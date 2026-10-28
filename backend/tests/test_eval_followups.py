@@ -354,3 +354,16 @@ def test_a_list_follow_up_has_a_headline_without_the_case_names():
     assert "Corrects a wrong premise" in item["what"]["en"]
     one = build_follow_ups(_clean_history(), CASES, ONLINE, NOW)
     assert all(i["headline"] == i["what"] for i in one if i["rule"] != 3)
+
+
+def test_a_follow_up_line_says_one_case_or_n_cases_never_case_s():
+    """The line is read by a person: ``1 case was`` / ``2 cases were``, not ``case(s)``."""
+    from core.eval_followups import _not_measured, _offline_regressions
+    one = _not_measured([_run("scheduled", 0, {"P1": "error", "B1": "passed"})], {})
+    two = _not_measured([_run("scheduled", 0, {"P1": "error", "B1": "error"})], {})
+    assert one[0]["what"]["en"].startswith("1 case was not measured")
+    assert two[0]["what"]["en"].startswith("2 cases were not measured")
+    flipped = _offline_regressions([_run("scheduled", 0, {"B1": "failed"}), _run("scheduled", 7, {"B1": "passed"})], {})
+    assert flipped[0]["headline"]["en"] == "1 offline case passed last time and fails now"
+    for item in one + two + flipped:
+        assert "(s)" not in item["what"]["en"] and "(s)" not in item["headline"]["en"]

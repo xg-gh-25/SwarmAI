@@ -16,7 +16,7 @@ import {
 } from './derive';
 import {
   Btn, DIM_LABEL, ErrorState, H4, LinkBtn, Loading, Row, SERIES_COLORS, SidePanel, Spark, Zone, caseName, pct, pick,
-  statusLabel, useEvalActions, useGo, useLang, when, type Lang,
+  QueryNote, statusLabel, triggerLabel, useEvalActions, useGo, useLang, when, type Lang,
 } from './ui';
 
 const VERDICT_TEXT = {
@@ -47,7 +47,7 @@ export function OverviewTab() {
   return (
     <div className="max-w-[880px] mx-auto px-7 pt-10 pb-20" data-testid="eval-overview">
       <div className="text-small text-[var(--color-text-muted)]">
-        {h.last_run ? t(`Last run ${when(h.last_run.triggered_at)} · ${h.last_run.triggered_by}`, `最近一次运行 ${when(h.last_run.triggered_at)} · ${h.last_run.triggered_by}`) : t('No run yet', '还没有运行')}
+        {h.last_run ? <>{t(`Last run ${when(h.last_run.triggered_at)}`, `最近一次运行 ${when(h.last_run.triggered_at)}`)}{triggerLabel(h.last_run.triggered_by, lang) && ` · ${triggerLabel(h.last_run.triggered_by, lang)}`}</> : t('No run yet', '还没有运行')}
       </div>
       <div className="text-display leading-tight font-semibold mt-1" data-testid="overview-verdict">
         {v ? <span style={{ color: v.color }}>{v[lang]}</span>
@@ -67,7 +67,7 @@ export function OverviewTab() {
         {total > 0 && <div className="border-t border-[var(--color-border)]" />}
       </Zone>
 
-      <Zone title={t('Five dimensions', '五个维度')} sub={t('this week', '本周')}>
+      <Zone title={t('Five dimensions', '五个维度')} sub={t('cases from the last full run; live sessions from the last 7 days', 'case 来自最近一次全量运行，真实会话来自过去 7 天')}>
         <Dimensions />
       </Zone>
 
@@ -84,7 +84,7 @@ export function OverviewTab() {
         </span>
       </div>
 
-      <SidePanel open={!!open} onClose={() => setOpen(null)} testId="follow-up-panel">
+      <SidePanel open={!!open} onClose={() => setOpen(null)} testId="follow-up-panel" label={t('Follow-up', '要处理的事')}>
         {open && <FollowUpDetail f={open} lang={lang} onDone={() => setOpen(null)} />}
       </SidePanel>
     </div>
@@ -113,14 +113,15 @@ export function releaseLede(checks: ReleaseCheck[], lang: Lang): string {
   const known = checkById(checks, 'record')?.known_issues?.length ?? 0;
   const parts: string[] = [];
   if (!red || !dims || !den) parts.push(zh ? '有一道关没有检查。' : 'A release check is missing.');
-  if (red && !red.passed) parts.push(zh ? `${red.cases?.length ?? 0} 条红线没守住。` : `${red.cases?.length ?? 0} red line(s) broken.`);
-  if (dims && !dims.passed) parts.push(zh ? `${dims.cases?.length ?? 0} 条拦上线的 case 没过。` : `${dims.cases?.length ?? 0} release-blocking case(s) fail.`);
-  if (den && !den.passed) parts.push(zh ? `${den.cases?.length ?? 0} 条拦上线的 case 没有结果。` : `${den.cases?.length ?? 0} release-blocking case(s) have no result.`);
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  if (red && !red.passed) parts.push(zh ? `${red.cases?.length ?? 0} 条红线没守住。` : `${n(red.cases?.length ?? 0, 'red line is', 'red lines are')} broken.`);
+  if (dims && !dims.passed) parts.push(zh ? `${dims.cases?.length ?? 0} 条拦上线的 case 没过。` : `${n(dims.cases?.length ?? 0, 'release-blocking case fails', 'release-blocking cases fail')}.`);
+  if (den && !den.passed) parts.push(zh ? `${den.cases?.length ?? 0} 条拦上线的 case 没有结果。` : `${n(den.cases?.length ?? 0, 'release-blocking case has', 'release-blocking cases have')} no result.`);
   if (!parts.length) {
     const n = den?.selected;
     parts.push(zh ? `拦上线的 ${n ?? ''} 条 case 全部通过。` : `All ${n ?? ''} release-blocking cases pass.`.replace('  ', ' '));
   }
-  if (known) parts.push(zh ? `观测档有 ${known} 条没过，不拦。` : `${known} watched case(s) fail; they do not block.`);
+  if (known) parts.push(zh ? `观测档有 ${known} 条没过，不拦。` : known === 1 ? '1 watched case fails; it does not block.' : `${known} watched cases fail; they do not block.`);
   return parts.join(zh ? '' : ' ');
 }
 
@@ -193,7 +194,7 @@ function FollowUpRow({ f, lang, evolution, onLook }: { f: FollowUp; lang: Lang; 
     <Row testId={evolution ? 'evolution-item' : 'needs-item'} onOpen={onLook}
          dot={f.severity === 'high' ? 'var(--color-status-error)' : undefined}
          what={pick(f.headline ?? f.what, lang)} sub={names || pick(f.action, lang)}
-         right={<Btn onClick={onLook}>{zh ? '看一下' : 'Look'} ›</Btn>} />
+         right={<Btn onClick={onLook} tabIndex={-1}>{zh ? '看一下' : 'Look'} ›</Btn>} />
   );
 }
 
@@ -257,6 +258,7 @@ function Dimensions() {
   const online = useSessionQuality();
   const weeks = lastWeeks(new Date());
   const runs = history.data ?? [];
+  const failed = history.isError || online.isError;
   const summary = health.data?.dimension_summary;
   const on = online.data;
 
@@ -308,6 +310,7 @@ function Dimensions() {
 
   return (
     <div data-testid="five-dimensions">
+      <QueryNote q={{ isLoading: history.isLoading || online.isLoading, isError: false }}>
       <div className="grid grid-cols-5 border-t border-[var(--color-border)]">
         {cols.map(([id, c]) => (
           <div key={id} className="pt-4 pr-4" data-testid={`dimension-${id}`}>
@@ -329,6 +332,9 @@ function Dimensions() {
           </div>
         ))}
       </div>
+      </QueryNote>
+      {failed && <div className="text-small text-[var(--color-status-error)] mt-3" data-testid="dimensions-partial">
+        {t('Part of this did not load (run history or live sessions); a missing value here is not a zero.', '有一部分没加载出来（运行记录或真实会话）；这里缺的值不是 0。')}</div>}
       <div className="text-small text-[var(--color-text-dim)] mt-4">
         {t('Big number: release-blocking cases passed. The line under it: the weakest watched signal. Trend lines appear once two weeks have a value. Tone and style are not scored.',
           '大数字是拦上线的 case 通过数，下面一行是最弱的观测信号。有两周的数据后显示趋势线。语气风格不打分。')}

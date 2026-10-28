@@ -12,7 +12,7 @@
  * Saving runs the backend's full admission (POST /golden-set/try is the same check
  * without saving), so the form lists the checks and shows each one's result.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { getApiBaseUrl } from '../../services/tauri';
 import { openExternal } from '../../utils/openExternal';
 import {
@@ -21,9 +21,11 @@ import {
   type AdmissionResult, type CaseDetail, type CaseInput, type EvalRun, type GoldenCase, type QuickDay, type ReleaseTier,
 } from './api';
 import { checkById, notPassing } from './derive';
+import { releaseLede } from './OverviewTab';
 import {
-  Btn, CATEGORY_LABEL, Code, ErrorState, H4, KV, LinkBtn, Loading, Seg, SidePanel, TIER_LABEL, TierText,
-  caseName, categoryName, dimName, isQuick, judgeReason, pick, splitPurpose, statusLabel, useEvalActions, useGo, useLang, when,
+  Btn, CATEGORY_LABEL, Code, ErrorState, H4, InlineConfirm, KV, LinkBtn, Loading, QueryNote, Seg, SidePanel, TIER_LABEL, TierText,
+  caseName, categoryName, dimName, isQuick, judgeReason, pick, rowReason, splitPurpose, statusLabel, triggerLabel, useEscape, useEvalActions,
+  useGo, useLang, useLayerFocus, when,
 } from './ui';
 
 type Line = 'all' | 'quick' | 'offline';
@@ -41,6 +43,9 @@ export function CasesTab({ focus }: { focus?: string }) {
   const [line, setLine] = useState<Line>('all');
   const [q, setQ] = useState('');
   const [panel, setPanel] = useState<Panel>(focus?.startsWith('case:') ? { kind: 'case', id: focus.slice(5) } : null);
+  // set by the form in a layout effect, read by the panel when a key or click asks to close
+  const formDirty = useRef(false);
+  const isDirty = useCallback(() => formDirty.current, []);
   useEffect(() => {
     if (focus === 'history') setView('history');
     if (focus?.startsWith('case:')) { setView('cases'); setPanel({ kind: 'case', id: focus.slice(5) }); }
@@ -81,12 +86,12 @@ export function CasesTab({ focus }: { focus?: string }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mt-6">
-        <Seg value={view} onChange={setView} testId="cases-view"
+        <Seg value={view} onChange={setView} testId="cases-view" label={t('View', '视图')}
              options={[['cases', t('Cases', '考题')], ['history', t('Run history', '运行记录')]]} />
         {view === 'cases' && <>
-          <Seg value={line} onChange={setLine} testId="cases-line"
+          <Seg value={line} onChange={setLine} testId="cases-line" label={t('Which cases', '哪类 case')}
                options={[['all', t('All', '全部')], ['quick', t('Quick checks', '快速检查')], ['offline', t('Offline', '离线考题')]]} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Search…', '搜索…')}
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Search name, id or tier…', '搜名字、ID 或档位…')} aria-label={t('Search cases', '搜索 case')}
                  className="ml-auto w-56 px-2.5 py-1 rounded-md border border-[var(--color-border)] bg-transparent text-small text-[var(--color-text)]" />
         </>}
       </div>
@@ -110,10 +115,13 @@ export function CasesTab({ focus }: { focus?: string }) {
         )}
       </> : <RunHistory />}
 
-      <SidePanel open={!!panel} onClose={() => setPanel(null)} testId="case-panel">
+      <SidePanel open={!!panel} onClose={() => setPanel(null)} testId="case-panel" isDirty={isDirty}
+                 label={panel?.kind === 'form' ? t('Case form', 'case 表单') : t('Case detail', 'case 详情')}
+                 resetKey={panel ? (panel.kind === 'case' ? `case:${panel.id}` : `form:${panel.from?.id ?? ''}:${panel.editing}`) : undefined}>
         {panel?.kind === 'case' && <CaseDetailView key={panel.id} id={panel.id} onForm={(p) => setPanel(p)} onClosed={() => setPanel(null)} />}
-        {panel?.kind === 'form' && <CaseForm key={`${panel.type}-${panel.from?.id ?? ''}-${panel.editing}`} type={panel.type} from={panel.from}
-                                             editing={!!panel.editing} total={live.length}
+        {/* the type is not in the key: switching it keeps what was typed */}
+        {panel?.kind === 'form' && <CaseForm key={`${panel.from?.id ?? ''}-${panel.editing}`} type={panel.type} from={panel.from}
+                                             editing={!!panel.editing} total={live.length} dirtyRef={formDirty}
                                              onType={(type) => setPanel({ ...panel, type })} onDone={() => setPanel(null)} />}
       </SidePanel>
     </div>
@@ -131,13 +139,15 @@ function RunMenu() {
   const { running: fullRunning, failed: fullFailed } = useRunProgress(runFull.data?.run_id);
   const busy = runQuick.isPending || fullRunning;
   const ref = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useEscape(open, close);
+  useLayerFocus(open, menu, { first: true });
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
     const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    window.addEventListener('keydown', onKey, true);
     document.addEventListener('mousedown', onDown);
-    return () => { window.removeEventListener('keydown', onKey, true); document.removeEventListener('mousedown', onDown); };
+    return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
   const start = (fn: () => void) => { setOpen(false); setDismissed(false); fn(); };
   const quick = runQuick.data as { cases_passed?: number; total_cases?: number } | undefined;
@@ -147,15 +157,17 @@ function RunMenu() {
         : null;
   return (
     <div className="relative" ref={ref}>
-      <Btn testId="run-menu" onClick={() => setOpen((o) => !o)}>{busy ? t('Running…', '运行中…') : t('Run', '运行')} ▾</Btn>
+      <button type="button" data-testid="run-menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}
+              className="btn-sm btn-secondary transition-colors">{busy ? t('Running…', '运行中…') : t('Run', '运行')} ▾</button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-10 w-72 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg p-2 space-y-1" role="menu">
-          <button type="button" role="menuitem" data-testid="run-quick" disabled={runQuick.isPending} onClick={() => start(() => runQuick.mutate())}
+        <div ref={menu} tabIndex={-1} aria-label={t('Run', '运行')} role="group"
+             className="absolute right-0 top-full mt-1 z-10 w-72 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg p-2 space-y-1 outline-none">
+          <button type="button" data-testid="run-quick" disabled={runQuick.isPending} onClick={() => start(() => runQuick.mutate())}
                   className="w-full text-left px-2 py-1.5 rounded hover:bg-[var(--color-hover)] disabled:opacity-40">
             <div className="text-body text-[var(--color-text)]">{t('Quick check', '快速检查')}</div>
             <div className="text-small text-[var(--color-text-dim)]">{t('code checks only, in a temporary workspace', '只跑代码检查，在临时工作区')}</div>
           </button>
-          <button type="button" role="menuitem" data-testid="run-full" disabled={runFull.isPending || fullRunning} onClick={() => start(() => runFull.mutate())}
+          <button type="button" data-testid="run-full" disabled={runFull.isPending || fullRunning} onClick={() => start(() => runFull.mutate())}
                   className="w-full text-left px-2 py-1.5 rounded hover:bg-[var(--color-hover)] disabled:opacity-40">
             <div className="text-body text-[var(--color-text)]">{t('The full set', '全量')}</div>
             <div className="text-small text-[var(--color-text-dim)]">{t('includes the offline cases: a real agent answers, calls the model', '含离线考题：真实 agent 答题，会调用模型')}</div>
@@ -187,7 +199,7 @@ function NotPassing({ cases, onOpen }: { cases: GoldenCase[]; onOpen: (c: Golden
       <h2 className="text-heading font-semibold text-[var(--color-text)] mb-2">{t('Not passing', '没通过')}</h2>
       {cases.map((c) => {
         const r = c.last_result?.run_id === runId ? byId.get(c.id) : undefined;
-        const reason = judgeReason(r?.notes, lang);
+        const reason = r ? rowReason(c.last_result?.status, r.notes, lang) : '';
         return (
           <button type="button" key={c.id} onClick={() => onOpen(c)} data-testid={`case-row-${c.id}`}
                   className="w-full grid grid-cols-[1fr_64px_70px_12px] gap-3 items-center py-3 border-t border-[var(--color-border)] text-left hover:bg-[var(--color-hover)]/40">
@@ -261,18 +273,20 @@ function RunHistory() {
     <div data-testid="run-history">
       <section className="mt-8">
         <h2 className="text-heading font-semibold text-[var(--color-text)]">{t('Quick check, by day', '快速检查，按天')}</h2>
-        <div className="text-small text-[var(--color-text-muted)] mt-1">
-          {lines?.quick.total != null ? `${when(lines.quick.last_run)} · ${lines.quick.passed}/${lines.quick.total}` : t('not run yet', '还没跑过')}
-          {' · '}{t('runs after a session ends, in a temporary workspace that never touches your data', '会话结束后自动跑，在临时工作区，不碰你的数据')}
-        </div>
-        <Days days={lines?.quick.days ?? []} />
+        <QueryNote q={health}>
+          <div className="text-small text-[var(--color-text-muted)] mt-1">
+            {lines?.quick.total != null ? `${when(lines.quick.last_run)} · ${lines.quick.passed}/${lines.quick.total}` : t('not run yet', '还没跑过')}
+            {' · '}{t('runs after a session ends, in a temporary workspace that never touches your data', '会话结束后自动跑，在临时工作区，不碰你的数据')}
+          </div>
+          <Days days={lines?.quick.days ?? []} />
+        </QueryNote>
       </section>
       <section className="mt-10">
         <h2 className="text-heading font-semibold text-[var(--color-text)]">{t('Full runs', '全量运行')}</h2>
         <div className="text-small text-[var(--color-text-muted)] mt-1 mb-2">
-          {t('next', '下次')} {when(lines?.full.next_run)} · {t('the four release checks of each run and why it passed or not', '每次的四道放行关和放行理由')}
+          {lines?.full.next_run && <>{t('next', '下次')} {when(lines.full.next_run)} · </>} {t('the four release checks of each run and why it passed or not', '每次的四道放行关和放行理由')}
         </div>
-        <ReleaseRecord runs={(history.data ?? []).filter((r) => r.line === 'full')} />
+        <QueryNote q={history}><ReleaseRecord runs={(history.data ?? []).filter((r) => r.line === 'full')} /></QueryNote>
       </section>
     </div>
   );
@@ -298,7 +312,7 @@ function Days({ days }: { days: QuickDay[] }) {
 }
 
 function ReleaseRecord({ runs }: { runs: EvalRun[] }) {
-  const { t } = useLang();
+  const { lang, t } = useLang();
   const [showOld, setShowOld] = useState(false);
   const decided = runs.filter((r) => r.release || r.status === 'failed');  // a crash is shown, not hidden as old
   const old = runs.length - decided.length;
@@ -328,11 +342,13 @@ function ReleaseRecord({ runs }: { runs: EvalRun[] }) {
         <tbody>
           {shown.map((r) => (
             <tr key={r.run_id} className="border-b border-[var(--color-border)] align-top">
-              <td className="py-2 whitespace-nowrap text-[var(--color-text)]">{when(r.triggered_at)} · {r.triggered_by}</td>
+              <td className="py-2 whitespace-nowrap text-[var(--color-text)]">{when(r.triggered_at)} · {triggerLabel(r.triggered_by, lang)}</td>
               {r.release ? <>{cell(r, 'redline')}{cell(r, 'dimensions')}{cell(r, 'denominator')}</>
                 : r.status === 'failed' ? <td colSpan={3} className="py-2 text-[var(--color-status-error)]">{t('did not finish', '没跑完')}</td>
                   : <td colSpan={3} className="py-2 text-[var(--color-text-dim)]">{t('old golden set, not comparable', '旧 golden set，不能比')}</td>}
-              <td className="py-2 text-[var(--color-text-muted)] break-words">{r.release_reason ?? r.error ?? '—'}</td>
+              <td className="py-2 text-[var(--color-text-muted)] break-words" title={r.release_reason ?? undefined} data-testid="release-reason">
+                {r.release && r.release_checks?.length ? releaseLede(r.release_checks, lang)
+                  : r.release_reason ?? r.error ?? '—'}</td>
               <td className="py-2 text-right">{r.report && <LinkBtn className="text-[var(--color-primary)]" onClick={() => openReport(r.report!)}>{t('Report', '报告')}</LinkBtn>}</td>
             </tr>
           ))}
@@ -402,7 +418,7 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
         <H4>{t('What it was asked', '题面')}</H4>
         <p className="text-small text-[var(--color-text)] whitespace-pre-wrap">{c.scenario?.prompt ?? '—'}</p>
         <H4>{t('What it did', '它做了什么')}</H4>
-        <div data-testid="drilldown">
+        <div data-testid="drilldown"><QueryNote q={run}>
           {r?.steps?.length ? (
             <div className="space-y-0.5">
               {r.steps.slice(0, 12).map((s, i) => (
@@ -426,7 +442,7 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
             <details><summary className="cursor-pointer text-small text-[var(--color-text)] line-clamp-2">{r.final_text.replace(/[*`#]+/g, '').replace(/\s+/g, ' ').slice(0, 200)}</summary>
               <pre className="whitespace-pre-wrap text-small text-[var(--color-text)] mt-1">{r.final_text}</pre></details>
           </>}
-        </div>
+        </QueryNote></div>
       </>}
 
       <div className="flex flex-wrap gap-2 mt-6">
@@ -441,14 +457,20 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
         {mineCase ? (
           <>
             <Btn testId="case-edit" onClick={() => onForm({ kind: 'form', type: quick ? 'quick' : 'offline', from: c, editing: true })}>{t('Edit', '编辑')}</Btn>
-            {confirm ? (
-              <Btn kind="danger" testId="case-delete-confirm" onClick={() => del.mutate(c.id, { onSuccess: onClosed })}>{t('Delete for good', '确认删除')}</Btn>
-            ) : <Btn kind="danger" testId="case-delete" onClick={() => setConfirm(true)}>{t('Delete', '删除')}</Btn>}
+            {/* stays in place while the question is open, so "keep it" can give focus back to it */}
+            <Btn kind="danger" testId="case-delete" ariaExpanded={confirm} onClick={() => setConfirm(true)}>{t('Delete', '删除')}</Btn>
           </>
         ) : (
           <Btn testId="case-copy" onClick={() => onForm({ kind: 'form', type: quick ? 'quick' : 'offline', from: c })}>{t('Copy as my case', '复制成我的 case')}</Btn>
         )}
       </div>
+      {confirm && (
+        <div className="mt-3">
+          <InlineConfirm testId="case-delete-confirm" message={t(`Delete ${c.id}? It is removed from your file, not archived.`, `删除 ${c.id}？会从你的文件里删掉，不归档。`)}
+                         cancel={t('Keep it', '保留')} confirm={del.isPending ? t('Deleting…', '删除中…') : t('Delete for good', '确认删除')} busy={del.isPending}
+                         onCancel={() => setConfirm(false)} onConfirm={() => del.mutate(c.id, { onSuccess: onClosed })} />
+        </div>
+      )}
       {rerun.isError && <div className="text-small text-[var(--color-status-error)] mt-2">{errorDetail(rerun.error)}</div>}
       {rerunFailed && <div className="text-small text-[var(--color-status-error)] mt-2">{t('The run did not finish: ', '这次运行没跑完：')}{rerunFailed}</div>}
       {del.isError && <div className="text-small text-[var(--color-status-error)] mt-2">{errorDetail(del.error)}</div>}
@@ -506,9 +528,11 @@ const CHECK_LABEL: Record<string, { en: string; zh: string }> = {
   trial: { en: 'Trial run: passes, and the negative fails', zh: '试跑：正例通过，反例失败' },
 };
 
-function CaseForm({ type, from, editing, total, onType, onDone }: {
+function CaseForm({ type, from, editing, total, onType, onDone, dirtyRef }: {
   type: 'quick' | 'offline'; from?: CaseDetail; editing: boolean; total: number;
   onType: (t: 'quick' | 'offline') => void; onDone: () => void;
+  /** whether the form holds input that closing would throw away, kept current */
+  dirtyRef: { current: boolean };
 }) {
   const { lang, t } = useLang();
   const { askSwarm } = useEvalActions();
@@ -524,6 +548,12 @@ function CaseForm({ type, from, editing, total, onType, onDone }: {
     negative: from?.verification?.negative_command ?? '', negExpected: from?.verification?.negative_expected_contains ?? '',
     prompt: from?.scenario?.prompt ?? '', steps: (from?.expected_trajectory ?? []).join(' '), rubric: from?.decision_rubric ?? '',
   });
+  const [initial] = useState(() => JSON.stringify(f));
+  const dirty = JSON.stringify(f) !== initial;
+  // a layout effect runs before the browser handles the next key, so a key pressed
+  // right after typing already sees the typing
+  useLayoutEffect(() => { dirtyRef.current = dirty; });
+  useLayoutEffect(() => () => { dirtyRef.current = false; }, [dirtyRef]);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
     setF({ ...f, [k]: e.target.value });
     setResult(null);  // an old trial says nothing about the edited case
@@ -583,16 +613,12 @@ function CaseForm({ type, from, editing, total, onType, onDone }: {
         </div>
       )}
       {!editing && (
-        <div className="flex gap-1 mt-4">
-          {(['offline', 'quick'] as const).map((ty) => (
-            <button key={ty} type="button" role="radio" aria-checked={type === ty} onClick={() => onType(ty)}
-                    className={`btn-sm ${type === ty ? 'btn-soft' : 'btn-ghost'}`}>
-              {ty === 'offline' ? t('Offline case · the agent answers', '离线考题 · agent 答题') : t('Quick check · you write a check script', '快速检查 · 要会写检查脚本')}
-            </button>
-          ))}
+        <div className="mt-4">
+          <Seg value={type} onChange={onType} testId="form-type" label={t('Kind of case', 'case 类型')}
+               options={[['offline', t('Offline case · the agent answers', '离线考题 · agent 答题')], ['quick', t('Quick check · you write a check script', '快速检查 · 要会写检查脚本')]]} />
         </div>
       )}
-      {field(t('Case id', 'Case ID'), t('letters, digits, _', '字母、数字、下划线'), <input className={inputCls} value={f.id} onChange={set('id')} disabled={editing} placeholder="MY_ARCHIVE_LOOKUP" data-testid="form-id" />)}
+      {field(t('Case id', 'Case ID'), t('letters, digits, _', '字母、数字、下划线'), <input className={`${inputCls} disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-[var(--color-hover)]`} value={f.id} onChange={set('id')} disabled={editing} placeholder="MY_ARCHIVE_LOOKUP" data-testid="form-id" />)}
       {field(t('What it protects', '它守住什么'), t('the agent is the subject, one sentence', '主语是 agent，一句话'), <input className={inputCls} value={f.head} onChange={set('head')} data-testid="form-head"
         placeholder={t('e.g. Asked about something only in an archive, the agent looks it up first.', '例：问到只记在归档里的事，agent 先去找。')} />)}
       {field(t('What breaks for you if it fails', '坏了对你意味着什么'), '', <input className={inputCls} value={f.rest} onChange={set('rest')}

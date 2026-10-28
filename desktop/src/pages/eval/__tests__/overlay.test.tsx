@@ -44,6 +44,19 @@ describe('Eval overlay', () => {
     expect(await screen.findByTestId('eval-judges')).toBeTruthy();
   });
 
+  it('the tab bar moves with the arrow keys; only the chosen tab is in the Tab order', async () => {
+    mount({});
+    const overview = screen.getByTestId('eval-tab-overview');
+    expect(overview.tabIndex).toBe(0);
+    expect(screen.getByTestId('eval-tab-cases').tabIndex).toBe(-1);
+    fireEvent.keyDown(overview, { key: 'ArrowRight' });
+    expect(screen.getByTestId('eval-tab-cases').getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByTestId('eval-tab-cases'));
+    fireEvent.keyDown(screen.getByTestId('eval-tab-cases'), { key: 'End' });
+    expect(screen.getByTestId('eval-tab-method').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('eval-tab-method');
+  });
+
   it('closes when a chat tab takes the prompt, and stays open with a notice when none can', async () => {
     const close = vi.fn();
     const dispatchPrompt = vi.fn(() => false);
@@ -75,5 +88,10 @@ describe('Guide', () => {
     expect(go).toHaveBeenCalledWith('cases', 'history');
     fireEvent.click(screen.getByTestId('wheel-1'));   // Build has no tab
     expect(go).toHaveBeenCalledTimes(1);
+    // the steps with a tab are links the keyboard reaches; Build is not one
+    expect(screen.getByTestId('wheel-4').getAttribute('tabindex')).toBe('0');
+    expect(screen.getByTestId('wheel-1').getAttribute('tabindex')).toBeNull();
+    fireEvent.keyDown(screen.getByTestId('wheel-4'), { key: 'Enter' });
+    expect(go).toHaveBeenLastCalledWith('online', undefined);
   });
 });

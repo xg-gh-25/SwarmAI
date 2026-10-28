@@ -6,7 +6,7 @@
  * the tabs show the live ones). Canon: Knowledge/Library eval-first knowledge base;
  * the Agent-DLC deck (pages 13–17) for the flywheel, five dimensions, tiers and checks.
  */
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { LinkBtn, TierTag, useGo, useLang, type TabId } from './ui';
 
 const SOURCES = [
@@ -221,8 +221,12 @@ function Wheel() {
         const a = -Math.PI / 2 + (i * Math.PI) / 3;
         const x = cx + R * Math.cos(a), y = cy + R * Math.sin(a);
         return (
-          <g key={n} data-testid={`wheel-${i}`} className={target[i] ? 'cursor-pointer' : undefined}
-             onClick={target[i] ? () => go(target[i]![0], target[i]![1]) : undefined}>
+          <g key={n} data-testid={`wheel-${i}`} className={target[i] ? 'cursor-pointer focus:outline-none [&:focus-visible>circle]:stroke-[var(--color-primary)]' : undefined}
+             {...(target[i] ? {
+               role: 'link', tabIndex: 0, 'aria-label': n,
+               onClick: () => go(target[i]![0], target[i]![1]),
+               onKeyDown: (e: ReactKeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(target[i]![0], target[i]![1]); } },
+             } : {})}>
             <circle cx={x} cy={y} r={26} fill="var(--color-card)" stroke={i === 3 ? 'var(--color-brand)' : 'var(--color-border)'} />
             <text x={x} y={y + 4} fill="var(--color-text)" fontSize={12} fontWeight={600} textAnchor="middle">{n}</text>
           </g>

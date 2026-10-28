@@ -38,6 +38,9 @@ describe('Live sessions', () => {
     await waitFor(() => expect(calls.find((c) => c.url === '/eval/calibration')?.body).toEqual({ session_id: 's1', human: 'disagree' }));
     fireEvent.click(within(row).getByText('Open session'));
     expect(actions.openSession).toHaveBeenCalledWith('s1');
+    // the row opens with a button, and "Open session" sits beside it, not inside it
+    expect(row.querySelector('button button, [role="button"] button')).toBeNull();
+    expect(within(row).getByText('Fix the build').closest('button')?.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('offers no label for a batch the backend does not accept, says why, and marks one already given', async () => {

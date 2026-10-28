@@ -64,7 +64,7 @@ describe('Overview', () => {
     expect(den.textContent).toContain('35/36');
     expect(den.textContent).toContain('Q_SLOW (Timed out)');
     expect(screen.queryByTestId('release-check-redline-detail')).toBeNull();
-    expect(screen.getByTestId('overview-lede').textContent).toContain('1 release-blocking case(s) have no result.');
+    expect(screen.getByTestId('overview-lede').textContent).toContain('1 release-blocking case has no result.');
     expect(screen.getByTestId('release-check-redline').getAttribute('data-passed')).toBe('true');
   });
 
@@ -72,7 +72,7 @@ describe('Overview', () => {
     routes['GET /eval/health'] = health({ verdict: 'release', reason: 'x', checks: checks({
       record: { known_issues: [{ id: 'W1' }, { id: 'W2' }] } }) });
     show(<OverviewTab />);
-    expect((await screen.findByTestId('overview-lede')).textContent).toBe('All 36 release-blocking cases pass. 2 watched case(s) fail; they do not block.');
+    expect((await screen.findByTestId('overview-lede')).textContent).toBe('All 36 release-blocking cases pass. 2 watched cases fail; they do not block.');
   });
 
   it('lists eval problems and behaviour signals as two groups; a row opens its evidence, handed to Swarm from there', async () => {
@@ -89,6 +89,9 @@ describe('Overview', () => {
     expect(needs[0].textContent).toContain('Case X has no teeth');
     expect(needs[0].textContent).toContain('Check the case');
     expect(needs[0].textContent).not.toContain('decision-judge');   // the evidence is behind "Look"
+    // the row's text is one button and "Look" another beside it, never one inside the other
+    expect(needs[0].querySelector('button button, [role="button"] button')).toBeNull();
+    expect(needs[0].querySelectorAll('button').length).toBe(2);
     expect(evo).toHaveLength(1);
     expect(screen.getByText('2 items, most important first')).toBeTruthy();
     fireEvent.click(within(needs[0]).getByText(/Look/));

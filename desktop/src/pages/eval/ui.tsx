@@ -7,10 +7,15 @@
  * page; sections are separated by whitespace and a hairline, not boxes; tier and
  * evidence layer keep one colour each across every tab.
  *
- * @exports useLang, labels, caseName, judgeReason, statusLabel, LinkBtn, TierTag, TierText, LayerTag, Tag, Spark,
- *          Zone, Row, Seg, SidePanel, EvalActionsContext, useEvalActions, when, pct
+ * @exports useLang, labels, caseName, judgeReason, rowReason, statusLabel, triggerLabel, LinkBtn, TierTag, TierText, LayerTag,
+ *          Tag, Spark, Zone, Row, Seg, rovingKey, SidePanel, InlineConfirm, QueryNote, EvalActionsContext,
+ *          useEvalActions, when, pct
+ *
+ * Layers (the side panel, a popover) all behave the same: focus moves in when one
+ * opens, Tab stays inside, Escape or a click outside asks to close, focus goes back
+ * to what opened it, and a layer holding unsaved input asks before it is dropped.
  */
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ReleaseTier } from './api';
 
@@ -56,6 +61,15 @@ export function judgeReason(notes?: string | null, lang: Lang = 'en'): string {
   return body.replace(/\.{1,2}\s*All \d+ (expected )?steps found\.?$/, '.').trim();
 }
 
+/** The one-line reason in a list row. A failed case shows the check's own reason; a
+ *  case that was not measured or timed out shows what that means, because its note is
+ *  the evaluator's error (the case's page keeps the full note). */
+export function rowReason(status: string | null | undefined, notes: string | null | undefined, lang: Lang): string {
+  if (status === 'error') return lang === 'zh' ? '检查本身没跑成，不是 agent 的问题（原因在详情里）' : 'the check itself could not run, not the agent (reason on the case)';
+  if (status === 'timeout') return lang === 'zh' ? '没在时限内跑完' : 'did not finish in time';
+  return judgeReason(notes, lang);
+}
+
 const STATUS_LABEL: Record<string, { en: string; zh: string }> = {
   passed: { en: 'Passed', zh: '通过' }, failed: { en: 'Failed', zh: '没通过' },
   timeout: { en: 'Timed out', zh: '超时' }, error: { en: 'Not measured', zh: '没测成' },
@@ -64,6 +78,17 @@ const STATUS_LABEL: Record<string, { en: string; zh: string }> = {
 /** A run status in words (the backend writes ``passed`` / ``failed`` / ...). */
 export const statusLabel = (s: string | null | undefined, lang: Lang) =>
   (s && STATUS_LABEL[s]?.[lang]) || s || '—';
+
+const TRIGGER_LABEL: Record<string, { en: string; zh: string }> = {
+  manual: { en: 'run by you', zh: '你手动跑的' }, canary: { en: 'quick check, run by you', zh: '你手动跑的快速检查' },
+  session_canary: { en: 'after a session', zh: '会话结束后' }, deploy: { en: 'after a deploy', zh: '部署后' },
+  scheduled: { en: 'scheduled', zh: '定时' },
+  steering_edit: { en: 'after a rule change', zh: '改规则后' }, model_change: { en: 'after a model change', zh: '换模型后' },
+  unknown: { en: '', zh: '' },
+};
+/** Who started a run (the backend's ``triggered_by``), in words. */
+export const triggerLabel = (s: string | null | undefined, lang: Lang) =>
+  !s ? '' : TRIGGER_LABEL[s] ? TRIGGER_LABEL[s][lang] : s;
 
 // ─── labels ────────────────────────────────────────────────────────────────
 
@@ -243,39 +268,58 @@ export function Zone({ id, title, sub, right, children, first }: {
   );
 }
 
-/** One row of a list: what (one line), a plain sub-line, actions on the right. The
- *  whole row can open something; then the actions stop the click. */
+/** One row of a list: what (one line), a plain sub-line, actions on the right. When
+ *  the row opens something, its text is the button and the actions sit beside it,
+ *  never inside it (a control inside a control is unreachable to a screen reader). */
 export function Row({ what, sub, right, onOpen, testId, dot }: {
   what: ReactNode; sub?: ReactNode; right?: ReactNode; onOpen?: () => void; testId?: string;
   /** a status colour shown before the text (only where status is the point) */
   dot?: string;
 }) {
-  const body = (
+  const text = (
     <>
       {dot && <span className="w-1.5 h-1.5 rounded-full mt-2 shrink-0" style={{ background: dot }} />}
-      <div className="min-w-0 flex-1">
-        <div className="text-body font-semibold text-[var(--color-text)] line-clamp-2">{what}</div>
-        {sub && <div className="text-small text-[var(--color-text-muted)] mt-0.5 line-clamp-2 break-words">{sub}</div>}
-      </div>
-      {right && <div className="flex gap-2 items-center shrink-0" onClick={(e) => e.stopPropagation()}>{right}</div>}
+      <span className="block min-w-0 flex-1">
+        <span className="block text-body font-semibold text-[var(--color-text)] line-clamp-2">{what}</span>
+        {sub && <span className="block text-small text-[var(--color-text-muted)] mt-0.5 line-clamp-2 break-words">{sub}</span>}
+      </span>
     </>
   );
-  const cls = 'w-full flex gap-3 items-start py-3.5 border-t border-[var(--color-border)] text-left';
-  return onOpen
-    ? <div role="button" tabIndex={0} data-testid={testId} onClick={onOpen}
-           onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
-           className={`${cls} cursor-pointer hover:bg-[var(--color-hover)]/40`}>{body}</div>
-    : <div data-testid={testId} className={cls}>{body}</div>;
+  // the padding is on the button, so the whole height of the row opens it
+  const inner = 'flex gap-3 items-start min-w-0 flex-1 text-left py-3.5';
+  return (
+    <div data-testid={testId} className={`w-full flex gap-3 items-stretch border-t border-[var(--color-border)] ${onOpen ? 'hover:bg-[var(--color-hover)]/40' : ''}`}>
+      {onOpen ? <button type="button" onClick={onOpen} className={`${inner} cursor-pointer`}>{text}</button> : <div className={inner}>{text}</div>}
+      {right && <div className="flex gap-2 items-start shrink-0 py-3.5">{right}</div>}
+    </div>
+  );
+}
+
+/** Arrow keys (and Home / End) move the choice within a group of buttons that are
+ *  siblings in one parent: the tab bar, a segmented choice. Only the chosen button
+ *  is in the Tab order, so Tab enters and leaves the group in one step. */
+export function rovingKey<T>(e: ReactKeyboardEvent<HTMLElement>, values: readonly T[], current: T, choose: (v: T) => void) {
+  const i = Math.max(0, values.indexOf(current));
+  const n = values.length;
+  const next = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? (i + 1) % n
+    : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? (i - 1 + n) % n
+      : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1;
+  if (next < 0) return;
+  e.preventDefault();
+  choose(values[next]);
+  (e.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
 }
 
 /** A segmented choice (one of a few views or filters). */
-export function Seg<T extends string>({ value, options, onChange, testId }: {
-  value: T; options: [T, string][]; onChange: (v: T) => void; testId?: string;
+export function Seg<T extends string>({ value, options, onChange, testId, label }: {
+  value: T; options: [T, string][]; onChange: (v: T) => void; testId?: string; label?: string;
 }) {
+  const values = options.map(([v]) => v);
   return (
-    <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden" data-testid={testId}>
+    <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden" data-testid={testId} role="radiogroup" aria-label={label}>
       {options.map(([v, label]) => (
         <button key={v} type="button" role="radio" aria-checked={value === v} onClick={() => onChange(v)}
+                tabIndex={value === v ? 0 : -1} onKeyDown={(e) => rovingKey(e, values, value, onChange)}
                 data-testid={testId ? `${testId}-${v}` : undefined}
                 className={`px-3 py-1 text-small transition-colors ${value === v
                   ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
@@ -292,41 +336,198 @@ export function LinkBtn({ children, onClick, className = '' }: { children: React
   return <button type="button" onClick={onClick} className={`cursor-pointer text-left hover:underline ${className}`}>{children}</button>;
 }
 
-export function Btn({ children, onClick, kind = 'normal', disabled, testId, title }: {
+export function Btn({ children, onClick, kind = 'normal', disabled, testId, title, tabIndex, ariaExpanded }: {
   children: ReactNode; onClick?: () => void; kind?: 'normal' | 'primary' | 'ghost' | 'danger';
   disabled?: boolean; testId?: string; title?: string;
+  /** -1 for a mouse shortcut that repeats a control already in the Tab order */
+  tabIndex?: number;
+  ariaExpanded?: boolean;
 }) {
   const cls = kind === 'primary' ? 'btn-primary' : kind === 'ghost' ? 'btn-ghost' : kind === 'danger' ? 'btn-danger' : 'btn-secondary';
   return (
-    <button type="button" data-testid={testId} title={title} disabled={disabled} onClick={onClick}
+    <button type="button" data-testid={testId} title={title} disabled={disabled} onClick={onClick} tabIndex={tabIndex} aria-expanded={ariaExpanded}
             className={`btn-sm ${cls} transition-colors disabled:opacity-40 disabled:cursor-not-allowed`}>
       {children}
     </button>
   );
 }
 
-/** The right-hand panel (case detail, the case form). ESC or ✕ closes it. */
-export function SidePanel({ open, onClose, children, testId }: {
-  open: boolean; onClose: () => void; children: ReactNode; testId?: string;
-}) {
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+/** A control a person can see: not under a closed <details> (its own summary is),
+ *  not hidden. The Tab trap counts only these: a hidden last control would let
+ *  Tab slip out of the layer. */
+function reachable(el: HTMLElement): boolean {
+  if (el.closest('[hidden], [aria-hidden="true"], [inert]')) return false;
+  let child: HTMLElement = el;
+  for (let n = el.parentElement; n; child = n, n = n.parentElement) {
+    if (n.tagName === 'DETAILS' && !(n as HTMLDetailsElement).open && !(child.tagName === 'SUMMARY' && child.parentElement === n)) return false;
+  }
+  return true;
+}
+const focusables = (root: HTMLElement | null) =>
+  root ? Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(reachable) : [];
+
+/** Where focus goes when the element that opened a layer is gone (a deep link from
+ *  another tab, a deleted case's row): the overlay's tab panel. */
+const fallbackFocus = () => document.getElementById('eval-scroll');
+
+/** Focus for a layer, one mechanism for every layer in the overlay:
+ *  - it moves in when the layer opens (to the layer, or to its first control with
+ *    ``first``), and again when ``resetKey`` changes (the panel swapped a case for the
+ *    form and the focused button is gone);
+ *  - Tab stays inside. The trap listens on the window, not on the layer, so it still
+ *    holds when focus has dropped to <body> because the focused control was removed;
+ *  - focus returns to what opened the layer, or to the tab panel when that is gone. */
+export function useLayerFocus(open: boolean, ref: RefObject<HTMLElement | null>, opts: { resetKey?: string; first?: boolean } = {}) {
+  const opener = useRef<HTMLElement | null>(null);
+  const { resetKey, first } = opts;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
+    // the opener is taken once per opening: on a resetKey change the focused button
+    // may already be gone, and focus sits on <body>
+    const active = document.activeElement as HTMLElement | null;
+    if (!opener.current && !ref.current?.contains(active)) opener.current = active;
+    const target = (first && focusables(ref.current)[0]) || ref.current;
+    target?.focus();
+  }, [open, resetKey, first, ref]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !ref.current) return;
+      const items = focusables(ref.current);
+      const at = document.activeElement;
+      if (!items.length) { e.preventDefault(); ref.current.focus(); return; }
+      const head = items[0], tail = items[items.length - 1];
+      if (!ref.current.contains(at)) { e.preventDefault(); (e.shiftKey ? tail : head).focus(); }
+      else if (e.shiftKey && (at === head || at === ref.current)) { e.preventDefault(); tail.focus(); }
+      else if (!e.shiftKey && at === tail) { e.preventDefault(); head.focus(); }
+    };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
+  }, [open, ref]);
+  useEffect(() => {
+    if (open) return;
+    const back = opener.current;
+    if (!back) return;
+    opener.current = null;
+    if (back.isConnected && back !== document.body) back.focus();
+    else fallbackFocus()?.focus();
+  }, [open]);
+}
+
+/** Escape goes to the topmost layer only. Every open layer (the Run menu, the side
+ *  panel, a question asked in place) registers here; one listener, in the capture
+ *  phase on the window, calls the newest one and stops the key, so a question inside
+ *  the panel is cancelled without closing the panel, and the overlay host (which
+ *  listens on document) never sees it. A key that ends an input-method composition
+ *  is not an Escape for the layer. */
+const escapeStack: { current: () => void }[] = [];
+function onEscapeKey(e: KeyboardEvent) {
+  if (e.key !== 'Escape' || e.isComposing || e.keyCode === 229) return;
+  const top = escapeStack[escapeStack.length - 1];
+  if (!top) return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  top.current();
+}
+export function useEscape(active: boolean, onEscape: () => void) {
+  // the stack calls the handler of the latest render, not the one it was added with
+  const latest = useRef(onEscape);
+  useLayoutEffect(() => { latest.current = onEscape; });
+  useEffect(() => {
+    if (!active) return;
+    const entry = latest;
+    escapeStack.push(entry);
+    if (escapeStack.length === 1) window.addEventListener('keydown', onEscapeKey, true);
+    return () => {
+      const i = escapeStack.lastIndexOf(entry);
+      if (i >= 0) escapeStack.splice(i, 1);
+      if (!escapeStack.length) window.removeEventListener('keydown', onEscapeKey, true);
+    };
+  }, [active]);
+}
+
+/** A question asked in place before something is lost: the safe answer has focus,
+ *  Escape is the safe answer, and when the question goes focus returns to what had it
+ *  before (or to the layer it sits in). */
+export function InlineConfirm({ message, confirm, cancel, onConfirm, onCancel, testId, busy = false }: {
+  message: ReactNode; confirm: string; cancel: string; onConfirm: () => void; onCancel: () => void; testId?: string;
+  /** the confirmed action is running: it cannot be sent twice */
+  busy?: boolean;
+}) {
+  const keep = useRef<HTMLButtonElement>(null);
+  useEscape(true, onCancel);
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    const layer = keep.current?.closest<HTMLElement>('[role="dialog"]') ?? null;
+    keep.current?.focus();
+    return () => {
+      if (before && before.isConnected && before !== document.body) before.focus();
+      else layer?.focus();
+    };
+  }, []);
+  return (
+    <div role="alertdialog" aria-label={typeof message === 'string' ? message : undefined} data-testid={testId}
+         className="flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-status-warning)] p-3 text-small text-[var(--color-text)]"
+         style={{ background: 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)' }}>
+      <span className="flex-1 min-w-[180px]">{message}</span>
+      <button ref={keep} type="button" className="btn-sm btn-secondary" onClick={onCancel} data-testid={testId ? `${testId}-cancel` : undefined}>{cancel}</button>
+      <button type="button" className="btn-sm btn-danger disabled:opacity-40 disabled:cursor-not-allowed" disabled={busy} onClick={onConfirm}
+              data-testid={testId ? `${testId}-ok` : undefined}>{confirm}</button>
+    </div>
+  );
+}
+
+/** The right-hand panel (case detail, the case form, a follow-up). Escape, ✕ or a
+ *  click outside asks to close; when ``isDirty()`` says the panel holds unsaved input,
+ *  it first asks whether to discard it. ``isDirty`` is read at the moment of the key
+ *  or click, not from the last render: a key pressed right after typing would
+ *  otherwise see the state from before the typing and drop it. Focus moves in, stays
+ *  in, and goes back (``useLayerFocus``). */
+export function SidePanel({ open, onClose, children, testId, label, isDirty, resetKey }: {
+  open: boolean; onClose: () => void; children: ReactNode; testId?: string;
+  /** what the panel is, read out when it opens */
+  label: string;
+  /** whether the panel holds input that closing would throw away, now */
+  isDirty?: () => boolean;
+  resetKey?: string;
+}) {
+  const { t } = useLang();
+  const ref = useRef<HTMLElement>(null);
+  const [asking, setAsking] = useState(false);
+  useEffect(() => { if (!open) setAsking(false); }, [open]);
+  const request = useCallback(() => { if (isDirty?.()) setAsking(true); else onClose(); }, [isDirty, onClose]);
+  useEscape(open, request);           // while the question is open, it takes Escape
+  useLayerFocus(open, ref, { resetKey });
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-40" onClick={onClose}>
-      <aside data-testid={testId} role="dialog"
-             className="absolute right-0 top-0 h-full w-[560px] max-w-[92vw] overflow-y-auto bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-xl p-7"
+    <div className="fixed inset-0 z-40" onClick={request}>
+      <aside ref={ref} data-testid={testId} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}
+             className="absolute right-0 top-0 h-full w-[560px] max-w-[92vw] overflow-y-auto bg-[var(--color-card)] border-l border-[var(--color-border)] shadow-xl p-7 outline-none"
              onClick={(e) => e.stopPropagation()}>
-        <button type="button" aria-label="close" onClick={onClose}
+        <button type="button" aria-label={t('Close', '关闭')} onClick={request}
                 className="absolute right-5 top-4 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">✕</button>
+        {asking && (
+          <div className="sticky top-0 z-10 -mx-1 mb-4 bg-[var(--color-card)] pr-8">
+            <InlineConfirm testId="discard" message={t('You have unsaved changes.', '有没保存的修改。')}
+                           cancel={t('Keep editing', '继续编辑')} confirm={t('Discard', '不要了')}
+                           onCancel={() => setAsking(false)} onConfirm={() => { setAsking(false); onClose(); }} />
+          </div>
+        )}
         {children}
       </aside>
     </div>
   );
+}
+
+/** A section's own data still loading or not loaded: said as such, never shown as
+ *  "nothing yet" (an empty answer reads as a result). */
+export function QueryNote({ q, children }: { q: { isLoading: boolean; isError: boolean }; children: ReactNode }) {
+  const { t } = useLang();
+  if (q.isLoading) return <div className="text-small text-[var(--color-text-dim)] py-2">{t('Loading…', '加载中…')}</div>;
+  if (q.isError) return <div className="text-small text-[var(--color-status-error)] py-2">{t('Could not load this part.', '这一部分没加载出来。')}</div>;
+  return <>{children}</>;
 }
 
 export function KV({ rows }: { rows: [ReactNode, ReactNode][] }) {

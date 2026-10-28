@@ -3,7 +3,7 @@
  *  with a zone are shown in local time. */
 import { describe, it, expect } from 'vitest';
 import { isoWeek, lastWeeks, onlineSeries, runSeries, tierCounts, metricSeries, lastTwo } from '../derive';
-import { when, splitPurpose, judgeReason, statusLabel } from '../ui';
+import { when, splitPurpose, judgeReason, rowReason, statusLabel } from '../ui';
 import type { EvalRun, OnlineScoring } from '../api';
 
 const run = (at: string, gatePassed: number, gateTotal: number): EvalRun => ({
@@ -67,5 +67,8 @@ describe('derive', () => {
     expect(statusLabel('timeout', 'en')).toBe('Timed out');
     expect(statusLabel('failed', 'zh')).toBe('没通过');
     expect(statusLabel('weird', 'en')).toBe('weird');
+    // an evaluator error is not shown as the agent's reason
+    expect(rowReason('error', 'decision judge: bad JSON: Expecting value: line 1', 'en')).toBe('the check itself could not run, not the agent (reason on the case)');
+    expect(rowReason('failed', "Missing steps: ['Read A']", 'en')).toBe('Expected steps not seen: Read A');
   });
 });

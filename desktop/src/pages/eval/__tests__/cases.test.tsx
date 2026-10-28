@@ -80,7 +80,7 @@ describe('Cases', () => {
     expect(screen.getByTestId('passing').textContent).toContain('1');
     expect(screen.getByTestId('not-run').textContent).toContain('Not run yet');
     expect(screen.getByTestId('not-run').querySelector('[data-testid^="not-run-group-"]')).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'zzz' } });
+    fireEvent.change(screen.getByPlaceholderText('Search name, id or tier…'), { target: { value: 'zzz' } });
     expect(screen.getByTestId('cases-no-match').textContent).toContain('No case matches “zzz”.');
     fireEvent.click(within(screen.getByTestId('cases-no-match')).getByText('Clear the filter'));
     expect(screen.queryByTestId('cases-no-match')).toBeNull();
@@ -144,7 +144,12 @@ describe('Cases', () => {
     fireEvent.click(await row('MINE_1'));
     fireEvent.click(await screen.findByTestId('case-delete'));
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
-    fireEvent.click(screen.getByTestId('case-delete-confirm'));
+    // the safe answer has focus, and "keep it" takes the question back
+    expect(document.activeElement).toBe(screen.getByTestId('case-delete-confirm-cancel'));
+    fireEvent.click(screen.getByTestId('case-delete-confirm-cancel'));
+    expect(screen.queryByTestId('case-delete-confirm')).toBeNull();
+    fireEvent.click(screen.getByTestId('case-delete'));
+    fireEvent.click(screen.getByTestId('case-delete-confirm-ok'));
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.url === '/eval/golden-set/MINE_1')).toBe(true));
     await waitFor(() => expect(screen.queryByTestId('case-panel')).toBeNull());
   });
@@ -230,6 +235,95 @@ const fullRuns = () => [
 ];
 const emptyHealth = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
 
+describe('Cases: a layer keeps focus and what the user typed', () => {
+  it('focus moves into the panel, Tab stays inside, and Escape gives it back to the row', async () => {
+    routes['GET /eval/golden-set/RED_1'] = { ...gc('RED_1', { release_tier: 'red' }), history: [] };
+    show(<CasesTab />);
+    const opener = (await row('RED_1')) as HTMLElement;
+    opener.focus();
+    fireEvent.click(opener);
+    const panel = await screen.findByTestId('case-panel');
+    await screen.findByTestId('case-detail');
+    expect(panel.getAttribute('aria-modal')).toBe('true');
+    expect(panel.contains(document.activeElement)).toBe(true);
+    const items = Array.from(panel.querySelectorAll<HTMLElement>('button:not([disabled]), summary'));
+    items[items.length - 1].focus();
+    fireEvent.keyDown(panel, { key: 'Tab' });
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(panel, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    // the overlay host listens on document (bubble): Escape pressed inside the panel
+    // must stop at the panel
+    const outer = vi.fn();
+    document.addEventListener('keydown', outer);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    document.removeEventListener('keydown', outer);
+    expect(screen.queryByTestId('case-panel')).toBeNull();
+    expect(outer).not.toHaveBeenCalled();          // only the panel closed, not the overlay
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('a form with unsaved input asks before Escape, ✕ or a click outside drops it', async () => {
+    show(<CasesTab />);
+    fireEvent.click(await screen.findByTestId('add-case'));
+    await screen.findByTestId('case-form');
+    fireEvent.keyDown(window, { key: 'Escape' });                 // nothing typed: closes at once
+    expect(screen.queryByTestId('case-panel')).toBeNull();
+    fireEvent.click(screen.getByTestId('add-case'));
+    fireEvent.change(await screen.findByTestId('form-id'), { target: { value: 'MY_CASE' } });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(await screen.findByTestId('discard')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByTestId('discard-cancel'));
+    fireEvent.keyDown(window, { key: 'Escape' });                 // Escape on the question = keep editing
+    expect(screen.queryByTestId('discard')).toBeNull();
+    expect((screen.getByTestId('form-id') as HTMLInputElement).value).toBe('MY_CASE');
+    fireEvent.click(screen.getByLabelText('Close'));
+    fireEvent.click(screen.getByTestId('discard-cancel'));
+    expect((screen.getByTestId('form-id') as HTMLInputElement).value).toBe('MY_CASE');
+    fireEvent.click(screen.getByTestId('case-panel').parentElement!);   // the backdrop
+    fireEvent.click(screen.getByTestId('discard-ok'));
+    expect(screen.queryByTestId('case-panel')).toBeNull();
+  });
+
+  it('switching the kind of case keeps what was typed', async () => {
+    show(<CasesTab />);
+    fireEvent.click(await screen.findByTestId('add-case'));
+    fireEvent.change(await screen.findByTestId('form-id'), { target: { value: 'MY_CASE' } });
+    fireEvent.click(screen.getByTestId('form-type-quick'));
+    expect(await screen.findByTestId('form-command')).toBeTruthy();
+    expect((screen.getByTestId('form-id') as HTMLInputElement).value).toBe('MY_CASE');
+    fireEvent.keyDown(screen.getByTestId('form-type-quick'), { key: 'ArrowLeft' });   // arrow keys move the choice
+    expect(await screen.findByTestId('form-prompt')).toBeTruthy();
+  });
+
+  it('a drill-down that could not load says so, not "no tool steps"', async () => {
+    routes['GET /eval/golden-set/OFF_1'] = { ...gc('OFF_1', { eval_method: 'behavior', release_tier: 'watch', category: 'decision' }),
+      history: [{ run_id: 'full1', triggered_at: '2026-10-28T02:35:00+00:00', status: 'failed', notes: 'x' }] };
+    failNext['GET /eval/runs/full1'] = { status: 500, detail: 'boom' };
+    show(<CasesTab />);
+    fireEvent.click(await row('OFF_1'));
+    const dd = await screen.findByTestId('drilldown');
+    await waitFor(() => expect(dd.textContent).toContain('Could not load this part.'));
+    expect(dd.textContent).not.toContain('kept no tool steps');
+  });
+
+  it('the Run menu takes focus, closes on Escape without closing the overlay, and gives focus back', async () => {
+    show(<CasesTab />);
+    const trigger = await screen.findByTestId('run-menu');
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('run-quick').parentElement!.contains(document.activeElement)).toBe(true);
+    const outer = vi.fn();
+    document.addEventListener('keydown', outer);
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    document.removeEventListener('keydown', outer);
+    expect(screen.queryByTestId('run-quick')).toBeNull();
+    expect(outer).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+
 describe('Run history', () => {
   it('the release record lists full runs with a decision; older ones only on request', async () => {
     routes['GET /eval/health'] = emptyHealth;
@@ -240,7 +334,9 @@ describe('Run history', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain('1 failed');
     expect(rows[0].textContent).toContain('36/36');
-    expect(rows[0].textContent).toContain('gate failed: Q_X');
+    // the reason in words from the run's checks; the backend's sentence stays the tooltip
+    expect(rows[0].textContent).toContain('1 release-blocking case fails.');
+    expect(rows[0].querySelector('[data-testid="release-reason"]')?.getAttribute('title')).toBe('gate failed: Q_X');
     expect(rec.textContent).not.toContain('canary');
     expect(rec.textContent).not.toContain('1/1');
     fireEvent.click(screen.getByText('Show'));
@@ -329,5 +425,80 @@ describe('a started full run', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Cases: one layer mechanism for focus and Escape', () => {
+  const offline = () => ({ ...gc('OFF_1', { eval_method: 'behavior', release_tier: 'watch', category: 'decision',
+    decision_rubric: 'PASS only if x; FAIL if y', expected_trajectory: ['Read A'] }), history: [] });
+
+  it('Tab skips controls inside a closed section, and brings focus back when it fell to the page', async () => {
+    routes['GET /eval/golden-set/OFF_1'] = offline();
+    show(<CasesTab />);
+    fireEvent.click(await row('OFF_1'));
+    const panel = await screen.findByTestId('case-panel');
+    await screen.findByTestId('case-detail');
+    const how = within(screen.getByTestId('case-how')).getByText('How it is checked');
+    how.focus();                                   // the last control a person can reach
+    fireEvent.keyDown(how, { key: 'Tab' });
+    // wraps to the first control; a hidden "See the judge" link inside the closed
+    // section is not counted as the last one
+    expect(document.activeElement).toBe(screen.getByLabelText('Close'));
+    (document.activeElement as HTMLElement).blur();  // a focused control was removed: focus is on <body>
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+    expect(panel.contains(document.activeElement)).toBe(true);
+  });
+
+  it('Escape on the delete question cancels the question, not the panel, and focus goes back to Delete', async () => {
+    routes['GET /eval/golden-set/MINE_1'] = { ...gc('MINE_1', { _origin: 'private', release_tier: 'watch' }), history: [] };
+    show(<CasesTab />);
+    fireEvent.click(await row('MINE_1'));
+    const del = await screen.findByTestId('case-delete');
+    del.focus();
+    fireEvent.click(del);
+    expect(screen.getByTestId('case-delete-confirm')).toBeTruthy();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByTestId('case-delete-confirm')).toBeNull();
+    expect(screen.getByTestId('case-panel')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByTestId('case-delete'));
+  });
+
+  it('"Keep editing" gives focus back to the field, and an Escape that ends an input-method composition is ignored', async () => {
+    show(<CasesTab />);
+    fireEvent.click(await screen.findByTestId('add-case'));
+    const id = await screen.findByTestId('form-id');
+    fireEvent.change(id, { target: { value: 'MY_CASE' } });
+    id.focus();
+    fireEvent.keyDown(id, { key: 'Escape', isComposing: true });
+    expect(screen.queryByTestId('discard')).toBeNull();
+    fireEvent.keyDown(id, { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('discard-cancel'));
+    expect(document.activeElement).toBe(screen.getByTestId('form-id'));
+  });
+
+  it('a panel opened from another tab (no opener left) gives focus to the tab panel when it closes', async () => {
+    const tabpanel = document.createElement('div');
+    tabpanel.id = 'eval-scroll'; tabpanel.tabIndex = -1;
+    document.body.appendChild(tabpanel);
+    routes['GET /eval/golden-set/RED_1'] = { ...gc('RED_1', { release_tier: 'red' }), history: [] };
+    show(<CasesTab focus="case:RED_1" />);
+    await screen.findByTestId('case-detail');
+    fireEvent.click(screen.getByLabelText('Close'));
+    expect(document.activeElement).toBe(tabpanel);
+    tabpanel.remove();
+  });
+});
+
+describe('SidePanel reads unsaved input at the moment of the key', () => {
+  it('asks before closing when isDirty turns true with no re-render in between', async () => {
+    const { SidePanel } = await import('../ui');
+    let dirty = false;
+    const onClose = vi.fn();
+    show(<SidePanel open onClose={onClose} label="Form" isDirty={() => dirty}><input data-testid="x" /></SidePanel>);
+    dirty = true;                                   // a keystroke the panel has not re-rendered for
+    fireEvent.keyDown(screen.getByTestId('x'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('discard')).toBeTruthy();
   });
 });

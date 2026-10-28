@@ -121,7 +121,16 @@ def _item(severity, rule, what_en, what_zh, why, action_en, action_zh, case_ids=
 
 
 def _cases_en(n: int, noun: str = "case") -> str:
+    """``1 case`` / ``2 cases``: a follow-up line is read, so no ``case(s)``."""
     return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def _were(n: int) -> str:
+    return "was" if n == 1 else "were"
+
+
+def _have(n: int) -> str:
+    return "has" if n == 1 else "have"
 
 
 def _is_full(run: Mapping[str, Any]) -> bool:
@@ -190,7 +199,7 @@ def _not_measured(runs: Sequence[Mapping[str, Any]], by_id) -> list[dict]:
     errors = [cid for cid, r in latest.items() if r.get("status") == "error"]
     if errors:
         out.append(_item(
-            "medium", 2, f"{len(errors)} case(s) were not measured (not scored)",
+            "medium", 2, f"{_cases_en(len(errors))} {_were(len(errors))} not measured (not scored)",
             f"{len(errors)} 条没测成，不计分", _first_line(latest[errors[0]].get("notes")),
             "Look at the environment error; the cases themselves were not judged.",
             "看一下环境报错；这些 case 本身没有被评判。", errors))
@@ -203,14 +212,14 @@ def _not_measured(runs: Sequence[Mapping[str, Any]], by_id) -> list[dict]:
             stuck.append(cid)
     if stuck:
         out.append(_item(
-            "high", 2, f"{len(stuck)} case(s) timed out twice in a row: possibly really stuck",
+            "high", 2, f"{_cases_en(len(stuck))} timed out twice in a row: possibly really stuck",
             f"{len(stuck)} 条连续两次超时：可能真的卡住了", _first_line(latest[stuck[0]].get("notes")),
             "Run one of them by hand on an idle machine; a hang here is a regression.",
             "在空闲时手动跑其中一条；如果这里卡住，就是退步。", stuck))
     rest = [cid for cid in timeouts if cid not in stuck]
     if rest:
         out.append(_item(
-            "medium", 2, f"{len(rest)} case(s) did not finish (not scored)",
+            "medium", 2, f"{_cases_en(len(rest))} did not finish (not scored)",
             f"{len(rest)} 条没跑完，不计分", _first_line(latest[rest[0]].get("notes")),
             "Usually a loaded machine; if it happens again it is listed as stuck.",
             "通常是机器负载高；再出现一次会被列为卡住。", rest))
@@ -232,16 +241,16 @@ def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[
     def names(ids, lang, sep):
         return sep.join(_label(by_id.get(c), c, lang) for c in ids[:3])
     if flipped:
-        out.append(_item("medium", 3, f"{len(flipped)} offline case(s) passed last time and fail now: "
+        out.append(_item("medium", 3, f"{_cases_en(len(flipped), 'offline case')} passed last time and fail{'s' if len(flipped) == 1 else ''} now: "
                                       f"{names(flipped, 'en', '; ')}",
                          f"{len(flipped)} 条离线考题上次通过、这次不通过：{names(flipped, 'zh', '；')}",
                          _first_line(now[flipped[0]].get("notes")),
                          "Read the agent's answer in the run detail; find which rule it no longer follows.",
                          "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped, kind=EVOLUTION,
-                         headline=(f"{_cases_en(len(flipped), 'offline case')} passed last time and fail now",
+                         headline=(f"{_cases_en(len(flipped), 'offline case')} passed last time and fail{'s' if len(flipped) == 1 else ''} now",
                                    f"{len(flipped)} 条离线考题上次通过、这次不通过")))
     if new:
-        out.append(_item("medium", 3, f"{len(new)} new offline case(s) fail on their first run: "
+        out.append(_item("medium", 3, f"{_cases_en(len(new), 'new offline case')} fail{'s' if len(new) == 1 else ''} on the first run: "
                                       f"{names(new, 'en', '; ')}",
                          f"{len(new)} 条新离线考题第一次运行没通过：{names(new, 'zh', '；')}",
                          _first_line(now[new[0]].get("notes")),
@@ -309,7 +318,7 @@ def _online(state: Mapping[str, Any] | None, include_session_text: bool) -> list
     out += _standing(checks, worse, include_session_text)
     low = [d for d in state.get("low_details") or [] if isinstance(d, Mapping)]
     if low:
-        out.append(_item("low", 4, f"{len(low)} session(s) the judge scored low this week",
+        out.append(_item("low", 4, f"{_cases_en(len(low), 'session')} the judge scored low this week",
                          f"本周有 {len(low)} 个会话被 judge 打了低分",
                          "; ".join(_session_label(d) for d in low[:3]) if include_session_text else "",
                          "Open them; decide whether one deserves a case or a rule change.",
@@ -331,7 +340,7 @@ def _standing(checks: Mapping[str, Any], worse: set, include_session_text: bool)
             if include_session_text else ""
         if cid == "O3_CORRECTIONS":
             if failed > 0:
-                out.append(_item("medium", 8, f"You corrected the agent in {failed} of {checked} session(s) this week",
+                out.append(_item("medium", 8, f"You corrected the agent in {failed} of {_cases_en(checked, 'session')} this week",
                                  f"本周 {checked} 个会话里，你在 {failed} 个纠正过它", sessions,
                                  "Each correction is where you said it was wrong: decide whether it needs a rule or a case.",
                                  "每次纠正都是你说过“不对”的地方：决定要改规则，还是加一条 case。",
@@ -368,7 +377,7 @@ def _always_failing(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[dict]
            if all((w.get(cid) or {}).get("status") == "failed" for w in window)]
     if not ids:
         return []
-    return [_item("medium", 6, f"{len(ids)} case(s) failed in each of the last {_BROKEN_RUNS} full runs",
+    return [_item("medium", 6, f"{_cases_en(len(ids))} failed in each of the last {_BROKEN_RUNS} full runs",
                   f"{len(ids)} 条在最近 {_BROKEN_RUNS} 次全量里都不通过",
                   ", ".join(ids[:5]), "The case itself may be broken: fix it or retire it.",
                   "这条可能本身坏了：修好或者退役。", ids)]
@@ -388,12 +397,12 @@ def _golden_set(cases: Sequence[Mapping[str, Any]], shadowed: Iterable[str]) -> 
                          "退役那些产品 case 已经覆盖的私有 case。"))
     unexplained = [c["id"] for c in product if not (c.get("purpose") or {}).get("en")]
     if unexplained:
-        out.append(_item("low", 7, f"{len(unexplained)} product case(s) have no purpose",
+        out.append(_item("low", 7, f"{_cases_en(len(unexplained), 'product case')} {_have(len(unexplained))} no purpose",
                          f"{len(unexplained)} 条产品 case 没写目的", "",
                          "This should not ship; report it.", "这不该发布出去，请反馈。", unexplained))
     hidden = list(shadowed or [])
     if hidden:
-        out.append(_item("low", 7, f"{len(hidden)} of your case(s) are hidden by a product case with the same id",
+        out.append(_item("low", 7, f"{len(hidden)} of your cases {'is' if len(hidden) == 1 else 'are'} hidden by a product case with the same id",
                          f"{len(hidden)} 条私有 case 和产品 case 同 id，被跳过",
                          ", ".join(hidden[:5]), "Rename or retire them.", "改名或退役它们。", hidden))
     return out

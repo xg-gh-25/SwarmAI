@@ -155,17 +155,18 @@ function LowRow({ l, accepting, label, lang }: { l: OnlineLow; accepting: boolea
   const sid = l.session_id ?? '';
   return (
     <div className="border-t border-[var(--color-border)]" data-testid="low-session">
-      <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((o) => !o)}
-           onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen((o) => !o); } }}
-           className="grid grid-cols-[1fr_auto_auto] gap-4 items-center py-3 cursor-pointer hover:bg-[var(--color-hover)]/40">
-        <div className="min-w-0">
-          <div className="text-body font-semibold text-[var(--color-text)] truncate">{l.title || sid}</div>
-          <div className={`text-small text-[var(--color-text-muted)] ${open ? '' : 'truncate'}`}>{open ? l.reason : firstSentence(l.reason)}</div>
-        </div>
-        <span className="text-small text-[var(--color-text-dim)] tabular-nums whitespace-nowrap">
-          {t('delivered', '交付')} {l.goal_score ?? '—'} · {t('tools', '工具')} {l.tool_score ?? '—'}
-        </span>
-        <span onClick={(e) => e.stopPropagation()}>{sid && <Btn onClick={() => openSession(sid)}>{t('Open session', '打开会话')}</Btn>}</span>
+      <div className="flex gap-4 items-center py-3 hover:bg-[var(--color-hover)]/40">
+        <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)}
+                className="grid grid-cols-[1fr_auto] gap-4 items-center min-w-0 flex-1 text-left cursor-pointer">
+          <span className="block min-w-0">
+            <span className="block text-body font-semibold text-[var(--color-text)] truncate">{l.title || sid}</span>
+            <span className={`block text-small text-[var(--color-text-muted)] ${open ? '' : 'truncate'}`}>{open ? l.reason : firstSentence(l.reason)}</span>
+          </span>
+          <span className="text-small text-[var(--color-text-dim)] tabular-nums whitespace-nowrap">
+            {t('delivered', '交付')} {l.goal_score ?? '—'} · {t('tools', '工具')} {l.tool_score ?? '—'}
+          </span>
+        </button>
+        {sid && <Btn onClick={() => openSession(sid)}>{t('Open session', '打开会话')}</Btn>}
       </div>
       {open && (
         <div className="flex flex-wrap gap-2 pb-3">
