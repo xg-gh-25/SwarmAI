@@ -1362,6 +1362,10 @@ DECISION_JUDGE_TEMPERATURE = 0.0
 DECISION_JUDGE_MAX_TOKENS = 400
 
 
+# How much of the agent's answer the decision judge reads.
+_JUDGE_TEXT_MAX = 4000
+
+
 def _judge_decision_direction(case: dict, final_text: str) -> dict:
     """LLM-judge whether the agent's REAL conclusion went the right way.
 
@@ -1386,7 +1390,7 @@ def _judge_decision_direction(case: dict, final_text: str) -> dict:
         # No rubric, or the agent produced no answer to judge → caller decides.
         return {"status": "skipped", "notes": "no decision_rubric or empty final_text"}
 
-    judge_prompt = DECISION_JUDGE_PROMPT.format(rubric=rubric, final_text=final_text[:4000])
+    judge_prompt = DECISION_JUDGE_PROMPT.format(rubric=rubric, final_text=final_text[:_JUDGE_TEXT_MAX])
 
     try:
         judge_model = _get_judge_model()
@@ -1696,6 +1700,11 @@ def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[
       restatement before the first (AGENT R20). Requires at least one tool call.
     - ``no_next_steps_block``: the answer carries no ```next-steps block
       (STEERING #7 / R18: none when there is no real next step).
+    - ``bootstrap_entries:<repo dir in the fixture workspace>``: the answer's JSON list
+      of a new brain's first entries passes bootstrap-apply's own rules (each section
+      admits its type, required fields are there, every source is a file of that repo)
+      and lies wholly within what the judge reads. Product cases only: the repo is read
+      from the shipped fixture workspace.
     Unknown names fail closed, so a typo cannot silently pass.
     """
     out: list[str] = []
@@ -1715,9 +1724,65 @@ def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[
         elif name == "no_next_steps_block":
             if "```next-steps" in final_text:
                 out.append("no_next_steps_block")
+        elif name.startswith("bootstrap_entries:"):
+            out.extend(_bootstrap_entries_failures(name.split(":", 1)[1], final_text))
         else:
             out.append(f"unknown check {name!r}")
     return out
+
+
+_JSON_BLOCK_RE = _re.compile(r"```json[ \t]*\n?(.*?)```", _re.DOTALL | _re.IGNORECASE)
+
+
+def _answer_json(text: str) -> tuple[object, int]:
+    """``(data, end)``: the JSON of an answer's last ```json block (else of the whole
+    answer) and the offset where it ends in *text*; ``(None, 0)`` if it does not parse."""
+    blocks = list(_JSON_BLOCK_RE.finditer(text))
+    body, end = (blocks[-1].group(1), blocks[-1].end()) if blocks else (text, len(text.rstrip()))
+    try:
+        return json.loads(body), end
+    except ValueError:
+        return None, 0
+
+
+def _bootstrap_entries_failures(repo_rel: str, final_text: str) -> list[str]:
+    """``bootstrap_entries:<repo>``: every entry passes ``apply.check_entry`` with the
+    sources checked against the files of ``<repo>`` in the shipped fixture workspace.
+    Stricter than bootstrap-apply in two ways, because the case's only evidence is the
+    repo and its judge reads only the answer: a source must be a repo file (``user``,
+    ``url:`` and ``file:`` are refused, there is no person and no other file), and the
+    whole list must end within the part of the answer the judge reads
+    (``_JUDGE_TEXT_MAX``), so no entry escapes the judge."""
+    from datetime import date
+    from core.brain_bootstrap import apply as ap
+    from utils.backend_bin import bundled_path
+    base = Path(bundled_path("templates", "eval", "fixtures", "workspace")).resolve()
+    root = (base / repo_rel).resolve()
+    if not root.is_dir() or root == base or base not in root.parents:
+        return [f"bootstrap_entries ({repo_rel!r} is not a repo of the fixture workspace)"]
+    entries, end = _answer_json(final_text)
+    if isinstance(entries, dict):
+        entries = entries.get("entries")
+    if not isinstance(entries, list) or not entries:
+        return ["bootstrap_entries (no JSON list of entries in the answer)"]
+    if end > _JUDGE_TEXT_MAX:
+        return [f"bootstrap_entries (the list ends at character {end}; the judge reads "
+                f"only the first {_JUDGE_TEXT_MAX})"]
+    evidence = ap.Evidence({root.name: root})
+    stamp = date.today().isoformat()
+    bad = []
+    for i, entry in enumerate(entries):
+        try:
+            srcs = entry.get("sources") if isinstance(entry, dict) else None
+            for src in srcs if isinstance(srcs, list) else []:
+                if isinstance(src, str) and (src.strip() == "user" or src.strip().startswith(("url:", "file:"))):
+                    raise ap.Rejected(f"source {src!r}: only a file of the repo is evidence here")
+            ap.check_entry(entry, evidence, stamp)
+        except ValueError as exc:  # Rejected is a ValueError
+            bad.append(f"#{i}: {exc}")
+    if bad:
+        return [f"bootstrap_entries ({len(bad)}/{len(entries)} refused: {'; '.join(bad[:3])})"]
+    return []
 
 
 # Judge-model resolution logging. A dedicated logger (this script has no

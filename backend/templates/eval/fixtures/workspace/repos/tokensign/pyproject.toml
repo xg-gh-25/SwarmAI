@@ -1,0 +1,8 @@
+[project]
+name = "tokensign"
+version = "2.1.0"
+description = "Sign data so it can be trusted after a round trip through an untrusted channel"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 100

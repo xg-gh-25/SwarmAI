@@ -83,18 +83,24 @@ class Rejected(ValueError):
 
 # ── sources ──────────────────────────────────────────────────────────────────
 
-class _Evidence:
-    """What a source may point at: the tracked files of each repo the brain owns."""
+class Evidence:
+    """What a source may point at: the files of each repo, by repo name (a git repo's
+    tracked files, else the walked tree — ``repo_read.list_files``)."""
 
-    def __init__(self, project_dir: Path) -> None:
-        from .survey import owned_repos
+    def __init__(self, roots: dict[str, Path]) -> None:
         self.repos: dict[str, set[str]] = {}
-        for r in owned_repos(project_dir):
+        for name, root in roots.items():
             try:
-                self.repos[r["name"]] = set(rr.list_files(Path(r["root"])))
+                self.repos[name] = set(rr.list_files(Path(root)))
             except Exception as exc:  # noqa: BLE001 — a repo that cannot be listed cites nothing
-                logger.warning("bootstrap-apply: cannot list %s: %s", r["name"], exc)
-                self.repos[r["name"]] = set()
+                logger.warning("bootstrap-apply: cannot list %s: %s", name, exc)
+                self.repos[name] = set()
+
+    @classmethod
+    def for_project(cls, project_dir: Path) -> "Evidence":
+        """The repos the brain owns (``survey.owned_repos``)."""
+        from .survey import owned_repos
+        return cls({r["name"]: Path(r["root"]) for r in owned_repos(project_dir)})
 
     def check(self, source: str) -> bool:
         """True when *source* is outside content (taint), False for ``user``.
@@ -148,7 +154,7 @@ def _text(entry: dict, key: str) -> str:
     return v
 
 
-def validate(entry, evidence: _Evidence) -> dict:
+def validate(entry, evidence: Evidence) -> dict:
     """``{doc, section, render, taint, sources}`` for an entry that may be written, or
     Rejected."""
     from core.ddd_skeleton import GAP_SECTION, SECTION_TYPES, locate_section
@@ -198,6 +204,18 @@ def validate(entry, evidence: _Evidence) -> dict:
     render["sources"] = [s.strip() for s in sources]
     return {"doc": place[0], "section": place[1], "render": render,
             "taint": "external" if taint else None, "sources": render["sources"]}
+
+
+def check_entry(entry, evidence: Evidence, stamp: str) -> dict:
+    """``validate`` plus the rendered block (``block``): exactly what a run does to
+    one entry before it is placed. Raises Rejected (or ValueError from the renderer,
+    e.g. a title that is not one line). The eval's ``bootstrap_entries`` check calls
+    this too, so an agent's answer is judged by the rules that would write it."""
+    from core.ddd_entry_lifecycle import render_ddd_unit
+    v = validate(entry, evidence)
+    v["block"] = render_ddd_unit(v["render"], date_str=stamp, source="bootstrap",
+                                 taint=v["taint"])
+    return v
 
 
 # ── docs ─────────────────────────────────────────────────────────────────────
@@ -287,7 +305,6 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
     ``{status, written: {doc: n}, already_present, rejected: [{index, title, reason}],
     refused_docs: {doc: reason}, ask, need_gap}``; ``status`` is ``refused`` when the
     brain is not setting up or the entries file cannot be read (nothing written)."""
-    from core.ddd_entry_lifecycle import render_ddd_unit
     from core.ddd_paths import ddd_path
     from core.ddd_setup_state import read_setup_state
     from core.ddd_skeleton import unexplained_product_sections, ASK_SECTIONS
@@ -321,15 +338,13 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
         old_log = []
     written_lines = {a["line"] for a in old_log if isinstance(a, dict) and isinstance(a.get("line"), str)}
 
-    evidence = _Evidence(project_dir)
+    evidence = Evidence.for_project(project_dir)
     stamp = (today or date.today()).isoformat()
     rejected: list[dict] = []
     by_doc: dict[str, list[tuple[int, dict]]] = {}
     for i, entry in enumerate(items):
         try:
-            v = validate(entry, evidence)
-            v["block"] = render_ddd_unit(v["render"], date_str=stamp, source="bootstrap",
-                                         taint=v["taint"])
+            v = check_entry(entry, evidence, stamp)
         except (Rejected, ValueError) as exc:
             rejected.append({"index": i, "title": (entry or {}).get("title") if isinstance(entry, dict) else None,
                              "reason": str(exc)})

@@ -463,7 +463,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - 空段都有对应的 gap。
 
 **判断部分**（OS Eval 的 golden case，只在 CI、部署或定时运行，不在 coding pipeline 里跑）：
-- 在 `backend/eval/fixtures/` 放 2–3 个小型公开 repo 的快照：一个 Python 库、一个 TS 服务、一个带 ADR 的 Go 项目，各附一份 must-have 主张清单。例如"默认摘要算法改了会让已签发 token 全部失效"必须出现在 Runtime Traps，并且出处可查。
+- 在 `backend/templates/eval/fixtures/workspace/repos/` 放两个自编的小 repo（不拷公开 repo：license 和内容都不可控）：Python 签名库 `tokensign`、带 ADR 的 Go 服务 `ledgerd`，各附 4 条 must-have 主张，写在 case 的 rubric 和 `fixtures/README.md` 里。例如"默认摘要算法改了会让已签发 token 全部失效"必须出现，并且出处可查。每个 repo 还埋了陷阱：一句写给 AI 的指令、一份状态流水账、一条被否决的 ADR。
 - 指标：
   - must-have 覆盖率；
   - **忠实率**：零上下文判官逐条核对"主张是否被出处原文支持"；
@@ -508,7 +508,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | **已完成**（correctness、ux 一轮，见 r7） |
 | 5 | G3 import 表、G4 语言修正、G6 | 1 | **已完成**（correctness 一轮，见 r8） |
 | 6 | §5.11 C5–C11（阶段二）；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
-| 7 | §6 eval golden case 和 fixture repo | 4 | — |
+| 7 | §6 eval golden case 和 fixture repo | 4 | **已完成**（correctness 一轮，见 r9） |
 | 8 | 用户确认后，归档 SwarmAI 的旧 `code-intel.json` 和 `spec-details/`（移动，不删除）；随后删除 §5.9 表里标为"保留到归档为止"的规则 | 1b | — |
 
 ## 10. 验证计划
@@ -695,3 +695,15 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
   - C++ 类外定义的成员函数仍然记成 `function`，值上的调用会按唯一名字连过去，可能误连，和 Python 原来的情况一样；
   - 增量批次里新出现的文件，要等下一次全量重建，别的文件指向它的 import 才会解析出来。
 
+**r9（2026-10-28）**：第 7 步实施（§6）。
+- **三条 golden case**：
+  - 快速检查 `DDD_BOOTSTRAP`（`probe_ddd bootstrap`）：夹具 repo → survey → 固定条目 → `bootstrap-apply` → P6 知识检查。核对每条落到哪一段、带什么类型和 taint，三条坏条目必须被拒，重跑不重复写。negative 模式关掉规则，必须输出 TEETH。
+  - 离线测试 `OFF_BRAIN_FIRST_ENTRIES_LIB`（tokensign）和 `OFF_BRAIN_FIRST_ENTRIES_ADR`（ledgerd），`gating: watch`。判官按 rubric 判 4 条 must-have、编造（含埋的指令和被否的 ADR）、流水账，并在 notes 里给出覆盖、无出处主张、流水账三个计数，作为定门槛的基线。
+- **判官只看答案，看不到 repo**：
+  - rubric 里列出 repo 说过的全部事实，列表之外的主张算无出处。
+  - 出处是否真实存在交给新的确定性检查 `bootstrap_entries:<repo>`。它调用 `apply.check_entry`，用 `bootstrap-apply` 自己的规则校验，出处对照随产品发布的夹具 repo。它比 `bootstrap-apply` 严两处：只认 repo 文件，不认 `user`、`url:`、`file:`；整个列表必须落在判官读得到的前 4000 字符里。
+- **和原设计的差别**：
+  - 两个 repo，不是三个，TS 服务没做，产品 golden set 现在 49/50；
+  - 不预先放 survey.json，因为它带绝对路径和 git 历史，夹具 repo 也不是 git 仓库，agent 直接读 repo；
+  - skill 的 P2b 契约写在 prompt 里，SKILL.md 改了 prompt 要同步。
+- **记为已知问题**：`scripts/eval_runner_test.py::TestEvalHistoryOutput::test_output_schema_valid` 读本机 live workspace 的 EvalHistory，最新文件没有 `overall_score`，在本次改动之前就红，不在本步范围。
