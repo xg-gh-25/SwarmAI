@@ -115,7 +115,7 @@ def test_v1_ingestion_database_migrates_without_losing_rows(tmp_path, monkeypatc
     conn.close()
 
     migrated = connect_rw()
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 7
     assert migrated.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='unit_usage'"
     ).fetchone()[0] == "unit_usage"

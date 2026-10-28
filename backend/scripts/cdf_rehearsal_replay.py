@@ -163,6 +163,16 @@ def _outcomes() -> dict[str, dict[str, int]]:
     return out
 
 
+def migrate_app_db() -> None:
+    """Run data.db's migrations on the copy, as backend startup does after the rebuild.
+
+    The live data.db is copied from the running (older) daemon, so tables the new code
+    reads (session_inputs, v16/v17) are not there yet. Without this every S2 item
+    failed with "no such table: session_inputs" (rehearsal 2026-10-28)."""
+    from database import db
+    asyncio.run(db.initialize(skip_init=True))
+
+
 def replay(data_dir: Path, workspace: Path, *, days: int = 7,
            sources: tuple[str, ...] = SOURCES, max_usd: float = 0.0,
            price_in: float = 3.0, price_out: float = 15.0, dry_run: bool = False,
@@ -195,6 +205,12 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
             except Exception as exc:  # one bad item is reported, the replay goes on
                 entry["errors"] += 1
                 entry.setdefault("first_error", f"{type(exc).__name__}: {exc}")
+                entry.setdefault("error_kinds", {})
+                kind = type(exc).__name__
+                entry["error_kinds"][kind] = entry["error_kinds"].get(kind, 0) + 1
+                import traceback
+                print(f"[{source}] item failed: {item!r:.200}\n{traceback.format_exc()}",
+                      file=sys.stderr, flush=True)
             # drain per item, as the live worker does, so the budget check above also
             # sees the cards' spend before the next item
             entry["drain_steps"] += _drain(workspace, judge_factory, max_steps)
@@ -240,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["SWARM_WORKSPACE"] = str(args.workspace.resolve())
     if str(BACKEND) not in sys.path:
         sys.path.insert(0, str(BACKEND))
+    if not args.dry_run:
+        migrate_app_db()
     report = replay(args.data_dir.resolve(), args.workspace.resolve(), days=args.days,
                     sources=sources, max_usd=args.max_usd, price_in=args.price_in,
                     price_out=args.price_out, dry_run=args.dry_run)

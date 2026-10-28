@@ -136,3 +136,25 @@ def test_transcript_sync_reads_sent_rows_in_order(tmp_path, monkeypatch) -> None
     assert [r["id"] for r in rows] == ["m1", "m2"]
     assert rows[1]["content"] == [{"type": "text", "text": "b"}]
     assert "content_seg" not in rows[0]
+
+
+def test_a_v6_database_gains_the_job_table(tmp_path, monkeypatch) -> None:
+    """Schema v6 was already on disk (dev and rehearsal copies): v7 adds the table."""
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data_dir))
+    from core.ingestion.api import SCHEMA_DDL, connect_rw
+    from core.ingestion.api_v2 import SCHEMA_V2_DDL
+    from core.ingestion.store import _USAGE_SCHEMA_DDL, _V2_MIGRATION_DDL, _V6_DDL
+    raw = sqlite3.connect(data_dir / "ingestion.db", isolation_level=None)
+    raw.execute("PRAGMA auto_vacuum=2")
+    raw.execute("PRAGMA journal_mode=WAL")
+    raw.executescript(f"BEGIN;{SCHEMA_DDL}{_V2_MIGRATION_DDL}{SCHEMA_V2_DDL}{_USAGE_SCHEMA_DDL}"
+                      f"{_V6_DDL}PRAGMA user_version=6;COMMIT;")
+    raw.close()
+    conn = connect_rw()
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert conn.execute("SELECT COUNT(*) FROM ingestion_s2_jobs").fetchone()[0] == 0
+    finally:
+        conn.close()

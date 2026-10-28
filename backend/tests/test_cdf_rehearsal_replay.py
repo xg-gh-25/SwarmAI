@@ -71,3 +71,17 @@ def test_budget_stops_before_the_next_item(cdf_env, monkeypatch) -> None:
                                max_usd=2.0, llm=Extractor(), judge_factory=Judge)
     assert report["stopped"].startswith("budget")
     assert report["sources"]["s2"]["receipts"] == 0
+
+
+def test_main_migrates_the_copy_before_a_real_run(tmp_path: Path, monkeypatch) -> None:
+    """The copy comes from the older running daemon: its data.db must get the new
+    tables (session_inputs) before S2 reads them, as backend startup would do."""
+    calls: list[str] = []
+    monkeypatch.setattr(replay_mod, "guard_paths", lambda *a: None)
+    monkeypatch.setattr(replay_mod, "migrate_app_db", lambda: calls.append("migrate"))
+    monkeypatch.setattr(replay_mod, "replay",
+                        lambda *a, **k: calls.append("replay") or {"dry_run": k["dry_run"]})
+    args = ["--data-dir", str(tmp_path), "--workspace", str(tmp_path)]
+    replay_mod.main(args + ["--max-usd", "1"])
+    replay_mod.main(args + ["--dry-run"])
+    assert calls == ["migrate", "replay", "replay"]
