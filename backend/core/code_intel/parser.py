@@ -67,11 +67,29 @@ LANGUAGE_MAP = {
 _REGEX_ONLY_LANGS = frozenset({"sql"})
 
 
+# The grammar a suffix is parsed with, where it is not its language's own. A .tsx
+# file is TypeScript (LANGUAGE_MAP: the same rule tables) but needs the tsx grammar:
+# the typescript grammar reads JSX as syntax errors, an error tree keeps no edges,
+# and every .tsx component came out "degraded" with 0 call edges.
+_GRAMMAR_BY_SUFFIX = {".tsx": "tsx"}
+
+
+def grammar_for(suffix: str) -> str | None:
+    """The tree-sitter grammar that parses files with *suffix*, or None when the
+    suffix is not indexed or its language is regex-only. Parser objects and the
+    liveness probe are keyed by this name; the per-language rule tables by
+    LANGUAGE_MAP's language."""
+    lang = LANGUAGE_MAP.get(suffix)
+    if lang is None or lang in _REGEX_ONLY_LANGS:
+        return None
+    return _GRAMMAR_BY_SUFFIX.get(suffix, lang)
+
+
 def tree_sitter_languages() -> list[str]:
-    """The languages whose tree-sitter grammar code intel uses: every language in
-    LANGUAGE_MAP but the regex-only ones. The packaged app ships exactly these
-    (scripts/bundle_tree_sitter_grammars.py; core.code_intel.grammars)."""
-    return sorted(set(LANGUAGE_MAP.values()) - _REGEX_ONLY_LANGS)
+    """The grammars code intel uses: ``grammar_for`` of every suffix in LANGUAGE_MAP.
+    The packaged app ships exactly these (scripts/bundle_tree_sitter_grammars.py;
+    core.code_intel.grammars)."""
+    return sorted({g for s in LANGUAGE_MAP if (g := grammar_for(s))})
 
 DEFINITION_TYPES = {
     "python": ["function_definition", "class_definition"],
@@ -611,7 +629,9 @@ except ImportError:
 
 
 def _get_cached_parser(language: str):
-    """Get or create a tree-sitter parser for a language (per-thread instance)."""
+    """Get or create a tree-sitter parser for a grammar (per-thread instance). The
+    name is a grammar name (``grammar_for``), which is the language name except
+    where _GRAMMAR_BY_SUFFIX says otherwise."""
     if not _ts_available:
         return None
     cache = getattr(_parser_cache_tls, "cache", None)
@@ -669,7 +689,7 @@ def _tree_has_error(tree) -> bool:
 
 
 def _tree_sitter_live(language: str) -> bool:
-    """Probe (once per language, cached) whether tree-sitter can actually parse a
+    """Probe (once per grammar name, cached) whether tree-sitter can actually parse a
     trivial snippet AND expose a usable root node. False → the AST path is dead in
     this environment; callers fall back to regex and the repo-level fidelity hole
     is emitted. Fail-safe: any probe error → not live (regex, honest signal)."""
@@ -2099,10 +2119,12 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
     # false-confidence the banking guarantee forbids. So: only enter the tree-sitter
     # branch when a liveness probe confirms the AST path works; the repo-level
     # fidelity signal is emitted once by parse_repo_with_coverage (not per file).
-    # _REGEX_ONLY_LANGS (e.g. sql) skip the tree-sitter branch even when a grammar
-    # is live — their edges would be dropped by the error-tree guard below.
-    parser = (_get_cached_parser(lang)
-              if (lang not in _REGEX_ONLY_LANGS and _tree_sitter_live(lang))
+    # _REGEX_ONLY_LANGS (e.g. sql) have no grammar (grammar_for is None) and skip
+    # the tree-sitter branch — their edges would be dropped by the error-tree guard
+    # below. The grammar may differ from the language (.tsx); the rules do not.
+    grammar = grammar_for(path.suffix)
+    parser = (_get_cached_parser(grammar)
+              if (grammar is not None and _tree_sitter_live(grammar))
               else None)
     if parser:
         try:
@@ -2300,7 +2322,7 @@ def parse_repo_with_coverage(
     # honest only if SAID — a "complete" stamp over regex-only fidelity is the
     # false-confidence the banking guarantee forbids. Emit ONE repo-level hole per
     # dead language (not per file) and mark partial. ──
-    langs_present = {LANGUAGE_MAP[p.suffix] for p in files_to_parse if p.suffix in LANGUAGE_MAP}
+    langs_present = {g for p in files_to_parse if (g := grammar_for(p.suffix))}
     dead_langs = sorted(l for l in langs_present if not _tree_sitter_live(l))
     if dead_langs:
         status = "partial"

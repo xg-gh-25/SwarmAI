@@ -535,6 +535,34 @@ class TestTreeSitterLiveAST:
                 f"tree-sitter must be LIVE for {lang} — got False (AST path dead, "
                 f"regex fallback). The parser constructor is broken.")
 
+    def test_a_tsx_file_with_jsx_keeps_its_call_edges(self, tmp_path):
+        """A .tsx file is TypeScript read with the tsx grammar. Read with the
+        typescript grammar, JSX is a syntax error, the file comes out degraded and
+        keeps no edges (every .tsx component in a repo had 0 call edges)."""
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("typescript"):
+            pytest.skip("tree-sitter tsx grammar not live in this env")
+        f = tmp_path / "Panel.tsx"
+        f.write_text(
+            "function load(): number { return 1; }\n"
+            "export function Panel() {\n"
+            "  const n = load();\n"
+            "  return <div className=\"p\">{n}</div>;\n"
+            "}\n")
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "ok"
+        assert {n.name for n in result.nodes} >= {"load", "Panel"}
+        assert any(e.edge_type == "calls" and e.target_id.endswith("load")
+                   for e in result.edges), [(e.edge_type, e.target_id) for e in result.edges]
+
+    def test_the_tsx_grammar_is_shipped_and_ts_rules_apply(self):
+        import core.code_intel.parser as P
+        assert P.grammar_for(".tsx") == "tsx"
+        assert P.grammar_for(".ts") == "typescript"
+        assert P.LANGUAGE_MAP[".tsx"] == "typescript"     # the rule tables stay TypeScript's
+        assert P.grammar_for(".sql") is None              # regex-only: no grammar at all
+        assert "tsx" in P.tree_sitter_languages()
+
     def test_real_ast_extracts_python_symbols_with_line_spans(self, tmp_path):
         """AC2: a real Python file parses via AST → correct symbol names + line spans.
 

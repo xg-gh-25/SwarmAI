@@ -221,7 +221,7 @@ def reindex_projects(full: bool = False) -> dict:
             # DURABLE record of that decision (observability + a hook can later read
             # it to decide domain-layer staleness, design §7.4) — it is persisted for
             # that, not consumed by this function's own control flow.
-            from core.code_intel.parser import parse_file, LANGUAGE_MAP, _tree_sitter_live
+            from core.code_intel.parser import parse_file, LANGUAGE_MAP, _tree_sitter_live, grammar_for
             from core.code_intel import extract_and_store_routes
             from core.code_intel import grading
 
@@ -281,7 +281,8 @@ def reindex_projects(full: bool = False) -> dict:
                     )
                     byte_changed = (content_hash is None) or (content_hash != old_hash)
                     lang = LANGUAGE_MAP.get(full_path.suffix, "unknown")
-                    is_supported = lang != "unknown" and _tree_sitter_live(lang)
+                    grammar = grammar_for(full_path.suffix)
+                    is_supported = grammar is not None and _tree_sitter_live(grammar)
 
                     grade = grading.file_grade(
                         old_sig, result, byte_changed=byte_changed, is_supported=is_supported

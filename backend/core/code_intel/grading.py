@@ -172,7 +172,8 @@ def file_grade(
         byte_changed: True if the file's content hash differs from the stored
             hash. False → NONE (nothing changed at the byte level at all).
         is_supported: True ONLY if tree-sitter is live for this language
-            (`_tree_sitter_live(lang)`), NOT merely "extension in LANGUAGE_MAP".
+            (`_tree_sitter_live(grammar_for(suffix))`), NOT merely "extension in
+            LANGUAGE_MAP" (a regex-only language has no grammar: unsupported).
             Gate-1 #3: the regex fallback misses nested/method defs, so a real
             added method could leave the signature unchanged → false COSMETIC.
             Unsupported/regex-degraded → fail UP to STRUCTURAL.

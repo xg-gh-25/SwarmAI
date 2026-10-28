@@ -103,8 +103,9 @@ def test_a_refused_language_takes_the_regex_path(pack, tmp_path, monkeypatch) ->
 
 def test_the_shipped_set_is_every_language_code_intel_parses() -> None:
     from core.code_intel import parser as P
-    assert P.tree_sitter_languages() == sorted(set(P.LANGUAGE_MAP.values()) - P._REGEX_ONLY_LANGS)
+    assert P.tree_sitter_languages() == sorted({P.grammar_for(s) for s in P.LANGUAGE_MAP} - {None})
     assert "sql" not in P.tree_sitter_languages()
+    assert {"typescript", "tsx"} <= set(P.tree_sitter_languages())
 
 
 def _pack_aliases(tree: ast.AST) -> tuple[set[str], list[int]]:
