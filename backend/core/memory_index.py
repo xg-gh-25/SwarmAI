@@ -197,7 +197,11 @@ def parse_memory_sections(content: str) -> dict[str, str]:
     """Split MEMORY.md content into named sections.
 
     Returns dict mapping section name (e.g. "Recent Context") to its content.
-    Strips the index block if present.
+    Strips the index block if present. A " — suffix" is dropped from each heading, so
+    two headings can reduce to the same name (``## What Worked`` and ``## What Worked —
+    Major Deliveries``): their bodies are joined in file order under that name, never
+    overwritten -- a dict keyed by the name used to keep only the last one, which hid
+    about 38% of SwarmAI's IMPROVEMENT.md from every DDD recall.
     """
     # Remove existing index block
     body = extract_body_without_index(content)
@@ -214,7 +218,12 @@ def parse_memory_sections(content: str) -> dict[str, str]:
             # Strip common suffixes like " — What I Remember"
             current_name = re.sub(r"\s*[—–-]\s+.*$", "", current_name)
         elif current_name:
-            sections[current_name] = part.strip()
+            body_part = part.strip()
+            if current_name in sections and sections[current_name]:
+                sections[current_name] = (f"{sections[current_name]}\n\n{body_part}"
+                                          if body_part else sections[current_name])
+            else:
+                sections[current_name] = body_part
 
     return sections
 
