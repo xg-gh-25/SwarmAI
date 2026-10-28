@@ -11,7 +11,7 @@
  * moment between their polls, never by rule.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 import { activityOf, waitingUnasked } from './useSwarmOutActivity';
 
@@ -134,6 +134,61 @@ export function runsByHive(runs: SwarmOutRun[], now: number, days = 7): { hive: 
   return [...by]
     .map(([hive, rs]) => ({ hive, runs: [...rs].sort((a, b) => sentAt(b) - sentAt(a)) }))
     .sort((a, b) => b.runs.length - a.runs.length || a.hive.localeCompare(b.hive));
+}
+
+/** The Brain a run went under, as the cards name it. */
+export function brainLabel(r: SwarmOutRun): string {
+  const b = r.project_agent?.brain;
+  if (!b) return '没走 Project Agent';
+  return b === 'General' ? '通用（Runner Agent）' : b;
+}
+
+const CHECK: Record<SwarmOutCheckStatus, string> = { ran: '跑了', errored: '报错了', unknown: '跑了但没有结果', not_run: '没跑' };
+
+/** "校验：tests 跑了 · lint 没跑" for a run whose Project Agent named checks, else null.
+ *  When older turns were not read, "没跑" is only "没看到". */
+export function checksLine(res: SwarmOutResult): string | null {
+  const c = res.checks;
+  if (!c || c.length === 0) return null;
+  const word = (s: SwarmOutCheckStatus) => (s === 'not_run' && res.checks_partial ? '没看到' : CHECK[s] ?? '没跑');
+  return `校验：${c.map((x) => `${x.id} ${word(x.status)}`).join(' · ')}${res.checks_partial ? '（只读了最近的轮次）' : ''}`;
+}
+
+const gateName = (k: string): string =>
+  k === 'integrity' ? '完整性' : k.startsWith('error:') ? `${k.slice(6)} 出错` : k;
+
+/** "Brain gate 拦下 3 次（no_git_push 2、完整性 1）"; for a Project Agent run on a Hive
+ *  that does not count them, says so; null otherwise. */
+export function gateLine(res: SwarmOutResult): string | null {
+  if (res.project_agent && res.gate_refusals === null) return 'Brain gate：这台 Hive 不记录拦截次数';
+  const g = Object.entries(res.gate_refusals ?? {}).filter(([, n]) => n > 0);
+  if (g.length === 0) return null;
+  const total = g.reduce((a, [, n]) => a + n, 0);
+  return `Brain gate 拦下 ${total} 次（${g.map(([k, n]) => `${gateName(k)} ${n}`).join('、')}）`;
+}
+
+export interface BrainRow { brain: string; label: string; runs: number; completed: number; failed: number; checksNotRun: number }
+
+/** The last `days` days' runs by the Brain they went under, Brains by run count;
+ *  runs without a Project Agent last. */
+export function runsByBrain(runs: SwarmOutRun[], now: number, days = 7): BrainRow[] {
+  const by = new Map<string, BrainRow>();
+  for (const r of runs) {
+    if (!(now - sentAt(r) < days * DAY_MS)) continue;
+    const key = r.project_agent?.brain ?? '';
+    const row = by.get(key) ?? { brain: key, label: brainLabel(r), runs: 0, completed: 0, failed: 0, checksNotRun: 0 };
+    row.runs += 1;
+    const bucket = outcomeBucket(r);
+    if (bucket === 'completed') row.completed += 1;
+    else if (bucket === 'error') row.failed += 1;
+    // a run still going has not reached its checks yet
+    if (r.result && !r.result.provisional && r.state !== 'running') {
+      row.checksNotRun += (r.result.checks ?? []).filter((c) => c.status !== 'ran').length;
+    }
+    by.set(key, row);
+  }
+  return [...by.values()].sort((a, b) => (a.brain ? 0 : 1) - (b.brain ? 0 : 1) || b.runs - a.runs
+    || a.label.localeCompare(b.label));
 }
 
 /** What a run's state means to the person, in the words the cards use. */

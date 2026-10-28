@@ -298,7 +298,10 @@ async def dispatch_spec(hive_ref: str, title: str, brain: str, task: str, accept
     except httpx.HTTPError as e:
         raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: the Hive did not answer "
                             f"({type(e).__name__}); nothing was sent") from None
-    agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "delivery", "acceptance")}
+    agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "delivery", "acceptance", "gates")}
+    # the checks the run is expected to run: compared with its Bash calls when its
+    # result is read (core/swarm_out_results)
+    agent["validations"] = [{"id": v["id"], "command": v["command"]} for v in spec["validations"]]
     row = await dispatch(hive_ref, title, spec["task"], origin,
                          [{"url": r["url"], "ref": r["ref"]} for r in spec["repos"]],
                          segment=task_spec.segment(spec), agent=agent)

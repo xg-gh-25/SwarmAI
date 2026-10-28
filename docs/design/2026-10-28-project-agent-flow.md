@@ -292,7 +292,7 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 - 正在安装时，新的 turn 等安装和 skill 重扫做完再开始，不会读到装了一半的 Brain。
 - 判断和标记之间没有 `await`，都在事件循环里完成，所以没有"先查再装"中间插进一个 turn 的窗口。
 - 读不出会话记录的 turn（数据库一时读不了）占用所有 Brain，不会有安装落在它下面。
-- 已知取舍：排队等 CLI slot 的 turn 也算占用；几个会话的 turn 一直首尾相接时，安装会一直被拒（控制台显示"正忙"）。两种情况都只是同步推迟，不会读到装了一半的 Brain。
+- 已知取舍：排队等 CLI slot 的 turn 也算占用。几个会话的 turn 一直首尾相接时，安装会一直被拒（控制台显示"正忙"）。两种情况都只是同步推迟，不会读到装了一半的 Brain。
 - 不同的 Brain 之间互不影响。
 - 一个会话的两个 turn 之间，Brain 可以被更新。下一个 turn 用新文件、旧 pin。gate 不一样时，Brain gate 钩子会拦下它的 gated 动作（"Brain 的 gate 被改过"），这个任务要重新派发，而不是在派发时没定过的规则下继续跑。
 
@@ -383,7 +383,12 @@ flowchart TB
 - `profile`：派发时定的，和 pipeline 实际用的。
 - 每条校验"跑了 / 报错了 / 没跑"：比对 Bash 调用得出，见简报设计 r2 §7。
 
-**⑧ 结果：** 面板按 Brain 分组，没有 Brain 的单独一组。结果挂回原来的 Intent。Intent 是 ToDo 的，更新它的状态。
+**实现（第 8 步）：**
+- **记录来自哪里：** brain、mode、revision、profile、交付方式、gate 名、校验清单都记在本机的派发记录里，`/runs` 只从这里取。
+- **校验：** 本机对照派发记录里的校验命令，看 Hive 上的 Bash 调用（取回的消息里 `display.object`），每条记"跑了 / 报错了 / 跑了但没有结果 / 没跑"。命令必须作为一条命令出现（行首，或 `&&`、`;`、`|`、换行、`(` 之后，参数不限）。只是提到它（`grep "pytest -q"`、`echo`）或写进 heredoc 的不算。只读了最近 20 轮时标"只读了最近的轮次"，"没跑"改说"没看到"。从来不说"通过"。
+- **gate 拦截：** Hive 的 Brain gate 钩子按 gate 计数（拒绝、`error:<gate>` 运行出错、`integrity` 完整性），写进每轮的 `turn_outcome.gate_refusals`。Project Agent 会话即使一次没拦也写 `{}`，所以本机能分清"没拦过"和"这台 Hive 不记录"。写入失败时计数留到下一轮。已知限制：最后一轮之后后台 agent 被拦的次数，没有下一轮就记不下来。
+
+**⑧ 结果：** 面板按 Brain 分组，没有 Brain 的单独一组。结果挂回原来的 Intent。Intent 是 ToDo 的，更新它的状态。实现：每张卡片写明 Brain 和 mode（悬停看验收），卡片上有校验行和 gate 行。面板新增"按大脑（7 天）"一节：每个 Brain 的 run 数、做完和出错数，以及结束了的 run 里有几条校验没跑或报错。挂回 ToDo 不在这一步。
 
 **⑨ 代码回到本机（改了代码的 run）：**
 

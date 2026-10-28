@@ -162,7 +162,8 @@ describe('the run view', () => {
     await screen.findByTestId('kpi-free');
     const tbd = screen.getAllByTestId('swarm-out-tbd').map((t) => t.textContent ?? '');
     expect(tbd.some((t) => t.includes('已安排') && t.includes('TBD：还没有定时派发'))).toBe(true);
-    expect(tbd.some((t) => t.includes('trace') && t.includes('TBD：'))).toBe(true);
+    expect(tbd.some((t) => t.includes('trace'))).toBe(false);   // the Brain of each run is recorded now
+    expect(screen.getByTestId('swarm-out-by-brain').textContent).toContain('没走 Project Agent');
     expect(tbd.some((t) => t.includes('结果'))).toBe(false);   // results come from the Hive now
     expect(screen.queryByTestId('swarm-out-sample-notice')).toBeNull();
     expect(document.body.textContent).not.toMatch(/示例|敬请期待/);

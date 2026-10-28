@@ -29,6 +29,9 @@ export interface SwarmOutRun {
   state_reason?: string;
   /** the repositories the task declared, with the directory each goes to on the Hive */
   repos?: { url: string; ref: string | null; dir: string }[];
+  /** The Project Agent the task went under (this machine's own dispatch record; absent
+   *  for a dispatch from before Project Agents). brain "General" = the Runner Agent. */
+  project_agent?: SwarmOutAgent;
   /** How the run ended and what it did, as last read from its Hive (backend
    *  core/swarm_out_results.public): no reply text, no error message. */
   result?: SwarmOutResult | null;
@@ -57,6 +60,22 @@ export interface SwarmOutRepoFact {
 
 /** detail: /result only (null in /runs) */
 export interface SwarmOutAuditRow { dim: string; verdict: string | null; detail: string | null }
+
+export interface SwarmOutAgent {
+  brain: string;
+  mode: string;
+  revision: string;
+  profile: string;
+  delivery: string;
+  acceptance: string;
+  gates?: string[];
+  validations?: { id: string; command: string }[];
+}
+
+/** ran: a Bash call ran the check's command (with any arguments) and did not error;
+ *  errored: its last such call errored; unknown: that call has no recorded result;
+ *  not_run: no call ran it. Never "passed". */
+export type SwarmOutCheckStatus = 'ran' | 'errored' | 'unknown' | 'not_run';
 
 export interface SwarmOutResult {
   ended: SwarmOutEnded;
@@ -93,6 +112,14 @@ export interface SwarmOutResult {
   pipeline: { run_id: string | null; profile: string | null; status: string | null; landing: string | null;
     landed_sha: string | null; audit: SwarmOutAuditRow[] } | null;
   dropped: number;
+  /** from this machine's dispatch record (null for a dispatch without a Project Agent) */
+  project_agent?: { brain: string | null; mode: string | null; profile: string | null; delivery: string | null } | null;
+  checks?: { id: string; status: SwarmOutCheckStatus }[] | null;
+  /** Brain gate refusals by gate ("error:<gate>": the gate could not run; "integrity":
+   *  the gates were changed or unreadable); null: the Hive does not count them */
+  gate_refusals?: Record<string, number> | null;
+  /** older turns were not read: a check or refusal there is not seen */
+  checks_partial?: boolean;
 }
 
 /** The whole kept record of one run (GET /swarm-out/runs/{id}/result). */

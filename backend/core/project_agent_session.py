@@ -254,6 +254,41 @@ def run_gates(workspace: Path, pin: dict[str, Any], input_data: dict[str, Any]) 
     return None
 
 
+REFUSALS_KEY = "brain_gate_refusals"
+_GATE_REASON = re.compile(r"Brain gate ([A-Za-z0-9][A-Za-z0-9._-]{0,79}) (refused this|could not start|"
+                          r"did not answer|failed)")
+
+
+def refusal_label(reason: str) -> str:
+    """What refused a call: the gate's name (it refused, exit 2), ``error:<name>`` (it
+    could not start, timed out or failed), or ``integrity`` (the gates could not be
+    read, were changed since the session started, or are missing)."""
+    m = _GATE_REASON.match(reason or "")
+    if not m:
+        return "integrity"
+    return m.group(1) if m.group(2) == "refused this" else f"error:{m.group(1)}"
+
+
+def take_refusals(session_context: Optional[dict[str, Any]]) -> Optional[dict[str, int]]:
+    """The refusals counted since the last call, and reset them; None when this is not
+    a Project Agent session (no pin was ever read into the context). A refusal made
+    after a session's last turn (a background agent's call) is counted into its next
+    turn, or not recorded when there is none."""
+    if not session_context or (PIN_KEY not in session_context and REFUSALS_KEY not in session_context):
+        return None
+    got = session_context.pop(REFUSALS_KEY, None)
+    return dict(got) if isinstance(got, dict) else {}
+
+
+def restore_refusals(session_context: Optional[dict[str, Any]], refusals: Optional[dict[str, int]]) -> None:
+    """Put back counts a failed outcome write did not record (they go to the next one)."""
+    if not session_context or not refusals:
+        return
+    now = session_context.setdefault(REFUSALS_KEY, {})
+    for k, n in refusals.items():
+        now[k] = now.get(k, 0) + n
+
+
 def create_brain_gate_hook(session_context: dict[str, Any]):
     """PreToolUse hook (Bash, Write, Edit, MultiEdit, NotebookEdit): in a Project
     Agent session, run the Brain's enforced gates (``run_gates``); outside one, do
@@ -277,6 +312,10 @@ def create_brain_gate_hook(session_context: dict[str, Any]):
             return {}
         logger.warning("[BRAIN_GATE] %s refused for %s: %s", input_data.get("tool_name"),
                        pin.get("brain"), reason[:200])
+        # counted for the turn's outcome record (SessionRouter._write_turn_outcome)
+        refusals = session_context.setdefault(REFUSALS_KEY, {})
+        label = refusal_label(reason)
+        refusals[label] = refusals.get(label, 0) + 1
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                        "permissionDecision": "deny",
                                        "permissionDecisionReason": reason}}

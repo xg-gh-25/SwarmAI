@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
-import { endedLabel, errorLabel, hiveStatusLabel, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, stateLabel, useRuns, workLines } from './live';
+import { brainLabel, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, stateLabel, useRuns, workLines } from './live';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
@@ -285,6 +285,9 @@ function RunResult({ r }: { r: SwarmOutRun }) {
     <div className="mt-1.5" data-testid="swarm-out-run-result">
       <div className={`text-[12.5px] font-medium ${TONE[ended.tone]}`} data-testid="swarm-out-run-ended">{ended.text}</div>
       {work.map((w) => <div key={w} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-work">{w}</div>)}
+      {[checksLine(res), gateLine(res)].filter(Boolean).map((l) => (
+        <div key={l!} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-checks">{l}</div>
+      ))}
       <div className={`text-[11.5px] mt-0.5 ${muted}`} data-testid="swarm-out-run-numbers">{numberParts(res).join(' · ')}</div>
       {r.result_error && <div className={`text-[11.5px] mt-0.5 ${muted}`}>上次检查：{resultErrorLabel(r.result_error)}</div>}
     </div>
@@ -301,7 +304,7 @@ function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
         <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
       </div>
       <div className={`text-[11.5px] mt-0.5 truncate ${muted}`}>
-        {r.hive} · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
+        {r.hive} · <span data-testid="swarm-out-run-brain" title={r.project_agent?.acceptance ? `验收：${r.project_agent.acceptance}` : undefined}>{brainLabel(r)}{r.project_agent?.mode ? ` / ${r.project_agent.mode}` : ''}</span> · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
       </div>
       <RunResult r={r} />
       {canOpen && (
@@ -327,6 +330,27 @@ function RunGroup({ title, rows, empty, onReload }: { title: string; rows: Swarm
           {rows.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={onReload} />)}
         </div>
       )}
+    </section>
+  );
+}
+
+/** The last 7 days by the Brain each run went under: how its work goes there. */
+function ByBrain({ runs, now }: { runs: SwarmOutRun[]; now: number }) {
+  const rows = runsByBrain(runs, now);
+  if (rows.length === 0) return null;
+  return (
+    <section className="mt-5" data-testid="swarm-out-by-brain">
+      <h3 className="m-0 mb-2 text-[13px] font-semibold">按大脑（7 天）</h3>
+      <div className="flex flex-col gap-1">
+        {rows.map((b) => (
+          <div key={b.brain || '-'} className="flex items-baseline gap-3 text-[12.5px]" data-testid="swarm-out-brain-row" data-brain={b.brain}>
+            <span className="w-44 shrink-0 truncate font-medium" title={b.label}>{b.label}</span>
+            <span className="tabular-nums">{b.runs} 个</span>
+            <span className={`tabular-nums ${muted}`}>{b.completed} 做完{b.failed ? ` · ${b.failed} 出错` : ''}</span>
+            {b.checksNotRun > 0 && <span className="text-[var(--color-status-warning)] tabular-nums">{b.checksNotRun} 个校验没跑或报错</span>}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -397,7 +421,7 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
           {groups.unknown.length > 0 && <RunGroup title="状态未知" rows={groups.unknown} empty="" />}
         </>
       )}
-      <Tbd title="trace：用了哪个大脑、打包了什么上下文" missing="派发记录里没有大脑和打包的上下文" />
+      {data && data.runs.length > 0 && <ByBrain runs={data.runs} now={at} />}
       <Tbd title="已安排" missing="还没有定时派发" />
     </div>
   );

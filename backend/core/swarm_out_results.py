@@ -49,7 +49,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 3
+SUMMARY_VERSION = 4
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -126,9 +126,61 @@ def _is_turn_start(row: dict) -> bool:
     return not (isinstance(meta, dict) and ("steered" in meta or "steer" in meta))
 
 
-def summarize(messages: Any, has_more: bool = False) -> dict[str, Any]:
+_CHECK_STATUSES = ("ran", "errored", "unknown", "not_run")
+_REFUSAL_KEY_RE = re.compile(r"[A-Za-z0-9_.:-]{1,90}")
+# where a command starts in a shell line: its beginning, or after a separator
+_CMD_START = r"(?:^|&&|\|\||;|\||\n|\(|\$\()\s*"
+
+
+def _norm(cmd: Any) -> str:
+    return " ".join(cmd.split()) if isinstance(cmd, str) else ""
+
+
+def _runs(call: str, check: str) -> bool:
+    """True when the shell line *call* runs *check* as a command of its own (at its
+    start or after ``&&``, ``;``, ``|``, a newline, ``(``), with any arguments — not
+    when it only mentions it (``grep "pytest -q"``, ``echo ...``) or writes it into a
+    heredoc (a match after ``<<``)."""
+    for m in re.finditer(_CMD_START + re.escape(check) + r"(?=$|\s|;|&|\||\))", call):
+        if "<<" not in call[:m.start()]:
+            return True
+    return False
+
+
+def _checks(blocks: list[dict], agent: Optional[dict]) -> Optional[list[dict]]:
+    """Each check the dispatch expected (``agent.validations``, the host's own list):
+    ``ran`` when a Bash call's command contains it and that call's result was not an
+    error, ``errored`` when the last such call errored, ``not_run`` otherwise. Read
+    from the persisted call (``display.object``, the command as shown, cut at its
+    display limit): never "passed" — a result says whether the command errored, not
+    what it found."""
+    wanted = [v for v in (agent or {}).get("validations") or [] if isinstance(v, dict)
+              and isinstance(v.get("id"), str) and _norm(v.get("command"))]
+    if not wanted:
+        return None
+    errored = {b.get("tool_use_id"): b.get("is_error") is True for b in blocks
+               if b.get("type") == "tool_result"}
+    calls = []
+    for b in blocks:
+        if b.get("type") == "tool_use" and b.get("name") == "Bash":
+            disp = b.get("display") if isinstance(b.get("display"), dict) else {}
+            line = disp.get("object") or b.get("summary") or ""
+            # whitespace inside a line collapsed, the lines kept (a newline separates commands)
+            calls.append(("\n".join(_norm(x) for x in str(line).splitlines()), errored.get(b.get("id"))))
+    out = []
+    for v in wanted:
+        hits = [e for cmd, e in calls if _runs(cmd, _norm(v["command"]))]
+        status = "not_run" if not hits else "unknown" if hits[-1] is None \
+            else "errored" if hits[-1] else "ran"
+        out.append({"id": v["id"], "status": status})
+    return out
+
+
+def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = None) -> dict[str, Any]:
     """The result of one run from its session's rows (chronological, as the
-    messages API returns them). Pure; never raises on malformed input."""
+    messages API returns them). Pure; never raises on malformed input. ``agent``: the
+    Project Agent the dispatch went under (the host's log row): its checks are looked
+    up in the run's Bash calls."""
     d = _Drops()
     rows = [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
     last_user = max((i for i, r in enumerate(rows) if _is_turn_start(r)), default=-1)
@@ -309,8 +361,22 @@ def summarize(messages: Any, has_more: bool = False) -> dict[str, Any]:
     if not kinds and report_full and ended in ("completed", "turn_limit"):
         kinds.append("answer")
 
+    # None: no outcome says (a Hive that does not count them, or not a Project Agent run)
+    refusals: Optional[dict[str, int]] = None
+    for o in outcomes:
+        g = o.get("gate_refusals")
+        if not isinstance(g, dict):
+            continue
+        refusals = refusals if refusals is not None else {}
+        for k, n in g.items():
+            if isinstance(k, str) and _REFUSAL_KEY_RE.fullmatch(k) and d.i(n):
+                refusals[k] = refusals.get(k, 0) + d.i(n)
+
     return {
         "ended": ended, "provisional": provisional, "outcome_recorded": bool(after_outcomes),
+        "checks": _checks(all_blocks, agent), "gate_refusals": refusals,
+        # older turns were not read: a check or refusal there is not seen
+        "checks_partial": bool(has_more),
         # any turn of the session has an outcome: the Hive records them, so a missing one
         # means the turn did not reach its end (a killed process), not an old Hive
         "hive_records_outcomes": bool(outcomes),
@@ -435,7 +501,8 @@ async def _fetch(row: dict) -> dict:
             if not isinstance(body, list):
                 rec["fetch_error"] = "unexpected_body"
             else:
-                rec["result"] = summarize(body, r.headers.get("x-has-more") == "1")
+                agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
+                rec["result"] = summarize(body, r.headers.get("x-has-more") == "1", agent)
                 rec["summary_version"] = SUMMARY_VERSION
                 etag = r.headers.get("etag")
                 rec["etag"] = etag[:200] if isinstance(etag, str) else None
@@ -568,7 +635,28 @@ def _public_repo(r: dict, host: dict) -> dict:
             "error": err}
 
 
-def public(record: Optional[dict], declared: Any = None) -> Optional[dict]:
+def _public_agent(res: dict, agent: Any) -> dict:
+    """The Project Agent part of ``/runs``: the brain, mode, profile and delivery from
+    the host's own row; check statuses only for the row's check ids; gate refusals only
+    under the row's gate names (or ``integrity``)."""
+    if not isinstance(agent, dict) or not isinstance(agent.get("brain"), str):
+        return {"project_agent": None, "checks": None, "gate_refusals": None, "checks_partial": False}
+    ids = [v.get("id") for v in agent.get("validations") or [] if isinstance(v, dict)]
+    got = {c.get("id"): c.get("status") for c in res.get("checks") or [] if isinstance(c, dict)}
+    names = {g for g in agent.get("gates") or [] if isinstance(g, str)}
+    gates = names | {f"error:{g}" for g in names} | {"integrity"}
+    ref = res.get("gate_refusals") if isinstance(res.get("gate_refusals"), dict) else None
+    return {
+        "project_agent": {k: agent.get(k) if isinstance(agent.get(k), str) else None
+                          for k in ("brain", "mode", "profile", "delivery")},
+        "checks": [{"id": i, "status": got.get(i) if got.get(i) in _CHECK_STATUSES else "not_run"}
+                   for i in ids if isinstance(i, str)] if ids else None,
+        "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},
+        "checks_partial": res.get("checks_partial") is True,
+    }
+
+
+def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> Optional[dict]:
     """The result as ``/runs`` carries it, which the CLI prints and the local agent
     reads: built field by field from enums, fixed value lists, numbers and shas. No
     string the Hive chose gets in: a repository appears under the URL, ref and
@@ -636,6 +724,7 @@ def public(record: Optional[dict], declared: Any = None) -> Optional[dict]:
         },
         "pipeline": pipeline,
         "dropped": _int(res.get("dropped")),
+        **_public_agent(res, agent),
     }
 
 
@@ -663,7 +752,7 @@ async def attach(rows: list[dict], status_of: dict[str, Optional[str]]) -> None:
     for r in rows:
         k = kept.get(r.get("dispatch_id") or "")
         st = status_of.get(r.get("hive_id"))
-        r["result"] = public(k, r.get("repos"))
+        r["result"] = public(k, r.get("repos"), r.get("project_agent"))
         r["result_status"] = _status(r, st, k)
         r["result_error"] = (k or {}).get("fetch_error")
         r["result_checked_at"] = (k or {}).get("checked_at")

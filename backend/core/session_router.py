@@ -4222,7 +4222,22 @@ class SessionRouter:
         try:
             repos = await self._task_repo_facts(session_id)
             block = outcome.block(repos)   # type: ignore[attr-defined]
-            return block if await writer.record_outcome(block) else None
+            from .project_agent_session import restore_refusals, take_refusals
+            unit = getattr(self, "_units", {}).get(session_id) if session_id else None
+            ctx = getattr(unit, "_hook_session_context", None)
+            refusals = take_refusals(ctx)
+            if refusals is not None:
+                # a Project Agent session always says so ({} = nothing refused), so the
+                # host can tell "none" from a Hive that does not count them
+                block["gate_refusals"] = refusals   # {gate | "error:<gate>" | "integrity": count}
+            try:
+                written = await writer.record_outcome(block)
+            except BaseException:
+                restore_refusals(ctx, refusals)
+                raise
+            if not written:
+                restore_refusals(ctx, refusals)
+            return block if written else None
         except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
             logger.error("turn_outcome.write_failed session_id=%s: %s", session_id, exc)
             return None
