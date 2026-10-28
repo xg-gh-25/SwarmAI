@@ -78,7 +78,7 @@ structured(prompt, *, schema: dict, system: str, model_id: str, max_tokens: int,
 ```
 
 - 用 Converse 发请求，带 `toolConfig`：只有一个 tool，`inputSchema` 就是传入的 schema，`toolChoice` 强制调用它。
-- 返回 tool 的输入（dict），先按 schema 校验，用的是已安装的 `jsonschema`。
+- 返回 tool 的输入（dict），先按 schema 校验。校验器是 `jobs/bedrock.py` 里一个只支持子集的小实现，支持 `type`、`properties`、`required`、`enum`、`items`：`jsonschema` 不是后端声明的依赖，是 `claude-agent-sdk` 顺带装上的，不能依赖它。schema 里出现子集以外的关键字，调用前直接报错，不会把某个约束悄悄跳过不查。
 - 失败时抛 `StructuredOutputError(kind, raw)`，`kind` 只有三种：
   - `truncated`：`stopReason == "max_tokens"`；
   - `missing`：回复里没有调用这个 tool；

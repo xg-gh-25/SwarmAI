@@ -381,6 +381,16 @@ def invoke(
             raise
 
 
+def _converse_kwargs(model_id: str, messages: list, system: list,
+                     inference_config: dict, tool_config: dict | None) -> dict:
+    kw: dict = {"modelId": model_id, "messages": messages, "inferenceConfig": inference_config}
+    if system:
+        kw["system"] = system
+    if tool_config is not None:
+        kw["toolConfig"] = tool_config
+    return kw
+
+
 def converse_with_retry(
     *,
     messages: list,
@@ -390,6 +400,7 @@ def converse_with_retry(
     region: str | None = None,
     read_timeout: int | None = None,
     max_attempts: int | None = None,
+    tool_config: dict | None = None,
 ) -> dict:
     """client.converse() with credential eviction + a single auth-error retry.
 
@@ -426,6 +437,8 @@ def converse_with_retry(
             client (default 1 when read_timeout is set). Ignored when read_timeout
             is None. This is the boto-internal retry, distinct from the one
             auth-evict retry above.
+        tool_config: passed as toolConfig= when given (``structured()`` forces one
+            tool this way); omitted otherwise. An empty *system* list is omitted too.
 
     Returns:
         The raw converse() response dict (caller extracts output/message/content).
@@ -448,12 +461,8 @@ def converse_with_retry(
                 client = build_timeout_client(
                     read_timeout=read_timeout, max_attempts=ffa, region=region
                 )
-                return client.converse(
-                    modelId=model_id,
-                    messages=messages,
-                    system=system,
-                    inferenceConfig=inference_config,
-                )
+                return client.converse(**_converse_kwargs(
+                    model_id, messages, system, inference_config, tool_config))
             except Exception as e:
                 err_str = str(e).lower()
                 retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
@@ -468,12 +477,8 @@ def converse_with_retry(
     for attempt in range(2):
         try:
             client = get_client(force_new=(attempt > 0), region=region)
-            return client.converse(
-                modelId=model_id,
-                messages=messages,
-                system=system,
-                inferenceConfig=inference_config,
-            )
+            return client.converse(**_converse_kwargs(
+                model_id, messages, system, inference_config, tool_config))
         except Exception as e:
             err_str = str(e).lower()
             retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
@@ -488,3 +493,191 @@ def converse_with_retry(
     # Unreachable: range(2) either returns or raises on attempt 1. Guards against
     # a future loop-bound edit silently returning None.
     raise RuntimeError("converse_with_retry exhausted retries without returning")
+
+
+# ── A model's answer: the one entry (design docs/design/2026-10-28-structured-model-output.md)
+#
+# Every backend call that wants a structured answer from a model goes through
+# structured(); every call that wants plain text goes through text(). The format of
+# a structured answer is guaranteed by the API (Converse with one forced tool whose
+# input schema is the answer's schema), not asked for in the prompt, and a reply cut
+# by max_tokens is reported as such instead of reaching a parser as broken text.
+
+_RAW_KEEP = 2000  # characters of the reply an error carries, for diagnosis
+
+# The subset of JSON Schema the answers use. A schema with any other keyword is
+# refused when the call is made, so a constraint is never silently left unchecked.
+_SCHEMA_KEYS = {"type", "properties", "required", "enum", "items", "description"}
+_SCHEMA_TYPES = {"object", "array", "string", "number", "integer", "boolean"}
+
+
+class StructuredOutputError(Exception):
+    """A model reply that is not a usable answer.
+
+    ``kind`` is one of:
+      - ``truncated``: the reply reached max_tokens (the limit is too low for it);
+      - ``missing``: no answer in the reply (no tool call, or empty text);
+      - ``invalid``: the answer does not match its schema.
+    ``raw`` is the start of the reply, kept for diagnosis.
+    """
+
+    KINDS = ("truncated", "missing", "invalid")
+
+    def __init__(self, kind: str, raw: str = "", detail: str = ""):
+        if kind not in self.KINDS:
+            raise ValueError(f"unknown kind {kind!r}")
+        self.kind = kind
+        self.raw = (raw or "")[:_RAW_KEEP]
+        self.detail = detail
+        super().__init__(f"{kind}: {detail}" if detail else kind)
+
+
+def _check_schema(schema: dict, path: str = "$") -> None:
+    if not isinstance(schema, dict):
+        raise ValueError(f"{path}: a schema is an object")
+    extra = set(schema) - _SCHEMA_KEYS
+    if extra:
+        raise ValueError(f"{path}: unsupported schema keywords {sorted(extra)}")
+    t = schema.get("type")
+    if t not in _SCHEMA_TYPES:
+        raise ValueError(f"{path}: type must be one of {sorted(_SCHEMA_TYPES)}")
+    for name, sub in (schema.get("properties") or {}).items():
+        _check_schema(sub, f"{path}.{name}")
+    if "items" in schema:
+        _check_schema(schema["items"], f"{path}[]")
+
+
+def _validate(value: Any, schema: dict, path: str = "$") -> Any:
+    """*value* checked against *schema* (the subset above); a number or integer
+    given as a numeric string is converted. Raises ValueError naming the path."""
+    t = schema["type"]
+    if t in ("number", "integer") and isinstance(value, str):
+        try:
+            value = float(value) if t == "number" else int(value)
+        except ValueError:
+            raise ValueError(f"{path}: expected {t}, got {value[:40]!r}") from None
+    ok = {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+    }[t]
+    if not ok:
+        raise ValueError(f"{path}: expected {t}, got {type(value).__name__}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(f"{path}: {value!r} is not one of {schema['enum']}")
+    if t == "object":
+        missing = [k for k in schema.get("required", []) if k not in value]
+        if missing:
+            raise ValueError(f"{path}: missing {missing}")
+        props = schema.get("properties") or {}
+        return {k: (_validate(v, props[k], f"{path}.{k}") if k in props else v)
+                for k, v in value.items()}
+    if t == "array" and "items" in schema:
+        return [_validate(v, schema["items"], f"{path}[{i}]") for i, v in enumerate(value)]
+    return value
+
+
+def _reply_parts(resp: dict) -> tuple[str, list]:
+    blocks = (((resp or {}).get("output") or {}).get("message") or {}).get("content") or []
+    return (resp or {}).get("stopReason") or "", blocks
+
+
+def _record(resp: dict, model_id: str) -> None:
+    usage = (resp or {}).get("usage") or {}
+    try:
+        _record_usage_sync(input_tokens=int(usage.get("inputTokens") or 0),
+                           output_tokens=int(usage.get("outputTokens") or 0), model=model_id)
+    except Exception:  # noqa: BLE001 — accounting never breaks the call
+        logger.debug("token usage not recorded", exc_info=True)
+
+
+def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperature: float,
+          region: str | None, read_timeout: int | None, max_attempts: int | None,
+          tool_config: dict | None, record_usage: bool) -> tuple[str, list]:
+    resp = converse_with_retry(
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        system=[{"text": system}] if system else [],
+        inference_config={"maxTokens": max_tokens, "temperature": temperature},
+        model_id=model_id, region=region, read_timeout=read_timeout,
+        max_attempts=max_attempts, tool_config=tool_config,
+    )
+    if record_usage:
+        _record(resp, model_id)
+    return _reply_parts(resp)
+
+
+def structured(
+    prompt: str,
+    *,
+    schema: dict,
+    model_id: str,
+    max_tokens: int,
+    system: str = "",
+    name: str = "answer",
+    description: str = "Record the answer.",
+    temperature: float = 0.0,
+    region: str | None = None,
+    read_timeout: int | None = None,
+    max_attempts: int | None = None,
+    record_usage: bool = False,
+) -> dict:
+    """A model's answer to *prompt* as a dict matching *schema* (an object schema).
+
+    The model is made to call one tool, *name*, whose input schema is *schema*, so
+    the reply is an object, never text to parse. Put a free-text field such as
+    ``reasoning`` first in a verdict schema: the model writes its analysis there
+    instead of before the answer. Raises StructuredOutputError (truncated / missing /
+    invalid); a Bedrock error propagates as from converse_with_retry. *record_usage*
+    records token usage the way the background jobs always have.
+    """
+    _check_schema(schema)
+    if schema["type"] != "object":
+        raise ValueError("an answer schema is an object")
+    tool = {"toolSpec": {"name": name, "description": description,
+                         "inputSchema": {"json": schema}}}
+    stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
+                         temperature=temperature, region=region, read_timeout=read_timeout,
+                         max_attempts=max_attempts, record_usage=record_usage,
+                         tool_config={"tools": [tool], "toolChoice": {"tool": {"name": name}}})
+    import json as _json
+    raw = _json.dumps(blocks, ensure_ascii=False, default=str)
+    if stop == "max_tokens":
+        raise StructuredOutputError("truncated", raw, f"reply reached max_tokens={max_tokens}")
+    use = next((b["toolUse"] for b in blocks
+                if isinstance(b, dict) and isinstance(b.get("toolUse"), dict)
+                and b["toolUse"].get("name") == name), None)
+    if use is None or not isinstance(use.get("input"), dict):
+        raise StructuredOutputError("missing", raw, f"no call to {name}")
+    try:
+        return _validate(use["input"], schema)
+    except ValueError as e:
+        raise StructuredOutputError("invalid", raw, str(e)) from None
+
+
+def text(
+    prompt: str,
+    *,
+    model_id: str,
+    max_tokens: int,
+    system: str = "",
+    temperature: float = 0.0,
+    region: str | None = None,
+    read_timeout: int | None = None,
+    max_attempts: int | None = None,
+    record_usage: bool = False,
+) -> str:
+    """A model's plain-text answer to *prompt*. A reply cut by max_tokens raises
+    StructuredOutputError("truncated") instead of being returned as if complete; an
+    empty reply raises ("missing")."""
+    stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
+                         temperature=temperature, region=region, read_timeout=read_timeout,
+                         max_attempts=max_attempts, tool_config=None, record_usage=record_usage)
+    out = "".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
+    if stop == "max_tokens":
+        raise StructuredOutputError("truncated", out, f"reply reached max_tokens={max_tokens}")
+    if not out.strip():
+        raise StructuredOutputError("missing", out, "empty reply")
+    return out
