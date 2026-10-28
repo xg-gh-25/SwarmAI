@@ -229,12 +229,17 @@ def test_sdk_runner_forks_without_tools_and_drops_the_fork(tmp_path, monkeypatch
     assert opts.resume == original and opts.fork_session is True and opts.tools == []
     assert opts.output_format == {"type": "json_schema", "schema": {"type": "object"}}
     assert opts.cwd == "/w" and not fork_file.exists()
+    from jobs.bedrock import get_model_id
+    assert opts.model == get_model_id("claude-sonnet-4-6")      # Sonnet, whatever the session used
     assert (tmp_path / "claude" / "projects" / "-w" / f"{original}.jsonl").exists()
     assert seen["usage"] == {"input_tokens": 5, "output_tokens": 2}
 
     seen["reply"] = result(is_error=True, errors=["No conversation found with session ID"],
                            session_id=original)
     with pytest.raises(s7_review.Unresumable):
+        s7_review.sdk_runner(original, "/w", "p", {"type": "object"})
+    seen["reply"] = result(is_error=True, errors=["Prompt is too long"], session_id=original)
+    with pytest.raises(s7_review.Unresumable):                   # falls back to S2
         s7_review.sdk_runner(original, "/w", "p", {"type": "object"})
 
 

@@ -41,6 +41,10 @@ SAMPLE_PERCENT = 10
 INDEX_USER_LIMIT = 200      # evidence index caps: what falls past is left off, not guessed
 INDEX_MEASURED_LIMIT = 100
 REVIEW_TIMEOUT_S = 300
+# The review runs on Sonnet whatever model the session used (user 2026-10-29): it reads
+# the whole session context, so an Opus review would cost several times more. Same model
+# key as the CDF extractor and cards (BedrockJudge).
+REVIEW_MODEL_KEY = "claude-sonnet-4-6"
 
 Runner = Callable[[str, str, str, dict], dict]   # (sdk_session_id, cwd, prompt, schema) -> answer
 
@@ -290,9 +294,11 @@ def _drop_fork(fork_id: str | None, original_id: str) -> None:
 def review_options(sdk_session_id: str, cwd: str, schema: dict) -> Any:
     """The SDK options of a review: a fork of the session, no tools, structured output."""
     from claude_agent_sdk import ClaudeAgentOptions
+    from jobs.bedrock import get_model_id
     from jobs.executor import _build_cli_env, _get_aws_credentials, _resolve_claude_cli
     return ClaudeAgentOptions(
         resume=sdk_session_id, fork_session=True, tools=[], cwd=cwd, max_turns=3,
+        model=get_model_id(REVIEW_MODEL_KEY),
         output_format={"type": "json_schema", "schema": schema}, strict_mcp_config=True,
         setting_sources=[], env=_build_cli_env(_get_aws_credentials()),
         cli_path=_resolve_claude_cli())
@@ -314,8 +320,10 @@ def sdk_runner(sdk_session_id: str, cwd: str, prompt: str, schema: dict) -> dict
                                   "output_tokens": int(usage.get("output_tokens") or 0)})
                 errors = " ".join(message.errors or [])
                 if message.is_error:
-                    if "No conversation found" in errors or "No conversation found" in str(message.result):
-                        raise Unresumable(errors or str(message.result))
+                    detail = f"{errors} {message.result or ''}"
+                    # gone, or larger than the review model's window: S2 reads it instead
+                    if "No conversation found" in detail or "too long" in detail.lower():
+                        raise Unresumable(detail.strip()[:300])
                     raise RuntimeError(f"review failed: {message.subtype} {errors}"[:300])
                 _drop_fork(message.session_id, sdk_session_id)
                 if not isinstance(message.structured_output, dict):
