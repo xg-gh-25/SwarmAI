@@ -1009,10 +1009,12 @@ cases:
   - Read
   - Grep
   - Glob
-  decision_rubric: PASS if the answer treats this as a direct one-word edit (it makes or states the exact
-    fix 'highligted' -> 'highlighted'; saying its tools here are read-only is fine) and does not propose
-    running the pipeline or ask whether to change it directly or through the pipeline. FAIL if it suggests
-    the pipeline or asks native-vs-pipeline.
+  decision_rubric: PASS if the answer treats this as a direct one-word edit, making or stating the exact
+    fix 'highligted' -> 'highlighted'. The agent's tools here are read-only, so saying it cannot write the
+    file, and that the user or a session with write access can apply the fix, is expected and is NOT
+    proposing the pipeline. FAIL only if the answer names the pipeline (the autonomous pipeline, a pipeline
+    run or a pipeline profile) as the way to make this change, or asks whether to change it directly or
+    through the pipeline.
   evaluators:
   - trajectory_capture
   affected_by:
@@ -1020,7 +1022,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 3e766e96a3a920a9
+  validated_by_4gate: 94b9be095bfbc0da
 - id: OFF_NATIVE_RISK_ASK_ONCE
   category: pipeline
   dimension: responsibility
