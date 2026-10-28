@@ -62,15 +62,31 @@ def test_replay_runs_one_session_end_to_end(cdf_env) -> None:
     assert report["stopped"] is None and report["cost_usd_estimate"] == 0.0
 
 
-def test_budget_stops_before_the_next_item(cdf_env, monkeypatch) -> None:
-    _session_row(cdf_env["data"], SESSION, datetime.now(timezone.utc))
+def test_budget_counts_this_run_only(cdf_env, monkeypatch) -> None:
+    """The copy already holds the live daemon's usage (50M tokens here): the cap applies
+    to what this run spends, and the run stops before the next item once it is spent."""
+    now = datetime.now(timezone.utc)
+    _session_row(cdf_env["data"], SESSION, now - timedelta(hours=2))
+    _session_row(cdf_env["data"], "second-session", now - timedelta(hours=1))
     import core.ingestion.llm_usage as usage_mod
+    spent = {"tokens": 0}
     monkeypatch.setattr(usage_mod, "totals", lambda: {
-        "calls": 10, "input_tokens": 1_000_000, "output_tokens": 0})
+        "calls": 1, "input_tokens": 50_000_000 + spent["tokens"], "output_tokens": 0})
+
+    ran = []
+
+    def costly(source, item, workspace, llm):
+        ran.append(item)
+        spent["tokens"] += 1_000_000              # $3 at the default price
+        return 1
+
+    monkeypatch.setattr(replay_mod, "_enqueue", costly)
     report = replay_mod.replay(cdf_env["data"], cdf_env["workspace"], sources=("s2",),
                                max_usd=2.0, llm=Extractor(), judge_factory=Judge)
-    assert report["stopped"].startswith("budget")
-    assert report["sources"]["s2"]["receipts"] == 0
+    assert ran == [SESSION]                                   # the first item ran
+    assert report["stopped"].startswith("budget")             # the second did not
+    assert report["usage_in_copy_before_run"]["input_tokens"] == 50_000_000
+    assert report["usage"]["input_tokens"] == spent["tokens"]
 
 
 def test_main_migrates_the_copy_before_a_real_run(tmp_path: Path, monkeypatch) -> None:

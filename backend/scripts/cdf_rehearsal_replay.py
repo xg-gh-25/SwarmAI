@@ -215,6 +215,7 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
     started = time.monotonic()
     report: dict[str, Any] = {"since": since.isoformat(), "dry_run": dry_run,
                               "max_usd": max_usd, "sources": {}, "stopped": None}
+    baseline = usage_snapshot()
     for source in sources:
         items = _items(source, data_dir, workspace, since, s2_sample)
         entry = {"items": len(items), "receipts": 0, "errors": 0, "drain_steps": 0}
@@ -226,7 +227,9 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
             continue
         before = usage_snapshot()
         for item in items:
-            spent = _cost(usage_snapshot(), price_in, price_out)
+            # this run's spend only: the copy's ingestion.db already holds the live
+            # daemon's usage rows (rehearsal 2026-10-29 stopped at "$44.63" before any call)
+            spent = _cost(_delta(usage_snapshot(), baseline), price_in, price_out)
             if max_usd and spent >= max_usd:
                 report["stopped"] = f"budget: ${spent:.2f} spent before {source}"
                 break
@@ -252,7 +255,8 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
     if not dry_run:
         report["summary_drain_steps"] = _drain(workspace, judge_factory, max_steps, summary=True)
         report["outcomes"] = _outcomes()
-    usage = usage_snapshot()
+    usage = _delta(usage_snapshot(), baseline)
+    report["usage_in_copy_before_run"] = baseline
     report["usage"] = usage
     report["cost_usd_estimate"] = round(_cost(usage, price_in, price_out), 2)
     report["price_per_million"] = {"input": price_in, "output": price_out}
