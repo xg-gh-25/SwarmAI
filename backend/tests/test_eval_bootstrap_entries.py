@@ -457,3 +457,15 @@ def test_write_keeps_what_follows_a_case_and_places_a_new_one_right_after(tmp_pa
     ids = [c["id"] for c in yaml.safe_load(text)["cases"]]
     assert ids[-4:] == ["OFF_BRAIN_FIRST_ENTRIES_LIB", "OFF_BRAIN_FIRST_ENTRIES_ADR",
                         "OFF_BRAIN_FIRST_ENTRIES_KNOWLEDGE", "ZZ_AFTER"]
+
+
+def test_each_case_gives_the_agent_the_skills_own_p2b_section() -> None:
+    # The case measures the skill as shipped: its P2b section verbatim, so a change to
+    # the skill changes the case (and the drift test asks for a regeneration).
+    from scripts.scenario_runner import _validate_canary_command
+    section = efb.skill_p2b()
+    assert section.startswith("#### Writing a new brain's first entries (P2b)")
+    assert "A PRODUCT section holds only what" in section
+    for c in _cases().values():
+        assert section in c["scenario"]["prompt"]
+        assert _validate_canary_command is None or _validate_canary_command(c["scenario"]["prompt"]) is None

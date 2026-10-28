@@ -14,9 +14,11 @@ from scripts.golden_case_validator import _is_gate_eligible, compute_case_stamp,
 _INSTANCE = re.compile(r"/Users/|Desktop/|\.venv/|cd backend|python backend/|Projects/|\.context/"
                        r"|SwarmAI-Workspace|gawan", re.I)
 # A path into the fixture workspace an offline case runs in ships with the product, so
-# it is not one machine's: a `Projects/...` path that exists there is allowed.
+# it is not one machine's: a `Projects/...` path that exists there is allowed. So is a
+# placeholder (`Projects/<P>/…`, as in a skill's own text a case quotes): it names no project.
 _FIXTURE_WS = Path(__file__).resolve().parents[1] / "templates" / "eval" / "fixtures" / "workspace"
 _FIXTURE_PATH = re.compile(r"Projects/[\w.-]+(?:/[\w.-]+)*")
+_PLACEHOLDER_PATH = re.compile(r"Projects/<[A-Za-z]+>(?:/(?!\.\.)[\w.<>-]+)*")
 
 
 def _without_fixture_paths(text: str) -> str:
@@ -24,7 +26,7 @@ def _without_fixture_paths(text: str) -> str:
         rel = m.group(0)
         shipped = ".." not in rel.split("/") and (_FIXTURE_WS / rel).exists()
         return "" if shipped else rel
-    return _FIXTURE_PATH.sub(_keep, text)
+    return _FIXTURE_PATH.sub(_keep, _PLACEHOLDER_PATH.sub("", text))
 
 
 def _cases():
@@ -54,6 +56,7 @@ def test_only_a_path_the_fixture_workspace_has_is_allowed():
     assert not _INSTANCE.search(_without_fixture_paths(f"read `{shipped}` first"))
     for live in ("Projects/SwarmAI/2-understanding/TECH.md", "Projects/Tokensign/../../../README.md"):
         assert _INSTANCE.search(_without_fixture_paths(f"read `{live}` first")), live
+    assert not _INSTANCE.search(_without_fixture_paths("write `Projects/<P>/.artifacts/x.json`"))
 
 
 def test_commands_use_the_backend_program():

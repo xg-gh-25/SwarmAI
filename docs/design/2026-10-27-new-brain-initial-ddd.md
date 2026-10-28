@@ -803,3 +803,10 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - mutation：第一轮 12 处、修复 11 处，全部抓到。
 - **没跑的**：`test_eval_fresh_install` 要把所有 probe 正反都跑一遍，这台机器上超时；这一层没改任何 probe，`DDD_BOOTSTRAP` 已单独跑过。
 
+**r12 第二层实施**（LIB 硬塞 PRODUCT 段）：
+- **查因**：三次 LIB 运行（`eval_20261028_031559`、`_073406`、`_082811`）每次都给五个 PRODUCT 段全写了条目，一个 gap 都没写。塞进 Strategic Priorities 和 Success Criteria 的内容都不是编的：一条是"SHA-1 留作默认、让 1.x 的 token 继续能验"（`docs/design.md`，一个为兼容做的设计选择），一条是"改 token 格式要带兼容测试"（`CONTRIBUTING.md`，一条贡献规则）。错在把它们推断成了"优先级"和"成功标准"。
+- **三个假设的结论**：P6 的压力不是原因（离线测试的 agent 看不到 SKILL.md 和 P6）；真正的原因是另外两个：case prompt 只列了"段：类型"，SKILL 表里"文档没说就留空"的那一列根本没到 agent 手里；而 SKILL 表本身的定义也没说"推断出来的不算"。
+- **改法**：SKILL.md 的 PRODUCT 各段改成"材料把它说成这件事才算"，并写明反例：为兼容做的设计选择进 Architecture 或 Recent Decisions，贡献和发布规则进 Conventions，PRODUCT 段写 gap。生成器把 SKILL.md 的 P2b 一节原样放进三条 case 的 prompt：eval 测的就是随产品发布的 skill，skill 一改 case 就过期，必须重新生成。
+- **验证**：要 rebuild 后重跑三条 case 才知道。证明标准是 LIB 的确定性检查不再报空段里的 cognition 条目，ADR 和 KNOWLEDGE 不退步。
+- `test_no_case_depends_on_one_machine_or_checkout` 放行 `Projects/<P>/…` 这种占位路径（不含 `..`）：它不指向任何项目，是 skill 原文里的写法。
+

@@ -347,15 +347,20 @@ person gave as `file:<absolute path>`, a web page as `url:`, what the person sai
 (`taint:external`); only `user` is not.
 
 Section by section, where to take the content from (the types each section takes are in
-the contract; they are where CDF routes that type):
+the contract; they are where CDF routes that type). **A PRODUCT section holds only what
+the material states as that thing.** A design choice, a contributing or release rule, or a
+property of the code is not a priority, a criterion or a positioning just because it
+matters: it goes in the TECH or PROJECT section it belongs to, and the PRODUCT section
+gets a gap. Inferring a PRODUCT entry from it is the most common way a new brain is born
+with knowledge nobody stated.
 
 | Section | Take it from |
 |---|---|
-| PRODUCT Vision | the README's positioning, the package description |
-| PRODUCT What Makes It Different | comparisons with alternatives the docs make |
-| PRODUCT Strategic Priorities | priorities the docs state; **none stated → leave it empty** |
-| PRODUCT Success Criteria | criteria the docs state; else empty |
-| PRODUCT Non-Goals | what the docs say is out of scope; else empty |
+| PRODUCT Vision | what the material says the project is for: the README's positioning, the package description |
+| PRODUCT What Makes It Different | comparisons with alternatives the material itself makes ("unlike X, …") |
+| PRODUCT Strategic Priorities | what the material calls a priority, a goal or the order of what comes first. **Not** a design choice kept for compatibility (→ Architecture or Recent Decisions) or a rule for changes (→ Conventions). None stated → a gap |
+| PRODUCT Success Criteria | what the material says counts as success: a target, a measure, a definition of done for the project. **Not** a test or review rule for contributions (→ Conventions). None stated → a gap |
+| PRODUCT Non-Goals | what the material says is out of scope or not to be used for; else a gap |
 | TECH Architecture | ARCHITECTURE / design documents; the entry points |
 | TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |
 | TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` = the CI / Makefile / package.json that declares it) |
