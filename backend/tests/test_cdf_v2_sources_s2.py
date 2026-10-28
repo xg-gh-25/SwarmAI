@@ -47,6 +47,9 @@ async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
     monkeypatch.setattr("core.session_inputs.user_authored_text",
                         lambda event: "Do not patch symptoms." if event == "u2" else None,
                         raising=False)
+    shown = []
+    monkeypatch.setattr(s2_session, "window_roots",
+                        lambda sid, chunk: shown.append(chunk) or ("m2-agent", "m3-tool"))
     calls, attempts = [], []
     monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k:
                         calls.append((a, k)) or SimpleNamespace(status="queued"))
@@ -60,7 +63,9 @@ async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
     assert list(result) == ["user_utterance", "main"]
     assert [call[1]["extraction_pass"] for call in calls] == ["user_utterance", "main"]
     assert calls[0][1]["read_root_ids"] == ("root:u2",)
-    assert calls[1][1]["read_root_ids"] == ("root:u2", "root:t1")
+    # the main pass reads the user roots plus the window's own agent and tool content
+    assert calls[1][1]["read_root_ids"] == ("root:u2", "root:t1", "root:m2-agent", "root:m3-tool")
+    assert shown == [transcript]
     assert all("u1" not in str(call) for call in calls)
     assert len(attempts) == 2
 

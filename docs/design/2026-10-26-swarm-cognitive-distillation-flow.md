@@ -1228,6 +1228,13 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 实施时同步改 AGENTS.md 的 Context and Memory System 一节和 `context_directory_loader` 的文档，L1 缓存的预算头也跟着改。
 - **DDD 注入不改**：仍然只注入 section 指针（`doc § section`），条目正文由 agent 按需读取；所以 what、how、why 的完整性在读取那一刻才成立，读取路径必须返回完整的 section。现有的整文件回退（`session_router.py` 截到 65,536 字符）违反第一准则，但改它属于改 DDD 注入，按规则需要先做 DDD 专项成对盲评，所以列入阶段 C，阶段 B 不动。r12 计划改成只注入几条正文，2026-10-26 的成对盲评里 8 对输了 7 对，已经撤回。唯一的改动是：被 supersedes 的条目，命中时转交给它的链头（§7.3）。
 - **Library 过滤不做**：多取后补足、过滤 frontmatter 和短正文，这几项在盲评里和基线持平，所以没有合并。等写入侧干净之后再评估。被污染的 Library 内容放进不可信数据边界里渲染。
+- **S2 的证据登记与后台执行**（r16.13，预演前审查发现）：
+  - **问题 1（安全）**：工具结果和助手发言从来没有登记成证据根（`record_tool_result` 没有生产调用方；E2E 测试是手工登记的）。主提取的读取集里只有用户消息，一个读过网页的会话，主提取单元算出来是 `user_explicit`、未污染，网页里的"以后都要 X"可以进 STEERING。
+  - **修法**：S2 主提取在提取每个窗口之前，把这个窗口里的内容登记成证据根，并放进这个窗口的读取集：`tool_result` 块按 `record_tool_result` 登记为 external（其中允许的度量字段另记 measured）；助手的文字、思考和工具调用登记为 `agent`（证据根按 external 计，`session_inputs` 一直如此）；用户消息已经由发送路径登记，不重复。这样主提取的单元只要窗口里有助手或工具内容就是被污染的，和 §9 的本意一致；用户原话那一遍不变。登记按 `(session_id, ref, content_hash)` 复用，同一会话重复提取不重复登记。登记发生在后台提取时，不在发送和流式路径上。
+  - **问题 2（阻塞）**：S2 在会话结束 hook（180 秒超时）和 Save to Memory 的 HTTP 请求里同步运行，大会话要几十次模型调用、十几到几十分钟，而且跑在默认线程池上。
+  - **修法**：hook 和按钮只登记一条提取任务（`ingestion_s2_jobs`，每个会话一行，已排队的不重复排）。CDF worker 里单独一个线程按顺序取任务，跑 S2 的两遍，把单元交给 inbox；它不处理单元，不阻塞其他 lane。重启时把 `running` 的任务放回队列，最多 3 次，之后记为 `failed` 并带原因。Save to Memory 返回 `queued`，前端提示"已排队，结果在 Flow 里看"。
+  - **相邻窗口重叠**（5a）：每个窗口开头重复上一个窗口末尾不超过 10% 字符的条目，让跨窗口的决定和理由能出现在同一窗口里；重复的单元照常判已存在。
+  - 删掉没有调用方的 `core/memory_extractor.py` 及其测试。
 - **S2 分窗**（r16.12，全量预演发现）：一周 37 个真实会话里 15 个超过 20 万 token、3 个超过 100 万 token，整个会话一次调用会超出模型的输入上限。S2 的两遍都按条目边界切成不超过 15 万字符的窗口（全是中文也在 20 万 token 以内），单条超过一个窗口的切成带序号的片段，一个字不丢；每个窗口一次提取、各记一条 attempt（`evidence_range` 带 `window` / `windows`）。主提取每个窗口都带整个会话的读取集（血统按整个会话算，宁严勿松）；跨窗口重复的单元照常由 writer 判已存在。代价：一个窗口看不到别的窗口的上下文。
 - **LLM 成本**（r16.7）：S2 主提取是 CDF 成本的大头。实测（最近 7 天、75 个会话）：每天约 11 个会话，每个会话的文本中位约 40 万字符、平均约 60 万，其中工具结果约占 44%。按每字符 0.3 到 0.5 个 token 估算，S2 主提取每天读入约 200 万到 400 万 token；用户原话提取、S3 和卡 1、卡 3 加起来是它的零头。估算方法：每天会话数 × 平均字符数 × token/字符系数。实测来源是 Flow 健康区按天、按 source 的 LLM 调用和 token 统计，全量预演的报告里给出实测值。
   - **调节杆（待评估，未采用）**：主提取对工具结果只读开头若干字符（例如 2,000）加锚点，需要原文时按锚点取回。这只缩小提取器的**输入**，不截断任何写入单元的语义字段，所以不违反第一准则。用提取层 holdout（§14 阶段 B）验证：提取召回不下降才采用；不下降之前，保持现在的"读完整记录"。
@@ -1514,6 +1521,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 - **r16.10**（用户）：T5 算出多数票标签约 4.2% 出错时 93% 写入精确率测不出（`ingestion_holdout_size.py` 加标签噪声参数，`test_cdf_holdout_noise.py` 固定）。门槛降到 88%，预注册分母 220、需对 202 个。Flow 的 LLM 用量改记在 `ingestion_llm_usage`（schema v6）。
 - **r16.11**（用户）：离线 go/no-go 不再是上线前提，改为上线后批量评测（§14.2）。判官阶段的结果 30 天后移入 `ingestion_eval_log` 保留 180 天，`extraction_attempts` 同样 180 天；新增 `ingest eval-export`。
 - **r16.12**（全量预演）：S2 分窗（§12）。CDF 的判官和提取器改走 `jobs.bedrock.text()`（main 的统一入口，`docs/design/2026-10-28-structured-model-output.md`），回复被截断或为空时报 `untyped`，不重试；卡片仍由各自的严格解析器定类型，改成 `structured()` 的 schema 是后续工作。批量评测的标注者走 `structured()`。快照脚本作为脚本运行时找不到 `core` 的问题已修。
+- **r16.13**（用户同意先修 A、B）：S2 主提取登记窗口内的助手和工具内容为证据根；S2 改为后台任务（`ingestion_s2_jobs`）；窗口重叠；删除 `memory_extractor.py`；Save to Memory 返回 queued（§12）。
 - **r16.8**（用户）：r16.7 合 main：COE Open Threads 按方案 B 移出 MEMORY，开着的 COE 由 COE Registry 基线加未蒸馏的 DailyActivity 信号在读取时算出（§8 新增一行）；按新 brain 设计 §5.11 做 C1-C4：段名通用化，`validate_ddd_matrix` 默认读 `templates/ddd-skeleton/`（§7.1 那句更正），writer 的 DDD 分支调用 `ddd_entry_lifecycle.render_ddd_unit`，基线读 `EntryMetadata.taint`。
 - **r16.7**（对齐 Agent 认知系统高层设计 HLD）：
   - §7.2 C3、§11 第 6 条：CDF 写进 STEERING / USER / TOOLS 的条目只进单独的"系统追加（自动提取）"段，prompt 组装时标明来源并声明优先级低于产品规则；SWARMAI 等产品文件里描述优先级的地方同步改。

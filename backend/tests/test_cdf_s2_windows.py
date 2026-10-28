@@ -68,9 +68,27 @@ def test_main_pass_calls_once_per_window(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(s2_session, "_root_ids", lambda ids: ())
     original = s2_session.windows
     transcript = _items(30, 900)
-    monkeypatch.setattr(s2_session, "windows", lambda items, key: original(items, key, limit=5_000))
+    monkeypatch.setattr(s2_session, "window_roots", lambda sid, chunk: ())
+    monkeypatch.setattr(s2_session, "windows",
+                        lambda items, key, overlap=0.0: original(items, key, limit=5_000))
     outcomes = s2_session._main_pass("sess", transcript, [], set(), None, None)
     assert len(calls) > 1 and outcomes == [f"unit-{i}" for i in range(1, len(calls) + 1)]
     assert [c["window"] for c in calls] == list(range(1, len(calls) + 1))
     assert {c["windows"] for c in calls} == {len(calls)}
     assert [item for c in calls for item in json.loads(c["text"])] == transcript
+
+
+def test_overlap_repeats_the_tail_and_never_stands_alone() -> None:
+    items = _items(40, 900)
+    chunks = s2_session.windows(items, "id", limit=5_000, overlap=0.25)
+    assert all(len(json.dumps(c, ensure_ascii=False)) <= 5_000 for c in chunks)
+    for previous, chunk in zip(chunks, chunks[1:]):
+        carried = [item for item in chunk if item in previous]
+        assert carried and chunk[:len(carried)] == previous[-len(carried):]
+        assert len(chunk) > len(carried)
+    seen = []
+    for chunk in chunks:
+        seen += [item for item in chunk if item not in seen]
+    assert seen == items
+    assert s2_session.windows(items, "id", limit=5_000) == s2_session.windows(
+        items, "id", limit=5_000, overlap=0.0)
