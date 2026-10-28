@@ -726,3 +726,61 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - **第 7 步的 JSON 格式**：两条离线测试的答案都是"`[` 加每行一个对象、没有逗号"，不是 JSON。原因是 case prompt 写了"one entry per line"，SKILL.md P2b 的示例本身也是两个裸对象。示例改为合法列表，prompt 改为"one valid JSON list, separated by commas"（5ce498634）。
 - **新判官下的第一组计数**（must-have / 无出处 / 流水账）：LIB 4/4、0、0，判官判失败（把 decision 写进了 repo 没提过的 Strategic Priorities）；ADR 4/4、0、0，判官判通过，整条因 JSON 不合法失败。格式修正后要再跑一次，门槛在那之后定。
 
+**r12（2026-10-28）**：条目格式和第 7 步测量的结构化（用户确认："系统化结构化，换个 repo 也要能用，也要覆盖纯知识 DDD"）。取代 r9–r11 里逐个修格式问题的做法。
+
+**三个结构性缺陷**（读代码确认）：
+1. **格式规则有三份，只有一份算数。** 规则在 `apply.py`（`_COGNITION_KEYS`、`_GAP_KEYS`、`_REQUIRED`、`_text` 只收文字、`MAX_TITLE`/`MAX_FIELD`、`Evidence.check` 的出处写法）和 `ddd_skeleton.SECTION_TYPES`；SKILL.md P2b 和 case prompt 是手抄的。手抄漏掉的是形状：r11 的"必须是一个 JSON 列表"，这次的"`rejected_alternatives` 只收文字"（字段名两处都写了，`_text` 只收字符串这一点没写）。
+2. **eval 没有 P2c 的纠错回合。** 真实流程里 agent 写文件、跑 `bootstrap-apply`、按拒绝原因改、再跑；离线测试的 agent 只有 Read/Grep/Glob（`eval_runner.py` 的只读锁，安全设计，不改），只答一次，形状一错整条失败。量到的是"第一次就写对格式"，不是产品要求的东西。
+3. **rubric 每个 repo 手写，计数不稳。** 判官要对照手抄的"repo 说过的全部事实"；同一种错（cognition 写进没有证据的段）两次运行计成"无出处 0"和"无出处 2"。`bootstrap_entries` 只认产品夹具里的 repo（`_bootstrap_entries_failures` 用 bundled 夹具路径），纯知识 brain 的 `file:` 出处判不了；它只在轨迹检查和判官都通过后才跑（`eval_runner.py:1674`），任何一关没过，确定性结果都不记录；判官出错时整条记成 `error`，确定性失败被盖住。
+
+**第一层：条目契约只定义一次（产品，每种 brain 都适用）**
+- `apply.entry_contract()` 从上面那些常量生成契约（JSON）：每种 kind 的字段、每种类型的必填字段、哪些字段只收文字、每段允许的类型、gap 只进 What to Watch For、出处的写法（`<path>#heading`、`<path>:line`、`<repo>:<path>`、`file:<绝对路径>`、`url:`、`user`）、长度上限、文件必须是一个 JSON 列表（或 `{"entries": [...]}`）。不另写规则：契约就是校验用的同一批常量。
+- **写入方**：新命令 `artifact_cli entry-contract --project <P>` 打印契约并写到 `.artifacts/bootstrap/entry-contract.json`（P2b 第一步跑它）；`bootstrap-apply`（含 `--dry-run`）每次也重写一次。纯知识 brain 没有 survey，一样能跑这条命令。不在 `create_project` 里写：那会让 workspace manager 依赖 brain_bootstrap，老 brain 也会读到旧契约（评审 LOW，P9）。
+- **读取方**：agent（SKILL P2b 改为"按 entry-contract.json 写"，字段规则段删除，只保留"Take it from"表和好坏例子，这些是判断）；eval 夹具（由生成脚本用同一个函数写出，测试比对）。
+- **两处校验调整**：`rejected_alternatives` 接受文字或非空字符串列表，列表用"; "连成一句渲染（契约里写明）——判断交给模型，形状交给 OS；文件读不成 JSON 时，拒绝原因带行号和列号。
+- **拒绝分两类**：`Rejected` 必须带 `kind`：`shape`（字段、类型、段、长度、文件格式，以及渲染器抛的 `ValueError`：P2c 回合能改好的）和 `evidence`（出处指向不存在或不允许的东西，包括 eval 更严的出处规则）。报告和 eval 都按这两类统计。
+- **不做**：不放进 survey.json（纯知识 brain 没有 survey）；不给 eval agent 开 Bash。
+
+**第三层：eval 改成"模板 + 每个夹具一份标准答案"**
+- **标准答案** `templates/eval/fixtures/answer-keys/<Brain>.yaml`，放在 `fixtures/workspace/` 之外（`fixture_workspace()` 只复制 `workspace/`，agent 看不到）：
+  - `material`：agent 该读的东西（repo 的相对路径，或纯知识 brain 的文档列表）；
+  - `must_have`：每条要点和它在材料里的出处；
+  - `facts`：材料说过的全部事实（判断"超出材料"的依据）；
+  - `empty_sections`：材料完全没提到的段，只能写 gap；
+  - `status_sources`：流水账文件；
+  - `planted`：埋给 AI 的指令里的关键词。
+- **prompt、rubric 和检查参数都由模板加标准答案生成，写进 case 本身**：检查写成 `checks: - bootstrap_entries: {brain, material, empty_sections, status_sources}`，运行时只读 case，从不读标准答案，所以 stamp 覆盖了检查做什么（评审 MED）。生成器就是现有的 `scripts/eval_fixture_surveys.py`，扩展后改名 `eval_fixture_brains.py`，一次生成契约、survey（有 repo 才有）、prompt、rubric 和检查参数；`--check` 比对，标准答案或模板一改就红。重新盖 stamp 走 `golden_case_validator`，生成器不盖。换 repo、加纯知识 brain，只加夹具和标准答案。
+- **标准答案对 agent 的隐藏只靠路径**：它不在 agent 的工作区里，但 agent 用绝对路径的 Read 能读到任何文件，和今天的 rubric 一样，是"不知道路径"，不是沙箱。
+- **确定性检查 `bootstrap_entries`**：只要 agent 跑完、有答案就执行，不看轨迹检查和判官的结果；结果写进运行记录的新字段 `bootstrap_counts`（加进 `_RECORD_DETAIL`，不叫 `metrics`：那是 run 级字段，另有含义）。
+  - **每条原始条目都查内容，和形状无关**（评审 HIGH）：`validate()` 先查形状、最后才查出处，形状错的条目出处根本不查。所以内容检查不复用 `validate()` 的顺序，对每条原始条目单独做：
+    - 出处：repo 出处必须是 `material` 里那个 repo 的文件；`file:` 用 `resolve()` 后去掉运行时临时工作区前缀（含 macOS 的 `/private` 形式），映射后的路径必须在 `material` 列出的文档里，不能是 survey、骨架文档或别的 brain 的文件；`user` 和 `url:` 不算出处。
+    - `empty_sections` 里出现 cognition 条目（不管类型对不对）。
+    - 引用了 `status_sources` 里的文件。
+  - **判失败**：上面三项任一不过；答案里没有可解析的条目列表；条目列表结束位置超出判官读得到的 `_JUDGE_TEXT_MAX`（保留今天的窗口检查）。
+  - **只记数**：`shape` 类拒绝条数（真实流程里是多改一轮，不是质量失败）。
+  - 运行时临时工作区路径由 `_run` 传给检查；工作区在 `with` 块结束时删除，所以检查在块内跑。
+- **判官判语义**：must-have 覆盖（列出 `must_have`）；超出 `facts` 的主张（`facts` 不收流水账里的内容，所以只换了出处、内容来自流水账的条目也会被算成无出处）；埋的指令有没有被照做（列出 `planted`）。**埋的指令不做关键词检查**：答案写"不是 FIPS 认证的"是对的，关键词会误判，`eval_runner.py` 里已经记录过"字符串和否定启发式两个方向都会错"（评审 HIGH）。notes 固定写成 `must-haves x/N; unsupported n; planted n`。
+- **结论**：先算确定性结果。确定性失败 → `failed`，不管判官是通过、失败还是出错；确定性通过时才按判官结果（判官出错仍是 `error`）。
+- **夹具**：两个已有的 repo 夹具补标准答案；新加一个纯知识 brain 夹具（几份文档，不对应 repo，出处只能是 `file:`），覆盖没有 survey、没有 repo 的路径。不加"只有代码"的 repo：两个已有夹具各有 2–3 个空 PRODUCT 段，"没证据就写 gap"已经测到了。产品集 49 + 1 = 50，上限不变，不需要砍旧 case。这用掉了最后一个名额：以后换夹具（同一条 case 换一个 repo）不受影响，再加第四个夹具就要先决定砍哪条（评审 LOW）。
+
+**第二层：LIB 硬塞 PRODUCT 段，先查因再改 skill**
+- 三个假设：P6 要求 PRODUCT 至少一条 typed 条目带来的压力；段落定义太薄（"priorities the docs state"，没说贡献约定属于 Conventions）；prompt 里"Strategic Priorities: decision"读起来像要求填写。
+- 方法：拿三次运行的答案对照，看被塞进去的内容来自哪里、被当成了什么，确定原因后改 SKILL 的段落定义（每个 PRODUCT 段一句定义加一个反例）。
+- 证明：LIB 的 `empty_sections` 检查从红变绿（确定性），ADR 和纯知识夹具不退步。
+
+**验证计划**
+- **最终测试集**（现在定下）：
+  1. 每种 brain（有 repo、多 repo、无 repo）跑 `entry-contract` 后都有 `entry-contract.json`，`bootstrap-apply` 运行后也有，内容相同。
+  2. 契约和校验一致：按契约每条规则造一个合规条目和一个违规条目，合规的必须通过，违规的必须被拒，且拒绝的 `kind` 对（含渲染器的 `ValueError` 记为 `shape`、eval 更严的出处规则记为 `evidence`）。
+  3. `rejected_alternatives` 列表被接受并渲染成一句；JSON 读失败的原因带行列号。
+  4. 夹具里的契约、survey、prompt、rubric 都和重新生成的一致。
+  5. 每项确定性内容检查各有一个会变红的反例，其中包括：形状错、出处编造的条目仍被判失败；类型不对、写在空段里的 cognition 条目仍被判失败；`file:` 指向夹具里 `material` 之外的文件被判失败；列表超出判官窗口被判失败。`shape` 拒绝只记数不判失败；轨迹失败、判官失败或判官出错时，确定性结果照样写进 `bootstrap_counts`，确定性失败时整条是 `failed` 而不是 `error`。
+  6. 已有的 `test_brain_bootstrap_apply`、`test_eval_bootstrap_entries`、`test_eval_product_set`、probe `DDD_BOOTSTRAP` 照样通过。
+- **mutation 检查**：上面每条新规则拿掉后，对应测试必须变红。
+- **评审**：第一层改产品接口和校验，api-contract 一轮；第三层改 eval 机制，correctness 一轮。
+- **线上**：rebuild 后三个夹具各跑一次：两个已有夹具 `shape` 拒绝应为 0，ADR 应通过；LIB 等第二层修完后 `empty_sections` 转绿；之后按三个夹具的计数定门槛。
+
+**落地顺序**：第一层 → 第三层 → 第二层，每层单独提交。
+
+**r12 的评审**（correctness，零上下文，评设计前提和关于代码的说法）：前提成立，没有说法被证伪；两处说法不精确，已改（检查还受轨迹检查限制；手抄漏的是形状而不是字段名）。HIGH 两条：形状错的条目出处不查、空段检查被形状拒绝盖住，改为每条原始条目单独查内容；埋的指令改回判官判，不做关键词匹配。MED：流水账内容交给判官的 `facts`；保留判官窗口检查；`file:` 只认 `material` 里的文档并由运行时传入工作区路径；结果字段改名 `bootstrap_counts` 并加进记录；检查参数写进 case 让 stamp 覆盖；确定性失败不被判官出错盖住。LOW：`Rejected` 必须带 kind；契约由命令写而不是 `create_project`；生成器合并成一个；隐藏只靠路径；最后一个名额。这些都已写进上面各段。
+
