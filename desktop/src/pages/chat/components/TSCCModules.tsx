@@ -21,6 +21,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useDialogLayer } from '../../../hooks/useLayer';
 import { createPortal } from 'react-dom';
 import type {
   SystemPromptMetadata,
@@ -180,21 +181,10 @@ function FlowTab() {
 // ===========================================================================
 
 function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () => void }) {
-  // Escape closes the modal ONLY. Registered in the CAPTURE phase with
-  // stopImmediatePropagation so it runs before the popover's own document-level
-  // keydown listener (which would otherwise close the whole popover). Without
-  // this, Escape would tear down the popover, not just the modal.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopImmediatePropagation();
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey, true); // capture
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  // A dialog layer above the popover: Escape closes the modal only (the popover is the
+  // layer under it), focus moves in, Tab stays in it, and focus goes back on close.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogLayer(true, dialogRef, onClose);
 
   // Rendered via a portal to document.body so `fixed inset-0` resolves against the
   // viewport. The modal is otherwise a DOM descendant of the popover's
@@ -213,8 +203,10 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
       onMouseDown={(e) => e.stopPropagation()}
       // z above the popover (zIndex 9999): both are fixed siblings under <body>,
       // so paint order is guaranteed, not left to incidental non-overlap geometry.
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 outline-none"
       onClick={onClose}
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label="Full system prompt"

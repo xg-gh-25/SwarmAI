@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { lazy, useEffect } from 'react';
-import { render, screen, act, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup, fireEvent } from '@testing-library/react';
 import { OverlayProvider, useOverlay } from '../../contexts/OverlayContext';
 import { OverlayHost } from './OverlayHost';
 import { registerOverlay } from './overlayRegistry';
@@ -243,5 +243,58 @@ describe('OverlayHost — closing while the content code is still loading', () =
     act(() => { vi.advanceTimersByTime(400); });
     expect(screen.queryByTestId('overlay-host-scrim')).toBeNull();
     vi.useRealTimers();
+  });
+});
+
+describe('OverlayHost — a layer: Escape and focus (hooks/useLayer)', () => {
+  // A surface with a rename field that takes Escape for itself, like the Workspace
+  // explorer's, and a plain button.
+  registerOverlay({
+    id: 'library',
+    render: () => (
+      <div>
+        <input data-testid="rename" onKeyDown={(e) => { if (e.key === 'Escape') e.preventDefault(); }} />
+        <button data-testid="plain">plain</button>
+      </div>
+    ),
+  });
+  function LibraryHarness() {
+    const { openOverlay, activeOverlay } = useOverlay();
+    return (
+      <div>
+        <button data-testid="card" onClick={() => openOverlay('library')}>Library</button>
+        <span data-testid="active">{activeOverlay ?? 'none'}</span>
+        <OverlayHost />
+      </div>
+    );
+  }
+  const open = () => {
+    render(<OverlayProvider><LibraryHarness /></OverlayProvider>);
+    const card = screen.getByTestId('card');
+    card.focus();
+    act(() => card.click());
+    return card;
+  };
+
+  it('Escape in a field that takes it for itself (a rename) does not close the overlay', () => {
+    open();
+    fireEvent.keyDown(screen.getByTestId('rename'), { key: 'Escape' });
+    expect(screen.getByTestId('active').textContent).toBe('library');
+  });
+
+  it('an Escape nobody inside handled closes the overlay, and focus goes back to the card that opened it', () => {
+    const card = open();
+    const panel = screen.getByRole('dialog', { name: 'Library' });
+    expect(panel.contains(document.activeElement)).toBe(true);   // focus moved in
+    fireEvent.keyDown(screen.getByTestId('plain'), { key: 'Escape' });
+    expect(screen.getByTestId('active').textContent).toBe('none');
+    expect(document.activeElement).toBe(card);
+  });
+
+  it('Tab is not trapped: the left nav beside the overlay stays reachable', () => {
+    open();
+    const plain = screen.getByTestId('plain');
+    plain.focus();
+    expect(fireEvent.keyDown(plain, { key: 'Tab' })).toBe(true);   // left to the browser
   });
 });

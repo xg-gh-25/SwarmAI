@@ -24,6 +24,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { SystemPromptMetadata } from '../../../types';
 import { SystemPromptModule } from './TSCCModules';
+import { useEscape } from '../../../hooks/useLayer';
 
 export interface TSCCPopoverButtonProps {
   sessionId: string | null;
@@ -87,16 +88,14 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
       }
       setIsOpen(false);
     };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsOpen(false);
-    };
     document.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen]);
+  // Escape closes the popover; the full-prompt dialog opened from it is a layer above
+  // it and takes Escape first.
+  useEscape(isOpen, () => setIsOpen(false), popoverRef);
 
   // Compute the safe box: anchored bottom-right to the button, grown toward
   // top-left, clamped so it never crosses the nav / tab bar / window edges.

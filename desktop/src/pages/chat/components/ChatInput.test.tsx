@@ -257,3 +257,26 @@ describe('swarm:inject-chat-input append', () => {
   });
 });
 
+
+describe('ChatInput — the slash-command list is a layer (hooks/useLayer)', () => {
+  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+  it('Escape with the list open closes the list only, even while an answer streams; the next Escape stops it', () => {
+    const props = createDefaultChatInputProps({ isStreaming: true });
+    function Controlled() {
+      const [value, setValue] = React.useState('');
+      return <ChatInput {...props} inputValue={value} onInputChange={setValue} />;
+    }
+    renderWithProviders(<Controlled />);
+    const ta = screen.getByRole('textbox');
+    ta.focus();
+    fireEvent.change(ta, { target: { value: '/' } });
+    expect(screen.getByTestId('slash-command-list')).toBeInTheDocument();
+    fireEvent.keyDown(ta, { key: 'Escape' });
+    expect(screen.queryByTestId('slash-command-list')).toBeNull();
+    expect(props.onStop).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(ta);
+    fireEvent.keyDown(ta, { key: 'Escape' });
+    expect(props.onStop).toHaveBeenCalledTimes(1);
+  });
+});

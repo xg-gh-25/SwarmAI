@@ -29,6 +29,7 @@ import { FileTypeIcon } from './FileTypeIcon';
 import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
+import { useDialogLayer, useEscape } from '../../hooks/useLayer';
 import { CopyPathButton, copyPathNow } from './CopyPathButton';
 import { previewKindOf, canDrawPreview, PreviewBody } from './filePreviews';
 import { openExternal, openInSystemApp } from '../../utils/openExternal';
@@ -294,6 +295,9 @@ function SelectionCommentPopover({
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  // A layer above the editor: Escape cancels the comment (not the editor), wherever
+  // focus is inside it.
+  useEscape(true, onCancel, popoverRef);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -314,13 +318,9 @@ function SelectionCommentPopover({
         e.preventDefault();
         const trimmed = text.trim();
         if (trimmed) onSubmit(trimmed);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancel();
       }
     },
-    [text, onSubmit, onCancel],
+    [text, onSubmit],
   );
 
   return createPortal(
@@ -1191,20 +1191,23 @@ export default function FileEditorCore({
     [variant],
   );
 
-  // Escape key — close search first, then editor
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isFocusWithinEditor(e)) {
-        if (showSearch) {
-          handleSearchClose();
-          return;
-        }
-        handleCloseAttempt();
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [showSearch, handleCloseAttempt, handleSearchClose, isFocusWithinEditor]);
+  // Escape — close search first, then the editor (through the unsaved-changes guard).
+  // The search box, a comment box and the editor itself take Escape first and mark it
+  // handled. In the modal the editor is a layer on the shared stack (hooks/useLayer),
+  // so a dialog over it gets Escape before it does; in the panel it is not a layer and
+  // answers only an Escape that reached its own root (handleRootKeyDown).
+  const handleEscape = useCallback(() => {
+    if (showSearch) handleSearchClose();
+    else handleCloseAttempt();
+  }, [showSearch, handleSearchClose, handleCloseAttempt]);
+  useEscape(variant === 'modal', handleEscape, rootRef);
+  const handleRootKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (variant === 'modal' || e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    handleEscape();
+  }, [variant, handleEscape]);
+  // The unsaved-changes question is a layer of its own: Escape is "continue editing".
+  const unsavedRef = useRef<HTMLDivElement>(null);
 
   // Ctrl+S / Cmd+S to save
   useEffect(() => {
@@ -1267,6 +1270,7 @@ export default function FileEditorCore({
     setShowUnsavedWarning(false);
     setReloadPending(false);
   }, []);
+  useDialogLayer(showUnsavedWarning, unsavedRef, handleContinueEditing, { first: true });
 
   /** Refetch the file from disk and apply it (with changed-line highlight).
    *  Shared by the Reload button and its unsaved-edits confirm path. */
@@ -1633,6 +1637,7 @@ export default function FileEditorCore({
           ? 'relative bg-[var(--color-card)] flex flex-col h-full w-full overflow-hidden'
           : 'bg-[var(--color-card)] border border-[var(--color-border)] shadow-2xl flex flex-col h-full w-full rounded-xl overflow-hidden'}
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={handleRootKeyDown}
         data-testid="file-editor-core"
       >
         {/* Header — modal only. In the panel (Super Canvas) the Canvas list names the
@@ -2096,12 +2101,13 @@ export default function FileEditorCore({
           className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="w-full max-w-md bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl p-6">
+          <div ref={unsavedRef} role="alertdialog" aria-modal="true" aria-labelledby="unsaved-warning-title" tabIndex={-1}
+            className="w-full max-w-md bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl p-6 outline-none">
             <div className="flex items-center gap-3 mb-4">
-              <span className="material-symbols-outlined icon-md text-[var(--color-warning)]">
+              <span className="material-symbols-outlined icon-md text-[var(--color-warning)]" aria-hidden="true">
                 warning
               </span>
-              <h3 className="text-lg font-semibold text-[var(--color-text)]">
+              <h3 id="unsaved-warning-title" className="text-lg font-semibold text-[var(--color-text)]">
                 Unsaved Changes
               </h3>
             </div>

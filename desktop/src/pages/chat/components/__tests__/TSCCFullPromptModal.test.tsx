@@ -12,7 +12,7 @@
  * resolves against the viewport. Because the popover has a document-level mousedown
  * "outside-close" listener, the portaled modal must stopPropagation on mousedown so
  * clicking the modal doesn't also close the underlying popover, and it owns a
- * capture-phase Escape handler that closes the modal only.
+ * Escape handler on the shared layer stack (hooks/useLayer) that closes the modal only.
  *
  * Properties asserted:
  * - AC1: the modal's dialog element is a direct child of document.body (portaled out).
@@ -24,7 +24,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { SystemPromptModule } from '../TSCCModules';
+import { useEscape } from '../../../../hooks/useLayer';
 import type { SystemPromptMetadata } from '../../../../types';
 
 vi.mock('../../../../services/tscc', () => ({
@@ -85,20 +87,21 @@ describe('FullPromptModal', () => {
     }
   });
 
-  it('AC4: Escape closes the modal (and stops the event so the popover stays open)', async () => {
-    const dialog = await openFullPromptModal();
-    const docKeyDown = vi.fn();
-    // Register on the NON-capture (bubble) phase — the modal's capture-phase
-    // handler runs first and stops propagation, so this must never see Escape.
-    document.addEventListener('keydown', docKeyDown);
-    try {
-      fireEvent.keyDown(dialog, { key: 'Escape' });
-      await waitFor(() =>
-        expect(screen.queryByRole('dialog', { name: /Full system prompt/i })).toBeNull()
-      );
-      expect(docKeyDown).not.toHaveBeenCalled();
-    } finally {
-      document.removeEventListener('keydown', docKeyDown);
+  it('AC4: Escape closes the modal only: the popover under it (a layer, open first) stays open', async () => {
+    const popover = vi.fn();
+    function Popover({ children }: { children: ReactNode }) {
+      useEscape(true, popover);
+      return <>{children}</>;
     }
+    render(<Popover><SystemPromptModule sessionId="s1" metadata={metadata} /></Popover>);
+    fireEvent.click(screen.getByRole('button', { name: /Prompt/i }));
+    fireEvent.click(screen.getByRole('button', { name: /View Full Prompt/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Full system prompt/i });
+    expect(dialog.contains(document.activeElement)).toBe(true);   // focus moved in
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close' }), { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /Full system prompt/i })).toBeNull()
+    );
+    expect(popover).not.toHaveBeenCalled();
   });
 });

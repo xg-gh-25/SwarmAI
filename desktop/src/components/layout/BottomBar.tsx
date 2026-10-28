@@ -18,6 +18,7 @@ import { CodeGraph } from '../code-intel/CodeGraph';
 import { terminalStore } from '../../stores/TerminalStore';
 import { TERMINAL_TOGGLE_EVENT, TERMINAL_GOTO_EVENT } from '../../contexts/TerminalContext';
 import { terminalLocation } from '../../stores/terminalLocation';
+import { useEscape } from '../../hooks/useLayer';
 
 // ── Code Intel Popover ───────────────────────────────────────────────────────
 
@@ -161,20 +162,8 @@ export function BottomBar() {
     return () => window.removeEventListener('swarm:show-code-graph', handler);
   }, []);
 
-  // Close graph on ESC key (stopPropagation prevents conflicts with other ESC handlers)
-  useEffect(() => {
-    if (!showGraph) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        e.preventDefault();
-        setShowGraph(false);
-      }
-    };
-    // Use capture phase to fire BEFORE other ESC handlers
-    document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
-  }, [showGraph]);
+  // The full-screen graph is a layer: Escape closes it (and nothing under it).
+  useEscape(showGraph, () => setShowGraph(false));
 
   // Close popover on outside click
   useEffect(() => {

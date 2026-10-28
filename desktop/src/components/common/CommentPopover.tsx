@@ -11,6 +11,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useEscape } from '../../hooks/useLayer';
 
 interface CommentPopoverProps {
   /** 1-based line number this popover is anchored to. */
@@ -97,14 +98,13 @@ export default function CommentPopover({
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         handleSubmit();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation(); // Prevent editor's global Escape handler from closing editor
-        onCancel();
       }
     },
-    [handleSubmit, onCancel],
+    [handleSubmit],
   );
+  // A layer above the editor: Escape cancels the comment, not the editor, wherever
+  // focus is inside the popover.
+  useEscape(true, onCancel, popoverRef);
 
   // Click-outside handler: close popover when clicking outside it
   useEffect(() => {

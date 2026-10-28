@@ -89,11 +89,11 @@ export default function Modal({
 
   // ---- Escape and focus (hooks/useLayer), gated on isOpen (intent) like the scroll
   // lock: Escape goes to the topmost layer only, so a dialog opened inside an
-  // overlay (Settings → Skills) closes without closing the overlay behind it, which
-  // also listens on document. Focus moves into the dialog once it is in the DOM
+  // overlay (Settings → Skills) closes without closing the overlay behind it, and a
+  // field in the dialog that takes Escape for itself keeps it. Focus moves into the dialog once it is in the DOM
   // (isRendering lags isOpen by one render on open), Tab stays inside it, and focus
   // goes back to what opened it as soon as it starts to close. ----
-  useEscape(isOpen, onClose);
+  useEscape(isOpen, onClose, dialogRef);
   useLayerFocus(isOpen && isRendering, dialogRef);
 
   // ---- body-scroll-lock — gate on isOpen (intent), NOT isRendering,

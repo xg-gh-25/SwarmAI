@@ -16,6 +16,7 @@ import { useVoiceRecorder } from '../../../hooks/useVoiceRecorder';
 import { VoiceConversationIndicator } from '../../../components/chat/VoiceConversationIndicator';
 import type { VoiceConversationState } from '../../../hooks/useVoiceConversation';
 import { INJECT_CHAT_INPUT, type InjectChatInputDetail } from '../injectChatInput';
+import { useEscape } from '../../../hooks/useLayer';
 
 /** The (value, width, expanded) triple that the textarea's wrapped height is a
  *  pure function of. applyHeight skips the forced-reflow measure when the current
@@ -508,22 +509,18 @@ export function ChatInput({
         setShowCommandSuggestions(false);
       }
     };
-    // F2: Global Escape works even when focus is on dropdown buttons.
-    // Only fires when focus is NOT on the textarea (textarea has its own
-    // Escape handler in handleKeyDown to avoid double-fire — F9 fix).
-    const handleGlobalEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && document.activeElement !== textareaRef.current) {
-        setShowCommandSuggestions(false);
-        textareaRef.current?.focus();
-      }
-    };
     document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleGlobalEscape);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleGlobalEscape);
     };
   }, [showCommandSuggestions]);
+  // F2: the command list is a layer: Escape closes it wherever focus is (the textarea
+  // or a list button) and puts focus back in the textarea. It takes Escape first, so
+  // Escape with the list open never stops a streaming answer.
+  useEscape(showCommandSuggestions, () => {
+    setShowCommandSuggestions(false);
+    textareaRef.current?.focus();
+  });
 
   // F5 fix: auto-scroll to selected item. F11 fix: clear stale refs on list change.
   const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
@@ -715,11 +712,8 @@ export function ChatInput({
         handleSelectCommand(filteredCommands[selectedCommandIndex].name);
         return;
       }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setShowCommandSuggestions(false);
-        return;
-      }
+      // Escape with the list open is the list layer's (useEscape above), taken before
+      // this handler runs.
     }
 
     // Escape to stop generation (when streaming, and slash commands not open)
@@ -812,6 +806,7 @@ export function ChatInput({
             {showCommandSuggestions && filteredCommands.length > 0 && (
               <div
                 ref={dropdownRef}
+                data-testid="slash-command-list"
                 className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden z-10 flex flex-col max-h-80"
               >
                 {/* Scrollable content area */}

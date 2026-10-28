@@ -7,7 +7,9 @@
  * open the five-dimension matrix and Esc close it; does a trace part that is missing
  * say so (无 Brain, Report 生成中) instead of vanishing.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { useEscape } from '../../hooks/useLayer';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { JudgeTag } from './JudgeTag';
 import { judgeState, judgeSummary } from './judge';
@@ -65,22 +67,20 @@ describe('JudgeTag', () => {
 });
 
 describe('JudgeTag keyboard', () => {
-  it('Escape closes only the popover (does not reach a global handler) and returns focus to the tag', () => {
-    const globalEsc = vi.fn();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') globalEsc(); };
-    window.addEventListener('keydown', onKey);
-    try {
-      render(<JudgeTag judge={judge(['PASS', 'PASS', 'PASS', 'PASS', 'PASS'])} title="Run Y" />);
-      fireEvent.click(screen.getByTestId('judge-tag'));
-      const pop = screen.getByTestId('judge-popover');
-      expect(document.activeElement).toBe(pop);
-      fireEvent.keyDown(pop, { key: 'Escape' });
-      expect(screen.queryByTestId('judge-popover')).toBeNull();
-      expect(globalEsc).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(screen.getByTestId('judge-tag'));
-    } finally {
-      window.removeEventListener('keydown', onKey);
+  it('Escape closes only the popover (not the layer it sits on) and returns focus to the tag', () => {
+    const below = vi.fn();
+    function Below({ children }: { children: ReactNode }) {
+      useEscape(true, below);   // the overlay or the chat command list under the dashboard
+      return <>{children}</>;
     }
+    render(<Below><JudgeTag judge={judge(['PASS', 'PASS', 'PASS', 'PASS', 'PASS'])} title="Run Y" /></Below>);
+    fireEvent.click(screen.getByTestId('judge-tag'));
+    const pop = screen.getByTestId('judge-popover');
+    expect(document.activeElement).toBe(pop);
+    fireEvent.keyDown(pop, { key: 'Escape' });
+    expect(screen.queryByTestId('judge-popover')).toBeNull();
+    expect(below).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId('judge-tag'));
   });
 
   it('scrolling closes the popover', () => {

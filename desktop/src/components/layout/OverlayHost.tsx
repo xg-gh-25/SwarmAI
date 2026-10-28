@@ -43,6 +43,7 @@ import type { OverlayId } from './overlayIds';
 import { getOverlaySpec, getOverlayCtxBridge } from './overlayRegistry';
 import { navEntry, ZONE_TINT } from './navTable';
 import { overlayTiming, timingOpen, timingMounted, timingClose } from './overlayTiming';
+import { useEscape, useLayerFocus } from '../../hooks/useLayer';
 
 // Responsive width tiers — CSS clamp(min, preferred%, max), resolved by the browser
 // against the panel's containing block (the scrim = MainContentArea). Ported verbatim
@@ -66,6 +67,7 @@ export function OverlayHost() {
   const spec = getOverlaySpec(activeOverlay);
 
   const scrimRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const unmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // `renderedId` keeps the surface mounted through its exit transition; `entered`
@@ -128,22 +130,25 @@ export function OverlayHost() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOverlay]);
 
-  // ---- Esc + ref-counted body-scroll-lock (gate on isOpen, ported from Modal) ----
+  // ---- Escape and focus (hooks/useLayer). The overlay is the bottom layer: a dialog
+  // or panel opened inside it takes Escape first, and a field inside it that takes
+  // Escape for itself (a rename, a search box) keeps it. Focus moves into the panel
+  // when it opens or switches surface, and goes back to the nav card on close; Tab is
+  // not trapped, because the left nav beside the overlay stays usable. ----
+  useEscape(isOpen, closeOverlay, panelRef);
+  useLayerFocus(isOpen && renderedId != null, panelRef, { trap: false, resetKey: renderedId ?? '' });
+
+  // ---- ref-counted body-scroll-lock (gate on isOpen, ported from Modal) ----
   useEffect(() => {
     if (!isOpen) return;
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeOverlay();
-    };
-    document.addEventListener('keydown', handleEscape);
     const w = window as unknown as { __modalLockCount?: number };
     w.__modalLockCount = (w.__modalLockCount ?? 0) + 1;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.removeEventListener('keydown', handleEscape);
       w.__modalLockCount = Math.max(0, (w.__modalLockCount ?? 1) - 1);
       if (w.__modalLockCount === 0) document.body.style.overflow = '';
     };
-  }, [isOpen, closeOverlay]);
+  }, [isOpen]);
 
   useEffect(() => () => { if (unmountTimer.current) clearTimeout(unmountTimer.current); }, []);
 
@@ -204,8 +209,12 @@ export function OverlayHost() {
       onMouseDown={(e) => { if (e.target === scrimRef.current) closeOverlay(); }}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-label={chrome?.navLabel ?? renderedId}
+        tabIndex={-1}
         className={clsx(
-          'absolute rounded-[18px] flex flex-col bg-[var(--color-card)] border shadow-2xl',
+          'absolute rounded-[18px] flex flex-col bg-[var(--color-card)] border shadow-2xl outline-none',
           'transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(.16,1,.3,1)]',
           'border-[color-mix(in_srgb,var(--panel-accent)_45%,var(--color-border))]',
           'shadow-[var(--shadow-overlay)] ring-1 ring-[color-mix(in_srgb,var(--panel-accent)_18%,transparent)]',

@@ -4,6 +4,7 @@ import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { copyToClipboard } from '../../utils/clipboard';
 import api from '../../services/api';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
+import { useEscape } from '../../hooks/useLayer';
 
 /**
  * FileContextMenu component - right-click context menu for file operations
@@ -98,13 +99,7 @@ export default function FileContextMenu({
       }
     };
 
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        returnFocusRef?.current?.focus();
-        onClose();
-        return;
-      }
-
+    const handleMenuKeys = (event: KeyboardEvent) => {
       const items = menuRef.current?.querySelectorAll('button[role="menuitem"]:not(:disabled)');
       if (!items?.length) return;
       const itemsArray = Array.from(items) as HTMLElement[];
@@ -127,15 +122,19 @@ export default function FileContextMenu({
     // Add listeners with a small delay to prevent immediate close
     const timeoutId = setTimeout(() => {
       document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEscape);
+      document.addEventListener('keydown', handleMenuKeys);
     }, 0);
 
     return () => {
       clearTimeout(timeoutId);
       document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener('keydown', handleMenuKeys);
     };
   }, [onClose, returnFocusRef]);
+
+  // Escape closes the menu (only the menu, also inside an overlay) and puts focus
+  // back on the row it was opened from.
+  useEscape(true, () => { returnFocusRef?.current?.focus(); onClose(); }, menuRef);
 
   // Adjust menu position to stay within viewport
   useEffect(() => {

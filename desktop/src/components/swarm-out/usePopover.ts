@@ -3,12 +3,13 @@
  * the run-trace tags). Shared so every tag behaves the same:
  *  - placed after it renders, from its measured size: below the tag when it fits,
  *    otherwise above, never over the tag; focus moves into it;
- *  - Escape closes it in the capture phase and stops there (the chat input has a
- *    global Escape handler that would otherwise grab focus), focus returns to the tag;
+ *  - Escape closes it (a layer on the shared stack, hooks/useLayer) and focus returns
+ *    to the tag;
  *  - an outside click, a scroll anywhere outside it or a window resize closes it
  *    (a fixed-position popover would otherwise stay put while its row scrolls away).
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEscape } from '../../hooks/useLayer';
 
 export function usePopover() {
   const [open, setOpen] = useState(false);
@@ -41,27 +42,20 @@ export function usePopover() {
       if (popRef.current?.contains(e.target as Node) || tagRef.current?.contains(e.target as Node)) return;
       close(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(true);
-    };
     const onMove = (e: Event) => {
       if (popRef.current && e.target instanceof Node && popRef.current.contains(e.target)) return;
       close(false);
     };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', onMove, true);
     window.addEventListener('resize', onMove);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey, true);
       window.removeEventListener('scroll', onMove, true);
       window.removeEventListener('resize', onMove);
     };
   }, [open, close]);
+  useEscape(open, () => close(true), popRef);
 
   const toggle = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();

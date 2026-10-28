@@ -25,6 +25,7 @@ import { hiveService, HiveAccount, HiveInstance, VerifyResult, TRANSITIONAL_STAT
 import { openExternal } from '../../utils/openExternal';
 import { copyToClipboard } from '../../utils/clipboard';
 import { isApiError } from '../../services/api';
+import { useDialogLayer } from '../../hooks/useLayer';
 
 /** Extract the most useful message from an API error. */
 export function friendlyError(e: unknown): string {
@@ -549,11 +550,10 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !saving) onClose(); };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose, saving]);
+  // A dialog layer: Escape closes it (not the Hive overlay behind it), except while
+  // saving; focus moves to the first field and back on close.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogLayer(true, dialogRef, () => { if (!saving) onClose(); }, { first: true });
 
   const handleSave = async () => {
     if (!accountId.match(/^\d{12}$/)) { setError('Account ID must be 12 digits'); return; }
@@ -576,8 +576,9 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={saving ? undefined : onClose}>
-      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Add AWS Account</h3>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hive-add-account-title" tabIndex={-1}
+        className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto outline-none" onClick={e => e.stopPropagation()}>
+        <h3 id="hive-add-account-title" className="text-lg font-semibold text-[var(--color-text)] mb-4">Add AWS Account</h3>
 
         <div className="space-y-3">
           <div>
@@ -649,11 +650,9 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
   const [deploying, setDeploying] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !deploying) onClose(); };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose, deploying]);
+  // A dialog layer, like AddAccountDialog: Escape closes it except while deploying.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogLayer(true, dialogRef, () => { if (!deploying) onClose(); }, { first: true });
 
   const handleDeploy = async () => {
     if (!name.match(/^[a-z][a-z0-9]([a-z0-9-]{0,60}[a-z0-9])?$/)) {
@@ -682,8 +681,9 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={deploying ? undefined : onClose}>
-      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px]" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Deploy New Hive</h3>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hive-deploy-title" tabIndex={-1}
+        className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] outline-none" onClick={e => e.stopPropagation()}>
+        <h3 id="hive-deploy-title" className="text-lg font-semibold text-[var(--color-text)] mb-4">Deploy New Hive</h3>
 
         <div className="space-y-3">
           <div>

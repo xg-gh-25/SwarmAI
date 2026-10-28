@@ -21,6 +21,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { sendTerminalTextToChat, type TerminalTab as TerminalTabModel } from '../../stores/TerminalStore';
 import { copyToClipboard } from '../../utils/clipboard';
+import { useEscape } from '../../hooks/useLayer';
 
 interface TerminalTabProps {
   tab: TerminalTabModel;
@@ -460,18 +461,18 @@ function TerminalMenu({ x, y, hasSelection, onClose, onCopy, onAdd, onSelectAll,
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
     window.addEventListener('wheel', onClose, { passive: true });
     window.addEventListener('blur', onClose);
     return () => {
       document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
       window.removeEventListener('wheel', onClose);
       window.removeEventListener('blur', onClose);
     };
   }, [onClose]);
+  // Escape closes the menu before xterm (which keeps focus) sends it to the shell: a
+  // layer without a ref takes Escape in the capture phase.
+  useEscape(true, onClose);
   const item = (key: string, icon: string, label: string, hint: string, run: () => void, disabled = false) => (
     <button
       key={key}

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { workspaceService } from '../../services/workspace';
+import { useDialogLayer } from '../../hooks/useLayer';
 import type { WorkspaceFile } from '../../types';
 
 interface FolderPickerModalProps {
@@ -38,19 +39,9 @@ export function FolderPickerModal({
     }
   }, [isOpen, initialPath]);
 
-  // Handle Escape key to close modal
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  // A dialog layer: Escape closes it (only it), focus moves in and back on close.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogLayer(isOpen, dialogRef, onClose);
 
   // Fetch directories using the browse API
   const {
@@ -143,12 +134,13 @@ export function FolderPickerModal({
       />
 
       {/* Modal */}
-      <div className="relative bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[80vh]">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="folder-picker-title" tabIndex={-1}
+        className="relative bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl w-full max-w-lg mx-4 flex flex-col max-h-[80vh] outline-none">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined icon-md text-primary">folder_open</span>
-            <h2 className="font-semibold text-[var(--color-text)]">{t('chat.selectWorkFolder') || 'Select Work Folder'}</h2>
+            <h2 id="folder-picker-title" className="font-semibold text-[var(--color-text)]">{t('chat.selectWorkFolder') || 'Select Work Folder'}</h2>
           </div>
           <button
             onClick={onClose}

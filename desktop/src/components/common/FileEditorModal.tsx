@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import FileEditorCore from './FileEditorCore';
+import { useLayerFocus } from '../../hooks/useLayer';
 import type { GitStatus } from '../../types';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 
@@ -195,6 +196,11 @@ export default function FileEditorModal({
   onContentChange,
 }: FileEditorModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
+  // Focus moves into the editor dialog, Tab stays in it, and focus goes back to what
+  // opened it on close. Escape is FileEditorCore's (it knows about search and unsaved
+  // edits), on the same layer stack.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useLayerFocus(isOpen, dialogRef);
 
   // Lock body scroll while modal is open
   useEffect(() => {
@@ -221,7 +227,8 @@ export default function FileEditorModal({
       onMouseDown={handleOverlayClick}
       data-testid="file-editor-modal"
     >
-      <div className="w-[95vw] h-[90vh] max-w-[1600px]">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={fileName} tabIndex={-1}
+        className="w-[95vw] h-[90vh] max-w-[1600px] outline-none">
         <FileEditorCore
           filePath={filePath}
           fileName={fileName}

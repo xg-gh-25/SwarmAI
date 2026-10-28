@@ -27,6 +27,7 @@ import {
 } from '../../stores/TerminalStore';
 import { terminalLocation, type LocationChoice } from '../../stores/terminalLocation';
 import TerminalTab from './TerminalTab';
+import { useEscape } from '../../hooks/useLayer';
 
 const MIN_HEIGHT = 120;
 const MAX_HEIGHT = 640;
@@ -102,11 +103,12 @@ function RecentsMenu({ recents, onPick, onClose }: {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+    return () => { document.removeEventListener('mousedown', onDown); };
   }, [onClose]);
+  // Escape closes the menu first, before the terminal (which keeps focus) sends it to
+  // the shell: a layer without a ref takes Escape in the capture phase.
+  useEscape(true, onClose);
   return (
     <div
       ref={ref}

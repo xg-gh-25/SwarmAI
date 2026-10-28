@@ -20,6 +20,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, cleanup, fireEvent } from '@testing-library/react';
 import Modal from './Modal';
+import { useEscape } from '../../hooks/useLayer';
 
 // Run rAF callbacks synchronously (double-rAF enter would otherwise never fire
 // under fake timers). Each call resolves on the next microtask-ish tick.
@@ -173,15 +174,28 @@ describe('Modal — a layer: focus, Tab, Escape (hooks/useLayer)', () => {
     expect(document.activeElement).not.toBe(screen.getByText('Lower OK'));
   });
 
-  it('Escape closes the dialog and stops there: an overlay behind it (listening on document) is not closed', () => {
+  it('Escape closes the dialog and stops there: the overlay behind it (a layer too) stays open', () => {
     const onClose = vi.fn();
-    const host = vi.fn();
-    document.addEventListener('keydown', host);
-    render(<Modal isOpen onClose={onClose} title="T"><input data-testid="x" /></Modal>);
+    const overlay = vi.fn();
+    function Overlay({ children }: { children: React.ReactNode }) {
+      useEscape(true, overlay);
+      return <>{children}</>;
+    }
+    // the overlay is open first and the dialog opens from it later, as in the app
+    const { rerender } = render(<Overlay><Modal isOpen={false} onClose={onClose} title="T"><input data-testid="x" /></Modal></Overlay>);
+    rerender(<Overlay><Modal isOpen onClose={onClose} title="T"><input data-testid="x" /></Modal></Overlay>);
     fireEvent.keyDown(screen.getByTestId('x'), { key: 'Escape' });
-    document.removeEventListener('keydown', host);
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(host).not.toHaveBeenCalled();
+    expect(overlay).not.toHaveBeenCalled();
+  });
+
+  it('a field in the dialog that takes Escape for itself keeps it: the dialog stays open', () => {
+    const onClose = vi.fn();
+    render(<Modal isOpen onClose={onClose} title="T">
+      <input data-testid="x" onKeyDown={(e) => { if (e.key === 'Escape') e.preventDefault(); }} />
+    </Modal>);
+    fireEvent.keyDown(screen.getByTestId('x'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('with two dialogs open, Escape closes only the top one', () => {

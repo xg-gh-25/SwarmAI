@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { writeTextFile, mkdir } from '@tauri-apps/plugin-fs';
 import { useLayout } from '../../contexts/LayoutContext';
+import { useDialogLayer } from '../../hooks/useLayer';
 
 /**
  * ExplorerToolbar component - toolbar with file operation buttons
@@ -186,6 +187,10 @@ export default function ExplorerToolbar({
   const handleCancel = () => {
     setDialogState({ isOpen: false, type: null, name: '', error: null });
   };
+  // The creation dialog is a layer: Escape cancels it (the name field takes Escape
+  // first, for the same cancel), focus stays in it and goes back on close.
+  const creationRef = useRef<HTMLDivElement>(null);
+  useDialogLayer(dialogState.isOpen, creationRef, handleCancel);
 
   // Handle key press in dialog
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -253,12 +258,17 @@ export default function ExplorerToolbar({
           onClick={handleCancel}
           data-testid="creation-dialog-overlay"
         >
-          <div 
-            className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg shadow-lg p-4 w-80"
+          <div
+            ref={creationRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="creation-dialog-title"
+            tabIndex={-1}
+            className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg shadow-lg p-4 w-80 outline-none"
             onClick={e => e.stopPropagation()}
             data-testid="creation-dialog"
           >
-            <h3 className="text-body text-[var(--color-text)] mb-3">
+            <h3 id="creation-dialog-title" className="text-body text-[var(--color-text)] mb-3">
               {dialogState.type === 'file' ? 'Create New File' : 'Create New Folder'}
             </h3>
             
