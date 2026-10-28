@@ -29,22 +29,12 @@ _DEBOUNCE_MS = 2000  # 2 seconds
 _MAX_BATCH_SIZE = 50  # Skip incremental when too many files change at once
 _CHUNK_SIZE = 20  # Process files in chunks to limit memory spikes
 
-# File extensions worth watching (from parser.py LANGUAGE_MAP)
-_WATCHED_EXTENSIONS = {
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".go",
-    ".rs", ".rb", ".cs", ".kt", ".kts", ".php", ".swift",
-    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
-}
-
-# Directories to skip
-_SKIP_DIRS = {
-    "node_modules", ".git", "__pycache__", "venv", ".venv",
-    "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
-    ".eggs", "egg-info", ".next", ".nuxt",
-}
-
-# Path segments that indicate non-source directories (never contain indexable code)
-# These are workspace/knowledge dirs whose bulk writes trigger jetsam kills
+# Which files the graph holds is parser.is_indexed_path (one answer for every path).
+# On top of it the watcher skips these path segments INSIDE the repo: workspace /
+# knowledge dirs whose bulk writes triggered jetsam kills. They are matched on the
+# path relative to the repo root, never the absolute path: bound repos are cloned
+# under ~/.swarm-ai/bindings/, so an absolute-path match on ".swarm-ai" would skip
+# every file of every bound repo.
 _SKIP_PATH_SEGMENTS = {
     "Knowledge", "DailyActivity", ".context", ".swarm-ai",
     "Attachments", "DailyBriefs", "JobResults", "Signals",
@@ -122,7 +112,7 @@ class CodeIntelWatcher:
                 if not self._running:
                     break
                 changed_files = [Path(path) for _, path in changes]
-                source_changes = [f for f in changed_files if f.suffix in _WATCHED_EXTENSIONS]
+                source_changes = [f for f in changed_files if self._in_repo(f) is not None]
                 if source_changes:
                     source_changes = await executors.run_in(
                         "io", _drop_git_ignored, self._root, source_changes)
@@ -145,17 +135,23 @@ class CodeIntelWatcher:
         finally:
             self._running = False
 
+    def _in_repo(self, path: Path) -> Path | None:
+        """*path* relative to the repo root when the graph holds it, else None."""
+        from .parser import is_indexed_path
+        rel = None
+        for root in (self._root, self._root.resolve()):
+            try:
+                rel = path.relative_to(root)
+                break
+            except ValueError:
+                continue
+        if rel is None or any(part in _SKIP_PATH_SEGMENTS for part in rel.parts):
+            return None
+        return rel if is_indexed_path(rel) else None
+
     def _filter(self, change, path: str) -> bool:
-        """Only watch parseable source files, skip noise directories."""
-        p = Path(path)
-        parts = p.parts
-        # Skip noise directories (build artifacts, caches)
-        if any(part in _SKIP_DIRS for part in parts):
-            return False
-        # Skip non-source workspace directories (knowledge, context, attachments)
-        if any(part in _SKIP_PATH_SEGMENTS for part in parts):
-            return False
-        return p.suffix in _WATCHED_EXTENSIONS
+        """Only files the graph holds (parser.is_indexed_path), relative to the root."""
+        return self._in_repo(Path(path)) is not None
 
     async def _trigger_incremental(self, changed_files: list[Path]):
         """Run incremental reindex + route extraction in thread pool.

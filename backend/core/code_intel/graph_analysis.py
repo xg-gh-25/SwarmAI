@@ -71,15 +71,16 @@ def _god_nodes(degree_rows: list[tuple], top_n: int = _DEFAULT_TOP_N) -> list[di
     return out
 
 
-_SOURCE_EXT_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go",
-                        ".java", ".rb", ".c", ".cpp", ".h", ".cs", ".php")
+def _source_ext_suffixes() -> tuple[str, ...]:
+    from .parser import LANGUAGE_MAP
+    return tuple(LANGUAGE_MAP)
 
 
 def _is_file_hub(name: str, node_type: str) -> bool:
     """True if this node is a file-level hub (not a real symbol abstraction)."""
     if node_type == "file":
         return True
-    return any(name.endswith(sfx) for sfx in _SOURCE_EXT_SUFFIXES)
+    return name.endswith(_source_ext_suffixes())
 
 
 def _symbol_cluster_map(clusters: dict | None) -> dict[str, str]:

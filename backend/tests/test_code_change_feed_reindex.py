@@ -77,20 +77,29 @@ class TestReindexChangedFiles:
         assert result == 0
         mock_graph.incremental_update.assert_not_called()
 
-    def test_skips_test_files(self, tmp_path):
-        """Test files are not indexed into the code graph."""
-        test_file = tmp_path / "tests" / "test_foo.py"
-        test_file.parent.mkdir(parents=True)
-        test_file.write_text("def test_x(): pass\n")
+    def test_test_files_and_every_parsed_language_are_reindexed(self, tmp_path):
+        """The graph holds test files and every LANGUAGE_MAP language (a full rebuild
+        indexes them); the hook used to skip tests and all but 5 languages, so their
+        nodes went stale after every edit."""
+        from core.code_intel.graph_store import GraphStore
 
-        changed_files = [("A", "tests/test_foo.py")]
-
-        mock_graph = MagicMock()
-        mock_graph.get_meta.return_value = str(tmp_path)  # built from this repo
-        with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
-            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
-
-        assert result == 0
+        files = {"tests/test_foo.py": "def test_x(): pass\n",
+                 "svc/main.go": "package main\n\nfunc Serve() {}\n",
+                 "node_modules/x/index.js": "function x() {}\n"}
+        for rel, text in files.items():
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(text)
+        graph = GraphStore(tmp_path / "g.db")
+        graph.set_meta("repo_root", str(tmp_path))
+        try:
+            with patch("hooks.code_change_feed.load_project_graph", return_value=graph):
+                result = _reindex_changed_files([("A", r) for r in files], str(tmp_path), "SwarmAI")
+            assert result == 2
+            assert graph.get_nodes_by_file("tests/test_foo.py")
+            assert graph.get_nodes_by_file("svc/main.go")
+            assert graph.get_nodes_by_file("node_modules/x/index.js") == []
+        finally:
+            graph.close()
 
     def test_exception_does_not_propagate(self, tmp_path):
         """Re-index errors are swallowed (non-blocking)."""

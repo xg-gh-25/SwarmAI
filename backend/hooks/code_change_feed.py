@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # Lazy-safe imports for code_intel (may not be available in all environments)
 try:
     from core.code_intel import graph_holds_repo, load_project_graph
+    from core.code_intel.parser import is_indexed_path
     _CODE_INTEL_AVAILABLE = True
 except ImportError:
     _CODE_INTEL_AVAILABLE = False
@@ -55,7 +56,9 @@ def _skipped(path: str) -> bool:
     return any(path.startswith(p) for p in _SKIP_PREFIXES) or "/tests/" in f"/{path}"
 
 # Only these extensions indicate potential architecture changes
-_CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".rs", ".go", ".js", ".jsx"}
+# Which changed files can be architecture changes (TECH-drift proposals) — a
+# purpose of its own, not graph membership (parser.is_indexed_path).
+_ARCH_CHANGE_EXTENSIONS = {".py", ".ts", ".tsx", ".rs", ".go", ".js", ".jsx"}
 
 # Git timeout (same as auto_commit_hook)
 _GIT_TIMEOUT = 10
@@ -184,7 +187,7 @@ class CodeChangeFeed:
             (status, path)
             for status, path in file_changes
             if not _skipped(path)
-            and Path(path).suffix in _CODE_EXTENSIONS
+            and Path(path).suffix in _ARCH_CHANGE_EXTENSIONS
         ]
 
         if not code_changes:
@@ -367,8 +370,6 @@ class CodeChangeFeed:
 # ── P3: Code Intelligence Graph Auto-Rebuild ──────────────────────────
 
 
-# Extensions to re-index into code_intel (subset of _CODE_EXTENSIONS)
-_REINDEX_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 
 
 def _reindex_changed_files(
@@ -410,12 +411,10 @@ def _reindex_changed_files(
             # Note: a rename (R) re-indexes at the new path; the old path's nodes
             # stay until the next full rebuild (the old path is not in file_changes).
 
-            # Skip non-code files
-            if Path(rel_path).suffix not in _REINDEX_EXTENSIONS:
-                continue
-
-            # Skip test files (not part of the architecture graph)
-            if _skipped(rel_path):
+            # Only files the graph holds — every language it parses, test files
+            # included (a full rebuild indexes them; skipping them here left their
+            # nodes stale after every edit).
+            if not is_indexed_path(rel_path):
                 continue
 
             if status != "D" and not (root / rel_path).is_file():

@@ -555,6 +555,52 @@ class TestTreeSitterLiveAST:
         assert any(e.edge_type == "calls" and e.target_id.endswith("load")
                    for e in result.edges), [(e.edge_type, e.target_id) for e in result.edges]
 
+    def test_a_degraded_file_keeps_the_edges_outside_its_broken_region(self, tmp_path):
+        """One stray `&` in JSX text (a tsx-grammar quirk) used to cost the whole file
+        every edge. Now the file stays degraded (a coverage hole) and keeps the edges
+        whose call site is outside every ERROR range."""
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("tsx"):
+            pytest.skip("tree-sitter tsx grammar not live in this env")
+        f = tmp_path / "About.tsx"
+        f.write_text(
+            "function load(): number { return 1; }\n"
+            "export function Panel() {\n"
+            "  const n = load();\n"
+            "  return <div>{n}</div>;\n"
+            "}\n"
+            "export function About() {\n"
+            "  return <button>Download & Install</button>;\n"
+            "}\n")
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "degraded"
+        calls = [(e.source_id.split("::")[-1], e.target_id.split("::")[-1], e.line_number)
+                 for e in result.edges if e.edge_type == "calls"]
+        assert ("Panel", "load", 3) in calls, calls
+        broken = P._error_line_ranges(P._get_cached_parser("tsx").parse(f.read_bytes()))
+        assert broken and all(not (a <= ln <= b) for _, _, ln in calls for a, b in broken)
+
+    def test_a_call_inside_a_broken_function_is_dropped(self, tmp_path):
+        """Inside an ERROR region the enclosing function may be wrong, so the edge's
+        source may be wrong: those edges go, the ones before the error stay."""
+        import core.code_intel.parser as P
+        if not P._tree_sitter_live("python"):
+            pytest.skip("tree-sitter python grammar not live in this env")
+        f = tmp_path / "m.py"
+        f.write_text(
+            "def helper():\n    return 1\n\n"
+            "def good():\n    return helper()\n\n"
+            "x = (helper(\n"                       # line 7: unclosed — swallows what follows
+            "def after():\n    return helper()\n")
+        result, status = P.parse_file_with_status(f, tmp_path)
+        assert status == "degraded"
+        calls = [(e.source_id.split("::")[-1], e.line_number)
+                 for e in result.edges if e.edge_type == "calls"]
+        assert ("good", 5) in calls, calls
+        # `after` is inside the ERROR region: its call would be attributed to the
+        # module, so no edge from line 7 on survives
+        assert all(ln < 7 for _, ln in calls), calls
+
     def test_the_tsx_grammar_is_shipped_and_ts_rules_apply(self):
         import core.code_intel.parser as P
         assert P.grammar_for(".tsx") == "tsx"

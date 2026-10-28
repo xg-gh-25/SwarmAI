@@ -18,7 +18,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -513,7 +513,7 @@ _NON_SOURCE_EXTENSIONS = {
     ".pyc", ".pyo", ".so", ".dylib", ".dll", ".o", ".a", ".class", ".jar",
     ".env", ".gitignore", ".gitattributes", ".editorconfig", ".dockerignore",
     ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",  # shell — no AST support
-    ".sql", ".graphql", ".proto", ".thrift",
+    ".graphql", ".proto", ".thrift",
     ".log", ".map", ".min", ".d.ts",
 }
 
@@ -688,6 +688,25 @@ def _tree_has_error(tree) -> bool:
         return False
 
 
+def _error_line_ranges(tree) -> list[tuple[int, int]]:
+    """The 1-based line ranges of the broken regions of a parsed tree: every ERROR
+    node, and the parent construct of every MISSING (zero-width, inserted) node.
+    Only subtrees that report has_error are walked."""
+    out: list[tuple[int, int]] = []
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR":
+            out.append((node.start_point[0] + 1, node.end_point[0] + 1))
+            continue
+        if node.is_missing:
+            owner = node.parent or node
+            out.append((owner.start_point[0] + 1, owner.end_point[0] + 1))
+            continue
+        stack.extend(c for c in node.children if c.has_error or c.is_missing)
+    return out
+
+
 def _tree_sitter_live(language: str) -> bool:
     """Probe (once per grammar name, cached) whether tree-sitter can actually parse a
     trivial snippet AND expose a usable root node. False → the AST path is dead in
@@ -742,6 +761,25 @@ def _should_skip_dir(component: str) -> bool:
     `binaries`/`_internal` would silently drop real source (run_f64f6031, Gate-2).
     """
     return component in SKIP_DIRS or component.endswith(".egg-info")
+
+
+def is_skipped_location(rel_path: str | PurePath) -> bool:
+    """Whether a repo-relative path lies in a directory code intel never indexes:
+    a SKIP_DIRS component, or a path-scoped skip (_SKIP_PATH_SUFFIXES)."""
+    rel = PurePath(rel_path)
+    if any(_should_skip_dir(part) for part in rel.parts):
+        return True
+    rel_posix = rel.as_posix()
+    return any(f"{sfx}/" in f"{rel_posix}/" for sfx in _SKIP_PATH_SUFFIXES)
+
+
+def is_indexed_path(rel_path: str | PurePath) -> bool:
+    """Whether a repo-relative path is one the code graph holds: an extension in
+    LANGUAGE_MAP, outside the skipped directories. The ONE answer for every path
+    that decides graph membership (full rebuild, watcher, the commit hook); test
+    files are members like any other. .gitignore is applied on top by the callers
+    that walk or watch a repo (one batched ``git check-ignore``)."""
+    return PurePath(rel_path).suffix in LANGUAGE_MAP and not is_skipped_location(rel_path)
 
 
 def _gitignored_subset(repo_root: Path, paths: list[Path]) -> set[Path]:
@@ -2137,17 +2175,23 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
             # file into an error-riddled tree (root has_error) on a non-empty file =
             # a genuine parse failure → coverage hole, not silent "ok".
             if _tree_has_error(tree) and content.strip():
-                # DoD-B (run_dd13fb03, §24.4 graphify ERROR-node fallback): tree-sitter
-                # error-recovery still parsed the well-formed top-level symbols into
-                # `nodes`. SALVAGE them (a partially-broken file keeps its parseable
-                # symbols) instead of discarding the whole file — BUT still record it
-                # as a coverage hole so this is NOT a silent-ok (status stays partial).
-                # Edges are DROPPED: a broken tail can leave an edge pointing at a node
-                # that was never created (dangling target), and get_module_edges guards
-                # such bare targets out anyway — nodes carry the durable value.
+                # Tree-sitter's error recovery still parses the well-formed parts. The
+                # file keeps its symbols and the edges whose call site lies outside
+                # every broken region; it is still recorded as a coverage hole
+                # ("degraded", never a silent ok). An edge from inside a broken region
+                # is dropped: there the enclosing function, and so the edge's source,
+                # may be wrong, and resolve_and_prune only removes edges to MISSING
+                # targets, not wrong edges to existing ones. An edge with no call-site
+                # line cannot be placed and is dropped too. (Dropping every edge of
+                # the file cost e.g. a 2143-line component all its edges for one
+                # bare `&` in JSX text.)
                 if nodes:
-                    logger.debug(f"Tree-sitter partial-error on {path} → degraded (salvaged {len(nodes)} symbols)")
-                    return ParseResult(nodes=nodes, edges=[], language=lang, file_path=rel_path,
+                    broken = _error_line_ranges(tree)
+                    kept = [e for e in edges if e.line_number is not None
+                            and not any(a <= e.line_number <= b for a, b in broken)]
+                    logger.debug(f"Tree-sitter partial-error on {path} → degraded "
+                                 f"({len(nodes)} symbols, {len(kept)}/{len(edges)} edges kept)")
+                    return ParseResult(nodes=nodes, edges=kept, language=lang, file_path=rel_path,
                                        imports=imports), "degraded"
                 # nothing salvageable → genuine failure (unchanged)
                 logger.debug(f"Tree-sitter parse has errors on {path}, no salvageable symbols → failed")
@@ -2232,14 +2276,9 @@ def parse_repo_with_coverage(
         if not path.is_file():
             continue
         rel = path.relative_to(repo_root)
-        # Skip dirs by checking each path component (out of scope, not a hole)
-        if any(_should_skip_dir(part) for part in rel.parts):
-            continue
-        # Path-scoped skips (generic dir names only safe under a known parent, e.g.
-        # `src-tauri/binaries` — the Tauri sidecar bundle). Match on the POSIX path
-        # so an intermediate `.../src-tauri/binaries/...` is caught at any depth.
-        rel_posix = rel.as_posix()
-        if any(f"{sfx}/" in f"{rel_posix}/" for sfx in _SKIP_PATH_SUFFIXES):
+        # Skipped directories (SKIP_DIRS components, and path-scoped skips such as
+        # `src-tauri/binaries`, the Tauri sidecar bundle): out of scope, not a hole.
+        if is_skipped_location(rel):
             continue
         suffix = path.suffix
         if suffix in LANGUAGE_MAP:
