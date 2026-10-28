@@ -100,6 +100,16 @@ async def hives() -> dict[str, Any]:
     return {"hives": rows, "running": sum(1 for r in rows if r["status"] == "running")}
 
 
+async def _running_hive_ids() -> list[str]:
+    """Every Hive this Host knows that is running: each one's questions are listed,
+    whether or not anything was ever dispatched to it from here."""
+    import aiosqlite
+    async with aiosqlite.connect(_db_path()) as conn:
+        await conn.execute("PRAGMA busy_timeout = 3000")
+        cur = await conn.execute("SELECT id FROM hive_instances WHERE status = 'running'")
+        return [r[0] for r in await cur.fetchall()]
+
+
 async def _instance(hive_ref: str) -> dict[str, Any]:
     """A running Hive by id or name, with its account row; validated fields only."""
     import aiosqlite
@@ -363,7 +373,8 @@ async def _streaming_sessions(inst: dict[str, Any]) -> Optional[set[str]]:
 
 
 async def list_runs() -> dict[str, Any]:
-    """Dispatch log rows (newest first) and every Hive's open questions.
+    """Dispatch log rows (newest first) and the open questions of every running Hive
+    and of every Hive in the log.
 
     Each row says ``waiting`` (its session has an open question) and ``running`` (its
     session is streaming on the Hive now): True / False, or None when that Hive could
@@ -372,7 +383,14 @@ async def list_runs() -> dict[str, Any]:
     asks: list[dict[str, Any]] = []
     errors: list[str] = []
     streaming: dict[str, Optional[set[str]]] = {}
-    for hive_id in sorted({r["hive_id"] for r in rows}):
+    try:
+        running = await _running_hive_ids()
+    except Exception as e:                          # store unreadable: the log's Hives only
+        logger.warning("swarm_out: listing running Hives failed (%s)", type(e).__name__)
+        errors.append("could not list the running Hives")
+        running = []
+    # every running Hive, plus a Hive in the log that is not running (it says so)
+    for hive_id in sorted({r["hive_id"] for r in rows} | set(running)):
         try:
             inst = await _instance(hive_id)
         except SwarmOutError as e:

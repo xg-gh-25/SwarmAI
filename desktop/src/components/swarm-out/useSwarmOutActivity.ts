@@ -3,7 +3,9 @@
  * runs are running there now, and how many questions are waiting for the person.
  *
  * Read from /api/swarm-out/runs, the same source as the dashboard's 真实派发 section:
- * `waiting` = open questions (asks), `running` = runs whose session is streaming on its
+ * `waiting` = open questions (asks) the person can still answer here: an ask whose answer
+ * the Hive refused is listed as not delivered but is not waiting (it is settled on the
+ * Hive's own page or expires). `running` = runs whose session is streaming on its
  * Hive (`running === true`). A run waiting on a question is not running, and a run
  * whose Hive could not be asked (`running` null) is not counted: the tab never claims
  * work it has not seen.
@@ -24,7 +26,7 @@ export interface SwarmOutActivity {
 
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {
   return {
-    waiting: d.asks.length,
+    waiting: d.asks.filter((a) => !a.refused).length,
     running: d.runs.filter((r) => r.running === true && !r.waiting).length,
   };
 }

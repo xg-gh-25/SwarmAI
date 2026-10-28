@@ -9,6 +9,15 @@ import pytest
 from core import swarm_out
 from hive import provisioner
 
+
+@pytest.fixture(autouse=True)
+def _no_running_hives_from_the_store(monkeypatch):
+    """list_runs also reads the running Hives from the Host's store; these tests give
+    their Hives through the dispatch log (a test that needs a store Hive sets it)."""
+    async def none():
+        return []
+    monkeypatch.setattr(swarm_out, "_running_hive_ids", none)
+
 INST = {"id": "h1", "name": "worker-1", "status": "running", "cloudfront_domain": "abc123.cloudfront.net",
         "s3_bucket": "swarmai-hive-2361-us-east-1", "region": "us-east-1",
         "auth_user": "admin", "auth_password": "s3cret-pass", "account_ref": "a1"}

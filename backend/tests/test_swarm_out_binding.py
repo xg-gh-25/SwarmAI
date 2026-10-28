@@ -20,6 +20,15 @@ import pytest
 from core import swarm_out
 from core.swarm_out_bridge import MAX_COMMAND_CHARS, _ask_record, approval_digest, approval_view
 
+
+@pytest.fixture(autouse=True)
+def _no_running_hives_from_the_store(monkeypatch):
+    """list_runs also reads the running Hives from the Host's store; these tests give
+    their Hives through the dispatch log (a test that needs a store Hive sets it)."""
+    async def none():
+        return []
+    monkeypatch.setattr(swarm_out, "_running_hive_ids", none)
+
 NOW = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 INST = {"id": "h1", "name": "worker-1", "status": "running", "cloudfront_domain": "abc123.cloudfront.net",
         "s3_bucket": "swarmai-hive-2361-us-east-1", "region": "us-east-1",
@@ -275,3 +284,44 @@ def test_a_dispatch_with_no_session_id_is_not_reported_as_stopped(monkeypatch):
     monkeypatch.setattr(swarm_out, "_streaming_sessions", live)
     out = asyncio.run(swarm_out.list_runs())
     assert {r["dispatch_id"]: r["running"] for r in out["runs"]} == {"d1": True, "d2": None}
+
+
+def test_a_running_hive_never_dispatched_to_still_shows_its_questions(monkeypatch):
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
+
+    async def running():
+        return ["h1"]
+
+    async def fake_instance(ref):
+        return swarm_out._validate_instance(INST, {"id": "a1"})
+
+    async def live(inst):
+        return set()
+    monkeypatch.setattr(swarm_out, "_running_hive_ids", running)
+    monkeypatch.setattr(swarm_out, "_instance", fake_instance)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+        {"kind": "approval", "session_id": "s7", "request_id": "r7"}])
+    monkeypatch.setattr(swarm_out, "_streaming_sessions", live)
+    out = asyncio.run(swarm_out.list_runs())
+    assert [a["request_id"] for a in out["asks"]] == ["r7"]
+    assert out["asks"][0]["dispatch_title"] is None and out["errors"] == []
+
+
+def test_an_unreadable_store_keeps_the_logs_hives(monkeypatch):
+    rows = [{"dispatch_id": "d1", "hive_id": "h1", "hive": "worker-1", "session_id": "s1", "title": "A"}]
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: list(rows))
+
+    async def broken():
+        raise OSError("db locked")
+
+    async def fake_instance(ref):
+        return swarm_out._validate_instance(INST, {"id": "a1"})
+    monkeypatch.setattr(swarm_out, "_running_hive_ids", broken)
+    monkeypatch.setattr(swarm_out, "_instance", fake_instance)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+        {"kind": "approval", "session_id": "s1", "request_id": "r1"}])
+    out = asyncio.run(swarm_out.list_runs())
+    assert [a["request_id"] for a in out["asks"]] == ["r1"]
+    assert out["errors"] == ["could not list the running Hives"]
