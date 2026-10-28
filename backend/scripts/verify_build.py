@@ -82,6 +82,10 @@ CAPABILITY_MANIFEST = [
     ("recall_engine",       "core.recall_engine",            "critical"),
     ("knowledge_store",     "core.knowledge_store",          "critical"),
     ("memory_index",        "core.memory_index",             "critical"),
+    # reached only through a lazy import in desktop_main (the `knowledge` subcommand):
+    # named so the agent's on-demand DDD lookup cannot vanish from the binary unseen
+    ("addressing",          "core.addressing",               "critical"),
+    ("knowledge_cli",       "core.knowledge_cli",            "critical"),
     ("manifest_loader",     "core.manifest_loader",          "critical"),
     ("llm_optimizer",       "core.llm_optimizer",            "critical"),
     ("memory_validation",   "core.memory_validation",        "critical"),
