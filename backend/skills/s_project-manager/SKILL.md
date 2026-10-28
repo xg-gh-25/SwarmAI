@@ -319,18 +319,21 @@ Never read a repo with `head`/`cat` snippets: a cut README or the first five fil
 
 #### Writing a new brain's first entries (P2b)
 
-Write `Projects/<P>/.artifacts/bootstrap/bootstrap-entries.json`: a JSON list, one object
-per entry. Two kinds:
+Write `Projects/<P>/.artifacts/bootstrap/bootstrap-entries.json`: one valid JSON list, one
+object per entry, the objects separated by commas. The file is parsed as one JSON document,
+so bare objects one after another (JSON Lines) are refused. Two kinds:
 
 ```json
-{"kind": "cognition", "type": "pitfall", "section": "Runtime Traps",
- "title": "Changing the default digest invalidates every issued token",
- "what": "Signer defaults to SHA-1; a signer built with another digest rejects all old signatures.",
- "applicability": "upgrading the library or configuring the digest",
- "sources": ["docs/concepts.rst#Digest", "CHANGES.rst"]}
-{"kind": "gap", "section": "What to Watch For", "title": "Non-Goals: no evidence yet",
- "what": "Nothing in the repo or the conversation says what this project will not do.",
- "proposed_next": "ask the maintainers"}
+[
+  {"kind": "cognition", "type": "pitfall", "section": "Runtime Traps",
+   "title": "Changing the default digest invalidates every issued token",
+   "what": "Signer defaults to SHA-1; a signer built with another digest rejects all old signatures.",
+   "applicability": "upgrading the library or configuring the digest",
+   "sources": ["docs/concepts.rst#Digest", "CHANGES.rst"]},
+  {"kind": "gap", "section": "What to Watch For", "title": "Non-Goals: no evidence yet",
+   "what": "Nothing in the repo or the conversation says what this project will not do.",
+   "proposed_next": "ask the maintainers"}
+]
 ```
 
 Fields: `title` (one line, ≤200 characters, no `**` or `|`), `what`, and by type `how`,

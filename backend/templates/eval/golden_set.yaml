@@ -1230,7 +1230,7 @@ cases:
       document in full with Read when you write the section it serves) and holds the commands the repo declares,
       the latest CHANGELOG release sections and the lint and test configs; `root` is the repo folder. Read
       the code where an entry needs it. Then write the brain''s first knowledge entries. Reply with only a
-      ```json block: a JSON list of at most 12 entries, one entry per line, each field one short sentence.
+      ```json block: one valid JSON list of at most 12 entries, separated by commas, each field one short sentence.
       Each entry is {"kind": "cognition", "type": T, "section": S, "title": ..., "what": ..., "sources": [...]};
       a decision also needs "why" and "rejected_alternatives", a pitfall "applicability" (when it bites), a
       process "how" (the command). A source is a path inside the repo, relative to the repo folder, optionally
@@ -1289,7 +1289,7 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: 743a8396d3dc0928
+  validated_by_4gate: 7f5d3fbe5fa80c22
 - id: OFF_BRAIN_FIRST_ENTRIES_ADR
   category: ddd
   dimension: cognition
@@ -1307,7 +1307,7 @@ cases:
       document in full with Read when you write the section it serves) and holds the commands the repo declares,
       the latest CHANGELOG release sections and the lint and test configs; `root` is the repo folder. Read
       the code where an entry needs it. Then write the brain''s first knowledge entries. Reply with only a
-      ```json block: a JSON list of at most 12 entries, one entry per line, each field one short sentence.
+      ```json block: one valid JSON list of at most 12 entries, separated by commas, each field one short sentence.
       Each entry is {"kind": "cognition", "type": T, "section": S, "title": ..., "what": ..., "sources": [...]};
       a decision also needs "why" and "rejected_alternatives", a pitfall "applicability" (when it bites), a
       process "how" (the command). A source is a path inside the repo, relative to the repo folder, optionally
@@ -1371,4 +1371,4 @@ cases:
   tier: behavior
   gating: watch
   eval_method: behavior
-  validated_by_4gate: ce8c00e3d655506b
+  validated_by_4gate: f263230d6db72d37
