@@ -273,16 +273,22 @@ def _drop_fork(fork_id: str | None, original_id: str) -> None:
             logger.warning("CDF review: could not remove fork transcript %s", path)
 
 
-def sdk_runner(sdk_session_id: str, cwd: str, prompt: str, schema: dict) -> dict:
-    """Resume a fork of the session with no tools and structured output (§6.2)."""
-    from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+def review_options(sdk_session_id: str, cwd: str, schema: dict) -> Any:
+    """The SDK options of a review: a fork of the session, no tools, structured output."""
+    from claude_agent_sdk import ClaudeAgentOptions
     from jobs.executor import _build_cli_env, _get_aws_credentials, _resolve_claude_cli
-    from core.ingestion import llm_usage
-    options = ClaudeAgentOptions(
+    return ClaudeAgentOptions(
         resume=sdk_session_id, fork_session=True, tools=[], cwd=cwd, max_turns=3,
         output_format={"type": "json_schema", "schema": schema}, strict_mcp_config=True,
         setting_sources=[], env=_build_cli_env(_get_aws_credentials()),
         cli_path=_resolve_claude_cli())
+
+
+def sdk_runner(sdk_session_id: str, cwd: str, prompt: str, schema: dict) -> dict:
+    """Resume a fork of the session with no tools and structured output (§6.2)."""
+    from claude_agent_sdk import ResultMessage, query
+    from core.ingestion import llm_usage
+    options = review_options(sdk_session_id, cwd, schema)
 
     async def run() -> dict:
         async for message in query(prompt=prompt, options=options):
