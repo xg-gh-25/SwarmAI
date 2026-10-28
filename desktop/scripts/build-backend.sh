@@ -113,6 +113,12 @@ uv sync --extra dev
 # a stale manifest cannot be packaged under an old catalog or binding attestation.
 python scripts/generate_app_registry.py --check --root "$PROJECT_ROOT/.."
 
+# The release gate binds an eval report to the eval's own source files
+# (eval_runner.compute_code_digest). A packaged daemon has none, so hash them here,
+# from the SOURCE checkout (a git repo; this copy is not), and ship the result: the
+# daemon's reports then carry the digest the gate computes in that checkout.
+python -c "import sys; from pathlib import Path; sys.path.insert(0, '.'); from scripts.eval_runner import write_gate_manifest; write_gate_manifest(Path(sys.argv[1]), Path('generated/eval_gate_inputs.json'))" "$PROJECT_ROOT/.."
+
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
 # Isolated: `import main` runs main's module-level logging setup, and with no
@@ -235,6 +241,7 @@ datas += [('templates', 'templates')]
 # consumes only the generated immutable index (no manifest scan on request paths).
 datas += [('apps', 'apps')]
 datas += [('generated/apps_index.json', 'generated')]
+datas += [('generated/eval_gate_inputs.json', 'generated')]  # eval gate digest (written above)
 # Include the expert library (backend/experts/<domain>/<id>.md): core.expert_manager
 # reads it at runtime (registry API, and the SubagentStop hook's registry-backed
 # adversarial classification). Missing here, the packaged daemon scans an absent dir,

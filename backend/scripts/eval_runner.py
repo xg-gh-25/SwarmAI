@@ -73,10 +73,11 @@ def _find_workspace_root() -> Path:
     return get_swarmws()
 
 
-# The checkout this module was loaded from (backend/scripts/ -> repo root). Only
-# the SwarmAI repo's own push gate reads source files through it
-# (compute_code_digest); in a packaged install those files are absent and hash as
-# MISSING markers, so a packaged digest never equals a checkout's.
+# The checkout this module was loaded from (backend/scripts/ -> repo root): where
+# compute_code_digest reads the eval's source files. A packaged daemon has no source
+# files, so the build hashes them from the source tree and ships the result
+# (_gate_manifest_path); the daemon's reports then carry the digest the release gate
+# computes in the checkout the package was built from.
 _THIS_CHECKOUT = Path(__file__).resolve().parents[2]
 
 
@@ -145,6 +146,53 @@ def _gate_input_files(code_root: Path) -> list[str]:
                     rels.add(str(p.relative_to(code_root)))
     return sorted(rels)
 
+
+def gate_input_hashes(code_root: Path) -> list[str]:
+    """``<rel>:<sha256>`` for every file compute_code_digest binds to (``<rel>:MISSING``
+    for one that is not there), in a fixed order."""
+    import hashlib
+
+    parts: list[str] = []
+    for rel in _gate_input_files(code_root):
+        try:
+            parts.append(f"{rel}:{hashlib.sha256((code_root / rel).read_bytes()).hexdigest()}")
+        except Exception:
+            parts.append(f"{rel}:MISSING")
+    return parts
+
+
+def _gate_manifest_path() -> Path:
+    """The build-time copy of gate_input_hashes inside a package (desktop/scripts/
+    build-backend.sh writes it from the source checkout)."""
+    from utils.backend_bin import bundled_path
+
+    return bundled_path("generated", "eval_gate_inputs.json")
+
+
+def write_gate_manifest(code_root: Path, out: Path) -> None:
+    """Freeze gate_input_hashes(code_root) into ``out`` for the package being built."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"inputs": gate_input_hashes(code_root)}, indent=1) + "\n")
+
+
+def _code_part(code_root: Path | None) -> list[str]:
+    """The digest's code part. A packaged daemon (no source files) reads the build-time
+    manifest; without one it logs an error and hashes what it can find, which is
+    nothing, so its reports stay stale for the gate rather than passing silently."""
+    from utils.backend_bin import is_frozen
+
+    if code_root is None and is_frozen():
+        try:
+            inputs = json.loads(_gate_manifest_path().read_text())["inputs"]
+            if isinstance(inputs, list) and inputs and all(isinstance(x, str) for x in inputs):
+                return inputs
+            raise ValueError("inputs is not a non-empty list of strings")
+        except Exception as e:
+            logging.getLogger(__name__).error(
+                "eval: this package has no usable gate manifest (%s: %s); its reports "
+                "cannot match the release gate's digest", type(e).__name__, e)
+    return gate_input_hashes(code_root if code_root is not None else _THIS_CHECKOUT)
+
 # Fast-deterministic evaluators eligible for the BVT gate. Excludes runtime_health
 # (subprocess, ~30s, load-flaky) and all LLM evaluators (non-deterministic, read
 # instance DDD). canary_pass is INCLUDED (run_5edf2cc0 G5): deterministic, just
@@ -200,20 +248,12 @@ def compute_code_digest(root: Path, code_root: Path | None = None) -> str:
     Binds the gate to its INPUTS, not to HEAD — so committing the eval report (an
     unrelated tracked file) does NOT change the digest, while editing eval code or
     a golden set file DOES. code_root defaults to the checkout this module is in (where
-    backend/ lives); pass it explicitly in tests. Missing files hash as a marker
-    rather than crashing (gate degrades to 'cannot verify' not exception)."""
+    backend/ lives), or in a packaged daemon to the build-time manifest (_code_part);
+    pass it explicitly in tests. Missing files hash as a marker rather than crashing
+    (gate degrades to 'cannot verify' not exception)."""
     import hashlib
 
-    if code_root is None:
-        code_root = _THIS_CHECKOUT
-
-    parts: list[str] = []
-    for rel in _gate_input_files(code_root):
-        p = code_root / rel
-        try:
-            parts.append(f"{rel}:{hashlib.sha256(p.read_bytes()).hexdigest()}")
-        except Exception:
-            parts.append(f"{rel}:MISSING")
+    parts: list[str] = _code_part(code_root)
     # Hash BOTH golden sets: bvt counts gate-eligible cases from the MERGED set
     # (product + private), so a changed PRIVATE gate-eligible case must also
     # invalidate the digest — else a stale report stays green (Gate-2 C1).
