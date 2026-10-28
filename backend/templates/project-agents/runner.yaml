@@ -1,0 +1,25 @@
+# The Runner Agent: the Project Agent of the General Brain, for tasks that belong to
+# no project. Its knowledge is the Markdown in Knowledge/Library; it has no repo and
+# no gates of its own and changes no project's code. Shipped with the product as a
+# draft: confirm it on the Brain Hub review card.
+# Design docs/design/2026-10-28-project-agent-flow.md §5.
+schema: 2
+status: draft
+reviewed_at: null
+reviewed_by: null
+identity:
+  summary: General research, reports and answers that belong to no project
+  out_of_scope: [changing the code of any project]
+gates:
+  enforce: []
+reserved_for_human: [open_pr, publish_release, push, send_external_message]
+placements: [chat-tab, hive]
+landing: {approval: human}
+modes:
+  - id: research
+    when: a question or an investigation that belongs to no project
+    profile: research
+  - id: write
+    when: writing a document or a report that belongs to no project
+    profile: direct
+default_mode: research

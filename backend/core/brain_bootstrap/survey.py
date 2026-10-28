@@ -275,7 +275,7 @@ def _guard_parts(out: dict) -> None:
     g = _Guard()
     for c in out.get("commands") or []:
         flags: list[str] = []
-        for key in ("name", "command", "runs"):
+        for key in ("name", "command", "runs", "cwd"):
             if key in c:
                 c[key], f = g.text(c[key])
                 flags += f

@@ -594,6 +594,47 @@ def cmd_entry_contract(args, reg) -> None:
                       "contract": entry_contract(project_dir)}, indent=2, ensure_ascii=False))
 
 
+def cmd_project_agent_draft(args, reg) -> None:
+    """Draft a Brain's Project Agent definition (design 2026-10-28-project-agent-flow §5).
+
+    Without ``--apply``: print the facts (repos, skills, gates, declared commands with
+    ids, docs) and the proposal format. With ``--apply <proposal.json>`` (``-`` = an
+    empty proposal): build the ``schema: 2`` draft, drop each judged row whose source
+    does not exist and each command its source does not declare, validate it and write
+    ``project-agent.yaml`` (``--dry-run``: print, write nothing). A reviewed definition
+    is never replaced. ``--general`` targets the General Brain (the Runner Agent).
+    Exit 1 when the draft has problems or a reviewed definition is there; 2 when
+    nothing could run.
+    """
+    from core.project_agent import GENERAL_BRAIN, general_brain_dir
+    if args.general:
+        project_dir, name = general_brain_dir(_get_workspace()), GENERAL_BRAIN
+    else:
+        if not args.project or "/" in args.project or "\\" in args.project or args.project in (".", ".."):
+            print(json.dumps({"error": "give --project <name> or --general"}), file=sys.stderr)
+            sys.exit(2)
+        project_dir, name = _get_workspace() / "Projects" / args.project, args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Brain '{name}' not found"}), file=sys.stderr)
+        sys.exit(2)
+    from core import project_agent_draft as pad
+    if not args.apply:
+        print(json.dumps({"brain": name, "facts": pad.survey(project_dir)}, indent=2, ensure_ascii=False))
+        return
+    proposal: object = {}
+    if args.apply != "-":
+        try:
+            proposal = json.loads(Path(args.apply).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": f"cannot read the proposal: {type(exc).__name__}: {exc}"}),
+                  file=sys.stderr)
+            sys.exit(2)
+    report = pad.apply(project_dir, proposal, dry_run=args.dry_run)
+    print(json.dumps({"brain": name, **report}, indent=2, ensure_ascii=False))
+    if report["problems"]:
+        sys.exit(1)
+
+
 def cmd_classify_starter(args, reg) -> None:
     """Which role a New Brain starter path takes: GOVERN (a repo: an asset to bind),
     DISTILL (a single file: read it into entries) or SHELF (a folder of documents: mount
@@ -839,6 +880,14 @@ def main() -> None:
     p_contract = sub.add_parser("entry-contract", help="Print and write a brain's bootstrap entry contract")
     p_contract.add_argument("--project", required=True)
 
+    # project-agent-draft (design 2026-10-28-project-agent-flow §5: a Brain's Project Agent draft)
+    p_pad = sub.add_parser("project-agent-draft", help="Print the facts for, or write, a Brain's Project Agent draft")
+    p_pad_target = p_pad.add_mutually_exclusive_group(required=True)
+    p_pad_target.add_argument("--project", default=None)
+    p_pad_target.add_argument("--general", action="store_true", help="The General Brain (Runner Agent)")
+    p_pad.add_argument("--apply", default=None, help="Proposal JSON file ('-' = no proposal: deterministic fields only)")
+    p_pad.add_argument("--dry-run", action="store_true", help="Build and check; write nothing")
+
     # classify-starter (design 2026-10-27 §5.10: GOVERN / DISTILL / SHELF for a starter path)
     p_cls = sub.add_parser("classify-starter", help="GOVERN / DISTILL / SHELF for a New Brain starter path")
     p_cls.add_argument("path")
@@ -889,6 +938,7 @@ def main() -> None:
         "survey": cmd_survey,
         "bootstrap-apply": cmd_bootstrap_apply,
         "entry-contract": cmd_entry_contract,
+        "project-agent-draft": cmd_project_agent_draft,
         "classify-starter": cmd_classify_starter,
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-health": cmd_ddd_health,

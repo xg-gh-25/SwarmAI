@@ -3,7 +3,10 @@
 Sources: CI workflows (GitHub Actions ``run:`` steps, GitLab CI ``script:`` lines),
 Makefile and justfile targets, ``package.json`` scripts, tox environments and nox
 sessions. Each item is ``{source, kind, name, command}`` where ``source`` is the file
-that declares it (the evidence an entry cites). Nothing is executed. A CI file's
+that declares it (the evidence an entry cites). ``cwd`` is where the command runs when
+that is not the repo root: a GitHub Actions step's (or its job's default)
+``working-directory``, or the directory of a Makefile in a subdirectory. Nothing is
+executed. A CI file's
 ``env:`` / ``secrets`` blocks are never read into the output: only the commands.
 """
 from __future__ import annotations
@@ -43,14 +46,27 @@ def _github_actions(root: Path, rel: str) -> list[dict]:
     out: list[dict] = []
     for job_id, job in (jobs or {}).items():
         steps = job.get("steps") if isinstance(job, dict) else None
+        job_cwd = _working_directory(job.get("defaults") if isinstance(job, dict) else None)
         for i, step in enumerate(steps or []):
             run = step.get("run") if isinstance(step, dict) else None
             if isinstance(run, str) and run.strip():
                 name = _label(step.get("name"), f"step {i + 1}")
-                out.append({"source": rel, "kind": "ci_run",
-                            "name": f"{_label(job_id, 'job')}: {name}",
-                            "command": run.strip()})
+                item = {"source": rel, "kind": "ci_run",
+                        "name": f"{_label(job_id, 'job')}: {name}",
+                        "command": run.strip()}
+                wd = step.get("working-directory")
+                cwd = wd if isinstance(wd, str) and wd.strip() else job_cwd
+                if cwd:
+                    item["cwd"] = cwd.strip()[:200]
+                out.append(item)
     return out
+
+
+def _working_directory(defaults) -> str | None:
+    """A job's ``defaults.run.working-directory`` when it is a plain string."""
+    run = defaults.get("run") if isinstance(defaults, dict) else None
+    wd = run.get("working-directory") if isinstance(run, dict) else None
+    return wd if isinstance(wd, str) and wd.strip() else None
 
 
 def _gitlab_ci(root: Path, rel: str) -> list[dict]:
@@ -79,7 +95,9 @@ def _makefile(root: Path, rel: str, tool: str) -> list[dict]:
         if name.startswith(".") or name in seen or "%" in name:
             continue
         seen.append(name)
-    return [{"source": rel, "kind": tool, "name": n, "command": f"{tool} {n}"} for n in seen]
+    where = rel.rpartition("/")[0]
+    return [{"source": rel, "kind": tool, "name": n, "command": f"{tool} {n}",
+             **({"cwd": where} if where else {})} for n in seen]
 
 
 def _package_json(root: Path, rel: str) -> list[dict]:

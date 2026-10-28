@@ -1,0 +1,23 @@
+# Project Agent definition of the default SwarmAI Brain, shipped with the product.
+# A draft: confirm it on the Brain Hub review card. It only names what a fresh
+# install has (the four seed documents); on a machine with the SwarmAI repo bound,
+# `artifact_cli project-agent-draft --project SwarmAI` drafts the full definition.
+# Design docs/design/2026-10-28-project-agent-flow.md §5.
+schema: 2
+status: draft
+reviewed_at: null
+reviewed_by: null
+identity:
+  summary: SwarmAI itself, the self-evolving Agent OS; questions about how it works and designs for changing it
+  source: PRODUCT.md
+gates:
+  enforce: []
+reserved_for_human: [open_pr, publish_release, push, send_external_message]
+placements: [chat-tab]
+landing: {approval: human}
+modes:
+  - id: research
+    when: a question, an investigation or a design about SwarmAI, with no code change
+    profile: research
+default_mode: research
+sources: [PRODUCT.md]

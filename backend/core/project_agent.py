@@ -53,6 +53,9 @@ PR_REMOTES: frozenset[str] = frozenset({"fork", "origin"})
 #: predicate (core/security_hooks._is_reserved_action)
 RESERVED_ACTIONS: frozenset[str] = frozenset(
     {"push", "open_pr", "publish_release", "send_external_message"})
+#: the Brain of tasks that belong to no project: its knowledge is Knowledge/Library and
+#: its Project Agent is the Runner Agent (design 2026-10-28-project-agent-flow §3, §5)
+GENERAL_BRAIN = "General"
 _MAX_BYTES = 64 * 1024
 _MODE_ID_RE = re.compile(r"[a-z][a-z0-9-]{0,39}")
 #: files under 3-gates/ that are never part of a gate's content (byte-compiled caches)
@@ -127,6 +130,29 @@ def _bindings(project_dir: Path) -> dict[str, Any]:
     except (ValueError, OSError) as exc:
         logger.debug("project_agent: bindings.yaml of %s unreadable: %s", project_dir, exc)
         return {}
+
+
+def general_brain_dir(workspace: Path) -> Path:
+    """Where the General Brain's definition lives: ``<workspace>/Knowledge/Library``."""
+    return Path(workspace) / "Knowledge" / "Library"
+
+
+def repo_roots(project_dir: Path) -> dict[str, Path]:
+    """{repo name: local checkout} for each binding whose checkout exists on this
+    machine: its declared ``worktree``, else the bind-managed clone directory."""
+    out: dict[str, Path] = {}
+    for name, b in _bindings(Path(project_dir)).items():
+        try:
+            if b.worktree:
+                root = Path(b.worktree).expanduser().resolve()
+            else:
+                from core.ddd_bindings import binding_worktree
+                root = binding_worktree(b)
+        except (ValueError, OSError):
+            continue
+        if root.is_dir():
+            out[name] = root
+    return out
 
 
 def _skills(project_dir: Path) -> tuple[Optional[dict[str, str]], Optional[str]]:
@@ -394,14 +420,10 @@ def check_sources(project_dir: Path) -> dict[str, Any]:
     project_dir = Path(project_dir)
     raw = (project_dir / PROJECT_AGENT_FILE).read_text(encoding="utf-8")
     d = normalize(yaml.safe_load(raw) or {})
-    bindings = _bindings(project_dir)
+    checkouts = repo_roots(project_dir)
     missing: list[str] = []
     for m in _modes(d):
-        roots = []
-        for r in _str_list(m.get("repos")):
-            b = bindings.get(r)
-            if b is not None and b.worktree:
-                roots.append(Path(b.worktree).expanduser())
+        roots = [checkouts[r] for r in _str_list(m.get("repos")) if r in checkouts]
         for key in ("setup", "validations"):
             for row in _list_of_dicts(m.get(key)):
                 src = str(row.get("source") or "")

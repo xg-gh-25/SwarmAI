@@ -1226,6 +1226,16 @@ class SwarmWorkspaceManager:
                     json.dumps(meta, indent=2), encoding="utf-8"
                 )
 
+            # The shipped Project Agent drafts (SwarmAI's and the Runner Agent's),
+            # updated only while the user has not changed them (design
+            # 2026-10-28-project-agent-flow §5). Never blocks workspace init.
+            try:
+                from core.project_agent_seed import seed_shipped
+                seed_shipped(root)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Shipped Project Agents skipped (non-fatal): %s: %s",
+                               type(e).__name__, e)
+
         await anyio.to_thread.run_sync(_provision)
         logger.info("Ensured default project '%s' at %s", DEFAULT_PROJECT_NAME, project_dir)
 
