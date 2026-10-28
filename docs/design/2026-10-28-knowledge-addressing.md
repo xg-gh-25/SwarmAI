@@ -3,7 +3,7 @@ title: 知识寻址（Knowledge Addressing）—— "什么知识在哪、怎么
 date: 2026-10-28
 created: 2026-10-28
 updated: 2026-10-28
-status: proposed (r3)
+status: final (r4) — XG approved 2026-10-28
 project: SwarmAI
 supersedes-scope-of: docs/design/2026-10-28-ddd-map-and-on-demand-knowledge.md
 ---
@@ -12,204 +12,272 @@ supersedes-scope-of: docs/design/2026-10-28-ddd-map-and-on-demand-knowledge.md
 
 ## 0. 主旨
 
-SwarmAI 的知识分在很多库里（DDD 四份文档和归档、DDD 的 `knowledge/` 语料、Library、pipeline 经验……）。
-今天"去哪找、一条是什么、怎么告诉读者还有更多、取到的怎么引用"由每个入口自己决定，于是同一个脑，
-各扇门说法不一，有的已经指向不存在的路径；而 Agent 从没被告诉过全集在哪，recall 就成了事实上的边界
-（有 knowledge.md 的 4 个 run、10 个专家打开 DDD 文件 0 次）。
+SwarmAI 的知识分在很多库里：DDD 的四份文档和归档、DDD 的 `knowledge/` 语料、Library、pipeline 经验……
+今天"去哪找、一条是什么、怎么告诉读者还有更多、取到的怎么引用"由每个入口自己决定：同一个脑，各扇门说法不一，
+有的已经指向不存在的路径；Agent 也从没被告诉过怎么自己去取，于是一次性推送的 recall 成了事实上的边界。
 
-**这不是新造一层。** 平台已经有大半：`ddd_paths` / `DDD_CANONICAL_DOCS` 是布局的单一来源（有单源测试），
-`recall_multi` 统一了五个召回域和 `recall_ddd` 的按用途配置，`ddd_usage` 是用量的单一入口，
-`ddd_cultivation.content_signature` 是写入去重的单一闸口。缺的是四样东西，本设计只补这四样，
-其余是把各扇门接到同一套上：
+知识进入 Agent 有两条路，各管一类知识，缺一不可：
 
-1. **一种单元身份**——今天至少 6 种，而且最常用的那种不稳定（§1.2）；
-2. **一份从代码和磁盘生成的寻址描述**——让 Agent 知道有什么、在哪、什么问题去哪找（进 system prompt 的稳定部分 + 使用点的坐标）；
-3. **一个按需取用的入口**——任何 cwd、任何会话都能用，返回整条 + 地址 + 身份；
-4. **一个引用入口**——取到的知识被引用、被审计、被衰减看到，和 recall 起步包平等。
+| | 推送（recall） | 主动查（on-demand） |
+|---|---|---|
+| 谁发起 | OS，确定性，在固定时机 | Agent，在想清楚之后 |
+| 擅长 | Agent 不知道要问的：始终有效的约束（Vision、Non-Goals、Success Criteria），以及"这块有东西"的提醒 | 只有方案成形后才知道要什么的：用方案里的词才找得到的那条（§1.4 实测） |
+| 现状 | 有，但粒度太粗（聊天只给小节名），推送的条目从没被引用 | 工具名义上有、实际坏（§1.3），没人告诉 Agent，取到的不能引用 |
 
-## 1. 现状（2026-10-28 读代码，两轮零上下文审查核实）
+本设计不新造一层：平台已有布局单一来源（`ddd_paths` / `DDD_CANONICAL_DOCS`）、统一召回（`recall_multi`、
+`recall_ddd` 按用途配置）、用量单一入口（`ddd_usage`）、写入去重闸口（`content_signature`）。只补五样，并把各扇门接上：
+
+1. **一种单元身份** `unit_id`（§2.1）；
+2. **结构说明**：SWARMAI.md 里改正后的几行，靠测试和布局常量钉死，不新增 prompt 段（§2.2）；
+3. **使用点的地图**：只在 pipeline / 专家用的那一刻生成（§2.3）；
+4. **一个能用的按需入口** `knowledge map | find | get` 和**一个引用入口**（§2.4、§2.5）；
+5. **在决定点触发**主动查（§2.7）。
+
+## 1. 现状（2026-10-28 读代码 + 实测 + 两轮零上下文审查核实）
 
 ### 1.1 各扇门
 
-| 门 | 怎么找 | 现在的问题 |
+| 门 | 怎么找 | 问题 |
 |---|---|---|
-| 聊天注入 `session_router._inject_ddd_for_active_project` | `recall_all(ddd)` + 覆盖率过滤 | 只给 `**TECH.md** § Architecture`（约 112K 字符的小节），无路径无行号；用量按条目内容记，但条目内容并没有展示给 Agent（:1862-1896） |
-| pipeline `run_knowledge`（knowledge.md / design / correctness 专家块） | `recall_ddd(purpose)` | 无地图；not-shown / pinned / pointer 行只有文档名；按需取到的不能引用（answers.py:107、hook_bridge.py:260 丢弃） |
-| REFLECT `reflect_job` | 每条经验按全项目 `recall_ddd(reflect)` 找候选给判官 | 没问题，保持 |
-| 培育写入 `ddd_cultivation` | 全文档 `content_signature` 精确去重 | 没问题，保持（这是 43K 重复的根治闸口，不能换成 BM25 top-N） |
-| 衰减用量 `ddd_usage.record_ddd_hit` | 按归一化文本前 120 字作 anchor | 只有聊天一扇门喂它（:1896），pipeline、专家用过的条目照样衰减 |
-| Brain Hub 搜索 / 提案（`routers/ddd_brain.py` :1760、:1388） | `recall_all` | UI 预览截到 400 字，没有"看全文"的去处 |
-| `repo_guidance._ddd_block` | 4 份文档路径 | 让读 2MB；排在 lessons 后被挤掉，`seen` 先记后判断不重试 |
-| 归档检索 `archive_browse.search_archive`（eval.py:705） | 自己的检索 | 和 recall 的单元、身份不一致 |
-| `jobs/handlers/ddd_weekly_report.py:39` | **自己复制了一份 `ddd_path` 回退实现** | 第二份布局实现 |
-| 技能散文 | 手写路径 | `s_qa` 读 `Projects/<project>/TECH.md`：对已迁移到编号布局的 DDD（如 SwarmAI）失效；`s_internal-crux-cr` 写死了一个具体项目名（P7） |
+| 聊天注入 `session_router._inject_ddd_for_active_project` | `recall_all(ddd)` + 覆盖率过滤 | 只给 `**TECH.md** § Architecture`（约 112K 字符的小节），无路径无行号；用量按条目内容记，但条目内容没有展示（:1862-1896） |
+| pipeline `run_knowledge`（knowledge.md / knowledge_design.md / correctness 专家块） | `recall_ddd(purpose)` | 无地图；not-shown / pinned / pointer 行只有文档名，Agent cwd 是源码 worktree，那里没有这些文件；按需取到的不能引用（answers.py:107、hook_bridge.py:260 丢弃） |
+| REFLECT `reflect_job` | 每条经验按全项目 `recall_ddd(reflect)` 给判官找候选 | 没问题，保持 |
+| 培育写入 `ddd_cultivation` | 全文档 `content_signature` 精确去重 | 没问题，保持（43K 重复的根治闸口） |
+| 衰减用量 `ddd_usage.record_ddd_hit` | 归一化文本前 120 字作 anchor | 只有聊天一扇门喂（:1896）；pipeline、专家用过的条目照样衰减 |
+| Brain Hub（`routers/ddd_brain.py` :1760 搜索、:1388 提案） | `recall_all` | 预览截到 400 字，没有去处看全文 |
+| `repo_guidance._ddd_block` | 4 份文档路径 | 让读 2MB；排在 lessons 后被挤掉，`seen["@ddd"]` 先记后判断、不重试（10 个带 lessons 的会话里 7 个没有它） |
+| `archive_browse.search_archive`（eval.py:705） | 自己的检索 | 单元和身份与 recall 不一致 |
+| `jobs/handlers/ddd_weekly_report.py:39` | 自带一份 `ddd_path` 回退实现 | 第二份布局实现 |
+| 技能散文 | 手写路径 | `s_qa` 读 `Projects/<project>/TECH.md`，对已迁移到编号布局的 DDD 失效；`s_internal-crux-cr` 写死具体项目名（P7） |
 | native `s_expert-review`、Swarm Out 任务包 | — | 不带任何 DDD 知识 |
-| 非 owner 渠道 | `prompt_builder._collect_shareable_ddd_paths`（`.project.json shareable` + 文档白名单 + 软链接逃逸守卫） | 已有正确的分享规则，新入口必须复用它 |
-| 可分发包 | Kiro 目标已出 `knowledgeBase` 资源（ddd_packager:1448）；Claude Code 不能读 cwd 外（AIM 标准 §5.5） | 本设计不动（§4） |
+| 非 owner 渠道 | `prompt_builder._collect_shareable_ddd_paths`（`shareable` + 文档白名单 + 软链接守卫） | 规则正确，新入口复用它 |
+| 可分发包 | Kiro 已出 `knowledgeBase`（ddd_packager:1448）；Claude Code 读不到 cwd 外（AIM 标准 §5.5） | 本设计不动 |
+| 自身描述 | SWARMAI.md § My Workspace 只有三行，没有编号布局、文档职责和取用方式；6 个 DDD 的 AGENTS.md 仍写 7-21 前的 `gates/`、`skills/` | 布局知识被复制成散文，没有任何测试管散文 |
 
 ### 1.2 单元身份：至少 6 种，最常用的不稳定
 
-pipeline 的 `item_id` 是对单元原文取哈希，而 `split_blocks` 把条目下面的元数据注释一并算进单元
-（ddd_entry_lifecycle.py:771）。实测 SwarmAI 的 IMPROVEMENT.md：1712 条条目里 **1481 条的单元文本含 `<!-- … -->` 注释**（ref/decay 元数据或 maturity 标记）。
-衰减任务每次改写 `ref:` / `last:` / `decay:`，这些条目的 id 就变了——**没有人编辑过，引用就对不上**。
-其他身份：用量的 anchor（前 120 字）、小节名、`content_signature`、退役/注入用的 `(title, section)`、REFLECT 的 `doc#section: head[:120]`。
+pipeline 的 `item_id` 对单元原文取哈希，而 `split_blocks` 把条目下的注释一并算进单元（ddd_entry_lifecycle.py:771）。
+SwarmAI 的 IMPROVEMENT.md 1712 条条目里 1481 条的单元文本含 `<!-- … -->` 注释——衰减每改写一次 `ref:` / `last:`，
+这些条目的 id 就变，没人编辑也对不上。其他身份：用量 anchor、小节名、`content_signature`、`(title, section)`、REFLECT 的 `doc#section: head[:120]`。
 
-### 1.3 按需入口本身是坏的
+### 1.3 按需入口是坏的
 
-`py -m scripts.context_recall_cli` 把 cwd 放到 `sys.path` 最前（desktop_main.py:70、:77），在别的仓库里 ImportError，
-在 SwarmAI worktree 里加载 run 正在改的代码；`--domains ddd` 返回小节名和分数，外加一个带内容的最佳条目，没有行号和身份。
+`py -m scripts.context_recall_cli` 把 cwd 放到 `sys.path` 最前（desktop_main.py:70、:77）：别的仓库里 ImportError，
+SwarmAI worktree 里加载 run 正在改的代码；`--domains ddd` 返回小节名和分数外加一个最佳条目，没有行号和身份。
 
-## 2. 设计：补四样，接所有门
+### 1.4 行为实测
 
-### 2.1 单元身份：一个函数 `unit_id(text)`（放在单元切分的家 `ddd_entry_lifecycle`）
+| 观察 | 结果 |
+|---|---|
+| 有 knowledge.md 的 4 个 run（驱动 + 10 个专家）打开 DDD 文件 | 0 次；一个驱动只 `cut -c1-400` 读了 knowledge.md |
+| 落地的 2 个 run 的 `knowledge_refs` | 都为空：推送的条目从没被引用 |
+| 近 14 天 288 个会话，聊天 `[DDD:X]` 小节指针注入后 15 个工具调用内读 DDD | 12 次注入里 5 次——指针会引发去读，但指向的是 100K 级的整节 |
+| 同一 `recall_ddd(design)`，用请求原话查 | 7 条，**没有**决定本设计的"活/冷二分"总纲（TECH.md:119） |
+| 用设计里才出现的词再查 | 命中该总纲 |
+| 写设计时我自己（规则在 prompt、路径已知） | 没有去查，被问"对你有没有用"才查 |
 
-- `unit_id = sha256(归一化文本)[:8]`，归一化 = 去掉元数据注释（复用 `ddd_usage._META_LINE_RE`）和行尾日期戳（`_TRAILING_STAMP_RE`），
-  条目再按 `content_signature` 同样的规则去掉格式差异（bullet、writeback 前缀、`[type]`、`**`、大小写、空白）。
-- **不改任何 DDD 文件**，不回填，不涉及 STEERING #20。衰减改写元数据不再改变身份；一条经验换个写法写两次，身份也相同——
-  和写入去重闸口对"同一条"的定义一致。
-- 用在：recall 起步包的 id（`run_knowledge.item_id` 改调它）、`knowledge` 命令的输出、引用校验。
-- 代价：已有 run 审计里记的旧 id 是旧算法算的；旧 run 只对自己记录的集合校验，不受影响，新 run 用新算法。
-- 不选"生产者把 id 写进元数据注释"：`_META_RE` 是锚定、定序的（:324-331），`to_comment()` 在每次注入/衰减/归档时重建注释，
-  加字段会被丢；大部分条目没有元数据注释，而自动给散文或无标题条目加注释是被禁止的（:233-241）；写入方至少 8 处，
-  移动 = 复制后退役还会重发 id。代价大、收益靠归一化哈希就能拿到。
+结论：推送是**提醒**，不是**答案**；能改变方案的知识要在方案成形后用方案的词去查；瓶颈在"决定点会不会去查"，不在"知不知道地址"。
 
-### 2.2 寻址描述：一个生成器 `core/addressing.py`，数据挂在现有单一来源旁边
+### 1.5 和 08-14 活/冷总纲的关系
 
-不新建库登记表。需要的描述作为数据加在已有的家里：`ddd_paths` 旁加每份文档"装什么、回答什么问题"，
-`recall_multi.DOMAINS` 旁加每个域"能到哪"。生成器读这些常量和磁盘，产出三种大小：
+总纲（TECH.md「活/冷二分」+ `Knowledge/Designs/2026-08-14-unified-retrieval-no-index.md`）禁止 in-prompt index：从内容派生、
+要和正文同步维护、随内容线性增长、拿来做关键词匹配面的东西。本设计**不往 system prompt 加任何生成段、任何清单**：
+结构说明是对 SWARMAI.md 现有散文的改正（总量不增），不含项目、文件、条目、数字；地图只出现在 run 的产物和 handout 里。
 
-| 产出 | 内容 | 给谁 |
-|---|---|---|
-| **寻址段**（system prompt 可缓存基段） | SwarmWS 布局；DDD 六段结构；路由表（产品意图/非目标 → PRODUCT，架构/约定/陷阱 → TECH，教训/踩坑 → IMPROVEMENT，当前焦点/决定 → PROJECT，深度参考 → `2-understanding/knowledge/`，跨项目 → Library，仓库经验 → `pipeline-lessons/<repo>.md`）；怎么取、怎么引用。**只有结构，没有任何项目、文件、条目的清单，没有大小、行号、摘要**（R30#4；08-14 活/冷总纲：零 in-prompt index；也不破缓存） | 每个主会话 |
-| `map(project, full)` | 每份文档和归档的绝对路径、大小、`##` 行号，超过 20K 的 `##` 列 `###`；`knowledge/` 文件清单；gates / capabilities 名；整行取舍，预算 8000 字符 | pipeline knowledge 文件、correctness 专家 |
-| `map(project, brief)` | 根 + 每份文档路径和大小 + 怎么取，约 600 字符 | 其他专家、native expert-review、Swarm Out 任务包、repo_guidance |
+## 2. 设计
 
-- 寻址段在自己的 try 里，失败只丢这一段并 ERROR，核心文件不连坐。
-- **和 08-14 活/冷总纲的边界**（TECH.md「活/冷二分」+ `Knowledge/Designs/2026-08-14-unified-retrieval-no-index.md`）：总纲禁止的是
-  in-prompt index——从内容派生、要和正文同步维护、拿来做关键词匹配面的东西（当年的 MEMORY index 占 15K、41 处写点、造成跨语言漏召）。
-  寻址段是**常量生成的结构说明**，不从内容派生、不需要同步、不做匹配面，属于同一份设计 §98 明确保留的"告诉我还有哪里可取"那一类。
-  r2 里的**项目表删掉**：它是随项目数线性增长的清单，最接近总纲禁止的"给非归档内容建 in-prompt 指针"，而且多数回合用不上；
-  当前项目的 DDD 根由已有的每回合 DDD 块给出（短暂段，不在基段），要看全部项目用 `knowledge map --projects`。
-- 隐私：寻址段不含任何项目信息，所有会话类型相同；非 owner 渠道能看到的 DDD 只按 `_collect_shareable_ddd_paths` 的规则。
+### 2.1 单元身份 `unit_id(text)`（放在单元切分的家 `ddd_entry_lifecycle`）
 
-### 2.3 按需入口：`"$SWARM_BACKEND_BIN" knowledge map | find | get`
+- `unit_id = sha256(归一化文本)[:8]`。归一化：去掉 `<!-- … -->` 注释（复用 `ddd_usage._META_LINE_RE` 的口径，扩到 maturity 注释）
+  和行尾日期戳（`_TRAILING_STAMP_RE`）；条目再按 `content_signature` 的规则去格式差异。
+- **不改任何 DDD 文件**、不回填。衰减改写元数据不改变身份；同一条经验换写法身份相同，和写入去重闸口对"同一条"的定义一致。
+- `run_knowledge.item_id` 改调它。旧 run 只对自己记录过的集合校验，不受影响。
+- 不选"生产者把 id 写进元数据注释"：`_META_RE` 锚定、定序（:324-331），`to_comment()` 每次重建注释会丢新字段；大部分条目没有元数据注释，
+  自动给散文或无标题条目加注释被禁止（:233-241）；写入方 8 处以上，移动 = 复制后退役还会重发 id。
 
-- 顶层子命令，和 `pipeline-v1` 一样在 `desktop_main.main` 分派，**不走 `py -m`**，不受 cwd 影响。
-- `find --project P --query "<词>" [--doc TECH.md] [--in ddd|library]`：包 `recall_ddd` / `recall_all(library)`，返回**整条**单元 +
-  `绝对路径:行号` + `unit_id`；放不下的用 `not_shown_note` 列出。`get <unit_id>|<path>:<line>`：取一条全文和它的 `unit_id`
-  （Grep 找到行号后用它拿身份）。
+### 2.2 结构说明：改正 SWARMAI.md § My Workspace，用测试钉住
+
+SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启动覆盖，所以只能写对每个用户都成立的结构。
+用下面这段**替换**现有的 § My Workspace，并删掉 FAQ 里 "What projects do I have?" 那一条（"There is no injected index" 仍然成立，并入下文）：
+
+```markdown
+## My Workspace
+- **SwarmWS** (`~/.swarm-ai/SwarmWS/`) — my working directory, my filesystem body.
+- **Projects/<name>/** — one DDD per project, every one with the same layout:
+  `AGENTS.md` (identity) · `2-understanding/PRODUCT.md` (intent, users, non-goals) ·
+  `TECH.md` (architecture, conventions, runtime traps) · `IMPROVEMENT.md` (what worked,
+  what failed, pitfalls) · `PROJECT.md` (current focus, decisions, open items) · their
+  `*-archive.md` (decayed, reference only) · `2-understanding/knowledge/` (deep reference) ·
+  `3-gates/` · `4-capabilities/` · `bindings.yaml` (bound repos). A doc may be absent.
+- **Knowledge/** — cross-project: `Library/` (reference; `pipeline-lessons/<repo>.md`),
+  `Designs/`, `Reports/`, `Notes/`, `Learned/`, `Meetings/`, `Handoffs/`, `DailyActivity/`
+  (raw session logs), `Pollinate/` (media output), `JobResults/` (background jobs),
+  `Signals/` (fetched, untrusted), `Archives/` (retired, not recalled).
+- **Finding things:** what I am given (recall, `[DDD:<project>]`, a run's knowledge files) is a
+  starting set, not everything. When a decision depends on a project's domain, search with
+  the words of the solution, not only the request:
+  `"$SWARM_BACKEND_BIN" knowledge find --project <name> --query "<words>"` (whole entries
+  with `path:line` and an id; `map` lists what a DDD holds; `get <id>|<path>:<line>` reads
+  one). Never read TECH / IMPROVEMENT whole. There is no injected project list: the active
+  project's DDD comes with `[DDD:<project>]`, others via `knowledge map`.
+```
+
+- **一致性测试**（新增，管散文——现有单源测试只管代码路径拼接）：从 `ddd_paths.UNDERSTANDING_DIR` / `GATES_DIR` / `CAPABILITIES_DIR`、
+  `DDD_CANONICAL_DOCS`、`swarm_workspace_manager.KNOWLEDGE_SUBDIRS` 取常量，断言这段文字恰好列出这些常量里的每个目录名和文档名（不多不少），
+  且不出现旧布局写法（`Projects/<…>/TECH.md` 这类根下文档、`gates/`、`skills/`）。布局一变而文字没改，测试红。
+- 同一检查用于技能正文（`scripts/lint_skills.py` 新规则）：禁止根下旧布局 `Projects/<X>/<DOC>.md` 和具体项目名；允许 `2-understanding/` 新布局（s_persist 等写 DDD 的技能需要）。
+- **增删 DDD 不会让它过期**：文字里没有项目名、数量、大小；实例信息只在当场读磁盘的地方（每回合 DDD 块、`knowledge map`）。
+- `SELF.md` § Recall 的按需用法改指 `knowledge` 命令（MEMORY / EVOLUTION 仍是 `context_recall_cli`）。`KNOWLEDGE.md` 不动（用户自己的注释）。
+
+### 2.3 使用点的地图 `core/addressing.py: ddd_map(project, size)`
+
+只读 `ddd_paths` 常量和磁盘（不读 AGENTS.md 文字），旧布局经 `ddd_path` 回退同样能出：
+
+- `full`（pipeline knowledge 文件、correctness 专家）：每份文档和归档的绝对路径、大小、`##` 行号；超过 20K 的 `##` 列 `###`；
+  `knowledge/` 文件清单；gates / capabilities 名；整行取舍，预算 8000 字符，放不下的合成一行 grep 提示。
+- `brief`（其他专家、native expert-review、Swarm Out、repo_guidance）：根 + 每份文档路径和大小 + 取用命令，约 600 字符。
+- 安全：只列根内、`resolve()` 后仍在根内的 `.md`；跳过 `.artifacts/`、锁文件、隐藏文件、数据库；内容放 `<recalled>` 围栏；不抛异常
+  （无 DDD / 缺文档 / 非 UTF-8 只少那一部分并说明，接 run-knowledge H5 矩阵）。
+- 地图的价值受 DDD 自身组织限制（IMPROVEMENT 只有 340K / 237K / 270K 三个大节）：它回答"有什么、在哪"，条目级的事交给 `find`。
+
+### 2.4 按需入口 `"$SWARM_BACKEND_BIN" knowledge map | find | get`
+
+- 顶层子命令，和 `pipeline-v1` 一样在 `desktop_main.main` 分派，**不走 `py -m`**，不受 cwd 影响、不加载 cwd 里的代码。
+- `map --project P [--brief] | --projects`；`find --project P --query "<词>" [--doc TECH.md] [--in ddd|library]`：包 `recall_ddd` /
+  `recall_all(library)`，返回**整条**单元 + `绝对路径:行号` + `unit_id`，放不下的用 `not_shown_note`；`get <unit_id>|<path>:<line>`：一条全文 + 身份。
 - 只读，只到 DDD 根和 Library；MEMORY / EVOLUTION 仍走带隐私门的 `context_recall_cli`。
-- 会话类型：沿用 `context_recall_cli` 的必填 `--session-type`、默认拒绝；渠道类型只放行 shareable 项目。
-  **实施第一步先核实**非 owner 渠道会话是否有 Bash、daemon 是否给子进程设了可信的会话类型环境变量；有就用它，不靠 Agent 自报。
+- 会话类型：必填 `--session-type`、默认拒绝；渠道类型只放行 shareable 项目。run 1 第一步先核实非 owner 渠道会话是否有 Bash、
+  daemon 是否给子进程设了可信的会话类型环境变量；有就用它，不靠 Agent 自报。
 
-### 2.4 引用入口：`cite`
+### 2.5 引用入口
 
 - 已知身份集合 = 本 run 召回过的 ∪ 项目 DDD（含 `*-archive.md`）里现存单元的 `unit_id`（项目取自 contract）。
-- REQUIREMENTS / DESIGN_SPEC 的 `knowledge_refs`：未知仍拒绝，提示用 `knowledge get` 重新取；专家 finding 的 `knowledge_ref`：
-  `answers.py` 形状不变，`hook_bridge._occ` 的 `carried` 换成已知集合，**未知仍丢弃、finding 照样算**。
-- R27 全部读者：`schemas` 文案、`_check_knowledge_refs`、engine.py:2807 的计数（拆"起步包 / 按需"）、`audit.py`、`events.py:137`、
+- REQUIREMENTS / DESIGN_SPEC 的 `knowledge_refs`：未知仍拒绝，提示用 `knowledge get` 重新取。专家 finding 的 `knowledge_ref`：`answers.py` 形状不变，
+  `hook_bridge._occ` 的 `carried` 换成已知集合，未知仍丢弃、finding 照样算。
+- R27 全部读者：`schemas` 文案、`_check_knowledge_refs`、engine.py:2807 计数（拆"推送 / 主动查"）、`audit.py`、`events.py:137`、
   `stages/evaluate.md`、`test_pipeline_v1_expert_knowledge.py:95-112`。REPORT 只出计数。
-- 被引用的单元调 `ddd_usage.record_ddd_hit`（anchor 仍由 `entry_anchor_text` 算，`.ddd-usage.json` 形状不变，不迁移）。
-  聊天门改为**只在内容真的展示给 Agent 时**才记用量。
+- 被引用的单元调 `ddd_usage.record_ddd_hit`（anchor 仍由 `entry_anchor_text` 算，`.ddd-usage.json` 不迁移）；聊天门只在内容真的展示时才记用量。
 
-### 2.5 触发：知道去哪找，不等于会去找
+### 2.6 推送保留，粒度改对
 
-地址只是必要条件。实测（§1、§7.1）：有起步包的 run 只读了 knowledge.md 的前 400 字符；我自己写这份设计时，AGENT 规则
-（设计决定前先读 PRODUCT / IMPROVEMENT）就在 prompt 里，路径也知道，仍然没有去查，直到被问"对你有没有用"才查，
-一查就找到了一条推翻 r2 一部分的总纲。所以缺的是**在决定点触发**，而不是更多指针：
+- **pipeline recall 保留**。固定带上的 Vision、Success Criteria、Target Users、Non-Goals 是推送最有价值的部分（和查询词无关，Agent 自己想不到要查），不动；
+  按查询排序的部分保持现有配额。knowledge 文件 = 起步包 + `map(full)`，not-shown / pinned / pointer 行改为绝对路径 + 行号。
+- **聊天 recall 保留，改为条目级**：给命中条目的**标题行 + `绝对路径:行号`**，不再给小节名；无条目命中时只给一行项目指针（含 DDD 根绝对路径）。
+  这是聊天里唯一的提醒（12 次里 5 次被跟进），改的是它指向的精度。
 
-- pipeline：THINK 和 PLAN 的产物各加一个**可选**字段 `knowledge_checked: [{query, result_ids}]`——Agent 在定方案前用自己从
-  设计里得出的词跑 2–3 次 `knowledge find`，记下查了什么、用了哪些；空就写 `[]`。stage 文档在"Read knowledge_design.md first"
-  后面加一句做法。**不设 gate**（P5：不判定该不该读）；REPORT 和 §5 只统计它是否为空。
-- 聊天和 native 工作：不加机制；寻址段里"怎么取"那几行写明**用方案里的词查，不是用请求的词查**（§7.1 的实测原因）。
+### 2.7 在决定点触发
 
-### 2.6 构建时机、实效性和延迟
+- pipeline：THINK 和 PLAN 的产物各加可选字段 `knowledge_checked: [{query, result_ids}]`——定方案前用方案里的词跑 2–3 次 `knowledge find`，
+  记下查了什么、用了哪些；没查到写 `[]`。stage 文档在 "Read knowledge_design.md first" 后加一句做法。**不设 gate**（P5）；REPORT 和 §5 只统计是否为空。
+- 聊天和 native 工作：不加机制，靠 §2.2 那段的 "search with the words of the solution"。
 
-| 层 | 何时构建 | 怎么保证不过期 | 延迟（2026-10-28 实测，SwarmAI） |
+### 2.8 通用 Knowledge
+
+- 结构由 §2.2 那段覆盖（子目录名来自 `KNOWLEDGE_SUBDIRS`，测试钉住）。
+- 取用：`knowledge find --in library`（包现有 FTS5 library 域，已覆盖 `Knowledge/`），同样返回整条 + 路径 + 身份。
+- 不出地图：约 1100 个文件、150MB、每天新增，没有固定结构，清单正是总纲禁止的东西。
+
+### 2.9 构建时机、实效性、延迟（2026-10-28 实测，SwarmAI）
+
+| 部分 | 何时构建 | 怎么保证不过期 | 延迟 |
 |---|---|---|---|
-| 寻址段 | 每次冷启动组装基段时（和 11 个 context 文件同一时机；prewarm 也走这里） | 只读代码常量，按构造就是新的；常量一变测试跟着红；产品升级才变，基段的 prompt 缓存不受影响 | 无 I/O，可忽略 |
-| `map` | 在使用点：run create、EVALUATE 完成、发 handout 时 | 当场读磁盘；行号写明"本 run 开始时的，对不上就 grep 标题"；`get <unit_id>` 按身份找当前位置，不依赖行号 | 50–80ms（含 Python 启动） |
-| `find` / `get` | Agent 每次调用 | 每次现读 | `recall_ddd` 37–110ms，`recall_all(ddd)` 73–205ms（首次较慢） |
-| `unit_id` | 现算 | 不受衰减改写元数据影响；同一条经验换写法身份不变 | 与切分同时完成 |
-
-### 2.7 通用 Knowledge（`SwarmWS/Knowledge/`）
-
-同一套原则，但不同的形状：
-
-- **寻址段覆盖它**：每个子目录装什么（Library 参考、Designs 设计、Reports 报告、Notes 笔记、Learned 知识卡、DailyActivity 原始日志、
-  Signals 外部抓取=不可信、Archives 墓碑不召回），这部分已在 `KNOWLEDGE.md` 种子里写成散文，改为从目录常量生成后，种子只留"用户自己的注释"。
-- **取用**：`knowledge find --in library` 包现有的 FTS5 library 域（已经覆盖 `Knowledge/`），同样返回整条 + 路径 + 身份。
-- **不出 map**：Knowledge 是约 1100 个文件、150MB、每天新增的集合，没有固定结构，文件清单既长又天天变，正是总纲禁止的那种清单。
-- 本机现状：`KNOWLEDGE.md` 是我手写的"去哪找"表，生成后它回到用户的注释用途。
+| 结构说明 | 随产品发布（SWARMAI.md 源码） | 一致性测试钉在布局常量上；不含实例信息 | 0（静态文字，不破 prompt 缓存） |
+| `map` | 使用点：run create、EVALUATE 完成、发 handout | 当场读磁盘；行号注明"本 run 开始时，对不上就 grep 标题"；`get <unit_id>` 按身份找当前位置 | 50–80ms（含 Python 启动） |
+| `find` / `get` | Agent 每次调用 | 每次现读 | `recall_ddd` 37–110ms，`recall_all(ddd)` 73–205ms |
+| `unit_id` | 现算 | 不受元数据改写影响 | 与切分同时 |
 
 ## 3. 各扇门接法
 
 | 门 | 改动 |
 |---|---|
-| 聊天 | 命中改为**条目级**：给命中条目的标题行 + `绝对路径:行号`（今天给的是 `**TECH.md** § Architecture`，那个小节 112K，真正相关的条目在它的第 105 行）；无命中时的项目指针带 DDD 根绝对路径；用量只记展示过的 |
-| pipeline | knowledge 文件 = 起步包 + `map(full)`；not-shown / pinned / pointer 行改为绝对路径 + 行号；引用走 §2.4；stage 文档改写"读 knowledge 文件"那句 |
-| 专家 | correctness：起步包 + `map(full)`；其他专家：`map(brief)`，handout 写明"只在 finding 需要时查"（按需读会花专家调用预算） |
+| 聊天 | §2.6 条目级；用量只记展示过的 |
+| pipeline | §2.6 起步包 + `map(full)` + 绝对路径；§2.5 引用；§2.7 `knowledge_checked`；stage 文档改写"读 knowledge 文件"那句 |
+| 专家 | correctness：起步包 + `map(full)`；其他专家：`map(brief)`，handout 写明"只在 finding 需要时查"（按需读花专家调用预算） |
 | native `s_expert-review` | 专家提示带 `map(brief)` |
 | Swarm Out | 任务包带被派往项目的 `map(brief)`（Hive 上有该 DDD 时） |
-| `repo_guidance` | 一行"绑定到项目 P，见 Workspace Addressing"，放在 lessons 之前，放进去才记 `seen` |
+| `repo_guidance` | 一行"绑定到项目 P，DDD 根 <绝对路径>"，放在 lessons 之前，放进去才记 `seen` |
 | Brain Hub | 预览保留，旁边给 `path:line`，点开看全文 |
 | `ddd_weekly_report` | 删自带的 `ddd_path` 回退，改用 `ddd_paths` |
-| 技能 | `s_qa` 改用 `knowledge find --doc TECH.md --query 'Dev Commands'`；`s_internal-crux-cr` 去掉具体项目名；`scripts/lint_skills.py` 加一条：禁止根下旧布局 `Projects/<X>/<DOC>.md` 和具体项目名（允许 `2-understanding/` 新布局，写这些文档的技能如 s_persist 需要它） |
+| 技能 | `s_qa` 改用 `knowledge find --doc TECH.md --query 'Dev Commands'`；`s_internal-crux-cr` 去掉项目名；`lint_skills.py` 新规则 |
 | REFLECT / 培育 / 分发包 | 不动 |
+| 本机 6 份过期 AGENTS.md | 不是产品代码：备份后只替换三类旧写法，diff 核对（地图不读 AGENTS.md，所以不建产品迁移） |
 
 ## 4. 不做的
 
-- 不新建知识库登记表，不包一层新 API 去替代 `recall_multi`。
+- 不往 system prompt 加生成段或任何清单（项目、文件、条目），不加回 PROJECTS.md。
+- 不新建知识库登记表，不包一层新 API 替代 `recall_multi`。
 - 不改 DDD 文件形状、不回填 id。
-- 不动写入去重（`content_signature`）和 REFLECT 候选。
-- 分发包不加离线检索：Kiro 已有 `knowledgeBase`；Claude Code 读不到 cwd 外的安装目录，`find.py` 和绝对路径都会撞同一堵墙，
-  且绝对路径会触发打包的宿主路径检查。要做，先用 `claude -p` 在外部 cwd 验证，另起设计。
+- 不动写入去重和 REFLECT 候选。
+- 分发包不加离线检索（Kiro 已有 `knowledgeBase`；Claude Code 读不到 cwd 外的安装目录，绝对路径还会触发打包的宿主路径检查）。
 - 不加"必须先查"的 gate；不加向量检索。
 
-## 5. 怎么量
+## 5. 怎么量、怎么判
 
-- 把 transcript 统计脚本收进 `backend/scripts/`：每个 run / 会话的按需读取（`knowledge` 调用 + 对 DDD 路径的 Read/Grep）、
-  起步包引用 vs 按需引用。
-- **run 1 上线后先量**：寻址段和 `knowledge` 命令到位后，看几个真实 run 和聊天；按需读取仍为 0 → 先改寻址段写法，再做 run 2。
-- 衰减：被引用过的条目不进归档候选（回归测试）。
+transcript 统计脚本收进 `backend/scripts/knowledge_usage_report.py`，按 run / 会话统计：`knowledge` 调用次数、对 DDD 路径的 Read/Grep 次数、
+`knowledge_checked` 是否为空、引用里推送 id 和主动查 id 各多少、聊天指针被跟进的比例。
 
-## 6. 要 XG 定的
-
-1. 寻址段常驻 system prompt 可缓存基段（约 2K 字符，只有结构）。我对 08-14 总纲的理解是它属于允许的一类（§2.2），这条需要你确认。
-2. 实施走 pipeline（下面 3 个 run），还是直接改。跨 prompt_builder / run_protocol / recall / CLI 分派，我倾向 pipeline。
-
-## 7. 实施（3 个 run，每个独立可验证）
-
-### 7.1 实测：起步包和按需查各找到什么
-
-同一个 DDD（SwarmAI），同一个 `recall_ddd(purpose="design")`，两次查询：
-
-- 用请求原话"DDD 地图 按需 recall pipeline knowledge 目录 on-demand"：7 条，**没有**活/冷总纲；
-- 用写设计时才出现的词"system prompt 寻址 项目表 in-prompt index"：命中活/冷总纲。
-
-能决定这个设计的那条知识，要用方案的词才找得到，而这些词在 run create 时还不存在。所以一次性起步包无论多大，
-都替代不了 Agent 在想清楚之后自己查。
-
-| run | 内容 | 关键验收（每条先在 main 上红，做变异检查） |
+| 指标 | 基线（今天） | run 1+2 上线两周后看 |
 |---|---|---|
-| 1 能力本体 | `unit_id`；`core/addressing.py`（寻址段 + `map`）；`knowledge` 子命令；system prompt 寻址段 | 衰减改写元数据后 `unit_id` 不变；同一经验两种写法 `unit_id` 相同；寻址段在基段、不含任何项目/文件/条目清单和数字、生成失败只丢这一段；布局常量一改输出跟着变、旧布局也能出；`map` 只列根内 `.md`、软链接逃逸不列、行号指向标题行、超预算整行取舍；从别的仓库 cwd 调 `knowledge` 不加载那里的代码；无 DDD / 缺文档 / 非 UTF-8 不抛异常 |
-| 2 接门 | pipeline、专家、native expert-review、Swarm Out、repo_guidance、聊天、Brain Hub 链接、引用和用量 | 按需 `unit_id` 被接受、编造的被拒/被丢；被引用条目进用量；not-shown 行是存在的绝对路径；repo_guidance 指针在 lessons 吃满时仍送达；聊天不记未展示内容的用量 |
-| 3 清理 | `ddd_weekly_report` 去重复实现；s_qa、crux-cr；技能 linter 规则；本机 6 份过期 AGENTS.md（非产品代码，备份后改） | linter 在当前 s_qa 上红、改后绿，且不误报 s_persist 等新布局写法 |
+| pipeline run 主动查（`knowledge` 调用或 DDD 读取）> 0 的比例 | 0/4 | 仍为 0 → 先改 stage 文档和 §2.2 的写法，不往下建 |
+| 引用：推送 id / 主动查 id | 0 / 不可能 | 推送始终 0、主动查 > 0 → 削减推送的排序部分（固定小节保留） |
+| 聊天指针被跟进率 | 5/12 | 条目级后不升反降 → 回看指针写法 |
+| 被引用条目进入归档候选 | 会（只有聊天喂用量） | 0（回归测试） |
 
-每个 run 的审查：correctness + security（路径边界、prompt 注入面、隐私）；run 1、2 加 api-contract（身份、引用契约）。
+## 6. 实施与验证计划
+
+### 6.1 三个 run（每个独立可验证，建议走 pipeline：跨 prompt 源、run_protocol、recall、CLI 分派）
+
+| run | 内容 |
+|---|---|
+| 1 能力本体 | `unit_id`；`core/addressing.py: ddd_map`；`knowledge` 子命令；SWARMAI.md / SELF.md 改正 + 一致性测试 |
+| 2 接门 | pipeline（knowledge 文件、绝对路径、引用、`knowledge_checked`、stage 文档）、专家、native expert-review、Swarm Out、repo_guidance、聊天条目级、Brain Hub 链接、用量 |
+| 3 清理 | `ddd_weekly_report` 去重复实现；s_qa、crux-cr；`lint_skills.py` 规则；`knowledge_usage_report.py`；本机 6 份 AGENTS.md（非产品代码） |
+
+run 2 依赖 run 1 的 `unit_id`、`ddd_map`、`knowledge`；run 3 的 linter 规则依赖 run 1 的一致性检查函数。
+
+### 6.2 谁读这次写下的东西（读者先于写者设计）
+
+| 写下的 | 读者 | 在哪个 run 一起改 |
+|---|---|---|
+| `unit_id`（新算法的 id） | `_check_knowledge_refs`、`hook_bridge._occ`、engine 计数、`audit.py`、`events.py`、REFLECT 的 contract 记录、聊天用量 | 1（函数）+ 2（全部读者） |
+| `knowledge find/get` 的输出格式 | 主 Agent、专家子 agent、stage 文档、SWARMAI.md 那段 | 1 |
+| `knowledge_checked` 字段 | `schemas`、REPORT、`knowledge_usage_report.py` | 2 + 3 |
+| `map` 文本 | 主 Agent、专家 | 1（生成）+ 2（放进各处） |
+
+### 6.3 最终测试集（每条先在 main 上红，做变异检查）
+
+1. 衰减改写元数据后 `unit_id` 不变；同一经验两种写法 `unit_id` 相同；`recall_ddd` 起步包和 `knowledge find` 对同一单元给出同一 id。
+2. SWARMAI.md 那段与布局常量一致；改一个常量测试红；文字里出现旧布局写法测试红。
+3. `lint_skills.py` 在当前 s_qa 上红、改后绿；不误报 s_persist 的 `2-understanding/` 写法。
+4. `map`：只列根内 `.md`；软链接指向根外不列；`##` 行号指向标题行；超 20K 列 `###`；超预算整行取舍；旧布局能出；无 DDD / 缺文档 / 非 UTF-8 不抛异常。
+5. 从别的仓库 cwd 调 `knowledge` 能用，且不加载该 cwd 里的同名模块。
+6. 引用：主动查到的 `unit_id` 被 REQUIREMENTS 接受、被专家 finding 保留；编造的 id 被拒（文档）/被丢（finding）；run 中途被归档的条目 id 仍认得；计数拆两类。
+7. 被引用的条目进 `record_ddd_hit`；聊天不为未展示的内容记用量。
+8. pipeline knowledge 文件：有 DDD 时含 `map(full)`、无 DDD 时不含；not-shown / pinned / pointer 行是存在的绝对路径。
+9. repo_guidance：lessons 吃满预算时 DDD 那一行仍送达；放不下时不记 `seen`、下次再试。
+10. 聊天：命中给条目标题 + `绝对路径:行号`；无条目命中时一行项目指针。
+11. 非 owner 渠道：`knowledge` 只放行 shareable 项目。
+
+现有测试一并跑：`run_knowledge`、`recall_multi`（recall_ddd）、engine / hook_bridge / answers 的 knowledge_ref、`repo_guidance`、
+`session_router` DDD 注入、`prompt_builder` 基段、两个单源测试、run-knowledge H5 矩阵。
+
+### 6.4 审查
+
+- run 1：correctness + security（路径边界、CLI 的会话类型和 shareable、prompt 源文字）+ api-contract（`unit_id`、CLI 输出格式）。
+- run 2：correctness + api-contract（引用契约的全部读者）+ state-machine（repo_guidance 的 `seen` 逻辑）。
+- run 3：correctness。
+
+### 6.5 端到端
+
+run 1 部署后：新开一个聊天会话，确认 SWARMAI.md 那段在 prompt 里，从别的仓库目录调一次 `knowledge find`。
+run 2 部署后：跑一个真实 trivial run 和一个 full run，确认 knowledge 文件有地图和绝对路径、`knowledge_checked` 被填写，
+用 `knowledge_usage_report.py` 出第一份数，和 §5 基线对照。
 
 ## 修订
 
 - r1（2026-10-28）：初稿：库登记表 + 单元模型 + 四操作 + 五种传输 + 6 个 run。
-- r3（2026-10-28）：XG 问构建时机、实效、延迟、通用 Knowledge 和方向。现场按需查 SwarmAI DDD，找到 08-14 活/冷总纲（零 in-prompt index）：
-  删掉寻址段里的项目表；补 §2.5 触发（定方案时用方案里的词查，并在 THINK/PLAN 产物里记下）、§2.6 构建时机/实效/延迟（实测）、
-  §2.7 通用 Knowledge；聊天命中改为条目级。实测：用请求原话召回，起步包里没有这条总纲；用设计里得出的词再查一次就命中（§7.1）。
-- r2（2026-10-28）：零上下文审查（已逐条对源码核实）：
-  - 生产者赋 id 会被 `_META_RE` / `to_comment()` 丢掉、覆盖不到大部分条目、要动 8 处以上写入方 → 改为归一化内容哈希 `unit_id`，不改文件；
-    同时发现现行 `item_id` 把元数据注释算进去，衰减一改写就变（1481/1712 条）。
-  - 把 REFLECT 和培育去重迁到 `find` 会削弱 43K 重复的根治闸口，且"REFLECT 只认本 run 召回过的"说错了 → 两者不动。
-  - 库登记表、HTTP 层、离线包大多是包装已有机制（P9）→ 删掉，只补四样；离线包和 AIM 标准 §5.5 冲突 → 不做。
-  - 隐私规则来源错了 → 复用 `shareable` 解析，非 owner 私信也排除项目表。
-  - linter 规则会误报写 DDD 的技能 → 只禁旧根布局和具体项目名。
-  - 补上漏掉的门：`search_archive`、`ddd_weekly_report` 的第二份布局实现、Brain Hub 两处预览、非 owner 渠道的分享规则。
-  - 计数修正：IMPROVEMENT 元数据注释 878 处（不是 1918）；身份至少 6 种（不是 3 种）。
+- r2（2026-10-28）：零上下文审查（逐条对源码核实）：生产者赋 id 不可行 → 归一化内容哈希；REFLECT / 培育去重不动；删库登记表、HTTP 层、离线包；
+  隐私复用 `shareable`；linter 只禁旧根布局和项目名；补漏掉的门；计数修正。
+- r3（2026-10-28）：现场按需查到 08-14 活/冷总纲 → 删 prompt 里的项目表；补触发、构建时机/实效/延迟、通用 Knowledge；聊天条目级。
+- r4（2026-10-28，final）：XG 确认。实测推送 vs 主动查（推送从未被引用、聊天指针 5/12 被跟进、决定性条目只有主动查找到）→ 两者都保留、分工写清；
+  不新增 system prompt 生成段，改为改正 SWARMAI.md § My Workspace 并用测试钉在布局常量上（增删 DDD 不影响）；补验证计划（读者、最终测试集、审查、端到端、判定标准）。
