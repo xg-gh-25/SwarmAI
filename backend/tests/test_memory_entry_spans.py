@@ -185,68 +185,6 @@ def _h3_spans(text: str) -> list[str]:
 
 # ── Writers emit canonical entries (S6) ────────────────────────────────────
 
-def test_s6_memory_extractor_enqueues_bucket_type_without_writing(tmp_path, monkeypatch):
-    """Stage B preserves bucket meaning in CDF type hints, not file formatting."""
-    import core.memory_extractor as me
-    from core.ingestion.api import EnqueueResult
-    from database import db
-
-    mem = _memory(tmp_path, {"Guidelines": "", "Decisions": ""})
-    before = mem.read_bytes()
-    calls = []
-
-    async def messages(_sid):
-        return [{"role": "user", "content": "x"}] * 4
-
-    monkeypatch.setattr(db.messages, "list_by_session", messages)
-    monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    monkeypatch.setattr(me, "_extract_sections", lambda *a, **k: {
-        "key_decisions": ["Pick SQLite — one file, no server"],
-        "lessons_learned": ["Lock order — acquire A before B"],
-    })
-    monkeypatch.setattr("core.session_inputs.derive_envelope", lambda *a, **k: {
-        "source_event_ids": ["input-1"], "evidence": "user_explicit",
-        "tainted": False, "writer": "memory_extractor"})
-    monkeypatch.setattr("core.ingestion.api.enqueue", lambda *a, **k: (
-        calls.append((a, k)) or EnqueueResult(status="queued", candidate_id="cand")))
-
-    result = asyncio.run(me.extract_and_save("s1", workspace_path=tmp_path, config={}))
-
-    assert result.total_saved == 2
-    assert {call[0][3]["type_hint"] for call in calls} == {"decision", "guideline"}
-    assert all(call[0][0] == "memory_extractor" for call in calls)
-    assert all(call[1]["envelope"]["source_event_ids"] == ["input-1"] for call in calls)
-    assert mem.read_bytes() == before
-
-
-def test_s6_replayed_extraction_uses_stable_slots(tmp_path, monkeypatch):
-    """Re-extracting the same statement produces the same semantic candidate slot."""
-    import core.memory_extractor as me
-    from core.ingestion.api import EnqueueResult
-    from database import db
-
-    calls = []
-
-    async def messages(_sid):
-        return [{"role": "user", "content": "x"}] * 4
-
-    monkeypatch.setattr(db.messages, "list_by_session", messages)
-    monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    monkeypatch.setattr(me, "_extract_sections", lambda *a, **k: {
-        "lessons_learned": ["Lock order — acquire A before B"]})
-    monkeypatch.setattr("core.session_inputs.derive_envelope", lambda *a, **k: {
-        "source_event_ids": [], "evidence": "inferred", "tainted": True,
-        "writer": "memory_extractor"})
-    monkeypatch.setattr("core.ingestion.api.enqueue", lambda *a, **k: (
-        calls.append((a, k)) or EnqueueResult(status="queued", candidate_id="cand")))
-
-    asyncio.run(me.extract_and_save("s1", workspace_path=tmp_path, config={}))
-    asyncio.run(me.extract_and_save("s1", workspace_path=tmp_path, config={}))
-
-    assert calls[0][0][2] == calls[1][0][2]
-    assert calls[0][0][3] == calls[1][0][3]
-
-
 # ── COE Registry is a keyed record (S3) ─────────────────────────────────────
 
 def _coe_entries(text: str) -> list:

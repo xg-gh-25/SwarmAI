@@ -507,7 +507,8 @@
       "lessons_other": "{{count}} lessons",
       "threads_one": "{{count}} thread",
       "threads_other": "{{count}} threads",
-      "context": "{{count}} context"
+      "context": "{{count}} context",
+      "queued": "Queued: CDF is reading this session; see Flow for what was kept"
     },
     "notice": {
       "dismiss": "Dismiss",

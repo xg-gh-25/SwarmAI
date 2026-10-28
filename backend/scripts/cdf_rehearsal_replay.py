@@ -6,7 +6,7 @@ a data dir and workspace given on the command line (a copy, never the live
 ``~/.swarm-ai``), replays the last N days through the production entry points, drains
 the worker and writer, and prints one JSON report.
 
-- S2: ``s2_session.extract_session`` for every session updated in the window.
+- S2: ``s2_session.extract_session_sync`` (what the S2 job executor runs) for every session updated in the window.
 - S4: ``ddd_refresh._recent_commits`` + ``s4_code.extract_commits`` per governed repo.
 - S5: ``governance_miner.enqueue_governance_proposals`` (the evolution optimizer cycle
   is NOT replayed: it rewrites SKILL.md files).
@@ -130,8 +130,8 @@ def _items(source: str, data_dir: Path, workspace: Path, since: datetime) -> lis
 def _enqueue(source: str, item: Any, workspace: Path, llm: Any | None) -> int:
     """Hand one item to the production entry point; return the receipts it produced."""
     if source == "s2":
-        from core.ingestion.sources.s2_session import extract_session
-        result = asyncio.run(extract_session(item, llm=llm))
+        from core.ingestion.sources.s2_session import extract_session_sync
+        result = extract_session_sync(item, llm=llm)  # what the S2 job executor runs
         return sum(len(v) for v in result.values())
     if source == "s4":
         from core.ingestion.sources.s4_code import extract_commits

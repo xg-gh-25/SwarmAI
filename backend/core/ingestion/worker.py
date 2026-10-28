@@ -788,6 +788,72 @@ class RunLaneExecutor:
             raise RuntimeError("CDF run-lane executor did not stop")
 
 
+class S2JobExecutor:
+    """One thread that runs queued S2 extractions in order (design §12 r16.13).
+
+    It only extracts and enqueues units; the scheduler thread judges and writes them.
+    A job waits while the session lane's admission says the host is loaded.
+    """
+
+    POLL_SECONDS = 60
+
+    def __init__(self, extract: Any = None) -> None:
+        self._extract = extract
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="cdf-s2-jobs", daemon=True)
+
+    def start(self) -> None:
+        from . import s2_jobs
+        s2_jobs.set_waker(self.wake)
+        self._thread.start()
+        self._wake.set()
+
+    def wake(self) -> None:
+        self._wake.set()
+
+    def _run(self) -> None:
+        from . import s2_jobs
+        conn = connect_rw()
+        try:
+            s2_jobs.recover(conn)
+            while not self._stop.is_set():
+                self._wake.wait(self.POLL_SECONDS)
+                self._wake.clear()
+                self.drain(conn)
+        finally:
+            conn.close()
+
+    def drain(self, conn: sqlite3.Connection) -> int:
+        from . import s2_jobs
+        done = 0
+        while not self._stop.is_set():
+            if not ingestion_admission("session").run:
+                break
+            job = s2_jobs.claim(conn)
+            if job is None:
+                break
+            try:
+                extract = self._extract
+                if extract is None:
+                    from .sources.s2_session import extract_session_sync as extract
+                extract(job["session_id"])
+            except Exception as exc:  # recorded on the job, retried up to MAX_ATTEMPTS
+                logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
+                s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])
+            else:
+                s2_jobs.finish(conn, job["session_id"])
+            done += 1
+        return done
+
+    def stop_and_join(self, timeout: float = 30) -> None:
+        from . import s2_jobs
+        self._stop.set()
+        self._wake.set()
+        s2_jobs.set_waker(None)
+        self._thread.join(timeout)
+
+
 class WorkerHandle:
     """Thread owner that joins the worker before releasing its owner lock."""
 
@@ -795,6 +861,7 @@ class WorkerHandle:
         self.owner = owner
         self.worker = IngestionWorker(owner, workspace_root)
         self.run_executor = RunLaneExecutor(owner, workspace_root)
+        self.s2_executor = S2JobExecutor()
         self._thread = threading.Thread(target=self._run, name="cdf-ingestion", daemon=True)
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -809,6 +876,7 @@ class WorkerHandle:
         """Start the scheduler and dedicated run-lane threads."""
         self._thread.start()
         self.run_executor.start()
+        self.s2_executor.start()
 
     def wake_run(self) -> None:
         """Notify the dedicated executor after an S3 report is enqueued."""
@@ -819,6 +887,9 @@ class WorkerHandle:
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self.worker.stop)
         self.run_executor.stop_and_join(timeout)
+        # A running extraction finishes its current model call first; a job it leaves
+        # running is put back in the queue by s2_jobs.recover at the next start.
+        self.s2_executor.stop_and_join(timeout)
         self._thread.join(timeout)
         if self._thread.is_alive():
             raise RuntimeError("CDF worker did not stop")

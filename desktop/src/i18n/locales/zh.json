@@ -507,7 +507,8 @@
       "lessons_other": "{{count}} 条经验",
       "threads_one": "{{count}} 个待续话题",
       "threads_other": "{{count}} 个待续话题",
-      "context": "{{count}} 条上下文"
+      "context": "{{count}} 条上下文",
+      "queued": "已排队：CDF 正在后台读取这个会话，留下了什么请在 Flow 里看"
     },
     "notice": {
       "dismiss": "关闭",

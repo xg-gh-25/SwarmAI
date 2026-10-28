@@ -21,12 +21,6 @@ class TestWriteTargetsDeriveFromSSoT:
 
 
 
-    def test_extractor_has_no_destination_map(self):
-        """memory_extractor emits candidates; CDF is the only routing authority."""
-        import core.memory_extractor as extractor
-
-        assert not hasattr(extractor, "_SECTION_MAP")
-
     def test_permanent_sections_are_valid(self):
         """memory_decay.PERMANENT_SECTIONS must reference real current sections."""
         from core.memory_decay import PERMANENT_SECTIONS

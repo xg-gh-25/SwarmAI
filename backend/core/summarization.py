@@ -675,7 +675,7 @@ class SummarizationPipeline:
     ) -> StructuredSummary:
         """Enrich a rule-based summary with LLM-extracted context.
 
-        Calls Bedrock (same pattern as memory_extractor) to extract
+        Calls Bedrock (jobs.bedrock.structured) to extract
         reasoning, rejected approaches, continue-from, and validation
         status. On failure, returns the original summary unchanged.
         """

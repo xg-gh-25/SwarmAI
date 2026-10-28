@@ -42,33 +42,3 @@ async def test_run_job_executes_off_event_loop(monkeypatch):
     assert seen and all(t != loop_thread for t in seen)
 
 
-@pytest.mark.asyncio
-async def test_memory_extraction_llm_runs_off_event_loop(tmp_path: Path, monkeypatch):
-    import core.memory_extractor as me
-    from database import db
-
-    async def _msgs(_sid):
-        return [{"role": "user", "content": "x"}] * 4
-
-    monkeypatch.setattr(db.messages, "list_by_session", _msgs)
-    monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    seen: list[int] = []
-
-    def _extract(*_args, **_kwargs):
-        seen.append(threading.get_ident())
-        return {"key_decisions": ["a"], "lessons_learned": ["b"]}
-
-    monkeypatch.setattr(me, "_extract_sections", _extract)
-    monkeypatch.setattr("core.session_inputs.derive_envelope", lambda *a, **k: {
-        "source_event_ids": [], "evidence": "inferred", "tainted": True,
-        "writer": "memory_extractor"})
-    monkeypatch.setattr("core.ingestion.api.enqueue", lambda *a, **k: SimpleNamespace(
-        status="queued", candidate_id="cand"))
-    loop_thread = threading.get_ident()
-
-    result = await me.extract_and_save("s1", workspace_path=tmp_path, config={})
-
-    assert result.total_saved == 2
-    assert len(seen) == 1, "candidate extraction is one batched LLM call"
-    assert all(t != loop_thread for t in seen)
-

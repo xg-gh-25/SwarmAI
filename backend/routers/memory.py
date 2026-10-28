@@ -150,7 +150,7 @@ class SaveSessionRequest(BaseModel):
 class SaveSessionResponse(BaseModel):
     """Response body for POST /api/memory/save-session."""
 
-    status: str  # "saved" | "empty" | "error"
+    status: str  # "queued" | "error" ("saved" / "empty" no longer sent: S2 runs as a job)
     entries: dict[str, int] = {}
     total_saved: int = 0
     next_message_idx: int = 0
@@ -166,31 +166,26 @@ async def save_session_to_memory(req: SaveSessionRequest):
     ``since_message_idx`` remains in the response contract but S2 always reads the
     complete transcript.
     """
-    from core.ingestion.sources.s2_session import extract_session
+    from core.ingestion import s2_jobs
     from core.session_inputs import record_session_input
 
     try:
         await asyncio.to_thread(
             record_session_input, req.session_id, "user_message", "user",
             "用户要求保存本会话", ref="save-to-memory")
-        result = await extract_session(req.session_id)
+        await asyncio.to_thread(s2_jobs.request, req.session_id, "save_button")
     except Exception as exc:
-        logger.error(
-            "S2 extraction failed for session %s: %s",
-            req.session_id, exc, exc_info=True)
+        logger.error("Save to Memory could not queue session %s: %s",
+                     req.session_id, exc, exc_info=True)
         return SaveSessionResponse(
             status="error", entries={}, total_saved=0,
             next_message_idx=req.since_message_idx,
-            message=f"Extraction failed: {type(exc).__name__}. Please try again.")
-
-    queued = len(result["user_utterance"]) + len(result["main"])
+            message=f"Could not queue: {type(exc).__name__}. Please try again.")
+    # Extraction runs in the CDF worker (design §12 r16.13); results show in Flow.
     return SaveSessionResponse(
-        status="saved" if queued else "empty",
-        entries={"user_utterance": len(result["user_utterance"]),
-                 "main": len(result["main"])},
-        total_saved=queued,
+        status="queued", entries={}, total_saved=0,
         next_message_idx=req.since_message_idx,
-        message="Queued through CDF" if queued else "No durable units extracted",
+        message="Queued: CDF reads this session in the background; see Flow for results.",
     )
 
 

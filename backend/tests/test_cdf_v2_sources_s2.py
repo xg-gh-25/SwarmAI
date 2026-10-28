@@ -35,7 +35,7 @@ async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
         {"id": "m2", "role": "assistant", "content": "I will redesign it."},
         {"id": "m3", "role": "tool", "content": "external output"},
     ]
-    monkeypatch.setattr(s2_session, "_whole_transcript", lambda sid: _async(transcript))
+    monkeypatch.setattr(s2_session, "_transcript_sync", lambda sid: transcript)
     rows = [
         {"event_id": "u1", "kind": "user_message"},
         {"event_id": "u2", "kind": "user_message"},
@@ -76,7 +76,7 @@ async def _async(value):
 
 @pytest.mark.asyncio
 async def test_s2_records_both_empty_passes(monkeypatch):
-    monkeypatch.setattr(s2_session, "_whole_transcript", lambda sid: _async([]))
+    monkeypatch.setattr(s2_session, "_transcript_sync", lambda sid: [])
     monkeypatch.setattr(s2_session, "_input_rows", lambda sid: [])
     monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: set())
     attempts = []
@@ -89,7 +89,7 @@ async def test_s2_records_both_empty_passes(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_user_pass_drops_not_self_contained(monkeypatch):
-    monkeypatch.setattr(s2_session, "_whole_transcript", lambda sid: _async([]))
+    monkeypatch.setattr(s2_session, "_transcript_sync", lambda sid: [])
     rows = [{"event_id": "u2", "kind": "user_message"}]
     monkeypatch.setattr(s2_session, "_input_rows", lambda sid: rows)
     monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: set())
@@ -103,25 +103,6 @@ async def test_user_pass_drops_not_self_contained(monkeypatch):
     await s2_session.extract_session("session-1", llm=llm)
     assert enqueued == []
     assert attempts[0][1]["invalid_units"][0]["reason"] == "not_self_contained"
-
-
-@pytest.mark.asyncio
-async def test_whole_transcript_reads_every_page(monkeypatch):
-    pages = {
-        None: [{"id": f"m{i}"} for i in range(201, 401)],
-        "m201": [{"id": f"m{i}"} for i in range(1, 201)],
-        "m1": [],
-    }
-    calls = []
-
-    async def page(session_id, limit, before_id):
-        calls.append(before_id)
-        return pages[before_id]
-
-    monkeypatch.setattr("database.db.messages.list_by_session_paginated", page)
-    rows = await s2_session._whole_transcript("session-1")
-    assert len(rows) == 400 and rows[0]["id"] == "m1" and rows[-1]["id"] == "m400"
-    assert calls == [None, "m201", "m1"]
 
 
 def test_read_roots_fail_closed_when_an_event_has_no_bound_root(tmp_path, monkeypatch):

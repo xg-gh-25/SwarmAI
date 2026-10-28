@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS ingestion_eval_log (
   record TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_eval_log_at ON ingestion_eval_log(at);
+CREATE TABLE IF NOT EXISTS ingestion_s2_jobs (
+  session_id TEXT PRIMARY KEY,
+  reason TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('queued','running','done','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  again INTEGER NOT NULL DEFAULT 0,
+  requested_at TEXT NOT NULL,
+  next_attempt_at TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_s2_jobs_state ON ingestion_s2_jobs(state, requested_at);
 ALTER TABLE ingestion_daily_stats DROP COLUMN llm_calls;
 ALTER TABLE ingestion_daily_stats DROP COLUMN tokens;
 """

@@ -92,22 +92,6 @@ def windows(items: list[dict[str, Any]], key: str, *, limit: int = WINDOW_CHARS,
 _ALLOWED = ("cognition", "event", "reference")
 
 
-async def _whole_transcript(session_id: str) -> list[dict[str, Any]]:
-    from database import db
-    pages: list[list[dict[str, Any]]] = []
-    before: str | None = None
-    while True:
-        page = await db.messages.list_by_session_paginated(
-            session_id, limit=PAGE_SIZE, before_id=before)
-        if not page:
-            break
-        pages.append(list(page))
-        if len(page) < PAGE_SIZE:
-            break
-        before = str(page[0]["id"])
-    return [row for page in reversed(pages) for row in page]
-
-
 _S2_REF = "s2:"  # ref prefix of the inputs S2 registers itself
 
 
@@ -171,6 +155,31 @@ def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> tuple[str, ...
                 event_ids.append(session_inputs.record_session_input(
                     session_id, kind, "agent", raw, ref=ref))
     return tuple(dict.fromkeys(event_ids))
+
+
+def _transcript_sync(session_id: str) -> list[dict[str, Any]]:
+    """The whole sent transcript, read-only, in send order (what list_by_session returns)."""
+    from core import session_inputs
+    path = session_inputs._db_path()
+    if not path.exists():
+        return []
+    uri = f"file:{path.resolve()}?mode=ro"
+    with sqlite3.connect(uri, uri=True, timeout=5.0) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE session_id=? AND (sent IS NULL OR sent != 0) "
+            "ORDER BY created_at, rowid", (session_id,)).fetchall()
+    out = []
+    for row in rows:
+        item = {k: v for k, v in dict(row).items() if not k.endswith("_seg")}
+        for key, value in item.items():
+            if isinstance(value, str) and value[:1] in ("[", "{"):
+                try:
+                    item[key] = json.loads(value)
+                except ValueError:
+                    pass
+        out.append(item)
+    return out
 
 
 def _input_rows(session_id: str) -> list[dict[str, Any]]:
@@ -323,17 +332,25 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
     return outcomes
 
 
+def extract_session_sync(session_id: str, *, project_snapshot: dict[str, Any] | None = None,
+                         llm: Any | None = None) -> dict[str, list[Any]]:
+    """Both S2 passes, trusted first, in the calling thread (the S2 job executor)."""
+    transcript = _transcript_sync(session_id)
+    rows = _input_rows(session_id)
+    claimed = _claimed_by_s1(session_id)
+    trusted = _trusted_pass(session_id, rows, claimed, project_snapshot, llm)
+    main = _main_pass(session_id, transcript, rows, claimed, project_snapshot, llm)
+    return {"user_utterance": trusted, "main": main}
+
+
 async def extract_session(session_id: str, *, project_snapshot: dict[str, Any] | None = None,
                           llm: Any | None = None) -> dict[str, list[Any]]:
-    """Run both S2 passes in one ordered batch; the trusted pass always goes first."""
-    transcript = await _whole_transcript(session_id)
-    rows = await asyncio.to_thread(_input_rows, session_id)
-    claimed = await asyncio.to_thread(_claimed_by_s1, session_id)
-    trusted = await asyncio.to_thread(
-        _trusted_pass, session_id, rows, claimed, project_snapshot, llm)
-    main = await asyncio.to_thread(
-        _main_pass, session_id, transcript, rows, claimed, project_snapshot, llm)
-    return {"user_utterance": trusted, "main": main}
+    """Run both S2 passes in one ordered batch; the trusted pass always goes first.
+
+    The same work as extract_session_sync, awaited off the event loop. Production asks
+    through s2_jobs.request and the job executor calls extract_session_sync."""
+    return await asyncio.to_thread(extract_session_sync, session_id,
+                                   project_snapshot=project_snapshot, llm=llm)
 
 
 class SessionExtractionHook:
@@ -342,5 +359,7 @@ class SessionExtractionHook:
     name = "cdf_v2_session_extraction"
 
     async def execute(self, context: Any) -> None:
+        # Queue only: S2 on a long session outlasts the 180 s hook budget (§12 r16.13).
         if not context.deleting:
-            await extract_session(context.session_id)
+            from core.ingestion import s2_jobs
+            await asyncio.to_thread(s2_jobs.request, context.session_id, "session_end")

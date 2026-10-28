@@ -19,13 +19,10 @@ import { tf } from '../pages/chat/tf';
 export type MemorySaveStatus = 'idle' | 'loading' | 'saved' | 'empty' | 'error';
 
 interface SaveSessionResponse {
-  status: 'saved' | 'empty' | 'error';
-  entries: {
-    key_decisions: number;
-    lessons_learned: number;
-    open_threads: number;
-    recent_context: number;
-  };
+  /** 'queued': CDF reads the session in the background (design §12 r16.13).
+   *  'saved' / 'empty' are no longer sent; kept so an older backend still reads right. */
+  status: 'queued' | 'saved' | 'empty' | 'error';
+  entries: Partial<Record<'key_decisions' | 'lessons_learned' | 'open_threads' | 'recent_context', number>>;
   total_saved: number;
   next_message_idx: number;
   message?: string;
@@ -56,11 +53,14 @@ function formatToastMessage(data: SaveSessionResponse, t: Translate): string {
   if (data.status === 'error') {
     return data.message || tf(t, 'chat.memory.failed', 'Failed to save to memory');
   }
+  if (data.status === 'queued') {
+    return tf(t, 'chat.memory.queued', 'Queued: CDF is reading this session; see Flow for what was kept');
+  }
   const counts: Array<[number, string, string, string]> = [
-    [data.entries.key_decisions, 'chat.memory.decisions', '{{count}} decision', '{{count}} decisions'],
-    [data.entries.lessons_learned, 'chat.memory.lessons', '{{count}} lesson', '{{count}} lessons'],
-    [data.entries.open_threads, 'chat.memory.threads', '{{count}} thread', '{{count}} threads'],
-    [data.entries.recent_context, 'chat.memory.context', '{{count}} context', '{{count}} context'],
+    [data.entries.key_decisions ?? 0, 'chat.memory.decisions', '{{count}} decision', '{{count}} decisions'],
+    [data.entries.lessons_learned ?? 0, 'chat.memory.lessons', '{{count}} lesson', '{{count}} lessons'],
+    [data.entries.open_threads ?? 0, 'chat.memory.threads', '{{count}} thread', '{{count}} threads'],
+    [data.entries.recent_context ?? 0, 'chat.memory.context', '{{count}} context', '{{count}} context'],
   ];
   const parts = counts
     .filter(([n]) => n > 0)
@@ -120,7 +120,7 @@ export function useMemorySave(): UseMemorySaveReturn {
       const message = formatToastMessage(data, t);
       setToastMap(prev => withEntry(prev, sessionId, message));
 
-      if (data.status === 'saved') {
+      if (data.status === 'saved' || data.status === 'queued') {
         setStatusMap(prev => withEntry(prev, sessionId, 'saved'));
       } else if (data.status === 'empty') {
         setStatusMap(prev => withEntry(prev, sessionId, 'empty'));
