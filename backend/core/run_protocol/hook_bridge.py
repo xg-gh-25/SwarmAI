@@ -309,8 +309,11 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
     if session_id:
         store.copy_to_session(session_id, answer)
     if cited_refs and payload.get("knowledge_project"):
-        from core import addressing          # the cited units were used (decay keeps them)
-        addressing.record_cited(str(payload["knowledge_project"]), cited_refs)
+        try:                                  # the cited units were used (decay keeps them)
+            from core import addressing
+            addressing.record_cited(str(payload["knowledge_project"]), cited_refs)
+        except Exception:  # noqa: BLE001 -- the answer is written; bookkeeping never fails it
+            logger.warning("hook_bridge: usage of cited units not recorded", exc_info=True)
     return {"answer": answer, "parsed": parsed}
 
 

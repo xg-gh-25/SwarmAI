@@ -113,7 +113,7 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 > **`Projects/<X>/2-understanding/<doc>`**, NOT the project root. The root path is the
 > PRE-migration location; the layout SSOT is `backend/core/ddd_paths.py` (`ddd_path()`
 > reads new-first, so recall only ever reads `2-understanding/`). Writing to the root
-> `Projects/<X>/TECH.md` creates an ORPHAN: git-tracked but never recalled — a real bug that stranded a principle. If a `2-understanding/` subdir is
+> `Projects/<X>/TECH.md` <!-- layout-example: the wrong path, shown on purpose --> creates an ORPHAN: git-tracked but never recalled — a real bug that stranded a principle. If a `2-understanding/` subdir is
 > absent for an un-migrated project, fall back to root; when in doubt, resolve with
 > `"$SWARM_BACKEND_BIN" py -c "from core.ddd_paths import ddd_path; print(ddd_path('Projects/<X>','TECH.md'))"`.
 
@@ -164,7 +164,7 @@ duplicate → error, nothing removed).
   --file .context/MEMORY.md --title "Exact entry title" --section "Open Threads"
 # 2) APPLY:
 "$SWARM_BACKEND_BIN" py -m scripts.artifact_cli ddd-retire \
-  --file Projects/SwarmAI/2-understanding/IMPROVEMENT.md --title "..." --section "What Failed" --apply
+  --file Projects/<P>/2-understanding/IMPROVEMENT.md --title "..." --section "What Failed" --apply
 # keep-class (decision/model/principle/correction/COE) is REFUSED unless you add --force
 ```
 
@@ -211,7 +211,7 @@ Where `[type]` is one of: `guideline`, `pitfall`, `decision`, `principle`, `corr
 ```
 **Persisted:**
 
-> **[type] Title** → `Projects/SwarmAI/2-understanding/IMPROVEMENT.md` § What Failed
+> **[type] Title** → `Projects/<P>/2-understanding/IMPROVEMENT.md` § What Failed
 > _(Why: one-sentence reason this knowledge compounds)_
 ```
 

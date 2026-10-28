@@ -151,6 +151,13 @@ REGISTER_RE = re.compile(
 # same exposure.
 OWNER_PATH_RE = re.compile(r"/(?:Users|home)/[A-Za-z][A-Za-z0-9_.-]*")
 
+# A path to one concrete project's DDD (``Projects/AIDLC/...``) in a skill resolves only
+# on the machine that has that project; a skill names a project by placeholder.
+NAMED_PROJECT_RE = re.compile(r"Projects/(?![<{$*])([A-Za-z][\w.-]*)/")
+_PLACEHOLDER_PROJECTS = frozenset({"X", "P", "Name", "name", "Project", "ProjectName", "MyProject"})
+# a line that shows an old-layout path on purpose (to say it is wrong) carries this marker
+LAYOUT_EXAMPLE_MARK = "layout-example"
+
 # Names of one specific person (the repo's own config, ``scripts/owner_identity.txt``).
 # A shipped file that says "needs <owner> approval" or uses a real person as the
 # example reads wrong on every other install. Loaded once; an absent file means this
@@ -403,6 +410,8 @@ def lint_body(path: Path) -> list[str]:
 
     allowed = BODY_ALLOWLIST.get(_allow_key(path), frozenset())
     findings: list[str] = []
+    from core.ddd_paths import stale_layout_refs   # the layout's own rule (one source)
+    in_skill = "skills" in path.parts or "ddd-skills" in path.parts
 
     for lineno, line in enumerate(text.splitlines(), 1):
         for m in RUNID_RE.finditer(line):
@@ -425,6 +434,23 @@ def lint_body(path: Path) -> list[str]:
                 f"{path}:{lineno}: path '{m.group()}' names a specific machine owner "
                 f"— use a neutral placeholder or a repo-relative path"
             )
+        if LAYOUT_EXAMPLE_MARK not in line:
+            for ref in stale_layout_refs(line):
+                if ref in allowed:
+                    continue
+                findings.append(
+                    f"{path}:{lineno}: '{ref}' is a DDD path from before the numbered layout "
+                    f"— the docs live under 2-understanding/ (core/ddd_paths.py); for a "
+                    f"lookup use `knowledge find --project <P> --doc <DOC>`"
+                )
+        if in_skill:
+            for m in NAMED_PROJECT_RE.finditer(line):
+                if m.group(1) in _PLACEHOLDER_PROJECTS or m.group() in allowed:
+                    continue
+                findings.append(
+                    f"{path}:{lineno}: '{m.group()}' names one machine's project — use a "
+                    f"placeholder (Projects/<P>/) or point at the product's own docs"
+                )
         for rx in OWNER_NAMES:
             for m in rx.finditer(line):
                 if m.group() in allowed:

@@ -81,7 +81,8 @@ def test_pinned_sections_come_whatever_the_query(ddd):
     assert ("pinned", "Vision") in kinds and ("pointer", "Non-Goals") in kinds
     assert not any(h["section"] in ("Success Criteria", "Target Users") for h in hits)
     nongoals = next(h for h in hits if h["section"] == "Non-Goals")
-    assert "Not a chatbot" not in nongoals["shown"] and "PRODUCT.md#Non-Goals" in nongoals["shown"]
+    assert "Not a chatbot" not in nongoals["shown"] and "2-understanding/PRODUCT.md:" in nongoals["shown"] \
+        and "(§ Non-Goals)" in nongoals["shown"]
 
 
 def test_product_is_recalled_by_paragraph_not_by_section(ddd):
@@ -119,7 +120,8 @@ def test_units_are_whole_or_named_never_cut(ddd):
     quota = rm.DDD_PURPOSES["design"]["docs"]["TECH.md"][1]
     assert len(omitted) == 1 and hits[-1] is omitted[0]
     assert f"{quota - len(shown)} more matching" in omitted[0]["shown"]
-    assert "TECH.md#Traps" in omitted[0]["shown"] and "characters)" in omitted[0]["shown"]
+    assert "2-understanding/TECH.md:" in omitted[0]["shown"] and "(§ Traps)" in omitted[0]["shown"] \
+        and "characters)" in omitted[0]["shown"]
 
 
 def test_a_unit_that_does_not_fit_is_not_displaced_by_a_lower_one():
@@ -154,7 +156,8 @@ def test_a_too_long_pinned_section_is_named_not_cut(ddd):
     ddd("PRODUCT.md", "# PRODUCT\n\n## Vision\n\n" + "An OS for agents. " * 200 + "\n")
     hits = rm.recall_ddd("", P, "requirement")
     vision = next(h for h in hits if h["section"] == "Vision")
-    assert vision["kind"] == "pointer" and "PRODUCT.md#Vision" in vision["shown"]
+    assert vision["kind"] == "pointer" and "2-understanding/PRODUCT.md:" in vision["shown"] \
+        and "(§ Vision)" in vision["shown"]
     assert "An OS for agents" not in vision["shown"]
 
 

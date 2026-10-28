@@ -38,8 +38,8 @@ the DDD structure.
 > **`DDD_SPEC_VERSION: 1.0`** — this skill provisions DDDs conforming to spec version
 > 1.0 (the six-section canonical structure). Because a DDD can carry `s_ddd-manager`
 > to create MORE DDDs (self-propagation), the structure is a VERSIONED spec: declaring
-> the version here is what keeps propagated DDDs from drifting. Source of truth:
-> `Projects/AIDLC/Knowledge/Designs/2026-07-11-ddd-agent-brain-paradigm-design.md` §3.6.
+> the version here is what keeps propagated DDDs from drifting. Source of truth: the layout
+> resolver `backend/core/ddd_paths.py` and the paradigm in SWARMAI.md § My Brain (AGENT.md R31).
 
 A DDD is a product's **domain BRAIN = its control plane**. It **OWNs** cognitive assets
 (holds them, is their source of truth) and **GOVERNs** physical assets (points at +

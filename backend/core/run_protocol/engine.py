@@ -2363,7 +2363,7 @@ class RunEngine:
                 cached = addressing.unit_ids(self.project)
             except Exception:  # noqa: BLE001 -- an unreadable DDD leaves the recalled ids
                 logger.warning("run %s: DDD unit ids unavailable", self.run_id, exc_info=True)
-                cached = set()
+                return set()                  # not cached: the next check reads again
             self._unit_ids_cache = cached
         return cached
 
@@ -2881,8 +2881,13 @@ class RunEngine:
         # DDD (checked when the hook wrote it)
         refs |= {str(e["payload"]["knowledge_ref"]) for e in rows
                  if e.get("kind") == "finding_occ" and e.get("payload", {}).get("knowledge_ref")}
-        cited = refs & known
-        on_demand = (refs - known) & self._ddd_unit_ids() if refs - known else set()
+        # what the run handed out: the knowledge files and every review handout's block
+        handed = known | {str(i) for e in rows if e.get("kind") == "handout"
+                          for i in (e.get("payload") or {}).get("knowledge_items") or ()}
+        cited = refs & handed
+        # every other stored ref passed its check when it was written (a DDD unit then); it
+        # is not re-checked against today's DDD, where a rewritten entry has a new id
+        on_demand = refs - handed
         return {"status": records[0].get("status"), "entries": len(known), "cited": sorted(cited),
                 "cited_on_demand": sorted(on_demand), "searches": searches,
                 "parts": [{"purpose": str(r.get("purpose") or "requirement"),

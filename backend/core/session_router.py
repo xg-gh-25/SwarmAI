@@ -1781,8 +1781,11 @@ def _ddd_hit_line(project: str, base, docs_text: dict, hit: dict) -> str:
     if base is None or text is None:
         return f"- **{doc}** § {sec}"
     where = _locator(doc, ddd_path(base, doc), text)(sec, content)
-    if content:
-        title = unit_title(content) or content.strip().splitlines()[0][:160]
+    title = unit_title(content) if content.strip() else ""
+    if not title and content.strip():
+        from core.addressing import Unit
+        title = Unit.first_line(content)
+    if title:
         return f"- {title[:160]} — {where}"
     return f"- § {sec} — {where}"
 
@@ -1892,7 +1895,7 @@ def _inject_ddd_for_active_project(
         f"\n\n## Project DDD — [DDD:{project}]\n"
         f"> **[DDD:{project}]** Retrieved from this project's DDD docs "
         f"(detected via {signal}). Read the ones that bear on this before acting "
-        f"(at that line, or `\"$SWARM_BACKEND_BIN\" knowledge get --project {project} <path>:<line>`).\n\n"
+        f"(at that line, or `\"$SWARM_BACKEND_BIN\" knowledge get --project {project} <path:line>`).\n\n"
         + "\n".join(lines)
     )
     deliver(block)

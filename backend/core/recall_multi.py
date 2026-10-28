@@ -1091,25 +1091,44 @@ def _section_named(sections: dict, name: str) -> Optional[str]:
     return None
 
 
+_COMMENT_LINE_RE = re.compile(r"^\s*<!--.*-->\s*$")
+
+
 def _locator(doc: str, path: Optional[Path], text: str):
-    """Where to read a unit or a section of *doc* in full: ``<absolute path>:<line> #<section>``
-    when the doc's file is known (the reader's cwd is often another repo, where a bare
-    doc name resolves to nothing), else ``<doc>#<section>``. *text* is the doc's text."""
+    """Where to read a unit or a section of *doc* in full: ``<absolute path>:<line> (§
+    <section>)`` when the doc's file is known (the reader's cwd is often another repo,
+    where a bare doc name resolves to nothing), else ``<doc>#<section>``. The
+    ``path:line`` part is copyable as is into ``knowledge get``. *text* is the doc's text.
+
+    A unit is found by its first lines as a sequence (it is a contiguous run of the doc's
+    lines), searched only inside its own section (every span of that name, in file
+    order): one line alone -- ``---``, a fence, a table header, a repeated bullet --
+    also occurs elsewhere, and a whole-file search of the first line returned an earlier
+    copy, sometimes in another section. No match falls back to the heading's line."""
     from core import memory_index
     lines = text.splitlines()
-    heads = {name: first for name, first, _end in memory_index.section_spans(text)}
+    spans: dict[str, list[tuple[int, int]]] = {}
+    for name, first, end in memory_index.section_spans(text):
+        spans.setdefault(name, []).append((first, end))
 
     def locate(section: str, unit: str = "") -> str:
         where = f"{doc}#{section}" if section else doc
         if path is None:
             return where
         line = 0
-        if unit:
-            first = unit.strip().splitlines()[0] if unit.strip() else ""
-            line = next((i + 1 for i, ln in enumerate(lines) if ln.strip() == first.strip()), 0)
-        if not line and section in heads:
-            line = heads[section]            # the heading's own line (1-based)
-        return f"{path}:{line} #{section}" if line and section else (f"{path}:{line}" if line else str(path))
+        # a unit is a contiguous run of the doc's lines: match its first lines as a
+        # sequence (one line alone repeats -- a fence, a table header)
+        want = [ln.strip() for ln in (unit or "").strip().splitlines()][:6]
+        ranges = spans.get(section) or ([(0, len(lines))] if not section else [])
+        if want and any(w and not _COMMENT_LINE_RE.match(w) for w in want):
+            n = len(want)
+            line = next((i + 1 for a, b in ranges for i in range(a, max(a, b - n + 1))
+                         if all(lines[i + k].strip() == want[k] for k in range(n))), 0)
+        if not line and section in spans:
+            line = spans[section][0][0]       # the heading's own line (1-based)
+        if not line:
+            return str(path)
+        return f"{path}:{line} (§ {section})" if section else f"{path}:{line}"
     return locate
 
 

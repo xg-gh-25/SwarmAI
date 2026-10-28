@@ -160,3 +160,39 @@ def test_design_spec_knowledge_checked_shape(variant):
     assert issues([]) == [] and issues([{"query": "x", "result_ids": ["0a1b2c3d"]}]) == []
     assert issues("x") and issues([{"query": ""}]) and issues([{"query": "x", "result_ids": ["nope"]}])
     assert issues([{"query": "x", "extra": 1}])
+
+
+def test_stage_complete_records_the_cited_units_usage(tmp_path, monkeypatch):
+    """Through the real EVALUATE completion: a REQUIREMENTS citing a unit found on demand
+    is accepted and the unit's usage is recorded (the stage write path, not a direct call)."""
+    from tests.pipeline_v1_rig import documents
+    r = Rig(tmp_path, monkeypatch, profile="full")
+    _with_ddd(r)
+    r.create()
+    other = addressing.find(PROJECT, "quokkas midnight").units[0]
+    req = {**documents("full")["evaluate"], "knowledge_refs": [other.id]}
+    assert r.v1("stage-complete", "--artifact", r.artifact("requirements", req)).get("ok") is True
+    assert entry_anchor_text(other.text) in _usage(r)
+    bad = {**documents("full")["evaluate"], "knowledge_refs": ["deadbeef"]}
+    r2 = Rig(tmp_path / "b", monkeypatch, profile="full")
+    _with_ddd(r2)
+    r2.create()
+    assert r2.v1("stage-complete", "--artifact", r2.artifact("requirements", bad)).get("ok") is False
+
+
+def test_report_counts_a_cited_block_entry_as_handed_out_not_on_demand(tmp_path, monkeypatch):
+    """An entry handed to the correctness expert in its block (handout knowledge_items)
+    and cited by a finding is "cited", even when no knowledge file lists it; a ref that
+    passed the hook's check but names no handed-out entry is "found on demand", without
+    re-checking today's DDD (an entry rewritten since has a new id)."""
+    r = Rig(tmp_path, monkeypatch, profile="full")
+    _with_ddd(r)
+    r.create()
+    eng = r.engine()
+    assert "b10cb10c" not in eng._recalled_ids()
+    rows = r.events() + [
+        {"kind": "handout", "payload": {"expert_id": "correctness", "knowledge_items": ["b10cb10c"]}},
+        {"kind": "finding_occ", "payload": {"knowledge_ref": "b10cb10c"}},
+        {"kind": "finding_occ", "payload": {"knowledge_ref": "0dd0dd00"}}]
+    summary = eng._knowledge_summary(rows)
+    assert "b10cb10c" in summary["cited"] and summary["cited_on_demand"] == ["0dd0dd00"]

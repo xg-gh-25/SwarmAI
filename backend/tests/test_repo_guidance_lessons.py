@@ -158,3 +158,71 @@ def test_the_ddd_line_is_not_marked_seen_when_it_did_not_fit(tmp_path, monkeypat
     (repo / "src.py").write_text("x = 2\n")
     second = _read(repo / "src.py")
     assert "[Project DDD]" in second
+
+
+def test_lessons_that_did_not_fit_come_back_on_the_next_touch(tmp_path, monkeypatch, _iso):
+    """The lessons used to be marked seen before the fit check, so a crowded block hid
+    them for the rest of the session (state-machine review)."""
+    from core import repo_guidance
+    ws = _iso["ws"]
+    repo = _repo(tmp_path / "proj")
+    _bind(monkeypatch, ws, repo)
+    _lesson(ws, repo, 1, "always run the migration check")
+    monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 1000)   # header + DDD line, no lessons
+    first = _read(repo / "src.py")
+    assert "[Project DDD]" in first and "always run the migration check" not in first
+    monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 7_500)
+    second = _read(repo / "src.py")
+    assert "always run the migration check" in second and "[Project DDD]" not in second
+
+
+def test_one_repo_touched_twice_in_one_call_is_one_block(tmp_path, monkeypatch, _iso):
+    import asyncio
+    from unittest.mock import MagicMock
+    ws = _iso["ws"]
+    repo = _repo(tmp_path / "proj")
+    _bind(monkeypatch, ws, repo)
+    (repo / "sub").mkdir()
+    hook = rg.create_repo_guidance_hook({"sdk_session_id": "s9"}, "PostToolUse")
+    out = asyncio.run(hook({"tool_name": "Bash", "tool_input": {
+        "command": f"cd {repo} && ls && cd {repo / 'sub'} && ls"}, "cwd": str(repo)}, None, MagicMock()))
+    text = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+    assert text.count("[Project DDD]") == 1
+
+
+def test_a_repo_whose_ddd_line_did_not_fit_is_still_one_block_per_call(tmp_path, monkeypatch, _iso):
+    import asyncio
+    from unittest.mock import MagicMock
+    from core import repo_guidance
+    ws = _iso["ws"]
+    repo = _repo(tmp_path / "proj")
+    _bind(monkeypatch, ws, repo)
+    (repo / "AGENTS.md").write_text("## Rules\n\n" + "follow the rules. " * 400, encoding="utf-8")
+    (repo / "sub").mkdir()
+    monkeypatch.setattr(repo_guidance, "MAX_FILE_CHARS", 7_000)   # AGENTS.md takes the budget
+    hook = rg.create_repo_guidance_hook({"sdk_session_id": "s10"}, "PostToolUse")
+    out = asyncio.run(hook({"tool_name": "Bash", "tool_input": {
+        "command": f"cd {repo} && ls && cd {repo / 'sub'} && ls"}, "cwd": str(repo)}, None, MagicMock()))
+    text = (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
+    assert text.count(f"guidance — {repo}]") == 1
+
+
+def test_a_guidance_file_that_did_not_fit_comes_back(tmp_path, monkeypatch, _iso):
+    """A file that did not fit (not even as a pointer) used to be marked seen anyway. A
+    long repo path makes the pointer itself larger than what is left after AGENTS.md."""
+    from core import repo_guidance
+    repo = _repo(tmp_path / ("x" * 90) / ("y" * 90) / "proj")
+    (repo / "AGENTS.md").write_text("## Rules\n\n" + "short rule. " * 20, encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("## Entry\n\nthe claude entry point.\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-qm", "guidance"], check=True)
+    full = _read(repo / "src.py", sid="probe")
+    end = full.index(f"--- END {repo / 'AGENTS.md'} ---") + len(f"--- END {repo / 'AGENTS.md'} ---")
+    # AGENTS.md (with its note reserve) fits; the CLAUDE.md pointer block does not
+    monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", end + repo_guidance.NOTE_MAX + 20)
+    first = _read(repo / "src.py", sid="s11")
+    assert "short rule." in first and "CLAUDE.md" not in first
+    monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 7_500)
+    second = _read(repo / "src.py", sid="s11")
+    assert "the claude entry point." in second

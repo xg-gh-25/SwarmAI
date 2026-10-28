@@ -53,7 +53,7 @@ print(f'Output: {result[\"output_path\"]}')
   a protected zone (TECH>Architecture / SELF / PRODUCT>Vision,Non-Goals,Strategic) that
   a human should hand-distill. NOT auto-writable (human-only zone),
   so cultivation diverts them here instead of silently dropping.
-- `Projects/*/PRODUCT.md|TECH.md|IMPROVEMENT.md|PROJECT.md` — health stats (line count, mtime)
+- `Projects/*/2-understanding/{PRODUCT,TECH,IMPROVEMENT,PROJECT}.md` — health stats (line count, mtime)
 
 ## Human-Distill Candidates Section
 
