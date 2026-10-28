@@ -180,7 +180,6 @@ scripts/probe_ingestion.py:preserve  # exempt: probe writes into its own temp wo
 scripts/probe_knowledge.py:_mount_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_memory.py:_inject_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_memory.py:_reclaim_holds  # exempt: probe writes into its own temp workspace
-scripts/probe_memory.py:_selection_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_recall.py:_archive_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_recall.py:_seed_projects  # exempt: probe writes into its own temp workspace
 scripts/recall_replay.py:cmd_replay  # exempt: replay output dir
@@ -203,3 +202,7 @@ utils/file_lock.py:md_lock  # exempt: the .lock sidecar
 scripts/probe_ddd.py:_bootstrap_holds  # exempt: eval probe fixture in a temp workspace
 scripts/cdf_rehearsal_replay.py:_drain  # exempt: drives CDF's own worker and writer, only on a workspace copy (guard_paths refuses ~/.swarm-ai)
 scripts/cdf_rehearsal_replay.py:main  # exempt: writes the JSON report to --report; governed writes go through _drain
+core/project_agent.py:check_sources  # exempt: project-agent source-check JSON (.project-agent-check.json), not a governed knowledge file
+core/project_agent_draft.py:apply  # exempt: project-agent definition draft (YAML) awaiting the Brain Hub review card, not governed knowledge
+routers/ddd_brain.py:_confirm_agent  # exempt: confirms that project-agent draft on the review card (calls project_agent_draft.confirm)
+scripts/eval_runner.py:write_gate_manifest  # exempt: eval gate input-hash manifest

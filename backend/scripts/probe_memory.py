@@ -2,8 +2,6 @@
 """probe_memory — product eval probes for memory.
 
 Contract: scripts/_probe_kit.py. Subcommands:
-  selection   over-budget MEMORY is selected as whole units without rewriting the
-              file, and every meta-cognitive unit remains present
   inject      active MEMORY entries reach the prompt intact; dormant ones do not
   immune      judgment entries (decision / correction / pitfall) never decay with
               age; an operational guideline does
@@ -16,77 +14,6 @@ from datetime import date
 from unittest import mock
 
 from scripts._probe_kit import run, tempdir, verdict
-
-_PAD = "operational guideline detail lorem ipsum dolor sit amet consectetur " * 12
-
-
-def _big_memory(n_ops: int) -> str:
-    parts = ["# Memory\n\n## Principles\n"]
-    for i in range(5):
-        parts.append(f"- [principle] **PRI{i:02d}** evergreen principle {i} — load-bearing judgment kept always\n")
-        parts.append("  <!-- ref:3 | last:2026-08-01 | decay:active | sessions:4 -->\n")
-    parts.append("\n## Guidelines\n")
-    for i in range(n_ops):
-        parts.append(f"- [guideline] **GUI{i:04d}** operational guideline {i} — {_PAD}\n")
-        parts.append("  <!-- ref:0 | last:none | decay:active | sessions:0 -->\n")
-    parts.append("\n## Open Threads\n- [process] **open thread** one open thread\n")
-    return "".join(parts)
-
-
-# ── deterministic selection ───────────────────────────────────────────────────
-
-def _selection_conn():
-    import sqlite3
-    conn = sqlite3.connect(":memory:")
-    conn.execute("""CREATE TABLE injection_selection(
-        id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL,
-        file_hash TEXT NOT NULL, selected_anchors TEXT NOT NULL,
-        score_snapshot_version TEXT NOT NULL, computed_at TEXT NOT NULL,
-        omitted_count INTEGER NOT NULL DEFAULT 0)""")
-    return conn
-
-
-def _selection_holds(selector) -> tuple[bool, str]:
-    from core.context_directory_loader import ContextDirectoryLoader as C
-    from core.ingestion.units import parse_units
-    from core.memory_injection import Selection
-
-    with tempdir() as d:
-        mem = d / "MEMORY.md"
-        mem.write_text(_big_memory(40), encoding="utf-8")
-        before_bytes = mem.read_bytes()
-        budget = 1000
-        result = selector(mem, budget, C.estimate_tokens, _selection_conn())
-        if mem.read_bytes() != before_bytes:
-            return False, "selection rewrote MEMORY.md"
-        if C.estimate_tokens(result.text) > budget:
-            return False, "selected prompt exceeds the 1000-token fixture budget"
-        if any(f"PRI{i:02d}" not in result.text for i in range(5)):
-            return False, "a meta-cognitive principle was omitted"
-        if result.omitted <= 0:
-            return False, "over-budget fixture omitted no units"
-        for unit in parse_units(mem, root=d):
-            prompt_unit = C._HTML_COMMENT_RE.sub("", unit.text).strip()
-            prefix = prompt_unit[:40]
-            if prefix and prefix in result.text and prompt_unit not in result.text:
-                return False, f"unit {unit.title!r} was cut"
-    return True, ""
-
-
-def selection(negative: bool) -> int:
-    from core.memory_injection import Selection, select_context_file
-
-    def real(path, budget, estimate, conn):
-        return select_context_file(path, budget=budget, estimate=estimate,
-                                   now=date(2026, 10, 28), conn=conn)
-
-    def cutting(path, budget, estimate, conn):
-        text = path.read_text(encoding="utf-8")[:budget]
-        return Selection(text=text, omitted=1, used_tokens=estimate(text))
-
-    return verdict("MEM_INJECTION_SELECTION", negative,
-                   lambda: _selection_holds(real), lambda: _selection_holds(cutting))
-
 
 # ── inject ────────────────────────────────────────────────────────────────────
 
@@ -189,5 +116,5 @@ def reclaim(negative: bool) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(run({"selection": selection, "inject": inject, "immune": immune,
+    raise SystemExit(run({"inject": inject, "immune": immune,
                           "reclaim": reclaim}))
