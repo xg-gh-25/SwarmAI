@@ -3,7 +3,11 @@
 Endpoints:
     GET  /api/code-intel/{project}/summary   — codebase stats + freshness
     GET  /api/code-intel/{project}/analysis  — codebase analysis, computed on demand
-    POST /api/code-intel/{project}/reindex   — trigger background re-index
+    GET  /api/code-intel/{project}/graph     — top nodes + edges for the graph view
+    POST /api/code-intel/{project}/reindex   — trigger background re-index (every graph)
+
+The read endpoints show one graph: ``?repo=<binding repo>`` picks a bound repo's,
+default the project's first (``core.code_intel.project_graph``).
 """
 
 import asyncio
@@ -17,8 +21,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Response
 from pydantic import BaseModel
 
 from core.code_intel import (
-    load_project_graph,
     get_code_intel_db_path,
+    project_graph,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +72,7 @@ class ReindexResponse(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("/{project}/analysis")
-async def get_code_intel_analysis(project: str, layers: str = ""):
+async def get_code_intel_analysis(project: str, layers: str = "", repo: str | None = None):
     """The codebase analysis of a project's graph, computed now (never stored).
 
     Shape and versioning: ``core.code_intel.analysis`` (``schema`` + ``version``).
@@ -86,7 +90,7 @@ async def get_code_intel_analysis(project: str, layers: str = ""):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     def _run() -> str | None:
-        result = analyze_project(project, names)
+        result = analyze_project(project, names, repo=repo)
         # Serialize here too: a large repo's analysis is megabytes of JSON, and
         # encoding it on the event loop would stall every other request.
         return None if result is None else json.dumps(result, ensure_ascii=False)
@@ -98,18 +102,14 @@ async def get_code_intel_analysis(project: str, layers: str = ""):
 
 
 @router.get("/{project}/summary", response_model=CodeIntelSummary)
-async def get_code_intel_summary(project: str):
+async def get_code_intel_summary(project: str, repo: str | None = None):
     """Return compact codebase stats for the given project.
 
     Returns 404 if no code_intel.db exists for the project.
     Uses asyncio.to_thread to avoid blocking the event loop (F1 fix:
     get_codebase_summary() calls find_dead_code() which is a full table scan).
     """
-    if not _SAFE_PROJECT_RE.match(project):
-        raise HTTPException(status_code=400, detail="Invalid project name")
-    graph = load_project_graph(project)
-    if graph is None:
-        raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
+    graph = await _graph_or_404(project, repo)
 
     # F1: Offload sync SQLite I/O to threadpool — find_dead_code() is O(n) scan
     summary = await asyncio.to_thread(graph.get_codebase_summary)
@@ -148,50 +148,19 @@ async def get_code_intel_summary(project: str):
 
 
 @router.get("/{project}/graph")
-async def get_code_intel_graph(project: str, limit: int = 300):
+async def get_code_intel_graph(project: str, limit: int = 300, repo: str | None = None):
     """Return top-N nodes + edges for force-directed graph visualization.
 
     Nodes ranked by connectivity (most-connected first).
     Only edges between included nodes are returned.
     """
-    if not _SAFE_PROJECT_RE.match(project):
-        raise HTTPException(status_code=400, detail="Invalid project name")
-    graph = load_project_graph(project)
-    if graph is None:
-        raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
+    graph = await _graph_or_404(project, repo)
 
     # Cap limit to prevent full-graph dump (min 1 for testing, max 1000)
     limit = min(max(limit, 1), 1000)
 
     data = await asyncio.to_thread(graph.get_graph_data, limit)
     return data
-
-
-@router.get("/{project}/routes")
-async def get_code_intel_routes(project: str):
-    """Return all detected HTTP routes for a project.
-
-    Returns JSON list of routes with method, path, handler, framework,
-    file_path, and line_number.
-    """
-    if not _SAFE_PROJECT_RE.match(project):
-        raise HTTPException(status_code=400, detail="Invalid project name")
-    graph = load_project_graph(project)
-    if graph is None:
-        raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
-
-    routes = await asyncio.to_thread(graph.get_routes)
-    return [
-        {
-            "method": r["method"],
-            "path": r["path"],
-            "handler": r["handler_node_id"],
-            "framework": r["framework"],
-            "file_path": r["file_path"],
-            "line_number": r["line_number"],
-        }
-        for r in routes
-    ]
 
 
 @router.post("/{project}/reindex", response_model=ReindexResponse, status_code=202)
@@ -225,6 +194,18 @@ async def trigger_reindex(project: str, background_tasks: BackgroundTasks):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+async def _graph_or_404(project: str, repo: str | None):
+    """The graph a read endpoint shows (400 on a bad name, 404 when there is none).
+    The lookup reads bindings.yaml and may open the db: it runs off the loop."""
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    found = await asyncio.to_thread(project_graph, project, repo)
+    if found is None:
+        what = f"repo '{repo}' of project '{project}'" if repo else f"project '{project}'"
+        raise HTTPException(status_code=404, detail=f"Code intelligence not found for {what}")
+    return found[1]
+
+
 def _compute_freshness(last_indexed: str | None) -> str:
     """Determine freshness status from last_indexed timestamp."""
     from core.code_intel.graph_store import parse_index_time
@@ -236,77 +217,24 @@ def _compute_freshness(last_indexed: str | None) -> str:
 
 
 def _run_reindex(project: str) -> None:
-    """Run a full re-index for a project (clear + re-parse). Called as background task.
+    """Re-index every code graph of a project (its own db and each bound repo's).
+    Called as a background task.
 
     Releases _reindex_in_progress guard on completion (success or failure).
     """
     try:
         from jobs.paths import PROJECTS_DIR
-        from core.code_intel import (
-            code_intel_dbs, repo_root_is_owned, resolve_owned_repo_root,
-        )
+        from core.code_intel import load_project_graphs
         project_dir = PROJECTS_DIR / project
-        dbs = code_intel_dbs(project_dir)
-        if not dbs:
-            logger.warning(f"Cannot reindex {project}: no code_intel.db")
+        # Rebuild through the cached graphs (the ones recall and the watchers use),
+        # each under its write lock: readers see the old graph or the new one, never
+        # an emptied one, and nothing closes a store a watcher holds.
+        graphs = load_project_graphs(project)
+        if not graphs:
+            logger.warning(f"Cannot reindex {project}: no code_intel.db could be opened")
             return
-
-        # Rebuild through the project's cached graph (the one recall and the watcher
-        # use), holding its write lock for the whole rebuild: readers on it wait and
-        # then see the new graph, never an emptied one, and nothing closes the store
-        # the watcher holds.
-        graph = load_project_graph(project)
-        if graph is None:
-            logger.warning(f"Cannot reindex {project}: code_intel.db could not be opened")
-            return
-        # The repo to parse. A bind-managed db is ONLY ever its own clone; never fall
-        # back to another repo, which would mix two repos in one graph. The project's
-        # own db: the repo it records if the project owns it, else its owned repo.
-        primary = dbs[0]
-        if primary.repo_root is not None:
-            repo_path = str(primary.repo_root) if primary.repo_root.is_dir() else None
-        else:
-            stored = graph.get_meta("repo_root")
-            if stored and repo_root_is_owned(project_dir, stored):
-                repo_path = stored
-            else:
-                repo_path = resolve_owned_repo_root(project_dir)
-        if not repo_path:
-            logger.warning(f"Cannot reindex {project}: it owns no local repo "
-                           "(TECH.md / bindings.yaml)")
-            return
-        logger.info(f"Re-indexing {project} from {repo_path}")
-        import contextlib
-        from pathlib import Path as _Path
-        # A bind-managed clone may be mid-bind (cleared, re-cloning, rebuilt by the bind
-        # itself): take its bind lock, and skip rather than parse a half-cloned tree.
-        from core.ddd_bindings import BindInProgress
-        guard = contextlib.nullcontext()
-        if primary.repo_root is not None:
-            from core.ddd_bindings import _bind_lock
-            guard = _bind_lock(primary.repo_root, primary.repo or project)
-        try:
-            with guard:
-                # HEAD before the parse: a commit landing while it runs stays unindexed
-                # (the incremental path picks it up) instead of being stamped as done.
-                from core.code_intel.freshness import GitError, _git
-                try:
-                    head = _git(_Path(repo_path), ["rev-parse", "HEAD"]).strip() or None
-                except GitError:
-                    head = None
-                # The one full rebuild: it replaces the graph under the store's
-                # write lock (readers see the old graph or the new one), stores
-                # routes and coverage, and leaves an empty parse unstamped (it used
-                # to clear the graph and mark the empty result fresh).
-                from core.code_intel.build import rebuild
-                built = rebuild(graph, repo_path, head=head)
-                if built.empty:
-                    logger.warning(f"Re-index of {project}: the parse produced nothing; "
-                                   "the graph was left as it was")
-        except BindInProgress as exc:
-            logger.warning(f"Cannot reindex {project} now: {exc}")
-            return
-
+        for ref, graph in graphs:
+            _reindex_one(project, project_dir, ref, graph)
         logger.info(f"Re-index complete for {project}")
 
     except Exception as e:
@@ -314,3 +242,53 @@ def _run_reindex(project: str) -> None:
     finally:
         # F3: Always release the concurrency guard
         _reindex_in_progress.pop(project, None)
+
+
+def _reindex_one(project: str, project_dir, ref, graph) -> None:
+    """Rebuild one of the project's graphs from the repo it holds."""
+    import contextlib
+    from pathlib import Path as _Path
+
+    from core.code_intel import repo_root_is_owned, resolve_owned_repo_root
+    # The repo to parse. A bind-managed db is ONLY ever its own clone; never fall
+    # back to another repo, which would mix two repos in one graph. The project's
+    # own db: the repo it records if the project owns it, else its owned repo.
+    name = ref.repo or project
+    if ref.repo_root is not None:
+        repo_path = str(ref.repo_root) if ref.repo_root.is_dir() else None
+    else:
+        stored = graph.get_meta("repo_root")
+        if stored and repo_root_is_owned(project_dir, stored):
+            repo_path = stored
+        else:
+            repo_path = resolve_owned_repo_root(project_dir)
+    if not repo_path:
+        logger.warning(f"Cannot reindex {name}: it owns no local repo "
+                       "(TECH.md / bindings.yaml)")
+        return
+    logger.info(f"Re-indexing {name} from {repo_path}")
+    # A bind-managed clone may be mid-bind (cleared, re-cloning, rebuilt by the bind
+    # itself): take its bind lock, and skip rather than parse a half-cloned tree.
+    from core.ddd_bindings import BindInProgress
+    guard = contextlib.nullcontext()
+    if ref.repo_root is not None:
+        from core.ddd_bindings import _bind_lock
+        guard = _bind_lock(ref.repo_root, name)
+    try:
+        with guard:
+            # HEAD before the parse: a commit landing while it runs stays unindexed
+            # (the incremental path picks it up) instead of being stamped as done.
+            from core.code_intel.freshness import GitError, _git
+            try:
+                head = _git(_Path(repo_path), ["rev-parse", "HEAD"]).strip() or None
+            except GitError:
+                head = None
+            # The one full rebuild: it replaces the graph under the store's write
+            # lock, stores routes and coverage, and leaves an empty parse unstamped.
+            from core.code_intel.build import rebuild
+            built = rebuild(graph, repo_path, head=head)
+            if built.empty:
+                logger.warning(f"Re-index of {name}: the parse produced nothing; "
+                               "the graph was left as it was")
+    except BindInProgress as exc:
+        logger.warning(f"Cannot reindex {name} now: {exc}")

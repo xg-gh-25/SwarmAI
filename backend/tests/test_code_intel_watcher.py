@@ -236,10 +236,10 @@ class TestWatcherBatchHandling:
             # Route extraction chunked: ceil(35/20) = 2 calls
             assert mock_routes.call_count == 2
             # First chunk: 20 files
-            first_call_rel = mock_routes.call_args_list[0][0][0]
+            first_call_rel = mock_routes.call_args_list[0][0][1]  # (graph, rel, abs)
             assert len(first_call_rel) == _CHUNK_SIZE
             # Second chunk: 15 files
-            second_call_rel = mock_routes.call_args_list[1][0][0]
+            second_call_rel = mock_routes.call_args_list[1][0][1]
             assert len(second_call_rel) == 15
 
 
@@ -278,11 +278,11 @@ class TestWatcherRoutePrefixes:
         graph = GraphStore(tmp_path / "ci.db")
         try:
             watcher = CodeIntelWatcher("p", repo, graph)
-            watcher._extract_routes_only(["backend/routers/chat.py"], [chat])
+            watcher._extract_routes_only(graph, ["backend/routers/chat.py"], [chat])
             paths = [r["path"] for r in graph.get_routes("backend/routers/chat.py")]
             assert paths == ["/api/chat/sessions"], paths
             # Idempotent: a second watcher batch must not double-prefix.
-            watcher._extract_routes_only(["backend/routers/chat.py"], [chat])
+            watcher._extract_routes_only(graph, ["backend/routers/chat.py"], [chat])
             paths = [r["path"] for r in graph.get_routes("backend/routers/chat.py")]
             assert paths == ["/api/chat/sessions"], paths
         finally:
@@ -339,20 +339,23 @@ class TestWatcherRegistry:
         watcher_mod._watchers.clear()
         watcher_mod._watcher_lock = None
 
-        graph = MagicMock()
+        # The registry holds one watcher per graph (db path).
+        def graph(i):
+            return MagicMock(_db_path=Path(f"/tmp/g{i}.code_intel.db"))
 
         # Patch CodeIntelWatcher.start to avoid actual FS watching
         with patch.object(CodeIntelWatcher, 'start', new_callable=AsyncMock):
             # Fill up to max capacity
             for i in range(_MAX_WATCHERS):
-                result = await start_watcher(f"project-{i}", Path(f"/tmp/repo{i}"), graph)
+                result = await start_watcher(f"project-{i}", Path(f"/tmp/repo{i}"), graph(i))
                 assert result is True
 
             # Next one should fail (all are "running")
             for name, w in watcher_mod._watchers.items():
                 w._running = True  # Simulate running state
 
-            result = await start_watcher("overflow-project", Path("/tmp/overflow"), graph)
+            result = await start_watcher("overflow-project", Path("/tmp/overflow"),
+                                         graph("overflow"))
             assert result is False
 
         # Cleanup
@@ -360,7 +363,7 @@ class TestWatcherRegistry:
 
     @pytest.mark.asyncio
     async def test_start_watcher_idempotent(self):
-        """Starting a watcher for the same project twice returns True without duplication."""
+        """Starting a watcher for the same graph twice returns True without duplication."""
         from core.code_intel import watcher as watcher_mod
         from core.code_intel.watcher import (
             CodeIntelWatcher,
@@ -371,13 +374,13 @@ class TestWatcherRegistry:
         watcher_mod._watchers.clear()
         watcher_mod._watcher_lock = None
 
-        graph = MagicMock()
+        graph = MagicMock(_db_path=Path("/tmp/my.code_intel.db"))
 
         with patch.object(CodeIntelWatcher, 'start', new_callable=AsyncMock):
             result1 = await start_watcher("my-project", Path("/tmp/myrepo"), graph)
             assert result1 is True
             # Mark as running
-            watcher_mod._watchers["my-project"]._running = True
+            watcher_mod._watchers[str(graph._db_path)]._running = True
 
             result2 = await start_watcher("my-project", Path("/tmp/myrepo"), graph)
             assert result2 is True

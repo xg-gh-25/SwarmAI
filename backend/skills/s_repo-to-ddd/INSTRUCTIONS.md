@@ -578,7 +578,9 @@ analysis, computed from the graph on demand:
 "$SWARM_BACKEND_BIN" py -m core.code_intel.analysis <project> --layers graph_clusters,domain_rules   # structural domains + business-rule manifest
 ```
 
-(Also `GET /api/code-intel/<project>/analysis?layers=...`.) Use it to check the module,
+A project that binds several repos has one graph per repo: add `--repo <binding name>`
+(default: the first; the others are named on stderr). (Also
+`GET /api/code-intel/<project>/analysis?layers=...&repo=...`.) Use it to check the module,
 route and entry-point claims the docs make, and as the input of the Business-Rules
 Extraction score (below). Exit code 1 = the project has no code graph: rely on
 `extract_import_graph` (Phase 3) alone.

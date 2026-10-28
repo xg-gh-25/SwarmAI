@@ -2,7 +2,8 @@
 Code Intelligence Platform — project-scoped code graph for pipeline & agent.
 
 Public API:
-    load_project_graph(project_name) → GraphStore | None
+    load_project_graphs(project_name) → [(CodeIntelDb, GraphStore)]  (every graph)
+    project_graph(project_name, repo=None) → (CodeIntelDb, GraphStore) | None
     code_intel_dbs(project_dir) → list[CodeIntelDb]   (project db + bind-managed dbs)
     code_intel_db_for(project_dir) → Path | None      (the primary one)
     get_code_intel_db_path(project_name) → Path
@@ -28,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Module-level caches (guarded by _cache_lock for thread safety)
 _cache_lock = threading.Lock()
-_graph_cache: dict[str, GraphStore] = {}
 # db path → (open graph, (st_dev, st_ino) of the file it was opened on)
 _db_graph_cache: dict[str, tuple[GraphStore, tuple[int, int]]] = {}
 
@@ -112,59 +112,41 @@ def get_code_intel_db_path(project_name: str) -> Path:
     return code_intel_db_for(project_dir) or project_dir / "code_intel.db"
 
 
-def load_project_graph(project_name: str) -> GraphStore | None:
-    """
-    Load the graph for a project. Returns None if no code_intel.db exists.
-    Cached at module level (same pattern as SessionRecall).
-    """
-    with _cache_lock:
-        if project_name in _graph_cache:
-            return _graph_cache[project_name]
-
-    db_path = get_code_intel_db_path(project_name)
-    if not db_path.exists():
-        return None
-
-    try:
-        from .graph_store import GraphStore
-        graph = GraphStore(db_path)
-        with _cache_lock:
-            # Double-check: another thread may have populated the cache.
-            if project_name in _graph_cache:
-                graph.close()
-                return _graph_cache[project_name]
-            _graph_cache[project_name] = graph
-        return graph
-    except Exception as e:
-        logger.warning(f"Failed to load code_intel for {project_name}: {e}")
-        return None
-
-
 def load_project_graphs(project_name: str) -> list[tuple[CodeIntelDb, GraphStore]]:
     """Every code graph the project has (``code_intel_dbs`` order), opened once per db
-    path and cached. The multi-repo counterpart of ``load_project_graph`` (which
-    returns the first only): a project that binds several repos is searched in all
-    of them. A db that cannot be opened is skipped."""
+    path and cached: the one way in for every reader and writer, so a project that
+    binds several repos is searched, watched and re-indexed in all of them. A db that
+    cannot be opened is skipped.
+
+    A db file deleted and re-created gets a new store, and the old one is closed:
+    ``GraphStore.close`` waits for a query in flight on it, and a later use fails
+    loudly instead of writing into a deleted file (an unclosed old connection kept
+    the deleted file and its WAL alive and could remove the new WAL by path when it
+    was finally collected). The watcher re-resolves its store by db path each batch.
+    """
     from jobs.paths import PROJECTS_DIR
     out: list[tuple[CodeIntelDb, GraphStore]] = []
     for ref in code_intel_dbs(PROJECTS_DIR / project_name):
         key = str(ref.db_path)
-        try:
-            st = ref.db_path.stat()
-            ident = (st.st_dev, st.st_ino)
-        except OSError:
-            continue
+        stale = None
         with _cache_lock:
+            # stat under the lock: a stat taken before another thread cached the
+            # re-created file would read as a mismatch and evict that fresh store
+            try:
+                st = ref.db_path.stat()
+            except OSError:
+                continue
+            ident = (st.st_dev, st.st_ino)
             cached = _db_graph_cache.get(key)
             if cached is not None and cached[1] != ident:
-                # the file was deleted and re-created (a re-bind): the old handle
-                # still reads the old graph
-                _db_graph_cache.pop(key, None)
-                try:
-                    cached[0].close()
-                except Exception as exc:  # noqa: BLE001 — a stale handle is dropped anyway
-                    logger.debug("code_intel: closing a stale graph handle failed: %s", exc)
+                stale = _db_graph_cache.pop(key)[0]
                 cached = None
+        if stale is not None:
+            # outside the cache lock: close() waits for a query in flight on it
+            try:
+                stale.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("closing the store of a re-created %s failed", key, exc_info=True)
         if cached is not None:
             graph = cached[0]
         else:
@@ -184,37 +166,40 @@ def load_project_graphs(project_name: str) -> list[tuple[CodeIntelDb, GraphStore
     return out
 
 
+def project_graph(project_name: str, repo: str | None = None
+                  ) -> tuple[CodeIntelDb, GraphStore] | None:
+    """One of the project's graphs, for a reader that shows one at a time: the graph
+    of the binding named *repo*, or the first (``code_intel_dbs`` order) when *repo*
+    is None. None when there is no such graph."""
+    graphs = load_project_graphs(project_name)
+    if repo is None:
+        return graphs[0] if graphs else None
+    return next(((ref, g) for ref, g in graphs if ref.repo == repo), None)
+
+
 def invalidate_cache(project_name: str | None = None):
-    """Invalidate caches. Called on project create/delete. Closes evicted GraphStores."""
+    """Drop cached stores (one project's, or all) and close them.
+
+    A reset for tests and tools, never called by the running app: closing a store
+    another thread is querying breaks that query, and a re-bind is already handled by
+    ``load_project_graphs`` (a re-created db file gets a new store)."""
     with _cache_lock:
         if project_name:
-            old = _graph_cache.pop(project_name, None)
-            if old:
-                try:
-                    old.close()
-                except Exception:
-                    pass
             try:
                 from jobs.paths import PROJECTS_DIR
-                paths = [str(r.db_path) for r in code_intel_dbs(PROJECTS_DIR / project_name)]
+                keys = [str(r.db_path) for r in code_intel_dbs(PROJECTS_DIR / project_name)]
             except Exception as exc:  # noqa: BLE001 — nothing to evict when the dbs cannot be listed
                 logger.debug("code_intel: listing %s's graph dbs failed: %s", project_name, exc)
-                paths = []
-            for key in paths:
-                entry = _db_graph_cache.pop(key, None)
-                if entry:
-                    try:
-                        entry[0].close()
-                    except Exception as exc:  # noqa: BLE001 — the entry is evicted anyway
-                        logger.debug("code_intel: closing evicted graph %s failed: %s", key, exc)
+                keys = []
+            entries = [e for e in (_db_graph_cache.pop(k, None) for k in keys) if e]
         else:
-            for g in list(_graph_cache.values()) + [e[0] for e in _db_graph_cache.values()]:
-                try:
-                    g.close()
-                except Exception:
-                    pass
-            _graph_cache.clear()
+            entries = list(_db_graph_cache.values())
             _db_graph_cache.clear()
+    for graph, _ident in entries:
+        try:
+            graph.close()
+        except Exception as exc:  # noqa: BLE001 — the entry is evicted anyway
+            logger.debug("code_intel: closing evicted graph %s failed: %s", graph._db_path, exc)
 
 
 # Entrypoint files scanned (in order) for FastAPI include_router() prefixes.

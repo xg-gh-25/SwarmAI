@@ -52,18 +52,18 @@ class CodeIntelWatcher:
         self._task: asyncio.Task | None = None
         self._running = False
 
-    @property
-    def _graph(self) -> 'GraphStore':
-        """The project's CURRENT cached store for the same db, else the one started with.
+    def _current_graph(self) -> 'GraphStore':
+        """The CURRENT cached store for this watcher's db, else the one started with
+        (blocking: it reads bindings.yaml and may open the db, so call it off the loop).
 
-        ``invalidate_cache`` closes the cached store; a watcher holding the old object
-        would then fail on every batch until the daemon restarts.
+        A db re-created on disk gets a new store from ``load_project_graphs`` (and the
+        old one is closed); a watcher still writing the old store would fail.
         """
         try:
-            from . import load_project_graph
-            current = load_project_graph(self._project_name)
-            if current is not None and current._db_path == self._started_graph._db_path:
-                return current
+            from . import load_project_graphs
+            for _ref, current in load_project_graphs(self._project_name):
+                if current._db_path == self._started_graph._db_path:
+                    return current
         except Exception as exc:  # noqa: BLE001 -- keep the graph we started with
             logger.debug("CodeIntelWatcher %s: current graph lookup failed: %s",
                          self._project_name, exc)
@@ -181,10 +181,14 @@ class CodeIntelWatcher:
                              self._project_name)
                 return
 
+            # The store to write, resolved off the loop (it may read bindings.yaml
+            # and open the db).
+            graph = await executors.run_in("io", self._current_graph)
+
             # Phase 1: Single graph update (one FTS rebuild, not per-chunk)
             await executors.run_in(
                 "io",
-                self._graph.incremental_update,
+                graph.incremental_update,
                 self._root,
                 relative_files,
             )
@@ -198,6 +202,7 @@ class CodeIntelWatcher:
                 await executors.run_in(
                     "io",
                     self._extract_routes_only,
+                    graph,
                     chunk_rel,
                     chunk_abs,
                 )
@@ -212,7 +217,8 @@ class CodeIntelWatcher:
         except Exception as e:
             logger.warning(f"CodeIntelWatcher incremental reindex failed: {e}")
 
-    def _extract_routes_only(self, relative_files: list[str], abs_files: list[Path]):
+    def _extract_routes_only(self, graph: 'GraphStore', relative_files: list[str],
+                             abs_files: list[Path]):
         """Re-store the routes of one chunk of changed files (runs in a thread).
 
         Separated from the graph update so that the update (one FTS rebuild) runs
@@ -224,7 +230,7 @@ class CodeIntelWatcher:
         from .build import routes_for
         existing = [rel for rel, p in zip(relative_files, abs_files) if p.exists()]
         if existing:
-            routes_for(self._graph, self._root, existing)
+            routes_for(graph, self._root, existing)
 
 
 def _drop_git_ignored(root: Path, files: list[Path]) -> list[Path]:
@@ -249,6 +255,7 @@ def _drop_git_ignored(root: Path, files: list[Path]) -> list[Path]:
 
 # ── Module-level watcher registry ──────────────────────────────────────
 
+# db path → watcher: one watcher per graph, so each bound repo of a project is watched.
 _watchers: dict[str, CodeIntelWatcher] = {}
 _watcher_lock: asyncio.Lock | None = None
 
@@ -262,40 +269,44 @@ def _get_lock() -> asyncio.Lock:
 
 
 async def start_watcher(project_name: str, project_root: Path, graph_store: 'GraphStore') -> bool:
-    """Start a watcher for a project. Returns True if started, False if at capacity."""
+    """Start a watcher for one of a project's graphs (keyed by its db). Returns True if
+    started or already running, False if at capacity (``_MAX_WATCHERS`` graphs)."""
     lock = _get_lock()
+    key = str(graph_store._db_path)
 
     async with lock:
-        if project_name in _watchers and _watchers[project_name].is_running:
+        if key in _watchers and _watchers[key].is_running:
             return True  # Already running
 
         if len(_watchers) >= _MAX_WATCHERS:
             # Evict oldest idle watcher
-            for name, w in list(_watchers.items()):
+            for k, w in list(_watchers.items()):
                 if not w.is_running:
-                    del _watchers[name]
+                    del _watchers[k]
                     break
             else:
-                logger.warning(f"CodeIntelWatcher: at capacity ({_MAX_WATCHERS}), cannot start for {project_name}")
+                logger.warning(f"CodeIntelWatcher: at capacity ({_MAX_WATCHERS} graphs), "
+                               f"not watching {project_name} at {project_root}")
                 return False
 
         watcher = CodeIntelWatcher(project_name, project_root, graph_store)
         await watcher.start()
-        _watchers[project_name] = watcher
+        _watchers[key] = watcher
         return True
 
 
 async def stop_watcher(project_name: str):
-    """Stop a specific project watcher."""
+    """Stop every watcher of a project (one per graph)."""
     lock = _get_lock()
 
     async with lock:
-        if project_name in _watchers:
-            await _watchers[project_name].stop()
-            del _watchers[project_name]
+        for key, w in list(_watchers.items()):
+            if w._project_name == project_name:
+                await w.stop()
+                del _watchers[key]
 
 
 async def stop_all_watchers():
     """Stop all watchers. Called on shutdown."""
-    for name in list(_watchers.keys()):
+    for name in {w._project_name for w in list(_watchers.values())}:
         await stop_watcher(name)

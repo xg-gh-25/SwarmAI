@@ -48,7 +48,7 @@ _DIM = 1024
 
 def _codeintel_live(negative: bool = False) -> int:
     """CodeIntel WIRE: the REAL recall_multi._codeintel_recall must drive the
-    REAL load_project_graph().search_symbols over the LIVE SwarmAI code graph
+    REAL load_project_graphs()[..].search_symbols over the LIVE SwarmAI code graph
     for a known symbol and return a hit (with 1-hop caller enrichment). Nothing
     is mocked — if the graph is absent or search_symbols is broken, the bucket is
     empty → marker absent. Prints CODEINTEL_LIVE_OK.

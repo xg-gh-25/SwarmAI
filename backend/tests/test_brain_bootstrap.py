@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 
 from core.brain_bootstrap import commands, docs, packages, repo_read, survey
+from core.code_intel import CodeIntelDb as _CIDb
+_REF = _CIDb(db_path=Path("code_intel.db"))  # a project db ref for loader mocks
 
 
 def _git(root: Path, *args: str) -> None:
@@ -330,7 +332,7 @@ def test_reindex_syncs_docs_after_processing_a_moved_head(monkeypatch, tmp_path:
 
     monkeypatch.setattr("config.get_swarmws", lambda: ws)
     monkeypatch.setattr("core.code_intel.code_intel_db_for", lambda d: proj / "code_intel.db")
-    monkeypatch.setattr("core.code_intel.load_project_graph", lambda n: G())
+    monkeypatch.setattr("core.code_intel.load_project_graphs", lambda n: [(_REF, G())])
     monkeypatch.setattr("core.code_intel.freshness.check_freshness", lambda g: F())
     monkeypatch.setattr("core.code_intel.repo_root_is_owned", lambda d, r: True)
     out = job.reindex_projects()

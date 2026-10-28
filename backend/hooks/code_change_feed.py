@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Lazy-safe imports for code_intel (may not be available in all environments)
 try:
-    from core.code_intel import graph_holds_repo, load_project_graph
+    from core.code_intel import graph_holds_repo, load_project_graphs
     from core.code_intel.parser import is_indexed_path
     _CODE_INTEL_AVAILABLE = True
 except ImportError:
@@ -399,12 +399,16 @@ def _reindex_changed_files(
         if not _CODE_INTEL_AVAILABLE:
             return 0
 
-        graph = load_project_graph(project)
-        if graph is None:
+        # Each graph is built from ONE repo: the commit lands in the graph of the
+        # repo it was made in, never another (same relative path, different file).
+        found = next(((ref, g) for ref, g in load_project_graphs(project)
+                      if graph_holds_repo(g, repo_root)), None)
+        if found is None:
             return 0
-        # The project's graph is built from ONE repo; a commit in another repo the
-        # project governs must not land in it (same relative path, different file).
-        if not graph_holds_repo(graph, repo_root):
+        ref, graph = found
+        # A bind is re-cloning this clone and rebuilds its graph itself.
+        from core.ddd_bindings import bind_in_progress
+        if ref.repo_root is not None and bind_in_progress(ref.repo_root):
             return 0
 
         root = Path(repo_root)

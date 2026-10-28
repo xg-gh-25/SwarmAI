@@ -106,6 +106,8 @@ So there is no merged grading path. Instead, there are two functions in `build.p
 - `load_project_graphs` must not close a store a watcher thread is using: on an inode change it drops the stale store from the cache and the watcher re-resolves on its next batch. It closes the stale store only after the watcher has re-resolved, or never (the store is garbage-collected).
 - The reindex job, the feed and the health hook loop over the graphs.
 
+As built (step 3): `project_graph(project, repo=None)` is the single-graph accessor over `load_project_graphs`. The analysis CLI defaults to the first graph, like the API, and names the others on stderr (`--repo` picks one): one JSON shape for one and for several repos. `invalidate_cache` is a reset for tests and tools; the app never calls it. Two readers with no consumer go instead of being made multi-repo: the `/routes` endpoint (nothing calls it) and `code_intel_feed` (the TECH-drift channel wrote `code_drift_health.json`, which nothing reads, and only for the project named SwarmAI; its two coverage helpers had no caller).
+
 **3.4 Which files are code: one membership source; purpose-specific lists stay and are renamed.**
 - Membership is `parser.LANGUAGE_MAP` keys, `parser.SKIP_DIRS` and `_SKIP_PATH_SUFFIXES`. `.sql` comes out of `_NON_SOURCE_EXTENSIONS`.
 - The watcher filter and the incremental targets of `code_change_feed` derive from it, and test files are indexed on every path, as the full rebuild does.

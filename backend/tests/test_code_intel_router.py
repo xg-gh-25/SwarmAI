@@ -5,6 +5,9 @@ import time
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+from pathlib import Path as _P_ref
+from core.code_intel import CodeIntelDb as _CIDb
+_REF = _CIDb(db_path=_P_ref("code_intel.db"))  # a project db ref for loader mocks
 
 
 @pytest.fixture
@@ -37,7 +40,7 @@ class TestCodeIntelSummary:
             "module_count": 6,
         }
 
-        with patch("routers.code_intel.load_project_graph", return_value=mock_graph):
+        with patch("routers.code_intel.project_graph", return_value=(_REF, mock_graph)):
             resp = client.get("/api/code-intel/SwarmAI/summary")
 
         assert resp.status_code == 200
@@ -53,7 +56,7 @@ class TestCodeIntelSummary:
 
     def test_returns_404_when_no_db(self, client):
         """AC5: graceful degradation — no code_intel.db returns 404."""
-        with patch("routers.code_intel.load_project_graph", return_value=None):
+        with patch("routers.code_intel.project_graph", return_value=None):
             resp = client.get("/api/code-intel/NonExistent/summary")
 
         assert resp.status_code == 404
@@ -72,7 +75,7 @@ class TestCodeIntelSummary:
             "top_connected": [], "last_indexed": recent_time, "module_count": 1,
         }
 
-        with patch("routers.code_intel.load_project_graph", return_value=mock_graph):
+        with patch("routers.code_intel.project_graph", return_value=(_REF, mock_graph)):
             resp = client.get("/api/code-intel/TestProject/summary")
 
         assert resp.status_code == 200
@@ -91,7 +94,7 @@ class TestCodeIntelSummary:
             "top_connected": [], "last_indexed": old_time, "module_count": 1,
         }
 
-        with patch("routers.code_intel.load_project_graph", return_value=mock_graph):
+        with patch("routers.code_intel.project_graph", return_value=(_REF, mock_graph)):
             resp = client.get("/api/code-intel/TestProject/summary")
 
         assert resp.status_code == 200
@@ -171,7 +174,7 @@ class TestRunReindexRepoPathParsing:
         # The rebuild imports the parser function-locally, so patch it at its SOURCE
         # module; the graph comes from the project's cached store.
         with patch("jobs.paths.PROJECTS_DIR", tmp_path), \
-             patch.object(mod, "load_project_graph", return_value=graph), \
+             patch("core.code_intel.load_project_graphs", return_value=[(_REF, graph)]), \
              patch("core.code_intel.parser.parse_repo_with_coverage",
                    side_effect=fake_parse_repo), \
              patch.dict(mod._reindex_in_progress, {}, clear=True):

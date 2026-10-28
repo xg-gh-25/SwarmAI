@@ -13,6 +13,8 @@ from core.code_intel.freshness import (
     _git,
     check_freshness,
 )
+from core.code_intel import CodeIntelDb as _CIDb
+_REF = _CIDb(db_path=Path("code_intel.db"))  # a project db ref for loader mocks
 
 
 @pytest.fixture
@@ -272,7 +274,7 @@ class TestFullRebuildDelegation:
         """A Projects/ dir with one never-indexed code_intel.db on a git repo.
 
         Redirects BOTH path sources the handler uses: Path.home() (for the
-        Projects/ iteration) AND load_project_graph (for the DB load, which
+        Projects/ iteration) AND load_project_graphs (for the DB load, which
         otherwise resolves via the frozen jobs.paths.PROJECTS_DIR).
         """
         import subprocess as sp
@@ -292,13 +294,13 @@ class TestFullRebuildDelegation:
         db.set_meta("repo_root", str(proj))  # never indexed: no last_indexed_commit
         db.close()
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        # load_project_graph is imported function-locally from core.code_intel,
+        # load_project_graphs is imported function-locally from core.code_intel,
         # and resolves DB via the frozen PROJECTS_DIR — patch it at the source
         # so the handler operates on OUR never-indexed tmp db.
         import core.code_intel as ci
         monkeypatch.setattr(
-            ci, "load_project_graph",
-            lambda name: GraphStore(proj / "code_intel.db"),
+            ci, "load_project_graphs",
+            lambda name: [(_REF, GraphStore(proj / "code_intel.db"))],
         )
         import jobs.handlers.code_intel_reindex as handler
         return handler
@@ -375,8 +377,8 @@ class TestGradedIncrementalE2E:
 
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         import core.code_intel as ci
-        monkeypatch.setattr(ci, "load_project_graph",
-                            lambda name: GraphStore(proj / "code_intel.db"))
+        monkeypatch.setattr(ci, "load_project_graphs",
+                            lambda name: [(_REF, GraphStore(proj / "code_intel.db"))])
         import jobs.handlers.code_intel_reindex as handler
         return handler, proj, env
 

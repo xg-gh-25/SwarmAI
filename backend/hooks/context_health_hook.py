@@ -668,8 +668,9 @@ class ContextHealthHook:
         if not projects_dir.is_dir():
             return
 
-        from core.code_intel import load_project_graph
+        from core.code_intel import load_project_graphs
         from core.code_intel.freshness import check_freshness
+        from core.ddd_bindings import bind_in_progress
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
@@ -678,99 +679,100 @@ class ContextHealthHook:
             if code_intel_db_for(project_dir) is None:
                 continue
 
-            graph = load_project_graph(project_dir.name)
-            if not graph:
-                continue
+            # Every graph the project has (its own db and each bound repo's).
+            for ref, graph in load_project_graphs(project_dir.name):
+                # A bind is re-cloning this clone and rebuilds its graph itself.
+                if ref.repo_root is not None and bind_in_progress(ref.repo_root):
+                    continue
+                freshness = check_freshness(graph)
+                if not freshness.stale:
+                    continue
 
-            freshness = check_freshness(graph)
-            if not freshness.stale:
-                continue
+                # OWNERSHIP GATE (run_864c23b4): a project that owns no resolvable local
+                # repo (resolve_owned_repo_root → None — e.g. a worktree:null data-agent
+                # DDD like IVTHub, which GOVERNs a remote Coral repo but has no local
+                # checkout) can NEVER be legitimately reindexed. Its graph_meta lacks
+                # repo_root, so check_freshness returns suggest_full_rebuild=True forever;
+                # without this gate the emit branch below fired code_intel_full_reindex
+                # every health tick, the reindex handler no-op'd it (unowned_repo), and it
+                # re-emitted next tick — unbounded churn (CPU + log spam + scheduler
+                # pressure). This is the SAME ownership oracle the incremental branch
+                # (below) and the reindex handler already use; hoisting it here makes it
+                # cover the emit branch too (the only previously-unguarded emit site).
+                # NOTE: check_freshness is deliberately left untouched — recall_multi
+                # depends on repo_root-absent → stale=True to stamp hits as needs-verify.
+                from core.code_intel import resolve_owned_repo_root
+                if resolve_owned_repo_root(project_dir) is None:
+                    logger.debug(
+                        "code_intel: %s owns no resolvable local repo — skipping "
+                        "freshness-driven reindex (worktree:null / no-checkout DDD)",
+                        project_dir.name,
+                    )
+                    continue
 
-            # OWNERSHIP GATE (run_864c23b4): a project that owns no resolvable local
-            # repo (resolve_owned_repo_root → None — e.g. a worktree:null data-agent
-            # DDD like IVTHub, which GOVERNs a remote Coral repo but has no local
-            # checkout) can NEVER be legitimately reindexed. Its graph_meta lacks
-            # repo_root, so check_freshness returns suggest_full_rebuild=True forever;
-            # without this gate the emit branch below fired code_intel_full_reindex
-            # every health tick, the reindex handler no-op'd it (unowned_repo), and it
-            # re-emitted next tick — unbounded churn (CPU + log spam + scheduler
-            # pressure). This is the SAME ownership oracle the incremental branch
-            # (below) and the reindex handler already use; hoisting it here makes it
-            # cover the emit branch too (the only previously-unguarded emit site).
-            # NOTE: check_freshness is deliberately left untouched — recall_multi
-            # depends on repo_root-absent → stale=True to stamp hits as needs-verify.
-            from core.code_intel import resolve_owned_repo_root
-            if resolve_owned_repo_root(project_dir) is None:
-                logger.debug(
-                    "code_intel: %s owns no resolvable local repo — skipping "
-                    "freshness-driven reindex (worktree:null / no-checkout DDD)",
-                    project_dir.name,
-                )
-                continue
+                def _schedule_full_rebuild() -> None:
+                    logger.info(
+                        "code_intel %s: %d commits behind, %d files — triggering background rebuild",
+                        project_dir.name, freshness.commits_behind,
+                        len(freshness.changed_files),
+                    )
+                    # Emit event for background full reindex (non-blocking).
+                    # Uses emit_event_atomic (fcntl-locked load→append→save) to
+                    # avoid the race where this hook's stale state overwrites the
+                    # scheduler's successful job updates. See scheduler.emit_event_atomic.
+                    try:
+                        from jobs.scheduler import emit_event_atomic
+                        emit_event_atomic("code_intel_full_reindex", data={
+                            "project": project_dir.name,
+                            "commits_behind": freshness.commits_behind,
+                            "files_changed": len(freshness.changed_files),
+                        })
+                    except Exception as emit_err:
+                        logger.debug("code_intel: failed to emit reindex event: %s", emit_err)
 
-            def _schedule_full_rebuild() -> None:
+                if freshness.suggest_full_rebuild:
+                    _schedule_full_rebuild()
+                    continue  # don't block session start — background job handles it
+
+                # Incremental update for small changes
+                from pathlib import Path as P
+
+                repo_root = P(graph.get_meta("repo_root") or "")
+                if not repo_root.is_dir():
+                    continue
+
+                # OWNERSHIP GUARD (run_1950e67e): the THIRD index-trigger site (with the
+                # startup watcher + reindex job). Never incrementally index a repo_root
+                # the project doesn't OWN (its TECH.md or bindings.yaml must declare it) — else a
+                # foreign/mis-seeded repo_root re-indexes another project's files into
+                # this brain (the IVTHub-indexed-SwarmAI contamination). R27 all-consumers.
+                from core.code_intel import repo_root_is_owned
+                if not repo_root_is_owned(project_dir, str(repo_root)):
+                    logger.warning(
+                        "code_intel: %s repo_root %s not owned by project — skipping "
+                        "incremental index (cross-project contamination guard)",
+                        project_dir.name, repo_root)
+                    continue
+
+                # The one incremental update (core.code_intel.build.update_files): every
+                # changed file (a full rebuild was already delegated above for more than
+                # FULL_REBUILD_FILES), with routes. The commit marker moves only when
+                # every file landed: it used to move after the first 50, so files 51+
+                # of a 51-100 file change were never indexed until a full rebuild.
+                from core.code_intel.build import update_files
+                upd = update_files(graph, repo_root, freshness.changed_files)
+                if upd.needs_full:
+                    # update_files stored nothing (more files than one update covers).
+                    _schedule_full_rebuild()
+                    continue
+                if upd.complete and freshness.current_head:
+                    graph.set_meta("last_indexed_commit", freshness.current_head)
+
                 logger.info(
-                    "code_intel %s: %d commits behind, %d files — triggering background rebuild",
-                    project_dir.name, freshness.commits_behind,
-                    len(freshness.changed_files),
+                    "code_intel %s: incremental update — %d updated, %d failed%s",
+                    project_dir.name, len(upd.updated), len(upd.failed),
+                    "" if upd.complete else " (commit marker not moved)",
                 )
-                # Emit event for background full reindex (non-blocking).
-                # Uses emit_event_atomic (fcntl-locked load→append→save) to
-                # avoid the race where this hook's stale state overwrites the
-                # scheduler's successful job updates. See scheduler.emit_event_atomic.
-                try:
-                    from jobs.scheduler import emit_event_atomic
-                    emit_event_atomic("code_intel_full_reindex", data={
-                        "project": project_dir.name,
-                        "commits_behind": freshness.commits_behind,
-                        "files_changed": len(freshness.changed_files),
-                    })
-                except Exception as emit_err:
-                    logger.debug("code_intel: failed to emit reindex event: %s", emit_err)
-
-            if freshness.suggest_full_rebuild:
-                _schedule_full_rebuild()
-                continue  # don't block session start — background job handles it
-
-            # Incremental update for small changes
-            from pathlib import Path as P
-
-            repo_root = P(graph.get_meta("repo_root") or "")
-            if not repo_root.is_dir():
-                continue
-
-            # OWNERSHIP GUARD (run_1950e67e): the THIRD index-trigger site (with the
-            # startup watcher + reindex job). Never incrementally index a repo_root
-            # the project doesn't OWN (its TECH.md or bindings.yaml must declare it) — else a
-            # foreign/mis-seeded repo_root re-indexes another project's files into
-            # this brain (the IVTHub-indexed-SwarmAI contamination). R27 all-consumers.
-            from core.code_intel import repo_root_is_owned
-            if not repo_root_is_owned(project_dir, str(repo_root)):
-                logger.warning(
-                    "code_intel: %s repo_root %s not owned by project — skipping "
-                    "incremental index (cross-project contamination guard)",
-                    project_dir.name, repo_root)
-                continue
-
-            # The one incremental update (core.code_intel.build.update_files): every
-            # changed file (a full rebuild was already delegated above for more than
-            # FULL_REBUILD_FILES), with routes. The commit marker moves only when
-            # every file landed: it used to move after the first 50, so files 51+
-            # of a 51-100 file change were never indexed until a full rebuild.
-            from core.code_intel.build import update_files
-            upd = update_files(graph, repo_root, freshness.changed_files)
-            if upd.needs_full:
-                # update_files stored nothing (more files than one update covers).
-                _schedule_full_rebuild()
-                continue
-            if upd.complete and freshness.current_head:
-                graph.set_meta("last_indexed_commit", freshness.current_head)
-
-            logger.info(
-                "code_intel %s: incremental update — %d updated, %d failed%s",
-                project_dir.name, len(upd.updated), len(upd.failed),
-                "" if upd.complete else " (commit marker not moved)",
-            )
 
     # ------------------------------------------------------------------
     # Auto-cultivation — promote session signals into DDD docs

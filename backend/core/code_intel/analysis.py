@@ -15,15 +15,15 @@ Entry points (one function behind each):
     analyze_graph_store(graph, layers=None) → dict      the library call
     analyze_project(project, layers=None) → dict | None the project's graph (resolver)
     GET /api/code-intel/{project}/analysis?layers=…     routers/code_intel.py
-    python -m core.code_intel.analysis <project> [--layers a,b] [--out FILE]
+    python -m core.code_intel.analysis <project> [--layers a,b] [--repo R] [--out FILE]
 
 Pure read: nothing here writes to the graph or to disk (the CLI writes only the
 ``--out`` file the caller names).
 
 Contract: the result carries ``schema`` = ``SCHEMA`` and ``version`` = ``VERSION``.
 Adding a field keeps the version; renaming or removing one bumps it. Top-level keys:
-``schema, version, generated_at, project, repo_root (local path), indexed_commit,
-layers, <one key per layer>, errors?``. A layer too large to compute safely reports
+``schema, version, generated_at, project, repo? (the bound repo analyzed), repo_root
+(local path), indexed_commit, layers, <one key per layer>, errors?``. A layer too large to compute safely reports
 ``{"skipped": reason}`` content instead of loading the whole graph.
 """
 from __future__ import annotations
@@ -132,17 +132,22 @@ def analyze_graph_store(graph: "GraphStore", layers: Iterable[str] | None = None
     return out
 
 
-def analyze_project(project: str, layers: Iterable[str] | None = None) -> dict | None:
-    """Analyze *project*'s code graph (``load_project_graph``); None when it has none."""
+def analyze_project(project: str, layers: Iterable[str] | None = None,
+                    repo: str | None = None) -> dict | None:
+    """Analyze one of *project*'s code graphs (``project_graph``: the bound repo
+    *repo*, else the first); None when there is no such graph."""
     names = resolve_layers(layers)  # validate before opening anything
-    from . import load_project_graph
-    graph = load_project_graph(project)
-    if graph is None:
+    from . import project_graph
+    found = project_graph(project, repo)
+    if found is None:
         return None
+    ref, graph = found
     result = analyze_graph_store(graph, names)
     result["project"] = project
+    if ref.repo:
+        result["repo"] = ref.repo
     if "structure" in result:
-        result["structure"]["repo"]["name"] = project
+        result["structure"]["repo"]["name"] = ref.repo or project
     return result
 
 
@@ -305,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("project", help="project name (Projects/<name>)")
     ap.add_argument("--layers", default="",
                     help=f"comma-separated subset of: {', '.join(LAYERS)} (default: all)")
+    ap.add_argument("--repo", default=None,
+                    help="a bound repo's graph (its binding name); default: the first")
     ap.add_argument("--out", default=None, help="write the JSON here instead of stdout")
     args = ap.parse_args(argv)
     try:
@@ -312,11 +319,18 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    result = analyze_project(args.project, names)
+    result = analyze_project(args.project, names, repo=args.repo)
     if result is None:
-        print(f"{args.project}: no code graph (bind a repo, or index the project's own)",
+        what = f"repo {args.repo!r}" if args.repo else "code graph"
+        print(f"{args.project}: no {what} (bind a repo, or index the project's own)",
               file=sys.stderr)
         return 1
+    if args.repo is None:
+        from . import load_project_graphs
+        others = [ref.repo for ref, _g in load_project_graphs(args.project)[1:] if ref.repo]
+        if others:
+            print(f"{args.project} also has the graphs of: {', '.join(others)} "
+                  "(analyze one with --repo)", file=sys.stderr)
     text = json.dumps(result, indent=2, ensure_ascii=False)
     if args.out:
         Path(args.out).write_text(text + "\n", encoding="utf-8")

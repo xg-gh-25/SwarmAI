@@ -20,6 +20,8 @@ from unittest.mock import patch
 import pytest
 
 from core.code_intel.graph_store import GraphStore
+from core.code_intel import CodeIntelDb as _CIDb
+_REF = _CIDb(db_path=Path("code_intel.db"))  # a project db ref for loader mocks
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -164,12 +166,12 @@ class TestBoundGraphVisible:
         assert code_intel_db_for(project_dir) == db
 
     def test_project_name_lookup_returns_the_binding_db(self, bound_project):
-        from core.code_intel import get_code_intel_db_path, invalidate_cache, load_project_graph
+        from core.code_intel import get_code_intel_db_path, invalidate_cache, project_graph
         project_dir, _clone, db = bound_project
         assert get_code_intel_db_path("Demo") == db
         invalidate_cache("Demo")
         try:
-            assert load_project_graph("Demo") is not None
+            assert project_graph("Demo")[0].db_path == db
         finally:
             invalidate_cache("Demo")
 
@@ -499,24 +501,6 @@ class TestBindLock:
         finally:
             graph.close()
 
-    def test_watcher_uses_the_current_store_after_invalidation(self, bound_project):
-        """invalidate_cache closes the cached store; the watcher must not keep the closed one."""
-        import asyncio
-        from core.code_intel import invalidate_cache, load_project_graph
-        from core.code_intel.watcher import CodeIntelWatcher
-        _project_dir, clone, _db = bound_project
-        invalidate_cache("Demo")
-        try:
-            first = load_project_graph("Demo")
-            watcher = CodeIntelWatcher("Demo", clone, first)
-            invalidate_cache("Demo")  # closes `first`
-            (clone / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
-            asyncio.run(watcher._trigger_incremental([clone / "a.py"]))
-            current = load_project_graph("Demo")
-            assert [n["id"] for n in current.get_nodes_by_file("a.py")] == ["a.py::a"]
-        finally:
-            invalidate_cache("Demo")
-
 
 class TestGraphWriteAtomicity:
     def test_a_reader_never_sees_a_file_half_replaced(self, tmp_path):
@@ -660,7 +644,7 @@ class TestIncrementalWritersResolve:
             (repo / "a.py").write_text("def keep():\n    return 1\n", encoding="utf-8")
             stale = MagicMock(stale=True, suggest_full_rebuild=False, commits_behind=1,
                               changed_files=["a.py"], current_head=None)
-            monkeypatch.setattr(ci, "load_project_graph", lambda name: graph)
+            monkeypatch.setattr(ci, "load_project_graphs", lambda name: [(_REF, graph)])
             monkeypatch.setattr(fr, "check_freshness", lambda g: stale)
             ContextHealthHook()._refresh_code_intel(tmp_path)
             assert [n["id"] for n in graph.get_nodes_by_file("a.py")] == ["a.py::keep"]

@@ -12,7 +12,6 @@ Channels (see self.channels in __init__ for the live set):
     - Knowledge staleness detection
     - Entity index validation
     - Signal→DDD bridge (hooks.signal_ddd_bridge)
-    - Code Intelligence drift (core.code_intel_feed)
     - Entry lifecycle (per-entry decay/reclaim)
 
 Note: the auto_refresh channels (mechanical/memory/llm content-rewrite) were
@@ -169,7 +168,6 @@ class DddCultivationOrchestrator:
         "ddd_staleness": 2.0,
         "knowledge_staleness": 1.0,
         "signal_ddd_bridge": 3.0,
-        "code_intel_drift": 5.0,
         # mechanical_refresh/memory_refresh/llm_refresh budgets REMOVED (run_781ffbd9)
     }
 
@@ -192,14 +190,6 @@ class DddCultivationOrchestrator:
             }),
             ("signal_ddd_bridge", self._ch_signal_bridge, {
                 EventType.SIGNAL_DIGEST,
-            }),
-            # Drift detection is now a HEALTH signal (run_8d5fe9d1, Admission Component A):
-            # it writes code_drift_health.json, no longer proposals. Its old trigger
-            # (CODE_INTEL_INDEXED, emitted by detect_tech_drift itself) is gone with the
-            # proposal path, so run it on the health cadence (TIMER_30MIN) like the other
-            # pull-only health channels — otherwise the handler is orphaned + drift stops.
-            ("code_intel_drift", self._ch_code_intel, {
-                EventType.TIMER_30MIN,
             }),
             # mechanical_refresh / memory_refresh / llm_refresh channels REMOVED
             # (run_781ffbd9): the auto_refresh module produced zero output in 2
@@ -262,8 +252,8 @@ class DddCultivationOrchestrator:
         for name, channel_fn, subscribed_events in self.channels:
             if event_type in subscribed_events:
                 budget = self._CHANNEL_BUDGETS.get(name, 3.0)
-                # Priority mapping: signal/code_intel = 1, staleness = 2, knowledge = 3
-                if name in ("signal_ddd_bridge", "code_intel_drift"):
+                # Priority mapping: signal = 1, staleness = 2, knowledge = 3
+                if name in ("signal_ddd_bridge",):
                     priority = 1
                 elif name in ("ddd_staleness",):
                     priority = 2
@@ -424,20 +414,6 @@ class DddCultivationOrchestrator:
             logger.info(
                 "ddd_orchestrator: signal bridge generated %d proposals",
                 proposal_count,
-            )
-        return []
-
-    # ── Channel 7: Code Intelligence Drift ─────────────────────────────────
-
-    def _ch_code_intel(self, root: Path, ws_path: str) -> list[str]:
-        """Code Intelligence drift → TECH.md proposals."""
-        from core.code_intel_feed import detect_tech_drift
-
-        drift_count = detect_tech_drift(ws_path)
-        if drift_count > 0:
-            logger.info(
-                "ddd_orchestrator: code intel drift generated %d proposals",
-                drift_count,
             )
         return []
 

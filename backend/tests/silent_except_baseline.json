@@ -8,7 +8,6 @@
   "core/code_intel/clustering.py": 1,
   "core/code_intel/freshness.py": 1,
   "core/code_intel/graph_store.py": 4,
-  "core/code_intel_feed.py": 1,
   "core/compaction_guard.py": 3,
   "core/context_injector.py": 4,
   "core/ddd_bindings.py": 4,

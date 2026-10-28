@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.code_intel.graph_store import GraphStore
+from core.code_intel import CodeIntelDb as _CIDb
+_REF = _CIDb(db_path=Path("code_intel.db"))  # a project db ref for loader mocks
 
 _ROUTER = ('from fastapi import APIRouter\n\nrouter = APIRouter()\n\n'
            '@router.get("/items")\ndef list_items():\n    return []\n')
@@ -264,7 +266,7 @@ def _health_hook_run(tmp_path, monkeypatch, changed, fail=()):
     g.set_meta("last_indexed_commit", "old")
     stale = MagicMock(stale=True, suggest_full_rebuild=False, commits_behind=1,
                       changed_files=list(changed), current_head="new")
-    monkeypatch.setattr(ci, "load_project_graph", lambda name: g)
+    monkeypatch.setattr(ci, "load_project_graphs", lambda name: [(_REF, g)])
     monkeypatch.setattr(fr, "check_freshness", lambda graph: stale)
     real = g.store_file_nodes_edges
 
@@ -309,7 +311,7 @@ def test_the_commit_hook_drops_a_renamed_files_old_path(tmp_path):
         _git(repo, "commit", "-q", "-m", "mv")
         lines = _git(repo, "log", "-1", "-M", "--name-status", "--format=").strip().splitlines()
         changes = CodeChangeFeed()._parse_name_status(lines)
-        with patch("hooks.code_change_feed.load_project_graph", return_value=g):
+        with patch("hooks.code_change_feed.load_project_graphs", return_value=[(_REF, g)]):
             _reindex_changed_files(changes, str(repo), "P")
         assert g.get_nodes_by_file("old/mod.py") == []
         assert g.get_nodes_by_file("new/mod.py")

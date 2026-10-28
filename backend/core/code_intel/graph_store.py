@@ -236,7 +236,7 @@ class _LockingConnection:
     READS (``routers/code_intel.py`` on ``asyncio.to_thread``; ``recall_multi`` on the
     bounded ``executors "io"`` pool) and WRITES (``context_health_hook`` on the bounded
     ``executors "subprocess"`` pool; ``code_change_feed`` + the reindex job via
-    ``load_project_graph`` on the anyio/default pool). This is NOT an exhaustive list
+    ``load_project_graphs`` on the anyio/default pool). This is NOT an exhaustive list
     and the pool a caller uses is IRRELEVANT to the hazard: any 2 threads sharing one
     ``sqlite3.Connection`` object is the danger, regardless of which pool they came from.
     A single ``sqlite3.Connection`` is NOT safe for concurrent use across threads

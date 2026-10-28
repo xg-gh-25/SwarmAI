@@ -19,7 +19,7 @@ repo_root-absent → stale=True to stamp hits as needs-verify.
 
 METHODOLOGY: drive the REAL ContextHealthHook._refresh_code_intel with a real tmp
 workspace root + a real (empty) code_intel.db file, monkeypatching only the leaf
-boundaries (load_project_graph, check_freshness, resolve_owned_repo_root,
+boundaries (load_project_graphs, check_freshness, resolve_owned_repo_root,
 emit_event_atomic). Assert emit is NOT called for an unowned project and IS reachable
 for an owned one. Mutation-proof: reverting the gate makes the unowned test fail.
 """
@@ -28,6 +28,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from core.code_intel import CodeIntelDb as _CIDb
+_REF = _CIDb(db_path=Path("code_intel.db"))  # a project db ref for loader mocks
 
 
 def _make_stale_full_rebuild_freshness():
@@ -64,7 +66,7 @@ class TestReindexOwnershipGate:
 
         # Leaf boundaries: a non-empty graph + a stale/full-rebuild freshness verdict.
         graph = MagicMock()
-        monkeypatch.setattr(code_intel_mod, "load_project_graph", lambda name: graph)
+        monkeypatch.setattr(code_intel_mod, "load_project_graphs", lambda name: [(_REF, graph)])
         # check_freshness is imported INSIDE the method via
         # `from core.code_intel.freshness import check_freshness`, so patch the source module.
         monkeypatch.setattr(
