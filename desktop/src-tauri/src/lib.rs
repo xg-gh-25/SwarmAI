@@ -1290,7 +1290,7 @@ async fn get_daemon_version() -> Option<String> {
     version
 }
 
-/// Sync daemon binary to match app version when a mismatch is detected.
+/// Sync the daemon to this app's bundled backend when `backend_upgrade_needed`.
 ///
 /// Flow: graceful shutdown → atomic binary deploy → restart launchd → verify.
 /// Returns Ok(()) on success, Err(msg) on failure (surfaced to user via event).
@@ -1306,12 +1306,12 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     let daemon_version = get_daemon_version().await
         .unwrap_or_else(|| "unknown".to_string());
 
-    if daemon_version == app_version {
-        return Ok(());  // Versions match — nothing to do
+    if !backend_upgrade_needed(app, &daemon_version, app_version) {
+        return Ok(());  // this exact build already runs — nothing to do
     }
 
     println!(
-        "[Tauri] Daemon version mismatch: daemon={}, app={} — upgrading",
+        "[Tauri] Daemon needs the bundled backend: daemon={}, app={} — upgrading",
         daemon_version, app_version
     );
     // NOTE: the `backend-upgrading` event is emitted by
@@ -1348,6 +1348,18 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         });
     if let Some(pid) = daemon_pid {
         println!("[Tauri] Captured daemon PID {} before bootout", pid);
+    }
+    // A new build of the same version is deployed into the very dir the old process
+    // loaded from, and the backend re-opens its files by path (see Step 3): it may only
+    // be replaced once that process is known to be gone. With no PID to watch, leave it.
+    // Judged by the target dir, not the reported version: a hung daemon reports no
+    // version at all and is the one most likely to survive SIGKILL.
+    let same_version = runtime_deploy::runtime_root().ok()
+        .and_then(|r| runtime_deploy::current_version(&r))
+        .as_deref() == Some(app_version);
+    if same_version && daemon_pid.is_none() {
+        return Err("A backend outside launchd is using the port, so the new build was \
+                    not installed. Stop that backend, then restart SwarmAI.".to_string());
     }
 
     let _ = std::process::Command::new("launchctl")
@@ -1396,9 +1408,10 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
                     .args(["-9", &pid.to_string()])
                     .output();
                 // Poll until kernel reaps the process (SIGKILL delivery is async)
+                let mut reaped = false;
                 for _ in 0..3 {
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                    let reaped = std::process::Command::new("kill")
+                    reaped = std::process::Command::new("kill")
                         .args(["-0", &pid.to_string()])
                         .output()
                         .map(|o| !o.status.success())
@@ -1406,6 +1419,15 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
                     if reaped {
                         break;
                     }
+                }
+                if !reaped && same_version {
+                    // the old process still runs from the dir a same-version deploy
+                    // would replace: put it back under launchd and stop here
+                    let _ = std::process::Command::new("launchctl")
+                        .args(["bootstrap", &gui_target, &plist_path])
+                        .output();
+                    return Err("The old backend did not exit, so the new build was not \
+                                installed.".to_string());
                 }
                 break;
             }
@@ -1420,12 +1442,29 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     }
 
     // Step 4: Deploy the new version into the versioned runtime and switch `current`
-    // (the old version stays as `previous` for rollback; nothing is overwritten in place).
-    let bundle_base = app.path().resource_dir()
-        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-    let runtime_root = runtime_deploy::runtime_root().map_err(|e| e.to_string())?;
-    let previous_current = runtime_deploy::current_version(&runtime_root);
-    let target_binary = deploy_bundled_runtime(app)?;
+    // (the old version stays as `previous` for rollback; a new build of the same
+    // version keeps the running copy as `<version>.app-prev`, see runtime_deploy::deploy).
+    // The daemon is booted out from here on: a failure to deploy must still bootstrap
+    // it again. A failed copy or swap leaves `current` on the old copy; only a failure
+    // after the swap (writing a pointer file) leaves the new build there unverified.
+    let deployed = (|| -> Result<_, String> {
+        let bundle_base = app.path().resource_dir()
+            .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+        let runtime_root = runtime_deploy::runtime_root().map_err(|e| e.to_string())?;
+        let previous_current = runtime_deploy::current_version(&runtime_root);
+        let target_binary = deploy_bundled_runtime(app)?;
+        Ok((bundle_base, runtime_root, previous_current, target_binary))
+    })();
+    let (bundle_base, runtime_root, previous_current, target_binary) = match deployed {
+        Ok(d) => d,
+        Err(e) => {
+            println!("[Tauri] Backend deploy failed, restarting the old one: {}", e);
+            let _ = std::process::Command::new("launchctl")
+                .args(["bootstrap", &gui_target, &plist_path])
+                .output();
+            return Err(format!("Backend upgrade failed: {}", e));
+        }
+    };
     println!("[Tauri] Daemon binary deployed: {:?}", target_binary);
 
     // Step 4b: Re-render the plist from the NEW bundle's template. We booted the
@@ -1523,14 +1562,29 @@ fn deployed_backend_exe() -> Option<std::path::PathBuf> {
     legacy.is_file().then_some(legacy)
 }
 
+/// Whether the daemon should get this app's bundled backend: its version differs, or
+/// it is the same version from another build (a rebuilt app;
+/// `runtime_deploy::bundled_build_differs`). Comparing versions alone never deploys a
+/// same-version rebuild. The one decision both upgrade functions use.
+#[cfg(target_os = "macos")]
+fn backend_upgrade_needed(app: &tauri::AppHandle, daemon_version: &str, app_version: &str) -> bool {
+    if daemon_version != app_version {
+        return true;
+    }
+    match (app.path().resource_dir(), runtime_deploy::runtime_root()) {
+        (Ok(res), Ok(root)) => runtime_deploy::bundled_build_differs(&res, &root),
+        _ => false,
+    }
+}
+
 /// Background wrapper around `sync_daemon_version`.
 ///
 /// This function is designed to be spawned via `tauri::async_runtime::spawn`
 /// and NEVER awaited on the `start_backend` critical path. It:
 ///
-/// 1. Pre-checks the daemon's current version to avoid emitting spurious
-///    `backend-upgrading` events when versions already match (required for
-///    Property 2 — Preservation).
+/// 1. Pre-checks (`backend_upgrade_needed`) to avoid emitting spurious
+///    `backend-upgrading` events when this exact build already runs (required
+///    for Property 2 — Preservation).
 /// 2. Emits `backend-upgrading` with `{from, to}` payload at start.
 /// 3. Invokes `sync_daemon_version`, catching any panic via
 ///    `FutureExt::catch_unwind`.
@@ -1554,7 +1608,7 @@ async fn sync_daemon_version_background(
     // that a matching version produces zero observable upgrade activity.
     let daemon_version = get_daemon_version().await
         .unwrap_or_else(|| "unknown".to_string());
-    if daemon_version == app_version {
+    if !backend_upgrade_needed(&app, &daemon_version, &app_version) {
         return;
     }
 

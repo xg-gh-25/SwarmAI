@@ -23,8 +23,13 @@
 //! Pointer files, not symlinks: the same on Windows (no symlink privilege needed) and
 //! readable from the launchd wrapper with one `cat`.
 //!
+//! - `bundled_build_differs` tells a same-version rebuild of the app (a new manifest)
+//!   from the build the runtime already runs. Deploying such a build over the running
+//!   version moves the running copy to `<version>.app-prev` and makes that `previous`,
+//!   so a failed upgrade still has a copy to roll back to.
+//!
 //! Public: `runtime_root`, `exe_name`, `deploy`, `switch_current`, `rollback`,
-//! `current_version`, `current_exe`, `RuntimeError`.
+//! `current_version`, `current_exe`, `bundled_build_differs`, `RuntimeError`.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -207,11 +212,58 @@ pub fn deploy(resource_dir: &Path, root: &Path, version: &str) -> Result<PathBuf
     }
     fs::write(staging.join(".version"), format!("{} release", version))?;
     fs::write(staging.join(".deployed"), &marker)?;
-    if dest.exists() {
+    // a new build of the version that runs now keeps the running copy as the rollback
+    // version `<version>.app-prev` (its own name: dev tooling owns `<version>.prev`).
+    // Only for a manifest build over a working copy: a broken dir or a dev build is
+    // replaced as before, so it never displaces the real `previous`.
+    let keep = (man.is_some() && dest.join(exe_name()).is_file()
+                && current_version(root).as_deref() == Some(version))
+        .then(|| format!("{}.app-prev", version));
+    if let Some(k) = &keep {
+        let _ = fs::remove_dir_all(root.join(k));
+        fs::rename(&dest, root.join(k))?;
+    } else if dest.exists() {
         fs::remove_dir_all(&dest)?;
     }
-    fs::rename(&staging, &dest)?;
+    if let Err(e) = fs::rename(&staging, &dest) {
+        if let Some(k) = &keep {
+            let _ = fs::rename(root.join(k), &dest);    // `current` must keep a copy
+        }
+        return Err(e.into());
+    }
+    if let Some(k) = &keep {
+        write_atomic(&root.join("previous"), k)?;
+    }
     Ok(dest)
+}
+
+/// Whether this app's bundled backend should replace the one `current` runs even
+/// though the versions match: a rebuilt app of the same version carries a new build,
+/// and comparing versions alone never deploys it. True only when the bundle has a
+/// manifest AND the runtime was deployed by an app (its `.deployed` names a manifest)
+/// AND the two differ AND the bundle is not the build a rollback just left (`previous`
+/// carries its marker; so reinstalling that earlier build on purpose does not redeploy
+/// it either). A runtime with no marker came from dev tooling (`prod.sh`,
+/// whose rsync does not carry one) and is left alone, so an installed app never puts
+/// its bundle over a newer dev deploy; a bundle without a manifest (a local dev build
+/// of the app) never redeploys.
+pub fn bundled_build_differs(resource_dir: &Path, root: &Path) -> bool {
+    let Ok(Some((digest, _))) = manifest(resource_dir) else { return false };
+    let Some(version) = current_version(root) else { return false };
+    let want = format!("manifest {}", digest);
+    let marker_of = |v: &str| fs::read_to_string(root.join(v).join(".deployed"))
+        .map(|m| m.trim().to_string()).ok();
+    // this build already ran and was rolled back from (it is `previous`): retrying it
+    // on every launch would restart a working daemon each time
+    if read_pointer(&root.join("previous")).and_then(|p| marker_of(&p)).as_deref()
+        == Some(want.as_str())
+    {
+        return false;
+    }
+    match marker_of(&version) {
+        Some(m) => m.starts_with("manifest ") && m != want,
+        None => false,
+    }
 }
 
 pub fn current_version(root: &Path) -> Option<String> {
@@ -314,6 +366,67 @@ mod tests {
         switch_current(&root, "3.0.0").unwrap();
         assert!(root.join("1.0.0").is_dir() && root.join("3.0.0").is_dir());
         assert!(!root.join("2.0.0").exists());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_same_version_rebuild_is_detected_only_over_an_app_deploy() {
+        let base = tmp("rebuild");
+        let (res, root) = (base.join("res"), base.join("runtime"));
+        bundle(&res, b"v1", true);
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        // the build that is running: nothing to do
+        assert!(!bundled_build_differs(&res, &root));
+        // the app is rebuilt with the same version: its bundle is a new build
+        bundle(&res, b"v1-rebuilt", true);
+        assert!(bundled_build_differs(&res, &root));
+        // deploying it makes them match again; the running copy stays as the rollback
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        assert_eq!(fs::read(root.join("1.0.0").join(exe_name())).unwrap(), b"v1-rebuilt");
+        assert!(!bundled_build_differs(&res, &root));
+        assert_eq!(rollback(&root).unwrap(), "1.0.0.app-prev");
+        assert_eq!(fs::read(root.join("1.0.0.app-prev").join(exe_name())).unwrap(), b"v1");
+        // the rolled-back build is not retried on the next launch
+        assert!(!bundled_build_differs(&res, &root));
+        switch_current(&root, "1.0.0").unwrap();
+        // a dev deploy (prod.sh) leaves no marker: an app never overwrites it
+        fs::remove_file(root.join("1.0.0/.deployed")).unwrap();
+        bundle(&res, b"v1-older-app", true);
+        assert!(!bundled_build_differs(&res, &root));
+        // an app build without a manifest never redeploys; nor without a runtime
+        fs::write(root.join("1.0.0/.deployed"), "manifest something-else").unwrap();
+        fs::remove_file(res.join("install-manifest.json")).unwrap();
+        assert!(!bundled_build_differs(&res, &root));
+        bundle(&res, b"v1", true);
+        assert!(!bundled_build_differs(&res, &base.join("no-runtime")));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_broken_or_dev_copy_is_replaced_without_displacing_previous() {
+        let base = tmp("repair");
+        let (res, root) = (base.join("res"), base.join("runtime"));
+        bundle(&res, b"old", true);
+        deploy(&res, &root, "0.9.0").unwrap();
+        switch_current(&root, "0.9.0").unwrap();
+        bundle(&res, b"v1", true);
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        // the running copy lost its executable: a repair deploy replaces it in place
+        fs::remove_file(root.join("1.0.0").join(exe_name())).unwrap();
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        assert!(!root.join("1.0.0.app-prev").exists());
+        assert_eq!(read_pointer(&root.join("previous")).as_deref(), Some("0.9.0"));
+        // a build without a manifest redeploys each time; it never rotates `previous`
+        fs::remove_file(res.join("install-manifest.json")).unwrap();
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        assert!(!root.join("1.0.0.app-prev").exists());
+        assert_eq!(read_pointer(&root.join("previous")).as_deref(), Some("0.9.0"));
+        assert!(root.join("0.9.0").join(exe_name()).is_file());
         let _ = fs::remove_dir_all(&base);
     }
 

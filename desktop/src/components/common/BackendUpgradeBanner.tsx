@@ -78,7 +78,9 @@ export default function BackendUpgradeBanner() {
     >
       {state.kind === 'upgrading' && (
         <span className="text-[var(--color-text-muted)]">
-          Upgrading backend ({state.from} → {state.to})…
+          {state.from === state.to
+            ? `Updating backend v${state.to} to the new build…`
+            : `Upgrading backend (${state.from} → ${state.to})…`}
         </span>
       )}
       {state.kind === 'upgraded' && (
