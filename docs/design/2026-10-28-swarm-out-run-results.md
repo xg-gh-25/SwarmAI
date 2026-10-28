@@ -172,7 +172,7 @@ Hive 上的 run 可能是 pipeline、native coding（直接改代码、跑测试
 | `answer`：最后的回复有多长 | 4.2 的 `report_chars` | 不写代码也不写文件的 run，结果就是这段回复 |
 | `pipeline`：profile、结局、是否落地、五维结论 | `pipeline_summary` 块 | 只有 pipeline run 才有 |
 
-由这组事实推出一行"做了什么"，例如"改了 swarmai 4 个文件 +120 −30，已提交 3f2a1c9"、"写了 2 份文档"、"只回答，没有产出文件"、"pipeline · bugfix · 已落地"。多种都有时连起来写。规则在 `summarize` 里，有单元测试，不靠模型判断。
+由这组事实推出一行"做了什么"，例如"改了 swarmai 4 个文件 +120 −30，已提交 3f2a1c9"、"写了 2 份文档"、"只回答，没有产出文件"、"pipeline · bugfix · 已落地"。多种都有时连起来写。"只回答"只用于正常做完（或到了轮数上限）的 run：被停或出错的 run 最后一段话是中途的话，不是它的回答，这时不写这一行。规则在 `summarize` 里，有单元测试，不靠模型判断。
 
 **五维审计只给 pipeline run，其余不造结论。** pipeline 的五维结论来自它自己的确定性规则（`run_protocol/audit.py`）。native 和非编码的 run 没有这些规则的输入（没有测试报告、没有审查记录、没有合同），如果本机拿上面的事实去套出 PASS/WARN，就是在没有依据的地方下结论（SOUL P5）。所以这类 run 的卡片显示的是事实本身：用时、花费、人介入几次、命令失败几次、改了什么。"质量"一项写"这类 run 没有质量检查的记录"，不写 TBD，也不写 PASS。
 

@@ -554,3 +554,9 @@ async def test_a_result_kept_by_older_summary_rules_is_fetched_again_in_full(hiv
     assert "if-none-match" not in seen[1].headers
     await res.fetch(ROW)
     assert seen[2].headers["if-none-match"] == '"e1"'
+
+
+def test_a_stopped_or_failed_run_is_not_called_only_an_answer():
+    assert summarize([U(), A(T("Step 2 done."), {"type": "turn_stop", "running": []}, out("none"))])["kinds"] == []
+    assert summarize([U(), A(T("partial"), out("error", code="MODEL_ERROR"))])["kinds"] == []
+    assert summarize([U(), A(T("391"), out())])["kinds"] == ["answer"]

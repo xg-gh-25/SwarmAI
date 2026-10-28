@@ -49,7 +49,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 2
+SUMMARY_VERSION = 3
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -304,7 +304,9 @@ def summarize(messages: Any, has_more: bool = False) -> dict[str, Any]:
         kinds.append("code")
     if deliverables:
         kinds.append("files")
-    if not kinds and report_full:
+    # "only an answer" is said of a run that finished: a stopped or failed one left its
+    # last words mid-way, which is not its answer
+    if not kinds and report_full and ended in ("completed", "turn_limit"):
         kinds.append("answer")
 
     return {
