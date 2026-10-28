@@ -124,21 +124,6 @@ class TestE2EFlow:
         result = check_freshness(graph_db)
         assert result.stale is True
 
-    def test_codebase_map_generation(self, repo_dir, graph_db):
-        """Generate codebase briefing string."""
-        from core.code_intel.codebase_map import _format_briefing
-        from core.code_intel.parser import parse_repo
-
-        results = parse_repo(repo_dir)
-        graph_db.bulk_insert(results)
-
-        summary = graph_db.get_codebase_summary()
-        if summary and summary.get("total_nodes", 0) > 0:
-            briefing = _format_briefing("TestProject", summary)
-            assert briefing is not None
-            assert "📦" in briefing
-            assert "TestProject" in briefing
-
     def test_clear_and_rebuild(self, repo_dir, graph_db):
         """Clear graph and rebuild from scratch."""
         from core.code_intel.parser import parse_repo

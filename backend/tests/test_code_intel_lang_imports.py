@@ -144,7 +144,6 @@ def test_imports_follow_incremental_updates_and_deletes(tmp_path) -> None:
 
 def test_index_time_markers_have_one_format_and_every_reader_agrees(tmp_path) -> None:
     import time
-    from core.code_intel.codebase_map import generate_codebase_map
     from core.code_intel.graph_store import parse_index_time
     from routers.code_intel import _compute_freshness
     g = GraphStore(tmp_path / "g.db")
