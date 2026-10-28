@@ -165,22 +165,23 @@ def test_replay_aborts_if_corpus_changes_during_run(tmp_path: Path, monkeypatch)
         replay(_args(source, corpus))
 
 
-def test_bedrock_body_never_sends_top_p_with_temperature(monkeypatch):
-    """Claude 4.5+ on Bedrock rejects temperature + top_p together (ValidationException)."""
-    import io
+def test_judge_sends_temperature_and_no_top_p(monkeypatch):
+    """Claude 4.5+ on Bedrock rejects temperature + top_p together (ValidationException).
+    The judge now asks through jobs.bedrock.text(), which takes no top_p at all."""
+    import inspect
     import core.ingestion.llm as llm
+    import jobs.bedrock as jb
 
     sent = {}
 
-    class FakeClient:
-        def invoke_model(self, **kwargs):
-            sent.update(json.loads(kwargs["body"]))
-            return {"body": io.BytesIO(json.dumps({"content": [{"type": "text", "text": "x"}]}).encode())}
+    def fake_text(prompt, **kwargs):
+        sent.update(kwargs)
+        return "x"
 
-    monkeypatch.setattr(llm, "build_timeout_client", lambda **_: FakeClient())
-    judge = llm.BedrockJudge(model_id="m")
-    result = judge._invoke("prompt", lambda raw: raw)
-    assert "temperature" in sent and "top_p" not in sent
+    monkeypatch.setattr(llm, "text", fake_text)
+    result = llm.BedrockJudge(model_id="m")._invoke("prompt", lambda raw: raw)
+    assert sent["temperature"] == 0.0 and "top_p" not in sent
+    assert "top_p" not in inspect.signature(jb.text).parameters
     assert result.vector["top_p"] is None and result.vector["temperature"] == 0.0
 
 

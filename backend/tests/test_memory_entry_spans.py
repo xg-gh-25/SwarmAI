@@ -200,8 +200,7 @@ def test_s6_memory_extractor_enqueues_bucket_type_without_writing(tmp_path, monk
 
     monkeypatch.setattr(db.messages, "list_by_session", messages)
     monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    monkeypatch.setattr(me, "_call_llm", lambda *a, **k: "{}")
-    monkeypatch.setattr(me, "_parse_extraction", lambda _raw: {
+    monkeypatch.setattr(me, "_extract_sections", lambda *a, **k: {
         "key_decisions": ["Pick SQLite — one file, no server"],
         "lessons_learned": ["Lock order — acquire A before B"],
     })
@@ -233,8 +232,7 @@ def test_s6_replayed_extraction_uses_stable_slots(tmp_path, monkeypatch):
 
     monkeypatch.setattr(db.messages, "list_by_session", messages)
     monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    monkeypatch.setattr(me, "_call_llm", lambda *a, **k: "{}")
-    monkeypatch.setattr(me, "_parse_extraction", lambda _raw: {
+    monkeypatch.setattr(me, "_extract_sections", lambda *a, **k: {
         "lessons_learned": ["Lock order — acquire A before B"]})
     monkeypatch.setattr("core.session_inputs.derive_envelope", lambda *a, **k: {
         "source_event_ids": [], "evidence": "inferred", "tainted": True,

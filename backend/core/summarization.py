@@ -21,6 +21,7 @@ Used by the automatic ``DailyActivityExtractionHook``.
 
 from __future__ import annotations
 
+import json
 import re
 import logging
 from dataclasses import dataclass, field
@@ -669,7 +670,7 @@ class SummarizationPipeline:
         summary: StructuredSummary,
         messages: list[dict],
         *,
-        open_next_items: list[dict[str, str]],
+        open_next_items: list[dict[str, str]] | None = None,
         open_problems: list[str] | None = None,
     ) -> StructuredSummary:
         """Enrich a rule-based summary with LLM-extracted context.
@@ -687,7 +688,7 @@ class SummarizationPipeline:
             topics="; ".join(summary.topics) or "(none)",
             decisions="; ".join(summary.decisions) or "(none)",
             files="; ".join(summary.files_modified) or "(none)",
-            open_next_items=json.dumps(open_next_items, ensure_ascii=False),
+            open_next_items=json.dumps(open_next_items or [], ensure_ascii=False),
             open_problems="; ".join(f'"{x}"' for x in (open_problems or [])) or "(none)",
         )
 

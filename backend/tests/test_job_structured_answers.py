@@ -20,11 +20,6 @@ SP_OK = {"skill_name": "s_x", "skill_md": "---\nname: s_x\n---\nbody", "trigger_
          "confidence": 8, "reasoning": "r"}
 
 
-def _ddd():
-    from jobs.handlers import ddd_refresh as m
-    return m._generate_proposal("P", {"current_tech_md": "", "age_days": 1, "commit_count": 2})
-
-
 def _mh():
     from jobs.handlers import memory_health as m
     return m._call_llm("prompt")
@@ -36,7 +31,7 @@ def _sp():
 
 
 CASES = [
-    ("proposal", _ddd, {"no_changes": True, "reason": "docs are current"}),
+    # ddd_refresh asks no model since CDF stage B: it hands commits to S4 (s4_code).
     ("report", _mh, MH_EMPTY),
     ("proposal", _sp, SP_OK),
 ]
