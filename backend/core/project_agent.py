@@ -127,7 +127,7 @@ def _bindings(project_dir: Path) -> dict[str, Any]:
     try:
         from core.ddd_bindings import load_bindings
         return {b.repo: b for b in load_bindings(p).bindings}
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, yaml.YAMLError) as exc:  # a broken file reads as no repo
         logger.debug("project_agent: bindings.yaml of %s unreadable: %s", project_dir, exc)
         return {}
 
@@ -459,8 +459,8 @@ def _mode_view(m: dict[str, Any], d: dict[str, Any]) -> dict[str, Any]:
                          for r in _list_of_dicts(m.get("profile_rules"))],
         "placements": _str_list(_mode_value(m, d, "placements")),
         "repos": _str_list(m.get("repos")),
-        "setup": _rows(m.get("setup"), ("command", "source")),
-        "validations": _rows(m.get("validations"), ("id", "command", "source")),
+        "setup": _rows(m.get("setup"), ("command", "source", "repo", "cwd")),
+        "validations": _rows(m.get("validations"), ("id", "command", "source", "repo", "cwd")),
         "skills": _str_list(m.get("skills")),
         "delivery": str(m.get("delivery") or "bundle"),
         "prRemote": str(m.get("pr_remote") or "fork") if m.get("delivery") == "branch-pr" else None,
@@ -508,7 +508,8 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
                      "inScope": _str_list(identity.get("in_scope")),
                      "outOfScope": _str_list(identity.get("out_of_scope")),
                      "source": str(identity.get("source") or "")},
-        "intake": {"handles": _str_list(intake.get("handles")), "repos": _str_list(intake.get("repos"))},
+        "intake": {"handles": _str_list(intake.get("handles")), "repos": _str_list(intake.get("repos")),
+                   "proposedAliases": _rows(intake.get("proposed_aliases"), ("name", "source"))},
         "confidence": str(d.get("confidence") or ""),
         "reviewFocus": _rows(d.get("watches"), ("area", "why", "source")),
         "reservedForHuman": _str_list(d.get("reserved_for_human")),
@@ -525,7 +526,53 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "revision": revision(project_dir),
         "problems": validate(doc, project_dir),
         "notes": notes(doc, project_dir),
+        "sourceCheck": source_check_current(project_dir),
+        "sourcePaths": _source_paths(d, project_dir),
     }
+
+
+def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:
+    """{source as written: absolute path} for every source of the definition that
+    resolves to a file — a Brain document, ``<repo>:<path>``, or (key
+    ``<repo>:<path>``) a setup / validations row's file in its repo — so the review
+    card can open it. Sources that do not resolve are left out."""
+    from core.brain_bootstrap.repo_read import confine
+    from core.ddd_paths import ddd_path
+    from core.project_registry import DDD_CANONICAL_DOCS
+    roots = repo_roots(project_dir)
+    out: dict[str, str] = {}
+
+    def add(src: Any, repo: Optional[str] = None) -> None:
+        if not isinstance(src, str) or not src:
+            return
+        key = f"{repo}:{src}" if repo else src
+        if key in out:
+            return
+        name, sep, rel = key.partition(":")
+        if sep and name in roots:
+            p = confine(roots[name], rel)
+        elif src in DDD_CANONICAL_DOCS:
+            p = ddd_path(project_dir, src)
+        else:
+            p = confine(project_dir, src)
+        if p is not None and p.is_file():
+            out[key] = str(p)
+
+    ident = d.get("identity") if isinstance(d.get("identity"), dict) else {}
+    add(ident.get("source"))
+    for w in _list_of_dicts(d.get("watches")):
+        add(w.get("source"))
+    intake = d.get("intake") if isinstance(d.get("intake"), dict) else {}
+    for a in _list_of_dicts(intake.get("proposed_aliases")):
+        add(a.get("source"))
+    for s in _str_list(d.get("sources")):
+        add(s)
+    for m in _modes(d):
+        add(m.get("source"))
+        for key in ("setup", "validations"):
+            for row in _list_of_dicts(m.get(key)):
+                add(row.get("source"), row.get("repo") if isinstance(row.get("repo"), str) else None)
+    return out
 
 
 def project_agent_status(project_dir: Path) -> str | None:

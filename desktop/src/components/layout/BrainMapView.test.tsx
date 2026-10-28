@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockAnalytics = vi.fn();
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({ data: mockAnalytics() }),
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 const DETAIL = {
   name: 'P', kind: 'knowledge',
@@ -25,9 +26,12 @@ const REVIEW = {
   hunks: [{ file: 'Projects/P/K.md', signature: 's1', tag: 'cultivation·auto-applied', diff_text: '' }],
   proposals: [{ id: 'p1', target_doc: 'TECH.md', target_section: 'Gates', content: 'Add a concurrency reviewer', confidence: 0.8, source_run_id: 'run_x' }],
 };
+const confirmProjectAgent = vi.fn();
 vi.mock('../../services/ddd', () => ({
   useBrainDetail: () => ({ data: DETAIL }),
   useReview: () => ({ data: REVIEW }),
+  useRunnerAgent: () => ({ data: null }),
+  confirmProjectAgent: (...a: unknown[]) => confirmProjectAgent(...a),
 }));
 vi.mock('../../services/pipelines', () => ({ pipelinesService: { fetchAnalytics: vi.fn() } }));
 
@@ -150,28 +154,41 @@ describe('BrainMapView', () => {
 
 describe('BrainMapView · Project Agent definition', () => {
   const AGENT = {
-    path: 'project-agent.yaml', status: 'draft', summary: 'Small fixes behind the service layer.',
-    defaultProfile: 'bugfix', profileRules: [{ when: 'config-only change', profile: 'direct' }],
+    path: 'project-agent.yaml', status: 'draft', revision: 'r1', summary: 'Small fixes behind the service layer.',
+    identity: { summary: 'Small fixes behind the service layer.', inScope: [], outOfScope: [], source: 'TECH.md' },
     reviewFocus: [{ area: 'concurrency', why: 'refunds settle asynchronously', source: 'TECH.md' }],
-    validations: [{ id: 'unit', command: 'pytest -q', source: 'validations.json' }],
-    placements: ['chat-tab'], landing: { approval: 'human', via: 'github-pr' }, sources: ['TECH.md'], problems: [],
+    placements: ['chat-tab'], landing: { approval: 'human' }, sources: ['TECH.md'], problems: [],
+    reservedForHuman: ['push'], gates: [], defaultMode: 'code-change',
+    modes: [{ id: 'code-change', when: 'a fix', profile: 'bugfix', profileRules: [{ when: 'config-only change', profile: 'direct' }],
+      placements: ['chat-tab'], repos: [], setup: [], validations: [], skills: [], delivery: 'bundle', reservedForHuman: ['push'], gates: [] }],
   };
   const openAgent = (onDispatch = vi.fn(() => true)) => {
     render(<BrainAgentView name="P" onDispatch={onDispatch} />);
     return onDispatch;
   };
 
-  it('shows the generated definition with its sources, and confirm goes to chat', () => {
+  it('shows the review card, and confirm goes to the backend, not to chat', async () => {
     (DETAIL as Record<string, unknown>).projectAgent = AGENT;
+    confirmProjectAgent.mockResolvedValue({ revision: 'r2', reviewedAt: 't', reviewedBy: 'me', aliasesAdded: [], sourceCheck: { ok: true, missing: [] } });
     const onDispatch = openAgent();
     const def = screen.getByTestId('bm-agent-def');
-    for (const s of ['bugfix', 'direct', 'concurrency', 'TECH.md', 'pytest -q', 'you approve every landing']) {
+    for (const s of ['bugfix', 'direct', 'concurrency', 'TECH.md', 'push']) {
       expect(def.textContent).toContain(s);
     }
     expect(screen.getByTestId('bm-agent-status').textContent).toContain('draft');
     fireEvent.click(screen.getByTestId('bm-agent-confirm'));
-    const calls = onDispatch.mock.calls as unknown as string[][];
-    expect(calls[0][0]).toContain('status: reviewed');
+    await waitFor(() => expect(confirmProjectAgent).toHaveBeenCalledWith('P', expect.objectContaining({ revision: 'r1' })));
+    expect(onDispatch).not.toHaveBeenCalled();
+  });
+
+  it('a new revision of the definition starts the card afresh', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, intake: { handles: ['a', 'b'], repos: [] } };
+    const { rerender } = render(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
+    fireEvent.click(screen.getByTestId('pa-del-intake.handles[0]'));
+    expect(screen.getByTestId('bm-agent-confirm').textContent).toBe('Delete 1 and confirm');
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, revision: 'r9', intake: { handles: ['x', 'a', 'b'], repos: [] } };
+    rerender(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
+    expect(screen.getByTestId('bm-agent-confirm').textContent).toBe('Confirm');
   });
 
   it('a revise note goes to chat; a reviewed definition has no confirm button', () => {
@@ -189,7 +206,7 @@ describe('BrainMapView · Project Agent definition', () => {
     const onDispatch = openAgent();
     fireEvent.click(screen.getByTestId('bm-agent-generate'));
     const calls = onDispatch.mock.calls as unknown as string[][];
-    expect(calls[0][0]).toContain('P3b');
+    expect(calls[0][0]).toContain('project-agent-draft');
     delete (DETAIL as Record<string, unknown>).projectAgent;
   });
 });

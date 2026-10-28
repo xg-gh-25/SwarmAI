@@ -57,7 +57,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -1772,3 +1772,67 @@ async def brain_recall(name: str, q: str = "") -> dict:
     except Exception as exc:  # noqa: BLE001 — degrade to empty, never 500 the overlay
         logger.warning("brain recall failed for %s: %s", name, exc)
         return {"query": q, "count": 0, "hits": [], "error": "recall unavailable"}
+
+
+# ── Project Agent review card (design 2026-10-28-project-agent-flow §5, step 3) ──
+
+class ProjectAgentConfirmBody(BaseModel):
+    """The review card's choices, made on the revision the person saw."""
+    revision: str
+    remove: list[str] = []
+    allow_hive: Optional[bool] = None
+    aliases: list[str] = []
+
+
+def _confirm_agent(project_dir: Path, body: ProjectAgentConfirmBody) -> dict:
+    import getpass
+    import os as _os
+    from core.project_agent_review import ReviewError, confirm
+    if _os.environ.get("SWARMAI_MODE") == "hive":
+        # a Hive runs the definitions the host syncs to it; confirming here would be
+        # overwritten by the next sync and would let a Hive approve its own actions
+        raise HTTPException(status_code=403, detail="Confirm the Project Agent on the desktop")
+    try:
+        return confirm(project_dir, seen_revision=body.revision, remove=body.remove,
+                       allow_hive=body.allow_hive, aliases=body.aliases,
+                       reviewer=getpass.getuser())
+    except ReviewError as exc:
+        detail: Any = {"message": str(exc), "problems": exc.problems} if exc.problems else str(exc)
+        raise HTTPException(status_code=exc.status, detail=detail) from None
+
+
+@router.post("/brains/{name}/project-agent/confirm")
+async def confirm_project_agent(name: str, body: ProjectAgentConfirmBody) -> dict:
+    """Confirm a Brain's Project Agent with the review card's removals, Hive choice and
+    accepted aliases. 409 when the definition changed since the card showed it."""
+
+    def _work() -> dict:
+        project_dir = _resolve_brain_dir(name)   # containment-checked
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+        return _confirm_agent(project_dir, body)
+
+    return await executors.run_nav(_work)
+
+
+@router.get("/runner-agent")
+async def get_runner_agent() -> dict:
+    """The Runner Agent: the General Brain's Project Agent (Knowledge/Library), for
+    tasks that belong to no project. ``projectAgent`` is null when it is not there."""
+    from core.project_agent import general_brain_dir
+
+    def _work() -> dict:
+        return {"projectAgent": load_project_agent(general_brain_dir(_workspace_root()))}
+
+    return await executors.run_nav(_work)
+
+
+@router.post("/runner-agent/confirm")
+async def confirm_runner_agent(body: ProjectAgentConfirmBody) -> dict:
+    """Confirm the Runner Agent, as ``/brains/{name}/project-agent/confirm`` does."""
+    from core.project_agent import general_brain_dir
+
+    def _work() -> dict:
+        return _confirm_agent(general_brain_dir(_workspace_root()), body)
+
+    return await executors.run_nav(_work)

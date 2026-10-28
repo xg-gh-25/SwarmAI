@@ -5,7 +5,8 @@
  * The backend already emits camelCase, so this is a thin typed client — no
  * snake→camel conversion needed (unlike workspace.ts).
  *
- * Everything here is a live read projection: no writes, no external actions.
+ * Everything here is a live read projection, except confirming a Project Agent from
+ * its review card (confirmProjectAgent). No external actions.
  */
 import { useQuery } from '@tanstack/react-query';
 import api from './api';
@@ -178,19 +179,74 @@ export interface BrainDetail {
   setupState?: 'setting-up' | 'ready' | null;
 }
 
+/** A setup / validations row: a command its source file declares, run in `cwd`
+ *  (repo-relative; empty = the repo root) of `repo`. */
+export interface AgentCommand { id?: string; command: string; source: string; repo?: string; cwd?: string }
+
+/** One work mode of a Project Agent (schema 2). A mode only narrows the shared part. */
+export interface AgentMode {
+  id: string;
+  when: string;
+  profile: string;
+  profileRules: { when: string; profile: string }[];
+  placements: string[];
+  repos: string[];
+  setup: AgentCommand[];
+  validations: AgentCommand[];
+  skills: string[];
+  delivery: string;
+  prRemote?: string | null;
+  reservedForHuman: string[];
+  gates: string[];
+}
+
 export interface ProjectAgent {
   path: string;
+  schema?: number;
   status?: 'draft' | 'reviewed';
   reviewedAt?: string | null;
+  reviewedBy?: string | null;
   summary?: string;
+  identity?: { summary: string; inScope: string[]; outOfScope: string[]; source: string };
+  intake?: { handles: string[]; repos: string[]; proposedAliases?: { name: string; source: string }[] };
+  confidence?: string;
   defaultProfile?: string;
   profileRules?: { when: string; profile: string }[];
   reviewFocus?: { area: string; why: string; source: string }[];
-  validations?: { id: string; command: string; source: string }[];
+  validations?: AgentCommand[];
+  reservedForHuman?: string[];
+  gates?: string[];
   placements?: string[];
   landing?: Record<string, string>;
+  modes?: AgentMode[];
+  defaultMode?: string;
   sources?: string[];
+  /** sha256 over the definition, the skills its modes use and the Brain's gates;
+   *  a confirm names the revision the person saw. */
+  revision?: string | null;
   problems: string[];
+  /** not problems: e.g. a desktop-only skill in a mode that may run on a Hive */
+  notes?: string[];
+  /** the host check that every setup / validations source exists, for this revision */
+  sourceCheck?: { ok: boolean; checked_at: string; missing: string[] } | null;
+  /** {source as written: absolute path} for the sources that resolve to a file */
+  sourcePaths?: Record<string, string>;
+}
+
+/** The review card's choices (POST …/project-agent/confirm). */
+export interface AgentConfirm {
+  revision: string;
+  remove: string[];
+  allow_hive?: boolean;
+  aliases: string[];
+}
+
+export interface AgentConfirmResult {
+  revision: string;
+  reviewedAt: string;
+  reviewedBy: string;
+  aliasesAdded: string[];
+  sourceCheck: { ok: boolean; missing: string[] };
 }
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────
@@ -266,6 +322,22 @@ export async function getBrainsWithPinned(): Promise<{ brains: BrainSummary[]; p
 export async function getBrainDetail(name: string): Promise<BrainDetail> {
   const resp = await api.get<BrainDetail>(`/ddd/brains/${encodeURIComponent(name)}`);
   return resp.data;
+}
+
+/** POST /api/ddd/brains/{name}/project-agent/confirm — confirm a Brain's Project
+ *  Agent with the review card's choices; `brain` null = the Runner Agent (the
+ *  General Brain). 409 when the definition changed since it was shown. */
+export async function confirmProjectAgent(brain: string | null, body: AgentConfirm): Promise<AgentConfirmResult> {
+  const url = brain === null ? '/ddd/runner-agent/confirm'
+    : `/ddd/brains/${encodeURIComponent(brain)}/project-agent/confirm`;
+  const resp = await api.post<AgentConfirmResult>(url, body);
+  return resp.data;
+}
+
+/** GET /api/ddd/runner-agent — the Runner Agent (null when it is not there). */
+export async function getRunnerAgent(): Promise<ProjectAgent | null> {
+  const resp = await api.get<{ projectAgent: ProjectAgent | null }>('/ddd/runner-agent');
+  return resp.data.projectAgent ?? null;
 }
 
 /** One repo document in a brain's survey (design 2026-10-27 §5.3). Tier 1 = read
@@ -419,6 +491,16 @@ export function useBrainsWithPinned() {
 /** The options of the Gallery query — also what the Brain Hub nav item prefetches. */
 export function brainsWithPinnedQuery() {
   return { queryKey: ['brains-with-pinned'] as const, queryFn: getBrainsWithPinned, staleTime: BRAIN_STALE_MS };
+}
+
+/** Cached GET /ddd/runner-agent — the Runner Agent (the General Brain's Project Agent). */
+export function useRunnerAgent(enabled = true) {
+  return useQuery<ProjectAgent | null>({
+    queryKey: ['runner-agent'],
+    queryFn: getRunnerAgent,
+    enabled,
+    staleTime: BRAIN_STALE_MS,
+  });
 }
 
 /** Cached GET /ddd/brains/{name} — the six-section detail. */

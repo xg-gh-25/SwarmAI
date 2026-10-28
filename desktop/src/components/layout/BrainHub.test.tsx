@@ -80,6 +80,8 @@ vi.mock('../../services/ddd', async () => {
     approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
     rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
     brainRecall: (...a: unknown[]) => mockBrainRecall(...a),
+    useRunnerAgent: () => ({ data: null }),
+    confirmProjectAgent: vi.fn(),
     useBrainSpecs: (name: string, enabled: boolean) =>
       useAsync(() => (enabled ? mockGetSpecs(name) : Promise.resolve(undefined)), `${name}:${enabled}`),
     useBrainSpecDoc: (name: string, repo: string, path: string) =>

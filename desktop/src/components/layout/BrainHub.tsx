@@ -190,7 +190,7 @@ export function BrainHub(
     return (
       <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
         <div className="flex-1 overflow-auto">
-          <Gallery brains={brains} selfName={selfName} onOpen={openFromHome} />
+          <Gallery brains={brains} selfName={selfName} onOpen={openFromHome} onDispatch={onDispatch} />
         </div>
       </div>
     );
@@ -444,13 +444,14 @@ function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: st
  * get_pinned_projects, existence-guarded); pinned empty (old daemon) → no marker.
  */
 function Gallery(
-  { brains, selfName, onOpen }:
+  { brains, selfName, onOpen, onDispatch }:
   { brains: BrainSummary[] | null; selfName?: string;
-    onOpen: (n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => void },
+    onOpen: (n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => void;
+    onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean },
 ) {
   if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains</div>;
   if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
-  return <BrainHubHome brains={brains} selfName={selfName} onOpen={onOpen} />;
+  return <BrainHubHome brains={brains} selfName={selfName} onOpen={onOpen} onDispatch={onDispatch} />;
 }
 
 

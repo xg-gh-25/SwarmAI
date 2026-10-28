@@ -414,18 +414,21 @@ except ImportError:
 
 
 def _check_project_agent(d: Path) -> tuple[str, str, str]:
-    """⑤ PROJECT AGENT: project-agent.yaml, generated at P3b from the Brain's knowledge.
+    """⑤ PROJECT AGENT: project-agent.yaml, drafted at P3b from the Brain's knowledge.
 
-    Missing → PENDING (a Brain made before the Project Agent existed is not broken;
-    generate one). Present with any problem ``core.project_agent.validate`` reports
-    for this Brain (either schema; names checked against the Brain on disk) → FAIL.
-    Present and valid → PASS (draft or reviewed). Off a SwarmAI host the validator is
-    not importable and the v1 profile/placement checks below run instead.
+    Missing → FAIL (every Brain has one; draft it with ``artifact_cli
+    project-agent-draft``). Present with any problem ``core.project_agent.validate``
+    reports for this Brain (either schema; names checked against the Brain on disk) →
+    FAIL. Valid and a draft → PENDING (it waits for the person on the Brain Hub review
+    card, which does not fail the gate). Valid and reviewed → PASS. Off a SwarmAI host
+    the validator is not importable and the v1 profile/placement checks below run
+    instead.
     """
     name = "⑤ Project Agent"
     p = d / "project-agent.yaml"
     if not p.is_file():
-        return (name, STATUS_PENDING, "no project-agent.yaml yet — generate it from the DDD (s_project-manager P3)")
+        return (name, STATUS_FAIL, "no project-agent.yaml — draft it from the DDD "
+                                   "(artifact_cli project-agent-draft, s_project-manager P3b)")
     try:
         import yaml  # noqa: PLC0415 — optional dep, same as _read_bindings_raw
         doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
@@ -433,18 +436,35 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         return (name, STATUS_FAIL, f"project-agent.yaml could not be parsed: {type(exc).__name__}")
     if not isinstance(doc, dict):
         return (name, STATUS_FAIL, "project-agent.yaml is not a mapping")
+    problems = None
     if _validate_project_agent is not None:
-        problems = _validate_project_agent(doc, d)
+        try:
+            problems = _validate_project_agent(doc, d)
+        except ImportError:      # a partial install: the reference checks are unavailable
+            problems = None
+    if problems is not None:
         if problems:
             return (name, STATUS_FAIL, "; ".join(problems[:5]))
         modes = doc.get("modes") if doc.get("schema") == 2 else None
         detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
                   else f"default profile {doc.get('default_profile')}")
-        return (name, STATUS_PASS, f"{doc.get('status', 'draft')} · {detail}")
+        if doc.get("status") != "reviewed":
+            return (name, STATUS_PENDING, f"draft · {detail} — confirm it on the Brain Hub review card")
+        return (name, STATUS_PASS, f"reviewed · {detail}")
     bad: list[str] = []
-    if doc.get("default_profile") not in _PROFILES:
-        bad.append(f"default_profile {doc.get('default_profile')!r}")
-    for r in doc.get("profile_rules") or []:
+    if doc.get("schema") == 2:      # profiles live in the modes
+        modes = doc.get("modes") if isinstance(doc.get("modes"), list) else []
+        if not modes:
+            bad.append("modes []")
+        rules = [r for m in modes if isinstance(m, dict) for r in (m.get("profile_rules") or [])]
+        for m in modes:
+            if not isinstance(m, dict) or m.get("profile") not in _PROFILES:
+                bad.append(f"mode profile {m.get('profile') if isinstance(m, dict) else m!r}")
+    else:
+        if doc.get("default_profile") not in _PROFILES:
+            bad.append(f"default_profile {doc.get('default_profile')!r}")
+        rules = doc.get("profile_rules") or []
+    for r in rules:
         if isinstance(r, dict) and r.get("profile") not in _PROFILES:
             bad.append(f"rule profile {r.get('profile')!r}")
     places = doc.get("placements") or []
@@ -452,7 +472,11 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         bad.append(f"placements {places!r}")
     if bad:
         return (name, STATUS_FAIL, "not a supported value: " + ", ".join(bad))
-    return (name, STATUS_PASS, f"{doc.get('status', 'draft')} · default profile {doc['default_profile']}")
+    detail = (f"{len(doc['modes'])} modes" if doc.get("schema") == 2
+              else f"default profile {doc['default_profile']}")
+    if doc.get("status") != "reviewed":
+        return (name, STATUS_PENDING, f"draft · {detail}")
+    return (name, STATUS_PASS, f"reviewed · {detail}")
 
 
 # ── orchestration ────────────────────────────────────────────────────────────

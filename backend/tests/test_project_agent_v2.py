@@ -177,7 +177,7 @@ def test_p6_uses_the_same_validator(tmp_path):
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     b = _brain(tmp_path)
     name, status, detail = mod._check_project_agent(b)
-    assert status == mod.STATUS_PASS and "2 modes, default code-change" in detail
+    assert status == mod.STATUS_PENDING and "2 modes, default code-change" in detail
     (b / "project-agent.yaml").write_text(yaml.safe_dump(_with_mode(placements=["local-worker"])))
     status, detail = mod._check_project_agent(b)[1:]
     assert status == mod.STATUS_FAIL and "a mode only narrows" in detail

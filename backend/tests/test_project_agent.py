@@ -88,8 +88,10 @@ def test_delivery_section_lists_the_project_agent(tmp_path):
 def test_p6_gate(tmp_path):
     mod = _verify_mod()
     name, status, _ = mod._check_project_agent(tmp_path)
-    assert (name, status) == ("⑤ Project Agent", mod.STATUS_PENDING)
+    assert (name, status) == ("⑤ Project Agent", mod.STATUS_FAIL)       # every Brain has one
     (tmp_path / "project-agent.yaml").write_text(GOOD)
+    assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PENDING   # a draft waits for the person
+    (tmp_path / "project-agent.yaml").write_text(GOOD.replace("status: draft", "status: reviewed"))
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PASS
     (tmp_path / "project-agent.yaml").write_text(GOOD.replace("default_profile: bugfix", "default_profile: turbo"))
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_FAIL

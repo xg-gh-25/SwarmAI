@@ -5,16 +5,18 @@
  *      choosing Need you also opens the one queue of everything waiting on a person;
  *   2. one card per Brain: the six-petal flower, the name, the ONE most urgent signal
  *      (brainSignal) and a one-line description, cards with something to do first;
- *   3. a footer line for the Run Conductor and Eval. Everything else lives one click
- *      down, on the Brain's map.
+ *   3. a footer line for the Run Conductor, the Runner Agent (the General Brain's
+ *      Project Agent: its review card opens below) and Eval. Everything else lives
+ *      one click down, on the Brain's map.
  *
- * Data: the gallery summaries already fetched by BrainHub plus the 30-day pipeline
- * analytics (the same cached query the Brain map uses). No other call.
+ * Data: the gallery summaries already fetched by BrainHub, the 30-day pipeline
+ * analytics (the same cached query the Brain map uses) and the Runner Agent.
  * Exports: BrainHubHome, HubFilter, Flower (the six-petal icon, also in the Brain header)
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { BrainSummary, SectionKey } from '../../services/ddd';
+import { useRunnerAgent, type BrainSummary, type ProjectAgent, type SectionKey } from '../../services/ddd';
+import { ProjectAgentCard } from './ProjectAgentCard';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { SECTION_ORDER, brainSignal, hubNeeds, hubSummary, type BrainSignalTone, type HubNeed } from './brainMapModel';
 import { openOverlayAt } from '../../utils/overlayTarget';
@@ -93,10 +95,12 @@ function SumCell({ label, value, sub, tone, filter, active, onPick }: {
   );
 }
 
-export function BrainHubHome({ brains, selfName, onOpen }: {
+export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
   brains: BrainSummary[];
   selfName?: string;
   onOpen: (name: string, target?: OpenTarget) => void;
+  /** sends a prompt to chat (the Runner Agent's "Revise in chat") */
+  onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
 }) {
   const [filter, setFilter] = useState<HubFilter>('all');
   const [picking, setPicking] = useState(false);
@@ -127,6 +131,9 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
     else window.dispatchEvent(new CustomEvent('swarm:show-needs-you'));
   };
   const openPipelines = () => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
+  const { data: runnerRaw } = useRunnerAgent();
+  const runner = runnerRaw && typeof runnerRaw === 'object' && 'problems' in runnerRaw ? runnerRaw as ProjectAgent : null;
+  const [runnerOpen, setRunnerOpen] = useState(false);
 
   return (
     <div className="p-4" data-testid="brainhub-gallery">
@@ -216,10 +223,25 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
         <button className="hover:text-[var(--color-text)]" onClick={openPipelines} data-testid="hub-conductor">
           Run Conductor · {sum.liveRuns} running in chat tabs · Local Worker and Hive are mocks ›
         </button>
-        <span data-testid="hub-eval">
-          Eval · last 30 days: {sum.finished ? `${sum.landed} of ${sum.finished} finished Runs landed` : 'no finished Runs'}
+        <span className="flex items-center gap-4">
+          {runner && (
+            <button className={`hover:text-[var(--color-text)] ${runner.status !== 'reviewed' ? 'text-[var(--color-status-error)]' : ''}`}
+              onClick={() => setRunnerOpen((v) => !v)} aria-expanded={runnerOpen} data-testid="hub-runner">
+              Runner Agent · {runner.status === 'reviewed' ? 'reviewed' : 'draft to confirm'} {runnerOpen ? '‹' : '›'}
+            </button>
+          )}
+          <span data-testid="hub-eval">
+            Eval · last 30 days: {sum.finished ? `${sum.landed} of ${sum.finished} finished Runs landed` : 'no finished Runs'}
+          </span>
         </span>
       </div>
+      {runner && runnerOpen && (
+        <div className="mt-2 max-w-[900px] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3" data-testid="hub-runner-card">
+          <div className="text-meta text-[var(--color-text-muted)] mb-1">For tasks that belong to no Brain: research, reports and answers, with the Markdown in Knowledge/Library.</div>
+          <ProjectAgentCard key={`runner:${runner.revision ?? ''}`} brain={null} agent={runner}
+            onRevise={(note) => { onDispatch?.(`Revise the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nKeep it a draft and tell me when it is on the review card.`, { autoSend: true }); }} />
+        </div>
+      )}
     </div>
   );
 }

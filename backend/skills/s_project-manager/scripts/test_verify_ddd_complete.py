@@ -65,6 +65,9 @@ def _make_ddd(
     skills: list[str] | None = None,
     code_intel: bool = False,
     numbered_layout: bool = False,
+    project_agent: str | None = "schema: 2\nstatus: draft\nplacements: [chat-tab]\n"
+                                "modes:\n  - {id: research, when: a question, profile: research}\n"
+                                "default_mode: research\n",
 ) -> Path:
     """Build a synthetic DDD dir. Returns the project dir.
 
@@ -102,7 +105,9 @@ def _make_ddd(
     for s in (skills or []):
         (skdir / s).mkdir(exist_ok=True)
         (skdir / s / "SKILL.md").write_text(f"---\nname: {s}\ndescription: test\n---\n# {s}\n")
-    # ⑤ DELIVERY CONTRACT
+    # ⑤ DELIVERY CONTRACT + the Project Agent (a draft unless the test says otherwise)
+    if project_agent is not None:
+        (d / "project-agent.yaml").write_text(project_agent)
     if bindings_yaml is not None:
         (d / "bindings.yaml").write_text(bindings_yaml)
     # ⑥ the derived code graph: a real one, built from a repo TECH.md declares
