@@ -1768,6 +1768,34 @@ def _format_ttft_line(
     )
 
 
+def _best_entry_of_section(hit: dict, base, docs_text: dict, keywords: str) -> dict:
+    """A section-level hit (no ``content``) as its best-matching unit for *keywords*,
+    so the chat pointer names an entry and its line, not a section heading (knowledge
+    addressing §2.6: SwarmAI's TECH.md "Architecture" is ~100K characters). The units
+    are split exactly as ``core.addressing`` splits them, so the line and the id agree
+    with ``knowledge get``. Unchanged when the doc is not known or nothing matches."""
+    doc, sec = str(hit.get("doc") or ""), str(hit.get("section") or "")
+    text = (docs_text or {}).get(doc)
+    if base is None or text is None or sec.startswith("("):
+        return hit
+    try:
+        from core import addressing, memory_index
+        from core.ddd_paths import ddd_path
+        path = ddd_path(base, doc)
+        units = [u for u in addressing._file_units("doc", doc, Path(path), Path(base), text)
+                 if u.section == sec and u.live]
+        if not units:
+            return hit
+        raw = memory_index._bm25_scores(keywords, {str(i): u.text for i, u in enumerate(units)})
+        best = max(raw.items(), key=lambda kv: kv[1], default=None)   # only scores > 0
+        if best is None:
+            return hit
+        return {**hit, "content": units[int(best[0])].text}
+    except Exception:  # noqa: BLE001 -- a pointer at the heading is still a pointer
+        logger.debug("chat DDD: best entry of %s § %s not found", doc, sec, exc_info=True)
+        return hit
+
+
 def _ddd_hit_line(project: str, base, docs_text: dict, hit: dict) -> str:
     """One chat DDD hit as a pointer: an entry by its own title (its first line, no
     longer than 160 characters) and where it is, a section by its heading line. Falls
@@ -1785,6 +1813,7 @@ def _ddd_hit_line(project: str, base, docs_text: dict, hit: dict) -> str:
     if not title and content.strip():
         from core.addressing import Unit
         title = Unit.first_line(content)
+    title = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", title)     # the entry's own list marker
     if title:
         return f"- {title[:160]} — {where}"
     return f"- § {sec} — {where}"
@@ -1849,7 +1878,8 @@ def _inject_ddd_for_active_project(
                 except OSError:
                     text = ""
             if _coverage(f"{sec}\n{text}", terms) >= need:
-                ddd_hits.append(h)
+                ddd_hits.append(h if h.get("content") else
+                                _best_entry_of_section(h, base, docs_text, keywords))
     _ddd_ms = (time.perf_counter() - _ddd_t0) * 1000.0
     # Recall metrics (run_40091f5c): the ddd leg is a REAL per-prompt daemon recall
     # on its OWN path (excluded from the session_prompt sample) — measure it too, or

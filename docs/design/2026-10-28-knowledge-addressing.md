@@ -343,6 +343,8 @@ knowledge 文件地图与绝对路径、引用扩展、`knowledge_checked`、专
 **审查**：run 1 — correctness / security / api-contract 两轮；run 2 — correctness / api-contract / state-machine 两轮；run 3 — correctness 一轮。第二轮另修：repo_guidance 的 lessons 块在路径较长时超出预算、又因未标记而每次触碰重试（只注入空标题）——提示行按最长长度预留，什么都没展示时不注入；linter 的旧路径规则扩到 `$dir/`、`<ddd>/`、`{root}/` 后直接跟文档名的写法（s_project-manager 的 List Projects 因此把所有迁移后的 DDD 判成 "no DDD"）。
 每个修复都做了变异检查（撤掉修复，测试变红）。
 
+**部署后 E2E 发现并修复**：真实 recall 给聊天的命中大多是小节级（不带内容），实现仍指向小节标题行（SwarmAI TECH.md 的 Architecture 约 100K），测试没抓到是因为夹具里的命中都带条目内容。改为在该小节内按关键词取最匹配的条目（与 `knowledge get` 同一切分，行号和 id 一致），没有匹配时才指标题行；首条消息的 DDD 腿多约 100ms（在线程里）。
+
 **上线前基线**（`knowledge_usage_report.py`，近 14 天，SwarmWS 会话）：60 个会话读过 DDD 文件（非写入的 Read/Grep/Glob/Bash，226 次），
 `[DDD:]` 提示实际送达 41 次（用户消息里或冷启动系统提示快照里，同一快照只算一次）、其中 5 次之后 15 个工具调用内读了 DDD；pipeline run 7 个、
 引用知识 0、按需检索 0。§5 的判定以此为基线。（第一版统计把读源码时 tool_result 里出现的提示标题也算成提示、把 s_persist 写入算成读取，
