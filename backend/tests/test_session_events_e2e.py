@@ -117,10 +117,12 @@ async def test_cli_initiated_turn_reaches_the_events_subscriber_over_http(hub, m
     async def act():
         await r.run_injected_turn(unit, object())
 
-    got = await _sse_frames(app, "/api/chat/events", 7, act, turn_frames=True)
+    got = await _sse_frames(app, "/api/chat/events", 8, act, turn_frames=True)
     assert got[0]["type"] == "events_hello"
     turn = got[1:]
-    assert [f["type"] for f in turn] == ["turn_start", "assistant", "session_start", "assistant", "result", "turn_end"]
+    assert [f["type"] for f in turn] == ["turn_start", "assistant", "session_start", "assistant", "result",
+                                         "assistant", "turn_end"]   # ... its turn_outcome block, turn_end
+    assert turn[-2]["content"][0]["type"] == "turn_outcome"
     seqs = [f["eventSeq"] for f in turn]
     assert seqs == sorted(set(seqs))   # strictly increasing (non-turn envelopes share the counter)
     assert {f["sessionId"] for f in turn} == {"S1"} and len({f["turnId"] for f in turn}) == 1

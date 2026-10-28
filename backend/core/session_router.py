@@ -4052,6 +4052,39 @@ class SessionRouter:
         start_on_session_start: bool,
         writer: TurnWriter,
         opener: Optional["TurnOpener"] = None,
+        project_agent: Optional[dict] = None,
+    ) -> AsyncIterator[dict]:
+        """``_published_events`` for one turn, holding the turn's Brain on a Hive
+        (core/brain_use: a turn never reads a Brain while it is being installed, and an
+        install waits for no turn — it is refused while one holds the Brain).
+        ``project_agent`` is the pin of a new session; an existing one's is read from
+        its record."""
+        from . import brain_use
+        brain = await brain_use.brain_of_turn(session_id, project_agent)
+        key = uuid4().hex
+        if brain is not None:
+            await brain_use.hold(brain, key)
+        try:
+            async with aclosing(self._published_events(
+                agen, session_id=session_id, turn_client_id=turn_client_id, source=source,
+                start_on_session_start=start_on_session_start, writer=writer, opener=opener,
+            )) as events:
+                async for ev in events:
+                    yield ev
+        finally:
+            if brain is not None:
+                brain_use.release(brain, key)
+
+    async def _published_events(
+        self,
+        agen: AsyncIterator[dict],
+        *,
+        session_id: Optional[str],
+        turn_client_id: Optional[str],
+        source: str,
+        start_on_session_start: bool,
+        writer: TurnWriter,
+        opener: Optional["TurnOpener"] = None,
     ) -> AsyncIterator[dict]:
         """Run one turn's event generator and publish every event of the turn.
 
@@ -4286,6 +4319,7 @@ class SessionRouter:
             start_on_session_start=True,
             writer=writer,
             opener=opener,
+            project_agent=project_agent,
         )) as turn:
             async for ev in turn:
                 yield ev

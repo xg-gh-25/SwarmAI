@@ -1825,6 +1825,9 @@ app.include_router(ingestion_router, tags=["ingestion"])  # prefix /api/ingestio
 app.include_router(ingestion_redact_router, tags=["ingestion"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
+# A Hive's own Brains (install endpoint + list; 404 off a Hive), design 2026-10-28 §6
+from routers.hive_brains import router as hive_brains_router  # noqa: E402
+app.include_router(hive_brains_router, prefix="/api/hive", tags=["hive"])
 from routers.swarm_out import router as swarm_out_router  # noqa: E402
 app.include_router(swarm_out_router, prefix="/api/swarm-out", tags=["swarm-out"])
 app.include_router(apps_router, prefix="/api/apps", tags=["apps"])

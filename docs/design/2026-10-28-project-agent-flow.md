@@ -211,7 +211,7 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 - **`delivery: branch-pr`** 只能用在这个仓库的 `bindings.yaml` 里 `remote_kind` 是 GitHub 的 mode 上，其余前提在派发准入时检查（§7 ⑨）。内部仓库（`kind: internal`）只能用 `bundle`。
 - **不通过时：** Brain Hub 显示问题清单，派发拒绝。
 
-**版本：** revision 是定义文件，加上所有 mode 用到的 skill 目录、以及整个 `3-gates/` 目录全部文件的 sha256。改任何一个 mode，revision 都会变。人改了其中任何一样，revision 就变，下一个 run 用新的版本。
+**版本：** revision 是定义文件，加上所有 mode 用到的 skill 目录、以及整个 `3-gates/` 目录的 sha256。目录里的文件按同步白名单取（`.gitkeep` 这类不同步的文件不算），所以 Hive 从自己那份算出的 revision 和本机相同。改任何一个 mode，revision 都会变。人改了其中任何一样，revision 就变，下一个 run 用新的版本。
 
 ## 5. 建 Brain 时同时建出 Project Agent
 
@@ -263,32 +263,42 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 - 唯一的前提是 Hive 的版本里有安装接口，这是一次性的。没有这个接口的 Hive 返回 404，本机标成"这台 Hive 的版本太旧，更新一次之后就能同步"。
 
 **同步机制：**
-1. 本机按白名单打包这个 Brain，算出 digest。白名单和"文档正在被写就不打包"的检查，见简报设计 r2 §3。通用 Brain 的白名单是 `Knowledge/Library/**/*.md`。
+1. 本机按白名单打包这个 Brain，算出 digest。白名单和"文档正在被写就不打包"的检查，见简报设计 r2 §3。通用 Brain 的白名单是 `Knowledge/Library/**/*.md`。和简报设计 r2 不同，`2-understanding/` 下的 `*-archive*.md` 和 `assets/data-source/data-contract/**/*.md` 也在白名单里：它们是知识寻址（`docs/design/2026-10-28-knowledge-addressing.md`）单元表的一部分，带上它们，Hive 上的 `knowledge find` 和本机读到同一批单元、同一批 `unit_id`。测试把 `core.addressing` 读的文件集合钉在白名单里。
 2. 本机调 Hive 的 `PUT /api/hive/brains/<brain>`，body 是包本身，带 `digest` 头。Hive 先做这些检查，任何一项不过就拒绝，什么都不写：
    - `<brain>` 符合 `^[A-Za-z0-9_-]{1,64}$`（URL 解码之后再检查，`%2F`、`..` 都过不去），并且不区分大小写地和已有的 Brain 名比对，防止只有大小写不同的两个 Brain。
    - 按 Content-Length 在读入之前就检查 20 MB 上限。解包后的总大小、成员数也有上限。
    - tar 里只接受普通文件：符号链接、硬链接、设备文件、目录项一律拒绝。每个成员的路径规范化之后，必须落在白名单里，不能含 `..`，不能是绝对路径。
    - 每次写或删之前，目标文件和它的每一级父目录，`realpath` 都必须在 `realpath(Projects/<brain>)` 之下，路径中任何一级都不能是符号链接。写文件用 `O_NOFOLLOW`。这样 Hive 上的 agent 事先放进去的目录符号链接，也引不走写入和删除。
 
-   检查都通过后，Hive 拿这个 Brain 的锁（见下），核对 sha256，然后：
-   - 白名单内的文件逐个先写临时文件，再 rename。
+   检查都通过后，Hive 把这个 Brain 标成"正在安装"（见下面的"安装和 turn 互斥"），然后：
+   - 先删掉旧的 `.brain.json`，再把包里每个文件要落的目录都打开一遍（遇到符号链接、或该是目录的地方是个文件，就在写任何文件之前失败）。装到一半失败时没有记录，这个 Brain 显示"没同步"，不能派发。
+   - 白名单内的文件逐个先写临时文件，再 rename。临时文件名是随机的，用 `O_EXCL` 创建，事先放在那里的链接或硬链接永远不会被打开。
    - 白名单范围内、但包里已经没有的文件，删掉。
    - `.artifacts/`、`code_intel.db*`，以及白名单以外的东西不动。
    - 写 `.brain.json`：`{digest, revision, installed_at, files: {路径: sha256}}`。
-   - 重新扫描 Brain 的 skill（`ddd_skill_registry.build_manifest`），再执行一次 skill 投影（`projection_layer.project_skills`），新的 skill 就能用了。
+   - 重新扫描 Brain 的 skill（`ddd_skill_registry.build_manifest`），再执行一次 skill 投影（`projection_layer.project_skills`），新的 skill 就能用了。同一时间只做一次重扫。重扫完才解除"正在安装"。
+   - 解包前先有上限地解压：解压后超过上限就拒绝，`tarfile` 读不到一个超大的头。
 3. 包大小上限 20 MB。实测：SwarmAI 的文本部分约 5 MB，通用 Brain 约 0.8 MB。
 
 **完整性不靠 Hive 自己的记录：**
 - 派发时，本机把这个 Brain 的 digest 和 `3-gates/` 的 digest 写进派发请求。
-- Hive 把它们存进会话的 `session_context`（后端进程的内存），不从磁盘或数据库重读。
+- Hive 在会话开始时把它们记在会话记录的 `metadata.project_agent` 里（要在后端重启后仍然有效），hook 读一次放进会话的 `session_context`。会话记录在 Hive 的数据库里，agent 改得了它，这和下面说的 P5 边界相同。
 - 一个 run 开始时、以及每次执行 gate 之前，都**从文件内容重新计算** digest，再和这个值比对（§8.2）。不读 `.brain.json`，因为它是 Hive 上的文件，agent 改得了。
 - 安装接口的 basic auth 防的是外面的人，不保护 Hive 上 Brain 的完整性。Hive 上的 agent 本来就能直接写 `Projects/<brain>/`，也能改掉凭据的 hash 再重启后端（按 P5，这在防范范围之外）。
 
-**锁：** Hive 上每个 Brain 有一把锁。
-- 安装要拿到锁。用这个 Brain 的 run 在跑时拿不到，安装就等这个 run 结束。
-- 新的 run 开始时也要拿锁，确认装好的 digest 和派发里写的一致。不一致就拒绝，提示"Brain 正在同步，或版本不对"。
-- 这样就没有"先查再装"中间被插进一个 run 的窗口。
-- 一台 Hive 上同一个 Brain 只有一份，所以一个 Brain 的 run 和安装是串行的。不同的 Brain 之间互不影响。
+**安装和 turn 互斥（`core/brain_use.py`）：** 按 turn 计，不按会话计。
+- 一个 Project Agent 会话的每个 turn，从第一个事件之前到 turn 结束，都占用它的 Brain。所有 turn 都经过 `SessionRouter._published_turn`，占用就放在这里。新会话的 Brain 来自派发的 pin，老会话的来自会话记录。只在 Hive 上这样做。
+- 有 turn 占用时，安装直接拒绝（423），本机提示"Hive 正忙，等它跑完再同步"。不排队等：一个 pipeline turn 可能跑一个小时，HTTP 请求等不了这么久。派发前的自动同步遇到 423，就不派，并说明原因。
+- 正在安装时，新的 turn 等安装和 skill 重扫做完再开始，不会读到装了一半的 Brain。
+- 判断和标记之间没有 `await`，都在事件循环里完成，所以没有"先查再装"中间插进一个 turn 的窗口。
+- 读不出会话记录的 turn（数据库一时读不了）占用所有 Brain，不会有安装落在它下面。
+- 已知取舍：排队等 CLI slot 的 turn 也算占用；几个会话的 turn 一直首尾相接时，安装会一直被拒（控制台显示"正忙"）。两种情况都只是同步推迟，不会读到装了一半的 Brain。
+- 不同的 Brain 之间互不影响。
+- 一个会话的两个 turn 之间，Brain 可以被更新。下一个 turn 用新文件、旧 pin。gate 不一样时，Brain gate 钩子会拦下它的 gated 动作（"Brain 的 gate 被改过"），这个任务要重新派发，而不是在派发时没定过的规则下继续跑。
+
+**只认编号布局：** 白名单只认 `2-understanding/` 这种编号布局。文档还在 Brain 根目录的旧布局 Brain 不同步，提示先迁移，免得 Hive 上缺文档。
+
+**文档正文照原样同步：** `bindings.yaml` 去掉本机的 `worktree` 路径，但文档正文里写到的本机路径（比如设计文档里的 `/Users/<name>/...`）会原样带到 Hive。Hive 是用户自己账户里的机器，这是接受的。
 
 **Hive 上的改动看得见，但不设只读：** Hive 上有合法的写入方会往 `Projects/<brain>/` 里写，比如 pipeline、code_intel、cultivation。设成只读，没有处理 `PermissionError` 的写入方会直接崩溃。所以不设只读，改成：
 - 控制台按 `.brain.json` 里的 hash 比对，显示"Hive 改过 N 个文件"。
@@ -309,7 +319,7 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 | 本机版本 / Hive 版本 | digest 前 8 位和同步时间。两边不一致时标"过期"。Hive 上改过文件时标"Hive 改过 N 个文件" |
 | 能不能派 | 能，或者不能并写明原因：草稿、`placements` 里没有 hive、Hive 版本太旧 |
 | 在跑 | 这台 Hive 上用这个 Brain 的 run 数 |
-| 操作 | 同步、移除 |
+| 操作 | 同步（移除不在第 5、6 步里：没有需要它的流程，等有了再加） |
 
 数据来自 Hive 的 `GET /api/hive/brains`，它读各个 `.brain.json`，只返回 digest、时间和改过的文件数。本机自己的 digest 由本机计算。本机不读 Hive 写的任何文字。
 
@@ -361,7 +371,8 @@ flowchart TB
 **⑤ 同步：** 见 §6。
 
 **⑥ 执行：**
-- 执行者收到 Task Spec，前面加一段由定义生成的项目段：身份、知识地图在哪、要跑的校验、交付方式、哪些动作保留给人、会执行哪些 gate、可以用哪些 skill。
+- 执行者收到 Task Spec，前面加一段由定义生成的项目段：身份、知识怎么取、要跑的校验、交付方式、哪些动作保留给人、会执行哪些 gate、可以用哪些 skill。
+- 知识不在项目段里另画地图：Brain 装在 Hive 自己的 `Projects/<brain>/`，Hive 上的 SWARMAI.md 已经写明布局和 `knowledge map | find | get`。项目段只给一行"本任务属于 Brain <brain>，定方案前用方案里的词跑 `knowledge find --project <brain>`"，路径由 Hive 当场算，不会把本机路径带过去。
 - 会话的 `metadata.project_agent = {brain, revision}` 来自本机的派发记录，执行约束（§8）靠它认出这个会话。
 
 **⑦ 记录：** 在 run-results 设计已有的记录上，再加：

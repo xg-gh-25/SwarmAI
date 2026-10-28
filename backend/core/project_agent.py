@@ -183,18 +183,25 @@ def _gates_dir(project_dir: Path) -> Path:
 
 
 def gate_files(project_dir: Path) -> dict[str, Path]:
-    """{gate name: script} — the top-level ``*.py`` scripts of 3-gates/, tests excluded."""
+    """{gate name: script} — the top-level ``*.py`` scripts of 3-gates/ that travel to a
+    Hive, tests excluded."""
+    from core.brain_sync import whitelisted
     root = _gates_dir(project_dir)
     if not root.is_dir():
         return {}
     out: dict[str, Path] = {}
     for p in sorted(root.iterdir()):
-        if p.is_file() and not p.is_symlink() and p.suffix == ".py" and not p.name.startswith("test_"):
+        if (p.is_file() and not p.is_symlink() and p.suffix == ".py" and not p.name.startswith("test_")
+                and whitelisted(f"3-gates/{p.name}", False)):
             out[p.stem] = p
     return out
 
 
-def _tree_files(root: Path) -> list[Path]:
+def _tree_files(root: Path, prefix: str) -> list[Path]:
+    """The files under *root* that travel to a Hive (``core.brain_sync.whitelisted`` of
+    ``<prefix>/<rel>``): the revision and the gates digest cover exactly what a Hive
+    receives, so a Hive recomputes the same values from its copy."""
+    from core.brain_sync import whitelisted
     if not root.is_dir():
         return []
     files = []
@@ -202,7 +209,7 @@ def _tree_files(root: Path) -> list[Path]:
         rel = p.relative_to(root)
         if any(part in _GATE_SKIP_PARTS for part in rel.parts) or p.suffix == ".pyc":
             continue
-        if p.is_file() and not p.is_symlink():
+        if p.is_file() and not p.is_symlink() and whitelisted(f"{prefix}/{rel.as_posix()}", False):
             files.append(p)
     return files
 
@@ -219,13 +226,13 @@ def _hash_one(h: "hashlib._Hash", rel: str, data: bytes) -> None:
 
 
 def gates_snapshot(project_dir: Path) -> tuple[str, dict[str, bytes]]:
-    """(digest, {path relative to 3-gates/: bytes}) of every file under 3-gates/ (not
-    ``__pycache__``), each read once: a gate that runs is run from these bytes, so it
+    """(digest, {path relative to 3-gates/: bytes}) of every file under 3-gates/ that
+    travels to a Hive (``_tree_files``), each read once: a gate that runs is run from these bytes, so it
     is the content the digest covers."""
     root = _gates_dir(project_dir)
     h = hashlib.sha256()
     files: dict[str, bytes] = {}
-    for f in _tree_files(root):
+    for f in _tree_files(root, "3-gates"):
         rel = str(f.relative_to(root))
         data = f.read_bytes()
         _hash_one(h, rel, data)
@@ -234,7 +241,7 @@ def gates_snapshot(project_dir: Path) -> tuple[str, dict[str, bytes]]:
 
 
 def gates_digest(project_dir: Path) -> str:
-    """sha256 of every file under 3-gates/ (not ``__pycache__``): the value a session
+    """sha256 of the files under 3-gates/ that travel to a Hive: the value a session
     pins and compares before it runs any of this Brain's gates."""
     return gates_snapshot(project_dir)[0]
 
@@ -346,12 +353,31 @@ def _in_v1_terms(problems: list[str]) -> list[str]:
     return seen
 
 
+def _unsynced_gate_files(project_dir: Path) -> list[str]:
+    """A ``.py`` under 3-gates/ whose name the sync whitelist keeps home (a secret or
+    archive name rule): it is neither a gate nor importable by one, here or on a Hive."""
+    from core.brain_sync import whitelisted
+    root = _gates_dir(project_dir)
+    if not root.is_dir():
+        return []
+    out = []
+    for p in sorted(root.rglob("*.py")):
+        rel = p.relative_to(root).as_posix()
+        if "__pycache__" in rel or p.is_symlink() or rel.split("/")[-1].startswith("."):
+            continue
+        if not whitelisted(f"3-gates/{rel}", False):
+            out.append(f"3-gates/{rel} is not used: its name matches a secret or archive rule, so it "
+                       "is not synced or hashed; rename it")
+    return out
+
+
 def _reference_problems(d: dict[str, Any], project_dir: Path) -> list[str]:
     out: list[str] = []
     skills, err = _skills(project_dir)
     if err:
         out.append(err)
     gates = gate_files(project_dir)
+    out.extend(_unsynced_gate_files(project_dir))
     bindings = _bindings(project_dir)
     _check_names("gates.enforce", (d.get("gates") or {}).get("enforce"), gates, "gates", out)
     _check_names("intake.repos", (d.get("intake") or {}).get("repos"), bindings, "repos", out)
@@ -393,8 +419,8 @@ def notes(doc: Any, project_dir: Path) -> list[str]:
 
 
 def revision(project_dir: Path) -> Optional[str]:
-    """sha256 of the definition file, every skill directory its modes use and the whole
-    3-gates/ tree; None when the Brain has no definition. Any change to one of them
+    """sha256 of the definition file, every skill directory its modes use and the
+    3-gates/ tree (the files of each that travel to a Hive); None when the Brain has no definition. Any change to one of them
     gives a new revision, so a run pins exactly what it was dispatched with."""
     project_dir = Path(project_dir)
     p = project_dir / PROJECT_AGENT_FILE
@@ -415,7 +441,7 @@ def revision(project_dir: Path) -> Optional[str]:
             d = caps / s
             if d.is_dir() and not d.is_symlink():
                 h.update(b"skill:" + s.encode("utf-8") + b"\0")
-                _hash_files(h, caps, _tree_files(d))
+                _hash_files(h, caps, _tree_files(d, f"4-capabilities/{s}"))
     h.update(b"gates:" + gates_digest(project_dir).encode("ascii"))
     return h.hexdigest()
 

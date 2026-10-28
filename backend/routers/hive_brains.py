@@ -1,0 +1,141 @@
+"""The Brains a Hive holds: the install endpoint the host pushes to, and the list the
+host's console reads (design docs/design/2026-10-28-project-agent-flow.md §6).
+
+Served only by a Hive (``SWARMAI_MODE=hive``); on a desktop both answer 404. Every
+``/api/*`` request on a Hive already passes ``hive_auth`` (the Caddy credential,
+checked again in the app).
+
+``PUT /api/hive/brains/{brain}``: body = the package (``core.brain_sync.pack``), header
+``X-Brain-Digest`` = its content digest. Checked before anything is written (name,
+size before reading, members, digest); then installed and the domain skills
+re-scanned and projected, while no turn holds the Brain and no new turn can take it
+(``core.brain_use``). A Brain a turn holds answers 423 (try again when it finishes);
+every other refusal keeps its own status and says why. ``GET /api/hive/brains``: for every Brain installed this
+way, its recorded digest, revision and time, how many of its files changed on the
+Hive since, and how many turns hold it now. Nothing else.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Request
+
+from core import brain_sync, brain_use
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+_refresh_lock = asyncio.Lock()      # one skill re-scan at a time (it sets the workspace)
+
+
+def _hive_only() -> None:
+    if os.environ.get("SWARMAI_MODE") != "hive":
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _workspace() -> Path:
+    from core.project_registry import get_swarmws
+    return get_swarmws()
+
+
+async def _read_body(request: Request) -> bytes:
+    length = request.headers.get("content-length")
+    if not length or not length.isdigit():
+        raise HTTPException(status_code=411, detail="Content-Length is required")
+    if int(length) > brain_sync.MAX_PACKAGE_BYTES:
+        raise HTTPException(status_code=413, detail="the package is larger than 20 MB")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > brain_sync.MAX_PACKAGE_BYTES:
+            raise HTTPException(status_code=413, detail="the package is larger than 20 MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def refresh_skills(workspace: Path) -> None:
+    """Re-scan the domain skills and project them, as a workspace refresh does."""
+    from core import ddd_skill_registry
+    from core.projection_layer import ProjectionLayer
+    from core.skill_manager import skill_manager
+    async with _refresh_lock:
+        try:
+            skill_manager.workspace_root = workspace
+            await asyncio.to_thread(ddd_skill_registry.build_manifest, workspace, skill_manager.builtin_path)
+            await skill_manager.scan_all()
+            await ProjectionLayer(skill_manager).project_skills(workspace, allow_all=True)
+        except Exception as exc:  # noqa: BLE001 — the Brain is installed; its skills show on the next refresh
+            logger.error("hive brains: skill refresh after an install failed: %s", exc)
+
+
+@router.put("/brains/{brain}")
+async def put_brain(brain: str, request: Request) -> dict:
+    _hive_only()
+    digest = request.headers.get("x-brain-digest", "")   # unpack() checks it against the content
+    ws = _workspace()
+    try:
+        _root, general = brain_sync.brain_root(ws, brain)
+    except brain_sync.SyncError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    data = await _read_body(request)
+    try:
+        files = await asyncio.to_thread(brain_sync.unpack, data, general, digest)
+    except brain_sync.SyncError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    if not brain_use.begin_install(brain):
+        n = brain_use.in_use(brain)
+        raise HTTPException(status_code=423, detail=(
+            f"{n} turn(s) using {brain} are running; sync again when they finish" if n
+            else f"{brain} is being installed already"))
+    work = asyncio.ensure_future(asyncio.to_thread(brain_sync.install, ws, brain, files, digest))
+    try:
+        try:
+            record = await asyncio.shield(work)
+        except brain_sync.SyncError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        await refresh_skills(ws)          # before a turn can take the Brain again
+    finally:
+        if not work.done():
+            # cancelled while the files are written: the Brain stays marked until the
+            # thread is done, so no turn reads it half-written
+            try:
+                await asyncio.wait({work})
+            except BaseException:  # noqa: BLE001 — a second cancel: still end below
+                pass
+        brain_use.end_install(brain)
+    logger.info("hive brains: installed %s (%s, %d files)", brain, digest[:12], len(files))
+    return {"brain": brain, "digest": record["digest"], "revision": record["revision"],
+            "installed_at": record["installed_at"], "files": len(files)}
+
+
+@router.get("/brains")
+async def list_brains() -> dict:
+    _hive_only()
+    ws = _workspace()
+
+    def _work() -> list[dict]:
+        from core.project_agent import GENERAL_BRAIN
+        names = [GENERAL_BRAIN]
+        projects = ws / "Projects"
+        if projects.is_dir():
+            names += sorted(p.name for p in projects.iterdir()
+                            if p.is_dir() and (p / brain_sync.STATE_FILE).is_file()
+                            and brain_sync.BRAIN_NAME_RE.fullmatch(p.name))
+        out = []
+        for name in names:
+            try:
+                state = brain_sync.installed_state(ws, name)
+            except (brain_sync.SyncError, OSError):
+                state = None
+            if state is not None:
+                out.append(state)
+        return out
+
+    brains = await asyncio.to_thread(_work)
+    for b in brains:
+        b["running"] = brain_use.in_use(b["brain"])
+    return {"brains": brains}

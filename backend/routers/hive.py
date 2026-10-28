@@ -825,3 +825,51 @@ async def _retry_steps(provisioner: HiveProvisioner, instance_id: str, version: 
 
     # Redeploy
     await provisioner.deploy(instance_id)
+
+
+# ── Brains on a Hive (design 2026-10-28-project-agent-flow §6): the console's column ──
+
+def _brain_sync_error(exc: Exception) -> HTTPException:
+    """A Hive that is not running / has no credentials, or a sync the host refuses."""
+    return HTTPException(status_code=409, detail=str(exc))
+
+
+@router.get("/instances/{instance_id}/brains")
+async def instance_brains(instance_id: str) -> dict:
+    """Each local Brain against this Hive: versions, changed files, running sessions,
+    whether it can be dispatched there (and why not)."""
+    from core import brain_sync_host
+    from core.swarm_out import SwarmOutError
+    try:
+        return await brain_sync_host.status(instance_id)
+    except (SwarmOutError, brain_sync_host.SyncRefused) as exc:
+        raise _brain_sync_error(exc) from None
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"the Hive did not answer ({type(exc).__name__})") from None
+
+
+@router.post("/instances/{instance_id}/brains/sync-defaults")
+async def instance_sync_default_brains(instance_id: str) -> dict:
+    """Sync the SwarmAI and General Brains to this Hive when missing or out of date."""
+    from core import brain_sync_host
+    from core.swarm_out import SwarmOutError
+    try:
+        return await brain_sync_host.sync_defaults(instance_id)
+    except (SwarmOutError, brain_sync_host.SyncRefused) as exc:
+        raise _brain_sync_error(exc) from None
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"the Hive did not answer ({type(exc).__name__})") from None
+
+
+@router.post("/instances/{instance_id}/brains/{brain}/sync")
+async def instance_sync_brain(instance_id: str, brain: str) -> dict:
+    """Push one Brain to this Hive now."""
+    from core import brain_sync_host
+    from core.swarm_out import SwarmOutError, _instance
+    try:
+        inst = await _instance(instance_id)
+        return await brain_sync_host.sync(inst, brain)
+    except (SwarmOutError, brain_sync_host.SyncRefused) as exc:
+        raise _brain_sync_error(exc) from None
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"the Hive did not answer ({type(exc).__name__})") from None

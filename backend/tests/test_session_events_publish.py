@@ -72,14 +72,17 @@ async def test_run_conversation_publishes_from_session_start(hub, monkeypatch):
     got = [e async for e in r.run_conversation(agent_id="a", user_message="x",
                                                session_id="S1", client_id="local-c1")]
     pub = _published(hub, "S1")
-    assert [e["type"] for e in pub] == ["turn_start", "session_start", "text_delta", "result", "turn_end"]
+    # a started turn ends with its turn_outcome block (core/turn_outcome) before turn_end
+    assert [e["type"] for e in pub] == ["turn_start", "session_start", "text_delta", "result",
+                                        "assistant", "turn_end"]
+    assert pub[-2]["content"][0]["type"] == "turn_outcome"
     seqs = [e["eventSeq"] for e in pub]
     assert seqs == sorted(set(seqs)) and seqs[0] == 1   # strictly increasing
     assert len({e["turnId"] for e in pub}) == 1
     assert all(e["turnClientId"] == "local-c1-asst" for e in pub)
     # the caller gets the pre-turn event unstamped and the turn events stamped
     assert "turnId" not in got[0]
-    assert [e["type"] for e in got[1:]] == ["turn_start", "session_start", "text_delta", "result"]
+    assert [e["type"] for e in got[1:]] == ["turn_start", "session_start", "text_delta", "result", "assistant"]
     assert all("eventSeq" in e for e in got[1:])
     assert seen_kwargs["client_id"] == "local-c1"
 
@@ -98,7 +101,8 @@ async def test_new_session_id_learned_from_session_start(hub, monkeypatch):
     events = [{"type": "session_start", "sessionId": "NEW"}, {"type": "result"}]
     monkeypatch.setattr(r, "_run_conversation_impl", lambda **kw: _fake_impl(events))
     [e async for e in r.run_conversation(agent_id="a", user_message="x", session_id=None)]
-    assert [e["type"] for e in _published(hub, "NEW")] == ["turn_start", "session_start", "result", "turn_end"]
+    assert [e["type"] for e in _published(hub, "NEW")] == ["turn_start", "session_start", "result",
+                                                                "assistant", "turn_end"]
 
 
 async def test_drained_turn_gets_a_server_client_id(hub, monkeypatch):
@@ -157,9 +161,9 @@ async def test_continuations_publish_every_event(hub, monkeypatch, method, unit_
     monkeypatch.setattr(r, "_turn_files_of", lambda u: None)
     got = [e async for e in getattr(r, method)(*args)]
     pub = _published(hub, "S1")
-    assert [e["type"] for e in pub] == ["turn_start", "text_delta", "result", "turn_end"]
+    assert [e["type"] for e in pub] == ["turn_start", "text_delta", "result", "assistant", "turn_end"]
     assert all(e["turnClientId"] == "local-c9-asst" for e in pub)
-    assert [e["type"] for e in got] == ["turn_start", "text_delta", "result"]
+    assert [e["type"] for e in got] == ["turn_start", "text_delta", "result", "assistant"]
 
 
 async def test_missing_unit_continuation_publishes_nothing(hub, monkeypatch):
@@ -204,7 +208,8 @@ async def test_injected_turn_publishes_after_persisting(hub, monkeypatch):
     monkeypatch.setattr(hub, "publish", publish)
     await r.run_injected_turn(unit, object())
     pub = _published(hub, "S1")
-    assert [e["type"] for e in pub] == ["turn_start", "session_start", "text_delta", "result", "turn_end"]
+    assert [e["type"] for e in pub] == ["turn_start", "session_start", "text_delta", "result",
+                                        "assistant", "turn_end"]
     key = pub[0]["turnClientId"]
     assert key.startswith("injected-") and key.endswith("-asst")
     assert order.index("persist:text_delta") < order.index("publish:text_delta")
