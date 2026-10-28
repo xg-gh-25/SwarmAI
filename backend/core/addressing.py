@@ -220,6 +220,35 @@ def unit_ids(project: str) -> set[str]:
     return {u.id for u in ddd_units(project).units}
 
 
+
+def record_cited(project: str, ids) -> int:
+    """Tell decay that the units *ids* name were used: a citation in a pipeline
+    document or an expert finding is the strongest "this entry earned its place"
+    signal there is. Recall used to be the only feed (``session_router`` records what
+    chat injects), so an entry a run relied on could still be archived as unused.
+    Records through ``ddd_usage.record_ddd_hit`` (its anchor, its file); only decay-
+    trackable entries count there. Returns how many were recorded; never raises."""
+    wanted = {str(i) for i in ids or () if i}
+    if not wanted:
+        return 0
+    try:
+        from datetime import date
+        from core.ddd_usage import entry_anchor_text, record_ddd_hit
+        seen: set[str] = set()
+        n = 0
+        for u in _ranked([u for u in ddd_units(project).units if u.id in wanted]):
+            if u.id in seen:
+                continue                      # one hit per cited id: its best unit
+            seen.add(u.id)
+            anchor = entry_anchor_text(u.text)
+            if anchor:
+                record_ddd_hit(project, anchor, date.today())
+                n += 1
+        return n
+    except Exception:  # noqa: BLE001 -- usage bookkeeping never fails a run
+        logger.warning("addressing: usage of cited units not recorded", exc_info=True)
+        return 0
+
 # ── map ─────────────────────────────────────────────────────────────────────
 
 def _k(n: int) -> str:
@@ -426,6 +455,8 @@ def matches(project: str, ref: str) -> list[Unit]:
     except OSError:
         return []
     line = int(m.group("line"))
+    if line < 1 or not _inside(path, table.root):
+        return []
     mine = sorted((u for u in table.units if Path(u.path).resolve() == path), key=lambda u: u.line)
     for u in mine:
         if u.line <= line < u.line + len(u.text.splitlines()):
@@ -434,9 +465,11 @@ def matches(project: str, ref: str) -> list[Unit]:
         text_line = path.read_text(encoding="utf-8").splitlines()[line - 1]
     except (OSError, UnicodeDecodeError, IndexError):
         return []
-    if _H2_RE.match(text_line):
+    h = _H2_RE.match(text_line)
+    if h:
+        name = section_name(h.group(1))
         after = [u for u in mine if u.line > line]
-        return after[:1]
+        return after[:1] if after and after[0].section == name else []
     return []
 
 
@@ -460,11 +493,19 @@ def projects() -> list[tuple[str, Optional[Path], bool]]:
     return out
 
 
+_FENCE_TAG_RE = re.compile(r"</?\s*recalled\s*>", re.I)
+
+
 def fence(text: str) -> str:
     """*text* as recalled data: any fence marker inside it removed, then fenced. Every
     piece of DDD or Library text the knowledge command prints goes through here."""
-    body = re.sub(r"</?\s*recalled\s*>", "", text or "", flags=re.I).strip()
-    return f"<recalled>\n{body}\n</recalled>"
+    body = text or ""
+    while True:                      # until stable: "</reca</recalled>lled>" leaves no tag
+        cleaned = _FENCE_TAG_RE.sub("", body)
+        if cleaned == body:
+            break
+        body = cleaned
+    return f"<recalled>\n{body.strip()}\n</recalled>"
 
 
 def render_unit(u: Unit, others: int = 0) -> str:

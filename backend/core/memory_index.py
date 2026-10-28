@@ -205,18 +205,19 @@ def section_name(heading: str) -> str:
 def section_spans(text: str) -> list[tuple[str, int, int]]:
     """``(name, first body line, end)`` for each ``## `` section of *text* (0-based line
     indices into ``text.splitlines()``, end exclusive), in file order, the text before
-    the first heading left out. A ``## `` line inside a code fence is code, not a
-    heading. The one section split of recall and the knowledge unit table, so both cut
-    a document the same way."""
+    the first heading left out. The one section split of recall and the knowledge unit
+    table, so both cut a document the same way.
+
+    Every ``^## `` line is a heading, also inside a code fence: DDD entries are cut at
+    write time, so a fence opened in one is often never closed, and treating everything
+    after it as code hid whole sections of real DDD docs (measured on review: two
+    sections of a TECH.md, 38 of 69 entries of an IMPROVEMENT.md section). A ``## `` line
+    inside a properly closed fence is rare; it starts a section here."""
     lines = text.splitlines()
     spans: list[tuple[str, int, int]] = []
-    current, first, fence = None, 0, ""
+    current, first = None, 0
     for i, line in enumerate(lines):
-        mark = line.lstrip()[:3]
-        if mark in ("```", "~~~") and (not fence or fence == mark):
-            fence = "" if fence else mark
-            continue
-        m = None if fence else _SECTION_HEAD_RE.match(line)
+        m = _SECTION_HEAD_RE.match(line)
         if m:
             if current is not None:
                 spans.append((current, first, i))
@@ -230,8 +231,7 @@ def parse_memory_sections(content: str) -> dict[str, str]:
     """Split MEMORY.md content into named sections.
 
     Returns dict mapping section name (e.g. "Recent Context") to its content.
-    Strips the index block if present. Sections are cut by ``section_spans`` (a ``## ``
-    inside a code fence is not a heading). A " — suffix" is dropped from each heading,
+    Strips the index block if present. Sections are cut by ``section_spans``. A " — suffix" is dropped from each heading,
     so two headings can reduce to the same name (``## What Worked`` and ``## What
     Worked — Major Deliveries``): their bodies are joined in file order under that name,
     never overwritten -- a dict keyed by the name used to keep only the last one, which
@@ -241,6 +241,8 @@ def parse_memory_sections(content: str) -> dict[str, str]:
     lines = body.splitlines()
     sections: dict[str, str] = {}
     for name, first, end in section_spans(body):
+        if not name:
+            continue                 # a heading with no name ("##  ") names no section
         body_part = "\n".join(lines[first:end]).strip()
         if name in sections and sections[name]:
             if body_part:

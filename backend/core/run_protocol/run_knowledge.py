@@ -59,6 +59,13 @@ LIBRARY_SLOTS = {"library": 3, "memory_archive": 1}
 _FENCE = re.compile(r"</?\s*recalled\s*>", re.I)
 
 
+def _unfenced(text: str) -> str:
+    """*text* with every ``<recalled>`` tag removed, repeatedly ("</reca</recalled>lled>"
+    must not leave a closing tag behind), so recalled text cannot end its own fence."""
+    from core.addressing import fence
+    return fence(text)[len("<recalled>\n"):-len("\n</recalled>")]
+
+
 @dataclass
 class Knowledge:
     status: str
@@ -299,7 +306,7 @@ def _render(k: Knowledge, rows: list[dict], *, project: str, has_ddd: bool, quer
                 continue
             body.append(f"## {title}\n")
             for r in part:
-                text = _FENCE.sub("", r["text"]).strip()
+                text = _unfenced(r["text"]).strip()
                 label = f"`{r['id']}`" if r["id"] is not None else "not shown"
                 body.append(f"- {label} · {r['source']}\n\n<recalled>\n{text}\n</recalled>\n")
     return "\n".join(head + body).rstrip() + "\n"
@@ -360,7 +367,7 @@ def expert_block(*, project: str, has_ddd: bool, paths, requirement: str | None,
              "check them against the code. When a finding comes from an entry, add "
              "\"knowledge_ref\":\"<id>\" to that finding's row."]
     for r in rows:
-        text = _FENCE.sub("", r["text"]).strip()
+        text = _unfenced(r["text"]).strip()
         label = f"`{r['id']}`" if r["id"] is not None else "not shown"
         parts.append(f"- {label} · {r['source']}\n<recalled>\n{text}\n</recalled>")
     return "\n\n".join(parts), [r["id"] for r in rows if r["id"] is not None], "recalled"

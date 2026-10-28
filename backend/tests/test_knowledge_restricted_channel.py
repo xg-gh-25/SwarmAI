@@ -35,7 +35,8 @@ def test_denied_in_any_spelling(cmd):
     assert knowledge_command_denial(cmd)
 
 
-@pytest.mark.parametrize("cmd", ["ls -la", "grep -rn knowledge notes.txt", 'echo "addressing the issue"'])
+@pytest.mark.parametrize("cmd", ["ls -la", "grep -rn knowledge notes.txt", 'echo "addressing the issue"',
+                                 "grep addressing notes.py", "cat knowledge.py"])
 def test_other_commands_unaffected(cmd):
     assert knowledge_command_denial(cmd) is None
 
@@ -61,13 +62,33 @@ def test_cli_rejects_abbreviated_options(monkeypatch):
         knowledge_cli.main(["find", "--proj", "P", "--query", "x"])
 
 
-def test_channel_session_gets_the_env_flag_and_the_handler(monkeypatch, tmp_path):
-    """build_options for a non-owner channel: the subprocess env carries RESTRICTED_ENV
-    and the handler denies the command; an owner channel gets neither."""
-    import inspect
-    from core import prompt_builder
-    src = inspect.getsource(prompt_builder.PromptBuilder.build_options)
-    assert "deny_knowledge=True" in src and "RESTRICTED_ENV: \"1\"" in src
-    flag_at = src.index('RESTRICTED_ENV: "1"')
-    guard = src.rfind("if _channel_sender_dir:", 0, flag_at)
-    assert guard != -1 and flag_at - guard < 400
+async def _options(channel_context, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    from core import initialization_manager as im
+    from core.prompt_builder import PromptBuilder
+    monkeypatch.setattr(im.initialization_manager, "get_cached_workspace_path",
+                        lambda: str(tmp_path), raising=False)
+    cfg = MagicMock()
+    values = {"thinking_mode": "adaptive", "thinking_effort": "high"}
+    cfg.get = MagicMock(side_effect=lambda k, d=None: values.get(k, d))
+    cfg.get_model = MagicMock(return_value="claude-opus-5-5")
+    return await PromptBuilder(cfg).build_options(
+        agent_config={"model": "claude-opus-5-5"}, enable_skills=False, enable_mcp=False,
+        resume_session_id=None, session_context={"sdk_session_id": "sid"},
+        channel_context=channel_context, editor_context=None, terminal_context=None,
+        cached_system_prompt="CACHED")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier,restricted", [("public", True), ("owner", False)])
+async def test_build_options_restricts_only_a_non_owner_channel(tier, restricted, tmp_path, monkeypatch):
+    ctx = {"channel_id": "c1", "channel_type": "slack",
+           "sender_identity": {"permission_tier": tier, "external_id": "u1"}}
+    opts = await _options(ctx, tmp_path, monkeypatch)
+    env = opts.env or {}
+    assert (env.get(knowledge_cli.RESTRICTED_ENV) == "1") is restricted
+    cmd = {"command": '"$SWARM_BACKEND_BIN" knowledge map --projects'}
+    if restricted:
+        assert (await opts.can_use_tool("Bash", cmd, {}))["behavior"] == "deny"
+    elif opts.can_use_tool is not None:
+        assert (await opts.can_use_tool("Bash", cmd, {}))["behavior"] == "allow"

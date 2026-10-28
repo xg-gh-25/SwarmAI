@@ -6037,7 +6037,8 @@ def knowledge_command_denial(command: str) -> "str | None":
     flat = re.sub(r"[\"'\\]", "", command or "")
     if not _KNOWLEDGE_WORD_RE.search(flat):
         return None
-    if re.search(r"SWARM_BACKEND_BIN|python-backend|desktop_main|\bpy(?:thon\d?)?\b", flat):
+    if re.search(r"SWARM_BACKEND_BIN|python-backend|desktop_main"
+                 r"|(?:^|[;&|(`]|\$\()\s*(?:\S*/)?py(?:thon[\d.]*)?(?=\s)", flat):
         return "the knowledge command is not available in this session"
     return None
 
