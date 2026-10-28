@@ -114,8 +114,11 @@ def _blocks(message: dict[str, Any]) -> list[tuple[str, Any]]:
     return [("text", content)]
 
 
-def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> tuple[str, ...]:
+def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> list[tuple[str, ...]]:
     """Register what this window shows the extractor that the send path did not.
+
+    Returns, per chunk item, the event ids registered for it (empty for user rows,
+    which the send path registered): the main pass shows them as that item's anchors.
 
     Tool results are external (``record_tool_result``, measured fields split out); the
     agent's own text, thinking and tool calls are ``agent``. User text was registered
@@ -124,11 +127,12 @@ def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> tuple[str, ...
     """
     import hashlib
     from core import session_inputs
-    plan: list[tuple[str, str, Any]] = []  # (kind, ref, content)
-    for item in chunk:
+    plan: list[tuple[int, str, str, Any]] = []  # (item index, kind, ref, content)
+    for position, item in enumerate(chunk):
         if "json_fragment" in item:
             if item.get("role") != "user":
-                plan.append(("tool_result", f"{_S2_REF}{item.get('part_of')}#part{item['part']}",
+                plan.append((position, "tool_result",
+                             f"{_S2_REF}{item.get('part_of')}#part{item['part']}",
                              item["json_fragment"]))
             continue
         role = item.get("role")
@@ -138,23 +142,48 @@ def window_roots(session_id: str, chunk: list[dict[str, Any]]) -> tuple[str, ...
             if content in (None, "", []):
                 continue
             kind = "tool_result" if (block_type == "tool_result" or role == "tool") else "agent_message"
-            plan.append((kind, f"{_S2_REF}{item.get('id')}#{index}:{block_type}", content))
+            plan.append((position, kind, f"{_S2_REF}{item.get('id')}#{index}:{block_type}", content))
+    per_item: list[list[str]] = [[] for _ in chunk]
     if not plan:
-        return ()
-    event_ids: list[str] = []
+        return [()] * len(chunk)
     with sqlite3.connect(str(session_inputs._db_path()), timeout=5.0) as conn:
-        for kind, ref, content in plan:
+        for position, kind, ref, content in plan:
             raw = content if isinstance(content, str) else session_inputs._canonical(content)
             digest = hashlib.sha256(raw.encode("utf-8", errors="surrogatepass")).hexdigest()
             found = _existing_input(conn, session_id, ref, digest)
             if found:
-                event_ids += found
+                per_item[position] += found
             elif kind == "tool_result":
-                event_ids += session_inputs.record_tool_result(session_id, content, ref=ref)
+                per_item[position] += session_inputs.record_tool_result(session_id, content, ref=ref)
             else:
-                event_ids.append(session_inputs.record_session_input(
+                per_item[position].append(session_inputs.record_session_input(
                     session_id, kind, "agent", raw, ref=ref))
-    return tuple(dict.fromkeys(event_ids))
+    return [tuple(dict.fromkeys(ids)) for ids in per_item]
+
+
+def _user_events_by_message(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """{message id: event ids} for user-sent events (their ref is the message id, or
+    ``<id>#<part>`` for a quote, attachment or code block split out at send)."""
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        ref = str(row.get("ref") or "")
+        if ref and not ref.startswith(_S2_REF):
+            out.setdefault(ref.split("#", 1)[0], []).append(str(row["event_id"]))
+    return out
+
+
+def _with_anchors(chunk: list[dict[str, Any]], own: list[tuple[str, ...]],
+                  user_events: dict[str, list[str]]) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+    """The chunk as shown to the extractor, each item carrying the anchors it may be
+    cited by, and the window's evidence allow-list (exactly those anchors)."""
+    shown, anchors = [], []
+    for item, ids in zip(chunk, own, strict=True):
+        if item.get("role") == "user":
+            ids = tuple(user_events.get(str(item.get("id") or item.get("part_of")), ()))
+        item_anchors = [f"event:{event}" for event in ids]
+        shown.append({**item, "anchors": item_anchors})
+        anchors += item_anchors
+    return shown, tuple(dict.fromkeys(anchors))
 
 
 def _transcript_sync(session_id: str) -> list[dict[str, Any]]:
@@ -310,7 +339,7 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
                project_snapshot: dict[str, Any] | None, llm: Any | None) -> list[Any]:
     owned = [row for row in rows if row["event_id"] not in claimed
              and not str(row.get("ref") or "").startswith(_S2_REF)]
-    evidence = tuple(f"event:{row['event_id']}" for row in owned)
+    user_events = _user_events_by_message(owned)
     evidence_range = {"session_id": session_id, "pass": "main",
                       "message_count": len(transcript)}
     if not transcript:
@@ -322,9 +351,14 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
     chunks = windows(transcript, "id", overlap=WINDOW_OVERLAP)
     outcomes: list[Any] = []
     for index, chunk in enumerate(chunks, 1):
-        roots = tuple(dict.fromkeys(user_roots + _root_ids(window_roots(session_id, chunk))))
+        # Each item shows the anchors it can be cited by; the allow-list is exactly the
+        # window's anchors (2026-10-29: a session-wide list of bare user event ids, with
+        # no way to tell which message each was, left 262 of 273 windows empty).
+        own = window_roots(session_id, chunk)
+        shown, evidence = _with_anchors(chunk, own, user_events)
+        roots = tuple(dict.fromkeys(user_roots + _root_ids(tuple(e for ids in own for e in ids))))
         outcomes += common.extract_and_enqueue(
-            "S2", session_id, json.dumps(chunk, ensure_ascii=False, default=str), evidence,
+            "S2", session_id, json.dumps(shown, ensure_ascii=False, default=str), evidence,
             evidence_range={**evidence_range, "window": index, "windows": len(chunks)},
             session_id=session_id, read_root_ids=roots,
             project_snapshot=project_snapshot, extraction_pass="main",

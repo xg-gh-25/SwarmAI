@@ -5,6 +5,7 @@ functions are monkeypatched so tests assert only the source boundary.
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -16,8 +17,10 @@ from core.ingestion.sources import s2_session
 class FakeLLM:
     def __init__(self, replies):
         self.replies = list(replies)
+        self.prompts = []
 
     def extract(self, prompt):
+        self.prompts.append(prompt)
         return SimpleNamespace(value=self.replies.pop(0), raw="raw")
 
 
@@ -37,9 +40,9 @@ async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
     ]
     monkeypatch.setattr(s2_session, "_transcript_sync", lambda sid: transcript)
     rows = [
-        {"event_id": "u1", "kind": "user_message"},
-        {"event_id": "u2", "kind": "user_message"},
-        {"event_id": "t1", "kind": "tool_text"},
+        {"event_id": "u1", "kind": "user_message", "ref": "m0"},
+        {"event_id": "u2", "kind": "user_message", "ref": "m1"},
+        {"event_id": "t1", "kind": "quote", "ref": "m1#quote-0"},
     ]
     monkeypatch.setattr(s2_session, "_input_rows", lambda sid: rows)
     monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: {"u1"})
@@ -49,7 +52,7 @@ async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
                         raising=False)
     shown = []
     monkeypatch.setattr(s2_session, "window_roots",
-                        lambda sid, chunk: shown.append(chunk) or ("m2-agent", "m3-tool"))
+                        lambda sid, chunk: shown.append(chunk) or [(), ("m2-agent",), ("m3-tool",)])
     calls, attempts = [], []
     monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k:
                         calls.append((a, k)) or SimpleNamespace(status="queued"))
@@ -66,6 +69,13 @@ async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
     # the main pass reads the user roots plus the window's own agent and tool content
     assert calls[1][1]["read_root_ids"] == ("root:u2", "root:t1", "root:m2-agent", "root:m3-tool")
     assert shown == [transcript]
+    # every item shows the anchors it can be cited by; the allow-list is exactly those
+    main_prompt = llm.prompts[1]
+    for item, anchors in (("m1", ["event:u2", "event:t1"]), ("m2", ["event:m2-agent"]),
+                          ("m3", ["event:m3-tool"])):
+        assert f'"id": "{item}"' in main_prompt and json.dumps(anchors) in main_prompt
+    allowed = json.loads(main_prompt.split("Allowed evidence: ", 1)[1].split("\n", 1)[0])
+    assert allowed == ["event:u2", "event:t1", "event:m2-agent", "event:m3-tool"]
     assert all("u1" not in str(call) for call in calls)
     assert len(attempts) == 2
 

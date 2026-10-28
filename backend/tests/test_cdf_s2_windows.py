@@ -68,14 +68,16 @@ def test_main_pass_calls_once_per_window(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(s2_session, "_root_ids", lambda ids: ())
     original = s2_session.windows
     transcript = _items(30, 900)
-    monkeypatch.setattr(s2_session, "window_roots", lambda sid, chunk: ())
+    monkeypatch.setattr(s2_session, "window_roots", lambda sid, chunk: [()] * len(chunk))
     monkeypatch.setattr(s2_session, "windows",
                         lambda items, key, overlap=0.0: original(items, key, limit=5_000))
     outcomes = s2_session._main_pass("sess", transcript, [], set(), None, None)
     assert len(calls) > 1 and outcomes == [f"unit-{i}" for i in range(1, len(calls) + 1)]
     assert [c["window"] for c in calls] == list(range(1, len(calls) + 1))
     assert {c["windows"] for c in calls} == {len(calls)}
-    assert [item for c in calls for item in json.loads(c["text"])] == transcript
+    shown = [item for c in calls for item in json.loads(c["text"])]
+    assert all(item.pop("anchors") == [] for item in shown)   # no registered roots here
+    assert shown == transcript
 
 
 def test_overlap_repeats_the_tail_and_never_stands_alone() -> None:
