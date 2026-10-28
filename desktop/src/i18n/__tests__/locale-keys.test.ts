@@ -91,8 +91,9 @@ describe('locale keys', () => {
   it('no dead chat.turn / chat.file keys (dynamic families excepted)', () => {
     const all = sources().join('\n');
     // reasonCode: backend cause codes (pipeline_stage_events._PLAIN_REASONS); zone.verb:
-    // TurnZones' `chat.turn.zone.verb.${kind}` (turnZones VERBS)
-    const dynamic = /^chat\.turn\.(subAgentStatus|attention\.reasonCode|zone\.verb)\./;
+    // TurnZones' `chat.turn.zone.verb.${kind}` (turnZones VERBS); run.status: RunLine's
+    // `chat.turn.run.status.${status}` (pipeline_stage_events.RUN_END_STATUSES)
+    const dynamic = /^chat\.turn\.(subAgentStatus|attention\.reasonCode|zone\.verb|run\.status)\./;
     const dead = [...new Set(Object.keys(EN).map((k) => k.replace(/_(one|other)$/, '')))]
       .filter((k) => /^chat\.(turn|file)\./.test(k) && !dynamic.test(k))
       .filter((k) => !all.includes(`'${k}'`) && !all.includes(`"${k}"`) && !all.includes(`\`${k}\``));
@@ -102,6 +103,52 @@ describe('locale keys', () => {
   it('dynamic families are complete', () => {
     for (const s of ['failed', 'stopped']) expect(EN).toHaveProperty([`chat.turn.subAgentStatus.${s}`]);
     for (const k of ['explore', 'edit', 'run']) expect(EN).toHaveProperty([`chat.turn.zone.verb.${k}`]);
+    // a run's end status (backend pipeline_stage_events.RUN_END_STATUSES) and an
+    // escalation's severity (EscalationBlock's severity union)
+    for (const k of ['completed', 'abandoned', 'failed']) expect(EN).toHaveProperty([`chat.turn.run.status.${k}`]);
+    for (const k of ['low', 'medium', 'high', 'critical']) expect(EN).toHaveProperty([`chat.escalation.severity.${k}`]);
+  });
+
+  it('no object in en.json or zh.json names a key twice (JSON keeps the last one silently)', () => {
+    // A duplicate once gave two meanings one key: the stop button ("Stop this agent")
+    // read the later "background agent {{name}} stopped" line. Importing the JSON hides
+    // it, so read the raw text: a key token is a string followed by a colon.
+    const dupes = (raw: string): string[] => {
+      const out: string[] = [];
+      const stack: Set<string>[] = [];
+      const path: string[] = [];
+      let pending: string | null = null;
+      for (let i = 0; i < raw.length; i++) {
+        const c = raw[i];
+        if (c === '"') {
+          let j = i + 1;
+          while (raw[j] !== '"') j += raw[j] === '\\' ? 2 : 1;
+          const str = raw.slice(i + 1, j);
+          i = j;
+          if (/^\s*:/.test(raw.slice(j + 1))) {
+            const keys = stack[stack.length - 1];
+            if (keys.has(str)) out.push([...path, str].join('.'));
+            keys.add(str);
+            pending = str;
+          }
+        } else if (c === '{') { stack.push(new Set()); if (pending !== null && stack.length > 1) path.push(pending); pending = null; }
+        else if (c === '}') { stack.pop(); if (stack.length >= 1) path.pop(); }
+        else if (c === ',') pending = null;
+      }
+      return out;
+    };
+    const dir = join(SRC, 'i18n', 'locales');
+    const found = ['en.json', 'zh.json'].flatMap((f) => dupes(readFileSync(join(dir, f), 'utf-8')).map((k) => `${f}: ${k}`));
+    expect(found).toEqual([]);
+    expect(dupes('{ "a": { "b": 1, "b": 2 }, "c": 3 }')).toEqual(['a.b']);   // the scan sees one
+  });
+
+  it('a chat.* string in zh.json is not the English sentence copied over', () => {
+    // New chat keys were once added "in English in both locales" and stayed so. A
+    // single word (Agent) or a value with no English words may legitimately match.
+    const copied = Object.keys(EN).filter((k) => /^chat\./.test(k) && ZH[k] === EN[k]
+      && /[A-Za-z]+\s+[A-Za-z]+/.test(EN[k]));
+    expect(copied).toEqual([]);
   });
 
   it('chat.turn never hardcodes the assistant name or calls it "AI"', () => {

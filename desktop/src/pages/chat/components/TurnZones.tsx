@@ -579,8 +579,8 @@ function AgentRow({ step, sessionId, readOnly, focused }: { step: ToolStep; sess
             data-testid="agent-stop"
             disabled={stopping}
             onClick={stop}
-            aria-label={tf(t, 'chat.turn.zone.stopAgent', 'Stop this agent')}
-            title={tf(t, 'chat.turn.zone.stopAgent', 'Stop this agent')}
+            aria-label={tf(t, 'chat.turn.zone.stopAgentButton', 'Stop this agent')}
+            title={tf(t, 'chat.turn.zone.stopAgentButton', 'Stop this agent')}
             className="shrink-0 px-1 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 disabled:opacity-40"
           >
             ✕

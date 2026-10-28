@@ -218,7 +218,15 @@
     },
     "escalation": {
       "title": "Escalation",
-      "resolved": "Escalation resolved"
+      "resolved": "Escalation resolved",
+      "decided": "Decided",
+      "recommended": "Recommended",
+      "severity": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "critical": "critical"
+      }
     },
     "permission": {
       "title": "Permission Required",
@@ -226,7 +234,11 @@
       "noLongerPending": "No longer pending",
       "timedOut": "Timed out",
       "timesOutIn": "Times out in",
-      "flagged": "Flagged:"
+      "flagged": "Flagged:",
+      "approve": "Approve",
+      "approved": "Approved",
+      "deny": "Deny",
+      "denied": "Denied"
     },
     "unsent": {
       "label": "Not sent",
@@ -278,8 +290,6 @@
       },
       "result": "Result",
       "attention": {
-        "title": "For you to check",
-        "notLanded": "Not landed",
         "more": "+{{count}} more in the run report",
         "reason": "Why: {{text}}",
         "reasonCode": {
@@ -306,19 +316,13 @@
         "openLink": "Open link"
       },
       "summary": {
-        "notLanded": "Done · not landed",
-        "done": "Done",
-        "missing": "not produced",
-        "reviewStat": "{{experts}} experts · {{findings}} findings · {{settled}} settled",
         "doc": {
           "requirements": "Requirements · root cause · clarifications",
           "design": "Approach · architecture & flow · invariants",
           "review": "Gates · expert reviews · how each finding was settled",
           "report": "Full run report",
           "fixing": "Fixes · each finding with its break test"
-        },
-        "abandoned": "Closed without landing",
-        "failed": "Failed"
+        }
       },
       "backToLatest": "↓ Back to latest",
       "backgroundAgentsRunning_one": "{{count}} background agent running",
@@ -363,19 +367,22 @@
         "calls_other": "{{count}} calls",
         "edits_one": "{{count}} edit",
         "edits_other": "{{count}} edits",
-        "verb": { "explore": "Explored", "edit": "Edited", "run": "Ran" },
+        "verb": {
+          "explore": "Explored",
+          "edit": "Edited",
+          "run": "Ran"
+        },
         "commands_other": "{{count}} commands",
         "done": "{{count}} done",
         "failedCall": "This call failed and the turn ended there:",
         "failed": "Failed",
-        "needsYou": "Needs you",
         "next": "next:",
         "pipelineStarted": "Pipeline started",
         "round": "round {{n}}",
         "running": "{{count}} running",
         "steps_one": "{{count}} step",
         "steps_other": "{{count}} steps",
-        "stopAgent": "Stop this agent",
+        "stopAgent": "background agent {{name}} stopped",
         "stopAll": "Stop all",
         "stopped": "Stopped · the last call did not finish",
         "stoppedSuperseded": "Stopped · your newer message continued the conversation",
@@ -408,7 +415,6 @@
         "stopCalls": "{{count}} calls stopped",
         "stopNotRun": "{{tool}} not run",
         "stopNotRunCount": "{{count}} calls not run",
-        "stopAgent": "background agent {{name}} stopped",
         "stopAgents": "{{count}} background agents stopped",
         "stopOmitted": "+{{count}} more",
         "stopKeptCalls": "{{count}} calls kept, no conclusion",
@@ -416,24 +422,11 @@
         "stopNoOutput": "output not kept",
         "stopMayHaveWritten": "may have written",
         "stopNotRunWhy": "not run (it was waiting for your approval)",
-        "stopContinueHint": "Continue picks up from here: the agent is told what was stopped and checks what it already did before going on."
+        "stopContinueHint": "Continue picks up from here: the agent is told what was stopped and checks what it already did before going on.",
+        "stopAgentButton": "Stop this agent"
       },
-      "doc": {
-        "expand": "Show full text",
-        "collapse": "Collapse",
-        "open": "Open",
-        "loading": "Loading…",
-        "failed": "Could not read this document"
-      },
-      "runResult": {
-        "title": "Run result",
-        "audit": "Run audit",
-        "landed": "on main · {{sha}}",
-        "asked": "Asked",
-        "before": "Before",
-        "now": "Now",
-        "details": "Run details"
-      },
+      "doc": {},
+      "runResult": {},
       "bgAgentLabel": "Agent",
       "viewOriginalAgent": "View original agent",
       "viewOriginalAgentNamed": "View original agent: {{name}}",
@@ -442,6 +435,25 @@
         "title": "Assumptions to verify",
         "decision": "Decision",
         "assumption": "Assumption"
+      },
+      "run": {
+        "title": "Pipeline run",
+        "status": {
+          "completed": "completed",
+          "abandoned": "abandoned",
+          "failed": "failed"
+        },
+        "landed": "landed",
+        "landedSha": "landed {{sha}}",
+        "notLanded": "not landed",
+        "notLandedLabel": "Not landed",
+        "docOne": "1 document",
+        "docs": "{{count}} documents",
+        "asked": "Asked",
+        "audit": "Audit",
+        "missing": "Missing",
+        "notWritten": "not written by this run",
+        "report": "Full report"
       }
     },
     "nextSteps": {
@@ -501,6 +513,20 @@
       "dismiss": "Dismiss",
       "dotError": "This tab has an error",
       "dotWarning": "This tab has a warning"
+    },
+    "ask": {
+      "title": "Swarm needs your decision",
+      "answered": "Answered",
+      "customPlaceholder": "Enter your custom answer...",
+      "multi": "(Select multiple)",
+      "noSelection": "no selection",
+      "other": "Other (custom answer)",
+      "submit": "Submit Answer",
+      "submitMany": "Submit Answers"
+    },
+    "swarmOut": {
+      "running": "{{n}} running",
+      "waiting": "{{n}} waiting for you"
     }
   },
   "tasks": {
