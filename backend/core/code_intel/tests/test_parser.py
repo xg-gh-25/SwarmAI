@@ -607,7 +607,7 @@ class TestTreeSitterLiveAST:
 
         # Force the construction dependency to raise (the real failure mode a
         # broken/missing grammar would exhibit).
-        monkeypatch.setattr(P.tslp, "get_language", _boom)
+        monkeypatch.setattr(P.grammars, "get_language", _boom)
         assert P._get_cached_parser("python") is None, (
             "a raising get_language must be caught → None (fail-safe), not propagate")
         P._ts_live_cache.clear()

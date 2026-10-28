@@ -66,6 +66,13 @@ LANGUAGE_MAP = {
 # create_procedure boundaries but invocation=0 inside bodies + edges dropped.
 _REGEX_ONLY_LANGS = frozenset({"sql"})
 
+
+def tree_sitter_languages() -> list[str]:
+    """The languages whose tree-sitter grammar code intel uses: every language in
+    LANGUAGE_MAP but the regex-only ones. The packaged app ships exactly these
+    (scripts/bundle_tree_sitter_grammars.py; core.code_intel.grammars)."""
+    return sorted(set(LANGUAGE_MAP.values()) - _REGEX_ONLY_LANGS)
+
 DEFINITION_TYPES = {
     "python": ["function_definition", "class_definition"],
     "typescript": [
@@ -596,7 +603,8 @@ _parser_cache_tls = threading.local()
 
 try:
     import tree_sitter
-    import tree_sitter_language_pack as tslp
+    import tree_sitter_language_pack  # noqa: F401 — loaded through .grammars only
+    from . import grammars
     _ts_available = True
 except ImportError:
     logger.info("tree-sitter/tree-sitter-language-pack not available, using regex fallback")
@@ -621,7 +629,9 @@ def _get_cached_parser(language: str):
         # exposes root_node as a property, as _tree_sitter_live / _extract_from_tree
         # expect. Constructed per-thread here (the TLS cache above) because the
         # native Parser is PyO3-`unsendable` — see the cache header comment.
-        parser = tree_sitter.Parser(tslp.get_language(language))
+        # grammars.get_language: the shipped grammar only, never a download (a
+        # language not shipped raises and takes the regex path).
+        parser = tree_sitter.Parser(grammars.get_language(language))
         cache[language] = parser
         return parser
     except Exception as e:

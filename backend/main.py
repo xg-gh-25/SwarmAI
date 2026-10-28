@@ -993,14 +993,15 @@ def _run_scheduler_safe() -> None:
 
 def _prewarm_tree_sitter_body() -> None:
     """Load the tree-sitter grammar libraries once (process-wide dlopen), so the
-    first parse anywhere does not pay the cold extraction. Never raises."""
+    first parse anywhere does not pay the first load. Never raises."""
     try:
-        from tree_sitter_language_pack import get_language
+        import tree_sitter_language_pack  # noqa: F401
+        from core.code_intel.grammars import get_language
     except Exception:  # noqa: BLE001 — not installed: code intel uses its regex path
         return
     t0 = time.time()
     loaded = []
-    for lang in ("python", "typescript", "tsx", "javascript"):
+    for lang in ("python", "typescript", "javascript"):
         try:
             get_language(lang)
             loaded.append(lang)
@@ -1278,11 +1279,10 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_prewarm_recall_body)
     asyncio.create_task(_prewarm_recall())
 
-    # Pre-load the tree-sitter grammars code intel uses. The first
-    # get_language() extracts + dlopens the grammar library from the bundle:
-    # ~9 s on a quiet host, past 30 s under load (verify_build's tree_sitter_ast
-    # probe timed out at 30 s, 2026-10-22, load ~39 on 12 cores) -- and the first
-    # code-intel call in a session paid the same. Off the loop, best-effort.
+    # Pre-load the tree-sitter grammars code intel uses most, so the first parse
+    # does not pay the dlopen. They come from the grammars the app ships
+    # (core.code_intel.grammars): never a download, which would hold the GIL and
+    # stop every thread (192 s on a fresh HOME, 2026-10-28). Off the loop, best-effort.
     async def _prewarm_tree_sitter():
         await asyncio.to_thread(_prewarm_tree_sitter_body)
     asyncio.create_task(_prewarm_tree_sitter())
@@ -2017,7 +2017,7 @@ def _verify_native_probe(path: str) -> dict:
     if len(parts) == 2 and parts[0] == "tree_sitter":
         try:
             import tree_sitter
-            from tree_sitter_language_pack import get_language
+            from core.code_intel.grammars import get_language
             parser = tree_sitter.Parser(get_language("python"))
             tree = parser.parse(b"def _probe():\n    return 1\n")
             root_type = tree.root_node.type

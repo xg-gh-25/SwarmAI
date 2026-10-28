@@ -384,11 +384,13 @@ def _check_data_via_health(port: int, data_path: str) -> tuple[bool, str]:
 def _check_native_via_import(port: int, native_path: str) -> tuple[bool, str]:
     """Check if a native extension is loadable.
 
-    Timeout is 30s, not the 5s the import/data checks use, because the native
-    probes pay a COLD first-call cost inside the frozen bundle: the very first
-    `get_language("python")` makes tree_sitter_language_pack extract and load its
-    grammar shared library out of the PyInstaller onedir, measured at ~8.8s on a
-    warm host (0.0016s on every call after). At 5s that answer never arrives, so
+    Timeout is 30s, not the 5s the import/data checks use, because a native probe
+    can pay a COLD first-call cost. The ~8.8s once measured for the first
+    `get_language("python")` was tree_sitter_language_pack fetching and extracting
+    its grammar into a fresh cache (on a fresh HOME it downloads the bundle, holding
+    the GIL: minutes, 2026-10-28). The app now ships the grammars
+    (core.code_intel.grammars), so that call is a local dlopen; the 30s stays as the
+    margin for a cold native load on slow CI I/O. At 5s that answer never arrived, so
     `urlopen` raised and the probe reported "endpoint unavailable" — an
     unmeasurable probe, NOT a broken build — which the manifest then counted as a
     CRITICAL tree_sitter_ast failure and falsely blocked the release (same

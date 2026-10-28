@@ -119,6 +119,12 @@ python scripts/generate_app_registry.py --check --root "$PROJECT_ROOT/.."
 # daemon's reports then carry the digest the gate computes in that checkout.
 python -c "import sys; from pathlib import Path; sys.path.insert(0, '.'); from scripts.eval_runner import write_gate_manifest; write_gate_manifest(Path(sys.argv[1]), Path('generated/eval_gate_inputs.json'))" "$PROJECT_ROOT/.."
 
+# tree-sitter grammars ship with the app (core/code_intel/grammars.py): the library
+# would otherwise download them at first use, holding the GIL and stopping the whole
+# backend (192 s on a fresh HOME, 2026-10-28), offline it would fail.
+echo "Bundling tree-sitter grammars..."
+python scripts/bundle_tree_sitter_grammars.py generated/tree_sitter_grammars
+
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
 # Isolated: `import main` runs main's module-level logging setup, and with no
@@ -242,6 +248,7 @@ datas += [('templates', 'templates')]
 datas += [('apps', 'apps')]
 datas += [('generated/apps_index.json', 'generated')]
 datas += [('generated/eval_gate_inputs.json', 'generated')]  # eval gate digest (written above)
+datas += [('generated/tree_sitter_grammars', 'tree_sitter_grammars')]  # code intel grammars (written above)
 # Include the expert library (backend/experts/<domain>/<id>.md): core.expert_manager
 # reads it at runtime (registry API, and the SubagentStop hook's registry-backed
 # adversarial classification). Missing here, the packaged daemon scans an absent dir,
