@@ -202,6 +202,16 @@ export function CognitiveDistillationFlow() {
           headers={['日期', 'Source', '调用', '输入 Token', '输出 Token']}
           rows={health.data.llmBySource.map((row) => [row.utcDay, row.source, String(row.calls), String(row.inputTokens), String(row.outputTokens)])}
         />}
+        {health.data?.review && <HealthTable
+          title={`会后复盘（30 天，Agent 自身认知写入 EVOLUTION / MEMORY：${health.data.review.agentSelfWritten}）`}
+          headers={['会话类型', '复盘', '产出单元', '被拒', '抽样会话', '抽样漏记率']}
+          rows={(['code', 'files', 'conversation'] as const).map((kind) => {
+            const row = health.data.review!.byType[kind];
+            const label = { code: '改过代码', files: '写过非代码文件', conversation: '只有对话' }[kind];
+            return [label, String(row.reviews), String(row.units), String(row.invalid), String(row.sampled),
+              row.missRate == null ? '—' : `${(row.missRate * 100).toFixed(0)}%（${row.missed}/${row.missed + row.covered}）`];
+          })}
+        />}
         {health.data && health.data.recurrence.length > 0 && <HealthTable
           title="纠错复发"
           headers={['纠错', '次数', '最近间隔', '规则前 / 后（日率）']}

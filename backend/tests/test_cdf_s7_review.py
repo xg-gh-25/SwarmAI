@@ -236,3 +236,44 @@ def test_sdk_runner_forks_without_tools_and_drops_the_fork(tmp_path, monkeypatch
                            session_id=original)
     with pytest.raises(s7_review.Unresumable):
         s7_review.sdk_runner(original, "/w", "p", {"type": "object"})
+
+
+def test_review_health_reports_miss_rate_per_session_type(cdf_env) -> None:
+    """A sampled review's S2 main units: written = missed, reinforced / already_exists
+    = covered (§12). Unsampled sessions do not count."""
+    from core.ingestion import queries
+    from core.ingestion.api import connect_rw
+    conn = connect_rw()
+    try:
+        def attempt(aid, sid, kind, sampled_flag, units):
+            conn.execute("INSERT INTO extraction_attempts(attempt_id,source,evidence_range,"
+                         "extractor_version,started_at,status,units_emitted) VALUES (?,?,?,?,?,?,?)",
+                         (aid, "S7", json.dumps({"session_id": sid, "session_type": kind,
+                                                 "sampled": sampled_flag}),
+                          "v", "2099-01-01T00:00:00", "ok", units))
+
+        def unit(uid, sid, state, reason=None, source="S2", passname="main", dest=None):
+            conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,"
+                         "payload_schema,content_hash,envelope,project_snapshot,created_at,source_v2,"
+                         "extraction_pass) VALUES (?,?,?,?,'session','{}','v','h','{}','{}',"
+                         "'2099-01-01T00:00:00',?,?)", (uid, uid, source, sid, source, passname))
+            conn.execute("INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,"
+                         "destination,updated_at) VALUES (?,?,'{}',?,?,?,'2099-01-01T00:00:00')",
+                         (uid + ".u", uid, state, reason, dest))
+
+        attempt("a1", "s-code", "code", True, 3)
+        attempt("a2", "s-chat", "conversation", False, 2)
+        unit("c1", "s-code", "written")
+        unit("c2", "s-code", "reinforced")
+        unit("c3", "s-code", "rejected", "already_exists")
+        unit("c4", "s-code", "rejected", "quality")       # not final evidence either way
+        unit("x1", "s-chat", "written")                     # not sampled: ignored
+        unit("e1", "s-chat", "written", source="S7", dest='{"store": "EVOLUTION"}')
+        out = queries.review_health(conn, "2000-01-01")
+    finally:
+        conn.close()
+    code = out["by_type"]["code"]
+    assert (code["reviews"], code["units"], code["sampled"]) == (1, 3, 1)
+    assert (code["missed"], code["covered"], code["miss_rate"]) == (1, 2, 0.333)
+    assert out["by_type"]["conversation"]["miss_rate"] is None
+    assert out["agent_self_written"] == 1

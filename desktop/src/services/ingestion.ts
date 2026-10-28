@@ -99,6 +99,22 @@ export interface LlmSourceDay {
   outputTokens: number;
 }
 
+export interface ReviewTypeStats {
+  reviews: number;
+  units: number;
+  invalid: number;
+  sampled: number;
+  missed: number;
+  covered: number;
+  missRate: number | null;
+}
+
+/** After-session review metrics (docs/design/2026-10-29-cdf-session-review.md §12). */
+export interface ReviewHealth {
+  byType: Record<'code' | 'files' | 'conversation', ReviewTypeStats>;
+  agentSelfWritten: number;
+}
+
 export interface IngestionHealth {
   lanes: Record<string, { backlog: number; oldestWaitSeconds: number | null }>;
   events: Array<Record<string, unknown>>;
@@ -110,6 +126,7 @@ export interface IngestionHealth {
   evolutionBytes: number;
   recurrence: RecurrenceRow[];
   llmBySource: LlmSourceDay[];
+  review?: ReviewHealth;
 }
 
 export interface IngestionFilters {

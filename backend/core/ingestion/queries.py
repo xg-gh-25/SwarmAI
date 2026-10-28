@@ -467,6 +467,64 @@ def read_bootstrap_progress(project: str) -> dict[str, Any]:
         return bootstrap_progress(conn, project)
 
 
+REVIEW_TYPES = ("code", "files", "conversation")
+
+
+def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
+    """After-session review metrics (2026-10-29-cdf-session-review.md §12), per session type.
+
+    - reviews / units / invalid: S7 attempts since *since*.
+    - miss rate: in the sampled sessions the job also ran the S2 main pass; of its units
+      that reached a final state, the share written as new is what the review missed
+      (``written``); ``reinforced`` / ``merged`` / rejected ``already_exists`` were
+      already covered. None when nothing is final yet.
+    - agent_self: S7 units written to EVOLUTION or MEMORY.
+    """
+    by_type = {kind: {"reviews": 0, "units": 0, "invalid": 0, "sampled": 0,
+                      "missed": 0, "covered": 0} for kind in REVIEW_TYPES}
+    sampled: dict[str, str] = {}
+    if not (_column_exists(conn, "extraction_attempts", "source")
+            and _column_exists(conn, "ingestion_inbox", "source_v2")):
+        # a pre-v2 database (only old fixtures): nothing to report
+        for entry in by_type.values():
+            entry["miss_rate"] = None
+        return {"by_type": by_type, "agent_self_written": 0}
+    for row in conn.execute("""SELECT evidence_range, units_emitted, units_invalid
+                               FROM extraction_attempts WHERE source='S7' AND started_at>=?""",
+                            (since,)):
+        rng = _json(row[0], {})
+        kind = rng.get("session_type") if rng.get("session_type") in by_type else "conversation"
+        entry = by_type[kind]
+        entry["reviews"] += 1
+        entry["units"] += int(row[1] or 0)
+        entry["invalid"] += int(row[2] or 0)
+        if rng.get("sampled") and rng.get("session_id"):
+            sampled[str(rng["session_id"])] = kind
+    for kind in set(sampled.values()):
+        by_type[kind]["sampled"] = sum(1 for k in sampled.values() if k == kind)
+    if sampled:
+        marks = ",".join("?" * len(sampled))
+        for session_id, state, reason in conn.execute(
+                f"""SELECT i.source_ref, u.state, u.reason FROM ingestion_units u
+                    JOIN ingestion_inbox i ON i.id=u.candidate_id
+                    WHERE i.source_v2='S2' AND i.extraction_pass='main'
+                      AND i.source_ref IN ({marks})""", tuple(sampled)):
+            entry = by_type[sampled[str(session_id)]]
+            if state == "written":
+                entry["missed"] += 1
+            elif state in ("reinforced", "merged") or (state == "rejected" and reason == "already_exists"):
+                entry["covered"] += 1
+    for entry in by_type.values():
+        final = entry["missed"] + entry["covered"]
+        entry["miss_rate"] = round(entry["missed"] / final, 3) if final else None
+    agent_self = conn.execute(
+        """SELECT COUNT(*) FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id
+           WHERE i.source_v2='S7' AND u.state='written' AND i.created_at>=?
+             AND (u.destination LIKE '%EVOLUTION%' OR u.destination LIKE '%MEMORY%')""",
+        (since,)).fetchone()[0]
+    return {"by_type": by_type, "agent_self_written": int(agent_self)}
+
+
 def health() -> dict[str, Any]:
     """Return lane backlog, anomaly events, cleanup time, and bounded file sizes."""
     now = _utc_now()
@@ -493,6 +551,7 @@ def health() -> dict[str, Any]:
                ORDER BY utc_day,source""",
             ((now.date() - timedelta(days=29)).isoformat(),),
         ).fetchall()
+        review = review_health(conn, (now - timedelta(days=30)).isoformat())
     lanes: dict[str, Any] = {}
     for row in backlog_rows:
         try:
@@ -522,4 +581,5 @@ def health() -> dict[str, Any]:
             "inbox_count": inbox_count, "inbox_bytes": db_bytes,
             "memory_bytes": size("MEMORY.md"), "evolution_bytes": size("EVOLUTION.md"),
             "recurrence": recurrence_rows,
-            "llm_by_source": [dict(row) for row in llm_rows]}
+            "llm_by_source": [dict(row) for row in llm_rows],
+            "review": review}
