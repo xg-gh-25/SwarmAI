@@ -986,8 +986,39 @@ body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-zone-work) 35%, transparent);
 }
 .session-tab--swarm-out.session-tab--active::before { content: none; }
+/* Swarm Out activity (SessionTab `activity`): a count badge after the title — runs
+   running (quiet, the tab's own blue) or questions waiting for you (amber, the one
+   thing in the strip meant to catch the eye) — and the hive icon breathing while a
+   run is running. Motion only when work is going; idle is still. */
+.swarm-out-badge {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 10.5px;
+  line-height: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--color-zone-work) 55%, var(--color-text));
+  background: color-mix(in srgb, var(--color-zone-work) 22%, transparent);
+}
+.session-tab--swarm-out.session-tab--active .swarm-out-badge {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.22);
+}
+.session-tab--swarm-out .swarm-out-badge--ask,
+.session-tab--swarm-out.session-tab--active .swarm-out-badge--ask {
+  color: #1b1406;
+  background: var(--color-status-warning);
+}
+@keyframes swarm-out-breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.14); opacity: 0.55; }
+}
+.swarm-out-icon--busy { animation: swarm-out-breathe 2.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .session-tab { transition: none; }
+  .swarm-out-icon--busy { animation: none; }
 }
 
 /* Left Nav scroll area — its own 3px bar, invisible until the pointer is over the

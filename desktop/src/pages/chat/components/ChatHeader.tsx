@@ -4,6 +4,7 @@ import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTabBar } from './SessionTabBar';
 import { SessionTab } from './SessionTab';
 import { isSwarmOutTab, normalTabs } from '../swarmOut';
+import { useSwarmOutActivity } from '../../../components/swarm-out/useSwarmOutActivity';
 import { useHealth } from '../../../contexts/HealthContext';
 
 interface ChatHeaderProps {
@@ -33,6 +34,16 @@ interface ChatHeaderProps {
   canvasOpen?: boolean;
   /** Open Canvas on the active tab (dispatches swarm:open-canvas). */
   onOpenCanvas?: () => void;
+}
+
+/** The pinned Swarm Out tab with the Hives' activity (polled only while it exists). */
+function SwarmOutPinnedTab({ tab, isActive, onSelect, status }: {
+  tab: OpenTab; isActive: boolean; onSelect: (id: string) => void; status?: TabStatus;
+}) {
+  const activity = useSwarmOutActivity();
+  return (
+    <SessionTab tab={tab} isActive={isActive} onSelect={onSelect} onClose={() => {}} status={status} variant="swarm-out" activity={activity} />
+  );
 }
 
 /**
@@ -106,13 +117,11 @@ export function ChatHeader({
             data-testid="swarm-out-divider"
           />
           <div role="tablist" aria-label="Swarm Out" className="flex items-center self-stretch">
-            <SessionTab
+            <SwarmOutPinnedTab
               tab={swarmOutTab}
               isActive={swarmOutTab.id === activeTabId}
               onSelect={onTabSelect}
-              onClose={() => {}}
               status={tabStatuses?.[swarmOutTab.id]}
-              variant="swarm-out"
             />
           </div>
         </div>

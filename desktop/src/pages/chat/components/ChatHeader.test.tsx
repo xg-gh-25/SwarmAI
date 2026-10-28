@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { swarmOutService, type SwarmOutRuns } from '../../../services/swarmOut';
 import { ChatHeader } from './ChatHeader';
 import { HealthContext, type HealthContextValue } from '../../../contexts/HealthContext';
 import type { OpenTab } from '../types';
@@ -7,6 +8,11 @@ import type { OpenTab } from '../types';
 // ChatHeader uses useTranslation (tail "+" labels + health warnings).
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
+}));
+
+// The pinned Swarm Out tab polls the Hives' activity; by default there is none.
+vi.mock('../../../services/swarmOut', () => ({
+  swarmOutService: { runs: vi.fn(async () => ({ runs: [], asks: [], errors: [] })) },
 }));
 
 /**
@@ -169,5 +175,50 @@ describe('ChatHeader — pinned Swarm Out tab', () => {
     const onTabSelect = renderWithSwarmOut('tab-0');
     screen.getByRole('tablist', { name: 'Swarm Out' }).querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(onTabSelect).toHaveBeenCalledWith('swarm-out');
+  });
+});
+
+describe('ChatHeader — Swarm Out tab shows the Hives\' activity', () => {
+  // Questions: does the tab say how many questions wait for you (amber, before the
+  // running count) or else how many runs are running; does a run whose Hive could not be
+  // asked (running null) or that waits on you not count as running; does the icon
+  // breathe only while something runs; does an idle Hive show nothing.
+  const run = (sid: string, running: boolean | null, waiting = false) => ({
+    dispatch_id: sid, hive_id: 'h1', hive: 'w', session_id: sid, title: sid, origin: 'swarm-out', sent_at: '', waiting, running,
+  });
+  const ask = (sid: string) => ({ kind: 'approval' as const, hive: 'w', hive_id: 'h1', session_id: sid, request_id: 'r', asked_at: '' });
+  async function renderWith(data: SwarmOutRuns) {
+    vi.mocked(swarmOutService.runs).mockResolvedValue(data);
+    render(
+      <HealthContext.Provider value={makeHealth('connected')}>
+        <ChatHeader
+          openTabs={[{ id: 'tab-0', title: 'One', agentId: 'a1', isNew: false }, { id: 'swarm-out', title: 'Swarm Out', agentId: 'a1', isNew: true }]}
+          activeTabId="tab-0" onTabSelect={vi.fn()} onTabClose={vi.fn()} onNewSession={vi.fn()}
+        />
+      </HealthContext.Provider>,
+    );
+    await waitFor(() => expect(swarmOutService.runs).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });   // let the answer land
+  }
+
+  it('runs running: a quiet count and a breathing icon', async () => {
+    await renderWith({ runs: [run('a', true), run('b', true), run('c', null), run('d', false)], asks: [], errors: [] });
+    await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('2 在跑'));
+    expect(screen.getByTestId('swarm-out-badge').className).not.toContain('swarm-out-badge--ask');
+    expect(screen.getByTestId('swarm-out-icon').className).toContain('swarm-out-icon--busy');
+  });
+
+  it('a question waiting: the amber count wins, and a waiting run is not running', async () => {
+    await renderWith({ runs: [run('a', true), run('b', false, true)], asks: [ask('b')], errors: [] });
+    await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('1 等你'));
+    expect(screen.getByTestId('swarm-out-badge').className).toContain('swarm-out-badge--ask');
+    expect(screen.getByTestId('swarm-out-icon').className).toContain('swarm-out-icon--busy');
+  });
+
+  it('nothing running or waiting: no badge, a still icon', async () => {
+    await renderWith({ runs: [run('a', false), run('b', null)], asks: [], errors: [] });
+    await waitFor(() => expect(swarmOutService.runs).toHaveBeenCalled());
+    expect(screen.queryByTestId('swarm-out-badge')).toBeNull();
+    expect(screen.getByTestId('swarm-out-icon').className).not.toContain('swarm-out-icon--busy');
   });
 });

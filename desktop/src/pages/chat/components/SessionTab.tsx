@@ -7,6 +7,7 @@ import { TabStatusIndicator } from './TabStatusIndicator';
 import { TabNoticeDot } from './TabNoticeBar';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
+import type { SwarmOutActivity } from '../../../components/swarm-out/useSwarmOutActivity';
 
 interface SessionTabProps {
   tab: OpenTab;
@@ -20,6 +21,10 @@ interface SessionTabProps {
   /** 'swarm-out': the pinned Swarm Out tab (pages/chat/swarmOut.ts) — its own colour
    *  and icon, no close button, no shortcut hint. */
   variant?: 'swarm-out';
+  /** Swarm Out only: work on the Hives. A badge says how many questions wait for the
+   *  person (amber, takes precedence) or else how many runs are running; the hive icon
+   *  breathes while any run is running. Null / absent = not known yet: nothing shown. */
+  activity?: SwarmOutActivity | null;
 }
 
 /**
@@ -53,6 +58,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
     maxTitleLength = 25,
     onKeyDown,
     variant,
+    activity,
   },
   ref
 ) {
@@ -119,7 +125,10 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       )}
 
       {/* Chat icon */}
-      <span className="material-symbols-outlined icon-xs flex-shrink-0">
+      <span
+        className={clsx('material-symbols-outlined icon-xs flex-shrink-0', pinned && activity?.running ? 'swarm-out-icon--busy' : null)}
+        data-testid={pinned ? 'swarm-out-icon' : undefined}
+      >
         {pinned ? 'hive' : 'chat_bubble'}
       </span>
 
@@ -133,6 +142,17 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       <span className="truncate text-[12.5px]" title={tab.title}>
         {displayTitle}
       </span>
+
+      {pinned && activity && (activity.waiting > 0 || activity.running > 0) && (
+        <span
+          className={clsx('swarm-out-badge', activity.waiting > 0 && 'swarm-out-badge--ask')}
+          data-testid="swarm-out-badge"
+        >
+          {activity.waiting > 0
+            ? tf(t, 'chat.swarmOut.waiting', '{{n}} 等你', { n: activity.waiting })
+            : tf(t, 'chat.swarmOut.running', '{{n}} 在跑', { n: activity.running })}
+        </span>
+      )}
 
       {/* Shortcut hint — shown on hover, 9px mono font, dim color */}
       {shortcutLabel && (

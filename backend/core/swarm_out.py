@@ -8,7 +8,8 @@ monitoring beyond what the dashboard needs to list a run.
 - ``dispatch`` — start a session on the Hive with the task and return as soon as the
   Hive names the session. The turn keeps running on the Hive after we disconnect
   (``routers/chat.py`` detaches a turn whose client went away; measured 2026-10-27).
-- ``list_runs`` — the local dispatch log, each row with its Hive's open questions.
+- ``list_runs`` — the local dispatch log, each row with its Hive's open questions and
+  whether its session is streaming on the Hive right now.
 - ``answer`` — validate an answer against the question the Hive wrote, then write it
   to ``bridge/<hive>/answer/…``. Only the Host can write there.
 
@@ -276,14 +277,40 @@ def _open_asks(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
     return out
 
 
+async def _streaming_sessions(inst: dict[str, Any]) -> Optional[set[str]]:
+    """The session ids streaming on the Hive now (its own streaming-state endpoint, the
+    same one its tabs read), or None when the Hive did not say."""
+    async with _client(inst) as client:
+        r = await client.get("/api/chat/sessions/streaming-state")
+    if r.status_code != 200:
+        return None
+    sessions = r.json().get("sessions")
+    if not isinstance(sessions, dict):
+        return None
+    return {sid for sid, e in sessions.items() if isinstance(e, dict) and e.get("streaming") is True}
+
+
 async def list_runs() -> dict[str, Any]:
-    """Dispatch log rows (newest first) and every Hive's open questions."""
+    """Dispatch log rows (newest first) and every Hive's open questions.
+
+    Each row says ``waiting`` (its session has an open question) and ``running`` (its
+    session is streaming on the Hive now): True / False, or None when that Hive could
+    not be asked, never a guess. A session the Hive no longer holds is not running."""
     rows = list(reversed(await asyncio.to_thread(_read_log)))
     asks: list[dict[str, Any]] = []
     errors: list[str] = []
+    streaming: dict[str, Optional[set[str]]] = {}
     for hive_id in sorted({r["hive_id"] for r in rows}):
         try:
             inst = await _instance(hive_id)
+        except SwarmOutError as e:
+            errors.append(str(e))
+            continue
+        except Exception as e:                      # store unreadable: show it, keep the list
+            logger.warning("swarm_out: reading the Hive record failed (%s)", type(e).__name__)
+            errors.append("could not read questions from one Hive")
+            continue
+        try:
             s3 = await asyncio.to_thread(_s3, inst)
             for rec in await asyncio.to_thread(_open_asks, s3, inst["s3_bucket"], inst["name"]):  # cleaned
                 rec["hive_id"] = inst["id"]
@@ -293,9 +320,16 @@ async def list_runs() -> dict[str, Any]:
         except Exception as e:                      # S3 unreachable: show it, keep the list
             logger.warning("swarm_out: listing questions failed (%s)", type(e).__name__)
             errors.append("could not read questions from one Hive")
+        try:
+            streaming[hive_id] = await _streaming_sessions(inst)
+        except Exception as e:                      # Hive unreachable: running unknown
+            logger.warning("swarm_out: reading session state failed (%s)", type(e).__name__)
+            streaming[hive_id] = None
     by_session = {(a["hive_id"], a.get("session_id")): a for a in asks}
     for r in rows:
         r["waiting"] = (r["hive_id"], r["session_id"]) in by_session
+        live = streaming.get(r["hive_id"])
+        r["running"] = None if live is None else r["session_id"] in live
     return {"runs": rows, "asks": asks, "errors": errors}
 
 

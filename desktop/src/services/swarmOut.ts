@@ -15,6 +15,8 @@ export interface SwarmOutRun {
   origin: string;
   sent_at: string;
   waiting: boolean;
+  /** Its session is streaming on the Hive now; null when that Hive could not be asked. */
+  running: boolean | null;
 }
 
 export interface SwarmOutQuestion {
