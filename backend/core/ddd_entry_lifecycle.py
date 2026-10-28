@@ -30,6 +30,7 @@ Public API:
     classify_entry_type(text) → str
 """
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -731,7 +732,14 @@ def split_entries(body: str) -> "list[str]":
 
 
 def split_blocks(body: str) -> "list[tuple[str, str]]":
-    """*body* as recall units, in order: each column-0 ``- `` entry (read as
+    """*body* as recall units ``(kind, text)``, in order -- ``split_blocks_at`` without
+    the line numbers."""
+    return [(kind, text) for kind, text, _line in split_blocks_at(body)]
+
+
+def split_blocks_at(body: str) -> "list[tuple[str, str, int]]":
+    """*body* as recall units ``(kind, text, line)``, in order; ``line`` is the 0-based
+    index in ``body.splitlines()`` of the unit's first line. Each column-0 ``- `` entry (read as
     ``split_entries`` reads it) is ``("entry", text)``; what lies between entries is cut
     at blank lines into ``("block", text)`` -- a paragraph, a table, a ``###`` heading with
     the lines under it. For docs written as prose (PRODUCT): a whole ``## `` section is
@@ -739,40 +747,73 @@ def split_blocks(body: str) -> "list[tuple[str, str]]":
     run-knowledge §3.6.9. A fenced code block is one block: a blank line or a ``- `` line
     inside a fence is code, and cutting there would show half of it."""
     lines = body.splitlines()
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, int]] = []
     buf: list[str] = []
+    buf_start = [0]
     fence = ""
 
     def flush() -> None:
         text = "\n".join(buf).strip()
         if text:
-            out.append(("block", text))
+            lead = next(n for n, ln in enumerate(buf) if ln.strip())
+            out.append(("block", text, buf_start[0] + lead))
         buf.clear()
     i = 0
     while i < len(lines):
         mark = lines[i].lstrip()[:3]
         if mark in ("```", "~~~") and (not fence or fence == mark):
             fence = "" if fence else mark
+            if not buf:
+                buf_start[0] = i
             buf.append(lines[i])
             i += 1
             continue
         if fence:
+            if not buf:
+                buf_start[0] = i
             buf.append(lines[i])
             i += 1
             continue
         if lines[i].startswith("- "):
             flush()
             _text_end, _meta, end = _scan_entry(lines, i)
-            out.append(("entry", "\n".join(lines[i:end]).strip()))
+            out.append(("entry", "\n".join(lines[i:end]).strip(), i))
             i = max(end, i + 1)
             continue
         if not lines[i].strip():
             flush()
         else:
+            if not buf:
+                buf_start[0] = i
             buf.append(lines[i])
         i += 1
     flush()
     return out
+
+
+_ANY_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def unit_id(text: str) -> str:
+    """The identity of one recall unit (an entry or a prose block): 8 hex characters.
+
+    The same for every copy of the unit wherever it is read -- a recall hit, a
+    ``knowledge find`` result, a line of the doc on disk -- and stable across the
+    rewrites nobody would call an edit: comments are removed first (the
+    ``<!-- ref:… | last:… | decay:… -->`` line the decay job rewrites, and the
+    ``<!-- maturity: … -->`` marker), then an entry is reduced by
+    ``ddd_cultivation.content_signature`` (bullet, writeback prefix, ``[type]``, bold,
+    trailing attribution, case, whitespace) -- the same rule the write-side dedup uses
+    for "the same lesson" -- and a block's whitespace is collapsed and lowercased.
+    Hashing the raw text instead changed the id each time decay touched an entry.
+    Knowledge addressing design §2.1."""
+    t = _ANY_COMMENT_RE.sub(" ", text or "").strip()
+    if t.startswith("- "):
+        from core.ddd_cultivation import content_signature
+        norm = content_signature(t)
+    else:
+        norm = re.sub(r"\s+", " ", t).strip().lower()
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:8]
 
 
 def parse_entries(content: str, *, include_prose: bool = False,

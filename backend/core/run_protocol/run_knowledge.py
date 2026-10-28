@@ -41,7 +41,6 @@ Public:
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from dataclasses import dataclass, field
@@ -78,8 +77,11 @@ def entry_head(text: str) -> str:
 
 
 def item_id(text: str) -> str:
-    """8 hex characters naming one recalled entry (its whole text, whitespace folded)."""
-    return hashlib.sha256(" ".join(str(text).split()).encode("utf-8")).hexdigest()[:8]
+    """8 hex characters naming one recalled entry: ``ddd_entry_lifecycle.unit_id``, the
+    one identity every reader uses (knowledge addressing §2.1). It ignores the
+    metadata comments the decay job rewrites, so an entry keeps its id across decay."""
+    from core.ddd_entry_lifecycle import unit_id
+    return unit_id(str(text))
 
 
 def _ddd_rows(query: str, project: str, purpose: str) -> list[dict]:
