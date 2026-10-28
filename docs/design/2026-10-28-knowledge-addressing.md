@@ -134,7 +134,7 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
 只读 `ddd_paths` 常量和磁盘（不读 AGENTS.md 文字），旧布局经 `ddd_path` 回退同样能出：
 
 - `full`（pipeline knowledge 文件、correctness 专家）：每份文档和归档的绝对路径、大小、`##` 行号；超过 20K 的 `##` 列 `###`；
-  `knowledge/` 文件清单；gates / capabilities 名；整行取舍，预算 8000 字符，放不下的合成一行 grep 提示。
+  `knowledge/` 文件清单；`assets/<kind>/` 下的治理资产（含 `data-contract/`）；gates / capabilities 名；`bindings.yaml`、`REFRESHER.md` 是否存在；整行取舍，预算 8000 字符，放不下的合成一行 grep 提示。
 - `brief`（其他专家、native expert-review、Swarm Out、repo_guidance）：根 + 每份文档路径和大小 + 取用命令，约 600 字符。
 - 安全：只列根内、`resolve()` 后仍在根内的 `.md`；跳过 `.artifacts/`、锁文件、隐藏文件、数据库；内容放 `<recalled>` 围栏；不抛异常
   （无 DDD / 缺文档 / 非 UTF-8 只少那一部分并说明，接 run-knowledge H5 矩阵）。
@@ -143,8 +143,12 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
 ### 2.4 按需入口 `"$SWARM_BACKEND_BIN" knowledge map | find | get`
 
 - 顶层子命令，和 `pipeline-v1` 一样在 `desktop_main.main` 分派，**不走 `py -m`**，不受 cwd 影响、不加载 cwd 里的代码。
-- `map --project P [--brief] | --projects`；`find --project P --query "<词>" [--doc TECH.md] [--in ddd|library]`：包 `recall_ddd` /
-  `recall_all(library)`，返回**整条**单元 + `绝对路径:行号` + `unit_id`，放不下的用 `not_shown_note`；`get <unit_id>|<path>:<line>`：一条全文 + 身份。
+- `map --project P [--brief] | --projects`；`find --project P --query "<词>" [--doc TECH.md] [--in ddd|library]`；`get <unit_id>|<path>:<line>`：一条全文 + 身份。
+- **`find --in ddd` 的范围 = 和引用校验同一个单元表**（`ddd_units(project)`）：四份文档 + 各自 `*-archive.md` + `2-understanding/knowledge/` +
+  治理资产的 `data-contract/`（今天 `_recall_ddd` 已经召回它，recall_multi.py:1284）。只包 `recall_ddd` 不够：它只加载四份文档
+  （`_load_ddd_docs_text`），查不到归档和语料，和"引用含归档"自相矛盾。排序复用 `recall_ddd` 的按文档 BM25 和整条取舍；
+  `ddd_units` 在切分时记下每个单元的起始行号（`recall_ddd` 的命中今天不带行号，`_parse_docs_sections` 只返回文本）。
+  返回**整条**单元 + `绝对路径:行号` + `unit_id`，放不下的用 `not_shown_note`。`--in library` 包 `recall_all(library)`，同样整条 + 路径 + 身份。
 - 只读，只到 DDD 根和 Library；MEMORY / EVOLUTION 仍走带隐私门的 `context_recall_cli`。
 - 会话类型：必填 `--session-type`、默认拒绝；渠道类型只放行 shareable 项目。run 1 第一步先核实非 owner 渠道会话是否有 Bash、
   daemon 是否给子进程设了可信的会话类型环境变量；有就用它，不靠 Agent 自报。
@@ -167,7 +171,8 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
 
 ### 2.7 在决定点触发
 
-- pipeline：THINK 和 PLAN 的产物各加可选字段 `knowledge_checked: [{query, result_ids}]`——定方案前用方案里的词跑 2–3 次 `knowledge find`，
+- pipeline：DESIGN_SPEC（full 和 lite 共用的字段集 `common`，schemas.py:493；THINK 没有自己的产物，它的结论进 DESIGN_SPEC）加可选字段
+  `knowledge_checked: [{query, result_ids}]`；`direct` 没有 PLAN，不适用；lite REQUIREMENTS 不受影响——定方案前用方案里的词跑 2–3 次 `knowledge find`，
   记下查了什么、用了哪些；没查到写 `[]`。stage 文档在 "Read knowledge_design.md first" 后加一句做法。**不设 gate**（P5）；REPORT 和 §5 只统计是否为空。
 - 聊天和 native 工作：不加机制，靠 §2.2 那段的 "search with the words of the solution"。
 
@@ -199,7 +204,9 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
 | Brain Hub | 预览保留，旁边给 `path:line`，点开看全文 |
 | `ddd_weekly_report` | 删自带的 `ddd_path` 回退，改用 `ddd_paths` |
 | 技能 | `s_qa` 改用 `knowledge find --doc TECH.md --query 'Dev Commands'`；`s_internal-crux-cr` 去掉项目名；`lint_skills.py` 新规则 |
-| REFLECT / 培育 / 分发包 | 不动 |
+| REFLECT / 培育 / 分发包 | 不动（REFLECT 每条经验已按全项目召回候选，主动查到的条目同样在候选范围内） |
+| `archive_browse.search_archive`、eval 的 DDD 扫描（eval.py:516）、`ddd_refresh` 的陈旧检查 | 不动：读者是人看的界面和健康检查，不是把知识交给 Agent 的门 |
+| 本机 TOOLS.md § On-Demand Recall | 不是产品文件：run 3 里把 DDD / Library 的按需用法改指 `knowledge` 命令 |
 | 本机 6 份过期 AGENTS.md | 不是产品代码：备份后只替换三类旧写法，diff 核对（地图不读 AGENTS.md，所以不建产品迁移） |
 
 ## 4. 不做的
@@ -256,7 +263,8 @@ run 2 依赖 run 1 的 `unit_id`、`ddd_map`、`knowledge`；run 3 的 linter �
 8. pipeline knowledge 文件：有 DDD 时含 `map(full)`、无 DDD 时不含；not-shown / pinned / pointer 行是存在的绝对路径。
 9. repo_guidance：lessons 吃满预算时 DDD 那一行仍送达；放不下时不记 `seen`、下次再试。
 10. 聊天：命中给条目标题 + `绝对路径:行号`；无条目命中时一行项目指针。
-11. 非 owner 渠道：`knowledge` 只放行 shareable 项目。
+. `knowledge find --in ddd` 能命中只在 `*-archive.md`、`2-understanding/knowledge/`、`data-contract/` 里的条目；返回的行号指向该单元第一行。
+13. DESIGN_SPEC full 和 lite 都接受 `knowledge_checked`、形状错误报 DS-5；REPORT 只出"是否为空"的计数。
 
 现有测试一并跑：`run_knowledge`、`recall_multi`（recall_ddd）、engine / hook_bridge / answers 的 knowledge_ref、`repo_guidance`、
 `session_router` DDD 注入、`prompt_builder` 基段、两个单源测试、run-knowledge H5 矩阵。
@@ -273,6 +281,40 @@ run 1 部署后：新开一个聊天会话，确认 SWARMAI.md 那段在 prompt 
 run 2 部署后：跑一个真实 trivial run 和一个 full run，确认 knowledge 文件有地图和绝对路径、`knowledge_checked` 被填写，
 用 `knowledge_usage_report.py` 出第一份数，和 §5 基线对照。
 
+## 7. 本次讨论中提出的已知问题，逐条去向
+
+| 问题（出处） | 去向 |
+|---|---|
+| knowledge.md 头部没有 DDD 路径 | §2.3 `map(full)` |
+| not-shown / pinned / pointer 行只有文档名 | §2.6 绝对路径 + 行号 |
+| 主动查到的不能引用（answers.py:107、hook_bridge.py:260、engine.py:2807） | §2.5 |
+| `knowledge_refs` 的全部读者（R27） | §2.5 列全 + 测试 6 |
+| `py -m` 受 cwd 影响、`--domains ddd` 没有行号和身份 | §2.4 顶层子命令 + 测试 5 |
+| repo_guidance 指针被 lessons 挤掉、`seen` 先记 | §3 + 测试 9 |
+| 聊天只给 100K 级小节名、为未展示内容记用量 | §2.6 条目级 + 测试 7、10 |
+| 只有聊天喂衰减用量 | §2.5 被引用即记 + 测试 7 |
+| `item_id` 含元数据注释、衰减一改写就变 | §2.1 `unit_id` + 测试 1 |
+| 生产者赋 id 会被 `_META_RE` 丢、覆盖不全 | §2.1 不采用 |
+| REFLECT / 培育去重不能换成 BM25 | §3 不动 |
+| 行号在 run 中途漂移、条目被归档 | §2.9 + `get <unit_id>`；已知集合含归档 + 测试 6 |
+| 专家按需读花调用预算 | §3 handout 写明"只在 finding 需要时查" |
+| 非 owner 渠道 / 群聊的隐私 | §2.4 只放行 shareable + 测试 11；prompt 里无任何项目信息 |
+| 活/冷总纲（零 in-prompt index） | §1.5、§4：不加生成段和清单 |
+| SWARMAI.md 增删 DDD 会不会过期 | §2.2 只写结构 + 一致性测试（测试 2） |
+| `s_qa` 旧路径、`s_internal-crux-cr` 项目名 | §3 + linter 规则（测试 3） |
+| `ddd_weekly_report` 第二份布局实现 | §3 run 3 |
+| Brain Hub 预览截 400 字 | §3 给 `path:line` 链接 |
+| 6 个 DDD 的 AGENTS.md 过期 | §3 run 3（本机，备份后改） |
+| 推送从未被引用 / 主动查是否真的发生 | §5 指标和判定 |
+| 指针以前没送达过，"告诉了也不读"未被检验 | §5 先量再往下建 |
+| 分发包离线检索与 AIM §5.5 冲突 | §4 不做 |
+| r4 核对时新发现：`find` 只包 `recall_ddd` 查不到归档、语料、data-contract | §2.4 改为同一单元表 |
+| r4 核对时新发现：`recall_ddd` 命中不带行号 | §2.4 `ddd_units` 记行号 |
+| r4 核对时新发现：`knowledge_checked` 放在哪个产物、哪些 profile 有 | §2.7 DESIGN_SPEC 的 `common`，direct 不适用 |
+| r4 核对时新发现：地图漏了治理资产、`REFRESHER.md`、`bindings.yaml` | §2.3 |
+| BM25 归一化丢掉最弱匹配（10-27 记录） | 已在 `_normalize_bm25_scores` 修复（memory_index.py:472），无需再做 |
+| 本对话之外的 P0（streaming 卡顿、Interrupted） | 与本设计无关，不在范围 |
+
 ## 修订
 
 - r1（2026-10-28）：初稿：库登记表 + 单元模型 + 四操作 + 五种传输 + 6 个 run。
@@ -281,3 +323,5 @@ run 2 部署后：跑一个真实 trivial run 和一个 full run，确认 knowle
 - r3（2026-10-28）：现场按需查到 08-14 活/冷总纲 → 删 prompt 里的项目表；补触发、构建时机/实效/延迟、通用 Knowledge；聊天条目级。
 - r4（2026-10-28，final）：XG 确认。实测推送 vs 主动查（推送从未被引用、聊天指针 5/12 被跟进、决定性条目只有主动查找到）→ 两者都保留、分工写清；
   不新增 system prompt 生成段，改为改正 SWARMAI.md § My Workspace 并用测试钉在布局常量上（增删 DDD 不影响）；补验证计划（读者、最终测试集、审查、端到端、判定标准）。
+  定稿后逐条核对已知问题（§7），补 4 处遗漏：`find` 的范围改为与引用同一单元表（含归档、语料、data-contract）、单元带行号、
+  `knowledge_checked` 落在 DESIGN_SPEC、地图补治理资产。
