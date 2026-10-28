@@ -10,6 +10,8 @@ system Python:
   argument is a flag or absent, which is how launchd and Tauri start it).
 - ``pipeline-v1 <args>`` — the pipeline CLI (``core/run_protocol/cli_main.py``). Not supported on
   Windows: it says so and exits 2.
+- ``knowledge map | find | get`` — read a project's DDD (or the Library) on demand, whole
+  units with ``path:line`` and an id (``core/knowledge_cli.py``; knowledge addressing design).
 - ``hook <event> --host <host>`` — a coding agent host's hook (Claude Code, ...) hands
   its event JSON on stdin (``core/host_hooks.py``). Always exits 0: it never blocks
   the host.
@@ -19,6 +21,7 @@ system Python:
   skill scripts) uses this instead.
 
 Public: ``main(argv)``, ``run_py(argv)``, ``run_pipeline_v1(argv)``, ``run_hook(argv)``,
+``run_knowledge(argv)``,
 ``WINDOWS_PIPELINE_MESSAGE``.
 """
 import json
@@ -105,6 +108,13 @@ def run_pipeline_v1(argv: "list[str]") -> int:
         return 2
     from core.run_protocol.cli_main import main as pipeline_main
     return pipeline_main(argv)
+
+
+# ── knowledge ─────────────────────────────────────────────────────────────────
+
+def run_knowledge(argv: "list[str]") -> int:
+    from core.knowledge_cli import main as knowledge_main
+    return knowledge_main(argv)
 
 
 # ── hook ──────────────────────────────────────────────────────────────────────
@@ -198,6 +208,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return run_pipeline_v1(argv[1:])
     if argv and argv[0] == "hook":
         return run_hook(argv[1:])
+    if argv and argv[0] == "knowledge":
+        return run_knowledge(argv[1:])
     if argv and argv[0] == "daemon":
         argv = argv[1:]
     return run_daemon(argv)
