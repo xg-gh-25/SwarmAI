@@ -42,6 +42,8 @@ import type {
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
+import { getCodeIntelSummary, triggerReindex, type CodeIntelSummary } from '../../services/codeIntel';
+import { relativeTime } from './ArtifactsOverlay';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
@@ -804,6 +806,7 @@ function BrainBrowse(
               {graphOpen ? 'expand_less' : 'expand_more'}
             </span>
           </button>
+          {graphOpen && <CodeIntelStatus key={`status-${name}`} name={name} />}
           {graphOpen && (
             <div className="border-t border-[var(--color-border)] h-[360px]" data-testid="codegraph-panel">
               <CodeGraph key={`graph-${name}`} project={name} inline />
@@ -811,6 +814,62 @@ function BrainBrowse(
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ── Code graph status (the one decision: is this brain's graph current, re-index?) ──
+// It used to be a bottom-bar badge hard-wired to the project named SwarmAI, so every
+// other brain had none. Here it belongs to the brain it describes; fetched only when
+// the Code Graph disclosure is opened.
+
+function _indexedAge(iso: string | null): string {
+  if (!iso) return 'never indexed';
+  // the backend stores UTC without a zone suffix
+  const zoned = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`;
+  const age = relativeTime(zoned);           // 'now' | '5m' | '3h' | '2d' | 'YYYY-MM-DD' | ''
+  if (!age) return 'indexed —';
+  if (age === 'now') return 'indexed just now';
+  return /^\d+[mhd]$/.test(age) ? `indexed ${age} ago` : `indexed on ${age}`;
+}
+
+function CodeIntelStatus({ name }: { name: string }) {
+  const [summary, setSummary] = useState<CodeIntelSummary | null>(null);
+  const [reindexing, setReindexing] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getCodeIntelSummary(name)
+      .then((s) => { if (!cancelled) setSummary(s); })
+      .catch(() => { if (!cancelled) setSummary(null); });
+    return () => { cancelled = true; };
+  }, [name]);
+
+  const reindex = () => {
+    setReindexing(true);
+    triggerReindex(name)
+      // the re-index runs in the background: read the summary again after a moment
+      .then(() => new Promise((r) => setTimeout(r, 5000)))
+      .then(() => getCodeIntelSummary(name))
+      .then((s) => setSummary(s))
+      .catch(() => {})
+      .finally(() => setReindexing(false));
+  };
+
+  if (!summary) return null;
+  const stale = summary.freshnessStatus === 'stale';
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] text-meta" data-testid="codeintel-status">
+      <span className="tabular-nums text-[var(--color-text-muted)]">{summary.symbolCount.toLocaleString()} symbols</span>
+      <span className={stale ? 'text-amber-500' : 'text-[var(--color-text-faint)]'}>· {_indexedAge(summary.lastIndexedAt)}</span>
+      <button
+        data-testid="codeintel-reindex"
+        onClick={reindex}
+        disabled={reindexing}
+        className="btn-sm btn-soft ml-auto disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {reindexing ? 'Indexing…' : 'Re-index'}
+      </button>
     </div>
   );
 }

@@ -30,7 +30,7 @@ import { terminalLocation } from '../stores/terminalLocation';
 const PANEL_OPEN_KEY = 'terminalPanelOpen';
 
 /** Window event the BottomBar (outside this provider) dispatches to toggle the
- *  panel — same decoupling idiom as 'swarm:show-code-graph'. */
+ *  panel (a window event, so the bar needs no context from this provider). */
 export const TERMINAL_TOGGLE_EVENT = 'swarm:toggle-terminal';
 
 /** Window event: reveal the panel at the current location (terminalLocation) —

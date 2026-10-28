@@ -128,7 +128,9 @@ vi.mock('../code-intel/CodeGraph', () => ({
 vi.mock('../../services/codeIntel', () => ({
   getCodeIntelSummary: vi.fn(),
   getCodeIntelGraph: vi.fn(),
+  triggerReindex: vi.fn(),
 }));
+import { getCodeIntelSummary, triggerReindex } from '../../services/codeIntel';
 
 // The Brain detail content is now the real Projects/<name> file tree (run_a75197d9).
 // Mock LibraryTree at the boundary — assert it's rooted at Projects/<name> and that
@@ -222,6 +224,7 @@ beforeEach(() => {
   mockGetBrains.mockResolvedValue(GALLERY);
   mockGetPinned.mockReturnValue([]);  // default: flat-grid fallback (existing assertions)
   mockGetBrainDetail.mockResolvedValue(DETAIL);
+  (getCodeIntelSummary as ReturnType<typeof vi.fn>).mockResolvedValue(null);  // no graph status
   mockGetReview.mockResolvedValue(REVIEW);
   mockApproveReview.mockResolvedValue({ last_reviewed_sha: REVIEW.head_sha });
   mockRejectHunk.mockResolvedValue({ reverted: true });
@@ -471,6 +474,28 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(mockCodeGraph).toHaveBeenCalledWith(expect.objectContaining({ project: 'SwarmAI', inline: true }));
     // Tree stays visible alongside the graph (not swapped out).
     expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
+  });
+
+  it('the code graph status and Re-index belong to the brain opened, not to a fixed project', async () => {
+    (getCodeIntelSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      symbolCount: 1234, edgeCount: 0, fileCount: 3, unusedExportsCount: 0, unusedExportsPct: 0,
+      entryPoints: 0, languages: {}, modulesTop5: [], lastIndexedAt: null, freshnessStatus: 'unknown',
+    });
+    (triggerReindex as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    mockGetBrainDetail.mockResolvedValue({ ...DETAIL, name: 'AIDLC' });
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-AIDLC'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-browse')).toBeTruthy());
+    // collapsed: nothing fetched
+    expect(getCodeIntelSummary).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('codegraph-toggle'));
+    const status = await screen.findByTestId('codeintel-status');
+    expect(getCodeIntelSummary).toHaveBeenCalledWith('AIDLC');
+    expect(status.textContent).toContain('1,234 symbols');
+    expect(status.textContent).toContain('never indexed');
+    fireEvent.click(screen.getByTestId('codeintel-reindex'));
+    expect(triggerReindex).toHaveBeenCalledWith('AIDLC');
   });
 
   it('hasSpecs → Repo documents is a collapsed disclosure; opening it lists tier 1 first and fetches a document on click', async () => {

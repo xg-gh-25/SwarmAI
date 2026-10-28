@@ -23,9 +23,12 @@ vi.mock('@tauri-apps/api/window', () => ({
   }),
 }));
 
-// Mock Code Intelligence service (BottomBar dependency)
+// A project with a code graph exists: the bar must still not show a badge for one.
 vi.mock('../../services/codeIntel', () => ({
-  getCodeIntelSummary: vi.fn().mockResolvedValue(null),
+  getCodeIntelSummary: vi.fn().mockResolvedValue({
+    symbolCount: 10, edgeCount: 0, fileCount: 1, unusedExportsCount: 0, unusedExportsPct: 0,
+    entryPoints: 0, languages: {}, modulesTop5: [], lastIndexedAt: null, freshnessStatus: 'fresh',
+  }),
   triggerReindex: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -195,6 +198,12 @@ describe('BottomBar', () => {
   it('renders workspace name "SwarmWS"', () => {
     renderBottomBarWithHealth(true);
     expect(screen.getByText('SwarmWS')).toBeDefined();
+  });
+
+  it('shows no code-intel badge: the status lives on each brain in Brain Hub', async () => {
+    renderBottomBarWithHealth(true);
+    await new Promise((r) => setTimeout(r, 0));   // let a summary fetch, if any, land
+    expect(screen.queryByTestId('code-intel-indicator')).toBeNull();
   });
 
   it('renders keyboard shortcut hints', () => {
