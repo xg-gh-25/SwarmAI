@@ -410,7 +410,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 常量 | `project_registry.SPEC_DETAILS_DIR`；`prompt_builder.py:2646` 的 spec-details 排除 | 已有 brain 的目录还在盘上，所以排除规则保留到用户归档那个目录为止，常量随之删除 |
 | 前端 | `LibraryTree.tsx:54` 隐藏 code-intel.json 的规则 | 保留到已有文件被归档为止，然后删除 |
 
-**已有数据不由代码删除**（SOUL P4 / STEERING #20）：SwarmAI 的 `code-intel.json`（399 KB，SwarmWS 里有 git 跟踪）和 `spec-details/`（14 份）是用户工作区里的文件。代码退出之后，这两样不再被读写。归档由用户确认后执行：移到 `Projects/SwarmAI/.artifacts/archive/` 下，不删除。业务层里有价值的内容，以后经 CDF 的 S2/S3 写成 DDD 条目，不做一次性迁移（CDF §13：系统不整理已沉淀的内容）。
+**已有数据不由代码删除**（SOUL P4 / STEERING #20）：SwarmAI 的 `code-intel.json`（399 KB，SwarmWS 里有 git 跟踪）和 `spec-details/`（14 份）是用户工作区里的文件。代码退出之后，这两样不再被读写。~~归档由用户确认后执行：移到 `Projects/SwarmAI/.artifacts/archive/` 下，不删除。~~ 用户确认改为直接删除（r11）：SwarmWS 里有 git 跟踪，删除可以从历史恢复。业务层里有价值的内容，以后经 CDF 的 S2/S3 写成 DDD 条目，不做一次性迁移（CDF §13：系统不整理已沉淀的内容）。
 
 **失去什么**：只有 SwarmAI 失去 domains 这一路 recall。SwarmAI 的 TECH.md 本身已有大量 Key Subsystems 内容，由 DDD 那一路覆盖。其他 brain 什么都不失去。
 
@@ -509,7 +509,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 5 | G3 import 表、G4 语言修正、G6 | 1 | **已完成**（correctness 一轮，见 r8） |
 | 6 | §5.11 C5–C11（阶段二）；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
 | 7 | §6 eval golden case 和 fixture repo | 4 | **已完成**（correctness 一轮，见 r9） |
-| 8 | 用户确认后，归档 SwarmAI 的旧 `code-intel.json` 和 `spec-details/`（移动，不删除）；随后删除 §5.9 表里标为"保留到归档为止"的规则 | 1b | — |
+| 8 | 删除 SwarmAI 的旧 `code-intel.json` 和 `spec-details/`（用户改为直接删除，不归档）；随后删除 §5.9 表里标为"保留到归档为止"的规则 | 1b | **已完成**（SwarmWS 9dddb43e5b 删文件；f225eb3a7 删规则，I11 不再留例外） |
 
 ## 10. 验证计划
 
@@ -720,3 +720,9 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
   - **survey 读到外层 repo 的 git**：被调查的目录不是 git 顶层时（夹具 repo 位于 SwarmAI 仓库里），survey 原来会写进外层仓库的 HEAD、remote 和提交历史，热点也是从外层仓库算出来的。现在 `identity` 和提交历史只在目录本身是 repo 顶层时才读，规则和 `list_files` 一致。
   - **`test_no_case_depends_on_one_machine_or_checkout`**：原来一律禁止出现 `Projects/`。现在放行夹具工作区里真实存在、且不含 `..` 的路径。
 - **mutation 检查**：8 处，全部被抓到。
+
+**r11（2026-10-28）**：
+- **第 8 步**：用户确认旧文件直接删除，不归档。SwarmWS 提交 9dddb43e5b 删除了 `code-intel.json`、14 份 `spec-details/` 和 DDD 里的 `s_repo-to-ddd` 副本（都有 git 跟踪，可从历史恢复）；main 上 f225eb3a7 删除了 `prompt_builder` 的 spec-details 排除、`LibraryTree` 的隐藏规则和 I11 的例外。
+- **第 7 步的 JSON 格式**：两条离线测试的答案都是"`[` 加每行一个对象、没有逗号"，不是 JSON。原因是 case prompt 写了"one entry per line"，SKILL.md P2b 的示例本身也是两个裸对象。示例改为合法列表，prompt 改为"one valid JSON list, separated by commas"（5ce498634）。
+- **新判官下的第一组计数**（must-have / 无出处 / 流水账）：LIB 4/4、0、0，判官判失败（把 decision 写进了 repo 没提过的 Strategic Priorities）；ADR 4/4、0、0，判官判通过，整条因 JSON 不合法失败。格式修正后要再跑一次，门槛在那之后定。
+
