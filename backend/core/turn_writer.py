@@ -21,6 +21,8 @@ continue_with_cmd_permission, run_injected_turn) gets ONE ``TurnWriter``:
   the session's running one — ``TurnWriter.running(session_id)`` — until
   ``close()``. One turn runs per session at a time; the registry is keyed by
   session and every entry is removed by its own writer's ``close()``.
+- ``record_outcome(block)``: the turn's ``turn_outcome`` block (core/turn_outcome),
+  written by ``SessionRouter._published_turn`` before ``close()`` for a started turn.
 - ``flush()``: writes what is held now and keeps the writer open — for a write
   into the running turn from outside it (``_persist_stop_receipt`` flushes
   ``running(sid)`` first), so the turn's rows keep the order the turn showed.
@@ -75,6 +77,7 @@ class TurnWriter:
         self._held: list[dict] = []   # step results waiting for the next assistant row
         self._fresh_segment = False   # a steer's segment with no assistant row yet
         self._closed = False
+        self._outcome_recorded = False   # record_outcome writes one block per turn
         self._lock = asyncio.Lock()
 
     @property
@@ -172,6 +175,29 @@ class TurnWriter:
         await self._router._persist_assistant_blocks(
             self._session_id, held, None,
             label=f"{self._label or 'turn'}-results", client_id=self._row_key)
+
+    async def record_outcome(self, block: dict) -> bool:
+        """Write the turn's ``turn_outcome`` block (core/turn_outcome) onto its newest
+        row, after what it still holds, else as a row of its own. Before ``close``;
+        a closed writer writes nothing (False)."""
+        async with self._lock:
+            if self._closed or not self._session_id or self._outcome_recorded:
+                return False                     # one outcome per turn
+            await self._write_held()
+            # marked before the write: a cancel can land after the commit, and a retry
+            # must not add a second outcome (one lost is better than one doubled)
+            self._outcome_recorded = True
+            token = TRANSCRIPT_FEED_SUPPRESSED.set(True)
+            try:
+                from database import db
+                if not (self._row_key and await db.messages.append_to_turn_row(
+                        self._session_id, self._row_key, [block])):
+                    await self._router._persist_assistant_blocks(
+                        self._session_id, [block], None,
+                        label=f"{self._label or 'turn'}-outcome", client_id=self._row_key)
+                return True
+            finally:
+                TRANSCRIPT_FEED_SUPPRESSED.reset(token)
 
     async def flush(self) -> None:
         """Write the step results held now; the turn goes on."""

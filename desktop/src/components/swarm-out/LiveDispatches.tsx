@@ -8,13 +8,19 @@
  * stopped in the last 24 h, state unknown). What has no data source yet says TBD and
  * which source is missing; nothing on this view is a sample.
  *
- * Everything a Hive wrote (question text, command, reason) is shown as plain text,
- * never rendered as markdown or HTML. Polls /api/swarm-out/runs every 30 s while shown;
+ * A run that is not running any more shows what its Hive recorded (design
+ * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
+ * numbers; the details (the reply, code per repository, files, steps, a pipeline's
+ * five rows) open on demand.
+ *
+ * Everything a Hive wrote (question text, command, reason, the reply, paths) is shown
+ * as plain text, never rendered as markdown or HTML. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useState } from 'react';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutRun } from '../../services/swarmOut';
-import { errorLabel, hiveStatusLabel, panelNumbers, runGroups, stateLabel, useRuns } from './live';
+import { useCallback, useEffect, useState } from 'react';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
+import { JudgeTag } from './JudgeTag';
+import { endedLabel, errorLabel, hiveStatusLabel, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, stateLabel, useRuns, workLines } from './live';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
@@ -197,7 +203,97 @@ function Fleet({ fleet, failed }: { fleet: SwarmOutFleet | null; failed?: boolea
   );
 }
 
-function RunCard({ r }: { r: SwarmOutRun }) {
+const TONE = { error: 'text-[var(--color-status-error)]', normal: '', muted: muted } as const;
+
+function ResultDetail({ r, onRefreshed }: { r: SwarmOutRun; onRefreshed: () => void }) {
+  const [full, setFull] = useState<SwarmOutResult | null>(null);
+  const [state, setState] = useState<'idle' | 'loading' | 'failed'>('loading');
+  const id = r.dispatch_id;
+  const load = useCallback(async () => {
+    setState('loading');
+    try {
+      const rec = await swarmOutService.result(id);
+      setFull(rec.record?.result ?? null);
+      setState('idle');
+    } catch {
+      setState('failed');
+    }
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);   // once, when the details open
+  const refresh = async () => {
+    setState('loading');
+    try {
+      await swarmOutService.refresh(r.dispatch_id);
+      onRefreshed();
+      await load();
+    } catch {
+      setState('failed');
+    }
+  };
+  // the details come from the whole record only: /runs carries counts, not the
+  // Hive-written text and paths shown here
+  const res = full;
+  const judge = res ? runJudge(res) : null;
+  const tools = Object.entries(res?.work.steps.by_tool ?? {});
+  return (
+    <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[12.5px]" data-testid="swarm-out-run-detail">
+      {state === 'loading' && <div className={muted}>正在读…</div>}
+      {state === 'failed' && <div className={muted}>读不到详情，稍后再试</div>}
+      {judge && <div className="mb-2"><JudgeTag judge={judge} title={r.title} /></div>}
+      {res?.error?.message && <div className="mb-2 text-[var(--color-status-error)] whitespace-pre-wrap">{res.error.message}</div>}
+      {full?.report ? (
+        <>
+          <div className={`text-[11.5px] ${muted}`}>最后的回复</div>
+          <pre className="mt-1 mb-0 p-2 rounded-md bg-[var(--color-hover)] text-[12px] whitespace-pre-wrap break-words font-sans max-h-[320px] overflow-auto" data-testid="swarm-out-run-report">{full.report}</pre>
+          {full.report_chars > full.report.length && <div className={`mt-1 text-[11.5px] ${muted}`}>全文 {full.report_chars} 字，去 Hive 页面看</div>}
+        </>
+      ) : full && <div className={muted}>没有回复文字</div>}
+      {(res?.work.repos ?? []).filter((x) => x.files.length || x.commits.length).map((x) => (
+        <div key={x.dir ?? x.url ?? ''} className="mt-2" data-testid="swarm-out-run-repo">
+          <div className={`text-[11.5px] ${muted}`}>{x.dir}{x.ref ? ` @ ${x.ref}` : ''}（只统计 commit，未提交的改动没读）</div>
+          {x.files.map((f, i) => <div key={`${i}:${f.path}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path} <span className={muted}>+{f.added ?? '?'} −{f.deleted ?? '?'}</span></div>)}
+          {x.files_total > x.files.length && <div className={`text-[11.5px] ${muted}`}>还有 {x.files_total - x.files.length} 个文件</div>}
+          {x.commits.length > 0 && <div className={`font-mono text-[11.5px] ${muted}`}>{x.commits.map((c) => c.slice(0, 9)).join(' ')}{x.commits_total > x.commits.length ? ` …共 ${x.commits_total} 个` : ''}</div>}
+        </div>
+      ))}
+      {(res?.work.files ?? []).length > 0 && (
+        <div className="mt-2" data-testid="swarm-out-run-files">
+          <div className={`text-[11.5px] ${muted}`}>写了的文件（Hive 上的路径）</div>
+          {res!.work.files.map((f, i) => <div key={`${i}:${f.path ?? ''}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path}</div>)}
+        </div>
+      )}
+      {tools.length > 0 && (
+        <div className={`mt-2 text-[11.5px] ${muted}`} data-testid="swarm-out-run-steps">
+          {res!.work.steps.total} 次工具调用：{tools.map(([n, c]) => `${n} ${c}`).join(' · ')}
+        </div>
+      )}
+      <div className="mt-2"><button type="button" className={btn} disabled={state === 'loading'} onClick={() => { void refresh(); }}>刷新结果</button></div>
+    </div>
+  );
+}
+
+function RunResult({ r }: { r: SwarmOutRun }) {
+  const res = r.result;
+  if (!res) {
+    if (r.result_status === 'pending') return <div className={`text-[11.5px] mt-1 ${muted}`} data-testid="swarm-out-run-result">正在从 Hive 取回结果</div>;
+    if (r.result_status === 'failed') return <div className={`text-[11.5px] mt-1 ${muted}`} data-testid="swarm-out-run-result">取不回结果：{resultErrorLabel(r.result_error)}</div>;
+    return null;
+  }
+  const ended = endedLabel(res);
+  const work = workLines(res);
+  return (
+    <div className="mt-1.5" data-testid="swarm-out-run-result">
+      <div className={`text-[12.5px] font-medium ${TONE[ended.tone]}`} data-testid="swarm-out-run-ended">{ended.text}</div>
+      {work.map((w) => <div key={w} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-work">{w}</div>)}
+      <div className={`text-[11.5px] mt-0.5 ${muted}`} data-testid="swarm-out-run-numbers">{numberParts(res).join(' · ')}</div>
+      {r.result_error && <div className={`text-[11.5px] mt-0.5 ${muted}`}>上次检查：{resultErrorLabel(r.result_error)}</div>}
+    </div>
+  );
+}
+
+function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const canOpen = !!r.result || r.result_status === 'failed';
   return (
     <div className={`${card} px-3.5 py-3 min-w-0`} data-testid="swarm-out-run" data-state={r.state ?? 'unknown'}>
       <div className="flex items-start gap-2 min-w-0">
@@ -207,13 +303,19 @@ function RunCard({ r }: { r: SwarmOutRun }) {
       <div className={`text-[11.5px] mt-0.5 truncate ${muted}`}>
         {r.hive} · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
       </div>
+      <RunResult r={r} />
+      {canOpen && (
+        <button type="button" className={`mt-1.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
+          onClick={() => setOpen((o) => !o)} data-testid="swarm-out-run-toggle">{open ? '收起' : '详情'}</button>
+      )}
+      {open && <ResultDetail r={r} onRefreshed={onReload ?? (() => {})} />}
     </div>
   );
 }
 
 const runGrid = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))' };
 
-function RunGroup({ title, rows, empty }: { title: string; rows: SwarmOutRun[]; empty: string }) {
+function RunGroup({ title, rows, empty, onReload }: { title: string; rows: SwarmOutRun[]; empty: string; onReload?: () => void }) {
   return (
     <section className="mt-5" data-testid="swarm-out-run-group" data-group={title}>
       <div className="flex items-baseline gap-2 mb-2">
@@ -222,7 +324,7 @@ function RunGroup({ title, rows, empty }: { title: string; rows: SwarmOutRun[]; 
       </div>
       {rows.length === 0 ? <div className={`text-[12.5px] ${muted}`}>{empty}</div> : (
         <div className="grid gap-3" style={runGrid}>
-          {rows.map((r) => <RunCard key={r.dispatch_id} r={r} />)}
+          {rows.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={onReload} />)}
         </div>
       )}
     </section>
@@ -291,11 +393,11 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
       ) : (
         <>
           <RunGroup title="在跑" rows={groups.running} empty="没有在跑的任务" />
-          <RunGroup title="不在跑了（24 小时内派出的）" rows={groups.stopped} empty="24 小时内派出的都还在跑，或在等你" />
+          <RunGroup title="结束了（24 小时内派出的）" rows={groups.stopped} empty="24 小时内派出的都还在跑，或在等你" onReload={reload} />
           {groups.unknown.length > 0 && <RunGroup title="状态未知" rows={groups.unknown} empty="" />}
         </>
       )}
-      <Tbd title="run 的结果、五维审计和 trace" missing="本机还没有从 Hive 取回每个 run 的结果和审计：不在跑了的 run 说不出是做完、失败还是被停" />
+      <Tbd title="trace：用了哪个大脑、打包了什么上下文" missing="派发记录里没有大脑和打包的上下文" />
       <Tbd title="已安排" missing="还没有定时派发" />
     </div>
   );

@@ -561,6 +561,24 @@ export interface TurnChangesContent {
   unknown?: { repo: string; reason: string }[];
 }
 
+/** How a turn ended — written by the BACKEND at every started turn's end
+ *  (core/turn_outcome). A display block the chat does not render; Swarm Out reads it
+ *  from a Hive to tell a finished run from a failed one. */
+export interface TurnOutcomeContent {
+  type: 'turn_outcome';
+  ended: 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'none' | string;
+  subtype?: string | null;
+  code?: string | null;
+  message?: string | null;
+  exception?: string | null;
+  duration_ms?: number | null;
+  num_turns?: number | null;
+  cli_cost_total?: number | null;
+  cli_pid?: number | null;
+  at?: string;
+  repos?: unknown[];
+}
+
 /** Why a turn's last call did not finish — written by the BACKEND when it restarts
  *  the AI process mid-turn or a newer message takes over (core/turn_notice). */
 export interface TurnNoticeContent {
@@ -613,7 +631,8 @@ export interface BackgroundFinishedContent {
 
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
   | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
-  | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent | TurnProductContent;
+  | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent | TurnProductContent
+  | TurnOutcomeContent;
 
 export interface Message {
   id: string;

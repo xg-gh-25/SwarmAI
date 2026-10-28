@@ -48,6 +48,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.turn_outcome import cost_increase
+
 logger = logging.getLogger(__name__)
 
 WINDOW_DAYS = 7
@@ -386,7 +388,7 @@ def _turn_costs(rows: list[tuple[str, str, float]], since: str, until: str | Non
             c = float(cost)
         except (TypeError, ValueError):
             continue
-        d = c - prev[sid] if sid in prev and c >= prev[sid] else c
+        d = cost_increase((sid, prev[sid]) if sid in prev else None, sid, c)
         if d > 0 and str(ts) >= since and (until is None or str(ts) < until):
             out.append(d)
         prev[sid] = c

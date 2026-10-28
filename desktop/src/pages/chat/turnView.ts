@@ -300,7 +300,7 @@ const standInAgent = (id: string): ToolUseContent => ({
 /** Backend-written display blocks that are not part of the turn's flow (the run's
  *  alignment, what needs the user, the turn's products): lifted into TurnView
  *  fields, invisible to segments, the done rule and the outcome. */
-const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes', 'turn_notice', 'background_finished', 'turn_stop', 'turn_product']);
+const DISPLAY_TYPES = new Set(['pipeline_run', 'pipeline_attention', 'pipeline_summary', 'turn_deliverables', 'turn_changes', 'turn_notice', 'background_finished', 'turn_stop', 'turn_product', 'turn_outcome']);
 
 /** Derive the display units for one assistant message. Pure.
  *  `progress` is the streaming message's live sub-agent status, by Agent id. */

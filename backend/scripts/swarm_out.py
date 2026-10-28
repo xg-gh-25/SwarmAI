@@ -51,6 +51,17 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 120) 
         return 1
 
 
+def _repo_arg(value: str) -> dict:
+    """``URL`` or ``URL@ref`` -> {url, ref}. The ``@`` of ``git@host:`` is not a ref;
+    the daemon validates both (core/task_repos)."""
+    prefix = "git@" if value.startswith("git@") else ""
+    rest = value[len(prefix):]
+    if "@" in rest:
+        url, ref = rest.rsplit("@", 1)
+        return {"url": prefix + url, "ref": ref}
+    return {"url": value, "ref": None}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="swarm_out")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -60,13 +71,18 @@ def main(argv: list[str] | None = None) -> int:
     g = d.add_mutually_exclusive_group(required=True)
     g.add_argument("--task-file")
     g.add_argument("--task")
+    d.add_argument("--repo", action="append", default=[],
+                   help="a repository the task works on: URL or URL@ref (repeatable)")
     sub.add_parser("runs")
     sub.add_parser("hives")
     args = p.parse_args(argv)
 
     if args.cmd == "dispatch":
         task = args.task if args.task is not None else open(args.task_file, encoding="utf-8").read()
-        return _call("POST", "/dispatch", {"hive": args.hive, "title": args.title, "task": task})
+        body = {"hive": args.hive, "title": args.title, "task": task}
+        if args.repo:
+            body["repos"] = [_repo_arg(r) for r in args.repo]
+        return _call("POST", "/dispatch", body)
     if args.cmd == "hives":
         return _call("GET", "/hives")
     return _call("GET", "/runs")

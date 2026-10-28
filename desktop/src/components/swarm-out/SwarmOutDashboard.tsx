@@ -19,7 +19,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import { HiveGuide } from './HiveGuide';
 import { LiveDispatches, Tbd } from './LiveDispatches';
-import { dailySent, runsByHive, stateLabel, useFleet, useRuns } from './live';
+import { dailyByOutcome, endedLabel, runsByHive, stateLabel, useFleet, useRuns, type OutcomeBucket } from './live';
 
 /** Below this panel width (CSS px) the dashboard uses its compact layout. */
 export const COMPACT_BELOW = 820;
@@ -46,25 +46,42 @@ function when(iso: string): string {
   return Number.isNaN(t) ? '' : new Date(t).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+const BUCKETS: { key: OutcomeBucket; label: string; color: string }[] = [
+  { key: 'error', label: '出错', color: 'var(--color-status-error)' },
+  { key: 'stopped', label: '被停', color: 'var(--color-status-warning)' },
+  { key: 'completed', label: '做完', color: 'var(--color-chart-1)' },
+  { key: 'other', label: '还不知道', color: 'var(--color-border)' },
+];
+
 function DailyBars({ runs, now }: { runs: SwarmOutRun[]; now: number }) {
-  const days = dailySent(runs, now);
+  const days = dailyByOutcome(runs, now);
   const max = Math.max(1, ...days.map((d) => d.count));
   return (
     <section className={card} data-testid="swarm-out-daily">
       <div className="flex items-baseline gap-2 px-4 pt-3 pb-1">
         <h3 className="m-0 text-[13px] font-semibold">每天派出的 run</h3>
-        <span className="text-[12px] text-[var(--color-text-dim)]">近 14 天 · 按本机日期</span>
+        <span className="text-[12px] text-[var(--color-text-dim)]">近 14 天 · 按本机日期 · 按结局</span>
       </div>
       <div className="px-4 pb-3">
         <div className="flex items-end gap-[6px] h-[90px] border-b border-[var(--color-border)]">
           {days.map((d) => (
-            <div key={d.label} className="flex-1 flex flex-col justify-end h-full" title={`${d.label} · 派出 ${d.count} 个`} data-testid="swarm-out-day" data-count={d.count}>
-              <div className="rounded-t bg-[var(--color-chart-1)]" style={{ height: `${(d.count / max) * 100}%` }} />
+            <div key={d.label} className="flex-1 flex flex-col justify-end h-full"
+              title={`${d.label} · 派出 ${d.count} 个${d.count ? `：${BUCKETS.filter((b) => d.by[b.key]).map((b) => `${b.label} ${d.by[b.key]}`).join('，')}` : ''}`}
+              data-testid="swarm-out-day" data-count={d.count} data-error={d.by.error}>
+              {/* top down in BUCKETS order: errors first, so a failure is never buried */}
+              {BUCKETS.map((b) => d.by[b.key] > 0 && (
+                <div key={b.key} style={{ height: `${(d.by[b.key] / max) * 100}%`, background: b.color }}
+                  className="first:rounded-t" />
+              ))}
             </div>
           ))}
         </div>
         <div className={`flex justify-between text-[10.5px] mt-1 ${muted}`}>
-          <span>{days[0].label}</span><span>{days[days.length - 1].label}</span>
+          <span>{days[0].label}</span>
+          <span className="flex gap-2">{BUCKETS.map((b) => (
+            <span key={b.key} className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: b.color }} />{b.label}</span>
+          ))}</span>
+          <span>{days[days.length - 1].label}</span>
         </div>
       </div>
     </section>
@@ -99,7 +116,7 @@ function History({ hidden, now }: { hidden: boolean; now: number }) {
                     <span className="min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
                     <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
                   </div>
-                  <div className={`text-[11.5px] mt-0.5 ${muted}`}>{stateLabel(r)}</div>
+                  <div className={`text-[11.5px] mt-0.5 ${muted}`}>{r.result ? endedLabel(r.result).text : stateLabel(r)}</div>
                 </li>
               ))}
             </ul>
@@ -107,7 +124,7 @@ function History({ hidden, now }: { hidden: boolean; now: number }) {
         ))}
       </section>
       <Tbd title="一句话结论" missing="没有跨 run 的审计汇总" testId="swarm-out-tbd-verdict" />
-      <Tbd title="五个维度" missing="Run Isolation · Quality · Autonomy · Speed · Token Cost 要从每个 run 的审计汇总，本机还没取回审计" testId="swarm-out-tbd-dimensions" />
+      <Tbd title="五个维度" missing="只有 pipeline run 带五维结论（在 run 卡片的详情里），跨 run 的汇总还没做" testId="swarm-out-tbd-dimensions" />
       <Tbd title="工蜂占用" missing="没有按时间采样每台 Hive 的并发" testId="swarm-out-tbd-occupancy" />
       <Tbd title="按类型" missing="派发记录不带任务类型" testId="swarm-out-tbd-type" />
     </div>

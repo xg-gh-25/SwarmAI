@@ -371,6 +371,21 @@ async def transcribe_voice(request: Request):
         await form.close()  # Release SpooledTemporaryFile backing the upload
 
 
+async def _record_task_repos(session_id: str, repos: list) -> None:
+    """Write a dispatched task's repositories into its new session's metadata
+    (``task_repos``), read at every turn end (SessionRouter._task_repo_facts). A
+    failure is logged: the task still runs, its outcome then names no repository."""
+    try:
+        row = await db.sessions.get(session_id)
+        if row is None:
+            logger.error("task_repos: session %s not found to record its repositories", session_id)
+            return
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        await db.sessions.update(session_id, {"metadata": {**meta, "task_repos": repos}})
+    except Exception as exc:  # noqa: BLE001 — never breaks the turn
+        logger.error("task_repos: recording failed for session %s: %s", session_id, exc)
+
+
 @router.post("/stream")
 async def chat_stream(request: Request):
     """Stream chat responses via SSE."""
@@ -391,6 +406,17 @@ async def chat_stream(request: Request):
     # Validate multimodal content blocks if present
     if chat_request.content:
         validate_content(chat_request.content)
+
+    # Swarm Out: the task's repositories, validated before the turn starts and
+    # recorded on the session once its id is known (core/task_repos). A request for an
+    # existing session does not change what that session declared.
+    task_repos: list = []
+    if chat_request.task_repos and chat_request.session_id is None:
+        from core import task_repos as _task_repos
+        try:
+            task_repos = _task_repos.parse(chat_request.task_repos)
+        except _task_repos.TaskRepoError as e:
+            raise ValidationException(message="Invalid task repositories", detail=str(e))
 
     _get_router()  # Ensure session infrastructure initialized
 
@@ -441,6 +467,8 @@ async def chat_stream(request: Request):
             async for msg in _turn_stream:
                 if captured_session_id is None:
                     captured_session_id = msg.get("sessionId") or msg.get("session_id")
+                    if captured_session_id is not None and task_repos:
+                        await _record_task_repos(captured_session_id, task_repos)
                     # A NEW session's id first arrives here — register now so the
                     # watcher can attribute to it for the rest of this turn.
                     if captured_session_id is not None and _injection_registered is None:

@@ -8,6 +8,22 @@ status: r4 — 任务带上要用的仓库，Hive 按它拉取，结果按仓库
 
 # Swarm Out 从 Hive 取回每个 run 的结果
 
+**r5（实现后的专家审查，2026-10-28，两轮）：** security 和 correctness 两位审查者看了实现，改了这些地方：
+- **`/runs` 改成白名单（4.5、4.7）。** 原来只去掉回复和错误信息，审计说明、仓库错误、文件路径、pipeline 的状态字符串这些 Hive 能随便写的文字照样进 `/runs`。现在 `/runs` 逐字段构造，只带枚举、固定取值、数字和 sha。仓库按本机派发时记下的那份显示，名字也用本机的。
+- **Hive 不再读工作区（4.4，XG 2026-10-28 选 A）。** git 读工作区时会执行仓库配置里的命令（filter），这个配置 Hive 的 agent 写得了。第一轮按仓库自己的配置检测、配置了就不读，第二轮审查实测子模块里的 filter 同样会被执行，父仓库查不到。照这个方向往下补没有尽头，所以改成：只统计 commit（`base..HEAD`，tree 对 tree）和未跟踪文件的个数，未提交的改动不统计。这一类问题因此整个消失，过滤器检测的代码也删掉了。
+- **起点固定在拉取时（4.4）。** 原来的起点是 `merge-base(HEAD, origin/<ref>)`，任务自己推到声明的分支后，起点会跟着移到 HEAD，结果报成"0 个 commit"。现在读远端引用自己的 reflog，取会话开始之后的第一次更新。
+- **结局写入不会卡住会话（4.1）。** 写结局时如果再被取消一次，turn 照样关闭、发 `turn_end`、释放会话。writer 每个 turn 只写一个结局，所以重试不会重复写。
+- **花费和结局（4.2）。**
+  - 崩溃、被 Stop 的 turn 没有花费时也标"部分"。
+  - 按用户 turn 逐个检查有没有结局，不再比总数。
+  - 记录了"没有终止事件"的 turn 改为 `no_terminal`，不再算 `no_record`。
+- **同一个 run 的检查依次进行（4.2）。** 手动刷新和后台检查不再同时写。
+- **另外三处小修：** origin 带 token 或写成 `ssh://` 时也认作同一个仓库。正则改为整串匹配，末尾带换行的 ref 不再被接受。检查登记改在 task 结束的回调里清除。
+- **没改的三条（4.7 记下理由）：**
+  - turn 结束时读仓库最多 30 秒。
+  - 新会话写元数据存在竞态。
+  - `/result` 本机任何调用方都能读。
+
 **r4（XG 2026-10-28）：** 仓库信息由任务带过去，Hive 根据它决定拉哪些仓库。r3 里"在没绑定的仓库里改代码只有路径、没有行数和 commit"这个限制因此不该存在：任务声明了哪些仓库，Hive 就知道哪些目录是这个任务的代码，结局里按仓库记下改了什么、提交了什么、推送了没有。新增 4.4"任务带上的仓库"，派发不再只是一段文字。
 
 **r3（XG 2026-10-28）：** Hive 上跑的不一定是 pipeline，也可能是 native coding 或者不写代码的任务，这几类都要能看出来做了什么、做得怎样。r2 只对 pipeline 有五维审计，其余只有结局和回复。r3 加了 4.3"这个 run 做了什么"：每个 run 不分类型都列出同一组事实，pipeline 额外带它自己的五维结论。面板按这组事实显示（4.6）。
@@ -108,15 +124,16 @@ Swarm Out 面板现在能说一个 run 在等人、在跑还是"不在跑了"（
 
 | 字段 | 来源 |
 |---|---|
-| `ended` | 看最后一条用户消息之后的部分。有 `turn_stop` 写 `stopped`（优先于其他记录）。否则用其中最后一个 `turn_outcome` 的 `ended`。它是 `none` 或没有这个块时，有 `turn_notice` 写它的 `reason`，都没有写 `no_record`。取值 `completed` / `turn_limit` / `error` / `crashed` / `paused` / `stopped` / `restarted` / `superseded` / `gave_up` / `no_record` |
+| `ended` | 看最后一条用户消息之后的部分。有 `turn_stop` 写 `stopped`（优先于其他记录）。否则用其中最后一个 `turn_outcome` 的 `ended`。它是 `none` 或没有这个块时，有 `turn_notice` 写它的 `reason`。没有 notice 但块写的是 `none`，写 `no_terminal`：有记录，这个 turn 没收到结束事件。一个块都没有才写 `no_record`。取值 `completed` / `turn_limit` / `error` / `crashed` / `paused` / `no_terminal` / `stopped` / `restarted` / `superseded` / `gave_up` / `no_record` |
 | `provisional` | 最后一条用户消息之后还没有任何结局记录，或结局是 `paused`：结果可能还会变，界面写"暂定"，不写"做完" |
 | `error` | `{code, message}`，只在 `error` 时有。`/runs` 里只给 `code` |
-| `outcome_recorded` | 最后一个 turn 有没有 `turn_outcome`（旧版 Hive 没有，界面写"这台 Hive 的版本不记录结束方式"） |
+| `outcome_recorded` | 最后一个 turn 有没有 `turn_outcome` |
+| `hive_records_outcomes` | 会话里有没有任何一个 turn 有 `turn_outcome`。有的话 Hive 是记录结局的，最后一个 turn 缺记录说明它没走到结束（进程中途退出），界面这样写。一个都没有时分不出是旧版 Hive 还是唯一的 turn 没走到结束，界面两种都写出来 |
 | `ended_at` | `turn_outcome.at`，没有时用最后一行的 `created_at` |
 | `turns` | 用户消息的条数 |
 | `active_s`、`tokens` | 各 turn 的 `duration_ms`、`usage` 相加 |
 | `cost_usd` | 按 `turn_outcome` 的顺序求每个 turn 的花费：`cli_pid` 和上一条相同且 `cli_cost_total` 不比上一条小时，取差值，否则（换了进程，或数值变小）取它本身。规则和 `session_quality._turn_costs` 相同，这次把它抽成两边共用的一个函数 |
-| `cost_partial` | 有 turn 缺记录或缺花费（例如合成的 result 不带花费），或有更早的 turn 没读到。这时花费仍给出已知部分，界面写"至少 $N"，不把缺的当成 0 |
+| `cost_partial` | 有更早的 turn 没读到，或下面两种情况之一：一是某个用户 turn 后面一个结局都没有（逐个 turn 检查，因为暂停后的续接和注入的 turn 会多出结局，比总数会把缺的盖住）。二是某个结局没带花费（崩溃、被 Stop、合成的 result），而同一进程后面也没有更新的累计值补上（暂停的 turn 由续接的累计值补上，不算）。这时花费仍给出已知部分，界面写"至少 $N"，不把缺的当成 0 |
 | `report` | 最后一个 turn 最后一个助手文本块，前 4000 字。超出时 `report_chars` 给全长，界面写"全文 N 字，去 Hive 页面看"，不悄悄截掉 |
 | `deliverables` | 所有 turn 的 `turn_deliverables` 的 `path`，去重，最多 50 条，超出写 `deliverables_omitted`（再加上各块自己的 `omitted`） |
 | `changes` | 所有 turn 的 `turn_changes` 合计改了几个文件、增删多少行，以及有没有落地 |
@@ -148,7 +165,7 @@ Hive 上的 run 可能是 pipeline、native coding（直接改代码、跑测试
 
 | 事实 | 来源（Hive 上已经写下的块） | 说明 |
 |---|---|---|
-| `code`：每个仓库改了几个文件、增删多少行、提交了哪些 commit、推送了没有 | 任务声明的仓库：`turn_outcome` 的 `repos`（4.4）。Hive 上绑定了项目的仓库和 run worktree：`turn_changes` 的 `files` 和 `landed`（`turn_changes.py:624`、`:646`，范围见 `code_roots`，`turn_changes.py:183`） | 同一个仓库两处都有时以 `repos` 为准，它是相对拉下来的那个版本算的整体改动 |
+| `code`：每个仓库改了几个文件、增删多少行、提交了哪些 commit、推送了没有 | 任务声明的仓库：`turn_outcome` 的 `repos`（4.4）。Hive 上绑定了项目的仓库和 run worktree：`turn_changes` 的 `files` 和 `landed`（`turn_changes.py:624`、`:646`，范围见 `code_roots`，`turn_changes.py:183`） | 同一个仓库两处都有时以 `repos` 为准，它是相对拉下来的那个版本算的已提交改动 |
 | `files`：写了哪些文件，按种类分：文档和页面（`content`）、知识（`knowledge`）、仓库外的文件（`external-diff` / `external-nodiff`） | `turn_deliverables` 的 `kind`（`turn_products.py:35` 的 `PRODUCT_FILE_KINDS`） | 落在任务声明的仓库目录里的文件不再算"仓库外的文件"，归到那个仓库的 `code` 下。任务没声明、agent 自己拉的仓库，仍然只有路径，界面写"任务没声明这个仓库，看不到行数和 commit" |
 | `steps`：调用了多少次工具、按工具名计数、失败了几次、后台/子 agent 几个 | `tool_use` 块的 `name`，`tool_result` 的 `is_error`、`subagent.status`（`session_router.py:2367` 起的 `_compact_tool_results`） | 只给计数，不给命令内容。"跑了哪些测试"按语言判断不了（SOUL P7），所以不猜，只给"命令失败几次" |
 | `human`：Hive 上问了几次人、批准几次、拒绝几次、还有几个没回答 | `cmd_permission_request` 块（`decision` 写在块上，`permission_prompt.py:52`），`ask_user_question` 块和它记下的回答 | 这就是"自主"那一维在非 pipeline run 上能给的事实 |
@@ -180,15 +197,23 @@ Hive 上的 run 可能是 pipeline、native coding（直接改代码、跑测试
 repos: [{ url, ref, dir,
           present: bool,             # 目录存在且是 git 仓库
           origin_matches: bool,      # 它的 origin 就是声明的 URL
-          base: sha | null,          # HEAD 和 origin/<ref> 的 merge-base：拉下来的那个版本
+          base: sha | null,          # HEAD 和"拉下来时的 origin/<ref>"的 merge-base（见下）
           head: sha | null,
           commits: [sha] (最多 20) + commits_total,   # base..HEAD
-          files: [{path, added, deleted}] (最多 50) + files_total, added, deleted,  # git diff --numstat base（含未提交的改动）
+          files: [{path, added, deleted}] (最多 50) + files_total, added, deleted,  # git diff --numstat base HEAD（只看 commit，不读工作区）
           untracked: int,
           pushed: "yes" | "no" | "unknown",   # 有远端分支包含 HEAD（按本地记录的远端引用）
           error: str | null }]
 ```
 
+- **起点：** 远端引用会被任务自己的 push 移动，所以起点不能取它的当前值。读 `refs/remotes/origin/<ref>` 自己的 reflog（每行是 `旧值 新值 … 时间`），找会话开始之后的第一次更新。
+  - 这次更新是 clone、fetch 或 pull：取它的新值，也就是任务拉到的版本。
+  - 是别的（任务自己的 push）：取它的旧值，也就是 push 之前的版本。
+  - 会话开始之后没有更新：远端引用一直没动，取它的当前值。
+  - tag 和没有 reflog 的情况，同样取当前值。
+- **不读工作区：** git 读工作区时，会执行仓库配置里的 `filter.<x>.clean/process`，子模块的配置也算，而这些配置 Hive 的 agent 都写得了。所以 git 命令只比较 tree 和读引用：`diff base HEAD`、`rev-list`、`merge-base`、`branch -r --contains`、`remote get-url`，外加 `ls-files --others` 数未跟踪文件，这条不读文件内容，也不进子模块。未提交的改动不统计，面板写"只统计 commit，未提交的改动没读"。
+- **origin：** 比较前先去掉 `https://` 里的 userinfo（用 token clone 的情况），并把 `ssh://git@host/path` 换成 `git@host:path`。声明的 URL 仍然只接受这两种写法。
+- `error` 只取 task_repos 里固定的几句话（`ERRORS`）。
 - 只记事实，不带 commit 信息正文（那是 agent 写的文字，见 4.7 安全）。
 - 目录不存在写 `present: false`：任务结束时还没拉，或者拉到了别处。origin 不对写 `origin_matches: false`，这时不算它的改动。
 - 目录必须在 `Hive/repos/` 之下（取 realpath 后检查，防符号链接跑出去）。
@@ -204,7 +229,7 @@ repos: [{ url, ref, dir,
 `/api/swarm-out/runs` 的每一行加：
 
 ```
-result: {...} | null,          # 4.2 的归纳和 4.3 的 work，不含 report 正文（只有 report_chars）
+result: {...} | null,          # 4.2 的归纳和 4.3 的 work，按白名单构造（4.7）：只有 report_chars，没有正文
 result_status: "fetched" | "pending" | "failed" | "not_applicable",
 result_error: str | null,      # 中文可读，如 "Hive 没有回答" / "Hive 上已经没有这个会话"
 result_checked_at: str | null
@@ -235,15 +260,26 @@ result_checked_at: str | null
 ### 4.7 安全
 
 - Hive 写的所有文字（回复、错误信息、文件路径）都是数据，不是指令。面板以纯文本显示。React 默认转义，不用 `dangerouslySetInnerHTML`，不渲染链接。
-- 本机 agent 的入口：命令行 `swarm_out.py runs` 原样打印 `/runs`，所以 `/runs` 只带枚举字段（结局、错误码、数字、文件数和路径、工具名的计数，不带命令和工具参数），**不带回复正文**。正文走单独的 `/runs/{dispatch_id}/result`，命令行不调它，只给人在面板上看。这样 Hive 上一个 run 读到的网页内容，不会经回复变成本机 agent 读到的文字（B 类规则：读入污染再外传的链条）。错误信息 `message` 也是 Hive 写的，所以在 `/runs` 里只给 `code`，`message` 也放进 `/result`。
+- 本机 agent 的入口：命令行 `swarm_out.py runs` 原样打印 `/runs`，所以 `/runs` 由 `swarm_out_results.public` **逐字段构造**，只带这些：
+  - 枚举：结局、仓库的推送状态、文件种类、五维的维度和结论。
+  - 固定取值：错误码（产品发出的那些，其余写 `other`），pipeline 的 profile、status、landing（不在列表里写 null）。
+  - 数字和 sha。
+  - 仓库：只列本机派发时声明过的（派发日志里的 `repos`），地址、ref、目录用本机记下的那份。Hive 报来的、本机没派过的仓库不列。别的仓库的改动卡片不带名字。
+  - 仓库错误：只认 task_repos 固定的那几句。
+
+  文件路径、工具名、审计说明、错误信息和回复正文都不进 `/runs`。面板卡片只用到上面这些。展开详情时读 `/result`，读到之前不显示任何列表。正文走单独的 `/runs/{dispatch_id}/result`，命令行不调它，只给人在面板上看。这样 Hive 上一个 run 读到的网页内容，不会经回复变成本机 agent 读到的文字（B 类规则：读入污染再外传的链条）。错误信息 `message` 也是 Hive 写的，所以在 `/runs` 里只给 `code`，`message` 也放进 `/result`。
 - 已有的暴露，这次不改：`/runs` 里的问题卡片本来就带 Hive 写的问题文字，命令行也会打印。
+- **接受的风险：** `/runs/{id}/result` 不检查是谁在调。本机 agent 可以自己去 curl 这个接口，拿到回复正文。按 P5，同一个用户的本机 agent 不在防范范围内（和审批接口同一个决定）。`/runs` 只保证 agent 平常的读取路径（命令行）不带 Hive 写的文字。
+- **没改的两条：**
+  - **turn 结束时读仓库最多 30 秒：** 这个上限只防挂死，git 读本地仓库平时只要几毫秒。缩短上限换不来什么。
+  - **新会话写元数据是"先读再整列写"：** 派发出来的新会话没有别的写入方（唯一的另一个写入方是把 ToDo 拖进会话）。写失败时记 ERROR。
 - 请求只发往已校验过的 Hive 地址（`_validate_instance`），路径里的 session id 再校验一次。
 - 任务声明的仓库 URL 两边都校验（4.4）。Hive 上的 git 命令参数固定、不经 shell，目录限制在 `Hive/repos/` 之下。commit 的说明文字是 agent 写的，不进 `turn_outcome`，只记 sha。
 - 存下的文件在本机的状态目录里，不含 Hive 的凭证。
 
 ## 5. 版本兼容
 
-- 旧版 Hive（hive2 及以前）不写 `turn_outcome`：结局写"这台 Hive 的版本不记录结束方式"，其他字段照常（回复、文件、被停、pipeline 审计都能拿到），花费为空。Hive 更新后，新跑的 turn 就有记录。
+- 旧版 Hive（hive2 及以前）不写 `turn_outcome`：结局写"这台 Hive 的版本不记录，或 turn 没走到结束"（只凭记录分不出这两种），其他字段照常（回复、文件、被停、pipeline 审计都能拿到），花费为空。Hive 更新后，新跑的 turn 就有记录。
 - `turn_outcome` 是新增的块类型。旧前端读到它时：`DISPLAY_TYPES` 里没有它，会被当成 turn 内容中一个不认识的块。所以前端和后端在同一次发布里一起改，本机 build 时两边同时更新。Hive 的前端和后端在同一个包里，也一起更新。
 
 ## 6. 不做
@@ -262,7 +298,7 @@ result_checked_at: str | null
 | 前端跳过 | 聊天界面 | 前端：带 `turn_outcome` 的 turn，`deriveTurnView` 的分段、完成判定和结局跟没有这个块时一样 |
 | `summarize` | `/runs` 的 `result` | 后端：每种结局一条（completed、error、crashed、turn_limit、paused、stopped、restarted、gave_up、旧版 Hive 的 no_record）。多 turn 时取最后一条用户消息之后的结局，Stop 优先。最后一条用户消息之后没有结局时 `provisional`。花费：同一进程三个 turn 的累计值求差，换进程（pid 变或数值变小）后重新起算，缺记录时 `cost_partial` 且给已知部分。`X-Has-More: 1` 时 `older_turns_not_read`。回复超过 4000 字时有 `report_chars`。交付文件去重并计 `omitted`。不合规的字段丢掉并计数。pipeline run 带五行审计，非 pipeline 为 null |
 | `work`（4.3） | `/runs`、面板 | 后端：四种 run 各一条——pipeline（带五维）、native coding（`turn_changes` 有文件和 landed sha）、在未绑定仓库里改代码（只有 `external-diff` 文件）、非编码（只有 `content` 文件，或只有回复）。同时改代码又写文档的 run 两样都列出。`steps` 的失败数来自 `is_error`。`human` 的批准、拒绝、未回答各自计数。非 pipeline run 没有五维结论字段。`/runs` 里没有命令内容和工具参数 |
-| 任务带上的仓库（4.4） | Hive 的会话记录、任务说明、`turn_outcome.repos` | 后端：URL 校验（接受 https 和 `git@`，拒绝 `file://`、本机路径、带密码的 URL、超过 10 个、ref 字符不对）。本机和 Hive 用同一个函数算出同一个目录。续接已有会话时 `task_repos` 被忽略。在临时 git 仓库上：有未提交改动、有本地 commit、已推送、还没拉、origin 不对、符号链接指到 `Hive/repos/` 外，各自的 `repos` 字段。一个仓库的 git 失败不影响其他仓库和 turn 结束 |
+| 任务带上的仓库（4.4） | Hive 的会话记录、任务说明、`turn_outcome.repos` | 后端：URL 校验（接受 https 和 `git@`，拒绝 `file://`、本机路径、带密码的 URL、超过 10 个、ref 字符不对）。本机和 Hive 用同一个函数算出同一个目录。续接已有会话时 `task_repos` 被忽略。在临时 git 仓库上：未提交改动不计入、有本地 commit、已推送、任务自己推到声明的分支、任务新建并推送分支、还没拉、origin 不对（以及带 token 的 origin 算同一个）、符号链接指到 `Hive/repos/` 外、仓库和子模块里配置的 filter 都不执行、reflog 很长或被换成 FIFO，各自的 `repos` 字段。一个仓库的 git 失败不影响其他仓库和 turn 结束 |
 | 取回和存储 | 面板、刷新接口 | 后端：200 存下，304 只更新检查时间，404 记会话已不在，超时记 Hive 没回答且保留旧结果。同一个 run 同时只有一个检查。超出 24 小时的 run 不自动检查。原子写：写到一半失败不留下坏文件。没有 session id 的 run 是 `not_applicable` |
 | 命令行 | 本机 agent | 后端：`/runs` 的每行 `result` 里没有回复正文和错误信息，`/result` 里有 |
 | 面板 | 用户 | 前端：每种结局的第一行文字。四种 run 的第二行文字和展开后出现的区块（非 pipeline 的不出现五维，只回答的不出现文件区块）。缺记录时写"—"和原因。回复以纯文本显示（含 `<a>`、Markdown 的回复不变成链接）。历史每日柱按结局分组 |

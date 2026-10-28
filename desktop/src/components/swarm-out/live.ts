@@ -11,7 +11,8 @@
  * moment between their polls, never by rule.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
+import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 import { activityOf, waitingUnasked } from './useSwarmOutActivity';
 
 export const LIVE_POLL_MS = 30_000;
@@ -159,4 +160,160 @@ export function errorLabel(e: string): string {
   if (e === 'could not list the running Hives') return '读不到 Hive 列表：只显示派发记录里的 Hive';
   if (e === 'could not read a Hive record') return '有一台 Hive 的记录读不出来';
   return e;
+}
+
+// ── a run's result (design docs/design/2026-10-28-swarm-out-run-results.md §4.6) ──
+
+/** How a run ended, in the card's words, and whether it is the one to look at (an
+ *  error). Facts only: a provisional ending says so, an unrecorded one says why. */
+export function endedLabel(res: SwarmOutResult): { text: string; tone: 'error' | 'normal' | 'muted' } {
+  const base: Record<SwarmOutEnded, string> = {
+    completed: '做完', turn_limit: '到了轮数上限', error: '出错', crashed: '出错（崩溃）',
+    paused: '停在问题或审批上', no_terminal: '没有正常结束（没收到结束事件）', stopped: '被停', restarted: '进程重启后没接上',
+    superseded: '被新消息接替', gave_up: '重试用尽', no_record: '没有结束记录',
+  };
+  let text = base[res.ended] ?? res.ended;
+  if ((res.ended === 'error' || res.ended === 'crashed') && res.error?.code && res.error.code !== 'other') text += ` · ${res.error.code}`;
+  if (res.ended === 'no_record' && !res.outcome_recorded) {
+    text = res.hive_records_outcomes ? '没有结束记录：这个 turn 没走到结束（进程中途退出）'
+      : '结束方式不知道：这台 Hive 的版本不记录，或 turn 没走到结束';
+  }
+  if (res.provisional && res.ended !== 'no_record') text += ' · 暂定';
+  const tone = res.ended === 'error' || res.ended === 'crashed' || res.ended === 'gave_up' ? 'error'
+    : res.provisional || res.ended === 'no_record' || res.ended === 'no_terminal' ? 'muted' : 'normal';
+  return { text, tone };
+}
+
+const repoName = (dir: string | null, url: string | null): string => {
+  // an scp-style URL (git@host:owner/name) names its path after the colon
+  const parts = (dir || (url ?? '').replace(/^[^/:]+@[^/:]+:/, '') || '').replace(/\.git$/, '').split('/').filter(Boolean);
+  return parts.slice(-2).join('/') || '仓库';
+};
+
+const PUSHED: Record<SwarmOutRepoFact['pushed'], string> = {
+  yes: '已推送', no: '没推送', nothing_to_push: '没有新 commit', unknown: '推送情况不明',
+};
+
+/** The errors core/task_repos writes (the only ones /runs passes through). */
+const REPO_ERROR: Record<string, string> = {
+  'the directory leads outside Hive/repos': '目录指到了 Hive/repos 外面，没读',
+  'the repository has no commit checked out': '没有检出任何 commit',
+  "the declared ref is not among the repository's remote refs": '远端没有任务给的分支或 tag',
+  'HEAD and the declared ref share no history': '当前代码和任务给的分支没有共同历史',
+  'git diff failed': 'git diff 失败',
+  'reading the repository timed out': '读仓库超时',
+  'could not read the repository': '读不了这个仓库',
+};
+
+/** One line per thing the run did (code per repository, files by kind, a pipeline,
+ *  or only an answer), in the order the kinds come. Empty when nothing is known. */
+export function workLines(res: SwarmOutResult): string[] {
+  const out: string[] = [];
+  const p = res.pipeline;
+  if (p) {
+    const land = p.landing === 'landed' ? `已落地${p.landed_sha ? ` ${p.landed_sha}` : ''}`
+      : p.landing === 'not_landed' ? '没有落地' : p.landing === 'no_code' ? '没有代码改动' : (p.status ?? '');
+    out.push(['pipeline', p.profile, land].filter(Boolean).join(' · '));
+  }
+  for (const r of res.work.repos ?? []) {
+    const name = repoName(r.dir, r.url);
+    if (r.present === false) out.push(`${name}：还没拉下来`);
+    else if (r.origin_matches === false) out.push(`${name}：origin 不是任务给的地址，没计入`);
+    else if (r.error) out.push(`${name}：${REPO_ERROR[r.error] ?? '读不了这个仓库'}`);
+    else {
+      // commits only: the Hive never reads the working tree (core/task_repos)
+      out.push(`${name}：${r.commits_total} 个 commit，改了 ${r.files_total} 个文件 +${r.added} −${r.deleted}，${PUSHED[r.pushed]}`
+        + (r.untracked ? `，另有 ${r.untracked} 个未跟踪文件` : ''));
+    }
+  }
+  const declared = new Set((res.work.repos ?? []).map((r) => repoName(r.dir, r.url).split('/').pop()));
+  for (const c of res.work.changes) {
+    if (c.repo && declared.has(c.repo)) continue;   // the declared repository's facts are the whole change
+    out.push(`${c.repo ?? '一个仓库'}：${c.files} 个文件 +${c.added} −${c.deleted}${c.landed.length ? `，已提交 ${c.landed[c.landed.length - 1]}` : ''}`);
+  }
+  const by = { docs: 0, knowledge: 0, outside: 0 };
+  for (const f of res.work.files) {
+    if (f.kind === 'knowledge') by.knowledge += 1;
+    else if (f.kind === 'external-diff' || f.kind === 'external-nodiff') by.outside += 1;
+    else by.docs += 1;
+  }
+  const files = [by.docs && `${by.docs} 份文档`, by.knowledge && `${by.knowledge} 个知识文件`,
+    by.outside && `${by.outside} 个仓库外的文件`].filter(Boolean);
+  if (files.length) out.push(`写了 ${files.join('、')}${res.work.files_omitted ? `（另有 ${res.work.files_omitted} 个没列出）` : ''}`);
+  if (!out.length && res.kinds.includes('answer')) out.push('只回答，没有产出文件');
+  return out;
+}
+
+const minutes = (s: number): string => (s < 60 ? `${s} 秒` : `${Math.round(s / 60)} 分钟`);
+
+/** The card's numbers: when it ended, time, cost, people asked, failed steps. A value
+ *  not known is "—" with the reason, never a zero. */
+export function numberParts(res: SwarmOutResult): string[] {
+  const h = res.work.human;
+  const asked = h.approved + h.denied + h.unanswered + h.answered_questions;
+  const t = res.ended_at ? Date.parse(res.ended_at) : NaN;
+  return [
+    Number.isNaN(t) ? '' : `结束于 ${new Date(t).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
+    res.active_s == null ? '用时 —' : `用时 ${minutes(res.active_s)}`,
+    res.cost_usd == null ? '花费 —（没有记录）' : `花费 ${res.cost_partial ? '至少 ' : ''}$${res.cost_usd.toFixed(2)}`,
+    `问人 ${asked} 次${h.unanswered ? `（${h.unanswered} 个没回答）` : ''}`,
+    `失败 ${res.work.steps.failed} 步`,
+  ].filter(Boolean);
+}
+
+/** A pipeline run's five audit rows as the JudgeTag's shape (in its dimension order;
+ *  a dimension the run does not carry is N/A), or null for any other run. */
+export function runJudge(res: SwarmOutResult): RunJudge | null {
+  const audit = res.pipeline?.audit ?? [];
+  if (!res.pipeline || audit.length === 0) return null;
+  const norm = (v: string | null): Verdict => (v === 'N/A' ? 'NA' : (['PASS', 'WARN', 'BLOCK', 'NA', 'PENDING'].includes(v ?? '') ? v as Verdict : 'NA'));
+  const row = (d: string) => audit.find((a) => a.dim === d);
+  const p = res.pipeline;
+  return {
+    outcome: [p.status, p.landing, p.landed_sha].filter(Boolean).join(' · ').toUpperCase(),
+    verdicts: DIMENSIONS.map((d) => norm(row(d)?.verdict ?? null)) as RunJudge['verdicts'],
+    numbers: DIMENSIONS.map((d) => row(d)?.detail ?? '') as RunJudge['numbers'],
+  };
+}
+
+/** Why a run's result could not be read, in the panel's words. */
+export function resultErrorLabel(e: string | null | undefined): string {
+  if (!e) return '';
+  return ({ session_gone: 'Hive 上已经没有这个会话', hive_silent: 'Hive 没回答，稍后再试',
+    hive_not_running: 'Hive 不在运行', hive_unusable: '这台 Hive 的记录不完整', unexpected_body: 'Hive 返回的内容不对',
+    'no session': '没有会话 id' } as Record<string, string>)[e] ?? (e.startsWith('http_') ? `Hive 返回 ${e.slice(5)}` : e);
+}
+
+export type OutcomeBucket = 'completed' | 'error' | 'stopped' | 'other';
+
+/** The history bucket of a run: done, failed, stopped, or not known (no result yet,
+ *  provisional, no record). */
+export function outcomeBucket(r: SwarmOutRun): OutcomeBucket {
+  const res = r.result;
+  if (!res) return 'other';   // paused / no_record (the provisional endings) fall to 'other' below
+  if (res.ended === 'completed' || res.ended === 'turn_limit') return 'completed';
+  if (res.ended === 'error' || res.ended === 'crashed' || res.ended === 'gave_up') return 'error';
+  if (res.ended === 'stopped' || res.ended === 'superseded' || res.ended === 'restarted') return 'stopped';
+  return 'other';
+}
+
+/** Runs sent per local calendar day over the last `days` days, oldest first, each
+ *  day split by outcome (the same days as dailySent). */
+export function dailyByOutcome(runs: SwarmOutRun[], now: number, days = 14):
+{ label: string; count: number; by: Record<OutcomeBucket, number> }[] {
+  const days_ = dailySent([], now, days).map((d) => ({ ...d, by: { completed: 0, error: 0, stopped: 0, other: 0 } }));
+  const dayOf = (t: number) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  const first = new Date(now);
+  first.setHours(0, 0, 0, 0);
+  first.setDate(first.getDate() - (days - 1));
+  const byLabel = new Map(days_.map((d) => [d.label, d]));
+  for (const r of runs) {
+    const t = Date.parse(r.sent_at);
+    if (Number.isNaN(t) || t < first.getTime() || t > now) continue;
+    const d = byLabel.get(dayOf(t));
+    if (!d) continue;
+    d.count += 1;
+    d.by[outcomeBucket(r)] += 1;
+  }
+  return days_;
 }

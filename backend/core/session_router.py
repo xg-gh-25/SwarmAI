@@ -3996,7 +3996,12 @@ class SessionRouter:
         event through it before yielding it): closed here, in ``finally`` and
         before ``turn_end`` is published, however the turn ends — so what the
         turn still held (step results waiting for the next assistant row) is
-        written, and is in the DB when a tab reloads on ``turn_end``.
+        written, and is in the DB when a tab reloads on ``turn_end``. Before it, a
+        started turn's ``turn_outcome`` block (core/turn_outcome: how the turn ended,
+        from the events published here and an exception leaving the turn) is
+        written through the same writer and published as one more assistant event
+        (through the hub only when the turn ended by an exception or a close); a turn
+        that never started writes none.
 
         ``opener`` (run_conversation, docs/design/chat-turn-liveness.md S1): the
         inner generator claims the turn itself at admission (``TurnOpener.open``,
@@ -4012,10 +4017,13 @@ class SessionRouter:
         turns (both wait for no turn to be open or claimed).
         """
         from . import session_state as _ss
+        from .turn_outcome import OutcomeRecorder
         hub = session_events.hub()
         turn_id = opener.turn_id if opener is not None else uuid4().hex[:12]
         sid = session_id
         started = False
+        outcome = OutcomeRecorder()   # how the turn ended: written at its end
+        outcome_written = False
 
         def unit_of(s):
             return getattr(self, "_units", {}).get(s)
@@ -4051,24 +4059,98 @@ class SessionRouter:
                         started = True
                         writer.begin(sid)
                         yield publish({"type": "turn_start", "source": source})
+                    outcome.note(ev, getattr(unit_of(sid), "pid", None)
+                                 if ev.get("type") == "result" else None)
                     yield publish(ev)
-            finally:
-                await writer.close()
-                ended: set = set()
                 if started:
-                    publish({"type": "turn_end"})   # ends the claim of this turn too
-                    ended.add(sid)
-                if opener is not None and opener.opened and opener.session_id not in ended:
-                    # claimed, never started (queued, rejected, cancelled)
-                    hub.release_claim(opener.session_id, turn_id)
-                    _ss.refresh_activity(opener.session_id, unit_of(opener.session_id))
-                    ended.add(opener.session_id)
-                # the session is free of this turn: if messages were queued while it
-                # held the session, they go now (one flag, set wherever a message is
-                # queued for being busy; no other trigger is needed — v4 RC-B)
-                for s in ended:
-                    if hub.take_waiters(s):
-                        self.kick(s)
+                    # the turn ran to its end: the outcome goes out like any block of
+                    # the turn, so a live tab holds what a reload shows
+                    block = await self._write_turn_outcome(writer, sid, outcome)
+                    outcome_written = True   # after the write: a cancel inside it retries below
+                    if block is not None:
+                        yield publish({"type": "assistant", "content": [block], "model": None})
+            except Exception as exc:
+                # an unexpected exception: the SSE wrapper builds its error frame
+                # outside this turn, so the outcome names the crash here
+                outcome.crashed(exc)
+                raise
+            finally:
+                try:
+                    if started and not outcome_written:
+                        # an exception or a close: nothing can be yielded any more, so
+                        # the block reaches subscribed tabs through the hub only (the
+                        # writer writes one outcome per turn, so a retry never doubles)
+                        block = await self._write_turn_outcome(writer, sid, outcome)
+                        if block is not None:
+                            publish({"type": "assistant", "content": [block], "model": None})
+                finally:
+                    # however the outcome write went (a second cancel can land in it),
+                    # the turn is closed, ended and its session released
+                    await writer.close()
+                    ended: set = set()
+                    if started:
+                        publish({"type": "turn_end"})   # ends the claim of this turn too
+                        ended.add(sid)
+                    if opener is not None and opener.opened and opener.session_id not in ended:
+                        # claimed, never started (queued, rejected, cancelled)
+                        hub.release_claim(opener.session_id, turn_id)
+                        _ss.refresh_activity(opener.session_id, unit_of(opener.session_id))
+                        ended.add(opener.session_id)
+                    # the session is free of this turn: if messages were queued while it
+                    # held the session, they go now (one flag, set wherever a message is
+                    # queued for being busy; no other trigger is needed — v4 RC-B)
+                    for s in ended:
+                        if hub.take_waiters(s):
+                            self.kick(s)
+
+    async def _write_turn_outcome(self, writer: TurnWriter, session_id: Optional[str],
+                                  outcome: object) -> Optional[dict]:
+        """Write the started turn's ``turn_outcome`` block (core/turn_outcome), with
+        what the turn did to each repository its session declared (core/task_repos);
+        returns it, or None when it was not written. A failure is logged and never
+        holds the turn's end."""
+        try:
+            repos = await self._task_repo_facts(session_id)
+            block = outcome.block(repos)   # type: ignore[attr-defined]
+            return block if await writer.record_outcome(block) else None
+        except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
+            logger.error("turn_outcome.write_failed session_id=%s: %s", session_id, exc)
+            return None
+
+    #: hang guard for reading every declared repository at a turn end
+    TASK_REPO_FACTS_TIMEOUT_S = 30
+
+    async def _task_repo_facts(self, session_id: Optional[str]) -> Optional[list]:
+        """Facts of the repositories the session's dispatch declared
+        (``sessions.metadata.task_repos``), or None when it declared none."""
+        if not session_id:
+            return None
+        from database import db
+        from . import executors, task_repos
+        row = await db.sessions.get(session_id)
+        meta = (row or {}).get("metadata")
+        declared = meta.get("task_repos") if isinstance(meta, dict) else None
+        if not declared:
+            return None
+        try:
+            repos = task_repos.parse(declared)
+        except task_repos.TaskRepoError as exc:
+            logger.warning("task_repos: session %s carries an invalid list: %s", session_id, exc)
+            return None
+        from .project_registry import get_swarmws
+        since = None                       # the session's start: where each base is read
+        try:
+            since = datetime.fromisoformat(str(row.get("created_at"))).timestamp()
+        except (TypeError, ValueError):
+            logger.warning("task_repos: session %s has no readable start time", session_id)
+        try:
+            return await asyncio.wait_for(
+                executors.run_in("turn_changes", task_repos.repo_facts, str(get_swarmws()),
+                                 repos, since),
+                self.TASK_REPO_FACTS_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return [{"url": r["url"], "ref": r["ref"], "dir": r["dir"], "present": None,
+                     "error": task_repos.ERR_TIMEOUT} for r in repos]
 
     async def run_conversation(
         self,

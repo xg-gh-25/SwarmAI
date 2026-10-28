@@ -27,6 +27,79 @@ export interface SwarmOutRun {
   /** why: e.g. waiting_input, question, preparing, idle, not_held, hive_stopped,
    *  hive_silent, no_session_id */
   state_reason?: string;
+  /** the repositories the task declared, with the directory each goes to on the Hive */
+  repos?: { url: string; ref: string | null; dir: string }[];
+  /** How the run ended and what it did, as last read from its Hive (backend
+   *  core/swarm_out_results.public): no reply text, no error message. */
+  result?: SwarmOutResult | null;
+  result_status?: 'fetched' | 'pending' | 'failed' | 'not_applicable';
+  /** why the last check failed: session_gone, hive_silent, http_502, ... */
+  result_error?: string | null;
+  result_checked_at?: string | null;
+}
+
+export type SwarmOutEnded = 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'no_terminal'
+  | 'stopped' | 'restarted' | 'superseded' | 'gave_up' | 'no_record';
+
+/** One declared repository: what the task changed against the version it pulled.
+ *  In /runs the file and commit lists are empty (counts only) and url/ref/dir are
+ *  null unless still URL-shaped; /result carries them. */
+export interface SwarmOutRepoFact {
+  url: string | null; ref: string | null; dir: string | null;
+  present: boolean | null; origin_matches: boolean | null;
+  base: string | null; head: string | null;
+  commits: string[]; commits_total: number;
+  files: { path: string; added: number | null; deleted: number | null }[];
+  files_total: number; added: number; deleted: number; untracked: number;
+  pushed: 'yes' | 'no' | 'nothing_to_push' | 'unknown';
+  error: string | null;
+}
+
+/** detail: /result only (null in /runs) */
+export interface SwarmOutAuditRow { dim: string; verdict: string | null; detail: string | null }
+
+export interface SwarmOutResult {
+  ended: SwarmOutEnded;
+  /** may still change (no ending recorded after the last message, or paused) */
+  provisional: boolean;
+  /** the Hive wrote how the turn ended (false: a Hive version without that record) */
+  outcome_recorded: boolean;
+  /** some turn of the session has an outcome: this Hive records them */
+  hive_records_outcomes: boolean;
+  /** /runs: {code} ("other" unless a plain code); /result: {code, message} */
+  error: { code: string | null; message?: string | null } | null;
+  ended_at: string | null;
+  turns: number;
+  older_turns_not_read: boolean;
+  active_s: number | null;
+  tokens: { input: number; output: number } | null;
+  cost_usd: number | null;
+  /** the cost may be short (a turn without a record, or older turns not read) */
+  cost_partial: boolean;
+  /** /result only: the last reply (up to 4000 chars) */
+  report?: string;
+  report_chars: number;
+  kinds: ('pipeline' | 'code' | 'files' | 'answer')[];
+  work: {
+    repos: SwarmOutRepoFact[] | null;
+    /** /runs: root null, repo null unless a plain name */
+    changes: { root: string | null; repo: string | null; files: number; added: number; deleted: number; landed: string[] }[];
+    /** /runs: kind only; /result: with the Hive path */
+    files: { path?: string; kind: 'content' | 'knowledge' | 'external-diff' | 'external-nodiff' | 'other' }[];
+    files_omitted: number;
+    steps: { total: number; failed: number; agents: number; by_tool: Record<string, number> };
+    human: { approved: number; denied: number; unanswered: number; answered_questions: number };
+  };
+  pipeline: { run_id: string | null; profile: string | null; status: string | null; landing: string | null;
+    landed_sha: string | null; audit: SwarmOutAuditRow[] } | null;
+  dropped: number;
+}
+
+/** The whole kept record of one run (GET /swarm-out/runs/{id}/result). */
+export interface SwarmOutResultRecord {
+  dispatch_id: string;
+  record: { result: SwarmOutResult | null; fetch_error: string | null; checked_at: string | null;
+    fetched_at: string | null } | null;
 }
 
 export interface SwarmOutQuestion {
@@ -112,6 +185,18 @@ export const swarmOutService = {
   async runs(): Promise<SwarmOutRuns> {
     const { data } = await api.get('/swarm-out/runs');
     return data as SwarmOutRuns;
+  },
+
+  /** One run's whole kept result, with the Hive's reply: the panel's card only. */
+  async result(dispatchId: string): Promise<SwarmOutResultRecord> {
+    const { data } = await api.get(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/result`);
+    return data as SwarmOutResultRecord;
+  },
+
+  /** Check one run's Hive now. */
+  async refresh(dispatchId: string): Promise<{ result: SwarmOutResult | null; result_error: string | null }> {
+    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/refresh`);
+    return data as { result: SwarmOutResult | null; result_error: string | null };
   },
 
   async answer(ask: SwarmOutAsk, body: { answers?: Record<string, string>; decision?: 'approve' | 'deny' }): Promise<void> {

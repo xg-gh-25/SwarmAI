@@ -217,8 +217,11 @@ def _steered_turn(after_steer: str = "end", hold: asyncio.Event | None = None,
 async def _assistant_rows(sid: str) -> list[tuple]:
     from database import db
     rows = await db.messages.list_by_session(sid, include_pending=True)
+    # the turn's turn_outcome (core/turn_outcome) is on its last row too: not part of
+    # the order these tests check
     return [((r.get("metadata") or {}).get("client_id"),
-             [b.get("text") or b.get("tool_use_id") or b.get("id") for b in r["content"]])
+             [b.get("text") or b.get("tool_use_id") or b.get("id") for b in r["content"]
+              if b.get("type") != "turn_outcome"])
             for r in rows if r["role"] == "assistant"]
 
 

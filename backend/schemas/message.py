@@ -165,6 +165,9 @@ class ChatRequest(BaseModel):
     editor_context: EditorContext | None = None  # Currently open file in editor panel
     terminal_context: TerminalContext | None = None  # Attached terminal output (P2)
     client_id: str | None = None  # Correlation ID for optimistic message dedup
+    # Swarm Out: the repositories a dispatched task works on ([{url, ref}], core/task_repos).
+    # Recorded on a NEW session only; ignored when session_id names an existing one.
+    task_repos: list[dict[str, Any]] | None = None
 
 
 class AnswerQuestionRequest(BaseModel):

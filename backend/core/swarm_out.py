@@ -172,21 +172,37 @@ def _s3(inst: dict[str, Any]):
     return session.client("s3", region_name=inst["region"])
 
 
-def _log_row(inst: dict[str, Any], session_id: Optional[str], title: str, origin: str) -> dict[str, Any]:
+def _log_row(inst: dict[str, Any], session_id: Optional[str], title: str, origin: str,
+             repos: Optional[list] = None) -> dict[str, Any]:
     """One dispatch log row; ``session_id`` None when the Hive never named the session."""
     return {"dispatch_id": f"so_{uuid.uuid4().hex[:12]}", "hive_id": inst["id"],
             "hive": inst["name"], "session_id": session_id, "title": title,
-            "origin": origin, "sent_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            "origin": origin, "sent_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "repos": repos or []}
 
 
-async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-out") -> dict[str, Any]:
-    """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at}."""
+def task_message(task: str, repos: list) -> str:
+    """What the Hive receives: the unattended preamble, the task's repositories with
+    the directory each goes to (core/task_repos), then the task."""
+    from core.task_repos import task_text
+    return UNATTENDED_PREAMBLE.replace("Task:\n", task_text(repos) + "Task:\n", 1) + task
+
+
+async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-out",
+                   repos: Optional[list] = None) -> dict[str, Any]:
+    """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
+    repos}. ``repos``: ``[{url, ref}]`` the task works on (core/task_repos)."""
+    from core import task_repos
     title = " ".join((title or "").split())[:MAX_TITLE_CHARS]
     task = (task or "").strip()
     if not title or not task:
         raise SwarmOutError("a dispatch needs a title and a task")
     if len(task) > MAX_TASK_CHARS:
         raise SwarmOutError(f"the task is longer than {MAX_TASK_CHARS} characters")
+    try:
+        declared = task_repos.parse(repos)
+    except task_repos.TaskRepoError as e:
+        raise SwarmOutError(str(e)) from None
     inst = await _instance(hive_ref)
     async with _client(inst) as client:
         r = await client.get("/api/chat/sessions/admission-state")
@@ -196,12 +212,12 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             raise SwarmOutError(f"Hive {inst['name']} is busy; try again later")
         try:
             session_id = await asyncio.wait_for(
-                _start_session(client, UNATTENDED_PREAMBLE + task), SESSION_ID_WAIT_S)
+                _start_session(client, task_message(task, declared), declared), SESSION_ID_WAIT_S)
         except (asyncio.TimeoutError, httpx.ReadTimeout):
             # The task may have been sent and taken: the Hive may be running it. Record
             # the dispatch without a session so this Hive's questions are still listed,
             # and say so instead of a generic failure (fixing spec J1).
-            row = _log_row(inst, None, title, origin)
+            row = _log_row(inst, None, title, origin, declared)
             await asyncio.to_thread(_append, json.dumps(row, ensure_ascii=False) + "\n")
             raise SwarmOutError(
                 f"Hive {inst['name']} did not name the session within {SESSION_ID_WAIT_S}s; "
@@ -209,7 +225,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
                 "it again.") from None
     if not session_id or not KEY_RE.match(session_id):
         raise SwarmOutError("the Hive did not name a session")
-    row = _log_row(inst, session_id, title, origin)
+    row = _log_row(inst, session_id, title, origin, declared)
     line = json.dumps(row, ensure_ascii=False) + "\n"
     await asyncio.to_thread(_append, line)
     logger.info("swarm_out: dispatched %s to %s (session %s)", row["dispatch_id"], inst["name"], session_id)
@@ -221,11 +237,16 @@ def _append(line: str) -> None:
         f.write(line)
 
 
-async def _start_session(client: httpx.AsyncClient, message: str) -> Optional[str]:
+async def _start_session(client: httpx.AsyncClient, message: str,
+                         repos: Optional[list] = None) -> Optional[str]:
     """POST the message and read SSE only until the Hive names the session, then drop
-    the connection: the Hive keeps running the turn (it detaches a gone client)."""
-    async with client.stream("POST", "/api/chat/stream",
-                             json={"agent_id": "default", "message": message},
+    the connection: the Hive keeps running the turn (it detaches a gone client). The
+    task's repositories go as ``task_repos`` (a Hive older than that field ignores it;
+    the message still names them)."""
+    body: dict[str, Any] = {"agent_id": "default", "message": message}
+    if repos:
+        body["task_repos"] = [{"url": r["url"], "ref": r["ref"]} for r in repos]
+    async with client.stream("POST", "/api/chat/stream", json=body,
                              timeout=httpx.Timeout(HTTP_TIMEOUT_S, read=SESSION_ID_WAIT_S)) as r:
         if r.status_code != 200:
             raise SwarmOutError(f"the Hive refused the task (HTTP {r.status_code})")
@@ -512,7 +533,38 @@ async def list_runs() -> dict[str, Any]:
     for a in asks:
         a["dispatch_title"] = titles.get((a["hive_id"], a.get("session_id")))
         a["possible_dispatch_title"] = unnamed.get(a["hive_id"]) if a["dispatch_title"] is None else None
+    # each run's kept result (core/swarm_out_results); the checks due start here
+    from core import swarm_out_results
+    try:
+        await swarm_out_results.attach(rows, status_of)
+    except Exception as e:                          # results unreadable: the runs still list
+        logger.warning("swarm_out: attaching results failed (%s)", type(e).__name__)
+        errors.append("could not read the runs' results")
     return {"runs": rows, "asks": asks, "errors": errors}
+
+
+def _log_row_of(dispatch_id: str) -> dict[str, Any]:
+    for r in _read_log():
+        if r.get("dispatch_id") == dispatch_id:
+            return r
+    raise SwarmOutError(f"no dispatch {dispatch_id!r}")
+
+
+async def run_result(dispatch_id: str) -> dict[str, Any]:
+    """The whole kept record of one run (with the reply), for the panel only."""
+    from core import swarm_out_results
+    await asyncio.to_thread(_log_row_of, dispatch_id)
+    rec = await asyncio.to_thread(swarm_out_results.load, dispatch_id)
+    return {"dispatch_id": dispatch_id, "record": rec}
+
+
+async def refresh_result(dispatch_id: str) -> dict[str, Any]:
+    """Check one run's Hive now (the card's refresh) and return what /runs carries."""
+    from core import swarm_out_results
+    row = await asyncio.to_thread(_log_row_of, dispatch_id)
+    rec = await swarm_out_results.fetch(row)
+    return {"dispatch_id": dispatch_id, "result": swarm_out_results.public(rec, row.get("repos")),
+            "result_error": rec.get("fetch_error"), "result_checked_at": rec.get("checked_at")}
 
 
 FLEET_KEYS = ("name", "status", "version", "region", "instance_type",

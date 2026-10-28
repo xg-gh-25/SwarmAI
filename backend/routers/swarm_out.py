@@ -30,6 +30,8 @@ class DispatchBody(BaseModel):
     title: str = Field(min_length=1, max_length=swarm_out.MAX_TITLE_CHARS * 2)
     task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
     origin: str = Field(default="swarm-out", max_length=40)
+    # [{url, ref}] the task works on (core/task_repos validates them)
+    repos: Optional[list[dict[str, Any]]] = Field(default=None, max_length=20)
 
 
 class AnswerBody(BaseModel):
@@ -54,7 +56,7 @@ async def _call(coro) -> Any:
 @router.post("/dispatch")
 async def dispatch(body: DispatchBody) -> dict[str, Any]:
     _require_desktop()
-    return await _call(swarm_out.dispatch(body.hive, body.title, body.task, body.origin))
+    return await _call(swarm_out.dispatch(body.hive, body.title, body.task, body.origin, body.repos))
 
 
 @router.get("/hives")
@@ -73,6 +75,20 @@ async def fleet() -> dict[str, Any]:
 async def runs() -> dict[str, Any]:
     _require_desktop()
     return await _call(swarm_out.list_runs())
+
+
+@router.get("/runs/{dispatch_id}/result")
+async def run_result(dispatch_id: str) -> dict[str, Any]:
+    """One run's whole kept result, with the Hive's reply (the panel's card)."""
+    _require_desktop()
+    return await _call(swarm_out.run_result(dispatch_id))
+
+
+@router.post("/runs/{dispatch_id}/refresh")
+async def refresh_result(dispatch_id: str) -> dict[str, Any]:
+    """Check one run's Hive now."""
+    _require_desktop()
+    return await _call(swarm_out.refresh_result(dispatch_id))
 
 
 @router.post("/asks/{hive_id}/{session_id}/{request_id}/answer")

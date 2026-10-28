@@ -126,8 +126,8 @@ describe('the run view', () => {
     const group = (title: string) => screen.getAllByTestId('swarm-out-run-group').find((g) => g.getAttribute('data-group') === title)!;
     const titles = (g: HTMLElement) => within(g).queryAllByTestId('swarm-out-run').map((c) => c.getAttribute('data-state') + ':' + c.textContent?.split(/\d/)[0].trim());
     expect(titles(group('在跑'))).toEqual(['running:task a']);
-    expect(titles(group('不在跑了（24 小时内派出的）'))).toEqual(['stopped:task c', 'stopped:task f']);
-    expect(within(group('不在跑了（24 小时内派出的）')).getAllByTestId('swarm-out-run-state')[1].textContent).toContain('Hive 已关机');
+    expect(titles(group('结束了（24 小时内派出的）'))).toEqual(['stopped:task c', 'stopped:task f']);
+    expect(within(group('结束了（24 小时内派出的）')).getAllByTestId('swarm-out-run-state')[1].textContent).toContain('Hive 已关机');
     expect(titles(group('状态未知'))).toEqual(['unknown:task e']);
   });
 
@@ -162,7 +162,8 @@ describe('the run view', () => {
     await screen.findByTestId('kpi-free');
     const tbd = screen.getAllByTestId('swarm-out-tbd').map((t) => t.textContent ?? '');
     expect(tbd.some((t) => t.includes('已安排') && t.includes('TBD：还没有定时派发'))).toBe(true);
-    expect(tbd.some((t) => t.includes('五维审计') && t.includes('TBD：'))).toBe(true);
+    expect(tbd.some((t) => t.includes('trace') && t.includes('TBD：'))).toBe(true);
+    expect(tbd.some((t) => t.includes('结果'))).toBe(false);   // results come from the Hive now
     expect(screen.queryByTestId('swarm-out-sample-notice')).toBeNull();
     expect(document.body.textContent).not.toMatch(/示例|敬请期待/);
   });
