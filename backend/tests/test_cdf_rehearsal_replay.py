@@ -85,3 +85,17 @@ def test_main_migrates_the_copy_before_a_real_run(tmp_path: Path, monkeypatch) -
     replay_mod.main(args + ["--max-usd", "1"])
     replay_mod.main(args + ["--dry-run"])
     assert calls == ["migrate", "replay", "replay"]
+
+
+def test_s2_sample_spreads_over_size_smallest_first(tmp_path: Path) -> None:
+    db = sqlite3.connect(tmp_path / "data.db")
+    db.execute("CREATE TABLE messages (session_id TEXT, content TEXT)")
+    for i in range(10):
+        db.execute("INSERT INTO messages VALUES (?,?)", (f"s{i}", "x" * (100 * (10 - i))))
+    db.commit()
+    db.close()
+    sessions = [f"s{i}" for i in range(10)]
+    picked = replay_mod.sample_by_size(tmp_path, sessions, 4)
+    assert picked == ["s9", "s6", "s3", "s0"]          # smallest .. largest, both ends kept
+    assert replay_mod.sample_by_size(tmp_path, sessions, 0) == sorted(
+        sessions, key=lambda s: -int(s[1:]))            # all, smallest first

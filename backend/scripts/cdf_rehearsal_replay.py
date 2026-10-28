@@ -59,6 +59,31 @@ def _sessions_in_window(data_dir: Path, since: datetime) -> list[str]:
     return [row[0] for row in rows]
 
 
+def sample_by_size(data_dir: Path, sessions: list[str], n: int) -> list[str]:
+    """*n* sessions spread evenly over the size ranking (characters of sent messages),
+    returned smallest first so a budget stop cuts the largest. Deterministic."""
+    if n <= 0 or n >= len(sessions):
+        chosen = list(sessions)
+    else:
+        sizes = _session_sizes(data_dir, sessions)
+        ranked = sorted(sessions, key=lambda sid: (sizes.get(sid, 0), sid))
+        step = (len(ranked) - 1) / (n - 1) if n > 1 else 0
+        chosen = list(dict.fromkeys(ranked[round(i * step)] for i in range(n)))
+    sizes = _session_sizes(data_dir, chosen)
+    return sorted(chosen, key=lambda sid: (sizes.get(sid, 0), sid))
+
+
+def _session_sizes(data_dir: Path, sessions: list[str]) -> dict[str, int]:
+    uri = f"file:{data_dir / 'data.db'}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
+        out = {}
+        for sid in sessions:
+            row = conn.execute("SELECT COALESCE(SUM(LENGTH(content)),0) FROM messages "
+                               "WHERE session_id=?", (sid,)).fetchone()
+            out[sid] = int(row[0])
+    return out
+
+
 def _cost(usage: dict[str, int], price_in: float, price_out: float) -> float:
     return (usage["input_tokens"] * price_in + usage["output_tokens"] * price_out) / 1_000_000
 
@@ -101,10 +126,12 @@ def _drain(workspace: Path, judge_factory: Callable[[], Any] | None, max_steps: 
     return steps
 
 
-def _items(source: str, data_dir: Path, workspace: Path, since: datetime) -> list[Any]:
+def _items(source: str, data_dir: Path, workspace: Path, since: datetime,
+           s2_sample: int = 0) -> list[Any]:
     """What one source would replay in the window (no model call)."""
     if source == "s2":
-        return _sessions_in_window(data_dir, since)
+        sessions = _sessions_in_window(data_dir, since)
+        return sample_by_size(data_dir, sessions, s2_sample) if s2_sample else sessions
     if source == "s4":
         from core.ddd_bindings import governed_repo_roots
         from jobs.handlers.ddd_refresh import _recent_commits
@@ -177,7 +204,7 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
            sources: tuple[str, ...] = SOURCES, max_usd: float = 0.0,
            price_in: float = 3.0, price_out: float = 15.0, dry_run: bool = False,
            llm: Any | None = None, judge_factory: Callable[[], Any] | None = None,
-           max_steps: int = 100_000) -> dict[str, Any]:
+           max_steps: int = 100_000, s2_sample: int = 0) -> dict[str, Any]:
     """Replay *sources* over the copy; stop before the next item once *max_usd* is spent.
 
     The caller must have pointed SWARM_DATA_DIR / SWARM_WORKSPACE at the copy before
@@ -189,8 +216,11 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
     report: dict[str, Any] = {"since": since.isoformat(), "dry_run": dry_run,
                               "max_usd": max_usd, "sources": {}, "stopped": None}
     for source in sources:
-        items = _items(source, data_dir, workspace, since)
+        items = _items(source, data_dir, workspace, since, s2_sample)
         entry = {"items": len(items), "receipts": 0, "errors": 0, "drain_steps": 0}
+        if source == "s2" and s2_sample:
+            entry["sampled"] = list(items)
+            entry["done"] = []
         report["sources"][source] = entry
         if dry_run:
             continue
@@ -202,6 +232,8 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
                 break
             try:
                 entry["receipts"] += _enqueue(source, item, workspace, llm)
+                if "done" in entry:
+                    entry["done"].append(item)
             except Exception as exc:  # one bad item is reported, the replay goes on
                 entry["errors"] += 1
                 entry.setdefault("first_error", f"{type(exc).__name__}: {exc}")
@@ -241,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--price-in", type=float, default=3.0, help="USD per million input tokens")
     parser.add_argument("--price-out", type=float, default=15.0, help="USD per million output tokens")
     parser.add_argument("--dry-run", action="store_true", help="count items, call no model")
+    parser.add_argument("--s2-sample", type=int, default=0,
+                        help="replay only N S2 sessions spread over size, smallest first (0 = all)")
     parser.add_argument("--report", type=Path, help="also write the JSON report here")
     args = parser.parse_args(argv)
 
@@ -260,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         migrate_app_db()
     report = replay(args.data_dir.resolve(), args.workspace.resolve(), days=args.days,
                     sources=sources, max_usd=args.max_usd, price_in=args.price_in,
-                    price_out=args.price_out, dry_run=args.dry_run)
+                    price_out=args.price_out, dry_run=args.dry_run, s2_sample=args.s2_sample)
     text = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     print(text)
     if args.report:
