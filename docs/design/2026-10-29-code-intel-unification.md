@@ -153,6 +153,8 @@ The agent gets the graph only from recall: location, signature, and 1-hop caller
 - **(a) Nothing new.** Fix the data and keep recall as the only door; delete `blast_radius`. Cost 0.
 - **(b) One read-only command, `code_intel_cli.py impact <file|symbol> --project P [--repo R]`.** It returns direct and transitive callers (depth ≤ 2), grouped by file, from every graph, freshness-stamped like recall. A stale graph says so and names the files changed since indexing. R27 and `s_expert-review`'s scope step name it as the first step, with grep as the cross-check. Cost: about 150 lines plus two doc lines. It keeps `blast_radius`.
 
+As built: `python -m core.code_intel.impact` (not a separate `code_intel_cli.py`, the same entry form as `core.code_intel.analysis`). It walks callers only (`GraphStore.find_callers`); `blast_radius`, which also walked callees, had no other caller and is deleted.
+
 Recommendation: **(b)**. Since B1 the call graph covers the frontend, where most cross-file regressions have come from, and without a reader those edges are cost with no use.
 
 ## 6. Order and verification

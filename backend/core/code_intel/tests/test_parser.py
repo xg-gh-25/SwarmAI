@@ -832,12 +832,12 @@ class TestValueRefEdges:
                 n.id for n in result.nodes
                 if n.node_type == "constant" and n.name == "MAX_RETRIES"
             )
-            affected = {nid for nid, _depth in gs.blast_radius([const_id], max_depth=2)}
+            affected = {nid for nid, _depth in gs.find_callers(const_id, depth=2)}
             reader_ids = {e.source_id for e in self._ref_edges(result)
                           if e.target_id == const_id}
             assert reader_ids, "test setup: expected a reader of MAX_RETRIES"
             assert reader_ids & affected, (
-                f"blast_radius from const {const_id} must surface its reader "
+                f"the callers of const {const_id} must include its reader "
                 f"{reader_ids}, got affected={affected}")
         finally:
             gs.close()

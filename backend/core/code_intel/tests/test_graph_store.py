@@ -265,10 +265,10 @@ class TestUpsert:
             gs.close()
 
 
-# ── Blast radius (bidirectional CTE) ────────────────────────────────────
+# ── Callers (the walk behind core.code_intel.impact) ───────────────────
 
 
-class TestBlastRadius:
+class TestFindCallers:
     def _build_chain(self, store):
         """Build: A -> B -> C -> D (linear call chain)."""
         nodes = [
@@ -285,25 +285,17 @@ class TestBlastRadius:
         store.upsert_nodes(nodes)
         store.upsert_edges(edges)
 
-    def test_blast_radius_depth_1(self, store):
+    def test_direct_callers(self, store):
         self._build_chain(store)
-        result = store.blast_radius(["B"], max_depth=1)
-        ids = {nid for nid, _ in result}
-        # B itself (depth 0), A (backward 1), C (forward 1)
-        assert "B" in ids
-        assert "A" in ids
-        assert "C" in ids
-        # D is 2 hops forward, should not appear at depth 1.
-        assert "D" not in ids
+        assert store.find_callers("C", depth=1) == [("B", 1)]
 
-    def test_blast_radius_depth_2(self, store):
+    def test_callers_of_callers_up_to_the_depth(self, store):
         self._build_chain(store)
-        result = store.blast_radius(["B"], max_depth=2)
-        ids = {nid for nid, _ in result}
-        assert ids == {"A", "B", "C", "D"}
+        assert dict(store.find_callers("D", depth=2)) == {"C": 1, "B": 2}
 
-    def test_blast_radius_empty(self, store):
-        assert store.blast_radius([]) == []
+    def test_no_callers(self, store):
+        self._build_chain(store)
+        assert store.find_callers("A", depth=2) == []
 
 
 # ── Dead-code detection ──────────────────────────────────────────────────

@@ -207,7 +207,10 @@ land a large correct change safely — NOT a shield to avoid it and patch. (SOUL
 **R27. Contract migration: grep ALL consumers, including reads.** A commit claiming "single
 writer / sole authority / remove dual-write" MUST grep every caller of the OLD API and confirm
 each migrated — READ paths (tab switch, session load) too, not just writes. The question isn't
-"is the new code correct?" but "are ALL old consumers converted?" (SOUL P1+P2)
+"is the new code correct?" but "are ALL old consumers converted?" Start from the code graph
+when the project has one: `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol>
+--project <P>` lists the callers resolved across files; grep then cross-checks what the
+graph cannot see (dynamic calls, string dispatch, tests in another repo). (SOUL P1+P2)
 
 **R28. Recovery paths need execution tests.** Any crash/error/timeout recovery path needs ≥1
 test that FORCES execution (mock the trigger, assert it runs). "Compiles" ≠ "executes"; zero

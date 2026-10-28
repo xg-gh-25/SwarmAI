@@ -1014,7 +1014,7 @@ _EMIT_MODULE_LEVEL_CALL_EDGES = True
 
 # The synthetic source_id for a module-level (no enclosing function) edge. By
 # design this is NOT a real code_node — find_dead_code / orphan-cleanup /
-# blast_radius all key on target_id, so a synthetic SOURCE is safe (verified:
+# the callers walk all key on target_id, so a synthetic SOURCE is safe (verified:
 # graph_store.py:1132 orphan-cleanup checks target_id only; find_callers CTE
 # tolerates a source with no matching node). This is why we deliberately do NOT
 # add a source_id orphan-cleanup (Gate-1 skeptic's literal Fix-3 suggestion):

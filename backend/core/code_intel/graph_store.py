@@ -289,9 +289,9 @@ class _LockingConnection:
         lock-guarded — any statement run on it bypasses the serialization this
         proxy exists to provide (R1 race, run_071e54c8). A multi-statement
         read-modify-write on a raw cursor MUST be wrapped by the caller in
-        ``with graph._conn_lock:`` for the WHOLE sequence (see GraphStore.blast_radius
-        and core.code_intel.resolve_router_prefixes — the only two
-        sanctioned lock-holding RMW callers). Prefer ``.execute()`` on
+        ``with graph._conn_lock:`` for the WHOLE sequence (see
+        core.code_intel.resolve_router_prefixes, the sanctioned lock-holding RMW
+        caller). Prefer ``.execute()`` on
         this proxy (locked + row-materialized) for anything that isn't a
         TEMP-TABLE/RMW sequence. Do NOT add a new raw-cursor caller without the lock.
         """
@@ -986,70 +986,6 @@ class GraphStore:
 
     # ── CTE traversal ────────────────────────────────────────────────────
 
-    def blast_radius(
-        self,
-        changed_node_ids: list[str],
-        max_depth: int = 2,
-    ) -> list[tuple[str, int]]:
-        """Bidirectional traversal from *changed_node_ids*.
-
-        Combines forward (callees via source_id -> target_id) and backward
-        (callers via target_id -> source_id) reachability up to *max_depth*
-        hops.  Uses a temp table for seed IDs so the CTE stays clean.
-
-        Returns:
-            List of ``(node_id, depth)`` tuples (depth 0 = seed nodes).
-        """
-        if not changed_node_ids:
-            return []
-
-        # This is the ONE method that needs a RAW cursor (not the _LockingConnection
-        # proxy): it shares a TEMP TABLE (_seeds) across multiple statements on the
-        # SAME cursor/session, which the row-materializing proxy cannot express. So we
-        # hold the store's connection RLock across the whole cursor lifetime — the
-        # multi-statement TEMP-TABLE sequence must be atomic against a concurrent
-        # writer on the shared connection (R1 race fix, run_071e54c8). RLock is
-        # reentrant, so nesting under an already-locked caller is safe.
-        with self._conn_lock:
-            cur = self._conn.cursor()
-            cur.execute("CREATE TEMP TABLE IF NOT EXISTS _seeds (id TEXT PRIMARY KEY)")
-            cur.execute("DELETE FROM _seeds")
-            for start in range(0, len(changed_node_ids), _BATCH_SIZE):
-                batch = changed_node_ids[start : start + _BATCH_SIZE]
-                cur.executemany("INSERT OR IGNORE INTO _seeds VALUES (?)", [(i,) for i in batch])
-
-            # Forward CTE: follow edges source -> target.
-            # Backward CTE: follow edges target -> source.
-            sql = f"""
-            WITH RECURSIVE
-            forward(nid, depth) AS (
-                SELECT id, 0 FROM _seeds
-                UNION
-                SELECT e.target_id, f.depth + 1
-                FROM forward f
-                JOIN code_edges e ON e.source_id = f.nid
-                WHERE f.depth < ?
-            ),
-            backward(nid, depth) AS (
-                SELECT id, 0 FROM _seeds
-                UNION
-                SELECT e.source_id, b.depth + 1
-                FROM backward b
-                JOIN code_edges e ON e.target_id = b.nid
-                WHERE b.depth < ?
-            )
-            SELECT nid, MIN(depth) AS depth FROM (
-                SELECT nid, depth FROM forward
-                UNION ALL
-                SELECT nid, depth FROM backward
-            )
-            GROUP BY nid
-            ORDER BY depth
-            """
-            rows = cur.execute(sql, (max_depth, max_depth)).fetchall()
-            cur.execute("DROP TABLE IF EXISTS _seeds")
-            return [(r[0], r[1]) for r in rows]
-
     def find_callers(self, node_id: str, depth: int = 1) -> list[tuple[str, int]]:
         """Find direct and transitive callers of *node_id* up to *depth* hops.
 
@@ -1534,7 +1470,7 @@ class GraphStore:
         ``module::name`` targets dangled until the next full rebuild.
 
         Orphans are calls to builtins/stdlib (or ambiguous names) that are not in the
-        graph; without the cleanup, blast_radius CTE traverses phantoms. *files*
+        graph; without the cleanup, the callers walk traverses phantoms. *files*
         limits the cleanup to edges whose source is in those files (the incremental
         callers pass the files they re-stored); None means the whole graph, which only
         a full rebuild of this graph may use. Returns the number of resolved edges.
