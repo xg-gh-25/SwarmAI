@@ -2,7 +2,7 @@
 title: Project Agent —— 从 Intent 到 Hive 执行的整条 flow
 created: 2026-10-28
 updated: 2026-10-28
-status: final (r4)
+status: final (r5)
 project: SwarmAI
 supersedes_partial:
   - docs/design/2026-10-28-swarm-out-project-agent-brief.md（r2 的"简报"成为本设计 §6 的同步机制和 §7 的派发内容）
@@ -14,9 +14,16 @@ extends:
 
 # Project Agent：从 Intent 到 Hive 执行
 
+**r5（XG 2026-10-28）：**
+- **一个 Brain 对一个 Project Agent，Project Agent 里分多个工作模式（mode）（§4）。** 同一个 Brain 里的活，在在哪跑、跑哪些校验、准备什么环境、用哪些 skill、交付方式上都不一样，只靠 `profile_rules` 装不下。但如果拆成多个独立的 agent，路由会多一层判断，共享的部分要写好几遍，版本也会散开。所以共享的部分只写一次，每个 mode 只能在它的基础上收紧。
+- **每个 mode 有自己的交付方式 `delivery`（§7 ⑨）：**
+  - **`bundle`：** 默认值，所有仓库都能用，Hive 上不需要写凭据。
+  - **`branch-pr`：** 由 Hive 推一个 `hive/**` 分支再开 PR，只用于满足五个前提的 GitHub 仓库。
+  - **直接推 `main`、在 Hive 上直接发 Amazon 内部的 CR：** 都不做。
+
 **r4（定稿）：** 加 §14 E2E 流程图和 §15 推演：用"一个 SwarmAI 代码改动"走完整条 flow。推演暴露出五个缺口，已补进正文：
 - **代码怎么回到本机（§7 第 ⑨ 步）。** Hive 没有推送凭据，SwarmAI 也规定只有本机能推（STEERING #5）。r3 写的是在 Hive 上提交，可这个 commit 回不来。现在改成 Hive 把改动打成 `git bundle`，本机取回，用 `session_worktree land` 落地，再在本机做 qualify。
-- **执行环境（`evidence.setup`）。** Hive 上装的是 SwarmAI 的运行时包，不是开发环境。仓库的测试依赖（backend 的开发依赖、desktop 的 node_modules）在 Hive 上没有装（未实测，按 Hive 包的内容推断），校验跑不起来。定义加一个 `setup`，从 CI 里抄装依赖的命令。
+- **执行环境（mode 的 `setup`）。** Hive 上装的是 SwarmAI 的运行时包，不是开发环境。仓库的测试依赖（backend 的开发依赖、desktop 的 node_modules）在 Hive 上没有装（未实测，按 Hive 包的内容推断），校验跑不起来。定义加一个 `setup`，从 CI 里抄装依赖的命令。
 - **能力分平台（§4）。** SwarmAI Brain 的 4 个开发 skill 是 `platform: desktop`，Hive 上本来就会过滤掉。定义校验时按 `placements` 提示"这个 skill 在 Hive 上不可用"。
 - **路由别名。** SwarmAI 的 `aim.json` 没有 `aliases`，"Swarm Out 的卡片……"这类说法，确定性信号认不出它属于 SwarmAI。生成器从 PRODUCT.md 里的模块名提议别名，人审。
 - **qualify 在本机。** SwarmAI 的"qualified"要求本机 build、部署、观察到生效。Hive 上的校验只能算证据，不能算 qualified。Task Spec 的验收把这两件事分开写。
@@ -107,6 +114,7 @@ AgentSpaces（Amazon 内部）已经有同名的 Project Agent：每个项目一
 | **通用 Brain（General）** | 不属于任何项目的任务用的"大脑"：知识是 `Knowledge/Library` 里的 Markdown（现在 50 篇，约 0.8 MB），没有 ③、④、仓库 | 本机 `Knowledge/Library/` | 本机 |
 | **Runner Agent** | 通用 Brain 的 Project Agent：调研、写报告、回答问题这类不属于任何项目的活 | 产品自带的一份定义（§5） | 产品发布，用户审 |
 | **Project Agent 定义** | Brain ⑤ 里的一份文件：这个项目的活怎么接、怎么干、怎么交付。从 Brain 的其他部分推出来，人审过才生效 | `Projects/<brain>/project-agent.yaml` | 建 Brain 时生成草稿，人审 |
+| **工作模式（mode）** | 一个 Project Agent 里的一种活：什么时候用、哪个 profile、在哪跑、校验、环境、skill、交付方式。只能在共享部分的基础上收紧 | 定义文件里的 `modes` | 同定义 |
 | **定义版本（revision）** | 定义文件加上它引用的 skill 目录（整个目录）的 sha256 | 计算得到 | — |
 | **Brain 快照** | 一个 Brain 的白名单文件打成的包，按内容寻址 | `bridge/<hive>/brain/<digest>.tar.gz`。Hive 上装到 `Projects/<brain>/` | 本机打包 |
 | **Intent** | 人要的结果：一句话、一个 ToDo、一条 Slack | 来源各异 | 人 |
@@ -123,66 +131,87 @@ status: draft | reviewed          # 只有 reviewed 的能派到 Hive
 reviewed_at: 2026-10-28T10:00:00Z
 reviewed_by: <login>
 
+# ── 共享部分：所有 mode 都继承，只写一次 ──────────────────────────────
 identity:                         # ① 从 AGENTS.md / PRODUCT.md 推出
-  summary: 一句话：这里的改动通常是什么样
+  summary: 一句话：这里的活通常是什么样
   in_scope: [...]                 # 接哪些活
   out_of_scope: [...]             # 不接哪些（路由时用来排除）
   source: PRODUCT.md
 
-intake:                           # 路由用（§7）。别名不放这里，放在 aim.json 的 aliases（已有，detect_active_project 在读）
+intake:                           # 路由用（§7）。别名不放这里，放在 aim.json 的 aliases（detect_active_project 在读）
   handles:                        # 典型的 Intent，3-8 条，每条一句话，给模型提议时对照
-    - 修 itsdangerous 的签名或时间戳 bug
-    - 回答 itsdangerous 的兼容性问题
-  repos: [itsdangerous]           # bindings.yaml 里的资产名。在这些仓库里干活就归这个 Brain
+    - 修 SwarmAI 的后端或前端 bug
+    - 调研 SwarmAI 某个子系统怎么工作
+  repos: [swarmai]                # bindings.yaml 里的资产名。在这些仓库里干活就归这个 Brain
 
-run:                              # 怎么干
-  default_profile: bugfix
-  profile_rules:
-    - {when: 只改文档或 CI 配置, profile: direct}
-  confidence: 不确定根因时先派一个 research run，不直接改代码
-
-evidence:                         # 什么算做完
-  setup:                          # 执行环境准备，从 CI 里原样抄（Hive 上没有开发依赖）
-    - {command: "cd backend && uv sync", source: .github/workflows/ci.yml}
-  validations:
-    - {id: tests, command: "uv run --locked tox run -e py3.13", source: .github/workflows/tests.yaml}
-  require: [每条校验在最后一次改动之后跑过]
+confidence: 不确定根因时先用 research mode，不直接改代码
 
 watches:                          # 审查重点
-  - {area: security, why: 签名比较必须是常数时间, source: IMPROVEMENT.md}
+  - {area: frontend, why: 信息密集的界面先读 design-judgment, source: IMPROVEMENT.md}
 
-capabilities:                     # ④ 允许执行者用的领域 skill，只能是这个 Brain 里真有的
-  skills: [s_itsdangerous-release]
+gates:                            # ③ 用这个 Project Agent 的会话都要执行的 gate（§8.2）
+  enforce: []
 
-gates:                            # ③ 用这个 Project Agent 的会话要执行的 gate（§8.2）
-  enforce: [no_git_push]
-
-reserved_for_human:               # 执行者自己不能做、每次都要人批的动作（§8.1）
+reserved_for_human:               # 每次都要人批的动作（§8.1）
   - push
   - open_pr
   - publish_release
   - send_external_message
 
-placements: [chat-tab, hive]
-landing: {approval: human, via: github-pr}   # 分支和远端类型来自 bindings.yaml
-sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/tests.yaml]
+placements: [chat-tab, hive]      # 所有 mode 的上限
+landing: {approval: human}        # 分支和远端类型来自 bindings.yaml
+
+# ── 工作模式：每个 mode 只能收紧，不能放宽 ─────────────────────────────
+modes:
+  - id: code-change
+    when: 改 backend / desktop / hive 的代码
+    profile: bugfix               # 或 profile_rules: [{when: 跨模块或改接口, profile: full}]
+    placements: [chat-tab, hive]
+    repos: [swarmai]
+    setup:                        # 执行环境准备，从 CI 里原样抄
+      - {command: "cd backend && uv sync", source: .github/workflows/ci.yml}
+    validations:
+      - {id: backend-tests, command: "...", source: .github/workflows/ci.yml}
+    skills: [s_health-check]
+    delivery: bundle              # bundle（默认）| branch-pr（§7 ⑨）
+  - id: release
+    when: build、发版、管 daemon
+    profile: direct
+    placements: [chat-tab]        # 开发 skill 只能在桌面上用
+    skills: [s_swarm-build, s_swarm-release, s_swarm-daemon]
+    gates: {enforce: []}          # 只能比共享部分多
+    reserved_for_human: [publish_release]   # 只能比共享部分多
+  - id: research
+    when: 调研、写设计、回答问题
+    profile: research
+    placements: [chat-tab, hive]
+default_mode: code-change
+
+sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/ci.yml]
 ```
 
-**兼容：** v2 把已知的键挪了位置，比如 `default_profile` 移到了 `run:` 下。不认识的键会被忽略，但这帮不上忙，因为挪走的是认识的键。所以第 1 步要同时改三个读取方：`project_agent.validate` 和 `load_project_agent` 按 `schema` 分开读，`verify_ddd_complete` 的 P6 改成直接调 `validate`，不再保留一份自己的检查。v1 文件照样能读。
+**兼容：** v2 把已知的键挪了位置，比如 `default_profile` 和 `profile_rules` 被 `modes` 取代。v1 文件读进来时，等同于只有一个 mode 的 v2：`default_profile` 成为这个 mode 的 profile，`profile_rules` 成为它的 profile_rules，`validations` 成为它的校验。不认识的键会被忽略，但这帮不上忙，因为挪走的是认识的键。所以第 1 步要同时改三个读取方：`project_agent.validate` 和 `load_project_agent` 按 `schema` 分开读，`verify_ddd_complete` 的 P6 改成直接调 `validate`，不再保留一份自己的检查。v1 文件照样能读。
 
 **校验（扩展 `validate`）：**
 - **保留 v1 的检查：** profile、placements、status。
-- **引用检查：**
-  - `capabilities.skills` 里的每一项，都要出现在 `scan_domain_skill_dirs` 的结果里。它返回的是路径，要换成名字。它读不了目录时会抛 `OSError`，抛了就算这一项没通过。
+- **引用检查（共享部分和每个 mode）：**
+  - `skills` 里的每一项，都要出现在 `scan_domain_skill_dirs` 的结果里。它返回的是路径，要换成名字。它读不了目录时会抛 `OSError`，抛了就算这一项没通过。
   - `gates.enforce` 里的每一项，都要在这个 Brain 的 `3-gates/` 里。
   - `intake.repos` 里的每一项，都要在 `bindings.yaml` 里。
-- **只在本机审核时做的检查：** `evidence.validations` 的 `source` 在绑定的仓库里，不在 Brain 里。这一项只在本机、在人审核时检查，结果连同检查时间写进 `.project-agent-check.json`。Hive 上不重新检查，只认这份结果。
+- **只在本机审核时做的检查：** 各 mode 的 `validations` 的 `source` 在绑定的仓库里，不在 Brain 里。这一项只在本机、在人审核时检查，结果连同检查时间写进 `.project-agent-check.json`。Hive 上不重新检查，只认这份结果。
 - **保留动作：** `reserved_for_human` 只能取产品认识的动作名（§8.1 的固定列表）。
 - **派到 Hive 的前提：** `placements` 里有 `hive` 时，`status` 必须是 `reviewed`。
-- **能力分平台：** `capabilities.skills` 里 `platform: desktop`（或 `macos`）的 skill，在 `placements` 有 `hive` 时标出"Hive 上不可用"。这不算错，但项目段在 Hive 上不会列出它。
+- **能力分平台：** 一个 mode 的 `skills` 里有 `platform: desktop`（或 `macos`）的 skill，而这个 mode 的 `placements` 有 `hive` 时，标出"Hive 上不可用"。这不算错，但项目段在 Hive 上不会列出它。
+- **mode 只能收紧，不能放宽：**
+  - mode 的 `placements` 必须是共享 `placements` 的子集。
+  - mode 的 `reserved_for_human`、`gates.enforce` 只能在共享部分的基础上增加，不能删。
+  - mode 的 `repos` 必须在 `intake.repos` 里。
+  - 违反任何一条都算错。这样安全底线只在共享部分审一次。
+- **`default_mode`** 必须是一个存在的 mode。每个 mode 的 `when` 不能为空。mode 的 `id` 不能重复。
+- **`delivery: branch-pr`** 只能用在这个仓库的 `bindings.yaml` 里 `remote_kind` 是 GitHub 的 mode 上，其余前提在派发准入时检查（§7 ⑨）。内部仓库（`kind: internal`）只能用 `bundle`。
 - **不通过时：** Brain Hub 显示问题清单，派发拒绝。
 
-**版本：** revision 是定义文件，加上 `capabilities.skills` 各个 skill 目录、以及整个 `3-gates/` 目录全部文件的 sha256。人改了其中任何一样，revision 就变，下一个 run 用新的版本。
+**版本：** revision 是定义文件，加上所有 mode 用到的 skill 目录、以及整个 `3-gates/` 目录全部文件的 sha256。改任何一个 mode，revision 都会变。人改了其中任何一样，revision 就变，下一个 run 用新的版本。
 
 ## 5. 建 Brain 时同时建出 Project Agent
 
@@ -190,16 +219,16 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 
 | 字段 | 谁出 | 怎么出 |
 |---|---|---|
-| `intake.repos`、`landing.via` | 代码 | 从 `bindings.yaml` 读 |
-| `evidence.validations` | 代码 | 从绑定仓库的 `validations.json` 或 CI 文件里抽命令，原样抄，不编 |
-| `capabilities.skills` | 代码 | `scan_domain_skill_dirs`（路径换成名字，`OSError` 时记成问题） |
+| `intake.repos`、各 mode 的 `repos` | 代码 | 从 `bindings.yaml` 读 |
+| 各 mode 的 `validations` | 代码 | 从绑定仓库的 `validations.json` 或 CI 文件里抽命令，原样抄，不编 |
+| 各 mode 的 `skills` | 代码 | `scan_domain_skill_dirs`（路径换成名字，`OSError` 时记成问题），再按平台分到能用它的 mode 里 |
 | `gates.enforce` | 代码 | `3-gates/` 里的 gate 文件名。从包导入的 Brain，默认一个都不勾，等人在审核卡上勾 |
 | `reserved_for_human` | 代码 | 默认四项都带，人可以删 |
-| `run.default_profile` | 代码 | 有 code-repo 资产用 `bugfix`，没有资产用 `research` |
-| `evidence.setup` | 代码 | 从 CI 文件里抽装依赖的命令，原样抄 |
+| `modes` 的骨架 | 代码 + 模型 | 代码先放一个 `research` mode（每个 Brain 都有）。有 code-repo 资产的，再放一个 `code-change` mode，`delivery: bundle`。模型读完知识和 skill 后提议别的 mode（比如 SwarmAI 的 `release`、CMHK 的报表），以及每个 mode 的 `when`，并写明来源。每个 mode 的 skill 由代码按平台分好 |
+| 各 mode 的 `setup` | 代码 | 从 CI 文件里抽装依赖的命令，原样抄 |
 | `aim.json` 的 `aliases` | 模型提议 | 从 PRODUCT.md 里的模块名、产品名提议几个，人审后写进 `aim.json`，路由的确定性信号就能认出它们 |
 | `placements` | 代码 | 默认 `[chat-tab]`，人审时可以加 `hive` |
-| `identity`、`intake.handles`、`run.profile_rules`、`run.confidence`、`watches` | 模型提议 | 读完 ② 知识后写成 JSON，每条带来源，工具检查来源存在后才写入 |
+| `identity`、`intake.handles`、各个 mode 的 `when` 和 `profile_rules`、`confidence`、`watches` | 模型提议 | 读完 ② 知识后写成 JSON，每条带来源，工具检查来源存在后才写入 |
 
 生成的定义是 `status: draft`。New Brain 流程最后，Brain Hub 打开这个 Brain，显示一张**审核卡**：
 - 每条一行，来源可以点开看。
@@ -209,14 +238,14 @@ sources: [PRODUCT.md, TECH.md, IMPROVEMENT.md, bindings.yaml, .github/workflows/
 **已有的 Brain：** 加一条命令 `artifact_cli project-agent-draft --project <name>`，用同一个生成器给现有的 Brain 补草稿，补好后进 Brain Hub 等人审。SwarmAI、SecDLC、CMHK_SalesIntel、itsdangerous 先补。**P6 等它们都有了草稿再收紧**，收紧后：没有定义算 FAIL，草稿算 PENDING。不先补就收紧，11 个 Brain 里会有 10 个立刻 FAIL。
 
 **默认的 SwarmAI Brain：** 产品随 4 份种子文档一起发一份 SwarmAI 的定义。
-- **只引用种子里有的东西。** 新装的机器上没有 `bindings.yaml`，没有 gate，也没有领域 skill，所以这份定义 `default_profile: research`，没有 `intake.repos`，没有 `validations`，`placements: [chat-tab]`。绑定了 SwarmAI 仓库的机器，可以用生成器在这份默认定义的基础上补全。
+- **只引用种子里有的东西。** 新装的机器上没有 `bindings.yaml`，没有 gate，也没有领域 skill，所以这份定义只有一个 `research` mode，没有 `intake.repos`，没有校验，`placements: [chat-tab]`。绑定了 SwarmAI 仓库的机器，可以用生成器在这份默认定义的基础上补全。
 - **种子加载器要改。** 现在它只读 4 份 canonical 文档，要加上这个文件。
 - **怎么知道用户改过。** 加载时记下发布版本的 hash：本机文件的 hash 等于上次发布的 hash，说明没被改过，就更新成新发布的版本。不等于，说明用户改过，就不动它。这条规则另立，不是 `user_customized`。`user_customized` 是给 context 文件用的固定标记。
 - **默认是草稿。** 发布的这份是 `status: draft`，每个用户自己审。如果发成 `reviewed`，就等于产品维护者替每个用户批了保留动作（问题 3）。
 
 **通用的 Runner Agent：** 产品再发一份定义，给不属于任何 Brain 的任务用：
 - `identity`：通用调研、写报告、回答问题，不改任何项目的代码。
-- `run.default_profile: research`。`profile_rules` 里写明写文档类任务用 `direct`。
+- 两个 mode：`research`（profile research）和 `write`（写文档、写报告，profile direct）。
 - `placements: [chat-tab, hive]`。
 - `capabilities` 只用系统 skill。没有仓库，没有 Brain 自己的 gate。
 - `reserved_for_human` 四项都带。
@@ -312,12 +341,13 @@ flowchart TB
 |---|---|
 | 做什么 | Intent 原文，加上 Project Agent 补的范围说明 |
 | 验收 | 必填，写成能检查的句子 |
-| profile | `run.profile_rules` 里命中的那条（写明是哪条）。一条都没命中就用 `default_profile`。派 pipeline 时显式传 `--profile`，不用 CLI 的默认值 |
-| 仓库 | `intake.repos` 对应到 `bindings.yaml` 的 clone 地址和分支 |
-| 在哪跑 | 人选，但必须在 `placements` 里 |
+| mode 和 profile | 先选 mode：命中哪个 mode 的 `when`（写明是哪个），一个都没命中就用 `default_mode`。再按这个 mode 的 profile 或它的 `profile_rules` 选 profile。派 pipeline 时显式传 `--profile`，不用 CLI 的默认值 |
+| 仓库 | 这个 mode 的 `repos` 对应到 `bindings.yaml` 的 clone 地址和分支 |
+| 在哪跑 | 人选，但必须在这个 mode 的 `placements` 里 |
+| 交付方式 | 这个 mode 的 `delivery` |
 | 定义版本 | 当前的 revision，钉住 |
 
-置信度不够的 Intent（根因不清、范围不清），按 `run.confidence` 先派一个 research run，不直接派实现。
+置信度不够的 Intent（根因不清、范围不清），按 `confidence` 先用 research mode，不直接派实现。
 
 **③ 准入（确定性，拒绝时说明是哪一条）：**
 - 定义通过 `validate()`。
@@ -326,7 +356,7 @@ flowchart TB
 - 验收不为空。
 - 目标 Hive 能同步 Brain。
 
-**④ 确认：** 列出 Brain、profile（以及它命中的规则）、验收、仓库、在哪跑、定义版本，人点了才派。沿用 s_swarm-out 已有的"派出前确认"这一步，用 AskUserQuestion 的形式。
+**④ 确认：** 列出 Brain、mode 和 profile（以及各自命中的规则）、验收、仓库、在哪跑、交付方式、定义版本，人点了才派。沿用 s_swarm-out 已有的"派出前确认"这一步，用 AskUserQuestion 的形式。
 
 **⑤ 同步：** 见 §6。
 
@@ -336,6 +366,7 @@ flowchart TB
 
 **⑦ 记录：** 在 run-results 设计已有的记录上，再加：
 - `brain`、`revision`。
+- `mode`、`delivery`。
 - `profile`：派发时定的，和 pipeline 实际用的。
 - 每条校验"跑了 / 报错了 / 没跑"：比对 Bash 调用得出，见简报设计 r2 §7。
 
@@ -368,7 +399,37 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
 - **落地：** 人批了以后，用 `session_worktree land` 落到本机 main。`land` 自带 rebase 和"不能把别人的改动改回去"的检查。
 - **qualify：** 必须在人批准之后才做，按仓库自己的规则来。SwarmAI 的规则是 STEERING #5：build、部署、看到生效、受影响的测试是绿的。push 仍然只由人决定。
 - **Hive 写的文字不进本机 agent 的上下文：** 落地后，`code_change_feed` 会读 commit 说明，把它当成数据加上界线标记，或者在落地时重写 commit 说明、原文作为引用保留。这样 Hive 写的话不会顺着代码变更流，进到本机 agent 之后的上下文里。
-- **落地方式由 landing 决定：** `landing.via: github-pr` 的仓库，本机落地后由人决定开不开 PR。`self-hosted-main` 的仓库（SwarmAI）落到本机 main。
+- **上面写的是 `delivery: bundle`（默认）。** `self-hosted-main` 的仓库（SwarmAI）落到本机 main。其他仓库在本机落地后，由人决定要不要推送、要不要开 PR。Amazon 内部仓库在本机落地后，由本机的 `s_internal-crux-cr` 准备好 CR 命令，人来执行。
+
+**`delivery: branch-pr`：Hive 推 `hive/**` 分支，再开 PR。**
+
+这种方式适用于 GitHub 上的仓库，人审 diff 的地方从本机的卡片换成了 GitHub 上的 PR。是同一道控制，只是换了位置：PR 上能评论、能看 CI，代码先在 GitHub 的 CI 里跑，然后才可能到本机。
+
+**五个前提，派发准入时都由确定性检查确认，少一条就不允许用 `branch-pr`，并说明是哪一条：**
+1. **凭据要窄、要短：**
+   - 用一个只装在这个仓库上的 GitHub App，权限只有 contents 写和 PR 写。
+   - 每次派发，由本机签发一个 installation token，1 小时内有效，随 Task Spec 发过去，只放进这个会话的 git credential helper，不写到盘上。
+   - 绝不用人的 token：人的账号通常在 `main` 分支保护的绕过名单里。
+   - Hive 上的 agent 和后端是同一个系统用户，能读到这个 token。所以靠的是范围小、时间短：最坏的情况，是它在 1 小时内往 `hive/**` 分支写东西。
+2. **只能写 `hive/**`：** GitHub 的 ruleset 限定这个 App 只能推 `hive/**`。`main` 要求 PR 加批准，而且 App 不在绕过名单里。本机调 GitHub API 确认这两条规则都在。
+3. **不让 CI 带出 secret：** 同一个仓库里的分支开 PR，分支里的 workflow 会带着仓库的 secret 跑，被注入的 agent 改一下 workflow 就能把 secret 带走。所以：
+   - 默认 `pr_remote: fork`：推到 fork，从 fork 开 PR，这样的 PR 拿不到 secret。
+   - 如果用 `pr_remote: origin`，必须有 ruleset 禁止 App 改 `.github/workflows/**`。本机同样调 API 确认。
+4. **公开仓库就是发布：** 推上去的分支马上公开，而 Hive 上的 agent 读过私有 DDD。所以公开仓库：
+   - 要么推到一个**私有** fork。
+   - 要么每次 push 都要人批，批准卡上显示 diff 统计和"这是公开仓库"。
+5. **push 和开 PR 仍然是保留动作：** 每次都经 bridge 问人。被批准的 push 只能到 `hive/**`，由 token 的权限保证。
+
+**PR 合并之后：** 本机按平常的方式拉取。SwarmAI 这类要在本机 qualify 的仓库，qualify 仍然在本机做，推送 `main` 也仍然由人决定。
+
+**各仓库用哪种：**
+
+| 仓库 | delivery | 原因 |
+|---|---|---|
+| SwarmAI | `bundle` | 公开仓库，要在本机 qualify，只能从本机推（STEERING #5）。换成 `branch-pr` 换不来什么，反而多一道发布的风险 |
+| itsdangerous 这类外部开源仓库 | `branch-pr`，`pr_remote: fork` | 和开源贡献的正常流程一样 |
+| Amazon 内部仓库 | `bundle` | CR 要 Midway 和公司网络，Hive 拿不到，也不该拿到 |
+| 直接推 `main` | 任何仓库都不做 | 跳过了人审 |
 
 ## 8. 执行约束
 
@@ -477,6 +538,7 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
 | 7 | 派发：路由（含 Runner Agent）、Task Spec、准入、确认、自动同步。改写 skill | 3、4、5 | 用 itsdangerous 派一个 bugfix。用 Runner Agent 派一个调研 |
 | 8 | 记录：brain、revision、profile、校验比对、被 gate 拦下的动作。面板按 Brain 分组 | 7 | 面板上 itsdangerous 一组、通用一组 |
 | 9 | 代码回到本机（§7 ⑨）：Hive 打 bundle，本机取回、核对、`land` | 8 | §15 的 SwarmAI 推演从头跑到尾，改动落到本机 main |
+| 9b | `delivery: branch-pr`：GitHub App 的签发、ruleset 和 fork 的检查、只推 `hive/**` | 9 | 用 itsdangerous 派一个 bugfix，Hive 推到 fork 的 `hive/<run>`，开出一个 PR |
 | 10 | 经验回流（§13）：Hive run 的教训作为记录交回，本机用同一个判官写进 Brain | 8 | 一个 Hive run 的教训，过判官后出现在本机 Brain 的 IMPROVEMENT 里 |
 
 ## 11. 验证计划
@@ -517,6 +579,16 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
   - 事先放好的目录符号链接，引不走写入和删除。
   - Brain 名是 `..`、`%2F`，或者只是大小写不同的，都拒绝。
   - 超过大小上限，在读入之前就拒绝。
+- **mode：**
+  - mode 放宽了共享部分（多了一个 placement、少了一个保留动作、少了一个 gate），validate 报错。
+  - `release` mode 派到 Hive，被准入拒绝。
+  - v1 文件读出来，等同于一个 mode。
+  - 选中的 mode 和它命中的 `when` 出现在确认卡上和记录里。
+- **branch-pr：**
+  - 五个前提少了任何一个，准入时都拒绝用 `branch-pr`，并说明是哪一条。
+  - token 推 `main` 被 GitHub 拒绝。
+  - fork 来的 PR 拿不到 secret。
+  - 内部仓库配了 `branch-pr`，validate 报错。
 - **代码回本机：**
   - 一个试图更新 `refs/heads/main` 的 bundle，只会写进 `refs/hive/`。含两个 ref 的 bundle 被拒。含畸形对象的 bundle 被 fsck 拒。
   - base 不在本机历史里时拒绝。
@@ -541,6 +613,8 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
 | D6 | Brain 的 skill 在 Hive 上对所有会话可见（v1） | 按会话隔离需要每个会话一份投影目录，单独做 |
 | D7 | 同步走 HTTPS 推送，和 Hive 的更新分开 | XG 2026-10-28 |
 | D8 | Hive 不推送，代码用 bundle 回到本机落地 | Hive 上没有凭据，只有本机能推（§7 ⑨） |
+| D10 | 一个 Brain 对一个 Project Agent，里面分多个 mode。mode 只能收紧 | 既有按活分开的表达力，又不多一层路由，共享部分只审一次 |
+| D11 | `delivery` 默认 `bundle`。`branch-pr` 只用于满足五个前提的 GitHub 仓库。任何仓库都不直接推 `main`。Hive 上不发内部 CR | 人审 diff 这一道控制，无论用哪种交付方式都在 |
 | D9 | 先做 §10 的 1–4 步 | 做完就能审定义。本机会话里，保留动作和 Brain gate 开始生效 |
 
 ## 13. 这是不是 Brain/DDD driven autonomous 的方向
@@ -610,9 +684,9 @@ sequenceDiagram
 | 步 | 发生了什么 | 依据 |
 |---|---|---|
 | ① 路由 | 消息里没出现"SwarmAI"。审过的别名里有"Swarm Out"（来自生成器的提议），信号 3 命中 SwarmAI。如果没有这个别名，就由模型对照各个 Brain 的 `handles` 提议 SwarmAI，再问你 | `recall_multi.py:1441-1466`（别名来自 `aim.json`） |
-| ② Task Spec | 改的是前端的显示加一个字段，`profile_rules` 里"前端展示改动"命中 `bugfix`。仓库：`swarmai`，`https://github.com/xg-gh-25/SwarmAI.git@main`。验收分成两条：Hive 上的校验跑过（证据），本机落地后 qualified（STEERING #5） | `Projects/SwarmAI/bindings.yaml`、`project-agent.yaml` |
+| ② Task Spec | 命中 `code-change` mode 的 `when`（改 backend / desktop 的代码），这个 mode 的 profile 是 `bugfix`，`delivery: bundle`。仓库：`swarmai`，`https://github.com/xg-gh-25/SwarmAI.git@main`。验收分成两条：Hive 上的校验跑过（证据），本机落地后 qualified（STEERING #5） | `Projects/SwarmAI/bindings.yaml`、`project-agent.yaml` |
 | ③ 准入 | 定义有效，是 reviewed，`placements` 里有 `hive`。仓库是公开的，Hive 拉得到。4 个开发 skill 是 `platform: desktop`，项目段在 Hive 上不会列出它们 | `4-capabilities/s_swarm-*/SKILL.md` |
-| ④ 确认 | 你看到：SwarmAI · bugfix（命中"前端展示改动"）· 验收两条 · swarmai@main · explorer · revision 前 8 位 | — |
+| ④ 确认 | 你看到：SwarmAI · code-change / bugfix · bundle · 验收两条 · swarmai@main · explorer · revision 前 8 位 | — |
 | ⑤ 同步 | explorer 上的 SwarmAI 还是 `--with-live-ddd` 的旧 seed，digest 对不上，先推一个新包（约 5 MB）。装的时候拿锁，没有用 SwarmAI 的 run 在跑 | §6 |
 | ⑥ 执行 | Hive 上的 agent 读到项目段：`AGENTS.md`、知识地图、审查重点（例如"前端改动要先读 `s_frontend-design` 的 design-judgment"）、`setup`、要跑的校验（受影响的 vitest、tsc）、"只提交、不推"、保留动作。它 clone 仓库，跑 setup，进 pipeline bugfix。SwarmAI 的 `3-gates/` 里没有 gate 脚本，所以 Brain gate 这一层什么都不执行。它在 Hive 本地 clone 的 main 上 land（pipeline 的落地），不推 | `.swarmai/pipeline.toml`、`ci.yml` |
 | ⑦ 记录 | `turn_outcome`：结局 `completed`。`repos[0]`：2 个文件 +40 −3、1 个 commit、`pushed: no`、bundle sha。校验：vitest 跑了，tsc 跑了。`brain: SwarmAI`、`revision`。pipeline 五维 | run-results 设计 |
@@ -627,7 +701,7 @@ sequenceDiagram
 | 缺口 | 处理 |
 |---|---|
 | Hive 上的 commit 回不到本机 | §7 ⑨：bundle，人看 diff，再在本机 `land` |
-| Hive 上没有开发依赖，校验跑不起来 | schema 加 `evidence.setup`，从 CI 里抄 |
+| Hive 上没有开发依赖，校验跑不起来 | 每个 mode 加 `setup`，从 CI 里抄 |
 | SwarmAI 的开发 skill 只能在桌面上用 | 校验按 `placements` 标出。项目段在 Hive 上不列出它们 |
 | "Swarm Out"这类说法认不出是 SwarmAI | 生成器提议 `aim.json` 的 `aliases`，人审 |
 | Hive 上的校验不等于 qualified | Task Spec 的验收分开写。qualify 在本机，push 由人决定 |
