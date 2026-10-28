@@ -192,7 +192,7 @@ pipeline 的 `item_id` 是对单元原文取哈希，而 `split_blocks` 把条�
 
 | run | 内容 | 关键验收（每条先在 main 上红，做变异检查） |
 |---|---|---|
-| 1 能力本体 | `unit_id`；`core/addressing.py`（寻址段 + `map`）；`knowledge` 子命令；system prompt 寻址段 | 衰减改写元数据后 `unit_id` 不变；同一经验两种写法 `unit_id` 相同；寻址段在基段、无数字快照、群聊和非 owner 私信无项目表、生成失败只丢这一段；布局常量一改输出跟着变、旧布局也能出；`map` 只列根内 `.md`、软链接逃逸不列、行号指向标题行、超预算整行取舍；从别的仓库 cwd 调 `knowledge` 不加载那里的代码；无 DDD / 缺文档 / 非 UTF-8 不抛异常 |
+| 1 能力本体 | `unit_id`；`core/addressing.py`（寻址段 + `map`）；`knowledge` 子命令；system prompt 寻址段 | 衰减改写元数据后 `unit_id` 不变；同一经验两种写法 `unit_id` 相同；寻址段在基段、不含任何项目/文件/条目清单和数字、生成失败只丢这一段；布局常量一改输出跟着变、旧布局也能出；`map` 只列根内 `.md`、软链接逃逸不列、行号指向标题行、超预算整行取舍；从别的仓库 cwd 调 `knowledge` 不加载那里的代码；无 DDD / 缺文档 / 非 UTF-8 不抛异常 |
 | 2 接门 | pipeline、专家、native expert-review、Swarm Out、repo_guidance、聊天、Brain Hub 链接、引用和用量 | 按需 `unit_id` 被接受、编造的被拒/被丢；被引用条目进用量；not-shown 行是存在的绝对路径；repo_guidance 指针在 lessons 吃满时仍送达；聊天不记未展示内容的用量 |
 | 3 清理 | `ddd_weekly_report` 去重复实现；s_qa、crux-cr；技能 linter 规则；本机 6 份过期 AGENTS.md（非产品代码，备份后改） | linter 在当前 s_qa 上红、改后绿，且不误报 s_persist 等新布局写法 |
 
