@@ -58,8 +58,10 @@ FULL_REBUILD_FILES = 100
 # annotations; a name-only call named like a builtin method is its own band
 # (design 2026-10-29-code-intel-e2e B). 3: tool caches (.gradle, .cache, .nox,
 # .ruff_cache) are not read. 4: a call on a chain through a call (``X.builder().build()``)
-# is a call on a value, not on X.
-PARSER_VERSION = 4
+# is a call on a value, not on X. 5: Java receivers typed (parameters, locals, `var`,
+# declared fields, static calls, same-file returns, casts; JDK and outside-library
+# values get no edge); `this::m` / `Store::m` are references.
+PARSER_VERSION = 5
 
 
 def parser_outdated(graph: GraphStore) -> bool:

@@ -37,7 +37,8 @@ def _call_targets(result) -> set[str]:
 ])
 def test_method_calls_are_named_by_the_method(tmp_path, name, src) -> None:
     targets = _call_targets(_parse(tmp_path, name, src))
-    assert {"process", "helper"} <= {t.lower() for t in targets}, targets
+    # a typed call is named with its class (java `B b`: B.process), still the method
+    assert {"process", "helper"} <= {t.rsplit(".", 1)[-1].lower() for t in targets}, targets
     assert "b" not in targets and "s" not in targets      # never the receiver
 
 

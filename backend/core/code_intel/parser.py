@@ -108,7 +108,7 @@ DEFINITION_TYPES = {
     ],
     "java": [
         "method_declaration", "class_declaration",
-        "interface_declaration", "enum_declaration",
+        "interface_declaration", "enum_declaration", "record_declaration",
     ],
     "go": ["function_declaration", "method_declaration", "type_declaration"],
     "rust": ["function_item", "struct_item", "impl_item", "trait_item"],
@@ -1054,6 +1054,9 @@ _CLASS_BASE_CONTAINER_TYPES = {
     "python": frozenset({"argument_list"}),
     "typescript": frozenset({"class_heritage", "extends_clause", "implements_clause"}),
     "javascript": frozenset({"class_heritage", "extends_clause", "implements_clause"}),
+    # java: `extends B` (superclass), `implements I, J` / an interface's `extends I`
+    # (a type_list inside)
+    "java": frozenset({"superclass", "super_interfaces", "extends_interfaces"}),
 }
 
 
@@ -1126,7 +1129,8 @@ def _extract_base_names(class_node, language: str) -> list[str]:
                         continue
                     if b.type in _SKIP_CONTAINER_TYPES:
                         continue
-                    if b.type in ("extends_clause", "implements_clause", "class_heritage"):
+                    if b.type in ("extends_clause", "implements_clause", "class_heritage",
+                                  "type_list"):
                         _collect_from(b, names)
                         continue
                     nm = _leaf_name(b)
@@ -1135,7 +1139,7 @@ def _extract_base_names(class_node, language: str) -> list[str]:
 
     def _collect_from(container, out):
         for b in container.children:
-            if b.type in ("extends_clause", "implements_clause"):
+            if b.type in ("extends_clause", "implements_clause", "type_list"):
                 _collect_from(b, out)
                 continue
             if b.type in ("comment",) or b.is_named is False:
@@ -1327,6 +1331,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
         # A function or class named as a value (an argument, an assigned value, a
         # container element, a return value, a decorator): a `references` edge, so
         # `Thread(target=save_all)` makes `save_all` reached (core.code_intel.receivers).
+        # (java has no function values but `this::save`, below)
         if typed and ntype in ("identifier", "shorthand_property_identifier",
                                "attribute", "member_expression"):
             target = _rx.value_reference(
@@ -1346,6 +1351,20 @@ def _extract_from_tree(tree, path_str: str, language: str,
                     confidence=(TYPED_CALL_CONFIDENCE if member else 1.0 if local
                                 else PATH_REFERENCE_CONFIDENCE),
                     line_number=node.start_point[0] + 1))
+
+        # java `this::save` / `Store::save` / `store::save`: the method is passed on
+        if typed and ntype == "method_reference":
+            got = _rx.method_reference_target(node, ft, scope, enclosing_class)
+            source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
+            if got is not None:
+                target = _rx.class_target(got[0], got[1], path_str, classes, import_map,
+                                          QUALIFIED_SEPARATOR, _qualify)
+                if target != source and (source, target) not in _seen_value_refs:
+                    _seen_value_refs.add((source, target))
+                    edges.append(CodeEdge(
+                        source_id=source, target_id=target, edge_type="references",
+                        confidence=TYPED_CALL_CONFIDENCE,
+                        line_number=node.start_point[0] + 1))
 
         # Value-ref: a reader function/method body references a module-scope const.
         # The reader node type is per-language (python/go/rust/ts=identifier;
@@ -1388,7 +1407,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 # trait and a go `type` declaration are types too.
                 is_class = ("class" in ntype or "interface" in ntype
                             or "enum" in ntype or "struct" in ntype or "trait" in ntype
-                            or ntype == "type_declaration")
+                            or ntype in ("type_declaration", "record_declaration"))
                 owner = enclosing_class
                 if ntype == "method_declaration" and language == "go":
                     # func (f *F) Flush(): a method of F
@@ -1426,7 +1445,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 new_func = qn if not is_class else enclosing_func
                 new_scope = scope
                 if typed and not is_class:
-                    new_scope = _rx.scope_of(node, language, ft, scope)
+                    new_scope = _rx.scope_of(node, language, ft, scope, new_class)
                 for child in node.children:
                     _walk(child, enclosing_func=new_func, enclosing_class=new_class,
                           scope=new_scope)
@@ -1502,7 +1521,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
 
         # a lambda / function expression binds its own parameters (and, in TS/JS,
         # its own `this`)
-        child_scope = (_rx.scope_of(node, language, ft, scope)
+        child_scope = (_rx.scope_of(node, language, ft, scope, enclosing_class)
                        if typed and ntype in _rx.NESTED_SCOPE_TYPES and ntype not in def_types
                        else scope)
         for child in node.children:

@@ -44,6 +44,7 @@ class Caller:
     line: int | None
     depth: int
     how: str = "call"        # call | reference (named as a value, or patched) | subclass
+    #                          | base (a call on the method this one overrides)
     by_name: bool = False    # linked by the name alone: a call on a value of unknown type
     builtin_name: bool = False  # … and the name is a builtin type's method (data.get())
 
@@ -103,16 +104,20 @@ def _callers(graph: GraphStore, seeds: list[str], depth: int) -> list[Caller]:
     """Callers of *seeds* up to *depth* hops. A caller reached by a stated link (a
     call whose target the source names, a reference, a subclass) beats one linked by
     the name alone; only stated links are followed further, so a guess at hop 1 does
-    not bring its own callers in at hop 2."""
+    not bring its own callers in at hop 2. A call on the method a seed overrides
+    (``repo.save()`` typed by the interface, for ``Impl.save``) is a caller too."""
     seen = set(seeds)
     frontier = set(seeds)
     found: dict[str, tuple[int, str, bool, bool]] = {}
     for d in range(1, depth + 1):
         per: dict[str, tuple[str, bool, bool]] = {}
-        for src, _dst, edge_type, conf in graph.direct_callers(frontier):
-            if src in seen:
+        bases = {b: o for b, o in graph.overridden(frontier).items() if b not in frontier}
+        for src, dst, edge_type, conf in graph.direct_callers(frontier | set(bases)):
+            if src in seen or (dst in bases and edge_type != "calls"):
                 continue
             how, guess = _HOW.get(edge_type, "call"), is_by_name(edge_type, conf)
+            if dst in bases:
+                how = "base"
             builtin = guess and is_builtin_named(edge_type, conf)
             prev = per.get(src)
             # a stated link beats a guess, a plain guess beats a builtin-named one

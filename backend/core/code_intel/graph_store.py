@@ -1060,6 +1060,38 @@ class GraphStore:
                            f"WHERE target_id IN ({ph})", batch).fetchall())
         return out
 
+    def overridden(self, node_ids) -> dict[str, str]:
+        """``{base method id: overriding method id}`` for each method in *node_ids*
+        whose class extends or implements a repo class with a method of that name
+        (``Impl.save`` → ``Repo.save``, up the bases). A call typed by the base
+        (``repo.save()`` with ``Repo repo``) reaches the override at run time."""
+        out: dict[str, str] = {}
+        for nid in dict.fromkeys(node_ids):
+            path, sep, symbol = nid.partition("::")
+            if not sep or "." not in symbol:
+                continue
+            cls, _, member = symbol.rpartition(".")
+            frontier, seen = [f"{path}{sep}{cls}"], set()
+            for _ in range(8):
+                nxt = []
+                for c in frontier:
+                    if c in seen:
+                        continue
+                    seen.add(c)
+                    for (base,) in self._conn.execute(
+                            "SELECT e.target_id FROM code_edges e JOIN code_nodes n "
+                            "ON n.id = e.target_id WHERE e.source_id = ? "
+                            "AND e.edge_type = 'extends'", (c,)):
+                        cand = f"{base}.{member}"
+                        if self._conn.execute("SELECT 1 FROM code_nodes WHERE id = ?",
+                                              (cand,)).fetchone():
+                            out.setdefault(cand, nid)
+                        nxt.append(base)
+                if not nxt:
+                    break
+                frontier = nxt
+        return out
+
     # ── dead-code detection ──────────────────────────────────────────────
 
     def find_dead_code(self) -> list[dict]:
