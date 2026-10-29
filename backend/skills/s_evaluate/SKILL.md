@@ -216,7 +216,7 @@ Build: implement chosen approach
 Test: QA against acceptance criteria
 ```
 
-**Publish as artifact (L1+):**
+**Structured form (L1+, shown with the evaluation):**
 ```json
 {
   "requirement": "...",
@@ -335,18 +335,6 @@ save_escalation(WORKSPACE_ROOT, esc)
 
 **Triggers:** `AMBIGUOUS_SCOPE`, `CONFLICTING_PRIORITIES`, `MISSING_INFORMATION`
 
-### Escalation to Artifact
-
-When escalating with a project (L1/L2), also publish a partial evaluation
-artifact so context is preserved for async resolution:
-
-```bash
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
-  --project <PROJECT> --type evaluation --producer s_evaluate \
-  --summary "ESCALATE: <reason>" \
-  --data '{"recommendation": "ESCALATE", "escalation_questions": ["..."], "partial_scores": {...}}'
-```
-
 ## Rules
 
 - **Never auto-GO on architectural changes** — always ESCALATE for human review
@@ -355,24 +343,11 @@ artifact so context is preserved for async resolution:
 - **L0 evaluation is still valuable** — structuring a vague request IS the evaluation
 - **Don't over-score** — 3/5 is the default. 5/5 requires strong evidence.
 
-## Artifact Operations
+## Inside a pipeline run
 
-**Discover prior research (before scoring):**
-```bash
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli discover --project <PROJECT> --types research --full
-```
-
-**Publish evaluation (after presenting to user):**
-```bash
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
-  --project <PROJECT> --type evaluation --producer s_evaluate \
-  --summary "<GO/DEFER/REJECT/ESCALATE>: <one-line rationale>" \
-  --data '<JSON of evaluation output>'
-```
-
-**Inside a pipeline run:** stage progress is recorded by `"$SWARM_BACKEND_BIN" pipeline-v1`
+Stage progress is recorded by `"$SWARM_BACKEND_BIN" pipeline-v1`
 (`stage-complete --project <PROJECT> --run-id <RUN_ID>`), never by this skill. Standalone,
-publishing the artifact above is the whole hand-off.
+the evaluation shown to the user is the whole hand-off.
 
 > **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
 > handoff point. Immediately Read the next stage's doc (the `advance` output prints its
@@ -399,4 +374,4 @@ Before marking this task complete, show evidence for each:
 - [ ] **Recommendation stated** — explicit GO / DEFER / REJECT / ESCALATE with reasoning tied to scores (and pre-mortem if applicable)
 - [ ] **Acceptance criteria defined** — numbered, testable criteria for what "done" looks like (GO) or clear rationale for deferral/rejection
 - [ ] **Scope boundaries set** — what is included and what is explicitly excluded from the scope
-- [ ] **Evaluation artifact published** — JSON artifact saved via artifact_cli (L1+) or structured output shown in chat (L0)
+- [ ] **Evaluation recorded** — the structured form shown in chat (L1+), or the structured output (L0)

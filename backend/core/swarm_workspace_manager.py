@@ -1133,7 +1133,7 @@ class SwarmWorkspaceManager:
         """Provision the default SwarmAI project with DDD structure.
 
         Creates ``Projects/SwarmAI/`` with PRODUCT.md, TECH.md,
-        IMPROVEMENT.md, PROJECT.md, and ``.artifacts/manifest.json``.
+        IMPROVEMENT.md, PROJECT.md, and an ``.artifacts/`` directory.
         Only writes files that don't already exist (preserves user edits).
         Called during ``create_folder_structure`` and ``verify_integrity``.
         """
@@ -1178,17 +1178,8 @@ class SwarmWorkspaceManager:
                     continue
                 ddd_write_path(project_dir, filename).write_text(content, encoding="utf-8")
 
-            # Ensure .artifacts/ with manifest.json
-            artifacts_dir = project_dir / ".artifacts"
-            artifacts_dir.mkdir(exist_ok=True)
-            manifest = artifacts_dir / "manifest.json"
-            if not manifest.exists():
-                manifest.write_text(json.dumps({
-                    "project": DEFAULT_PROJECT_NAME,
-                    "pipeline_state": "evaluate",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "artifacts": [],
-                }, indent=2), encoding="utf-8")
+            # Ensure .artifacts/ (readers check that it exists)
+            (project_dir / ".artifacts").mkdir(exist_ok=True)
 
             # Ensure decision-strategy.json for ROI triage
             strategy = project_dir / "decision-strategy.json"
@@ -1447,18 +1438,8 @@ class SwarmWorkspaceManager:
                         gdst.write_text(gsrc.read_text(encoding="utf-8"), encoding="utf-8")
                         created.append(f"3-gates/{gate_file} (internal)")
 
-            # Ensure .artifacts/ with manifest.json
-            artifacts_dir = project_dir / ".artifacts"
-            artifacts_dir.mkdir(exist_ok=True)
-            manifest = artifacts_dir / "manifest.json"
-            if not manifest.exists():
-                manifest.write_text(json.dumps({
-                    "project": project_name,
-                    "pipeline_state": "evaluate",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                    "artifacts": [],
-                }, indent=2), encoding="utf-8")
-                created.append(".artifacts/manifest.json")
+            # Ensure .artifacts/ (readers check that it exists)
+            (project_dir / ".artifacts").mkdir(exist_ok=True)
 
             # Ensure decision-strategy.json for ROI triage weights
             strategy = project_dir / "decision-strategy.json"

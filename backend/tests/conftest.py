@@ -995,7 +995,7 @@ def _stub_credential_preflight(request, monkeypatch):
     is skipped and the real method is left intact. Auth-specific tests
     (test_credential_preflight.py) patch get_credential_validator themselves (local patch
     wins); test_credential_validator.py uses fresh CredentialValidator() instances
-    (untouched by this singleton stub). Mirrors _isolate_judge_telemetry (P7 pattern)."""
+    (untouched by this singleton stub). P7 pattern: one structural chokepoint."""
     if request.node.get_closest_marker("real_credential_check"):
         return
     try:
@@ -1046,22 +1046,6 @@ def _isolate_ai_docs_refresh(monkeypatch):
                             lambda *a, **k: {"files_updated": [], "warnings": []},
                             raising=False)
     except Exception:  # noqa: BLE001 — never let the isolation break a test
-        pass
-
-
-@pytest.fixture(autouse=True)
-def _isolate_judge_telemetry(tmp_path_factory, monkeypatch):
-    """Redirect judge telemetry to a temp dir for EVERY test (P7: structural guard,
-    not per-test discipline). self_adversarial_judge logs each verdict to
-    .context/judge-telemetry.jsonl; without this, any test that exercises the judge
-    (admission_band / distillation / cultivation) writes fixture junk into the REAL
-    workspace telemetry, corrupting the live pass/discard gauge. Redirecting the one
-    _telemetry_dir chokepoint immunizes all callers at once."""
-    d = tmp_path_factory.mktemp("judge_telemetry") / ".context"
-    try:
-        import core.ingestion_gate as _ig
-        monkeypatch.setattr(_ig, "_telemetry_dir", lambda: d, raising=False)
-    except Exception:  # noqa: BLE001 — never let telemetry isolation break a test
         pass
 
 

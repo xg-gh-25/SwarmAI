@@ -1,7 +1,7 @@
 """
 Tests for DDD Weekly Report job handler.
 
-Verifies: multi-project scanning, changelog aggregation, escalation detection,
+Verifies: multi-project scanning, changelog aggregation, legacy proposals ignored,
 health stats, markdown generation, edge cases (0 projects, empty data).
 """
 
@@ -19,7 +19,7 @@ def workspace(tmp_path):
     projects = tmp_path / "Projects"
     projects.mkdir()
 
-    # Project 1: SwarmAI — has changelog + escalations
+    # Project 1: SwarmAI — has changelog + a legacy proposal file
     p1 = projects / "SwarmAI"
     p1.mkdir()
     (p1 / "PRODUCT.md").write_text("# Product\n\n## Vision\n\nTest\n")
@@ -42,7 +42,7 @@ def workspace(tmp_path):
     ]
     changelog.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
-    # Add escalation
+    # A legacy proposal file on disk: the report no longer reads it
     proposals = artifacts / "proposals"
     proposals.mkdir()
     esc = {"id": "esc1", "target_doc": "PRODUCT.md", "target_section": "Vision",
@@ -51,7 +51,7 @@ def workspace(tmp_path):
            "created_at": now.isoformat(), "ttl_days": 14}
     (proposals / "esc1_20260513.json").write_text(json.dumps(esc))
 
-    # Project 2: ClientOrg — empty (no changelog, no escalations)
+    # Project 2: ClientOrg — empty (no changelog)
     p2 = projects / "SalesIntel"
     p2.mkdir()
     (p2 / "PRODUCT.md").write_text("# ClientOrg Product\n")
@@ -73,14 +73,13 @@ class TestDDDWeeklyReport:
         assert result["status"] == "success"
         assert result["output_path"] is not None
         assert "2 applied" in result["summary"]
-        assert "1 escalations" in result["summary"]
+        assert "escalation" not in result["summary"]
         assert "2 projects" in result["summary"]
 
         # Check the report file has MBR-style sections
         report = Path(result["output_path"]).read_text()
         assert "## Executive Summary" in report
         assert "## Highlights & Lowlights" in report
-        assert "## Decisions Needed" in report
         assert "## DDD Health Dashboard" in report
         assert "## Next Week" in report
         assert "SwarmAI" in report
@@ -97,7 +96,7 @@ class TestDDDWeeklyReport:
         assert "Lesson one from SwarmAI" in report
         assert "auto-applied" in report.lower() or "auto-cultivated" in report.lower() or "applied" in report.lower()
 
-    def test_report_shows_escalations(self, workspace):
+    def test_report_ignores_legacy_proposal_files(self, workspace):
         from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
 
         with patch("jobs.handlers.ddd_weekly_report.PROJECTS_DIR", workspace / "Projects"), \
@@ -105,8 +104,8 @@ class TestDDDWeeklyReport:
             result = run_ddd_weekly_report()
 
         report = Path(result["output_path"]).read_text()
-        assert "Should we pivot?" in report
-        assert "Escalation" in report or "escalated" in report.lower()
+        assert "Should we pivot?" not in report
+        assert "## Decisions Needed" not in report
 
     def test_report_health_table(self, workspace):
         from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
@@ -125,7 +124,7 @@ class TestDDDWeeklyReport:
     def test_surfaces_created_section_drift(self, tmp_path):
         """When changelog entries have created_section=true, the report must
         surface them (Health Dashboard line + Next Week reconcile action) so the
-        operator knows a DDD doc template drifted from ROUTING_TABLE and a section
+        operator knows a DDD doc template drifted and a section
         was auto-created. Without this, drift auto-heals silently forever."""
         from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
 

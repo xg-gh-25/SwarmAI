@@ -1820,10 +1820,6 @@ from routers.swarm_out_remote import router as swarm_out_remote_router  # noqa: 
 app.include_router(swarm_out_remote_router, prefix="/api/swarm-out/remote", tags=["swarm-out"])
 app.include_router(apps_router, prefix="/api/apps", tags=["apps"])
 
-# DDD Cultivation API (list/approve/reject proposals)
-from routers.cultivation import router as cultivation_router
-app.include_router(cultivation_router, tags=["cultivation"])
-
 # Memory compliance router (no prefix — router defines /api internally)
 from routers.memory import router as memory_router
 app.include_router(memory_router, tags=["memory"])

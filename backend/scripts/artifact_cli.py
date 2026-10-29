@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""CLI for the artifact registry, DDD maintenance and the release CI gate.
+"""CLI for DDD maintenance and the release CI gate.
 
 Called by the agent via bash. A standalone script with no FastAPI dependency.
 Pipeline runs are not here: Pipeline v1 runs live in ``"$SWARM_BACKEND_BIN" pipeline-v1``.
 
 Usage:
-    python artifact_cli.py discover --project SwarmAI --types research,alternatives [--full]
-    python artifact_cli.py publish --project SwarmAI --type evaluation \\
-        --producer s_evaluate --summary "GO" --data '{"roi": 3.2}'
-    python artifact_cli.py learn --project SwarmAI --evaluation-id art_xxx --outcome success
-    python artifact_cli.py projects
     python artifact_cli.py bind --project SwarmAI
     python artifact_cli.py ddd-health|ddd-retire|ddd-noise ...
     python artifact_cli.py release-gate --poll|--status|--verify|--clear [--ref v1.2.3]
@@ -30,136 +25,11 @@ from pathlib import Path
 # Add parent directory to path so we can import core modules
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.artifact_registry import ArtifactRegistry
-
-
 
 def _get_workspace() -> Path:
     """Resolve workspace root from environment or default."""
     from config import get_swarmws
     return get_swarmws().expanduser().resolve()
-
-
-def cmd_discover(args, reg: ArtifactRegistry) -> None:
-    """Discover active artifacts of given types."""
-    types = [t.strip() for t in args.types.split(",") if t.strip()]
-    artifacts = reg.discover(args.project, *types)
-
-    if not artifacts:
-        print(json.dumps({"artifacts": [], "count": 0}))
-        return
-
-    result = []
-    for a in artifacts:
-        entry = {
-            "id": a.id,
-            "type": a.type,
-            "producer": a.producer,
-            "summary": a.summary,
-            "file": a.file,
-        }
-        # Optionally load full data
-        if args.full:
-            artifact_dir = (
-                _get_workspace() / "Projects" / args.project / ".artifacts"
-            )
-            data_file = artifact_dir / a.file
-            if data_file.exists():
-                try:
-                    entry["data"] = json.loads(
-                        data_file.read_text(encoding="utf-8")
-                    )
-                except (json.JSONDecodeError, OSError):
-                    pass
-        result.append(entry)
-
-    print(json.dumps({"artifacts": result, "count": len(result)}, indent=2))
-
-
-
-def _read_json_arg(raw: str, argname: str) -> str:
-    """Resolve a CLI JSON argument's RAW-STRING source — @path / @- / inline.
-
-    Used by ``publish --data``: it reads a
-    file. ``@PATH`` reads the file, ``@-`` reads stdin, anything else is returned
-    verbatim (a JSON value never starts with '@', so the prefix is unambiguous).
-    It does not ``json.loads``: the caller parses; ``argname`` names the argument
-    in the read-failure message.
-    """
-    if isinstance(raw, str) and raw.startswith("@"):
-        try:
-            if raw == "@-":
-                return sys.stdin.read()
-            return Path(raw[1:]).expanduser().read_text(encoding="utf-8")
-        except (OSError, IOError) as e:
-            print(json.dumps({"error": f"Could not read {argname} source {raw!r}: {e}"}),
-                  file=sys.stderr)
-            sys.exit(1)
-    return raw
-
-
-def cmd_publish(args, reg: ArtifactRegistry) -> None:
-    """Publish a bare artifact (no run, no stage): manifest-tracked, read by id.
-    Standalone skills (s_evaluate on ESCALATE, s_qa standalone) emit an
-    artifact this way; Pipeline v1 run documents go through ``pipeline-v1``."""
-    _raw = _read_json_arg(args.data, "--data")
-    try:
-        data = json.loads(_raw)
-    except json.JSONDecodeError as e:
-        print(json.dumps({"error": f"Invalid JSON data: {e}"}), file=sys.stderr)
-        sys.exit(1)
-    try:
-        # the trust boundary: an unsafe project name writes nothing
-        reg._validate_path_identifiers(args.project)
-    except ValueError as e:
-        print(json.dumps({"error": f"unsafe path identifier (rejected before write): {e}"}),
-              file=sys.stderr)
-        sys.exit(3)
-    try:
-        artifact_id = reg.publish(
-            project=args.project, artifact_type=args.type, data=data,
-            producer=args.producer, summary=args.summary, topic=args.topic or "")
-    except (ValueError, FileNotFoundError) as e:
-        print(json.dumps({"error": str(e)}), file=sys.stderr)
-        sys.exit(1)
-    if getattr(args, "quiet", False):
-        print(json.dumps({"artifact_id": artifact_id}))
-    else:
-        print(json.dumps({"artifact_id": artifact_id, "project": args.project}))
-
-
-def cmd_learn(args, reg: ArtifactRegistry) -> None:
-    """Record outcome of a pipeline run for learning feedback."""
-    lessons = [l.strip() for l in (args.lessons or "").split(";") if l.strip()]
-    reg.record_outcome(
-        project=args.project,
-        evaluation_id=args.evaluation_id,
-        outcome=args.outcome,
-        actual_effort=args.actual_effort,
-        lessons=lessons or None,
-    )
-    print(json.dumps({
-        "project": args.project,
-        "evaluation_id": args.evaluation_id,
-        "outcome": args.outcome,
-        "recorded": True,
-    }))
-
-
-def cmd_projects(args, reg: ArtifactRegistry) -> None:
-    """List all projects with pipeline status."""
-    statuses = reg.list_projects()
-    result = [
-        {
-            "project": s.project,
-            "pipeline_state": s.pipeline_state,
-            "artifact_count": s.artifact_count,
-            "active_artifact_count": s.active_artifact_count,
-            "latest_artifact": s.latest_artifact,
-        }
-        for s in statuses
-    ]
-    print(json.dumps({"projects": result, "count": len(result)}, indent=2))
 
 
 def _validate_project_name(project: str, projects_root: Path) -> None:
@@ -306,7 +176,7 @@ def _release_marker_authorizes_head(
     return True, f"CI green on HEAD {head[:8]} (run {data.get('run_id')})"
 
 
-def cmd_release_gate(args, reg: "ArtifactRegistry") -> None:
+def cmd_release_gate(args, reg) -> None:
     """CI-green gate for the release skill's Stage 7b (design A, run_9fec1fb1).
 
     --poll: do ONE `gh run list` check for the CI run on the CURRENT git HEAD.
@@ -902,43 +772,11 @@ def _refuse_if_worktree_copy(script: str) -> None:
 def main() -> None:
     import functools
     parser = argparse.ArgumentParser(
-        description="Artifact registry CLI for SwarmAI pipeline", allow_abbrev=False,
+        description="SwarmAI DDD maintenance and release-gate CLI", allow_abbrev=False,
     )
     sub = parser.add_subparsers(dest="command", required=True,
                                 parser_class=functools.partial(argparse.ArgumentParser,
                                                                allow_abbrev=False))
-
-    # discover
-    p_discover = sub.add_parser("discover", help="Discover artifacts by type")
-    p_discover.add_argument("--project", required=True)
-    p_discover.add_argument("--types", required=True, help="Comma-separated types")
-    p_discover.add_argument("--full", action="store_true", help="Include full artifact data")
-
-    # publish
-    p_publish = sub.add_parser("publish", help="Publish a new artifact")
-    p_publish.add_argument("--project", required=True)
-    p_publish.add_argument("--type", required=True)
-    p_publish.add_argument("--producer", required=True)
-    p_publish.add_argument("--summary", required=True)
-    p_publish.add_argument("--data", required=True, help="JSON data string")
-    p_publish.add_argument("--topic", default="")
-    p_publish.add_argument("--quiet", action="store_true",
-                           help='Emit ONLY a single-line {"artifact_id": ...} on success')
-
-
-    # learn
-    p_learn = sub.add_parser("learn", help="Record pipeline outcome for learning")
-    p_learn.add_argument("--project", required=True)
-    p_learn.add_argument("--evaluation-id", required=True, help="ID of evaluation artifact")
-    p_learn.add_argument("--outcome", required=True, choices=["success", "partial", "failure", "cancelled"])
-    p_learn.add_argument("--actual-effort", default=None, help="Actual effort (T-shirt or sessions)")
-    p_learn.add_argument("--lessons", default=None, help="Semicolon-separated lessons")
-
-    # projects
-    sub.add_parser("projects", help="List all projects")
-
-
-
 
     # bind (CREATE→BIND→PULL: clone + index every binding of a project's bindings.yaml)
     p_bind = sub.add_parser("bind", help="PULL: clone + code-intel every binding in a project's bindings.yaml")
@@ -1016,13 +854,7 @@ def main() -> None:
 
     _refuse_if_worktree_copy(__file__)
     args = parser.parse_args()
-    reg = ArtifactRegistry(_get_workspace())
-
     handlers = {
-        "discover": cmd_discover,
-        "publish": cmd_publish,
-        "learn": cmd_learn,
-        "projects": cmd_projects,
         "bind": cmd_bind,
         "survey": cmd_survey,
         "bootstrap-apply": cmd_bootstrap_apply,
@@ -1037,7 +869,7 @@ def main() -> None:
         "release-gate": cmd_release_gate,
     }
     try:
-        handlers[args.command](args, reg)
+        handlers[args.command](args, None)  # 2nd arg: unused, kept for the handlers' signature
     except json.JSONDecodeError:
         raise                                # a data error keeps its traceback
     except ValueError as e:

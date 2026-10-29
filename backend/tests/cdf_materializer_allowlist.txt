@@ -18,14 +18,9 @@ core/data_safety.py:clear_recovery_marker  # exempt: recovery marker in the app 
 core/data_safety.py:isolate_store  # exempt: moves a damaged database aside
 core/data_safety.py:isolate_store._relocate  # exempt: moves a damaged database aside
 core/data_safety.py:write_recovery_marker  # exempt: recovery marker in the app data dir
-core/ddd_auto_approval.py:record_revert  # exempt: append-only revert log under a project's .artifacts/
 core/ddd_bindings.py:_clear_worktree_for_reclone  # exempt: bound repo clone dir
 core/ddd_bindings.py:_open_lock  # exempt: binding lock file
 core/ddd_bindings.py:sync_back  # exempt: sync report file; the DDD changes themselves land via the user's pull + ingest sync-record
-core/ddd_cultivation.py:_log_supersede_delete  # exempt: DDD changelog JSONL
-core/ddd_cultivation.py:log_application  # exempt: DDD changelog JSONL
-core/ddd_cultivation.py:record_cultivation_outcome  # exempt: cultivation outcome JSONL
-core/ddd_cultivation.py:record_workspace_cultivation_health  # exempt: cultivation health JSONL
 core/ddd_health.py:compute_section_health  # exempt: section health state JSON
 core/ddd_job_registry.py:_write_manifest_atomic  # exempt: DDD job manifest
 core/ddd_packager.py:_copy_corpus  # exempt: writes the package output dir
@@ -66,7 +61,6 @@ core/ingestion/pipeline_v2.py:requeue_parked  # exempt: via store.connect_rw: in
 core/ingestion/pipeline_v2.py:requeue_units  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/summary_lane.py:append_daily_summary  # exempt: DailyActivity (working memory, not governed); the summary lane is its writer
 core/ingestion/usage.py:record_usage  # exempt: via store.connect_rw: ingestion.db unit_usage
-core/ingestion_gate.py:_write_telemetry_row  # exempt: gate telemetry JSONL
 core/knowledge_graph.py:_locked_read_modify_write  # exempt: .knowledge-graph.yaml (derived relation graph) lock
 core/knowledge_graph.py:save_graph  # exempt: .knowledge-graph.yaml (derived relation graph)
 core/library_health.py:write_report_atomic  # exempt: Knowledge/.library-health.json report
@@ -155,8 +149,6 @@ main.py:lifespan  # exempt: via _migrate_legacy_state_dir: legacy state dir move
 main.py:read_backend_json  # exempt: backend.json (reads with a lock opened for write)
 main.py:remove_backend_json  # exempt: backend.json
 main.py:write_backend_json  # exempt: backend.json
-routers/cultivation.py:_proposal_lock  # exempt: proposal lock
-routers/cultivation.py:_update_proposal_status  # exempt: proposal JSON status
 routers/ddd_brain.py:_write_watermark  # exempt: brain watermark file
 routers/pollinate.py:_write_publish_state  # exempt: pollinate publish sidecar
 routers/workspace_api.py:create_file._create  # exempt: non-governed paths only: governed targets go through apply_user_edit
@@ -175,11 +167,7 @@ scripts/probe_context.py:_cache_holds  # exempt: probe writes into its own temp 
 scripts/probe_context.py:_seed_private  # exempt: probe writes into its own temp workspace
 scripts/probe_context.py:order  # exempt: probe writes into its own temp workspace
 scripts/probe_context.py:order.broken  # exempt: probe writes into its own temp workspace
-scripts/probe_ddd.py:_cultivate_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_ddd.py:_noise_verdict  # exempt: probe writes into its own temp workspace
-scripts/probe_ingestion.py:_cultivation_enqueue_holds  # probe seeds a temp workspace fixture, never the live corpus
-scripts/probe_ingestion.py:_preserve_holds  # exempt: probe writes into its own temp workspace
-scripts/probe_ingestion.py:preserve  # exempt: probe writes into its own temp workspace
 scripts/probe_knowledge.py:_mount_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_memory.py:_inject_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_recall.py:_archive_holds  # exempt: probe writes into its own temp workspace

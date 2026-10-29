@@ -3,7 +3,7 @@ DDD Weekly Report — generates a summary of all DDD cultivation activity.
 
 Scans ALL projects for:
 - ddd-changelog.jsonl entries (last 7 days)
-- Pending escalation proposals
+- drift fixes the self-audit applied
 - DDD document stats (line count, last modified)
 
 Outputs: Knowledge/Reports/YYYY-MM-DD-ddd-weekly.md
@@ -49,11 +49,9 @@ REPORT_WINDOW_DAYS = 7
 def _md_cell(value: object) -> str:
     """Sanitize a changelog-sourced string for safe inline markdown rendering.
 
-    Values normally come from SAFE_APPEND_SECTIONS/ROUTING_TABLE (trusted), but
     _read_changelog re-parses the on-disk JSONL with no whitelist re-validation —
     a corrupted/hand-edited ddd-changelog.jsonl could carry a section name with a
-    pipe (breaks tables), backtick, or newline. Neutralize those. (Mirrors the
-    _safe() sanitizer ddd_cultivation.py already applies to the same fields.)
+    pipe (breaks tables), backtick, or newline. Neutralize those.
     """
     return (
         str(value)
@@ -89,7 +87,6 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
     # Gather data per project
     all_applied = []
     all_drift_fixes = []
-    all_escalations = []
     project_health = {}
 
     for project_name, project_dir in projects:
@@ -99,17 +96,13 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
         # drift corrections the self-audit applied (their own log: not lessons, not counted as applied)
         all_drift_fixes.extend([(project_name, e) for e in _read_drift_fixes(project_dir, cutoff)])
 
-        # Read pending escalations
-        escalations = _read_escalations(project_dir)
-        all_escalations.extend([(project_name, e) for e in escalations])
-
         # DDD health stats
         health = _compute_doc_health(project_dir)
         project_health[project_name] = health
 
     # Generate report
     report = _generate_report(
-        all_applied, all_escalations, project_health, window_days, drift_fixes=all_drift_fixes
+        all_applied, project_health, window_days, drift_fixes=all_drift_fixes
     )
 
     # Write output
@@ -120,7 +113,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
     output_path.write_text(report, encoding="utf-8")
 
     summary = (
-        f"{len(all_applied)} applied, {len(all_drift_fixes)} drift fixes, {len(all_escalations)} escalations, "
+        f"{len(all_applied)} applied, {len(all_drift_fixes)} drift fixes, "
         f"{len(projects)} projects scanned"
     )
     logger.info("DDD weekly report: %s → %s", summary, output_path)
@@ -183,23 +176,6 @@ def _read_drift_fixes(project_dir: Path, cutoff: datetime) -> list[dict]:
     return out
 
 
-def _read_escalations(project_dir: Path) -> list[dict]:
-    """Read pending escalation proposals."""
-    proposals_dir = project_dir / ".artifacts" / "proposals"
-    if not proposals_dir.exists():
-        return []
-
-    escalations = []
-    for f in proposals_dir.glob("*.json"):
-        try:
-            data = json.loads(f.read_text())
-            if data.get("status") in ("pending", "escalated"):
-                escalations.append(data)
-        except (json.JSONDecodeError, KeyError):
-            continue
-    return escalations
-
-
 def _compute_doc_health(project_dir: Path) -> dict:
     """Compute basic health stats for DDD docs in a project."""
     stats = {}
@@ -226,7 +202,6 @@ def _compute_doc_health(project_dir: Path) -> dict:
 
 def _generate_report(
     applied: list[tuple[str, dict]],
-    escalations: list[tuple[str, dict]],
     health: dict[str, dict],
     window_days: int,
     drift_fixes: "list[tuple[str, dict]] | tuple" = (),
@@ -236,7 +211,6 @@ def _generate_report(
     Structure inspired by AWS MBR format:
     - Executive Summary (what happened, so what)
     - Highlights & Lowlights (narrative, not just data)
-    - Decisions Needed (escalations with context)
     - Health Dashboard (metrics)
     - Next Week (forward-looking)
     """
@@ -245,7 +219,6 @@ def _generate_report(
     week_start = (now - timedelta(days=window_days)).strftime("%Y-%m-%d")
 
     total_applied = len(applied)
-    total_escalated = len(escalations)
     total_projects = len(health)
 
     # Compute derived insights
@@ -264,7 +237,7 @@ def _generate_report(
     ]
     # Auto-created sections (DDD drift self-healed): a whitelisted section was
     # absent from the doc so cultivation created it. Safe, but signals the doc
-    # template / ROUTING_TABLE drifted — surface it so it can be reconciled
+    # template drifted — surface it so it can be reconciled
     # instead of auto-healing silently forever. Dedup by (project, doc, section).
     created_sections = sorted({
         (proj, e.get("target_doc", "?"), e.get("target_section", "?"))
@@ -290,7 +263,7 @@ def _generate_report(
     # ─── Executive Summary ───
     lines.append("## Executive Summary")
     lines.append("")
-    if total_applied == 0 and total_escalated == 0:
+    if total_applied == 0:
         lines.append(
             f"Quiet week. {total_projects} projects scanned, all DDD docs stable, "
             f"no cultivation activity. This means no pipeline runs produced actionable "
@@ -303,11 +276,6 @@ def _generate_report(
             summary_parts.append(
                 f"**{total_applied} lessons auto-cultivated** into DDD docs ({doc_summary}) "
                 f"across {len(by_project)} project(s)"
-            )
-        if total_escalated > 0:
-            summary_parts.append(
-                f"**{total_escalated} change(s) escalated** — these touch strategic docs "
-                f"or contradict existing content and need your call"
             )
         if stale_projects:
             summary_parts.append(
@@ -351,37 +319,12 @@ def _generate_report(
         )
         lines.append("")
 
-    if total_escalated == 0 and not stale_projects and not applied:
+    if not stale_projects and not applied:
         lines.append(
             "**[LL1] No cultivation input this week** — "
             "the engine needs pipeline REFLECT output to grow. "
             "If you're coding without the pipeline, DDD doesn't learn."
         )
-        lines.append("")
-
-    # ─── Decisions Needed ───
-    if escalations:
-        lines.append("## Decisions Needed")
-        lines.append("")
-        lines.append(
-            f"{total_escalated} proposed change(s) need your approval. "
-            f"These target strategic docs (PRODUCT.md/PROJECT.md) or modify existing content."
-        )
-        lines.append("")
-        for i, (proj, esc) in enumerate(escalations, 1):
-            lines.append(f"### Escalation {i}: {proj}/{esc.get('target_doc', '?')}")
-            lines.append("")
-            lines.append(f"**Target:** {esc.get('target_doc', '?')} / {esc.get('target_section', '?')}")
-            lines.append(f"**Proposed change:** {esc.get('content', '')[:200]}")
-            lines.append(f"**Source:** {esc.get('source_run_id', '?')}")
-            lines.append(f"**Why escalated:** Not a safe additive change — touches strategic/operational docs")
-            lines.append("")
-            lines.append("→ **Approve** / **Reject** / **Discuss in next session**")
-            lines.append("")
-    else:
-        lines.append("## Decisions Needed")
-        lines.append("")
-        lines.append("_None — all changes this week were safe additive lessons. No action required._")
         lines.append("")
 
     # ─── DDD Health Dashboard ───
@@ -412,7 +355,7 @@ def _generate_report(
             f"**⚠️ {n} auto-created section{'s' if n != 1 else ''} (template drift):** "
             f"a whitelisted section was missing from the doc, so cultivation created "
             f"it automatically. The lesson was NOT lost — but the doc template drifted "
-            f"from ROUTING_TABLE. Reconcile to stop recurring auto-creates:"
+            f"from what is written. Reconcile to stop recurring auto-creates:"
         )
         for proj, doc, section in created_sections:
             lines.append(
@@ -459,12 +402,10 @@ def _generate_report(
     if created_sections:
         lines.append(
             f"- **Action:** Reconcile {len(created_sections)} auto-created section(s) — "
-            f"add the section to the project's DDD template (or update ROUTING_TABLE) "
+            f"add the section to the project's DDD template "
             f"so cultivation appends in place instead of re-creating"
         )
-    if escalations:
-        lines.append(f"- **Action:** Resolve {total_escalated} pending escalation(s)")
-    if not applied and not escalations:
+    if not applied:
         lines.append("- **Suggestion:** Run pipelines to start feeding the cultivation engine")
     lines.append(f"- Next report: {(now + timedelta(days=7)).strftime('%Y-%m-%d')}")
     lines.append("")

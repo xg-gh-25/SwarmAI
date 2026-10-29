@@ -6,8 +6,8 @@ drive real `git` subprocesses on a throwaway workspace.
 
 Key invariants under test:
   - AC1: GET /brains/{name}/review returns tagged hunks computed live from a
-    scoped `git diff <last-reviewed-sha>..HEAD -- Projects/<ddd>/`, plus pending
-    risky proposals. No stored metric (R30#4).
+    scoped `git diff <last-reviewed-sha>..HEAD -- Projects/<ddd>/`. No stored
+    metric (R30#4).
   - AC2: POST /review/approve advances the per-DDD last-reviewed-ref watermark
     file to HEAD.
   - AC3: POST /review/reject {file, hunk_signature} reverts ONLY that hunk via

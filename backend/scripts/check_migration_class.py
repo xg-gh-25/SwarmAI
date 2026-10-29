@@ -11,7 +11,7 @@ blocks any member that is neither migrated nor explicitly carved-out.
 
 ANTI-CIRCULARITY (Gate-2 CRITICAL, R-A): a self-authored member list inherits the
 migration's blind spot. So enumeration MUST grep a PHYSICAL SINK (the last-mile write
-call every member is forced through — e.g. `_run_locked_write` / `apply_to_ddd`) across
+call every member is forced through — e.g. `_run_locked_write`) across
 the tree; the sink's caller set is the class BY CONSTRUCTION, independent of the author's
 mental model. `validate_enumeration_cmd` rejects a member-list / echo / curated-file
 subset that would re-import the blind spot.

@@ -1691,67 +1691,14 @@ class TestCorrectionsCount:
 
 
 class TestMemoryWorthyCorrectionGate:
-    """The unified value gate for the immediate correction-capture MEMORY write.
+    """The immediate correction-capture hook logs the signal and writes nothing to
+    MEMORY.
 
-    Root cause (run_4443a967): create_user_correction_detector wrote raw prompt[:150]
-    as a [pitfall] into MEMORY.md ## Pitfalls with ZERO value gate — bypassing the
-    same floor the cultivation writeback leg uses. 19 raw-prompt dumps (14 test-ses +
-    task-notification XML + truncated prompts) leaked. The golden-case seeding leg on
-    this same path was already post-session + CLASS-gated; the MEMORY leg was not.
+    Root cause (run_4443a967): create_user_correction_detector once wrote raw
+    prompt[:150] as a [pitfall] into MEMORY.md ## Pitfalls with ZERO value gate —
+    19 raw-prompt dumps leaked. The after-session review now writes corrections
+    with their context; the hook only logs.
     """
-
-    # The actual garbage that leaked into MEMORY (must ALL be rejected).
-    GARBAGE = [
-        "不对，应该用 rebase 不是 merge",
-        "That's wrong, use async instead",
-        "Actually, don't use merge here",
-        "that's wrong, use async instead",
-        "The code is wrongfully tested",
-        "Actually, not like that. Use rebase.",
-        "that's wrong, it should be X",
-        "<task-notification> <task-id>a7589c8ed378bf507</task-id> "
-        "<tool-use-id>toolu_bdrk_017ePJd95LNW4NLdUJufnK9Z</tool-use-id> "
-        "<output-file>/private/tmp/clau",
-        # Gate-2 meta-review (run_4443a967): CJK stem PARITY — long pure-CJK redirects
-        # (no lesson body) must reject just as EN ones do. Before parity, the CJK-aware
-        # char floor let these leak. These strip below the residue floor after CJK
-        # trigger-stems are removed. (The KNOWN RESIDUAL — a verbose CJK redirect that
-        # stays >30 chars post-strip — is documented in is_memory_worthy_correction as
-        # an accepted MED, not covered here.)
-        "不对不对，你这样搞完全错了，重新想想吧要推倒重来",
-        "错了，这个不是我要的，你应该改用之前的方案",
-    ]
-    # Genuine mid-session lessons that MUST still reach MEMORY (capture preserved).
-    REAL_LESSONS = [
-        "TAURI_SIGNING_PRIVATE_KEY error at the end of a local build is an "
-        "environment-fixed updater-signing gap, not a regression from the change "
-        "in flight; relaunch the freshly-built app and it runs clean",
-        "CMHK 9 Skills 应该是 CMHK DDD 的一部分，SwarmAI 作为个人 Agent 挂载并 "
-        "manage CMHK DDD，所以可以直接调用 CMHK Skills",
-        # Gate-2 adversarial (run_4443a967) — the HIGH false-negative the original
-        # gate wrongly REJECTED. PURE-CJK lesson, ZERO Latin tokens — the
-        # authorship-trap case: is_quality_lesson's >=5-WORD floor is
-        # whitespace-tokenized → CJK counts as 1 "word" → wrongly rejected. The
-        # original CJK REAL_LESSONS above only passed because they carried Latin
-        # tokens (CMHK/DDD/Skills) that inflated split(). This pure-CJK lesson is the
-        # true probe of the CJK-aware char-length floor; stays RED if the fix reverts.
-        "不对，应该用悲观锁而不是乐观锁，因为这个热点账户并发更新极高，"
-        "乐观锁重试会雪崩，这是线上事故复盘的结论",
-    ]
-
-    @pytest.mark.parametrize("prompt", GARBAGE)
-    def test_garbage_rejected(self, prompt):
-        """AC1: pure correction-signals / XML / short fragments are NOT memory-worthy."""
-        from core.ddd_cultivation import is_memory_worthy_correction
-        assert is_memory_worthy_correction(prompt) is False, \
-            f"garbage should be rejected: {prompt[:50]!r}"
-
-    @pytest.mark.parametrize("prompt", REAL_LESSONS)
-    def test_real_lessons_accepted(self, prompt):
-        """AC2: genuine mid-session lessons still pass the gate (capture preserved)."""
-        from core.ddd_cultivation import is_memory_worthy_correction
-        assert is_memory_worthy_correction(prompt) is True, \
-            f"real lesson should be accepted: {prompt[:50]!r}"
 
     @pytest.mark.asyncio
     async def test_hook_does_not_write_garbage_to_memory(

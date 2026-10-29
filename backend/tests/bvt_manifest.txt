@@ -52,7 +52,6 @@ test_memory_wiring.py
 test_merge_assistant_messages.py
 test_oom_detection.py
 test_oom_governance.py
-test_persist_routing_declared_type.py
 test_phase_wiring.py
 test_pipeline_profiles.py
 test_redline_gate.py

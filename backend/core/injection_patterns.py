@@ -32,8 +32,7 @@ Design — the ONE thing that makes this false-positive-safe:
   a live classifier, not the prose store.
 
 This is a WRITE-side gate. It is orthogonal to the READ-side ``[RECALLED]``
-provenance header (recall_multi.py) and to ddd_cultivation's instance-log/zone
-filtering — it does not call or import either.
+provenance header (recall_multi.py) — it does not call or import it.
 """
 
 from __future__ import annotations

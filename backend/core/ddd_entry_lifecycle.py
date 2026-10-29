@@ -161,8 +161,8 @@ ARCHIVED_THRESHOLD_DAYS = 90
 # age transitions, exactly like an evergreen SECTION. guideline/process (operational
 # notes) still age-decay normally. Safe because the intake gate (Step 1: dedup +
 # value floor) + the one-time cleanse (Step 2) guarantee LIVE judgment entries are
-# real, not silt. Genuine staleness is handled by evidence-based retire
-# (ddd_cultivation retire path), NEVER by silent age-death.
+# real, not silt. Genuine staleness is handled by evidence-based retire, NEVER by
+# silent age-death.
 #
 # The set is ALL five judgment types (cognitive + meta-cognitive): decision, model
 # (cognitive) + principle, correction (meta-cognitive) + pitfall (hard-won failure
@@ -245,9 +245,7 @@ _ENTRY_RE = re.compile(
 
 # Leading author-declared "[type] " prefix on a RAW lesson string (NOT a bullet).
 # Used by route_lesson_type to honor an author-declared type over a keyword guess
-# (run_4ad5a44b). Anchored at start; group(1)=type. Defined locally (mirrors
-# persist_routing._DECLARED_TYPE_RE) to keep ddd_entry_lifecycle free of a reverse
-# import dependency on persist_routing (which already imports this module).
+# (run_4ad5a44b). Anchored at start; group(1)=type.
 _DECLARED_TYPE_RE = re.compile(r"^\[(\w+)\]\s+")
 
 # ── Shared boundary-detection fragments (SSOT, run_3cb6b9ae Cycle-5 #5) ────────
@@ -1502,13 +1500,10 @@ def route_lesson_type(lesson: str) -> "tuple[str | None, str]":
     # "[pitfall]"/"[principle]" prefix), so re-guessing it from prose keywords
     # is strictly worse (measured 82% keyword accuracy, with a systematic skew
     # that demotes principle/correction -> pitfall/guideline because the pitfall
-    # signal words bug/wrong/failed are greedy). Both route call-sites
-    # (ingestion_gate.admit_memory_lesson + context_health REFLECT path) receive
-    # tag-bearing input, so honoring HERE makes both consistent (P8) with no
-    # caller change. classify_entry_type stays the fallback for untagged lessons
-    # (the DailyActivity distillation path, which has no author tag).
-    # Local regex (NOT persist_routing._DECLARED_TYPE_RE) to avoid a reverse
-    # import dep — persist_routing already imports THIS module.
+    # signal words bug/wrong/failed are greedy). Honoring it HERE makes every
+    # caller consistent (P8) with no caller change. classify_entry_type stays the
+    # fallback for untagged lessons (the DailyActivity distillation path, which has
+    # no author tag).
     _m = _DECLARED_TYPE_RE.match(lesson)
     declared = _m.group(1).lower() if _m else None
     etype = declared if (declared in VALID_TYPES) else classify_entry_type(lesson)
@@ -1672,9 +1667,8 @@ def reclaim_duplicate_entries(
 
     NOT near-dup / similarity: signatures must be EXACTLY equal after normalization
     (strip bullet marker, [type] tag, attribution, bold, whitespace, case). This is
-    deliberate — the knowledge governance rule is "never delete on a guess" (see
-    ddd_cultivation.py supersession-language note); similarity-based deletion is a
-    non-goal.
+    deliberate — the knowledge governance rule is "never delete on a guess";
+    similarity-based deletion is a non-goal.
 
     It writes nothing (CDF stage B, design 2026-10-26 CDF §8): the candidates feed
     the C&M entry-health counts. *project_dir*, *archive_name* and *source_path* are

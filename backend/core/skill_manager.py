@@ -71,10 +71,8 @@ class SkillInfo:
     Used by ``ProjectionLayer`` to filter skills in Hive (EC2 Linux).
 
     ``consumes_artifacts`` and ``produces_artifact`` are optional metadata
-    from the SKILL.md YAML frontmatter.  When present, the artifact
-    registry auto-discovers upstream artifacts for skills that declare
-    ``consumes_artifacts``, and auto-publishes output for skills that
-    declare ``produces_artifact``.
+    from the SKILL.md YAML frontmatter, parsed and carried as declared
+    (descriptive only: nothing discovers or publishes artifacts from them).
     """
 
     folder_name: str

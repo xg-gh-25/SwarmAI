@@ -1,7 +1,7 @@
 # Structured QA
 
 Diff-aware testing with atomic fixes and self-regulation. Works on any git repo
-at L0 (no project needed). Gets smarter with artifacts (L1) and DDD docs (L2).
+at L0 (no project needed). Gets smarter with run documents (L1) and DDD docs (L2).
 
 ## Workflow
 
@@ -31,10 +31,10 @@ ls pyproject.toml package.json Cargo.toml go.mod Makefile 2>/dev/null
 | `Cargo.toml` | `cargo test` | `-- <pattern>` |
 | `go.mod` | `go test ./...` | `-run <pattern>` |
 
-**L1 (with artifacts):**
-- Read `changeset` artifact for precise file list and branch base
-- Read `design_doc` artifact for acceptance criteria
-- Read `review` artifact for flagged issues to verify
+**L1 (inside a pipeline run, with its documents):**
+- Use the run's changeset for the precise file list and branch base
+- Use the run's design document for acceptance criteria
+- Use the run's review findings for flagged issues to verify
 
 **L2 (with DDD docs) — read these BEFORE auto-detection:**
 
@@ -63,7 +63,7 @@ Changed database schema → run migration + integration tests
 Changed config → verify startup still works
 ```
 
-If design_doc artifact has `acceptance_criteria`, build a checklist from those.
+If the design document lists acceptance criteria, build a checklist from those.
 Otherwise, derive test targets from the diff.
 
 ### Step 3: UNIT TEST
@@ -164,7 +164,7 @@ Summarize results:
 - [route]: OK / FAIL (screenshot attached)
 ```
 
-**L1+:** Publish this report as a `test_report` artifact:
+**L1+:** Include this structured form with the report:
 ```json
 {
   "passed": 45,
@@ -212,24 +212,11 @@ Before marking QA complete, show evidence for each:
 - **Report everything** — even if you can't fix it, diagnose and document it.
 - **L0 works without setup** — auto-detect everything. Never tell the user "I need TECH.md first."
 
-## Artifact Operations
+## Inside a pipeline run
 
-**Discover upstream artifacts (before scoping):**
-```bash
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli discover --project <PROJECT> --types changeset,design_doc,review --full
-```
-
-**Publish test report (after completing QA):**
-```bash
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
-  --project <PROJECT> --type test_report --producer s_qa \
-  --summary "<X passed, Y failed, Z fixed>" \
-  --data '<JSON of test report>'
-```
-
-**Inside a pipeline run:** stage progress is recorded by `"$SWARM_BACKEND_BIN" pipeline-v1`
+Stage progress is recorded by `"$SWARM_BACKEND_BIN" pipeline-v1`
 (`stage-complete --project <PROJECT> --run-id <RUN_ID>`), never by this skill. Standalone,
-publishing the artifact above is the whole hand-off.
+the report shown to the user is the whole hand-off.
 
 > **⏭️ Continuation contract — advance is not the end of your turn.** `advance` only records the state transition; it is NOT a
 > handoff point. Immediately Read the next stage's doc (the `advance` output prints its

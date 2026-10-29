@@ -323,10 +323,8 @@ def create_user_correction_detector(
 
         # Two tiers of match (adversarial MED, run_e681a61d):
         #  - explicit_error: "that's wrong / 不对 / 应该是" — a recorded MISTAKE.
-        #    Logs to corrections.jsonl AND (if it passes the value gate) writes a
-        #    MEMORY [pitfall]. Golden-case seeding is NO LONGER done here (moved
-        #    post-session + CLASS-gated, M5 :306); the MEMORY write is now likewise
-        #    value-gated via is_memory_worthy_correction (run_4443a967, :317).
+        #    Logs to corrections.jsonl; nothing is written to MEMORY from here (the
+        #    after-session review writes the correction with its context, see below).
         #  - meta_only: a redirect/reframe ("去查 X / 重新想 / go check") — STEERING,
         #    not a mistake. Logs to corrections.jsonl (for the post-session
         #    classifier to judge) but does NOT write a MEMORY [pitfall] — a redirect

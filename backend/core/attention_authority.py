@@ -4,11 +4,11 @@
 Design: Knowledge/Designs/2026-08-08-unified-need-you-channel-design.md
 
 WHY this is a read-aggregation layer and NOT a new store/table:
-    The 5 sources each own their lifecycle correctly (escalation has resolve,
+    The sources each own their lifecycle correctly (escalation has resolve,
     proposal has apply/reject, run has resume). A central "attention" table
     would force every source to dual-write → state drift — the exact lesson from
     2026-08-03-unified-review-trigger ("git is already the authority, don't build
-    a new table"). So this module OWNS no state: it READS the 5 sources' existing
+    a new table"). So this module OWNS no state: it READS the sources' existing
     entry points and NORMALIZES them into one shape.
 
 The single output is `collect()` → `AttentionResult` (items + counts), consumed by:
@@ -19,7 +19,7 @@ Two tiers (design §2 — "does the user NOT-acting break something?"):
     - BLOCKING : work is STOPPED, nothing moves without the user
                  (L2 escalation · paused pipeline `pause_kind=="decision"` · circuit-broken job)
     - REVIEW   : work self-advances (L1 timeout auto-accepts); the user's input
-                 is confirm-or-override (cultivation · governance · L1 consult)
+                 is confirm-or-override (governance · L1 consult)
 
 Brain attribution (design §4 Gate-1 correction): every item carries the brain
 (project) it belongs to, EXCEPT governance — governance proposals are
@@ -97,10 +97,6 @@ _CLASS_HUMAN = {
                             "a session working on something other than what was asked"),
 }
 
-#: The `[tag]` a cultivation proposal starts with → the section it would join.
-_NOTE_KIND = {"decision": "decisions", "pitfall": "pitfalls",
-              "guideline": "guidelines", "risk": "risks"}
-
 _SUMMARY_MAX = 160
 _FACT_MAX = 2000
 
@@ -125,27 +121,18 @@ def _prompt(ask: str, facts: list[tuple[str, str]] = (), refs: list[str] = ()) -
     return "\n\n".join(parts)
 
 
-def _split_note(content: str) -> tuple[str, str]:
-    """`[decision] text` → ("decisions", "text"); no tag → ("", text)."""
-    s = (content or "").strip()
-    if s.startswith("[") and "]" in s[:20]:
-        tag, rest = s[1:].split("]", 1)
-        return _NOTE_KIND.get(tag.strip().lower(), tag.strip().lower()), rest.strip()
-    return "", s
-
-
 @dataclass
 class AttentionItem:
     """One normalized "needs you" item, source-agnostic.
 
     `id` carries a source prefix (e.g. "escalation:esc_abc") so it is globally
-    unique across the 5 sources. `brain` is the owning project, or None for
+    unique across the sources. `brain` is the owning project, or None for
     OS-level (governance). `dispatch.message` is what gets injected into a chat
     tab when the user clicks the item (reusing onItemClick).
     """
 
     id: str
-    source: str          # escalation | paused_run | cultivation | governance | job
+    source: str          # escalation | paused_run | governance | job | …
     tier: str            # blocking | review
     brain: Optional[str]  # project name, or None for OS-level (governance)
     title: str           # plain: what is needed of the user
@@ -227,47 +214,6 @@ def _collect_escalations(workspace_root: Path) -> list[AttentionItem]:
                 logger.warning("attention: escalation read failed for %s: %s", project, exc)
     except Exception as exc:
         logger.warning("attention: escalation source failed: %s", exc)
-    return items
-
-
-def _collect_cultivation(workspace_root: Path) -> list[AttentionItem]:
-    """Pending DDD cultivation proposals (notes awaiting a human) → REVIEW."""
-    items: list[AttentionItem] = []
-    try:
-        from core.ddd_cultivation import read_pending_proposals
-        from routers.ddd_brain import _list_project_dirs
-
-        for pdir in _list_project_dirs():
-            project = pdir.name
-            try:
-                for p in read_pending_proposals(workspace_root, project):
-                    pid = getattr(p, "proposal_id", None) or getattr(p, "id", "")
-                    section, note = _split_note(p.content or "")
-                    where = f"{p.target_doc}, {section}" if section else p.target_doc
-                    items.append(AttentionItem(
-                        id=f"cultivation:{project}:{pid}",
-                        source="cultivation",
-                        tier=TIER_REVIEW,
-                        brain=project,
-                        title="Approve a note SwarmAI wants to add to its memory",
-                        summary=_one_line(note),
-                        detail=(p.content or "")[:400],
-                        dispatch={
-                            "message": _prompt(
-                                (f"SwarmAI wants to add this note to the {project} brain ({where}). "
-                                 "First explain in plain words what it means and whether it is right, "
-                                 "then let me approve, edit, or reject it."),
-                                [("Proposed note", _one_line(note, _FACT_MAX))],
-                                [f"proposal {pid}"],
-                            ),
-                            "context": {"kind": "cultivation", "project": project,
-                                        "proposal_id": pid, "target_doc": p.target_doc},
-                        },
-                    ))
-            except Exception as exc:
-                logger.warning("attention: cultivation read failed for %s: %s", project, exc)
-    except Exception as exc:
-        logger.warning("attention: cultivation source failed: %s", exc)
     return items
 
 
@@ -921,7 +867,7 @@ def collect(
     brain: Optional[str] = None,
     pipeline_runs: Optional[list[dict]] = None,
 ) -> AttentionResult:
-    """Aggregate all 5 sources → normalized, tiered, brain-attributed items.
+    """Aggregate all sources → normalized, tiered, brain-attributed items.
 
     Args:
         workspace_root: SwarmWS root (Projects/ lives under it).
@@ -937,7 +883,6 @@ def collect(
     """
     items: list[AttentionItem] = []
     items += _collect_escalations(workspace_root)
-    items += _collect_cultivation(workspace_root)
     items += _collect_governance()
     items += _collect_paused_runs(pipeline_runs)
     items += _collect_jobs()

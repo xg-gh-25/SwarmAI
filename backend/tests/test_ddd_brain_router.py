@@ -13,7 +13,7 @@ the live workspace happened to contain.
 
 Key invariants under test:
   - AC1: brains list returns every real DDD project with live health signals
-    (sinking = dormant+archived count, pending = staged proposals, liveRun
+    (sinking = dormant+archived count, pending = Need-You items, liveRun
     = git dirty, last_change = relative time) — NO stored metric, computed live.
   - AC2: brain detail returns the six sections (via ddd_paths SSOT) with real
     member files; ② canonical docs carry per-entry entry_type + decay_state that
@@ -496,34 +496,13 @@ class TestHealthBlockInBrainDetail:
                   "diagnostics", "computedAt"):
             assert k in h, f"missing health key {k}: {h}"
 
-    def test_cultivation_health_surfaced(self, tmp_path):
-        """run_abf49550 M0 (AC2): the learning-organ health (write_failed +
-        silent_learning_failure) is READ from the durable per-project sink and
-        surfaced in _brain_health — no more write-only counters. A recorded write
-        failure must make it visible here."""
-        from routers import ddd_brain as m
-        from core.ddd_cultivation import record_cultivation_outcome
-        pd = tmp_path / "P"
-        pd.mkdir()
-        # a real write failure was recorded for this project
-        record_cultivation_outcome(pd, {
-            "applied": 1, "rejected": 0, "write_failed": 1, "escalated": 0,
-        })
-        h = m._brain_detail(pd)["health"]
-        assert "cultivation" in h, f"cultivation health must be surfaced: {h}"
-        c = h["cultivation"]
-        assert c["write_failed"] == 1
-        assert c["silent_learning_failure"] is True
-
-    def test_cultivation_health_clean_when_no_outcomes(self, tmp_path):
-        """No recorded outcomes → cultivation block present, not flagged (honest
-        zero, never fabricated)."""
+    def test_no_cultivation_health_block(self, tmp_path):
+        """The legacy proposal path's outcomes sink is gone; health carries no
+        `cultivation` block."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         pd.mkdir()
-        h = m._brain_detail(pd)["health"]
-        assert "cultivation" in h
-        assert h["cultivation"]["silent_learning_failure"] is False
+        assert "cultivation" not in m._brain_detail(pd)["health"]
 
     def test_recall_is_experimental_null(self, tmp_path):
         """recall carries no fabricated value — {value:None, experimental:True}
@@ -946,7 +925,7 @@ class TestPerfDedupRun9af622ee:
 
         def _counting(name):
             calls["n"] += 1
-            return {"cultivation": 2, "paused_run": 1}
+            return {"escalation": 2, "paused_run": 1}
 
         monkeypatch.setattr(m, "_pending_by_source", _counting)
         state = m.build_brain_state(pd, with_noise=True)
@@ -954,16 +933,16 @@ class TestPerfDedupRun9af622ee:
         # value still correct in BOTH consumers (health.pending + escalationPending)
         assert state["health"]["pending"] == 3
         assert state["health"]["escalationPending"] == 3
-        assert state["pendingBySource"] == {"cultivation": 2, "paused_run": 1}
+        assert state["pendingBySource"] == {"escalation": 2, "paused_run": 1}
 
     def test_pending_split_by_source_sums_to_pending(self, monkeypatch, tmp_path):
-        """The Hub names what waits (a Run, a proposal, an escalation): the gallery's
+        """The Hub names what waits (a Run, an escalation): the gallery's
         once-per-request aggregate arrives split by source and health.pending is its sum."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
-        st = m._brain_summary(pd, {"cultivation": 2, "escalation": 1})
-        assert st["pendingBySource"] == {"cultivation": 2, "escalation": 1}
+        st = m._brain_summary(pd, {"paused_run": 2, "escalation": 1})
+        assert st["pendingBySource"] == {"paused_run": 2, "escalation": 1}
         assert st["health"]["pending"] == 3
         assert m._brain_summary(pd, {})["health"]["pending"] == 0
 

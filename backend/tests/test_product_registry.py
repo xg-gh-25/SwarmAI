@@ -8,9 +8,8 @@ Covers the 6 acceptance criteria from design_doc art_5c8787b5:
   AC5 — backfill_from_gitlog idempotent (keyed by path)
   AC6 — sync core callable off-loop; watcher hook calls register_batch on RAW paths
 
-The registry reuses utils.file_lock + an atomic write-temp+rename primitive — the
-SAME mechanism ArtifactRegistry uses, NOT a subclass (workspace-level flat keyspace
-does not fit the project-scoped ArtifactRegistry API — THINK falsified subclassing).
+The registry is built on utils.file_lock + an atomic write-temp+rename primitive,
+with a workspace-level flat keyspace.
 """
 
 from __future__ import annotations

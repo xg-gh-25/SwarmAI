@@ -39,13 +39,11 @@ def patched_sources(monkeypatch):
     state = {
         "esc": [_item("escalation", TIER_BLOCKING, "SwarmAI", "e1"),
                 _item("escalation", TIER_REVIEW, "CMHK", "e2")],
-        "cult": [_item("cultivation", TIER_REVIEW, "SwarmAI", "c1")],
         "gov": [_item("governance", TIER_REVIEW, None, "g1")],
         "paused": [_item("paused_run", TIER_BLOCKING, "SwarmAI", "r1")],
         "jobs": [_item("job", TIER_BLOCKING, None, "j1")],
     }
     monkeypatch.setattr(aa, "_collect_escalations", mk("esc", state["esc"]))
-    monkeypatch.setattr(aa, "_collect_cultivation", mk("cult", state["cult"]))
     monkeypatch.setattr(aa, "_collect_governance", mk("gov", state["gov"]))
     monkeypatch.setattr(aa, "_collect_paused_runs", mk("paused", state["paused"]))
     monkeypatch.setattr(aa, "_collect_jobs", mk("jobs", state["jobs"]))
@@ -61,19 +59,19 @@ def patched_sources(monkeypatch):
 def test_aggregates_all_sources(patched_sources):
     res = collect(Path("/tmp"))
     sources = {it.source for it in res.items}
-    # 6 collectors wired; job_digest is patched-empty in this fixture (its
-    # own behavior is covered by the _collect_job_digests isolation tests),
-    # so it contributes no source here — the other 5 all appear.
-    assert sources == {"escalation", "cultivation", "governance", "paused_run", "job"}
+    # job_digest is patched-empty in this fixture (its own behavior is covered
+    # by the _collect_job_digests isolation tests), so it contributes no source
+    # here — the other 4 all appear.
+    assert sources == {"escalation", "governance", "paused_run", "job"}
     assert "job_digest" not in sources  # patched-empty in this fixture
-    assert len(res.items) == 6  # 2 esc + 1 cult + 1 gov + 1 paused + 1 job
+    assert len(res.items) == 5  # 2 esc + 1 gov + 1 paused + 1 job
 
 
 def test_counts_split_by_tier(patched_sources):
     res = collect(Path("/tmp"))
-    # BLOCKING: esc-e1, paused-r1, job-j1 = 3 ; REVIEW: esc-e2, cult-c1, gov-g1 = 3
+    # BLOCKING: esc-e1, paused-r1, job-j1 = 3 ; REVIEW: esc-e2, gov-g1 = 2
     assert res.counts[TIER_BLOCKING] == 3
-    assert res.counts[TIER_REVIEW] == 3
+    assert res.counts[TIER_REVIEW] == 2
 
 
 def test_blocking_items_sorted_first(patched_sources):
@@ -96,8 +94,8 @@ def test_per_brain_query_excludes_governance(patched_sources):
     res = collect(Path("/tmp"), brain="SwarmAI")
     brains = {it.brain for it in res.items}
     assert brains == {"SwarmAI"}          # only SwarmAI, never None
-    # SwarmAI items: escalation e1, cultivation c1, paused r1 = 3
-    assert len(res.items) == 3
+    # SwarmAI items: escalation e1, paused r1 = 2
+    assert len(res.items) == 2
     assert not any(it.source == "governance" for it in res.items)
 
 
@@ -248,7 +246,7 @@ def test_sense_format_groups_by_tier_then_brain(monkeypatch):
     items = [
         _item("escalation", TIER_BLOCKING, "SwarmAI", "e1"),
         _item("job", TIER_BLOCKING, None, "j1"),
-        _item("cultivation", TIER_REVIEW, "SwarmAI", "c1"),
+        _item("escalation", TIER_REVIEW, "SwarmAI", "c1"),
         _item("governance", TIER_REVIEW, None, "g1"),
     ]
     # give the dispatch message so the "to handle" line renders

@@ -56,7 +56,7 @@ _SECTION_JOIN_RE = re.compile(
 # literal on the line, so `_DOC_JOIN_RE` (matches "TECH.md") never sees it. Two
 # waves recurred:
 #   - run_3a636c88: 15 loop-var readers (`project_dir / doc_name`)
-#   - run_6f636dd5: 3 ddd_cultivation.py attribute-shape readers
+#   - run_6f636dd5: 3 cultivation attribute-shape readers
 #     (`project_dir / proposal.target_doc`) → a migrated DDD's canonical docs live
 #     under 2-understanding/, so the root join hit a non-existent path →
 #     doc.exists()==False → cultivation returned "doc_missing" → SILENTLY stopped

@@ -450,9 +450,8 @@ identifier only I can resolve** — this covers CODE and shipped artifacts (skil
 comments), not just context files. A stranger cannot open a run id, correction id or owner-named
 path, and a rule whose justification is unresolvable loses its authority exactly when enforced
 (the citation rots for me too). Write the lesson so the sentence stands alone. The doors differ
-ON PURPOSE (reader scope): a private store may keep a trailing `(…, <id>)` provenance footnote
-(`ingestion_gate.shape_warnings` permits that shape), a published artifact may not — don't unify
-them. Package-local numbering that resolves inside the artifact is fine. **Tell: I'm about to write
+ON PURPOSE (reader scope): a private store may keep a trailing `(…, <id>)` provenance footnote,
+a published artifact may not — don't unify them. Package-local numbering that resolves inside the artifact is fine. **Tell: I'm about to write
 an id, a count, a username path or a status flag into a file the product ships.** The skill corpus
 is held to this by a fail-closed CI linter (`scripts/lint_skills.py`). (SOUL P1+P4+P6+P8)
 

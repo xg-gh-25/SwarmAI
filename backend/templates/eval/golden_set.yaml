@@ -354,71 +354,6 @@ cases:
   gating: gate
   eval_method: programmatic
   validated_by_4gate: 9ea346ec376a8652
-- id: ING_JUDGE_DOWN
-  category: ingestion
-  dimension: cognition
-  level: tool_call
-  title: A lesson the judge could not review is deferred, not dropped
-  purpose:
-    en: When the memory judge is unavailable (budget spent or erroring), a lesson waits in the pending
-      queue instead of being dropped. If this breaks, lessons vanish during an outage.
-    zh: 记忆的 judge 不可用（预算用完或报错）时，条目进待定队列而不是被丢掉。坏了意味着故障期间的教训全部消失。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion judge_down'
-    expected_contains: ING_JUDGE_DOWN_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion judge_down negative'
-    negative_expected_contains: ING_JUDGE_DOWN_TEETH
-  evaluators:
-  - canary_pass
-  affected_by:
-  - backend/core/ingestion_gate.py
-  tier: stable
-  gating: gate
-  eval_method: programmatic
-  validated_by_4gate: 72892c4a04c015f1
-- id: ING_FLOORS
-  category: ingestion
-  dimension: cognition
-  level: tool_call
-  title: Deterministic floors hold without any network
-  purpose:
-    en: Without any network, the fixed rules still keep out a too-short entry, a governance rule and an
-      entry aimed at the wrong store. If this breaks, junk enters memory when the judge is down.
-    zh: 不联网时确定性底线照样拦住：太短的、改治理规则的、写错存储的。坏了意味着 judge 不可用时垃圾会进入记忆。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion floors'
-    expected_contains: ING_FLOORS_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion floors negative'
-    negative_expected_contains: ING_FLOORS_TEETH
-  evaluators:
-  - canary_pass
-  affected_by:
-  - backend/core/ingestion_gate.py
-  tier: stable
-  gating: gate
-  eval_method: programmatic
-  validated_by_4gate: ab78f21dc11aea79
-- id: ING_DDD_ARCHIVE
-  category: ingestion
-  dimension: cognition
-  level: tool_call
-  title: Project-doc candidates enter CDF without source-side writes
-  purpose:
-    en: A project-doc candidate is queued with provenance and a stable semantic slot, while the source writes neither the DDD nor an archive. If this breaks, a source can bypass the single writer.
-    zh: 项目文档候选带着来源和稳定语义槽进入 CDF，source 不直接写 DDD，也不写自己的归档。坏了意味着 source 能绕过唯一写入者。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion ddd_archive'
-    expected_contains: ING_DDD_ARCHIVE_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion ddd_archive negative'
-    negative_expected_contains: ING_DDD_ARCHIVE_TEETH
-  evaluators:
-  - canary_pass
-  affected_by:
-  - backend/core/ddd_cultivation.py
-  tier: stable
-  gating: gate
-  eval_method: programmatic
-  validated_by_4gate: 65518b32f262b291
 - id: ING_PRESERVE
   category: ingestion
   dimension: responsibility
@@ -583,28 +518,6 @@ cases:
   gating: gate
   eval_method: programmatic
   validated_by_4gate: 3f107fdf9f1258da
-- id: DDD_CULTIVATE
-  category: ddd
-  dimension: responsibility
-  level: tool_call
-  title: Session lessons enter CDF and never write project files directly
-  purpose:
-    en: Replaying a session lesson keeps one CDF slot and project snapshot, while the compatibility entry point leaves governed files unchanged. If this breaks, a legacy source can bypass the worker.
-    zh: 同一条会话教训重放时保留同一个 CDF 槽和项目快照，兼容入口不改受控文件。坏了意味着旧 source 能绕过 worker。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd cultivate'
-    expected_contains: DDD_CULTIVATE_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd cultivate negative'
-    negative_expected_contains: DDD_CULTIVATE_TEETH
-  evaluators:
-  - canary_pass
-  affected_by:
-  - backend/core/ddd_cultivation.py
-  tier: stable
-  gating: gate
-  eval_method: programmatic
-  redline: true
-  validated_by_4gate: b9e57de587098a1a
 - id: DDD_BOOTSTRAP
   category: ddd
   dimension: responsibility

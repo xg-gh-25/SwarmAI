@@ -135,15 +135,6 @@ def test_an_unreadable_test_report_blob_does_not_break_the_completed_audit(tmp_p
     assert "repo" in report and "could not be read" in report
 
 
-def test_a_doc_removed_between_the_check_and_the_write_is_kept_not_rejected(tmp_path, monkeypatch):
-    from core import ddd_cultivation
-    doc = tmp_path / "Projects" / "R" / "2-understanding" / "TECH.md"
-    doc.parent.mkdir(parents=True)
-    doc.write_text("# TECH\n\n## Conventions\n")
-    monkeypatch.setattr(ddd_cultivation, "apply_to_ddd", lambda *a, **k: "doc_missing")
-    assert _route(tmp_path, "domain:R:TECH:Conventions", project="R") == "kept_in_run"
-
-
 def test_a_project_name_must_match_the_directory_exactly(tmp_path):
     """On a case-insensitive file system `foo` would open `Foo`; on a case-sensitive
     one it would not. Only the exact directory name is that project."""

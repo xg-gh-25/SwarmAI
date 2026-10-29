@@ -40,7 +40,6 @@ print(f'Output: {result[\"output_path\"]}')
 |---------|--------------|
 | Executive Summary | 1-paragraph narrative: quiet week vs active cultivation |
 | Highlights & Lowlights | [HL]/[LL] format — top lessons applied, staleness warnings |
-| Decisions Needed | Escalated proposals with context + approve/reject prompt |
 | DDD Health Dashboard | Per-project × per-doc table with status indicators |
 | Change Log | Detailed table of all auto-applied entries |
 | Next Week | Forward-looking actions + stale doc warnings |
@@ -48,7 +47,6 @@ print(f'Output: {result[\"output_path\"]}')
 ## Data Sources
 
 - `Projects/*/.artifacts/ddd-changelog.jsonl` — applied entries (per project)
-- `Projects/*/.artifacts/proposals/*.json` — pending escalations
 - `Projects/*/.artifacts/protected-zone-candidates.jsonl` — lessons auto-dropped from
   a protected zone (TECH>Architecture / SELF / PRODUCT>Vision,Non-Goals,Strategic) that
   a human should hand-distill. NOT auto-writable (human-only zone),

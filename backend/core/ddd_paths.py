@@ -274,9 +274,8 @@ def confined_doc_path(project_dir: Path | str, target_doc: str) -> Path | None:
     "doc_missing" branch — a legitimate routing outcome, not an attack).
 
     This is PATH CONFINEMENT (where may we write), which is orthogonal to ADMISSION
-    AUTHORITY (what is worth writing). It deliberately does NOT re-introduce the
-    doc-identity allowlist that ``admission_band`` removed on purpose — any doc
-    inside the project stays writable.
+    AUTHORITY (what is worth writing). It deliberately does NOT re-introduce a
+    doc-identity allowlist — any doc inside the project stays writable.
 
     Three failure modes are handled because each was measured, not theorised:
       * ``Path.resolve()`` raises ``RuntimeError`` on a symlink loop and

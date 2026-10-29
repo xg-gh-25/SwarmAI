@@ -710,22 +710,6 @@ class TestUsageDecayGate:
 # only. There is no embedding-orphan backlog to converge anymore.
 
 
-class TestContentFloor:
-    """ingestion_gate.content_floor is not over-broad (its REFLECT→MEMORY caller was
-    retired with the old pipeline; v1 queues MEMORY lessons as proposals)."""
-
-    def test_ac4_high_confidence_passes_floor(self, hook):
-        """AC4b companion: a normal-confidence dict does NOT trip content_floor (proves
-        the floor isn't over-broad — an operational lesson passes through)."""
-        from core.ingestion_gate import content_floor
-        lesson = ("Always take the .lock before the read-modify-write on MEMORY.md "
-                  "to avoid a lost-update race across concurrent writers here.")
-        with patch("core.persist_routing.classify_content",
-                   return_value={"confidence": 0.6, "is_governance": False}):
-            deny, reason = content_floor(lesson)
-        assert deny is False, f"normal-confidence lesson must pass the floor, got: {reason}"
-
-
 class TestMaturityWritebackResolvesLayout:
     """run_ff06972d: _set_verified_from_pipeline_runs must resolve canonical docs
     via ddd_paths (migrated → 2-understanding/), not a raw project_root path.

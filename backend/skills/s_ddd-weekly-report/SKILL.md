@@ -1,6 +1,6 @@
 ---
 name: ddd-weekly-report
-description: "Weekly report of DDD document changes across all projects: what was applied, what needs escalation, per-project health. TRIGGER: \"DDD weekly\", \"DDD report\", \"cultivation report\", \"DDD 周报\"."
+description: "Weekly report of DDD document changes across all projects: what was applied, drift fixed, per-project health. TRIGGER: \"DDD weekly\", \"DDD report\", \"cultivation report\", \"DDD 周报\"."
 tier: lazy
 platform: all
 ---

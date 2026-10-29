@@ -658,21 +658,16 @@ User says: "List my projects", "What projects do I have?", "Show projects"
 ls -d Projects/*/  2>/dev/null | while read dir; do
   name=$(basename "$dir")
   if [ -f "$dir/2-understanding/PRODUCT.md" ]; then ddd="DDD"; else ddd="no DDD"; fi
-  if [ -f "$dir/.artifacts/manifest.json" ]; then
-    state=$("$SWARM_BACKEND_BIN" py -c "import json; print(json.load(open('$dir/.artifacts/manifest.json'))['pipeline_state'])" 2>/dev/null || echo "unknown")
-  else
-    state="-"
-  fi
-  echo "$name | $ddd | $state"
+  echo "$name | $ddd"
 done
 ```
 
 Present as a table:
 
-| Project | DDD Status | Pipeline | Type |
-|---------|-----------|----------|------|
-| SwarmAI | Full | plan | Default |
-| ClientApp | Partial (TECH.md only) | build | User |
+| Project | DDD Status | Type |
+|---------|-----------|------|
+| SwarmAI | Full | Default |
+| ClientApp | Partial (TECH.md only) | User |
 
 ---
 
@@ -711,18 +706,15 @@ mv "Projects/OldName" "Projects/NewName"
 #### Step 3: Update DDD doc titles
 Edit the `# OldName` heading in each of PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md to use the new name.
 
-#### Step 4: Update manifest
-Edit `.artifacts/manifest.json` — change `"project": "OldName"` to `"project": "NewName"`.
-
-#### Step 5: Update shared path constant (if applicable)
+#### Step 4: Update shared path constant (if applicable)
 If the project is referenced in `backend/skills/_shared/project_paths.py` (e.g., `ClientOrg_PROJECT`), update that constant. Also update `backend/core/project_registry.py` if it has a named constant for this project.
 
-#### Step 6: (No index refresh needed)
+#### Step 5: (No index refresh needed)
 The renamed `Projects/<NewName>/` directory is discoverable immediately via recall +
 Glob. The in-prompt PROJECTS.md index was removed 2026-08-14 — nothing to regenerate.
 
-#### Step 7: Confirm
-> "Renamed **OldName** → **NewName**. DDD docs updated, manifest updated. The project is discoverable immediately (no index to refresh)."
+#### Step 6: Confirm
+> "Renamed **OldName** → **NewName**. DDD docs updated. The project is discoverable immediately (no index to refresh)."
 
 **Note:** Historical references in DailyActivity, Signals, Reports, and .artifacts/runs/ are NOT updated (they record what the name was at that time).
 
@@ -764,7 +756,7 @@ Before marking this task complete, show evidence for each:
 
 - [ ] **Project directory created/updated** — `Projects/<Name>/` exists with the expected structure shown via `ls`
 - [ ] **DDD docs present AND populated** — all four files exist. If codebase path provided: at least one doc has non-placeholder content extracted from repo files
-- [ ] **Artifacts directory initialized** — `.artifacts/manifest.json` exists with correct project name and pipeline state
+- [ ] **Artifacts directory initialized** — `.artifacts/` exists
 - [ ] **TECH.md populated** — if a codebase path was provided, stack auto-detection results (actual deps from package.json/pyproject.toml) are written to TECH.md
 - [ ] **Project discoverable** — `Projects/<Name>/` exists, so recall + Glob surface it immediately (no PROJECTS.md index to refresh — removed 2026-08-14)
 - [ ] **Confirmation shown** — user received the creation confirmation with pre-fill summary and remaining TODOs

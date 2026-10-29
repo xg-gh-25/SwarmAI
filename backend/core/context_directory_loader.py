@@ -403,10 +403,9 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     # always injected (priority 2 tier = strong attention). Runtime-owned, so the
     # LIVE `.context/SELF.md` is authoritative: the template is copied only when
     # that file is ABSENT and never overwrites it afterwards — a seed-only edit
-    # therefore does not reach an existing install. The older claim here, that
-    # auto-cultivation is code-blocked via `ddd_cultivation.is_protected_zone`, is
-    # stale: that symbol was DELETED (autonomy-first) and three tests now assert it
-    # no longer exists. Small enough that it never pressures the budget.
+    # therefore does not reach an existing install. No code hard-blocks writes to it
+    # (the protected-zone list was removed). Small enough that it never pressures the
+    # budget.
     ContextFileSpec("SELF.md",              2,  "Self-Portrait",      False, True,  "tail"),
     ContextFileSpec("AGENT.md",             3,  "Agent Directives",   True,  False, "tail"),
     # ── User-owned (user edits, never overwritten) ───────────────────
@@ -1319,7 +1318,7 @@ class ContextDirectoryLoader:
         # git leg — SCOPED to the 12 context source files ONLY, never the whole
         # .context/ dir. run_0f009a75 root-cause: `.context/` also holds per-session
         # runtime state files that are TRACKED and dirty EVERY session (.memory-usage.json,
-        # .eval-canary.json, judge-telemetry.jsonl, …). A dir-wide `git status -- .context/`
+        # .eval-canary.json, …). A dir-wide `git status -- .context/`
         # therefore reported dirty on every session → L1 was a PERMANENT cache-miss (the
         # latent bug behind the old "memory_smart bypasses L1" note). Scoping to the source
         # files makes git report only real context-file edits; mtime (above) already covers

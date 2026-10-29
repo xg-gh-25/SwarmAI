@@ -10,13 +10,11 @@ exclusive flock on a `.config.yaml.lock` SIDECAR and writes atomically (tmp +
 os.replace). BOTH writers route through it (R27 — a lock only one writer takes
 serializes nothing), so concurrent edits can never drop each other.
 
-Design cloned from core.artifact_registry._mutate_manifest / _write_manifest — the
-proven pattern in this codebase. Two load-bearing details (Gate-1, run_3c37f24e):
+Two load-bearing details (Gate-1, run_3c37f24e):
   - The lock is a SIDECAR, never config.yaml itself: os.replace swaps the inode, so a
     flock held on the replaced file would be silently dropped (GUI22).
   - The lock path is `.expanduser().resolve()`-canonicalized so the daemon and any
-    CLI/subprocess key the SAME inode even given a symlinked/un-resolved root
-    (artifact_registry.py:117).
+    CLI/subprocess key the SAME inode even given a symlinked/un-resolved root.
 """
 
 from __future__ import annotations

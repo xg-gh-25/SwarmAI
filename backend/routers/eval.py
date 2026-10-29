@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 from core.context_brain import build_context_token_block
 from core.ddd_paths import ddd_path
 from core.eval_service import get_eval_service
-from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -320,46 +319,25 @@ async def reload_eval_data():
 # ─── Context Health (DDD & Memory Auto-Refresh) ────────────────────────────
 
 
-def _format_proposals_for_health(proposals: list) -> list:
-    """Shared proposal→dict mapping for BOTH /context-health and its /lite twin.
-
-    Extracted (run_2eb74e15, Gate-1) so the lite endpoint can NOT silently drift
-    from the full endpoint's proposal shape: one mapping, one cap, two consumers.
-    Returns the first 10 proposals mapped to the frontend Review-list shape.
-    """
-    return [
-        {
-            "id": p.id,
-            "target_doc": p.target_doc,
-            "target_section": p.target_section,
-            "content": p.content[:200],
-            "created_at": p.created_at,
-            "confidence": p.confidence,
-        }
-        for p in proposals[:10]
-    ]
-
-
 @router.get("/context-health/lite")
 async def get_context_health_lite():
     """Thin first-paint twin of /context-health for the C&M Global Brain overlay.
 
-    Returns ONLY the three things the overlay needs on open — the calibrated
-    token_block (Context tab + load rail), the pending_proposals list (Review),
-    and a governance-pending count (Approve). It deliberately does NOT run the
+    Returns ONLY the two things the overlay needs on open — the calibrated
+    token_block (Context tab + load rail) and a governance-pending count (Approve). It deliberately does NOT run the
     heavy read ops the full endpoint does (_ch_ddd_staleness, get_semantic_drift,
     _build_learning_dashboard) — those stay on GET /context-health, which has no
     UI reader since the Eval overlay dropped its Context Health tab. (The old read_refresh_log op was removed with
     the auto_refresh module, run_781ffbd9.)
 
-    ⚠️ DISTINCT schema from /context-health (3 keys, not 7). Fail-soft: any read
-    error / missing workspace → 200 with safe defaults (token_block null,
-    [], 0), never a 500 (matches the full endpoint's swallow-and-continue pattern).
+    ⚠️ DISTINCT schema from /context-health (2 keys, not 6). Fail-soft: any read
+    error / missing workspace → 200 with safe defaults (token_block null, 0),
+    never a 500 (matches the full endpoint's swallow-and-continue pattern).
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
 
-    result = {"token_block": None, "pending_proposals": [], "governance_pending_count": 0}
+    result = {"token_block": None, "governance_pending_count": 0}
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
@@ -372,16 +350,7 @@ async def get_context_health_lite():
     except Exception as exc:
         logger.debug("context-health/lite: token block failed: %s", exc)
 
-    # 2. Pending DDD proposals (Review) — same mapping+cap as the full endpoint.
-    try:
-        from core.ddd_cultivation import read_pending_proposals
-        result["pending_proposals"] = _format_proposals_for_health(
-            read_pending_proposals(root, DEFAULT_PROJECT_NAME)
-        )
-    except Exception as exc:
-        logger.debug("context-health/lite: proposals read failed: %s", exc)
-
-    # 3. Governance-pending count (Approve) — same source as the overlay badge.
+    # 2. Governance-pending count (Approve) — same source as the overlay badge.
     try:
         result["governance_pending_count"] = get_eval_service().get_pending_governance()["total"]
     except Exception as exc:
@@ -395,7 +364,7 @@ async def get_context_health():
     """Read-only context freshness report for the Eval dashboard.
 
     Returns recent auto-refresh activity (Layer 1 applied fixes) +
-    DDD staleness signals + pending Layer 3 proposals.
+    DDD staleness signals + semantic drift.
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
@@ -406,14 +375,13 @@ async def get_context_health():
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"refresh_log": [], "staleness": [], "pending_proposals": [],
+        return {"refresh_log": [], "staleness": [],
                 "weeks_available": 0, "semantic_drift": _empty_drift}
 
     root = Path(ws_path)
     result = {
         "refresh_log": [],
         "staleness": [],
-        "pending_proposals": [],
         "weeks_available": 0,
         "semantic_drift": _empty_drift,
     }
@@ -434,14 +402,6 @@ async def get_context_health():
         ]
     except Exception as exc:
         logger.debug("context-health: staleness check failed: %s", exc)
-
-    # 3. Pending proposals (Layer 3 escalations)
-    try:
-        from core.ddd_cultivation import read_pending_proposals
-        proposals = read_pending_proposals(root, DEFAULT_PROJECT_NAME)
-        result["pending_proposals"] = _format_proposals_for_health(proposals)
-    except Exception as exc:
-        logger.debug("context-health: proposals read failed: %s", exc)
 
     # 3b. DDD SEMANTIC drift (ddd-self-audit findings) + at-risk golden cases.
     # Distinct from #2 staleness (that is ddd_refresh's SYNTACTIC mtime signal); this is

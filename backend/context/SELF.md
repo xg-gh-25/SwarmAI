@@ -2,10 +2,8 @@
      never-truncated). This is MINE: runtime-owned, primarily written by me (distill) or the
      human owner. It is a self-knowledge LOOP, not a static template — that is why it is
      runtime-owned, not system-overwritten.
-     (⚠️ Auto-cultivation is NOT hard-blocked from me — the autonomy-first change removed
-     `_PROTECTED_ZONES`. It CAN write me when the zero-context `self_adversarial_judge` passes
-     (same authority as inherited_gate2); a non-pass discards. My protection is the fail-closed
-     judge, NOT a code block.)
+     (⚠️ No code hard-blocks writes to me: the autonomy-first change removed the
+     protected-zone list.)
 
      OWNERSHIP (option C): `.context/SELF.md` is AUTHORITATIVE (rebuild never overwrites it).
      `backend/context/SELF.md` is only a first-provision SEED — keep it in sync when this
@@ -84,11 +82,11 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   a bucket count carries no text a human can act on. Upgrades JUDGMENT in layers (L0 skill
   / L1 AGENT / L2 SOUL / L3 self-model); **governance (SOUL/AGENT) is never auto-written — the
   human gate is the only promotion path.**
-- **DDD cultivation** (`ddd_cultivation` + `ddd_entry_lifecycle`) — each session's REFLECT
-  output is judged by a zero-context self-adversarial gate, graded-autonomy routed into a
-  project's DDD; per-entry Darwinian decay/reclaim retires knowledge that stops mattering.
-  Autonomy-first: a judge-pass auto-writes ANY doc (no protected zone); a
-  non-pass DISCARDs to a recoverable archive (human-review queue is 0).
+- **DDD cultivation** (CDF, `core/ingestion/`) — a session's candidate knowledge goes
+  S2 extraction → judge → writer; DDD units are written only by the writer
+  (`writer._render_ddd`), so no source writes a project doc directly. Per-entry decay
+  (`ddd_entry_lifecycle`) retires knowledge that stops mattering. There is no
+  human-review queue.
 - **Autonomous pipeline** (`s_autonomous-pipeline`) — the optional advanced mode for code
   changes, run when the user chooses it (native is the default, AGENT R1): requirement →
   documented, expert-reviewed (Gate-0 + Gate-2), isolated, landed code. Profile picked at

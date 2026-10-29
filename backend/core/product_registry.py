@@ -3,20 +3,15 @@ and the Canvas rail will project from (Artifacts B′ Run 1; design_doc art_5c87
 
 WHAT THIS OWNS
     A durable, WORKSPACE-LEVEL store of user-facing PRODUCTS (decks, reports,
-    images, design docs) at ``<SwarmWS>/.artifacts/products.json`` — distinct from
-    the PER-PROJECT pipeline-stage artifacts ``artifact_registry.py`` holds. Both
+    images, design docs) at ``<SwarmWS>/.artifacts/products.json``. Both
     the Artifacts overlay (today: git-log projection) and the Canvas rail (today:
     per-tab sessionStorage) will, in Run 2, read from this ONE store instead of
     their two lossy derived views.
 
-WHY A NEW CLASS, NOT A SUBCLASS (THINK-stage decision, Gate-1 confirmed)
-    ``ArtifactRegistry`` threads a ``project`` arg through every method — its
-    keyspace is PER-PROJECT (``Projects/<p>/.artifacts/``). A product can land
-    ANYWHERE (``Knowledge/``, any ``Projects/*``, or be gitignored), so the store
-    must be FLAT + workspace-level. Subclassing would pass a sentinel project into
-    every base method and pollute the base semantics. Instead this reuses the
-    PRIMITIVES ``ArtifactRegistry`` is built on — ``utils.file_lock`` (flock) + an
-    atomic write-temp+rename — never the class.
+WHY A FLAT, WORKSPACE-LEVEL STORE
+    A product can land ANYWHERE (``Knowledge/``, any ``Projects/*``, or be
+    gitignored), so the store must be FLAT + workspace-level, not keyed by project.
+    It is built on ``utils.file_lock`` (flock) + an atomic write-temp+rename.
 
 THE GATE-1 FIX (the load-bearing design point)
     ``register_batch`` classifies RAW paths INDEPENDENTLY of the surface verdict.
@@ -38,13 +33,11 @@ DELEGATION (never a parallel walk — run_847ed9f9 / run_4de279ca)
 CONCURRENCY & DURABILITY
     Every ``products.json`` mutation runs under an exclusive flock on a
     ``.products.lock`` sidecar (read-modify-write serialized across processes), and
-    the write is atomic (temp file + ``os.replace``). Same guarantees as
-    ``ArtifactRegistry._mutate_manifest`` / ``_write_manifest``, same primitives.
+    the write is atomic (temp file + ``os.replace``).
 
     MECHANISM: flock is advisory + bound to the fd/inode (NOT the path — never
     unlink the lock to "release" it). Atomic replace is same-directory rename.
-    VERIFY: mirrors artifact_registry.py:411 (flock) + :446 (mkstemp+replace),
-    both production-verified; utils.file_lock carries the Windows byte-range branch.
+    utils.file_lock carries the Windows byte-range branch.
 """
 
 from __future__ import annotations
@@ -507,7 +500,7 @@ class ProductRegistry:
             raise
 
     def _mutate(self, mutator) -> None:
-        """flock-guarded read-modify-write (mirrors ArtifactRegistry._mutate_manifest).
+        """flock-guarded read-modify-write.
 
         The default store is constructed INSIDE the lock so two processes seeing
         "no store" cannot each seed a fresh empty one and lose the other's write.

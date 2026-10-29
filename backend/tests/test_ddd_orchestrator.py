@@ -18,7 +18,7 @@ class TestDddDocLockConvergence:
     """run_06350217 — every DDD-doc writer must lock via ONE shared name.
 
     The bug: IMPROVEMENT.md was guarded by 3 DIFFERENT lock filenames
-    (IMPROVEMENT.lock @ apply_to_ddd, IMPROVEMENT.md.lock @ orchestrator auto-apply,
+    (IMPROVEMENT.lock @ the old cultivation applier, IMPROVEMENT.md.lock @ orchestrator auto-apply,
     .IMPROVEMENT.md.lock @ orchestrator decay), so concurrent writers did NOT
     mutually exclude → lost-update race. Fix: all writers use utils.file_lock.md_lock,
     whose single name derivation (<doc>.md.lock) makes exclusion real.
@@ -33,7 +33,7 @@ class TestDddDocLockConvergence:
             lock = doc.with_suffix(doc.suffix + ".lock")  # IMPROVEMENT.md.lock
             assert lock.exists(), "md_lock must create <doc>.md.lock"
         # The OLD divergent names must NOT be what md_lock uses.
-        assert not (tmp_path / "IMPROVEMENT.lock").exists(), "old apply_to_ddd name"
+        assert not (tmp_path / "IMPROVEMENT.lock").exists(), "old cultivation-applier name"
         assert not (tmp_path / ".IMPROVEMENT.md.lock").exists(), "old decay-site name"
 
     def test_shared_name_gives_real_mutual_exclusion(self, tmp_path):
@@ -50,24 +50,11 @@ class TestDddDocLockConvergence:
             with md_lock(doc, blocking=False) as got2:
                 assert got2 is False, "second acquire on SAME doc must be excluded"
 
-    def test_legacy_ddd_mutators_are_read_only(self, tmp_path, monkeypatch):
-        from types import SimpleNamespace
-        from core.ingestion import api
-        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+    def test_legacy_ddd_mutators_are_read_only(self, tmp_path):
         from core.ddd_maturity import promote_section
         doc = tmp_path / "IMPROVEMENT.md"
         doc.write_text("# I\n\n## What Worked\n\n- prior\n")
         original = doc.read_text()
-        proposal = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="Validate inputs before filesystem operations.",
-            source_run_id="run-1", confidence=0.9,
-        )
-        monkeypatch.setattr(
-            api, "enqueue",
-            lambda *a, **k: SimpleNamespace(status="queued"),
-        )
-        assert apply_to_ddd(proposal, tmp_path) == "queued"
         assert promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature") is False
         assert doc.read_text() == original
 

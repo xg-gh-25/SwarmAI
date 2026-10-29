@@ -12,7 +12,7 @@ Six handlers (4 read, 2 mutating):
   GET  /api/ddd/brains/{name}              → Brain view: six-section breakdown +
                                              per-entry decay/type state of ② docs.
   GET  /api/ddd/brains/{name}/review       → Review queue: tagged git-diff hunks
-                                             since the watermark + pending proposals.
+                                             since the watermark.
   GET  /api/ddd/brains/{name}/distribution → Distribute: declared reach + output state.
 
   MUTATING (write the working tree / a stored artifact — NOT read-only):
@@ -33,7 +33,7 @@ Data sources:
   - change      ← `git status --porcelain -z` (run here via asyncio.to_thread —
                   Gate-1 revision: we do NOT import workspace_api's private
                   `_get_git_status` across a router boundary) + `git log -1`
-  - pending     ← core.ddd_cultivation.read_pending_proposals (staged proposals)
+  - pending     ← core.attention_authority (per-brain Need-You items)
 
 Design conformance:
   - ⑤ Delivery (bindings.yaml) / ⑥ Refresher (REFRESHER.md) resolve to the
@@ -306,19 +306,16 @@ def _relative_time(iso: Optional[str]) -> str:
     return f"{secs // 86400}d ago"
 
 
-# ─── Pending proposals (read-only) ───────────────────────────────────────────
+# ─── Pending Need-You items (read-only) ───────────────────────────────────────
 
 def _pending_by_source(project_name: str) -> dict[str, int]:
     """THIS brain's Need You items, counted per source (escalation | paused_run |
-    cultivation | job).
+    job | …).
 
-    Asks the unified AttentionAuthority (per-brain query) — NOT just cultivation.
-    Historically this only counted `read_pending_proposals` (cultivation), so a
-    brain with an open L2 escalation or a paused-decision run still showed
-    "✓ Nothing needs you" — a lying badge (design 2026-08-08 §1 root cause #1).
-    The per-source split lets the Hub say WHAT waits (a Run, a rule proposal, an
-    escalation) instead of calling every item a proposal. Governance (brain=None)
-    is OS-level and excluded.
+    Asks the unified AttentionAuthority (per-brain query), so a brain with an open
+    L2 escalation or a paused-decision run never shows "✓ Nothing needs you" (design
+    2026-08-08 §1 root cause #1). The per-source split lets the Hub say WHAT waits
+    (a Run, an escalation). Governance (brain=None) is OS-level and excluded.
     """
     try:
         from core.attention_authority import collect
@@ -572,7 +569,7 @@ def build_brain_state(
         expensive detail-only block). (The gallery ALWAYS parsed for `sinking` —
         the old "no parse_entries" claim was wrong; typeCounts rides that pass.)
       - with_noise=True  → detail superset: the same base PLUS the admission-passing
-        detail metrics (noise/trust/escalation/recall/cultivation/diagnostics).
+        detail metrics (noise/trust/escalation/recall/diagnostics).
 
     The health shape is a SUPERSET, not two different shapes: detail = base ∪ metrics.
     typeCounts is a top-level SIBLING of health (like lifecycleStage), NOT nested in
@@ -621,7 +618,7 @@ def build_brain_state(
         "projectAgentStatus": project_agent_status(project_dir),
         "health": health,
         "typeCounts": stats["typeCounts"],
-        # health.pending split by source: escalation | paused_run | cultivation | job.
+        # health.pending split by source: escalation | paused_run | job | ….
         # A sibling of health (the gallery's 4-key health contract holds).
         "pendingBySource": by_source,
         # ddd-changelog entries stamped in the last 30 days. A sibling of health (like
@@ -747,17 +744,6 @@ def _brain_detail_metrics(
         diagnostics = None
         computed_at = None
 
-    # cultivation — learning-fidelity health (run_abf49550 M0). READ-ONLY: aggregates
-    # the durable per-project outcomes sink over a 7d window (no write in the GET path
-    # — Gate-1 CRITICAL). silent_learning_failure is the north-star flag: True iff a
-    # genuine write failure (locked/doc_missing) occurred in-window. Never fabricated —
-    # absent sink → honest all-zero, unflagged.
-    try:
-        from core.ddd_cultivation import read_cultivation_health
-        cultivation = read_cultivation_health(project_dir, window_days=7)
-    except (OSError, ValueError, ImportError):  # never 500 a brain view on health read
-        cultivation = None
-
     recent_activity = recent_activity if recent_activity is not None else _recent_activity(project_dir)
 
     return {
@@ -765,7 +751,6 @@ def _brain_detail_metrics(
         "trust": trust,
         "escalationPending": pending if pending is not None else _pending_count(project_dir.name),
         "recall": {"value": None, "experimental": True},
-        "cultivation": cultivation,
         "recentActivity": recent_activity,
         "diagnostics": diagnostics,
         "computedAt": computed_at,
@@ -784,13 +769,13 @@ def _lifecycle_stage(
 
     CREATE     — skeleton only, no sedimented knowledge yet.
     GROW       — has ② knowledge entries (the default steady state).
-    REVIEW     — has pending proposals awaiting a human decision.
+    REVIEW     — has pending Need-You items awaiting a human decision.
     DISTRIBUTE — has a distribute output under .artifacts/.
     A brain with 0 governed assets is COMPLETE, not stuck (R31) — so we never
     emit a 'blocked' stage; the four are progressive-but-non-terminal.
 
     ORDER — REVIEW dominates DISTRIBUTE (not step-index order). A brain that has
-    already distributed AND has accrued new pending proposals must surface REVIEW,
+    already distributed AND has accrued new pending items must surface REVIEW,
     not DISTRIBUTE: a pending human decision is the more actionable signal, and the
     frontend renders lifecycleStage as a linear stepper (DISTRIBUTE = terminal),
     so DISTRIBUTE-first would light the bar fully green and HIDE the un-reviewed
@@ -1309,16 +1294,11 @@ def _parse_hunks(diff_text: str) -> list[dict]:
     return hunks
 
 
-def _tag_hunk(file_rel: str, proposal_files: set[str]) -> str:
-    """Provenance tag for a hunk. Phase-1: everything in the git diff is already
-    COMMITTED sediment (cultivation auto-commits), so the default is
-    `cultivation·auto-applied`. A hunk touching a file that also has a pending
-    proposal is surfaced as `risky·staged`. (`decay·sinking` is engine-driven and
-    not derivable from the git diff alone — deferred, never fabricated: R30#4.)"""
-    base = file_rel.rsplit("/", 1)[-1]
-    if file_rel in proposal_files or base in proposal_files:
-        return "risky·staged"
-    return "cultivation·auto-applied"
+#: Provenance tag for a hunk: everything in the git diff is already COMMITTED
+#: sediment, so every hunk is `cultivation·auto-applied`. (`decay·sinking` is
+#: engine-driven and not derivable from the git diff alone — deferred, never
+#: fabricated: R30#4.)
+_HUNK_TAG = "cultivation·auto-applied"
 
 
 def _sha_exists(ws: Path, sha: str) -> bool:
@@ -1373,7 +1353,7 @@ def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
         rel = project_dir.as_posix()
     try:
         # Exclude .artifacts/ — pipeline bookkeeping (the watermark file, run
-        # state, proposals) is NOT reviewable DDD knowledge; including it would
+        # state) is NOT reviewable DDD knowledge; including it would
         # surface the watermark's own commits as review hunks (self-reference).
         r = subprocess.run(
             ["git", "diff", f"{base_sha}..HEAD", "--unified=3", "--",
@@ -1394,44 +1374,9 @@ def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
     if r.returncode != 0:
         return []
     hunks = _parse_hunks(r.stdout)
-    proposal_files: set[str] = set()
-    try:
-        from core.ddd_cultivation import read_pending_proposals
-        for p in read_pending_proposals(ws, project_dir.name):
-            td = getattr(p, "target_doc", None)
-            if td:
-                proposal_files.add(td)
-    except Exception:  # pragma: no cover - proposals are best-effort provenance
-        logger.debug("_scoped_diff_hunks: suppressed exception on a fail-safe path", exc_info=True)
-        pass
     for h in hunks:
-        h["tag"] = _tag_hunk(h["file"], proposal_files)
+        h["tag"] = _HUNK_TAG
     return hunks
-
-
-def _pending_proposals_payload(project_dir: Path) -> list[dict]:
-    ws = _workspace_root()
-    try:
-        from core.ddd_cultivation import read_pending_proposals
-        out = []
-        for p in read_pending_proposals(ws, project_dir.name):
-            out.append({
-                "id": getattr(p, "id", ""),
-                "target_doc": getattr(p, "target_doc", ""),
-                "target_section": getattr(p, "target_section", ""),
-                "content": (getattr(p, "content", "") or "")[:400],
-                "confidence": getattr(p, "confidence", None),
-                "source_run_id": getattr(p, "source_run_id", ""),
-            })
-        return out
-    except Exception as exc:  # noqa: BLE001
-        # Degrade-OBSERVABLE, and the highest-consequence instance of the pattern in
-        # this router: [] renders as "nothing is waiting for approval", so a broken
-        # payload builder does not surface as an error — it makes every pending
-        # proposal INVISIBLE and therefore unapprovable, while the UI looks calm.
-        logger.warning("cannot build pending-proposals payload for %s, reporting "
-                       "none pending: %s", project_dir, exc)
-        return []
 
 
 class RejectHunkBody(BaseModel):
@@ -1441,7 +1386,7 @@ class RejectHunkBody(BaseModel):
 
 @router.get("/brains/{name}/review")
 async def get_review(name: str) -> dict:
-    """Review queue: tagged git-diff hunks since the watermark + pending proposals."""
+    """Review queue: tagged git-diff hunks since the watermark."""
 
     def _work() -> Optional[dict]:
         project_dir = _resolve_brain_dir(name)   # containment-checked (Gate-2)
@@ -1467,7 +1412,6 @@ async def get_review(name: str) -> dict:
             "last_reviewed_sha": wm,
             "head_sha": head,
             "hunks": hunks,
-            "proposals": _pending_proposals_payload(project_dir),
             "diff_incomplete": diff_incomplete,
         }
 

@@ -176,9 +176,9 @@ LIVE_DDD="${SWARM_DATA_DIR:-${HOME}/.swarm-ai}/SwarmWS/Projects/SwarmAI"
 #   (a) the live DDD dir exists,
 #   (b) the canonical TECH.md is present AND non-empty (stub/empty detector — a
 #       low sentinel, NOT a quality gate),
-#   (c) no canonical doc is currently WRITE-LOCKED by cultivation. Detection is a
+#   (c) no canonical doc is currently WRITE-LOCKED. Detection is a
 #       real held-flock try-lock (flock -n), NEVER lock-FILE presence: md_lock
-#       never unlinks its <doc>.md.lock sidecar (ddd_cultivation.py), so the file
+#       never unlinks its <doc>.md.lock sidecar (utils/file_lock.py), so the file
 #       is on disk permanently — presence ≠ in-flight write. flock(1) is util-linux
 #       and ABSENT on macOS, so this sub-check is command-v-gated and simply skips
 #       on macOS (fail-open: the local build machine has no concurrent-writer race

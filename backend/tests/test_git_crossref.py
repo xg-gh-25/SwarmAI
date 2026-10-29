@@ -22,19 +22,6 @@ from core.session_hooks import HookContext
 _CTX = HookContext(session_id="s-crossref", agent_id="a", message_count=1,
                    session_start_time="2026-10-27T00:00:00+00:00", session_title="t")
 
-import core.ingestion_gate as _ig
-
-# The distillation write path runs an LLM-based self-adversarial noise-filter
-# (core.ingestion_gate.self_adversarial_judge, reached via admit_memory_lesson)
-# BETWEEN git-verify tagging and the MEMORY write. It correctly rejects weak
-# narrative fixtures as noise — but these tests target the git-verify [UNVERIFIED]
-# tagging behavior, NOT the judge (which has its own tests + is environment/Bedrock
-# dependent). The three tests below that drive _distill_files bypass the judge to
-# 'pass' so the REAL admit_memory_lesson (floors + section routing) runs and tagged
-# entries reach MEMORY deterministically offline. This is the suite's canonical
-# offline-judge pattern (see test_distillation_admission.py). Tagging itself is NOT
-# mocked, so a break in _tag_unverified_claims still turns these tests RED.
-_JUDGE_PASS = lambda *a, **k: ("pass", "test-bypass")  # noqa: E731
 
 
 # ---------------------------------------------------------------------------

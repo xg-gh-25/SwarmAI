@@ -32,7 +32,7 @@ def _write_tree(tmp_path: Path) -> Path:
         "def b():\n    _run_locked_write(p, 'Decisions', y)  # decisions — the easy-to-miss sibling\n"
     )
     (tmp_path / "core" / "cult.py").write_text(
-        "def c():\n    apply_to_ddd(prop, d)  # writeback\n"
+        "def c():\n    apply_doc_write(prop, d)  # writeback\n"
     )
     return tmp_path
 
@@ -49,7 +49,7 @@ class TestEnumerationValidation:
 
     def test_accept_sink_grep_across_tree(self):
         ok, _ = validate_enumeration_cmd(
-            "grep -rn '_run_locked_write(\\|apply_to_ddd(' backend/ | grep -v 'def '")
+            "grep -rn '_run_locked_write(\\|apply_doc_write(' backend/ | grep -v 'def '")
         assert ok is True
 
     def test_reject_curated_single_file_subset_flagged(self):
@@ -94,16 +94,16 @@ class TestReconciliation:
     def _mc(self, tmp_path, members):
         return {
             "description": "every path that writes to a store",
-            "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_to_ddd(' {tmp_path} | grep -v 'def '",
+            "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_doc_write(' {tmp_path} | grep -v 'def '",
             "members": members,
         }
 
     def test_all_declared_migrated_passes(self, tmp_path):
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_memory_lesson"},
-            {"id": "writeback", "disposition": "migrated", "locator": "core/cult.py:2", "evidence": "admission_band"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_lesson"},
+            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_lesson"},
+            {"id": "writeback", "disposition": "migrated", "locator": "core/cult.py:2", "evidence": "doc_gate"},
         ])
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.passed is True
@@ -114,8 +114,8 @@ class TestReconciliation:
         members[] row = MISSED → BLOCK."""
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "writeback", "disposition": "migrated", "locator": "core/cult.py:2", "evidence": "admission_band"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_lesson"},
+            {"id": "writeback", "disposition": "migrated", "locator": "core/cult.py:2", "evidence": "doc_gate"},
             # 'decisions' sink caller (distill.py:4) deliberately NOT declared
         ])
         res = check_migration_class(mc, cwd=tmp_path)
@@ -125,8 +125,8 @@ class TestReconciliation:
     def test_carveout_with_reason_passes(self, tmp_path):
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_memory_lesson"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_lesson"},
+            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_lesson"},
             {"id": "writeback", "disposition": "carved-out", "locator": "core/cult.py:2", "evidence": "value-refresh not ingestion"},
         ])
         res = check_migration_class(mc, cwd=tmp_path)
@@ -136,8 +136,8 @@ class TestReconciliation:
         """AC5 — carve-out must carry a one-line reason, else UNJUSTIFIED → block."""
         _write_tree(tmp_path)
         mc = self._mc(tmp_path, [
-            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"},
-            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_memory_lesson"},
+            {"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_lesson"},
+            {"id": "decisions", "disposition": "migrated", "locator": "hooks/distill.py:4", "evidence": "_admit_lesson"},
             {"id": "writeback", "disposition": "carved-out", "locator": "core/cult.py:2", "evidence": ""},
         ])
         res = check_migration_class(mc, cwd=tmp_path)
@@ -151,8 +151,8 @@ class TestCoverageTable:
         _write_tree(tmp_path)
         mc = {
             "description": "writes",
-            "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_to_ddd(' {tmp_path} | grep -v 'def '",
-            "members": [{"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_memory_lesson"}],
+            "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_doc_write(' {tmp_path} | grep -v 'def '",
+            "members": [{"id": "lessons", "disposition": "migrated", "locator": "hooks/distill.py:2", "evidence": "_admit_lesson"}],
         }
         res = check_migration_class(mc, cwd=tmp_path)
         assert res.coverage_table  # non-empty string
@@ -171,7 +171,7 @@ class TestNoOp:
 class TestGate2Regressions:
     def _mc(self, tmp_path, members):
         return {"description": "writes",
-                "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_to_ddd(' {tmp_path} | grep -v 'def '",
+                "enumeration_cmd": f"grep -rn '_run_locked_write(\\|apply_doc_write(' {tmp_path} | grep -v 'def '",
                 "members": members}
 
     def test_1_full_path_no_basename_collision(self):
@@ -224,7 +224,7 @@ class TestGate3Regressions:
 
     def _mc(self, tmp_path, members, cmd=None):
         return {"description": "writes",
-                "enumeration_cmd": cmd or f"grep -rn '_run_locked_write(\\|apply_to_ddd(' {tmp_path} | grep -v 'def '",
+                "enumeration_cmd": cmd or f"grep -rn '_run_locked_write(\\|apply_doc_write(' {tmp_path} | grep -v 'def '",
                 "members": members}
 
     def test_C1_empty_members_blocks_not_fail_open(self, tmp_path):
