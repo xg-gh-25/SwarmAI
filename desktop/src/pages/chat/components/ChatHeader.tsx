@@ -3,7 +3,7 @@ import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTabBar } from './SessionTabBar';
 import { SessionTab } from './SessionTab';
-import { isSwarmOutTab, normalTabs } from '../swarmOut';
+import { hiveTabOf, isSwarmOutTab, normalTabs } from '../swarmOut';
 import { useSwarmOutActivity } from '../../../components/swarm-out/useSwarmOutActivity';
 import { useHealth } from '../../../contexts/HealthContext';
 
@@ -91,6 +91,8 @@ export function ChatHeader({
   // strip's "+" behind a divider (pages/chat/swarmOut.ts).
   const userTabs = normalTabs(openTabs);
   const swarmOutTab = openTabs.find((tab) => isSwarmOutTab(tab.id));
+  // The Hive tab (a dispatched run's session) sits right after Swarm Out, in its group.
+  const hiveTab = hiveTabOf(openTabs);
 
   return (
     <div className="h-10 px-4 flex items-center flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)] shadow-[inset_0_-1px_0_var(--color-border)]">
@@ -123,6 +125,16 @@ export function ChatHeader({
               onSelect={onTabSelect}
               status={tabStatuses?.[swarmOutTab.id]}
             />
+            {hiveTab && (
+              <SessionTab
+                tab={hiveTab}
+                isActive={hiveTab.id === activeTabId}
+                onSelect={onTabSelect}
+                onClose={onTabClose}
+                status={tabStatuses?.[hiveTab.id]}
+                variant="hive"
+              />
+            )}
           </div>
         </div>
       )}

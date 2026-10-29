@@ -30,6 +30,7 @@ import hljs from 'highlight.js';
 import { getApiBaseUrl } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
 import { MarkdownLiveContext } from './markdownLive';
+import { RemoteContentContext } from '../../pages/chat/remoteContentContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal } from '../../utils/openExternal';
 import { FileTypeIcon } from './FileTypeIcon';
@@ -803,8 +804,10 @@ export function buildOpenFileDetail(
 const InlineCode = memo(function InlineCode({ children }: { children: React.ReactNode }) {
   const content = String(children);
   const hasNewlines = content.includes('\n');
+  // A Hive session's paths name files on the Hive: plain code there, never a link.
+  const remote = useContext(RemoteContentContext);
   // Detect on the fragment-stripped path (a `#base=…` suffix breaks the ext check).
-  const isFilePath = !hasNewlines && isWorkspaceFilePath(parseOpenFileTarget(content).path);
+  const isFilePath = !remote && !hasNewlines && isWorkspaceFilePath(parseOpenFileTarget(content).path);
 
   if (isFilePath) {
     // Fragment stripped, leading ./ removed; baseRef added when `#base=<sha>` is valid.
@@ -1076,13 +1079,34 @@ const remarkPlugins: PluggableList = [remarkGfm, remarkBreaks, [remarkMath, { si
 // strict: false suppresses warnings for Unicode text in math mode
 const rehypePlugins: PluggableList = [[rehypeKatex, { strict: false }]];
 
+// A Hive session's content (the Hive tab, design 2026-10-29-swarm-out-hive-session-tab
+// §7): a link to a path renders as its text (the file is on the Hive, not here) and no
+// image is loaded from this machine (its alt text shows instead). External http(s)
+// links keep the base behaviour.
+const BaseLink = baseMarkdownComponents.a;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- same props type as baseMarkdownComponents
+const remoteMarkdownComponents: Record<string, React.ComponentType<any>> = {
+  ...baseMarkdownComponents,
+  a: (props: { href?: string; children?: React.ReactNode }) => {
+    const { href, children } = props;
+    const filePath = href?.startsWith('file://') ? href.replace('file://', '') : href;
+    if (!href || isWorkspaceFilePath(parseOpenFileTarget(filePath ?? '').path)) {
+      return <span data-testid="remote-path-text">{children}</span>;
+    }
+    return <BaseLink {...props} />;
+  },
+  img: ({ alt }: { alt?: string }) => (alt ? <span className="text-[var(--color-text-muted)]">{alt}</span> : null),
+};
+
 const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   className = '',
   basePath,
 }: MarkdownRendererProps) {
+  const remote = useContext(RemoteContentContext);
   // When basePath is provided, override the img component to resolve local paths
   const components = useMemo(() => {
+    if (remote) return remoteMarkdownComponents;
     if (basePath === undefined) return baseMarkdownComponents;
     return {
       ...baseMarkdownComponents,
@@ -1095,7 +1119,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
         />
       ),
     };
-  }, [basePath]);
+  }, [basePath, remote]);
 
   return (
     <div className={`markdown-content min-w-0 ${className}`}>

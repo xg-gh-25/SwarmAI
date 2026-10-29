@@ -36,7 +36,10 @@ import {
 import api from '../services/api';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { tabNoticeStore } from '../stores/tabNoticeStore';
-import { SWARM_OUT_TAB_ID, SWARM_OUT_TITLE, isSwarmOutTab, normalChatMax, normalTabs } from '../pages/chat/swarmOut';
+import {
+  SWARM_OUT_TAB_ID, SWARM_OUT_TITLE, hiveTabId, hiveTabOf, isHiveTab, isSwarmOutTab, normalChatMax, normalTabs,
+} from '../pages/chat/swarmOut';
+import { isRemoteId, setRemote } from '../services/remoteSession';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -385,6 +388,10 @@ export interface UseUnifiedTabStateReturn {
 
   // --- Tab CRUD ---
   addTab: (agentId: string) => OpenTab | undefined;
+  /** Put the Hive tab of `sessionId` in the map (pages/chat/swarmOut.ts): not counted
+   *  against the cap, not selected; registers the session as remote. Undefined when a
+   *  Hive tab is already open (the caller closes it first). */
+  addHiveTab: (sessionId: string, title: string, agentId: string) => OpenTab | undefined;
   closeTab: (tabId: string) => void;
   selectTab: (tabId: string) => void;
 
@@ -653,6 +660,23 @@ export function useUnifiedTabState(
     [bump, setActiveTabIdBoth],
   );
 
+  const addHiveTab = useCallback(
+    (sessionId: string, title: string, agentId: string): OpenTab | undefined => {
+      const map = tabMapRef.current;
+      // A session the proxy does not accept never becomes a Hive tab: its calls
+      // would go to this machine's backend.
+      if (hiveTabOf(map.values()) || !isRemoteId(sessionId)) return undefined;
+      const tab: UnifiedTab = {
+        ...createDefaultTab(agentId), id: hiveTabId(sessionId), title, sessionId, isNew: false,
+      };
+      map.set(tab.id, tab);
+      setRemote(sessionId);
+      bump();
+      return { id: tab.id, title: tab.title, agentId: tab.agentId, isNew: tab.isNew, sessionId };
+    },
+    [bump],
+  );
+
   const closeTab = useCallback(
     (tabId: string) => {
       const map = tabMapRef.current;
@@ -660,6 +684,20 @@ export function useUnifiedTabState(
       if (!tab) return;
       // The Swarm Out tab is pinned: it cannot be closed.
       if (isSwarmOutTab(tabId)) return;
+
+      // The Hive tab is not one of the user's tabs: closing it never creates a tab, and
+      // the focus goes back to the Swarm Out tab it sits after.
+      if (isHiveTab(tabId)) {
+        if (tab.abortController) {
+          try { tab.abortController.abort(); } catch { /* already aborted */ }
+        }
+        map.delete(tabId);
+        tabNoticeStore.clearTab(tabId);
+        setRemote(null);
+        if (activeTabIdRef.current === tabId) setActiveTabIdBoth(SWARM_OUT_TAB_ID);
+        bump();
+        return;
+      }
 
       // Abort streaming if active
       if (tab.abortController) {
@@ -720,7 +758,8 @@ export function useUnifiedTabState(
     (tabId: string, title: string) => {
       const tab = tabMapRef.current.get(tabId);
       if (!tab) return;
-      if (isSwarmOutTab(tabId)) return; // its title is fixed
+      // Its title is fixed (Swarm Out), or names the Hive and the run (the Hive tab).
+      if (isSwarmOutTab(tabId) || isHiveTab(tabId)) return;
       tab.title = title;
       bump();
     },
@@ -853,6 +892,7 @@ export function useUnifiedTabState(
       messageStoreRegistry.destroy(tabId);
 
       tabMapRef.current.delete(tabId);
+      if (isHiveTab(tabId)) setRemote(null);
       bump();
     },
     [bump],
@@ -893,11 +933,21 @@ export function useUnifiedTabState(
       // hard ceiling as before; the saved Swarm Out tab is taken apart from them, so
       // that cap can never cut it (and its session) off.
       map.clear();
+      setRemote(null);
       const savedSwarmOut = data.tabs.find((t) => isSwarmOutTab(t.id));
       for (const saved of normalTabs(data.tabs).slice(0, MAX_TABS_HARD_CEILING)) {
         map.set(saved.id, hydrateTab(saved));
       }
       if (savedSwarmOut) map.set(savedSwarmOut.id, hydrateTab(savedSwarmOut));
+      // The Hive tab is restored on its own, with its session registered as remote NOW:
+      // ChatPage reads every restored tab's messages right after this returns, and the
+      // Hive tab's must already go to the Host proxy. Only a tab whose id is its own
+      // session's is taken (a file edited by hand cannot point it at another session).
+      const savedHive = data.tabs.find((t) => isHiveTab(t.id) && isRemoteId(t.sessionId) && t.id === hiveTabId(t.sessionId));
+      if (savedHive) {
+        map.set(savedHive.id, { ...hydrateTab(savedHive), isNew: false });
+        setRemote(savedHive.sessionId!);
+      }
       // A file from before Swarm Out (or one that only holds it) still yields the
       // pinned tab plus at least one tab of the user's own.
       ensureSwarmOutTab(map, defaultAgentId);
@@ -931,6 +981,8 @@ export function useUnifiedTabState(
       let changed = false;
 
       for (const tab of map.values()) {
+        // A Hive session is not one of this machine's sessions: never in the list.
+        if (isHiveTab(tab.id)) continue;
         if (tab.sessionId && !validSessionIds.has(tab.sessionId)) {
           tab.sessionId = undefined;
           tab.isNew = true;
@@ -987,6 +1039,7 @@ export function useUnifiedTabState(
 
     // Tab CRUD
     addTab,
+    addHiveTab,
     closeTab,
     selectTab,
 

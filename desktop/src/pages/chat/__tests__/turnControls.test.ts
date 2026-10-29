@@ -469,3 +469,54 @@ describe('stopTurn / stopBackground (one Stop at a time)', () => {
     expect(h.stopSession).toHaveBeenCalledTimes(2);
   });
 });
+
+// ── A Hive session (design 2026-10-29-swarm-out-hive-session-tab §7) ──
+describe('sendMessage to a Hive session', () => {
+  beforeEach(async () => { (await import('../../../services/remoteSession')).setRemote(null); });
+
+  const pathAtt = { id: 'p', name: 'a.md', type: 'text', deliveryStrategy: 'path_hint', workspacePath: 'Knowledge/a.md' } as unknown as UnifiedAttachment;
+  const upload = { id: 'u', name: 'b.png', type: 'image', deliveryStrategy: 'base64_image', base64: 'x' } as unknown as UnifiedAttachment;
+  const termHint = { ...termAtt('$ ls'), deliveryStrategy: 'terminal_context' } as unknown as UnifiedAttachment;
+
+  it.each([
+    ['a /plugin command', '/plugin install x', [] as UnifiedAttachment[]],
+    ['a file named by a path on this machine', 'look', [pathAtt]],
+    ["this machine's terminal output", 'look', [termHint]],
+  ])('refuses %s with a toast, the draft kept, nothing sent', async (_name, text, attachments) => {
+    const { setRemote } = await import('../../../services/remoteSession');
+    setRemote('H');
+    const toasts: string[] = [];
+    const onToast = (e: Event) => toasts.push((e as CustomEvent).detail?.message);
+    document.addEventListener('swarm:toast', onToast);
+    try {
+      const h = setup({ tabs: [tab('A', { sessionId: 'H' })], text, attachments });
+      await sendMessage(h.d);
+      expect(toasts).toHaveLength(1);
+      expect(h.d.composer.clear).not.toHaveBeenCalled();
+      expect(h.d.composer.clearText).not.toHaveBeenCalled();
+      expect(h.d.pluginCommand).not.toHaveBeenCalled();
+      expect(h.d.setLocalSending).not.toHaveBeenCalled();
+      expect(h.posts).toHaveLength(0);
+    } finally {
+      document.removeEventListener('swarm:toast', onToast);
+    }
+  });
+
+  it('sends text and an upload to a Hive session as usual', async () => {
+    const { setRemote } = await import('../../../services/remoteSession');
+    setRemote('H');
+    const h = setup({ tabs: [tab('A', { sessionId: 'H' })], attachments: [upload] });
+    const p = sendMessage(h.d);
+    h.attachmentsRead();
+    await p;
+    expect(h.posts).toHaveLength(1);
+  });
+
+  it('a local session with the same attachments is not refused', async () => {
+    const { setRemote } = await import('../../../services/remoteSession');
+    setRemote('H');
+    const h = setup({ tabs: [tab('A', { sessionId: 'LOCAL' })], text: '/plugin list' });
+    await sendMessage(h.d);
+    expect(h.d.pluginCommand).toHaveBeenCalled();
+  });
+});

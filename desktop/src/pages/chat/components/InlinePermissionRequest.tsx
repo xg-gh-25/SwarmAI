@@ -27,10 +27,12 @@
  * @exports InlinePermissionRequest
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useContext } from 'react';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ActDone, ActFrame } from '../../../components/common/ActCard';
+import { RemoteContentContext } from '../remoteContentContext';
+import { hiveCommandApprovable } from '../swarmOut';
 
 /** Display timeout in ms — mirrors backend PERMISSION_ANSWER_TIMEOUT_SECONDS (4 h).
  *  Counted from when this card mounted, so it can only run out AFTER the backend's. */
@@ -74,6 +76,11 @@ export function InlinePermissionRequest({
   const gone = decision === 'expired';
   const effectiveDecision = gone ? null : (decision || localDecision);
   const command = (toolInput?.command as string) || JSON.stringify(toolInput, null, 2);
+  // A Hive session's command is held to the dashboard's rule: one too long to read
+  // whole, or with characters that hide what it does, can only be denied here (design
+  // 2026-10-29-swarm-out-hive-session-tab §6.4). Local tabs: always approvable.
+  const remote = useContext(RemoteContentContext);
+  const approvable = !remote || hiveCommandApprovable(command);
 
   // Countdown timer — only when pending. Running out only marks the card expired;
   // it never calls onDecision (the backend answers the call with its own timeout).
@@ -98,11 +105,11 @@ export function InlinePermissionRequest({
   }, [isPending, effectiveDecision, expired]);
 
   const handleApprove = useCallback(() => {
-    if (!isPending || effectiveDecision || expired) return;
+    if (!isPending || effectiveDecision || expired || !approvable) return;
     if (timerRef.current) clearInterval(timerRef.current);
     setLocalDecision('approve');
     onDecision?.(requestId, 'approve');
-  }, [isPending, effectiveDecision, expired, requestId, onDecision]);
+  }, [isPending, effectiveDecision, expired, approvable, requestId, onDecision]);
 
   const handleDeny = useCallback(() => {
     if (!isPending || effectiveDecision || expired) return;
@@ -157,12 +164,19 @@ export function InlinePermissionRequest({
           <button type="button" onClick={handleDeny} className="btn-sm btn-secondary">
             {tf(t, 'chat.permission.deny', 'Deny')}
           </button>
-          <button type="button" onClick={handleApprove} className="btn-sm btn-primary">
-            {tf(t, 'chat.permission.approve', 'Approve')}
-          </button>
+          {approvable && (
+            <button type="button" onClick={handleApprove} className="btn-sm btn-primary">
+              {tf(t, 'chat.permission.approve', 'Approve')}
+            </button>
+          )}
         </>
       )}>
       <p className="text-[12.5px] text-[var(--color-text-secondary)]">{reason}</p>
+      {!approvable && (
+        <p className="text-[12px] text-[var(--color-text-muted)]" data-testid="permission-deny-only">
+          {tf(t, 'swarmOut.hiveTab.denyOnly', 'This command is too long or hides characters: it can only be denied here.')}
+        </p>
+      )}
       <div className="rounded-[7px] bg-[var(--color-bg)] px-2.5 py-1.5 font-mono text-[12px]">
         <span className="select-none text-[var(--color-text-dim)]">$ </span>
         <code className="break-all whitespace-pre-wrap text-[var(--color-text)]">{command}</code>

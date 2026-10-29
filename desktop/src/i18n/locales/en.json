@@ -1514,6 +1514,16 @@
       "unanswered_one": "{{count}} unanswered",
       "unanswered_other": "{{count}} unanswered",
       "humanTitle": "approved {{approved}} · denied {{denied}} · answered {{answered}} · unanswered {{unanswered}}"
+    },
+    "hiveTab": {
+      "open": "Open {{title}} in the Hive tab",
+      "notDispatched": "This session is not one this machine sent to a Hive; the Hive tab was closed.",
+      "draft": "The Hive tab has a draft. Send or clear it before opening another run.",
+      "noLocalOpen": "This file is on the Hive, not on this machine.",
+      "noPlugin": "Plugin commands run on this machine and cannot be sent to a Hive session.",
+      "noLocalFile": "A file on this machine cannot be sent to a Hive session. Attach it as an upload instead.",
+      "noTerminal": "This machine's terminal output cannot be sent to a Hive session.",
+      "denyOnly": "This command is too long or hides characters: it can only be denied here."
     }
   }
 }

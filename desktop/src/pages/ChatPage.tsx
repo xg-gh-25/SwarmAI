@@ -76,7 +76,9 @@ import { prefetchNav } from '../components/layout/overlayQueries';
 // them via the ctx bridge (setOverlayCtxBridge below).
 import { type ResumeTabInfo } from './chat/resumeTarget';
 import { classifyWorkLanding, type LandingVerdict } from './chat/landPromptInTab';
-import { SWARM_OUT_TAB_ID, isSwarmOutTab, normalChatMax, normalTabs } from './chat/swarmOut';
+import { SWARM_OUT_TAB_ID, hiveTabOf, isHiveTab, isSwarmOutTab, normalChatMax, normalTabs } from './chat/swarmOut';
+import { isRemoteId, startRelay, stopRelay } from '../services/remoteSession';
+import { RemoteContentContext } from './chat/remoteContentContext';
 import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
 import { useSwarmOutChatWidth, chatColumnStyle } from '../components/swarm-out/SwarmOutChatResize';
 import { dispatchInjectChatInput, injectDispatchedPrompt } from './chat/injectChatInput';
@@ -290,6 +292,7 @@ export default function ChatPage() {
     openTabs,
     activeTabId,
     addTab,
+    addHiveTab,
     closeTab,
     selectTab,
     updateTabTitle,
@@ -769,7 +772,9 @@ export default function ChatPage() {
       // connection-phase send was swallowed during the outage, re-issue it.
       // mergeTabFromDb would only surface DB content, which has no response for
       // a question that never reached the backend.
-      if (!resendTabOnRecovery(activeId)) {
+      // A Hive tab is never re-sent: its message may already have reached the Hive
+      // through the proxy, and a second send would run a second turn there (design §4).
+      if (isHiveTab(activeId) || !resendTabOnRecovery(activeId)) {
         // CONTENT RECONCILE (root-cause fix): on reconnect, the backend may have
         // produced & persisted responses while the SSE stream was detached (it
         // keeps running post-disconnect). Previously we SKIPPED refetch whenever a
@@ -793,8 +798,8 @@ export default function ChatPage() {
       // lose responses during a disconnect window.
       for (const [tabId, ts] of tabMapRef.current.entries()) {
         if (tabId === activeId) continue; // handled above
-        // Background tab with a swallowed question → resend first.
-        if (resendTabOnRecovery(tabId)) continue;
+        // Background tab with a swallowed question → resend first (never a Hive tab).
+        if (!isHiveTab(tabId) && resendTabOnRecovery(tabId)) continue;
         if (!ts.sessionId || ts.isStreaming) continue;
         if (ts._dbReconcileFailed) {
           // Frozen-PARTIAL tab whose earlier force-clear fetch failed: use the
@@ -809,6 +814,7 @@ export default function ChatPage() {
     window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
     return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
   }, [loadSessionMessages, reconcileTabFromDb, mergeTabFromDb, resendTabOnRecovery]);
+
 
   // Foreground-resume reconcile (OT01 recurrence — App Nap stale store).
   // macOS App Nap throttles requestAnimationFrame AND setTimeout AND suspends
@@ -1194,10 +1200,19 @@ export default function ChatPage() {
     // "auto-create new tab when last one is closed" logic.
     closeTab(tabId);
 
-    // Fire-and-forget backend slot release (R6b). Frees the concurrency slot
-    // without deleting messages. Guarded on sessionId — a brand-new tab has
-    // sessionId === undefined and nothing to release.
-    if (sessionId) {
+    // A Hive tab holds no local slot (its session runs on the Hive): there is nothing
+    // to release here; this window's hold on the Host relay is dropped instead. The
+    // run itself goes on on the Hive.
+    if (isHiveTab(tabId)) {
+      if (sessionId) {
+        stopRelay(sessionId).catch((err) => {
+          console.warn('[handleTabClose] Failed to stop the Hive relay:', err);
+        });
+      }
+    } else if (sessionId) {
+      // Fire-and-forget backend slot release (R6b). Frees the concurrency slot
+      // without deleting messages. Guarded on sessionId — a brand-new tab has
+      // sessionId === undefined and nothing to release.
       chatService.releaseSession(sessionId, force).catch((err) => {
         console.warn('[handleTabClose] Failed to release backend session:', err);
       });
@@ -1220,12 +1235,20 @@ export default function ChatPage() {
   }, [closeTab, clearPendingStreamTab, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning, setPendingPermissionRequestId, setIsExpanded]);
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
-  // R6b: ANY close releases the backend slot. Idle tab → release silently.
+  // R6b: closing a local tab releases its backend slot. Idle tab → release silently.
   // Streaming tab → confirm first (avoid silently discarding a live response).
+  // The Hive tab is the exception: no confirm and no slot release (its run goes on on
+  // the Hive); doCloseTab drops this window's relay hold instead.
   const handleTabClose = useCallback((tabId: string) => {
     if (isSwarmOutTab(tabId)) return; // pinned: cannot be closed
     const tab = tabMapRef.current.get(tabId);
     const tabSessionId = tab?.sessionId;
+    // The Hive tab closes without the streaming confirm: closing it does not stop
+    // the run, which goes on on the Hive (design §4).
+    if (isHiveTab(tabId)) {
+      doCloseTab(tabId, tabSessionId, false);
+      return;
+    }
     const isStreaming = tab?.isStreaming || tab?.localSending || pendingStreamTabs.has(tabId);
 
     if (isStreaming) {
@@ -1516,6 +1539,94 @@ export default function ChatPage() {
       addTab, initTabState, selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion,
       selectedAgentId, loadSessionMessages]);
 
+  // ── The Hive tab (docs/design/2026-10-29-swarm-out-hive-session-tab.md §4) ──
+
+  /** Start (or join) the Host relay of the Hive tab `tabId`. The tab is named before
+   *  the await: a 404 (not a session this Host dispatched) closes that tab only, never
+   *  one opened since. */
+  const startHiveRelay = useCallback((tabId: string, sid: string) => {
+    startRelay(sid).catch((err) => {
+      // The api client answers an ApiError (statusCode); a raw axios error has response.status.
+      const e = err as { statusCode?: number; response?: { status?: number } };
+      const status = e?.statusCode ?? e?.response?.status;
+      if (status === 404 && tabMapRef.current.get(tabId)?.sessionId === sid) {
+        doCloseTab(tabId, sid, false);
+        document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('swarmOut.hiveTab.notDispatched') } }));
+        return;
+      }
+      console.warn('[ChatPage] Hive relay start failed:', err);
+    });
+  }, [doCloseTab, tabMapRef, t]);
+  // For the mount-only restore effect, which must call the current one.
+  const startHiveRelayRef = useRef(startHiveRelay);
+  startHiveRelayRef.current = startHiveRelay;
+
+  /** Open a dispatched run's Hive session in the Hive tab: select it when it is already
+   *  there, refuse while the Hive tab holds a draft, else close the old Hive tab and
+   *  open a new one (a new tab id, so the old tab's late callbacks find no tab). */
+  const openHiveSession = useCallback((sid: string, title: string) => {
+    // Only a session the proxy accepts can be a Hive tab (addHiveTab refuses the rest):
+    // checked first, so nothing of the current tabs changes for one it would refuse.
+    if (!isRemoteId(sid)) return;
+    const map = tabMapRef.current;
+    const old = hiveTabOf(map.values());
+    if (old && old.sessionId === sid) {
+      void handleTabSelect(old.id);
+      return;
+    }
+    if (old) {
+      const draft = old.id === activeTabIdRef.current ? activeTabHasDraft() : tabHasDraft(old.id);
+      if (draft) {
+        document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('swarmOut.hiveTab.draft') } }));
+        return;
+      }
+    }
+    // Save the outgoing tab's React state the way handleTabSelect does (not when it is
+    // the old Hive tab: that one is closed below).
+    const currentTabId = activeTabIdRef.current;
+    if (currentTabId && currentTabId !== old?.id && map.has(currentTabId)) {
+      const currentTab = map.get(currentTabId)!;
+      updateTabState(currentTabId, {
+        ...(!currentTab.isStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
+        pendingQuestion,
+        pendingPermissionRequestId,
+        isExpanded: isExpandedRef.current,
+      });
+      inputValueMapRef.current.set(currentTabId, inputValueRef.current);
+    }
+    if (old) doCloseTab(old.id, old.sessionId, false);
+    const tab = addHiveTab(sid, title, selectedAgentId || 'default');
+    if (!tab) return;
+    initTabState(tab.id, []);
+    // This handler sets the new tab's React state itself: the sync-active-tab effect
+    // skips this switch.
+    tabSelectHandledRef.current = true;
+    selectTab(tab.id);
+    setSessionId(sid);
+    setMessages([]);
+    setPendingQuestion(null);
+    setPendingPermissionRequestId(null);
+    setContextWarning(null);
+    setIsExpanded(false);
+    setInputValue('');
+    void loadSessionMessages(sid);
+    startHiveRelay(tab.id, sid);
+  }, [tabMapRef, activeTabIdRef, handleTabSelect, activeTabHasDraft, tabHasDraft, t, updateTabState, messagesRef,
+      sessionIdRef, pendingQuestion, pendingPermissionRequestId, doCloseTab, addHiveTab, selectedAgentId, initTabState,
+      selectTab, setSessionId, setMessages, setPendingQuestion, setPendingPermissionRequestId, setContextWarning,
+      setIsExpanded, loadSessionMessages, startHiveRelay]);
+
+  // A restarted daemon has no relay: the Hive tab would get the local hub's resync and
+  // then nothing. Start it again on recovery (idempotent on the Host).
+  useEffect(() => {
+    const onRecovered = () => {
+      const hive = hiveTabOf(tabMapRef.current.values());
+      if (hive?.sessionId) startHiveRelay(hive.id, hive.sessionId);
+    };
+    window.addEventListener('swarm:backend-recovered', onRecovered);
+    return () => window.removeEventListener('swarm:backend-recovered', onRecovered);
+  }, [tabMapRef, startHiveRelay]);
+
   // Publish ChatPage's tab-owned closures + agent scope to the OverlayHost bridge
   // (decision B): dispatch/resume/delete are ChatPage responsibilities (it owns the
   // tab store); host-rendered surfaces (NewBrain, History, the 4 workbench) reach them
@@ -1613,6 +1724,9 @@ export default function ChatPage() {
 
       if (restored) {
         console.log('[ChatPage] Tabs restored from open_tabs.json');
+        // A restored Hive tab (already registered remote by the restore) gets its relay.
+        const restoredHive = hiveTabOf(tabMapRef.current.values());
+        if (restoredHive?.sessionId) startHiveRelayRef.current(restoredHive.id, restoredHive.sessionId);
         const activeId = activeTabIdRef.current;
         const activeState = activeId ? tabMapRef.current.get(activeId) : null;
         if (activeState?.sessionId) {
@@ -2663,7 +2777,8 @@ export default function ChatPage() {
             session. The dashboard must stay the column's previous sibling: the drag
             ceiling measures it there. */}
         {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch. */}
-        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} onOpenHive={() => openOverlay('hive')} />
+        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} onOpenHive={() => openOverlay('hive')}
+          onOpenSession={openHiveSession} />
 
         {/* Main Chat Area.
             `contain:layout` (run_26172836) SEVERS the layout coupling between this
@@ -2733,6 +2848,9 @@ export default function ChatPage() {
                 const ts = tabMapRef.current.get(tab.id);
                 const active = tab.id === activeTabId;
                 return (
+                  // A Hive tab's content comes from the Hive: its paths do not open
+                  // here and an over-long command cannot be approved (design §7, §6.4).
+                  <RemoteContentContext.Provider key={tab.id} value={isHiveTab(tab.id)}>
                   <TabView
                     key={tab.id}
                     tabId={tab.id}
@@ -2763,6 +2881,7 @@ export default function ChatPage() {
                     onStopBackground={stableStopBackground}
                     onRetryQueueTimeout={handleRetryQueueTimeout}
                   />
+                  </RemoteContentContext.Provider>
                 );
               })}
 

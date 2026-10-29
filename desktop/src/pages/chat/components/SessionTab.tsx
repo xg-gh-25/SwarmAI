@@ -19,8 +19,9 @@ interface SessionTabProps {
   maxTitleLength?: number;
   onKeyDown?: (e: React.KeyboardEvent) => void;
   /** 'swarm-out': the pinned Swarm Out tab (pages/chat/swarmOut.ts) — its own colour
-   *  and icon, no close button, no shortcut hint. */
-  variant?: 'swarm-out';
+   *  and icon, no close button, no shortcut hint. 'hive': the Hive tab after it — the
+   *  hive icon and a close button, no shortcut hint. */
+  variant?: 'swarm-out' | 'hive';
   /** Swarm Out only: work on the Hives. A badge says how many questions wait for the
    *  person (amber, takes precedence) or else how many runs are running; the hive icon
    *  breathes while any run is running. Null / absent = not known yet: nothing shown. */
@@ -63,12 +64,13 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
   ref
 ) {
   const pinned = variant === 'swarm-out';
+  const hive = variant === 'hive';
   const { t } = useTranslation();
   const displayTitle = truncateTitle(tab.title, maxTitleLength);
   const isUnread = !isActive && status === 'complete_unread';
   // Show shortcut hint for first 9 tabs (Cmd/Ctrl+1 through Cmd/Ctrl+9)
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
-  const shortcutLabel = !pinned && index != null && index < 9 ? `${isMac ? '\u2318' : 'Ctrl+'}${index + 1}` : null;
+  const shortcutLabel = !pinned && !hive && index != null && index < 9 ? `${isMac ? '\u2318' : 'Ctrl+'}${index + 1}` : null;
 
   const handleClick = () => {
     if (!isActive) {
@@ -108,6 +110,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         'session-tab group/tab flex items-center gap-1.5 h-[30px] px-2.5 cursor-pointer border',
         'min-w-0 max-w-[220px] flex-shrink-0',
         pinned && 'session-tab--swarm-out',
+        hive && 'session-tab--hive',
         isActive
           ? 'session-tab--active text-[var(--color-text)] font-medium'
           : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
@@ -127,9 +130,9 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       {/* Chat icon */}
       <span
         className={clsx('material-symbols-outlined icon-xs flex-shrink-0', pinned && activity?.running ? 'swarm-out-icon--busy' : null)}
-        data-testid={pinned ? 'swarm-out-icon' : undefined}
+        data-testid={pinned ? 'swarm-out-icon' : hive ? 'hive-tab-icon' : undefined}
       >
-        {pinned ? 'hive' : 'chat_bubble'}
+        {pinned || hive ? 'hive' : 'chat_bubble'}
       </span>
 
       {/* Tab status indicator (streaming, error, etc.) — skip for unread since we show dot */}

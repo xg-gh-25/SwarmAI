@@ -20,7 +20,8 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import { HiveGuide } from './HiveGuide';
-import { Dot, LiveDispatches, Tbd } from './LiveDispatches';
+import { Dot, LiveDispatches, RunTitle, Tbd } from './LiveDispatches';
+import { OpenSessionContext } from './openSession';
 import { dailyByOutcome, endedLabel, runsByHive, stateLabel, useFleet, useRuns, when, type OutcomeBucket } from './live';
 import { runTone, TONE_VAR, type Tone } from './tone';
 
@@ -122,7 +123,7 @@ function History({ hidden, now }: { hidden: boolean; now: number }) {
                   <li key={r.dispatch_id} className="px-2 py-2 border-t border-[var(--color-border)] first:border-t-0 min-w-0" data-testid="history-run" data-tone={tone}>
                     <div className="flex items-start gap-2 min-w-0">
                       <span className="h-[18px] flex items-center"><Dot tone={tone} /></span>
-                      <span className="min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
+                      <RunTitle r={r} className="min-w-0 flex-1 line-clamp-2 leading-[18px]" />
                       <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
                     </div>
                     {/* the status word in its tone; grey (unknown) stays the muted text colour */}
@@ -143,7 +144,12 @@ function History({ hidden, now }: { hidden: boolean; now: number }) {
   );
 }
 
-export function SwarmOutDashboard({ hidden = false, onOpenHive, now }: { hidden?: boolean; onOpenHive?: () => void; now?: number }) {
+export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, now }: {
+  hidden?: boolean; onOpenHive?: () => void;
+  /** Open a run's Hive session in the Hive tab (run titles become buttons). */
+  onOpenSession?: (sessionId: string, title: string) => void;
+  now?: number;
+}) {
   const { t } = useTranslation();
   const [view, setView] = useState<'run' | 'history'>('run');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -161,6 +167,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenHive, now }: { hidden?
     >{label}</button>
   );
   return (
+    <OpenSessionContext.Provider value={onOpenSession ?? null}>
     <div
       ref={rootRef}
       className={`min-w-0 flex flex-col min-h-0 bg-[var(--color-bg)] ${compact ? 'text-[12.5px]' : 'text-[13px]'}`}
@@ -187,5 +194,6 @@ export function SwarmOutDashboard({ hidden = false, onOpenHive, now }: { hidden?
           : <History hidden={hidden} now={at} />}
       </div>
     </div>
+    </OpenSessionContext.Provider>
   );
 }

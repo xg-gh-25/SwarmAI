@@ -1514,6 +1514,16 @@
       "unanswered_one": "{{count}} 个没回答",
       "unanswered_other": "{{count}} 个没回答",
       "humanTitle": "批准 {{approved}} · 拒绝 {{denied}} · 回答 {{answered}} · 没回答 {{unanswered}}"
+    },
+    "hiveTab": {
+      "open": "在 Hive tab 里打开 {{title}}",
+      "notDispatched": "这个会话不是本机派到 Hive 的，Hive tab 已关闭。",
+      "draft": "Hive tab 里还有草稿，发送或清空后再打开别的 run。",
+      "noLocalOpen": "这个文件在 Hive 上，不在本机。",
+      "noPlugin": "插件命令在本机运行，不能发给 Hive 会话。",
+      "noLocalFile": "本机的文件不能发给 Hive 会话，请改用上传附件。",
+      "noTerminal": "本机终端的输出不能发给 Hive 会话。",
+      "denyOnly": "这条命令太长或含有隐藏字符，这里只能拒绝。"
     }
   }
 }

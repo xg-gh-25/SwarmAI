@@ -24,6 +24,8 @@ import type { chatService, StreamLivenessOpts } from '../../services/chat';
 import { canContinueTurn, shouldQueueSend } from '../../hooks/streaming-guards';
 import { terminalContextOf } from '../../utils/terminalAttachment';
 import { refreshCanvasChanges } from '../../services/canvasSession';
+import { isRemote } from '../../services/remoteSession';
+import i18n from '../../i18n';
 
 /** The part of a MessageStore the controllers use. */
 export interface TurnStore {
@@ -207,6 +209,17 @@ export async function sendWhileBusy(d: TurnControlDeps, tabId: string, text: str
   );
 }
 
+/** What a message to a Hive session may not carry, as its i18n key, or null: a
+ *  /plugin command (it runs on this machine), a file named by a path on this machine
+ *  (the Hive cannot read it) or this machine's terminal output (design
+ *  docs/design/2026-10-29-swarm-out-hive-session-tab.md §7). Exported for its tests. */
+export function remoteSendRefusal(text: string, attachments: UnifiedAttachment[]): string | null {
+  if (text.trim().startsWith('/plugin')) return 'swarmOut.hiveTab.noPlugin';
+  if (attachments.some((a) => a.deliveryStrategy === 'path_hint' || !!a.workspacePath)) return 'swarmOut.hiveTab.noLocalFile';
+  if (attachments.some((a) => a.deliveryStrategy === 'terminal_context' || a.type === 'terminal')) return 'swarmOut.hiveTab.noTerminal';
+  return null;
+}
+
 /** The composer's Send. */
 export async function sendMessage(d: TurnControlDeps): Promise<void> {
   const messageText = d.composer.text();
@@ -218,6 +231,15 @@ export async function sendMessage(d: TurnControlDeps): Promise<void> {
 
   const tabs = d.tabs();
   const guardTab = tabs.get(d.activeTabId() ?? '');
+  // A Hive session: what only works on this machine is refused before anything
+  // happens, the draft stays in the composer.
+  if (isRemote(guardTab?.sessionId)) {
+    const refusal = remoteSendRefusal(messageText, currentAttachments);
+    if (refusal) {
+      document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: i18n.t(refusal) } }));
+      return;
+    }
+  }
   // Session creation in flight: the tab's first POST is open and it has no
   // session yet; once it has one, the queue path below takes the send.
   if (!guardTab?.sessionId && guardTab?.localSending) return;

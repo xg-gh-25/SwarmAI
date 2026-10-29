@@ -257,6 +257,27 @@ describe('the relay', () => {
     expect(relayClientId()).toBe(relayClientId());
   });
 
+  it('sends relay calls in call order: a stop still in flight reaches the Host before the next start', async () => {
+    const order: string[] = [];
+    let finishStop: () => void = () => {};
+    del.mockImplementationOnce(() => new Promise((res) => { order.push('stop-sent'); finishStop = () => { order.push('stop-done'); res({} as never); }; }));
+    post.mockImplementationOnce(async () => { order.push('start-sent'); return { data: { session_id: SID, state: null } } as never; });
+    const stop = stopRelay(SID);
+    const start = startRelay(SID);
+    await Promise.resolve(); await Promise.resolve();
+    expect(order).toEqual(['stop-sent']);
+    finishStop();
+    await stop; await start;
+    expect(order).toEqual(['stop-sent', 'stop-done', 'start-sent']);
+  });
+
+  it('a failed relay call does not stop the next one', async () => {
+    del.mockRejectedValueOnce(new Error('down'));
+    post.mockResolvedValueOnce({ data: { session_id: SID, state: null } } as never);
+    await expect(stopRelay(SID)).rejects.toThrow('down');
+    expect(await startRelay(SID)).toBeNull();
+  });
+
   it('builds no URL from an id the proxy would refuse', async () => {
     await expect(startRelay('../x')).rejects.toThrow();
     await expect(stopRelay('a/b')).rejects.toThrow();

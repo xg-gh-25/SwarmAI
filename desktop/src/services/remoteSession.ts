@@ -16,20 +16,26 @@
  * and `X-Swarm-User-Action`, so a remote write sends both and a JSON body, `{}` when
  * the local call sends none (`remoteWrite`, `REMOTE_WRITE_HEADERS`).
  *
- * Exports: setRemote, isRemote, remotePath, remoteWrite, REMOTE_WRITE_HEADERS,
- * relayClientId, startRelay, stopRelay.
+ * Exports: isRemoteId, setRemote, isRemote, remotePath, remoteWrite,
+ * REMOTE_WRITE_HEADERS, relayClientId, startRelay, stopRelay.
  */
 import api from './api';
 
 /** The ids the proxy accepts in a path (backend core/swarm_out_remote.ID_RE). */
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
+/** Whether the proxy accepts `sid`: only such a session can be a Hive tab's (any
+ *  other would route to this machine's backend). */
+export function isRemoteId(sid: unknown): sid is string {
+  return typeof sid === 'string' && ID_RE.test(sid);
+}
+
 let remoteSid: string | null = null;
 
 /** Bind the Hive tab's session (or clear it with null). An id the proxy would not
  *  accept registers nothing: no URL is ever built from it. */
 export function setRemote(sid: string | null): void {
-  remoteSid = typeof sid === 'string' && ID_RE.test(sid) ? sid : null;
+  remoteSid = isRemoteId(sid) ? sid : null;
 }
 
 /** Whether `sid` is the Hive tab's session. */
@@ -68,16 +74,32 @@ function relayUrl(sid: string): string {
   return `/swarm-out/remote/${sid}/relay`;
 }
 
+// Relay calls leave this window one at a time, in call order: this window's hold is
+// one entry on the Host, so a stop still in flight when the same session is opened
+// again must reach the Host before the new start, or it drops the new tab's hold.
+let relayChain: Promise<unknown> = Promise.resolve();
+function inOrder<T>(call: () => Promise<T>): Promise<T> {
+  const next = relayChain.then(call, call);
+  relayChain = next.catch(() => undefined);
+  return next;
+}
+
 /** Start (or join) the Host relay of a Hive session; answers the session's state
  *  entry as the streaming-state poll carries it (snake_case: convert it with
  *  chatService.toStreamingStateEntry). */
 export async function startRelay(sid: string): Promise<Record<string, unknown> | null> {
-  const r = await api.post<{ session_id: string; state: Record<string, unknown> | null }>(
-    relayUrl(sid), { client_id: RELAY_CLIENT_ID }, { headers: { ...REMOTE_WRITE_HEADERS } });
-  return r.data?.state ?? null;
+  const url = relayUrl(sid);
+  return inOrder(async () => {
+    const r = await api.post<{ session_id: string; state: Record<string, unknown> | null }>(
+      url, { client_id: RELAY_CLIENT_ID }, { headers: { ...REMOTE_WRITE_HEADERS } });
+    return r.data?.state ?? null;
+  });
 }
 
 /** Drop this window's hold on the relay (the Host stops it when no window holds it). */
 export async function stopRelay(sid: string): Promise<void> {
-  await api.delete(relayUrl(sid), { data: { client_id: RELAY_CLIENT_ID }, headers: { ...REMOTE_WRITE_HEADERS } });
+  const url = relayUrl(sid);
+  return inOrder(async () => {
+    await api.delete(url, { data: { client_id: RELAY_CLIENT_ID }, headers: { ...REMOTE_WRITE_HEADERS } });
+  });
 }

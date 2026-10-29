@@ -201,7 +201,14 @@ Hive（或其上被提示注入的 agent）是不可信来源；它的输出今�
 S3 桥对审批有两个约束：命令超过 `MAX_COMMAND_CHARS`（2000）不能批准、命令在显示后变了不能批准
 （`swarm_out_bridge.py:16-19`）。Hive tab 里的审批卡（chat 的同一个组件）对 remote tab：
 
-- 命令超过 `MAX_COMMAND_CHARS` 或含控制字符 / bidi 字符时，**只允许拒绝**。
+- 命令超过 `MAX_COMMAND_CHARS` 或含看不清的字符时，**只允许拒绝**。看不清的字符按 Unicode 类别判：
+  Cc（除 tab、换行、回车）、Cf（bidi 控制和 LRM/RLM/ALM、零宽字符、BOM、tag 字符）、Zl、Zp
+  （`pages/chat/swarmOut.ts` `hiveCommandApprovable`）。
+- 这条规则只在界面上执行：Host 代理转发 `cmd-permission-continue` 时不检查命令。dashboard 那条能在
+  服务端拒绝，是因为 S3 桥自己存着它显示过的命令；代理没有这份记录，要在服务端执行就得让 relay
+  另存每个待批命令。今天只有 Hive tab 一个界面会显示 Hive 的待批命令，它已经包在
+  `RemoteContentContext` 里，所以先不做。以后加第二个显示 Hive 审批的界面时，要么也包上
+  `RemoteContentContext`，要么先把这条规则搬到 Host。
 - Hive 侧补一个检查：`cmd-permission-continue` 只接受属于 `body.session_id` 的 `request_id`
   （`routers/chat.py:1518` 今天按 `request_id` 找 `perm_req`，不看会话）；`answer-question` 同理核对
   `tool_use_id`。这是本机也受益的修正，但这里它是代理"只动这个会话"的前提，所以在本设计第 1 步做。

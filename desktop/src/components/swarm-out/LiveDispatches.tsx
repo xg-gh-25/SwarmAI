@@ -26,7 +26,9 @@
  * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
+import { OpenSessionContext } from './openSession';
+import { isRemoteId } from '../../services/remoteSession';
 import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
@@ -376,6 +378,20 @@ function RunResult({ r }: { r: SwarmOutRun }) {
   );
 }
 
+/** A run's title: a button that opens its Hive session when the run has one this Host
+ *  knows (design docs/design/2026-10-29-swarm-out-hive-session-tab.md §4), else text. */
+export function RunTitle({ r, className }: { r: SwarmOutRun; className: string }) {
+  const { t } = useTranslation();
+  const open = useContext(OpenSessionContext);
+  const sid = r.session_id;
+  if (!open || !isRemoteId(sid) || r.session_unknown) return <span className={className} title={r.title}>{r.title}</span>;
+  return (
+    <button type="button" className={`${className} text-left hover:underline cursor-pointer`}
+      title={t('swarmOut.hiveTab.open', { title: r.title })} data-testid="swarm-out-run-open"
+      onClick={() => open(sid, `${r.hive} · ${r.title}`)}>{r.title}</button>
+  );
+}
+
 function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -390,7 +406,7 @@ function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
       data-testid="swarm-out-run" data-state={r.state ?? 'unknown'} data-tone={tone} data-open={open || undefined}>
       <div className="flex items-start gap-2 min-w-0">
         <span className="h-[18px] flex items-center"><Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} /></span>
-        <span className="font-medium min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
+        <RunTitle r={r} className="font-medium min-w-0 flex-1 line-clamp-2 leading-[18px]" />
         <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
       </div>
       <div className={`text-[11.5px] mt-0.5 truncate ${muted}`}>

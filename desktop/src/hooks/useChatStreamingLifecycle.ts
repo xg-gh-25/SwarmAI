@@ -77,6 +77,7 @@ import { dispatchUiCommand } from '../utils/uiCommands';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { tabNoticeStore } from '../stores/tabNoticeStore';
+import { isHiveTab } from '../pages/chat/swarmOut';
 import { noteThinking } from '../stores/thinkingProgressStore';
 import { toContextWarning, isNewerSnapshot, snapshotFromEvent, onContextUsageStale, type ContextUsageSnapshot } from './contextUsage';
 
@@ -3049,6 +3050,11 @@ export function useChatStreamingLifecycle(
         //    Stamped with the active sessionId for tab-scoping (background-tab
         //    writes must not surface in the active tab). Replaces the old frontend
         //    summary-parse trigger (MergedToolBlock swarm:file-referenced). ──
+        // A Hive tab's events come from the Hive (the Host relay strips both of these;
+        // this is the second wall): its paths are not this machine's, and the Hive's
+        // agent never drives this app's UI (design 2026-10-29-swarm-out-hive-session-tab §7).
+        if ((event.type === 'file_changed' || event.type === 'ui_command') && isHiveTab(capturedTabId)) return;
+
         if (event.type === 'file_changed') {
           const e = event as unknown as Record<string, unknown>;
           const path = e.path as string;

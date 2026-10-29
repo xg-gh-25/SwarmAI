@@ -22,7 +22,7 @@
  * @exports classifyLanding, LandingVerdict, LandingGuardOpts
  */
 import { isReusableIdle, resolveResumeTarget, type ResumeTabInfo } from './resumeTarget';
-import { isSwarmOutTab, normalChatMax, normalTabs } from './swarmOut';
+import { isHiveTab, isSwarmOutTab, normalChatMax, normalTabs } from './swarmOut';
 
 /** The side-effect-free landing decision. `focus` carries the already-open tab id;
  *  `reuse` carries the active idle tab id; `newtab` needs no id (caller adds one).
@@ -127,7 +127,8 @@ export function classifyWorkLanding(
   }
   const userTabs = normalTabs(tabs);
   const verdict = classifyLanding(key, userTabs, normalChatMax(chatMax), activeTabId, guard);
-  if (verdict.kind === 'blocked' && isSwarmOutTab(activeTabId)) {
+  // The same while the Hive tab is active: it is not one of the user's tabs either.
+  if (verdict.kind === 'blocked' && (isSwarmOutTab(activeTabId) || isHiveTab(activeTabId))) {
     const empty = userTabs.find((t) => isReusableIdle(t) && !t.sessionId && !tabHasDraft(t.id));
     if (empty) return { kind: 'land', mode: 'reuse', tabId: empty.id };
   }

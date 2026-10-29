@@ -37,6 +37,9 @@ import { refreshCanvasArtifacts, refreshCanvasSession, setActiveCanvasSession, s
 import type { GitStatus } from '../types';
 import { MAX_SNAPSHOT_COMMANDS, MAX_SNAPSHOT_OUTPUTS, type CanvasFileViewReport, type CanvasSnapshot, type UiCommandResult } from '../utils/uiContext';
 import { UI_COMMAND_RESULT_EVENT, type UiCommandResultDetail } from '../utils/uiCommands';
+import { isHiveTab } from '../pages/chat/swarmOut';
+import { isRemote } from '../services/remoteSession';
+import i18n from '../i18n';
 
 export interface CanvasFile {
   filePath: string;
@@ -625,6 +628,14 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       //    origin tab (mirroring the file_changed sibling), which we MUST prefer — else
       //    the file lands on whatever tab is active at fire time (the observed bleed).
       const landingTab = stampedTab ?? activeTabIdRef.current;
+      // A Hive tab's paths name files on the Hive, not here: nothing on this machine is
+      // opened for it, whatever path the content carries (design
+      // docs/design/2026-10-29-swarm-out-hive-session-tab.md §7).
+      if (isHiveTab(landingTab) || isRemote(openSessionId ?? (landingTab === activeTabIdRef.current ? sessionIdRef.current : null))) {
+        if (cmdId) recordCommand(keyFor(landingTab), { id: cmdId, cmd: 'open-canvas-file', result: 'ignored', reason: 'remote session' });
+        document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: i18n.t('swarmOut.hiveTab.noLocalOpen') } }));
+        return;
+      }
       const k = keyFor(landingTab);
       // An agent open-canvas-file (cmdId set by uiCommands) settles its pending entry.
       const settle = (result: 'applied' | 'ignored', reason?: string) => {
