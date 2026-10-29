@@ -7,6 +7,11 @@ core/backup_manager.py:BackupManager._save_state  # exempt: backup state JSON
 core/backup_manager.py:_file_set_token  # exempt: backup token file (0600) under the app data dir
 core/backup_manager.py:_sqlite_backup_store  # writes sqlite backup copies under the backup dir, never a governed corpus file
 core/brain_bootstrap/apply.py:_write_atomic  # pending: New Brain C9 (bootstrap entries move to CDF in New Brain stage two)
+core/brain_sync.py:_open_dir  # exempt: Hive side; opens/creates a directory of the Hive's cached copy of a host Brain (the host is the only writer)
+core/brain_sync.py:_remove  # exempt: Hive side; removes a file the synced package no longer has from the Hive's cached copy
+core/brain_sync.py:_write  # exempt: Hive side; writes a file of a checked package into the Hive's cached copy (no-follow dir fds)
+core/brain_sync.py:install  # exempt: Hive side; installs a host Brain's package into the Hive's cache and records .brain.json
+core/brain_sync.py:pack  # exempt: builds the tar.gz in memory (BytesIO); writes no file
 core/brain_size_series.py:append_snapshot  # exempt: brain size series JSONL
 core/context_directory_loader.py:_atomic_write_bytes  # exempt: template seeding; governed context files are written only when absent (first run)
 core/data_safety.py:clear_recovery_marker  # exempt: recovery marker in the app data dir

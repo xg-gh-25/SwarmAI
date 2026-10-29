@@ -99,13 +99,15 @@ async def put_brain(brain: str, request: Request) -> dict:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
         await refresh_skills(ws)          # before a turn can take the Brain again
     finally:
-        if not work.done():
-            # cancelled while the files are written: the Brain stays marked until the
-            # thread is done, so no turn reads it half-written
+        # cancelled while the files are written: the Brain stays marked until the
+        # thread is done, so no turn reads it half-written. A further cancel while
+        # waiting must not end the wait early (that unmarked the Brain mid-write).
+        while not work.done():
             try:
                 await asyncio.wait({work})
-            except BaseException:  # noqa: BLE001 — a second cancel: still end below
-                pass
+            except asyncio.CancelledError:
+                logger.info("hive brains: install of %s cancelled again; waiting for "
+                            "its files to finish", brain)
         brain_use.end_install(brain)
     logger.info("hive brains: installed %s (%s, %d files)", brain, digest[:12], len(files))
     return {"brain": brain, "digest": record["digest"], "revision": record["revision"],

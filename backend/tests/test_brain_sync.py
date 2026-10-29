@@ -728,6 +728,44 @@ def test_a_cancelled_install_keeps_the_brain_marked_until_the_files_are_written(
     assert (ws / "Projects" / "Lib" / "AGENTS.md").read_text() == "# x\n"
 
 
+def test_a_second_cancel_does_not_unmark_the_brain_mid_write(hive_app, monkeypatch):
+    """The wait for the install thread used to end on a second cancel, unmarking the
+    Brain while its files were still being written."""
+    import threading
+    app, ws, _r, hb = hive_app
+    from core import brain_use
+    monkeypatch.setenv("SWARMAI_MODE", "hive")
+    files = {"AGENTS.md": b"# y\n"}
+    data = bs.pack(files)
+    started, release = threading.Event(), threading.Event()
+    real = bs.install
+
+    def slow(*a):
+        started.set()
+        release.wait(5)
+        return real(*a)
+    monkeypatch.setattr(bs, "install", slow)
+
+    async def go():
+        req = asyncio.create_task(_put(app, data, bs.content_digest(files)))
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        req.cancel()
+        await asyncio.sleep(0.05)
+        req.cancel()
+        await asyncio.sleep(0.05)
+        marked = not brain_use.begin_install("Lib")       # still installing
+        release.set()
+        try:
+            await req
+        except BaseException:  # noqa: BLE001
+            pass
+        free = brain_use.begin_install("Lib")
+        brain_use.end_install("Lib")
+        return marked, free
+    assert asyncio.run(go()) == (True, True)
+
+
 async def _put(app, data, digest):
     async with _client_for(app) as c:
         return await c.put("/api/hive/brains/Lib", content=data, headers={"X-Brain-Digest": digest})
