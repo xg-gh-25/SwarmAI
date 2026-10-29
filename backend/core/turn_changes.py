@@ -377,9 +377,10 @@ class TurnChanges:
         # None: discover the trees in the pool (code_roots reads run.json files).
         self._given = None if roots is None else [os.path.realpath(r) for r in roots]
         # This turn's landings are read by (session, turn id) from the stamp
-        # session_worktree land writes (core/session_landings); no turn id, none.
+        # a landing writes (core/session_landings.stamp); no turn id, none.
         # *context* is the session's hook context: run_owner_gate marks there that the
-        # turn ran a session_worktree command (``_turn_sw``); none, no read.
+        # turn ran a landing command, session_worktree or a pipeline landing
+        # (``_turn_sw``); none, no read.
         self._session_id, self._turn_id, self._context = session_id, turn_id, context
         # The card, computed once per turn: result and Stop may both finish it.
         self._result: Optional[asyncio.Future] = None
@@ -478,7 +479,7 @@ class TurnChanges:
                 logger.warning("turn_changes: finish exceeded %.0fs — showing %d rows", FINISH_BUDGET_S, len(self._partial))
         if self._session_id and self._turn_id and (
                 self._context is None or self._context.get("_turn_sw")):
-            landings = await self._landings(deadline)   # no session_worktree: no git
+            landings = await self._landings(deadline)   # no landing command: no git
         block = _block(self._partial, landings)
         if block is not None and self._turn_id:
             block["turn_id"] = self._turn_id

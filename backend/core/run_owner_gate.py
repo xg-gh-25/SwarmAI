@@ -23,7 +23,9 @@ For a ``pipeline_v1.py`` command:
   main agent only, the turn's id in front of the whole line
   (``_session_worktree_export``), which ``land`` stamps into the landing's reflog
   entry; composed with the pipeline rewrite into one updatedInput (design
-  docs/design/2026-10-26-turn-cards-unified.md §3.2).
+  docs/design/2026-10-26-turn-cards-unified.md §3.2). A pipeline landing
+  (``pipeline-v1 land`` / ``run-land``) gets the same export: the run's merge writes
+  the same stamp (design 2026-10-29-pipeline-retro-fixes F1).
 - **approval**: the person-approved actions (``AFTER_APPROVAL`` with ``--request``)
   are handled in the ``phase="approved"`` registration, after dangerous_command_gate
   recorded the person's approval for this exact command: the gate takes the run over
@@ -511,7 +513,15 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         command = tool_input.get("command") or ""
         from core import pipeline_command
         sw_allow = None
-        if phase == "check" and isinstance(command, str) and _SW_MODULE in command:
+        # a landing command gets the session and the turn it stamps into the landing's
+        # reflog entry: session_worktree (check phase) and a pipeline landing (both
+        # phases: an approved run-land is rewritten by the approved phase too; design
+        # 2026-10-29-pipeline-retro-fixes F1)
+        lands = isinstance(command, str) and (
+            (phase == "check" and (_SW_MODULE in command or pipeline_command.is_land(command)))
+            or (phase == "approved" and pipeline_command.is_land(command)
+                and any(c in command for c in AFTER_APPROVAL)))
+        if lands:
             # pure string work, no IO
             sub_agent = bool(input_data.get("agent_id"))
             try:
@@ -519,12 +529,12 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
                     command, str(session_context.get("sdk_session_id") or ""),
                     session_context.get("_turn_id"), sub_agent)
             except Exception:  # noqa: BLE001 — fail-open, never blocks a command
-                logger.warning("run_owner_gate: session_worktree rewrite failed", exc_info=True)
+                logger.warning("run_owner_gate: landing rewrite failed", exc_info=True)
                 export = None
             if export is not None:
                 if not sub_agent:
-                    # TurnChanges reads this turn's landings only when it ran one
-                    # (design 2026-10-26-turn-cards-unified.md §3.3)
+                    # TurnChanges reads this turn's landings only when it ran a landing
+                    # command (design 2026-10-26-turn-cards-unified.md §3.3)
                     session_context["_turn_sw"] = True
 
                 def sw_allow(base: str, export=export):

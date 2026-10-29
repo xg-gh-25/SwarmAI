@@ -202,10 +202,10 @@ def test_multi_repo_landing_persists_partial_progress_and_retries(tmp_path, monk
         bindings[name] = {"delivery_tree": tree}
     progress = tmp_path / "landing-progress.json"
     original = landing._fast_forward
-    def fail_second(root, commit):
+    def fail_second(root, commit, run_id=None):
         if root == roots["b"]:
             raise landing.LandingError("synthetic second-repo failure")
-        return original(root, commit)
+        return original(root, commit, run_id)
     monkeypatch.setattr(landing, "_fast_forward", fail_second)
     with pytest.raises(landing.PartialLanding, match="synthetic"):
         landing.commit_repos(run_id="run_one", integration_roots=roots, bases=bases,

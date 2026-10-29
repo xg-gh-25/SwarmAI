@@ -75,10 +75,10 @@ def test_a_failure_after_every_check_passed_is_a_partial_land(tmp_path, monkeypa
     roots, bases, bindings = _repos(tmp_path)
     original = landing._fast_forward
 
-    def race(root, commit):
+    def race(root, commit, run_id=None):
         if root == roots["b"]:
             raise landing.LandingError("b: integration branch moved")
-        return original(root, commit)
+        return original(root, commit, run_id)
     monkeypatch.setattr(landing, "_fast_forward", race)
     with pytest.raises(landing.PartialLanding) as raised:
         _land(tmp_path, roots, bases, bindings)
@@ -220,8 +220,8 @@ def test_a_fast_forward_that_moved_the_ref_before_failing_counts_as_landed(tmp_p
     roots, bases, bindings = _repos(tmp_path)
     original = landing._fast_forward
 
-    def moved_then_failed(root, commit):
-        original(root, commit)
+    def moved_then_failed(root, commit, run_id=None):
+        original(root, commit, run_id)
         raise landing.LandingError("could not write ORIG_HEAD")
     monkeypatch.setattr(landing, "_fast_forward", moved_then_failed)
     commits = _land(tmp_path, roots, bases, bindings)

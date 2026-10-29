@@ -136,3 +136,71 @@ def test_a_denied_pipeline_segment_denies_the_line(monkeypatch):
     monkeypatch.setattr(rog, "_decide", lambda *a: rog._deny("not yours"))
     out = _run(f"{LAND} && {PIPE}")
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# ── a pipeline landing gets the same hand-off (design 2026-10-29-pipeline-retro-fixes F1) ──
+
+V1_LAND = ('"$SWARM_BACKEND_BIN" pipeline-v1 land --project P --run-id run_abcd1234 '
+           '--message "m"')
+
+
+def _allow_with_session(monkeypatch):
+    from core import run_owner_gate as rog
+
+    def decide(sid, cmd, *a):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "allow",
+                                       "updatedInput": {"command": _with_session(cmd, sid)}}}
+    monkeypatch.setattr(rog, "_decide", decide)
+
+
+def test_a_pipeline_land_gets_the_export_and_marks_the_turn(monkeypatch):
+    _allow_with_session(monkeypatch)
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_sw": False}
+    assert _rewritten(_run(V1_LAND, ctx=ctx)) == EXPORT + _with_session(V1_LAND, SID)
+    assert ctx["_turn_sw"] is True
+
+
+def test_another_pipeline_command_gets_no_export(monkeypatch):
+    _allow_with_session(monkeypatch)
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_sw": False}
+    cmd = '"$SWARM_BACKEND_BIN" pipeline-v1 status --project P --run-id run_abcd1234'
+    assert _rewritten(_run(cmd, ctx=ctx)) == _with_session(cmd, SID)
+    assert ctx["_turn_sw"] is False
+
+
+def test_a_sub_agent_pipeline_land_gets_no_turn_id(monkeypatch):
+    _allow_with_session(monkeypatch)
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_sw": False}
+    new = _rewritten(_run(V1_LAND, ctx=ctx, agent_id="a1"))
+    assert new == f"export SWARM_APP_SESSION_ID={shlex.quote(SID)}; " + _with_session(V1_LAND, SID)
+    assert ctx["_turn_sw"] is False
+
+
+RUN_LAND = ('"$SWARM_BACKEND_BIN" pipeline-v1 run-land --project P --run-id run_abcd1234 '
+            '--request req_1')
+
+
+def test_an_unapproved_run_land_is_still_denied_in_the_approved_phase(monkeypatch):
+    from core import security_hooks
+    _allow_with_session(monkeypatch)
+    monkeypatch.setattr(security_hooks, "consume_land_approval", lambda *a: False)
+    out = _run(RUN_LAND, phase="approved")
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "updatedInput" not in out["hookSpecificOutput"]
+
+
+def test_an_approved_run_land_gets_the_same_rewrite_in_both_phases(monkeypatch):
+    from core import security_hooks
+    _allow_with_session(monkeypatch)
+    monkeypatch.setattr(security_hooks, "consume_land_approval", lambda *a: True)
+    approved = _rewritten(_run(RUN_LAND, phase="approved"))
+    assert approved == _rewritten(_run(RUN_LAND)) == EXPORT + _with_session(RUN_LAND, SID)
+
+
+def test_a_denied_pipeline_land_stays_denied(monkeypatch):
+    from core import run_owner_gate as rog
+    monkeypatch.setattr(rog, "_decide", lambda *a: rog._deny("not yours"))
+    out = _run(V1_LAND)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "updatedInput" not in out["hookSpecificOutput"]

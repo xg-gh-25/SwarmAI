@@ -1448,7 +1448,7 @@ class SessionUnit:
         if isinstance(ctx, dict):
             import uuid
             ctx["_turn_id"] = uuid.uuid4().hex
-            ctx["_turn_sw"] = False     # set by run_owner_gate: this turn ran session_worktree
+            ctx["_turn_sw"] = False     # set by run_owner_gate: this turn ran a landing command
         # Clear last turn's spawn timing at the new-turn admission point
         # (same lifecycle as the per-turn fields around it). A warm turn never
         # reaches _spawn, so this reset is what guarantees it relays None — not a

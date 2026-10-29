@@ -755,3 +755,23 @@ def test_without_a_declaration_nothing_is_linked(env):
     e = rw.create(RUN, "swarmai", env["main"])
     assert e["dep_links"] == []
     assert not os.path.lexists(rw.wt_path(RUN, "swarmai") / "desktop" / "node_modules")
+
+
+def test_land_writes_the_landing_stamp(env, monkeypatch):
+    """design 2026-10-29-pipeline-retro-fixes F1: the run's merge into main is recorded
+    with core/session_landings.stamp, so the turn's changes card reads it."""
+    from core import app_session_id as asi
+    sid, turn = "11111111-2222-3333-4444-555555555555", "0123456789abcdef0123456789abcdef"
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", sid)
+    monkeypatch.setenv("SWARM_TURN_ID", turn)
+    main = env["main"]
+    # written whatever the repo says: no reflog yet, and the repo would not start one
+    _g(main, "config", "core.logAllRefUpdates", "false")
+    (Path(_g(main, "rev-parse", "--absolute-git-dir")) / "logs" / "refs" / "heads" / "main").unlink()
+    onto = _g(main, "rev-parse", "HEAD")
+    e, wt, t = _ready(env)
+    res = rw.land(RUN, e, main, "msg\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>", t, write_b=_write_b)
+    msg = _g(main, "reflog", "show", "-n1", "--format=%gs", "refs/heads/main")
+    assert msg == (f"swarm-land run/{RUN} session={asi.session_key(sid)} turn={turn} "
+                   f"onto={onto}: Fast-forward"), msg
+    assert _g(main, "rev-parse", "HEAD") == res["sha"]

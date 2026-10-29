@@ -964,13 +964,15 @@ def _replace_bytes(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
-def _merge_carrying(main: Path, n: str, plan) -> subprocess.CompletedProcess:
+def _merge_carrying(main: Path, n: str, plan, run_id: "str | None" = None
+                    ) -> subprocess.CompletedProcess:
     """``git merge --ff-only n`` with the planned uncommitted files carried over: each
     is set back to base (refused if it changed since planned), the merge runs, then
     each gets the 3-way result. If the merge fails or raises, their bytes go back
     (whether git left the file at base or already at the run's version). A file a third
     writer changed in between is left as that writer left it; their planned bytes are
-    in the ledger copy either way."""
+    in the ledger copy either way. *run_id*: the merge writes the landing stamp of
+    ``run/<run_id>`` (core/session_landings.stamp) so the turn's changes card reads it."""
     reset: "list[tuple[str, bytes, bytes, bytes, bytes]]" = []
     m = None
     try:
@@ -981,7 +983,15 @@ def _merge_carrying(main: Path, n: str, plan) -> subprocess.CompletedProcess:
                                     "main checkout changed while landing", files=[rel])
             _replace_bytes(main / rel, base_b)
             reset.append(item)
-        m = git(main, "merge", "-q", "--ff-only", n, timeout=120)
+        env = None
+        if run_id is not None:
+            from core.session_landings import stamp
+            # the entry must be written whatever the repo's core.logAllRefUpdates (git()
+            # drops inherited GIT_CONFIG_*; these are the merge's own)
+            env = {"GIT_REFLOG_ACTION": stamp(f"run/{run_id}", _rev(main, "HEAD")),
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.logAllRefUpdates",
+                   "GIT_CONFIG_VALUE_0": "always"}
+        m = git(main, "merge", "-q", "--ff-only", n, timeout=120, env=env)
     finally:
         ok = m is not None and m.returncode == 0
         for rel, cur_b, base_b, merged, new_b in reset:
@@ -1068,7 +1078,7 @@ def land(run_id: str, entry: dict, main: "str | Path", message: str, expect_tree
             with _integrate_lock(entry):
                 plan = _dirty_merge_plan(main, base, n, files, run_id)
                 t1 = time.monotonic()
-                m = _merge_carrying(main, n, plan)
+                m = _merge_carrying(main, n, plan, run_id)
                 merge_s = round(time.monotonic() - t1, 2)
                 carried = [rel for rel, *_ in plan] if m.returncode == 0 else []
                 carried_backup = _LAST_CARRY_BACKUP.pop(run_id, None) if carried else None

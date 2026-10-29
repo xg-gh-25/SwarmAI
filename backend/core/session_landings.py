@@ -1,10 +1,13 @@
 """session_landings — a session's landings, read from the stamp git keeps.
 
-``session_worktree land`` merges with ``GIT_REFLOG_ACTION="swarm-land <branch>
-session=<key> turn=<id> onto=<target>"``, so the destination branch's reflog entry
-for that update is the landing's one record: git writes it under its own ref lock,
-and the entry's sha is the branch head (design
-docs/design/2026-10-25-turn-result-card.md §3-§4, v9). This module only reads it:
+``session_worktree land`` and a pipeline run's landing (``run_worktree.land``, the
+manual ``landing`` path) merge with ``GIT_REFLOG_ACTION="swarm-land <branch>
+session=<key> turn=<id> onto=<target>"`` (``stamp``: the one place the format is
+written), so the destination branch's reflog entry for that update is the landing's
+one record: git writes it under its own ref lock, and the entry's sha is the branch
+head (design docs/design/2026-10-25-turn-result-card.md §3-§4, v9). The branch is
+``session/<key>-<name>`` or, for a pipeline run, ``run/<run id>`` (design
+2026-10-29-pipeline-retro-fixes F1). Apart from ``stamp`` this module only reads it:
 
 - no turn window, no neighbour logic: an entry means a landing only by its own
   message, matched exactly, with this session's key;
@@ -22,7 +25,7 @@ the per-call timeout is what bounds it). Read-only, ``GIT_OPTIONAL_LOCKS=0``.
   search by the turn id, so no entry cap and any destination branch (design
   docs/design/2026-10-26-turn-cards-unified.md §3.3).
 
-Public: ``Deadline``, ``read_turn``, ``read_repo``, ``read_session``, ``landed_path``,
+Public: ``stamp``, ``Deadline``, ``read_turn``, ``read_repo``, ``read_session``, ``landed_path``,
 ``TURN_CAP``, ``CANVAS_CAP``.
 """
 from __future__ import annotations
@@ -41,9 +44,27 @@ CANVAS_CAP = 2000
 MAX_SUBJECTS = 10
 
 _STAMP = re.compile(
-    r"^swarm-land (session/[A-Za-z0-9._/-]+) session=([0-9a-f]{12}) "
+    r"^swarm-land ((?:session|run)/[A-Za-z0-9._/-]+) session=([0-9a-f]{12}) "
     r"turn=([0-9a-f]{32}|none) onto=([0-9a-f]{40}): Fast-forward$")
 _DIFF = ("diff", "--no-renames", "--no-ext-diff", "--no-textconv")
+
+
+def attribution() -> "tuple[str, str]":
+    """(session key, turn id) of the landing this process makes, each ``none`` when
+    absent or invalid. ``SWARM_APP_SESSION_ID`` / ``SWARM_TURN_ID`` come from the
+    session's env or from run_owner_gate (design 2026-10-25-turn-result-card.md §3.2)."""
+    from core import app_session_id as asi
+    sid = os.environ.get("SWARM_APP_SESSION_ID")
+    turn = os.environ.get("SWARM_TURN_ID")
+    return (asi.session_key(sid) if asi.valid_app_session_id(sid) else "none",
+            turn if asi.valid_turn_id(turn) else "none")
+
+
+def stamp(branch: str, onto: str) -> str:
+    """The ``GIT_REFLOG_ACTION`` a landing of *branch* onto the commit *onto* merges
+    with: the record ``read_turn`` / ``read_session`` read back (``_STAMP``)."""
+    key, turn = attribution()
+    return f"swarm-land {branch} session={key} turn={turn} onto={onto}"
 
 
 class Deadline:

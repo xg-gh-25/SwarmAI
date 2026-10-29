@@ -444,9 +444,18 @@ def _made_by(root: str, commit: str, author: str) -> bool:
     return people.get("author") == author and people.get("committer") == author
 
 
-def _fast_forward(root: str, commit: str) -> None:
-    """Phase 2 for one repo: the only step that moves a ref."""
-    _git(root, "merge", "--ff-only", "-q", commit)
+def _fast_forward(root: str, commit: str, run_id: "str | None" = None) -> None:
+    """Phase 2 for one repo: the only step that moves a ref. *run_id*: the merge writes
+    the landing stamp of ``run/<run_id>`` (core/session_landings.stamp), the record the
+    turn's changes card reads."""
+    if run_id is None:
+        _git(root, "merge", "--ff-only", "-q", commit)
+        return
+    import os
+    from core.session_landings import stamp
+    action = stamp(f"run/{run_id}", _git(root, "rev-parse", "HEAD"))
+    _git(root, "-c", "core.logAllRefUpdates=always", "merge", "--ff-only", "-q", commit,
+         env={**os.environ, "GIT_REFLOG_ACTION": action})
 
 
 class Landed(dict):
@@ -640,7 +649,7 @@ def commit_repos(
         try:
             if _branch(integration_roots[name], None) != plan[name]["branch"]:
                 raise LandingError(f"the main checkout left {plan[name]['branch']}")
-            _fast_forward(integration_roots[name], prepared[name])
+            _fast_forward(integration_roots[name], prepared[name], run_id)
         except (LandingError, OSError, subprocess.SubprocessError) as exc:
             try:
                 moved = _git(integration_roots[name], "rev-parse", "HEAD") == prepared[name]

@@ -258,3 +258,46 @@ def test_an_old_unrelated_entry_closes_the_canvas_window(tmp_path, monkeypatch):
     monkeypatch.delenv("GIT_COMMITTER_DATE")
     res = _read(repo, cap=1, since_days=30)
     assert res == {"landed": [], "unverified": 0, "truncated": False, "unknown": None}
+
+
+def test_a_pipeline_run_landing_is_read_from_its_stamp(tmp_path, monkeypatch):
+    """design 2026-10-29-pipeline-retro-fixes F1: a run's merge writes the same stamp
+    (sl.stamp) with the branch run/<run id>; read_turn reads it like a session land."""
+    repo = _repo(tmp_path / "proj")
+    onto = _g(repo, "rev-parse", "HEAD").strip()
+    _g(repo, "checkout", "-q", "-b", "run/run_abcd1234")
+    (repo / "r.py").write_text("r = 1\n")
+    _g(repo, "add", "-A")
+    _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "the run's change")
+    new = _g(repo, "rev-parse", "HEAD").strip()
+    _g(repo, "checkout", "-q", "main")
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", SID)
+    monkeypatch.setenv("SWARM_TURN_ID", T1)
+    subprocess.run(["git", "-C", str(repo), "-c", "core.logAllRefUpdates=always", "merge",
+                    "--ff-only", "-q", new], check=True,
+                   env={**os.environ, "GIT_REFLOG_ACTION": sl.stamp("run/run_abcd1234", onto)})
+    monkeypatch.setattr(sl, "_bound_checkouts", lambda: [str(repo)])
+    [land] = sl.read_turn(SID, T1, deadline=sl.Deadline(10))["landed"]
+    assert land["branch"] == "run/run_abcd1234" and (land["onto"], land["new"]) == (onto, new)
+    assert [f["path"] for f in land["files"]] == ["r.py"]
+
+
+def test_a_manual_pipeline_landing_writes_the_stamp(tmp_path, monkeypatch):
+    """The approved run-land path (core/run_protocol/landing._fast_forward) stamps too."""
+    from core.run_protocol import landing
+    repo = _repo(tmp_path / "proj")
+    onto = _g(repo, "rev-parse", "HEAD").strip()
+    _g(repo, "checkout", "-q", "-b", "side")
+    (repo / "s.py").write_text("s = 1\n")
+    _g(repo, "add", "-A")
+    _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "side")
+    new = _g(repo, "rev-parse", "HEAD").strip()
+    _g(repo, "checkout", "-q", "main")
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", SID)
+    monkeypatch.setenv("SWARM_TURN_ID", T1)
+    # written whatever the repo says: no reflog yet, and the repo would not start one
+    _g(repo, "config", "core.logAllRefUpdates", "false")
+    os.unlink(os.path.join(_g(repo, "rev-parse", "--absolute-git-dir").strip(), "logs", "refs", "heads", "main"))
+    landing._fast_forward(str(repo), new, "run_abcd1234")
+    msg = _g(repo, "reflog", "show", "-n1", "--format=%gs", "refs/heads/main").strip()
+    assert msg == sl.stamp("run/run_abcd1234", onto) + ": Fast-forward", msg

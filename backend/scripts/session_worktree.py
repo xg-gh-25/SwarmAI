@@ -41,7 +41,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core import app_session_id as asi  # noqa: E402
 from core import run_worktree as rw  # noqa: E402
 from scripts import check_no_revert  # noqa: E402
 
@@ -88,13 +87,9 @@ def _branch_of_main(main: Path) -> str:
 
 
 def _attribution() -> "tuple[str, str]":
-    """(session key, turn id) for the landing stamp, each ``none`` when absent or
-    invalid. ``SWARM_APP_SESSION_ID`` / ``SWARM_TURN_ID`` come from the session's
-    env or from run_owner_gate (design 2026-10-25-turn-result-card.md §3.2)."""
-    sid = os.environ.get("SWARM_APP_SESSION_ID")
-    turn = os.environ.get("SWARM_TURN_ID")
-    return (asi.session_key(sid) if asi.valid_app_session_id(sid) else "none",
-            turn if asi.valid_turn_id(turn) else "none")
+    """(session key, turn id) for the landing stamp (core/session_landings.attribution)."""
+    from core.session_landings import attribution
+    return attribution()
 
 
 def create(repo: str, name: "str | None") -> dict:
@@ -173,9 +168,9 @@ def land(path: str) -> dict:
     # The stamp is the landing's record: git writes it, under its own ref lock, into
     # the destination's reflog entry; the session's cards read only that
     # (design docs/design/2026-10-25-turn-result-card.md §3.1).
-    stamp = f"swarm-land {branch} session={key} turn={turn} onto={target}"
+    from core.session_landings import stamp
     p = _git(main, "-c", "core.logAllRefUpdates=always", "merge", "--ff-only", "-q", branch,
-             env={"GIT_REFLOG_ACTION": stamp})
+             env={"GIT_REFLOG_ACTION": stamp(branch, target)})
     if p.returncode != 0:
         raise Refused(f"merge --ff-only into {base} refused: "
                       + (p.stderr or p.stdout).strip()[:400])
