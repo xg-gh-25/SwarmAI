@@ -711,3 +711,14 @@ def test_an_existing_caller_in_the_changed_file_is_checked(project, capsys):
     out = capsys.readouterr().out
     assert "lib.py: again — L12: passes `dry_run=`" in out
     assert "a call this change adds" not in out           # the graph's edge, not a new call
+
+
+def test_a_gradle_cache_is_not_source_and_not_a_coverage_hole(tmp_path):
+    from core.code_intel.parser import parse_repo_with_coverage
+    repo = tmp_path / "pkg"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "A.java").write_text("class A { void f() {} }\n")
+    (repo / ".gradle" / "buildOutputCleanup").mkdir(parents=True)
+    (repo / ".gradle" / "buildOutputCleanup" / "outputFiles.bin").write_bytes(b"\x00\x01")
+    out = parse_repo_with_coverage(repo)
+    assert not any(h["ref"].startswith(".gradle") for h in out.coverage_holes), out.coverage_holes

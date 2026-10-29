@@ -41,7 +41,7 @@ _WALK_CAP = 20000                 # files listed by the non-git fallback walk
 SKIP_DIRS = frozenset({
     ".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next",
     ".nuxt", "target", ".tox", ".nox", ".eggs", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", ".cache", "vendor", "third_party", "site-packages",
+    ".ruff_cache", ".cache", ".gradle", "vendor", "third_party", "site-packages",
 })
 _SKIP_DIR_PATTERNS = ("*.egg-info",)
 

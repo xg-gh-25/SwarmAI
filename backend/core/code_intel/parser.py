@@ -461,6 +461,8 @@ SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
     "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
     ".eggs", "egg-info", ".next", ".nuxt",
+    # tool caches: never source (a Gradle build leaves .gradle/ in every Java package)
+    ".gradle", ".ruff_cache", ".nox", ".cache",
     # `target` = Rust/Cargo (also Maven) build output — a near-universal,
     # tool-reserved build-dir name, safe as a bare component skip at any depth.
     # (Part of the run_f64f6031 fix for ~3316 build-artifact nodes polluting the
