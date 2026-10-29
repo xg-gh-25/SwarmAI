@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Optional, Any, Callable
 
 MAX_ATTEMPTS = 3
 RETRY_DELAY = timedelta(minutes=5)
@@ -167,10 +167,15 @@ def finish(conn: sqlite3.Connection, session_id: str, *, error: str | None = Non
     return state
 
 
-def recover(conn: sqlite3.Connection) -> int:
-    """Jobs left running by a stop or crash go back to the queue (or fail when spent)."""
+def recover(conn: sqlite3.Connection, failed: Optional[list] = None) -> int:
+    """Jobs left running by a stop or crash go back to the queue (or fail when spent);
+    ``failed`` collects the session ids of the ones that failed."""
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if failed is not None:
+            failed += [r[0] for r in conn.execute(
+                "SELECT session_id FROM ingestion_s2_jobs WHERE state='running' AND attempts>=?",
+                (MAX_ATTEMPTS,))]
         conn.execute(
             """UPDATE ingestion_s2_jobs SET state='failed', finished_at=?,
                    error=COALESCE(error,'interrupted') WHERE state='running' AND attempts>=?""",

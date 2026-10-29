@@ -128,7 +128,10 @@ def _bundle_fact(b: Any) -> Optional[dict]:
     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha) or not isinstance(size, int) \
             or isinstance(size, bool) or not 0 < size <= hive_bundle.MAX_BUNDLE_BYTES:
         return None
-    return {"key": b["key"], "sha256": sha, "size": size}
+    seq = b.get("seq")
+    return {"key": b["key"], "sha256": sha, "size": size,
+            # the run-record entry it was sealed as (core/hive_records), on a Hive that keeps one
+            **({"seq": seq} if isinstance(seq, int) and not isinstance(seq, bool) and seq > 0 else {})}
 
 
 # ── summarize ─────────────────────────────────────────────────────────────────
@@ -470,13 +473,7 @@ def _now() -> str:
 _locks: dict[tuple[int, str], asyncio.Lock] = {}   # one check per run at a time, per loop
 
 
-async def fetch(row: dict) -> dict:
-    """Check the run's session on its Hive once and keep what came back; returns the
-    kept record. Never raises: a failure is written as ``fetch_error`` and the
-    previous result stays. Checks of one run (the background check, the card's
-    refresh) run one after the other, so each starts from what the last one kept and
-    an older answer never replaces a newer one."""
-    did = row.get("dispatch_id") or ""
+def _lock_for(did: str) -> asyncio.Lock:
     loop_id = id(asyncio.get_running_loop())
     if any(k[0] != loop_id for k in _locks):   # a lock binds to one loop (as _sems)
         _locks.clear()
@@ -484,7 +481,44 @@ async def fetch(row: dict) -> dict:
     lock = _locks.get(key)
     if lock is None:
         lock = _locks[key] = asyncio.Lock()
-    async with lock:      # kept for the process (one small lock per dispatched run)
+    return lock      # kept for the process (one small lock per dispatched run)
+
+
+_ACCEPTS: set = set()
+
+
+async def accept_lessons(dispatch_id: str, digests: list[str]) -> dict:
+    """The person takes the run's lessons they were shown (core/hive_lessons.accept,
+    ``digests``); returns the run's lessons as ``/runs`` shows them. Runs under the run's
+    check lock, so a check and an accept never overwrite each other's record, and as one
+    shielded step: a dropped request never leaves units queued but not recorded."""
+    from core import hive_lessons, swarm_out
+    if not DISPATCH_ID_RE.fullmatch(dispatch_id or ""):
+        raise ValueError("not a dispatch id")
+    row = await asyncio.to_thread(swarm_out._log_row_of, dispatch_id)
+
+    async def step() -> None:
+        async with _lock_for(dispatch_id):
+            rec = await asyncio.to_thread(load, dispatch_id)
+            if not isinstance(rec, dict):
+                raise ValueError("this run's result has not been taken back yet")
+            rec["lessons"] = await asyncio.to_thread(hive_lessons.accept, row, rec.get("lessons"), digests)
+            await _keep(rec)
+    task = asyncio.ensure_future(step())
+    _ACCEPTS.add(task)                 # referenced until done, also when the request is gone
+    task.add_done_callback(_ACCEPTS.discard)
+    await asyncio.shield(task)
+    kept = (await asyncio.to_thread(_read_kept, [dispatch_id]))[dispatch_id]
+    return _public_lessons(kept) or {}
+
+
+async def fetch(row: dict) -> dict:
+    """Check the run's session on its Hive once and keep what came back; returns the
+    kept record. Never raises: a failure is written as ``fetch_error`` and the
+    previous result stays. Checks of one run (the background check, the card's
+    refresh) run one after the other, so each starts from what the last one kept and
+    an older answer never replaces a newer one."""
+    async with _lock_for(row.get("dispatch_id") or ""):
         return await _fetch(row)
 
 
@@ -496,12 +530,26 @@ async def _fetch(row: dict) -> dict:
            "etag": prev.get("etag"), "transcript_rev": prev.get("transcript_rev"),
            "fetched_at": prev.get("fetched_at"), "checked_at": _now(),
            "fetch_error": None, "result": prev.get("result"),
-           "summary_version": prev.get("summary_version"), "lessons": prev.get("lessons")}
+           "summary_version": prev.get("summary_version"), "lessons": prev.get("lessons"),
+           "records": prev.get("records")}
     if not isinstance(sid, str) or not swarm_out.KEY_RE.fullmatch(sid):
         rec["fetch_error"] = "no session"
         return rec
     try:
         inst = await swarm_out._instance(row.get("hive_id") or "")
+        # a Hive that keeps run records (core/hive_records): take the new entries, then
+        # read only the copy kept here
+        records = False
+        if DISPATCH_ID_RE.fullmatch(did):
+            from core import hive_records
+            pulled = await asyncio.wait_for(hive_records.pull(row, inst), PULL_TIMEOUT_S)
+            records = pulled["supported"]
+            if not records:
+                rec["records"] = None
+            elif await _from_records(row, rec, prev, pulled):
+                return await _keep(rec)
+            # a record that does not start at the session's first turn (a session older
+            # than its Hive's records): its result is still read the old way below
         current = prev.get("summary_version") == SUMMARY_VERSION
         headers = {"If-None-Match": rec["etag"]} if rec["etag"] and rec["result"] is not None and current else {}
         async with swarm_out._client(inst) as client:
@@ -526,22 +574,63 @@ async def _fetch(row: dict) -> dict:
                 rev = r.headers.get("x-transcript-rev")
                 rec["transcript_rev"] = int(rev) if isinstance(rev, str) and rev.isdigit() else None
                 rec["fetched_at"] = rec["checked_at"]
-        if rec["fetch_error"] is None:
-            # the run's lessons, for this machine's judge (core/hive_lessons, design §13)
+        if rec["fetch_error"] is None and not records:
+            # the run's lessons, kept here until the person takes them (core/hive_lessons)
             from core import hive_lessons
             got = await hive_lessons.take(row, inst, prev.get("lessons"))
             if got is not None:
                 rec["lessons"] = got
     except swarm_out.SwarmOutError as e:
         rec["fetch_error"] = "hive_not_running" if "not running" in str(e) else "hive_unusable"
+    except asyncio.TimeoutError:
+        rec["fetch_error"] = "hive_silent"     # the record pull's own bound: kept what it kept
     except Exception as e:  # noqa: BLE001 — Hive slow or unreachable: keep the old result
         logger.warning("swarm_out_results: checking %s failed (%s)", did, type(e).__name__)
         rec["fetch_error"] = "hive_silent"
+    return await _keep(rec)
+
+
+async def _keep(rec: dict) -> dict:
     try:
         await asyncio.to_thread(save, rec)
     except Exception as e:  # noqa: BLE001 — the next check writes again
-        logger.error("swarm_out_results: keeping %s failed: %s", did, e)
+        logger.error("swarm_out_results: keeping %s failed: %s", rec.get("dispatch_id"), e)
     return rec
+
+
+#: a record check that failed for a reason the Hive could fix by answering again
+_RECORD_TRANSIENT = ("hive_silent", "hive_unusable")
+
+
+#: one record pull's wall clock: a Hive streaming slowly never holds the run's lock (and
+#: the person's accept) longer
+PULL_TIMEOUT_S = 120
+
+
+async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
+    """Fill ``rec`` from the run's record kept here (core/hive_records): the record's
+    state, the lessons, and the result when the record starts at the session's first turn.
+    Returns whether the result came from the record (False: read it the old way)."""
+    from core import hive_lessons, hive_records
+    did = rec["dispatch_id"]
+    err = pulled.get("error")
+    rec["records"] = {"seq": pulled.get("seq", 0), "closed": pulled.get("closed") is True,
+                      "last_at": pulled.get("last_at"), "error": err}
+    got = hive_lessons._agent_of(row)
+    if got is not None:
+        rec["lessons"] = await asyncio.to_thread(hive_lessons.pending_state, got[0], got[1],
+                                                 prev.get("lessons"))
+    rows, complete, partial = await asyncio.to_thread(hive_records.turn_rows, did)
+    if rows and not complete:
+        return False
+    agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
+    if rows:
+        rec["result"] = summarize(rows, partial, agent)
+        rec["summary_version"] = SUMMARY_VERSION
+        rec["fetched_at"] = rec["checked_at"]
+    rec["etag"] = rec["transcript_rev"] = None
+    rec["fetch_error"] = (err if err in _RECORD_TRANSIENT else "record_check_failed") if err else None
+    return True
 
 
 # ── checks started from /runs ─────────────────────────────────────────────────
@@ -583,14 +672,30 @@ def _age_s(sent_at: Any) -> Optional[float]:
     return time.time() - t.timestamp()
 
 
+#: after a record says it is complete, how often it is asked again (a session may be
+#: resumed and produce more)
+CLOSED_RECHECK_S = 600
+
+
 def check_due(row: dict, hive_status: Optional[str], kept: Optional[dict]) -> bool:
-    """A stopped run on a running Hive is checked on every poll while it is recent,
-    and once when it has never been checked."""
+    """A stopped run on a running Hive is checked on every poll, and once when it has
+    never been checked. A run whose Hive keeps records (core/hive_records) until its
+    record is ``closed`` (then every ``CLOSED_RECHECK_S``), and never after 14 days
+    without a new entry. Without records, while it is recent (``RECENT_S`` from sending)."""
     if hive_status != "running" or not row.get("session_id"):
         return False
     if row.get("state") != "stopped" or row.get("state_reason") not in ("idle", "not_held"):
         return False
     if kept is None:
+        return True
+    recs = kept.get("records")
+    if isinstance(recs, dict):
+        from core import hive_records
+        if hive_records.backstop_passed(recs.get("last_at") or row.get("sent_at")):
+            return False
+        if recs.get("closed"):
+            age = _age_s(kept.get("checked_at"))
+            return age is None or age > CLOSED_RECHECK_S
         return True
     age = _age_s(row.get("sent_at"))
     return age is not None and age <= RECENT_S
@@ -755,12 +860,14 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> O
     }
 
 
+_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _LESSON_ERROR_RE = re.compile(r"not_supported|bad_session|too_large|hive_unusable|hive_silent|unexpected_body|not_queued|http_\d{3}")
 
 
 def _public_lessons(record: Optional[dict]) -> Optional[dict]:
-    """The run's lessons as counts (core/hive_lessons): how many the Hive holds, how many
-    went to this machine's judge and what it decided (``lesson_states``, read by
+    """The run's lessons as counts (core/hive_lessons): how many are kept here, how many
+    wait for the person (``pending``), how many went to this machine's judge and what it
+    decided (``written`` / ``rejected`` / ``judging``, from ``lesson_states`` read by
     ``_read_kept``), how many were skipped (another scope or kind) or refused."""
     les = (record or {}).get("lessons")
     if not isinstance(les, dict):
@@ -770,12 +877,17 @@ def _public_lessons(record: Optional[dict]) -> Optional[dict]:
     cands = les.get("candidates")
     err = les.get("error")
     return {"returned": _int(les.get("returned")),
+            # waiting for the person (design 2026-10-29 §7 D3), and whether they took some
+            "pending": _int(les.get("pending")), "accepted": isinstance(les.get("accepted_at"), str),
             "sent": len(cands) if isinstance(cands, list) else 0,
             "written": _int(st.get("written")), "rejected": _int(st.get("rejected")),
-            "pending": _int(st.get("pending")),
+            "judging": _int(st.get("pending")),
             "skipped": _int(les.get("skipped")),
             "refused": len(les["refused"]) if isinstance(les.get("refused"), list) else 0,
             "truncated": les.get("truncated") is True,
+            # the waiting units, as this machine's hashes: what an accept takes
+            "digests": [x for x in (les.get("digests") if isinstance(les.get("digests"), list) else [])
+                        if isinstance(x, str) and _DIGEST_RE.fullmatch(x)][:_int(les.get("pending"))],
             "error": err if isinstance(err, str) and _LESSON_ERROR_RE.fullmatch(err) else None}
 
 

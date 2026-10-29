@@ -63,7 +63,7 @@ def load_feeds(config: dict) -> list[Feed]:
 
 
 #: the system jobs a worker Hive runs (core/app_role); an allowlist, so a new job is off there
-WORKER_SYSTEM_JOBS = frozenset({"worktree-sweep", "log-patrol", "session-health-probe"})
+WORKER_SYSTEM_JOBS = frozenset({"worktree-sweep", "log-patrol", "session-health-probe", "records-sweep"})
 
 
 def load_jobs() -> list[Job]:

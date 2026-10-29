@@ -67,3 +67,18 @@ def test_a_symlinked_file_is_left_alone(ws, monkeypatch, tmp_path):
     (ws / ".context" / "USER.md").symlink_to(outside)
     rec = worker_reset.set_aside(ws)
     assert ".context/USER.md" not in rec["moved"] and outside.read_text() == "not the hive's"
+
+
+def test_nothing_is_moved_through_a_linked_context_or_knowledge(ws, monkeypatch, tmp_path):
+    import shutil
+    from core import worker_reset
+    _role(monkeypatch, "hive")
+    outside = tmp_path / "outside-ctx"
+    shutil.move(str(ws / ".context"), str(outside))
+    (ws / ".context").symlink_to(outside)
+    out_k = tmp_path / "outside-k"
+    shutil.move(str(ws / "Knowledge"), str(out_k))
+    (ws / "Knowledge").symlink_to(out_k)
+    rec = worker_reset.set_aside(ws)
+    assert rec["moved"] == []
+    assert (outside / "MEMORY.md").exists() and (out_k / "DailyActivity" / "2026-10-28.md").exists()

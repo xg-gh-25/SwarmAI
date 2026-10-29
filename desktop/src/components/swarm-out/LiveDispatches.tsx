@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
 import { ReturnPanel } from './ReturnPanel';
+import { LessonsAccept } from './LessonsAccept';
 import MarkdownRenderer from '../common/MarkdownRenderer';
 import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, runStats, stateLabel, useRuns, when, workLines, type RunStat } from './live';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
@@ -293,6 +294,7 @@ function ResultDetail({ r, onRefreshed, onClose }: { r: SwarmOutRun; onRefreshed
           {x.bundle?.error && <div className={`text-[11.5px] ${muted}`} data-testid="swarm-out-return-unavailable">{t('swarmOut.detail.bundleError', { error: x.bundle.error })}</div>}
         </div>
       ))}
+      <LessonsAccept dispatchId={r.dispatch_id} lessons={r.result?.lessons} onDone={onRefreshed} />
       {(res?.work.files ?? []).length > 0 && (
         <div className="mt-2" data-testid="swarm-out-run-files">
           <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.filesWritten')}</div>

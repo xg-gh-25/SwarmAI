@@ -33,7 +33,19 @@ def _process_run(engine: Any) -> dict[str, Any]:
     engine.reflect_complete(degraded=False, reason="")
     if s3_run.has_human_text(engine):
         _queue_human(engine.run_id)
+    _seal_run_lessons(engine)
     return {"reflect": "ok", "main": len(main)}
+
+
+def _seal_run_lessons(engine: Any) -> None:
+    """On a Hive, the lessons this landing queued go into the creator session's run
+    record now (core/hive_records): the run may land after that session's review."""
+    try:
+        from core import hive_records
+        if hive_records.on_hive():
+            hive_records.on_run_landed(engine.contract.get("session_id"))
+    except Exception:  # noqa: BLE001 — never breaks the landing
+        logger.warning("run lessons of %s not sealed", getattr(engine, "run_id", "?"), exc_info=True)
 
 
 def process_run(engine: Any) -> dict[str, Any] | None:

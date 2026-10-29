@@ -186,9 +186,14 @@ export function lessonsLine(res: SwarmOutResult): string | null {
   if (!l) return null;
   if (l.error === 'not_supported') return i18n.t('swarmOut.lessons.notSupported');
   if (l.sent === 0 && l.returned === 0) return l.error ? i18n.t('swarmOut.lessons.notFetched') : null;
+  if (l.sent === 0) {
+    return l.pending ? i18n.t('swarmOut.lessons.waiting', { count: l.pending })
+      : l.skipped ? i18n.t('swarmOut.lessons.noneForBrain', { count: l.skipped }) : null;
+  }
   const parts = [i18n.t('swarmOut.lessons.written', { count: l.written })];
   if (l.rejected) parts.push(i18n.t('swarmOut.lessons.rejected', { count: l.rejected }));
-  if (l.pending) parts.push(i18n.t('swarmOut.lessons.pending', { count: l.pending }));
+  if (l.judging) parts.push(i18n.t('swarmOut.lessons.judging', { count: l.judging }));
+  if (l.pending) parts.push(i18n.t('swarmOut.lessons.morePending', { count: l.pending }));
   const extra = [l.skipped ? i18n.t('swarmOut.lessons.skipped', { count: l.skipped }) : '',
     l.refused ? i18n.t('swarmOut.lessons.refused', { count: l.refused }) : ''].filter(Boolean);
   const line = i18n.t('swarmOut.lessons.line', { count: l.sent, parts: parts.join(i18n.t('swarmOut.sep.list')) });
@@ -417,7 +422,8 @@ export function runJudge(res: SwarmOutResult): RunJudge | null {
 export function resultErrorLabel(e: string | null | undefined): string {
   if (!e) return '';
   const key = ({ session_gone: 'sessionGone', hive_silent: 'hiveSilent', hive_not_running: 'hiveNotRunning',
-    hive_unusable: 'hiveUnusable', unexpected_body: 'unexpectedBody', 'no session': 'noSession' } as Record<string, string>)[e];
+    hive_unusable: 'hiveUnusable', unexpected_body: 'unexpectedBody', 'no session': 'noSession',
+    record_check_failed: 'recordCheck' } as Record<string, string>)[e];
   if (key) return i18n.t(`swarmOut.resultError.${key}`);
   return e.startsWith('http_') ? i18n.t('swarmOut.resultError.http', { code: e.slice(5) }) : e;
 }

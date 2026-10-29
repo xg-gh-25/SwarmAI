@@ -272,11 +272,11 @@ def test_refused_units_use_the_runs_budget_and_leave_no_row(cdf_env, monkeypatch
         assert conn.execute("SELECT COUNT(*) FROM evidence_roots").fetchone()[0] == 0
     finally:
         conn.close()
-    asked = []
-    monkeypatch.setattr(swarm_out, "_client", _client(lambda req: asked.append(1) or httpx.Response(200, json={})))
+    hive_lessons._legacy_path(DID).parent.mkdir(parents=True, exist_ok=True)
+    hive_lessons._legacy_path(DID).write_text(json.dumps({"lessons": [{"unit": _pitfall("one more")}]}))
     full = {"candidates": ["c"] * 10, "refused": [f"r{i}" for i in range(hive_lessons.MAX_LESSONS - 10)]}
-    asyncio.run(hive_lessons.take(ROW, {"id": "h"}, full))
-    assert asked == []
+    took = hive_lessons.accept(ROW, full, [])                     # the run's budget is used
+    assert took["pending"] == 0 and took["candidates"] == ["c"] * 10 and _inbox_count() == 0
 
 
 def test_the_general_brain_takes_world_lessons_only(cdf_env):
@@ -332,7 +332,16 @@ def _client(handler):
                                                       base_url="http://h")
 
 
-def test_take_queues_and_keeps_what_it_took(cdf_env, monkeypatch):
+def _inbox_count() -> int:
+    from core.ingestion.store import connect_rw
+    conn = connect_rw()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM ingestion_inbox").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_take_keeps_the_lessons_and_queues_nothing_until_the_person_accepts(cdf_env, monkeypatch):
     from core import hive_lessons, swarm_out
     seen = []
 
@@ -343,15 +352,19 @@ def test_take_queues_and_keeps_what_it_took(cdf_env, monkeypatch):
     monkeypatch.setattr(swarm_out, "_client", _client(handler))
     rec = asyncio.run(hive_lessons.take(ROW, {"id": "h"}, None))
     assert seen == [f"/api/hive/lessons/{SID}"]
-    assert rec["returned"] == 1 and len(rec["candidates"]) == 1 and len(rec["taken"]) == 1
-    assert rec["error"] is None
-    again = asyncio.run(hive_lessons.take(ROW, {"id": "h"}, rec))
-    assert again["candidates"] == rec["candidates"] and again["taken"] == rec["taken"]
+    assert rec["returned"] == 1 and rec["pending"] == 1 and rec["candidates"] == [] and rec["error"] is None
+    assert _inbox_count() == 0                                         # nothing reached the judge
+    took = hive_lessons.accept(ROW, rec, rec["digests"])
+    assert len(took["candidates"]) == 1 and took["pending"] == 0 and took["accepted_at"]
+    assert _inbox_count() == 1
+    again = hive_lessons.accept(ROW, took, rec["digests"])
+    assert again["candidates"] == took["candidates"] and _inbox_count() == 1
+    later = asyncio.run(hive_lessons.take(ROW, {"id": "h"}, took))     # the same lesson again
+    assert later["pending"] == 0 and later["candidates"] == took["candidates"]
     assert asyncio.run(hive_lessons.take({**ROW, "project_agent": None}, {"id": "h"}, None)) is None
     assert asyncio.run(hive_lessons.take({**ROW, "dispatch_id": ""}, {"id": "h"}, None)) is None
-    full = {**rec, "candidates": [f"c{i}" for i in range(hive_lessons.MAX_LESSONS)]}
-    assert asyncio.run(hive_lessons.take(ROW, {"id": "h"}, full))["candidates"] == full["candidates"]
-    assert len(seen) == 2                                           # a full run asks the Hive nothing
+    with pytest.raises(ValueError):
+        hive_lessons.accept({**ROW, "project_agent": None}, rec, rec["digests"])
 
 
 def test_take_reads_no_more_than_its_cap(cdf_env, monkeypatch):
@@ -383,8 +396,8 @@ def test_take_keeps_what_was_taken_when_the_hive_does_not_answer(cdf_env, monkey
     assert rec["refused"] == ["e"] and rec["skipped"] == 0
 
 
-def test_the_results_fetch_takes_the_lessons_and_runs_shows_counts_only(cdf_env, monkeypatch, tmp_path):
-    from core import hive_lessons, swarm_out
+def test_the_results_fetch_keeps_the_lessons_and_runs_shows_counts_only(cdf_env, monkeypatch, tmp_path):
+    from core import swarm_out
     from core import swarm_out_results as sor
     from tests.test_project_agent_records import _messages
     monkeypatch.setattr(sor, "_dir", lambda: tmp_path)
@@ -398,17 +411,25 @@ def test_the_results_fetch_takes_the_lessons_and_runs_shows_counts_only(cdf_env,
             return httpx.Response(200, json={"lessons": [{"unit": _pitfall("counted")},
                                                          {"unit": _pitfall("x", scope="user",
                                                                            user_kind="preference")}]})
+        if req.url.path.startswith("/api/hive/records/"):
+            return httpx.Response(404)                             # a Hive that keeps no records
         return httpx.Response(200, json=_messages())
     monkeypatch.setattr(swarm_out, "_client", _client(handler))
+    monkeypatch.setattr(swarm_out, "_log_row_of", lambda did: ROW)
     rec = asyncio.run(sor.fetch(ROW))
-    assert rec["lessons"]["returned"] == 2 and rec["lessons"]["skipped"] == 1
+    assert rec["lessons"]["returned"] == 2 and rec["lessons"]["skipped"] == 1 and rec["lessons"]["pending"] == 1
     kept = sor._read_kept([DID])[DID]
-    assert kept["lesson_states"] == {"written": 0, "rejected": 0, "pending": 1}
     pub = sor.public(kept, [], ROW["project_agent"])["lessons"]
-    assert pub == {"returned": 2, "sent": 1, "written": 0, "rejected": 0, "pending": 1,
-                   "skipped": 1, "refused": 0, "truncated": False, "error": None}
+    shown = pub.pop("digests")
+    assert pub == {"returned": 2, "pending": 1, "accepted": False, "sent": 0, "written": 0, "rejected": 0,
+                   "judging": 0, "skipped": 1, "refused": 0, "truncated": False, "error": None}
+    assert len(shown) == 1 and len(shown[0]) == 64 and "counted" not in json.dumps(shown)   # hashes only
+    assert _inbox_count() == 0
+    got = asyncio.run(sor.accept_lessons(DID, shown))
+    assert got["accepted"] and got["sent"] == 1 and got["pending"] == 0 and got["judging"] == 1
     _drain(cdf_env)
-    assert sor._read_kept([DID])[DID]["lesson_states"]["written"] == 1
+    kept = sor._read_kept([DID])[DID]
+    assert kept["lesson_states"]["written"] == 1
     kept["lessons"]["error"] = "<b>Hive text</b>"
     assert sor.public(kept, [], ROW["project_agent"])["lessons"]["error"] is None
     assert sor.public({"result": kept["result"]}, [], None)["lessons"] is None
@@ -432,3 +453,24 @@ def test_a_failed_lessons_fetch_does_not_fail_the_results_fetch(cdf_env, monkeyp
     rec = asyncio.run(sor.fetch(ROW))
     assert rec["fetch_error"] is None and rec["result"] is not None
     assert rec["lessons"]["error"] == "hive_silent"
+
+
+def test_accept_reaches_every_waiting_unit_and_keeps_them_when_the_store_fails(cdf_env, monkeypatch):
+    from core import hive_lessons, hive_records
+    d = hive_records.local_dir(DID)
+    d.mkdir(parents=True, exist_ok=True)
+    other = [{"unit": _pitfall(f"o{i}", scope="project:Q")} for i in range(45)]
+    mine = [{"unit": _pitfall(f"m{i}")} for i in range(10)]
+    hive_lessons._legacy_path(DID).write_text(json.dumps({"lessons": other + mine + mine[:3]}))
+    rec = hive_lessons.pending_state(DID, "P", None)
+    assert rec["pending"] == 10 and rec["skipped"] == 45 and rec["returned"] == 55   # duplicates once
+    real = hive_lessons.ingest
+    monkeypatch.setattr(hive_lessons, "ingest", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("store")))
+    failed = hive_lessons.accept(ROW, rec, rec["digests"])
+    assert failed["error"] == "not_queued" and failed["pending"] == 10 and failed["candidates"] == []
+    monkeypatch.setattr(hive_lessons, "ingest", real)
+    late = [{"unit": _pitfall("arrived after the panel rendered")}]
+    hive_lessons._legacy_path(DID).write_text(json.dumps({"lessons": other + mine + mine[:3] + late}))
+    took = hive_lessons.accept(ROW, rec, rec["digests"])          # what the person was shown
+    assert len(took["candidates"]) == 10 and took["pending"] == 1
+    assert hive_lessons.accept(ROW, took, [])["candidates"] == took["candidates"]   # nothing shown: nothing taken

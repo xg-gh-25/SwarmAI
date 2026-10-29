@@ -31,12 +31,17 @@ DIRS = (Path("Knowledge") / "DailyActivity",)
 
 
 def _targets(ws: Path) -> list[Path]:
+    """What to move; nothing under a linked ``.context`` or ``Knowledge`` (it would carry
+    content from outside the workspace)."""
     ctx = ws / ".context"
     out: list[Path] = []
-    for name in PRIVATE_CONTEXT:
-        stem = name[:-3]
-        out += [ctx / name] + sorted(ctx.glob(f"{stem}-archive*.md"))
-    out += [ws / d for d in DIRS]
+    if ctx.is_dir() and not ctx.is_symlink():
+        for name in PRIVATE_CONTEXT:
+            stem = name[:-3]
+            out += [ctx / name] + sorted(ctx.glob(f"{stem}-archive*.md"))
+    for d in DIRS:
+        if not any((ws / p).is_symlink() for p in [*d.parents][:-1]):
+            out.append(ws / d)
     return [p for p in out if p.exists() and not p.is_symlink()]
 
 

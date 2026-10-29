@@ -2205,6 +2205,13 @@ class TurnOpener:
         return True
 
 
+#: turn seals of a Hive's run records still running (core/hive_records), kept referenced
+_SEAL_TASKS: set = set()
+#: one lock per (event loop, session): a session's turns are sealed in order;
+#: ``[lock, users]``, dropped when no seal holds or waits for it
+_SEAL_LOCKS: dict = {}
+
+
 class SessionRouter:
     """Routes chat requests to SessionUnits with RAM-based spawn admission.
 
@@ -4193,7 +4200,11 @@ class SessionRouter:
                 finally:
                     # however the outcome write went (a second cancel can land in it),
                     # the turn is closed, ended and its session released
-                    await writer.close()
+                    try:
+                        await writer.close()
+                    finally:
+                        if started:   # also when a cancel lands in close: the gap stays visible
+                            self._spawn_turn_seal(sid)   # a Hive's run record (no wait)
                     ended: set = set()
                     if started:
                         publish({"type": "turn_end"})   # ends the claim of this turn too
@@ -4239,6 +4250,49 @@ class SessionRouter:
             logger.error("turn_outcome.write_failed session_id=%s: %s", session_id, exc)
             return None
 
+    def _spawn_turn_seal(self, session_id: Optional[str]) -> None:
+        """On a Hive, seal the turn that just ended into the session's run record
+        (core/hive_records), in a task of its own: the turn's end never waits for it and
+        no cancel of the turn lands in it. Called once per started turn, after the
+        writer closed; ``until``: the turn's end, so a later turn's rows are not this one's
+        (where it starts is the record's own marker, ``hive_records.turn_slice``)."""
+        from . import hive_records
+        if not session_id or not hive_records.on_hive():
+            return
+        until = datetime.now().isoformat()          # the messages table's own clock
+        task = asyncio.get_running_loop().create_task(self._seal_turn_record(session_id, until))
+        _SEAL_TASKS.add(task)
+        task.add_done_callback(_SEAL_TASKS.discard)
+
+    async def _seal_turn_record(self, session_id: str, until: str) -> None:
+        """Read the session's newest rows and seal the turn, one session's turns in order."""
+        from . import hive_records
+        from .project_registry import get_swarmws
+        loop_id = id(asyncio.get_running_loop())
+        key = (loop_id, session_id)
+        if any(k[0] != loop_id for k in _SEAL_LOCKS):
+            _SEAL_LOCKS.clear()
+        slot = _SEAL_LOCKS.setdefault(key, [asyncio.Lock(), 0])
+        slot[1] += 1                     # a waiter counts too: release() wakes it later
+        try:
+            async with slot[0]:
+                rows = None
+                try:
+                    from database import db
+                    rows = await db.messages.list_by_session_paginated(session_id, limit=hive_records.TURN_ROWS)
+                except Exception as exc:  # noqa: BLE001 — sealed as an error entry, the gap visible
+                    logger.warning("hive_records: rows of %s unreadable (%s)", session_id, type(exc).__name__)
+                try:
+                    await asyncio.to_thread(hive_records.seal_turn, get_swarmws(), session_id, rows,
+                                            until=until)
+                except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
+                    logger.error("hive_records: sealing the turn of %s failed (%s)", session_id,
+                                 type(exc).__name__)
+        finally:
+            slot[1] -= 1
+            if slot[1] == 0 and _SEAL_LOCKS.get(key) is slot:
+                _SEAL_LOCKS.pop(key, None)
+
     #: hang guard for reading every declared repository at a turn end
     TASK_REPO_FACTS_TIMEOUT_S = 30
     #: hang guard for bundling their commits on a Hive (core/hive_bundle)
@@ -4279,10 +4333,12 @@ class SessionRouter:
         # own bound: a slow bundle never costs the facts
         from . import hive_bundle
         try:
-            return await asyncio.wait_for(
+            bundled = await asyncio.wait_for(
                 executors.run_in("turn_changes", hive_bundle.add_bundles, get_swarmws(), session_id,
                                  [dict(f) for f in facts]),
                 self.TASK_REPO_BUNDLES_TIMEOUT_S)
+            # sealed here, after the thread returned: a late result is never sealed
+            return await asyncio.to_thread(hive_bundle.seal_bundles, get_swarmws(), session_id, bundled)
         except asyncio.TimeoutError:
             for f in facts if hive_bundle.on_hive() else []:
                 if isinstance(f, dict) and f.get("commits_total") and f.get("dir"):

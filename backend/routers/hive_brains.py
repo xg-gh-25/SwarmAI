@@ -14,9 +14,10 @@ every other refusal keeps its own status and says why. ``GET /api/hive/brains``:
 way, its recorded digest, revision and time, how many of its files changed on the
 Hive since, and how many turns hold it now. Nothing else.
 
-``GET /api/hive/bundles/{session}/{key}``: a turn's commits as a git bundle
-(core/hive_bundle). ``GET /api/hive/lessons/{session}``: the lessons the Hive's CDF
-extracted for a dispatched session (core/hive_lessons).
+``GET /api/hive/records/{session}`` and ``.../{seq}``: a dispatched session's run
+record (core/hive_records), what the host takes back. Kept for a host that does not read
+records yet: ``GET /api/hive/bundles/{session}/{key}`` (the newest sealed bundle of a
+key, core/hive_bundle) and ``GET /api/hive/lessons/{session}`` (core/hive_lessons).
 """
 from __future__ import annotations
 
@@ -129,6 +130,45 @@ async def get_bundle(session_id: str, key: str):
         fd, size = await asyncio.to_thread(hive_bundle.open_bundle, _workspace(), session_id, key)
     except OSError:
         raise HTTPException(status_code=404, detail="no such bundle") from None
+
+    def chunks():
+        try:
+            while True:
+                b = os.read(fd, 1 << 20)
+                if not b:
+                    return
+                yield b
+        finally:
+            os.close(fd)
+    return StreamingResponse(chunks(), media_type="application/octet-stream",
+                             headers={"Content-Length": str(size)})
+
+
+@router.get("/records/{session_id}")
+async def get_record(session_id: str, after: int = 0) -> dict:
+    """The entries of a session's run record after ``after`` (core/hive_records), for the
+    host to take back. Hive only; read-only."""
+    _hive_only()
+    from core import hive_records
+    try:
+        d = hive_records.session_dir(_workspace(), session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="not a session id") from None
+    if not (d / hive_records.MANIFEST).is_file():
+        raise HTTPException(status_code=404, detail="no record for this session")
+    return await asyncio.to_thread(hive_records.entries, _workspace(), session_id, max(0, after))
+
+
+@router.get("/records/{session_id}/{seq}")
+async def get_record_entry(session_id: str, seq: int):
+    """One entry's file, opened without following a link. Hive only."""
+    _hive_only()
+    from fastapi.responses import StreamingResponse
+    from core import hive_records
+    try:
+        fd, size = await asyncio.to_thread(hive_records.open_entry, _workspace(), session_id, seq)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="no such entry") from None
 
     def chunks():
         try:

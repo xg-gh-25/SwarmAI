@@ -129,8 +129,14 @@ export interface SwarmOutResult {
 }
 
 export interface SwarmOutLessons {
-  returned: number; sent: number; written: number; rejected: number; pending: number;
+  /** kept on this machine; waiting for the person to take them (nothing reaches a Brain
+   *  before that); whether they took some */
+  returned: number; pending: number; accepted: boolean;
+  /** sent to this machine's judge, and what it decided */
+  sent: number; written: number; rejected: number; judging: number;
   skipped: number; refused: number; truncated: boolean; error: string | null;
+  /** the waiting units as this machine's hashes (no Hive text): what an accept takes */
+  digests?: string[];
 }
 
 /** The whole kept record of one run (GET /swarm-out/runs/{id}/result). */
@@ -235,6 +241,14 @@ export const swarmOutService = {
     const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/land`,
       { key, tip, approve_protected: approveProtected });
     return data as { landed: boolean; head: string | null; into: string | null };
+  },
+  /** Take a run's lessons: they go to this machine's judge (backend core/hive_lessons.accept). */
+  /** Take the lessons the person was shown (``digests`` of the state rendered): one
+   *  that arrived after it waits for the next accept. */
+  async acceptLessons(dispatchId: string, digests: string[]): Promise<SwarmOutLessons> {
+    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/lessons/accept`,
+      { digests });
+    return data as SwarmOutLessons;
   },
   async returnReject(dispatchId: string, key: string, tip: string): Promise<void> {
     await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/reject`, { key, tip });

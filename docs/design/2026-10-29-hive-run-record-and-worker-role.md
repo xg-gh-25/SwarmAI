@@ -11,6 +11,24 @@ extends:
 
 # Hive 的 run 记录和 worker 角色
 
+**r4（2026-10-29）：** 第 2–4 步已经实现。按实现和两轮评审（correctness、security，第二轮加 concurrency），和上一版不同的地方：
+- **`turn` 的封存点：** 不在 `_write_turn_outcome` 里。放在里面会推迟这一轮的实时发布，还多出一个取消窗口。现在改成 `writer.close()` 之后（`close` 被取消也照样封存），`SessionRouter._spawn_turn_seal` 另起一个任务。同一个会话的轮次按锁排队，锁按引用计数清理，有人在等就不清。
+  - **这一轮从哪一行开始：** 记录目录里的 `sealed-turns.json` 记下上一个 `turn` 条目的最后一行，这一轮从那之后开始。不再看 outcome 标记：outcome 可能没写成，而 `_outcome_recorded` 在写之前就已经置位。读不到行的一轮，封存成 `turn{error}`，标记不动，它的行由下一轮带上。
+  - **这一轮到哪一行结束：** `until`（这一轮结束的时间，和消息表用同一个本地钟）把后一轮的行挡在外面。
+  - **哪一轮是会话开头：** 标记的那一行已经不在读回的行里（行被删了，或者一轮超过 `TURN_ROWS`），这一轮就不算会话开头。
+- **`bundle` 的封存：** `hive_bundle.make` 只把 bundle 写成记录目录里的临时文件。`_task_repo_facts` 等线程返回以后，由 `hive_bundle.seal_bundles` 封存。线程超时之后才回来的结果不封存（I9）。
+- **bundle 不重复封存：** 每个 bundle 都装着整条分支。所以一轮里 `base..head` 没变时，沿用已经封存的那个（`sealed-bundles.json`），不再封一份。本机取回之后，删掉最新那个带仓库事实的 outcome 已经不引用的旧 bundle 文件（清单行留着），它之后封存的不删。预算只算还在盘上的文件。
+- **本机的预算（security HIGH）：** 一个 Hive 可能是坏的，也可能是恶意的。所以每个派发最多存 2000 个条目、300 MB。清单最多读 256 KB，按流读，到上限就停。一个文件最多读到清单报的大小。一次 pull 最多 120 秒。`records-sweep` 两端都清：Hive 上清 30 天没动过的会话目录，本机清 30 天没动过的派发记录（这之后，没落地的代码和没收下的教训就取不回了，和 Hive 上的保留期一致），两边都会清过期的临时文件。时间是工作日 UTC 05:30，遵守任务的时间窗规则。
+- **记录不全时的结果：** 只有记录完整（第一条 `turn` 是会话开头、没有 `turn{error}`），结果汇总才读记录。不全就回到消息接口。但只要有记录，就不再走 `take`。
+- **D3 收下教训：** `take` 只把老 Hive 的教训存到本机，不入队。
+  - **`/runs` 给什么：** 等待中的单元的 digest。这些是本机算的哈希，不带 Hive 的文字。
+  - **`lessons/accept` 收什么：** 请求带上这组 digest，只入队人看到的那些。面板渲染之后才到的单元，等下一次收下。
+  - **一次收下：** 入队和保存记录是一个 shield 住的步骤，请求断开也不会出现"入了队、没记下"。出错时返回 `not_queued`。
+  - **界面：** `LessonsAccept` 按钮只有在返回没有错误、也没有剩下等待的单元时，才显示"已交给判官"。
+- **还没定（交给 XG）：** 收下和落地一样，现在只有界面这一道门。本机的 agent 能用 curl 调本机接口，替人点了"收下"。代码层面的"只有人能点"的门，和落地的同一个问题一起定。
+- **旧通道还没删：** 第 2–3 步表里"删掉什么"那一列，全部留到第 5 步。老 Hive 还要走回退，要等两台 Hive 都更新了才能删。
+- **已知限制：** `seal_bundles` 进行中如果被取消，会留下一个孤立的临时 bundle，由 sweep 清掉。
+
 **r3（XG 2026-10-29）：** D1–D4 按建议定（默认 worker、关 DailyActivity、人收下才交判官、保留 30 天）。第 1 步已经实现，按实现和它的评审改了 §3：
 - **expiry 清理的位置：** 不放在调度器任务里，放进 `WorkerHandle` 自己的每日维护线程。
 - **每轮的检查点：** 它也会写 DailyActivity，还会留下一个崩溃检查点，下一个会话的 resume 上下文会读它。所以在 worker 上不注册，也不读检查点。
@@ -184,7 +202,7 @@ Hive/records/<session>/
 
 ### 4.5 Hive 上的保留期
 
-记录保留 30 天（决策 D4），由调度器白名单里的 `records-sweep`（第 2 步新增）删掉过期的会话目录。会话被删不影响它的记录。
+记录保留 30 天（决策 D4），由调度器白名单里的 `records-sweep`（第 2 步新增，工作日 UTC 05:30）删掉过期的会话目录。会话被删不影响它的记录。
 
 ### 4.6 迁移完成后删掉什么
 
@@ -229,9 +247,9 @@ Hive/records/<session>/
 | 步 | 内容 | 删掉什么 | 评审 |
 |---|---|---|---|
 | 1 ✅ | worker 角色：`app_role.is_worker()`，以及 §3.2 的各个判断点（每个判断点一个测试，变异检查全部抓到） | 不再有"Hive 自己写 Brain、下次同步还原" | correctness（2 个 MED 已修：检查点漏关、启动失败条件太宽） |
-| 2 | 记录的骨架和教训：会话目录、清单、`lessons`/`closed` 的增量封存、两个记录接口、`records-sweep`。本机的 `pull` 和教训读取方改读本机记录，老 Hive 回退 | 教训的 24 小时窗口和"会话没了就拿不到"，`hive_lessons.take`、`/api/hive/lessons` | correctness、security |
-| 3 | `bundle` 和 `turn` 的封存，结果汇总和 `prepare` 改读记录 | 取消息那一套、`checks_partial`、`_download`、`/api/hive/bundles` | correctness、security |
-| 4 | 按 D3 的选择改教训的入队时机，同时改第 10 步的测试 | — | security |
+| 2 ✅ | 记录的骨架和教训：会话目录、清单、`lessons`/`closed` 的增量封存、两个记录接口、`records-sweep`。本机的 `pull` 和教训读取方改读本机记录，老 Hive 回退 | 教训的 24 小时窗口和"会话没了就拿不到"，`hive_lessons.take`、`/api/hive/lessons` | correctness、security |
+| 3 ✅ | `bundle` 和 `turn` 的封存，结果汇总和 `prepare` 改读记录 | 取消息那一套、`checks_partial`、`_download`、`/api/hive/bundles` | correctness、security |
+| 4 ✅ | 按 D3 的选择改教训的入队时机，同时改第 10 步的测试 | — | security |
 | 5 | 两台 Hive 更新后跑真机端到端（含 I1 的全会话快照），按 §4.6 删剩下的旧通道 | 回退路径 | correctness |
 
 **最后要成立的不变量（测试在设计定下时一起写）：**

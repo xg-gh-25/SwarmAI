@@ -1010,14 +1010,21 @@ class S2JobExecutor:
     @staticmethod
     def _recover(conn: sqlite3.Connection) -> None:
         """``s2_jobs.recover``; a failure (database still busy) is logged, never the
-        end of the thread: the next pass recovers again."""
+        end of the thread: the next pass recovers again. A job it failed for good closes
+        its session's run record on a Hive (``on_session_job_end``, never raises)."""
         from . import s2_jobs
+        failed: list = []
         try:
-            s2_jobs.recover(conn)
+            s2_jobs.recover(conn, failed)
         except Exception:
             logger.exception("CDF session job recovery failed; retrying after the next pass")
             if conn.in_transaction:
                 conn.rollback()
+            return
+        # a job a restart failed for good ends its session too (core/hive_records)
+        from core import hive_records
+        for sid in failed:
+            hive_records.on_session_job_end(sid, "failed")
 
     def drain(self, conn: sqlite3.Connection) -> int:
         from . import s2_jobs
@@ -1035,9 +1042,13 @@ class S2JobExecutor:
                     run_session_job(conn, job)
             except Exception as exc:  # recorded on the job, retried up to MAX_ATTEMPTS
                 logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
-                s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])
+                state = s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])
             else:
-                s2_jobs.finish(conn, job["session_id"])
+                state = s2_jobs.finish(conn, job["session_id"])
+            # on a Hive, a job that ended (done, or failed for good) seals the session's
+            # lessons and ``closed`` into its run record (core/hive_records)
+            from core import hive_records
+            hive_records.on_session_job_end(job["session_id"], state)
             done += 1
         return done
 

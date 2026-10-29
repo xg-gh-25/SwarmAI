@@ -184,10 +184,44 @@ def _bundle_fact(dispatch_id: str, declared: dict) -> dict[str, Any]:
     raise ReturnError("the run's result names no bundle for this repository (refresh the result first)")
 
 
+def _from_record(dispatch_id: str, b: dict, dest: Path) -> bool:
+    """Copy the bundle from the run's record kept here (core/hive_records), checking its
+    bytes against the fact again; False when the record does not hold it."""
+    from core import hive_records
+    if not isinstance(b.get("seq"), int):
+        return False
+    src = hive_records.bundle_path(dispatch_id, b["seq"], b["key"])
+    if src is None:
+        return False
+    tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
+    h = hashlib.sha256()
+    n = 0
+    try:
+        with open(src, "rb") as f, open(tmp, "wb") as out:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                n += len(chunk)
+                if n > b["size"]:
+                    break
+                h.update(chunk)
+                out.write(chunk)
+        if n != b["size"] or h.hexdigest() != b["sha256"]:
+            return False
+        os.replace(tmp, dest)
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 async def _download(row: dict, b: dict, dest: Path) -> None:
     from core import hive_bundle, swarm_out
-    inst = await swarm_out._instance(row.get("hive_id") or "")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    import asyncio
+    if await asyncio.to_thread(_from_record, row["dispatch_id"], b, dest):
+        return
+    if isinstance(b.get("seq"), int):
+        raise ReturnError("the run's record here does not hold this bundle yet; refresh the result, "
+                          "then take the commits back")
+    inst = await swarm_out._instance(row.get("hive_id") or "")
     tmp = dest.with_name(f".{dest.name}.{secrets.token_hex(4)}.tmp")
     h = hashlib.sha256()
     n = 0

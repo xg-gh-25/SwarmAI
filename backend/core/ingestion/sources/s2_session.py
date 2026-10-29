@@ -443,6 +443,10 @@ class SessionExtractionHook:
     async def execute(self, context: Any) -> None:
         # Queue only (§12 r16.13). The idle hook fires 120 s after the last turn; the job's
         # not-before waits 8 more minutes and is pushed by later activity (review §16).
+        if context.deleting:
+            # on a Hive, a deleted session's record gets its lessons and ``closed``
+            from core import hive_records
+            await asyncio.to_thread(hive_records.on_session_deleted, context.session_id)
         if not context.deleting:
             from core.ingestion import s2_jobs
             await asyncio.to_thread(

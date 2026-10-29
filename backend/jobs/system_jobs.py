@@ -148,6 +148,20 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Hive run records (docs/design/2026-10-29-hive-run-record-and-worker-role.md §4.5) ---
+    # Removes a session's record untouched for 30 days and stale temporary files.
+    # No-op on an instance with no Hive/records/.
+    Job(
+        id="records-sweep",
+        name="Hive run record sweep",
+        type="records_sweep",
+        schedule="30 5 * * 1-5",        # weekdays UTC 05:30 = ICT 13:30 (job window policy)
+        enabled=True,
+        category="system",
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        config={},
+    ),
+
     # --- Daily log patrol (design chat-transcript-single-source S5) ---
     # New or doubling WARNING/ERROR kinds, 4xx/5xx routes and gates timing out
     # (failing open), compared with the previous 7 days; one Slack message.

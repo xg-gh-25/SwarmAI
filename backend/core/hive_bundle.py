@@ -2,15 +2,21 @@
 docs/design/2026-10-28-project-agent-flow.md §7 ⑨, Hive side).
 
 At a turn's end, for each declared repository whose facts (core/task_repos) show
-commits ``base..head``, ``make`` writes ``git bundle create <file> <base>..HEAD`` to
-``Hive/bundles/<session>/<key>.bundle`` and adds ``{key, sha256, size}`` to the fact
-(``bundle``). ``key`` = the first 16 hex of sha256 of the repository's declared ``dir``:
-the host recomputes it from the dir it sent and never takes a path from the Hive. The
-Hive never pushes; it does not need a write credential. A failed or too large bundle
-carries ``{"error": ...}`` instead (fixed texts).
+commits ``base..head``, ``make`` writes ``git bundle create <tmp> <base>..HEAD`` to a
+temporary file of the session's run record (core/hive_records); ``seal_bundles``, run by
+the turn's coroutine once the bundling thread returned, seals each one as a ``bundle``
+entry and puts ``{key, sha256, size, seq}`` in the fact (``bundle``); a turn that made no
+new commit reuses the bundle sealed for the same ``base..head`` (``hive_records.sealed_bundle``),
+so a long session keeps one copy per change of its branch. A bundle whose
+thread returns after the turn gave up on it is never sealed (its temporary file is swept).
+``key`` = the first 16 hex of sha256 of the repository's declared ``dir``: the host
+recomputes it from the dir it sent and never takes a path from the Hive. The Hive never
+pushes; it does not need a write credential. A failed or too large bundle carries
+``{"error": ...}`` instead (fixed texts).
 
-``open_bundle(workspace, session, key)`` opens one for the download endpoint
-(routers/hive_brains), never through a link.
+``open_bundle(workspace, session, key)`` opens the newest sealed bundle of a key (or one
+an older version left in ``Hive/bundles/``) for the download endpoint an older host
+uses (routers/hive_brains), never through a link.
 """
 from __future__ import annotations
 
@@ -18,7 +24,6 @@ import hashlib
 import logging
 import os
 import re
-import secrets
 import stat
 import subprocess
 from pathlib import Path
@@ -65,15 +70,20 @@ def make(workspace: Path, session_id: str, fact: dict[str, Any]) -> Optional[dic
     repo = (ws / rdir).resolve()
     if not repo.is_relative_to(ws.joinpath("Hive", "repos")):
         return None
-    out = _dir(ws, session_id)
+    from core import hive_records
     k = key(rdir)
+    try:
+        again = hive_records.sealed_bundle(ws, session_id, k, base, head)
+    except (OSError, ValueError):
+        again = None
+    if again is not None:
+        return again                                   # no new commit: the sealed one stands
     du = _git(str(repo), "rev-list", "--objects", "--disk-usage", f"{base}..HEAD")
     if du is not None and du.returncode == 0 and du.stdout.strip().isdigit() \
             and int(du.stdout.strip()) > MAX_BUNDLE_BYTES:
         return {"key": k, "error": ERR_TOO_LARGE}                # never written to disk
     try:
-        out.mkdir(parents=True, exist_ok=True)
-        tmp = out / f".{k}.{secrets.token_hex(6)}.tmp"
+        tmp = hive_records.tmp_path(ws, session_id, k)
         p = _git(str(repo), "bundle", "create", "-q", str(tmp), f"{base}..HEAD")
         now = _git(str(repo), "rev-parse", "--verify", "--quiet", "HEAD")
         if p is None or p.returncode != 0 or not tmp.is_file():
@@ -86,15 +96,36 @@ def make(workspace: Path, session_id: str, fact: dict[str, Any]) -> Optional[dic
         if size > MAX_BUNDLE_BYTES:
             tmp.unlink(missing_ok=True)
             return {"key": k, "error": ERR_TOO_LARGE}
-        h = hashlib.sha256()
-        with open(tmp, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        os.replace(tmp, out / f"{k}.bundle")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         logger.warning("hive_bundle: %s of %s failed (%s)", k, session_id, type(exc).__name__)
         return {"key": k, "error": ERR_FAILED}
-    return {"key": k, "sha256": h.hexdigest(), "size": size}
+    return {"key": k, "tmp": str(tmp)}
+
+
+def seal_bundles(workspace: Path, session_id: Optional[str], facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Seal each fact's bundle (``make``'s temporary file) into the run record."""
+    from core import hive_records
+    for f in facts:
+        b = f.get("bundle") if isinstance(f, dict) else None
+        if not isinstance(b, dict) or not b.get("tmp"):
+            continue
+        try:
+            e = hive_records.append(workspace, str(session_id), "bundle", src=Path(b["tmp"]), key=b["key"])
+            f["bundle"] = {"key": b["key"], "sha256": e["sha256"], "size": e["size"], "seq": e["seq"]}
+        except (OSError, ValueError) as exc:
+            logger.warning("hive_bundle: sealing %s of %s failed (%s)", b.get("key"), session_id,
+                           type(exc).__name__)
+            Path(b["tmp"]).unlink(missing_ok=True)
+            f["bundle"] = {"key": b["key"], "error": ERR_TOO_LARGE if "larger" in str(exc) else ERR_FAILED}
+            continue
+        try:
+            if isinstance(f.get("base"), str) and isinstance(f.get("head"), str):
+                hive_records.note_bundle(workspace, str(session_id), b["key"], f["base"], f["head"],
+                                         f["bundle"]["seq"])
+        except (OSError, ValueError) as exc:   # sealed: only the next turn may seal a copy
+            logger.warning("hive_bundle: noting %s of %s failed (%s)", b.get("key"), session_id,
+                           type(exc).__name__)
+    return facts
 
 
 def on_hive() -> bool:
@@ -116,7 +147,9 @@ def open_bundle(workspace: Path, session_id: str, k: str) -> tuple[int, int]:
     """(fd, size) of a bundle, opened without following a link; raises FileNotFoundError."""
     if not SESSION_RE.fullmatch(session_id or "") or not KEY_RE.fullmatch(k or ""):
         raise FileNotFoundError(k)
-    path = _dir(Path(workspace), session_id) / f"{k}.bundle"
+    from core import hive_records
+    path = hive_records.latest_bundle(Path(workspace), session_id, k) \
+        or _dir(Path(workspace), session_id) / f"{k}.bundle"
     fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     st = os.fstat(fd)
     if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_BUNDLE_BYTES:

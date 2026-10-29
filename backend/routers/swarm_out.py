@@ -12,7 +12,7 @@ import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core import swarm_out
 
@@ -112,6 +112,32 @@ async def _return(fn, *args) -> dict[str, Any]:
     except Exception:
         logger.exception("swarm_out return failed")
         raise HTTPException(status_code=500, detail="taking the commits back failed")
+
+
+class LessonsAcceptBody(BaseModel):
+    #: the ``digests`` of the lessons state the person was shown: only those are taken
+    digests: list[str] = Field(..., max_length=200)
+
+    @field_validator("digests")
+    @classmethod
+    def _hex(cls, v: list[str]) -> list[str]:
+        if not all(isinstance(x, str) and len(x) == 64 and all(c in "0123456789abcdef" for c in x) for x in v):
+            raise ValueError("a digest is 64 lowercase hex")
+        return v
+
+
+@router.post("/runs/{dispatch_id}/lessons/accept")
+async def lessons_accept(dispatch_id: str, body: LessonsAcceptBody) -> dict[str, Any]:
+    """The person takes the run's lessons they were shown: queued for this machine's judge
+    (core/hive_lessons.accept). Until then nothing a Hive learned reaches a Brain."""
+    _require_desktop()
+    from core import swarm_out_results
+    try:
+        return await swarm_out_results.accept_lessons(dispatch_id, list(body.digests))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except swarm_out.SwarmOutError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/runs/{dispatch_id}/return/prepare")

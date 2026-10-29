@@ -395,6 +395,17 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "records_sweep":
+            from .handlers.records_sweep import run_records_sweep
+            rs = run_records_sweep()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status=_monitor_result_status(rs.get("status", "unknown"), ok={"success"}, benign=set()),
+                summary=rs.get("error") or f"removed {rs.get('removed', 0)}, tmp {rs.get('tmp', 0)}",
+                duration_seconds=duration,
+            )
+
         elif job.type == "log_patrol":
             from .handlers.log_patrol import run_log_patrol
             lp = run_log_patrol(dry_run=bool((job.config or {}).get("dry_run", False)))

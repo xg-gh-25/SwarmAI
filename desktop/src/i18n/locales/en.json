@@ -1387,11 +1387,18 @@
       "notFetched": "Lessons: not fetched this time, retried at the next check",
       "written": "{{count}} written into the Brain by the local judge",
       "rejected": "{{count}} rejected",
-      "pending": "{{count}} pending",
       "skipped": "{{count}} not for this Brain, not taken",
       "refused": "{{count}} failed this machine's checks",
       "line": "Lessons: {{count}} returned, {{parts}}",
-      "withExtra": "{{line}} ({{extra}})"
+      "withExtra": "{{line}} ({{extra}})",
+      "judging": "{{count}} being judged",
+      "waiting": "Lessons: {{count}} waiting for you (the local judge sees them once you take them)",
+      "morePending": "{{count}} more waiting for you",
+      "noneForBrain": "Lessons: {{count}} returned, none for this Brain",
+      "accept": "Take the lessons",
+      "accepting": "Sending to the judge…",
+      "accepted": "Sent to the local judge",
+      "notQueued": "Not sent to the judge (this machine's knowledge store is unavailable); take them again later"
     },
     "state": {
       "waiting": "Waiting for you",
@@ -1491,7 +1498,8 @@
       "hiveUnusable": "This Hive's record is incomplete",
       "unexpectedBody": "The Hive returned something unexpected",
       "noSession": "No session id",
-      "http": "The Hive returned {{code}}"
+      "http": "The Hive returned {{code}}",
+      "recordCheck": "The Hive's record failed this machine's check; retried at the next check"
     },
     "stats": {
       "ended": "Ended",
