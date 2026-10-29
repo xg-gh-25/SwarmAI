@@ -43,6 +43,19 @@ class Caller:
     symbol: str
     line: int | None
     depth: int
+    how: str = "call"        # call | reference (named as a value, or patched) | subclass
+    by_name: bool = False    # linked by the name alone: a call on a value of unknown type
+
+
+_HOW = {"calls": "call", "references": "reference", "extends": "subclass"}
+
+
+def is_by_name(edge_type: str, confidence: float) -> bool:
+    """A call on a value whose type the source does not state, resolved by its name
+    (``parser.NAME_ONLY_CONFIDENCE``, or unresolved below it): it may be another
+    object's method of the same name."""
+    from .parser import MEMBER_CALL_CONFIDENCE
+    return edge_type == "calls" and confidence <= MEMBER_CALL_CONFIDENCE
 
 
 @dataclass
@@ -79,24 +92,41 @@ def _seeds(graph: GraphStore, target: str) -> tuple[str, list[str], int]:
 
 
 def _callers(graph: GraphStore, seeds: list[str], depth: int) -> list[Caller]:
-    seed_set = set(seeds)
-    best: dict[str, int] = {}
-    for seed in seeds:
-        for nid, d in graph.find_callers(seed, depth=depth):
-            if nid in seed_set:
+    """Callers of *seeds* up to *depth* hops. A caller reached by a stated link (a
+    call whose target the source names, a reference, a subclass) beats one linked by
+    the name alone; only stated links are followed further, so a guess at hop 1 does
+    not bring its own callers in at hop 2."""
+    seen = set(seeds)
+    frontier = set(seeds)
+    found: dict[str, tuple[int, str, bool]] = {}
+    for d in range(1, depth + 1):
+        per: dict[str, tuple[str, bool]] = {}
+        for src, _dst, edge_type, conf in graph.direct_callers(frontier):
+            if src in seen:
                 continue
-            if nid not in best or d < best[nid]:
-                best[nid] = d
+            how, guess = _HOW.get(edge_type, "call"), is_by_name(edge_type, conf)
+            prev = per.get(src)
+            if prev is None or (prev[1] and not guess):
+                per[src] = (how, guess)
+        frontier = set()
+        for src, (how, guess) in per.items():
+            found[src] = (d, how, guess)
+            seen.add(src)
+            if not guess:
+                frontier.add(src)
+        if not frontier:
+            break
     out: list[Caller] = []
-    for nid, d in best.items():
+    for nid, (d, how, guess) in found.items():
         row = graph._conn.execute(
             "SELECT file_path, line_start FROM code_nodes WHERE id = ?", (nid,)).fetchone()
         file_path, line = (row[0], row[1]) if row else (nid.split("::", 1)[0], None)
         symbol = nid.split("::", 1)[1] if "::" in nid else nid
         if symbol == "<module>":
             symbol = "(module level)"  # a call outside any function (parser's sentinel)
-        out.append(Caller(file=file_path, symbol=symbol, line=line, depth=d))
-    out.sort(key=lambda c: (c.depth, c.file, c.line or 0))
+        out.append(Caller(file=file_path, symbol=symbol, line=line, depth=d, how=how,
+                          by_name=guess))
+    out.sort(key=lambda c: (c.depth, c.by_name, c.file, c.line or 0))
     return out
 
 
@@ -152,9 +182,15 @@ def impact(project: str, target: str, *, repo: str | None = None,
 
 # ── text form (what an agent reads) ──────────────────────────────────────────
 
-_BLIND_SPOTS = ("Not in the graph: dynamic calls (getattr, string dispatch), calls from "
-                "repos the project does not bind, and code the parser could not read. "
-                "Cross-check with grep.")
+_BLIND_SPOTS = ("Not in the graph: dynamic calls (getattr, string dispatch, registries "
+                "keyed by strings), calls from repos the project does not bind, and code "
+                "the parser could not read. Calls linked by the method name alone are "
+                "listed apart. Cross-check with grep.")
+
+
+def _caller_label(c: Caller) -> str:
+    where = f"{c.symbol} (L{c.line})" if c.line else c.symbol
+    return where if c.how == "call" else f"{where} [{c.how}]"
 
 
 def render(project: str, target: str, results: list[GraphImpact]) -> str:
@@ -184,14 +220,22 @@ def render(project: str, target: str, results: list[GraphImpact]) -> str:
         if not res.callers:
             lines.append("  no callers in the graph")
         for d in sorted({c.depth for c in res.callers}):
-            at = [c for c in res.callers if c.depth == d]
+            at = [c for c in res.callers if c.depth == d and not c.by_name]
+            guessed = [c for c in res.callers if c.depth == d and c.by_name]
             files = sorted({c.file for c in at})
             lines.append(f"  depth {d} ({'direct' if d == 1 else 'via a caller'}): "
                          f"{len(at)} callers in {len(files)} files")
             for f in files:
-                syms = ", ".join(f"{c.symbol} (L{c.line})" if c.line else c.symbol
-                                 for c in at if c.file == f)
+                syms = ", ".join(_caller_label(c) for c in at if c.file == f)
                 lines.append(f"    {f}: {syms}")
+            if guessed:
+                gfiles = sorted({c.file for c in guessed})
+                lines.append(f"  depth {d}, linked by the method name alone (a call on a value "
+                             f"whose type the code does not state; may be another object's "
+                             f"method): {len(guessed)} in {len(gfiles)} files")
+                for f in gfiles:
+                    syms = ", ".join(_caller_label(c) for c in guessed if c.file == f)
+                    lines.append(f"    {f}: {syms}")
         lines.append("")
     lines.append(_BLIND_SPOTS)
     return "\n".join(lines)

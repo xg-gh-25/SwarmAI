@@ -7,8 +7,8 @@ callers, with the code files that name it (and its module or class) without a ca
 graph saw — a function passed as a value, a test that mocks it by its dotted path — for
 the reviewer to grep. What can break outside the change comes first; symbols called
 only inside it fold into one line, and those of files new in the change are counted.
-A method or short name is linked by the graph by its name alone when the receiver's
-type is unknown, so such a caller counts only in a file that names the class or module.
+A call on a value whose type the code does not state is linked by the method name
+alone (``impact.is_by_name``); those files are listed apart, as a lead, not a caller.
 It is deterministic: the same diff and graph give the same report, so a review step can
 run it instead of relying on someone remembering to ask.
 
@@ -55,7 +55,8 @@ class Changed:
     mentions: list[str] = field(default_factory=list)   # named, no call seen
     more_callers: int = 0
     more_mentions: int = 0
-    unconfirmed: int = 0    # callers linked by name only, in files naming neither class nor module
+    unconfirmed: int = 0    # files outside the change linked to it by the method name alone
+    guessed: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -185,13 +186,6 @@ def _anchors(c: "Changed") -> list[str]:
     return [w for w in words if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", w or "")]
 
 
-def _by_name_only(c: "Changed") -> bool:
-    """The graph links a call to a method, or to a short name, by its name when it
-    cannot see the receiver's type (``conn.execute()`` reaches every ``execute``), so
-    such a caller is kept only when its file also names the class or module."""
-    return "." in c.id.split("::", 1)[-1] or len(c.name) < 4
-
-
 def _anchored(repo: Path, c: "Changed", files: list[str]) -> set[str]:
     """The subset of *files* that carry one of *c*'s anchors as a word."""
     anchors = _anchors(c)
@@ -276,18 +270,17 @@ def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True) -> Rep
         if c.file in new_files:
             rep.new += 1
             continue
-        callers = [{"file": x.file, "symbol": x.symbol, "line": x.line}
-                   for x in _callers(graph, [c.id], 1)]
-        if _by_name_only(c):
-            keep = _anchored(repo, c, [x["file"] for x in callers if x["file"] != c.file]) | {c.file}
-            c.unconfirmed = sum(1 for x in callers if x["file"] not in keep)
-            callers = [x for x in callers if x["file"] in keep]
+        found = _callers(graph, [c.id], 1)
+        callers = [{"file": x.file, "symbol": x.symbol, "line": x.line, "how": x.how}
+                   for x in found if not x.by_name]
+        guessed = sorted({x.file for x in found if x.by_name and x.file not in in_change})
+        c.unconfirmed, c.guessed = len(guessed), guessed[:MAX_MENTIONS]
         outside = [x for x in callers if x["file"] not in in_change]
         c.inside = [x for x in callers if x["file"] in in_change][:MAX_CALLERS]
         c.outside, c.more_callers = outside[:MAX_CALLERS], max(0, len(outside) - MAX_CALLERS)
-        mentions = _mentions(repo, c, {x["file"] for x in callers} | in_change)
+        mentions = _mentions(repo, c, {x.file for x in found} | in_change)
         c.mentions, c.more_mentions = mentions[:MAX_MENTIONS], max(0, len(mentions) - MAX_MENTIONS)
-        if c.outside or c.mentions:
+        if c.outside or c.mentions or c.unconfirmed:
             shown.append(c)
         else:
             rep.quiet.append(c.id)
@@ -318,14 +311,17 @@ def render(rep: Report) -> str:
         if c.outside:
             lines.append(f"  - callers outside this change ({len(c.outside) + c.more_callers}):")
             lines += [f"    - {x['file']}: {x['symbol']}" + (f" (L{x['line']})" if x["line"] else "")
+                      + ("" if x.get("how", "call") == "call" else f" [{x['how']}]")
                       for x in c.outside]
             if c.more_callers:
                 lines.append(f"    - … {c.more_callers} more (run `core.code_intel.impact {c.id}`)")
         else:
             lines.append("  - no caller outside this change in the graph")
         if c.unconfirmed:
-            lines.append(f"  - {c.unconfirmed} more calls linked by the name alone, in files "
-                         "that name neither its class nor its module: left out")
+            more = f" (+{c.unconfirmed - len(c.guessed)} more)" if c.unconfirmed > len(c.guessed) else ""
+            lines.append(f"  - linked by the method name alone (a call on a value whose type "
+                         f"the code does not state; may be another object's): "
+                         + ", ".join(c.guessed) + more)
         if c.inside:
             lines.append("  - callers inside this change: "
                          + ", ".join(f"{x['file']}: {x['symbol']}" for x in c.inside))

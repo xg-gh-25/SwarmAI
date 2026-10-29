@@ -156,6 +156,18 @@ Left as they are:
 - **The eval case** `CI_IMPACT_FRESH` (`scripts/probe_code_intel.py`) fits the cap: the product set was at 49 when it was added.
 - **Tests:** the §0.6 invariants are in `tests/test_code_intel_r3_invariants.py` (a second process reads mid-rebuild; a SIGKILLed writer; every `ensure_fresh` state; Confirm as the only writer of `confirmed`; an AST scan that no daemon module references a graph writer) and `tests/test_code_intel_local_roots.py`; each was checked by reverting what it guards (`scripts.mutation_check`).
 
+### 0.10 Receiver types and references (after r3, 2026-10-29)
+
+Measured first: on a real diff, the callers report listed 34 callers of `SessionExtractionHook.execute`, most of them `conn.execute(...)` on a sqlite connection; and `to_thread(spawn_build, …)`, a real call site, had no edge. The graph linked every `x.m()` to every method `m` at the same confidence as a stated call, and a function handed on as a value had no edge.
+
+- **What the source states, the graph follows** (Python, TypeScript, JavaScript; `core/code_intel/receivers.py`): `self`/`this`, an annotated parameter, a local whose every binding is one constructor or annotation, a class named directly, `Store().m()`, and a module alias (`import pkg.mod as m; m.f()`, matched by path only). A typed target `Store.m` resolves by class and up its bases.
+- **What it does not state stays a guess, marked:** a call on a value of unknown type is still linked by name, at 0.4 instead of 0.8. `impact` and the callers report list those apart and do not follow them further.
+- **References:** a function, class or `self.m` / `Cls.m` in a value position, and a test's `patch` / `monkeypatch.setattr` / `patch.object` by dotted path, module or class. An imported name, or a dotted path, is matched by its module path only, never by the bare name.
+- **Also fixed on the way:** `scan_imports` dropped `import a.b as m` aliases; a resolved edge colliding with an existing one raised, and that failure made the cleanup delete every still-unresolved edge (half the real graph). A failed resolution now skips the cleanup, and colliding edges are merged.
+- **Measured on SwarmAI (temp db, same commit):** edges 84.5K → 91.2K; 11.7K calls marked name-only; 7.0K typed; 12K references; dead-code symbols 1,271 → 1,091; module edges 152 → 131 (guesses left out).
+- **Review:** correctness, one round (1 HIGH, 3 MED, 3 LOW, 3 test gaps), all fixed; every guard mutation-checked (`tests/test_code_intel_receivers.py`).
+- **A graph built before this keeps its old edges** until it is rebuilt (Brain Hub Re-index).
+
 ## 1. What the graph is for: the readers that reach someone
 
 | Reader | Reads | Who sees it |

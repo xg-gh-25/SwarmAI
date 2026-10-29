@@ -880,7 +880,9 @@ def _is_exported(name: str, language: str, node_text: str = "") -> bool:
 # ── Layer 1: Per-file Resolution ────────────────────────────────────────
 
 _PY_FROM_RE = re.compile(r"^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n]+)", re.MULTILINE)
-_PY_IMPORT_RE = re.compile(r"^[ \t]*import[ \t]+([\w.]+(?:[ \t]*,[ \t]*[\w.]+)*)", re.MULTILINE)
+_PY_IMPORT_RE = re.compile(
+    r"^[ \t]*import[ \t]+([\w.]+(?:[ \t]+as[ \t]+\w+)?(?:[ \t]*,[ \t]*[\w.]+(?:[ \t]+as[ \t]+\w+)?)*)",
+    re.MULTILINE)
 _TS_FROM_RE = re.compile(
     r"\b(?:import|export)\s+(?:type\s+)?(\{[^}]*\}|\*\s+as\s+\w+|\w+(?:\s*,\s*\{[^}]*\})?)\s+from\s+['\"]([^'\"]+)['\"]")
 _JAVA_IMPORT_RE = re.compile(r"^[ \t]*import[ \t]+(static[ \t]+)?([\w.]+?)(\.\*)?[ \t]*;", re.MULTILINE)
@@ -913,9 +915,11 @@ def scan_imports(content: str, language: str) -> list[ImportRef]:
                 if name and name.isidentifier():
                     out.append(ImportRef(name, m.group(1), _line_at(content, m.start())))
         for m in _PY_IMPORT_RE.finditer(content):
-            for mod in re.split(r"\s*,\s*", m.group(1)):
+            for item in re.split(r"\s*,\s*", m.group(1)):
+                mod, _, alias = (p.strip() for p in item.partition(" as "))
                 parts = mod.split(".")
-                out.append(ImportRef(parts[-1], mod, _line_at(content, m.start()), True))
+                # `import a.b as m` binds m; the alias is the name the file uses
+                out.append(ImportRef(alias or parts[-1], mod, _line_at(content, m.start()), True))
     elif language in ("typescript", "javascript"):
         for m in _TS_FROM_RE.finditer(content):
             spec, module, line = m.group(1), m.group(2), _line_at(content, m.start())
@@ -1303,8 +1307,40 @@ def _extract_from_tree(tree, path_str: str, language: str,
     _reader_excl_parents = (vspec.reader_exclusion_parent_types
                             if vspec is not None else frozenset())
 
-    def _walk(node, enclosing_func=None, enclosing_class=None):
+    from . import receivers as _rx
+    typed = language in _rx.TYPED_LANGS
+    classes = _rx.class_names(root) if typed else set()
+    known = _rx.known_classes(classes, import_map) if typed else set()
+    modules = (_rx.module_aliases(root.text.decode("utf-8", errors="replace"))
+               if language == "python" and root.text else {})
+    value_refs: list[CodeEdge] = []
+    _seen_value_refs: set[tuple[str, str]] = set()
+
+    def _walk(node, enclosing_func=None, enclosing_class=None, scope=None):
         ntype = node.type
+
+        # A function or class named as a value (an argument, an assigned value, a
+        # container element, a return value, a decorator): a `references` edge, so
+        # `Thread(target=save_all)` makes `save_all` reached (core.code_intel.receivers).
+        if typed and ntype in ("identifier", "shorthand_property_identifier",
+                               "attribute", "member_expression"):
+            target = _rx.value_reference(
+                node, path=path_str, scope=scope, classes=classes, import_map=import_map,
+                top_names=defined_names, enclosing_class=enclosing_class,
+                sep=QUALIFIED_SEPARATOR, qualify=_qualify)
+            source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
+            if target and target != source and (source, target) not in _seen_value_refs:
+                _seen_value_refs.add((source, target))
+                member = "." in target.rsplit(QUALIFIED_SEPARATOR, 1)[-1]
+                local = target.startswith(path_str + QUALIFIED_SEPARATOR)
+                value_refs.append(CodeEdge(
+                    source_id=source, target_id=target, edge_type="references",
+                    # a class member (Store.load, self.go) resolves by its class; an
+                    # imported name by its module path only (a module handed on as
+                    # a value, `reload(store)`, must not reach a function `store`)
+                    confidence=(TYPED_CALL_CONFIDENCE if member else 1.0 if local
+                                else PATH_REFERENCE_CONFIDENCE),
+                    line_number=node.start_point[0] + 1))
 
         # Value-ref: a reader function/method body references a module-scope const.
         # The reader node type is per-language (python/go/rust/ts=identifier;
@@ -1332,7 +1368,8 @@ def _extract_from_tree(tree, path_str: str, language: str,
         if ntype == "impl_item":
             owner = _type_name(node.child_by_field_name("type"))
             for child in node.children:
-                _walk(child, enclosing_func=enclosing_func, enclosing_class=owner or enclosing_class)
+                _walk(child, enclosing_func=enclosing_func,
+                      enclosing_class=owner or enclosing_class, scope=scope)
             return
 
         # Definitions
@@ -1382,8 +1419,12 @@ def _extract_from_tree(tree, path_str: str, language: str,
 
                 new_class = name if is_class else owner
                 new_func = qn if not is_class else enclosing_func
+                new_scope = scope
+                if typed and not is_class:
+                    new_scope = _rx.scope_of(node, language, known, scope)
                 for child in node.children:
-                    _walk(child, enclosing_func=new_func, enclosing_class=new_class)
+                    _walk(child, enclosing_func=new_func, enclosing_class=new_class,
+                          scope=new_scope)
                 return
 
         # Calls. Inside a function/method → source is the enclosing func. At MODULE
@@ -1395,7 +1436,44 @@ def _extract_from_tree(tree, path_str: str, language: str,
             if call_name:
                 call_name = _sanitize_name(call_name)
                 source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
-                if receiver not in (None, "self") and receiver not in import_map:
+                cls = recv1 = None
+                if typed:
+                    recv1 = _rx.direct_receiver(node, known)
+                    if recv1:
+                        cls = _rx.receiver_class(recv1, scope, classes, import_map,
+                                                 enclosing_class)
+                    if language == "python":
+                        patched = _rx.patch_reference(
+                            node, call_name, path=path_str, classes=classes,
+                            import_map=import_map, sep=QUALIFIED_SEPARATOR,
+                            qualify=_qualify, modules=modules)
+                        if patched and patched != source:
+                            edges.append(CodeEdge(
+                                source_id=source, target_id=patched,
+                                edge_type="references",
+                                # patch.object(Cls, "m") names a class member;
+                                # a dotted string is matched by its module path
+                                confidence=(TYPED_CALL_CONFIDENCE if "." in
+                                            patched.rsplit(QUALIFIED_SEPARATOR, 1)[-1]
+                                            and call_name in ("object", "setattr")
+                                            else PATH_REFERENCE_CONFIDENCE),
+                                line_number=node.start_point[0] + 1))
+                module_alias = (recv1 if language == "python" and recv1 in modules
+                                and not (scope is not None and recv1 in scope.bound)
+                                and not cls else None)
+                if module_alias:
+                    # `m.tool()` with `import pkg.mod as m`: pkg/mod.py's tool, matched
+                    # by path only (`os.getcwd()` must not reach a repo's own getcwd)
+                    target = f"{modules[module_alias]}{QUALIFIED_SEPARATOR}{call_name}"
+                    conf = PATH_REFERENCE_CONFIDENCE
+                elif cls:
+                    # the source states the receiver's class: Store.save, not "save"
+                    target = _rx.class_target(cls, call_name, path_str, classes,
+                                              import_map, QUALIFIED_SEPARATOR, _qualify)
+                    conf = TYPED_CALL_CONFIDENCE
+                elif (receiver not in (None, "self") and receiver not in import_map) or (
+                        typed and receiver == "self" and recv1 is None):
+                    # (typed languages: `self.db.save()` is a call on a value, not on self)
                     # A method of a value: bare and method-only (MEMBER_CALL_CONFIDENCE),
                     # never this file's same-named function.
                     target, conf = call_name, MEMBER_CALL_CONFIDENCE
@@ -1410,10 +1488,22 @@ def _extract_from_tree(tree, path_str: str, language: str,
                     line_number=node.start_point[0] + 1,
                 ))
 
+        # a lambda / function expression binds its own parameters (and, in TS/JS,
+        # its own `this`)
+        child_scope = (_rx.scope_of(node, language, known, scope)
+                       if typed and ntype in _rx.NESTED_SCOPE_TYPES and ntype not in def_types
+                       else scope)
         for child in node.children:
-            _walk(child, enclosing_func, enclosing_class)
+            _walk(child, enclosing_func, enclosing_class, child_scope)
 
     _walk(root)
+    # A value reference to this file's own name counts only when the name is one of
+    # its definitions (the name scan also holds variables); one to an imported name is
+    # resolved by the store, or dropped.
+    own = {n.id for n in nodes}
+    prefix = path_str + QUALIFIED_SEPARATOR
+    edges.extend(e for e in value_refs
+                 if not e.target_id.startswith(prefix) or e.target_id in own)
     return nodes, edges
 
 
@@ -1573,6 +1663,19 @@ _SELF_TYPES = frozenset({"self", "this", "this_expression"})
 # a method and module edges leave it out. A call through a module or package
 # (``utils.helper()``, ``pkg.Fn()``) or a type path (``Foo::new``) keeps 0.5.
 MEMBER_CALL_CONFIDENCE = 0.45
+# Confidence bands the receiver typing adds (core.code_intel.receivers):
+# - TYPED_CALL_CONFIDENCE: the source states the receiver's class (``self.m()``,
+#   ``s: Store`` then ``s.m()``, ``x = Store()``, ``Store.m()``); the target is
+#   ``Store.m``, resolved by class (and its bases), never by the bare name ``m``.
+# - PATH_REFERENCE_CONFIDENCE: a symbol named by its dotted path (a test's
+#   ``patch("pkg.mod.f")``); it resolves only to a file whose path ends with that
+#   module, never by the bare name (``patch("os.getcwd")`` must not reach a repo
+#   function ``getcwd``).
+# - NAME_ONLY_CONFIDENCE: what a call on a value of unknown type (MEMBER_CALL) becomes
+#   once resolved by its name alone; a reader shows it apart from a stated link.
+TYPED_CALL_CONFIDENCE = 0.9
+PATH_REFERENCE_CONFIDENCE = 0.95
+NAME_ONLY_CONFIDENCE = 0.4
 
 
 def _callee_name(fn) -> str | None:

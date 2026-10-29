@@ -1046,6 +1046,20 @@ class GraphStore:
         rows = self._conn.execute(sql, (node_id, depth)).fetchall()
         return [(r[0], r[1]) for r in rows]
 
+    def direct_callers(self, node_ids) -> list[tuple[str, str, str, float]]:
+        """``(source_id, target_id, edge_type, confidence)`` of every edge into
+        *node_ids* (calls, references, extends …), one hop."""
+        ids = list(dict.fromkeys(node_ids))
+        out: list[tuple[str, str, str, float]] = []
+        for start in range(0, len(ids), _BATCH_SIZE):
+            batch = ids[start : start + _BATCH_SIZE]
+            ph = ",".join("?" * len(batch))
+            out.extend((r[0], r[1], r[2], r[3] if r[3] is not None else 1.0)
+                       for r in self._conn.execute(
+                           "SELECT source_id, target_id, edge_type, confidence FROM code_edges "
+                           f"WHERE target_id IN ({ph})", batch).fetchall())
+        return out
+
     # ── dead-code detection ──────────────────────────────────────────────
 
     def find_dead_code(self) -> list[dict]:
@@ -1094,9 +1108,10 @@ class GraphStore:
 
     # God-node guard threshold (ported from graphify, run_2392a203).
     # code_edges.confidence semantics (parser.py): 1.0 = target is qualified
-    # (has "::", an EXACT reference), 0.8 = single-candidate cross-file resolved,
-    # 0.6 = regex-fallback inferred call, 0.5 = bare/unresolved/N-candidate
-    # ambiguous. A 0.5 edge is DEFINITIONALLY bare (parser.py:1044 sets 0.5 iff
+    # (has "::", an EXACT reference), 0.95 = matched by its module path, 0.9 = the
+    # source states the receiver's class, 0.8 = single-candidate cross-file resolved
+    # by name, 0.6 = regex-fallback inferred call, 0.5 = bare/unresolved/N-candidate
+    # ambiguous, 0.4 = a call on a value of unknown type resolved by name only. A 0.5 edge is DEFINITIONALLY bare (parser.py:1044 sets 0.5 iff
     # the target has no "::"), so `_mod_of` turns its bare target (`str`, `mkdir`,
     # `get`) into a FABRICATED single-token module — 87% of the pre-guard module
     # skeleton was such garbage. Excluding <=0.5 edges from the AGGREGATION (not
@@ -1503,8 +1518,9 @@ class GraphStore:
         limits the cleanup to edges whose source is in those files (the incremental
         callers pass the files they re-stored); None means the whole graph, which only
         a full rebuild of this graph may use. Returns the number of resolved edges.
-        Never raises. Inside ``transaction()`` a failed cleanup rolls back, which
-        fails the whole transaction: the rebuild raises and the old graph stays.
+        Never raises. A failed resolution skips the cleanup (unresolved is not
+        orphaned). Inside ``transaction()`` a failed cleanup rolls back, which fails
+        the whole transaction: the rebuild raises and the old graph stays.
         """
         resolved = 0
         try:
@@ -1513,7 +1529,14 @@ class GraphStore:
             if resolved:
                 logger.info("Cross-file resolution: %d bare targets resolved", resolved)
         except Exception as e:
-            logger.debug("Cross-file resolution skipped: %s", e)
+            # Not resolved is not orphaned: the prune below would delete every
+            # cross-file edge still waiting for this resolution (it once cut a real
+            # graph's edges in half without a trace). Keep them for the next run.
+            logger.warning("Cross-file resolution failed, orphan cleanup skipped: %s: %s",
+                           type(e).__name__, e)
+            if not getattr(self._conn, "_defer_commit", 0):
+                self._rollback_open_txn()     # inside transaction() the caller commits
+            return 0
         try:
             # Scoped to the re-stored files' outbound edges when *files* is given:
             # an incremental update must not judge edges of files it did not touch.
@@ -1760,6 +1783,16 @@ class GraphStore:
           - 1 candidate: resolve directly (confidence 0.8)
           - N candidates: prefer the one whose file is imported by the caller
           - 0 or ambiguous: leave unresolved (orphan-cleanup drops it)
+        Before that, what the source states wins (``parser`` confidence bands):
+          - a typed target ``Cls.m`` resolves by its class and up its bases
+            (``TYPED_CALL_CONFIDENCE``); if the class is unknown, by the name ``m``,
+            marked ``NAME_ONLY_CONFIDENCE``;
+          - a dotted-path reference resolves only to a file at that path, never by
+            the bare name (``PATH_REFERENCE_CONFIDENCE``);
+          - a dangling module-qualified name resolves to the one file whose path
+            ends with that module.
+        A call on a value of unknown type resolved by its name alone keeps
+        ``NAME_ONLY_CONFIDENCE`` (not 0.8), so a reader can tell it from a stated link.
 
         Imports are resolved first (``resolve_imports``; the import table is kept apart
         from the edges). Covers edge_type IN (calls, extends, references) — extends/references were
@@ -1808,7 +1841,7 @@ class GraphStore:
         # `NOT IN (…, NULL)` never-true and silently disable ALL resolution — Gate-2
         # red-team LOW) and a friendly anti-join plan. Returns ONLY unresolved rows.
         bare_sql = (
-            "SELECT rowid, source_id, target_id, confidence FROM code_edges e "
+            "SELECT rowid, source_id, target_id, confidence, edge_type FROM code_edges e "
             "WHERE e.edge_type IN ('calls', 'extends', 'references') "
             "AND NOT EXISTS (SELECT 1 FROM code_nodes n WHERE n.id = e.target_id)"
         )
@@ -1844,38 +1877,148 @@ class GraphStore:
             return any(d.endswith("/") and cand_file.startswith(d) and "/" not in cand_file[len(d):]
                        for d in imported)
 
-        from .parser import MEMBER_CALL_CONFIDENCE
+        from .parser import (MEMBER_CALL_CONFIDENCE, NAME_ONLY_CONFIDENCE,
+                             PATH_REFERENCE_CONFIDENCE, TYPED_CALL_CONFIDENCE)
+        sep = qualified_separator
+        # "Cls.m" → ids ending in "::Cls.m" (a class member named with its class)
+        by_member: dict[str, list[str]] = {}
+        for node_id, _name, _t, _l in all_nodes:
+            if sep in node_id:
+                by_member.setdefault(node_id.split(sep, 1)[1], []).append(node_id)
+        # a class id → the ids of its bases (resolved extends edges)
+        bases: dict[str, list[str]] = {}
+        node_ids = {r[0] for r in all_nodes}
+        for src, dst in self._conn.execute(
+                "SELECT source_id, target_id FROM code_edges WHERE edge_type = 'extends'"):
+            if dst in node_ids:
+                bases.setdefault(src, []).append(dst)
+
+        def _in_module(cand: str, module: str) -> bool:
+            """Whether candidate *cand*'s file is *module*: a repo-relative path with or
+            without its suffix, a dotted path turned into ``a/b/c``, or an import's
+            ``./x`` / ``../lib/x`` (compared by what follows the dots). A package's
+            ``__init__`` / ``index`` file is the package."""
+            if not module:
+                return True
+            mod = module.replace("\\", "/")
+            while mod.startswith(("./", "../")):
+                mod = mod.split("/", 1)[1]
+            mod = mod.strip("/")
+            last = mod.rsplit("/", 1)[-1]
+            if "." in last:
+                mod = mod.rsplit(".", 1)[0]
+            stem = cand.split(sep, 1)[0].rsplit(".", 1)[0]
+            for s_ in (stem, stem.removesuffix("/__init__"), stem.removesuffix("/index")):
+                if s_ == mod or s_.endswith("/" + mod):
+                    return True
+            return False
+
+        def _class_member(module: str, cls: str, member: str) -> str | None:
+            """``cls.member`` in *module* (or anywhere when unique), up its bases."""
+            classes = [c for c in by_member.get(cls, []) if _in_module(c, module)]
+            if not classes and module:
+                classes = by_member.get(cls, [])
+            if len(classes) != 1:
+                exact = [c for c in by_member.get(f"{cls}.{member}", []) if _in_module(c, module)]
+                return exact[0] if len(exact) == 1 else None
+            frontier, seen = [classes[0]], set()
+            for _ in range(8):
+                nxt = []
+                for c in frontier:
+                    if c in seen:
+                        continue
+                    seen.add(c)
+                    cand = f"{c}.{member}"
+                    if cand in node_ids:
+                        return cand
+                    nxt.extend(bases.get(c, []))
+                if not nxt:
+                    return None
+                frontier = nxt
+            return None
+
+        def _set(rowid: int, target: str, conf: float) -> None:
+            try:
+                self._conn.execute(
+                    "UPDATE code_edges SET target_id = ?, confidence = ? WHERE rowid = ?",
+                    (target, conf, rowid))
+            except sqlite3.IntegrityError:
+                # The resolved edge exists already (two spellings of one call on one
+                # line, e.g. a typed `mod::Store.save` and a bare `save`): keep one,
+                # with the higher confidence.
+                row = self._conn.execute(
+                    "SELECT source_id, edge_type, line_number FROM code_edges WHERE rowid = ?",
+                    (rowid,)).fetchone()
+                if row is not None:
+                    self._conn.execute(
+                        "UPDATE code_edges SET confidence = MAX(confidence, ?) "
+                        "WHERE source_id = ? AND target_id = ? AND edge_type = ? "
+                        "AND IFNULL(line_number, -1) = IFNULL(?, -1)",
+                        (conf, row[0], target, row[1], row[2]))
+                self._conn.execute("DELETE FROM code_edges WHERE rowid = ?", (rowid,))
+
         resolved_count = 0
-        for rowid, source_id, target_id, confidence in bare_edges:
-            # bare name = last separator-segment (handles bare `Animal` and dangling
-            # `base::Animal` → `Animal`). CodeNode.name for a method is the bare
-            # method name (id is `file::Cls.method`, name is `method`), so if the
-            # segment still carries a `Cls.` prefix (a dangling qualified METHOD
-            # target), fall back to the part after the last dot (Gate-2 recall LOW).
-            target_name = target_id.rsplit(qualified_separator, 1)[-1]
+        for rowid, source_id, target_id, confidence, edge_type in bare_edges:
+            module, _, symbol = target_id.rpartition(sep)
+            # 1. A target the source typed (`Store.save`): by its class, up the bases.
+            if confidence is not None and abs(confidence - TYPED_CALL_CONFIDENCE) < 1e-9 \
+                    and "." in symbol:
+                cls, _, member = symbol.rpartition(".")
+                hit = _class_member(module, cls, member)
+                if hit:
+                    _set(rowid, hit, TYPED_CALL_CONFIDENCE)
+                    resolved_count += 1
+                    continue
+                if edge_type != "calls":
+                    continue      # a reference to a member its class lacks: no guess
+                target_id, confidence = member, MEMBER_CALL_CONFIDENCE   # fall back: by name
+            # 2. A symbol named by its dotted path: only a file at that path.
+            elif confidence is not None and abs(confidence - PATH_REFERENCE_CONFIDENCE) < 1e-9:
+                if "." in symbol:
+                    cls, _, member = symbol.rpartition(".")
+                    hit = _class_member(module, cls, member)
+                else:
+                    cands = [c for c in name_to_ids.get(symbol, []) if _in_module(c, module)]
+                    hit = cands[0] if len(cands) == 1 else None
+                if hit:
+                    _set(rowid, hit, PATH_REFERENCE_CONFIDENCE)
+                    resolved_count += 1
+                continue
+            # 3. A module-qualified name that dangles (`core/x::f` from an import):
+            #    the file whose path ends with that module first.
+            elif module and "." not in symbol:
+                cands = [c for c in name_to_ids.get(symbol, []) if _in_module(c, module)]
+                if len(cands) == 1:
+                    _set(rowid, cands[0], 1.0)
+                    resolved_count += 1
+                    continue
+
+            # 4. By the bare name, as before. bare name = last separator-segment
+            # (handles bare `Animal` and dangling `base::Animal` → `Animal`).
+            # CodeNode.name for a method is the bare method name (id is
+            # `file::Cls.method`, name is `method`), so if the segment still carries a
+            # `Cls.` prefix, fall back to the part after the last dot.
+            target_name = target_id.rsplit(sep, 1)[-1]
             candidates = name_to_ids.get(target_name, [])
             if not candidates and "." in target_name:
                 candidates = name_to_ids.get(target_name.rsplit(".", 1)[-1], [])
-            if confidence is not None and confidence <= MEMBER_CALL_CONFIDENCE:
-                # a call on a value (f.Close()) names a method, never a free function
-                candidates = [c for c in candidates if c in member_ok]
+            by_name_only = confidence is not None and confidence <= MEMBER_CALL_CONFIDENCE
+            if by_name_only:
+                # a call on a value (f.Close()) names a method, never a free function,
+                # and is not the caller itself (`self.db.load()` inside Store.load)
+                candidates = [c for c in candidates if c in member_ok and c != source_id]
+            resolved_conf = NAME_ONLY_CONFIDENCE if by_name_only else 0.8
 
             if len(candidates) == 1:
-                self._conn.execute(
-                    "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
-                    (candidates[0], rowid)
-                )
+                _set(rowid, candidates[0], resolved_conf)
                 resolved_count += 1
             elif len(candidates) > 1:
-                caller_file = source_id.split(qualified_separator)[0]
+                caller_file = source_id.split(sep)[0]
                 imported_files = file_imports.get(caller_file, set())
                 matching = [c for c in candidates
-                            if _imported(c.split(qualified_separator)[0], imported_files)]
+                            if _imported(c.split(sep)[0], imported_files)]
                 if len(matching) == 1:
-                    self._conn.execute(
-                        "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
-                        (matching[0], rowid)
-                    )
+                    _set(rowid, matching[0], resolved_conf)
                     resolved_count += 1
 
         self._conn.commit()

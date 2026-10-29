@@ -63,12 +63,13 @@ def test_a_signature_change_lists_its_callers_and_the_files_that_name_it(project
     rep = report(project)
     c = _by_id(rep)["store.py::save_all"]
     assert c.signature
-    assert [x["file"] for x in c.outside] == ["api.py"]
-    # passed as a value (thread target) and mocked by its dotted path: no call the graph saw
-    assert c.mentions == ["jobs.py", "test_store.py"]
+    # a call, a thread target (named as a value) and a test patch by its dotted path
+    assert {(x["file"], x["how"]) for x in c.outside} == {
+        ("api.py", "call"), ("jobs.py", "reference"), ("test_store.py", "reference")}
+    assert c.mentions == []
     text = render(rep)
     assert "`store.py::save_all` (signature or first lines changed)" in text
-    assert "api.py: post" in text and "jobs.py, test_store.py" in text
+    assert "api.py: post" in text and "jobs.py: start" in text and "[reference]" in text
 
 
 def test_a_method_body_change_names_the_method_not_its_class(project):
@@ -100,7 +101,7 @@ def test_a_linked_work_tree_uses_the_graph_of_its_checkout(project, tmp_path):
     (wt / "store.py").write_text(_STORE.replace("def save_all(rows):", "def save_all(items):"))
     rep = report(wt)
     assert rep.project == "Demo"
-    assert [x["file"] for x in _by_id(rep)["store.py::save_all"].outside] == ["api.py"]
+    assert "api.py" in [x["file"] for x in _by_id(rep)["store.py::save_all"].outside]
 
 
 def test_a_checkout_without_a_graph_says_so(tmp_path, monkeypatch):
@@ -131,7 +132,8 @@ def test_a_caller_the_change_also_edits_is_listed_apart(project):
     (project / "store.py").write_text(_STORE.replace("def save_all(rows):", "def save_all(rows, x):"))
     (project / "api.py").write_text(_API.replace("save_all(rows)\n", "save_all(rows, 1)\n"))
     c = _by_id(report(project))["store.py::save_all"]
-    assert c.outside == [] and [x["file"] for x in c.inside] == ["api.py"]
+    assert [x["file"] for x in c.inside] == ["api.py"]
+    assert sorted(x["file"] for x in c.outside) == ["jobs.py", "test_store.py"]
 
 
 def _noisy(project):
@@ -147,9 +149,18 @@ def _noisy(project):
 def test_a_name_counts_only_in_code_that_also_names_its_module(project):
     from core.code_intel.changed import report
     _noisy(project)
+    (project / "dyn.py").write_text("import store\n\n\ndef pick():\n"
+                                    "    return getattr(store, 'save_all')\n")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-q", "-m", "dyn")
+    from core.code_intel import load_project_graphs
+    from core.code_intel.build import ensure_fresh
+    (ref, g), = load_project_graphs("Demo")
+    ensure_fresh(project.parent / "ws" / "Projects" / "Demo", ref, g)
     (project / "store.py").write_text(_STORE.replace("def save_all(rows):", "def save_all(rows, x):"))
     c = _by_id(report(project))["store.py::save_all"]
-    assert c.mentions == ["jobs.py", "test_store.py"]
+    # a string the graph cannot follow: named with its module, in code only
+    assert c.mentions == ["dyn.py"]
 
 
 def test_what_is_called_from_outside_comes_first_and_the_rest_is_one_line(project):
@@ -194,3 +205,4 @@ def test_a_method_caller_linked_by_name_alone_is_left_out(project):
     c = _by_id(rep)["store.py::Store.save"]
     files = [x["file"] for x in c.outside]
     assert "use.py" in files and "db.py" not in files
+    assert c.guessed == ["db.py"]                    # listed apart, as a lead
