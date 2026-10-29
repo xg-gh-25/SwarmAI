@@ -42,14 +42,21 @@ function toCamelCase(raw: RawCodeIntelSummary): CodeIntelSummary {
  * Fetch code intelligence summary for a project.
  * Returns null if the project has no code_intel.db (404).
  */
-export async function getCodeIntelSummary(project: string): Promise<CodeIntelSummary | null> {
+export async function getCodeIntelSummary(project: string, repo?: string): Promise<CodeIntelSummary | null> {
   try {
-    const resp = await api.get<RawCodeIntelSummary>(`/code-intel/${encodeURIComponent(project)}/summary`);
+    const resp = await api.get<RawCodeIntelSummary>(`/code-intel/${encodeURIComponent(project)}/summary`,
+      repo ? { params: { repo } } : undefined);
     return toCamelCase(resp.data);
   } catch (err: unknown) {
     if (err && typeof err === 'object' && 'response' in err && (err as { response?: { status?: number } }).response?.status === 404) return null;
     throw err;
   }
+}
+
+/** The repos of a project that have a code graph, first = the default one. */
+export async function getCodeIntelGraphs(project: string): Promise<string[]> {
+  const resp = await api.get<{ graphs: { repo: string }[] }>(`/code-intel/${encodeURIComponent(project)}/graphs`);
+  return (resp.data.graphs ?? []).map((g) => g.repo);
 }
 
 /**
@@ -84,11 +91,11 @@ export interface GraphData {
  * Fetch graph visualization data (top-N most-connected nodes + their edges).
  * Returns null if the project has no code_intel.db.
  */
-export async function getCodeIntelGraph(project: string, limit: number = 300): Promise<GraphData | null> {
+export async function getCodeIntelGraph(project: string, limit: number = 300, repo?: string): Promise<GraphData | null> {
   try {
     const resp = await api.get<GraphData>(
       `/code-intel/${encodeURIComponent(project)}/graph`,
-      { params: { limit } }
+      { params: repo ? { limit, repo } : { limit } }
     );
     return resp.data;
   } catch (err: unknown) {

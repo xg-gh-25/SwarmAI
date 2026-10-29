@@ -531,30 +531,34 @@ cases:
   gating: gate
   eval_method: programmatic
   validated_by_4gate: 54101670f5d83841
-- id: CI_IMPACT_FRESH
+- id: CI_IMPACT
   category: code_aware
   dimension: cognition
   level: tool_call
-  title: Impact answers from the repo as it is now, without a manual re-index
+  title: The callers of a change are right, without anyone re-indexing
   purpose:
-    en: 'impact lists a caller a commit added after the graph was built: the graph is brought up to HEAD when it
-      is read. If this breaks, a change looks safe while a caller nobody sees breaks.'
-    zh: 确认本地仓库后，构建图之后新提交加入的调用方，impact 也能列出来：读图时会先更新到仓库 HEAD。坏了意味着 agent 以为改动安全，实际有它看不到的调用方会坏。
+    en: 'The callers report lists a caller added after the build, typed calls and functions passed or patched;
+      an untyped call is only a lead. If this breaks, a change looks safe while a caller breaks.'
+    zh: 每次评审拿到的调用方报告要列出：建图之后新提交加入的调用方、对已声明类型的值的调用、作为值传递或在测试里被 patch 的函数；对类型不明的值的调用只作为线索。坏了意味着改动看起来安全而调用方会坏，或把猜测当成事实。
   verification:
     command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_code_intel impact'
-    expected_contains: CI_IMPACT_FRESH_OK
+    expected_contains: CI_IMPACT_OK
     negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_code_intel impact negative'
-    negative_expected_contains: CI_IMPACT_FRESH_TEETH
+    negative_expected_contains: CI_IMPACT_TEETH
   evaluators:
   - canary_pass
   affected_by:
   - backend/core/code_intel/build.py
+  - backend/core/code_intel/changed.py
+  - backend/core/code_intel/graph_store.py
   - backend/core/code_intel/impact.py
   - backend/core/code_intel/local_roots.py
+  - backend/core/code_intel/parser.py
+  - backend/core/code_intel/receivers.py
   tier: stable
   gating: gate
   eval_method: programmatic
-  validated_by_4gate: d442684e8a57158b
+  validated_by_4gate: d47cc49401a45a86
 - id: DDD_SKELETON
   category: ddd
   dimension: cognition

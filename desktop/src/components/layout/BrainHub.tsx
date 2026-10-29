@@ -43,7 +43,7 @@ import type {
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
-import { getCodeIntelSummary, triggerReindex, type CodeIntelSummary } from '../../services/codeIntel';
+import { getCodeIntelGraphs, getCodeIntelSummary, triggerReindex, type CodeIntelSummary } from '../../services/codeIntel';
 import { relativeTime } from './ArtifactsOverlay';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
@@ -778,6 +778,23 @@ function BrainBrowse(
   // CodeGraph when expanded — so getCodeIntelGraph (an expensive force-graph fetch)
   // never runs unless the user asks. Default collapsed; no 3rd-level tab toggle.
   const [graphOpen, setGraphOpen] = useState(false);
+  // The repos with a graph (design 2026-10-29-code-intel-auto D7): a Brain that
+  // reads several shows a picker; fetched only once the disclosure is open.
+  const [repos, setRepos] = useState<string[] | null>(null);
+  const [repo, setRepo] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!graphOpen) return;
+    let cancelled = false;
+    getCodeIntelGraphs(name)
+      .then((r) => {
+        if (cancelled) return;
+        setRepos(r);
+        // one graph: no picker and no repo parameter (the endpoints default to it)
+        setRepo((cur) => (r.length > 1 ? (cur && r.includes(cur) ? cur : r[0]) : undefined));
+      })
+      .catch(() => { if (!cancelled) setRepos([]); });
+    return () => { cancelled = true; };
+  }, [graphOpen, name]);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-auto px-4 pb-4" data-testid="brainhub-browse">
@@ -830,10 +847,19 @@ function BrainBrowse(
               {graphOpen ? 'expand_less' : 'expand_more'}
             </span>
           </button>
-          {graphOpen && <CodeIntelStatus key={`status-${name}`} name={name} />}
-          {graphOpen && (
+          {graphOpen && repos && repos.length > 1 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] text-meta">
+              <span className="text-[var(--color-text-muted)]">Repository</span>
+              <select data-testid="codegraph-repo" value={repo} onChange={(e) => setRepo(e.target.value)}
+                className="bg-[var(--color-input-bg)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-meta">
+                {repos.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+          )}
+          {graphOpen && repos && <CodeIntelStatus key={`status-${name}-${repo ?? ''}`} name={name} repo={repo} />}
+          {graphOpen && repos && (
             <div className="border-t border-[var(--color-border)] h-[360px]" data-testid="codegraph-panel">
-              <CodeGraph key={`graph-${name}`} project={name} inline />
+              <CodeGraph key={`graph-${name}-${repo ?? ''}`} project={name} repo={repo} inline />
             </div>
           )}
         </div>
@@ -931,23 +957,23 @@ function _indexedAge(iso: string | null): string {
   return /^\d+[mhd]$/.test(age) ? `indexed ${age} ago` : `indexed on ${age}`;
 }
 
-function CodeIntelStatus({ name }: { name: string }) {
+function CodeIntelStatus({ name, repo }: { name: string; repo?: string }) {
   const [summary, setSummary] = useState<CodeIntelSummary | null>(null);
   const [reindexing, setReindexing] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    getCodeIntelSummary(name)
+    (repo ? getCodeIntelSummary(name, repo) : getCodeIntelSummary(name))
       .then((s) => { if (!cancelled) setSummary(s); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [name]);
+  }, [name, repo]);
 
   const reindex = () => {
     setReindexing(true);
     triggerReindex(name)
       // the re-index runs in the background: read the summary again after a moment
       .then(() => new Promise((r) => setTimeout(r, 5000)))
-      .then(() => getCodeIntelSummary(name))
+      .then(() => (repo ? getCodeIntelSummary(name, repo) : getCodeIntelSummary(name)))
       .then((s) => setSummary(s))
       .catch(() => {})
       .finally(() => setReindexing(false));

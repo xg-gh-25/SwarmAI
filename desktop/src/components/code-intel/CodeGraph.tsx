@@ -50,6 +50,8 @@ const TYPE_SIZE: Record<string, number> = {
 
 interface CodeGraphProps {
   project: string;
+  /** One of the project's repos (``GET …/graphs``); omitted = the first graph. */
+  repo?: string;
   limit?: number;
   onClose?: () => void;
   /** inline=true → embed in a parent pane (`relative h-full w-full`) instead of the
@@ -73,7 +75,7 @@ interface ForceGraphLink {
   type: string;
 }
 
-export function CodeGraph({ project, limit = 300, onClose, inline = false }: CodeGraphProps) {
+export function CodeGraph({ project, repo, limit = 300, onClose, inline = false }: CodeGraphProps) {
   // Outer container: fullscreen overlay by default; parent-filling when embedded.
   // The `bg-[#0d1117]` is shared; only the positioning differs (Gate-1 B1: the
   // inline parent — BrainHub's flex-1 content pane — has a definite height, so
@@ -96,7 +98,7 @@ export function CodeGraph({ project, limit = 300, onClose, inline = false }: Cod
     setLoading(true);
     setError(null);
 
-    getCodeIntelGraph(project, limit)
+    getCodeIntelGraph(project, limit, repo)
       .then((data) => {
         if (cancelled) return;
         if (!data) {
@@ -117,7 +119,7 @@ export function CodeGraph({ project, limit = 300, onClose, inline = false }: Cod
       });
 
     return () => { cancelled = true; };
-  }, [project, limit]);
+  }, [project, limit, repo]);
 
   // Responsive sizing
   useEffect(() => {

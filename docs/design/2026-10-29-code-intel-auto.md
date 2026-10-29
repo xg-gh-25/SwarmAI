@@ -2,7 +2,7 @@
 title: "Code intel r4: fully automatic once a Brain has a repo"
 created: 2026-10-29
 updated: 2026-10-29
-status: r2, being built (D3, D1, D2, D4, D5 landed)
+status: r2, built (D1–D7); review fixes in progress
 ---
 
 # Code intel r4: fully automatic once a Brain has a repo
@@ -189,9 +189,10 @@ root with `bind --local`'s function (owned at once) instead of `propose` + `conf
 
 ### D7. Brain Hub graph view stays, and shows each repo
 
-The view stays. With more than one graph, a repo picker above it passes `repo=` to
-`/graph` and `/summary` (both accept it, `routers/code_intel.py:95,117`). The card's
-local-roots block becomes a list with source and Remove (D1).
+The view stays. `GET /api/code-intel/{project}/graphs` lists the repos with a graph;
+with more than one, a picker above the view passes `repo=` to `/graph` and
+`/summary` (both accept it). The card's local-roots block is a list with source and
+Remove (D1).
 
 ## 3. Out of scope (recorded, not built)
 

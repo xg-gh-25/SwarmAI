@@ -134,9 +134,10 @@ vi.mock('../code-intel/CodeGraph', () => ({
 vi.mock('../../services/codeIntel', () => ({
   getCodeIntelSummary: vi.fn(),
   getCodeIntelGraph: vi.fn(),
+  getCodeIntelGraphs: vi.fn(() => Promise.resolve([])),
   triggerReindex: vi.fn(),
 }));
-import { getCodeIntelSummary, triggerReindex } from '../../services/codeIntel';
+import { getCodeIntelGraphs, getCodeIntelSummary, triggerReindex } from '../../services/codeIntel';
 
 // The Brain detail content is now the real Projects/<name> file tree (run_a75197d9).
 // Mock LibraryTree at the boundary — assert it's rooted at Projects/<name> and that
@@ -505,6 +506,24 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(status.textContent).toContain('never indexed');
     fireEvent.click(screen.getByTestId('codeintel-reindex'));
     expect(triggerReindex).toHaveBeenCalledWith('AIDLC');
+  });
+
+  it('a Brain with two graphs gets a repository picker that the status and the graph follow', async () => {
+    (getCodeIntelGraphs as ReturnType<typeof vi.fn>).mockResolvedValue(['app', 'lib']);
+    (getCodeIntelSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      symbolCount: 5, edgeCount: 0, fileCount: 1, languages: {}, lastIndexedAt: null,
+      indexedCommit: null, freshnessStatus: 'fresh',
+    });
+    await openBrowse();
+    fireEvent.click(await screen.findByTestId('codegraph-toggle'));
+    const pick = await screen.findByTestId('codegraph-repo') as HTMLSelectElement;
+    expect(Array.from(pick.options).map((o) => o.value)).toEqual(['app', 'lib']);
+    await waitFor(() => expect(getCodeIntelSummary).toHaveBeenCalledWith('SwarmAI', 'app'));
+    expect(mockCodeGraph).toHaveBeenLastCalledWith(expect.objectContaining({ repo: 'app' }));
+    fireEvent.change(pick, { target: { value: 'lib' } });
+    await waitFor(() => expect(getCodeIntelSummary).toHaveBeenCalledWith('SwarmAI', 'lib'));
+    expect(mockCodeGraph).toHaveBeenLastCalledWith(expect.objectContaining({ repo: 'lib' }));
+    (getCodeIntelGraphs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
   it('a graph an older parser wrote reads "rebuilding for a new parser", not its age', async () => {

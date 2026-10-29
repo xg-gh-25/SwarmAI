@@ -93,3 +93,18 @@ class TestGraphEndpoint:
         # FastAPI normalizes ../ so test with special chars instead
         resp = client.get("/api/code-intel/bad%20name!/graph")
         assert resp.status_code == 400
+
+
+class TestGraphsEndpoint:
+    """GET /api/code-intel/{project}/graphs: the repos with a graph, for Brain Hub's picker."""
+
+    def test_lists_the_repos_whose_graph_exists_in_order(self, client, tmp_path):
+        built = tmp_path / "a.db"
+        built.write_bytes(b"")
+        refs = [_CIDb(db_path=built, repo="app"), _CIDb(db_path=tmp_path / "missing.db", repo="lib")]
+        with patch("core.code_intel.owned_graphs", return_value=refs):
+            resp = client.get("/api/code-intel/SwarmAI/graphs")
+        assert resp.status_code == 200 and resp.json() == {"graphs": [{"repo": "app"}]}
+
+    def test_a_bad_name_is_refused(self, client):
+        assert client.get("/api/code-intel/..%2F/graphs").status_code in (400, 404)

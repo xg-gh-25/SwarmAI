@@ -93,6 +93,22 @@ async def get_code_intel_analysis(project: str, layers: str = "", repo: str | No
     return Response(content=body, media_type="application/json")
 
 
+@router.get("/{project}/graphs")
+async def get_code_intel_graphs(project: str):
+    """The repos of the project whose graph exists, in ``owned_graphs`` order (the
+    first is what the other read endpoints show without ``?repo=``). Brain Hub shows
+    a picker when there is more than one (design 2026-10-29-code-intel-auto D7)."""
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
+    def _work() -> dict:
+        from core.code_intel import code_intel_dbs
+        from jobs.paths import PROJECTS_DIR
+        return {"graphs": [{"repo": ref.repo} for ref in code_intel_dbs(PROJECTS_DIR / project)]}
+
+    return await asyncio.to_thread(_work)
+
+
 @router.get("/{project}/summary", response_model=CodeIntelSummary)
 async def get_code_intel_summary(project: str, repo: str | None = None):
     """A graph's status line: counts from the graph, and fresh/stale from one
