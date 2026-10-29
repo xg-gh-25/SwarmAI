@@ -195,7 +195,9 @@ async def test_injected_turn_is_persisted_and_the_unit_returns_to_idle():
 
     texts = [b.get("text") for r in rows for b in r["blocks"] if isinstance(b, dict)]
     assert "NOTIFIED" in texts
-    assert {r["label"] for r in rows} <= {"injected", "injected-results"}
+    # the turn's outcome block (core/turn_writer.record_outcome) lands on the turn's row,
+    # or as a row of its own under the same key when that row is not stored yet
+    assert {r["label"] for r in rows} <= {"injected", "injected-results", "injected-outcome"}
     keys = {r["client_id"] for r in rows}
     assert len(keys) == 1 and next(iter(keys)).startswith("injected-")
     assert all(r["sid"] == unit.session_id for r in rows)

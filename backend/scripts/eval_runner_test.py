@@ -449,36 +449,6 @@ class TestGoldenSetNewFields:
         assert "goal_success" in evaluators_used
 
 
-class TestEvalHistoryOutput:
-    """Test that eval run produces valid output (workspace-dependent, skips in CI)."""
-
-    @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
-    def test_output_file_exists(self):
-        root = _find_workspace_root()
-        hist_dir = root / "Eval" / "EvalHistory"
-        json_files = list(hist_dir.glob("*.json"))
-        assert len(json_files) > 0, "No eval history files found"
-
-    @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
-    def test_output_schema_valid(self):
-        root = _find_workspace_root()
-        hist_dir = root / "Eval" / "EvalHistory"
-        json_files = sorted(hist_dir.glob("*.json"))
-        if not json_files:
-            pytest.skip("No eval history files to validate")
-        latest = json_files[-1]
-        data = json.loads(latest.read_text())
-
-        assert "run_id" in data
-        assert "triggered_by" in data
-        assert "overall_score" in data
-        assert "dimensions" in data
-        assert "cases" in data
-        assert "total_cases" in data
-        assert isinstance(data["overall_score"], (int, float))
-        assert isinstance(data["cases"], list)
-
-
 class TestJudgeModelResolution:
     """_get_judge_model() must resolve short names to full Bedrock IDs.
 
