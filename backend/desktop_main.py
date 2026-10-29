@@ -163,11 +163,31 @@ def run_ingest(argv: "list[str]") -> int:
     sync_record.add_argument("--paths", nargs="+", required=True)
     wake_cmd = commands.add_parser("wake")
     wake_cmd.add_argument("--wait", type=float, default=0.0)
+    status_cmd = commands.add_parser("status")
+    status_cmd.add_argument("--json", action="store_true")
     eval_cmd = commands.add_parser("eval-export")
     eval_cmd.add_argument("--since", required=True)
     eval_cmd.add_argument("--until")
     eval_cmd.add_argument("--out", required=True)
     args = parser.parse_args(argv)
+
+    if args.command == "status":
+        # How CDF is doing and whether what it writes is used (core/ingestion/status).
+        # Read-only on ingestion.db; works with or without a running daemon.
+        import sqlite3
+        from core.ingestion.api import connect_ro
+        from core.ingestion.status import render, status
+        try:
+            conn = connect_ro()
+        except (FileNotFoundError, sqlite3.OperationalError):
+            print("CDF has no store yet (ingestion.db not created)")
+            return 0
+        try:
+            snapshot = status(conn)
+        finally:
+            conn.close()
+        print(json.dumps(snapshot, ensure_ascii=False, indent=1) if args.json else render(snapshot))
+        return 1 if snapshot["stalls"] else 0
 
     if args.command == "eval-export":
         # Design §14.2: every CDF outcome (judge stage live + archived, extractor

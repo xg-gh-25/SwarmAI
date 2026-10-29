@@ -774,6 +774,7 @@ def _collect_ingestion() -> list[AttentionItem]:
         "poison": "A Cognitive Distillation item repeatedly failed",
         "restored_orphan": "A restored file has no matching audit record",
         "missing_section": "Cognitive Distillation needs a target section",
+        "stalled": "Cognitive Distillation has stopped moving",
     }
     prompts = {
         "breaker": "Check why Cognitive Distillation paused a source and tell me how to restore it safely.",
@@ -785,6 +786,7 @@ def _collect_ingestion() -> list[AttentionItem]:
         "poison": "Inspect the repeatedly failing Cognitive Distillation item and identify the root cause.",
         "restored_orphan": "Inspect the restored Cognitive Distillation orphan without changing the restored file.",
         "missing_section": "Add the missing governed-file section so Cognitive Distillation can continue.",
+        "stalled": "Run `\"$SWARM_BACKEND_BIN\" ingest status`, find why Cognitive Distillation stopped moving and fix the cause.",
     }
     try:
         from core.ingestion.api import connect_ro
@@ -793,6 +795,8 @@ def _collect_ingestion() -> list[AttentionItem]:
             rows = conn.execute(
                 "SELECT id,at,kind,detail FROM ingestion_events WHERE resolved=0 ORDER BY at DESC,id DESC"
             ).fetchall()
+            from core.ingestion.status import stalls
+            stalled = stalls(conn)
     except (OSError, sqlite3.Error):
         return []
     except Exception as exc:
@@ -802,6 +806,16 @@ def _collect_ingestion() -> list[AttentionItem]:
     items: list[AttentionItem] = []
     seen: set[str] = set()
     now = datetime.now(timezone.utc)
+    if stalled:
+        # computed from the store, not an event: it clears by itself once CDF moves
+        summary = _one_line("; ".join(stalled))
+        items.append(AttentionItem(
+            id="ingestion:stalled", source="ingestion", tier=TIER_REVIEW, brain=None,
+            title=titles["stalled"], summary=summary, detail=summary,
+            dispatch={"message": _prompt(prompts["stalled"], [("What stopped", summary)],
+                                          ["ingest status"]),
+                      "context": {"kind": "stalled"}},
+        ))
     for row in rows:
         kind = str(row["kind"])
         if kind not in titles or kind in seen:

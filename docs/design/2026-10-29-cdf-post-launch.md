@@ -21,7 +21,7 @@ CDF 一次切换上线之后要做的事。原则不变：不加开关、不加�
 
 ## 1. 上线当天到第 7 天：怎么看它是否稳定
 
-重启后我在第 0、1、3、7 天各查一次，都是只读查询，查的是 `~/.swarm-ai/ingestion.db` 和 daemon 日志：
+重启后我在第 0、1、3、7 天各查一次，都是只读查询，查的是 `~/.swarm-ai/ingestion.db` 和 daemon 日志。下表除日志外的各项，`"$SWARM_BACKEND_BIN" ingest status` 一次输出（`--json` 给机器读），停住的项同时进 Need-You；它还输出北极星指标：CDF 写入的条目在写入后 14 天内被读到或被引用的比例（`core/ingestion/status.py`）：
 
 | 看什么 | 怎么查 | 不对的表现 |
 |---|---|---|

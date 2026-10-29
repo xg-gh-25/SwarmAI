@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 
@@ -33,6 +34,8 @@ def test_collect_ingestion_covers_each_kind_once(tmp_path: Path, monkeypatch: py
         if kind == "missing_section": detail["prompt"] = expected_prompt
         conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)", (_old(), kind, json.dumps(detail)))
     conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)", (_old(), "poison", "{}"))
+    # a live owner, so the computed "stalled" item stays out of these event-kind tests
+    conn.execute("INSERT INTO ingestion_owner(id,epoch,pid,started_at) VALUES(1,1,?,?)", (os.getpid(), _old()))
     conn.commit(); conn.close()
 
     def ro() -> sqlite3.Connection:
@@ -56,6 +59,8 @@ def test_collect_ingestion_ignores_young_threshold_events(tmp_path: Path, monkey
     now = datetime.now(timezone.utc).isoformat()
     conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)", (now, "backlog", json.dumps({"oldest_wait_seconds": 60})))
     conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)", (now, "judge_down", json.dumps({"since": now})))
+    # a live owner, so the computed "stalled" item stays out of these event-kind tests
+    conn.execute("INSERT INTO ingestion_owner(id,epoch,pid,started_at) VALUES(1,1,?,?)", (os.getpid(), _old()))
     conn.commit(); conn.close()
     monkeypatch.setattr(api, "connect_ro", lambda: sqlite3.connect(f"file:{path}?mode=ro", uri=True))
     assert authority._collect_ingestion() == []

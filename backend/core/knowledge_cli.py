@@ -87,6 +87,7 @@ def _find(args: argparse.Namespace) -> int:
         _out(f"knowledge find: no project named {args.project!r} (see: knowledge map --projects)")
         return 1
     found = addressing.find(args.project, args.query, doc=args.doc, top=args.top)
+    _record_use(found.units, "recall_injected")
     if args.json:
         _out(json.dumps({"units": [_unit_json(u) for u in found.units],
                          "omitted": [_unit_json(u, text=False) for u in found.omitted],
@@ -110,6 +111,23 @@ def _find(args: argparse.Namespace) -> int:
     return 0
 
 
+def _record_use(units, kind: str) -> None:
+    """Record the CDF entries a person or agent was shown (``find``: recall_injected) or
+    read (``get``: read_by_agent), so CDF's usage measure sees the knowledge CLI, the main
+    way the DDD is read. Exact entry text only; never fails the command."""
+    try:
+        import os
+        from pathlib import Path
+        from core.ingestion.usage import _units_in_content, record_usage
+        session = os.environ.get("SWARM_APP_SESSION_ID", "")
+        for u in units:
+            for anchor in _units_in_content(Path(u.path), u.text):
+                record_usage(anchor, kind, session)
+    except Exception as exc:  # noqa: BLE001 - usage bookkeeping never fails a lookup
+        import logging
+        logging.getLogger(__name__).warning("knowledge usage not recorded: %s", exc)
+
+
 def _unit_json(u, text: bool = True) -> dict:
     row = {"id": u.id, "path": u.path, "line": u.line, "section": u.section,
            "store": u.store, "title": u.title}
@@ -129,6 +147,7 @@ def _get(args: argparse.Namespace) -> int:
              "(an id changes when an entry is rewritten; find it again with `knowledge find`)")
         return 1
     u, others = found[0], found[1:]
+    _record_use([u], "read_by_agent")
     if args.json:
         _out(json.dumps({"units": [_unit_json(u)], "omitted": [_unit_json(o, text=False) for o in others],
                          "skipped": []}, ensure_ascii=False))
