@@ -213,10 +213,14 @@ function OverviewStrip({ o }: { o: JobsOverview }) {
     { label: 'healthy', value: String(o.healthy) },
     { label: 'failing', value: String(o.failing), danger: o.failing > 0 },
     { label: 'never-run', value: String(o.neverRun) },
-    { label: 'monthly spend', value: `$${o.monthlySpendUsd.toFixed(2)}` },
+    { label: 'jobs this month', value: `$${o.monthlySpendUsd.toFixed(2)}` },
+    // the budget is held to the whole platform's spend: reaching it stops new agent jobs
+    { label: 'platform / budget', value: o.platformMonthSpendUsd == null || o.monthlyBudgetUsd == null ? '—'
+        : `$${Math.round(o.platformMonthSpendUsd).toLocaleString()} / $${Math.round(o.monthlyBudgetUsd).toLocaleString()}`,
+      danger: o.platformMonthSpendUsd != null && o.monthlyBudgetUsd != null && o.platformMonthSpendUsd >= o.monthlyBudgetUsd },
   ];
   return (
-    <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="jobs-overview">
+    <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-6 gap-2" data-testid="jobs-overview">
       {cells.map((c) => (
         <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
           <span className={`text-heading font-semibold ${c.danger ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text)]'}`}>{c.value}</span>

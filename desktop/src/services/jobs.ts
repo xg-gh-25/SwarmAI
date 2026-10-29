@@ -86,6 +86,9 @@ export interface JobsOverview {
   failing: number;
   neverRun: number;
   monthlySpendUsd: number;
+  /** the whole platform's spend this month, the figure the monthly budget is held to */
+  platformMonthSpendUsd: number | null;
+  monthlyBudgetUsd: number | null;
 }
 
 /** One historical run of a job (from GET /api/jobs/{id}/runs recent[]). */
@@ -145,6 +148,8 @@ export const jobsService = {
       failing: (sj.failing as number) ?? 0,
       neverRun: (sj.never_run as number) ?? 0,
       monthlySpendUsd: (sj.monthly_spend_usd as number) ?? 0,
+      platformMonthSpendUsd: (sj.platform_month_spend_usd as number | null) ?? null,
+      monthlyBudgetUsd: (sj.monthly_budget_usd as number | null) ?? null,
     };
   },
 

@@ -43,7 +43,7 @@ function mkRoster(over: Partial<JobRosterRow> = {}): JobRosterRow {
   };
 }
 
-const OVERVIEW: JobsOverview = { total: 10, enabled: 8, healthy: 6, failing: 1, neverRun: 1, monthlySpendUsd: 3.5 };
+const OVERVIEW: JobsOverview = { total: 10, enabled: 8, healthy: 6, failing: 1, neverRun: 1, monthlySpendUsd: 3.5, platformMonthSpendUsd: 900, monthlyBudgetUsd: 1000 };
 
 const RUNS: JobRunsResult = {
   jobId: 'stock-analysis', lastOutput: 'FULL STOCK REPORT BODY\nline2',
@@ -253,7 +253,7 @@ describe('JobsRunsOverlay interactions', () => {
 
   it('empty roster shows the guide empty-state, not a blank column', async () => {
     fn(jobsService.fetchRoster).mockResolvedValue([]);
-    fn(jobsService.fetchOverview).mockResolvedValue({ total: 0, enabled: 0, healthy: 0, failing: 0, neverRun: 0, monthlySpendUsd: 0 });
+    fn(jobsService.fetchOverview).mockResolvedValue({ total: 0, enabled: 0, healthy: 0, failing: 0, neverRun: 0, monthlySpendUsd: 0, platformMonthSpendUsd: null, monthlyBudgetUsd: null });
     renderQ(<JobsRunsContent onDispatch={() => true} close={() => {}} />);
     openOverlay();
     await screen.findByTestId('jobs-overlay');

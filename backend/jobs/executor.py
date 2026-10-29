@@ -1672,12 +1672,37 @@ def send_post_job_notification(job: Job, result: JobResult) -> None:
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+def _platform_month_spend() -> float | None:
+    """The whole platform's spend this local month, from the usage ledger (every
+    machine and surface: chat, pipeline, CDF, jobs, background calls, the Hives); None
+    when the ledger cannot be read."""
+    try:
+        from core.usage_report import month_spend
+        return month_spend()
+    except Exception:  # noqa: BLE001 — a gate that crashes the scheduler is worse
+        return None
+
+
 def _check_monthly_budget(state: SchedulerState, defaults: SchedulerDefaults) -> str | None:
-    """Return error message if monthly budget exceeded, else None."""
+    """Return a skip reason when the monthly budget is reached, else None.
+
+    The budget (``defaults.max_monthly_spend_usd``) is held to the whole platform's spend
+    this month (design docs/design/2026-10-29-usage-accounting.md §11c). Reaching it only
+    stops the scheduler from starting a new agent job; chat, pipeline runs and work
+    already running are never stopped. The jobs' own spend this month
+    (``state.monthly_spend_usd``) is the floor, and the figure when the ledger cannot be read.
+    """
     cap = defaults.max_monthly_spend_usd
-    if state.monthly_spend_usd >= cap:
+    platform = _platform_month_spend()
+    if platform is None:
+        spent, scope = state.monthly_spend_usd, "scheduled jobs (usage ledger unreadable)"
+    else:
+        # never below the jobs' own figure: the ledger can miss rows (begun mid-month,
+        # rows dropped by a full writer queue)
+        spent, scope = max(platform, state.monthly_spend_usd), "whole platform"
+    if spent >= cap:
         return (
-            f"Monthly budget reached (${state.monthly_spend_usd:.2f}/${cap:.2f}). "
+            f"Monthly budget reached (${spent:.2f}/${cap:.2f}, {scope} this month). "
             f"Reset on 1st of next month."
         )
     return None

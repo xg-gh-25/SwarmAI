@@ -387,7 +387,7 @@ defaults:
   relevance_threshold: 0.3
   max_active_feeds: 20
   max_daily_agent_tasks: 50
-  max_monthly_spend_usd: 100.0
+  max_monthly_spend_usd: 100.0   # the whole platform's spend this month; reaching it stops new agent jobs
 
 user_context:
   interests: []

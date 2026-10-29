@@ -83,6 +83,7 @@ const DOMAIN_ORDER = [
   'nav-jobs',      // System: Jobs & Runs FIRST in System (XG 2026-08-02)
   'nav-capabilities',  // System: ability reference, after Jobs (moved from Work, run_5165013e)
   'nav-hive',      // System: Hive Fleet (run_b450108e)
+  'nav-usage',     // System: the usage view (design 2026-10-29-usage-accounting §11c)
   'nav-eval',
   'nav-settings',
 ];

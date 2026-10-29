@@ -1621,5 +1621,97 @@
         "stopped": "stopped"
       }
     }
+  },
+  "usage": {
+    "windowLabel": "Window",
+    "window": {
+      "d7": "Last 7 days",
+      "d30": "Last 30 days",
+      "all": "All"
+    },
+    "scopeHives": "This machine + {{count}} Hive(s) · book cost",
+    "scopeLocal": "This machine · book cost · no Hive has reported",
+    "loading": "Loading…",
+    "error": "The usage ledger could not be read",
+    "empty": "No usage in this window",
+    "vsPrevDown": "↓ {{pct}}% vs the window before ({{prev}})",
+    "vsPrevUp": "↑ {{pct}}% vs the window before ({{prev}})",
+    "vsPrevNone": "Nothing spent the window before",
+    "perDay": "{{v}} a day on average",
+    "facts": {
+      "billed": "billed tokens",
+      "hit": "cache hit",
+      "p50": "median turn",
+      "p90": "90th percentile turn",
+      "max": "costliest turn"
+    },
+    "budget": {
+      "line": "This month, whole platform: {{spent}} / budget {{cap}} ({{pct}}%)",
+      "none": "This month, whole platform: {{spent}} · no budget read",
+      "rule": "At the budget only new agent jobs stop; chat, pipeline runs and running work go on",
+      "reached": "Budget reached: no new agent job starts until the 1st; chat, pipeline runs and running work go on",
+      "edit": "Change budget",
+      "save": "Save",
+      "cancel": "Cancel",
+      "invalid": "The budget must be above 0",
+      "failed": "The budget was not saved"
+    },
+    "insight": {
+      "top": "The top {{n}} sessions spent {{share}}% of this window",
+      "sep": "; ",
+      "big": "the {{turns}} turns over {{usd}} ({{turnShare}}% of turns) spent {{costShare}}%.",
+      "hint": "Start optimizing there: why they run so long, and how much context each turn carries."
+    },
+    "axis": "Book cost per day (this window bright, the one before for comparison)",
+    "where": {
+      "title": "Where it goes",
+      "surface": "By surface",
+      "feature": "By feature",
+      "model": "By model",
+      "machine": "By machine"
+    },
+    "dimName": {
+      "surface": "surface",
+      "feature": "feature",
+      "model": "model",
+      "machine": "machine"
+    },
+    "col": {
+      "share": "share",
+      "cost": "book cost",
+      "billed": "billed tokens",
+      "hit": "cache hit",
+      "calls": "calls",
+      "perCall": "per call",
+      "turns": "turns",
+      "perTurn": "per turn"
+    },
+    "none": "(none)",
+    "costUnknown": "cost unknown",
+    "attribution": "pipeline: a split of chat ({{count}} run(s), not added in)",
+    "top": {
+      "title": "The largest",
+      "sessions": "session",
+      "runs": "pipeline run",
+      "jobs": "job",
+      "hive": "Hive run",
+      "empty": "None in this window",
+      "open": "Open",
+      "gone": "This session could not be opened (it may have been deleted)"
+    },
+    "turns": {
+      "title": "What a turn costs",
+      "range": "cost per turn",
+      "turns": "turns",
+      "share": "share of cost",
+      "note": "A turn's cost is almost all cache reads, so it grows with the context: the longer the context, the dearer each turn."
+    },
+    "gaps": {
+      "title": "Not visible yet:",
+      "unpriced": "{{surface}}: {{calls}} call(s), {{tokens}} tokens with no cost (no price learned yet)",
+      "imported": "{{cost}} of it is imported older records (increases per session, an estimate)",
+      "liveSince": "The ledger records live since {{date}}",
+      "noHive": "No Hive has reported yet (they join once updated to the new version)"
+    }
   }
 }

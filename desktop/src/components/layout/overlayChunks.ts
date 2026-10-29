@@ -27,6 +27,7 @@ export const OVERLAY_CHUNK = {
   jobs: () => import('./JobsRunsOverlay'),
   capabilities: () => import('./CapabilitiesOverlay'),
   hive: () => import('./HiveFleetOverlay'),
+  usage: () => import('./UsageOverlay'),
   eval: () => import('../../pages/eval/EvalOverlay'),
   settings: () => import('../../pages/SettingsPage'),
   // swarmws: WorkspaceExplorer is also the app's own sidebar, so it is in the first

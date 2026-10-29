@@ -70,7 +70,7 @@ usage_ledger(
 | CLI result（8 条路径） | 收成一个 `usage_accounting.record_cli_result(message, session, pid, surface)`：读 `model_usage`，每个模型的四种 token 和 `costUSD` 都对上一行（同一 pid、同一模型）取增量；没有 `model_usage` 的老 CLI 退回到 `usage` + `total_cost_usd`。channel 的 turn 标 `surface=channel` |
 | 所有 Bedrock 调用 | `jobs/bedrock.py` 每次都记（删掉 `record_usage` 开关），四种 token 都取；归属沿用 `llm_usage.attribute()` 的 contextvar 做法，推广成 `usage_accounting.attribute(feature=...)`，CDF 的现有 source 直接映射成 `cdf.s2/s3/s7`；`ingestion_llm_usage` 停止写入，历史导入后保留只读。现在没有一个调用用 `cachePoint`，缓存字段暂时都是 0 |
 | 其他 CLI 进程（s7 评审、ddd_self_audit、Slack DM、agent job） | 共用一个 `record_cli_json(output, surface, feature/job_id)`，读 `--output-format json` 里的 `modelUsage` / `total_cost_usd`，**包括非零退出**（有输出就记）；job 的模型用量按各模型相加，不取 max |
-| 调度器预算 | 读账本里 `surface=job` 的本月花费，不再另记一份（预算范围不变） |
+| 调度器预算 | 读账本里全平台本月的花费（所有机器、所有 surface 的 spend 行），见 §11c |
 | Pipeline run | run 结束时由 `usage.measure` 写 attribution 行（run 一行、每 stage 一行），按 transcript 里每条响应的 `message.model` 分模型，再按 token 占比分摊对应 spend 行的花费；`run_audit` 的判定继续用可比 token，报告另列计费 token 和账面花费 |
 | Hive | Hive 跑的是同一个产品，它自己也写 `usage_ledger`；Host 通过一个新的只读接口，按 Hive 那边的 `id` 增量拉取（`dedup_key = Hive 名 + Hive 行 id`），所以 Hive 上的 CDF、job、Bedrock 花费都能拉回来。老版本的 Hive 退回到导入 `turn_outcome` |
 
@@ -83,7 +83,7 @@ usage_ledger(
 | Swarm Out 卡片、History | 读账本里该 dispatch 的 spend 行 |
 | Pipeline 报告和面板 | 计费 token、账面花费、可比 token、每 stage 拆分 |
 | 备份 | `backup_manager.L2_TABLES` 加上 `usage_ledger` |
-| **新的"用量"视图**（做系统性优化就看这里） | 按天 × surface / feature / model 的花费；最贵的 session、run、job、功能；每个 feature 的缓存命中率；单次调用平均花费；每行都能点回明细。先出 mockup |
+| **新的"用量"视图**（做系统性优化就看这里） | 已实现（§11c）：mockup `Knowledge/Designs/mockups/2026-10-30-usage-view.html`；`core/usage_report` + `GET /api/usage/report`；左栏 System 区的 Usage 卡片和顶栏的 token 数字都打开它 |
 
 ## 6. 单价表（只给没有 CLI 花费的 Bedrock 直接调用用）
 
@@ -139,19 +139,28 @@ usage_ledger(
 ## 11. 需要你定的
 
 1. **Hive 的花费算不算进平台总账？** 推荐算，钱是同一个人付的
-2. **调度器月度预算要不要扩大到全平台？** 这一版只让它读账本里的 job 花费，范围不变；扩大意味着 chat 花多了 job 会被停，另做决定
+2. **调度器月度预算要不要扩大到全平台？** 已定（2026-10-30）：扩大，见 §11c
 3. **走 pipeline 还是直接做？** 跨 6 个模块、新表、迁移，属于高风险改动
 
 ## 11b. 实现时改了的决定（2026-10-29）
 
 - **`model_usage` 是进程累计值，已实测**：同一进程连续两次 result，第二次的 `model_usage` 含第一次的 token 和花费（`costUSD` 等于 `total_cost_usd`），`costBasis` 是 `"list"`。所以 CLI 行按"同一进程、同一模型的增量"记，token 和花费都一样。
 - **`token_usage` 继续写**（不是 r2 写的"不再写入"）：在线打分和顶栏的旧逻辑还读它，回退到旧版本时也要能用。等读的一侧都切到账本以后，再决定什么时候停写。
-- **调度器预算这一版不改来源**：仍是 `monthly_spend_usd`，只是 job 的花费同时写进账本。改预算读哪个数、管多宽，属于花费限制，按 STEERING #2 要你明确批准。
+- **调度器预算这一版不改来源**：仍是 `monthly_spend_usd`，只是 job 的花费同时写进账本。（2026-10-30 已改，见 §11c。）
 - **记账只交给一个写线程**（第 2 步专家审查后定的）：所有调用方只是把行放进一个有上限的队列，立刻返回；一个后台线程用自己的 sqlite3 连接（`mode=rw`，不会创建数据库文件）成批写入，数据库忙时重试，失败的行计数（`usage_accounting.stats()`），每分钟最多记一条日志。不碰按事件循环建的异步连接池：临时事件循环每次都会留下一个连接池和它的线程，而后台调用每天有几千次。
 - **每个 CLI result 只记一次**：结果分支最先记（在任何分支 yield、kill 或 return 之前），其他看见同一个 result 的路径因为它已被标记而不再记。去重键里有一个每次启动的随机串，daemon 重启后不会和旧行撞键；跟踪状态按 session 记，pid 变了就是新进程。
 - **CDF 的 `ingestion_llm_usage` 照写**：它是 CDF 预算回放在读的数；CDF 的调用现在也会进账本（`cdf.<source>`），平台总数只算账本。
 
 - **未决：账本的保留期**。账本不清理，每天几千行；备份把整张表导出成压缩 dump。等用量视图做出来、知道要查多久的明细之后，再定"明细保留多少天、更早的按天汇总"。
+
+## 11c. 预算扩大到全平台，用量视图（2026-10-30，用户批准）
+
+- **预算管多宽**：`defaults.max_monthly_spend_usd` 现在对的是全平台本月的花费：本机和拉回来的 Hive，chat、pipeline、CDF、job、后台调用都算；从本地日历月 1 号零点起。数来自 `usage_report.month_spend()`，attribution 行不算（它只是 chat 的拆分）。
+- **到了预算停什么**：只停调度器启动新的 agent job（和以前一样的那个闸，`jobs/executor._check_monthly_budget`），下月 1 号恢复。chat、pipeline run、正在跑的工作都不停，也不截断（STEERING #2）。账本读不到时退回 job 自己的本月花费。
+- **Hive 自己的调度器**：读它自己的账本，就是它自己的花费；Host 的预算包括 Hive 的花费，但不去停 Hive 上的 job。
+- **改预算**：用量视图里直接改（`PUT /api/usage/budget`，写进调度器的 `config.yaml`，经 `config_io.mutate_config` 加锁原子写）；Jobs & Runs 的概览也显示"全平台本月 / 预算"。
+- **上线前要改数**：旧的 $100 是只算 job 的数；按全平台算，本月已经 $8.9K，不改的话所有 agent job 一上线就停。
+- **用量视图**回答四件事：这段时间花了多少、和上一段比往哪走（加本月预算进度）；钱集中在哪（前几个 session 的占比、单轮超过 $15 的轮次的占比）；花在哪（按 surface / 功能 / 模型 / 机器，pipeline 行单列为 chat 的拆分、不进总数）；最大的几笔（session / pipeline run / job / Hive run，每行能点开）和一轮花多少；还看不见的单独列出（没有单价的调用、导入的估算、还没上报的 Hive），不用 0 去填。
 
 ## 12. r1 审查的 finding 怎么处理的
 

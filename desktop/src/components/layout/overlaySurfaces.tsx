@@ -38,6 +38,7 @@ const JobsRunsContent = lazy(() => OVERLAY_CHUNK.jobs().then((m) => ({ default: 
 const CapabilitiesContent = lazy(() => OVERLAY_CHUNK.capabilities().then((m) => ({ default: m.CapabilitiesContent })));
 const PipelineContent = lazy(() => OVERLAY_CHUNK.pipeline().then((m) => ({ default: m.PipelineContent })));
 const PollinateContent = lazy(() => OVERLAY_CHUNK.pollinate().then((m) => ({ default: m.PollinateContent })));
+const UsageContent = lazy(() => OVERLAY_CHUNK.usage().then((m) => ({ default: m.UsageContent })));
 const HiveFleetContent = lazy(() => OVERLAY_CHUNK.hive().then((m) => ({ default: m.HiveFleetContent })));
 const BrainHub = lazy(() => OVERLAY_CHUNK['brain-hub']().then((m) => ({ default: m.BrainHub })));
 const SettingsPage = lazy(() => OVERLAY_CHUNK.settings());
@@ -268,6 +269,17 @@ registerOverlay({
   render: ({ close }) => (
     <div className="flex-1 overflow-hidden" data-testid="hive-overlay-wrap">
       <HiveFleetContent close={close} />
+    </div>
+  ),
+});
+
+// ── usage — nav card + the top bar's token figures; not agent-openable (it sets the
+// monthly budget) ─────────────────────────────────────────────────────────────────────
+registerOverlay({
+  id: 'usage',
+  render: ({ close, resumeSession }) => (
+    <div className="flex-1 overflow-hidden" data-testid="usage-overlay">
+      <UsageContent close={close} resumeSession={resumeSession} />
     </div>
   ),
 });

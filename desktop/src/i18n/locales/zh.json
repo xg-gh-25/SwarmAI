@@ -1621,5 +1621,97 @@
         "stopped": "已停止"
       }
     }
+  },
+  "usage": {
+    "windowLabel": "时间段",
+    "window": {
+      "d7": "近 7 天",
+      "d30": "近 30 天",
+      "all": "全部"
+    },
+    "scopeHives": "本机 + {{count}} 个 Hive · 账面花费",
+    "scopeLocal": "本机 · 账面花费 · Hive 还没上报",
+    "loading": "读取中…",
+    "error": "用量账本读不到",
+    "empty": "这段时间没有用量",
+    "vsPrevDown": "↓ {{pct}}% 比上一段（{{prev}}）",
+    "vsPrevUp": "↑ {{pct}}% 比上一段（{{prev}}）",
+    "vsPrevNone": "上一段没有花费",
+    "perDay": "每天平均 {{v}}",
+    "facts": {
+      "billed": "计费 token",
+      "hit": "缓存命中",
+      "p50": "每轮中位",
+      "p90": "每轮 90 分位",
+      "max": "最贵的一轮"
+    },
+    "budget": {
+      "line": "本月全平台 {{spent}} / 预算 {{cap}}（{{pct}}%）",
+      "none": "本月全平台 {{spent}} · 没读到预算",
+      "rule": "到了预算只停新的 agent job；chat、pipeline 和正在跑的工作不停",
+      "reached": "已到预算：新的 agent job 不再启动，下月 1 号恢复；chat、pipeline 和正在跑的工作不停",
+      "edit": "改预算",
+      "save": "保存",
+      "cancel": "取消",
+      "invalid": "预算要大于 0",
+      "failed": "预算没保存上"
+    },
+    "insight": {
+      "top": "前 {{n}} 个 session 占了这段时间花费的 {{share}}%",
+      "sep": "；",
+      "big": "单轮超过 {{usd}} 的 {{turns}} 轮（{{turnShare}}% 的轮数）占了 {{costShare}}%。",
+      "hint": "系统性优化先看这几个：它们为什么这么长、每轮带了多少上下文。"
+    },
+    "axis": "每天的账面花费（这一段亮色，之前的作对比）",
+    "where": {
+      "title": "花在哪",
+      "surface": "按 surface",
+      "feature": "按功能",
+      "model": "按模型",
+      "machine": "按机器"
+    },
+    "dimName": {
+      "surface": "surface",
+      "feature": "功能",
+      "model": "模型",
+      "machine": "机器"
+    },
+    "col": {
+      "share": "花费占比",
+      "cost": "账面花费",
+      "billed": "计费 token",
+      "hit": "缓存命中",
+      "calls": "次数",
+      "perCall": "每次",
+      "turns": "轮",
+      "perTurn": "每轮"
+    },
+    "none": "（无）",
+    "costUnknown": "花费未知",
+    "attribution": "pipeline：chat 里的拆分（{{count}} 个 run，不进总数）",
+    "top": {
+      "title": "最大的几笔",
+      "sessions": "session",
+      "runs": "pipeline run",
+      "jobs": "job",
+      "hive": "Hive run",
+      "empty": "这段时间没有",
+      "open": "打开",
+      "gone": "这个 session 打不开（可能已删除）"
+    },
+    "turns": {
+      "title": "一轮花多少",
+      "range": "每轮花费",
+      "turns": "轮数",
+      "share": "占花费",
+      "note": "一轮的花费几乎全是缓存读，和上下文长度成正比：上下文越长，每轮越贵。"
+    },
+    "gaps": {
+      "title": "还看不见的：",
+      "unpriced": "{{surface}}：{{calls}} 次调用、{{tokens}} token 没有花费（还没学到单价）",
+      "imported": "其中 {{cost}} 是导入的旧记录（按 session 算增量，是估算）",
+      "liveSince": "账本从 {{date}} 起实时记录",
+      "noHive": "Hive 还没有上报（更新到新版本后自动并入）"
+    }
   }
 }

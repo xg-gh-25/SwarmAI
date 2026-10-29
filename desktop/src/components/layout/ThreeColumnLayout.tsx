@@ -141,7 +141,7 @@ function formatTokens(m: number): string {
   return '0';
 }
 
-function TopBar() {
+function TopBar({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
   const { data: tokenUsage } = useQuery<TokenUsageData>({
     queryKey: ['token-usage'],
     queryFn: async () => {
@@ -181,11 +181,14 @@ function TopBar() {
       {/* Right: token usage metrics — pr-5 (20px) keeps content away from window
           edge/resize handle. macOS has no right-side controls; Windows/Linux may
           have snap layout button area (~8px). 20px covers both safely. */}
-      <div
-        className="flex items-center gap-2 pr-5 text-meta text-[var(--color-text-muted)]"
-        role="status"
-        aria-label="Token usage"
-        title={tokenUsage ? tokenUsageTitle(tokenUsage) : 'Loading...'}
+      <button
+        type="button"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={onOpenUsage}
+        className="flex items-center gap-2 pr-5 text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] cursor-pointer"
+        aria-label="Token usage — open the usage view"
+        data-testid="top-bar-usage"
+        title={tokenUsage ? `${tokenUsageTitle(tokenUsage)}\n\nClick: the usage view` : 'Loading...'}
       >
         <span className="text-body">&#x1FA99;</span>
         <span>Today <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong>
@@ -193,7 +196,7 @@ function TopBar() {
         <span className="text-[var(--color-border)]">|</span>
         <span>Total <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong>
           {tokenUsage && <span className="tabular-nums"> · {usd(tokenUsage.total_cost_usd)}</span>}</span>
-      </div>
+      </button>
     </div>
   );
 }
@@ -388,6 +391,7 @@ function LeftSidebar() {
           {hiveEnabled && (
             <A10Card navId="hive" onPrefetch={() => prefetch('hive')} icon="cloud" statusDot={hiveStatusDot} isActive={newActiveOverlay === 'hive'} onClick={() => activateNav('hive')} data-testid="nav-hive" />
           )}
+          <A10Card navId="usage" onPrefetch={() => prefetch('usage')} icon="usage" isActive={newActiveOverlay === 'usage'} onClick={() => activateNav('usage')} data-testid="nav-usage" />
           <A10Card navId="eval" onPrefetch={() => prefetch('eval')} icon="heartbeat" isActive={newActiveOverlay === 'eval'} onClick={() => activateNav('eval')} data-testid="nav-eval" />
           <A10Card navId="settings" onPrefetch={() => prefetch('settings')} icon="gear" isActive={newActiveOverlay === 'settings'} onClick={() => activateNav('settings', () => setSettingsTab(undefined))} data-testid="nav-settings" />
         </A10Group>
@@ -495,6 +499,16 @@ function NavSvgIcon({ name }: { name: string }) {
           <circle cx="12" cy="5" r="1.9" />
           <circle cx="18" cy="15.5" r="1.9" />
           <circle cx="6" cy="15.5" r="1.9" />
+        </svg>
+      );
+    case 'usage':
+      // Three bars on a baseline: the usage view (spend by day)
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <line x1="3" y1="20" x2="21" y2="20" />
+          <rect x="5" y="11" width="3.5" height="9" rx="0.8" />
+          <rect x="10.25" y="6" width="3.5" height="14" rx="0.8" />
+          <rect x="15.5" y="13" width="3.5" height="7" rx="0.8" />
         </svg>
       );
     case 'activity':
@@ -934,7 +948,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       <>
 
         {/* Top bar -- session context, draggable */}
-        <TopBar />
+        <TopBar onOpenUsage={() => openOverlay('usage')} />
 
         {/* Main layout below top bar — min-h-0 overrides flex auto-min-height
             (which uses intrinsic content size and prevents shrinking). Without this,

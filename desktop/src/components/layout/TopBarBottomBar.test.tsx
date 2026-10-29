@@ -113,11 +113,11 @@ function setupMocks(overrides: {
 // ---------- TopBar Tests ----------
 
 describe('TopBar', () => {
-  function renderTopBar() {
+  function renderTopBar(onOpenUsage?: () => void) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
       <QueryClientProvider client={qc}>
-        <TopBar />
+        <TopBar onOpenUsage={onOpenUsage} />
       </QueryClientProvider>,
     );
   }
@@ -138,12 +138,21 @@ describe('TopBar', () => {
       total: { input: 1, output: 2, cache_read: 3, cache_write: 4, cache_hit_rate: 0.375 },
     } } as never);
     renderTopBar();
-    const bar = await screen.findByRole('status', { name: 'Token usage' });
+    const bar = await screen.findByRole('button', { name: /Token usage/ });
     await vi.waitFor(() => expect(bar.textContent).toContain('$839.49'));
     expect(bar.textContent).toContain('2.1B');
     expect(bar.getAttribute('title')).toBe('Today: $839.49\n  input 58.1K · output 4.3M · cache read 2.04B · cache write 15.5M · cache hit 99%'
-      + '\nTotal: $3,412.50\n  input 1 · output 2 · cache read 3 · cache write 4 · cache hit 38%');
+      + '\nTotal: $3,412.50\n  input 1 · output 2 · cache read 3 · cache write 4 · cache hit 38%'
+      + '\n\nClick: the usage view');
     get.mockRestore();
+  });
+
+  it('a click on the token figures opens the usage view', async () => {
+    setupMocks({ sessionMeta: null });
+    const open = vi.fn();
+    renderTopBar(open);
+    (await screen.findByTestId('top-bar-usage')).click();
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it('does not render context ring (moved to ChatInput)', () => {
