@@ -214,6 +214,15 @@ EVENT_RULE = ("An event is recorded only when it changes how the work stands: a 
               "rework. Routine operations are not events whether they succeed or fail: a "
               "build, a restart, a deploy, an install, a test run, checking a result, "
               "dispatching the next step of a plan.\n")
+def event_date_rule() -> str:
+    """The date an event falls back to: with none in the source the model invented one
+    (2025-01-01T00:00:00), which filed the event under a month of its own."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    return (f"Date an event (when) from the source; when the source shows no date, use "
+            f"today, {today}.\n")
+
+
 Significance = Literal["direction_change", "loss_or_rework", "milestone", "key_decision", "user_asked"]
 
 

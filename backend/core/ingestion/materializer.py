@@ -64,7 +64,8 @@ def is_governed(path: Path | str) -> bool:
     for name in _KNOWLEDGE_ROOTS:
         store = knowledge / name
         if candidate != store and _relative_to(candidate, store):
-            return True
+            # the corpus is text units: an image or a mounted database beside them is not
+            return candidate.suffix.lower() == ".md"
 
     projects = root / "Projects"
     if not _relative_to(candidate, projects):

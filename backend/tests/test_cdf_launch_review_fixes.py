@@ -368,3 +368,13 @@ def test_routine_operations_are_not_events_in_extraction_or_judgment():
     event = {"kind": "event", "when": "2026-10-29", "title": "T", "what": "W", "outcome": "O",
              "evidence": ["event:e"]}
     assert rule in prompts.card1_v2_prompt(event, (), ())
+
+
+def test_both_extraction_prompts_give_the_date_an_event_falls_back_to():
+    """With no date in the source, the model dated events 2025-01-01T00:00:00 and they
+    landed in a month section of their own (live 2026-10-29: 3 of 13 events)."""
+    from datetime import datetime, timezone
+    from core.ingestion.sources import extract_llm, s7_review
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert today in extract_llm.build_prompt("S2", "text", ("event:e",), ("event",))
+    assert today in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)")

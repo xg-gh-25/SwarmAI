@@ -664,3 +664,22 @@ def test_redaction_primitive_rejects_non_user(corpus: dict[str, Path]) -> None:
     from core.ingestion.governed_edit import redact
     with pytest.raises(PermissionError, match="user-only"):
         redact("x#y#z", "reason", actor="worker")
+
+
+def test_a_binary_file_in_a_knowledge_folder_is_not_governed_and_the_baseline_builds(
+    corpus: dict[str, Path],
+) -> None:
+    """The governed corpus is text units. A screenshot or a mounted code-graph database
+    in Knowledge/Library was governed, so the first baseline build (any governed edit,
+    a Brain install) raised UnicodeDecodeError on the live workspace."""
+    from core.ingestion import writer
+    library = corpus["workspace"] / "Knowledge" / "Library"
+    (library / "mounts" / "m1").mkdir(parents=True)
+    (library / "a.md").write_text("# A\n\n## Notes\n- one\n", encoding="utf-8")
+    (library / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n\xdc\xff")
+    (library / "mounts" / "m1" / "code_intel.db").write_bytes(b"SQLite format 3\x00\xdc\xff")
+    assert is_governed(library / "a.md")
+    assert not is_governed(library / "shot.png")
+    assert not is_governed(library / "mounts" / "m1" / "code_intel.db")
+    manifest = writer.ensure_baseline()
+    assert list(manifest["files"]) == ["Knowledge/Library/a.md"]
