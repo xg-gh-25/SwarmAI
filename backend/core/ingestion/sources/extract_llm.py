@@ -23,12 +23,17 @@ from core.ingestion.llm import BedrockJudge, JudgeResult
 from core.ingestion.prompts import UntypedOutput
 from jobs.bedrock import StructuredOutputError, structured
 
-EXTRACTOR_VERSION = "cdf-source-r16.14-v2"
+EXTRACTOR_VERSION = "cdf-source-r16.14-v3"
 TOOL_NAME = "record_units"
 # A straight double quote inside a text field makes the model send a whole list as
 # unescaped JSON text (2026-10-29: every failing extraction had one; 5/5 passed with
 # this rule). jobs.bedrock decodes what still slips through.
-QUOTE_RULE = ('Text fields are JSON strings: never put a straight double quote (") inside one. When the\nsource quotes something, write the quote with 「」 or ‘’ instead.\n')
+QUOTE_RULE = ('Text fields are JSON strings: never put a straight double quote (") inside one. When the\nsource quotes something, write the quote with 「」 or ‘’ instead.\n'
+              # one language: the duplicate check reads words, so the same lesson extracted
+              # once from Chinese messages and once from English tool output was written
+              # twice (rehearsal 2026-10-29, three pairs in one session)
+              'Write every unit in English, whatever the language of the source; keep a\n'
+              "term or the user's exact wording in its own language inside 「」 when it matters.\n")
 MAX_SEMANTIC_BYTES = 64 * 1024
 
 

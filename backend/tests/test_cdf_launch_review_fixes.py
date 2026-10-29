@@ -279,3 +279,58 @@ def test_one_undecodable_window_does_not_fail_the_session():
     with pytest.raises(RuntimeError):
         s2_session._windows_extracted([lambda: (_ for _ in ()).throw(RuntimeError("down")),
                                        lambda: ["u"]], "s")
+
+
+# ── found in the rehearsal on a copy of real data ──────────────────────────────
+
+def test_memory_and_evolution_entries_read_as_text_not_field_names():
+    from core.ingestion.writer import render_unit
+    group = {"title": "Guard paths", "what": "The guard reads paths inside content.",
+             "applicability": "When a heredoc holds a path.", "source": "S2"}
+    evo = render_unit({"destination": {"store": "EVOLUTION"},
+                       "card1": {"entry_type": "correction", "agent_kind": "correction"}}, "u.1", group)
+    mem = render_unit({"destination": {"store": "MEMORY"}, "card1": {"entry_type": "guideline"}},
+                      "u.2", group)
+    for out in (evo, mem):
+        assert "what:" not in out and "applicability:" not in out
+        assert "**Applies when:** When a heredoc holds a path." in out
+    assert "- **Correction**: **Guard paths** The guard reads" in evo
+
+
+def test_refine_of_a_timeline_event_does_not_copy_the_earlier_event(tmp_path, monkeypatch):
+    from tests.test_cdf_writer_core import (ClaimVerdict, HitJudgment, _connect, _decision, _unit,
+                                            corpus as _corpus)
+    from core.ingestion.writer import apply_unit
+    corpus = _corpus.__wrapped__(tmp_path, monkeypatch)
+    timeline = corpus["workspace"] / ".context/TIMELINE.md"
+    timeline.parent.mkdir(parents=True, exist_ok=True)
+    timeline.write_text("# Timeline\n\n## Not injected\n\n### 2026-10-26 Earlier run\n"
+                        "- what: The earlier run landed.\n<!-- cand:old.1 | event_key: | source:S2 -->\n",
+                        encoding="utf-8")
+    anchor = ".context/TIMELINE.md#Not injected#cand:old.1"
+    judgment = HitJudgment(anchor=anchor, overlap="related", same_topic=True,
+                           claim_verdicts=[ClaimVerdict(verdict="refines", existing_sentence="The earlier run landed.")],
+                           scope_relation="equal", candidate_evidence="measured", existing_evidence="inferred")
+    conn = _connect(corpus["db"])
+    row = _unit(conn, "new.1", "The design was updated.", title="Design updated")
+    decision = _decision("new.1", "TIMELINE", ".context/TIMELINE.md", "Not injected",
+                         action="refine", judgments=[judgment])
+    assert apply_unit(decision, row, conn) == "done"
+    conn.close()
+    text = timeline.read_text(encoding="utf-8")
+    start = text.index("Design updated")
+    new = text[start:text.index("cand:new.1", start)]
+    assert "The design was updated" in new and "earlier run landed" not in new
+
+
+def test_a_refined_block_entry_carries_its_text_without_heading_or_labels():
+    from core.ingestion.writer import _plain_unit_body
+    block = ("### C067 | 2026-10-29\n- **Correction**: **Guard** The guard reads content.\n"
+             "<!-- cand:x.unit -->")
+    assert _plain_unit_body(block) == "**Guard** The guard reads content."
+    assert _plain_unit_body("- [pitfall] **T** Body. <!-- cand:y -->") == "Body."
+
+
+def test_units_are_extracted_in_one_language():
+    from core.ingestion.sources import extract_llm
+    assert "Write every unit in English" in extract_llm.QUOTE_RULE

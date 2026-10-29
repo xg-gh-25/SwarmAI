@@ -274,11 +274,13 @@ def _meta_value(value: Any) -> str:
 
 
 def _cognition_body(group: dict[str, Any], fallback: str) -> str:
-    fields = [("what", group.get("what")), ("how", group.get("how")),
-              ("why", group.get("why")), ("applicability", group.get("applicability")),
-              ("rejected_alternatives", group.get("rejected_alternatives"))]
-    values = [f"{name}: {value}" for name, value in fields if value is not None]
-    return "; ".join(values) if values else fallback
+    """The entry text as a reader reads it, labelled as in DDD entries (the field names
+    "what: ...; applicability: ..." were written into MEMORY / EVOLUTION verbatim)."""
+    fields = [("", group.get("what")), ("**How:** ", group.get("how")),
+              ("**Why:** ", group.get("why")), ("**Applies when:** ", group.get("applicability")),
+              ("**Rejected:** ", group.get("rejected_alternatives"))]
+    values = [f"{label}{value}" for label, value in fields if value not in (None, "")]
+    return " ".join(values) if values else fallback
 
 
 def _ddd_entry(group: Mapping[str, Any], title: str, fallback_body: str,
@@ -408,9 +410,9 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
                                                         group.get("type_hint") or "guideline"))
     if kind == "gap":
         entry_type = f"gap:{group.get('gap_kind', 'follow_up')}"
-        fields = [("what", group.get("what")), ("why", group.get("why")),
-                  ("proposed_next", group.get("proposed_next"))]
-        body = "; ".join(f"{name}: {value}" for name, value in fields if value is not None)
+        fields = [("", group.get("what")), ("**Why:** ", group.get("why")),
+                  ("**Next:** ", group.get("proposed_next"))]
+        body = " ".join(f"{label}{value}" for label, value in fields if value not in (None, ""))
     else:
         body = str(effective or _cognition_body(group, fallback_body)).strip()
     body = _one_line(body)
@@ -419,7 +421,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     if store == "EVOLUTION":
         prefix = "C" if str(_model_value(answer, "agent_kind", "")) == "correction" else "K"
         label = "Correction" if prefix == "C" else "Competence"
-        return f"### {prefix}{sequence:03d} | {today}\n- **{label}**: {body}\n{marker}"
+        return f"### {prefix}{sequence:03d} | {today}\n- **{label}**: **{_one_line(title)}** {body}\n{marker}"
     if store == "MEMORY":
         lead, meta = format_memory_entry(entry_type, title, body, today, source=source)
         return f"{lead} {marker}\n{meta}"
@@ -482,9 +484,12 @@ def _remove_unit_bytes(content: bytes, unit: Any) -> bytes:
 
 
 def _plain_unit_body(text: str) -> str:
-    """Remove one rendered entry lead and candidate marker for refine composition."""
-    value = re.sub(r"^- (?:\[[^\]]+\]\s+)?\*\*[^*]+\*\*\s*(?:—|:)?\s*", "", text.strip())
-    value = re.sub(r"<!--\s*cand:[^>]+-->", "", value)
+    """An entry's text without its lead, heading, labels and comments, for refine
+    composition (a bullet entry, or a block such as an EVOLUTION entry)."""
+    lines = [line for line in text.strip().splitlines() if not line.lstrip().startswith("#")]
+    value = "\n".join(lines)
+    value = re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL)
+    value = re.sub(r"^\s*- (?:\[[^\]]+\]\s+)?\*\*[^*]+\*\*\s*(?:—|:)?\s*", "", value, flags=re.MULTILINE)
     return " ".join(value.split()).strip()
 
 
@@ -513,7 +518,9 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     old_unit = _unit_for_anchor(target, old_anchor)
     archive_path: Path | None = None
     action = str(_decision_value(decision, "action", "add"))
-    if action == "refine" and old_unit is not None and not _decision_value(decision, "card3b"):
+    # a TIMELINE event is an occurrence: a later one does not carry an earlier one's text
+    if (action == "refine" and old_unit is not None and store != "TIMELINE"
+            and not _decision_value(decision, "card3b")):
         # the refined entry carries the old one's content (renderers read "what", so
         # merging into "text" was ignored and refine wrote a plain second entry)
         prior = _plain_unit_body(old_unit.text)
