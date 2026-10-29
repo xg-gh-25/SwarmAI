@@ -62,8 +62,9 @@ FULL_REBUILD_FILES = 100
 # declared fields, static calls, same-file returns, casts; JDK and outside-library
 # values get no edge); `this::m` / `Store::m` are references. 6: an element taken out
 # of a builtin container (`d.get(k)`, `xs.pop()`, `max(xs)`, ts `m.get(k)`) is no
-# longer EXTERNAL: a call on it is linked by name.
-PARSER_VERSION = 6
+# longer EXTERNAL: a call on it is linked by name. 7: java `new Foo(…)` is a call of
+# Foo (none was recorded); a call in a java field initializer is its class's.
+PARSER_VERSION = 7
 
 
 def parser_outdated(graph: GraphStore) -> bool:

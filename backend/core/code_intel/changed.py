@@ -401,7 +401,9 @@ def _still_reachable(key: str, new_ifs: dict, new_names: set) -> bool:
     """Whether a symbol gone from its definitions can still be reached as before: a
     function still bound at module level (re-exported, ``from b import f``, assigned),
     a method its class may still inherit (a base defines it, or a base this file does
-    not define). Then it was moved, not removed: no caller is judged."""
+    not define) or that the language or a generator provides (Java's ``toString``, a
+    record's accessor, Lombok's getters). Then it was moved, not removed: no caller is
+    judged."""
     if "." not in key:
         return key in new_names
     cls, member = key.split(".", 1)
@@ -417,7 +419,9 @@ def _still_reachable(key: str, new_ifs: dict, new_names: set) -> bool:
             return c != cls or cls in new_names     # a base from elsewhere may define it
         if c != cls and (member in iface.methods or f"{c}.{member}" in new_ifs):
             return True
-        todo.extend(b for b in iface.bases if b not in ("object", "Generic", "Protocol"))
+        if member in iface.provided or "*" in iface.provided:
+            return True
+        todo.extend(b for b in iface.bases if b not in ("object", "Generic", "Protocol", "Object"))
     return False
 
 
@@ -519,7 +523,6 @@ class _Breaks:
         function or a class called by its bare name, in its own file or in a changed
         file that imports it from that file's module; a line holding one call of it."""
         from .interface import bare_calls, breaks
-        from .parser import scan_imports
         key = c.id.split("::", 1)[-1]
         if "." in key:
             return []                              # a method: its receiver is not known
@@ -529,9 +532,7 @@ class _Breaks:
             lang, text, tree = self.new.get(f)
             if text is None or not lang:
                 continue
-            if f != c.file and not any(
-                    ref.name == c.name and ref.module.replace(".", "/").rstrip("/").split("/")[-1]
-                    in (stem, stem.removesuffix(".js")) for ref in scan_imports(text, lang)):
+            if f != c.file and not _imports_it(f, text, lang, c, stem):
                 continue
             seen_now: set[int] = set()            # lines the graph's own edges cover now
             for src, line, _t, _conf in _edge_rows(self.graph, c.id):
@@ -549,6 +550,27 @@ class _Breaks:
                 if why:
                     out.append({"file": f, "line": line, "breaks": [f"L{line}: {w}" for w in why]})
         return out
+
+
+def _imports_it(f: str, text: str, lang: str, c: "Changed", stem: str) -> bool:
+    """Whether file *f* can name *c* (a function or class of another file) unqualified:
+    it imports it from that file's module; in Java also a class of the same package
+    (no import needed) or one it imports by its full name (``import a.b.Foo``)."""
+    from .parser import scan_imports
+    refs = scan_imports(text, lang)
+    if lang == "java":
+        own = Path(c.file).with_suffix("").as_posix()
+        named = [ref for ref in refs if ref.name == c.name]
+        if named:                                  # an import of the name wins: is it ours?
+            return any(own == r.module.replace(".", "/")
+                       or own.endswith("/" + r.module.replace(".", "/")) for r in named)
+        if Path(f).parent != Path(c.file).parent:
+            return False
+        # the same package needs no import, unless the file declares its own Foo
+        from .interface import interfaces
+        return c.name not in interfaces(text, lang, ".java")
+    return any(ref.name == c.name and ref.module.replace(".", "/").rstrip("/").split("/")[-1]
+               in (stem, stem.removesuffix(".js")) for ref in refs)
 
 
 def _field_reads(graph, repo: Path, c: "Changed", fields: list[str], texts: "_Texts",
@@ -663,16 +685,18 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
     rep.new = sum(1 for c in changed if c.file in new_files)
     from .interface import delta as _delta
     deltas = _deltas(repo, base, tree, sorted({c.file for c in changed} - new_files))
-    # A class whose fields went away in a method's body (``self.x = …`` removed from
-    # ``__init__``) is not touched in its own first lines: add it, so its readers are
-    # looked up (a removed field is an interface change of the class).
+    # A class whose interface changed inside its body — a field gone from ``__init__``,
+    # ``__init__``'s parameters, a Java constructor added or removed — is not touched in
+    # its own first lines: add it, so its readers and its `Cls(…)` / `new Cls(…)` calls
+    # are looked up.
     have = {c.id for c in changed}
     for f, (old_ifs, new_ifs, _names) in deltas.items():
         for key, oi in old_ifs.items():
             cid = f"{f}::{key}"
             if oi.kind != "class" or cid in have:
                 continue
-            if _delta(oi, new_ifs.get(key)).removed_fields:
+            d = _delta(oi, new_ifs.get(key))
+            if d.interface and not d.removed:
                 row = graph._conn.execute("SELECT name, line_start FROM code_nodes WHERE id = ?",
                                           (cid,)).fetchone()
                 if row:

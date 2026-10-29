@@ -1459,7 +1459,11 @@ def _extract_from_tree(tree, path_str: str, language: str,
             call_name, receiver = _call_parts(node)
             if call_name:
                 call_name = _sanitize_name(call_name)
-                source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
+                # java has no module level: a field initializer's call is its class's
+                source = enclosing_func or (
+                    _qualify(enclosing_class, path_str, None)
+                    if language == "java" and enclosing_class else
+                    _qualify(_MODULE_SENTINEL, path_str, None))
                 cls = recv1 = None
                 if typed:
                     recv1 = _rx.direct_receiver(node, ft.known)
@@ -1776,6 +1780,11 @@ def _call_parts(node) -> tuple[str | None, str | None]:
     Java's ``method_invocation`` and Ruby's ``call`` put the receiver first and the
     name in a field (``name`` / ``method``); everywhere else the first child is the
     function part (python, js/ts, go, rust, c/c++, kotlin)."""
+    if node.type == "object_creation_expression":     # java `new a.b.Foo<T>(…)`: Foo
+        typ = node.child_by_field_name("type")
+        text = typ.text.decode("utf-8", errors="replace") if typ is not None and typ.text else ""
+        name = text.split("<")[0].split(".")[-1].strip()
+        return (name or None), None
     if node.type == "method_invocation" or node.child_by_field_name("method") is not None:
         name = node.child_by_field_name("name") or node.child_by_field_name("method")
         recv = _receiver_of(node)

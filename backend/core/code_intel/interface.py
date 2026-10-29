@@ -18,22 +18,30 @@ answers the question the reviewer has:
   (``Cls.m(obj, …)``); only what the change itself removed or required is reported,
   so a call that was already wrong is not blamed on it.
 
-Python, TypeScript and JavaScript (tree-sitter, the parser's grammars). For any other
-language ``interfaces`` returns nothing and the report falls back to which lines a
-change touched. Nothing is executed; a file that does not parse gives no interface.
+Python, TypeScript, JavaScript and Java (tree-sitter, the parser's grammars). Java has
+no keywords, defaults or ``*args`` but overloads: a method or a constructor is the set
+of its versions, each an arity (``(String, int)``: 2; ``(String...)``: 0 or more), and
+a call breaks when the number of arguments it passes was taken before and no version
+takes it now (a new constructor that hides the implicit ``Foo()`` too). A parameter
+whose type changed is reported, not judged: whether the old argument still fits needs
+the types. For any other language ``interfaces`` returns nothing and the report falls
+back to which lines a change touched. Nothing is executed; a file that does not parse
+gives no interface.
 """
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
 
-LANGS = frozenset({"python", "typescript", "javascript"})
+LANGS = frozenset({"python", "typescript", "javascript", "java"})
 
 _COMMENT_TYPES = frozenset({"comment", "line_comment", "block_comment", "html_comment"})
 _PY_FUNC = "function_definition"
 _PY_CLASS = "class_definition"
 _TS_FUNCS = frozenset({"function_declaration", "method_definition", "generator_function_declaration"})
 _TS_CLASSES = frozenset({"class_declaration", "class", "abstract_class_declaration"})
+_JAVA_TYPES = frozenset({"class_declaration", "interface_declaration", "enum_declaration",
+                         "record_declaration"})
 
 
 @dataclass
@@ -53,6 +61,14 @@ class Iface:
     static: bool = False                       # staticmethod / classmethod / TS static
     code_hash: str = ""
     bases: list[str] = field(default_factory=list)   # a class's base names (as written)
+    # java: the versions of a method / a class's constructors — (fixed arguments,
+    # varargs) each — and their parameter types as written; None when not callable so
+    arities: list[tuple[int, bool]] | None = None
+    sigs: list[str] = field(default_factory=list)
+    # java: members the language or a generator provides without a declaration here
+    # (Object's toString, a record's accessors, an enum's name; "*": Lombok) — removing
+    # the declared one leaves them callable
+    provided: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -67,18 +83,33 @@ class Delta:
     comments_only: bool = False
     changed: bool = False                      # any code token changed
     signature: bool = False                    # the parameter list changed at all
+    # java: the arities before and now; argument counts no version takes any more
+    old_arities: list[tuple[int, bool]] | None = None
+    new_arities: list[tuple[int, bool]] | None = None
+    lost_arities: list[str] = field(default_factory=list)
+    types_changed: str = ""                    # "(String) → (long)": reported, not judged
+    unjudged: str = ""                         # why a signature change is not judged
 
     @property
     def interface(self) -> bool:
         """The interface a caller sees changed in a way that can break it."""
         return bool(self.removed or self.removed_params or self.now_required
                     or self.dropped_varpos or self.dropped_varkw
-                    or self.fewer_positionals is not None or self.removed_fields)
+                    or self.fewer_positionals is not None or self.removed_fields
+                    or self.lost_arities)
 
     def describe(self) -> str:
         parts = []
         if self.removed:
             return "removed"
+        if self.lost_arities:
+            parts.append("no version takes " + " or ".join(self.lost_arities)
+                         + " arguments any more")
+        if self.types_changed:
+            parts.append(f"parameter types changed: {self.types_changed} (calls listed, "
+                         "not judged)")
+        if self.unjudged:
+            parts.append(self.unjudged)
         params = [p for p in self.removed_params if p not in self.removed_fields]
         if params:
             parts.append("parameter " + ", ".join(f"`{p}`" for p in params) + " removed")
@@ -92,7 +123,7 @@ class Delta:
             parts.append(f"takes at most {self.fewer_positionals} positional arguments")
         if self.removed_fields:
             parts.append("field " + ", ".join(f"`{f}`" for f in self.removed_fields) + " removed")
-        if not parts and self.signature:
+        if not parts and self.signature and self.old_arities is None and not self.unjudged:
             parts.append("signature changed; existing calls still fit it")
         return "; ".join(parts)
 
@@ -224,9 +255,146 @@ def interfaces(text: str, language: str, suffix: str = "") -> dict[str, Iface]:
     out: dict[str, Iface] = {}
     if language == "python":
         _py_scan(tree.root_node, None, out)
+    elif language == "java":
+        _java_scan(tree.root_node, out)
     else:
         _ts_scan(tree.root_node, None, out)
     return out
+
+
+def _java_private(node) -> bool:
+    return any(c.type == "modifiers" and "private" in _t(c).split() for c in node.children)
+
+
+def _java_sig(params_node) -> tuple[tuple[int, bool], str]:
+    """(fixed arguments, varargs) of a parameter list and its types as written."""
+    fixed, var, types = 0, False, []
+    for p in (params_node.named_children if params_node is not None else []):
+        if p.type == "formal_parameter":
+            fixed += 1
+            types.append(" ".join(_t(p.child_by_field_name("type")).split()))
+        elif p.type == "spread_parameter":
+            var = True
+            typ = next((c for c in p.named_children
+                        if c.type not in ("modifiers", "variable_declarator")), None)
+            types.append(" ".join(_t(typ).split()) + "...")
+    return (fixed, var), "(" + ", ".join(types) + ")"
+
+
+def _java_members(body) -> list:
+    out = []
+    for c in (body.children if body is not None else []):
+        if c.type == "enum_body_declarations":
+            out.extend(c.children)
+        else:
+            out.append(c)
+    return out
+
+
+_JAVA_OBJECT = frozenset({"toString", "equals", "hashCode", "clone", "finalize", "getClass",
+                          "notify", "notifyAll", "wait"})
+# code generators whose members the source does not declare
+_LOMBOK = frozenset({"Data", "Value", "Getter", "Setter", "Builder", "SuperBuilder",
+                     "NoArgsConstructor", "AllArgsConstructor", "RequiredArgsConstructor",
+                     "With", "Accessors", "Delegate", "AutoValue", "Immutable"})
+
+
+def _java_annotations(node) -> set[str]:
+    mods = next((c for c in node.children if c.type == "modifiers"), None)
+    return {_t(a.child_by_field_name("name")).split(".")[-1]
+            for a in (mods.named_children if mods is not None else [])
+            if a.type in ("marker_annotation", "annotation")}
+
+
+def _java_scan(node, out: dict[str, Iface]) -> None:
+    """Classes, interfaces, enums and records, their non-private fields and their
+    methods; the versions of an overloaded method are one entry.
+
+    Not judged (a miss, never a false break): a class generated into by Lombok (its
+    constructors; a removed member it may generate); a method of a class with a base
+    outside this file (an inherited version may take the call); a nested class (the
+    graph names it ``Outer.Inner``, its calls ``Inner``, so none is found);
+    ``this(…)`` / ``super(…)`` calls (no graph edge)."""
+    _java_scan_types(node, out)
+    # a method's versions include those its class inherits from a base in this file;
+    # one with a base elsewhere is not judged (its arities are open)
+    classes = {k: v for k, v in out.items() if v.kind == "class"}
+    for key, iface in list(out.items()):
+        if iface.kind != "method" or "." not in key:
+            continue
+        cls, member = key.rsplit(".", 1)
+        seen, todo = {cls}, list(classes[cls].bases) if cls in classes else []
+        while todo and iface.arities is not None:
+            b = todo.pop()
+            if b in seen:
+                continue
+            seen.add(b)
+            base = classes.get(b)
+            if base is None:
+                iface.arities = None          # a base elsewhere may declare a version
+                break
+            inherited = out.get(f"{b}.{member}")
+            if inherited is not None and inherited.arities:
+                iface.arities = iface.arities + [a for a in inherited.arities
+                                                 if a not in iface.arities]
+            todo.extend(base.bases)
+
+
+def _java_scan_types(node, out: dict[str, Iface]) -> None:
+    from .parser import _extract_base_names
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type not in _JAVA_TYPES:
+            stack.extend(reversed(n.children))
+            continue
+        name = _t(n.child_by_field_name("name"))
+        body = n.child_by_field_name("body")
+        iface = Iface(kind="class", line=n.start_point[0] + 1, code_hash=_code_hash(n, "java"),
+                      bases=[b for b in _extract_base_names(n, "java") if b != "Object"])
+        ctors: list[tuple[tuple[int, bool], str]] = []
+        generated = bool(_java_annotations(n) & _LOMBOK)
+        # (an enum's own members, name() / ordinal(), are final: never declared here)
+        iface.provided = ({"*"} if generated else set()) | (
+            set() if n.type == "interface_declaration" else _JAVA_OBJECT)
+        if n.type == "record_declaration":
+            params = n.child_by_field_name("parameters")
+            canon = _java_sig(params)
+            ctors.append(canon)
+            iface.provided |= {_t(p.child_by_field_name("name"))       # its accessors
+                               for p in (params.named_children if params is not None else [])
+                               if p.type == "formal_parameter"}
+        for m in _java_members(body):
+            if m.type == "method_declaration":
+                mname = _t(m.child_by_field_name("name"))
+                iface.methods.add(mname)
+                spec, sig = _java_sig(m.child_by_field_name("parameters"))
+                key = f"{name}.{mname}"
+                h = _code_hash(m, "java")
+                got = out.get(key)
+                if got is None:
+                    out[key] = Iface(kind="method", line=m.start_point[0] + 1, arities=[spec],
+                                     sigs=[sig], code_hash=h,
+                                     static=any(c.type == "modifiers" and "static" in _t(c).split()
+                                                for c in m.children))
+                else:                              # an overload: one more version
+                    got.arities.append(spec)
+                    got.sigs.append(sig)
+                    got.code_hash = hashlib.sha1((got.code_hash + h).encode()).hexdigest()
+            elif m.type == "constructor_declaration":
+                ctors.append(_java_sig(m.child_by_field_name("parameters")))
+            elif m.type == "field_declaration" and not _java_private(m):
+                for d in m.named_children:
+                    if d.type == "variable_declarator":
+                        iface.fields.add(_t(d.child_by_field_name("name")))
+            elif m.type in _JAVA_TYPES:
+                stack.append(m)
+        if n.type == "class_declaration" and not ctors:
+            ctors.append(((0, False), "()"))      # the implicit Foo()
+        if n.type in ("class_declaration", "record_declaration") and not generated:
+            iface.arities = [c[0] for c in ctors]
+            iface.sigs = [c[1] for c in ctors]
+        out.setdefault(name, iface)
 
 
 _PY_COMPOUND = frozenset({"if_statement", "elif_clause", "else_clause", "try_statement",
@@ -294,7 +462,9 @@ def _py_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
                     if mname == "__init__":
                         iface.params = _py_params(deco.child_by_field_name("parameters"),
                                                   drop_first=True)
-            if iface.params is None and dataclass and not iface.bases:
+            if set(iface.bases) & {"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"}:
+                iface.params = None                # Planet(x) looks a member up, no __init__ call
+            elif iface.params is None and dataclass and not iface.bases:
                 # a dataclass with bases also takes its bases' fields: not judged
                 iface.params = dc_params
             out[name] = iface
@@ -312,6 +482,8 @@ def bound_names(text: str, language: str, suffix: str = "") -> set[str]:
     tree = _parse(text, language, suffix)
     if tree is None:
         return set()
+    if language == "java":
+        return set()                           # no re-export: a class gone from its file is gone
     out: set[str] = set()
 
     def last(node) -> str:
@@ -488,6 +660,20 @@ def _positional_capacity(params: list[Param]) -> int | None:
     return sum(1 for p in params if p.kind == "pos")
 
 
+def _accepts(arities, n: int) -> bool:
+    return any(n == fixed or (var and n >= fixed) for fixed, var in arities)
+
+
+def _lost_arities(old, new) -> list[str]:
+    """Argument counts some old version took and no new one takes ("2", "3 or more")."""
+    top = max([f for f, _v in old] + [f for f, _v in new]) + 1
+    lost = [n for n in range(top + 1) if _accepts(old, n) and not _accepts(new, n)]
+    out = [str(n) for n in lost if n < top]
+    if top in lost:                             # every larger count too
+        out.append(f"{top} or more")
+    return out
+
+
 def delta(old: Iface | None, new: Iface | None) -> Delta:
     d = Delta()
     if old is None:
@@ -496,6 +682,19 @@ def delta(old: Iface | None, new: Iface | None) -> Delta:
         d.removed = d.changed = True
         return d
     d.changed = old.code_hash != new.code_hash
+    if (old.arities is None or new.arities is None) and sorted(old.sigs) != sorted(new.sigs):
+        d.signature = True                         # java: open (a base elsewhere) or generated
+        d.unjudged = (f"signature changed: {', '.join(old.sigs) or '()'} → "
+                      f"{', '.join(new.sigs) or '()'} (a version may be inherited or "
+                      "generated: calls listed, not judged)")
+    if old.arities is not None and new.arities is not None:
+        d.old_arities, d.new_arities = old.arities, new.arities
+        d.signature = sorted(old.sigs) != sorted(new.sigs)
+        d.lost_arities = _lost_arities(old.arities, new.arities)
+        if d.signature and not d.lost_arities:
+            gone = [s for s in old.sigs if s not in new.sigs]
+            came = [s for s in new.sigs if s not in old.sigs]
+            d.types_changed = f"{', '.join(gone)} → {', '.join(came)}"
     if old.params is not None and new.params is not None:
         d.signature = [(p.name, p.kind, p.default) for p in old.params] != \
             [(p.name, p.kind, p.default) for p in new.params]
@@ -538,6 +737,20 @@ class Site:
 
 
 _CALLS = frozenset({"call", "call_expression", "new_expression"})
+_JAVA_CALLS = frozenset({"method_invocation", "object_creation_expression"})
+
+
+def _java_callee(node, *, qualified: bool = True) -> str:
+    """``m`` of ``x.m(…)`` / ``m(…)``; ``Foo`` of ``new Foo(…)`` / ``new Foo<T>(…)``, and
+    of ``new a.b.Foo(…)`` unless *qualified* is False (a call a change adds is judged
+    only when its type is written bare: a qualified one may be another ``Foo``)."""
+    if node.type == "method_invocation":
+        return _t(node.child_by_field_name("name"))
+    typ = node.child_by_field_name("type")
+    head = _t(typ).split("<")[0].strip() if typ is not None else ""
+    if not qualified and "." in head:
+        return ""
+    return head.split(".")[-1].strip()
 
 
 def call_sites(text: str, language: str, line: int, name: str, *, suffix: str = "",
@@ -553,6 +766,15 @@ def call_sites(text: str, language: str, line: int, name: str, *, suffix: str = 
     while stack:
         n = stack.pop()
         if n.start_point[0] + 1 > line or n.end_point[0] + 1 < line:
+            continue
+        if language == "java":
+            if n.type in _JAVA_CALLS and n.start_point[0] + 1 == line and _java_callee(n) == name:
+                args = n.child_by_field_name("arguments")
+                pos = sum(1 for a in (args.named_children if args is not None else [])
+                          if a.type not in _COMMENT_TYPES)
+                out.append(Site(line=line, positional=pos, keywords=[], splat=False,
+                                through_class=False))   # no self passed by hand in java
+            stack.extend(n.children)
             continue
         if n.type in _CALLS and n.start_point[0] + 1 == line:
             fn = n.child_by_field_name("function") or n.child_by_field_name("constructor")
@@ -599,7 +821,11 @@ def bare_calls(text: str, language: str, name: str, *, suffix: str = "", tree=No
     stack = [tree.root_node]
     while stack:
         n = stack.pop()
-        if n.type in _CALLS:
+        if language == "java":
+            if n.type == "object_creation_expression" and \
+                    _java_callee(n, qualified=False) == name:
+                lines.add(n.start_point[0] + 1)          # new Foo(…)
+        elif n.type in _CALLS:
             fn = n.child_by_field_name("function") or n.child_by_field_name("constructor")
             if fn is not None and fn.type == "identifier" and _t(fn) == name:
                 lines.add(n.start_point[0] + 1)
@@ -615,6 +841,12 @@ def breaks(d: Delta, new: Iface | None, site: Site, *, is_method: bool,
     JavaScript a missing or extra argument never fails, so only a removal counts."""
     if d.removed:
         return ["calls it, and this change removes it"]
+    if language == "java":
+        n = site.positional
+        if d.old_arities is not None and d.new_arities is not None and \
+                _accepts(d.old_arities, n) and not _accepts(d.new_arities, n):
+            return [f"passes {n} arguments; no version of it takes {n} now"]
+        return []
     if new is None or new.params is None or site.splat or language == "javascript":
         return []
     if is_method and site.through_class and not new.static:
@@ -650,8 +882,9 @@ def reads_attribute(text: str, language: str, attr: str, *, suffix: str = "", tr
     stack = [tree.root_node]
     while stack:
         n = stack.pop()
-        if n.type in ("attribute", "member_expression"):
-            a = n.child_by_field_name("attribute") or n.child_by_field_name("property")
+        if n.type in ("attribute", "member_expression", "field_access"):
+            a = (n.child_by_field_name("attribute") or n.child_by_field_name("property")
+                 or n.child_by_field_name("field"))
             if a is not None and _t(a) == attr:
                 lines.append(n.start_point[0] + 1)
         stack.extend(n.children)
