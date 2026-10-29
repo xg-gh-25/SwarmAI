@@ -34,6 +34,7 @@ OBSERVE = "observe"          # logging, capture, tracking, compaction continuity
 GATE_CLASS = {
     "dangerous_command_gate": SAFETY, "external_approval_gate": SAFETY,
     "ask_question_gate": SAFETY, "bash_syntax_guard": SAFETY, "skill_access_checker": SAFETY,
+    "symlink_target_guard": SAFETY,
     "background_command_guard": SESSION, "image_read_dedup_guard": SESSION,
     "run_owner_gate": RUN, "run_owner_gate_approved": RUN, "run_amend_gate": RUN,
     "active_run_commit_gate": RUN, "session_link_gate": RUN, "audit_marker_write_gate": RUN,

@@ -489,6 +489,19 @@ async def build_hooks(
         "bash_syntax_guard", matcher="Bash",
     )
 
+    # ── PreToolUse: symlink-target guard (Bash-scoped) ───────
+    # Deny `ln [-s] SRC DST` when DST is already a symlink to a directory and no -n/-h/-T
+    # is given: ln would create the link INSIDE the linked directory (exit 0, silent).
+    # In a worktree whose node_modules links to the main checkout that wrote a
+    # self-link into the main checkout's node_modules, which the next npm install
+    # turned into a nested copy and an ENOTEMPTY failure in another session.
+    # `ln -sfn` and linking into a real directory pass. Fail-open.
+    from core.symlink_target_guard import symlink_target_guard
+    registry.register(
+        "PreToolUse", symlink_target_guard,
+        "symlink_target_guard", matcher="Bash",
+    )
+
     # (inclusive_term_guard and design_lint_guard were SwarmAI-repo rules, not product
     # rules: they moved to scripts/lint_terms.py, run by that repo's CI. Design
     # 2026-10-24-swarmai-usable-by-anyone P7.)
