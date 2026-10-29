@@ -1,7 +1,7 @@
 ---
 title: Pipeline 审核收口 — finding 关闭协议、run 可观察性、没跑过的测试、落地摩擦、度量
 created: 2026-10-26
-updated: 2026-10-27
+updated: 2026-10-29
 project: SwarmAI
 status: r4 — 并入第二个 run（run_85e81059）的问题，审查一轮已并入；未实施
 ---
@@ -72,9 +72,10 @@ A2 → A3 → A4 是一条链：一个用错的状态词，让一条已证明的
 | design、security_policy | 同上 | — | 同上 | `closed_unproven` |
 | 任意 | `refuted`（R2 判 REFUTED 之后，带可解析的引用） | — | — | `refuted` |
 | 任意 | 人工 `accept-finding` | — | — | `accepted` |
+| Gate-0 提出的任意类型（2026-10-29 加） | 无：REVIEW 不处理，`review-address` 点名会被拒 | — | — | MEDIUM / LOW：之后有一轮 Gate-0 判 SUPPORTED / SUPPORTED-WITH-CHANGES → `closed_gate0`。HIGH / CRITICAL，以及通过那一轮自己的 finding：只能人工 `accept-finding`（后一轮只读需求、没读到前一轮的 finding，判不了 HIGH） |
 
 **"关闭"的口径**（审计、`findings` 命令、`next` 同一个函数）：
-- 关闭：`closed_asserted`、`refuted`、`accepted`、R2 判 ADEQUATE 之后的 `closed_proven`，以及 MEDIUM/LOW 的 `closed_unproven`。
+- 关闭：`closed_asserted`、`refuted`、`accepted`、`closed_gate0`、R2 判 ADEQUATE 之后的 `closed_proven`，以及 MEDIUM/LOW 的 `closed_unproven`。
 - 未关闭：`open`、`invalid_test`、R2 还没判 ADEQUATE 的 `closed_proven`（写作 `awaiting R2`）、HIGH/CRITICAL 的 `closed_unproven`（只经审查、没测试证明的 HIGH，和今天 `push_effect` 的判断一致）。
 - `push_effect`（挡 RV-2、写进 Quality）：HIGH/CRITICAL 且未关闭。比今天多挡一种：R2 没判 ADEQUATE 的 `closed_proven`（今天它靠"沉默改回 open"间接被挡，见第 3 点）。
 

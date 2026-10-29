@@ -6,6 +6,9 @@ Public symbols:
   closes each finding kind, the R2 words a state may get, and what counts as closed
   (design 2026-10-26-pipeline-review-closure-and-visibility §2.3).
 - ``push_effect`` — RV-2 effect: HIGH / CRITICAL and not closed.
+- ``GATE0_EXPERT`` / ``GATE0_PASS`` — a MEDIUM / LOW Gate-0 finding is closed
+  (``closed_gate0``) by a later parsed Gate-0 answer with a passing verdict, never in
+  REVIEW; a HIGH one waits for accept-finding.
 - ``cluster_findings`` / ``r2_experts`` — deterministic repair grouping/routing.
 
 No public API accepts ``authorized=True``, old/new test strings or diff booleans as
@@ -21,7 +24,16 @@ from core.run_protocol import events as ev
 KINDS = frozenset({"behavior", "contract", "absence", "docs", "design", "security_policy"})
 SEVERITIES = frozenset({"HIGH", "MEDIUM", "LOW", "CRITICAL"})
 STATUSES = frozenset({"open", "closed_proven", "closed_asserted", "closed_unproven",
-                      "refuted", "accepted", "invalid_test"})
+                      "refuted", "accepted", "invalid_test", "closed_gate0"})
+# Gate-0 reviews the requirements, not code: its findings are answered by revising the
+# requirements, and the next Gate-0 round judges that. A parsed answer with one of these
+# verdicts closes every still-open MEDIUM / LOW Gate-0 finding of an earlier answer
+# (``closed_gate0``, its evidence that answer). That round reads the requirements, not
+# the earlier findings, so a HIGH / CRITICAL one is not closed by it: like a reviewed-only
+# HIGH (``closed_unproven``) a person accepts it (accept-finding). The passing answer's
+# own findings stay open as well: no later round reads them.
+GATE0_EXPERT = "gate0-skeptic"
+GATE0_PASS = frozenset({"SUPPORTED", "SUPPORTED-WITH-CHANGES"})
 R2_OPEN = frozenset({"RESOLVED", "OPEN", "REFUTED"})
 R2_PROVEN = frozenset({"ADEQUATE", "TEST_INADEQUATE"})
 # written by the answer recorder, never by an expert: the line used a word the finding's
@@ -57,10 +69,11 @@ def r2_allowed(finding_status: str) -> frozenset[str]:
 
 def is_closed(row: Mapping[str, Any]) -> bool:
     """Whether a projected finding counts as closed (one answer for the audit, RV-2,
-    ``next`` and ``findings``): asserted, refuted, accepted; ``closed_proven`` only after
-    R2 judged its test ADEQUATE; ``closed_unproven`` (reviewed, no test) only below HIGH."""
+    ``next`` and ``findings``): asserted, refuted, accepted, ``closed_gate0`` (a MEDIUM /
+    LOW Gate-0 finding a later Gate-0 round passed over); ``closed_proven`` only after R2
+    judged its test ADEQUATE; ``closed_unproven`` (reviewed, no test) only below HIGH."""
     status = row.get("status")
-    if status in ("closed_asserted", "refuted", "accepted"):
+    if status in ("closed_asserted", "refuted", "accepted", "closed_gate0"):
         return True
     if status == "closed_proven":
         return row.get("r2_status") == "ADEQUATE"
@@ -123,7 +136,7 @@ def reported_push_effect(row: Mapping[str, Any]) -> bool:
     """V13 E5 rule for an unprojected review row: only unresolved HIGH/CRITICAL."""
     if not isinstance(row, Mapping) or row.get("resolved") is True \
             or str(row.get("status") or "open") in {
-                "closed_proven", "closed_asserted", "refuted", "accepted"}:
+                "closed_proven", "closed_asserted", "refuted", "accepted", "closed_gate0"}:
         return False
     try:
         return normalize_severity(str(row.get("severity") or "")) in {"HIGH", "CRITICAL"}
@@ -339,6 +352,16 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
             if event.get("producer") == "cli" and event["payload"].get("source") != "relayed":
                 raise FindingError("an answer written by the CLI must be source relayed")
             answers[event["event_id"]] = event
+            payload = event["payload"]
+            if payload.get("expert_id") == GATE0_EXPERT and payload.get("state") == "parsed" \
+                    and payload.get("verdict") in GATE0_PASS:
+                # every row here came from an earlier answer: an answer's own findings
+                # are folded after it (a finding_occ needs its answer already recorded)
+                for row in findings.values():
+                    if row["expert"] == GATE0_EXPERT and row["status"] == "open" \
+                            and row["severity"] not in ("HIGH", "CRITICAL"):
+                        row["status"] = "closed_gate0"
+                        row["evidence_event_id"] = event["event_id"]
         elif kind == "finding_occ":
             answer = answers.get(event["payload"]["answer_event_id"])
             # what an answer says is written by whoever wrote the answer (T6)

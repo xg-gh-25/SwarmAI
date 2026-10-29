@@ -17,8 +17,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core.run_protocol import events as ev
+from core.run_protocol import findings as fd
 from core.run_protocol.findings import cluster_findings, fold as fold_findings, push_effect, r2_experts
 from core.run_protocol.store import AuditStore
+
+# How a Gate-0 finding closes: it is about the requirements, which no REVIEW expert reads,
+# so review-address refuses it and no R2 is built for it (findings.GATE0_PASS).
+GATE0_CLOSES = ("a Gate-0 finding is not fixed in REVIEW: a MEDIUM / LOW one closes when a "
+                "later Gate-0 round passes (SUPPORTED / SUPPORTED-WITH-CHANGES); a HIGH one, "
+                "or one raised by the passing round, a person accepts (accept-finding)")
 
 OUTPUT_CONTRACT = """OUTPUT CONTRACT (exact; prose may precede rows):
 Gate-0 only: first non-empty line is VERDICT: SUPPORTED | SUPPORTED-WITH-CHANGES | UNSUPPORTED | WRONG-FRAME | ALREADY-SATISFIED
@@ -136,10 +143,11 @@ def close_with(row: Mapping[str, Any], ledger: Mapping[str, Any] | None, *,
                uncovered: bool, redispatch: bool) -> str:
     """What closes *row* now, from the closure table and the R2 ledger (design 2026-10-
     26-pipeline-review-closure §3.2). ``""`` when it is closed."""
-    from core.run_protocol import findings as fd
     if fd.is_closed(row):
         return ""
     status, r2 = row.get("status"), row.get("r2_status")
+    if row.get("expert") == fd.GATE0_EXPERT:
+        return GATE0_CLOSES
     if ledger and ledger.get("pending"):
         return "awaiting R2: spawn its R2 handout (status next lists it)"
     if uncovered:
@@ -169,7 +177,6 @@ def closure_view(rows: Sequence[Mapping[str, Any]],
                  events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """One line per finding for ``findings`` and REVIEW's ``next``: the same is_closed
     and close_with every reader uses (design 2026-10-26-pipeline-review-closure §3.2)."""
-    from core.run_protocol import findings as fd
     ledger = r2_ledger(events)
     uncovered = set(uncovered_addresses(events))
     redo = {cid for _answer, wrong in r2_redispatch_targets(events).values() for cid in wrong}
@@ -524,8 +531,10 @@ class ReviewOrchestrator:
         named = {item.get("finding_id") for item in items if isinstance(item, Mapping)}
         open_states = {"open", "invalid_test"}   # a proven neighbour stays as it is
         for cluster in cluster_findings(list(findings.values())):
+            # a Gate-0 neighbour is not fixed in REVIEW (GATE0_CLOSES)
             members = [cid for cid in cluster["findings"]
-                       if findings[cid].get("status") in open_states]
+                       if findings[cid].get("status") in open_states
+                       and findings[cid].get("expert") != fd.GATE0_EXPERT]
             if named & set(members) and set(members) - named:
                 raise ReviewError(
                     f"cluster {cluster['cluster_id']} ({cluster['sites'][0]['file']}) is fixed "
@@ -548,6 +557,9 @@ class ReviewOrchestrator:
             row = findings.get(finding_id)
             occurrence = next((event for event in self.store.read_events()
                                if event.get("event_id") == (row or {}).get("occurrence_event_id")), None)
+            if row is not None and row.get("expert") == fd.GATE0_EXPERT:
+                raise ReviewError(f"handoff item {index} ({finding_id}) is a Gate-0 finding: "
+                                  + GATE0_CLOSES)
             if row is None or occurrence is None or occurrence.get("round") != 1 \
                     or row.get("status") not in {"open", "invalid_test", "closed_proven"}:
                 raise ReviewError(f"handoff item {index} is not an addressable R1 finding")
