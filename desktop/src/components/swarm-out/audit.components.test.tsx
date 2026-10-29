@@ -7,7 +7,7 @@
  * open the five-dimension matrix and Esc close it; does a trace part that is missing
  * say so (无 Brain, Report 生成中) instead of vanishing.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import type { ReactNode } from 'react';
 import { useEscape } from '../../hooks/useLayer';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -15,6 +15,11 @@ import { JudgeTag } from './JudgeTag';
 import { judgeState, judgeSummary } from './judge';
 import { TraceTags } from './TraceTags';
 import type { RunJudge, RunTrace } from './shapes';
+import i18n from '../../i18n';
+
+// These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
+beforeAll(async () => { await i18n.changeLanguage('zh'); });
+afterAll(async () => { await i18n.changeLanguage('en'); });
 
 const judge = (verdicts: RunJudge['verdicts']): RunJudge => ({
   outcome: 'COMPLETED · NOT_LANDED · NOT PUSH READY',

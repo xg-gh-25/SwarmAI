@@ -11,12 +11,17 @@
  */
 // Local-day bucketing is only tested if local time is not UTC.
 process.env.TZ = 'Asia/Shanghai';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
 import { capacity, dailySent, panelNumbers, runGroups } from './live';
 import { activityOf, waitingUnasked } from './useSwarmOutActivity';
+import i18n from '../../i18n';
+
+// These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
+beforeAll(async () => { await i18n.changeLanguage('zh'); });
+afterAll(async () => { await i18n.changeLanguage('en'); });
 
 vi.mock('../../services/swarmOut', () => ({
   swarmOutService: { runs: vi.fn(), fleet: vi.fn(), answer: vi.fn(), hives: vi.fn() },
@@ -208,7 +213,7 @@ describe('SwarmOutDashboard and the Hives it can dispatch to', () => {
     render(<SwarmOutDashboard now={NOW} />);
     const guide = await screen.findByTestId('swarm-out-hive-guide');
     expect(guide.getAttribute('data-case')).toBe('none-running');
-    expect(guide.textContent).toContain('w1（stopped）');
+    expect(guide.textContent).toContain('w1（已关机）');   // the status in the panel's words
     expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('1 台 Hive，都没在运行');
   });
 

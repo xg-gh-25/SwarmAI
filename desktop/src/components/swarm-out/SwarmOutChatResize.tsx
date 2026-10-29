@@ -16,6 +16,7 @@
  *   per frame. Moves are coalesced to one state update per animation frame.
  */
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactElement } from 'react';
+import { useTranslation } from 'react-i18next';
 import { clientToCssScale } from '../../utils/layoutViewport';
 
 export const SWARM_OUT_CHAT = {
@@ -66,6 +67,7 @@ export function chatColumnStyle(width: number): CSSProperties {
 }
 
 export function useSwarmOutChatWidth(): { width: number; seam: ReactElement } {
+  const { t } = useTranslation();
   const [width, setWidth] = useState(readStoredWidth);
   const [dragging, setDragging] = useState(false);
   const seamRef = useRef<HTMLDivElement>(null);
@@ -143,11 +145,11 @@ export function useSwarmOutChatWidth(): { width: number; seam: ReactElement } {
       ref={seamRef}
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize Swarm Out chat"
+      aria-label={t('swarmOut.resize.label')}
       aria-valuenow={width}
       aria-valuemin={SWARM_OUT_CHAT.MIN_WIDTH}
       tabIndex={0}
-      title="拖动调整宽度 · 双击恢复默认"
+      title={t('swarmOut.resize.hint')}
       data-testid="swarm-out-chat-resize"
       className={`absolute top-0 left-0 h-full w-[6px] z-20 cursor-col-resize transition-colors ${
         dragging ? 'bg-[var(--color-zone-work)]' : 'hover:bg-[color-mix(in_srgb,var(--color-zone-work)_60%,transparent)]'

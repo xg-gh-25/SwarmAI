@@ -5,10 +5,15 @@
  * approval send exactly approve/deny; does a question's answer cover every question
  * before it can be sent; is Hive-written text shown as text (no HTML rendered).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { LiveDispatches } from './LiveDispatches';
 import { swarmOutService } from '../../services/swarmOut';
+import i18n from '../../i18n';
+
+// These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
+beforeAll(async () => { await i18n.changeLanguage('zh'); });
+afterAll(async () => { await i18n.changeLanguage('en'); });
 
 vi.mock('../../services/swarmOut', () => ({
   swarmOutService: { runs: vi.fn(), answer: vi.fn(async () => undefined) },

@@ -11,7 +11,8 @@
 export type Verdict = 'PASS' | 'WARN' | 'BLOCK' | 'NA' | 'PENDING';
 
 export const DIMENSIONS = ['Run Isolation', 'Quality', 'Autonomy', 'Speed', 'Token Cost'] as const;
-export const DIMENSION_ROLE = ['硬约束', '硬约束', '主要目标', '效率', '效率'] as const;
+/** Each dimension's role, as a locale key under swarmOut.judge.role. */
+export const DIMENSION_ROLE = ['hard', 'hard', 'primary', 'efficiency', 'efficiency'] as const;
 
 export interface RunJudge {
   /** Outcome line, e.g. "COMPLETED · LANDED · PUSH READY · 7d34ab1". */

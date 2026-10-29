@@ -1161,5 +1161,340 @@
       "editTitle": "系统工作区警告",
       "editMessage": "你正要修改 Swarm 工作区里的文件。这是 SwarmAI 内部运行使用的受保护系统工作区，修改这些文件可能影响 SwarmAI 的功能。"
     }
+  },
+  "swarmOut": {
+    "sep": {
+      "list": "、",
+      "clause": "，",
+      "item": "；"
+    },
+    "loading": "正在读…",
+    "runsUnreadable": "读不到派发记录，稍后自动重试",
+    "tbd": "TBD：{{missing}}",
+    "noRuns": "还没有派发过任务。在右边的对话里说要做什么，Swarm 会帮你派出去。",
+    "view": {
+      "run": "运行",
+      "history": "历史"
+    },
+    "header": {
+      "running_one": "{{count}} 台 Hive 在运行",
+      "running_other": "{{count}} 台 Hive 在运行",
+      "keepsGoing": "，合上 Mac 也会继续",
+      "noneRunning_one": "{{count}} 台 Hive，都没在运行",
+      "noneRunning_other": "{{count}} 台 Hive，都没在运行",
+      "noHive": "还没有 Hive"
+    },
+    "daily": {
+      "title": "每天派出的 run",
+      "sub": "近 14 天 · 按本机日期 · 按结局",
+      "day": "{{day}} · 派出 {{count}} 个",
+      "dayWith": "{{day}} · 派出 {{count}} 个：{{parts}}"
+    },
+    "bucket": {
+      "error": "出错",
+      "stopped": "被停",
+      "completed": "做完",
+      "other": "还不知道"
+    },
+    "history": {
+      "title": "Run 记录",
+      "sub": "近 7 天 · 按 Hive",
+      "groupingTbd": "按大脑 / Project Agent 分组 · TBD：派发记录里没有大脑和 Project Agent",
+      "empty": "近 7 天没有派出的 run",
+      "count_one": "{{count}} 个 run",
+      "count_other": "{{count}} 个 run"
+    },
+    "tbdParts": {
+      "verdict": "一句话结论",
+      "verdictMissing": "没有跨 run 的审计汇总",
+      "dimensions": "五个维度",
+      "dimensionsMissing": "只有 pipeline run 带五维结论（在 run 卡片的详情里），跨 run 的汇总还没做",
+      "occupancy": "工蜂占用",
+      "occupancyMissing": "没有按时间采样每台 Hive 的并发",
+      "type": "按类型",
+      "typeMissing": "派发记录不带任务类型",
+      "scheduled": "已安排",
+      "scheduledMissing": "还没有定时派发"
+    },
+    "live": {
+      "submitFailed": "没能提交，稍后再试",
+      "openHiveAdmin": "打开 Hive 管理"
+    },
+    "ask": {
+      "maybe": "可能属于：{{title}}",
+      "otherSession": "Hive 上的其他会话（不是这里派出的）",
+      "notDelivered": "没有送达",
+      "waiting": "在等你",
+      "refused": "Hive 拒收了这次回答：它和正在等待的内容对不上（问题在显示之后被改过，或者这台 Hive 的版本更新）。回答没有送达，请到这台 Hive 自己的页面上处理。",
+      "approvalTitle": "要执行一条需要批准的命令",
+      "truncated": "命令超过 2000 字，没有完整显示。不能在这里批准：去这台 Hive 自己的页面看全文再决定，或者在这里拒绝。",
+      "approve": "批准",
+      "deny": "拒绝",
+      "answerFor": "回答：{{question}}",
+      "ownAnswer": "或者写你自己的回答",
+      "yourAnswer": "你的回答",
+      "omitted_one": "还有 {{count}} 个问题或选项没有显示（太多或为空），完整内容在这台 Hive 自己的页面上。",
+      "omitted_other": "还有 {{count}} 个问题或选项没有显示（太多或为空），完整内容在这台 Hive 自己的页面上。",
+      "submit": "提交回答"
+    },
+    "kpi": {
+      "waiting": "等你回答",
+      "onHivePage": "+{{count}} 个要去 Hive 页面处理",
+      "free": "空位，可以马上派",
+      "running": "我派出的，在跑"
+    },
+    "waiting": {
+      "title": "等你",
+      "refresh": "刷新",
+      "none": "没有在等你的问题",
+      "unasked": "Hive 说这些在等人，但问题还没传到这里：去 Hive 页面处理",
+      "refused": "要去 Hive 页面处理（回答没有送达，这里不能再回答）"
+    },
+    "fleet": {
+      "title": "机群",
+      "note": "占用 = Hive 上所有在跑的会话，包括它自己的",
+      "failed": "读不到机群，稍后自动重试",
+      "unreachable": "连不上",
+      "full": "忙满 · 占用 {{used}}/{{max}}",
+      "used": "占用 {{used}}/{{max}}"
+    },
+    "detail": {
+      "failed": "读不到详情，稍后再试",
+      "lastReply": "最后的回复",
+      "fullReport": "全文 {{count}} 字，去 Hive 页面看",
+      "noReply": "没有回复文字",
+      "commitsOnly": "（只统计 commit，未提交的改动没读）",
+      "moreFiles_one": "还有 {{count}} 个文件",
+      "moreFiles_other": "还有 {{count}} 个文件",
+      "commitsTotal": " …共 {{count}} 个",
+      "bundleError": "取不回这些 commit：{{error}}",
+      "filesWritten": "写了的文件（Hive 上的路径）",
+      "toolCalls_one": "{{count}} 次工具调用：{{list}}",
+      "toolCalls_other": "{{count}} 次工具调用：{{list}}",
+      "refresh": "刷新结果"
+    },
+    "result": {
+      "pending": "正在从 Hive 取回结果",
+      "failed": "取不回结果：{{reason}}",
+      "lastCheck": "上次检查：{{reason}}"
+    },
+    "card": {
+      "acceptance": "验收：{{text}}",
+      "collapse": "收起",
+      "details": "详情"
+    },
+    "groups": {
+      "running": "在跑",
+      "runningEmpty": "没有在跑的任务",
+      "stopped": "结束了（24 小时内派出的）",
+      "stoppedEmpty": "24 小时内派出的都还在跑，或在等你",
+      "unknown": "状态未知"
+    },
+    "byBrain": {
+      "title": "按大脑（7 天）",
+      "runs_one": "{{count}} 个",
+      "runs_other": "{{count}} 个",
+      "done": "{{count}} 做完",
+      "failed": "{{count}} 出错",
+      "checks_one": "{{count}} 个校验没跑或报错",
+      "checks_other": "{{count}} 个校验没跑或报错"
+    },
+    "guide": {
+      "openHive": "打开 Hive",
+      "noneRunning": "没有在运行的 Hive",
+      "hiveWithStatus": "{{name}}（{{status}}）",
+      "startOne": "{{list}}。在 Hive 里启动一台，就能派任务。",
+      "noHive": "还没有 Hive，任务还派不出去",
+      "whatIsHive": "Hive 是部署在你自己 AWS 账号里的一台 SwarmAI。任务派到 Hive 上跑，合上 Mac 也会继续；需要你拍板的问题会出现在这里。",
+      "step1": "打开 Hive，在 Accounts 里点 Add Account，添加你的 AWS 账号。",
+      "step2": "在 Fleet 里点 Deploy Hive，等它显示 running（通常要几分钟）。",
+      "step3": "回到这里，在右边的对话里说要做什么，Swarm 跟你确认后派出去。"
+    },
+    "return": {
+      "landed": "已落到 {{into}}（{{head}}）。接下来按这个仓库自己的规则 build、测试。",
+      "nothing": "没有可落地的改动",
+      "rejected": "没有落地，改动留在 {{ref}}",
+      "fetching": "正在取回…",
+      "prepare": "取回改动并审阅",
+      "summary": "{{commits}}，{{files}}，落到 {{branch}}",
+      "dirty": "本机这个仓库有未提交的改动；改到同样的文件时，落地会被拒绝",
+      "protected_one": "改到了 {{count}} 个受保护的路径（会在本机构建、执行的代码，或 agent 自己的规则），要单独确认：",
+      "protected_other": "改到了 {{count}} 个受保护的路径（会在本机构建、执行的代码，或 agent 自己的规则），要单独确认：",
+      "tick": "我看过这些路径的改动",
+      "commitsNote": "commit（Hive 写的说明，只作参考）",
+      "fullDiff": "看完整 diff：",
+      "land": "批准落地",
+      "reject": "不要",
+      "retake": "重新取回"
+    },
+    "resize": {
+      "label": "调整 Swarm Out 对话宽度",
+      "hint": "拖动调整宽度 · 双击恢复默认"
+    },
+    "judge": {
+      "verdictPending": "还没到",
+      "soFar": "到目前",
+      "colDimension": "维度",
+      "colRole": "地位",
+      "colVerdict": "结论",
+      "colNumbers": "数字",
+      "role": {
+        "hard": "硬约束",
+        "primary": "主要目标",
+        "efficiency": "效率"
+      },
+      "source": "示例数据，还没正式上线。上线后由代码从 run 事件生成，不做综合分，任一硬约束 BLOCK 整体 BLOCK。",
+      "naNote": "{{list}} 暂无参考线（N/A）。",
+      "pending": "到目前为止各维度都正常；Quality 要到验证阶段才有结论。",
+      "noFlags": "没有 WARN 或 BLOCK 的维度；{{na}}",
+      "allPass": "五个维度都 PASS：隔离干净、验证和 finding 全过、没有人类决策和救援、在时间和 Token 警戒线内。",
+      "flag": "{{dim}} {{verdict}}：{{number}}",
+      "blocked": "{{parts}}。有 BLOCK 的维度，这个 run 不算合格交付。{{na}}",
+      "warned": "{{parts}}。{{na}}其余维度 PASS。"
+    },
+    "brain": {
+      "none": "没走 Project Agent",
+      "general": "通用（Runner Agent）"
+    },
+    "check": {
+      "ran": "跑了",
+      "errored": "报错了",
+      "unknown": "跑了但没有结果",
+      "notRun": "没跑",
+      "notSeen": "没看到",
+      "line": "校验：{{list}}",
+      "linePartial": "校验：{{list}}（只读了最近的轮次）"
+    },
+    "gate": {
+      "integrity": "完整性",
+      "errored": "{{name}} 出错",
+      "notCounted": "Brain gate：这台 Hive 不记录拦截次数",
+      "refused_one": "Brain gate 拦下 {{count}} 次（{{list}}）",
+      "refused_other": "Brain gate 拦下 {{count}} 次（{{list}}）"
+    },
+    "lessons": {
+      "notSupported": "教训：这台 Hive 还不能交回教训（需要更新 Hive）",
+      "notFetched": "教训：这次没取回来，下次检查再试",
+      "written": "本机判官写进 Brain {{count}} 条",
+      "rejected": "没通过 {{count}} 条",
+      "pending": "待判 {{count}} 条",
+      "skipped": "{{count}} 条不是这个 Brain 的，没收",
+      "refused": "{{count}} 条没过本机的检查",
+      "line": "教训：交回 {{count}} 条，{{parts}}",
+      "withExtra": "{{line}}（{{extra}}）"
+    },
+    "state": {
+      "waiting": "在等你",
+      "running": "在跑",
+      "runningWhy": "在跑 · {{reason}}",
+      "stopped": "不在跑了",
+      "stoppedHiveOff": "不在跑了 · Hive 已关机",
+      "stoppedHiveGone": "不在跑了 · Hive 已删除",
+      "sessionUnknown": "会话未确认，可能在跑",
+      "unknown": "状态未知 · Hive 没回答"
+    },
+    "hiveStatus": {
+      "running": "运行中",
+      "stopped": "已关机",
+      "starting": "启动中",
+      "stopping": "关机中",
+      "updating": "更新中",
+      "deploying": "部署中",
+      "provisioning": "部署中",
+      "error": "出错",
+      "failed": "出错"
+    },
+    "error": {
+      "questions": "读不到 Hive {{hive}} 的问题：「等你」可能不全",
+      "hiveList": "读不到 Hive 列表：只显示派发记录里的 Hive",
+      "hiveRecord": "有一台 Hive 的记录读不出来"
+    },
+    "ended": {
+      "completed": "做完",
+      "turn_limit": "到了轮数上限",
+      "error": "出错",
+      "crashed": "出错（崩溃）",
+      "paused": "停在问题或审批上",
+      "no_terminal": "没有正常结束（没收到结束事件）",
+      "stopped": "被停",
+      "restarted": "进程重启后没接上",
+      "superseded": "被新消息接替",
+      "gave_up": "重试用尽",
+      "no_record": "没有结束记录",
+      "noRecordExited": "没有结束记录：这个 turn 没走到结束（进程中途退出）",
+      "noRecordUnknown": "结束方式不知道：这台 Hive 的版本不记录，或 turn 没走到结束",
+      "provisional": " · 暂定"
+    },
+    "work": {
+      "repo": "仓库",
+      "aRepo": "一个仓库",
+      "landed": "已落地",
+      "notLanded": "没有落地",
+      "noCode": "没有代码改动",
+      "repoSays": "{{name}}：{{what}}",
+      "notPulled": "还没拉下来",
+      "otherOrigin": "origin 不是任务给的地址，没计入",
+      "commits_one": "{{count}} 个 commit",
+      "commits_other": "{{count}} 个 commit",
+      "files_one": "{{count}} 个文件",
+      "files_other": "{{count}} 个文件",
+      "repoChanged": "{{name}}：{{commits}}，改了 {{files}} +{{added}} −{{deleted}}，{{pushed}}",
+      "untracked_one": "，另有 {{count}} 个未跟踪文件",
+      "untracked_other": "，另有 {{count}} 个未跟踪文件",
+      "change": "{{name}}：{{files}} +{{added}} −{{deleted}}",
+      "committed": "，已提交 {{sha}}",
+      "docs_one": "{{count}} 份文档",
+      "docs_other": "{{count}} 份文档",
+      "knowledge_one": "{{count}} 个知识文件",
+      "knowledge_other": "{{count}} 个知识文件",
+      "outside_one": "{{count}} 个仓库外的文件",
+      "outside_other": "{{count}} 个仓库外的文件",
+      "wrote": "写了 {{list}}",
+      "omitted": "（另有 {{count}} 个没列出）",
+      "answerOnly": "只回答，没有产出文件"
+    },
+    "pushed": {
+      "yes": "已推送",
+      "no": "没推送",
+      "nothingToPush": "没有新 commit",
+      "unknown": "推送情况不明"
+    },
+    "repoError": {
+      "outside": "目录指到了 Hive/repos 外面，没读",
+      "noCommit": "没有检出任何 commit",
+      "noRef": "远端没有任务给的分支或 tag",
+      "noHistory": "当前代码和任务给的分支没有共同历史",
+      "diffFailed": "git diff 失败",
+      "timeout": "读仓库超时",
+      "unreadable": "读不了这个仓库"
+    },
+    "time": {
+      "seconds_one": "{{count}} 秒",
+      "seconds_other": "{{count}} 秒",
+      "minutes_one": "{{count}} 分钟",
+      "minutes_other": "{{count}} 分钟"
+    },
+    "numbers": {
+      "ended": "结束于 {{at}}",
+      "time": "用时 {{time}}",
+      "timeUnknown": "用时 —",
+      "cost": "花费 {{cost}}",
+      "costAtLeast": "花费 至少 {{cost}}",
+      "costUnknown": "花费 —（没有记录）",
+      "asked_one": "问人 {{count}} 次",
+      "asked_other": "问人 {{count}} 次",
+      "unanswered": "（{{count}} 个没回答）",
+      "failed_one": "失败 {{count}} 步",
+      "failed_other": "失败 {{count}} 步"
+    },
+    "resultError": {
+      "sessionGone": "Hive 上已经没有这个会话",
+      "hiveSilent": "Hive 没回答，稍后再试",
+      "hiveNotRunning": "Hive 不在运行",
+      "hiveUnusable": "这台 Hive 的记录不完整",
+      "unexpectedBody": "Hive 返回的内容不对",
+      "noSession": "没有会话 id",
+      "http": "Hive 返回 {{code}}"
+    }
   }
 }

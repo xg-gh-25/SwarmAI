@@ -9,11 +9,17 @@
  * The numbers are pure functions of those answers, and the counts of waiting and
  * running use the tab badge's own rule (activityOf): the two can differ only for the
  * moment between their polls, never by rule.
+ *
+ * Every label here comes from the locale files (swarmOut.* in i18n/locales), read at
+ * call time through the app's i18n instance, so a panel rendered after a language
+ * switch speaks the new language. Text a Hive wrote is data and is never translated.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import i18n from '../../i18n';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 import { activityOf, waitingUnasked } from './useSwarmOutActivity';
+import { endedTone, type Tone } from './tone';
 
 export const LIVE_POLL_MS = 30_000;
 const DAY_MS = 24 * 3600 * 1000;
@@ -139,32 +145,37 @@ export function runsByHive(runs: SwarmOutRun[], now: number, days = 7): { hive: 
 /** The Brain a run went under, as the cards name it. */
 export function brainLabel(r: SwarmOutRun): string {
   const b = r.project_agent?.brain;
-  if (!b) return '没走 Project Agent';
-  return b === 'General' ? '通用（Runner Agent）' : b;
+  if (!b) return i18n.t('swarmOut.brain.none');
+  return b === 'General' ? i18n.t('swarmOut.brain.general') : b;
 }
 
-const CHECK: Record<SwarmOutCheckStatus, string> = { ran: '跑了', errored: '报错了', unknown: '跑了但没有结果', not_run: '没跑' };
+const CHECK_KEYS: Record<SwarmOutCheckStatus, string> = { ran: 'ran', errored: 'errored', unknown: 'unknown', not_run: 'notRun' };
+const checkWord = (s: SwarmOutCheckStatus): string => i18n.t(`swarmOut.check.${CHECK_KEYS[s] ?? 'notRun'}`);
+
+/** True when a run named checks and one of them did not run cleanly (the amber line). */
+export const checksIncomplete = (res: SwarmOutResult): boolean => (res.checks ?? []).some((c) => c.status !== 'ran');
 
 /** "校验：tests 跑了 · lint 没跑" for a run whose Project Agent named checks, else null.
  *  When older turns were not read, "没跑" is only "没看到". */
 export function checksLine(res: SwarmOutResult): string | null {
   const c = res.checks;
   if (!c || c.length === 0) return null;
-  const word = (s: SwarmOutCheckStatus) => (s === 'not_run' && res.checks_partial ? '没看到' : CHECK[s] ?? '没跑');
-  return `校验：${c.map((x) => `${x.id} ${word(x.status)}`).join(' · ')}${res.checks_partial ? '（只读了最近的轮次）' : ''}`;
+  const word = (s: SwarmOutCheckStatus) => (s === 'not_run' && res.checks_partial ? i18n.t('swarmOut.check.notSeen') : checkWord(s));
+  return i18n.t(res.checks_partial ? 'swarmOut.check.linePartial' : 'swarmOut.check.line',
+    { list: c.map((x) => `${x.id} ${word(x.status)}`).join(' · ') });
 }
 
 const gateName = (k: string): string =>
-  k === 'integrity' ? '完整性' : k.startsWith('error:') ? `${k.slice(6)} 出错` : k;
+  k === 'integrity' ? i18n.t('swarmOut.gate.integrity') : k.startsWith('error:') ? i18n.t('swarmOut.gate.errored', { name: k.slice(6) }) : k;
 
 /** "Brain gate 拦下 3 次（no_git_push 2、完整性 1）"; for a Project Agent run on a Hive
  *  that does not count them, says so; null otherwise. */
 export function gateLine(res: SwarmOutResult): string | null {
-  if (res.project_agent && res.gate_refusals === null) return 'Brain gate：这台 Hive 不记录拦截次数';
+  if (res.project_agent && res.gate_refusals === null) return i18n.t('swarmOut.gate.notCounted');
   const g = Object.entries(res.gate_refusals ?? {}).filter(([, n]) => n > 0);
   if (g.length === 0) return null;
   const total = g.reduce((a, [, n]) => a + n, 0);
-  return `Brain gate 拦下 ${total} 次（${g.map(([k, n]) => `${gateName(k)} ${n}`).join('、')}）`;
+  return i18n.t('swarmOut.gate.refused', { count: total, list: g.map(([k, n]) => `${gateName(k)} ${n}`).join(i18n.t('swarmOut.sep.list')) });
 }
 
 /** "教训：交回 3 条，本机判官写进 Brain 1 条、没通过 1 条、待判 1 条" for a Project Agent
@@ -173,14 +184,15 @@ export function gateLine(res: SwarmOutResult): string | null {
 export function lessonsLine(res: SwarmOutResult): string | null {
   const l = res.lessons;
   if (!l) return null;
-  if (l.error === 'not_supported') return '教训：这台 Hive 还不能交回教训（需要更新 Hive）';
-  if (l.sent === 0 && l.returned === 0) return l.error ? '教训：这次没取回来，下次检查再试' : null;
-  const parts = [`本机判官写进 Brain ${l.written} 条`];
-  if (l.rejected) parts.push(`没通过 ${l.rejected} 条`);
-  if (l.pending) parts.push(`待判 ${l.pending} 条`);
-  const extra = [l.skipped ? `${l.skipped} 条不是这个 Brain 的，没收` : '',
-    l.refused ? `${l.refused} 条没过本机的检查` : ''].filter(Boolean);
-  return `教训：交回 ${l.sent} 条，${parts.join('、')}${extra.length ? `（${extra.join('，')}）` : ''}`;
+  if (l.error === 'not_supported') return i18n.t('swarmOut.lessons.notSupported');
+  if (l.sent === 0 && l.returned === 0) return l.error ? i18n.t('swarmOut.lessons.notFetched') : null;
+  const parts = [i18n.t('swarmOut.lessons.written', { count: l.written })];
+  if (l.rejected) parts.push(i18n.t('swarmOut.lessons.rejected', { count: l.rejected }));
+  if (l.pending) parts.push(i18n.t('swarmOut.lessons.pending', { count: l.pending }));
+  const extra = [l.skipped ? i18n.t('swarmOut.lessons.skipped', { count: l.skipped }) : '',
+    l.refused ? i18n.t('swarmOut.lessons.refused', { count: l.refused }) : ''].filter(Boolean);
+  const line = i18n.t('swarmOut.lessons.line', { count: l.sent, parts: parts.join(i18n.t('swarmOut.sep.list')) });
+  return extra.length ? i18n.t('swarmOut.lessons.withExtra', { line, extra: extra.join(i18n.t('swarmOut.sep.clause')) }) : line;
 }
 
 export interface BrainRow { brain: string; label: string; runs: number; completed: number; failed: number; checksNotRun: number }
@@ -210,71 +222,71 @@ export function runsByBrain(runs: SwarmOutRun[], now: number, days = 7): BrainRo
 /** What a run's state means to the person, in the words the cards use. */
 export function stateLabel(r: SwarmOutRun): string {
   switch (stateOf(r)) {
-    case 'waiting': return '在等你';
-    case 'running': return r.state_reason && r.state_reason !== 'streaming' ? `在跑 · ${r.state_reason}` : '在跑';
-    case 'stopped': return r.state_reason === 'hive_stopped' ? '不在跑了 · Hive 已关机'
-      : r.state_reason === 'hive_gone' ? '不在跑了 · Hive 已删除' : '不在跑了';
-    default: return r.session_unknown ? '会话未确认，可能在跑' : '状态未知 · Hive 没回答';
+    case 'waiting': return i18n.t('swarmOut.state.waiting');
+    case 'running': return r.state_reason && r.state_reason !== 'streaming'
+      ? i18n.t('swarmOut.state.runningWhy', { reason: r.state_reason }) : i18n.t('swarmOut.state.running');
+    case 'stopped': return r.state_reason === 'hive_stopped' ? i18n.t('swarmOut.state.stoppedHiveOff')
+      : r.state_reason === 'hive_gone' ? i18n.t('swarmOut.state.stoppedHiveGone') : i18n.t('swarmOut.state.stopped');
+    default: return r.session_unknown ? i18n.t('swarmOut.state.sessionUnknown') : i18n.t('swarmOut.state.unknown');
   }
 }
 
+/** The Hive statuses the locale names (core/hive_manager's states); any other is shown as is. */
+export const HIVE_STATUSES = ['running', 'stopped', 'starting', 'stopping', 'updating', 'deploying', 'provisioning', 'error', 'failed'];
+
 /** A Hive's status in the panel's words. */
 export function hiveStatusLabel(status: string): string {
-  return ({ running: '运行中', stopped: '已关机', starting: '启动中', stopping: '关机中', updating: '更新中',
-    deploying: '部署中', provisioning: '部署中', error: '出错', failed: '出错' } as Record<string, string>)[status] ?? status;
+  return HIVE_STATUSES.includes(status) ? i18n.t(`swarmOut.hiveStatus.${status}`) : status;
 }
 
 /** The daemon's English messages about what it could not read, in the panel's words. */
 export function errorLabel(e: string): string {
   const q = /^could not read the questions of Hive (.+)$/.exec(e);
-  if (q) return `读不到 Hive ${q[1]} 的问题：「等你」可能不全`;
-  if (e === 'could not list the running Hives') return '读不到 Hive 列表：只显示派发记录里的 Hive';
-  if (e === 'could not read a Hive record') return '有一台 Hive 的记录读不出来';
+  if (q) return i18n.t('swarmOut.error.questions', { hive: q[1] });
+  if (e === 'could not list the running Hives') return i18n.t('swarmOut.error.hiveList');
+  if (e === 'could not read a Hive record') return i18n.t('swarmOut.error.hiveRecord');
   return e;
 }
 
 // ── a run's result (design docs/design/2026-10-28-swarm-out-run-results.md §4.6) ──
 
-/** How a run ended, in the card's words, and whether it is the one to look at (an
- *  error). Facts only: a provisional ending says so, an unrecorded one says why. */
-export function endedLabel(res: SwarmOutResult): { text: string; tone: 'error' | 'normal' | 'muted' } {
-  const base: Record<SwarmOutEnded, string> = {
-    completed: '做完', turn_limit: '到了轮数上限', error: '出错', crashed: '出错（崩溃）',
-    paused: '停在问题或审批上', no_terminal: '没有正常结束（没收到结束事件）', stopped: '被停', restarted: '进程重启后没接上',
-    superseded: '被新消息接替', gave_up: '重试用尽', no_record: '没有结束记录',
-  };
-  let text = base[res.ended] ?? res.ended;
+/** Every ending the Hive records (SwarmOutEnded), each with its locale label. */
+export const ENDINGS: readonly SwarmOutEnded[] = ['completed', 'turn_limit', 'error', 'crashed', 'paused', 'no_terminal',
+  'stopped', 'restarted', 'superseded', 'gave_up', 'no_record'];
+
+/** How a run ended, in the card's words, and its tone (./tone). Facts only: a
+ *  provisional ending says so, an unrecorded one says why. */
+export function endedLabel(res: SwarmOutResult): { text: string; tone: Tone } {
+  let text = (ENDINGS as readonly string[]).includes(res.ended) ? i18n.t(`swarmOut.ended.${res.ended}`) : res.ended;
   if ((res.ended === 'error' || res.ended === 'crashed') && res.error?.code && res.error.code !== 'other') text += ` · ${res.error.code}`;
   if (res.ended === 'no_record' && !res.outcome_recorded) {
-    text = res.hive_records_outcomes ? '没有结束记录：这个 turn 没走到结束（进程中途退出）'
-      : '结束方式不知道：这台 Hive 的版本不记录，或 turn 没走到结束';
+    text = res.hive_records_outcomes ? i18n.t('swarmOut.ended.noRecordExited') : i18n.t('swarmOut.ended.noRecordUnknown');
   }
-  if (res.provisional && res.ended !== 'no_record') text += ' · 暂定';
-  const tone = res.ended === 'error' || res.ended === 'crashed' || res.ended === 'gave_up' ? 'error'
-    : res.provisional || res.ended === 'no_record' || res.ended === 'no_terminal' ? 'muted' : 'normal';
-  return { text, tone };
+  if (res.provisional && res.ended !== 'no_record') text += i18n.t('swarmOut.ended.provisional');
+  return { text, tone: endedTone(res) };
 }
 
 const repoName = (dir: string | null, url: string | null): string => {
   // an scp-style URL (git@host:owner/name) names its path after the colon
   const parts = (dir || (url ?? '').replace(/^[^/:]+@[^/:]+:/, '') || '').replace(/\.git$/, '').split('/').filter(Boolean);
-  return parts.slice(-2).join('/') || '仓库';
+  return parts.slice(-2).join('/') || i18n.t('swarmOut.work.repo');
 };
 
 const PUSHED: Record<SwarmOutRepoFact['pushed'], string> = {
-  yes: '已推送', no: '没推送', nothing_to_push: '没有新 commit', unknown: '推送情况不明',
+  yes: 'yes', no: 'no', nothing_to_push: 'nothingToPush', unknown: 'unknown',
 };
 
-/** The errors core/task_repos writes (the only ones /runs passes through). */
+/** The errors core/task_repos writes (the only ones /runs passes through), by locale key. */
 const REPO_ERROR: Record<string, string> = {
-  'the directory leads outside Hive/repos': '目录指到了 Hive/repos 外面，没读',
-  'the repository has no commit checked out': '没有检出任何 commit',
-  "the declared ref is not among the repository's remote refs": '远端没有任务给的分支或 tag',
-  'HEAD and the declared ref share no history': '当前代码和任务给的分支没有共同历史',
-  'git diff failed': 'git diff 失败',
-  'reading the repository timed out': '读仓库超时',
-  'could not read the repository': '读不了这个仓库',
+  'the directory leads outside Hive/repos': 'outside',
+  'the repository has no commit checked out': 'noCommit',
+  "the declared ref is not among the repository's remote refs": 'noRef',
+  'HEAD and the declared ref share no history': 'noHistory',
+  'git diff failed': 'diffFailed',
+  'reading the repository timed out': 'timeout',
+  'could not read the repository': 'unreadable',
 };
+const repoError = (e: string): string => i18n.t(`swarmOut.repoError.${REPO_ERROR[e] ?? 'unreadable'}`);
 
 /** One line per thing the run did (code per repository, files by kind, a pipeline,
  *  or only an answer), in the order the kinds come. Empty when nothing is known. */
@@ -282,25 +294,31 @@ export function workLines(res: SwarmOutResult): string[] {
   const out: string[] = [];
   const p = res.pipeline;
   if (p) {
-    const land = p.landing === 'landed' ? `已落地${p.landed_sha ? ` ${p.landed_sha}` : ''}`
-      : p.landing === 'not_landed' ? '没有落地' : p.landing === 'no_code' ? '没有代码改动' : (p.status ?? '');
+    const land = p.landing === 'landed' ? i18n.t('swarmOut.work.landed') + (p.landed_sha ? ` ${p.landed_sha}` : '')
+      : p.landing === 'not_landed' ? i18n.t('swarmOut.work.notLanded') : p.landing === 'no_code' ? i18n.t('swarmOut.work.noCode') : (p.status ?? '');
     out.push(['pipeline', p.profile, land].filter(Boolean).join(' · '));
   }
   for (const r of res.work.repos ?? []) {
     const name = repoName(r.dir, r.url);
-    if (r.present === false) out.push(`${name}：还没拉下来`);
-    else if (r.origin_matches === false) out.push(`${name}：origin 不是任务给的地址，没计入`);
-    else if (r.error) out.push(`${name}：${REPO_ERROR[r.error] ?? '读不了这个仓库'}`);
+    const said = (what: string) => i18n.t('swarmOut.work.repoSays', { name, what });
+    if (r.present === false) out.push(said(i18n.t('swarmOut.work.notPulled')));
+    else if (r.origin_matches === false) out.push(said(i18n.t('swarmOut.work.otherOrigin')));
+    else if (r.error) out.push(said(repoError(r.error)));
     else {
       // commits only: the Hive never reads the working tree (core/task_repos)
-      out.push(`${name}：${r.commits_total} 个 commit，改了 ${r.files_total} 个文件 +${r.added} −${r.deleted}，${PUSHED[r.pushed]}`
-        + (r.untracked ? `，另有 ${r.untracked} 个未跟踪文件` : ''));
+      out.push(i18n.t('swarmOut.work.repoChanged', {
+        name, commits: i18n.t('swarmOut.work.commits', { count: r.commits_total }),
+        files: i18n.t('swarmOut.work.files', { count: r.files_total }), added: r.added, deleted: r.deleted,
+        pushed: i18n.t(`swarmOut.pushed.${PUSHED[r.pushed] ?? 'unknown'}`),
+      }) + (r.untracked ? i18n.t('swarmOut.work.untracked', { count: r.untracked }) : ''));
     }
   }
   const declared = new Set((res.work.repos ?? []).map((r) => repoName(r.dir, r.url).split('/').pop()));
   for (const c of res.work.changes) {
     if (c.repo && declared.has(c.repo)) continue;   // the declared repository's facts are the whole change
-    out.push(`${c.repo ?? '一个仓库'}：${c.files} 个文件 +${c.added} −${c.deleted}${c.landed.length ? `，已提交 ${c.landed[c.landed.length - 1]}` : ''}`);
+    out.push(i18n.t('swarmOut.work.change', {
+      name: c.repo ?? i18n.t('swarmOut.work.aRepo'), files: i18n.t('swarmOut.work.files', { count: c.files }), added: c.added, deleted: c.deleted,
+    }) + (c.landed.length ? i18n.t('swarmOut.work.committed', { sha: c.landed[c.landed.length - 1] }) : ''));
   }
   const by = { docs: 0, knowledge: 0, outside: 0 };
   for (const f of res.work.files) {
@@ -308,27 +326,38 @@ export function workLines(res: SwarmOutResult): string[] {
     else if (f.kind === 'external-diff' || f.kind === 'external-nodiff') by.outside += 1;
     else by.docs += 1;
   }
-  const files = [by.docs && `${by.docs} 份文档`, by.knowledge && `${by.knowledge} 个知识文件`,
-    by.outside && `${by.outside} 个仓库外的文件`].filter(Boolean);
-  if (files.length) out.push(`写了 ${files.join('、')}${res.work.files_omitted ? `（另有 ${res.work.files_omitted} 个没列出）` : ''}`);
-  if (!out.length && res.kinds.includes('answer')) out.push('只回答，没有产出文件');
+  const files = [by.docs && i18n.t('swarmOut.work.docs', { count: by.docs }), by.knowledge && i18n.t('swarmOut.work.knowledge', { count: by.knowledge }),
+    by.outside && i18n.t('swarmOut.work.outside', { count: by.outside })].filter(Boolean);
+  if (files.length) {
+    out.push(i18n.t('swarmOut.work.wrote', { list: files.join(i18n.t('swarmOut.sep.list')) })
+      + (res.work.files_omitted ? i18n.t('swarmOut.work.omitted', { count: res.work.files_omitted }) : ''));
+  }
+  if (!out.length && res.kinds.includes('answer')) out.push(i18n.t('swarmOut.work.answerOnly'));
   return out;
 }
 
-const minutes = (s: number): string => (s < 60 ? `${s} 秒` : `${Math.round(s / 60)} 分钟`);
+const minutes = (s: number): string => (s < 60 ? i18n.t('swarmOut.time.seconds', { count: s }) : i18n.t('swarmOut.time.minutes', { count: Math.round(s / 60) }));
+
+/** A timestamp as month/day hour:minute in the app's language (empty when unparseable). */
+export function when(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? '' : new Date(t).toLocaleString(i18n.language || undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
 /** The card's numbers: when it ended, time, cost, people asked, failed steps. A value
  *  not known is "—" with the reason, never a zero. */
 export function numberParts(res: SwarmOutResult): string[] {
   const h = res.work.human;
   const asked = h.approved + h.denied + h.unanswered + h.answered_questions;
-  const t = res.ended_at ? Date.parse(res.ended_at) : NaN;
+  const ended = when(res.ended_at);
+  const cost = res.cost_usd == null ? '' : `$${res.cost_usd.toFixed(2)}`;
   return [
-    Number.isNaN(t) ? '' : `结束于 ${new Date(t).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`,
-    res.active_s == null ? '用时 —' : `用时 ${minutes(res.active_s)}`,
-    res.cost_usd == null ? '花费 —（没有记录）' : `花费 ${res.cost_partial ? '至少 ' : ''}$${res.cost_usd.toFixed(2)}`,
-    `问人 ${asked} 次${h.unanswered ? `（${h.unanswered} 个没回答）` : ''}`,
-    `失败 ${res.work.steps.failed} 步`,
+    ended ? i18n.t('swarmOut.numbers.ended', { at: ended }) : '',
+    res.active_s == null ? i18n.t('swarmOut.numbers.timeUnknown') : i18n.t('swarmOut.numbers.time', { time: minutes(res.active_s) }),
+    res.cost_usd == null ? i18n.t('swarmOut.numbers.costUnknown')
+      : i18n.t(res.cost_partial ? 'swarmOut.numbers.costAtLeast' : 'swarmOut.numbers.cost', { cost }),
+    i18n.t('swarmOut.numbers.asked', { count: asked }) + (h.unanswered ? i18n.t('swarmOut.numbers.unanswered', { count: h.unanswered }) : ''),
+    i18n.t('swarmOut.numbers.failed', { count: res.work.steps.failed }),
   ].filter(Boolean);
 }
 
@@ -350,9 +379,10 @@ export function runJudge(res: SwarmOutResult): RunJudge | null {
 /** Why a run's result could not be read, in the panel's words. */
 export function resultErrorLabel(e: string | null | undefined): string {
   if (!e) return '';
-  return ({ session_gone: 'Hive 上已经没有这个会话', hive_silent: 'Hive 没回答，稍后再试',
-    hive_not_running: 'Hive 不在运行', hive_unusable: '这台 Hive 的记录不完整', unexpected_body: 'Hive 返回的内容不对',
-    'no session': '没有会话 id' } as Record<string, string>)[e] ?? (e.startsWith('http_') ? `Hive 返回 ${e.slice(5)}` : e);
+  const key = ({ session_gone: 'sessionGone', hive_silent: 'hiveSilent', hive_not_running: 'hiveNotRunning',
+    hive_unusable: 'hiveUnusable', unexpected_body: 'unexpectedBody', 'no session': 'noSession' } as Record<string, string>)[e];
+  if (key) return i18n.t(`swarmOut.resultError.${key}`);
+  return e.startsWith('http_') ? i18n.t('swarmOut.resultError.http', { code: e.slice(5) }) : e;
 }
 
 export type OutcomeBucket = 'completed' | 'error' | 'stopped' | 'other';

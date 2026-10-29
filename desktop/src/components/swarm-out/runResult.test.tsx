@@ -4,11 +4,16 @@
  * files, an answer), its numbers, the details on demand (the reply as plain text), and
  * the history's days by outcome.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
 import { dailyByOutcome, endedLabel, numberParts, outcomeBucket, runJudge, workLines } from './live';
+import i18n from '../../i18n';
+
+// These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
+beforeAll(async () => { await i18n.changeLanguage('zh'); });
+afterAll(async () => { await i18n.changeLanguage('en'); });
 
 vi.mock('../../services/swarmOut', () => ({
   swarmOutService: { runs: vi.fn(), fleet: vi.fn(), answer: vi.fn(), hives: vi.fn(), result: vi.fn(), refresh: vi.fn() },
@@ -37,18 +42,18 @@ const repo = (over = {}) => ({
 
 describe('how a run ended', () => {
   it.each([
-    [{ ended: 'completed' as const }, '做完', 'normal'],
+    [{ ended: 'completed' as const }, '做完', 'ok'],
     [{ ended: 'error' as const, error: { code: 'MODEL_ERROR' } }, '出错 · MODEL_ERROR', 'error'],
     [{ ended: 'crashed' as const, error: { code: 'crashed' } }, '出错（崩溃） · crashed', 'error'],
-    [{ ended: 'turn_limit' as const }, '到了轮数上限', 'normal'],
+    [{ ended: 'turn_limit' as const }, '到了轮数上限', 'attention'],
     [{ ended: 'error' as const, error: { code: 'other' } }, '出错', 'error'],
-    [{ ended: 'no_terminal' as const }, '没有正常结束（没收到结束事件）', 'muted'],
-    [{ ended: 'stopped' as const }, '被停', 'normal'],
-    [{ ended: 'paused' as const, provisional: true }, '停在问题或审批上 · 暂定', 'muted'],
+    [{ ended: 'no_terminal' as const }, '没有正常结束（没收到结束事件）', 'unknown'],
+    [{ ended: 'stopped' as const }, '被停', 'attention'],
+    [{ ended: 'paused' as const, provisional: true }, '停在问题或审批上 · 暂定', 'unknown'],
     [{ ended: 'no_record' as const, outcome_recorded: false, hive_records_outcomes: false, provisional: true },
-      '结束方式不知道：这台 Hive 的版本不记录，或 turn 没走到结束', 'muted'],
+      '结束方式不知道：这台 Hive 的版本不记录，或 turn 没走到结束', 'unknown'],
     [{ ended: 'no_record' as const, outcome_recorded: false, hive_records_outcomes: true, provisional: true },
-      '没有结束记录：这个 turn 没走到结束（进程中途退出）', 'muted'],
+      '没有结束记录：这个 turn 没走到结束（进程中途退出）', 'unknown'],
   ])('%j', (over, text, tone) => {
     expect(endedLabel(result(over))).toEqual({ text, tone });
   });
@@ -173,7 +178,8 @@ describe('a run card', () => {
   it('shows how it ended, what it did and its numbers', async () => {
     const c = await card('fix the widget');
     expect(within(c).getByTestId('swarm-out-run-ended').textContent).toBe('出错 · MODEL_ERROR');
-    expect(within(c).getByTestId('swarm-out-run-ended').className).toContain('status-error');
+    expect(within(c).getByTestId('swarm-out-run-ended').dataset.tone).toBe('error');
+    expect(within(c).getByTestId('swarm-out-run-ended').style.color).toBe('var(--color-status-error)');
     expect(within(c).getByTestId('swarm-out-run-work').textContent).toContain('acme/widget：1 个 commit，改了 4 个文件 +120 −30');
     expect(within(c).getByTestId('swarm-out-run-numbers').textContent).toContain('花费 $1.23');
   });

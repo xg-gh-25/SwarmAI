@@ -4,6 +4,7 @@
  * BLOCK (Run Isolation and Quality are hard constraints), otherwise the number of
  * WARNs, otherwise PASS; N/A and PENDING do not count.
  */
+import i18n from '../../i18n';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 
 export type JudgeState = 'PASS' | 'WARN' | 'BLOCK';
@@ -24,17 +25,14 @@ export function judgeSummary(judge: RunJudge): string {
     .map((v, i) => [v, i] as const)
     .filter(([v]) => v === 'NA')
     .map(([, i]) => DIMENSIONS[i]);
-  const naNote = na.length ? `${na.join('、')} 暂无参考线（N/A）。` : '';
+  const naNote = na.length ? i18n.t('swarmOut.judge.naNote', { list: na.join(i18n.t('swarmOut.sep.list')) }) : '';
   if (flagged.length === 0) {
-    if (judge.verdicts.includes('PENDING')) {
-      return '到目前为止各维度都正常；Quality 要到验证阶段才有结论。';
-    }
-    return na.length
-      ? `没有 WARN 或 BLOCK 的维度；${naNote}`
-      : '五个维度都 PASS：隔离干净、验证和 finding 全过、没有人类决策和救援、在时间和 Token 警戒线内。';
+    if (judge.verdicts.includes('PENDING')) return i18n.t('swarmOut.judge.pending');
+    return na.length ? i18n.t('swarmOut.judge.noFlags', { na: naNote }) : i18n.t('swarmOut.judge.allPass');
   }
-  const parts = flagged.map(([v, i]) => `${DIMENSIONS[i]} ${v}：${judge.numbers[i]}`).join('；');
+  const parts = flagged.map(([v, i]) => i18n.t('swarmOut.judge.flag', { dim: DIMENSIONS[i], verdict: v, number: judge.numbers[i] }))
+    .join(i18n.t('swarmOut.sep.item'));
   return judge.verdicts.includes('BLOCK')
-    ? `${parts}。有 BLOCK 的维度，这个 run 不算合格交付。${naNote}`
-    : `${parts}。${na.length ? `${naNote}其余维度 PASS。` : '其余维度 PASS。'}`;
+    ? i18n.t('swarmOut.judge.blocked', { parts, na: naNote })
+    : i18n.t('swarmOut.judge.warned', { parts, na: naNote });
 }

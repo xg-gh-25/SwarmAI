@@ -1161,5 +1161,340 @@
       "editTitle": "System Workspace Warning",
       "editMessage": "You are about to modify a file in the Swarm Workspace. This is a protected system workspace used by SwarmAI for internal operations. Modifying these files may affect SwarmAI's functionality."
     }
+  },
+  "swarmOut": {
+    "sep": {
+      "list": ", ",
+      "clause": ", ",
+      "item": "; "
+    },
+    "loading": "Loading…",
+    "runsUnreadable": "Can't read the dispatch log, retrying shortly",
+    "tbd": "TBD: {{missing}}",
+    "noRuns": "Nothing sent yet. Say what to do in the chat on the right, and Swarm will send it out.",
+    "view": {
+      "run": "Runs",
+      "history": "History"
+    },
+    "header": {
+      "running_one": "{{count}} Hive running",
+      "running_other": "{{count}} Hives running",
+      "keepsGoing": ", keeps going with the Mac closed",
+      "noneRunning_one": "{{count}} Hive, not running",
+      "noneRunning_other": "{{count}} Hives, none running",
+      "noHive": "No Hive yet"
+    },
+    "daily": {
+      "title": "Runs sent per day",
+      "sub": "Last 14 days · local date · by outcome",
+      "day": "{{day}} · {{count}} sent",
+      "dayWith": "{{day}} · {{count}} sent: {{parts}}"
+    },
+    "bucket": {
+      "error": "Failed",
+      "stopped": "Stopped",
+      "completed": "Done",
+      "other": "Not known yet"
+    },
+    "history": {
+      "title": "Run log",
+      "sub": "Last 7 days · by Hive",
+      "groupingTbd": "Grouping by Brain / Project Agent · TBD: the dispatch log carries no Brain or Project Agent",
+      "empty": "No runs sent in the last 7 days",
+      "count_one": "{{count}} run",
+      "count_other": "{{count}} runs"
+    },
+    "tbdParts": {
+      "verdict": "One-line verdict",
+      "verdictMissing": "No cross-run audit summary",
+      "dimensions": "Five dimensions",
+      "dimensionsMissing": "Only pipeline runs carry a five-dimension verdict (in the run card's details); there is no cross-run summary yet",
+      "occupancy": "Worker occupancy",
+      "occupancyMissing": "Each Hive's concurrency is not sampled over time",
+      "type": "By type",
+      "typeMissing": "The dispatch log carries no task type",
+      "scheduled": "Scheduled",
+      "scheduledMissing": "No scheduled dispatches yet"
+    },
+    "live": {
+      "submitFailed": "Couldn't submit, try again later",
+      "openHiveAdmin": "Open Hive admin"
+    },
+    "ask": {
+      "maybe": "Possibly: {{title}}",
+      "otherSession": "Another session on the Hive (not sent from here)",
+      "notDelivered": "Not delivered",
+      "waiting": "Waiting for you",
+      "refused": "The Hive refused this answer: it does not match what is waiting (the question changed after it was shown, or this Hive runs a newer version). The answer was not delivered; handle it on this Hive's own page.",
+      "approvalTitle": "Wants to run a command that needs approval",
+      "truncated": "The command is over 2000 characters and is not shown in full. It can't be approved here: read it on this Hive's own page and decide there, or deny it here.",
+      "approve": "Approve",
+      "deny": "Deny",
+      "answerFor": "Answer: {{question}}",
+      "ownAnswer": "Or write your own answer",
+      "yourAnswer": "Your answer",
+      "omitted_one": "{{count}} more question or option is not shown (too many or empty); the full content is on this Hive's own page.",
+      "omitted_other": "{{count}} more questions or options are not shown (too many or empty); the full content is on this Hive's own page.",
+      "submit": "Submit answer"
+    },
+    "kpi": {
+      "waiting": "Waiting for your answer",
+      "onHivePage": "+{{count}} to handle on the Hive's page",
+      "free": "Free slots, ready to send",
+      "running": "Sent by me, running"
+    },
+    "waiting": {
+      "title": "Waiting for you",
+      "refresh": "Refresh",
+      "none": "No questions waiting for you",
+      "unasked": "The Hive says these wait on someone, but the question has not reached here: handle them on the Hive's page",
+      "refused": "To handle on the Hive's page (the answer was not delivered and can't be given here again)"
+    },
+    "fleet": {
+      "title": "Fleet",
+      "note": "In use = every session running on the Hive, its own included",
+      "failed": "Can't read the fleet, retrying shortly",
+      "unreachable": "Unreachable",
+      "full": "Full · {{used}}/{{max}} in use",
+      "used": "{{used}}/{{max}} in use"
+    },
+    "detail": {
+      "failed": "Can't read the details, try again later",
+      "lastReply": "Last reply",
+      "fullReport": "Full text is {{count}} characters; see the Hive page",
+      "noReply": "No reply text",
+      "commitsOnly": " (commits only; uncommitted changes not read)",
+      "moreFiles_one": "{{count}} more file",
+      "moreFiles_other": "{{count}} more files",
+      "commitsTotal": " …{{count}} in all",
+      "bundleError": "Can't fetch these commits: {{error}}",
+      "filesWritten": "Files written (paths on the Hive)",
+      "toolCalls_one": "{{count}} tool call: {{list}}",
+      "toolCalls_other": "{{count}} tool calls: {{list}}",
+      "refresh": "Refresh result"
+    },
+    "result": {
+      "pending": "Fetching the result from the Hive",
+      "failed": "Can't fetch the result: {{reason}}",
+      "lastCheck": "Last check: {{reason}}"
+    },
+    "card": {
+      "acceptance": "Acceptance: {{text}}",
+      "collapse": "Hide",
+      "details": "Details"
+    },
+    "groups": {
+      "running": "Running",
+      "runningEmpty": "No tasks running",
+      "stopped": "Ended (sent in the last 24 h)",
+      "stoppedEmpty": "Everything sent in the last 24 h is still running or waiting on you",
+      "unknown": "State unknown"
+    },
+    "byBrain": {
+      "title": "By Brain (7 days)",
+      "runs_one": "{{count}} run",
+      "runs_other": "{{count}} runs",
+      "done": "{{count}} done",
+      "failed": "{{count}} failed",
+      "checks_one": "{{count}} check not run or errored",
+      "checks_other": "{{count}} checks not run or errored"
+    },
+    "guide": {
+      "openHive": "Open Hive",
+      "noneRunning": "No Hive is running",
+      "hiveWithStatus": "{{name}} ({{status}})",
+      "startOne": "{{list}}. Start one in Hive to send tasks.",
+      "noHive": "No Hive yet, so tasks can't be sent",
+      "whatIsHive": "A Hive is a SwarmAI deployed in your own AWS account. Tasks sent to a Hive keep running with the Mac closed; questions that need your call show up here.",
+      "step1": "Open Hive, click Add Account under Accounts and add your AWS account.",
+      "step2": "Click Deploy Hive under Fleet and wait until it shows running (usually a few minutes).",
+      "step3": "Come back here and say what to do in the chat on the right; Swarm confirms it with you and sends it out."
+    },
+    "return": {
+      "landed": "Landed on {{into}} ({{head}}). Next, build and test it the way this repository does.",
+      "nothing": "No change to land",
+      "rejected": "Not landed; the change stays at {{ref}}",
+      "fetching": "Fetching…",
+      "prepare": "Fetch the change and review",
+      "summary": "{{commits}}, {{files}}, onto {{branch}}",
+      "dirty": "This repository has uncommitted changes here; landing is refused if they touch the same files",
+      "protected_one": "Changes {{count}} protected path (code built or run on this machine, or the agent's own rules); confirm it separately:",
+      "protected_other": "Changes {{count}} protected paths (code built or run on this machine, or the agent's own rules); confirm them separately:",
+      "tick": "I've read the changes to these paths",
+      "commitsNote": "Commits (the Hive's own descriptions, for reference only)",
+      "fullDiff": "Full diff: ",
+      "land": "Approve landing",
+      "reject": "Reject",
+      "retake": "Fetch again"
+    },
+    "resize": {
+      "label": "Resize Swarm Out chat",
+      "hint": "Drag to resize · double-click to reset"
+    },
+    "judge": {
+      "verdictPending": "Not yet",
+      "soFar": "so far",
+      "colDimension": "Dimension",
+      "colRole": "Role",
+      "colVerdict": "Verdict",
+      "colNumbers": "Numbers",
+      "role": {
+        "hard": "Hard constraint",
+        "primary": "Primary goal",
+        "efficiency": "Efficiency"
+      },
+      "source": "Sample data, not live yet. Once live it is built by code from run events: no composite score, and any hard constraint at BLOCK makes the run BLOCK.",
+      "naNote": "{{list}} have no reference line yet (N/A).",
+      "pending": "Every dimension is fine so far; Quality has a verdict only at the verify stage.",
+      "noFlags": "No dimension at WARN or BLOCK; {{na}}",
+      "allPass": "All five dimensions PASS: clean isolation, verification and findings all passed, no human decision or rescue, within the time and token lines.",
+      "flag": "{{dim}} {{verdict}}: {{number}}",
+      "blocked": "{{parts}}. A dimension is at BLOCK, so this run is not a qualified delivery. {{na}}",
+      "warned": "{{parts}}. {{na}}The other dimensions PASS."
+    },
+    "brain": {
+      "none": "No Project Agent",
+      "general": "General (Runner Agent)"
+    },
+    "check": {
+      "ran": "ran",
+      "errored": "errored",
+      "unknown": "ran with no result",
+      "notRun": "not run",
+      "notSeen": "not seen",
+      "line": "Checks: {{list}}",
+      "linePartial": "Checks: {{list}} (only the latest turns were read)"
+    },
+    "gate": {
+      "integrity": "integrity",
+      "errored": "{{name}} errored",
+      "notCounted": "Brain gate: this Hive doesn't count refusals",
+      "refused_one": "Brain gate refused {{count}} time ({{list}})",
+      "refused_other": "Brain gate refused {{count}} times ({{list}})"
+    },
+    "lessons": {
+      "notSupported": "Lessons: this Hive can't return lessons yet (update the Hive)",
+      "notFetched": "Lessons: not fetched this time, retried at the next check",
+      "written": "{{count}} written into the Brain by the local judge",
+      "rejected": "{{count}} rejected",
+      "pending": "{{count}} pending",
+      "skipped": "{{count}} not for this Brain, not taken",
+      "refused": "{{count}} failed this machine's checks",
+      "line": "Lessons: {{count}} returned, {{parts}}",
+      "withExtra": "{{line}} ({{extra}})"
+    },
+    "state": {
+      "waiting": "Waiting for you",
+      "running": "Running",
+      "runningWhy": "Running · {{reason}}",
+      "stopped": "Not running",
+      "stoppedHiveOff": "Not running · Hive is off",
+      "stoppedHiveGone": "Not running · Hive deleted",
+      "sessionUnknown": "Session not confirmed, may be running",
+      "unknown": "State unknown · the Hive didn't answer"
+    },
+    "hiveStatus": {
+      "running": "Running",
+      "stopped": "Off",
+      "starting": "Starting",
+      "stopping": "Stopping",
+      "updating": "Updating",
+      "deploying": "Deploying",
+      "provisioning": "Deploying",
+      "error": "Error",
+      "failed": "Error"
+    },
+    "error": {
+      "questions": "Can't read Hive {{hive}}'s questions: \"Waiting for you\" may be incomplete",
+      "hiveList": "Can't list the Hives: only the Hives in the dispatch log are shown",
+      "hiveRecord": "One Hive's record can't be read"
+    },
+    "ended": {
+      "completed": "Done",
+      "turn_limit": "Hit the turn limit",
+      "error": "Failed",
+      "crashed": "Failed (crashed)",
+      "paused": "Stopped on a question or approval",
+      "no_terminal": "Didn't end normally (no end event)",
+      "stopped": "Stopped",
+      "restarted": "Not resumed after a process restart",
+      "superseded": "Taken over by a new message",
+      "gave_up": "Retries used up",
+      "no_record": "No end record",
+      "noRecordExited": "No end record: this turn never reached its end (the process exited midway)",
+      "noRecordUnknown": "How it ended is not known: this Hive's version does not record it, or the turn never reached its end",
+      "provisional": " · provisional"
+    },
+    "work": {
+      "repo": "repository",
+      "aRepo": "a repository",
+      "landed": "landed",
+      "notLanded": "not landed",
+      "noCode": "no code change",
+      "repoSays": "{{name}}: {{what}}",
+      "notPulled": "not pulled yet",
+      "otherOrigin": "origin isn't the address the task gave, not counted",
+      "commits_one": "{{count}} commit",
+      "commits_other": "{{count}} commits",
+      "files_one": "{{count}} file",
+      "files_other": "{{count}} files",
+      "repoChanged": "{{name}}: {{commits}}, changed {{files}} +{{added}} −{{deleted}}, {{pushed}}",
+      "untracked_one": ", plus {{count}} untracked file",
+      "untracked_other": ", plus {{count}} untracked files",
+      "change": "{{name}}: {{files}} +{{added}} −{{deleted}}",
+      "committed": ", committed {{sha}}",
+      "docs_one": "{{count}} document",
+      "docs_other": "{{count}} documents",
+      "knowledge_one": "{{count}} knowledge file",
+      "knowledge_other": "{{count}} knowledge files",
+      "outside_one": "{{count}} file outside the repositories",
+      "outside_other": "{{count}} files outside the repositories",
+      "wrote": "Wrote {{list}}",
+      "omitted": " ({{count}} more not listed)",
+      "answerOnly": "Answer only, no files produced"
+    },
+    "pushed": {
+      "yes": "pushed",
+      "no": "not pushed",
+      "nothingToPush": "no new commit",
+      "unknown": "push status unclear"
+    },
+    "repoError": {
+      "outside": "the directory points outside Hive/repos, not read",
+      "noCommit": "no commit checked out",
+      "noRef": "the remote has no branch or tag the task gave",
+      "noHistory": "the current code shares no history with the task's branch",
+      "diffFailed": "git diff failed",
+      "timeout": "reading the repository timed out",
+      "unreadable": "can't read this repository"
+    },
+    "time": {
+      "seconds_one": "{{count}} second",
+      "seconds_other": "{{count}} seconds",
+      "minutes_one": "{{count}} minute",
+      "minutes_other": "{{count}} minutes"
+    },
+    "numbers": {
+      "ended": "Ended {{at}}",
+      "time": "Took {{time}}",
+      "timeUnknown": "Took —",
+      "cost": "Cost {{cost}}",
+      "costAtLeast": "Cost at least {{cost}}",
+      "costUnknown": "Cost — (not recorded)",
+      "asked_one": "Asked {{count}} time",
+      "asked_other": "Asked {{count}} times",
+      "unanswered": " ({{count}} unanswered)",
+      "failed_one": "{{count}} step failed",
+      "failed_other": "{{count}} steps failed"
+    },
+    "resultError": {
+      "sessionGone": "The Hive no longer has this session",
+      "hiveSilent": "The Hive didn't answer, try again later",
+      "hiveNotRunning": "The Hive is not running",
+      "hiveUnusable": "This Hive's record is incomplete",
+      "unexpectedBody": "The Hive returned something unexpected",
+      "noSession": "No session id",
+      "http": "The Hive returned {{code}}"
+    }
   }
 }

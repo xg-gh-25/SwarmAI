@@ -1,5 +1,5 @@
 /** ReturnPanel: take back, review, approve (protected paths need their own tick), reject. */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
 const returnPrepare = vi.fn();
@@ -14,6 +14,11 @@ vi.mock('../../services/swarmOut', async () => {
   } };
 });
 import { ReturnPanel } from './ReturnPanel';
+import i18n from '../../i18n';
+
+// These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
+beforeAll(async () => { await i18n.changeLanguage('zh'); });
+afterAll(async () => { await i18n.changeLanguage('en'); });
 
 const REV = {
   key: 'k'.repeat(16), tip: 't'.repeat(40), base: 'b'.repeat(40), ref: 'refs/hive/so_1/k', branch: 'refs/heads/main',

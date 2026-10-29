@@ -3,9 +3,14 @@
  * a run's Brain and mode on its card, the checks line, Brain gate refusals, and the
  * last week grouped by Brain.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { SwarmOutResult, SwarmOutRun } from '../../services/swarmOut';
 import { brainLabel, checksLine, gateLine, lessonsLine, runsByBrain } from './live';
+import i18n from '../../i18n';
+
+// These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
+beforeAll(async () => { await i18n.changeLanguage('zh'); });
+afterAll(async () => { await i18n.changeLanguage('en'); });
 
 const NOW = Date.parse('2026-10-29T12:00:00Z');
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
