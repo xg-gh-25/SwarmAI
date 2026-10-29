@@ -129,7 +129,7 @@ SYSTEM_JOBS: list[Job] = [
                                         # behind it). 14-day gate in handler → real run only biweekly.
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=3600),
+        safety=JobSafety(timeout_seconds=3600),
         config={},
     ),
 
@@ -144,7 +144,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="*/30 * * * *",       # interval probe (the scheduler loop runs hourly)
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        safety=JobSafety(timeout_seconds=300),
         config={},
     ),
 
@@ -158,7 +158,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="30 5 * * 1-5",        # weekdays UTC 05:30 = ICT 13:30 (job window policy)
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        safety=JobSafety(timeout_seconds=300),
         config={},
     ),
 
@@ -172,7 +172,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 6 * * 1-5",         # weekdays UTC 06:00 = ICT 13:00 (job window policy)
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        safety=JobSafety(timeout_seconds=300),
         config={},
     ),
 
@@ -187,7 +187,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 7 * * 1-5",         # weekday UTC 07:00 = ICT 15:00
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+        safety=JobSafety(timeout_seconds=120),
         config={},
     ),
 
@@ -203,7 +203,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 7 * * 1",           # Monday UTC 07:00 = ICT 15:00 (weekly, weekday)
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+        safety=JobSafety(timeout_seconds=120),
         config={},
     ),
 
@@ -219,7 +219,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 8 * * 5",          # Friday UTC 08:00 = ICT 16:00 (end-of-week, weekday-only policy)
         enabled=True,
         category="system",
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=1800),
+        safety=JobSafety(timeout_seconds=1800),
         config={},
     ),
 
@@ -270,12 +270,10 @@ SYSTEM_JOBS: list[Job] = [
             "todo_max": 40,
         },
         safety=JobSafety(
-            # max_budget_usd=0: NO per-job dollar cap (matches sibling jobs): no
-            # per-job/per-call dollar number. timeout_seconds is the ONLY real control
+            # No per-job dollar cap (no job has one). timeout_seconds is the ONLY real control
             # here — it bounds a genuine hang of the outer job (the per-project inner
             # spawns each carry their own _PER_PROJECT_TIMEOUT_S hang guard).
             timeout_seconds=2400,
-            max_budget_usd=0,
             allowed_tools=["Read", "Grep", "Glob"],
         ),
     ),
@@ -358,11 +356,9 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 7 * * 4",          # Thursday UTC 07:00 = ICT 15:00
         enabled=True,
         category="system",
-        # max_budget_usd=0: script jobs never consult max_budget_usd (only
-        # agent_task does), matching sibling script jobs — the Bedrock spend of
-        # the cycle is not capped by the job system on this path. timeout_seconds
-        # is the real control (see comment above).
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=1800),
+        # No spend cap (no job has one); timeout_seconds is the real control
+        # (see comment above).
+        safety=JobSafety(timeout_seconds=1800),
         config={
             "command": _py("-m", "jobs.run_evolution"),
         },
@@ -389,7 +385,7 @@ SYSTEM_JOBS: list[Job] = [
                 "--output-dir", str(get_swarmws() / "Knowledge" / "JobResults"),
             ),
         },
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+        safety=JobSafety(timeout_seconds=300),
     ),
 
     # --- Code Intelligence refresh (hourly) ---
@@ -408,7 +404,7 @@ SYSTEM_JOBS: list[Job] = [
         config={
             "command": _py("-m", "jobs.handlers.code_intel_reindex"),
         },
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+        safety=JobSafety(timeout_seconds=120),
     ),
 ]
 

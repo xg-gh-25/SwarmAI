@@ -23,7 +23,7 @@ class TestModels:
         job = Job(id="test", name="Test", type="script", schedule="0 * * * *")
         assert job.enabled is True
         assert job.category == "system"
-        assert job.safety.max_budget_usd == 5.0
+        assert not hasattr(job.safety, "max_budget_usd")      # no per-job spend cap
 
     def test_scheduler_state_empty(self):
         from jobs.models import SchedulerState

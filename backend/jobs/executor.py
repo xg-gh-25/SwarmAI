@@ -807,7 +807,6 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         "--output-format", "json",
         "--no-session-persistence",
         "--model", _resolve_job_model(),
-        "--max-budget-usd", str(safety.max_budget_usd),
         # Jobs run headless — bypass permission prompts for allowed tools.
         # Safety is enforced by --allowedTools (only listed tools are available).
         "--permission-mode", "bypassPermissions",
@@ -858,8 +857,7 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
     system = (
         f'You are SwarmAI running scheduled job: "{job.name}".\n'
         f"Execute concisely. Results matter, not explanations.\n"
-        f"Time: {start.isoformat()}\n"
-        f"Budget: ${safety.max_budget_usd:.2f} max spend."
+        f"Time: {start.isoformat()}"
     )
     cmd.extend(["--system-prompt", system])
     cmd.extend(["-p", prompt])
@@ -918,22 +916,10 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         # Extract result text — CLI puts agent output in "result" field
         result_text = output.get("result", "")
         if not result_text or result_text.startswith("API Error"):
-            # No usable result — might be budget exceeded or error
+            # No usable result — an error
             result_text = ""
 
-        # Detect budget exceeded — job ran but didn't finish
-        subtype = output.get("subtype", "")
-        if subtype == "error_max_budget_usd":
-            status = "partial"
-            num_turns = output.get("num_turns", 0)
-            cost_usd = output.get("total_cost_usd", 0)
-            summary = (
-                f"Budget exceeded after {num_turns} turns (${cost_usd:.2f}). "
-                f"Increase safety.max_budget_usd if task needs more turns."
-            )
-            if result_text:
-                summary += f"\nPartial result: {result_text[:150]}"
-        elif (api_err := cli_api_error(output)) is not None:
+        if (api_err := cli_api_error(output)) is not None:
             # The CLI exited 0 but the run was an API error (is_error / "API
             # Error: ..." result). Never a success: auth-like errors take the
             # transient auth path (not counted by the circuit breaker),
@@ -1590,7 +1576,6 @@ def _send_slack_dm(message: str) -> bool:
             "--output-format", "json",
             "--no-session-persistence",
             "--model", _resolve_job_model(),
-            "--max-budget-usd", "1.00",
             "--permission-mode", "bypassPermissions",
             "--mcp-config", mcp_config_file.name,
             "--strict-mcp-config",

@@ -358,7 +358,7 @@ class TestAuthFailureFallback:
                 "prompt": "Test prompt",
                 "fallback_script": "echo 'fallback executed'",
             },
-            safety=JobSafety(max_budget_usd=1.0, timeout_seconds=30),
+            safety=JobSafety(timeout_seconds=30),
         )
 
         # Mock _handle_agent_task to return auth_failed
@@ -404,7 +404,7 @@ class TestAuthFailureFallback:
             enabled=True,
             category="user",
             config={"prompt": "Test prompt"},
-            safety=JobSafety(max_budget_usd=1.0, timeout_seconds=30),
+            safety=JobSafety(timeout_seconds=30),
         )
 
         with patch("jobs.executor._handle_agent_task") as mock_agent, \

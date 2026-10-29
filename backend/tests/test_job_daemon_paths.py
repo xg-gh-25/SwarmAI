@@ -43,7 +43,7 @@ class TestFallbackCwdHandling:
                 "cwd": None,  # This was the bug — None cwd
                 "output_mode": "report",
             },
-            safety=JobSafety(max_budget_usd=0, timeout_seconds=5),
+            safety=JobSafety(timeout_seconds=5),
         )
 
         # Should not raise TypeError
@@ -102,7 +102,7 @@ def _timeout_job(timeout_s: int = 7):
         id="test-timeout", name="Test Timeout", type="script",
         schedule="0 0 * * *", enabled=True, category="system",
         config={"command": "true", "cwd": None, "output_mode": "report"},
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=timeout_s),
+        safety=JobSafety(timeout_seconds=timeout_s),
     )
 
 

@@ -151,11 +151,11 @@ usage_ledger(
 - **每个 CLI result 只记一次**：结果分支最先记（在任何分支 yield、kill 或 return 之前），其他看见同一个 result 的路径因为它已被标记而不再记。去重键里有一个每次启动的随机串，daemon 重启后不会和旧行撞键；跟踪状态按 session 记，pid 变了就是新进程。
 - **CDF 的 `ingestion_llm_usage` 照写**：它是 CDF 预算回放在读的数；CDF 的调用现在也会进账本（`cdf.<source>`），平台总数只算账本。
 
-- **未决：账本的保留期**。账本不清理，每天几千行；备份把整张表导出成压缩 dump。等用量视图做出来、知道要查多久的明细之后，再定"明细保留多少天、更早的按天汇总"。
+- **账本的保留期：不清理**（2026-10-30 定）。每月几千行，用量视图读"全部"也只是几千到几万行；删明细是删用户数据，没有理由。等真读慢了，再按测得的耗时定"更早的按天汇总"。
 
 ## 11c. 没有预算，用量视图（2026-10-30，用户决定）
 
-- **月度预算删掉**：`defaults.max_monthly_spend_usd`、调度器的 `_check_monthly_budget`、改预算的接口和界面都删了，以后也不加这类设置。调度器启动 agent job 前只看每日 agent job 数和内存。花了多少在用量视图里看，不由一个数去停工作。（每个 job 自己的 `safety.max_budget_usd` 是另一回事，这次没动。）
+- **月度预算删掉**：`defaults.max_monthly_spend_usd`、调度器的 `_check_monthly_budget`、改预算的接口和界面都删了，以后也不加这类设置。调度器启动 agent job 前只看每日 agent job 数和内存。花了多少在用量视图里看，不由一个数去停工作。每个 job 的 `safety.max_budget_usd`（CLI 的 `--max-budget-usd`，花到就截断）也一起删了：job 不再有花费上限，只有超时防卡死。
 - **用量视图**回答四件事：这段时间花了多少、和上一段比往哪走；钱集中在哪（前几个 session 的占比、单轮超过 $15 的轮次的占比）；花在哪（按 surface / 功能 / 模型 / 机器，pipeline 行单列为 chat 的拆分、不进总数）；最大的几笔（session / pipeline run / job / Hive run，每行能点开）和一轮花多少；还看不见的单独列出（没有单价的调用、导入的估算、还没上报的 Hive），不用 0 去填。只读：`GET /api/usage/report`。
 
 ## 12. r1 审查的 finding 怎么处理的

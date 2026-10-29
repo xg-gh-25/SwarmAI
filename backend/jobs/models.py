@@ -152,12 +152,9 @@ class Feed(BaseModel):
 # ── Job Models ────────────────────────────────────────────────────────
 
 class JobSafety(BaseModel):
-    """Per-job permission scope for safe execution.
-
-    Budget control uses --max-budget-usd (Claude CLI flag).
-    max_budget_usd is the per-run spend cap in dollars.
-    """
-    max_budget_usd: float = 5.00
+    """Per-job permission scope for safe execution. There is no spend cap: what a job
+    spends is recorded in the usage ledger; ``timeout_seconds`` bounds a hang. (A
+    ``max_budget_usd`` left in an older jobs file is ignored.)"""
     timeout_seconds: int = 300
     allowed_tools: list[str] = []
     allow_write: bool = False

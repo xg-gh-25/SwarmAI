@@ -185,7 +185,6 @@ def cmd_create(job_json: str) -> None:
     if job_type == "agent_task":
         safety = spec.get("safety", {})
         job_def["safety"] = {
-            "max_budget_usd": safety.get("max_budget_usd", 0.20),
             "timeout_seconds": safety.get("timeout_seconds", 180),
             "allowed_tools": safety.get("allowed_tools", []),
         }

@@ -118,10 +118,12 @@ class TestAgentTask:
         result, _ = _run_agent_task({"is_error": True, "result": "API Error: 403 security token expired"})
         assert result.status == "auth_failed"
 
-    def test_budget_exceeded_stays_partial(self):
-        result, _ = _run_agent_task({"is_error": True, "subtype": "error_max_budget_usd",
-                                     "result": "", "num_turns": 4, "total_cost_usd": 1.5})
-        assert result.status == "partial"
+    def test_no_spend_cap_is_passed_and_an_error_result_fails(self):
+        # no --max-budget-usd on the command; an error result is a failure, never "partial"
+        result, calls = _run_agent_task({"is_error": True, "subtype": "error_max_budget_usd",
+                                         "result": "", "num_turns": 4, "total_cost_usd": 1.5})
+        assert result.status == "failed"
+        assert not any("--max-budget-usd" in c for call in calls for c in call)
 
     def test_success_still_success(self):
         result, _ = _run_agent_task({"is_error": False, "result": "All good"})
