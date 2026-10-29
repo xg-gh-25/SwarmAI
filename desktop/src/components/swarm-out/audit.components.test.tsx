@@ -1,6 +1,6 @@
 /**
- * The run audit's components (Autonomy Judge tag, trace tags), kept for when a run's
- * result and audit come back from its Hive; the live panel does not render them yet.
+ * The run audit's components (Autonomy Judge tag, trace tags). Each pipeline run's
+ * card renders the tag from the audit its Hive recorded (runResult.test.tsx).
  *
  * Questions: does the tag show the worst verdict (any BLOCK → BLOCK, else the WARN
  * count, else ✓; N/A and PENDING not counted) rather than an average; does a click

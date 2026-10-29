@@ -527,7 +527,8 @@
     },
     "swarmOut": {
       "running": "{{n}} running",
-      "waiting": "{{n}} waiting for you"
+      "waiting": "{{n}} waiting for you",
+      "hiveTabFrom": "From Swarm Out · {{title}}"
     }
   },
   "tasks": {
@@ -1283,6 +1284,7 @@
       "acceptance": "Acceptance: {{text}}",
       "collapse": "Hide",
       "details": "Details",
+      "open": "Open session",
       "brain": "Brain",
       "agent": "Agent",
       "noBrain": "None",
@@ -1353,7 +1355,7 @@
         "primary": "Primary goal",
         "efficiency": "Efficiency"
       },
-      "source": "Sample data, not live yet. Once live it is built by code from run events: no composite score, and any hard constraint at BLOCK makes the run BLOCK.",
+      "source": "From the run audit the Hive recorded, built by code from run events: no composite score, and any hard constraint at BLOCK makes the run BLOCK. The numbers come with the run's details.",
       "naNote": "{{list}} have no reference line yet (N/A).",
       "pending": "Every dimension is fine so far; Quality has a verdict only at the verify stage.",
       "noFlags": "No dimension at WARN or BLOCK; {{na}}",

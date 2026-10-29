@@ -15,7 +15,8 @@
  *   "+" behind a divider (not in the scrolling strip) and is never chosen as the tab a
  *   ToDo, job prompt or history session lands in.
  *
- * The Hive tab (below) sits right after it, in the same group.
+ * The Hive tab (below) sits right after it, in the same group, joined to it by a
+ * branch line and drawn as its child (index.css .session-tab--hive).
  */
 
 export const SWARM_OUT_TAB_ID = 'swarm-out';

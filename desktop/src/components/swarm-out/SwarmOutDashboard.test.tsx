@@ -125,6 +125,17 @@ describe('the run view', () => {
     expect(within(screen.getByTestId('swarm-out-refused-group')).getAllByTestId('swarm-out-ask')).toHaveLength(1);
   });
 
+  it('puts the fleet, with the numbers in it, on top, and the questions waiting under it', async () => {
+    render(<SwarmOutDashboard now={NOW} />);
+    await screen.findByTestId('kpi-free');
+    const fleet = screen.getByTestId('swarm-out-fleet');
+    expect(fleet.contains(screen.getByTestId('kpi-grid'))).toBe(true);
+    const live = screen.getByTestId('swarm-out-live');
+    const sections = [...live.querySelectorAll('[data-testid="swarm-out-fleet"], [data-testid="swarm-out-waiting"], [data-testid="swarm-out-run-group"]')]
+      .map((e) => e.getAttribute('data-testid'));
+    expect(sections.slice(0, 3)).toEqual(['swarm-out-fleet', 'swarm-out-waiting', 'swarm-out-run-group']);
+  });
+
   it('puts each run in the group of its state', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     await screen.findByTestId('kpi-free');

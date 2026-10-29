@@ -171,6 +171,28 @@ describe('ChatHeader — pinned Swarm Out tab', () => {
     expect(plus.closest('.session-tab-bar')!.contains(pinned)).toBe(false);
   });
 
+  it('the Hive tab branches off Swarm Out: a branch line between them, its own icon and hover', () => {
+    const tabs: OpenTab[] = [
+      { id: 'tab-0', title: 'One', agentId: 'a1', isNew: false },
+      { id: 'swarm-out', title: 'Swarm Out', agentId: 'a1', isNew: true },
+      { id: 'hive-session:9db44de7-b39e-4a35-b739-85b656a04264', title: 'E2E run · demo', agentId: 'a1', isNew: false },
+    ];
+    render(
+      <HealthContext.Provider value={makeHealth('connected')}>
+        <ChatHeader openTabs={tabs} activeTabId="tab-0" onTabSelect={vi.fn()} onTabClose={vi.fn()} onNewSession={vi.fn()} />
+      </HealthContext.Provider>,
+    );
+    const group = screen.getByRole('tablist', { name: 'Swarm Out' });
+    const [swarmOut, hive] = [...group.querySelectorAll('[role="tab"]')];
+    const branch = screen.getByTestId('hive-tab-branch');
+    const follows = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(swarmOut, branch) && follows(branch, hive)).toBe(true);
+    expect(hive.className).toContain('session-tab--hive');
+    expect(screen.getByTestId('hive-tab-icon').textContent).toBe('cloud');
+    expect(screen.getByTestId('swarm-out-icon').textContent).toBe('hive');
+    expect(hive.querySelector('[title]')!.getAttribute('title')).toContain('Swarm Out');
+  });
+
   it('selecting it goes through onTabSelect like any tab', () => {
     const onTabSelect = renderWithSwarmOut('tab-0');
     screen.getByRole('tablist', { name: 'Swarm Out' }).querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));

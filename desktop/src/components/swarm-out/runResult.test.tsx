@@ -233,6 +233,45 @@ describe('a run card', () => {
     expect(c.dataset.open).toBeUndefined();
   });
 
+  it('a pipeline run shows its Autonomy Judge tag on the card, before any details are read', async () => {
+    const audit = [{ dim: 'Run Isolation', verdict: 'PASS', detail: null }, { dim: 'Quality', verdict: 'WARN', detail: null },
+      { dim: 'Autonomy', verdict: 'PASS', detail: null }];
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN, result: result({ kinds: ['pipeline'],
+      pipeline: { run_id: null, profile: 'research', status: 'completed', landing: 'no_code', landed_sha: null, audit } }) }],
+    asks: [], errors: [] });
+    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
+      result: { ...RUN.result!, kinds: ['pipeline'], report: 'ok', report_chars: 2, pipeline: { run_id: 'run_1', profile: 'research',
+        status: 'completed', landing: 'no_code', landed_sha: null, audit: audit.map((x) => ({ ...x, detail: `${x.dim} 的数字` })) } },
+      fetch_error: null, checked_at: ago(0), fetched_at: ago(0) } });
+    vi.mocked(swarmOutService.result).mockClear();
+    const c = await card('fix the widget');
+    const tag = within(c).getByTestId('judge-tag');
+    expect(tag.textContent).toContain('! 1 WARN');
+    expect(vi.mocked(swarmOutService.result)).not.toHaveBeenCalled();   // from /runs alone
+    fireEvent.click(tag);
+    expect(screen.getByTestId('judge-popover').textContent).not.toContain('Quality 的数字');   // numbers not read yet
+    fireEvent.click(tag);
+    fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
+    await within(c).findByTestId('swarm-out-run-report');
+    expect(within(c).getAllByTestId('judge-tag')).toHaveLength(1);   // one tag, not a second in the details
+    fireEvent.click(within(c).getByTestId('judge-tag'));
+    expect(screen.getByTestId('judge-popover').textContent).toContain('Quality 的数字');   // the record's numbers
+  });
+
+  it('a run with a Hive session has an Open button that opens it, titled run first', async () => {
+    const sid = '9db44de7-b39e-4a35-b739-85b656a04264';
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN, session_id: sid },
+      { ...RUN, dispatch_id: 'so_dddddddddddd', title: 'no session', session_id: null }], asks: [], errors: [] });
+    const onOpenSession = vi.fn();
+    render(<SwarmOutDashboard now={NOW} onOpenSession={onOpenSession} />);
+    const all = await screen.findAllByTestId('swarm-out-run');
+    const withSession = all.find((c) => c.textContent?.includes('fix the widget'))!;
+    fireEvent.click(within(withSession).getByTestId('swarm-out-run-open-button'));
+    expect(onOpenSession).toHaveBeenCalledWith(sid, 'fix the widget · explorer');
+    const without = all.find((c) => c.textContent?.includes('no session'))!;
+    expect(within(without).queryByTestId('swarm-out-run-open-button')).toBeNull();
+  });
+
   it('the details wait for the whole record: /runs counts are never shown as file lists', async () => {
     vi.mocked(swarmOutService.result).mockReturnValue(new Promise(() => {}));
     vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN,

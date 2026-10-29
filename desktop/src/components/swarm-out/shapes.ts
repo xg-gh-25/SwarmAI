@@ -1,10 +1,10 @@
 /**
- * Shapes of what a Swarm Out run will carry once its result and audit come back from
- * the Hive: the five-dimension verdicts (Pipeline v1 run audit, run_protocol.audit:
- * Run Isolation, Quality, Autonomy, Speed, Token Cost — each PASS / WARN / BLOCK, or
- * N/A / PENDING, no composite score). The live panel does not render them yet (it says TBD where they go): the Host
- * does not fetch a run's result or audit from its Hive. JudgeTag renders the verdicts
- * and keeps its own tests, for when that data exists.
+ * Shapes of a Swarm Out pipeline run's audit as its Hive recorded it: the
+ * five-dimension verdicts (Pipeline v1 run audit, run_protocol.audit: Run Isolation,
+ * Quality, Autonomy, Speed, Token Cost — each PASS / WARN / BLOCK, or N/A / PENDING, no
+ * composite score). /runs carries the verdicts; the numbers behind them come with the
+ * run's whole record (/runs/{id}/result). JudgeTag renders them on each run card
+ * (live.runJudge builds one from a result).
  */
 
 export type Verdict = 'PASS' | 'WARN' | 'BLOCK' | 'NA' | 'PENDING';

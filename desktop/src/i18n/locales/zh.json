@@ -527,7 +527,8 @@
     },
     "swarmOut": {
       "running": "{{n}} 在跑",
-      "waiting": "{{n}} 等你"
+      "waiting": "{{n}} 等你",
+      "hiveTabFrom": "从 Swarm Out 打开 · {{title}}"
     }
   },
   "tasks": {
@@ -1283,6 +1284,7 @@
       "acceptance": "验收：{{text}}",
       "collapse": "收起",
       "details": "详情",
+      "open": "打开会话",
       "brain": "Brain",
       "agent": "Agent",
       "noBrain": "无",
@@ -1353,7 +1355,7 @@
         "primary": "主要目标",
         "efficiency": "效率"
       },
-      "source": "示例数据，还没正式上线。上线后由代码从 run 事件生成，不做综合分，任一硬约束 BLOCK 整体 BLOCK。",
+      "source": "来自 Hive 记录的 run 审计，由代码从 run 事件生成：不做综合分，任一硬约束 BLOCK 整体 BLOCK。具体数字在 run 的详情里。",
       "naNote": "{{list}} 暂无参考线（N/A）。",
       "pending": "到目前为止各维度都正常；Quality 要到验证阶段才有结论。",
       "noFlags": "没有 WARN 或 BLOCK 的维度；{{na}}",

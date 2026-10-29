@@ -1011,6 +1011,34 @@ body {
   color: #1b1406;
   background: var(--color-status-warning);
 }
+/* The Hive tab (SessionTab variant 'hive'): a run's Hive session opened from the
+   Swarm Out dashboard. It branches off Swarm Out — a dashed line (.swarm-out-branch)
+   leads from Swarm Out to it — and is drawn as Swarm Out's child: a dashed border and a
+   light tint in Swarm Out's colour; active, its top rule is that colour too. */
+.swarm-out-branch {
+  align-self: center;
+  flex-shrink: 0;
+  width: 18px;
+  margin: 0 3px;
+  border-top: 2px dashed color-mix(in srgb, var(--color-zone-work) 55%, transparent);
+}
+.swarm-out-branch--active { border-top-color: var(--color-zone-work); }
+.session-tab--hive {
+  color: color-mix(in srgb, var(--color-zone-work) 55%, var(--color-text-muted));
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--color-zone-work) 60%, var(--nav-key-border));
+  background:
+    linear-gradient(color-mix(in srgb, var(--color-zone-work) 12%, transparent),
+                    color-mix(in srgb, var(--color-zone-work) 12%, transparent)),
+    var(--nav-key-face);
+}
+.session-tab--hive.session-tab--active {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--color-zone-work) 60%, var(--color-border));
+  border-bottom-color: transparent;
+  background: var(--color-bg);
+  box-shadow: inset 0 2px 0 var(--color-zone-work);
+}
 @keyframes swarm-out-breathe {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.14); opacity: 0.55; }

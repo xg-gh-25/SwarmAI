@@ -4,8 +4,9 @@
  * The right side is the real chat column ChatPage renders for every tab; this panel
  * shows the Hives and the runs sent to them, on real data only (design
  * docs/design/2026-10-28-swarm-out-live-dashboard.md). Two views:
- *  - Runs (LiveDispatches): the questions waiting, the fleet and its free slots, the
- *    runs by state.
+ *  - Runs (LiveDispatches): the fleet on top (its three numbers — questions waiting,
+ *    free slots, runs running — and each Hive's slots), the questions waiting under
+ *    it, then the runs by state.
  *  - History: runs sent per day and the last week's runs by Hive, from the dispatch log.
  *    The cross-run audit (verdict, five dimensions, by type, occupancy) and grouping by
  *    brain or Project Agent have no data source yet: each says TBD and what is missing.

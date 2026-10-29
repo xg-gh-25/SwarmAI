@@ -70,13 +70,13 @@ export function JudgeTag({ judge, title }: { judge: RunJudge; title: string }) {
                   <td className="px-1.5 py-1.5 font-medium whitespace-nowrap">{DIMENSIONS[i]}</td>
                   <td className="px-1.5 py-1.5 text-[11.5px] text-[var(--color-text-muted)] whitespace-nowrap">{t(`swarmOut.judge.role.${DIMENSION_ROLE[i]}`)}</td>
                   <td className="px-1.5 py-1.5 text-[11.5px] font-bold whitespace-nowrap" style={{ color: VERDICT_COLOR[v] }}>{verdictLabel(v)}</td>
-                  <td className="px-1.5 py-1.5 text-[var(--color-text-secondary)]">{judge.numbers[i]}</td>
+                  <td className="px-1.5 py-1.5 text-[var(--color-text-secondary)]">{judge.numbers[i] || '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {/* no judge has a real source yet (run audits do not come back from the Hive,
-              and the live panel renders none): the popover must not claim one (fixing spec J4) */}
+          {/* the verdicts are the Hive's recorded run audit (they come with /runs); the
+              numbers behind them only once the run's whole record is read */}
           <div className="mt-2 text-[11.5px] text-[var(--color-text-dim)]" data-testid="judge-source">
             {t('swarmOut.judge.source')}
           </div>

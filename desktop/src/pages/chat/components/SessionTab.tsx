@@ -19,8 +19,9 @@ interface SessionTabProps {
   maxTitleLength?: number;
   onKeyDown?: (e: React.KeyboardEvent) => void;
   /** 'swarm-out': the pinned Swarm Out tab (pages/chat/swarmOut.ts) — its own colour
-   *  and icon, no close button, no shortcut hint. 'hive': the Hive tab after it — the
-   *  hive icon and a close button, no shortcut hint. */
+   *  and icon, no close button, no shortcut hint. 'hive': the Hive tab after it, a child
+   *  of Swarm Out (index.css .session-tab--hive: dashed, in Swarm Out's colour) — the
+   *  cloud icon, a close button, no shortcut hint, and "from Swarm Out" on its hover. */
   variant?: 'swarm-out' | 'hive';
   /** Swarm Out only: work on the Hives. A badge says how many questions wait for the
    *  person (amber, takes precedence) or else how many runs are running; the hive icon
@@ -132,7 +133,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         className={clsx('material-symbols-outlined icon-xs flex-shrink-0', pinned && activity?.running ? 'swarm-out-icon--busy' : null)}
         data-testid={pinned ? 'swarm-out-icon' : hive ? 'hive-tab-icon' : undefined}
       >
-        {pinned || hive ? 'hive' : 'chat_bubble'}
+        {pinned ? 'hive' : hive ? 'cloud' : 'chat_bubble'}
       </span>
 
       {/* Tab status indicator (streaming, error, etc.) — skip for unread since we show dot */}
@@ -142,7 +143,8 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       <TabNoticeDot tabId={tab.id} sessionId={tab.sessionId} isActive={isActive} />
 
       {/* Truncated title */}
-      <span className="truncate text-[12.5px]" title={tab.title}>
+      <span className="truncate text-[12.5px]"
+        title={hive ? tf(t, 'chat.swarmOut.hiveTabFrom', 'From Swarm Out · {{title}}', { title: tab.title }) : tab.title}>
         {displayTitle}
       </span>
 

@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
@@ -91,7 +92,8 @@ export function ChatHeader({
   // strip's "+" behind a divider (pages/chat/swarmOut.ts).
   const userTabs = normalTabs(openTabs);
   const swarmOutTab = openTabs.find((tab) => isSwarmOutTab(tab.id));
-  // The Hive tab (a dispatched run's session) sits right after Swarm Out, in its group.
+  // The Hive tab (a dispatched run's session) sits right after Swarm Out, in its group,
+  // behind a branch line that marks it as opened from Swarm Out.
   const hiveTab = hiveTabOf(openTabs);
 
   return (
@@ -125,6 +127,12 @@ export function ChatHeader({
               onSelect={onTabSelect}
               status={tabStatuses?.[swarmOutTab.id]}
             />
+            {/* the Hive tab branches off Swarm Out: a dashed line from it, so the two
+                read as parent and child, not as two tabs side by side */}
+            {hiveTab && (
+              <span aria-hidden="true" data-testid="hive-tab-branch"
+                className={clsx('swarm-out-branch', hiveTab.id === activeTabId && 'swarm-out-branch--active')} />
+            )}
             {hiveTab && (
               <SessionTab
                 tab={hiveTab}

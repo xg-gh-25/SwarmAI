@@ -2,18 +2,22 @@
  * LiveDispatches — the run view of the Swarm Out panel, on real data only
  * (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
  *
- * It answers three things, in this order: does a Hive need me (the questions waiting,
- * each with its answer controls — the one thing in the accent colour), can I send
- * more work (the fleet and its free slots), and how are the runs I sent (running,
- * stopped in the last 24 h, state unknown). What has no data source yet says TBD and
- * which source is missing; nothing on this view is a sample.
+ * It answers three things, in this order: where the work stands (one compact card on
+ * top: the questions waiting, the free slots and the runs running as three numbers, and
+ * each Hive's slots under them), does a Hive need me (the questions waiting, each with
+ * its answer controls — the one thing in the accent colour), and how are the runs I
+ * sent (running, stopped in the last 24 h, state unknown). What has no data source yet
+ * says TBD and which source is missing; nothing on this view is a sample.
  *
  * A run that is not running any more shows what its Hive recorded (design
  * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
  * numbers; the details (the reply, code per repository, files, steps, a pipeline's
  * five rows) open on demand, across the whole row, with a second Hide at their end.
  * Every card names its Brain and Project Agent as two labelled fields, and its facts
- * (ended, duration, tokens, cost, human loops, failed steps) as a row of cells.
+ * (ended, duration, tokens, cost, human loops, failed steps) as a row of cells. A
+ * pipeline run's Autonomy Judge tag sits next to how it ended: its verdicts come with
+ * /runs, the numbers behind them once the details are read. A run whose Hive session
+ * this Host knows has an explicit Open button (the title opens it too).
  *
  * The reply is the agent's markdown, rendered by the app's own MarkdownRenderer (the
  * chat's: no raw HTML, remote images dropped, an external link opens only on a click,
@@ -180,28 +184,32 @@ export function Tbd({ title, missing, testId }: { title: string; missing: string
   );
 }
 
-/** One headline number; its tone colours the value (none = neutral: a zero or unknown). */
+/** One headline number inline (value, then its label); its tone colours the value
+ *  (none = neutral: a zero or unknown). */
 function Num({ value, label, tone, testId }: { value: React.ReactNode; label: string; tone?: Tone; testId: string }) {
   return (
-    <div className={`${card} px-4 py-3`} style={tone ? cardTint(tone) : undefined} data-testid={testId} data-tone={tone}>
-      <div className="text-[24px] font-semibold leading-none tabular-nums" style={tone ? { color: TONE_VAR[tone] } : undefined}>{value}</div>
-      <div className={`text-[12px] mt-1.5 ${muted}`}>{label}</div>
+    <div className="flex items-baseline gap-1.5 min-w-0" data-testid={testId} data-tone={tone}>
+      <span className="text-[18px] font-semibold leading-none tabular-nums" style={tone ? { color: TONE_VAR[tone] } : undefined}>{value}</span>
+      <span className={`text-[12px] ${muted}`}>{label}</span>
     </div>
   );
 }
 
-function Fleet({ fleet, failed }: { fleet: SwarmOutFleet | null; failed?: boolean }) {
+/** The top card: the three numbers in its header, each Hive's slots under them. What
+ *  "in use" counts is explained on hover (the title and every status). */
+function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed?: boolean; numbers: React.ReactNode }) {
   const { t } = useTranslation();
   const hives = fleet?.hives ?? [];
+  const note = t('swarmOut.fleet.note');
   return (
-    <section className={`${card} mt-5`} data-testid="swarm-out-fleet">
-      <div className="flex items-baseline gap-2 px-4 pt-3 pb-1">
-        <h3 className="m-0 text-[13px] font-semibold">{t('swarmOut.fleet.title')}</h3>
-        <span className={`ml-auto text-[12px] truncate min-w-0 ${muted}`}>{t('swarmOut.fleet.note')}</span>
+    <section className={card} data-testid="swarm-out-fleet">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1.5 px-4 pt-3 pb-2">
+        <h3 className="m-0 text-[13px] font-semibold" title={note}>{t('swarmOut.fleet.title')}</h3>
+        <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 min-w-0" data-testid="kpi-grid">{numbers}</div>
       </div>
       {failed && <div className={`px-4 text-[12px] ${muted}`} data-testid="swarm-out-fleet-failed">{t('swarmOut.fleet.failed')}</div>}
       {fleet === null ? (!failed && <div className={`px-4 pb-3 text-[12px] ${muted}`}>{t('swarmOut.loading')}</div>) : (
-        <div className="grid grid-cols-[minmax(80px,180px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-1.5 pb-3">
+        <div className="grid grid-cols-[minmax(80px,220px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-2.5 pb-3 border-t border-[var(--color-border)]">
           {hives.map((h) => {
             const up = h.status === 'running' && h.reachable && h.max_concurrent != null;
             const used = { used: h.streaming ?? 0, max: h.max_concurrent ?? 0 };
@@ -230,7 +238,7 @@ function Fleet({ fleet, failed }: { fleet: SwarmOutFleet | null; failed?: boolea
                 </div>
                 <div className={`text-[12px] text-right truncate min-w-0 ${tone === 'error' || tone === 'attention' ? '' : muted}`}
                   style={tone === 'error' || tone === 'attention' ? { color: TONE_VAR[tone] } : undefined}
-                  title={status} data-testid="swarm-out-fleet-status">{status}</div>
+                  title={`${status} · ${note}`} data-testid="swarm-out-fleet-status">{status}</div>
               </div>
             );
           })}
@@ -240,9 +248,13 @@ function Fleet({ fleet, failed }: { fleet: SwarmOutFleet | null; failed?: boolea
   );
 }
 
-function ResultDetail({ r, onRefreshed, onClose }: { r: SwarmOutRun; onRefreshed: () => void; onClose: () => void }) {
+/** The details of a run, read from its whole record. The record is held by the card
+ *  (`full` / `setFull`), so the card's Autonomy Judge tag gets its numbers from it. */
+function ResultDetail({ r, full, setFull, onRefreshed, onClose }: {
+  r: SwarmOutRun; full: SwarmOutResult | null; setFull: (res: SwarmOutResult | null) => void;
+  onRefreshed: () => void; onClose: () => void;
+}) {
   const { t } = useTranslation();
-  const [full, setFull] = useState<SwarmOutResult | null>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'failed'>('loading');
   const id = r.dispatch_id;
   const load = useCallback(async () => {
@@ -254,7 +266,7 @@ function ResultDetail({ r, onRefreshed, onClose }: { r: SwarmOutRun; onRefreshed
     } catch {
       setState('failed');
     }
-  }, [id]);
+  }, [id, setFull]);
   useEffect(() => { void load(); }, [load]);   // once, when the details open
   const refresh = async () => {
     setState('loading');
@@ -269,13 +281,11 @@ function ResultDetail({ r, onRefreshed, onClose }: { r: SwarmOutRun; onRefreshed
   // the details come from the whole record only: /runs carries counts, not the
   // Hive-written text and paths shown here
   const res = full;
-  const judge = res ? runJudge(res) : null;
   const tools = Object.entries(res?.work.steps.by_tool ?? {});
   return (
     <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[12.5px]" data-testid="swarm-out-run-detail">
       {state === 'loading' && <div className={muted}>{t('swarmOut.loading')}</div>}
       {state === 'failed' && <div className={muted}>{t('swarmOut.detail.failed')}</div>}
-      {judge && <div className="mb-2"><JudgeTag judge={judge} title={r.title} /></div>}
       {res?.error?.message && <div className="mb-2 text-[var(--color-status-error)] whitespace-pre-wrap">{res.error.message}</div>}
       {full?.report ? (
         <>
@@ -352,7 +362,7 @@ function AgentFacts({ r }: { r: SwarmOutRun }) {
   );
 }
 
-function RunResult({ r }: { r: SwarmOutRun }) {
+function RunResult({ r, full }: { r: SwarmOutRun; full: SwarmOutResult | null }) {
   const { t } = useTranslation();
   const res = r.result;
   if (!res) {
@@ -363,10 +373,15 @@ function RunResult({ r }: { r: SwarmOutRun }) {
   const ended = endedLabel(res);
   const work = workLines(res);
   const checks = checksLine(res);
+  // the verdicts come with /runs; the numbers behind them only in the whole record
+  const judge = (full && runJudge(full)) ?? runJudge(res);
   return (
     <div className="mt-1.5" data-testid="swarm-out-run-result">
-      <div className="text-[12.5px] font-medium" style={ended.tone === 'busy' ? undefined : { color: TONE_VAR[ended.tone] }}
-        data-testid="swarm-out-run-ended" data-tone={ended.tone}>{ended.text}</div>
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <div className="text-[12.5px] font-medium" style={ended.tone === 'busy' ? undefined : { color: TONE_VAR[ended.tone] }}
+          data-testid="swarm-out-run-ended" data-tone={ended.tone}>{ended.text}</div>
+        {judge && <JudgeTag judge={judge} title={r.title} />}
+      </div>
       {work.map((w) => <div key={w} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-work">{w}</div>)}
       {[checks, gateLine(res), lessonsLine(res)].filter(Boolean).map((l) => (
         <div key={l!} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-checks"
@@ -380,22 +395,46 @@ function RunResult({ r }: { r: SwarmOutRun }) {
 
 /** A run's title: a button that opens its Hive session when the run has one this Host
  *  knows (design docs/design/2026-10-29-swarm-out-hive-session-tab.md §4), else text. */
-export function RunTitle({ r, className }: { r: SwarmOutRun; className: string }) {
-  const { t } = useTranslation();
+/** Opens a run's Hive session in the Hive tab, or null when there is none this Host
+ *  knows. The tab is titled run first, then its Hive: a narrow tab still shows which
+ *  run it is, and the whole title is on its hover. */
+function useOpenRun(r: SwarmOutRun): (() => void) | null {
   const open = useContext(OpenSessionContext);
   const sid = r.session_id;
-  if (!open || !isRemoteId(sid) || r.session_unknown) return <span className={className} title={r.title}>{r.title}</span>;
+  if (!open || !isRemoteId(sid) || r.session_unknown) return null;
+  return () => open(sid, `${r.title} · ${r.hive}`);
+}
+
+export function RunTitle({ r, className }: { r: SwarmOutRun; className: string }) {
+  const { t } = useTranslation();
+  const open = useOpenRun(r);
+  if (!open) return <span className={className} title={r.title}>{r.title}</span>;
   return (
     <button type="button" className={`${className} text-left hover:underline cursor-pointer`}
       title={t('swarmOut.hiveTab.open', { title: r.title })} data-testid="swarm-out-run-open"
-      onClick={() => open(sid, `${r.hive} · ${r.title}`)}>{r.title}</button>
+      onClick={open}>{r.title}</button>
+  );
+}
+
+/** The card's explicit way into the run's Hive session (the title is a button too, but
+ *  nothing about a title says it can be clicked). */
+function OpenRunButton({ r, open }: { r: SwarmOutRun; open: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button type="button" className={`${btn} inline-flex items-center gap-1`} onClick={open}
+      title={t('swarmOut.hiveTab.open', { title: r.title })} data-testid="swarm-out-run-open-button">
+      <span className="material-symbols-outlined text-[15px]" aria-hidden>open_in_new</span>
+      {t('swarmOut.card.open')}
+    </button>
   );
 }
 
 function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [full, setFull] = useState<SwarmOutResult | null>(null);
   const canOpen = !!r.result || r.result_status === 'failed';
+  const openRun = useOpenRun(r);
   const tone = runTone(r);
   return (
     // only a failed run, or one waiting on the person, tints its border: a stopped run keeps
@@ -413,15 +452,18 @@ function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
         {r.hive} · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
       </div>
       <AgentFacts r={r} />
-      <RunResult r={r} />
-      {canOpen && (
-        <button type="button" className={`mt-1.5 inline-flex items-center gap-0.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
-          onClick={() => setOpen((o) => !o)} data-testid="swarm-out-run-toggle">
-          {open ? t('swarmOut.card.collapse') : t('swarmOut.card.details')}
-          <span className="material-symbols-outlined text-[16px]" aria-hidden>{open ? 'expand_less' : 'expand_more'}</span>
-        </button>
-      )}
-      {open && <ResultDetail r={r} onRefreshed={onReload ?? (() => {})} onClose={() => setOpen(false)} />}
+      <RunResult r={r} full={full} />
+      {(canOpen || openRun) && <div className="mt-2 flex items-center gap-3 min-w-0">
+        {canOpen && (
+          <button type="button" className={`inline-flex items-center gap-0.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
+            onClick={() => setOpen((o) => !o)} data-testid="swarm-out-run-toggle">
+            {open ? t('swarmOut.card.collapse') : t('swarmOut.card.details')}
+            <span className="material-symbols-outlined text-[16px]" aria-hidden>{open ? 'expand_less' : 'expand_more'}</span>
+          </button>
+        )}
+        {openRun && <span className="ml-auto"><OpenRunButton r={r} open={openRun} /></span>}
+      </div>}
+      {open && <ResultDetail r={r} full={full} setFull={setFull} onRefreshed={onReload ?? (() => {})} onClose={() => setOpen(false)} />}
     </div>
   );
 }
@@ -489,14 +531,14 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
     <div data-testid="swarm-out-live">
       {failed && <div className={`text-[12px] mb-2 ${muted}`}>{t('swarmOut.runsUnreadable')}</div>}
       {(data?.errors ?? []).map((e) => <div key={e} className="text-[12px] mb-1" style={{ color: TONE_VAR.attention }}>{errorLabel(e)}</div>)}
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }} data-testid="kpi-grid">
+      <Fleet fleet={fleet} failed={fleetFailed} numbers={<>
         <Num testId="kpi-waiting" label={t('swarmOut.kpi.waiting')} tone={n.waiting || n.onHivePage ? 'attention' : undefined}
              value={<>{n.waiting ?? dash}{n.onHivePage ? <span className="text-[12.5px] font-medium ml-2" data-testid="kpi-on-hive-page">{t('swarmOut.kpi.onHivePage', { count: n.onHivePage })}</span> : null}</>} />
         {/* free slots: green while there is room, amber when every running Hive is full */}
         <Num testId="kpi-free" label={t('swarmOut.kpi.free')} tone={n.capacity ? (n.capacity.free > 0 ? 'ok' : 'attention') : undefined}
-             value={n.capacity ? <>{n.capacity.free}<span className={`text-[13px] font-medium ml-1 ${muted}`}>/ {n.capacity.total}</span></> : dash} />
+             value={n.capacity ? <>{n.capacity.free}<span className={`text-[12.5px] font-medium ml-1 ${muted}`}>/ {n.capacity.total}</span></> : dash} />
         <Num testId="kpi-running" label={t('swarmOut.kpi.running')} tone={n.running ? 'busy' : undefined} value={n.running ?? dash} />
-      </div>
+      </>} />
 
       <section className="mt-5" data-testid="swarm-out-waiting">
         <div className="flex items-baseline gap-2 mb-2">
@@ -524,8 +566,6 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
           </div>
         )}
       </section>
-
-      <Fleet fleet={fleet} failed={fleetFailed} />
 
       {noRuns ? (
         <div className={`mt-5 text-[12px] ${muted}`}>{t('swarmOut.noRuns')}</div>
