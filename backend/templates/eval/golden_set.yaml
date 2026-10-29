@@ -531,6 +531,30 @@ cases:
   gating: gate
   eval_method: programmatic
   validated_by_4gate: 54101670f5d83841
+- id: CI_IMPACT_FRESH
+  category: code_aware
+  dimension: cognition
+  level: tool_call
+  title: Impact answers from the repo as it is now, without a manual re-index
+  purpose:
+    en: 'impact lists a caller a commit added after the graph was built: the graph is brought up to HEAD when it
+      is read. If this breaks, a change looks safe while a caller nobody sees breaks.'
+    zh: 确认本地仓库后，构建图之后新提交加入的调用方，impact 也能列出来：读图时会先更新到仓库 HEAD。坏了意味着 agent 以为改动安全，实际有它看不到的调用方会坏。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_code_intel impact'
+    expected_contains: CI_IMPACT_FRESH_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_code_intel impact negative'
+    negative_expected_contains: CI_IMPACT_FRESH_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/code_intel/build.py
+  - backend/core/code_intel/impact.py
+  - backend/core/code_intel/local_roots.py
+  tier: stable
+  gating: gate
+  eval_method: programmatic
+  validated_by_4gate: d442684e8a57158b
 - id: DDD_SKELETON
   category: ddd
   dimension: cognition

@@ -22,40 +22,27 @@ class TestUnifiedRecallCfull:
     """C-full (run_ccd1b6c5): runtime recall unified onto recall_all's 5-domain
     path (minus ddd, which keeps its own pre-gate leg). Strangler-fig fallback."""
 
-    def test_unified_body_covers_four_domains_not_ddd(self, monkeypatch):
-        """The unified body surfaces the 4 keyword-gated domains incl codeintel
-        (the net-new one), and NOT ddd (excluded to avoid double-inject).
-
-        This is a WIRING test: does the unified path route codeintel hits into a
-        "Code Symbols" block and keep ddd out. The real code graph (code_intel.db)
-        is unreachable under the autouse _isolate_app_data_dir fixture (it reroots
-        jobs.paths.PROJECTS_DIR onto a per-test sandbox with no db) — so we inject a
-        deterministic codeintel hit rather than depend on a built graph. This gives
-        the wiring assertion real teeth in EVERY environment (local + CI), instead
-        of skipping on a graph the test fixture guarantees is absent."""
+    def test_unified_body_carries_neither_code_symbols_nor_ddd(self, monkeypatch):
+        """The per-turn body covers context files, library and session. Code symbols
+        left it (design 2026-10-29-code-intel-unification §0.1: rarely present, almost
+        never followed; they stay on demand), and DDD has its own leg. The code leg is
+        stubbed to return a hit, so only not calling it keeps the body clean."""
         import core.recall_multi as _rm
-        # Deterministic synthetic hit → renders as "### Code Symbols\n- `...`".
+        called = []
         monkeypatch.setattr(
             _rm, "_codeintel_recall",
-            lambda q, project=None, limit=8, **kw: [
+            lambda q, project=None, limit=8, **kw: called.append(q) or [
                 {"id": "core.session_router._unified_recall_body", "name": "_unified_recall_body",
                  "file_path": "backend/core/session_router.py"}
             ],
         )
         from core.session_router import _unified_recall_body, _resolve_active_project
-        # 2nd arg is editor_file_path (project detected inside, off-loop).
         _ap = _resolve_active_project("/x/SwarmWS/Projects/SwarmAI/TECH.md",
                                       "session resume timeout")
-        # A code-like term: the relevance gate keeps code symbols only for those.
         s, _structured = _unified_recall_body("session_router resume timeout", _ap)
-        assert "Code Symbols" in s, "codeintel is the net-new runtime domain"
-        # Assert the RENDERED symbol ref, not just the header: the "Code Symbols"
-        # label can also appear in the coverage-gap line (render_recall_body) when a
-        # codeintel expect-token is in the query. Asserting the injected symbol's id
-        # makes teeth query-independent — only a NON-EMPTY codeintel bucket renders it.
-        assert "core.session_router._unified_recall_body" in s, \
-            "the codeintel HIT must render, not just the label"
-        assert "[DDD:" not in s, "ddd must NOT be in unified path (own leg)"
+        assert called == []
+        assert "core.session_router._unified_recall_body" not in (s or "")
+        assert "[DDD:" not in (s or ""), "ddd must NOT be in unified path (own leg)"
 
     # test_unified_failclosed_no_project_still_recalls REMOVED 2026-08-16 (CI = BVT).
     # Its `len(s) > 100` assertion required the text domains to recall from the LIVE

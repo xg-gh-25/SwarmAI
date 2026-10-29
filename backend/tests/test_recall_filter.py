@@ -87,16 +87,18 @@ def test_recall_all_skips_legs_after_deadline(monkeypatch):
     assert r.hit_layers == {"library": "skipped_deadline", "session": "skipped_deadline"}
 
 
-def test_code_symbol_leg_runs_only_for_code_like_terms(monkeypatch):
+def test_the_per_turn_recall_never_runs_the_code_symbol_leg(monkeypatch):
+    """Not even for a code-like term: code symbols are on demand only (the recall CLI,
+    ``impact``), design 2026-10-29-code-intel-unification §0.1."""
     import core.recall_multi as rm
     from core.session_router import _unified_recall_body
 
     seen = []
-    monkeypatch.setattr(rm, "_codeintel_recall", lambda q, project=None, limit=8, **kw: seen.append(q) or [])
+    monkeypatch.setattr(rm, "_codeintel_recall",
+                        lambda q, project=None, limit=8, **kw: seen.append(q) or [])
     _unified_recall_body("build 重启", (None, "no_signal"))
-    assert seen == []
     _unified_recall_body("session_router build", (None, "no_signal"))
-    assert seen == ["session_router build"]
+    assert seen == []
 
 
 def test_external_signals_render_in_an_untrusted_block():

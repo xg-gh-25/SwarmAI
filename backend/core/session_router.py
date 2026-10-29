@@ -964,16 +964,13 @@ def _unified_recall_body(
     → legacy path); the structured list is purely additive (None on the failure/
     fallback branches).
 
-    C-full (run_ccd1b6c5): the UNIFIED recall path — one recall_all fan-out
-    across ALL 5 domains (context_files / ddd / library / session / codeintel),
-    rendered to an injectable body. Replaces the runtime path's old 3-leg subset
-    (Library+Transcript+Memory) — it now also surfaces DDD + code symbols, and
-    shares ONE code path with the CLI (no more edit-twice drift).
+    C-full (run_ccd1b6c5): the UNIFIED recall path — one recall_all fan-out over
+    context_files / library / session, rendered to an injectable body, sharing ONE
+    code path with the CLI (no more edit-twice drift). DDD has its own leg (below);
+    code symbols are not per-turn at all (design 2026-10-29-code-intel-unification
+    §0.1) and stay on demand through the recall CLI and ``impact``.
 
-    Active-project detection (for the codeintel domain) runs HERE, inside the
-    thread — its list_project_names() does a blocking Path.iterdir(), which must
-    NOT run on the event loop (Gate-2 M1). Fail-closed: no project → codeintel
-    empty, other domains still recall.
+    The active project is resolved by the caller, off the event loop.
 
     STRANGLER-FIG (R26): this is the NEW path. On ANY failure or empty result it
     returns "" and the caller FALLS BACK to the legacy _recall_for_query 3-leg
@@ -999,11 +996,11 @@ def _unified_recall_body(
         # re-detects (was: a second blocking iterdir with a DIFFERENT query =
         # extracted keywords, which could disagree with the DDD leg's project).
         project = active_project[0] if active_project else None
-        from .recall_filter import code_like_terms
-        # The code-symbol leg (~0.1 s) only ever survives the relevance gate for a
-        # code-like term, so do not run it otherwise.
-        _code = bool(code_like_terms(query.split()))
-        non_ddd = tuple(d for d in DOMAINS if d != "ddd" and (d != "codeintel" or _code))
+        # Code symbols are not in the per-turn recall (design 2026-10-29-code-intel-
+        # unification §0.1–§0.2: measured, they were rarely present and almost never
+        # followed). They stay on demand (`impact`, `context_recall_cli --domains
+        # codeintel`).
+        non_ddd = tuple(d for d in DOMAINS if d not in ("ddd", "codeintel"))
         result = recall_all(query, project=project, domains=non_ddd, allow_embed=False,
                             exclude_session_id=exclude_session_id, deadline=deadline,
                             prompt_text=prompt_text)
