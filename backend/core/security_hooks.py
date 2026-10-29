@@ -12,7 +12,7 @@ Public symbols
 - ``create_dangerous_command_gate``          — single PreToolUse gate for Bash commands
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
-- ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link)
+- ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link) and SWARM_TURN_ID (a landing's turn)
 - ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (run events, keys, markers)
 - ``create_run_amend_gate``                  — in an active run, deny git commit --amend (no HITL prompt)
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
@@ -21,6 +21,7 @@ Public symbols
 """
 
 import asyncio
+import contextvars
 import fnmatch
 import functools
 import glob
@@ -4169,6 +4170,25 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # no owner and is refused (`create` requires a session id). Fail-open on
 # internal errors. No operator bypass (gate_force.UNFORCEABLE).
 _SESSION_LINK_VAR = "SWARM_APP_SESSION_ID"
+# The turn id run_owner_gate hands to a landing command, which stamps it into the
+# landing's reflog entry so the turn's changes card shows it (design 2026-10-29-pipeline-
+# retro-fixes F1). A command that sets it attributes a landing to another turn, so it is
+# guarded by the same classifier (_command_link_var): the classifier reads the variable it
+# checks from _LINK_VAR, which is the session id unless a caller sets another.
+_TURN_LINK_VAR = "SWARM_TURN_ID"
+# The labels of a wholesale environment reset in front of a link reader (env -i, sudo
+# without -E, exec -c, su -). For the session id that is an unlink; for the turn id it
+# only drops it (the landing records turn=none and shows on no card), so the turn check
+# lets these through: `sudo --preserve-env=SWARM_APP_SESSION_ID python …` stays allowed.
+_ENV_RESET_HITS = frozenset({"env -i", "sudo (resets the environment)", "exec -c",
+                             "su - (a login shell resets the environment)"})
+_LINK_VAR: "contextvars.ContextVar[str]" = contextvars.ContextVar(
+    "session_link_var", default=_SESSION_LINK_VAR)
+
+
+def _link_var() -> str:
+    """The variable the session-link classifier checks (``_LINK_VAR``)."""
+    return _LINK_VAR.get()
 _SESSION_LINK_MAX_DEPTH = 3
 # Linear-time bounds (the classifier runs synchronously inside the hook, and the
 # chain's 5 s wait_for cannot cancel sync code): at most _SESSION_LINK_MAX_WORDS
@@ -4216,7 +4236,7 @@ _DECLARE_BUILTINS = frozenset({"declare", "typeset", "local"})
 def _names_session_link(word: str) -> bool:
     """True iff *word* names the link variable (bare, `$VAR`, `${VAR}`, or with a
     subscript `VAR[0]`, which for a scalar is the variable itself)."""
-    v = _SESSION_LINK_VAR
+    v = _link_var()
     if word in (v, "$" + v, "${" + v + "}"):
         return True
     m = _NAME_SUBSCRIPT_RE.match(word)
@@ -4232,7 +4252,7 @@ def _maybe_names_session_link(word: str) -> bool:
     if _names_session_link(word):
         return True
     if len(word) <= 256 and any(c in word for c in "*?[") \
-            and fnmatch.fnmatchcase(_SESSION_LINK_VAR, word):
+            and fnmatch.fnmatchcase(_link_var(), word):
         return True
     if _NAME_SUBSCRIPT_RE.match(word):
         return False
@@ -4242,7 +4262,7 @@ def _maybe_names_session_link(word: str) -> bool:
 def _assigns_session_link(word: str) -> bool:
     """True iff *word* is a shell assignment to the link variable (`VAR=`, `VAR+=`)."""
     m = _SHELL_ASSIGN_RE.match(word)
-    return bool(m) and m.group(1) == _SESSION_LINK_VAR
+    return bool(m) and m.group(1) == _link_var()
 
 
 def _env_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
@@ -4290,7 +4310,7 @@ def _env_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
                 val = a_list[i]
             if opt == "u" and _maybe_names_session_link(val):
                 if _names_session_link(val):
-                    return "env -u " + _SESSION_LINK_VAR, resets, []
+                    return "env -u " + _link_var(), resets, []
                 return "env -u of a name built at run time", resets, []
             if opt == "S":
                 try:
@@ -4300,7 +4320,7 @@ def _env_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
         i += 1
     while i < len(a_list) and _SHELL_ASSIGN_RE.match(a_list[i]):
         if _assigns_session_link(a_list[i]):
-            return "env " + _SESSION_LINK_VAR + "=…", resets, []
+            return "env " + _link_var() + "=…", resets, []
         i += 1
     return None, resets, a_list[i:]
 
@@ -4321,7 +4341,7 @@ def _sudo_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
         if a.startswith("--"):
             name, eq, v = a[2:].partition("=")
             if name == "preserve-env":
-                preserve = preserve or not eq or _SESSION_LINK_VAR in v.split(",")
+                preserve = preserve or not eq or _link_var() in v.split(",")
             elif name in _SUDO_VALUE_LONG_OPTS and not eq:
                 i += 1
         else:
@@ -4335,7 +4355,7 @@ def _sudo_session_link(args: list[str]) -> "tuple[str | None, bool, list[str]]":
         i += 1
     while i < len(args) and _SHELL_ASSIGN_RE.match(args[i]):
         if _assigns_session_link(args[i]):
-            return "sudo " + _SESSION_LINK_VAR + "=…", not preserve, []
+            return "sudo " + _link_var() + "=…", not preserve, []
         i += 1
     return None, not preserve, args[i:]
 
@@ -4379,7 +4399,7 @@ def _nameref_session_link(word: str, operands: list[str]) -> "str | None":
     for op in operands:
         _name, eq, target = op.partition("=")
         if eq and _maybe_names_session_link(target):
-            return word + " -n …=" + (_SESSION_LINK_VAR if _names_session_link(target)
+            return word + " -n …=" + (_link_var() if _names_session_link(target)
                                       else "<a name built at run time>")
     return None
 
@@ -4395,41 +4415,41 @@ def _builtin_session_link(word: str, args: list[str]) -> "str | None":
     indirect = any(_maybe_names_session_link(a) for a in operands)
     if word in ("unset", "unsetenv"):
         if named:
-            return word + " " + _SESSION_LINK_VAR
+            return word + " " + _link_var()
         return word + " of a name built at run time" if indirect else None
     if word == "setenv":  # csh: setenv NAME [VALUE]
         if operands and _maybe_names_session_link(operands[0]):
-            return "setenv " + _SESSION_LINK_VAR
+            return "setenv " + _link_var()
         return None
     if word == "set" and named:  # fish: set [-e|-gx|-U] NAME [VALUE]
-        return "set " + _SESSION_LINK_VAR
+        return "set " + _link_var()
     if word == "nameref":  # ksh
         return _nameref_session_link(word, operands)
     if word in ("export", "readonly") or word in _DECLARE_BUILTINS:
         if any(_assigns_session_link(a) for a in args):
-            return word + " " + _SESSION_LINK_VAR + "=…"
+            return word + " " + _link_var() + "=…"
         flags = "".join(a[1:] for a in args if len(a) > 1 and a[0] in "-+" and a != "--")
         if word == "export" and "n" in flags and (named or indirect):
-            return "export -n " + (_SESSION_LINK_VAR if named
+            return "export -n " + (_link_var() if named
                                    else "of a name built at run time")
         if word in _DECLARE_BUILTINS and "n" in flags:
             hit = _nameref_session_link(word, operands)
             if hit is not None:
                 return hit
         if named and word in _DECLARE_BUILTINS and not set(flags) & set("pfF"):
-            return word + " " + _SESSION_LINK_VAR
+            return word + " " + _link_var()
         return None
     if word in ("read", "mapfile", "readarray") and named:
-        return word + " " + _SESSION_LINK_VAR
+        return word + " " + _link_var()
     if word == "printf":
         for k, a in enumerate(args):
             if (a == "-v" and k + 1 < len(args) and _names_session_link(args[k + 1])) \
-                    or a == "-v" + _SESSION_LINK_VAR:
-                return "printf -v " + _SESSION_LINK_VAR
+                    or a == "-v" + _link_var():
+                return "printf -v " + _link_var()
     if word in ("for", "select") and args and _names_session_link(args[0]):
-        return word + " " + _SESSION_LINK_VAR
+        return word + " " + _link_var()
     if word == "getopts" and len(args) >= 2 and _names_session_link(args[1]):
-        return "getopts … " + _SESSION_LINK_VAR
+        return "getopts … " + _link_var()
     return None
 
 
@@ -4570,8 +4590,8 @@ class _LinkScan:
         self._bodies_hit: "list[str | None] | None" = None  # memo: [] = no bodies
 
     def _named(self, shell: str) -> "str | None":
-        if _SESSION_LINK_VAR in self.flat:
-            return shell + " reading a script that names " + _SESSION_LINK_VAR
+        if _link_var() in self.flat:
+            return shell + " reading a script that names " + _link_var()
         return None
 
     def stdin_hit(self, idx: int, shell: str) -> "str | None":
@@ -4611,12 +4631,12 @@ def _positional_session_link(sub: str, positional: list[str], depth: int) -> "st
     classified with its positional references ($0-$9, ${N}, $@, $*) replaced by those
     ARGs, so `bash -c 'unset "$1"' _ VAR` reads as `unset "VAR"`. An expansion that
     would exceed _SESSION_LINK_MAX_CHARS is denied without being built."""
-    if not any(_SESSION_LINK_VAR in p for p in positional):
+    if not any(_link_var() in p for p in positional):
         return None
     rest = " ".join(positional[1:])
     longest = max(len(rest), max(len(p) for p in positional))
     if len(sub) + len(_POSITIONAL_REF_RE.findall(sub)) * longest > _SESSION_LINK_MAX_CHARS:
-        return "a shell -c string whose arguments name " + _SESSION_LINK_VAR \
+        return "a shell -c string whose arguments name " + _link_var() \
             + " (too long to expand)"
 
     def _rep(m: "re.Match[str]") -> str:
@@ -4634,7 +4654,7 @@ def _beyond_window_tampers(cmd_word: str, beyond: list[str]) -> bool:
     remove or override the link: one names the variable, is a tamper word
     (_SESSION_LINK_TAMPER_WORDS), or — for a name-taking builtin — is a name built
     at run time."""
-    if any(_SESSION_LINK_VAR in t or os.path.basename(t) in _SESSION_LINK_TAMPER_WORDS
+    if any(_link_var() in t or os.path.basename(t) in _SESSION_LINK_TAMPER_WORDS
            for t in beyond):
         return True
     return cmd_word in _SESSION_LINK_NAME_BUILTINS \
@@ -4676,7 +4696,7 @@ def _segment_session_link(tokens: list[str], scan: _LinkScan, idx: int) -> "str 
             continue
         if _SHELL_ASSIGN_RE.match(tok):
             if _assigns_session_link(tok):
-                return _SESSION_LINK_VAR + "=… assignment"
+                return _link_var() + "=… assignment"
             i += 1
             continue
         break
@@ -4732,7 +4752,7 @@ def _segment_session_link(tokens: list[str], scan: _LinkScan, idx: int) -> "str 
                 return hit
     if end < len(tokens) and _beyond_window_tampers(win[0], tokens[end:]):
         return ("a simple command of over %d words whose unscanned part names %s or "
-                "holds a tamper form" % (_SESSION_LINK_MAX_WORDS, _SESSION_LINK_VAR))
+                "holds a tamper form" % (_SESSION_LINK_MAX_WORDS, _link_var()))
     return None
 
 
@@ -4751,7 +4771,7 @@ def _command_session_link(command: str, depth: int = 0) -> "str | None":
     (a name built at run time) while the substituted command is still scanned as its
     own segment. An unsplittable command is allowed (bash_syntax_guard denies it)."""
     flat = re.sub(r"[\"'\\]", "", command)
-    named = _SESSION_LINK_VAR in flat
+    named = _link_var() in flat
     if not named and not _SESSION_LINK_HINT_RE.search(flat):
         return None
     too_deep = depth > _SESSION_LINK_MAX_DEPTH
@@ -4763,7 +4783,7 @@ def _command_session_link(command: str, depth: int = 0) -> "str | None":
         if named or _SESSION_LINK_TAMPER_HINT_RE.search(flat):
             what = ("a shell string nested deeper than %d levels" % _SESSION_LINK_MAX_DEPTH
                     if too_deep else "a command over %d characters" % _SESSION_LINK_MAX_CHARS)
-            return what + " (not parsed) that names " + _SESSION_LINK_VAR \
+            return what + " (not parsed) that names " + _link_var() \
                 + " or holds a tamper form"
         return None
     seps: list[str] = []
@@ -4777,6 +4797,17 @@ def _command_session_link(command: str, depth: int = 0) -> "str | None":
         if hit is not None:
             return hit
     return None
+
+
+def _command_link_var(command: str, var: str) -> "str | None":
+    """``_command_session_link`` for another handed-over variable *var*: the same forms
+    (assignment, removal, a run-time name, an env reset in front of a link reader), the
+    same recursion and bounds."""
+    token = _LINK_VAR.set(var)
+    try:
+        return _command_session_link(command)
+    finally:
+        _LINK_VAR.reset(token)
 
 
 def _session_link_advice(hit: str) -> str:
@@ -4803,7 +4834,8 @@ def _session_link_advice(hit: str) -> str:
 def create_session_link_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate that DENIES, always (with or without an active
     run), any command removing or overriding SWARM_APP_SESSION_ID
-    (_command_session_link; forms in the section comment above). Without the link a
+    (_command_session_link; forms in the section comment above), and the same for
+    SWARM_TURN_ID (_TURN_LINK_VAR: the turn a landing is recorded under). Without the link a
     run is not this session's run, so the run gates stop applying. Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open on
     any internal error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
@@ -4820,9 +4852,26 @@ def create_session_link_gate(session_context: dict[str, Any]):
             return {"decision": "approve"}
         try:
             hit = _command_session_link(command)
+            turn_hit = None if hit is not None else _command_link_var(command, _TURN_LINK_VAR)
+            if turn_hit in _ENV_RESET_HITS:
+                turn_hit = None     # a clean environment drops the turn: no misattribution
         except Exception:
             logger.debug("session_link_gate: classify failed — failing open", exc_info=True)
             return {"decision": "approve"}
+        if turn_hit is not None:
+            logger.warning("[BLOCKED] session_link_gate (%s, turn id) in session %s: %s",
+                           turn_hit, session_context.get("sdk_session_id", "") or "",
+                           command[:120])
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "DENY (" + turn_hit + "): this command removes or overrides "
+                    + _TURN_LINK_VAR + ", or may (the checker could not rule it out). The "
+                    "backend hands that variable to a landing command (session_worktree "
+                    "land, pipeline-v1 land / run-land): the landing records it, and the "
+                    "turn's changes card shows the landing by it. Leave it as the backend "
+                    "set it; reading it is fine. This gate has no bypass: if it is wrong, "
+                    "tell the user.")}}
         if hit is None:
             return {"decision": "approve"}
         session_id = session_context.get("sdk_session_id", "") or ""
