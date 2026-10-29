@@ -233,3 +233,19 @@ def test_a_bad_port_in_a_clone_url_does_not_break_the_form(tmp_path):
     _bind(b, _repo(tmp_path), clone="https://github.com:99999/acme/lib.git")
     pad.apply(b, {"identity": {"summary": "A lib", "source": "PRODUCT.md"}})
     assert load_project_agent(b)["form"] is not None
+
+
+def test_a_write_drops_the_retired_keys(tmp_path):
+    """A definition written before landing / drafted_at were removed loses them on its
+    next write, and the rest is unchanged."""
+    b = _brain(tmp_path)
+    pad.apply(b, {"identity": {"summary": "A lib", "source": "PRODUCT.md"}})
+    path = b / "project-agent.yaml"
+    old = yaml.safe_load(path.read_text())
+    path.write_text(yaml.safe_dump({**old, "drafted_at": "2026-10-01T00:00:00Z",
+                                    "landing": {"approver": "you"}}, sort_keys=False))
+    edit(b, seen_revision=revision(b), changes=[{"path": "identity.summary", "value": "The lib"}])
+    new = yaml.safe_load(path.read_text())
+    assert "landing" not in new and "drafted_at" not in new
+    assert new["identity"]["summary"] == "The lib" and new["modes"] == old["modes"]
+    assert set(std.RETIRED_KEYS).isdisjoint(std.SHARED_ORDER)

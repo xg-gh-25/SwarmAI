@@ -299,10 +299,17 @@ def _order(d: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return out
 
 
+#: keys the standard no longer has; every write drops them (a file written before they
+#: were removed would otherwise carry them through each edit and confirm)
+RETIRED_KEYS = ("landing", "drafted_at")
+
+
 def ordered(doc: dict[str, Any]) -> dict[str, Any]:
     """A copy of *doc* with its keys (and those of identity, intake and each mode) in the
-    standard order; keys the standard does not name keep their order, after the rest."""
-    d = _order(copy.deepcopy(doc), SHARED_ORDER)
+    standard order, retired keys dropped; keys the standard does not name keep their
+    order, after the rest."""
+    d = {k: v for k, v in copy.deepcopy(doc).items() if k not in RETIRED_KEYS}
+    d = _order(d, SHARED_ORDER)
     if isinstance(d.get("identity"), dict):
         d["identity"] = _order(d["identity"], IDENTITY_ORDER)
     if isinstance(d.get("intake"), dict):
