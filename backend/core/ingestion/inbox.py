@@ -69,6 +69,9 @@ def enqueue(
 
     # One wall-clock budget for all attempts (§4.1: a source never waits more than
     # ~1.5 s): each attempt's SQLite busy timeout is what is left, capped at 500 ms.
+    # SQLite waits about twice its busy timeout for one BEGIN IMMEDIATE on a WAL database
+    # held by a writer (measured on 3.47: 500 ms -> 0.93 s), so each attempt gets half of
+    # what is left: the 1.5 s budget is then the wall clock it promises.
     deadline = time.monotonic() + 1.5
     for attempt in range(3):
         conn: sqlite3.Connection | None = None
@@ -76,7 +79,7 @@ def enqueue(
         if remaining_ms <= 0:
             return EnqueueResult("busy", None, "ingestion database busy")
         try:
-            conn = connect_rw(busy_timeout_ms=min(500, remaining_ms))
+            conn = connect_rw(busy_timeout_ms=min(500, remaining_ms) // 2)
             conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute(
                 """INSERT INTO ingestion_inbox(

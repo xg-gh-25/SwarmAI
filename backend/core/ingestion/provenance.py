@@ -435,6 +435,9 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
     lane = contracts_v2.SOURCES_V2[source]["lane"]
     snapshot = project_snapshot or {}
 
+    # SQLite waits about twice its busy timeout for one BEGIN IMMEDIATE on a WAL database
+    # held by a writer (measured on 3.47: 500 ms -> 0.93 s), so each attempt gets half of
+    # what is left: the 1.5 s budget is then the wall clock it promises.
     deadline = time.monotonic() + 1.5
     for attempt in range(3):
         conn = None
@@ -442,7 +445,7 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
         if remaining_ms <= 0:
             return EnqueueResult("busy", None, "ingestion database busy")
         try:
-            conn = connect_rw(busy_timeout_ms=min(500, remaining_ms))
+            conn = connect_rw(busy_timeout_ms=min(500, remaining_ms) // 2)
             conn.execute("BEGIN IMMEDIATE")
             if source == "S1":
                 if not session_id or len(roots) != 1 or roots[0].root_kind != "user_message":
