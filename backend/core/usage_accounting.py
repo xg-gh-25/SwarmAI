@@ -309,7 +309,7 @@ class _Writer:
         except Exception:  # noqa: BLE001 — a row unpriced is still a row
             logger.debug("usage ledger: pricing skipped", exc_info=True)
 
-    def _write(self, batch: list[dict[str, Any]]) -> None:
+    def _write(self, batch: list[dict[str, Any]]) -> bool:
         import sqlite3
         from database.sqlite import usage_ledger_insert_sql, usage_ledger_values
         self._price(batch)
@@ -327,7 +327,7 @@ class _Writer:
                 finally:
                     conn.close()
                 self.written += len(batch)
-                return
+                return True
             except sqlite3.OperationalError as e:
                 if "locked" in str(e) or "busy" in str(e):
                     time.sleep(0.5 * (attempt + 1))
@@ -341,6 +341,7 @@ class _Writer:
             err = RuntimeError("database busy")
         self.lost += len(batch)
         self._log("usage ledger: %d row(s) not written (%s); %d lost so far", len(batch), err, self.lost)
+        return False
 
     def _log(self, msg: str, *args: Any) -> None:
         now = time.monotonic()
@@ -374,6 +375,12 @@ def record_sync(rows: list[dict[str, Any]]) -> None:
         logger.debug("usage_accounting: rows not queued", exc_info=True)
 
 
+def insert_now(rows: list[dict[str, Any]]) -> bool:
+    """Write ``rows`` now on this thread (a caller that must know they landed: the Hive
+    sync advances its read position only then). Blocking: never on the event loop."""
+    return _writer._write(list(rows)) if rows else True
+
+
 async def record(rows: list[dict[str, Any]]) -> None:
     """``record_sync`` for an async caller (it does not wait on the database either)."""
     record_sync(rows)
@@ -387,6 +394,30 @@ def stats() -> dict[str, int]:
     """Rows written, dropped (queue full) and lost (a write that failed) since start."""
     return {"written": _writer.written, "dropped": _writer.dropped, "lost": _writer.lost,
             "queued": _writer._q.qsize()}
+
+
+#: the columns a Hive serves to its host (core/usage_hive_sync): accounting only
+SERVED_COLUMNS = ("id", "at_utc", "surface", "feature", "session_id", "run_id", "stage", "job_id",
+                  "model", "input", "output", "cache_read", "cache_write", "cost_usd", "cost_source", "kind",
+                  "imported")
+
+
+def rows_after(after_id: int, limit: int = 1000) -> dict[str, Any]:
+    """This machine's ledger rows with an id above ``after_id`` (oldest first, at most
+    ``limit``), its own rows only (none pulled from elsewhere), as {"rows", "last_id",
+    "more"}."""
+    import sqlite3
+    import database
+    conn = sqlite3.connect(f"file:{database.db.db_path}?mode=ro", uri=True, timeout=5.0)
+    try:
+        cur = conn.execute(f"SELECT {', '.join(SERVED_COLUMNS)} FROM usage_ledger WHERE id > ? "
+                           "AND machine = 'host' ORDER BY id LIMIT ?", (after_id, limit + 1))
+        rows = [dict(zip(SERVED_COLUMNS, r)) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    more = len(rows) > limit
+    rows = rows[:limit]
+    return {"rows": rows, "last_id": rows[-1]["id"] if rows else after_id, "more": more}
 
 
 #: the CLI results of this daemon (one tracker: a process's results all pass here)

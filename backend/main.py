@@ -1524,6 +1524,12 @@ async def lifespan(app: FastAPI):
         from core.swarm_out_bridge import run_bridge_loop
         _swarm_out_bridge_task = asyncio.create_task(run_bridge_loop(), name="swarm-out-bridge")
 
+    # ── Hive spend into the host's usage ledger (host only) ───────────
+    # Pulls each running Hive's new usage rows (core/usage_hive_sync), every 15 min.
+    if backend_mode != "hive":
+        from core.usage_hive_sync import run_loop as _usage_hive_loop
+        asyncio.create_task(_usage_hive_loop(), name="usage-hive-sync")
+
     # ── Canvas Layer-2 workspace surface watcher (daemon/hive only) ───
     # Surfaces author-agnostic writes (sub-agent/CLI/hook — SDK-sidechain-
     # filtered from Layer-1) onto the sole streaming session's live SSE stream.

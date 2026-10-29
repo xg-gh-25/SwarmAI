@@ -14,6 +14,9 @@ every other refusal keeps its own status and says why. ``GET /api/hive/brains``:
 way, its recorded digest, revision and time, how many of its files changed on the
 Hive since, and how many turns hold it now. Nothing else.
 
+``GET /api/hive/usage?after_id=``: this Hive's usage ledger rows after an id, the
+accounting columns only (core/usage_accounting.rows_after), for the host's ledger.
+
 ``GET /api/hive/records/{session}`` and ``.../{seq}``: a dispatched session's run
 record (core/hive_records), what the host takes back. Kept for a host that does not read
 records yet: ``GET /api/hive/bundles/{session}/{key}`` (the newest sealed bundle of a
@@ -142,6 +145,16 @@ async def get_bundle(session_id: str, key: str):
             os.close(fd)
     return StreamingResponse(chunks(), media_type="application/octet-stream",
                              headers={"Content-Length": str(size)})
+
+
+@router.get("/usage")
+async def get_usage(after_id: int = 0, limit: int = 1000) -> dict:
+    """This Hive's usage ledger rows after ``after_id`` (core/usage_accounting), for the
+    host's platform-wide ledger (core/usage_hive_sync). Hive only; read-only; the
+    accounting columns only — no session content."""
+    _hive_only()
+    from core import usage_accounting
+    return await asyncio.to_thread(usage_accounting.rows_after, max(0, after_id), max(1, min(limit, 2000)))
 
 
 @router.get("/records/{session_id}")
