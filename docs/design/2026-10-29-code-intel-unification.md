@@ -5,7 +5,7 @@ updated: 2026-10-29
 
 # Code intel: one way in, one way to build, one way to update
 
-Status: r3 proposed (2026-10-29). r2 (§1–§6 below) has landed in full: B1–B9, the deletions and `impact`. r3 (§0) changes **when** a graph is built and refreshed, and where that work runs; it supersedes the refresh paths of §3.2–§3.3 (watcher, health hook, commit hook).
+Status: r3 proposed (2026-10-29), after one premise review (§0.8). r2 (§1–§6 below) has landed in full: B1–B9, the deletions and `impact`. r3 (§0) changes **when** a graph is built and refreshed, and where that work runs; it supersedes the refresh paths of §3.2–§3.3 (watcher, health hook, commit hook).
 - r1 had one correctness premise review: 3 HIGH, 7 MED, 6 LOW. All are folded in here, and each was checked against the code.
 
 ## 0. r3 — build where the repo lives, refresh when it is read
@@ -30,83 +30,122 @@ Method, reproducible: the last 14 days of session transcripts (`~/.claude/projec
 
 ### 0.2 Rules
 
-1. **The daemon never parses or writes a graph.** It only reads: Brain Hub, the Library overlay. Every build and update runs in a separate process, either a CLI the agent runs or a job, so it never holds the GIL the chat loop needs.
-2. **A graph is built where the repo lives**, for every local repo a Brain owns, when the Brain is created or updated.
-3. **A graph is refreshed when it is read**, and at most once an hour in the background, and only when its repo's HEAD moved. A repo nobody works on costs nothing.
-4. **Code symbols leave the per-turn auto-recall.** They stay on demand: `impact`, and `context_recall_cli --domains codeintel`.
+1. **The daemon never parses or writes a repo's graph.** It reads: Brain Hub, its recall, the Library search. Every build and update runs in a separate process. The one parse left in the daemon is the build-verification probe (`main.py:2031`, one snippet, `verify_build` only), and the grammar pre-warm (`main.py:995`) stays for it.
+2. **A graph is built for every local repo a Brain owns** when the Brain is created or updated, and ownership has one declaration (§0.3).
+3. **A graph is refreshed when it is read out of the daemon** (`impact`, `analysis`, the survey, the recall CLI's `codeintel` leg). Nothing refreshes in the background, so a repo nobody reads costs nothing.
+4. **Code symbols leave the per-turn auto-recall.** They stay on demand.
 
-### 0.3 Build: one entry for every local repo
+### 0.3 Build and ownership
 
 - **Today:** only `bind_repo` creates a graph (`ddd_bindings.py:563`), plus `index_code_mount` for a Library mount (`library_mounts.py:553`). `load_project_graphs` opens only dbs that already exist (`code_intel_dbs`, `__init__.py:50`). So, as measured above:
   - an internal or Brazil binding raises `NotImplementedError`;
   - a binding whose worktree is the user's own checkout fails in `binding_worktree` (`ddd_bindings.py:277`);
   - a TECH.md `Local:` path has a graph only if a db was made by hand.
-- **r3: `build.ensure_graph(project_dir) -> list[result]`.** It builds a missing graph for each owned local root; for a graph that exists, it is `ensure_fresh`. The db of each kind of root:
-  - a bind-managed clone: unchanged, `bindings/<repo>.code_intel.db`;
-  - a TECH.md root: `Projects/<p>/code_intel.db`, as SwarmAI has today;
-  - a **local root** (the user's own checkout, internal or not): `bindings/local/<sha1(realpath)[:16]>.code_intel.db`. It is keyed by the path, so two Brains naming the same checkout share one graph.
-- **Who calls it:** New Brain's bind step and `artifact_cli bind`, in their own process.
-- **Ownership** (the security boundary, `owned_repo_roots` at `__init__.py:326`):
-  - A free `worktree` path in `bindings.yaml` still grants nothing, because that file can be written from repo content.
-  - A local root is owned only through a **machine-local registry the user writes**: `bindings/local_roots.json`, which maps a project to absolute paths. `artifact_cli bind --local <path>` writes it, from New Brain when the person names a checkout.
-  - The registry lives outside SwarmWS and outside any repo, so neither sync (Brain sync strips `worktree` anyway, `brain_sync.py:125`) nor a repo can add to it.
-  - A registered root must be a git work-tree top (`git rev-parse --show-toplevel` equals the path) and must not be inside SwarmWS or the bindings root.
-  - `owned_repo_roots`, `code_intel_dbs` and `repo_root_is_owned` read the registry, so every existing guard covers local roots without change.
+- **Today's ownership is read two ways** (`owned_repo_roots`, `__init__.py:326`):
+  - **a TECH.md path**, checked only with `is_dir`, from a line `extract_repo_path` takes (`__init__.py:300`). TECH.md is written by cultivation and travels in Brain sync, so once r3 builds a graph for every owned root, a line in a doc would decide which directory gets parsed;
+  - **a bind-managed clone.**
+- **r3: one declaration, the local-root registry `bindings/local_roots.json`.**
+  - **Shape:** project → `[{path, state: pending|confirmed, added_at}]`.
+  - **Pending:** `artifact_cli bind --local <path>` writes an entry as `pending`. An agent can run that command.
+  - **Confirmed:** only a person clicking Confirm on the Brain Hub review card moves it to `confirmed`. The card says which directory will be indexed, and that its symbols can reach the Brain's docs and a Hive. It is a daemon endpoint, the same pattern as the Project Agent review card. A model's output never confirms an entry; a person's click does (SOUL P5).
+  - **Refused paths:** the path must be a git work-tree top (`git rev-parse --show-toplevel` equals it). It must not be `$HOME`, SwarmWS, a parent of SwarmWS, or anything inside SwarmWS or the bindings root.
+  - **What it does and does not stop:** repo content, a synced Brain and a document cannot click, so they cannot make a directory owned. An agent editing the JSON by hand is the same-user limit the product already accepts elsewhere; the confirm step makes such an edit visible, not impossible.
+  - **TECH.md stops granting ownership.** SwarmAI's one TECH.md root becomes a pending entry, and XG confirms it once.
+  - `owned_repo_roots`, `code_intel_dbs` and `repo_root_is_owned` read the registry plus the bind-managed clones, so every existing guard covers local roots without change.
+- **Db layout:**
+  - a bind-managed clone: `bindings/<repo>.code_intel.db`, unchanged;
+  - a confirmed local root: `bindings/local/<sha1(realpath)[:16]>.code_intel.db`, so two Brains naming the same checkout share one graph.
+  - `Projects/<p>/code_intel.db` goes. `refresh_ai_docs.py:56` reads it by that path and moves to `project_graph`.
+- **`build.ensure_graph(project_dir)`** builds a missing graph for each owned root; for one that exists, it is `ensure_fresh`. Callers: New Brain's bind step, `artifact_cli bind`, and Confirm on the card (the daemon starts it as a subprocess, §0.4).
 
-### 0.4 Refresh
+### 0.4 Writing: one transaction, one process at a time, never inline-heavy
 
-- **On read: `build.ensure_fresh(graph, repo_root) -> Freshness`.**
-  - It runs `check_freshness` first (git only: `rev-parse`, `merge-base`, `diff --no-renames`, `rev-list`).
-  - Up to `FULL_REBUILD_FILES` (100) changed files: `update_files`, then move the commit marker when it is `complete`.
-  - Above 100, or a base commit rebased away: a full `rebuild` inline when the repo has at most `INLINE_REBUILD_FILES` (5,000) indexed files. That is about 10 ms a file, so about 50 s at the limit; SwarmAI takes 25 s.
-  - Larger than that: answer from the old graph, say how far behind it is, and emit `code_intel_full_reindex` (§0.4.2).
-  - Callers, all of them separate processes: `impact`, `analysis` (CLI), the survey (`survey_repo`, which `doc_index.sync_project` calls from the CLI and from the job).
-  - `--no-refresh` skips it, for a caller that must not wait.
-- **Background:**
-  - The incremental job moves from `on:git_commit` to a cron schedule, hourly. Today that event fires on SwarmWS auto-commits, not on the code repo's commits (`auto_commit_hook.py:340`); the scheduler runs event jobs on its hourly tick anyway (`main.py:857`).
-  - The job already updates only graphs whose repo moved (`check_freshness` per graph).
-  - The full job (`on:code_intel_full_reindex`) rebuilds only the graphs whose freshness asks for it (`suggest_full_rebuild`, or never indexed). Today `--full` rebuilds every graph of every project.
+- **A rebuild is one SQLite transaction.**
+  - Today `rebuild` holds `_conn_lock`, a thread lock, but `GraphStore.clear()` commits on its own (`graph_store.py:1460`), and `bulk_insert`, `rebuild_fts` and the meta writes commit again. A reader in another process can therefore see an empty graph with no `repo_root`, and a process killed after `clear()` leaves it so.
+  - r3: `rebuild` parses outside the transaction, then runs `BEGIN IMMEDIATE`; clear; insert; FTS; meta; `COMMIT`. The writers get a no-commit path for this.
+  - Under WAL, readers in any process see the old graph or the new one. A kill rolls back to the old graph.
+  - Why not "write a temp db and rename it": a reader still holding the old file keeps its `-wal` open by path, and the renamed db would pair with it.
+- **Incremental `update_files`** keeps its per-file commits. A reader sees each file either old or new.
+- **One writer per db.**
+  - **The lock:** `build` takes an `fcntl` lock on `<db>.write.lock`, and it does so only to avoid parsing the same repo twice.
+  - **Who waits:** `ensure_fresh` tries without waiting; if another writer holds it, it answers from the graph as it is and says so. An explicit rebuild (bind, Confirm, Re-index, mount) waits for the lock.
+  - `ensure_fresh` also skips a clone while `bind_in_progress`.
+- **`build.ensure_fresh(graph, repo_root) -> Freshness`**, for a reader out of the daemon:
+  - It runs `check_freshness` first (git only).
+  - Up to `FULL_REBUILD_FILES` (100) changed files: `update_files`, then move the marker when it is `complete`. That is 0.3–1.1 s on this repo.
+  - Above 100, or a base commit rebased away: no inline rebuild. The agent's Bash call has a 120 s timeout (`claude_environment.py:362`), and a full parse on a loaded machine has measured 81–114 s across all projects (`system_jobs.py:434`). So it starts the rebuild as a **detached child process** (`start_new_session`, the launcher the jobs use, `utils.backend_bin.py_command`): `python -m core.code_intel.build --db <path>`. It answers from the old graph: "N commits behind, a rebuild started, ask again in about a minute". A second start finds the lock held and exits.
+  - `--no-refresh` skips all of this.
+- **Started by a person:** the Brain Hub Re-index button (`_run_reindex`, today a BackgroundTask thread in the daemon), Confirm, and a Library code mount (`library_api.py:225` → `index_code_mount` in `asyncio.to_thread`) start the same child with `asyncio.create_subprocess_exec`. The endpoint returns 202, and "in progress" means the child is alive.
 - **Deleted:**
-  - the watcher (`watcher.py`, its start in `main.py:863`/`:1544`, and its tests);
-  - the health hook's `_refresh_code_intel` (`context_health_hook.py:665`, call at `:292`), which runs on the daemon's executor;
-  - the commit hook's `_reindex_changed_files` (`code_change_feed.py:380`, call at `:318`);
-  - the daemon's tree-sitter pre-warm (`main.py:1285`), if nothing in the daemon parses any more. `verify_build`'s native probe loads grammars on its own (`verify_build.py:394`), so it is checked separately.
-- **Started by a person:**
-  - The Brain Hub Re-index button (`routers/code_intel.py` `_run_reindex`, now a daemon BackgroundTask thread) and a Library code mount (`library_api.py:225` → `index_code_mount` in `asyncio.to_thread`) start a **subprocess** with the same launcher the jobs use (`utils.backend_bin.py_command`). It is `python -m core.code_intel.build --project P` or `--mount <id>`, run with `asyncio.create_subprocess_exec`.
-  - The endpoint returns 202. Its in-progress guard becomes "the child is still alive".
-- **Two writers on one db** (the CLI and the job): `ensure_fresh` and `rebuild` take a non-blocking `fcntl` lock on `<db>.write.lock`. The one that loses does not wait: a reader answers from the graph as it is and says it is being updated; the job skips that graph this hour. SQLite WAL keeps the daemon's readers consistent with a writer in another process; `busy_timeout` is 5 s.
+  - the watcher (`watcher.py`, its start in `main.py:863`/`:1544` and its shutdown at `main.py:1671`);
+  - the health hook's `_refresh_code_intel` (`context_health_hook.py:665`, called at `:292`);
+  - the commit hook's code-repo leg (`code_change_feed.py:256` `_analyze_and_propose_codebase` and `_reindex_changed_files` at `:380`): with the reindex gone it only logs (`_generate_proposals`, `:342`);
+  - both reindex jobs (`system_jobs.py:408`, `:424`) and `jobs/handlers/code_intel_reindex.py`. Today `on:git_commit` fires on SwarmWS auto-commits (`auto_commit_hook.py:340`), not on the code repo's commits, and `--full` rebuilds every graph of every project.
+  - Text that would become false: the REFRESHER template (`swarm_workspace_manager.py:512` "rebuilt … on each commit", agent-facing), `code_change_feed.py:263`/`:357`, `workspace_surface_watcher.py:14`.
 
-### 0.5 What the daemon still reads, made light
+### 0.5 What the daemon reads, made light
 
-- **Brain Hub `/summary`:** `get_codebase_summary` runs `find_dead_code` (a full scan) and the module map, 192 times in the stall record. `/summary` now returns only counts and freshness from `graph_meta` plus `COUNT(*)`. Dead code and modules stay in `analysis`.
-- **`/graph`** (Brain Hub, on expand) and the Library overlay's mount symbols (`library_api.py:337`, `search_symbols`): unchanged, read-only and user-started.
-- **Auto-recall:** `session_router.py:1006` drops `codeintel` from the per-turn domains. That removes, every turn, the symbol search plus 3–4 git subprocesses per graph for the freshness stamp (`recall_multi.py:362`).
+| Reader | Today | r3 |
+|---|---|---|
+| Brain Hub `/summary` | `get_codebase_summary`: dead-code scan + module map (192 of the stall record) | counts and the marker from `graph_meta` and `COUNT(*)`; dead code and modules stay in `analysis` |
+| Brain Hub `/graph` | top-N nodes and edges | unchanged (on expand) |
+| Brain Hub recall (`ddd_brain.py:1728`, `codeintel` in its domains) and Library `/search` (`library_api.py:333`, `LIBRARY_DOMAINS`) | `check_freshness` per graph: 3–4 git subprocesses (`recall_multi.py:362`) | the stamp is one `git rev-parse HEAD` against the marker, no refresh |
+| per-turn auto-recall (`session_router.py:1006`) | `codeintel` when the query has a code-like term | `codeintel` dropped |
+
+The recall CLI (`context_recall_cli --domains codeintel`, out of the daemon) calls `ensure_fresh` before searching; the daemon readers pass `refresh=False`.
 
 ### 0.6 Verification plan (decided now)
 
 - **New tests, each red before its fix:**
-  - `ensure_graph`: a local root gets a graph; an unregistered `worktree` path in `bindings.yaml` gets none (the ownership boundary); a registered path inside SwarmWS or not a work-tree top is refused.
-  - `ensure_fresh`: no change → no write; 1–100 files → incremental and the marker moves; above 100 → inline rebuild under the size limit, otherwise stale answer plus event; the write lock held → answer flagged, no wait.
-  - `impact` on a repo with a new commit returns the new caller without a manual re-index.
-  - The full job rebuilds only the graph that asked.
-  - The re-index endpoint and mount indexing start a subprocess; no parse runs in the daemon process (assert `parse_repo_with_coverage` is not called in-process).
-  - Auto-recall's domains no longer include `codeintel`.
-- **Final test set:** `core/code_intel/tests/`, the `test_code_intel_*.py` files, `test_code_change_feed*.py`, `test_context_health_hook.py`, `test_recall_multi.py`, `test_ddd_bindings.py`, `test_library_mounts*.py`, `test_brain_bootstrap.py`, `test_session_router` recall tests, and the Brain Hub vitest.
-- **Eval:** one deterministic product case on a fixture repo, bind → commit → `impact` returns the caller the commit added. The golden set is at its cap of 50: it replaces a case, or the cap question goes to XG.
+  - Ownership:
+    - an unconfirmed entry, a TECH.md path or a `worktree` in `bindings.yaml` owns nothing;
+    - a confirmed git top does;
+    - `$HOME`, SwarmWS, inside the bindings root and a non-top path are refused at `bind --local`.
+  - Confirm: the endpoint is the only writer of `confirmed`, and it starts the build child.
+  - Atomic rebuild:
+    - a second process reading during a rebuild never sees 0 nodes or a missing `repo_root`;
+    - killing the writer after the clear leaves the old graph.
+  - `ensure_fresh`:
+    - no change → no write;
+    - 1–100 files → incremental and the marker moves;
+    - above 100 → a child starts once (a second call finds the lock) and the answer is flagged;
+    - lock held → flagged answer, no wait;
+    - bind in progress → skip.
+  - `impact` after a new commit returns the new caller without a manual re-index.
+  - No parse in the daemon: the re-index and mount endpoints start a child, and `parse_repo_with_coverage` is not called in-process.
+  - Recall: auto-recall has no `codeintel`; the daemon stamp uses one git call; the recall CLI refreshes.
+- **Final test set:** `core/code_intel/tests/`, the `test_code_intel_*.py` files, `test_code_change_feed*.py`, `test_context_health_hook.py`, `test_recall_multi.py`, `test_ddd_bindings.py`, `test_library_mounts*.py`, `test_brain_bootstrap.py`, the `session_router` recall tests, `test_ddd_brain_router.py`, and the Brain Hub vitest.
+- **Eval:** one deterministic product case on a fixture repo, bind → commit → `impact` returns the caller the commit added. The set is at its cap of 50, so it replaces a case or the question goes to XG.
 - **After deploy:**
-  - Re-run the stall attribution (§0.1 method): stalls with code-intel frames should be about 0.
-  - At 30 days, count `impact` and `--domains codeintel` runs outside code-intel's own development (§0.1 method). Near zero → the graph goes, and survey keeps a one-shot parse.
+  - re-run the stall attribution (§0.1 method): stalls with code-intel frames should be about 0;
+  - at 30 days, count `impact` and `--domains codeintel` runs outside code-intel's own development. Near zero → the graph goes, and survey keeps a one-shot parse.
 - **Review:**
-  - one correctness expert on the build/refresh step;
-  - one security expert on the local-root registry, since it is the ownership boundary;
+  - a correctness expert on steps 2–3;
+  - a security expert on step 1 (the registry is the ownership boundary, and indexed structure can reach a Hive through the survey);
   - the deletions get none.
 
 ### 0.7 Order (one commit each, each landed)
 
-1. **Ownership and build:** the local-root registry, `ensure_graph`, `bind --local`, and New Brain's bind step calling `ensure_graph`.
-2. **Refresh on read:** `ensure_fresh` + the write lock; `impact`, `analysis` and the survey call it; the job becomes hourly and `--full` targets.
-3. **The daemon stops parsing:** the re-index endpoint and mount indexing go to a subprocess; delete the watcher, the health-hook refresh, the commit-hook reindex and the pre-warm; light `/summary`.
+1. **Ownership:** the registry, `bind --local`, the Confirm card and endpoint, `ensure_graph`, migrating SwarmAI's TECH.md root; TECH.md no longer grants ownership.
+2. **Writing:** the one-transaction rebuild, the write lock, `ensure_fresh`, the detached rebuild child; `impact`, `analysis`, the survey and the recall CLI call it.
+3. **The daemon stops parsing:** the endpoints start the child; delete the watcher, the health-hook refresh, the commit hook's code-repo leg, both reindex jobs and their handler; light `/summary` and the daemon stamp; fix the false text.
 4. **Auto-recall drops `codeintel`;** the eval case.
+
+### 0.8 Premise review (r3, one round)
+
+One correctness premise review: 2 HIGH, 5 MED, 3 LOW. All were checked against the code and are folded in above:
+- **HIGH:** TECH.md as a second, unguarded ownership path → one registry with a human confirm. A rebuild was not atomic across processes → one transaction.
+- **MED:**
+  - inline full rebuild against the 120 s Bash timeout → a detached child;
+  - lock losers that must not skip → explicit rebuilds wait;
+  - two daemon readers missing from §0.5 → added;
+  - the recall CLI never refreshed → it calls `ensure_fresh`;
+  - the registry writable by an agent → pending/confirmed.
+- **LOW:** the build-verification probe parses in the daemon → rule 1 names it and keeps the pre-warm; an incomplete deletion list → completed; delete rather than build → the hourly job, the full job and the commit hook's code-repo leg go instead of being retuned.
+
+Left as they are:
+- `governed_repo_roots` (`ddd_bindings.py:203`) still reads free paths for DDD refresh and self-audit, which are not code-intel ownership.
+- The reviewer ran out of budget before checking Hive-side readers. A Hive receives no graph (Brain sync never carries one, `brain_sync.py` docstring), so it has none to read.
 
 ## 1. What the graph is for: the readers that reach someone
 
