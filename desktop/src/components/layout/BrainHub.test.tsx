@@ -88,6 +88,7 @@ vi.mock('../../services/ddd', async () => {
     removeLocalRoot: (...a: unknown[]) => mockRemoveLocalRoot(...a),
     useRunnerAgent: () => mockRunner(),
     confirmProjectAgent: vi.fn(),
+    editProjectAgent: vi.fn(),
     useBrainSpecs: (name: string, enabled: boolean) =>
       useAsync(() => (enabled ? mockGetSpecs(name) : Promise.resolve(undefined)), `${name}:${enabled}`),
     useBrainSpecDoc: (name: string, repo: string, path: string) =>

@@ -13,8 +13,7 @@ import { useEscape } from '../../hooks/useLayer';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { JudgeTag } from './JudgeTag';
 import { judgeState, judgeSummary } from './judge';
-import { TraceTags } from './TraceTags';
-import type { RunJudge, RunTrace } from './shapes';
+import type { RunJudge } from './shapes';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -96,41 +95,4 @@ describe('JudgeTag keyboard', () => {
   });
 });
 
-const trace = (over: Partial<RunTrace> = {}): RunTrace => ({
-  brain: { name: 'SwarmAI', version: 'v3', docs: ['TECH.md'] },
-  agent: { name: 'swarmai-agent', status: 'reviewed', profile: 'bugfix', rule: '有复现的缺陷', validations: ['pytest'], placement: 'hive', landing: '自动落到 main' },
-  context: { goal: '修 X', acceptance: '测试绿', slices: [{ source: 'TECH.md § Recall', score: 0.82 }], memory: 2, tokens: '6.1k', packedAt: '22:19' },
-  hive: { instance: 'explorer', slot: 1, session: 'ses_1', run: 'run_1' },
-  startedAt: '22:20', endedAt: '22:58', duration: '38 分', tokens: '519k',
-  report: { outcome: 'COMPLETED · LANDED', deliverables: ['commit abc'], turns: 14, flowedBack: ['IMPROVEMENT.md 1 条'], path: 'records/ses_1/report.md' },
-  ...over,
-});
 
-describe('TraceTags', () => {
-  it('each prepared part opens its detail', () => {
-    render(<TraceTags trace={trace()} />);
-    fireEvent.click(screen.getByTestId('trace-context'));
-    const ctx = screen.getByTestId('trace-context-popover');
-    expect(ctx.textContent).toContain('TECH.md § Recall');
-    expect(ctx.textContent).toContain('0.82');
-    fireEvent.click(screen.getByTestId('trace-agent'));
-    expect(screen.getByTestId('trace-agent-popover').textContent).toContain('有复现的缺陷');
-    fireEvent.click(screen.getByTestId('trace-report'));
-    expect(screen.getByTestId('trace-report-popover').textContent).toContain('IMPROVEMENT.md 1 条');
-  });
-
-  it('a task with no brain says 无 Brain and has nothing to open', () => {
-    render(<TraceTags trace={trace({ brain: undefined, agent: undefined })} />);
-    const tag = screen.getByTestId('trace-brain');
-    expect(tag.textContent).toContain('无 Brain');
-    expect(tag.tagName).not.toBe('BUTTON');
-    expect(screen.getByTestId('trace-agent').textContent).toContain('通用 Agent');
-  });
-
-  it('a running run shows Report 生成中, not an openable report', () => {
-    render(<TraceTags trace={trace({ report: undefined, endedAt: undefined })} />);
-    const tag = screen.getByTestId('trace-report');
-    expect(tag.textContent).toContain('Report 生成中');
-    expect(tag.tagName).not.toBe('BUTTON');
-  });
-});

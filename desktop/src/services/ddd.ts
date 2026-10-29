@@ -217,7 +217,6 @@ export interface ProjectAgent {
   reservedForHuman?: string[];
   gates?: string[];
   placements?: string[];
-  landing?: Record<string, string>;
   modes?: AgentMode[];
   defaultMode?: string;
   sources?: string[];
@@ -231,15 +230,52 @@ export interface ProjectAgent {
   sourceCheck?: { ok: boolean; checked_at: string; missing: string[] } | null;
   /** {source as written: absolute path} for the sources that resolve to a file */
   sourcePaths?: Record<string, string>;
+  /** the Brain Hub form; null when it could not be built, undefined from an old daemon */
+  form?: AgentForm | null;
 }
 
-/** The review card's choices (POST …/project-agent/confirm). */
-export interface AgentConfirm {
-  revision: string;
-  remove: string[];
-  allow_hive?: boolean;
-  aliases: string[];
+/** How a form field may change (core/project_agent_standard.KINDS). */
+export type AgentFieldKind = 'edit' | 'brain' | 'you' | 'fixed';
+
+/** A choice of a names / choice field: a plain value, or one with its label. */
+export type AgentChoice = string | { value: string; label: string; where?: string; help?: string; available?: boolean; fixed?: boolean };
+
+/** One field of the Project Agent form (core/project_agent_form). A mode's own field
+ *  carries `values` / `paths` keyed by mode id; a shared one `value` / `path`. */
+export interface AgentFormField {
+  key: string;
+  label: string;
+  help: string;
+  kind: AgentFieldKind;
+  kindLabel: string;
+  shape: 'text' | 'list' | 'rows' | 'names' | 'choice' | 'view';
+  required: boolean;
+  removable: boolean;
+  editable: boolean;
+  example: string;
+  columns: string[];
+  scope: 'shared' | 'mode';
+  value?: unknown;
+  path?: string;
+  values?: Record<string, unknown>;
+  paths?: Record<string, string>;
+  choices?: AgentChoice[] | null;
+  hive?: { local_modes: { mode: string; why: string }[] };
 }
+
+export interface AgentForm {
+  sections: { id: string; title: string; purpose: string; fields: AgentFormField[] }[];
+  modes: { id: string; standard: boolean; isDefault: boolean; placements: string[]; ownPlacements: boolean }[];
+  /** required fields still empty (a finished draft has them) */
+  missing: string[];
+  /** written by code at Brain creation; the drafting step has not run */
+  skeleton: boolean;
+  /** where the definition's own guardrails are enforced */
+  enforced: string;
+}
+
+/** One change the form sends: a new value, or a row to drop. */
+export type AgentChange = { path: string; value: unknown } | { path: string; remove: number };
 
 export interface AgentConfirmResult {
   revision: string;
@@ -338,13 +374,24 @@ export async function getBrainDetail(name: string): Promise<BrainDetail> {
   return resp.data;
 }
 
-/** POST /api/ddd/brains/{name}/project-agent/confirm — confirm a Brain's Project
- *  Agent with the review card's choices; `brain` null = the Runner Agent (the
- *  General Brain). 409 when the definition changed since it was shown. */
-export async function confirmProjectAgent(brain: string | null, body: AgentConfirm): Promise<AgentConfirmResult> {
-  const url = brain === null ? '/ddd/runner-agent/confirm'
-    : `/ddd/brains/${encodeURIComponent(brain)}/project-agent/confirm`;
-  const resp = await api.post<AgentConfirmResult>(url, body);
+const AGENT_WRITE = { headers: { 'Content-Type': 'application/json', 'X-Swarm-User-Action': 'project-agent' } };
+
+function agentUrl(brain: string | null): string {
+  return brain === null ? '/ddd/runner-agent' : `/ddd/brains/${encodeURIComponent(brain)}/project-agent`;
+}
+
+/** POST …/project-agent/confirm — confirm the revision the form showed; `brain` null =
+ *  the Runner Agent (the General Brain). 409 when it changed since it was shown. */
+export async function confirmProjectAgent(brain: string | null, revision: string): Promise<AgentConfirmResult> {
+  const resp = await api.post<AgentConfirmResult>(`${agentUrl(brain)}/confirm`, { revision }, AGENT_WRITE);
+  return resp.data;
+}
+
+/** PATCH …/project-agent — the form's changes on the revision it showed; the result is
+ *  a draft. 400 a change the form may not make, 409 changed since, 422 not valid. */
+export async function editProjectAgent(brain: string | null, revision: string,
+  changes: AgentChange[]): Promise<{ revision: string; status: 'draft' }> {
+  const resp = await api.patch<{ revision: string; status: 'draft' }>(agentUrl(brain), { revision, changes }, AGENT_WRITE);
   return resp.data;
 }
 

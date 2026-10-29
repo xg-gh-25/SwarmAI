@@ -27,11 +27,14 @@ const REVIEW = {
   proposals: [{ id: 'p1', target_doc: 'TECH.md', target_section: 'Gates', content: 'Add a concurrency reviewer', confidence: 0.8, source_run_id: 'run_x' }],
 };
 const confirmProjectAgent = vi.fn();
+const editProjectAgent = vi.fn();
 vi.mock('../../services/ddd', () => ({
   useBrainDetail: () => ({ data: DETAIL }),
   useReview: () => ({ data: REVIEW }),
   useRunnerAgent: () => ({ data: null }),
   confirmProjectAgent: (...a: unknown[]) => confirmProjectAgent(...a),
+  editProjectAgent: (...a: unknown[]) => editProjectAgent(...a),
+  getStarterKind: () => Promise.resolve({ path: '', role: 'DISTILL', why: '', roots: [] }),
 }));
 vi.mock('../../services/pipelines', () => ({ pipelinesService: { fetchAnalytics: vi.fn() } }));
 
@@ -137,10 +140,10 @@ describe('BrainMapView', () => {
     expect(screen.getByTestId('bm-panel-eval').textContent).toContain('UNKNOWN');
   });
 
-  it('the Project Agent submits a request to chat and marks unbuilt places as mock', async () => {
+  it('the Project Agent page submits a request to chat and shows no mock intake', async () => {
     const onDispatch = vi.fn(() => true);
     render(<BrainAgentView name="P" onDispatch={onDispatch} />);
-    expect(screen.getAllByTestId('bm-mock').length).toBeGreaterThan(0);
+    expect(screen.queryAllByTestId('bm-mock')).toHaveLength(0);
     const submit = screen.getByTestId('bm-agent-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     fireEvent.change(screen.getByTestId('bm-agent-req'), { target: { value: 'Add jittered backoff to retries' } });
@@ -152,49 +155,102 @@ describe('BrainMapView', () => {
   });
 });
 
-describe('BrainMapView · Project Agent definition', () => {
+describe('BrainMapView · Project Agent form', () => {
+  const field = (o: Record<string, unknown>) => ({
+    help: 'what it is for', kindLabel: { edit: 'Editable', brain: 'From the Brain', you: 'Your choice', fixed: 'Fixed' }[o.kind as string],
+    required: false, removable: false, editable: o.kind !== 'fixed' && o.shape !== 'view', example: '', columns: [], scope: 'shared', ...o,
+  });
+  const FORM = {
+    sections: [
+      { id: 'identity', title: 'Identity', purpose: 'Who it is.', fields: [
+        field({ key: 'summary', label: 'Summary', kind: 'edit', shape: 'text', required: true, value: 'Small fixes.', path: 'identity.summary' }),
+        field({ key: 'repos', label: 'Repositories', kind: 'brain', shape: 'view', editable: false,
+          value: [{ name: 'lib', local: '~/src/lib', remote: 'https://github.com/acme/lib.git' }] })] },
+      { id: 'modes', title: 'Modes', purpose: 'Kinds of work.', fields: [
+        field({ key: 'when', label: 'Used when', kind: 'edit', shape: 'text', required: true, scope: 'mode',
+          values: { 'code-change': 'a fix' }, paths: { 'code-change': 'modes[code-change].when' } }),
+        field({ key: 'mode_repos', label: 'Repositories', kind: 'brain', shape: 'names', scope: 'mode', editable: false,
+          values: { 'code-change': ['lib'] }, paths: { 'code-change': 'modes[code-change].repos' } }),
+        field({ key: 'validations', label: 'Checks a run must pass', kind: 'brain', shape: 'rows', removable: true, scope: 'mode',
+          columns: ['id', 'command', 'cwd', 'source'],
+          values: { 'code-change': [{ id: 'unit', command: 'pytest', cwd: '' }, { id: 'lint', command: 'ruff', cwd: '' }] },
+          paths: { 'code-change': 'modes[code-change].validations' } })] },
+      { id: 'guardrails', title: 'Guardrails', purpose: 'Limits.', fields: [
+        field({ key: 'reserved_for_human', label: 'Always ask me before', kind: 'you', shape: 'names', required: true,
+          value: ['push'], path: 'reserved_for_human', choices: [{ value: 'push', label: 'Push to a remote' }, { value: 'open_pr', label: 'Open a pull request' }] })] },
+      { id: 'intake', title: 'Intake', purpose: 'How work comes in.', fields: [
+        field({ key: 'handles', label: 'Typical requests', kind: 'edit', shape: 'list', required: true, value: ['fix a bug'], path: 'intake.handles' })] },
+      { id: 'profiles', title: 'Pipeline profiles', purpose: 'Reference.', fields: [
+        field({ key: 'profiles', label: 'Profiles', kind: 'fixed', shape: 'view', editable: false,
+          value: [{ name: 'bugfix', for: 'a defect', stages: ['build', 'test'], modes: ['code-change'] }] })] },
+    ],
+    modes: [{ id: 'code-change', standard: true, isDefault: true, placements: ['chat-tab'], ownPlacements: false }],
+    missing: [], skeleton: false, enforced: 'The guardrails of this definition are enforced when the agent runs on a Hive.',
+  };
   const AGENT = {
-    path: 'project-agent.yaml', status: 'draft', revision: 'r1', summary: 'Small fixes behind the service layer.',
-    identity: { summary: 'Small fixes behind the service layer.', inScope: [], outOfScope: [], source: 'TECH.md' },
-    reviewFocus: [{ area: 'concurrency', why: 'refunds settle asynchronously', source: 'TECH.md' }],
-    placements: ['chat-tab'], landing: { approval: 'human' }, sources: ['TECH.md'], problems: [],
-    reservedForHuman: ['push'], gates: [], defaultMode: 'code-change',
-    modes: [{ id: 'code-change', when: 'a fix', profile: 'bugfix', profileRules: [{ when: 'config-only change', profile: 'direct' }],
-      placements: ['chat-tab'], repos: [], setup: [], validations: [], skills: [], delivery: 'bundle', reservedForHuman: ['push'], gates: [] }],
+    path: 'project-agent.yaml', status: 'draft', revision: 'r1', summary: 'Small fixes.',
+    identity: { summary: 'Small fixes.', inScope: [], outOfScope: [], source: 'TECH.md' },
+    problems: [], form: FORM,
   };
   const openAgent = (onDispatch = vi.fn(() => true)) => {
     render(<BrainAgentView name="P" onDispatch={onDispatch} />);
     return onDispatch;
   };
+  beforeEach(() => { confirmProjectAgent.mockReset(); editProjectAgent.mockReset(); });
 
-  it('shows the review card, and confirm goes to the backend, not to chat', async () => {
+  it('shows the backend\'s sections in order, each field with who may change it', () => {
     (DETAIL as Record<string, unknown>).projectAgent = AGENT;
-    confirmProjectAgent.mockResolvedValue({ revision: 'r2', reviewedAt: 't', reviewedBy: 'me', aliasesAdded: [], sourceCheck: { ok: true, missing: [] } });
+    openAgent();
+    const ids = screen.getAllByTestId(/^pa-section-/).map((el) => el.getAttribute('data-testid'));
+    expect(ids).toEqual(['pa-section-identity', 'pa-section-modes', 'pa-section-guardrails', 'pa-section-intake', 'pa-section-profiles']);
+    expect(screen.getByTestId('pa-field-summary').textContent).toContain('Editable');
+    expect(screen.getByTestId('pa-field-repos').textContent).toContain('From the Brain');
+    expect(screen.getByTestId('pa-repos').textContent).toContain('github.com/acme/lib');
+    expect(screen.getByTestId('pa-enforced').textContent).toContain('on a Hive');
+  });
+
+  it('saves the changes in one request, rows dropped highest first, then confirms', async () => {
+    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
+    editProjectAgent.mockResolvedValue({ revision: 'r2', status: 'draft' });
+    confirmProjectAgent.mockResolvedValue({ revision: 'r3', reviewedAt: 't', reviewedBy: 'me', aliasesAdded: [], sourceCheck: { ok: true, missing: [] } });
     const onDispatch = openAgent();
-    const def = screen.getByTestId('bm-agent-def');
-    for (const s of ['bugfix', 'direct', 'concurrency', 'TECH.md', 'push']) {
-      expect(def.textContent).toContain(s);
-    }
-    expect(screen.getByTestId('bm-agent-status').textContent).toContain('draft');
+    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'Fixes to the signer.' } });
+    const rows = screen.getByTestId('pa-rows-modes[code-change].validations');
+    for (const b of Array.from(rows.querySelectorAll('button[title="Remove"]'))) fireEvent.click(b);
+    expect(screen.getByTestId('pa-count').textContent).toBe('3 changes');
+    expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();          // save first
+    fireEvent.click(screen.getByTestId('pa-save'));
+    await waitFor(() => expect(editProjectAgent).toHaveBeenCalledWith('P', 'r1', [
+      { path: 'identity.summary', value: 'Fixes to the signer.' },
+      { path: 'modes[code-change].validations', remove: 1 },
+      { path: 'modes[code-change].validations', remove: 0 }]));
     fireEvent.click(screen.getByTestId('bm-agent-confirm'));
-    await waitFor(() => expect(confirmProjectAgent).toHaveBeenCalledWith('P', expect.objectContaining({ revision: 'r1' })));
+    await waitFor(() => expect(confirmProjectAgent).toHaveBeenCalledWith('P', 'r1'));
     expect(onDispatch).not.toHaveBeenCalled();
   });
 
-  it('a new revision of the definition starts the card afresh', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, intake: { handles: ['a', 'b'], repos: [] } };
-    const { rerender } = render(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
-    fireEvent.click(screen.getByTestId('pa-del-intake.handles[0]'));
-    expect(screen.getByTestId('bm-agent-confirm').textContent).toBe('Delete 1 and confirm');
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, revision: 'r9', intake: { handles: ['x', 'a', 'b'], repos: [] } };
-    rerender(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
-    expect(screen.getByTestId('bm-agent-confirm').textContent).toBe('Confirm');
+  it('cannot confirm while a required field is empty', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, form: { ...FORM, missing: ['Typical requests'] } };
+    openAgent();
+    expect((screen.getByTestId('bm-agent-confirm') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('pa-missing').textContent).toContain('Typical requests');
   });
 
-  it('a revise note goes to chat; a reviewed definition has no confirm button', () => {
+  it('a new revision starts the form afresh', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
+    const { rerender } = render(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
+    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'x' } });
+    expect(screen.getByTestId('pa-count')).toBeTruthy();
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, revision: 'r9' };
+    rerender(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
+    expect(screen.queryByTestId('pa-count')).toBeNull();
+  });
+
+  it('a revise note goes to chat; a confirmed definition has no confirm button', () => {
     (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed' };
     const onDispatch = openAgent();
     expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('confirmed');
     fireEvent.change(screen.getByTestId('bm-agent-note'), { target: { value: 'use full for API changes' } });
     fireEvent.click(screen.getByTestId('bm-agent-revise'));
     const calls = onDispatch.mock.calls as unknown as string[][];

@@ -5,7 +5,7 @@
  * General is not a Projects/ DDD: its knowledge is the Markdown in Knowledge/Library and
  * its Project Agent is the Runner Agent, for tasks that belong to no Brain. The page
  * answers one decision: can such a task go out (is the Runner Agent confirmed)? So it
- * has three blocks — what it is, its knowledge, the Runner Agent's review card — and
+ * has three blocks — what it is, its knowledge, the Runner Agent's form — and
  * none of a DDD's tabs, and no delete or rename: it is built in.
  *
  * Opened by its own view (BrainHub `openGeneral`), never by the name, so a Projects/
@@ -14,7 +14,7 @@
  * @exports GeneralBrainView
  */
 import { useRunnerAgent, type GeneralBrain, type ProjectAgent } from '../../services/ddd';
-import { ProjectAgentCard } from './ProjectAgentCard';
+import { ProjectAgentForm } from './ProjectAgentForm';
 
 export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }: {
   general: GeneralBrain | null;
@@ -45,7 +45,7 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-5 space-y-8 max-w-[900px]">
+      <div className="flex-1 overflow-auto px-6 py-5 space-y-8 max-w-[1180px]">
         <section data-testid="general-what">
           <h3 className="text-heading font-semibold">What it is</h3>
           <p className="mt-1 text-body">
@@ -79,8 +79,8 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
                   <button className="btn-sm btn-secondary" onClick={() => void refetch()} data-testid="general-agent-retry">Retry</button>
                 </div>
               : agent
-              ? <ProjectAgentCard key={`runner:${agent.revision ?? ''}`} brain={null} agent={agent}
-                  onRevise={(note) => { onDispatch?.(`Revise the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nKeep it a draft and tell me when it is on the review card.`, { autoSend: true }); }} />
+              ? <ProjectAgentForm key={`runner:${agent.revision ?? ''}`} brain={null} agent={agent}
+                  onRevise={(note) => { onDispatch?.(`Revise the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nKeep it a draft and tell me when it is on the Brain Hub form.`, { autoSend: true }); }} />
               : <div className="text-small text-[var(--color-text-muted)]" data-testid="general-no-agent">
                   No Runner Agent definition here yet: it is written when the workspace starts.
                 </div>}

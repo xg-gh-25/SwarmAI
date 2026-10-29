@@ -198,3 +198,15 @@ def test_binding_a_repo_gives_a_draft_its_code_change_mode(tmp_path):
     assert "code-change" in ids and doc["identity"]["summary"] == "A lib"
     code = next(m for m in doc["modes"] if m["id"] == "code-change")
     assert code["validations"][0]["command"] == "python -m pytest -q"
+
+
+def test_the_front_end_holds_no_field_list():
+    """The form is drawn from what the backend sends: the component builds no stored
+    path itself (it sends back the path each field came with), so a field added to the
+    template needs no front-end change to be shown and saved."""
+    tsx = (Path(__file__).resolve().parents[2] / "desktop/src/components/layout/ProjectAgentForm.tsx").read_text()
+    assert "`modes[" not in tsx and "'modes[" not in tsx and "\"modes[" not in tsx
+    for f in std.TEMPLATE:
+        if f.store and not f.store.startswith("modes[]."):
+            for q in ("'", '"', "`"):
+                assert f"{q}{f.store}{q}" not in tsx, f.store

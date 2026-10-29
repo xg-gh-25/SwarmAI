@@ -14,11 +14,10 @@
  * Reads only records that already exist: the brain detail + review queue (cached
  * ddd hooks) and the 30-day pipeline analytics (one cached query, the same payload
  * the Pipelines overlay reads). Nothing here recomputes on the backend.
- * What is not built yet (Local Worker, Hive, Slack and schedule intake, Conductor /
- * Project Agent eval) is shown and labelled `mock`. The Project Agent definition is
- * real: project-agent.yaml, drafted from the DDD at creation. Its review card
- * (ProjectAgentCard) deletes rows, allows the Hive and confirms through the backend;
- * wording changes go to chat (the agent edits the file).
+ * What is not built yet (Conductor / Project Agent eval) is shown and labelled `mock`.
+ * The Project Agent definition is real: project-agent.yaml, a skeleton at creation and
+ * drafted from the DDD. Its form (ProjectAgentForm) shows the standard template's eight
+ * sections, saves changes and confirms through the backend; bigger changes go to chat.
  * Submitting a request is real: it goes to chat as a pipeline Run request.
  *
  * Exports: BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView,
@@ -31,7 +30,7 @@ import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } fro
 import { Stat, SectionLabel, StatusBadge, Hint, type Tone } from '../overlay';
 import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from './BrainMap';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
-import { ProjectAgentCard } from './ProjectAgentCard';
+import { ProjectAgentForm } from './ProjectAgentForm';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { openOverlayAt } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -266,12 +265,10 @@ export function BrainAgentView({ name, onDispatch, onRequestClose }: {
   const { detail, runs } = useBrainData(name);
   const send = useSend(onDispatch, onRequestClose);
   return (
-    <div className="p-4 max-w-[900px]" data-testid="bm-panel-agent">
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-        <AgentPanel name={name} runs={runs}
-          delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []}
-          agent={detail ? detail.projectAgent : undefined} onDispatch={send} />
-      </div>
+    <div className="p-4 max-w-[1180px]" data-testid="bm-panel-agent">
+      <AgentPanel name={name} runs={runs}
+        delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []}
+        agent={detail ? detail.projectAgent : undefined} onDispatch={send} />
     </div>
   );
 }
@@ -338,9 +335,6 @@ function AddKnowledgePanel({ name, onSend }: { name: string; onSend: (msg: strin
   );
 }
 
-function Row({ children, testid }: { children: React.ReactNode; testid?: string }) {
-  return <div className="py-2 border-b border-[var(--color-border)] last:border-b-0" data-testid={testid}>{children}</div>;
-}
 
 
 /** No definition yet: offer to draft it from the DDD in chat. */
@@ -354,12 +348,6 @@ function AgentNone({ onGenerate }: { onGenerate: () => void }) {
     </div>
   );
 }
-
-const PLACES = [
-  { key: 'chat', label: 'Chat tab (inline)', built: true },
-  { key: 'worker', label: 'Local Worker', built: false },
-  { key: 'hive', label: 'Hive', built: false },
-] as const;
 
 function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
   name: string; runs: PipelineRunSummary[]; delivery: string[];
@@ -401,35 +389,22 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
         </div>
       ) : (
         agent === null
-          ? <AgentNone onGenerate={() => send(`Draft the Project Agent of the ${name} Brain from its DDD (s_project-manager P3b, artifact_cli project-agent-draft) and tell me when it is on the review card.`, 'draft the Project Agent')} />
-          : <ProjectAgentCard key={`${name}:${agent.revision ?? ''}`} brain={name} agent={agent}
-              onRevise={(note) => send(`Revise the Project Agent of the ${name} Brain (project-agent.yaml): ${note}\nGive each change its source, keep it a draft, and tell me when it is on the review card.`, 'revise the Project Agent')} />
+          ? <AgentNone onGenerate={() => send(`Draft the Project Agent of the ${name} Brain from its DDD (s_project-manager P3b, artifact_cli project-agent-draft) and tell me when it is on the Brain Hub form.`, 'draft the Project Agent')} />
+          : <ProjectAgentForm key={`${name}:${agent.revision ?? ''}`} brain={name} agent={agent}
+              onRevise={(note) => send(`Revise the Project Agent of the ${name} Brain (project-agent.yaml): ${note}\nGive each change its source, keep it a draft, and tell me when it is on the Brain Hub form.`, 'revise the Project Agent')} />
       )}
-      <Hint>The Project Agent is built from this Brain&apos;s knowledge with the pipeline&apos;s profiles. You review and revise it. It drafts Runs; it never submits one, and it does not define its own Eval.</Hint>
-
-      <div>
-        <SectionLabel>Ask for a change</SectionLabel>
+      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4" data-testid="bm-agent-send">
+        <SectionLabel>Send it work</SectionLabel>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional, at most 60 characters)" maxLength={60}
-          className="mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2 py-1 text-small" data-testid="bm-agent-title" />
+          className="mt-2 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2 py-1 text-small" data-testid="bm-agent-title" />
         <textarea value={req} onChange={(e) => setReq(e.target.value)} rows={3} placeholder={`Describe a change for ${name}`}
           className="mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2 py-1 text-small" data-testid="bm-agent-req" />
-        <div className="flex flex-wrap items-center gap-3 mt-1 text-small">
-          {PLACES.map((p) => (
-            <label key={p.key} className={p.built ? '' : 'text-[var(--color-text-muted)]'}>
-              <input type="radio" name="bm-place" defaultChecked={p.built} disabled={!p.built} className="mr-1" />
-              {p.label}{!p.built && <Mock />}
-            </label>
-          ))}
+        <div className="flex flex-wrap items-center gap-3 mt-1 text-meta text-[var(--color-text-muted)]">
+          It runs in a chat tab; the agent picks the mode and profile from the definition above.
           <button className="btn-sm btn-primary ml-auto" disabled={!req.trim()} onClick={submit} data-testid="bm-agent-submit">Submit as a Run</button>
         </div>
         {sent && <div className="text-meta text-[var(--color-status-success)] mt-1" data-testid="bm-agent-sent">{sent}</div>}
-      </div>
-
-      <div>
-        <SectionLabel>Other ways in</SectionLabel>
-        <Row><span className="text-small">Slack request in the project channel</span><Mock /></Row>
-        <Row><span className="text-small">Schedule, e.g. a weekly flaky-test sweep</span><Mock /></Row>
-      </div>
+      </section>
     </div>
   );
 }
