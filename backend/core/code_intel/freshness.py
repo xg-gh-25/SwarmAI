@@ -121,7 +121,7 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
     # Edge case: force push / rebase removed our baseline commit
     try:
         ancestor_check = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", last_commit, current_head],
+            ["git", *_hardening(), "merge-base", "--is-ancestor", last_commit, current_head],
             cwd=repo_root, capture_output=True, timeout=5
         )
         if ancestor_check.returncode != 0:
@@ -174,11 +174,18 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
     ))
 
 
+def _hardening() -> tuple[str, ...]:
+    """No hooks, fsmonitor, external diff: an owned root is read by jobs and reviews
+    outside any session (design 2026-10-29-code-intel-auto D1)."""
+    from .local_roots import GIT_SAFE
+    return GIT_SAFE
+
+
 def _git(cwd: Path, args: list[str], timeout: int = 5) -> str:
     """Bare git command. No hosting API. Works on any git repo."""
     try:
         result = subprocess.run(
-            ["git"] + args,
+            ["git", *_hardening(), *args],
             cwd=cwd, capture_output=True, text=True, timeout=timeout
         )
     except FileNotFoundError:

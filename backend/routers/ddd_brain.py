@@ -59,7 +59,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import (
@@ -1849,10 +1849,10 @@ async def confirm_project_agent(name: str, body: ProjectAgentConfirmBody) -> dic
     return await executors.run_nav(_work)
 
 
-# ── Local repositories (design 2026-10-29-code-intel-unification §0.3) ─────────
-# The user's own checkouts a Brain may read into its code graph. An agent proposes
-# one (``artifact_cli bind --local``); only a person confirms it, here. Confirm starts
-# the graph build in a child process: the daemon never parses.
+# ── Local repositories (design 2026-10-29-code-intel-auto D1) ─────────────────
+# The user's own checkouts a Brain reads into its code graph. Declared with
+# ``artifact_cli bind --local`` (an agent, or New Brain through it), owned at once;
+# here they are listed and removed. The daemon never parses.
 
 
 class LocalRootBody(BaseModel):
@@ -1860,22 +1860,23 @@ class LocalRootBody(BaseModel):
 
 
 def _local_roots_view(name: str, project_dir: Path) -> dict:
+    """What the card lists: each root, who declared it, whether its graph is built.
+    Read-only: no read path adds a root (design 2026-10-29-code-intel-auto D1)."""
     from core.code_intel import owned_graphs
-    from core.code_intel.local_roots import entries, suggest_from_tech_md
-    suggest_from_tech_md(project_dir)          # a legacy TECH.md path, once, as pending
+    from core.code_intel.local_roots import entries
     built = {str(ref.repo_root): ref.db_path.exists() for ref in owned_graphs(project_dir)
              if ref.repo_root is not None}
     rows = []
     for e in entries(name):
         rows.append({"path": e["path"], "state": e.get("state"), "source": e.get("source"),
-                     "addedAt": e.get("added_at"), "confirmedAt": e.get("confirmed_at"),
+                     "addedAt": e.get("added_at"),
                      "graphBuilt": bool(built.get(e["path"]))})
     return {"localRoots": rows}
 
 
 @router.get("/brains/{name}/local-roots")
 async def get_local_roots(name: str) -> dict:
-    """The Brain's local repositories: pending ones wait for a person's Confirm."""
+    """The local repositories this Brain reads (declared with ``bind --local``)."""
 
     def _work() -> dict:
         project_dir = _resolve_brain_dir(name)
@@ -1886,45 +1887,44 @@ async def get_local_roots(name: str) -> dict:
     return await executors.run_nav(_work)
 
 
-@router.post("/brains/{name}/local-roots/confirm")
-async def confirm_local_root(name: str, body: LocalRootBody) -> dict:
-    """A person confirms a proposed local repository: it becomes owned and its graph
-    is built in a child process. 400 when the path is not allowed or was not proposed."""
-    import os as _os
-    from core.code_intel.local_roots import LocalRootError, confirm
-    if _os.environ.get("SWARMAI_MODE") == "hive":
-        # a person confirms on their own machine; a Hive confirming would let whatever
-        # holds the Hive credential pick a directory to parse (as for the Project Agent)
-        raise HTTPException(status_code=403, detail="Confirm a local repository on the desktop")
+@router.get("/starter-kind")
+async def get_starter_kind(path: str) -> dict:
+    """The role New Brain gives a local path it was handed (read-only: one hardened
+    ``git rev-parse`` per directory looked at; design 2026-10-29-code-intel-auto D2).
+    400 when the path does not exist."""
+    from core.code_intel.local_roots import LocalRootError, classify_starter
+
+    def _work() -> dict:
+        try:
+            return classify_starter(path)
+        except LocalRootError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return await executors.run_nav(_work)
+
+
+@router.post("/brains/{name}/local-roots/remove")
+async def remove_local_root(name: str, body: LocalRootBody, request: Request) -> dict:
+    """Stop reading a local repository into this Brain (its graph file is left; the
+    removal is remembered). A write from the app only: ``Content-Type:
+    application/json`` and ``X-Swarm-User-Action``, which a cross-site page cannot
+    send without a preflight the daemon refuses; 403 off the desktop."""
+    from core.code_intel.local_roots import LocalRootError, local_mode, remove
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ctype != "application/json" or not request.headers.get("x-swarm-user-action"):
+        raise HTTPException(status_code=415, detail="a JSON request from the app is required")
+    if not local_mode():
+        raise HTTPException(status_code=403, detail="Local repositories are managed on the desktop")
 
     def _work() -> dict:
         project_dir = _resolve_brain_dir(name)
         if project_dir is None:
             raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
         try:
-            entry = confirm(name, body.path)
+            removed = remove(name, body.path)
         except LocalRootError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        from core.code_intel import owned_graphs
-        from core.code_intel.build import spawn_build
-        repo = next((ref.repo for ref in owned_graphs(project_dir)
-                     if ref.repo_root is not None and str(ref.repo_root) == entry["path"]), None)
-        spawn_build(name, repo=repo)
-        return {**_local_roots_view(name, project_dir), "building": repo}
-
-    return await executors.run_nav(_work)
-
-
-@router.post("/brains/{name}/local-roots/remove")
-async def remove_local_root(name: str, body: LocalRootBody) -> dict:
-    """Stop reading a local repository into this Brain (its graph file is left)."""
-    from core.code_intel.local_roots import remove
-
-    def _work() -> dict:
-        project_dir = _resolve_brain_dir(name)
-        if project_dir is None:
-            raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
-        if not remove(name, body.path):
+        if not removed:
             raise HTTPException(status_code=404, detail=f"{body.path} is not a local root of {name}")
         return _local_roots_view(name, project_dir)
 

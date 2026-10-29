@@ -232,8 +232,13 @@ def test_end_to_end_a_fixed_entries_file_makes_p6_pass_knowledge(brain: Path) ->
 
 def test_classify_starter(tmp_path: Path, capsys) -> None:
     import scripts.artifact_cli as cli
+    import subprocess
     (tmp_path / "r").mkdir()
     (tmp_path / "r" / "pyproject.toml").write_text("[project]\nname='r'\n")
+    subprocess.run(["git", "init", "-q", str(tmp_path / "r")], check=True)
+    # a repo marker without git: bind --local cannot read it in place
+    (tmp_path / "nogit").mkdir()
+    (tmp_path / "nogit" / "pyproject.toml").write_text("[project]\nname='n'\n")
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "a.md").write_text("# a\n")
     (tmp_path / "one.md").write_text("# one\n")
@@ -242,11 +247,11 @@ def test_classify_starter(tmp_path: Path, capsys) -> None:
         path = ""
 
     roles = {}
-    for name in ("r", "notes", "one.md"):
+    for name in ("r", "notes", "one.md", "nogit"):
         A.path = str(tmp_path / name)
         cli.cmd_classify_starter(A(), None)
         roles[name] = json.loads(capsys.readouterr().out)["role"]
-    assert roles == {"r": "GOVERN", "notes": "SHELF", "one.md": "DISTILL"}
+    assert roles == {"r": "GOVERN", "notes": "SHELF", "one.md": "DISTILL", "nogit": "SHELF"}
 
 
 

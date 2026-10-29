@@ -819,9 +819,10 @@ def _gitignored_subset(repo_root: Path, paths: list[Path]) -> set[Path]:
     # stdin is a temp file, never input= (utils/stdin_file: a pipe deadlocked here
     # under memory pressure and hung the 300s full-reindex job, 2026-10-22).
     from utils.stdin_file import run_with_stdin_file
+    from core.code_intel.local_roots import GIT_SAFE
     try:
         proc = run_with_stdin_file(
-            ["git", "-C", str(repo_root), "check-ignore", "--stdin"], stdin_blob,
+            ["git", *GIT_SAFE, "-C", str(repo_root), "check-ignore", "--stdin"], stdin_blob,
             capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as e:

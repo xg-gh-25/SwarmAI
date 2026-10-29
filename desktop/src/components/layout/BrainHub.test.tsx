@@ -43,7 +43,6 @@ const mockBrainRecall = vi.fn();
 const mockGetSpecs = vi.fn();
 const mockGetSpecDoc = vi.fn();
 const mockGetLocalRoots = vi.fn();
-const mockConfirmLocalRoot = vi.fn();
 const mockRemoveLocalRoot = vi.fn();
 // BrainHub now consumes React Query HOOKS (run_cfb460ac), not raw fetchers. We mock
 // the hooks at the boundary with a tiny useState+useEffect wrapper over the same
@@ -86,7 +85,6 @@ vi.mock('../../services/ddd', async () => {
     rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
     brainRecall: (...a: unknown[]) => mockBrainRecall(...a),
     getLocalRoots: (...a: unknown[]) => mockGetLocalRoots(...a),
-    confirmLocalRoot: (...a: unknown[]) => mockConfirmLocalRoot(...a),
     removeLocalRoot: (...a: unknown[]) => mockRemoveLocalRoot(...a),
     useRunnerAgent: () => mockRunner(),
     confirmProjectAgent: vi.fn(),
@@ -552,35 +550,31 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(screen.queryByTestId('brainhub-specs-disclosure')).toBeNull();
   });
 
-  it('a proposed local repository waits for the person: Confirm and Remove act on that path', async () => {
-    const pending = { path: '/Users/me/code/app', state: 'pending', source: 'agent', graphBuilt: false };
-    mockGetLocalRoots.mockResolvedValue([pending]);
-    mockConfirmLocalRoot.mockResolvedValue([{ ...pending, state: 'confirmed' }]);
+  it('a local repository is listed with who added it, and Remove takes it back', async () => {
+    const root = { path: '/Users/me/code/app', state: 'confirmed', source: 'new-brain', graphBuilt: false };
+    mockGetLocalRoots.mockResolvedValue([root]);
     mockRemoveLocalRoot.mockResolvedValue([]);
     await openBrowse();
     const card = await screen.findByTestId('local-roots-card');
     expect(mockGetLocalRoots).toHaveBeenCalledWith('SwarmAI');
     expect(card.textContent).toContain('/Users/me/code/app');
-    expect(card.textContent).toContain('Proposed by the agent');
-    fireEvent.click(screen.getByTestId('local-root-confirm'));
-    expect(mockConfirmLocalRoot).toHaveBeenCalledWith('SwarmAI', '/Users/me/code/app');
-    await waitFor(() => expect(screen.getByTestId('local-root-confirmed')).toBeTruthy());
-    expect(screen.getByTestId('local-roots-card').textContent).toContain('building its code graph');
-    expect(screen.queryByTestId('local-root-confirm')).toBeNull();
+    expect(card.textContent).toContain('added when this Brain was created');
+    expect(card.textContent).toContain('building its code graph');
+    expect(screen.queryByText('Confirm')).toBeNull();          // nothing to approve
     fireEvent.click(screen.getByTestId('local-root-remove'));
     expect(mockRemoveLocalRoot).toHaveBeenCalledWith('SwarmAI', '/Users/me/code/app');
     await waitFor(() => expect(screen.queryByTestId('local-roots-card')).toBeNull());
   });
 
-  it('a refused Confirm says why and keeps the entry pending', async () => {
-    mockGetLocalRoots.mockResolvedValue([{ path: '/x', state: 'pending', source: 'tech-md', graphBuilt: false }]);
-    mockConfirmLocalRoot.mockRejectedValue({ response: { data: { detail: '/x: not the top of a git work tree' } } });
+  it('a refused Remove says why and keeps the repository listed', async () => {
+    mockGetLocalRoots.mockResolvedValue([{ path: '/x', state: 'confirmed', source: 'agent', graphBuilt: true }]);
+    mockRemoveLocalRoot.mockRejectedValue({ response: { data: { detail: 'managed on the desktop' } } });
     await openBrowse();
-    expect((await screen.findByTestId('local-roots-card')).textContent).toContain("Named in this Brain's TECH.md");
-    fireEvent.click(screen.getByTestId('local-root-confirm'));
+    expect((await screen.findByTestId('local-roots-card')).textContent).toContain('added by the agent');
+    fireEvent.click(screen.getByTestId('local-root-remove'));
     await waitFor(() => expect(screen.getByTestId('local-roots-card').textContent)
-      .toContain('not the top of a git work tree'));
-    expect(screen.getByTestId('local-root-pending')).toBeTruthy();
+      .toContain('managed on the desktop'));
+    expect(screen.getByTestId('local-root')).toBeTruthy();
   });
 
   it('a brain with no local repositories shows no card', async () => {

@@ -133,7 +133,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** get the format (`artifact_cli entry-contract`), then write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** ask the person only about the PRODUCT sections it reports in `ask` (at most 3 questions); every section left without evidence gets a gap. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); PRODUCT, TECH and IMPROVEMENT each hold a typed entry, and every empty PRODUCT section has its gap (content). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
 | **P3b — PROJECT AGENT** ⭐ | **Every brain.** Draft `project-agent.yaml` (next to `bindings.yaml`, section ⑤) with `artifact_cli project-agent-draft` from what this brain now knows — see "Generating the Project Agent" below. The person reviews and confirms it on the Brain Hub review card; they never fill it in. | P6 ⑤ Project Agent check (the same validator the tool uses): reviewed → PASS; a valid draft → PENDING (it waits for the person); missing or invalid → FAIL. |
-| **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph; the reindex job keeps it current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
+| **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph, or `bind --local` reads a local checkout in place and builds its graph in a child; the reindex job keeps both current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
 | **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME> --record` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
 
@@ -245,8 +245,9 @@ From the user's message, determine:
 - **Name**: Short project name (PascalCase preferred, no spaces). If not given, derive from folder name.
 - **Path** (optional): an existing codebase. Classify it first —
   `"$SWARM_BACKEND_BIN" py scripts/artifact_cli.py classify-starter <path>` says GOVERN
-  (a repo: bind it as an asset, P3 — a local path is a valid clone source), DISTILL (one
-  file: read it into entries) or SHELF (a folder of documents: mount it in the Library).
+  (a git work tree, or a folder of them: bind each top in `roots` with `bind --local`,
+  P3 Step 2b — read in place, not cloned), DISTILL (one file: read it into entries) or
+  SHELF (a folder of documents: mount it in the Library).
   The person can change the role.
 
 If the user doesn't provide a name, ask:
@@ -548,24 +549,26 @@ Output is one JSON outcome per binding + a `counts` rollup, e.g.:
   to the pre-Run-2 spike. Declaring them in `bindings.yaml` is fine; PULLing them is not
   yet wired.
 
-#### Step 2b: The user's own checkout (not cloned): propose it, a person confirms it
+#### Step 2b: The user's own checkout (not cloned): read it in place
 
 When the repo already lives on this machine (the user's working checkout, e.g.
-`~/code/app`) and should not be cloned again, propose it as a **local root**:
+`~/code/app`) and should not be cloned again, declare it as a **local root**:
 
 ```bash
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli bind --project <P> --local ~/code/app
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli bind --project <P> --local ~/code/app [--source new-brain]
 ```
 
-- The path must be the top of a git work tree; `$HOME`, SwarmWS (or a directory
-  containing it), anything inside SwarmWS and the bindings directory are refused.
-- The entry is **pending and owns nothing**: no graph is built, nothing is read into the
-  Brain. Tell the person to confirm it on the Brain's **Local repositories** card in
-  Brain Hub. Confirm is the only way a local checkout becomes owned; it starts the graph
-  build in a child process.
-- A path written in TECH.md (`**Local:** `...``) grants nothing: Brain Hub shows it as a
-  pending suggestion to confirm or remove, and a removed one is not suggested again.
-- Never edit `~/.swarm-ai/bindings/local_roots.json` by hand to mark a root confirmed.
+- The path must be the top of a git work tree (`classify-starter` gives the top for a
+  folder inside one). Refused: `$HOME` or a directory containing it, SwarmWS (or a
+  directory containing it), anything inside SwarmWS, the app data directory, the
+  bindings directory, credential locations (`~/.ssh`, `~/.aws`, `~/.config`, …), and a
+  checkout another Brain already reads (the error names it).
+- It is **owned at once**: its code graph is built by a child process (the command
+  returns right away), and the hourly code-intel job keeps it current. Nobody confirms
+  anything. The person sees it on the Brain's **Local repositories** card in Brain Hub
+  and in Need You, and can Remove it there.
+- A path written in TECH.md (`**Local:** `...``) grants nothing.
+- Never edit `~/.swarm-ai/bindings/local_roots.json` by hand.
 
 #### Step 3: Confirm
 

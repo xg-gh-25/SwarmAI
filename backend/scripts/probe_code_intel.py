@@ -1,6 +1,6 @@
 """probe_code_intel — the code graph answers from the repo's current HEAD.
 
-``impact``: a person confirms a local checkout for a Brain, its graph is built, a
+``impact``: a local checkout is declared for a Brain, its graph is built, a
 commit then adds a new caller of a function, and ``impact`` (asked from outside the
 daemon, as an agent asks it) lists that caller without anyone re-indexing — the
 graph is brought up to HEAD when it is read. The negative asks the same question
@@ -30,7 +30,7 @@ def _impact_holds(refresh: bool) -> tuple[bool, str]:
     from core.code_intel import invalidate_cache
     from core.code_intel.build import ensure_graph
     from core.code_intel.impact import impact
-    from core.code_intel.local_roots import confirm, propose
+    from core.code_intel.local_roots import declare
     from jobs.paths import PROJECTS_DIR
 
     with tempdir() as d:
@@ -43,8 +43,7 @@ def _impact_holds(refresh: bool) -> tuple[bool, str]:
         _git(repo, "commit", "-q", "-m", "init")
         project_dir = PROJECTS_DIR / "ProbeBrain"
         project_dir.mkdir(parents=True, exist_ok=True)
-        propose("ProbeBrain", repo)
-        confirm("ProbeBrain", repo)                       # what the Brain Hub card records
+        declare("ProbeBrain", repo)                       # what bind --local records
         invalidate_cache("ProbeBrain")
         built = ensure_graph(project_dir)
         if [r["action"] for r in built] != ["built"]:

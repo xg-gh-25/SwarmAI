@@ -131,8 +131,7 @@ def _make_ddd(
         repo.mkdir(exist_ok=True)
         (repo / "m.py").write_text("def f():\n    return 1\n")
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        local_roots.propose(d.name, repo)
-        local_roots.confirm(d.name, repo)
+        local_roots.declare(d.name, repo)
         graph = GraphStore(local_roots.db_path(repo))
         graph.upsert_nodes([{"id": "m.py::f", "file_path": "m.py", "node_type": "function",
                              "name": "f", "line_start": 1, "line_end": 2, "language": "python"}])

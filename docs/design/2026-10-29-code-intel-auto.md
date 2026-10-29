@@ -2,7 +2,7 @@
 title: "Code intel r4: fully automatic once a Brain has a repo"
 created: 2026-10-29
 updated: 2026-10-29
-status: r2, being built (D3 landed)
+status: r2, being built (D3, D1, D2 landed)
 ---
 
 # Code intel r4: fully automatic once a Brain has a repo
@@ -63,20 +63,21 @@ r3 decision: ownership of a local checkout no longer waits for a person's Confir
   `SWARMAI_MODE` is the desktop daemon (`daemon`) or unset (dev); in any other mode
   `confirmed()` returns `[]` and every write raises. A Hive reads only its bind-managed
   clones.
-- **Visible.** Each root records `source` (`new-brain` / `agent` / `migrated`) and the
-  session or run that declared it. An agent-declared root raises one attention item
-  ("<Brain> now reads <path>. [Remove]"); the Brain Hub card lists every root with
+- **Visible.** Each root records `source` (`new-brain` / `agent` / `migrated`; a label
+  shown on the card, not a privilege — the CLI cannot tell who ran it). Every new root
+  is a Need You REVIEW item for 20 hours (`attention_authority._collect_local_roots`,
+  read-only, the window is the state); the Brain Hub card lists every root with
   Remove. The remove route requires `Content-Type: application/json` and
   `X-Swarm-User-Action` (the `swarm_out_remote` guard, `routers/swarm_out_remote.py`),
   so a web page cannot post it.
 - **Git on an owned root is hardened.** Every git call in `core/code_intel/`
-  (`local_roots.validate`, `freshness._git` and its `merge-base`, `changed._git`,
-  `build`) passes `repo_read.GIT_HARDENING` (no hooks, no fsmonitor, no external diff,
-  explicit bare repos): an owned root is now hit by the hourly job and every review,
-  outside any session.
-- **The build walks what was checked.** The build child calls `confirmed()` itself and
-  walks the real path it returns; it stops if the root's real path changes during the
-  walk.
+  (`local_roots`, `freshness`, `changed`, `build.head_of`, the parser's check-ignore)
+  passes `local_roots.GIT_SAFE` (no hooks, no fsmonitor, explicit bare repos), and a
+  patch diff passes `--no-ext-diff`. (`repo_read.GIT_HARDENING`'s empty
+  `diff.external` makes git try to run "" for a patch, so it is not reused as is.)
+- **The build walks what was checked.** The build child reads `confirmed()` itself
+  (`owned_graphs`), and `rebuild` writes nothing when the root's real path changed
+  while it was parsed.
 
 ### D2. New Brain: a local repo folder is GOVERN, read in place
 

@@ -757,6 +757,67 @@ def _collect_job_digests(workspace_root: Path) -> list[AttentionItem]:
     return items
 
 
+# A local repository a Brain started reading surfaces for this long, then ages out (the
+# window is the state: collect() stays read-only).
+_LOCAL_ROOT_FRESH_HOURS = 20
+
+
+def _collect_local_roots() -> list[AttentionItem]:
+    """A local repository declared in the last ``_LOCAL_ROOT_FRESH_HOURS`` → a REVIEW
+    item for its Brain: it is read at once with no Confirm (design
+    2026-10-29-code-intel-auto D1), so the person is told, once, and can take it
+    back from the Brain Hub card. Read-only; fail-soft."""
+    items: list[AttentionItem] = []
+    try:
+        import json as _json
+        from datetime import datetime, timedelta, timezone
+        from core.code_intel.local_roots import CONFIRMED, local_mode, registry_path
+        if not local_mode():
+            return []
+        path = registry_path()
+        if not path.is_file():
+            return []
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=_LOCAL_ROOT_FRESH_HOURS)
+        for brain, rows in (data.get("projects") or {}).items():
+            for r in rows if isinstance(rows, list) else []:
+                if not isinstance(r, dict) or r.get("state") != CONFIRMED:
+                    continue
+                at_raw = r.get("confirmed_at") or r.get("added_at") or ""
+                try:
+                    at = datetime.fromisoformat(str(at_raw))
+                except ValueError:
+                    continue
+                if at.tzinfo is None:
+                    at = at.replace(tzinfo=timezone.utc)
+                if at < cutoff:
+                    continue
+                root = str(r.get("path") or "")
+                name = Path(root).name or root
+                items.append(AttentionItem(
+                    id=f"local_root:{brain}:{root}",
+                    source="local_root",
+                    tier=TIER_REVIEW,
+                    brain=brain,
+                    title=f"{brain} now reads the repository {name}",
+                    summary=root,
+                    detail=(f"{root} is read into {brain}'s code graph. To stop, remove it "
+                            "on the Brain Hub card (Local repositories)."),
+                    dispatch={
+                        "message": _prompt(
+                            (f"The Brain {brain} now reads the local repository {name}. Tell me "
+                             "in two lines what it is and what reading it gives this Brain; I "
+                             "can remove it in Brain Hub if it should not be read."),
+                            [("path", root), ("added by", str(r.get("source") or "agent"))],
+                        ),
+                        "context": {"kind": "local_root", "brain": brain, "path": root},
+                    },
+                ))
+    except Exception as exc:
+        logger.warning("attention: local_root source failed: %s", exc)
+    return items
+
+
 def _collect_ingestion() -> list[AttentionItem]:
     """Unresolved CDF anomalies, one item per kind; a missing DB is silent."""
     import json
@@ -880,6 +941,7 @@ def collect(
     items += _collect_job_digests(workspace_root)
     items += _collect_db_recovery()  # OS-level (brain=None), like governance
     items += _collect_ingestion()  # OS-level CDF anomalies; missing DB is silent
+    items += _collect_local_roots()  # a repository a Brain started reading
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

@@ -173,3 +173,26 @@ describe('previewSections', () => {
     expect(p.gates && p.refresher && p.knowledge).toBe(true);
   });
 });
+
+describe('remote vs local (design 2026-10-29-code-intel-auto D2)', () => {
+  it('a remote is recognised only at the start of the value', async () => {
+    const { detectKind, isLocalPath } = await import('../newBrainDispatch');
+    expect(detectKind('https://github.com/acme/app')).toBe('repo');
+    expect(detectKind('github.com/acme/app')).toBe('repo');
+    expect(detectKind('git@github.com:acme/app.git')).toBe('repo');
+    expect(detectKind('~/src/github.com/acme/app')).toBe('folder');
+    expect(detectKind('/Users/me/src/github.com/acme/app')).toBe('folder');
+    expect(detectKind('/Users/me/code/app/.git')).toBe('repo');
+    expect(isLocalPath('~/code/app')).toBe(true);
+    expect(isLocalPath('C:\\code\\app')).toBe(true);
+    expect(isLocalPath('https://github.com/acme/app')).toBe(false);
+  });
+
+  it('the manifest binds a local path in place and a URL by cloning', async () => {
+    const { buildBrainManifest } = await import('../newBrainDispatch');
+    const m = buildBrainManifest('Acme', [{ value: '/Users/me/code/app', role: 'GOVERN' }]);
+    expect(m).toContain('--local <path>');
+    expect(m).toContain('--source new-brain');
+  });
+});
+

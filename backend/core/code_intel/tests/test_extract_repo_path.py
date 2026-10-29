@@ -2,8 +2,8 @@
 
 run_19eecc9f: an inline single-format regex (``**Repo Path:**``) matched ZERO of 8 real
 projects. The fix is one PURE helper (patterns + order + first-match, no filesystem I/O).
-A TECH.md path no longer grants ownership; the helper seeds a pending local-root
-suggestion (``local_roots.suggest_from_tech_md``).
+A TECH.md path no longer grants ownership; the install-time migration reads it once
+(``local_roots.migrate_once``).
 
 These tests pin:
   - AC1/AC2: the helper matches every real TECH.md format

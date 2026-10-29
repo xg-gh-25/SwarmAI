@@ -134,6 +134,11 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
     root = Path(repo_root).resolve()
     out = parse_repo_with_coverage(root)
     results = out.results
+    if Path(repo_root).resolve() != root:
+        # the directory was swapped (e.g. for a symlink) while it was read: what was
+        # parsed is not the checked directory, so nothing is written
+        logger.warning("code intel: %s changed while it was read; not written", repo_root)
+        return RebuildResult(empty=True, parse_status="root-changed")
     if not results:
         if graph.get_meta("repo_root") is None:
             graph.set_meta("repo_root", str(root))
@@ -214,7 +219,8 @@ def head_of(repo_root: str | Path) -> str | None:
     """The repo's HEAD commit, read BEFORE a parse (``rebuild``'s contract)."""
     import subprocess
     try:
-        out = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        from core.code_intel.local_roots import GIT_SAFE
+        out = subprocess.run(["git", *GIT_SAFE, "-C", str(repo_root), "rev-parse", "HEAD"],
                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None

@@ -569,8 +569,8 @@ End with: `<!-- user: Your additions below — refresh preserves this section --
 #### 4.6: Code graph analysis (read, never written)
 
 The skill writes no graph file. When the repo is a SwarmAI project's code graph
-(a repo bound with `artifact_cli bind`, or a local checkout proposed with `bind --local`
-and confirmed in Brain Hub), read its
+(a repo bound with `artifact_cli bind`, or a local checkout declared with `bind --local`),
+read its
 analysis, computed from the graph on demand:
 
 ```bash

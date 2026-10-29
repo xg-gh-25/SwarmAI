@@ -348,14 +348,14 @@ export async function confirmProjectAgent(brain: string | null, body: AgentConfi
   return resp.data;
 }
 
-/** A local repository a Brain may read into its code graph (design
- *  2026-10-29-code-intel-unification §0.3): an agent proposes it, a person confirms. */
+/** A local repository a Brain reads into its code graph (design
+ *  2026-10-29-code-intel-auto D1): declared on this machine with `bind --local`
+ *  (an agent, or New Brain through it), owned at once, listed here with a Remove. */
 export interface LocalRoot {
   path: string;
-  state: 'pending' | 'confirmed';
-  source?: string | null;        // 'agent' | 'tech-md'
+  state: 'confirmed';
+  source?: string | null;        // 'agent' | 'new-brain' | 'migrated'
   addedAt?: string | null;
-  confirmedAt?: string | null;
   graphBuilt: boolean;
 }
 
@@ -365,16 +365,28 @@ export async function getLocalRoots(brain: string): Promise<LocalRoot[]> {
   return resp.data.localRoots ?? [];
 }
 
-/** POST …/local-roots/confirm — the person's Confirm; the graph is built in a child. */
-export async function confirmLocalRoot(brain: string, path: string): Promise<LocalRoot[]> {
-  const resp = await api.post<{ localRoots: LocalRoot[] }>(`/ddd/brains/${encodeURIComponent(brain)}/local-roots/confirm`, { path });
+/** POST …/local-roots/remove — stop reading the repository into this Brain. The
+ *  route takes a JSON write from the app only (`X-Swarm-User-Action`). */
+export async function removeLocalRoot(brain: string, path: string): Promise<LocalRoot[]> {
+  const resp = await api.post<{ localRoots: LocalRoot[] }>(
+    `/ddd/brains/${encodeURIComponent(brain)}/local-roots/remove`, { path },
+    { headers: { 'Content-Type': 'application/json', 'X-Swarm-User-Action': 'remove-local-root' } });
   return resp.data.localRoots ?? [];
 }
 
-/** POST …/local-roots/remove — stop reading the repository into this Brain. */
-export async function removeLocalRoot(brain: string, path: string): Promise<LocalRoot[]> {
-  const resp = await api.post<{ localRoots: LocalRoot[] }>(`/ddd/brains/${encodeURIComponent(brain)}/local-roots/remove`, { path });
-  return resp.data.localRoots ?? [];
+/** The role New Brain gives a local path (design 2026-10-29-code-intel-auto D2):
+ *  `roots` are the git work-tree tops to bind with `bind --local` for GOVERN. */
+export interface StarterKind {
+  path: string;
+  role: 'GOVERN' | 'DISTILL' | 'SHELF';
+  why: string;
+  roots: string[];
+}
+
+/** GET /api/ddd/starter-kind?path= — read-only. */
+export async function getStarterKind(path: string): Promise<StarterKind> {
+  const resp = await api.get<StarterKind>('/ddd/starter-kind', { params: { path } });
+  return resp.data;
 }
 
 /** GET /api/ddd/runner-agent — the Runner Agent (null when it is not there). */

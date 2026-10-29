@@ -34,8 +34,16 @@ export interface StarterItem {
 /** The item's TYPE, either supplied by the drop or detected from the value. */
 export type StarterKind = 'repo' | 'folder' | 'file' | 'link' | 'text';
 
-const GIT_URL_RE = /(^git@)|(\.git\/?$)|(github\.com|gitlab\.com|bitbucket\.org)/i;
+// A remote is recognised only at the START of the value (a scheme, git@, or a known
+// host): `~/src/github.com/acme/app` is a local path, not a clone URL.
+const GIT_URL_RE = /^(git@|ssh:\/\/|git:\/\/)|^(https?:\/\/)?(www\.)?(github\.com|gitlab\.com|bitbucket\.org)\//i;
 const URL_RE = /^(https?:\/\/|www\.)/i;
+const LOCAL_PATH_RE = /^([/~]|\.{1,2}[/\\]|[a-zA-Z]:[\\/]|\\\\)/;
+
+/** A value naming a place on this machine (POSIX, ~, ./, a Windows drive or UNC). */
+export function isLocalPath(value: string): boolean {
+  return LOCAL_PATH_RE.test(value.trim());
+}
 // A path that ends in a slash, or is a bare dir name, reads as a folder.
 const FOLDER_RE = /\/$/;
 // Common single-document extensions that DISTILL (read → judgment).
@@ -48,8 +56,8 @@ const DOC_EXT_RE = /\.(md|markdown|txt|pdf|docx?|rtf|html?|csv|json|ya?ml|rst|or
 export function detectKind(value: string): StarterKind {
   const v = value.trim();
   if (GIT_URL_RE.test(v)) return 'repo';
-  // A local .git directory or a path literally ending in .git → a repo.
-  if (/\.git\/?$/.test(v)) return 'repo';
+  // A URL or a local path ending in .git → a repo.
+  if (/\.git\/?$/.test(v) && (URL_RE.test(v) || isLocalPath(v))) return 'repo';
   if (URL_RE.test(v)) return 'link';
   if (FOLDER_RE.test(v)) return 'folder';
   // A local-ish path (POSIX slash/~/./ OR a Windows path: backslash or C:\ drive)
@@ -74,9 +82,10 @@ export function detectKind(value: string): StarterKind {
  *   - single doc file / link / text    → DISTILL (read → becomes judgment)
  *   - folder / anything else           → SHELF   (kept for reference, on-demand)
  *
- * folder defaults to SHELF (safe default — the launcher can't see contents; chat
- * may later suggest DISTILL after reading). The returned role is a DEFAULT the
- * user can override via the pill.
+ * folder defaults to SHELF (safe default — this rule can't see contents). A LOCAL
+ * folder is then refined by the backend (`getStarterKind`): a git work tree, or a
+ * folder of them, becomes GOVERN (design 2026-10-29-code-intel-auto D2). The
+ * returned role is a DEFAULT the user can override via the pill.
  */
 export function classifyStarterItem(input: { value: string; kind?: StarterKind }): StarterRole {
   const kind = input.kind ?? detectKind(input.value);
@@ -151,7 +160,7 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
 
   const order: StarterRole[] = ['GOVERN', 'DISTILL', 'SHELF'];
   const roleNote: Record<StarterRole, string> = {
-    GOVERN: 'GOVERN (the asset the brain manages — bind it, don\'t store as text)',
+    GOVERN: 'GOVERN (the asset the brain manages — bind it, don\'t store as text; a local path is read in place)',
     DISTILL: 'DISTILL (read → distill into the DDD docs; keep a source pointer)',
     SHELF: 'SHELF (keep for reference in the Library, fetch on demand)',
   };
@@ -171,7 +180,9 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
   lines.push(
     'Set it up with me: run the s_project-manager setup (P0 confirm the governed assets, ' +
       'artifact_cli classify-starter for a folder whose role is unclear → P1 create → P3 bind each repo ' +
-      'first, which also surveys it → P2 read the survey and the material whole, write the first typed ' +
+      'first, which also surveys it: a local path with `artifact_cli bind --project <name> --local <path> ' +
+      '--source new-brain` (read in place, owned at once, its graph built in the background), a URL with ' +
+      '`artifact_cli bind` → P2 read the survey and the material whole, write the first typed ' +
       'entries section by section into bootstrap-entries.json, write them with artifact_cli ' +
       'bootstrap-apply (fix what it rejects), ask me only about the PRODUCT sections it reports without ' +
       'evidence (with a "not sure yet" choice) and record the rest as gaps → ' +
@@ -210,7 +221,7 @@ function materialLines(items: StarterItem[], notes: Record<StarterRole, string>)
 export function buildAddKnowledgePrompt(name: string, items: StarterItem[]): string {
   const lines = [`Add knowledge to the "${name.trim()}" Brain (s_project-manager: Add knowledge to an existing Brain).`, '', 'Material:'];
   lines.push(...materialLines(items, {
-    GOVERN: 'GOVERN (a new asset: bind it in bindings.yaml, build the code graph for a repo)',
+    GOVERN: 'GOVERN (a new asset: a local path with `artifact_cli bind --local`, read in place; a URL in bindings.yaml and `artifact_cli bind`)',
     DISTILL: 'DISTILL (read it, then sediment what is worth keeping into PRODUCT/TECH/IMPROVEMENT/PROJECT)',
     SHELF: 'SHELF (mount for reference in the Library; do not copy it into the docs)',
   }));

@@ -1,9 +1,9 @@
 """Local roots: the one ownership declaration for a user's own checkout.
 
-An agent may propose a directory; only a person's Confirm (a Brain Hub endpoint) makes
-it owned, and only an owned repo is parsed into a Brain. Nothing a document says
-grants ownership any more: a TECH.md path is only a pending suggestion, a bindings.yaml
-worktree path counts for nothing (design 2026-10-29-code-intel-unification §0.3).
+A directory declared on this machine (``bind --local``) is owned at once and its graph
+built by a child; Brain Hub lists it with a Remove (design 2026-10-29-code-intel-auto
+D1). Nothing a document says grants ownership: a TECH.md path counts once, in the
+install-time migration; a bindings.yaml worktree path counts for nothing.
 """
 from __future__ import annotations
 
@@ -63,31 +63,6 @@ def test_refused_paths(env):
     assert validate(env["repo"]) == str(env["repo"].resolve())
 
 
-def test_a_proposed_root_owns_nothing_until_a_person_confirms_it(env):
-    from core.code_intel import owned_repo_roots, repo_root_is_owned
-    from core.code_intel.local_roots import confirm, propose
-    entry = propose("Demo", env["repo"])
-    assert entry["state"] == "pending"
-    assert owned_repo_roots(env["project"]) == []
-    assert not repo_root_is_owned(env["project"], str(env["repo"]))
-    confirm("Demo", env["repo"])
-    assert owned_repo_roots(env["project"]) == [str(env["repo"].resolve())]
-    assert repo_root_is_owned(env["project"], str(env["repo"]))
-
-
-def test_a_tech_md_path_is_only_a_suggestion_and_a_removed_one_stays_removed(env):
-    from core.code_intel import owned_repo_roots
-    from core.code_intel.local_roots import entries, remove, suggest_from_tech_md
-    (env["project"] / "TECH.md").write_text(f"# TECH\n\n**Local:** `{env['repo']}`\n",
-                                            encoding="utf-8")
-    assert owned_repo_roots(env["project"]) == []          # the doc grants nothing
-    assert suggest_from_tech_md(env["project"])["state"] == "pending"
-    assert [e["source"] for e in entries("Demo")] == ["tech-md"]
-    assert remove("Demo", env["repo"])
-    assert suggest_from_tech_md(env["project"]) is None     # not suggested again
-    assert entries("Demo") == []
-
-
 def test_a_bindings_worktree_outside_the_root_owns_nothing(env):
     from core.code_intel import owned_graphs, owned_repo_roots
     (env["project"] / "bindings.yaml").write_text(
@@ -99,12 +74,11 @@ def test_a_bindings_worktree_outside_the_root_owns_nothing(env):
     assert owned_graphs(env["project"]) == []
 
 
-def test_a_confirmed_root_gets_a_graph_keyed_by_its_path(env):
+def test_a_declared_root_gets_a_graph_keyed_by_its_path(env):
     from core.code_intel import code_intel_dbs, owned_graphs, project_graph
     from core.code_intel.build import ensure_graph
-    from core.code_intel.local_roots import confirm, db_path, propose
-    propose("Demo", env["repo"])
-    confirm("Demo", env["repo"])
+    from core.code_intel.local_roots import db_path, declare
+    declare("Demo", env["repo"])
     (ref,) = owned_graphs(env["project"])
     assert ref.repo == "app" and ref.db_path == db_path(env["repo"])
     assert code_intel_dbs(env["project"]) == []                # not built yet
@@ -114,50 +88,13 @@ def test_a_confirmed_root_gets_a_graph_keyed_by_its_path(env):
     assert [r["action"] for r in ensure_graph(env["project"])] == ["exists"]
 
 
-def test_bind_local_only_proposes(env, capsys):
-    import scripts.artifact_cli as cli
-    from core.code_intel import owned_repo_roots
-    cli._bind_local("Demo", str(env["repo"]))
-    out = json.loads(capsys.readouterr().out)
-    assert out["local_root"]["state"] == "pending"
-    assert owned_repo_roots(env["project"]) == []
-    with pytest.raises(SystemExit):
-        cli._bind_local("Demo", str(env["home"]))
-
-
-def test_confirm_endpoint_owns_the_root_and_starts_the_build_child(env, monkeypatch):
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    import routers.ddd_brain as mod
-    from core.code_intel import owned_repo_roots
-    from core.code_intel.local_roots import propose
-    started = []
-    monkeypatch.setattr("core.code_intel.build.spawn_build",
-                        lambda project, repo=None, full=False: started.append((project, repo)))
-    monkeypatch.setattr(mod, "_resolve_brain_dir", lambda name: env["project"] if name == "Demo" else None)
-    app = FastAPI()
-    app.include_router(mod.router, prefix="/api/ddd")
-    client = TestClient(app)
-    propose("Demo", env["repo"])
-    rows = client.get("/api/ddd/brains/Demo/local-roots").json()["localRoots"]
-    assert [r["state"] for r in rows] == ["pending"]
-    r = client.post("/api/ddd/brains/Demo/local-roots/confirm", json={"path": str(env["repo"])})
-    assert r.status_code == 200
-    assert owned_repo_roots(env["project"]) == [str(env["repo"].resolve())]
-    assert started == [("Demo", "app")]
-    bad = client.post("/api/ddd/brains/Demo/local-roots/confirm", json={"path": str(env["home"])})
-    assert bad.status_code == 400
-    gone = client.post("/api/ddd/brains/Demo/local-roots/remove", json={"path": str(env["repo"])})
-    assert gone.status_code == 200 and owned_repo_roots(env["project"]) == []
-
-
 def test_an_unreadable_registry_owns_nothing_and_is_not_overwritten(env):
     from core.code_intel import owned_repo_roots
-    from core.code_intel.local_roots import LocalRootError, propose, registry_path
+    from core.code_intel.local_roots import LocalRootError, declare, registry_path
     registry_path().write_text("{not json", encoding="utf-8")
     assert owned_repo_roots(env["project"]) == []
     with pytest.raises(LocalRootError):
-        propose("Demo", env["repo"])
+        declare("Demo", env["repo"])
     assert registry_path().read_text(encoding="utf-8") == "{not json"
 
 
@@ -176,12 +113,11 @@ def test_a_symlink_or_another_case_is_checked_as_the_directory_it_is(env):
         assert validate(swapped) == str(env["repo"].resolve())
 
 
-def test_a_confirmed_root_replaced_by_a_symlink_is_not_followed(env):
+def test_a_declared_root_replaced_by_a_symlink_is_not_followed(env):
     import shutil
     from core.code_intel import owned_repo_roots
-    from core.code_intel.local_roots import confirm, propose
-    propose("Demo", env["repo"])
-    confirm("Demo", env["repo"])
+    from core.code_intel.local_roots import declare
+    declare("Demo", env["repo"])
     shutil.rmtree(env["repo"])
     other = _git_repo(env["home"] / "elsewhere")
     env["repo"].symlink_to(other, target_is_directory=True)
@@ -206,24 +142,10 @@ def _client(env, monkeypatch):
     return TestClient(app)
 
 
-def test_confirm_refuses_a_path_never_proposed_and_refuses_on_a_hive(env, monkeypatch):
-    from core.code_intel import owned_repo_roots
-    from core.code_intel.local_roots import propose
-    monkeypatch.setattr("core.code_intel.build.spawn_build",
-                        lambda *a, **k: pytest.fail("a build started"))
-    client = _client(env, monkeypatch)
-    r = client.post("/api/ddd/brains/Demo/local-roots/confirm", json={"path": str(env["repo"])})
-    assert r.status_code == 400 and "not proposed" in r.json()["detail"]
-    propose("Demo", env["repo"])
-    monkeypatch.setenv("SWARMAI_MODE", "hive")
-    r = client.post("/api/ddd/brains/Demo/local-roots/confirm", json={"path": str(env["repo"])})
-    assert r.status_code == 403
-    assert owned_repo_roots(env["project"]) == []
-
-
-def test_bind_local_files_the_entry_under_the_projects_own_name(env, capsys):
+def test_bind_local_files_the_entry_under_the_projects_own_name(env, capsys, monkeypatch):
     import scripts.artifact_cli as cli
     from core.code_intel.local_roots import entries
+    monkeypatch.setattr("core.code_intel.build.spawn_build", lambda *a, **k: None)
     cli._bind_local("demo", str(env["repo"]))
     assert [e["path"] for e in entries("Demo")] == [str(env["repo"].resolve())]
     assert entries("demo") == []

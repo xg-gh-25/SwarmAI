@@ -23,6 +23,14 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: (...args: unknown[]) => mockOpen(...args),
 }));
 
+// The backend's answer for a local folder (design 2026-10-29-code-intel-auto D2).
+// Default: unreachable, so a folder keeps its by-type role.
+const mockStarterKind = vi.fn();
+vi.mock('../../../services/ddd', async (orig) => ({
+  ...(await orig<typeof import('../../../services/ddd')>()),
+  getStarterKind: (...a: unknown[]) => mockStarterKind(...a),
+}));
+
 // M3: NewBrainOverlay → NewBrainContent (OverlayHost registry). Content renders
 // immediately (host-owned open + fresh mount per open); `close` is now a prop (was
 // useExclusiveOverlay). Helper renders it with a stub close + the given onDispatch.
@@ -44,6 +52,8 @@ beforeEach(() => {
     return 0;
   });
   mockOpen.mockReset();
+  mockStarterKind.mockReset();
+  mockStarterKind.mockRejectedValue(new Error('offline'));
   // The overlay draft store is module-level + process-lived by design (survives
   // unmount so a reopen restores). That crosses test cases, so reset it per test.
   __resetOverlayDraftsForTest();
@@ -282,6 +292,46 @@ describe('NewBrainOverlay', () => {
     expect(await screen.findByText('/Users/me/work/acme-infra')).toBeTruthy();
     expect(roles()).toEqual(['SHELF']);
     expect(mockOpen).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+  });
+
+  it('a picked folder that is a git repository becomes GOVERN, read in place', async () => {
+    mockOpen.mockResolvedValue('/Users/me/code/app/src');
+    mockStarterKind.mockResolvedValue({ path: '/Users/me/code/app/src', role: 'GOVERN',
+      why: 'inside the git work tree', roots: ['/Users/me/code/app'] });
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.click(screen.getByTestId('new-brain-add-folder'));
+    expect(await screen.findByText('/Users/me/code/app')).toBeTruthy();
+    expect(mockStarterKind).toHaveBeenCalledWith('/Users/me/code/app/src');
+    expect(roles()).toEqual(['GOVERN']);
+    expect(screen.queryByText('/Users/me/code/app/src')).toBeNull();   // the top replaces it
+  });
+
+  it('a folder of repositories becomes one GOVERN row per repository', async () => {
+    mockOpen.mockResolvedValue('/Users/me/code');
+    mockStarterKind.mockResolvedValue({ path: '/Users/me/code', role: 'GOVERN', why: 'a folder of 2',
+      roots: ['/Users/me/code/a', '/Users/me/code/b'] });
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.click(screen.getByTestId('new-brain-add-folder'));
+    expect(await screen.findByText('/Users/me/code/b')).toBeTruthy();
+    expect(roles()).toEqual(['GOVERN', 'GOVERN']);
+  });
+
+  it('a role the person picked while the folder was being checked is kept', async () => {
+    let answer: (v: unknown) => void = () => {};
+    mockStarterKind.mockReturnValue(new Promise((r) => { answer = r; }));
+    mockOpen.mockResolvedValue('/Users/me/code/app');
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.click(screen.getByTestId('new-brain-add-folder'));
+    const row = await screen.findByText('/Users/me/code/app');
+    expect(screen.getByText('checking…')).toBeTruthy();
+    const id = row.closest('[data-testid^="new-brain-item-"]')!.getAttribute('data-testid')!.split('-').pop();
+    fireEvent.click(screen.getByTestId(`new-brain-role-${id}-DISTILL`));
+    answer({ path: '/Users/me/code/app', role: 'GOVERN', why: 'top', roots: ['/Users/me/code/app'] });
+    await waitFor(() => expect(screen.queryByText('checking…')).toBeNull());
+    expect(roles()).toEqual(['DISTILL']);
   });
 
   it('AC2: a cancelled picker (open→null) adds nothing and does not crash', async () => {

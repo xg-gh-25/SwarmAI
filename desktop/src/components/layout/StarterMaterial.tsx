@@ -12,13 +12,18 @@
  */
 import { useCallback, useState } from 'react';
 import {
-  classifyStarterItem, detectKind,
+  classifyStarterItem, detectKind, isLocalPath,
   type StarterItem, type StarterKind, type StarterRole,
 } from '../../utils/newBrainDispatch';
+import { getStarterKind } from '../../services/ddd';
 
 export interface MaterialRow extends StarterItem {
   id: number;
   displayKind: string;
+  /** The backend is reading what this local folder is (a repo?). */
+  checking?: boolean;
+  /** The person chose the role: a late backend answer does not change it. */
+  touched?: boolean;
 }
 
 /** The three roles, as a segmented choice on each material row. */
@@ -48,16 +53,46 @@ export function MaterialPicker({
   // Guards against a second native dialog while one is pending (rapid double-click).
   const [picking, setPicking] = useState(false);
 
+  // A local folder (or local .git path) is asked of the backend: a git work tree, or a
+  // folder of them, is GOVERN with one row per repository (design
+  // 2026-10-29-code-intel-auto D2). Until it answers the row shows "checking".
+  const refine = useCallback((id: number, value: string) => {
+    const done = (up: (prev: MaterialRow[], at: number) => MaterialRow[]) =>
+      setItems((prev) => {
+        const at = prev.findIndex((it) => it.id === id);
+        if (at < 0) return prev;
+        if (prev[at].touched) return prev.map((it) => (it.id === id ? { ...it, checking: false } : it));
+        return up(prev, at);
+      });
+    getStarterKind(value)
+      .then((k) => done((prev, at) => {
+        if (k.role === 'GOVERN' && k.roots.length > 0) {
+          const rows = k.roots
+            .filter((r) => !prev.some((it, i) => i !== at && it.value === r))
+            .map((r) => ({ id: ++itemSeq, value: r, kind: 'repo' as StarterKind, role: 'GOVERN' as StarterRole,
+              displayKind: 'repo' }));
+          return [...prev.slice(0, at), ...rows, ...prev.slice(at + 1)];
+        }
+        return prev.map((it) => (it.id === id ? { ...it, role: k.role, checking: false } : it));
+      }))
+      .catch(() => done((prev) => prev.map((it) => (it.id === id ? { ...it, checking: false } : it))));
+  }, [setItems]);
+
   const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
     const value = raw.trim();
     if (!value) return;
+    // decided outside the updater: React may run an updater later, during render
+    const id = ++itemSeq;
+    const kind = kindOverride ?? detectKind(value);
+    const role = classifyStarterItem({ value, kind });
+    const ask = isLocalPath(value) && (kind === 'folder' || kind === 'repo');
     setItems((prev) => {
       if (prev.some((it) => it.value === value)) return prev; // dedupe
-      const kind = kindOverride ?? detectKind(value);
-      const role = classifyStarterItem({ value, kind });
-      return [...prev, { id: ++itemSeq, value, kind, role, displayKind: kind }];
+      return [...prev, { id, value, kind, role, displayKind: kind, checking: ask }];
     });
-  }, [setItems]);
+    // a deduped value has no row with this id: refine then changes nothing
+    if (ask) refine(id, value);
+  }, [setItems, refine]);
 
   const commitDraft = useCallback(() => {
     // Several lines at once: one item per line.
@@ -90,7 +125,7 @@ export function MaterialPicker({
 
   const removeItem = useCallback((id: number) => setItems((prev) => prev.filter((it) => it.id !== id)), [setItems]);
   const setRole = useCallback((id: number, role: StarterRole) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, role } : it)));
+    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, role, touched: true } : it)));
   }, [setItems]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
@@ -174,6 +209,9 @@ export function MaterialPicker({
                 className="flex items-center gap-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg pl-3 pr-1.5 py-1.5">
                 <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{KIND_ICON[it.displayKind] ?? 'description'}</span>
                 <span className="flex-1 min-w-0 text-small break-all" title={it.value}>{it.value}</span>
+                {it.checking && (
+                  <span className="text-meta text-[var(--color-text-muted)] shrink-0" data-testid={`${p}-checking-${it.id}`}>checking…</span>
+                )}
                 <div role="radiogroup" aria-label="Role" className="flex shrink-0 rounded-md border border-[var(--color-border)] overflow-hidden">
                   {ROLES.map((r) => {
                     const on = it.role === r.role;

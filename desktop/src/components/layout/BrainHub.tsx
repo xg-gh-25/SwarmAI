@@ -35,7 +35,7 @@ import {
   useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
   approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
   brainRecall, useBrainSpecs, useBrainSpecDoc,
-  getLocalRoots, confirmLocalRoot, removeLocalRoot, type LocalRoot,
+  getLocalRoots, removeLocalRoot, type LocalRoot,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, GeneralBrain,
@@ -843,10 +843,16 @@ function BrainBrowse(
 }
 
 
-// ── Local repositories (design 2026-10-29-code-intel-unification §0.3) ─────────
-// The decision: "should this Brain read this checkout of mine?" An agent can only
-// propose a repository; it is read into the Brain once the person confirms it here.
-// Nothing renders when the Brain has none.
+// ── Local repositories (design 2026-10-29-code-intel-auto D1) ─────────────────
+// The decision: "should this Brain keep reading this checkout of mine?" A repository
+// declared on this machine is read at once; this card says which ones, who declared
+// them, and lets the person take one back. Nothing renders when the Brain has none.
+
+const ROOT_SOURCE: Record<string, string> = {
+  'new-brain': 'added when this Brain was created',
+  agent: 'added by the agent',
+  migrated: "from this Brain's TECH.md",
+};
 
 function LocalRootsCard({ name }: { name: string }) {
   const [roots, setRoots] = useState<LocalRoot[] | null>(null);
@@ -860,10 +866,10 @@ function LocalRootsCard({ name }: { name: string }) {
     return () => { cancelled = true; };
   }, [name]);
 
-  const act = (path: string, fn: (b: string, p: string) => Promise<LocalRoot[]>) => {
+  const remove = (path: string) => {
     setBusy(path);
     setError(null);
-    fn(name, path)
+    removeLocalRoot(name, path)
       .then((r) => setRoots(r))
       .catch((e: unknown) => {
         const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -877,45 +883,32 @@ function LocalRootsCard({ name }: { name: string }) {
     <div className="mb-3 flex-shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2" style={{ maxWidth: 640 }} data-testid="local-roots-card">
       <div className="text-small mb-1">Local repositories</div>
       {roots.map((r) => (
-        <div key={r.path} className="py-1.5" data-testid={`local-root-${r.state}`}>
+        <div key={r.path} className="py-1.5" data-testid="local-root">
           <div className="flex items-center gap-2">
-            {/* the repo's name first: a path cut at its end would hide what is confirmed */}
+            {/* the repo's name first: a path cut at its end would hide which one it is */}
             <span className="text-small font-medium flex-shrink-0">{r.path.split('/').filter(Boolean).pop() ?? r.path}</span>
             <span className="text-meta text-[var(--color-text-muted)] truncate" style={{ direction: 'rtl', textAlign: 'left' }} title={r.path}>
               {`\u200e${r.path}\u200e`}{/* LRM: keep the path's own order inside rtl */}
             </span>
             <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
-              {r.state === 'pending' ? (
-                <button
-                  data-testid="local-root-confirm"
-                  disabled={busy === r.path}
-                  onClick={() => act(r.path, confirmLocalRoot)}
-                  className="btn-sm btn-primary disabled:opacity-50"
-                >
-                  Confirm
-                </button>
-              ) : (
-                <span className="text-meta text-[var(--color-text-faint)]">
-                  {r.graphBuilt ? 'read into this Brain' : 'building its code graph…'}
-                </span>
-              )}
+              <span className="text-meta text-[var(--color-text-faint)]">
+                {r.graphBuilt ? 'read into this Brain' : 'building its code graph…'}
+              </span>
               <button
                 data-testid="local-root-remove"
                 disabled={busy === r.path}
-                onClick={() => act(r.path, removeLocalRoot)}
+                onClick={() => remove(r.path)}
                 className="btn-sm btn-soft disabled:opacity-50"
               >
                 Remove
               </button>
             </span>
           </div>
-          {r.state === 'pending' && (
-            <div className="text-meta text-[var(--color-text-muted)] mt-0.5">
-              {r.source === 'tech-md' ? 'Named in this Brain\'s TECH.md. ' : 'Proposed by the agent. '}
-              Confirm to read its code structure (symbols, calls, routes) into this Brain;
-              the survey can write what it finds into the Brain&apos;s docs, which travel to a Hive.
-            </div>
-          )}
+          <div className="text-meta text-[var(--color-text-muted)] mt-0.5">
+            {ROOT_SOURCE[r.source ?? ''] ?? 'added on this machine'}. Its code structure (symbols,
+            calls, routes) is read into this Brain; the survey can write what it finds into the
+            Brain&apos;s docs, which travel to a Hive.
+          </div>
         </div>
       ))}
       {error && <div className="text-meta text-amber-500 mt-1">{error}</div>}

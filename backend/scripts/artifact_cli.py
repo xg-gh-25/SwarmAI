@@ -460,7 +460,7 @@ def cmd_bind(args, reg) -> None:
     from core.ddd_bindings import bind_project
 
     if getattr(args, "local", None):
-        _bind_local(args.project, args.local)
+        _bind_local(args.project, args.local, source=getattr(args, "source", "agent"))
         return
     try:
         outcomes = bind_project(args.project)
@@ -495,11 +495,12 @@ def cmd_bind(args, reg) -> None:
         sys.exit(1)
 
 
-def _bind_local(project: str, path: str) -> None:
-    """Propose the user's own checkout *path* as a local root of *project*. It stays
-    pending, and owns nothing, until a person confirms it on the Brain Hub card; then
-    its graph is built (design 2026-10-29-code-intel-unification §0.3)."""
-    from core.code_intel.local_roots import LocalRootError, propose
+def _bind_local(project: str, path: str, *, source: str = "agent") -> None:
+    """Read the user's own checkout *path* into *project* in place: it is owned now
+    (``local_roots.declare``; validated, refused if another Brain reads it) and its
+    graph is built by a detached child, so this returns at once (design
+    2026-10-29-code-intel-auto D1). The Brain Hub card lists it with a Remove."""
+    from core.code_intel.local_roots import LocalRootError, declare
     # The registry is keyed by the project's directory name, the name Brain Hub reads
     projects = _get_workspace() / "Projects"
     names = [d.name for d in projects.iterdir() if d.is_dir()] if projects.is_dir() else []
@@ -509,16 +510,25 @@ def _bind_local(project: str, path: str) -> None:
         sys.exit(1)
     project = match[0]
     try:
-        entry = propose(project, path)
+        entry, added = declare(project, path, source=source)
     except LocalRootError as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
-    state = (entry or {}).get("state")
-    print(json.dumps({"project": project, "local_root": entry,
-                      "next": ("already confirmed" if state == "confirmed" else
-                               "ask the person to confirm it in Brain Hub (the Brain's "
-                               "Local repositories card); until then it is not read")},
-                     indent=2))
+    from core.code_intel import owned_graphs
+    from core.code_intel.build import spawn_build
+    repo = next((ref.repo for ref in owned_graphs(projects / project)
+                 if ref.repo_root is not None and str(ref.repo_root) == entry["path"]), None)
+    building = False
+    if repo is not None:
+        try:
+            spawn_build(project, repo=repo, only_if_stale=True)
+            building = True
+        except OSError as e:
+            print(json.dumps({"warning": f"the graph build could not start: {e}; the "
+                              "hourly code-intel job builds it"}), file=sys.stderr)
+    print(json.dumps({"project": project, "local_root": entry, "added": added,
+                      "graph": "building in a child process" if building else
+                               "built by the hourly code-intel job"}, indent=2))
 
 
 def _summarize_learned(sync: dict) -> dict:
@@ -666,22 +676,18 @@ def cmd_project_agent_draft(args, reg) -> None:
 
 
 def cmd_classify_starter(args, reg) -> None:
-    """Which role a New Brain starter path takes: GOVERN (a repo: an asset to bind),
-    DISTILL (a single file: read it into entries) or SHELF (a folder of documents: mount
-    it for recall). Reuses library_mounts.judge_mount_kind (repo markers); the person
-    can still change the role. Design 2026-10-27 §5.10."""
-    from core.library_mounts import judge_mount_kind
-    path = Path(args.path).expanduser()
-    if path.is_file():
-        role, why = "DISTILL", "a single file"
-    elif not path.is_dir():
-        print(json.dumps({"error": f"no such file or folder: {args.path}"}), file=sys.stderr)
+    """Which role a New Brain starter path takes: GOVERN (a git work tree, or a folder
+    of them: bind each with ``bind --local``), DISTILL (a single file: read it into
+    entries) or SHELF (a folder of documents: mount it for recall). The same answer
+    New Brain shows (``local_roots.classify_starter``); the person can still change
+    the role. Design 2026-10-29-code-intel-auto D2."""
+    from core.code_intel.local_roots import LocalRootError, classify_starter
+    try:
+        out = classify_starter(args.path)
+    except LocalRootError as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(2)
-    elif judge_mount_kind(str(path)) == "code":
-        role, why = "GOVERN", "carries a repo marker (.git, package.json, pyproject.toml, …)"
-    else:
-        role, why = "SHELF", "a folder without a repo marker"
-    print(json.dumps({"path": str(path), "role": role, "why": why}))
+    print(json.dumps(out))
 
 
 def cmd_ddd_skeleton_align(args, reg) -> None:
@@ -890,8 +896,11 @@ def main() -> None:
     p_bind = sub.add_parser("bind", help="PULL: clone + code-intel every binding in a project's bindings.yaml")
     p_bind.add_argument("--project", required=True, help="Project whose bindings.yaml to PULL")
     p_bind.add_argument("--local", default=None, metavar="PATH",
-                        help="propose the user's own checkout PATH as a local root (pending until "
-                             "confirmed in Brain Hub) instead of PULLing bindings.yaml")
+                        help="read the user's own checkout PATH in place: it becomes a local root "
+                             "of the project now and its graph is built by a child process "
+                             "(instead of PULLing bindings.yaml)")
+    p_bind.add_argument("--source", default="agent", choices=("agent", "new-brain"),
+                        help="with --local: who declared it, shown on the Brain Hub card")
 
     # survey (design 2026-10-27 §5.2-§5.3: inventory the owned repos, index their docs in place)
     p_survey = sub.add_parser("survey", help="Survey a project's repos into survey.json and index their docs for recall")

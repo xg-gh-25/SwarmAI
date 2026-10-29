@@ -74,6 +74,15 @@ def reindex_projects(full: bool = False) -> dict:
         return {"status": "skipped", "reason": "no Projects/ directory"}
 
     results: list[dict] = []
+    # once per install: r3's pending roots and legacy TECH.md paths become owned, so
+    # an existing install needs no Confirm (design 2026-10-29-code-intel-auto D1)
+    try:
+        from core.code_intel.local_roots import LocalRootError, migrate_once
+        migrated = migrate_once(projects_dir)
+        if migrated["ran"]:
+            logger.info("code intel: local roots migrated: %s", migrated)
+    except (LocalRootError, OSError) as exc:
+        logger.warning("code intel: local-roots migration failed: %s", exc)
     for project_dir in sorted(projects_dir.iterdir()):
         if not project_dir.is_dir() or not owned_graphs(project_dir):
             continue

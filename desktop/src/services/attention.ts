@@ -20,7 +20,7 @@ import api from './api';
  *  `dispatch.message` = the prompt in their voice (fill or send). */
 export interface AttentionEntry {
   id: string;
-  source: 'escalation' | 'paused_run' | 'cultivation' | 'governance' | 'job' | 'job_digest' | 'db_recovery' | 'ingestion';
+  source: 'escalation' | 'paused_run' | 'cultivation' | 'governance' | 'job' | 'job_digest' | 'db_recovery' | 'ingestion' | 'local_root';
   tier: 'blocking' | 'review';
   /** Owning brain/project, or null for OS-level (governance/job infra). */
   brain: string | null;
@@ -40,6 +40,7 @@ export const ATTENTION_SOURCE_LABEL: Record<AttentionEntry['source'], string> = 
   job_digest: 'Digest',
   db_recovery: 'Data recovery',
   ingestion: 'Cognitive Distillation',
+  local_root: 'Repository',
 };
 
 export interface AttentionResult {

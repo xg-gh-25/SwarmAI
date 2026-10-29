@@ -76,7 +76,10 @@ class Report:
 
 def _git(repo: Path, *args: str) -> str | None:
     try:
-        out = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+        from .local_roots import GIT_SAFE
+        if args and args[0] == "diff":     # never a configured external diff program
+            args = ("diff", "--no-ext-diff", *args[1:])
+        out = subprocess.run(["git", *GIT_SAFE, "-C", str(repo), *args], capture_output=True,
                              text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -244,9 +247,9 @@ def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True) -> Rep
     checkout = main_checkout(repo)
     found = _project_graph_for(checkout) if checkout else None
     if found is None:
-        rep.note = ("this checkout has no code graph (bind the repo, or propose it with "
-                    "`artifact_cli bind --local` and confirm it in Brain Hub): grep the "
-                    "names of the changed functions instead")
+        rep.note = ("this checkout has no code graph (it is not read by any Brain; "
+                    "`artifact_cli bind --local` adds it): grep the names of the changed "
+                    "functions instead")
         return rep
     rep.project, project_dir, ref, graph = found
     rep.graph_repo = ref.repo

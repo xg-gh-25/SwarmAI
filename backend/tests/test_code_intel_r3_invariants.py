@@ -281,22 +281,16 @@ def _product_grep(pattern: str) -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
-def test_only_the_brain_hub_endpoint_confirms_a_local_root():
-    callers = _product_grep(r"local_roots import .*[ ,]confirm([^a-z_]|$)|local_roots\.confirm\(")
-    assert [c.split(":")[0] for c in callers] == ["routers/ddd_brain.py"], callers
+def test_only_bind_local_and_the_job_migration_add_a_local_root():
+    """r4 (design 2026-10-29-code-intel-auto D1): a root is declared by ``bind --local``
+    (the CLI an agent or New Brain runs), plus the job's one-time migration and the
+    probe. No daemon module adds one, and nothing else writes an owned state."""
+    callers = _product_grep(r"local_roots import .*declare|local_roots\.declare\(|migrate_once\(")
+    assert sorted({c.split(":")[0] for c in callers}) == [
+        "jobs/handlers/code_intel_reindex.py", "scripts/artifact_cli.py",
+        "scripts/probe_code_intel.py"], callers
     writes = _product_grep(r"""["']state["'] *[:=] *["']confirmed|local_roots.*CONFIRMED""")
-    assert writes == [], writes
-
-
-def test_propose_never_owns(tmp_path, monkeypatch):
-    from core.code_intel import owned_repo_roots
-    from core.code_intel.local_roots import propose
-    proj = tmp_path / "Projects" / "Demo"
-    proj.mkdir(parents=True)
-    for source in ("agent", "tech-md", "confirmed"):
-        repo = _repo(tmp_path / "code" / source, {"a.py": "x = 1\n"})
-        assert propose("Demo", repo, source=source)["state"] == "pending"
-    assert owned_repo_roots(proj) == []
+    assert [w for w in writes if not w.startswith("core/attention_authority.py")] == [], writes
 
 
 # ── 4. the daemon never parses ───────────────────────────────────────────────

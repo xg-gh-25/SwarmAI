@@ -49,7 +49,7 @@ class CodeIntelDb:
 def owned_graphs(project_dir: str | Path) -> list[CodeIntelDb]:
     """The graph of every repo *project_dir* owns, built or not, in a fixed order.
 
-    The ONE answer to "where is this project's code graph?": first each confirmed
+    The ONE answer to "where is this project's code graph?": first each owned
     local root (``local_roots.confirmed``; its db is keyed by the real path,
     ``local_roots.db_path``), then, in ``bindings.yaml`` order, each bind-managed
     clone with the db ``bind_repo`` builds beside it (``ddd_bindings.binding_db_path``).
@@ -326,14 +326,14 @@ def owned_repo_roots(project_dir) -> list[str]:
     """Every absolute local repo path project *project_dir* OWNS, deduplicated.
 
     Two declarations count, in this order:
-      1. each confirmed local root (``local_roots.confirmed``): the user's own
-         checkout, proposed by an agent and confirmed by a person in Brain Hub;
+      1. each owned local root (``local_roots.confirmed``): the user's own checkout,
+         declared on this machine with ``bind --local``;
       2. each bind-managed clone (``ddd_bindings.binding_worktree``) that exists —
          binding the repo is itself the declaration. The clone is confined to one
          directory under the bindings root.
     Nothing a document says grants ownership: a TECH.md path (written by cultivation,
-    carried by Brain sync) only becomes a pending suggestion
-    (``local_roots.suggest_from_tech_md``), and a free path in bindings.yaml
+    carried by Brain sync) counted once, in the install-time migration
+    (``local_roots.migrate_once``), and a free path in bindings.yaml
     (``bindings[].worktree`` outside the bindings root,
     ``governed_assets[].source_workspace``) counts for nothing: ownership decides what
     gets parsed into this brain (the cross-project contamination run_1950e67e guards
@@ -375,8 +375,8 @@ def owned_repo_roots(project_dir) -> list[str]:
 def _tech_md_repo_root(project_dir) -> str | None:
     """Return the absolute repo path the project's TECH.md declares, or None.
 
-    No longer an ownership declaration: it only seeds a pending local-root suggestion
-    (``local_roots.suggest_from_tech_md``) that a person confirms in Brain Hub. Reads
+    No longer an ownership declaration: the install-time migration
+    (``local_roots.migrate_once``) reads it once, for a Brain with no local root. Reads
     ``extract_repo_path`` over ``ddd_path(project_dir, "TECH.md")``, resolved and
     confirmed to be a real local directory; None when TECH.md declares no local repo
     (e.g. a Brain whose bindings are all Brazil packages, never checked out here).
