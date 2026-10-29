@@ -55,6 +55,7 @@ import argparse
 import json
 import sys
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -190,18 +191,30 @@ def _find_code_intel(project_dir: Path) -> Path | None:
 
 # ── individual checks — each returns (name, status, detail) ──────────────────
 
+# create_project writes this placeholder into aim.json; it says nothing about the Brain
+# (core.swarm_workspace_manager.DEFAULT_AIM_DESCRIPTION — this script stands alone)
+_PLACEHOLDER_DESCRIPTION = re.compile(r"^DDD package for .+ \(six-section canonical structure\)\.$")
+
+
 def _check_identity(d: Path) -> tuple[str, str, str]:
-    """① IDENTITY & MANIFEST: .project.json + aim.json + AGENTS.md present + aim.json valid JSON."""
+    """① IDENTITY & MANIFEST: .project.json + aim.json + AGENTS.md present, aim.json valid
+    JSON with a real ``description`` — one sentence on what the Brain is, which its Brain
+    Hub card and its package show (the create-time placeholder is not one)."""
     required = [".project.json", "aim.json", "AGENTS.md"]
     missing = [f for f in required if not (d / f).exists()]
     if missing:
         return ("① Identity/Manifest", STATUS_FAIL, f"missing manifest(s): {', '.join(missing)}")
     # aim.json must be valid JSON
     try:
-        json.loads((d / "aim.json").read_text(encoding="utf-8"))
+        aim = json.loads((d / "aim.json").read_text(encoding="utf-8"))
     except Exception as e:
         return ("① Identity/Manifest", STATUS_FAIL, f"aim.json invalid JSON: {type(e).__name__}")
-    return ("① Identity/Manifest", STATUS_PASS, "manifests present, aim.json valid")
+    desc = str(aim.get("description") or "").strip() if isinstance(aim, dict) else ""
+    if not desc or _PLACEHOLDER_DESCRIPTION.match(desc):
+        return ("① Identity/Manifest", STATUS_FAIL,
+                "aim.json has no description: write one sentence on what this Brain is and "
+                "for whom (its Brain Hub card shows it)")
+    return ("① Identity/Manifest", STATUS_PASS, "manifests present, aim.json valid, described")
 
 
 import re as _re

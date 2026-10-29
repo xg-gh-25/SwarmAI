@@ -110,6 +110,7 @@ def _make_ddd(
     (d / ".crux_template.md").write_text("template\n")
     if aim is None:
         aim = {"name": name, "ddd_spec_version": "1.0", "plugins": {"native_skills": []}}
+    aim = {"description": f"The {name} test Brain: what it knows, for whom.", **aim}
     (d / "aim.json").write_text(json.dumps(aim))
     # ③ GATES + ④ CAPABILITIES + ⑥ REFRESHER dirs
     (d / "gates").mkdir(exist_ok=True)
@@ -191,6 +192,17 @@ jobs: []
     assert _status_of(report, "code-intel") == "N/A"
     assert report["overall"] == "PASS", report
     assert report["exit_code"] == 0
+
+
+@pytest.mark.parametrize("desc", [None, "", "DDD package for X (six-section canonical structure)."])
+def test_a_brain_without_a_real_description_fails_identity(tmp_path, desc):
+    """The create-time placeholder (or none) tells the Brain Hub card nothing: the setup
+    gate asks for one sentence on what the Brain is."""
+    aim = {"name": "X", "ddd_spec_version": "1.0", "plugins": {"native_skills": []}, "description": desc}
+    d = _make_ddd(tmp_path, "X", bindings_yaml=None, aim=aim)
+    report = gate.verify_project(d)
+    assert _status_of(report, "Identity") == "FAIL", report
+    assert "description" in _detail_of(report, "Identity")
 
 
 def test_pure_knowledge_passes(tmp_path):
