@@ -57,8 +57,9 @@ FULL_REBUILD_FILES = 100
 # objects get no edge; self.x typed by the class's attributes; same-file return
 # annotations; a name-only call named like a builtin method is its own band
 # (design 2026-10-29-code-intel-e2e B). 3: tool caches (.gradle, .cache, .nox,
-# .ruff_cache) are not read.
-PARSER_VERSION = 3
+# .ruff_cache) are not read. 4: a call on a chain through a call (``X.builder().build()``)
+# is a call on a value, not on X.
+PARSER_VERSION = 4
 
 
 def parser_outdated(graph: GraphStore) -> bool:

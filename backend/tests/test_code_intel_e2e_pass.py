@@ -722,3 +722,17 @@ def test_a_gradle_cache_is_not_source_and_not_a_coverage_hole(tmp_path):
     (repo / ".gradle" / "buildOutputCleanup" / "outputFiles.bin").write_bytes(b"\x00\x01")
     out = parse_repo_with_coverage(repo)
     assert not any(h["ref"].startswith(".gradle") for h in out.coverage_holes), out.coverage_holes
+
+
+def test_a_java_builder_chain_is_a_call_on_a_value(tmp_path):
+    from core.code_intel.parser import NAME_ONLY_CONFIDENCE
+    g = _graph(tmp_path, {
+        "src/Factory.java": "public class Factory {\n  public Object build() { return null; }\n}\n",
+        "src/Main.java": ("import com.x.Emf;\npublic class Main {\n  Object f() {\n"
+                          "    return Emf.builder().setA(1).build();\n  }\n}\n"),
+    })
+    try:
+        e = _calls(g, "src/Main.java::Main.f")
+        assert e.get("src/Factory.java::Factory.build", NAME_ONLY_CONFIDENCE) <= NAME_ONLY_CONFIDENCE, e
+    finally:
+        g.close()

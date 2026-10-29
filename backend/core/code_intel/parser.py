@@ -1724,9 +1724,15 @@ def _receiver_of(node):
     return None
 
 
+_ALL_CALL_TYPES = frozenset(t for types in CALL_TYPES.values() for t in types)
+
+
 def _receiver_root(receiver) -> str:
     """The leftmost name of a receiver chain (``os`` of ``os.path``), ``self`` for
-    self/this, "" when it is an expression (``a().b``)."""
+    self/this, "" when it is an expression (``a().b``). A chain through a call
+    (``Config.builder().build()``) is a value the call returned: "", so the call is
+    one on a value, never ``Config``'s own ``build`` (a Java/Ruby call keeps its
+    receiver in a field, and the chain used to walk through it to the class)."""
     r = receiver
     for _ in range(32):
         if r.type in _SELF_TYPES or (r.type in _CALLEE_LEAF_TYPES
@@ -1734,6 +1740,8 @@ def _receiver_root(receiver) -> str:
             return "self"
         if r.type in _CALLEE_LEAF_TYPES:
             return r.text.decode("utf-8", errors="replace")
+        if r.type in _ALL_CALL_TYPES:
+            return ""
         nxt = _receiver_of(r)
         if nxt is None:
             return ""
