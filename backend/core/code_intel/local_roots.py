@@ -134,9 +134,8 @@ def validate(path: str | Path) -> str:
 
 # Git on an owned root runs with no hooks, no fsmonitor, explicit bare repos and no
 # signature program: the hourly job and every review read the root outside any
-# session. ``repo_read.GIT_HARDENING`` minus its empty ``diff.external`` (that makes
-# git try to run "" for a patch); a diff passes ``--no-ext-diff --no-textconv`` instead,
-# and a working-tree diff is not run at all in a repo whose config names a filter
+# session. The same settings as ``repo_read.GIT_HARDENING``; a diff passes
+# ``--no-ext-diff --no-textconv``, and a working-tree diff is not run at all in a repo whose config names a filter
 # program (``changed.filter_programs``: git would run its clean filter on dirty files).
 GIT_SAFE: tuple[str, ...] = (
     "-c", "core.hooksPath=/dev/null",
@@ -425,3 +424,65 @@ def migrate_once(projects_dir: str | Path) -> dict:
         data.setdefault("migrations", {})[MIGRATION_KEY] = _now()
         _write(reg, data)
     return {"ran": True, "promoted": promoted, "added": added}
+
+
+# ── a Hive's task clones (design 2026-10-29-code-intel-e2e F8) ─────────────────
+#
+# On a Hive the agent clones a task's repos under ``<SwarmWS>/Hive/repos/<host>/<path>``
+# (``core.task_repos.repo_dir``), and a pipeline run's worktrees fork from there: that
+# clone is the repo every Hive review reads, and no local root can exist there. A clone
+# at the path a Brain's binding names, whose ``origin`` is that binding's ``clone`` URL,
+# is that Brain's: the Brain's own delivery contract declares the repo, as a bind-managed
+# clone's does on the desktop. Nothing else under ``Hive/repos`` counts, and a desktop
+# never reads this.
+
+
+def hive_mode() -> bool:
+    return os.environ.get("SWARMAI_MODE", "") == "hive"
+
+
+def hive_db_path(root: str | Path) -> Path:
+    real = os.path.realpath(str(root))
+    return _bindings_root() / "hive" / f"{hashlib.sha1(real.encode()).hexdigest()[:16]}.code_intel.db"
+
+
+def hive_task_clones(project_dir: str | Path) -> list[tuple[str, Path]]:
+    """``(repo name, clone)`` for each binding of *project_dir* whose task clone exists
+    on this Hive: at ``task_repos.repo_dir(clone URL)``, inside ``Hive/repos``, the top
+    of its own git work tree, its ``origin`` the binding's URL. [] off a Hive. Never
+    raises."""
+    if not hive_mode():
+        return []
+    out: list[tuple[str, Path]] = []
+    try:
+        from config import get_swarmws
+        from core import task_repos
+        from core.ddd_bindings import load_bindings
+        bindings_file = Path(project_dir) / "bindings.yaml"
+        if not bindings_file.exists():
+            return []
+        repos_root = (Path(get_swarmws()) / Path(*task_repos.REPOS_ROOT)).resolve()
+        for b in load_bindings(bindings_file).bindings:
+            url = (b.clone or "").strip()
+            if not url or b.kind == "internal" or b.delivery_contract.build_system == "brazil":
+                continue
+            try:
+                rel = task_repos.repo_dir(url)
+            except task_repos.TaskRepoError:
+                continue
+            clone = (Path(get_swarmws()) / rel).resolve()
+            if not clone.is_dir() or not task_repos._inside(repos_root, clone) or clone == repos_root:
+                continue
+            if _work_tree_top(clone) != clone:
+                continue
+            try:
+                origin = subprocess.run(["git", *GIT_SAFE, "-C", str(clone), "config", "--get",
+                                         "remote.origin.url"], capture_output=True, text=True,
+                                        timeout=10).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if origin and task_repos._same_repo(task_repos._origin_key(origin), url):
+                out.append((b.repo, clone))
+    except Exception as exc:  # noqa: BLE001 — ownership must never raise into a reader
+        logger.warning("code intel: Hive task clones of %s unreadable: %s", project_dir, exc)
+    return out

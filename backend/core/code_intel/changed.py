@@ -12,6 +12,16 @@ alone (``impact.is_by_name``); those files are listed apart, as a lead, not a ca
 It is deterministic: the same diff and graph give the same report, so a review step can
 run it instead of relying on someone remembering to ask.
 
+What breaks, not only who calls (``core.code_intel.interface``): the base and the new
+version of each changed Python / TS / JS file are compared symbol by symbol. A symbol
+changed only in comments or its docstring is folded into one count and never looked
+up; a removed symbol, a removed or now-required parameter, a dropped ``*args`` /
+``**kwargs`` or a removed field comes first; and each outside call site is checked
+against what the change removed or required — "passes ``dry_run=``, a parameter this
+change removes" — so the definite breaks are named, not left for the reviewer to find
+among the callers. Code files that name a symbol count only when the name is a code
+token (or a mock's dotted path), never a comment or a docstring.
+
     "$SWARM_BACKEND_BIN" py -m core.code_intel.changed --repo <checkout> [--base REF] [--json]
 
 *--repo* is the checkout being reviewed (a session worktree is fine: its graph is the
@@ -22,7 +32,7 @@ is brought up to its repo's HEAD first (``build.ensure_fresh``), unless a caller
 time budget (the pipeline's REVIEW) asks it not to.
 
 Bounded in work, not only in output: at most ``MAX_EXAMINED`` touched symbols are
-looked up (signature changes first), and a caller's *budget_s* stops the lookups when
+looked up (removals and interface changes first), and a caller's *budget_s* stops the lookups when
 it runs out; what was not looked up is counted. Every report appends one line of
 counts to ``<app data>/logs/code_intel_usage.jsonl`` (no code, no path but the repo's
 name; a pipeline's REVIEW adds a line with the repo files its findings and the reports
@@ -53,6 +63,8 @@ MAX_SYMBOLS = 25
 MAX_CALLERS = 12
 MAX_MENTIONS = 8
 MAX_EXAMINED = 80          # touched symbols whose callers are looked up, at most
+MAX_DELTA_FILES = 300      # changed files whose base and new versions are compared
+MAX_PARSED = 40            # files parsed per symbol for call sites / mentions / field reads
 _SYMBOL_TYPES = ("function", "method", "class")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -63,7 +75,10 @@ class Changed:
     name: str
     file: str
     line: int
-    signature: bool                       # the change touches its first lines
+    signature: bool                       # the interface changed (or, for a language
+                                          # without one, the change touches its first lines)
+    delta: str = ""                       # what changed in the interface, in words
+    removed: bool = False
     outside: list[dict] = field(default_factory=list)   # callers not in this change
     inside: list[dict] = field(default_factory=list)    # callers in files it changes
     mentions: list[str] = field(default_factory=list)   # named, no call seen
@@ -71,6 +86,9 @@ class Changed:
     more_mentions: int = 0
     unconfirmed: int = 0    # files outside the change linked to it by the method name alone
     guessed: list[str] = field(default_factory=list)
+    builtin_named: int = 0  # … more such files where the name is a builtin type's method
+    breaking: int = 0       # outside call sites this change breaks (each caller's "breaks")
+    field_reads: list[dict] = field(default_factory=list)   # reads of a removed field
 
 
 @dataclass
@@ -87,6 +105,8 @@ class Report:
     new: int = 0                                    # symbols of files new in this change
     unexamined: int = 0      # touched symbols not looked up (MAX_EXAMINED or the budget)
     unexamined_signature: int = 0   # of those, signature changes
+    comments_only: list[str] = field(default_factory=list)  # changed only in comments
+    breaks: int = 0                  # outside call sites this change breaks
     note: str = ""
 
 
@@ -286,10 +306,13 @@ def _anchored(repo: Path, c: "Changed", files: list[str]) -> set[str]:
     return {f for f in (out or "").splitlines() if f}
 
 
-def _mentions(repo: Path, c: "Changed", skip: set[str]) -> list[str]:
+def _mentions(repo: Path, c: "Changed", skip: set[str], texts: "_Texts") -> list[str]:
     """Code files that name *c* without a call the graph saw: the file contains the
     name as a word AND one of its anchors (``_anchors``), so another module's own
-    ``take`` or ``_now`` does not count. Docs and prose are not code files."""
+    ``take`` or ``_now`` does not count, and — for a language the interface reader
+    knows — the name is a code token or a mock's dotted path, never only a comment or a
+    docstring (``interface.names_in_code``). Docs and prose are not code files."""
+    from .interface import names_in_code
     name = c.name
     if len(name) < 4 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
         return []
@@ -297,8 +320,180 @@ def _mentions(repo: Path, c: "Changed", skip: set[str]) -> list[str]:
     if not anchors:
         return []
     out = _git(repo, "grep", "-l", "-w", "-I", "-e", name, "--", *_code_pathspecs())
-    named = [f for f in (out or "").splitlines() if f and f not in skip]
-    return sorted(_anchored(repo, c, named))
+    named = sorted(_anchored(repo, c, [f for f in (out or "").splitlines() if f and f not in skip]))
+    kept = []
+    for i, f in enumerate(named):
+        if i >= MAX_PARSED:
+            kept.extend(named[i:])           # not read: kept as grep found them
+            break
+        lang, text, tree = texts.get(f)
+        verdict = names_in_code(text or "", lang, name, anchors=anchors + [c.name],
+                                suffix=Path(f).suffix, tree=tree) if text is not None else None
+        if verdict is not False:
+            kept.append(f)
+    return kept
+
+
+class _Texts:
+    """Files read once per report, at one revision (None: the checkout's working
+    tree), with their language and parse tree."""
+
+    def __init__(self, repo: Path, rev: str | None = None):
+        self.repo, self.rev = repo, rev
+        self._cache: dict[str, tuple[str | None, str | None, object]] = {}
+
+    def get(self, rel: str):
+        hit = self._cache.get(rel)
+        if hit is not None:
+            return hit
+        from .interface import _parse
+        from .parser import LANGUAGE_MAP
+        lang = LANGUAGE_MAP.get(Path(rel).suffix)
+        if self.rev is None:
+            try:
+                text = (self.repo / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = None
+        else:
+            text = _git(self.repo, "show", f"{self.rev}:{rel}")
+        tree = _parse(text, lang, Path(rel).suffix) if text is not None and lang else None
+        hit = (lang, text, tree)
+        self._cache[rel] = hit
+        return hit
+
+
+def _deltas(repo: Path, base: str, tree: str | None, files: list[str]) -> dict[str, tuple[dict, dict]]:
+    """Per changed file of a language ``interface`` reads: (base interfaces, new ones)."""
+    from .interface import LANGS, interfaces
+    from .parser import LANGUAGE_MAP
+    out: dict[str, tuple[dict, dict]] = {}
+    for f in files[:MAX_DELTA_FILES]:
+        lang = LANGUAGE_MAP.get(Path(f).suffix)
+        if lang not in LANGS:
+            continue
+        old = _git(repo, "show", f"{base}:{f}")
+        if tree is not None:
+            new = _git(repo, "show", f"{tree}:{f}")
+        else:
+            try:
+                new = (repo / f).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                new = None
+        out[f] = (interfaces(old, lang, Path(f).suffix) if old is not None else {},
+                  interfaces(new, lang, Path(f).suffix) if new is not None else {})
+    return out
+
+
+def _edge_rows(graph, target: str) -> list[tuple[str, int | None, str, float]]:
+    return [(r[0], r[1], r[2], r[3]) for r in graph._conn.execute(
+        "SELECT source_id, line_number, edge_type, confidence FROM code_edges "
+        "WHERE target_id = ?", (target,))]
+
+
+def _to_new_lines(n: int, hunks: list[tuple[int, int, int, int]]) -> list[int]:
+    """Graph-commit line *n* in the reviewed version: the line itself shifted, the new
+    lines of the hunk that rewrote it, or none when the hunk deleted it."""
+    offset = 0
+    for os_, ol, ns, nl in sorted(hunks):
+        if ol == 0:                       # lines inserted after os_
+            if n > os_:
+                offset += nl
+                continue
+            break
+        if n < os_:
+            break
+        if n <= os_ + ol - 1:
+            return list(range(ns, ns + nl))
+        offset += nl - ol
+    return [n + offset]
+
+
+class _Breaks:
+    """Definite breaks of one report: the caller files as the graph saw them (its edge
+    lines) for a caller outside the change, and as the reviewed version has them for a
+    caller in a file the change edits (a call the author left as it was)."""
+
+    def __init__(self, repo: Path, graph, commit: str, tree: str | None, in_change: set[str]):
+        self.repo, self.graph, self.commit, self.tree = repo, graph, commit, tree
+        self.in_change = in_change
+        self.old = _Texts(repo, commit)
+        self.new = _Texts(repo, tree)
+        self._hunks: dict[str, list] = {}
+
+    def _lines_now(self, file: str, line: int) -> list[int]:
+        if file not in self._hunks:
+            diff = _git(self.repo, "diff", "-U0", "--no-renames", "--no-color", self.commit,
+                        *([self.tree] if self.tree else []), "--", file)
+            self._hunks[file] = _hunks(diff or "").get(file, [])
+        return _to_new_lines(line, self._hunks[file])
+
+    def of(self, c: "Changed", d, new_iface) -> dict[str, list[str]]:
+        """Caller id → why its call sites break under *d* (only definite reasons: a
+        removed symbol, a removed keyword, too many positionals, a new required
+        parameter not passed; never a name-only link)."""
+        from .impact import is_by_name
+        from .interface import breaks, call_sites
+        out: dict[str, list[str]] = {}
+        key = c.id.split("::", 1)[-1]
+        is_class = (new_iface is not None and new_iface.kind == "class") or (
+            d.removed and "." not in key and c.name[:1].isupper())
+        is_method = "." in key and not is_class
+        owner = key.split(".")[0] if is_method else None
+
+        def add(src: str, why: str) -> None:
+            out.setdefault(src, [])
+            if why not in out[src]:
+                out[src].append(why)
+
+        for src, line, edge_type, conf in _edge_rows(self.graph, c.id):
+            file = src.split("::", 1)[0]
+            if is_by_name(edge_type, conf) or file == c.file:
+                continue
+            inside = file in self.in_change
+            if d.removed and not inside:
+                add(src, "calls it, and this change removes it" if edge_type == "calls"
+                    else "names it, and this change removes it")
+                continue
+            if line is None:
+                continue
+            texts = self.new if inside else self.old
+            lang, text, tree = texts.get(file)
+            if text is None:
+                continue
+            lines = self._lines_now(file, line) if inside else [line]
+            for n in lines:
+                sites = call_sites(text, lang or "", n, c.name, suffix=Path(file).suffix,
+                                   class_name=owner, tree=tree)
+                if d.removed and edge_type == "calls" and sites:
+                    add(src, f"L{n}: still calls it, and this change removes it")
+                    continue
+                for site in sites:
+                    for why in breaks(d, new_iface, site, is_method=is_method):
+                        add(src, f"L{n}: {why}")
+        return out
+
+
+def _field_reads(graph, repo: Path, c: "Changed", fields: list[str], texts: "_Texts",
+                 in_change: set[str]) -> list[dict]:
+    """Outside code that reads a field *c* (a class) no longer has, by name: files with
+    an edge into the class or its members, or importing its file."""
+    from .interface import reads_attribute
+    rows = graph._conn.execute(
+        "SELECT DISTINCT source_id FROM code_edges WHERE target_id = ? "
+        "OR target_id LIKE ? ESCAPE '\\'",
+        (c.id, c.id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + ".%")).fetchall()
+    files = {r[0].split("::", 1)[0] for r in rows}
+    files |= {r[0] for r in graph._conn.execute(
+        "SELECT DISTINCT src_file FROM code_imports WHERE dst_file = ?", (c.file,))}
+    out: list[dict] = []
+    for f in sorted(files - in_change)[:MAX_PARSED]:
+        lang, text, tree = texts.get(f)
+        if text is None:
+            continue
+        for fld in fields:
+            for line in reads_attribute(text, lang or "", fld, suffix=Path(f).suffix, tree=tree):
+                out.append({"file": f, "line": line, "field": fld})
+    return out
 
 
 def _project_graph_for(checkout: Path, project: str | None = None):
@@ -384,32 +579,100 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
     # A file new in this change: nothing outside it can call what it defines yet.
     new_files = {f for f in {c.file for c in changed}
                  if _git(repo, "cat-file", "-e", f"{base}:{f}") is None}
-    shown: list[Changed] = []
     rep.new = sum(1 for c in changed if c.file in new_files)
-    todo = [c for c in changed if c.file not in new_files]   # signature changes first
-    for i, c in enumerate(todo):
-        if i >= MAX_EXAMINED or (deadline is not None and time.monotonic() > deadline):
-            rep.unexamined = len(todo) - i
-            rep.unexamined_signature = sum(1 for x in todo[i:] if x.signature)
+    from .interface import delta as _delta
+    deltas = _deltas(repo, base, tree, sorted({c.file for c in changed} - new_files))
+    # A class whose fields went away in a method's body (``self.x = …`` removed from
+    # ``__init__``) is not touched in its own first lines: add it, so its readers are
+    # looked up (a removed field is an interface change of the class).
+    have = {c.id for c in changed}
+    for f, (old_ifs, new_ifs) in deltas.items():
+        for key, oi in old_ifs.items():
+            cid = f"{f}::{key}"
+            if oi.kind != "class" or cid in have:
+                continue
+            if _delta(oi, new_ifs.get(key)).removed_fields:
+                row = graph._conn.execute("SELECT name, line_start FROM code_nodes WHERE id = ?",
+                                          (cid,)).fetchone()
+                if row:
+                    changed.append(Changed(id=cid, name=row[0], file=f, line=row[1],
+                                           signature=True))
+                    have.add(cid)
+    plans: list[tuple[int, Changed, object, object]] = []
+    for c in changed:
+        if c.file in new_files:
+            continue
+        d = new_iface = None
+        if c.file in deltas:
+            old_ifs, new_ifs = deltas[c.file]
+            key = c.id.split("::", 1)[-1]
+            if key in old_ifs or key in new_ifs:
+                d, new_iface = _delta(old_ifs.get(key), new_ifs.get(key)), new_ifs.get(key)
+        if d is not None and d.comments_only:
+            rep.comments_only.append(c.id)
+            continue
+        if d is not None:
+            c.signature, c.delta, c.removed = d.interface or d.signature, d.describe(), d.removed
+        rank = (0 if d is not None and d.removed else 1 if d is not None and d.interface
+                else 2 if c.signature else 3)
+        plans.append((rank, c, d, new_iface))
+    plans.sort(key=lambda p: (p[0], p[1].file, p[1].line))  # what can break first
+    texts_w = _Texts(repo, tree)         # the reviewed tree: names and field reads
+    # 1. Every interface change is checked for definite breaks (cheap: the graph's edges
+    #    and the callers' call sites), however large the change; 2. the full listing
+    #    (callers, names, leads) then runs in this order: breaks first, up to the cap.
+    broken_by: dict[str, dict[str, list[str]]] = {}
+    checker = _Breaks(repo, graph, commit, tree, in_change)
+    for rank, c, d, new_iface in plans:
+        if d is None or not d.interface:
+            continue
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        b = checker.of(c, d, new_iface)
+        if b:
+            broken_by[c.id] = b
+    plans.sort(key=lambda p: (-len(broken_by.get(p[1].id, {})), p[0], p[1].file, p[1].line))
+    must = sum(1 for p in plans if p[1].id in broken_by)
+    shown: list[Changed] = []
+    for i, (rank, c, d, new_iface) in enumerate(plans):
+        if i >= max(MAX_EXAMINED, must) or (
+                i >= must and deadline is not None and time.monotonic() > deadline):
+            rep.unexamined = len(plans) - i
+            rep.unexamined_signature = sum(1 for p in plans[i:] if p[0] <= 2)
             break
         found = _callers(graph, [c.id], 1)
-        callers = [{"file": x.file, "symbol": x.symbol, "line": x.line, "how": x.how}
+        broken = broken_by.get(c.id, {})
+        callers = [{"file": x.file, "symbol": x.symbol, "line": x.line, "how": x.how,
+                    "breaks": broken.get(f"{x.file}::"
+                                         f"{'<module>' if x.symbol == '(module level)' else x.symbol}", [])}
                    for x in found if not x.by_name]
-        guessed = sorted({x.file for x in found if x.by_name and x.file not in in_change})
+        guessed = sorted({x.file for x in found if x.by_name and not x.builtin_name
+                          and x.file not in in_change})
         c.unconfirmed, c.guessed = len(guessed), guessed[:MAX_MENTIONS]
+        c.builtin_named = len({x.file for x in found if x.builtin_name and x.file not in in_change})
         outside = [x for x in callers if x["file"] not in in_change]
-        c.inside = [x for x in callers if x["file"] in in_change][:MAX_CALLERS]
-        c.outside, c.more_callers = outside[:MAX_CALLERS], max(0, len(outside) - MAX_CALLERS)
-        mentions = _mentions(repo, c, {x.file for x in found} | in_change)
+        outside.sort(key=lambda x: (not x["breaks"], x["file"], x["line"] or 0))
+        inside = [x for x in callers if x["file"] in in_change]
+        inside.sort(key=lambda x: (not x["breaks"], x["file"], x["line"] or 0))
+        c.breaking = sum(1 for x in outside + inside if x["breaks"])
+        c.inside = inside[:max(MAX_CALLERS, sum(1 for x in inside if x["breaks"]))]
+        cap = max(MAX_CALLERS, c.breaking)            # every break is listed
+        c.outside, c.more_callers = outside[:cap], max(0, len(outside) - cap)
+        if d is not None and d.removed_fields:
+            c.field_reads = _field_reads(graph, repo, c, d.removed_fields, texts_w, in_change)
+        mentions = _mentions(repo, c, {x.file for x in found} | in_change, texts_w)
         c.mentions, c.more_mentions = mentions[:MAX_MENTIONS], max(0, len(mentions) - MAX_MENTIONS)
-        if c.outside or c.mentions or c.unconfirmed:
+        if c.breaking or c.outside or c.mentions or c.unconfirmed or c.field_reads:
             shown.append(c)
         else:
             rep.quiet.append(c.id)
-    # What can break outside this change first: most outside callers, then names.
-    shown.sort(key=lambda c: (-(len(c.outside) + c.more_callers),
-                              -(len(c.mentions) + c.more_mentions), not c.signature, c.file, c.line))
-    rep.symbols, rep.more_symbols = shown[:MAX_SYMBOLS], max(0, len(shown) - MAX_SYMBOLS)
+    rep.breaks = sum(c.breaking for c in shown)
+    # What breaks first, then what can break: most outside callers, then names.
+    shown.sort(key=lambda c: (-c.breaking, not c.removed, not c.signature,
+                              -(len(c.outside) + c.more_callers),
+                              -(len(c.mentions) + c.more_mentions), c.file, c.line))
+    cap = max(MAX_SYMBOLS, sum(1 for c in shown if c.breaking))   # every break is shown
+    rep.symbols, rep.more_symbols = shown[:cap], max(0, len(shown) - cap)
     return rep
 
 
@@ -421,6 +684,7 @@ def listed_files(rep: Report) -> list[str]:
         out.update(x["file"] for x in c.outside)
         out.update(c.mentions)
         out.update(c.guessed)
+        out.update(r["file"] for r in c.field_reads)
     return sorted(out)
 
 
@@ -439,6 +703,7 @@ def _log_usage(rep: Report, caller: str) -> None:
                 + rep.new + rep.unexamined,
                 "with_outside_callers": sum(1 for c in rep.symbols if c.outside),
                 "callers_listed": sum(len(c.outside) for c in rep.symbols),
+                "breaks": rep.breaks, "comments_only": len(rep.comments_only),
                 "name_only_files": sum(c.unconfirmed for c in rep.symbols),
                 "unexamined": rep.unexamined}
         log_usage(line)
@@ -473,10 +738,14 @@ def _cleaned(rep: Report) -> Report:
     rep.graph_repo = _clean(rep.graph_repo) if rep.graph_repo else rep.graph_repo
     rep.files = [_clean(f) for f in rep.files]
     rep.quiet = [_clean(q) for q in rep.quiet]
+    rep.comments_only = [_clean(q) for q in rep.comments_only]
     for c in rep.symbols:
         c.id, c.file = _clean(c.id), _clean(c.file)
         for row in (*c.outside, *c.inside):
             row["file"], row["symbol"] = _clean(row["file"]), _clean(row["symbol"])
+            row["breaks"] = [_clean(b) for b in row.get("breaks", [])]
+        for row in c.field_reads:
+            row["file"], row["field"] = _clean(row["file"]), _clean(row["field"])
         c.mentions = [_clean(m) for m in c.mentions]
         c.guessed = [_clean(g) for g in c.guessed]
     return rep
@@ -491,32 +760,55 @@ def render(rep: Report) -> str:
     where = rep.project + (f" · repo {rep.graph_repo}" if rep.graph_repo else "")
     lines.append(f"Code graph of {where}, indexed at {(rep.indexed_commit or '?')[:9]}"
                  + (f" ({rep.freshness})" if rep.freshness else "") + ".")
-    if not (rep.symbols or rep.quiet or rep.new or rep.unexamined):
+    if not (rep.symbols or rep.quiet or rep.new or rep.unexamined or rep.comments_only):
         lines.append(f"{len(rep.files)} files changed; no function, method or class the "
                      "graph holds is touched.")
         return "\n".join(lines)
+    if rep.breaks:
+        lines.append(f"**{rep.breaks} caller{'s' if rep.breaks != 1 else ''} will break** "
+                     "(listed first under each symbol, with the reason).")
     if not rep.symbols and not rep.unexamined:
         lines.append("No changed function, method or class is called or named outside this change.")
     for c in rep.symbols:
-        what = "signature or first lines changed" if c.signature else "body changed"
+        what = ("removed" if c.removed else f"interface: {c.delta}" if c.delta
+                else "signature or first lines changed" if c.signature else "body changed")
         lines.append(f"- `{c.id}` ({what})")
-        if c.outside:
-            lines.append(f"  - callers outside this change ({len(c.outside) + c.more_callers}):")
+        breaking = [x for x in c.outside if x.get("breaks")]
+        breaking_in = [x for x in c.inside if x.get("breaks")]
+        rest = [x for x in c.outside if not x.get("breaks")]
+        if breaking or breaking_in:
+            lines.append(f"  - will break ({len(breaking) + len(breaking_in)}):")
+            lines += [f"    - {x['file']}: {x['symbol']} — " + "; ".join(x["breaks"])
+                      for x in breaking]
+            lines += [f"    - {x['file']}: {x['symbol']} (a file this change edits) — "
+                      + "; ".join(x["breaks"]) for x in breaking_in]
+        if rest:
+            total = len(rest) + c.more_callers
+            label = "other callers outside this change" if breaking else "callers outside this change"
+            lines.append(f"  - {label} ({total}):")
             lines += [f"    - {x['file']}: {x['symbol']}" + (f" (L{x['line']})" if x["line"] else "")
                       + ("" if x.get("how", "call") == "call" else f" [{x['how']}]")
-                      for x in c.outside]
+                      for x in rest]
             if c.more_callers:
                 lines.append(f"    - … {c.more_callers} more (run `core.code_intel.impact {c.id}`)")
-        else:
+        elif not breaking:
             lines.append("  - no caller outside this change in the graph")
+        if c.field_reads:
+            fields = sorted({r["field"] for r in c.field_reads})
+            lines.append(f"  - reads {', '.join(f'`.{f}`' for f in fields)} (removed here), by "
+                         "name — check the object is this class: "
+                         + ", ".join(f"{r['file']} (L{r['line']})" for r in c.field_reads[:MAX_CALLERS])
+                         + (f" (+{len(c.field_reads) - MAX_CALLERS} more)"
+                            if len(c.field_reads) > MAX_CALLERS else ""))
         if c.unconfirmed:
             more = f" (+{c.unconfirmed - len(c.guessed)} more)" if c.unconfirmed > len(c.guessed) else ""
             lines.append(f"  - linked by the method name alone (a call on a value whose type "
                          f"the code does not state; may be another object's): "
                          + ", ".join(c.guessed) + more)
-        if c.inside:
+        quiet_in = [x for x in c.inside if not x.get("breaks")]
+        if quiet_in:
             lines.append("  - callers inside this change: "
-                         + ", ".join(f"{x['file']}: {x['symbol']}" for x in c.inside))
+                         + ", ".join(f"{x['file']}: {x['symbol']}" for x in quiet_in))
         if c.mentions:
             more = f" (+{c.more_mentions} more)" if c.more_mentions else ""
             lines.append("  - code files that name it with its module or class but no call "
@@ -530,6 +822,11 @@ def render(rep: Report) -> str:
         more = f" (+{len(rep.quiet) - 15} more)" if len(rep.quiet) > 15 else ""
         lines.append(f"- {len(rep.quiet)} more changed symbols have no caller and no mention "
                      f"outside this change: {listed}{more}")
+    if rep.comments_only:
+        listed = ", ".join(f"`{q}`" for q in rep.comments_only[:10])
+        more = f" (+{len(rep.comments_only) - 10} more)" if len(rep.comments_only) > 10 else ""
+        lines.append(f"- {len(rep.comments_only)} changed symbols changed only in comments or "
+                     f"docstrings (not looked up): {listed}{more}")
     if rep.new:
         lines.append(f"- {rep.new} symbols are in files new in this change "
                      "(nothing outside can call them yet)")

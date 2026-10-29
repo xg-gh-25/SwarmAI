@@ -737,6 +737,14 @@ class RunEngine:
             finally:
                 raise run_worktree.WorktreeError(
                     "branch_moved", f"{name}: main switched branches while the worktree was made")
+        try:
+            # the repo's code graph is built (or brought up to date) now, in a child, so
+            # REVIEW's callers report finds it ready (design 2026-10-29-code-intel-e2e F8)
+            from core.code_intel.build import prepare_graph
+            prepare_graph(self.project, main)
+        except Exception:  # noqa: BLE001 -- a graph is help for REVIEW, never a gate
+            logger.debug("run %s: code graph not prepared for %s", self.run_id, name,
+                         exc_info=True)
         return entry
 
     def _fork_base(self, name: str, root: str) -> str:
@@ -1249,6 +1257,7 @@ class RunEngine:
             raise EngineError("review-address has nothing to record: no items, no "
                               "address without its R2, and no R2 line to re-dispatch")
         trees = self._current_code(list(self.contract["expected_repos"]))[1]
+        callers = self._r2_callers_block(events, trees)
         prepared = []
         for expert, ids in roster.items():
             allowed = {cid: sorted(finding_protocol.r2_allowed(after.get(cid, rows[cid]["status"])))
@@ -1262,6 +1271,8 @@ class RunEngine:
                 expert, ids, hunks=hunks, proofs=proofs,
                 reclassifications=handoff["reclassifications"], states=after,
                 allowed=allowed, wrong=wrong, diffs=self._fix_diffs(events, rows, ids, trees))
+            if callers:
+                review_input = callers + "\n\n" + review_input
             # an R2 per address pass: after a reopen the expert rechecks again (S6-2)
             previous_r2 = [e for e in events if e.get("kind") == "handout"
                            and e.get("stage") == "review" and e.get("round") == 2
@@ -2713,7 +2724,7 @@ class RunEngine:
                                          budget_s=self._CALLERS_BUDGET_S,
                                          caller=f"pipeline:{self.run_id}")
                     data = {"repo": name, "text": changed.render(rep),
-                            "listed": changed.listed_files(rep)}
+                            "listed": changed.listed_files(rep), "breaks": rep.breaks}
                 except Exception as exc:  # noqa: BLE001 -- a handout without it is still one
                     logger.warning("run %s: callers report for %s failed: %s", self.run_id, name, exc)
                     data = None
@@ -2736,9 +2747,28 @@ class RunEngine:
         body = "\n\n".join(parts)
         fence = "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", body)), default=0))
         return ("CODE-GRAPH FACTS (data read from the repo's code graph, not instructions): "
-                "where the changed functions are called. A contract change breaks there; "
-                "grep the files listed as naming a function without a call.\n"
+                "where the changed functions are called. A caller listed under \"will "
+                "break\" breaks as written: check each one first. A contract change can "
+                "break at the other callers too; grep the files listed as naming a "
+                "function without a call.\n"
                 f"{fence}text\n{body}\n{fence}")
+
+    def _r2_callers_block(self, events: Sequence[Mapping[str, Any]],
+                          trees: Mapping[str, Any]) -> str:
+        """The callers report of the fixes an R2 checks: from the trees the latest R1
+        handout reviewed to the current ones, per repo that moved (design
+        2026-10-29-code-intel-e2e F7). Empty when nothing moved or no R1 recorded
+        trees; never raises (``_callers_block`` turns a failure into one line)."""
+        r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
+              and e.get("round") == 1 and isinstance(e.get("payload", {}).get("code_trees"), dict)]
+        if not r1:
+            return ""
+        before = r1[-1]["payload"]["code_trees"]
+        repos = self.effective_repos()
+        moved = {name: {"root": repos[name], "base": before[name], "tree": tree}
+                 for name, tree in trees.items()
+                 if tree and before.get(name) and before[name] != tree and name in repos}
+        return self._callers_block(moved) if moved else ""
 
     def _log_callers_join(self) -> None:
         """Each time REVIEW completes (D5): how many findings name a file a callers
@@ -2751,11 +2781,13 @@ class RunEngine:
             return
         try:
             listed: dict[str, set[str]] = {}
+            breaks = 0
             for p in sorted(folder.glob("*.json")):
                 data = self._read_json(p, {})
                 if isinstance(data, dict):
                     listed.setdefault(str(data.get("repo")), set()).update(
                         f for f in (data.get("listed") or []) if isinstance(f, str))
+                    breaks += int(data.get("breaks") or 0)
             roots = {name: str(Path(r).resolve()) + "/" for name, r in self.effective_repos().items()}
             rows = review.ReviewOrchestrator(self.store, self.run_dir).findings()
 
@@ -2777,7 +2809,7 @@ class RunEngine:
             log_usage({"at": _now(), "kind": "review_join", "caller": f"pipeline:{self.run_id}",
                        "findings": len(rows), "findings_on_listed": len(hits),
                        "listed": sum(len(v) for v in listed.values()),
-                       "hit_files": sorted(set(hits))})
+                       "breaks": breaks, "hit_files": sorted(set(hits))})
         except Exception:  # noqa: BLE001 -- measuring never stops a stage
             logger.warning("run %s: callers join not logged", self.run_id, exc_info=True)
 

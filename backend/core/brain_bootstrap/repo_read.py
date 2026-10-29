@@ -58,8 +58,10 @@ GIT_HARDENING: tuple[str, ...] = (
     "-c", "core.fsmonitor=",
     "-c", "safe.bareRepository=explicit",
     "-c", "log.showSignature=false",
-    "-c", "diff.external=",
 )
+# A diff, show or log never runs a configured external diff or textconv program
+# (an empty ``-c diff.external=`` made git try to run "" and fail any patch).
+_NO_DIFF_PROGRAMS = ("--no-ext-diff", "--no-textconv")
 _GIT_TIMEOUT_S = 60
 
 
@@ -142,6 +144,8 @@ def _git_env() -> dict[str, str]:
 def git(root: Path, *args: str, timeout: int = _GIT_TIMEOUT_S) -> str | None:
     """Run ``git <args>`` in *root* with the hardening above. stdout, or None when git
     is missing, fails, or times out. Never raises."""
+    if args and args[0] in ("diff", "show", "log"):
+        args = (args[0], *_NO_DIFF_PROGRAMS, *args[1:])
     cmd = ["git", *GIT_HARDENING, "-C", str(root), *args]
     try:
         out = subprocess.run(cmd, capture_output=True, timeout=timeout, env=_git_env(),

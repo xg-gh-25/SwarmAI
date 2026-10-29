@@ -192,7 +192,9 @@ def _git_toplevel(path: Path) -> Optional[Path]:
     import os
     import subprocess
     try:
-        r = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+        # no hooks, no fsmonitor: the path may be any folder a document names
+        r = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+                            "-C", str(path), "rev-parse", "--show-toplevel"],
                            capture_output=True, text=True, timeout=5,
                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
     except (OSError, subprocess.SubprocessError):

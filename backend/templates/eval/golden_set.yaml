@@ -515,9 +515,9 @@ cases:
   level: tool_call
   title: The callers of a change are right, without anyone re-indexing
   purpose:
-    en: 'The callers report lists a caller added after the build, typed calls and functions passed or patched;
-      an untyped call is only a lead. If this breaks, a change looks safe while a caller breaks.'
-    zh: 每次评审拿到的调用方报告要列出：建图之后新提交加入的调用方、对已声明类型的值的调用、作为值传递或在测试里被 patch 的函数；对类型不明的值的调用只作为线索。坏了意味着改动看起来安全而调用方会坏，或把猜测当成事实。
+    en: 'Each review gets the callers of a change, typed and fresh, and the caller that still passes a removed
+      parameter named as one that will break. If this breaks, a change looks safe while a caller breaks.'
+    zh: 每次评审拿到的调用方报告要列出：建图之后新提交加入的调用方、对已声明类型的值的调用、作为值传递或在测试里被 patch 的函数，并把仍在传已删除参数的调用方标成"会坏"；对类型不明的值的调用只作为线索。坏了意味着改动看起来安全而调用方会坏，或把猜测当成事实。
   verification:
     command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_code_intel impact'
     expected_contains: CI_IMPACT_OK
@@ -530,13 +530,14 @@ cases:
   - backend/core/code_intel/changed.py
   - backend/core/code_intel/graph_store.py
   - backend/core/code_intel/impact.py
+  - backend/core/code_intel/interface.py
   - backend/core/code_intel/local_roots.py
   - backend/core/code_intel/parser.py
   - backend/core/code_intel/receivers.py
   tier: stable
   gating: gate
   eval_method: programmatic
-  validated_by_4gate: d47cc49401a45a86
+  validated_by_4gate: 8c3f85cc97d43dfc
 - id: DDD_SKELETON
   category: ddd
   dimension: cognition

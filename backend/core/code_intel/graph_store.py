@@ -1877,8 +1877,9 @@ class GraphStore:
             return any(d.endswith("/") and cand_file.startswith(d) and "/" not in cand_file[len(d):]
                        for d in imported)
 
-        from .parser import (MEMBER_CALL_CONFIDENCE, NAME_ONLY_CONFIDENCE,
-                             PATH_REFERENCE_CONFIDENCE, TYPED_CALL_CONFIDENCE)
+        from .parser import (BUILTIN_NAME_CONFIDENCE, MEMBER_CALL_CONFIDENCE,
+                             NAME_ONLY_CONFIDENCE, PATH_REFERENCE_CONFIDENCE,
+                             TYPED_CALL_CONFIDENCE)
         sep = qualified_separator
         # "Cls.m" → ids ending in "::Cls.m" (a class member named with its class)
         by_member: dict[str, list[str]] = {}
@@ -2007,7 +2008,9 @@ class GraphStore:
                 # a call on a value (f.Close()) names a method, never a free function,
                 # and is not the caller itself (`self.db.load()` inside Store.load)
                 candidates = [c for c in candidates if c in member_ok and c != source_id]
-            resolved_conf = NAME_ONLY_CONFIDENCE if by_name_only else 0.8
+            resolved_conf = (BUILTIN_NAME_CONFIDENCE if by_name_only and confidence is not None
+                             and confidence <= BUILTIN_NAME_CONFIDENCE + 1e-6
+                             else NAME_ONLY_CONFIDENCE if by_name_only else 0.8)
 
             if len(candidates) == 1:
                 _set(rowid, candidates[0], resolved_conf)

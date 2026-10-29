@@ -1155,7 +1155,8 @@ def _extract_base_names(class_node, language: str) -> list[str]:
 # ── Tree-sitter AST Extraction ──────────────────────────────────────────
 
 def _extract_from_tree(tree, path_str: str, language: str,
-                       import_map: dict, defined_names: set) -> tuple[list[CodeNode], list[CodeEdge]]:
+                       import_map: dict, defined_names: set,
+                       repo_root: Path | None = None) -> tuple[list[CodeNode], list[CodeEdge]]:
     """Walk tree-sitter AST and extract nodes + edges."""
     nodes = []
     edges = []
@@ -1310,10 +1311,11 @@ def _extract_from_tree(tree, path_str: str, language: str,
 
     from . import receivers as _rx
     typed = language in _rx.TYPED_LANGS
-    classes = _rx.class_names(root) if typed else set()
-    known = _rx.known_classes(classes, import_map) if typed else set()
     modules = (_rx.module_aliases(root.text.decode("utf-8", errors="replace"))
                if language == "python" and root.text else {})
+    ft = (_rx.FileTypes(root, language, import_map, defined_names, modules, repo_root)
+          if typed else None)
+    classes = ft.classes if ft is not None else set()
     value_refs: list[CodeEdge] = []
     _seen_value_refs: set[tuple[str, str]] = set()
 
@@ -1422,7 +1424,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 new_func = qn if not is_class else enclosing_func
                 new_scope = scope
                 if typed and not is_class:
-                    new_scope = _rx.scope_of(node, language, known, scope)
+                    new_scope = _rx.scope_of(node, language, ft, scope)
                 for child in node.children:
                     _walk(child, enclosing_func=new_func, enclosing_class=new_class,
                           scope=new_scope)
@@ -1439,10 +1441,8 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
                 cls = recv1 = None
                 if typed:
-                    recv1 = _rx.direct_receiver(node, known)
-                    if recv1:
-                        cls = _rx.receiver_class(recv1, scope, classes, import_map,
-                                                 enclosing_class)
+                    recv1 = _rx.direct_receiver(node, ft.known)
+                    cls = _rx.receiver_type(node, ft, scope, enclosing_class)
                     if language == "python":
                         patched = _rx.patch_reference(
                             node, call_name, path=path_str, classes=classes,
@@ -1462,7 +1462,11 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 module_alias = (recv1 if language == "python" and recv1 in modules
                                 and not (scope is not None and recv1 in scope.bound)
                                 and not cls else None)
-                if module_alias:
+                if cls == _rx.EXTERNAL:
+                    # a member of a literal, a builtin or an outside library's object:
+                    # no repo method is the target (cmd.extend, conn.execute, p.resolve)
+                    target = None
+                elif module_alias:
                     # `m.tool()` with `import pkg.mod as m`: pkg/mod.py's tool, matched
                     # by path only (`os.getcwd()` must not reach a repo's own getcwd)
                     target = f"{modules[module_alias]}{QUALIFIED_SEPARATOR}{call_name}"
@@ -1478,20 +1482,25 @@ def _extract_from_tree(tree, path_str: str, language: str,
                     # A method of a value: bare and method-only (MEMBER_CALL_CONFIDENCE),
                     # never this file's same-named function.
                     target, conf = call_name, MEMBER_CALL_CONFIDENCE
+                    if typed and call_name in _rx.builtin_method_names(language):
+                        # `data.get()` on a value of unknown type: most likely a dict's,
+                        # not the repo's own `get` (kept for reachability, never listed)
+                        conf = BUILTIN_NAME_CONFIDENCE
                 else:
                     target = _resolve_call_target(call_name, path_str, import_map,
                                                  defined_names, enclosing_class)
                     conf = 1.0 if QUALIFIED_SEPARATOR in target else 0.5
-                edges.append(CodeEdge(
-                    source_id=source, target_id=target,
-                    edge_type="calls",
-                    confidence=conf,
-                    line_number=node.start_point[0] + 1,
-                ))
+                if target is not None:
+                    edges.append(CodeEdge(
+                        source_id=source, target_id=target,
+                        edge_type="calls",
+                        confidence=conf,
+                        line_number=node.start_point[0] + 1,
+                    ))
 
         # a lambda / function expression binds its own parameters (and, in TS/JS,
         # its own `this`)
-        child_scope = (_rx.scope_of(node, language, known, scope)
+        child_scope = (_rx.scope_of(node, language, ft, scope)
                        if typed and ntype in _rx.NESTED_SCOPE_TYPES and ntype not in def_types
                        else scope)
         for child in node.children:
@@ -1674,9 +1683,13 @@ MEMBER_CALL_CONFIDENCE = 0.45
 #   function ``getcwd``).
 # - NAME_ONLY_CONFIDENCE: what a call on a value of unknown type (MEMBER_CALL) becomes
 #   once resolved by its name alone; a reader shows it apart from a stated link.
+# - BUILTIN_NAME_CONFIDENCE: a name-only call whose name is also a method of the
+#   language's builtin types (``get``, ``replace``, ``push``): kept so the method is
+#   still reached (dead code), never listed as a caller or a lead.
 TYPED_CALL_CONFIDENCE = 0.9
 PATH_REFERENCE_CONFIDENCE = 0.95
 NAME_ONLY_CONFIDENCE = 0.4
+BUILTIN_NAME_CONFIDENCE = 0.3
 
 
 def _callee_name(fn) -> str | None:
@@ -2287,7 +2300,8 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
         try:
             tree = parser.parse(raw_bytes)
             import_map, defined_names = _build_file_scope_regex(content, lang)
-            nodes, edges = _extract_from_tree(tree, rel_path, lang, import_map, defined_names)
+            nodes, edges = _extract_from_tree(tree, rel_path, lang, import_map, defined_names,
+                                              repo_root=repo_root)
             for n in nodes:
                 n.sha256 = sha
             # Gate-2 F3: "failed" is now REACHABLE. A LIVE tree-sitter that parses this

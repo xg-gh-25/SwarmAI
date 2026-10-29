@@ -255,3 +255,88 @@ def test_the_incremental_review_carries_the_callers_of_what_changed_since(run):
     assert out["incremental"] and out["handouts"], out
     text = _handout_text(out["handouts"][0])
     assert "INCREMENTAL REVIEW" in text and "store.py::save" in text and "api.py: post" in text
+
+
+# ── design 2026-10-29-code-intel-e2e: R2, run start, the outside-callers join ──
+
+def test_an_r2_gets_the_callers_of_the_fixes_since_its_r1(run):
+    from core.run_protocol import git_tree
+    engine, wt, data = run
+    reserved = (f".aidlc/deliverables/{engine.run_id}/",)
+    r1_tree = git_tree.write_tree(str(wt), reserved, {})
+    (wt / "store.py").write_text("def save(y):\n    return y\n")      # the fix renames x
+    now = git_tree.write_tree(str(wt), reserved, {})
+    events = [{"kind": "handout", "stage": "review", "round": 1,
+               "payload": {"expert_id": "correctness", "code_trees": {"repo": r1_tree}}}]
+    text = engine._r2_callers_block(events, {"repo": now})
+    assert "CODE-GRAPH FACTS" in text and "store.py::save" in text and "api.py: post" in text
+    assert engine._r2_callers_block(events, {"repo": r1_tree}) == ""      # nothing moved
+    assert engine._r2_callers_block([], {"repo": now}) == ""              # no R1 trees
+
+
+def test_review_address_puts_the_block_first_in_every_r2(tmp_path, monkeypatch):
+    import json as _json
+    from core.run_protocol.engine import RunEngine
+    from tests.pipeline_v1_rig import Rig
+    monkeypatch.setattr(RunEngine, "_r2_callers_block",
+                        lambda self, events, trees: "CALLERS-OF-THE-FIX")
+    r = Rig(tmp_path / "case", monkeypatch, profile="direct")
+    try:
+        r.CHANGE = {"backend/core/mod.py": "def add(a, b):\n    return b + a\n" + "".join(
+            f"\n\ndef f{i}():\n    return {i}\n" for i in range(15))}
+        r.create()
+        r.drive(until="review")
+        started = r.v1("review-start")
+        finding = {"severity": "HIGH", "kind": "behavior", "file": "backend/core/mod.py",
+                   "line": 2, "claim": "operands swapped", "fix": "restore order"}
+        for i, handout in enumerate(started["handouts"]):
+            r.spawn_reviewer(handout["prompt"], _json.dumps(finding) if i == 0 else "NO FINDINGS",
+                             f"r1-{i}")
+        from core.run_protocol import review
+        engine = r.engine()
+        (row,) = review.ReviewOrchestrator(engine.store, engine.run_dir).findings()
+        r.edit({"backend/core/mod.py": r.CHANGE["backend/core/mod.py"].replace("b + a", "a + b")})
+        r.v1("report-tests", "--artifact", r.artifact("fix", r.report()))
+        out = r.engine().review_address({"pass": 1, "items": [
+            {"finding_id": row["canonical_id"], "hunk": "@@ return a + b",
+             "proof": {"evidence_type": "reported_test",
+                       "command": "python -m pytest backend/tests/test_x.py"}}]})
+        (handout,) = out["handouts"]
+        assert "CALLERS-OF-THE-FIX" in Path(handout["path"]).read_text(encoding="utf-8")
+    finally:
+        r.close()
+
+
+def test_a_run_worktree_asks_for_its_repos_graph(tmp_path, monkeypatch):
+    from core.run_protocol.engine import RunEngine
+    import core.code_intel.build as build
+    asked = []
+    monkeypatch.setattr(build, "prepare_graph", lambda project, root: asked.append(
+        (project, str(root))) or "requested")
+    data, workspace = tmp_path / "data", tmp_path / "workspace"
+    (workspace / "Projects/P").mkdir(parents=True)
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
+    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.py").write_text("X = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    engine = RunEngine.create(data_dir=data, workspace=workspace, project="P", profile="direct",
+                              requirement="r", session_id="s", repos={"repo": str(repo)},
+                              run_id="run_two")
+    engine.ensure_stage_worktrees()
+    assert asked == [("P", str(repo))]
+
+
+def test_the_join_line_carries_the_reports_breaks(run, monkeypatch):
+    engine, wt, data = run
+    from core.run_protocol import review
+    _to_review(engine, wt, "def save():\n    return 1\n")          # post() still passes x
+    engine.review_start()
+    monkeypatch.setattr(review.ReviewOrchestrator, "findings", lambda self, events=None: [])
+    engine._log_callers_join()
+    (join,) = [l for l in _usage(data) if l["kind"] == "review_join"]
+    assert join["breaks"] == 1

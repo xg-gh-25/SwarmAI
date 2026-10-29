@@ -51,7 +51,8 @@ def owned_graphs(project_dir: str | Path) -> list[CodeIntelDb]:
 
     The ONE answer to "where is this project's code graph?": first each owned
     local root (``local_roots.confirmed``; its db is keyed by the real path,
-    ``local_roots.db_path``), then, in ``bindings.yaml`` order, each bind-managed
+    ``local_roots.db_path``), then on a Hive each binding's task clone
+    (``local_roots.hive_task_clones``), then, in ``bindings.yaml`` order, each bind-managed
     clone with the db ``bind_repo`` builds beside it (``ddd_bindings.binding_db_path``).
     Internal / Brazil bindings (never cloned here) and bindings whose worktree lies
     outside the bindings root contribute nothing. Never raises.
@@ -78,6 +79,9 @@ def owned_graphs(project_dir: str | Path) -> list[CodeIntelDb]:
             _add(local_db_path(root), Path(root).name, Path(root))
     except Exception as exc:  # noqa: BLE001 — a bad registry must not break readers
         logger.warning("code_intel: local roots of %s unreadable: %s", project_dir.name, exc)
+    from .local_roots import hive_db_path, hive_task_clones
+    for repo, clone in hive_task_clones(project_dir):   # a Hive: the task clone (F8)
+        _add(hive_db_path(clone), repo, clone)
     bindings_file = project_dir / "bindings.yaml"
     if not bindings_file.exists():
         return out
@@ -325,9 +329,10 @@ def extract_repo_path(content: str) -> str | None:
 def owned_repo_roots(project_dir) -> list[str]:
     """Every absolute local repo path project *project_dir* OWNS, deduplicated.
 
-    Two declarations count, in this order:
+    Three declarations count, in this order:
       1. each owned local root (``local_roots.confirmed``): the user's own checkout,
          declared on this machine with ``bind --local``;
+      1b. on a Hive, each binding's task clone (``local_roots.hive_task_clones``);
       2. each bind-managed clone (``ddd_bindings.binding_worktree``) that exists —
          binding the repo is itself the declaration. The clone is confined to one
          directory under the bindings root.
@@ -353,9 +358,11 @@ def owned_repo_roots(project_dir) -> list[str]:
         if resolved not in out and Path(resolved).is_dir():
             out.append(resolved)
 
-    from .local_roots import confirmed
+    from .local_roots import confirmed, hive_task_clones
     for root in confirmed(Path(project_dir).name):
         _add(root)
+    for _repo, clone in hive_task_clones(project_dir):
+        _add(clone)
     bindings_file = Path(project_dir) / "bindings.yaml"
     if bindings_file.exists():
         try:

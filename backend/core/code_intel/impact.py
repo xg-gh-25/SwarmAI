@@ -45,9 +45,17 @@ class Caller:
     depth: int
     how: str = "call"        # call | reference (named as a value, or patched) | subclass
     by_name: bool = False    # linked by the name alone: a call on a value of unknown type
+    builtin_name: bool = False  # … and the name is a builtin type's method (data.get())
 
 
 _HOW = {"calls": "call", "references": "reference", "extends": "subclass"}
+
+
+def is_builtin_named(edge_type: str, confidence: float) -> bool:
+    """A name-only call whose name is also a builtin type's method
+    (``parser.BUILTIN_NAME_CONFIDENCE``): kept for reachability, not a lead."""
+    from .parser import BUILTIN_NAME_CONFIDENCE
+    return edge_type == "calls" and confidence <= BUILTIN_NAME_CONFIDENCE + 1e-6
 
 
 def is_by_name(edge_type: str, confidence: float) -> bool:
@@ -98,26 +106,28 @@ def _callers(graph: GraphStore, seeds: list[str], depth: int) -> list[Caller]:
     not bring its own callers in at hop 2."""
     seen = set(seeds)
     frontier = set(seeds)
-    found: dict[str, tuple[int, str, bool]] = {}
+    found: dict[str, tuple[int, str, bool, bool]] = {}
     for d in range(1, depth + 1):
-        per: dict[str, tuple[str, bool]] = {}
+        per: dict[str, tuple[str, bool, bool]] = {}
         for src, _dst, edge_type, conf in graph.direct_callers(frontier):
             if src in seen:
                 continue
             how, guess = _HOW.get(edge_type, "call"), is_by_name(edge_type, conf)
+            builtin = guess and is_builtin_named(edge_type, conf)
             prev = per.get(src)
-            if prev is None or (prev[1] and not guess):
-                per[src] = (how, guess)
+            # a stated link beats a guess, a plain guess beats a builtin-named one
+            if prev is None or (prev[1] and not guess) or (prev[2] and guess and not builtin):
+                per[src] = (how, guess, builtin)
         frontier = set()
-        for src, (how, guess) in per.items():
-            found[src] = (d, how, guess)
+        for src, (how, guess, builtin) in per.items():
+            found[src] = (d, how, guess, builtin)
             seen.add(src)
             if not guess:
                 frontier.add(src)
         if not frontier:
             break
     out: list[Caller] = []
-    for nid, (d, how, guess) in found.items():
+    for nid, (d, how, guess, builtin) in found.items():
         row = graph._conn.execute(
             "SELECT file_path, line_start FROM code_nodes WHERE id = ?", (nid,)).fetchone()
         file_path, line = (row[0], row[1]) if row else (nid.split("::", 1)[0], None)
@@ -125,7 +135,7 @@ def _callers(graph: GraphStore, seeds: list[str], depth: int) -> list[Caller]:
         if symbol == "<module>":
             symbol = "(module level)"  # a call outside any function (parser's sentinel)
         out.append(Caller(file=file_path, symbol=symbol, line=line, depth=d, how=how,
-                          by_name=guess))
+                          by_name=guess, builtin_name=builtin))
     out.sort(key=lambda c: (c.depth, c.by_name, c.file, c.line or 0))
     return out
 

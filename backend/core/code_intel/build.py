@@ -53,19 +53,25 @@ FULL_REBUILD_FILES = 100
 # bands, which calls are typed). Bump it with any change to that output: every graph
 # stored with a lower version reads stale and is rebuilt by a child, with no step by
 # a person (design 2026-10-29-code-intel-auto D3). 1: receivers typed, values and
-# patches as references (§0.10).
-PARSER_VERSION = 1
+# patches as references (§0.10). 2: calls on literals, builtins and outside libraries'
+# objects get no edge; self.x typed by the class's attributes; same-file return
+# annotations; a name-only call named like a builtin method is its own band
+# (design 2026-10-29-code-intel-e2e B).
+PARSER_VERSION = 2
 
 
 def parser_outdated(graph: GraphStore) -> bool:
     """The graph holds symbols written by an older parser (no version stored, or a
     lower one). A graph with no symbols is not outdated: there is nothing in it to be
-    wrong, and an empty parse never stamps (it would read stale forever)."""
-    try:
-        stored = int(graph.get_meta("parser_version") or 0)
-    except ValueError:
-        stored = 0
-    if stored >= PARSER_VERSION:
+    wrong, and an empty parse never stamps (it would read stale forever); a graph this
+    parser rebuilt and found nothing in (``empty_parse_version``) is not outdated
+    either."""
+    def _int(key: str) -> int:
+        try:
+            return int(graph.get_meta(key) or 0)
+        except ValueError:
+            return 0
+    if _int("parser_version") >= PARSER_VERSION or _int("empty_parse_version") >= PARSER_VERSION:
         return False
     return graph._conn.execute("SELECT 1 FROM code_nodes LIMIT 1").fetchone() is not None
 
@@ -142,6 +148,10 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
     if not results:
         if graph.get_meta("repo_root") is None:
             graph.set_meta("repo_root", str(root))
+        # this parser found nothing to parse: the graph is left as it was (a transient
+        # empty parse must not wipe it), and it no longer reads outdated, so readers
+        # stop asking for a rebuild every ten minutes (F11)
+        graph.set_meta("empty_parse_version", str(PARSER_VERSION))
         return RebuildResult(empty=True, parse_status=out.status,
                              coverage_holes=out.coverage_holes)
     found = [r for p in results for r in (_file_routes(root, p.file_path) if routes else [])]
@@ -411,6 +421,33 @@ def spawn_child(args: list[str]):
                                 stderr=log, start_new_session=True)
 
 
+def _db_meta(db_path: str | Path, key: str) -> str | None:
+    """One ``graph_meta`` value, read-only (None when missing or unreadable)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"{Path(db_path).as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute("SELECT value FROM graph_meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def _head(root: Path) -> str | None:
+    import subprocess
+    from .local_roots import GIT_SAFE
+    try:
+        out = subprocess.run(["git", *GIT_SAFE, "-C", str(root), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
 def db_parser_outdated(db_path: str | Path) -> bool:
     """``parser_outdated`` for a graph file, read-only (opening a ``GraphStore`` runs
     its schema script). False when the file is missing or unreadable."""
@@ -423,13 +460,14 @@ def db_parser_outdated(db_path: str | Path) -> bool:
     except sqlite3.Error:
         return False
     try:
-        row = conn.execute("SELECT value FROM graph_meta WHERE key = 'parser_version'").fetchone()
-        try:
-            stored = int(row[0]) if row and row[0] else 0
-        except ValueError:
-            stored = 0
-        if stored >= PARSER_VERSION:
-            return False
+        for key in ("parser_version", "empty_parse_version"):
+            row = conn.execute("SELECT value FROM graph_meta WHERE key = ?", (key,)).fetchone()
+            try:
+                stored = int(row[0]) if row and row[0] else 0
+            except ValueError:
+                stored = 0
+            if stored >= PARSER_VERSION:
+                return False
         return conn.execute("SELECT 1 FROM code_nodes LIMIT 1").fetchone() is not None
     except sqlite3.Error:
         return False
@@ -470,6 +508,25 @@ def request_rebuild(project: str, ref) -> bool:
     except OSError:
         pass
     return True
+
+
+def prepare_graph(project: str, repo_root: str | Path) -> str:
+    """Before a review needs it: start a build child for the graph *project* owns of the
+    checkout *repo_root* when it is missing, built by an older parser, or behind its
+    HEAD (at most one child per ``REBUILD_REQUEST_EVERY_S``, as ``request_rebuild``).
+    Returns what it did: ``none`` (not owned), ``current``, ``requested``. Never parses
+    in the caller."""
+    from jobs.paths import PROJECTS_DIR
+    from . import owned_graphs
+    root = Path(repo_root).resolve()
+    for ref in owned_graphs(PROJECTS_DIR / project):
+        if ref.repo_root is None or Path(ref.repo_root).resolve() != root:
+            continue
+        if ref.db_path.exists() and not db_parser_outdated(ref.db_path):
+            if _db_meta(ref.db_path, "last_indexed_commit") == _head(root):
+                return "current"
+        return "requested" if request_rebuild(project, ref) else "none"
+    return "none"
 
 
 @dataclass

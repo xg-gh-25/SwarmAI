@@ -115,8 +115,8 @@ async def get_code_intel_summary(project: str, repo: str | None = None):
     ``git rev-parse`` against its commit marker. 404 when the project has no graph.
     Dead code and modules are not here (``analysis`` computes them): this endpoint is
     read on every Brain Hub open and must stay cheap. A graph an older parser wrote
-    reads "rebuilding": a rebuild child is asked for (at most every ten minutes), so
-    after a deploy that changes the parser nobody has to re-index."""
+    reads "rebuilding", and one behind its repo's HEAD reads "updating": a rebuild
+    child is asked for (at most every ten minutes), so nobody has to re-index."""
     ref, graph = await _found_or_404(project, repo)
 
     def _work() -> CodeIntelSummary:
@@ -129,6 +129,10 @@ async def get_code_intel_summary(project: str, repo: str | None = None):
         else:
             stale, _head = head_stamp(graph)
             status = "unknown" if stale is None else ("stale" if stale else "fresh")
+            if stale:
+                # behind its HEAD: an update child is asked for (the same ten-minute
+                # marker), so the graph is current the next time anyone looks (F10)
+                status = "updating" if request_rebuild(project, ref) else "stale"
         return CodeIntelSummary(
             symbol_count=c["nodes"], edge_count=c["edges"], file_count=c["files"],
             languages=c["languages"], last_indexed_at=c["last_indexed"],

@@ -68,8 +68,10 @@ def test_a_signature_change_lists_its_callers_and_the_files_that_name_it(project
         ("api.py", "call"), ("jobs.py", "reference"), ("test_store.py", "reference")}
     assert c.mentions == []
     text = render(rep)
-    assert "`store.py::save_all` (signature or first lines changed)" in text
-    assert "api.py: post" in text and "jobs.py: start" in text and "[reference]" in text
+    assert "`store.py::save_all` (interface: `strict` now required)" in text
+    # the call does not pass the new required keyword: it breaks, and says why
+    assert "api.py: post — L" in text and "does not pass `strict=`" in text
+    assert "jobs.py: start" in text and "[reference]" in text
 
 
 def test_a_method_body_change_names_the_method_not_its_class(project):
