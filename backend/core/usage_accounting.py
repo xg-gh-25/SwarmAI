@@ -244,7 +244,7 @@ def bedrock_row(usage: Mapping[str, Any], *, model: Optional[str], feature: Opti
 class _Writer:
     """One thread that writes queued rows to ``usage_ledger`` in batches, through its own
     sqlite3 connection (``mode=rw``: it never creates the database file). Callers only
-    enqueue. A batch that fails is retried while the database is busy, then dropped and
+    enqueue. A row with no cost is priced first (core/usage_prices). A batch that fails is retried while the database is busy, then dropped and
     counted; failures are logged at most once a minute."""
 
     MAX_QUEUED = 20_000
@@ -293,9 +293,26 @@ class _Writer:
             for _ in batch:
                 self._q.task_done()
 
+    def _price(self, batch: list[dict[str, Any]]) -> None:
+        """A row with no cost (a direct model call) gets its book cost at the prices the
+        CLI's own rows teach (core/usage_prices); unpriced it stays cost "none"."""
+        if not any(r.get("cost_usd") is None and r.get("model") for r in batch):
+            return
+        try:
+            from core import usage_prices
+            prices = usage_prices.current(self._path())
+            for r in batch:
+                if r.get("cost_usd") is None and r.get("model"):
+                    c = usage_prices.price(prices, r["model"], r)
+                    if c is not None:
+                        r["cost_usd"], r["cost_source"] = c, "priced"
+        except Exception:  # noqa: BLE001 — a row unpriced is still a row
+            logger.debug("usage ledger: pricing skipped", exc_info=True)
+
     def _write(self, batch: list[dict[str, Any]]) -> None:
         import sqlite3
         from database.sqlite import usage_ledger_insert_sql, usage_ledger_values
+        self._price(batch)
         for attempt in range(3):
             try:
                 conn = sqlite3.connect(f"file:{self._path()}?mode=rw", uri=True, timeout=self.BUSY_TIMEOUT_S)
