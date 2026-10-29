@@ -49,7 +49,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 5
+SUMMARY_VERSION = 6
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
