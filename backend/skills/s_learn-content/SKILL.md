@@ -11,12 +11,13 @@ Do not create or update files under `Knowledge/`. CDF is the only governed write
 
 Build one complete `ReferenceUnit`. Use `reference_kind: link` for a URL and include
 `source_url`, a one-sentence standalone `summary`, and a complete `body` explaining
-why the reference matters and when to use it. Submit with the current user event:
+why the reference matters and when to use it. Submit with the current user event
+(`last-user`: the CLI resolves this turn's message):
 
 ```bash
 printf %s '{"kind":"reference","reference_kind":"link","scope":"world","title":"<title>","summary":"<one complete sentence>","body":"<why it matters and when to use it>","source_url":"https://example.com/path","evidence":[]}' | \
   "$SWARM_BACKEND_BIN" ingest submit --source S1 \
-  --evidence "$SWARM_LAST_USER_EVENT_ID" --payload-json - --wait 10
+  --evidence last-user --payload-json - --wait 10
 ```
 
 Relay the CLI echo to the user unchanged. S1 validates that the event is the latest

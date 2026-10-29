@@ -158,12 +158,14 @@ only project tree moves are supported atomically.
 
 Sources never choose a file or edit governed content. Build one complete
 `contracts_v2` unit and bind it to the user message that asked for persistence.
-The current event id is exposed as `SWARM_LAST_USER_EVENT_ID`.
+Pass `--evidence last-user`: the CLI resolves this turn's user message from the
+session. (Never pass `$SWARM_LAST_USER_EVENT_ID`: a reused CLI keeps the id of the turn
+it was started on, which is stale from the second turn on.)
 
 ```bash
 printf %s '{"kind":"cognition","type":"guideline","scope":"world","title":"<complete title>","what":"<complete claim>","how":"<action when applicable>","why":"<why it matters>","applicability":"<trigger>","evidence":[]}' | \
   "$SWARM_BACKEND_BIN" ingest submit --source S1 \
-  --evidence "$SWARM_LAST_USER_EVENT_ID" --payload-json - --wait 10
+  --evidence last-user --payload-json - --wait 10
 ```
 
 The CLI validates that the evidence is the latest user event of this turn and
@@ -176,7 +178,7 @@ means the candidate is visible in Cognitive Distillation Flow, not that it faile
 
 - **Never edit a governed destination directly** — only run `ingest submit`.
 - **Complete claim** — include the conclusion, applicability, and why/how needed to understand it later.
-- **Current evidence** — pass `SWARM_LAST_USER_EVENT_ID`; never cite an older turn.
+- **Current evidence** — pass `--evidence last-user`; never cite an older turn.
 - **No pre-routing** — scope and project context are hints; CDF owns the final destination.
 - **Governance detection** — behavioral governance still follows its explicit promotion path.
 - **Project context** — include the relevant project hint when known; do not invent one.
@@ -184,6 +186,6 @@ means the candidate is visible in Cognitive Distillation Flow, not that it faile
 ## Verification
 
 - [ ] Payload is complete and self-contained.
-- [ ] `--source S1` and `--evidence "$SWARM_LAST_USER_EVENT_ID"` were supplied.
+- [ ] `--source S1` and `--evidence last-user` were supplied.
 - [ ] The CLI echo was relayed to the user unchanged.
 - [ ] No governed file was written directly.

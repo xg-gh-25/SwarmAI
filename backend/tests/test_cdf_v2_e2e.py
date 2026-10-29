@@ -979,3 +979,23 @@ async def test_s2_tool_result_rule_never_reaches_per_turn_files(cdf_env) -> None
     await s2_session.extract_session(SESSION, project_snapshot={"project": "P"},
                                      llm=Extractor([], []))
     assert len(s2_session._input_rows(SESSION)) == before
+
+
+def test_s1_on_a_warm_turn_cites_this_turn_through_last_user(cdf_env, monkeypatch, capsys) -> None:
+    """A reused CLI keeps the SWARM_LAST_USER_EVENT_ID of the turn it was spawned on.
+    `--evidence last-user` (what the skills pass) resolves this turn's message, so the
+    second turn's submit is queued; citing the first turn's id is still stale."""
+    import desktop_main
+
+    first = _record_person_message(cdf_env, "warm-1", "first turn")[0]
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", SESSION)
+    monkeypatch.setenv("SWARM_LAST_USER_EVENT_ID", first)          # frozen at spawn
+    _record_person_message(cdf_env, "warm-2", "Remember: answer in complete sentences.")
+    payload = _cognition("Complete sentences", "Answer in complete sentences.", [])
+    capsys.readouterr()
+    desktop_main.run_ingest(["submit", "--source", "S1", "--payload-json", json.dumps(payload),
+                             "--evidence", "last-user"])
+    assert '"status": "queued"' in capsys.readouterr().out
+    desktop_main.run_ingest(["submit", "--source", "S1", "--payload-json", json.dumps(payload),
+                             "--evidence", os.environ["SWARM_LAST_USER_EVENT_ID"]])
+    assert "s1_stale_evidence" in capsys.readouterr().out

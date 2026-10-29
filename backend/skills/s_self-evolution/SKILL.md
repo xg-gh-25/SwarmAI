@@ -76,7 +76,7 @@ proposal eligible.
 Never edit EVOLUTION.md: Cognitive Distillation Flow's writer is its only writer.
 - A correction the user just made (CAPTURE), or a status change the user just approved
   (promoted / retired), is submitted as one complete unit bound to that user message:
-  `"$SWARM_BACKEND_BIN" ingest submit --source S1 --evidence "$SWARM_LAST_USER_EVENT_ID"
+  `"$SWARM_BACKEND_BIN" ingest submit --source S1 --evidence last-user
   --payload-json -` with `"kind":"cognition"`, `"scope":"agent"` and `"type":"correction"`
   (bias tag in the title). A status change is a new unit that names the entry it updates;
   CDF links it with `supersedes`, the old text stays.
