@@ -748,30 +748,6 @@ body {
   border-color: color-mix(in srgb, var(--ac) 32%, var(--nav-key-border));
 }
 .a10-card--hilite .a10-chip { color: var(--ac); }
-/* New Brain — secondary action row: small solid + box + green text, no outer frame */
-.a10-newbrain {
-  border: 1px solid transparent;
-  background: none;
-  color: var(--ac);
-  cursor: pointer;
-}
-.a10-newbrain:hover {
-  background: color-mix(in srgb, var(--ac) 12%, transparent);
-}
-/* Active — the launcher overlay is open (parity with A10Card active highlight,
-   since New Brain is a bespoke button, not an A10Card — its `isActive` is inert). */
-.a10-newbrain--active {
-  background: color-mix(in srgb, var(--ac) 16%, transparent);
-  border-color: color-mix(in srgb, var(--ac) 45%, transparent);
-}
-.a10-newbrain .a10-plus {
-  color: var(--color-brand-ink);
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--ac) 80%, white),
-    var(--ac));
-  box-shadow: 0 1px 5px color-mix(in srgb, var(--ac) 35%, transparent),
-    0 1px 0 rgba(255, 255, 255, 0.25) inset;
-}
 
 /* Chat sheet — the chat column (MainChatPanel <main>) sits on the chrome base layer:
    6px in from the top, right and bottom, flush to the Nav on the left, rounded, with

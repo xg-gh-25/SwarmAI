@@ -65,14 +65,13 @@ function renderSidebar() {
 
 afterEach(() => cleanup());
 
-// Render order (run_b57266d2): Cognition zone first (Context/Memory/Brain Hub +
-// New Brain), then Work, then System. Cognition is a green PANEL (no group label),
+// Render order (run_b57266d2): Cognition zone first (Context/Library/Brain Hub; New
+// Brain opens from Brain Hub), then Work, then System. Cognition is a green PANEL (no group label),
 // so it is NOT a navgroup-label — only Work + System carry labels now.
 const DOMAIN_ORDER = [
   'nav-context',
   'nav-library',   // cognition zone: the bookshelf, above Brain Hub (XG 2026-08-02)
   'nav-brain-hub',
-  'nav-new-brain',
   // Work order (XG 2026-10-23): ToDo, Pipeline, Pollinate, Workspace, Community.
   // NOTE: no 'nav-canvas' — Canvas is output-triggered (auto-surface / chat file-chip
   // / agent command), not a nav card (run_990b0a03).
@@ -155,7 +154,7 @@ describe('LeftSidebar A10 — cognition zone + groups + domain order', () => {
     expect(screen.getByTestId('cognition-zone')).toBeInTheDocument();
     // Context (C&M)/Brain Hub live inside it. (Memory folded into the C&M overlay as a tab — no standalone nav card.)
     const zone = screen.getByTestId('cognition-zone');
-    ['nav-context', 'nav-brain-hub', 'nav-library', 'nav-new-brain'].forEach((id) =>
+    ['nav-context', 'nav-brain-hub', 'nav-library'].forEach((id) =>
       expect(within(zone).getByTestId(id)).toBeInTheDocument(),
     );
   });

@@ -1081,8 +1081,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * in exactly this order: Skills, MCP Servers, with no items missing or duplicated.
    */
   describe('Feature: left-navigation-redesign, Property 1: Navigation Item Order Consistency', () => {
-    // Exact DOM order of the DOMAIN cards (excludes nav-new-brain, a distinct
-    // .a10-newbrain create-affordance). Cognition (Context/Memory/Brain Hub) →
+    // Exact DOM order of the domain cards. Cognition (Context/Library/Brain Hub) →
     // Work (ToDo/Workspace/Pipeline/Pollinate — daily-common pair first, A4) →
     // System. "Workspace" is the de-jargoned label for the SwarmWS card.
     // Terminal + GitHub live in the footer, OUTSIDE the nav container.
@@ -1124,12 +1123,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
         };
       }
 
-      // Get all DOMAIN cards in DOM order. nav-new-brain matches the nav-* prefix
-      // but is a "+ New Brain" create-affordance (.a10-newbrain), NOT a domain
-      // card — exclude it so the order aligns with expectedNavOrder (domain cards
-      // only). (Repairs pre-existing drift: a prior session added new-brain +
-      // nav-todo without syncing this selector.)
-      const navButtons = navContainer.querySelectorAll('button[data-testid^="nav-"]:not([data-testid="nav-new-brain"])');
+      // Get all domain cards in DOM order (New Brain opens from Brain Hub: no nav card)
+      const navButtons = navContainer.querySelectorAll('button[data-testid^="nav-"]');
       const foundTestIds = Array.from(navButtons).map(btn => btn.getAttribute('data-testid'));
 
       // Check all expected items are present
@@ -2077,9 +2072,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           );
 
           const navContainer = document.querySelector('[data-testid="nav-icons"]');
-          // Exclude nav-new-brain: a .a10-newbrain create-affordance, not a
-          // domain .a10-card (matches the nav-* prefix but is a distinct control).
-          const navButtons = navContainer?.querySelectorAll('button[data-testid^="nav-"]:not([data-testid="nav-new-brain"])') ?? [];
+          const navButtons = navContainer?.querySelectorAll('button[data-testid^="nav-"]') ?? [];
           expect(navButtons.length).toBeGreaterThanOrEqual(2);
           for (const btn of Array.from(navButtons)) {
             expect(btn.classList.contains('a10-card')).toBe(true);

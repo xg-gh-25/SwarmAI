@@ -351,24 +351,6 @@ function LeftSidebar() {
           <A10Card navId="context" onPrefetch={() => prefetch('context')} icon="layers" isActive={newActiveOverlay === 'context'} onClick={() => activateNav('context')} data-testid="nav-context" />
           <A10Card navId="library" onPrefetch={() => prefetch('library')} icon="menu_book" isActive={newActiveOverlay === 'library'} onClick={() => activateNav('library')} data-testid="nav-library" />
           <A10Card navId="brain-hub" onPrefetch={() => prefetch('brain-hub')} icon="hub" highlight isActive={newActiveOverlay === 'brain-hub'} onClick={() => activateNav('brain-hub')} data-testid="nav-brain-hub" />
-          <button
-            className={`a10-newbrain w-full flex items-center gap-2.5 rounded-[10px] py-1.5 pl-3 pr-2.5 transition-colors${newActiveOverlay === 'new-brain' ? ' a10-newbrain--active' : ''}`}
-            style={{ '--ac': ZONE_TINT.cognitive } as CSSProperties}
-            aria-pressed={newActiveOverlay === 'new-brain'}
-            // Raw button (not A10Card) — the host re-derives this card's rect from its
-            // data-nav-id for the cognition-green spout.
-            onClick={() => activateNav('new-brain')}
-            onMouseEnter={() => prefetch('new-brain')}
-            onFocus={() => prefetch('new-brain')}
-            title="New Brain — 建一个新大脑"
-            data-testid="nav-new-brain"
-            data-nav-id="new-brain"
-          >
-            <span className="a10-plus flex-shrink-0 w-[22px] h-[22px] rounded-[7px] flex items-center justify-center">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-            </span>
-            <span className="flex-1 text-left text-small font-semibold whitespace-nowrap">{NAV['new-brain'].navLabel}</span>
-          </button>
         </div>
 
         {/* WORK zone order (XG 2026-10-23): ToDo, Pipeline, Pollinate, Workspace,

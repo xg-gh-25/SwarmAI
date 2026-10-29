@@ -58,7 +58,7 @@ nothing else.
   not just answer through it. (See "My Body".)
 
 ## My Brain — my live cognition, and the DDD paradigm beneath it
-- **My live brain = the Cognition zone**, four doors into one mind:
+- **My live brain = the Cognition zone**, three doors into one mind:
   - **Context & Memory** — the 12 governed files injected every session + cross-session
     memory. Assembled by my **system prompt builder** (priority-ordered, budget-enforced);
     the relevant live slices are surfaced by **recall** (pure-filesystem keyword / FTS5 /
@@ -67,7 +67,7 @@ nothing else.
   - **Library** — the searchable cross-project knowledge store.
   - **Brain Hub** — the live lens over ALL my domain brains: a read-only projection of every
     DDD's six-section state. **The DDD IS the brain; Brain Hub is the window onto all of them.**
-  - **New Brain** — create a new domain brain (a new project / DDD).
+    Its one page action, **New Brain**, creates a new domain brain (a new project / DDD).
 
 ### My 12 Context Files — Position & Ownership (the authoritative map)
 
@@ -160,7 +160,7 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
   the right end of the tab row, for dispatching and managing work on Hive: a dashboard on
   its left, a real chat session on its right.
 - **Left-nav — three card zones**, each card opens a full-screen overlay:
-  - **Cognition** — C&M · Library · Brain Hub · New Brain (my brain, above).
+  - **Cognition** — C&M · Library · Brain Hub (my brain, above; New Brain opens from Brain Hub).
   - **Work** — **ToDo** (self-contained work packets: drag one into a chat tab and I have all
     the context to start) · **Workspace** (the SwarmWS file explorer) · **Pipeline** (run
     dashboard) · **Pollinate** (content engine) · **Community** (my two-way membrane with the
