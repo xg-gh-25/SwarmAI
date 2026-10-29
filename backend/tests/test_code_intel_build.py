@@ -81,6 +81,38 @@ class TestRebuild:
         finally:
             g.close()
 
+    def test_a_repo_with_no_parseable_source_records_why(self, tmp_path):
+        """A graph that never had a node says why: the language no parser reads."""
+        import json
+        from core.code_intel.build import rebuild
+        repo = _repo(tmp_path / "r", {"model/main.smithy": "service S {}\n"})
+        g = GraphStore(tmp_path / "g.db")
+        try:
+            assert rebuild(g, repo, head="h").empty is True
+            holes = json.loads(g.get_meta("coverage_holes") or "[]")
+            assert g.get_meta("parse_status") == "partial"
+            assert any(h["ref"] == "model/main.smithy" for h in holes), holes
+            assert g.get_meta("coverage_commit") == "h"
+        finally:
+            g.close()
+
+    def test_an_empty_parse_keeps_the_coverage_of_a_graph_with_nodes(self, tmp_path):
+        from core.code_intel.build import rebuild
+        repo = _repo(tmp_path / "r", {"a.py": "def a():\n    return 1\n"})
+        g = GraphStore(tmp_path / "g.db")
+        try:
+            rebuild(g, repo, head="old")
+            before = (g.get_meta("parse_status"), g.get_meta("coverage_holes"))
+            from core.code_intel.parser import ParseRepoResult
+            hole = {"ref": str(repo), "kind": "repo", "reason": "nothing to parse"}
+            with patch("core.code_intel.parser.parse_repo_with_coverage",
+                       return_value=ParseRepoResult(results=[], coverage_holes=[hole],
+                                                    status="partial")):
+                rebuild(g, repo, head="new")
+            assert (g.get_meta("parse_status"), g.get_meta("coverage_holes")) == before
+        finally:
+            g.close()
+
     def test_routes_are_replaced_and_coverage_is_stored(self, tmp_path):
         from core.code_intel.build import rebuild
         repo = _repo(tmp_path / "r", {"api/items.py": _ROUTER})

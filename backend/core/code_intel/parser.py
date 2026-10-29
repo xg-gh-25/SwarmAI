@@ -34,6 +34,10 @@ LANGUAGE_MAP = {
     ".tsx": "typescript",
     ".js": "javascript",
     ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".mts": "typescript",
+    ".cts": "typescript",
     ".java": "java",
     ".go": "go",
     ".rs": "rust",
@@ -506,6 +510,7 @@ _MAX_REPO_FILES = 50_000
 _NON_SOURCE_EXTENSIONS = {
     ".md", ".markdown", ".rst", ".txt", ".text",
     ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".properties", ".config",
     ".lock", ".sum", ".mod",
     ".csv", ".tsv", ".xml", ".html", ".htm", ".css", ".scss", ".sass", ".less",
     ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp",
@@ -2439,6 +2444,9 @@ def parse_repo_with_coverage(
     files_to_parse: list[Path] = []
     unknown_ext_counts: dict[str, int] = {}
     unknown_ext_examples: dict[str, list[str]] = {}
+    # source-like files no parser reads, keyed by suffix or name; counted as holes
+    # only after the .gitignore pass below (a gitignored build cache is not a hole)
+    unparsed: list[tuple[str, Path]] = []
 
     outside: list[str] = []
     for path in repo_root.rglob("*"):
@@ -2463,11 +2471,7 @@ def parse_repo_with_coverage(
             # DoD-C (run_dd13fb03, §24.3): a source-like build/config file with no
             # AST parser (Makefile/Dockerfile/…). Account it as a hole — never a
             # silent drop — but bounded (one row per name, like unknown-ext).
-            rel = str(path.relative_to(repo_root))
-            unknown_ext_counts[path.name] = unknown_ext_counts.get(path.name, 0) + 1
-            ex = unknown_ext_examples.setdefault(path.name, [])
-            if len(ex) < _MAX_UNKNOWN_EXT_EXAMPLES:
-                ex.append(rel)
+            unparsed.append((path.name, path))
         elif suffix in _NON_SOURCE_EXTENSIONS or not suffix:
             # Known non-source (docs/data/assets) or extensionless — out of scope,
             # legitimately not a hole.
@@ -2475,11 +2479,7 @@ def parse_repo_with_coverage(
         else:
             # A1: UNKNOWN extension — a source-like file in a language we can't
             # parse. Never silently invisible; record bounded per-extension.
-            rel = str(path.relative_to(repo_root))
-            unknown_ext_counts[suffix] = unknown_ext_counts.get(suffix, 0) + 1
-            ex = unknown_ext_examples.setdefault(suffix, [])
-            if len(ex) < _MAX_UNKNOWN_EXT_EXAMPLES:
-                ex.append(rel)
+            unparsed.append((suffix, path))
 
     # ── DoD2 (run_fe26ed6c): honor the target repo's .gitignore ──
     # The hardcoded SKIP_DIRS/suffix checks above are a fast-path (and the ONLY
@@ -2492,8 +2492,14 @@ def parse_repo_with_coverage(
     # dropped. Fail-open: no .git / git missing / git error → keep the SKIP_DIRS
     # result unchanged. O030: ignored files are RECORDED as coverage holes
     # (kind='gitignored'), bounded — never silently invisible.
-    if files_to_parse and (repo_root / ".git").exists():
-        ignored = _gitignored_subset(repo_root, files_to_parse)
+    # The unparsed source-like files go through the same pass: a gitignored build
+    # cache (.gradle/*.bin, a generated *.properties) is out of scope by the repo's
+    # own rules, not a language the graph fails to cover.
+    if (files_to_parse or unparsed) and (repo_root / ".git").exists():
+        ignored = _gitignored_subset(repo_root, files_to_parse + [p for _, p in unparsed])
+        unparsed = [(k, p) for k, p in unparsed if p not in ignored]
+        _parse_set = set(files_to_parse)
+        ignored = {p for p in ignored if p in _parse_set}
         if ignored:
             files_to_parse = [p for p in files_to_parse if p not in ignored]
             status = "partial"
@@ -2506,6 +2512,12 @@ def parse_repo_with_coverage(
                                f"{_MAX_UNKNOWN_EXT_EXAMPLES}). Out of scope by the "
                                f"repo's own rules — recorded, never silently dropped."),
                 })
+
+    for key, path in unparsed:
+        unknown_ext_counts[key] = unknown_ext_counts.get(key, 0) + 1
+        ex = unknown_ext_examples.setdefault(key, [])
+        if len(ex) < _MAX_UNKNOWN_EXT_EXAMPLES:
+            ex.append(str(path.relative_to(repo_root)))
 
     if outside:
         status = "partial"

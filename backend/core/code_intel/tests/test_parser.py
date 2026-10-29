@@ -1462,6 +1462,33 @@ class TestGitignoreHonoring:
         holes = {h["ref"] for h in res.coverage_holes if h.get("kind") == "gitignored"}
         assert "out/gen.py" in holes
 
+    def test_gitignored_file_of_no_parsed_language_is_not_a_hole(self, tmp_path):
+        """A gitignored build cache (.gradle/*.bin) is out of scope by the repo's own
+        rules, not a language the graph misses; a tracked one of the same kind is."""
+        import subprocess
+        from core.code_intel.parser import parse_repo_with_coverage
+        repo = self._git_repo(tmp_path)
+        (repo / ".gitignore").write_text("cache/\n", encoding="utf-8")
+        (repo / "cache").mkdir(); (repo / "model").mkdir()
+        (repo / "cache" / "hashes.bin").write_bytes(b"\x00")
+        (repo / "model" / "main.smithy").write_text("service S {}\n", encoding="utf-8")
+        (repo / "app.py").write_text("def a(): pass\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        refs = {h["ref"] for h in parse_repo_with_coverage(repo).coverage_holes}
+        assert "cache/hashes.bin" not in refs, refs
+        assert "model/main.smithy" in refs, refs
+
+    def test_js_ts_module_variants_are_parsed_and_config_is_not_a_hole(self, tmp_path):
+        from core.code_intel.parser import parse_repo_with_coverage
+        repo = self._git_repo(tmp_path)
+        (repo / "a.mjs").write_text("export function a() { return 1 }\n", encoding="utf-8")
+        (repo / "b.cts").write_text("export function b(): number { return 1 }\n", encoding="utf-8")
+        (repo / "gradle.properties").write_text("x=1\n", encoding="utf-8")
+        (repo / "client.config").write_text("x\n", encoding="utf-8")
+        res = parse_repo_with_coverage(repo)
+        assert {"a.mjs", "b.cts"} <= {r.file_path for r in res.results}
+        assert not res.coverage_holes, res.coverage_holes
+
     def test_tracked_source_never_dropped(self, tmp_path):
         # A .py that matches a gitignore pattern but is TRACKED must NOT be skipped
         # (git check-ignore does not report tracked files).

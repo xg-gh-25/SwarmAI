@@ -64,7 +64,10 @@ FULL_REBUILD_FILES = 100
 # of a builtin container (`d.get(k)`, `xs.pop()`, `max(xs)`, ts `m.get(k)`) is no
 # longer EXTERNAL: a call on it is linked by name. 7: java `new Foo(…)` is a call of
 # Foo (none was recorded); a call in a java field initializer is its class's.
-PARSER_VERSION = 7
+# 8: .mjs/.cjs/.mts/.cts are read as javascript / typescript; .properties and .config
+# are configuration, not a language the graph misses; a gitignored file is never a
+# coverage hole; a parse that finds nothing records why.
+PARSER_VERSION = 8
 
 
 def parser_outdated(graph: GraphStore) -> bool:
@@ -159,6 +162,13 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
         # empty parse must not wipe it), and it no longer reads outdated, so readers
         # stop asking for a rebuild every ten minutes (F11)
         graph.set_meta("empty_parse_version", str(PARSER_VERSION))
+        if graph.counts()["nodes"] == 0:
+            # nothing was ever parsed here: say why (a language no parser reads, or no
+            # source at all), so the Brain shows a reason and not an unknown coverage
+            graph.set_meta("parse_status", out.status)
+            graph.set_meta("coverage_holes", json.dumps(out.coverage_holes))
+            if head:
+                graph.set_meta("coverage_commit", head)
         return RebuildResult(empty=True, parse_status=out.status,
                              coverage_holes=out.coverage_holes)
     found = [r for p in results for r in (_file_routes(root, p.file_path) if routes else [])]
