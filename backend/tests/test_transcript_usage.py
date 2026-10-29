@@ -159,3 +159,23 @@ class TestReviewHardening:
         main = _write(cfg / f"{SID}.jsonl", [])
         (cfg / SID / "subagents" / "agent-dir.jsonl").mkdir(parents=True)
         assert tu.find_subagent_transcripts([main]) == []
+
+
+class TestByModel:
+    """Each response's model is kept, so a run's usage splits per model (usage ledger
+    attribution: a sub-agent on another model is priced as that model)."""
+
+    def test_the_window_splits_per_response_model(self, cfg):
+        a = _resp("m1", "2026-10-18T10:00:05Z", inp=1, out=2, cread=3, ccreate=4)
+        a["message"]["model"] = "opus"
+        b = _resp("m2", "2026-10-18T10:10:00Z", inp=10, out=20, cread=30, ccreate=40)
+        b["message"]["model"] = "haiku"
+        c = _resp("m3", "2026-10-18T10:20:00Z", inp=100, out=0, cread=0, ccreate=0)   # names no model
+        main = _write(cfg / f"{SID}.jsonl", [a, b, c])
+        u = tu.usage_in_window([main], LO, HI)
+        assert u["by_model"] == {
+            "opus": {"input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
+            "haiku": {"input_tokens": 10, "output_tokens": 20, "cache_read_tokens": 30, "cache_creation_tokens": 40},
+            "": {"input_tokens": 100, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0},
+        }
+        assert u["input_tokens"] == sum(m["input_tokens"] for m in u["by_model"].values())

@@ -289,3 +289,34 @@ def test_a_failed_agent_job_still_records_what_it_spent(monkeypatch):
     assert res.status == "failed"
     assert sorted((r["model"], r["surface"], r["job_id"], r["cost_usd"]) for r in seen) == \
         [("haiku", "job", "j1", 0.1), ("opus", "job", "j1", 0.8)]
+
+
+def test_a_pipeline_run_is_an_attribution_per_model_replaced_by_its_later_measurement(tmp_path, monkeypatch):
+    """A run's share of its host session (attribution rows) is one row per run and model,
+    the REFLECT measurement replacing the DELIVER one, priced at the learned prices; the
+    top bar's sum (spend rows only) never adds it."""
+    import sqlite3
+    from core.run_protocol import usage as run_usage
+    from core import usage_prices
+    db_file = tmp_path / "u.db"
+    _ledger_db(db_file)
+    w = ua._Writer()
+    w._db_path = str(db_file)
+    monkeypatch.setattr(ua, "_writer", w)
+    monkeypatch.setattr(usage_prices, "current", lambda db_path=None: {"opus": {"input": 5e-6, "output": 25e-6,
+                                                                               "cache_read": 0.5e-6, "cache_write": 6.25e-6}})
+    store = SimpleNamespace(paths=SimpleNamespace(run_id="run_abc12345"))
+    first = {"opus": {"input_tokens": 10, "output_tokens": 100, "cache_read_tokens": 1000, "cache_creation_tokens": 0}}
+    later = {"opus": {"input_tokens": 20, "output_tokens": 200, "cache_read_tokens": 4000, "cache_creation_tokens": 0},
+             "haiku": {"input_tokens": 5, "output_tokens": 5, "cache_read_tokens": 0, "cache_creation_tokens": 0}}
+    run_usage._ledger_attribution(store, first, "deliver")
+    cost = run_usage._ledger_attribution(store, later, "reflect")
+    assert cost is None                                   # haiku has no price: the run's cost is not known
+    assert ua.flush(5)
+    with sqlite3.connect(db_file) as conn:
+        got = conn.execute("SELECT model, stage, output, cache_read, kind, run_id, round(cost_usd, 6) FROM usage_ledger "
+                           "ORDER BY model").fetchall()
+        spend = conn.execute("SELECT COUNT(*) FROM usage_ledger WHERE kind='spend'").fetchone()[0]
+    assert got == [("haiku", "reflect", 5, 0, "attribution", "run_abc12345", None),
+                   ("opus", "reflect", 200, 4000, "attribution", "run_abc12345", 0.0071)]
+    assert spend == 0

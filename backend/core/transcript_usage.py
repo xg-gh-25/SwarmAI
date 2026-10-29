@@ -24,7 +24,8 @@ Public symbols:
   ``cache_creation_tokens``), plus ``tokens`` (input + output + cache creation,
   cache reads excluded — the same definition ``artifact_cli._apply_token_cost`` and
   ``run_protocol.usage.measure`` use), ``responses`` and
-  ``source="transcript"``; None when no response falls inside the window.
+  ``source="transcript"`` and ``by_model`` (the same four sums per response model,
+  "" when a response names none); None when no response falls inside the window.
 """
 from __future__ import annotations
 
@@ -116,11 +117,13 @@ def _scan(path: str, main_thread: bool, best: dict) -> None:
                 mid = (msg.get("id") or rec.get("uuid")) if isinstance(msg, dict) else None
                 if t is None or not isinstance(usage, dict) or not isinstance(mid, str) or not mid:
                     continue
+                model = msg.get("model") if isinstance(msg.get("model"), str) else None
                 prev = best.get(mid)
                 if prev is None:
-                    best[mid] = [t, usage]
+                    best[mid] = [t, usage, model]
                     continue
                 prev[0] = min(prev[0], t)
+                prev[2] = prev[2] or model
                 if _int(usage.get("output_tokens")) >= _int(prev[1].get("output_tokens")):
                     prev[1] = usage
             except Exception:  # noqa: BLE001 — RecursionError, odd types: skip the record
@@ -139,16 +142,20 @@ def usage_in_window(paths: Iterable[str], lo: float, hi: float,
     if include_subagents:
         for p in find_subagent_transcripts(mains):
             _scan(p, False, best)
-    inside = [usage for first, usage in best.values() if lo <= first <= hi]
+    inside = [(usage, model) for first, usage, model in best.values() if lo <= first <= hi]
     if not inside:
         return None
     out = {name: 0 for _, name in _USAGE_KEYS}
-    for usage in inside:
+    by_model: dict = {}
+    for usage, model in inside:
+        m = by_model.setdefault(model or "", {name: 0 for _, name in _USAGE_KEYS})
         for raw, name in _USAGE_KEYS:
             out[name] += _int(usage.get(raw))
+            m[name] += _int(usage.get(raw))
     out["tokens"] = out["input_tokens"] + out["output_tokens"] + out["cache_creation_tokens"]
     out["responses"] = len(inside)
     out["source"] = "transcript"
+    out["by_model"] = by_model
     return out
 
 
@@ -161,7 +168,7 @@ def usage_for_subagent(path: str) -> Optional[dict]:
     if not best:
         return None
     out = {name: 0 for _, name in _USAGE_KEYS}
-    for _first, usage in best.values():
+    for _first, usage, _model in best.values():
         for raw, name in _USAGE_KEYS:
             out[name] += _int(usage.get(raw))
     out["tokens"] = out["input_tokens"] + out["output_tokens"] + out["cache_creation_tokens"]

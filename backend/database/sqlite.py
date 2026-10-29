@@ -2125,12 +2125,17 @@ def _local_midnight_utc() -> str:
     return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
-def usage_ledger_insert_sql() -> str:
-    """The one INSERT of usage ledger rows (async pool and sync writers share it); a row
-    whose ``dedup_key`` is already there is skipped."""
+def usage_ledger_insert_sql(replace: bool = False) -> str:
+    """The one INSERT of usage ledger rows (async pool and sync writers share it): a row
+    whose ``dedup_key`` is already there is skipped, or with ``replace`` (attribution
+    rows: a later measurement of the same run) updated in place."""
     cols = _USAGE_LEDGER_COLUMNS
-    return (f"INSERT OR IGNORE INTO usage_ledger({', '.join(cols)}) "
-            f"VALUES ({', '.join('?' for _ in cols)})")
+    values = ", ".join("?" for _ in cols)
+    if not replace:
+        return f"INSERT OR IGNORE INTO usage_ledger({', '.join(cols)}) VALUES ({values})"
+    update = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "dedup_key")
+    return (f"INSERT INTO usage_ledger({', '.join(cols)}) VALUES ({values}) "
+            f"ON CONFLICT(dedup_key) DO UPDATE SET {update}")
 
 
 def usage_ledger_values(rows: list) -> list:

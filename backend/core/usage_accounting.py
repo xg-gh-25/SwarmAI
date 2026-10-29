@@ -317,7 +317,12 @@ class _Writer:
             try:
                 conn = sqlite3.connect(f"file:{self._path()}?mode=rw", uri=True, timeout=self.BUSY_TIMEOUT_S)
                 try:
-                    conn.executemany(usage_ledger_insert_sql(), usage_ledger_values(batch))
+                    spend = [r for r in batch if r.get("kind") != "attribution"]
+                    split = [r for r in batch if r.get("kind") == "attribution"]
+                    if spend:
+                        conn.executemany(usage_ledger_insert_sql(), usage_ledger_values(spend))
+                    if split:                   # a later measurement of the same run replaces
+                        conn.executemany(usage_ledger_insert_sql(replace=True), usage_ledger_values(split))
                     conn.commit()
                 finally:
                     conn.close()

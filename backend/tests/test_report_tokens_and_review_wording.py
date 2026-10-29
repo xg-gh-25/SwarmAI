@@ -89,7 +89,7 @@ def test_with_a_transcript_the_report_shows_the_tokens_up_to_delivery(rig):
                 and e["payload"]["name"] == "input_tokens"]
     assert [e["stage"] for e in measured] == ["deliver", "reflect"], measured
     row = _row(report, "Token Cost")
-    assert "not measured" not in row and " total · " in row, row
+    assert "not measured" not in row and " comparable · " in row and "1k billed" in row, row
 
 
 def test_reports_no_expert_saw_are_called_agent_only(rig):

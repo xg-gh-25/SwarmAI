@@ -467,6 +467,10 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     cache_reads = (measured or experts).get("cache_read_tokens")
     token = {"verdict": token_verdict, "total_tokens": total_tokens,
              "cache_read_tokens": cache_reads,
+             # what the run spent: every token billed and its book cost (transcript
+             # measurement only; core/usage_accounting's definition)
+             "billed_tokens": measured.get("billed_tokens"),
+             "book_cost_usd": measured.get("book_cost_usd"),
              "baseline_runs": contract.get("token_baseline_runs",
                                            contract.get("baseline_runs")),
              "input_tokens": input_tokens, "output_tokens": output_tokens,
@@ -558,6 +562,8 @@ def _duration(seconds: Any) -> str:
 def _k(value: Any) -> str:
     if not isinstance(value, (int, float)):
         return "unknown"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
     return f"{value / 1000:.0f}k" if value >= 1000 else f"{value:g}"
 
 
@@ -588,11 +594,16 @@ def _token_text(token: Mapping[str, Any]) -> str:
     if calls is None or accounted != calls:
         shown = f"{accounted}/{calls}" if calls is not None else f"{accounted}/unknown"
         return f"{_k(total)} observed · {shown} calls accounted"
-    text = f"{_k(total)} total · {_k(token.get('input_tokens'))} input · {_k(token.get('output_tokens'))} output"
+    # the comparable count (input incl. cache writes + output) decides the verdict and the
+    # baseline; billed tokens and book cost say what the run spent
+    text = f"{_k(total)} comparable · {_k(token.get('input_tokens'))} input · {_k(token.get('output_tokens'))} output"
     budget = token.get("budget_tokens")
     reads = token.get("cache_read_tokens")
-    text += (f" · {_k(reads)} cache reads, not counted" if isinstance(reads, (int, float))
-             else "") + " · host-session responses in the run window"
+    text += (f" · {_k(reads)} cache reads, not counted" if isinstance(reads, (int, float)) else "")
+    billed, cost = token.get("billed_tokens"), token.get("book_cost_usd")
+    if isinstance(billed, (int, float)):
+        text += f" · {_k(billed)} billed" + (f" · ${cost:.2f} book cost" if isinstance(cost, (int, float)) else "")
+    text += " · host-session responses in the run window"
     return text + (f" · {100 * total / budget:.1f}% budget"
                    if isinstance(budget, (int, float)) and budget > 0 else _no_baseline(token))
 
