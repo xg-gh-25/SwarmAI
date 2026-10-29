@@ -173,11 +173,12 @@ def _has_code_repo_asset(assets: list[dict[str, Any]]) -> bool:
 
 
 def _find_code_intel(project_dir: Path) -> Path | None:
-    """The project's code graph db: its own, or a bind-managed repo's.
+    """The project's first built code graph db.
 
     On a SwarmAI host this is ``core.code_intel.code_intel_db_for`` (the one answer
-    to where a project's graph lives). Run portable, off a SwarmAI host, only the
-    project's own ``code_intel.db`` can be seen.
+    to where a project's graph lives: a confirmed local checkout's or a bind-managed
+    clone's). Run portable, off a SwarmAI host, only a ``code_intel.db`` in the
+    project directory can be seen.
     """
     try:
         from core.code_intel import code_intel_db_for
@@ -372,7 +373,7 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     ci = _find_code_intel(d)
     if ci is None:
         return ("⑥ Refresher/code-intel", STATUS_PENDING,
-                "governs a code-repo but no code graph built yet — bind the repo to build it (not a failure)")
+                "governs a code-repo but no code graph built yet — bind the repo, or confirm its local checkout in Brain Hub, to build it (not a failure)")
     try:
         from core.code_intel import repo_root_is_owned
     except ImportError:  # portable run: presence is all that can be seen
@@ -397,7 +398,7 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     if not repo_root_is_owned(d, root):
         return ("⑥ Refresher/code-intel", STATUS_PENDING,
                 f"code graph {ci.name} was built from a repo this brain does not own "
-                f"({root}) — re-bind the brain's own repo")
+                f"({root}) — bind the brain's own repo or confirm its checkout in Brain Hub")
     return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph {ci.name}: {nodes} files indexed")
 
 

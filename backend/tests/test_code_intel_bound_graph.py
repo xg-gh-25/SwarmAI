@@ -166,21 +166,20 @@ class TestBoundGraphVisible:
         assert code_intel_db_for(project_dir) == db
 
     def test_project_name_lookup_returns_the_binding_db(self, bound_project):
-        from core.code_intel import get_code_intel_db_path, invalidate_cache, project_graph
+        from core.code_intel import invalidate_cache, project_graph
         project_dir, _clone, db = bound_project
-        assert get_code_intel_db_path("Demo") == db
         invalidate_cache("Demo")
         try:
             assert project_graph("Demo")[0].db_path == db
         finally:
             invalidate_cache("Demo")
 
-    def test_project_db_comes_first(self, bound_project):
+    def test_a_db_in_the_project_directory_is_not_read(self, bound_project):
+        """``Projects/<p>/code_intel.db`` was the old home; nothing owns it now."""
         from core.code_intel import code_intel_dbs
         project_dir, _clone, db = bound_project
-        own = project_dir / "code_intel.db"
-        GraphStore(own).close()
-        assert [d.db_path for d in code_intel_dbs(project_dir)] == [own, db]
+        GraphStore(project_dir / "code_intel.db").close()
+        assert [d.db_path for d in code_intel_dbs(project_dir)] == [db]
 
     def test_binding_clone_is_owned_without_a_tech_md_path(self, bound_project):
         from core.code_intel import repo_root_is_owned
@@ -292,10 +291,10 @@ class TestReadersSeeTheBoundGraph:
         assert not (project_dir / "code_intel.db").exists()
         assert _brain_detail(project_dir)["hasCodeIntel"] is True
 
-    def test_manual_reindex_replaces_the_graph(self, bound_project):
-        """POST /reindex used to bulk_insert on top of the old rows: a deleted file's
-        symbols stayed forever. It now clears and re-parses the owned clone."""
-        import routers.code_intel as mod
+    def test_the_rebuild_child_replaces_the_graph(self, bound_project):
+        """The re-index used to bulk_insert on top of the old rows: a deleted file's
+        symbols stayed forever. The rebuild child clears and re-parses the clone."""
+        from core.code_intel.build import main
         project_dir, clone, db = bound_project
         (clone / "keep.py").write_text("def keep():\n    return 1\n", encoding="utf-8")
         graph = GraphStore(db)
@@ -306,12 +305,7 @@ class TestReadersSeeTheBoundGraph:
             graph.set_meta("repo_root", str(clone))
         finally:
             graph.close()
-        from core.code_intel import invalidate_cache
-        invalidate_cache("Demo")
-        try:
-            mod._run_reindex("Demo")
-        finally:
-            invalidate_cache("Demo")
+        assert main(["--project", "Demo", "--full"]) == 0
         graph = GraphStore(db)
         try:
             ids = {r[0] for r in graph._conn.execute("SELECT id FROM code_nodes").fetchall()}
@@ -483,23 +477,46 @@ class TestBindLock:
                     pass
         assert not bind_in_progress(wt)
 
-    def test_watcher_skips_while_a_bind_runs(self, tmp_path):
-        import asyncio
-        from core.code_intel.watcher import CodeIntelWatcher
+    def test_the_rebuild_child_skips_while_a_bind_runs(self, tmp_path):
+        from core.code_intel import CodeIntelDb
+        from core.code_intel.build import build_graph
         from core.ddd_bindings import _bind_lock
         wt = tmp_path / "bindings" / "lib"
-        wt.mkdir(parents=True)
+        _init_repo(wt)
         (wt / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+        ref = CodeIntelDb(db_path=tmp_path / "g.db", repo="lib", repo_root=wt)
+        with _bind_lock(wt, "lib"):
+            assert build_graph(ref) is None
+        assert build_graph(ref) is not None
         graph = GraphStore(tmp_path / "g.db")
         try:
-            watcher = CodeIntelWatcher("NoSuchProject", wt, graph)
-            with _bind_lock(wt, "lib"):
-                asyncio.run(watcher._trigger_incremental([wt / "a.py"]))
-            assert graph.get_nodes_by_file("a.py") == []
-            asyncio.run(watcher._trigger_incremental([wt / "a.py"]))
             assert [n["id"] for n in graph.get_nodes_by_file("a.py")] == ["a.py::a"]
         finally:
             graph.close()
+
+    def test_a_bind_waits_for_the_graphs_writer(self, tmp_path, monkeypatch):
+        """bind_repo takes the graph's write lock, so a rebuild child that holds it
+        finishes before the bind writes (two writers would race one graph)."""
+        import core.code_intel.build as build
+        from core.ddd_bindings import Binding, DeliveryContract, bind_repo
+        src = tmp_path / "src"
+        _init_repo(src)
+        (src / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+        _git(src, "add", "-A")
+        _git(src, "commit", "-q", "-m", "init")
+        held = []
+        real = build.write_lock
+
+        def spy(db, *, wait):
+            held.append((Path(db).name, wait))
+            return real(db, wait=wait)
+        monkeypatch.setattr(build, "write_lock", spy)
+        binding = Binding(repo="svc", kind="external", clone=str(src),
+                          delivery_contract=DeliveryContract(
+                              remote_kind="github-pr", branch="main",
+                              review_path="s_internal-crux-review", auto_send="on-clean-review"))
+        assert bind_repo(binding, tmp_path / "bindings").node_count == 1
+        assert held == [("svc.code_intel.db", True)]
 
 
 class TestGraphWriteAtomicity:
@@ -585,20 +602,15 @@ class TestGraphWriteAtomicity:
 class TestRouterNeverMixesRepos:
     def test_binding_db_with_missing_clone_is_not_filled_from_another_repo(
             self, bound_project, tmp_path):
-        import routers.code_intel as mod
-        from core.code_intel import invalidate_cache
+        import shutil
+        from core.code_intel.build import main
         project_dir, clone, db = bound_project
         other = tmp_path / "other_repo"
         other.mkdir()
         (other / "o.py").write_text("def other():\n    return 1\n", encoding="utf-8")
         (project_dir / "TECH.md").write_text(f"# TECH\n\n**Local:** `{other}`\n", encoding="utf-8")
-        import shutil
         shutil.rmtree(clone)
-        invalidate_cache("Demo")
-        try:
-            mod._run_reindex("Demo")
-        finally:
-            invalidate_cache("Demo")
+        main(["--project", "Demo", "--full"])
         graph = GraphStore(db)
         try:
             assert graph.get_nodes_by_file("o.py") == []
@@ -607,17 +619,41 @@ class TestRouterNeverMixesRepos:
 
 
 class TestIncrementalWritersResolve:
-    def test_reindex_job_resolves_a_cross_file_call_it_stored(self, tmp_path, monkeypatch):
-        import subprocess as sp
-        from core.code_intel.tests.test_freshness import TestGradedIncrementalE2E as _Fixture
-        handler, proj, env = _Fixture()._init_repo(tmp_path, monkeypatch)
-        monkeypatch.setattr("config.get_swarmws", lambda: proj.parent.parent)
-        (proj / "structural.py").write_text(
+    def _owned_repo(self, tmp_path, monkeypatch, own_local_root, files):
+        from core.code_intel import invalidate_cache
+        from core.code_intel.build import ensure_graph
+        projects = tmp_path / "ws" / "Projects"   # a local root may not sit inside SwarmWS
+        (projects / "P").mkdir(parents=True)
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        for rel, text in files.items():
+            (repo / rel).write_text(text, encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "init")
+        own_local_root("P", repo)
+        monkeypatch.setattr("jobs.paths.PROJECTS_DIR", projects)
+        monkeypatch.setattr("config.get_swarmws", lambda: tmp_path / "ws")
+        monkeypatch.setattr("core.code_intel.build._sync_docs", lambda *a: None)
+        invalidate_cache("P")
+        assert [r["action"] for r in ensure_graph(projects / "P")] == ["built"]
+        return repo
+
+    def _graph(self, repo):
+        from core.code_intel.local_roots import db_path
+        return GraphStore(db_path(repo))
+
+    def test_the_job_resolves_a_cross_file_call_it_stored(self, tmp_path, monkeypatch,
+                                                          own_local_root):
+        from jobs.handlers.code_intel_reindex import reindex_projects
+        repo = self._owned_repo(tmp_path, monkeypatch, own_local_root, {
+            "cosmetic.py": "def alpha():\n    return 1\n",
+            "structural.py": "def beta():\n    return 0\n"})
+        (repo / "structural.py").write_text(
             "from cosmetic import alpha\n\ndef beta():\n    return alpha()\n")
-        sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
-        sp.run(["git", "commit", "-q", "-m", "call"], cwd=proj, check=True, env=env)
-        handler.reindex_projects(full=False)
-        graph = GraphStore(proj / "code_intel.db")
+        _git(repo, "commit", "-qam", "call")
+        out = reindex_projects()
+        assert [r["status"] for r in out["projects"]] == ["updated"], out
+        graph = self._graph(repo)
         try:
             targets = [r[0] for r in graph._conn.execute(
                 "SELECT target_id FROM code_edges WHERE source_id = 'structural.py::beta'"
@@ -626,30 +662,16 @@ class TestIncrementalWritersResolve:
         finally:
             graph.close()
 
-    def test_health_hook_drops_a_removed_symbol(self, tmp_path, monkeypatch):
-        from unittest.mock import MagicMock
-        import core.code_intel as ci
-        import core.code_intel.freshness as fr
-        from hooks.context_health_hook import ContextHealthHook
-        proj = tmp_path / "Projects" / "P"
-        repo = proj / "repo"
-        repo.mkdir(parents=True)
-        (repo / "a.py").write_text("def keep():\n    return 1\n\ndef drop():\n    return 2\n",
-                                   encoding="utf-8")
-        (proj / "TECH.md").write_text(f"# TECH\n\n**Local:** `{repo}`\n", encoding="utf-8")
-        from core.code_intel.parser import parse_repo
-        graph = GraphStore(proj / "code_intel.db")
-        graph.bulk_insert(parse_repo(repo), repo_root=repo)
-        try:
-            (repo / "a.py").write_text("def keep():\n    return 1\n", encoding="utf-8")
-            stale = MagicMock(stale=True, suggest_full_rebuild=False, commits_behind=1,
-                              changed_files=["a.py"], current_head=None)
-            monkeypatch.setattr(ci, "load_project_graphs", lambda name: [(_REF, graph)])
-            monkeypatch.setattr(fr, "check_freshness", lambda g: stale)
-            ContextHealthHook()._refresh_code_intel(tmp_path)
-            assert [n["id"] for n in graph.get_nodes_by_file("a.py")] == ["a.py::keep"]
-        finally:
-            graph.close()
+    def test_ensure_fresh_drops_a_removed_symbol(self, tmp_path, monkeypatch, own_local_root):
+        from core.code_intel import project_graph
+        from core.code_intel.build import ensure_fresh
+        repo = self._owned_repo(tmp_path, monkeypatch, own_local_root, {
+            "a.py": "def keep():\n    return 1\n\ndef drop():\n    return 2\n"})
+        (repo / "a.py").write_text("def keep():\n    return 1\n", encoding="utf-8")
+        _git(repo, "commit", "-qam", "drop")
+        ref, graph = project_graph("P")
+        assert ensure_fresh(tmp_path / "ws" / "Projects" / "P", ref, graph).state == "updated"
+        assert [n["id"] for n in graph.get_nodes_by_file("a.py")] == ["a.py::keep"]
 
 
 # ── review round 2 fixes ─────────────────────────────────────────────────────
@@ -696,7 +718,7 @@ class TestFailedWriteLeavesNoOpenTransaction:
             graph.close()
 
 
-class TestRouterReindexTiming:
+class TestRebuildTiming:
     def _commit(self, repo: Path, name: str) -> str:
         (repo / name).write_text(f"def {name[:-3]}():\n    return 1\n", encoding="utf-8")
         _git(repo, "add", name)
@@ -704,17 +726,12 @@ class TestRouterReindexTiming:
         return _git(repo, "rev-parse", "HEAD").strip()
 
     def test_skips_while_the_clone_is_being_bound(self, bound_project):
-        import routers.code_intel as mod
-        from core.code_intel import invalidate_cache
+        from core.code_intel.build import main
         from core.ddd_bindings import _bind_lock
         project_dir, clone, db = bound_project
         self._commit(clone, "keep.py")
-        invalidate_cache("Demo")
-        try:
-            with _bind_lock(clone, "lib"):
-                mod._run_reindex("Demo")
-        finally:
-            invalidate_cache("Demo")
+        with _bind_lock(clone, "lib"):
+            main(["--project", "Demo", "--full"])
         graph = GraphStore(db)
         try:
             assert graph.get_nodes_by_file("keep.py") == []
@@ -722,8 +739,7 @@ class TestRouterReindexTiming:
             graph.close()
 
     def test_head_is_read_before_the_parse(self, bound_project):
-        import routers.code_intel as mod
-        from core.code_intel import invalidate_cache
+        from core.code_intel.build import main
         from core.code_intel.parser import parse_repo_with_coverage as real_parse
         project_dir, clone, db = bound_project
         head_before = self._commit(clone, "keep.py")
@@ -733,13 +749,9 @@ class TestRouterReindexTiming:
             self._commit(clone, "late.py")  # lands while the rebuild runs
             return out
 
-        invalidate_cache("Demo")
-        try:
-            with patch("core.code_intel.parser.parse_repo_with_coverage",
-                       side_effect=parse_then_commit):
-                mod._run_reindex("Demo")
-        finally:
-            invalidate_cache("Demo")
+        with patch("core.code_intel.parser.parse_repo_with_coverage",
+                   side_effect=parse_then_commit):
+            assert main(["--project", "Demo", "--full"]) == 0
         graph = GraphStore(db)
         try:
             assert graph.get_meta("last_indexed_commit") == head_before

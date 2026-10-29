@@ -40,10 +40,25 @@ def client(tmp_path, monkeypatch):
     import core.vec_db as vdb
     monkeypatch.setattr(vdb, "_DEFAULT_DB_PATH", db_path, raising=False)
 
+    # A code mount is indexed by a child process (the daemon never parses); here the
+    # child's entrypoint runs in this process, in place of the spawn, so the full loop
+    # mount → graph → search is still driven for real.
+    import core.code_intel.build as build
+    import core.library_mounts as lm
+    children = []
+
+    def run_child(args):
+        children.append(args)
+        assert args[:3] == ["-m", "core.library_mounts", "index-code"], args
+        assert lm.main(args[2:]) == 0
+    monkeypatch.setattr(build, "spawn_child", run_child)
+
     from routers.library_api import router
     app = FastAPI()
     app.include_router(router)
-    return TestClient(app)
+    c = TestClient(app)
+    c.children = children
+    return c
 
 
 def _make_code_dir(root: Path) -> Path:
@@ -66,9 +81,8 @@ def test_post_mount_code_registers_and_indexes(client, tmp_path):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["kind"] == "code"
-    assert body["status"] == "indexed"
-    assert body["symbols"] > 0
-    assert body["id"]
+    assert body["status"] == "indexing" and body["id"]
+    assert client.children == [["-m", "core.library_mounts", "index-code", body["id"]]]
 
 
 def test_post_mount_docs_indexes_content_at_mount_time(client, tmp_path):

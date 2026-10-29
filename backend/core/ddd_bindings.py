@@ -556,23 +556,29 @@ def _bind_locked(binding: Binding, worktree: Path, db_path: Path) -> BindResult:
     # The one full rebuild (core.code_intel.build.rebuild): routes, coverage, and
     # an empty parse leaves the graph unstamped. HEAD is read before the parse.
     from core.brain_bootstrap.repo_read import git as _git
-    from core.code_intel.build import rebuild
+    from core.code_intel.build import rebuild, write_lock
     from core.code_intel.graph_store import GraphStore
 
     head = (_git(Path(worktree), "rev-parse", "HEAD") or "").strip() or None
-    graph = GraphStore(db_path)
-    try:
-        built = rebuild(graph, worktree, head=head)
-        if built.empty:
-            # The parse found no code: the graph (a previous clone's, on a re-bind)
-            # was left as it was, so its nodes are not what was just bound.
-            logger.warning("bind_repo: '%s' parsed to no code files; graph left as it was",
-                           binding.repo)
-            node_count = 0
-        else:
-            node_count = int(graph.get_codebase_summary().get("total_nodes", 0))
-    finally:
-        graph.close()
+    # The graph's write lock: a rebuild child started before this bind (the re-index
+    # button, the hourly refresh) finishes first instead of racing this write.
+    with write_lock(db_path, wait=True) as held:
+        if not held:
+            raise RuntimeError(f"bind_repo: the graph of '{binding.repo}' is held by "
+                               "another writer; try again when its rebuild finished")
+        graph = GraphStore(db_path)
+        try:
+            built = rebuild(graph, worktree, head=head)
+        finally:
+            graph.close()
+    if built.empty:
+        # The parse found no code: the graph (a previous clone's, on a re-bind)
+        # was left as it was, so its nodes are not what was just bound.
+        logger.warning("bind_repo: '%s' parsed to no code files; graph left as it was",
+                       binding.repo)
+        node_count = 0
+    else:
+        node_count = built.nodes
 
     logger.info(
         "bind_repo: bound '%s' → worktree=%s, code_intel=%s, nodes=%d",

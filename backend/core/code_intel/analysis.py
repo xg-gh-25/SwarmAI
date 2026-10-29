@@ -133,15 +133,24 @@ def analyze_graph_store(graph: "GraphStore", layers: Iterable[str] | None = None
 
 
 def analyze_project(project: str, layers: Iterable[str] | None = None,
-                    repo: str | None = None) -> dict | None:
+                    repo: str | None = None, refresh: bool = False) -> dict | None:
     """Analyze one of *project*'s code graphs (``project_graph``: the bound repo
-    *repo*, else the first); None when there is no such graph."""
+    *repo*, else the first); None when there is no such graph. *refresh*: bring it to
+    its repo's HEAD first (``build.ensure_fresh``) — the CLI does, the daemon's API
+    endpoint does not (the daemon never writes a graph)."""
     names = resolve_layers(layers)  # validate before opening anything
     from . import project_graph
     found = project_graph(project, repo)
     if found is None:
         return None
     ref, graph = found
+    if refresh:
+        from jobs.paths import PROJECTS_DIR
+        from .build import ensure_fresh
+        try:
+            ensure_fresh(PROJECTS_DIR / project, ref, graph)
+        except Exception as exc:  # noqa: BLE001 — the analysis of the graph as it is stands
+            logger.warning("analysis %s: refresh failed: %s: %s", project, type(exc).__name__, exc)
     result = analyze_graph_store(graph, names)
     result["project"] = project
     if ref.repo:
@@ -319,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    result = analyze_project(args.project, names, repo=args.repo)
+    result = analyze_project(args.project, names, repo=args.repo, refresh=True)
     if result is None:
         what = f"repo {args.repo!r}" if args.repo else "code graph"
         print(f"{args.project}: no {what} (bind a repo, or index the project's own)",

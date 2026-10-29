@@ -400,44 +400,23 @@ SYSTEM_JOBS: list[Job] = [
         safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
     ),
 
-    # --- Code Intelligence Reindex (event-driven) ---
-    # Triggered by git_commit events emitted from auto_commit_hook.
-    # Runs incremental reindex on projects with code_intel.db.
-    # Also triggered by code_intel_full_reindex for >50 stale files.
+    # --- Code Intelligence refresh (hourly) ---
+    # Every owned graph is brought to its repo's HEAD (core.code_intel.build.ensure_fresh):
+    # an unmoved repo costs one `git rev-parse`; up to 100 changed files are updated in
+    # this process; more start a detached rebuild child. Runs as a job, never in the
+    # daemon (design 2026-10-29-code-intel-unification §0.2). The scheduler loop runs
+    # hourly, so this is at most once an hour.
     Job(
         id="code-intel-reindex",
-        name="Code Intelligence Reindex",
+        name="Code Intelligence Refresh",
         type="script",
-        schedule="on:git_commit",
+        schedule="*/30 * * * *",       # interval (the scheduler loop runs hourly)
         enabled=True,
         category="system",
         config={
             "command": _py("-m", "jobs.handlers.code_intel_reindex"),
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
-    ),
-
-    # --- Code Intelligence Full Reindex (event-driven) ---
-    # Triggered when context_health_hook detects >50 stale files.
-    # Does a full rebuild rather than incremental.
-    Job(
-        id="code-intel-full-reindex",
-        name="Code Intelligence Full Reindex",
-        type="script",
-        schedule="on:code_intel_full_reindex",
-        enabled=True,
-        category="system",
-        config={
-            "command": _py("-m", "jobs.handlers.code_intel_reindex", "--full"),
-        },
-        # 300s (was 120): the AGGREGATE full-reindex (fans out over ALL projects
-        # in SwarmWS/Projects/ — parse+clear+insert+export each) measured 81-114.5s
-        # for the current project set, hugging the old 120s wall and occasionally
-        # exceeding it → false "Script timed out" failures (run_ca79d3ef). 300 is a
-        # floor, not a cure: because runtime scales with (project count × repo size),
-        # this headroom ERODES as projects grow — if a reindex approaches 300s,
-        # re-benchmark and raise, don't assume it's a hang.
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
 ]
 

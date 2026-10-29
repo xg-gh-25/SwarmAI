@@ -352,7 +352,9 @@ function AddFolderButton() {
           // Don't repeat the badge's old lie ("recall now reaches it") in the toast.
           const codeEmpty = d.kind === 'code' && (d.status === 'indexed_empty' || (d.symbols ?? 0) === 0);
           const msg = d.kind === 'code'
-            ? (codeEmpty
+            ? (d.status === 'indexing'
+                ? 'Mounted (code) — indexing it in the background; recall reaches it when the badge says indexed.'
+                : codeEmpty
                 ? `Mounted (code) — but no parseable source found; recall can’t reach it yet.`
                 : `Mounted (code) — indexed ${d.symbols ?? 0} symbols; recall now reaches it.`)
             : `Mounted (docs). ${d.next ?? 'Ask chat to brief the folder into cards.'}`;

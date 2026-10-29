@@ -519,7 +519,7 @@ class TestRecallAll:
         from core import recall_multi
 
         # Stub the heavy domain readers to isolate the fan-out/bucketing logic.
-        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
+        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None, **kw: [])
         result = recall_multi.recall_all(
             "exit code sigkill", project="SwarmAI", allow_embed=False,
         )
@@ -537,7 +537,7 @@ class TestRecallAll:
         Without the fix, --domains leaked MEMORY to sessions --file denies."""
         from core import recall_multi
 
-        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
+        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None, **kw: [])
         # MEMORY.md excluded by policy → context_files bucket must be empty.
         result = recall_multi.recall_all(
             "exit code sigkill oom", project="SwarmAI", allow_embed=False,

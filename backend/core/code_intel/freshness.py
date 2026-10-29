@@ -72,12 +72,10 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
 
     # Compute HEAD once (best-effort). BOTH the never-indexed path and the
     # comparison below need it. Critically, populating current_head on the
-    # never-indexed path lets the 3 marker writers — all guarded by
-    # `if freshness.current_head:` (code_intel_reindex.py:73/129,
-    # context_health_hook.py:649) — persist last_indexed_commit. Without it,
-    # check_freshness returned current_head=None on "Never indexed", the marker
-    # never persisted, and every on:git_commit reindex redid a full repo reparse
-    # (~85-118s) forever, flapping past the 120s timeout (run_9a23dd4a).
+    # never-indexed path lets the marker writer (``build.ensure_fresh`` / ``rebuild``,
+    # guarded by ``if freshness.current_head:``) persist last_indexed_commit. Without
+    # it the marker never persisted on a never-indexed graph and every refresh redid a
+    # full repo reparse (run_9a23dd4a).
     try:
         current_head = _git(repo_root, ["rev-parse", "HEAD"]).strip()
         head_error: GitError | None = None
@@ -231,3 +229,20 @@ def _mtime_freshness(graph_store: GraphStore, repo_root: Path) -> FreshnessResul
         changed_files=changed,
         reason="mtime-based (no git)"
     )
+
+
+def head_stamp(graph_store: GraphStore) -> tuple[bool | None, str | None]:
+    """``(stale, head)`` from ONE ``git rev-parse HEAD`` against the graph's commit
+    marker — the stamp a reader in the daemon shows (it never refreshes a graph).
+    ``stale`` is None when it cannot tell (no repo root, not a git repo, git failed)."""
+    root = graph_store.get_meta("repo_root")
+    marker = graph_store.get_meta("last_indexed_commit")
+    if not root or not Path(root).is_dir():
+        return None, None
+    try:
+        head = _git(Path(root), ["rev-parse", "HEAD"]).strip() or None
+    except GitError:
+        return None, None
+    if head is None:
+        return None, None
+    return (marker != head), head

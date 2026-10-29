@@ -8,7 +8,11 @@ It is not complete either: a dynamic call (getattr, a string-dispatched handler,
 call in a repo the project does not bind) has no edge. So the answer names its own
 blind spots and the freshness of the graph, and grep stays the cross-check.
 
-    python -m core.code_intel.impact <file|symbol> --project P [--repo R] [--depth 2] [--json]
+    python -m core.code_intel.impact <file|symbol> --project P [--repo R] [--depth 2] [--json] [--no-refresh]
+
+Before answering, each graph is brought to its repo's HEAD (``build.ensure_fresh``):
+a change of up to 100 files is applied in this process, a larger one starts a
+rebuild child and the answer says the graph is behind. ``--no-refresh`` skips it.
 
 A target is a repo-relative file path (every symbol in it; callers inside the same
 file are left out) or a symbol: ``name``, ``Class.method`` or ``path::Class.method``.
@@ -52,6 +56,7 @@ class GraphImpact:
     commits_behind: int | None = None
     changed_since_index: list[str] = field(default_factory=list)
     freshness: str = ""                  # "", or why the graph may be behind
+    refreshed: int = 0                   # files brought up to HEAD before answering
 
 
 def _seeds(graph: GraphStore, target: str) -> tuple[str, list[str], int]:
@@ -96,12 +101,19 @@ def _callers(graph: GraphStore, seeds: list[str], depth: int) -> list[Caller]:
 
 
 def impact(project: str, target: str, *, repo: str | None = None,
-           depth: int = 2) -> list[GraphImpact] | None:
+           depth: int = 2, refresh: bool = True) -> list[GraphImpact] | None:
     """The callers of *target* in every graph of *project* that holds it (or the graph
     of *repo*). None when the project has no such graph; an empty list when no graph
-    holds the target."""
+    holds the target.
+
+    *refresh* (default): each graph is first brought to its repo's HEAD
+    (``build.ensure_fresh``): a small change is applied now, a large one starts a
+    rebuild child and the answer says so. This runs in the caller's process (a CLI),
+    never in the daemon."""
     from . import load_project_graphs
+    from .build import ensure_fresh
     from .freshness import check_freshness
+    from jobs.paths import PROJECTS_DIR
     depth = max(1, min(depth, MAX_DEPTH))
     graphs = load_project_graphs(project)
     if repo is not None:
@@ -110,22 +122,31 @@ def impact(project: str, target: str, *, repo: str | None = None,
         return None
     results: list[GraphImpact] = []
     for ref, graph in graphs:
+        note, behind, changed, refreshed = "", None, [], 0
+        try:
+            if refresh:
+                fr = ensure_fresh(PROJECTS_DIR / project, ref, graph)
+                if fr.state == "updated":
+                    refreshed = len(fr.changed)
+                elif not fr.current:
+                    note, behind, changed = (fr.message or "the graph is behind the repo",
+                                             fr.commits_behind, list(fr.changed))
+            else:
+                fresh = check_freshness(graph)
+                if fresh.stale:
+                    note, behind, changed = (fresh.reason or "the graph is behind the repo",
+                                             fresh.commits_behind, list(fresh.changed_files))
+        except Exception as exc:  # noqa: BLE001 — the answer stands; say freshness is unknown
+            note = f"freshness unknown: {type(exc).__name__}"
         kind, seeds, more = _seeds(graph, target)
         if not seeds:
             continue
-        res = GraphImpact(repo=ref.repo, target_kind=kind, seeds=seeds, more_matches=more,
-                          callers=_callers(graph, seeds, depth),
-                          indexed_commit=graph.get_meta("last_indexed_commit"))
-        try:
-            fresh = check_freshness(graph)
-        except Exception as exc:  # noqa: BLE001 — the answer stands; say freshness is unknown
-            res.freshness = f"freshness unknown: {type(exc).__name__}"
-        else:
-            if fresh.stale:
-                res.commits_behind = fresh.commits_behind
-                res.changed_since_index = list(fresh.changed_files)
-                res.freshness = fresh.reason or "the graph is behind the repo"
-        results.append(res)
+        results.append(GraphImpact(
+            repo=ref.repo, target_kind=kind, seeds=seeds, more_matches=more,
+            callers=_callers(graph, seeds, depth),
+            indexed_commit=graph.get_meta("last_indexed_commit"),
+            commits_behind=behind, changed_since_index=changed, freshness=note,
+            refreshed=refreshed))
     return results
 
 
@@ -146,12 +167,15 @@ def render(project: str, target: str, results: list[GraphImpact]) -> str:
         if res.target_kind == "symbol" and len(res.seeds) > 1:
             lines.append("  matches: " + ", ".join(res.seeds)
                          + (f" (+{res.more_matches} more: give file::name)" if res.more_matches else ""))
+        if res.refreshed:
+            lines.append(f"  graph: brought up to HEAD ({res.refreshed} changed files) before answering")
         if res.freshness:
             changed = res.changed_since_index
             hit = sorted({c.file for c in res.callers} & set(changed) | ({target} & set(changed)))
             behind = (f"{res.commits_behind} commits behind HEAD"
-                      if res.commits_behind is not None else res.freshness)
-            note = f"  graph: indexed at {(res.indexed_commit or '?')[:9]}, {behind}"
+                      if res.commits_behind is not None else "behind")
+            note = (f"  graph: indexed at {(res.indexed_commit or '?')[:9]}, {behind} — "
+                    f"{res.freshness}")
             if hit:
                 note += "; changed since, in this answer: " + ", ".join(hit)
             elif changed:
@@ -182,8 +206,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", default=None, help="one bound repo's graph (default: every graph)")
     ap.add_argument("--depth", type=int, default=2, help=f"caller hops, 1-{MAX_DEPTH} (default 2)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--no-refresh", action="store_true",
+                    help="answer from the graph as it is (do not bring it up to HEAD first)")
     args = ap.parse_args(argv)
-    results = impact(args.project, args.target, repo=args.repo, depth=args.depth)
+    results = impact(args.project, args.target, repo=args.repo, depth=args.depth,
+                     refresh=not args.no_refresh)
     if results is None:
         what = f"repo {args.repo!r}" if args.repo else "code graph"
         print(f"{args.project}: no {what} (bind a repo, or index the project's own)",

@@ -133,11 +133,27 @@ def test_a_name_with_many_matches_lists_some_and_asks_to_qualify(project):
     assert "(+2 more: give file::name)" in mod.render("Demo", "run", [res])
 
 
-def test_a_stale_graph_says_so_and_names_changed_files_in_the_answer(project):
-    from core.code_intel.impact import impact, render
-    _commit(project["app"], {"api/routes.py": "from core.store import save\n\n"
+def _move_the_caller(project):
+    _commit(project["app"], {"api/routes.py": "from core.store import save\n\n\n"
                                               "def post(x):\n    return save(x) + 0\n"}, "edit")
+
+
+def test_impact_brings_the_graph_to_head_before_answering(project):
+    """A commit since the build: the answer is computed on the updated graph, and it
+    says so (design 2026-10-29-code-intel-unification §0.2: refresh on read)."""
+    from core.code_intel.impact import impact, render
+    _move_the_caller(project)
     res = _by_repo(impact("Demo", "core/store.py::save", repo="app"))["app"]
+    assert res.refreshed == 1 and res.commits_behind is None and not res.freshness
+    assert [c.line for c in res.callers if c.file == "api/routes.py"] == [4]
+    assert res.indexed_commit == _git(project["app"], "rev-parse", "HEAD").strip()
+    assert "brought up to HEAD (1 changed files)" in render("Demo", "core/store.py::save", [res])
+
+
+def test_without_refresh_a_stale_graph_says_so_and_names_changed_files(project):
+    from core.code_intel.impact import impact, render
+    _move_the_caller(project)
+    res = _by_repo(impact("Demo", "core/store.py::save", repo="app", refresh=False))["app"]
     assert res.commits_behind == 1 and res.changed_since_index == ["api/routes.py"]
     text = render("Demo", "core/store.py::save", [res])
     assert "1 commits behind HEAD" in text and "in this answer: api/routes.py" in text

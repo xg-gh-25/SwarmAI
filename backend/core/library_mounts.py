@@ -524,7 +524,8 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
 
     Uses code_intel's public parse API + GraphStore public API only — never
     touches the CRITICAL shared _graph_cache or the project reindex loop. Returns
-    {status, symbols?} — status ∈ {indexed, indexed_empty, skipped_non_code, unknown, source_missing}.
+    {status, symbols?} — status ∈ {indexed, indexed_empty, skipped_non_code, unknown, source_missing,
+    already_indexing}.
 
     last_synced honesty (run_139d7652, Gate-2 HIGH): mark_synced is the signal the
     Library UI reads to claim "indexed — recall reaches it". A marker-bearing repo
@@ -544,22 +545,23 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
         store.check_health(mount_id)  # persists 'missing'
         return {"status": "source_missing"}
 
-    from core.code_intel.build import rebuild
+    from core.code_intel.build import rebuild, write_lock
     from core.code_intel.graph_store import GraphStore
 
     _invalidate_mount_graph(mount_id)  # drop any cached handle before rewrite
     db_path = _mount_db_path(mount_id)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    graph = GraphStore(db_path)
-    # The one full rebuild, without routes (a library's routes have no reader) and
-    # without the indexed stamp (a mount's freshness is its own last_synced). An
-    # empty parse leaves a previous graph as it was.
-    built = rebuild(graph, src, head=None, routes=False, stamp=False)
-    total = 0
-    if not built.empty:
-        graph.set_meta("repo_root", str(src))  # points at the EXTERNAL source, as given
-        graph.set_meta("mount_id", mount_id)
-        total = built.nodes
+    with write_lock(db_path, wait=False) as held:
+        if not held:  # a second index of the same mount is already running
+            return {"status": "already_indexing"}
+        graph = GraphStore(db_path)
+        # The one full rebuild, without routes (a library's routes have no reader) and
+        # without the indexed stamp (a mount's freshness is its own last_synced). An
+        # empty parse leaves a previous graph as it was.
+        # repo_root points at the EXTERNAL source, as given
+        built = rebuild(graph, src, head=None, routes=False, stamp=False,
+                        meta={"repo_root": str(src), "mount_id": mount_id})
+        total = 0 if built.empty else built.nodes
     with _mount_cache_lock:
         _mount_graph_cache[mount_id] = graph
     if total > 0:
@@ -694,3 +696,32 @@ def recall_mounts(query: str, *, scope: str, store: "LibraryMounts", limit: int 
     # Rank across mounts by the graph's own rank (more-negative BM25 = better).
     out.sort(key=lambda h: h.get("rank", 0.0))
     return out[:limit]
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m core.library_mounts index-code <mount id>``: index a code mount in
+    this process. The daemon starts it as a child (``code_intel.build.spawn_child``) so
+    a parse never holds the daemon's GIL."""
+    import json
+    import sqlite3
+    import sys
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 2 or args[0] != "index-code":
+        print("usage: python -m core.library_mounts index-code <mount id>", file=sys.stderr)
+        return 2
+    from jobs.paths import DB_PATH
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    try:
+        store = LibraryMounts(conn)
+        store.ensure_table()
+        result = index_code_mount(store, args[1])
+    finally:
+        conn.close()
+    print(json.dumps({"mount": args[1], **result}))
+    return 0 if result.get("status") in ("indexed", "indexed_empty") else 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    sys.exit(main())

@@ -296,49 +296,41 @@ def test_owned_repo_names_never_collide(tmp_path: Path, monkeypatch) -> None:
 
 # ── wiring: bind, reindex and the CLI call the one entry point ──────────────
 
-def test_reindex_syncs_docs_after_processing_a_moved_head(monkeypatch, tmp_path: Path) -> None:
+def test_the_refresh_job_syncs_docs_after_a_moved_head(monkeypatch, tmp_path: Path,
+                                                       own_local_root) -> None:
+    """The repo's documents follow its HEAD: the hourly refresh (``ensure_fresh``)
+    re-syncs them with the commit range's changed files."""
+    import subprocess
     import jobs.handlers.code_intel_reindex as job
     import core.brain_bootstrap.doc_index as di
+    from core.code_intel.build import ensure_graph
+    ws = tmp_path / "ws"
+    proj = ws / "Projects" / "Acme"
+    proj.mkdir(parents=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.email=t@e", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a.py").write_text("def a():\n    return 1\n")
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "i"], check=True)
+    own_local_root("Acme", repo)
+    monkeypatch.setattr("config.get_swarmws", lambda: ws)
     calls: list = []
     monkeypatch.setattr(di, "sync_repo_after_head_move",
                         lambda p, r, changed=None: calls.append((Path(p).name, str(r), changed))
                         or {"files": 1})
-    # drive the loop to the end of one project with a stubbed graph
-    ws = tmp_path / "ws"
-    proj = ws / "Projects" / "Acme"
-    proj.mkdir(parents=True)
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-
-    class G:
-        def get_meta(self, k):
-            return str(repo_root) if k == "repo_root" else None
-
-        def set_meta(self, *a):
-            pass
-
-        def checkpoint_truncate(self):
-            pass
-
-        def __getattr__(self, name):   # every other graph call: a no-op
-            return lambda *a, **k: 0
-
-    class F:
-        stale = True
-        suggest_full_rebuild = False
-        current_head = "abc"
-        changed_files: list = []
-        commits_behind = 1
-
-    monkeypatch.setattr("config.get_swarmws", lambda: ws)
-    monkeypatch.setattr("core.code_intel.code_intel_db_for", lambda d: proj / "code_intel.db")
-    monkeypatch.setattr("core.code_intel.load_project_graphs", lambda n: [(_REF, G())])
-    monkeypatch.setattr("core.code_intel.freshness.check_freshness", lambda g: F())
-    monkeypatch.setattr("core.code_intel.repo_root_is_owned", lambda d, r: True)
+    ensure_graph(proj)
+    calls.clear()                                  # the first build's own sync
+    (repo / "README.md").write_text("# Acme\n")
+    (repo / "a.py").write_text("def a():\n    return 2\n")
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "docs"], check=True)
     out = job.reindex_projects()
-    assert calls == [("Acme", str(repo_root.resolve()), [])]   # the commit range's changes
-    assert out["projects"][0].get("docs") == {"skipped": None, "files": 1, "written": None,
-                                              "removed": None, "survey_refreshed": None}
+    assert [r["status"] for r in out["projects"]] == ["updated"], out
+    assert len(calls) == 1
+    name, root, changed = calls[0]
+    assert (name, root) == ("Acme", str(repo.resolve())) and "a.py" in changed
 
 
 def test_survey_cli_runs_the_sync(monkeypatch, tmp_path: Path, capsys) -> None:

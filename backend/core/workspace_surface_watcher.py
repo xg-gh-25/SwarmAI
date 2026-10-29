@@ -11,8 +11,8 @@ session's live SSE stream (see surface_injection.py for the bleed-proof
 attribution rule). Additive: Layer-1 per-tool emit + the pipeline-finish
 sweep_run_changes fallback are unchanged.
 
-DESIGN (mirrors code_intel/watcher.py, the proven in-production pattern)
-------------------------------------------------------------------------
+DESIGN (the pattern of the former code-intel file watcher)
+----------------------------------------------------------
 - watchfiles.awatch over SwarmWS with a LIGHTWEIGHT ``watch_filter`` (extension +
   path-segment only — NO git subprocess in the filter; that would be one
   check-ignore per event = a flood).

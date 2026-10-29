@@ -274,13 +274,25 @@ class TestOnDemand:
         invalidate_cache("Nope")
         assert analyze_project("Nope") is None
 
-    def test_cli(self, tmp_path, monkeypatch, capsys):
-        graph, _repo = _real_graph(tmp_path)
+    def test_cli(self, tmp_path, monkeypatch, capsys, own_local_root):
+        from core.code_intel.local_roots import db_path
+        import subprocess
+        graph, repo = _real_graph(tmp_path)
         graph.close()
+        for args in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "-m", "i"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
         proj = tmp_path / "Projects" / "Demo"
         proj.mkdir(parents=True)
-        (tmp_path / "g.db").rename(proj / "code_intel.db")
+        own_local_root("Demo", repo)
+        db_path(repo).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "g.db").rename(db_path(repo))
         monkeypatch.setattr("jobs.paths.PROJECTS_DIR", tmp_path / "Projects")
+        # the CLI brings the graph to HEAD first; this repo was never stamped, so
+        # that is a rebuild child (not started here)
+        spawned = []
+        monkeypatch.setattr("core.code_intel.build.spawn_build",
+                            lambda project, **kw: spawned.append(project))
         from core.code_intel import invalidate_cache
         invalidate_cache("Demo")
         try:
@@ -291,6 +303,7 @@ class TestOnDemand:
             assert main(["Demo", "--layers", "bogus"]) == 2
             assert main(["Missing"]) == 1
             assert not (proj / "code-intel.json").exists()
+            assert spawned and set(spawned) == {"Demo"}
         finally:
             invalidate_cache("Demo")
 
@@ -324,14 +337,26 @@ class TestEndpoint:
 
 
 class TestReindexJobStoresNothingButTheGraph:
-    def test_full_reindex_writes_no_json_and_records_coverage(self, tmp_path, monkeypatch):
-        from core.code_intel.tests.test_freshness import TestGradedIncrementalE2E as _Fixture
-        handler, proj, _env = _Fixture()._init_repo(tmp_path, monkeypatch)
-        monkeypatch.setattr("config.get_swarmws", lambda: proj.parent.parent)
-        (proj / "notes.cbl").write_text("IDENTIFICATION DIVISION.\n", encoding="utf-8")
-        handler.reindex_projects(full=True)
+    def test_full_reindex_writes_no_json_and_records_coverage(self, tmp_path, monkeypatch,
+                                                              own_local_root):
+        import subprocess
+        from core.code_intel.local_roots import db_path
+        from jobs.handlers.code_intel_reindex import reindex_projects
+        proj = tmp_path / "ws" / "Projects" / "Demo"
+        proj.mkdir(parents=True)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "m.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+        (repo / "notes.cbl").write_text("IDENTIFICATION DIVISION.\n", encoding="utf-8")
+        for args in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-q", "-m", "i"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
+        own_local_root("Demo", repo)
+        monkeypatch.setattr("config.get_swarmws", lambda: tmp_path / "ws")
+        monkeypatch.setattr("core.code_intel.build._sync_docs", lambda *a: None)
+        reindex_projects(full=True)
         assert not (proj / "code-intel.json").exists()
-        graph = GraphStore(proj / "code_intel.db")
+        graph = GraphStore(db_path(repo))
         try:
             with patch("core.code_intel.analysis._packages", return_value=None):
                 cov = analyze_graph_store(graph, ["structure"])["structure"]["coverage"]

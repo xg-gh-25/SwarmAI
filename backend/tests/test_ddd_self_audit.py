@@ -82,10 +82,18 @@ class TestDomainAwarePrompt:
 
 
 class TestCodeBackedDetection:
-    def test_a_code_graph_makes_project_code_backed(self, tmp_path):
+    def test_a_code_graph_makes_project_code_backed(self, tmp_path, own_local_root):
         from core.code_intel.graph_store import GraphStore
-        GraphStore(tmp_path / "code_intel.db").close()
-        assert _is_code_backed(tmp_path) is True
+        from core.code_intel.local_roots import db_path
+        proj = tmp_path / "Demo"
+        proj.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        GraphStore(proj / "code_intel.db").close()       # the old home counts for nothing
+        assert _is_code_backed(proj) is False
+        own_local_root("Demo", repo)
+        GraphStore(db_path(repo)).close()
+        assert _is_code_backed(proj) is True
 
     def test_code_intel_json_alone_is_not_code_backed(self, tmp_path):
         """code-intel.json left the product (design 2026-10-27 §5.9)."""

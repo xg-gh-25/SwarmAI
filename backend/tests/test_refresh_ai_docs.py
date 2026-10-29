@@ -62,7 +62,7 @@ class TestCodeIntelStats:
 
     def test_returns_zeros_when_no_db(self):
         """Returns (0, 0) when no database file exists."""
-        with patch("scripts.refresh_ai_docs.CODE_INTEL_DB_PATHS", [Path("/nonexistent/db")]):
+        with patch("scripts.refresh_ai_docs._code_intel_db_paths", return_value=[Path("/nonexistent/db")]):
             symbols, edges = _get_code_intel_stats()
             assert symbols == 0
             assert edges == 0
@@ -80,7 +80,7 @@ class TestCodeIntelStats:
             conn.commit()
             conn.close()
 
-            with patch("scripts.refresh_ai_docs.CODE_INTEL_DB_PATHS", [Path(f.name)]):
+            with patch("scripts.refresh_ai_docs._code_intel_db_paths", return_value=[Path(f.name)]):
                 symbols, edges = _get_code_intel_stats()
                 assert symbols == 5
                 assert edges == 3

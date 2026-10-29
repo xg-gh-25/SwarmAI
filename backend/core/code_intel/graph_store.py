@@ -10,6 +10,7 @@ Public symbols:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import re
@@ -234,9 +235,8 @@ class _LockingConnection:
     module level (``__init__._graph_cache``) so its ONE connection is reached
     concurrently from SEVERAL threads across DIFFERENT executor pools — code_intel
     READS (``routers/code_intel.py`` on ``asyncio.to_thread``; ``recall_multi`` on the
-    bounded ``executors "io"`` pool) and WRITES (``context_health_hook`` on the bounded
-    ``executors "subprocess"`` pool; ``code_change_feed`` + the reindex job via
-    ``load_project_graphs`` on the anyio/default pool). This is NOT an exhaustive list
+    bounded ``executors "io"`` pool) and the incremental WRITES of ``ensure_fresh``
+    (the reindex job, ``impact``). This is NOT an exhaustive list
     and the pool a caller uses is IRRELEVANT to the hazard: any 2 threads sharing one
     ``sqlite3.Connection`` object is the danger, regardless of which pool they came from.
     A single ``sqlite3.Connection`` is NOT safe for concurrent use across threads
@@ -256,6 +256,10 @@ class _LockingConnection:
     def __init__(self, conn: "sqlite3.Connection", lock: "threading.RLock") -> None:
         self._conn = conn
         self._lock = lock
+        # Inside GraphStore.transaction(): the store's own commits wait for the outer
+        # one, and a rollback is remembered (the transaction then fails as a whole).
+        self._defer_commit = 0
+        self._rolled_back = False
 
     def execute(self, sql: str, params=None) -> _MaterializedCursor:
         with self._lock:
@@ -278,10 +282,14 @@ class _LockingConnection:
 
     def commit(self) -> None:
         with self._lock:
+            if self._defer_commit:
+                return
             self._conn.commit()
 
     def rollback(self) -> None:
         with self._lock:
+            if self._defer_commit:
+                self._rolled_back = True
             self._conn.rollback()
 
     def cursor(self):
@@ -367,8 +375,8 @@ class GraphStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: GraphStore is cached at module level, so its one
         # connection is reached concurrently from several threads across different
-        # executor pools (code_intel reads on to_thread/"io"; writes from
-        # context_health on "subprocess" and code_change_feed/reindex on anyio) —
+        # executor pools (code_intel reads on to_thread/"io"; incremental writes
+        # from ensure_fresh) —
         # not an exhaustive list, and the pool is irrelevant: any 2 threads on one
         # Connection object is the hazard.
         # check_same_thread=False only DISABLES sqlite3's ownership assertion;
@@ -528,7 +536,8 @@ class GraphStore:
         here must NEVER break indexing, so all errors are swallowed with a debug log
         (the WAL merely stays large; correctness is unaffected).
         """
-        if not self._conn:
+        if not self._conn or getattr(self._conn, "_defer_commit", 0):
+            # inside transaction(): nothing is committed yet, the caller checkpoints
             return
         try:
             row = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
@@ -537,6 +546,37 @@ class GraphStore:
                 logger.debug("WAL checkpoint(TRUNCATE) busy — reader held WAL, will retry next bulk write")
         except Exception as e:
             logger.debug("WAL checkpoint(TRUNCATE) skipped: %s", e)
+
+    @contextlib.contextmanager
+    def transaction(self):
+        """Run a multi-step write as ONE SQLite transaction (``BEGIN IMMEDIATE``).
+
+        The store's methods commit as they go; inside this block those commits wait
+        for the end, so a reader in another process (the daemon reading a graph a CLI
+        or a job is rebuilding) sees the graph before or after, never half of it, and a
+        writer killed in the middle leaves the old graph. A rollback inside the block
+        (a failed write method) fails the whole transaction.
+        """
+        conn = self._conn
+        with self._conn_lock:
+            if conn.in_transaction:
+                conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            conn._defer_commit += 1
+            conn._rolled_back = False
+            try:
+                yield self
+            except BaseException:
+                conn._defer_commit -= 1
+                if conn.in_transaction:
+                    conn.rollback()
+                raise
+            conn._defer_commit -= 1
+            if conn._rolled_back:
+                if conn.in_transaction:
+                    conn.rollback()
+                raise sqlite3.OperationalError("a write inside the transaction rolled back")
+            conn.commit()
 
     def close(self) -> None:
         """Close the underlying SQLite connection."""
@@ -1129,6 +1169,23 @@ class GraphStore:
 
     # ── codebase summary ─────────────────────────────────────────────────
 
+    def counts(self) -> dict:
+        """The cheap facts a status line needs: symbols, edges, files, languages and
+        when it was indexed. No dead-code scan, no module map (``get_codebase_summary``
+        does those; the daemon's status reads must not)."""
+        langs = dict(self._conn.execute(
+            "SELECT language, COUNT(*) FROM code_nodes GROUP BY language").fetchall())
+        nodes = self._conn.execute("SELECT COUNT(*) FROM code_nodes").fetchone()[0]
+        edges = self._conn.execute("SELECT COUNT(*) FROM code_edges").fetchone()[0]
+        files = self._conn.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM code_nodes").fetchone()[0]
+        when = self.indexed_at()
+        return {"nodes": nodes, "edges": edges, "files": files,
+                "languages": {k or "unknown": v for k, v in langs.items()},
+                "last_indexed": (datetime.fromtimestamp(when, timezone.utc)
+                                 .isoformat(timespec="seconds") if when else None),
+                "indexed_commit": self.get_meta("last_indexed_commit")}
+
     def get_codebase_summary(self) -> dict:
         """Compact codebase overview (~100 tokens).
 
@@ -1302,34 +1359,6 @@ class GraphStore:
             for r in rows
         ]
 
-    def get_edges_by_file(self, file_path: str) -> list[dict]:
-        """Return the edges ORIGINATING from *file_path* (source_id ∈ this file).
-
-        ⚠️ Population must mirror the parser's edge-emission rule (parser.py:~483:
-        ``CodeEdge(source_id=enclosing_func, ...)`` — the source is always a def IN
-        the file being parsed). The `code_edges` table has NO `file_path` column
-        (edges are associated to a file only via node ids), and
-        INBOUND calls from OTHER files are never re-emitted for THIS file, so
-        including them would make the OLD signature (superset) and the NEW
-        signature (parser outbound-only) permanently unequal → every file grades
-        STRUCTURAL → the grading optimization silently no-ops (Gate-1 #2,
-        run_4602932d). So this reader filters to OUTBOUND edges only, matching the
-        parser exactly (and matching what `store_file_nodes_edges` replaces).
-        """
-        rows = self._conn.execute(
-            "SELECT e.source_id, e.target_id, e.edge_type, e.confidence, e.line_number "
-            "FROM code_edges e "
-            "WHERE e.source_id IN (SELECT id FROM code_nodes WHERE file_path = ?)",
-            (file_path,),
-        ).fetchall()
-        return [
-            {
-                "source_id": r[0], "target_id": r[1], "edge_type": r[2],
-                "confidence": r[3], "line_number": r[4],
-            }
-            for r in rows
-        ]
-
     def get_full_graph(self) -> dict:
         """Return the ENTIRE graph — all nodes + all edges, NO limit.
 
@@ -1463,8 +1492,8 @@ class GraphStore:
     def resolve_and_prune(self, files: list[str] | None = None) -> int:
         """Resolve cross-file call targets, then drop edges that still point at nothing.
 
-        Shared by the full rebuild (``bulk_insert``) and every incremental re-store
-        (``incremental_update``, the reindex job, the health hook), so a cross-file
+        Shared by the full rebuild (``bulk_insert``) and the incremental re-store
+        (``incremental_update``, through ``build.update_files``), so a cross-file
         call stored incrementally resolves exactly as it would in a full rebuild:
         before this, only ``bulk_insert`` ran it and incrementally stored
         ``module::name`` targets dangled until the next full rebuild.
@@ -1474,7 +1503,8 @@ class GraphStore:
         limits the cleanup to edges whose source is in those files (the incremental
         callers pass the files they re-stored); None means the whole graph, which only
         a full rebuild of this graph may use. Returns the number of resolved edges.
-        Never raises.
+        Never raises. Inside ``transaction()`` a failed cleanup rolls back, which
+        fails the whole transaction: the rebuild raises and the old graph stays.
         """
         resolved = 0
         try:
@@ -1486,9 +1516,7 @@ class GraphStore:
             logger.debug("Cross-file resolution skipped: %s", e)
         try:
             # Scoped to the re-stored files' outbound edges when *files* is given:
-            # another connection (a full rebuild in the reindex job or bind_repo)
-            # commits file by file, so a graph-wide prune here could delete that
-            # rebuild's not-yet-resolvable edges.
+            # an incremental update must not judge edges of files it did not touch.
             base = "DELETE FROM code_edges WHERE target_id NOT IN (SELECT id FROM code_nodes)"
             if files is None:
                 orphan_count = self._conn.execute(base).rowcount
@@ -1525,14 +1553,10 @@ class GraphStore:
         FTS is rebuilt at the end.
 
         ``repo_root``: when provided, persisted into ``graph_meta`` as the absolute
-        ``repo_root`` key. This is REQUIRED for the code_intel hook to work — its
-        ``_build_context`` converts an absolute file path to repo-relative via
-        ``get_meta("repo_root")``; if unset, injection is silently dead for every
-        file, and ``context_health_hook``'s incremental reindex (which also gates
-        on this key) never engages. All prod full-rebuild callers MUST pass it —
-        this is the single choke-point every create/full-rebuild path funnels
-        through, so stamping it here (not per-caller) makes it drift-proof.
-        Optional for back-compat with test callers that set_meta by hand.
+        ``repo_root`` key. Freshness, ownership checks and the incremental update all
+        read it, so every full rebuild passes it (``build.rebuild``): stamping it here,
+        the one place every full write funnels through, keeps it from drifting.
+        Optional for test callers that set_meta by hand.
         """
         for pr in parse_results:
             d = pr if isinstance(pr, dict) else pr.__dict__
@@ -1546,15 +1570,13 @@ class GraphStore:
         self.rebuild_fts()
         self.resolve_and_prune()
 
-        # Full rebuild wrote the whole graph into the WAL — reclaim it now so the
-        # -wal file doesn't stay multi-GB on disk (the 2.73GB-bloat root cause).
+        # Full rebuild wrote the whole graph into the WAL — reclaim it so the -wal
+        # file doesn't stay multi-GB on disk (the 2.73GB-bloat root cause). Inside
+        # transaction() this is a no-op; build.rebuild checkpoints after the commit.
         self.checkpoint_truncate()
 
-        # Persist repo_root so the code_intel hook can resolve absolute file paths
-        # to repo-relative (get_meta("repo_root") in _build_context). Without this,
-        # injection is silently dead for every file. set_meta is INSERT OR REPLACE,
-        # so re-stamping on every rebuild is idempotent AND self-healing (backfills
-        # a db that predates this fix on its next full rebuild).
+        # set_meta is INSERT OR REPLACE: re-stamping on every rebuild is idempotent
+        # and backfills a db that predates the key on its next full rebuild.
         if repo_root:
             self.set_meta("repo_root", str(Path(repo_root).resolve()))
 

@@ -54,6 +54,17 @@ def _filled_doc(doc: str, name: str, *, skip: tuple[str, ...] = ()) -> str:
     return "\n".join(out) + "\n"
 
 
+@pytest.fixture(autouse=True)
+def _own_bindings_root(tmp_path, monkeypatch):
+    """The local-roots registry and graphs of these tests live in their tmp dir."""
+    monkeypatch.setattr("core.ddd_bindings._default_bindings_root",
+                        lambda: tmp_path / "bindings-root")
+    from core.code_intel import invalidate_cache
+    invalidate_cache()
+    yield
+    invalidate_cache()
+
+
 def _make_ddd(
     root: Path,
     name: str = "TestDDD",
@@ -110,21 +121,30 @@ def _make_ddd(
         (d / "project-agent.yaml").write_text(project_agent)
     if bindings_yaml is not None:
         (d / "bindings.yaml").write_text(bindings_yaml)
-    # ⑥ the derived code graph: a real one, built from a repo TECH.md declares
+    # ⑥ the derived code graph: a real one, built from a local checkout a person
+    # confirmed for this brain (the one ownership declaration for a local repo)
     if code_intel:
+        import subprocess
+        from core.code_intel import local_roots
         from core.code_intel.graph_store import GraphStore
         repo = d / "repo"
         repo.mkdir(exist_ok=True)
         (repo / "m.py").write_text("def f():\n    return 1\n")
-        tech = (doc_dir / "TECH.md") if docs else None
-        if tech is not None and tech.exists():
-            tech.write_text(tech.read_text() + f"\nLocal repo: **Local:** `{repo}`\n")
-        graph = GraphStore(d / "code_intel.db")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        local_roots.propose(d.name, repo)
+        local_roots.confirm(d.name, repo)
+        graph = GraphStore(local_roots.db_path(repo))
         graph.upsert_nodes([{"id": "m.py::f", "file_path": "m.py", "node_type": "function",
                              "name": "f", "line_start": 1, "line_end": 2, "language": "python"}])
         graph.set_meta("repo_root", str(repo))
         graph.close()
     return d
+
+
+def _graph_db(d: Path) -> Path:
+    """The graph db ``_make_ddd(code_intel=True)`` built for brain *d*."""
+    from core.code_intel import local_roots
+    return local_roots.db_path(d / "repo")
 
 
 def _status_of(report: dict, check_name_substr: str) -> str:
@@ -453,8 +473,10 @@ def test_empty_product_section_needs_a_gap(tmp_path):
 def test_empty_code_graph_is_pending(tmp_path):
     from core.code_intel.graph_store import GraphStore
     bindings = "governed_assets:\n  - kind: code-repo\n    name: svc\n"
-    d = _make_ddd(tmp_path, "EmptyGraph", bindings_yaml=bindings)
-    GraphStore(d / "code_intel.db").close()
+    d = _make_ddd(tmp_path, "EmptyGraph", bindings_yaml=bindings, code_intel=True)
+    db = _graph_db(d)
+    db.unlink()
+    GraphStore(db).close()
     report = gate.verify_project(d)
     assert _status_of(report, "code-intel") == "PENDING"
     assert "empty" in _detail_of(report, "code-intel")
@@ -466,7 +488,7 @@ def test_foreign_code_graph_is_pending(tmp_path):
     d = _make_ddd(tmp_path, "Foreign", bindings_yaml=bindings, code_intel=True)
     other = tmp_path / "someone_elses_repo"
     other.mkdir()
-    graph = GraphStore(d / "code_intel.db")
+    graph = GraphStore(_graph_db(d))
     graph.set_meta("repo_root", str(other))
     graph.close()
     report = gate.verify_project(d)
@@ -574,7 +596,7 @@ def test_portable_run_keeps_both_check_names_and_catches_a_stub(tmp_path, monkey
 def test_code_graph_check_is_read_only(tmp_path):
     bindings = "governed_assets:\n  - kind: code-repo\n    name: svc\n"
     d = _make_ddd(tmp_path, "RO", bindings_yaml=bindings, code_intel=True)
-    db = d / "code_intel.db"
+    db = _graph_db(d)
     before = db.read_bytes()
     with patch("core.code_intel.graph_store.GraphStore",
                side_effect=AssertionError("opened read-write")):

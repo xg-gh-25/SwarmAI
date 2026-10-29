@@ -151,8 +151,7 @@ def test_system_script_jobs_need_no_system_python_or_checkout():
     from utils.backend_bin import backend_bin
     scripts = [j for j in SYSTEM_JOBS if j.type == "script" and "command" in j.config]
     py_jobs = [j for j in scripts if " py " in j.config["command"]]
-    assert {j.id for j in py_jobs} >= {"loops-health", "judge-telemetry-report", "code-intel-reindex",
-                                        "code-intel-full-reindex"}
+    assert {j.id for j in py_jobs} >= {"loops-health", "judge-telemetry-report", "code-intel-reindex"}
     for j in scripts:
         cmd = j.config["command"]
         assert not cmd.startswith("python"), (j.id, cmd)

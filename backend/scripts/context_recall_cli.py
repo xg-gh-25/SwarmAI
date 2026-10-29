@@ -101,9 +101,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"allowed": False, "content": "",
                               "reason": f"unknown domain(s): {bad}; valid: {list(DOMAINS)}"}))
             return 2
+        # This CLI runs out of the daemon: a code graph is brought up to its repo's
+        # HEAD before it is searched (the daemon itself never writes a graph).
         r = recall_all(args.query, project=args.project, domains=sel,
                        allow_embed=False, max_sections=args.max_sections,
-                       policy_excluded_files=policy_excluded)
+                       policy_excluded_files=policy_excluded, refresh_code=True)
         # Repo documents and fetched signals are untrusted text: say so on each hit,
         # as the session prompt's own rendering does (recall_multi.render_recall_body).
         from core.recall_multi import is_external_source, is_repo_doc_source

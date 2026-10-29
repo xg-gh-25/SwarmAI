@@ -2,8 +2,9 @@
 
 Each entry point used to write the graph its own way: two rebuilds stored no routes,
 the Brain Hub re-index marked an emptied graph fresh, clear() kept the routes of
-deleted handlers, the health hook moved its commit marker past files it never
-indexed, the commit hook stored no routes and kept a renamed file's old nodes.
+deleted handlers, an incremental writer moved its commit marker past files it never
+indexed and kept a renamed file's old nodes. Now the rebuild child and the job call
+``rebuild``, and every incremental write is ``ensure_fresh`` → ``update_files``.
 Driven with real repos and real GraphStores; only the parse is replaced where a test
 needs it empty.
 """
@@ -141,16 +142,17 @@ def test_bind_stores_routes(tmp_path):
 
 
 @pytest.fixture
-def local_project(tmp_path, monkeypatch):
-    """A project whose own code_intel.db indexes a local repo its TECH.md declares."""
+def local_project(tmp_path, monkeypatch, own_local_root):
+    """A project that owns a local checkout (a confirmed local root) with a built graph."""
     from core.code_intel import invalidate_cache
     from core.code_intel.build import rebuild
-    projects = tmp_path / "Projects"
+    from core.code_intel.local_roots import db_path
+    projects = tmp_path / "ws" / "Projects"   # a local root may not sit inside SwarmWS
     proj = projects / "P"
     proj.mkdir(parents=True)
     repo = _repo(tmp_path / "repo", {"api/items.py": _ROUTER, "a.py": "def a():\n    return 1\n"})
-    (proj / "TECH.md").write_text(f"# TECH\n\n**Local:** `{repo}`\n", encoding="utf-8")
-    g = GraphStore(proj / "code_intel.db")
+    own_local_root("P", repo)
+    g = GraphStore(db_path(repo))
     rebuild(g, repo, head="first")
     g.close()
     monkeypatch.setattr("jobs.paths.PROJECTS_DIR", projects)
@@ -159,16 +161,18 @@ def local_project(tmp_path, monkeypatch):
     invalidate_cache("P")
 
 
-def _reopen(proj: Path) -> GraphStore:
-    return GraphStore(proj / "code_intel.db")
+def _reopen(repo: Path) -> GraphStore:
+    from core.code_intel.local_roots import db_path
+    return GraphStore(db_path(repo))
 
 
-def test_the_brain_hub_reindex_leaves_an_empty_parse_unstamped(local_project):
-    import routers.code_intel as mod
+def test_the_rebuild_child_leaves_an_empty_parse_unstamped(local_project):
+    """``python -m core.code_intel.build --full`` (what the re-index button starts)."""
+    from core.code_intel.build import main
     proj, repo = local_project
-    with _empty_parse(), patch.dict(mod._reindex_in_progress, {}, clear=True):
-        mod._run_reindex("P")
-    g = _reopen(proj)
+    with _empty_parse():
+        assert main(["--project", "P", "--full"]) == 0
+    g = _reopen(repo)
     try:
         assert g.get_nodes_by_file("a.py"), "an empty parse cleared the graph"
         assert g.get_meta("last_indexed_commit") == "first"
@@ -176,16 +180,15 @@ def test_the_brain_hub_reindex_leaves_an_empty_parse_unstamped(local_project):
         g.close()
 
 
-def test_the_brain_hub_reindex_stores_routes(local_project):
-    import routers.code_intel as mod
+def test_the_rebuild_child_stores_routes(local_project):
+    from core.code_intel.build import main
     proj, repo = local_project
-    g = _reopen(proj)
+    g = _reopen(repo)
     g._conn.execute("DELETE FROM code_routes")
     g._conn.commit()
     g.close()
-    with patch.dict(mod._reindex_in_progress, {}, clear=True):
-        mod._run_reindex("P")
-    g = _reopen(proj)
+    assert main(["--project", "P", "--full"]) == 0
+    g = _reopen(repo)
     try:
         assert ("/items", "api/items.py") in _route_paths(g)
     finally:
@@ -249,25 +252,27 @@ class TestUpdateFiles:
             g.close()
 
 
-def _health_hook_run(tmp_path, monkeypatch, changed, fail=()):
-    """Drive the real ContextHealthHook._refresh_code_intel over a project whose
-    graph is behind by *changed*; *fail* names files whose store fails."""
-    import core.code_intel as ci
+def _behind(tmp_path, monkeypatch, changed, fail=()):
+    """Run ``ensure_fresh`` over a graph that is behind by *changed* files (freshness
+    stubbed); *fail* names files whose store fails. Returns (graph, Freshness, spawned)."""
+    import core.code_intel.build as build
     import core.code_intel.freshness as fr
-    from hooks.context_health_hook import ContextHealthHook
     proj = tmp_path / "Projects" / "P"
-    repo = proj / "repo"
+    repo = proj.parent.parent / "repo"
     repo.mkdir(parents=True)
-    (proj / "TECH.md").write_text(f"# TECH\n\n**Local:** `{repo}`\n", encoding="utf-8")
+    proj.mkdir(parents=True)
     for f in changed:
         (repo / f).write_text(f"def {f[:-3]}():\n    return 1\n", encoding="utf-8")
-    g = GraphStore(proj / "code_intel.db")
+    db = tmp_path / "g.code_intel.db"
+    g = GraphStore(db)
     g.set_meta("repo_root", str(repo.resolve()))
     g.set_meta("last_indexed_commit", "old")
     stale = MagicMock(stale=True, suggest_full_rebuild=False, commits_behind=1,
-                      changed_files=list(changed), current_head="new")
-    monkeypatch.setattr(ci, "load_project_graphs", lambda name: [(_REF, g)])
+                      changed_files=list(changed), current_head="new", reason="behind")
     monkeypatch.setattr(fr, "check_freshness", lambda graph: stale)
+    monkeypatch.setattr(build, "_sync_docs", lambda *a: None)
+    spawned = []
+    monkeypatch.setattr(build, "spawn_build", lambda *a, **k: spawned.append((a, k)))
     real = g.store_file_nodes_edges
 
     def store(path, *a, **k):
@@ -276,45 +281,52 @@ def _health_hook_run(tmp_path, monkeypatch, changed, fail=()):
             raise sqlite3.OperationalError("database is locked")
         return real(path, *a, **k)
     monkeypatch.setattr(g, "store_file_nodes_edges", store)
-    ContextHealthHook()._refresh_code_intel(tmp_path)
-    return g
+    ref = _CIDb(db_path=db, repo="repo", repo_root=repo.resolve())
+    return g, build.ensure_fresh(proj, ref, g), spawned
 
 
-def test_the_health_hook_indexes_every_changed_file(tmp_path, monkeypatch):
+def test_ensure_fresh_indexes_every_changed_file(tmp_path, monkeypatch):
     changed = [f"m{i}.py" for i in range(60)]
-    g = _health_hook_run(tmp_path, monkeypatch, changed)
+    g, fresh, spawned = _behind(tmp_path, monkeypatch, changed)
     try:
+        assert fresh.state == "updated" and spawned == []
         assert all(g.get_nodes_by_file(f) for f in changed), "files after the 50th were dropped"
         assert g.get_meta("last_indexed_commit") == "new"
     finally:
         g.close()
 
 
-def test_the_health_hook_keeps_its_marker_when_a_file_failed(tmp_path, monkeypatch):
-    g = _health_hook_run(tmp_path, monkeypatch, ["a.py", "b.py"], fail=("b.py",))
+def test_ensure_fresh_keeps_its_marker_when_a_file_failed(tmp_path, monkeypatch):
+    """The marker stays, and a full rebuild child is started: the same file would fail
+    again on every read, and the full parse records it as a coverage hole."""
+    g, fresh, spawned = _behind(tmp_path, monkeypatch, ["a.py", "b.py"], fail=("b.py",))
     try:
+        assert fresh.state == "rebuilding" and "1 changed files" in fresh.message
+        assert spawned == [(("P",), {"repo": "repo", "full": True, "only_if_stale": True})]
         assert g.get_nodes_by_file("a.py")
         assert g.get_meta("last_indexed_commit") == "old"
     finally:
         g.close()
 
 
-def test_the_commit_hook_drops_a_renamed_files_old_path(tmp_path):
-    from core.code_intel.build import rebuild
-    from hooks.code_change_feed import CodeChangeFeed, _reindex_changed_files
+def test_ensure_fresh_drops_a_renamed_files_old_path(tmp_path):
+    """Real git rename, real freshness: the old path's nodes go with the marker."""
+    import core.code_intel.build as build
+    from core.code_intel.build import ensure_fresh, rebuild
     repo = _repo(tmp_path / "r", {"old/mod.py": "def f():\n    return 1\n"})
     g = GraphStore(tmp_path / "g.db")
     try:
-        rebuild(g, repo, head="h")
+        rebuild(g, repo, head=_git(repo, "rev-parse", "HEAD").strip())
         (repo / "new").mkdir()
         _git(repo, "mv", "old/mod.py", "new/mod.py")
         _git(repo, "commit", "-q", "-m", "mv")
-        lines = _git(repo, "log", "-1", "-M", "--name-status", "--format=").strip().splitlines()
-        changes = CodeChangeFeed()._parse_name_status(lines)
-        with patch("hooks.code_change_feed.load_project_graphs", return_value=[(_REF, g)]):
-            _reindex_changed_files(changes, str(repo), "P")
+        with patch.object(build, "_sync_docs", lambda *a: None):
+            fresh = ensure_fresh(tmp_path, _CIDb(db_path=tmp_path / "g.db", repo="r",
+                                                 repo_root=repo), g)
+        assert fresh.state == "updated"
         assert g.get_nodes_by_file("old/mod.py") == []
         assert g.get_nodes_by_file("new/mod.py")
+        assert g.get_meta("last_indexed_commit") == _git(repo, "rev-parse", "HEAD").strip()
     finally:
         g.close()
 
@@ -322,7 +334,7 @@ def test_the_commit_hook_drops_a_renamed_files_old_path(tmp_path):
 # ── review round 1 (correctness) ─────────────────────────────────────────────
 
 def test_freshness_lists_a_renamed_files_old_path(tmp_path):
-    """The health hook and the job take their files from check_freshness: with rename
+    """ensure_fresh takes its files from check_freshness: with rename
     detection the old path was missing, so its nodes outlived the marker."""
     from core.code_intel.freshness import check_freshness
     repo = _repo(tmp_path / "r", {"old/mod.py": "def f():\n    return 1\n"})
@@ -386,15 +398,14 @@ def test_a_directory_path_is_skipped_not_failed(tmp_path):
         g.close()
 
 
-def test_the_health_hook_schedules_a_rebuild_when_an_update_is_too_big(tmp_path, monkeypatch):
+def test_ensure_fresh_starts_a_rebuild_child_when_an_update_is_too_big(tmp_path, monkeypatch):
     from core.code_intel.build import FULL_REBUILD_FILES
-    events = []
-    monkeypatch.setattr("jobs.scheduler.emit_event_atomic",
-                        lambda name, data=None: events.append(name))
     changed = [f"m{i}.py" for i in range(FULL_REBUILD_FILES + 1)]
-    g = _health_hook_run(tmp_path, monkeypatch, changed)
+    g, fresh, spawned = _behind(tmp_path, monkeypatch, changed)
     try:
-        assert events == ["code_intel_full_reindex"]
+        assert fresh.state == "rebuilding"
+        assert spawned == [(("P",), {"repo": "repo", "full": True, "only_if_stale": True})]
+        assert not g.get_nodes_by_file("m0.py"), "a big update was parsed in-process"
         assert g.get_meta("last_indexed_commit") == "old"
     finally:
         g.close()
@@ -414,16 +425,16 @@ def test_a_rebind_with_an_empty_parse_reports_no_nodes(tmp_path):
 
 def _run_job(tmp_path, monkeypatch, full=True):
     from jobs.handlers.code_intel_reindex import reindex_projects
-    monkeypatch.setattr("config.get_swarmws", lambda: tmp_path)
+    monkeypatch.setattr("config.get_swarmws", lambda: tmp_path / "ws")
     return reindex_projects(full=full)
 
 
 def test_the_job_leaves_an_empty_parse_unstamped(local_project, tmp_path, monkeypatch):
-    proj, _repo_dir = local_project
+    proj, repo = local_project
     with _empty_parse():
         out = _run_job(tmp_path, monkeypatch)
-    assert [r["status"] for r in out["projects"] if r["project"] == "P"] == ["full_reindex"], out
-    g = _reopen(proj)
+    assert [r["status"] for r in out["projects"] if r["project"] == "P"] == ["empty"], out
+    g = _reopen(repo)
     try:
         assert g.count_files() > 0 and g.get_meta("last_indexed_commit") == "first"
     finally:
@@ -431,15 +442,45 @@ def test_the_job_leaves_an_empty_parse_unstamped(local_project, tmp_path, monkey
 
 
 def test_the_job_rebuild_stores_routes(local_project, tmp_path, monkeypatch):
-    proj, _repo_dir = local_project
-    g = _reopen(proj)
+    proj, repo = local_project
+    g = _reopen(repo)
     g._conn.execute("DELETE FROM code_routes")
     g._conn.commit()
     g.close()
     out = _run_job(tmp_path, monkeypatch)
-    assert [r["status"] for r in out["projects"] if r["project"] == "P"] == ["full_reindex"], out
-    g = _reopen(proj)
+    assert [r["status"] for r in out["projects"] if r["project"] == "P"] == ["built"], out
+    g = _reopen(repo)
     try:
         assert ("/items", "api/items.py") in _route_paths(g)
     finally:
         g.close()
+
+
+def test_ensure_fresh_never_applies_one_repos_diff_to_another(tmp_path, monkeypatch):
+    """The changed files come from the stored repo_root's history: a graph built from
+    another directory is rebuilt, not updated file by file."""
+    import core.code_intel.build as build
+    g, _fresh, spawned = _behind(tmp_path, monkeypatch, ["a.py"])
+    try:
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "a.py").write_text("def other():\n    return 0\n", encoding="utf-8")
+        g.set_meta("last_indexed_commit", "old")
+        g.remove_file("a.py")
+        ref = _CIDb(db_path=tmp_path / "g.code_intel.db", repo="repo", repo_root=other)
+        spawned.clear()
+        fresh = build.ensure_fresh(tmp_path / "Projects" / "P", ref, g)
+        assert fresh.state == "rebuilding" and "another directory" in fresh.message
+        assert g.get_nodes_by_file("a.py") == [] and len(spawned) == 1
+    finally:
+        g.close()
+
+
+def test_a_rebuild_child_that_got_the_lock_after_a_bind_started_skips(tmp_path, monkeypatch):
+    import core.code_intel.build as build
+    import core.ddd_bindings as db
+    repo = _repo(tmp_path / "r", {"a.py": "def a():\n    return 1\n"})
+    calls = iter([False, True])                 # free when asked, bound once locked
+    monkeypatch.setattr(db, "bind_in_progress", lambda root: next(calls))
+    monkeypatch.setattr(build, "rebuild", lambda *a, **k: pytest.fail("rebuilt during a bind"))
+    assert build.build_graph(_CIDb(db_path=tmp_path / "g.db", repo="r", repo_root=repo)) is None

@@ -26,8 +26,8 @@ vi.mock('@tauri-apps/api/window', () => ({
 // A project with a code graph exists: the bar must still not show a badge for one.
 vi.mock('../../services/codeIntel', () => ({
   getCodeIntelSummary: vi.fn().mockResolvedValue({
-    symbolCount: 10, edgeCount: 0, fileCount: 1, unusedExportsCount: 0, unusedExportsPct: 0,
-    entryPoints: 0, languages: {}, modulesTop5: [], lastIndexedAt: null, freshnessStatus: 'fresh',
+    symbolCount: 10, edgeCount: 0, fileCount: 1, languages: {}, lastIndexedAt: null,
+    indexedCommit: null, freshnessStatus: 'fresh',
   }),
   triggerReindex: vi.fn().mockResolvedValue(undefined),
 }));

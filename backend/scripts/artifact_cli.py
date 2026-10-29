@@ -458,6 +458,9 @@ def cmd_bind(args, reg) -> None:
     """
     from core.ddd_bindings import bind_project
 
+    if getattr(args, "local", None):
+        _bind_local(args.project, args.local)
+        return
     try:
         outcomes = bind_project(args.project)
     except (FileNotFoundError, ValueError) as e:
@@ -489,6 +492,32 @@ def cmd_bind(args, reg) -> None:
     # Run-level failure ONLY when there were bindings and every one failed.
     if outcomes and all(o.status == "failed" for o in outcomes):
         sys.exit(1)
+
+
+def _bind_local(project: str, path: str) -> None:
+    """Propose the user's own checkout *path* as a local root of *project*. It stays
+    pending, and owns nothing, until a person confirms it on the Brain Hub card; then
+    its graph is built (design 2026-10-29-code-intel-unification §0.3)."""
+    from core.code_intel.local_roots import LocalRootError, propose
+    # The registry is keyed by the project's directory name, the name Brain Hub reads
+    projects = _get_workspace() / "Projects"
+    names = [d.name for d in projects.iterdir() if d.is_dir()] if projects.is_dir() else []
+    match = [n for n in names if n == project] or [n for n in names if n.lower() == project.lower()]
+    if len(match) != 1:
+        print(json.dumps({"error": f"no project named {project!r}"}), file=sys.stderr)
+        sys.exit(1)
+    project = match[0]
+    try:
+        entry = propose(project, path)
+    except LocalRootError as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        sys.exit(1)
+    state = (entry or {}).get("state")
+    print(json.dumps({"project": project, "local_root": entry,
+                      "next": ("already confirmed" if state == "confirmed" else
+                               "ask the person to confirm it in Brain Hub (the Brain's "
+                               "Local repositories card); until then it is not read")},
+                     indent=2))
 
 
 def _summarize_learned(sync: dict) -> dict:
@@ -859,6 +888,9 @@ def main() -> None:
     # bind (CREATE→BIND→PULL: clone + index every binding of a project's bindings.yaml)
     p_bind = sub.add_parser("bind", help="PULL: clone + code-intel every binding in a project's bindings.yaml")
     p_bind.add_argument("--project", required=True, help="Project whose bindings.yaml to PULL")
+    p_bind.add_argument("--local", default=None, metavar="PATH",
+                        help="propose the user's own checkout PATH as a local root (pending until "
+                             "confirmed in Brain Hub) instead of PULLing bindings.yaml")
 
     # survey (design 2026-10-27 §5.2-§5.3: inventory the owned repos, index their docs in place)
     p_survey = sub.add_parser("survey", help="Survey a project's repos into survey.json and index their docs for recall")

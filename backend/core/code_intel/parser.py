@@ -776,9 +776,9 @@ def is_skipped_location(rel_path: str | PurePath) -> bool:
 def is_indexed_path(rel_path: str | PurePath) -> bool:
     """Whether a repo-relative path is one the code graph holds: an extension in
     LANGUAGE_MAP, outside the skipped directories. The ONE answer for every path
-    that decides graph membership (full rebuild, watcher, the commit hook); test
+    that decides graph membership (the full rebuild, the incremental update); test
     files are members like any other. .gitignore is applied on top by the callers
-    that walk or watch a repo (one batched ``git check-ignore``)."""
+    that walk a repo (one batched ``git check-ignore``)."""
     return PurePath(rel_path).suffix in LANGUAGE_MAP and not is_skipped_location(rel_path)
 
 
@@ -2223,13 +2223,10 @@ def parse_repo(repo_root: Path, languages: list[str] | None = None) -> list[Pars
     """
     Walk repo, parse all files matching LANGUAGE_MAP. Returns list[ParseResult].
 
-    BACK-COMPAT: this is the legacy list-returning API that 3 callers
-    (routers/code_intel.py, core/ddd_bindings.py, jobs/handlers/code_intel_reindex.py)
-    and test_parser.py depend on (they destructure the return as a bare list). It is
-    a thin wrapper over ``parse_repo_with_coverage`` that discards the coverage
-    ledger. Any caller that needs the "never silently under-report" coverage-holes
-    (the reindex job's full rebuild, which records them in graph meta) must call
-    ``parse_repo_with_coverage`` directly. DO NOT change this signature.
+    A thin wrapper over ``parse_repo_with_coverage`` that discards the coverage
+    ledger, for callers that only want the results (the parser tests). A rebuild
+    records the coverage holes in graph meta, so ``build.rebuild`` calls
+    ``parse_repo_with_coverage`` directly.
     """
     return parse_repo_with_coverage(repo_root, languages).results
 

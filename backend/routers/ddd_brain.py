@@ -1815,6 +1815,88 @@ async def confirm_project_agent(name: str, body: ProjectAgentConfirmBody) -> dic
     return await executors.run_nav(_work)
 
 
+# ── Local repositories (design 2026-10-29-code-intel-unification §0.3) ─────────
+# The user's own checkouts a Brain may read into its code graph. An agent proposes
+# one (``artifact_cli bind --local``); only a person confirms it, here. Confirm starts
+# the graph build in a child process: the daemon never parses.
+
+
+class LocalRootBody(BaseModel):
+    path: str
+
+
+def _local_roots_view(name: str, project_dir: Path) -> dict:
+    from core.code_intel import owned_graphs
+    from core.code_intel.local_roots import entries, suggest_from_tech_md
+    suggest_from_tech_md(project_dir)          # a legacy TECH.md path, once, as pending
+    built = {str(ref.repo_root): ref.db_path.exists() for ref in owned_graphs(project_dir)
+             if ref.repo_root is not None}
+    rows = []
+    for e in entries(name):
+        rows.append({"path": e["path"], "state": e.get("state"), "source": e.get("source"),
+                     "addedAt": e.get("added_at"), "confirmedAt": e.get("confirmed_at"),
+                     "graphBuilt": bool(built.get(e["path"]))})
+    return {"localRoots": rows}
+
+
+@router.get("/brains/{name}/local-roots")
+async def get_local_roots(name: str) -> dict:
+    """The Brain's local repositories: pending ones wait for a person's Confirm."""
+
+    def _work() -> dict:
+        project_dir = _resolve_brain_dir(name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+        return _local_roots_view(name, project_dir)
+
+    return await executors.run_nav(_work)
+
+
+@router.post("/brains/{name}/local-roots/confirm")
+async def confirm_local_root(name: str, body: LocalRootBody) -> dict:
+    """A person confirms a proposed local repository: it becomes owned and its graph
+    is built in a child process. 400 when the path is not allowed or was not proposed."""
+    import os as _os
+    from core.code_intel.local_roots import LocalRootError, confirm
+    if _os.environ.get("SWARMAI_MODE") == "hive":
+        # a person confirms on their own machine; a Hive confirming would let whatever
+        # holds the Hive credential pick a directory to parse (as for the Project Agent)
+        raise HTTPException(status_code=403, detail="Confirm a local repository on the desktop")
+
+    def _work() -> dict:
+        project_dir = _resolve_brain_dir(name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+        try:
+            entry = confirm(name, body.path)
+        except LocalRootError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        from core.code_intel import owned_graphs
+        from core.code_intel.build import spawn_build
+        repo = next((ref.repo for ref in owned_graphs(project_dir)
+                     if ref.repo_root is not None and str(ref.repo_root) == entry["path"]), None)
+        spawn_build(name, repo=repo)
+        return {**_local_roots_view(name, project_dir), "building": repo}
+
+    return await executors.run_nav(_work)
+
+
+@router.post("/brains/{name}/local-roots/remove")
+async def remove_local_root(name: str, body: LocalRootBody) -> dict:
+    """Stop reading a local repository into this Brain (its graph file is left)."""
+    from core.code_intel.local_roots import remove
+
+    def _work() -> dict:
+        project_dir = _resolve_brain_dir(name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+        if not remove(name, body.path):
+            raise HTTPException(status_code=404, detail=f"{body.path} is not a local root of {name}")
+        return _local_roots_view(name, project_dir)
+
+    return await executors.run_nav(_work)
+
+
 @router.get("/runner-agent")
 async def get_runner_agent() -> dict:
     """The Runner Agent: the General Brain's Project Agent (Knowledge/Library), for

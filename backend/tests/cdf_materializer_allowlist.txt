@@ -113,7 +113,6 @@ core/swarm_workspace_manager.py:ensure_project_metadata  # exempt: .project.json
 core/turn_changes.py:_tree  # exempt: temp git index copy
 core/user_observer.py:UserObserver.save_observations  # exempt: observations JSONL, not a governed file
 hooks/auto_commit_hook.py:WorkspaceAutoCommitHook._cleanup_stale_git_lock  # exempt: stale .git/index.lock
-hooks/code_change_feed.py:CodeChangeFeed._persist_last_commit  # exempt: last-analyzed commit state
 hooks/context_health_hook.py:ContextHealthHook._check_cache_freshness  # exempt: L1 prompt cache
 hooks/context_health_hook.py:ContextHealthHook._check_git_health  # exempt: stale .git lock
 hooks/context_health_hook.py:ContextHealthHook._deep_check  # exempt: via check_adversarial_health: adversarial health state file; the deep check itself is read-only on governed files

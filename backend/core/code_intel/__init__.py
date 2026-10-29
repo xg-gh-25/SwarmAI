@@ -4,9 +4,9 @@ Code Intelligence Platform — project-scoped code graph for pipeline & agent.
 Public API:
     load_project_graphs(project_name) → [(CodeIntelDb, GraphStore)]  (every graph)
     project_graph(project_name, repo=None) → (CodeIntelDb, GraphStore) | None
-    code_intel_dbs(project_dir) → list[CodeIntelDb]   (project db + bind-managed dbs)
-    code_intel_db_for(project_dir) → Path | None      (the primary one)
-    get_code_intel_db_path(project_name) → Path
+    owned_graphs(project_dir) → list[CodeIntelDb]     (every owned repo's graph, built or not)
+    code_intel_dbs(project_dir) → list[CodeIntelDb]   (the ones that exist)
+    code_intel_db_for(project_dir) → Path | None      (the first that exists)
     owned_repo_roots(project_dir) → list[str]         (repo-ownership oracle)
     resolve_router_prefixes(graph, repo_root) → int  (call after any route re-store)
 """
@@ -35,11 +35,10 @@ _db_graph_cache: dict[str, tuple[GraphStore, tuple[int, int]]] = {}
 
 @dataclass(frozen=True)
 class CodeIntelDb:
-    """One code-intel graph a project owns.
+    """One code-intel graph a project owns: the graph of one owned repo.
 
-    ``repo`` is the binding's repo name, or None for the project's own
-    ``Projects/<p>/code_intel.db``; ``repo_root`` is the bind-managed clone for a
-    binding db (None for the project db, whose repo root lives in its graph_meta).
+    ``repo`` names it (a binding's ``repo``; a local root's directory name);
+    ``repo_root`` is the repo it is built from.
     """
 
     db_path: Path
@@ -47,25 +46,38 @@ class CodeIntelDb:
     repo_root: Path | None = None
 
 
-def code_intel_dbs(project_dir: str | Path) -> list[CodeIntelDb]:
-    """Every code-intel db that exists for *project_dir*, in a fixed order.
+def owned_graphs(project_dir: str | Path) -> list[CodeIntelDb]:
+    """The graph of every repo *project_dir* owns, built or not, in a fixed order.
 
-    The ONE answer to "where is this project's code graph?". First the project's own
-    ``code_intel.db`` (built by the reindex job / daemon for self-hosted repos), then,
-    in ``bindings.yaml`` order, the db ``bind_repo`` builds beside each bind-managed
-    clone (``ddd_bindings.binding_db_path``). Before this, every reader looked only
-    at ``Projects/<p>/code_intel.db``, so a graph built by binding a repo — the New
-    Brain path — was invisible to recall, Brain Hub, the watcher and the reindex job.
-
+    The ONE answer to "where is this project's code graph?": first each confirmed
+    local root (``local_roots.confirmed``; its db is keyed by the real path,
+    ``local_roots.db_path``), then, in ``bindings.yaml`` order, each bind-managed
+    clone with the db ``bind_repo`` builds beside it (``ddd_bindings.binding_db_path``).
     Internal / Brazil bindings (never cloned here) and bindings whose worktree lies
-    outside the bindings root (self-hosted checkouts) contribute no binding db.
-    Never raises: an unreadable bindings.yaml yields just the project db, if any.
+    outside the bindings root contribute nothing. Never raises.
     """
     project_dir = Path(project_dir)
     out: list[CodeIntelDb] = []
-    own = project_dir / "code_intel.db"
-    if own.exists():
-        out.append(CodeIntelDb(db_path=own))
+    seen: set[str] = set()
+    names: set[str] = set()
+
+    def _add(db: Path, repo: str, root: Path) -> None:
+        key = str(db.resolve())
+        if key in seen:
+            return
+        seen.add(key)
+        name = repo
+        while name in names:
+            name += "-local"
+        names.add(name)
+        out.append(CodeIntelDb(db_path=db, repo=name, repo_root=root))
+
+    try:
+        from .local_roots import confirmed, db_path as local_db_path
+        for root in confirmed(project_dir.name):
+            _add(local_db_path(root), Path(root).name, Path(root))
+    except Exception as exc:  # noqa: BLE001 — a bad registry must not break readers
+        logger.warning("code_intel: local roots of %s unreadable: %s", project_dir.name, exc)
     bindings_file = project_dir / "bindings.yaml"
     if not bindings_file.exists():
         return out
@@ -73,43 +85,29 @@ def code_intel_dbs(project_dir: str | Path) -> list[CodeIntelDb]:
         from core.ddd_bindings import binding_db_path, binding_worktree, load_bindings
         doc = load_bindings(bindings_file)
     except Exception as exc:  # noqa: BLE001 — a bad bindings.yaml must not break readers
-        logger.debug("code_intel_dbs: %s unreadable: %s", bindings_file, exc)
+        logger.debug("code_intel: %s unreadable: %s", bindings_file, exc)
         return out
-    seen = {own.resolve()} if own.exists() else set()
     for binding in doc.bindings:
         if binding.kind == "internal" or binding.delivery_contract.build_system == "brazil":
             continue
         try:
-            db_path = binding_db_path(binding)
+            db = binding_db_path(binding)
             worktree = binding_worktree(binding)
         except ValueError:
             continue  # self-hosted (outside the bindings root) or an invalid repo name
-        if db_path.exists() and db_path.resolve() not in seen:
-            seen.add(db_path.resolve())
-            out.append(CodeIntelDb(db_path=db_path, repo=binding.repo, repo_root=worktree))
+        _add(db, binding.repo, worktree)
     return out
 
 
-def code_intel_db_for(project_dir: str | Path) -> Path | None:
-    """The project's primary code-intel db (first of ``code_intel_dbs``), or None.
+def code_intel_dbs(project_dir: str | Path) -> list[CodeIntelDb]:
+    """The project's graphs that exist (``owned_graphs`` order). Never raises."""
+    return [ref for ref in owned_graphs(project_dir) if ref.db_path.exists()]
 
-    Readers that work with one graph per project use this. A project binding several
-    repos is served by its first db; merging several graphs in one read is not done
-    here.
-    """
+
+def code_intel_db_for(project_dir: str | Path) -> Path | None:
+    """The project's first code-intel db that exists, or None."""
     dbs = code_intel_dbs(project_dir)
     return dbs[0].db_path if dbs else None
-
-
-def get_code_intel_db_path(project_name: str) -> Path:
-    """The project's primary code-intel db path (``code_intel_db_for``).
-
-    Returns the project's own ``Projects/<p>/code_intel.db`` path when the project has
-    no db at all, so callers that check ``.exists()`` keep working.
-    """
-    from jobs.paths import PROJECTS_DIR
-    project_dir = PROJECTS_DIR / project_name
-    return code_intel_db_for(project_dir) or project_dir / "code_intel.db"
 
 
 def load_project_graphs(project_name: str) -> list[tuple[CodeIntelDb, GraphStore]]:
@@ -327,14 +325,18 @@ def owned_repo_roots(project_dir) -> list[str]:
     """Every absolute local repo path project *project_dir* OWNS, deduplicated.
 
     Two declarations count, in this order:
-      1. the repo path its own TECH.md declares (``_tech_md_repo_root``, legacy);
+      1. each confirmed local root (``local_roots.confirmed``): the user's own
+         checkout, proposed by an agent and confirmed by a person in Brain Hub;
       2. each bind-managed clone (``ddd_bindings.binding_worktree``) that exists —
-         binding the repo is itself the declaration, no TECH.md path is needed. The
-         clone is confined to one directory under the bindings root.
-    A free path in bindings.yaml (``bindings[].worktree`` outside the bindings root,
-    ``governed_assets[].source_workspace``) does NOT make a repo owned: bindings.yaml
-    may be written from repo content, and ownership decides what gets indexed into
-    this brain (the cross-project contamination run_1950e67e guards against).
+         binding the repo is itself the declaration. The clone is confined to one
+         directory under the bindings root.
+    Nothing a document says grants ownership: a TECH.md path (written by cultivation,
+    carried by Brain sync) only becomes a pending suggestion
+    (``local_roots.suggest_from_tech_md``), and a free path in bindings.yaml
+    (``bindings[].worktree`` outside the bindings root,
+    ``governed_assets[].source_workspace``) counts for nothing: ownership decides what
+    gets parsed into this brain (the cross-project contamination run_1950e67e guards
+    against).
     Internal / Brazil bindings are never checked out here and own nothing local.
     Never raises; an empty list means "index nothing" (run_1950e67e).
     """
@@ -350,7 +352,9 @@ def owned_repo_roots(project_dir) -> list[str]:
         if resolved not in out and Path(resolved).is_dir():
             out.append(resolved)
 
-    _add(_tech_md_repo_root(project_dir))
+    from .local_roots import confirmed
+    for root in confirmed(Path(project_dir).name):
+        _add(root)
     bindings_file = Path(project_dir) / "bindings.yaml"
     if bindings_file.exists():
         try:
@@ -367,29 +371,18 @@ def owned_repo_roots(project_dir) -> list[str]:
     return out
 
 
-def resolve_owned_repo_root(project_dir) -> str | None:
-    """The project's first owned repo path (``owned_repo_roots``), or None."""
-    roots = owned_repo_roots(project_dir)
-    return roots[0] if roots else None
-
-
 def _tech_md_repo_root(project_dir) -> str | None:
     """Return the absolute repo path the project's TECH.md declares, or None.
 
-    The legacy declaration: whatever its own TECH.md declares (via
-    ``extract_repo_path`` over ``ddd_path(project_dir, "TECH.md")``), resolved and
-    confirmed to be a real local directory. Returns None when TECH.md declares
-    no local repo — e.g. a data-agent / internal-repo DDD whose bindings are all
-    ``worktree: null`` (code.amazon.com/* Brazil packages, never checked out here).
+    No longer an ownership declaration: it only seeds a pending local-root suggestion
+    (``local_roots.suggest_from_tech_md``) that a person confirms in Brain Hub. Reads
+    ``extract_repo_path`` over ``ddd_path(project_dir, "TECH.md")``, resolved and
+    confirmed to be a real local directory; None when TECH.md declares no local repo
+    (e.g. a Brain whose bindings are all Brazil packages, never checked out here).
 
-    This is the OWNERSHIP oracle used to validate a code_intel.db's stored
-    ``repo_root`` before we index or watch it. It exists because nothing previously
-    checked that a db's ``repo_root`` belonged to its project: IVTHub's db carried
-    ``repo_root=<SwarmAI source>`` and the startup watcher happily watched the
-    SwarmAI tree, re-indexing SwarmAI's files into IVTHub's brain on every save
-    (self-perpetuating content contamination — a Principle-1 violation: IVTHub's
-    brain described SwarmAI's code). A ``None`` result means "index NOTHING", never
-    "trust whatever repo_root is already in the db" (run_1950e67e).
+    Why it stopped deciding ownership: a TECH.md line is written by cultivation and
+    travels with Brain sync, and a project whose TECH.md named another project's
+    checkout had that checkout parsed into its graph (run_1950e67e).
     """
     try:
         tech_md = ddd_path(project_dir, "TECH.md")
@@ -411,30 +404,11 @@ def _tech_md_repo_root(project_dir) -> str | None:
         return None
 
 
-def graph_holds_repo(graph: GraphStore, repo_root: str | Path) -> bool:
-    """True iff *graph* was built from *repo_root* (its stored ``repo_root``).
-
-    A writer that feeds files by repo-relative path must check this first: two repos
-    can both have ``src/main.py``, and an incremental re-store replaces whatever the
-    graph holds at that path. Never raises; an unknown stored root is False.
-    """
-    try:
-        import os
-        stored = graph.get_meta("repo_root")
-        if not stored:
-            return False
-        a = Path(stored).expanduser().resolve()
-        b = Path(repo_root).expanduser().resolve()
-        return a == b or (a.is_dir() and b.is_dir() and os.path.samefile(a, b))
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def repo_root_is_owned(project_dir, stored_repo_root: str | None) -> bool:
     """True iff ``stored_repo_root`` matches a repo the project OWNS.
 
-    The gate the index trigger sites (startup watcher, reindex job, health hook) apply
-    before trusting a db's ``repo_root``. False when the project owns no local repo
+    The gate a caller applies before trusting a stored ``repo_root`` (a library
+    mount, the DDD completeness check). False when the project owns no local repo
     (``owned_repo_roots`` is empty) OR the stored value is none of them — either case
     means the db's ``repo_root`` is foreign and must NOT be indexed or watched
     (run_1950e67e).

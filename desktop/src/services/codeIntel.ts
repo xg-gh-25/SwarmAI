@@ -8,12 +8,10 @@ export interface CodeIntelSummary {
   symbolCount: number;
   edgeCount: number;
   fileCount: number;
-  unusedExportsCount: number;
-  unusedExportsPct: number;
-  entryPoints: number;
   languages: Record<string, number>;
-  modulesTop5: Array<{ name: string; function_count: number; class_count: number; file_count: number }>;
   lastIndexedAt: string | null;
+  indexedCommit: string | null;
+  /** The graph's commit against the repo's HEAD (one git call): stale = behind. */
   freshnessStatus: 'fresh' | 'stale' | 'unknown';
 }
 
@@ -21,12 +19,9 @@ interface RawCodeIntelSummary {
   symbol_count: number;
   edge_count: number;
   file_count: number;
-  unused_exports_count: number;
-  unused_exports_pct: number;
-  entry_points: number;
   languages: Record<string, number>;
-  modules_top5: Array<{ name: string; function_count: number; class_count: number; file_count: number }>;
   last_indexed_at: string | null;
+  indexed_commit: string | null;
   freshness_status: 'fresh' | 'stale' | 'unknown';
 }
 
@@ -35,12 +30,9 @@ function toCamelCase(raw: RawCodeIntelSummary): CodeIntelSummary {
     symbolCount: raw.symbol_count,
     edgeCount: raw.edge_count,
     fileCount: raw.file_count,
-    unusedExportsCount: raw.unused_exports_count,
-    unusedExportsPct: raw.unused_exports_pct,
-    entryPoints: raw.entry_points,
     languages: raw.languages,
-    modulesTop5: raw.modules_top5,
     lastIndexedAt: raw.last_indexed_at,
+    indexedCommit: raw.indexed_commit,
     freshnessStatus: raw.freshness_status,
   };
 }

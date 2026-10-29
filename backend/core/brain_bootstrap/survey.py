@@ -359,9 +359,13 @@ def survey_project(project_dir: str | Path, *, write: bool = True) -> dict:
     """Survey every repo *project_dir* owns; write ``survey.json`` when *write*.
 
     A project that owns no local repo gets ``repos: []`` (a pure-knowledge brain is
-    complete without one).
+    complete without one). Each code graph is first brought to its repo's HEAD when
+    the change is small (``code_intel.build.ensure_fresh``, no rebuild child): the
+    survey runs out of the daemon, so a stale graph is the only reason to read old
+    code shape.
     """
     project_dir = Path(project_dir)
+    _refresh_graphs(project_dir)
     result = {
         "schema": SCHEMA, "version": VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -372,6 +376,23 @@ def survey_project(project_dir: str | Path, *, write: bool = True) -> dict:
     if write:
         write_survey(project_dir, result)
     return result
+
+
+def _refresh_graphs(project_dir: Path) -> None:
+    """Small-change refresh of the project's graphs — only for a project of this
+    workspace (the loader resolves graphs by name under ``PROJECTS_DIR``; a project
+    dir elsewhere, e.g. an eval fixture, must not refresh a same-named live graph)."""
+    try:
+        from jobs.paths import PROJECTS_DIR
+        if project_dir.resolve() != (PROJECTS_DIR / project_dir.name).resolve():
+            return
+        from core.code_intel import load_project_graphs
+        from core.code_intel.build import ensure_fresh
+        for ref, graph in load_project_graphs(project_dir.name):
+            ensure_fresh(project_dir, ref, graph, spawn=False)
+    except Exception as exc:  # noqa: BLE001 — the survey of the graph as it is stands
+        logger.warning("survey %s: graph refresh failed: %s: %s", project_dir.name,
+                       type(exc).__name__, exc)
 
 
 def write_survey(project_dir: str | Path, result: dict) -> Path:

@@ -334,6 +334,35 @@ export async function confirmProjectAgent(brain: string | null, body: AgentConfi
   return resp.data;
 }
 
+/** A local repository a Brain may read into its code graph (design
+ *  2026-10-29-code-intel-unification §0.3): an agent proposes it, a person confirms. */
+export interface LocalRoot {
+  path: string;
+  state: 'pending' | 'confirmed';
+  source?: string | null;        // 'agent' | 'tech-md'
+  addedAt?: string | null;
+  confirmedAt?: string | null;
+  graphBuilt: boolean;
+}
+
+/** GET /api/ddd/brains/{name}/local-roots */
+export async function getLocalRoots(brain: string): Promise<LocalRoot[]> {
+  const resp = await api.get<{ localRoots: LocalRoot[] }>(`/ddd/brains/${encodeURIComponent(brain)}/local-roots`);
+  return resp.data.localRoots ?? [];
+}
+
+/** POST …/local-roots/confirm — the person's Confirm; the graph is built in a child. */
+export async function confirmLocalRoot(brain: string, path: string): Promise<LocalRoot[]> {
+  const resp = await api.post<{ localRoots: LocalRoot[] }>(`/ddd/brains/${encodeURIComponent(brain)}/local-roots/confirm`, { path });
+  return resp.data.localRoots ?? [];
+}
+
+/** POST …/local-roots/remove — stop reading the repository into this Brain. */
+export async function removeLocalRoot(brain: string, path: string): Promise<LocalRoot[]> {
+  const resp = await api.post<{ localRoots: LocalRoot[] }>(`/ddd/brains/${encodeURIComponent(brain)}/local-roots/remove`, { path });
+  return resp.data.localRoots ?? [];
+}
+
 /** GET /api/ddd/runner-agent — the Runner Agent (null when it is not there). */
 export async function getRunnerAgent(): Promise<ProjectAgent | null> {
   const resp = await api.get<{ projectAgent: ProjectAgent | null }>('/ddd/runner-agent');

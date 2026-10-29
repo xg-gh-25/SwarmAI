@@ -37,7 +37,7 @@ class TestUnifiedRecallCfull:
         # Deterministic synthetic hit → renders as "### Code Symbols\n- `...`".
         monkeypatch.setattr(
             _rm, "_codeintel_recall",
-            lambda q, project=None, limit=8: [
+            lambda q, project=None, limit=8, **kw: [
                 {"id": "core.session_router._unified_recall_body", "name": "_unified_recall_body",
                  "file_path": "backend/core/session_router.py"}
             ],

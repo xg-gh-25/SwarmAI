@@ -145,17 +145,17 @@ def test_imports_follow_incremental_updates_and_deletes(tmp_path) -> None:
 def test_index_time_markers_have_one_format_and_every_reader_agrees(tmp_path) -> None:
     import time
     from core.code_intel.graph_store import parse_index_time
-    from routers.code_intel import _compute_freshness
     g = GraphStore(tmp_path / "g.db")
     g.mark_indexed(full=False)
     stamp = g.get_meta("last_incremental_update")
     assert "T" in stamp and parse_index_time(stamp) is not None          # ISO, parseable
-    assert _compute_freshness(g.get_codebase_summary()["last_indexed"]) == "fresh"
+    shown = parse_index_time(g.counts()["last_indexed"])                 # the status line
+    assert shown is not None and abs(shown - time.time()) < 60
     # an older graph: an epoch float in one key, ISO in the other
     g.set_meta("last_incremental_update", str(time.time() - 60))
     g.set_meta("last_full_index", "2020-01-01T00:00:00+00:00")
     assert abs(g.indexed_at() - (time.time() - 60)) < 5               # the newer one
-    assert _compute_freshness(g.get_codebase_summary()["last_indexed"]) == "fresh"
+    assert abs(parse_index_time(g.counts()["last_indexed"]) - (time.time() - 60)) < 5
     assert parse_index_time("garbage") is None
 
 
@@ -258,20 +258,27 @@ def test_freshness_is_computed_once_per_head(tmp_path, monkeypatch) -> None:
 
 
 def test_an_import_only_edit_refreshes_the_import_table(tmp_path, monkeypatch) -> None:
-    """A changed import line with no symbol change grades COSMETIC (nodes are left
-    as they are); its imports must still be refreshed and resolved."""
+    """A changed import line with no symbol change: its imports are still refreshed
+    and resolved by the incremental update."""
     import subprocess as sp
-    import core.code_intel.tests.test_freshness as tf
-    handler, proj, env = tf.TestGradedIncrementalE2E._init_repo(None, tmp_path, monkeypatch)
-    monkeypatch.setattr("config.get_swarmws", lambda: tmp_path / ".swarm-ai" / "SwarmWS")
-    (proj / "cosmetic.py").write_text("from structural import beta\n\ndef alpha():\n    return 1\n")
-    sp.run(["git", "add", "."], cwd=proj, check=True, env=env)
-    sp.run(["git", "commit", "-q", "-m", "import only"], cwd=proj, check=True, env=env)
-    out = handler.reindex_projects(full=False)
-    g = GraphStore(proj / "code_intel.db")
-    rows = list(g._conn.execute("SELECT * FROM code_imports"))
-    assert g.imported_files("cosmetic.py") == {"structural.py"}, (out, rows)
-
+    import core.code_intel.build as build
+    from core.code_intel import CodeIntelDb
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "cosmetic.py").write_text("def alpha():\n    return 1\n")
+    (repo / "structural.py").write_text("def beta():\n    return 2\n")
+    git = ["git", "-C", str(repo), "-c", "user.email=t@e", "-c", "user.name=t"]
+    sp.run(["git", "init", "-q", str(repo)], check=True)
+    sp.run(git + ["add", "-A"], check=True)
+    sp.run(git + ["commit", "-q", "-m", "init"], check=True)
+    g = GraphStore(tmp_path / "g.db")
+    build.rebuild(g, repo, head=build.head_of(repo))
+    (repo / "cosmetic.py").write_text("from structural import beta\n\ndef alpha():\n    return 1\n")
+    sp.run(git + ["commit", "-qam", "import only"], check=True)
+    monkeypatch.setattr(build, "_sync_docs", lambda *a: None)
+    ref = CodeIntelDb(db_path=tmp_path / "g.db", repo="repo", repo_root=repo)
+    assert build.ensure_fresh(tmp_path, ref, g).state == "updated"
+    assert g.imported_files("cosmetic.py") == {"structural.py"}
 
 
 def test_a_go_call_resolves_through_the_imported_package(tmp_path) -> None:

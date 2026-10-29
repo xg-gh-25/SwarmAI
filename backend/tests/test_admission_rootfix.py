@@ -8,8 +8,8 @@ classes it should not. These tests pin the 4 subtractive fixes:
   2. _cultivate_proposals SKIPS protected-zone lessons instead of escalating them
      into the human review queue (they are dead-on-approve), WITHOUT dropping
      legitimate non-protected escalations.
-  3. code_change_feed does NOT write a CultivationProposal for a mere new-file
-     "architecture change" (git fact, not knowledge — code_intel already indexes it).
+  3. (removed with code_change_feed, which never wrote a CultivationProposal for a
+     mere new-file "architecture change".)
   4. governance_miner does NOT emit a proposal for a correction class with no real
      rule text (empty pattern → no contentless "Address recurring X" meta-instruction).
 """
@@ -126,24 +126,6 @@ class TestNoProtectedZoneAutonomyFirst:
         sink = tmp_path / ".artifacts" / "protected-zone-candidates.jsonl"
         assert not sink.exists(), "candidates sink must no longer be written"
         assert res.get("skipped_protected", 0) == 0
-
-
-# ── Fix 3: code_change_feed does not write arch-change proposals ──────────────
-class TestNoArchiProposal:
-    def test_generate_proposals_writes_nothing_for_arch_change(self):
-        """A new-module arch change writes 0 CultivationProposal (code_intel captures it)."""
-        from hooks.code_change_feed import CodeChangeFeed
-        feed = CodeChangeFeed()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ws = Path(tmpdir)
-            (ws / "Projects" / "SwarmAI").mkdir(parents=True)
-            arch_changes = [type("AC", (), {
-                "change_type": "new_module", "path": "backend/core/foo.py",
-                "confidence": 0.9, "target_section": "Key Subsystems",
-            })()]
-            with patch("core.ddd_cultivation.write_proposal") as mock_write:
-                feed._generate_proposals(arch_changes, "abc1234", "feat: foo", str(ws))
-                assert mock_write.call_count == 0, "arch-change must not write a proposal"
 
 
 # ── Fix 5 (backstop): approve on duplicate self-clears from the pending queue ──

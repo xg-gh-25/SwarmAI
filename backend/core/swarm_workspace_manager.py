@@ -509,7 +509,8 @@ _What changed and why._
 Section ⑥ GOVERNs the projection of whatever **governed asset** this DDD is bound
 to. It is a **self-contained mechanism that REGENERATES the projection from the
 asset's source** — its shape follows the asset `kind`: a `code-repo` → the code
-graph (`code_intel.db`, rebuilt by binding the repo and on each commit; its analysis
+graph (`code_intel.db`, built when the repo is bound or a person confirms a local
+checkout in Brain Hub, and brought up to the repo's HEAD when it is read; its analysis
 is computed on demand); a `data-source` → a schema/semantic projection; a
 `document-corpus` → an index. It ships the refresher (capability), never the
 projection (derived data).

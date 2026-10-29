@@ -235,7 +235,7 @@ def _ddd_section_scores_multi(query: str,
 
 
 def _codeintel_recall(query: str, project: Optional[str] = None,
-                      limit: int = 8) -> list[dict]:
+                      limit: int = 8, refresh: bool = False) -> list[dict]:
     """Bucket code-graph search hits for ``query`` in ``project``.
 
     Combines TWO sources (Library Cycle 4): the project's own code graph
@@ -248,7 +248,7 @@ def _codeintel_recall(query: str, project: Optional[str] = None,
     Signature UNCHANGED (Gate-1 rev 3: the mount list is consulted internally, not
     threaded through the call). Never auto-creates a DB, never crashes.
     """
-    project_hits = _project_codeintel_recall(query, project, limit)
+    project_hits = _project_codeintel_recall(query, project, limit, refresh=refresh)
     mount_hits = _mount_codeintel_recall(query, project, limit)
     if not mount_hits:
         return project_hits
@@ -298,7 +298,7 @@ def _mount_codeintel_recall(query: str, project: Optional[str], limit: int) -> l
 
 
 def _project_codeintel_recall(query: str, project: Optional[str] = None,
-                              limit: int = 8) -> list[dict]:
+                              limit: int = 8, refresh: bool = False) -> list[dict]:
     """The project's own code graph hits, from every graph it has (one per bound repo).
 
     BM25 ranks are relative to one graph's index, so the per-graph lists are merged by
@@ -314,7 +314,8 @@ def _project_codeintel_recall(query: str, project: Optional[str] = None,
     except Exception as exc:  # noqa: BLE001 — best-effort domain
         logger.debug("codeintel recall: load_project_graphs failed: %s", exc)
         return []
-    per_graph = [[(i, h) for h in _graph_codeintel_hits(query, ref, graph, limit)]
+    per_graph = [[(i, h) for h in _graph_codeintel_hits(query, ref, graph, limit,
+                                                         project=project, refresh=refresh)]
                  for i, (ref, graph) in enumerate(graphs)]
     merged: list[tuple[int, dict]] = []
     while len(merged) < limit and any(per_graph):
@@ -352,33 +353,31 @@ def _signature_line(repo_root: Optional[str], file_path: str, line: Optional[int
         return ""
 
 
-def _graph_codeintel_hits(query: str, ref, graph, limit: int) -> list[dict]:
-    """One graph's hits, freshness-stamped, each with repo, line and signature."""
+def _graph_codeintel_hits(query: str, ref, graph, limit: int, *,
+                          project: Optional[str] = None, refresh: bool = False) -> list[dict]:
+    """One graph's hits, freshness-stamped, each with repo, line and signature.
 
-    # Freshness guard (pure-filesystem recall design §3.x/DoD5, 2026-06-28):
-    # grep is always live; the AST graph can DRIFT (teammate rebase, a missed
-    # watcher window, a failed incremental update) and then silently return STALE
-    # edges — "confidently wrong", worse than grep. Before trusting the graph,
-    # check it against HEAD (cheap `git rev-parse`). We do NOT block on staleness
-    # (the index may still be useful) — we STAMP each hit with `stale` + `reason`
-    # so the consuming agent knows "this graph is as-of an older commit, verify
-    # against the live file". This is the code-layer cure for the same
-    # stale-comment-fooled-me class the MEMORY line keeps hitting (R16b).
+    *refresh* (the recall CLI, out of the daemon): the graph is first brought to its
+    repo's HEAD (``code_intel.build.ensure_fresh``). Otherwise (a reader in the
+    daemon, which never writes a graph) one ``git rev-parse`` against the graph's
+    commit marker stamps the hits: grep is always live, the graph can be behind, and
+    a stamped hit tells the agent to verify against the file."""
     stale_flag = False
     stale_reason = None
     repo_root = graph.get_meta("repo_root")
     repo = ref.repo or (Path(repo_root).name if repo_root else None)
     try:
-        from .code_intel.freshness import check_freshness
-        fr = check_freshness(graph)
-        stale_flag = bool(getattr(fr, "stale", False))
-        stale_reason = getattr(fr, "reason", None)
-        if stale_flag:
-            logger.info(
-                "codeintel recall: graph STALE vs HEAD (%s) — hits stamped "
-                "stale=True so the agent verifies against live files",
-                stale_reason or "unknown",
-            )
+        if refresh and project:
+            from jobs.paths import PROJECTS_DIR
+            from .code_intel.build import ensure_fresh
+            fr = ensure_fresh(PROJECTS_DIR / project, ref, graph)
+            stale_flag = not fr.current
+            stale_reason = fr.message or None
+        else:
+            from .code_intel.freshness import head_stamp
+            stale, _head = head_stamp(graph)
+            stale_flag = bool(stale)
+            stale_reason = "the graph is behind the repo's HEAD" if stale else None
     except Exception as exc:  # noqa: BLE001 — freshness is best-effort; never block recall
         logger.debug("codeintel recall: freshness check failed (non-fatal): %s", exc)
 
@@ -411,13 +410,16 @@ def recall_all(
     exclude_session_id: Optional[str] = None,
     deadline: Optional[float] = None,
     prompt_text: Optional[str] = None,
+    refresh_code: bool = False,
 ) -> BucketedRecall:
     """Fan ``query`` across all (or the requested) READ recall domains.
 
     Composes the existing per-domain verbs into ONE bucketed result. READ-only:
     ``allow_embed=False`` (default) guarantees no Bedrock embed and no write in
     ANY leg — context-files/DDD use keyword scoring, Library uses FTS5-only,
-    session uses FTS5, codeintel reads the existing graph.
+    session uses FTS5, codeintel reads the existing graph. The one exception is
+    ``refresh_code``: the recall CLI (out of the daemon) brings each code graph up to
+    its repo's HEAD before searching it; a caller in the daemon never passes it.
 
     Args:
         query: natural-language recall query.
@@ -503,7 +505,7 @@ def recall_all(
             _recall_session(query, exclude_session_id)
 
     if _go("codeintel"):
-        hits = _codeintel_recall(query, project=project)
+        hits = _codeintel_recall(query, project=project, refresh=refresh_code)
         result.buckets["codeintel"] = hits
         result.hit_layers["codeintel"] = "graph" if hits else "none"
 

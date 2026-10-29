@@ -5,7 +5,7 @@ updated: 2026-10-29
 
 # Code intel: one way in, one way to build, one way to update
 
-Status: r3 proposed (2026-10-29), after one premise review (§0.8). r2 (§1–§6 below) has landed in full: B1–B9, the deletions and `impact`. r3 (§0) changes **when** a graph is built and refreshed, and where that work runs; it supersedes the refresh paths of §3.2–§3.3 (watcher, health hook, commit hook).
+Status: r3 implemented (2026-10-29), after one premise review (§0.8); what differs from the plan is in §0.9. r2 (§1–§6 below) has landed in full: B1–B9, the deletions and `impact`. r3 (§0) changes **when** a graph is built and refreshed, and where that work runs; it supersedes the refresh paths of §3.2–§3.3 (watcher, health hook, commit hook).
 - r1 had one correctness premise review: 3 HIGH, 7 MED, 6 LOW. All are folded in here, and each was checked against the code.
 
 ## 0. r3 — build where the repo lives, refresh when it is read
@@ -146,6 +146,15 @@ One correctness premise review: 2 HIGH, 5 MED, 3 LOW. All were checked against t
 Left as they are:
 - `governed_repo_roots` (`ddd_bindings.py:203`) still reads free paths for DDD refresh and self-audit, which are not code-intel ownership.
 - The reviewer ran out of budget before checking Hive-side readers. A Hive receives no graph (Brain sync never carries one, `brain_sync.py` docstring), so it has none to read.
+
+### 0.9 As implemented: where it differs from the plan
+
+- **The hourly job stays, changed (departs from rule 3).** The repo's documents used to follow HEAD only through the reindex job (`doc_index.sync_repo_after_head_move`), so deleting the job would have frozen recall of repo docs at bind time. `code-intel-reindex` now runs `ensure_fresh` for every owned graph (one `git rev-parse` for a repo that did not move; up to 100 files inline; more, or a graph not built yet, a detached child), which also re-syncs the docs. It is a job process, never the daemon, so rule 1 holds. The full-rebuild job is gone.
+- **One commit for steps 1–3.** Their tests interleave (every graph writer's test needs the new ownership), so they land together; step 4 (auto-recall, the eval case) lands on its own.
+- **The children are `subprocess.Popen` with `start_new_session`,** started from `asyncio.to_thread` (`build.spawn_child`), not `asyncio.create_subprocess_exec`: the same launcher serves the daemon endpoints, the job and `ensure_fresh`, and the endpoint keeps the `Popen` to answer "already indexing".
+- **`bind_repo` and the Library mount index take the graph's write lock** (bind waits, a second mount index answers `already_indexing`), and the rebuild child skips a clone while a bind holds it. The plan named the lock for `build` only; without it a child started before a bind raced the bind's rebuild.
+- **The eval case** `CI_IMPACT_FRESH` (`scripts/probe_code_intel.py`) fits the cap: the product set was at 49 when it was added.
+- **Tests:** the §0.6 invariants are in `tests/test_code_intel_r3_invariants.py` (a second process reads mid-rebuild; a SIGKILLed writer; every `ensure_fresh` state; Confirm as the only writer of `confirmed`; an AST scan that no daemon module references a graph writer) and `tests/test_code_intel_local_roots.py`; each was checked by reverting what it guards (`scripts.mutation_check`).
 
 ## 1. What the graph is for: the readers that reach someone
 

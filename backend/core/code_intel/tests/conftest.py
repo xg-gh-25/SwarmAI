@@ -58,3 +58,31 @@ def _reset_parser_process_globals():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_local_roots(tmp_path_factory, monkeypatch):
+    """Keep the local-root registry (``<app data>/bindings/local_roots.json``, the
+    ownership declaration) off the live store: every test gets its own app-data dir."""
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path_factory.mktemp("app_data")))
+
+
+@pytest.fixture
+def own_local_root():
+    """``own(project, path)``: make *path* a confirmed local root of *project* — what a
+    person's Confirm in Brain Hub records — without the git-top checks."""
+    return _own_local_root
+
+
+def _own_local_root(project: str, path) -> None:
+    import json
+    import os
+    from core.code_intel.local_roots import registry_path
+    reg = registry_path()
+    reg.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(reg.read_text()) if reg.exists() else {"version": 1, "projects": {}}
+    rows = data["projects"].setdefault(project, [])
+    real = os.path.realpath(str(path))
+    if not any(r["path"] == real for r in rows):
+        rows.append({"path": real, "state": "confirmed", "added_at": "t", "source": "test"})
+    reg.write_text(json.dumps(data))

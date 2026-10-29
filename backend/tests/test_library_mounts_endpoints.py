@@ -196,11 +196,12 @@ def test_register_mount_docs_dir_indexes_content_at_mount_time(
     assert listed["mounts"][0]["path"] == str(d)
 
 
-def test_register_mount_code_dir_returns_the_index_result(
+def test_register_mount_code_dir_starts_the_index_child(
     tmp_path: Path, tmp_db: Path, monkeypatch,
 ) -> None:
-    """kind=code runs index_code_mount IN THE WORKER (the heaviest blocking call that
-    this run moved off the loop) and surfaces its symbol count."""
+    """kind=code is indexed by a child process: the daemon never parses a repo
+    (design 2026-10-29-code-intel-unification §0.2)."""
+    import core.code_intel.build as build
     import core.library_mounts as lm
 
     d = tmp_path / "src"
@@ -208,10 +209,11 @@ def test_register_mount_code_dir_returns_the_index_result(
     monkeypatch.setattr(lm, "is_protected_system_path", lambda p: False, raising=True)
     monkeypatch.setattr(lm, "judge_mount_kind", lambda p: "code", raising=True)
     monkeypatch.setattr(lm, "index_code_mount",
-                        lambda store, mid: {"status": "indexed", "symbols": 42},
-                        raising=True)
+                        lambda store, mid: pytest.fail("indexed in the daemon"), raising=True)
+    started = []
+    monkeypatch.setattr(build, "spawn_child", lambda args: started.append(args))
 
     out = asyncio.run(library_api.register_mount(path=str(d), scope="GLOBAL"))
     assert out["kind"] == "code"
-    assert out["status"] == "indexed"
-    assert out["symbols"] == 42
+    assert out["status"] == "indexing"
+    assert started == [["-m", "core.library_mounts", "index-code", out["id"]]]

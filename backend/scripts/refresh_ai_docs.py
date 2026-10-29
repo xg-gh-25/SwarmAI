@@ -51,11 +51,6 @@ AGENTS_MD = REPO_ROOT / "AGENTS.md"
 METRICS_FILE = REPO_ROOT / "docs" / "CODEBASE_METRICS.md"
 ENGINES_YAML = Path(__file__).resolve().parent / "engines.yaml"
 
-# Code Intelligence DB locations (checked in order)
-CODE_INTEL_DB_PATHS = [
-    get_swarmws() / "Projects" / "SwarmAI" / "code_intel.db",
-    get_swarmws() / "Projects" / "SwarmAI" / ".code_intel" / "code_intel.db",
-]
 
 # Prose staleness checks — patterns expected in AGENTS.md prose.
 # If any check fails, a [STALE] warning is emitted (never auto-fixed).
@@ -170,9 +165,18 @@ def _load_engines() -> list[dict]:
     return engines
 
 
+def _code_intel_db_paths() -> list[Path]:
+    """The SwarmAI Brain's built code graphs (``core.code_intel.code_intel_dbs``)."""
+    try:
+        from core.code_intel import code_intel_dbs
+        return [d.db_path for d in code_intel_dbs(get_swarmws() / "Projects" / "SwarmAI")]
+    except Exception:  # noqa: BLE001 — a metric, never a reason to fail the script
+        return []
+
+
 def _get_code_intel_stats() -> tuple[int, int]:
-    """Get symbol and edge counts from code_intel.db. Returns (0, 0) if unavailable."""
-    for db_path in CODE_INTEL_DB_PATHS:
+    """Symbol and edge counts of the SwarmAI Brain's code graph; (0, 0) if it has none."""
+    for db_path in _code_intel_db_paths():
         if db_path.exists():
             try:
                 conn = sqlite3.connect(

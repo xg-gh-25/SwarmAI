@@ -190,7 +190,8 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
     The +Add Folder button lands here. Judges the kind (a repo marker → code, else
     docs), registers it in library_mounts, then indexes INLINE — recall-reachable at
     mount time, no chat/LLM (B1, run_3f837bdd):
-      - code → index_code_mount (per-mount code_intel graph; returns symbol count)
+      - code → index_code_mount in a child process (per-mount code_intel graph);
+        the response says ``indexing`` and the mount's last_synced follows
       - docs → index_docs_mount (chunks the dir's UTF-8 text into the shared
         Knowledge FTS5; returns chunk count)
     Never copies the directory's bytes into the registry (the FTS5 chunks ARE the
@@ -222,7 +223,7 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
         import sqlite3
         from jobs.paths import DB_PATH
         from core.library_mounts import (
-            LibraryMounts, judge_mount_kind, index_code_mount, index_docs_mount,
+            LibraryMounts, judge_mount_kind, index_docs_mount,
         )
         kind = judge_mount_kind(str(src))
         conn = sqlite3.connect(str(DB_PATH))
@@ -232,9 +233,12 @@ async def register_mount(path: str = Query(...), scope: str = Query(default="GLO
             store.ensure_table()
             mid = store.add_mount(scope=scope, path=str(src), kind=kind)
             if kind == "code":
-                result = index_code_mount(store, mid)
-                return {"id": mid, "kind": kind, "status": result.get("status"),
-                        "symbols": result.get("symbols", 0)}
+                # Parsed in a child process: the daemon never parses a repo (design
+                # 2026-10-29-code-intel-unification §0.2). The mount's last_synced is
+                # stamped by the child once the graph holds symbols.
+                from core.code_intel.build import spawn_child
+                spawn_child(["-m", "core.library_mounts", "index-code", mid])
+                return {"id": mid, "kind": kind, "status": "indexing", "symbols": 0}
             # docs → chunk its text content into the shared Knowledge FTS5 INLINE
             # (B1, run_3f837bdd): recall-reachable at mount time, no chat/LLM/briefing.
             result = index_docs_mount(store, mid)

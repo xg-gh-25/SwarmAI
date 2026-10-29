@@ -860,59 +860,6 @@ _SCHEDULER_INTERVAL_SECONDS = 3600  # 1 hour — same as the old launchd StartCa
 _job_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="job-executor")
 
 
-async def _start_code_intel_watchers() -> None:
-    """Start FS watchers for every code graph of every project (daemon/hive only).
-
-    One watcher per graph (the project's own db and each bound repo's), each on the
-    repo that graph holds, if the project owns it; up to the watcher capacity.
-    """
-    await asyncio.sleep(10)  # Let startup settle
-    try:
-        from core.code_intel import load_project_graphs, repo_root_is_owned
-        from core.code_intel.watcher import start_watcher
-        from jobs.paths import PROJECTS_DIR
-
-        if not PROJECTS_DIR.is_dir():
-            return
-
-        started = 0
-        for project_dir in PROJECTS_DIR.iterdir():
-            if not project_dir.is_dir():
-                continue
-            from core.code_intel import code_intel_db_for
-            if code_intel_db_for(project_dir) is None:
-                continue
-
-            project_name = project_dir.name
-            for ref, graph in load_project_graphs(project_name):
-                # A bound repo's graph is its clone; the project's own db records
-                # its repo in its meta.
-                repo_root = str(ref.repo_root) if ref.repo_root else graph.get_meta("repo_root")
-                if not repo_root or not Path(repo_root).is_dir():
-                    continue
-
-                # OWNERSHIP GUARD (run_1950e67e): only watch a repo_root the project
-                # actually OWNS (its TECH.md or bindings.yaml declares it). A foreign/mis-seeded
-                # repo_root (e.g. IVTHub's db pointing at the SwarmAI source tree) must
-                # NOT be watched — else every save in that tree re-indexes foreign files
-                # into this project's brain (self-perpetuating content contamination).
-                if not repo_root_is_owned(project_dir, repo_root):
-                    logger.warning(
-                        "Code Intelligence: %s repo_root %r is NOT owned by the project "
-                        "(TECH.md / bindings.yaml declare no/different local repo) — skipping watcher to "
-                        "prevent cross-project contamination", project_name, repo_root)
-                    continue
-
-                ok = await start_watcher(project_name, Path(repo_root), graph)
-                if ok:
-                    started += 1
-
-        if started:
-            logger.info(f"Code Intelligence: started {started} FS watcher(s)")
-    except Exception:
-        logger.debug("Code Intelligence watcher startup failed (non-fatal)", exc_info=True)
-
-
 # Module-level handle so the watcher isn't garbage-collected + is stoppable.
 _workspace_surface_watcher = None
 
@@ -1538,11 +1485,6 @@ async def lifespan(app: FastAPI):
         from core.swarm_out_bridge import run_bridge_loop
         _swarm_out_bridge_task = asyncio.create_task(run_bridge_loop(), name="swarm-out-bridge")
 
-    # ── Code Intelligence FS watchers (daemon/hive only) ─────────────
-    # Start watchers for indexed projects so code-intel stays fresh.
-    if backend_mode in ("daemon", "hive"):
-        asyncio.create_task(_start_code_intel_watchers())
-
     # ── Canvas Layer-2 workspace surface watcher (daemon/hive only) ───
     # Surfaces author-agnostic writes (sub-agent/CLI/hook — SDK-sidechain-
     # filtered from Layer-1) onto the sole streaming session's live SSE stream.
@@ -1668,15 +1610,7 @@ async def lifespan(app: FastAPI):
         logger.info("SQLite connection pools closed")
     except Exception:
         logger.debug("pool close on shutdown skipped", exc_info=True)
-    # Stop Code Intelligence FS watchers
-    try:
-        from core.code_intel.watcher import stop_all_watchers
-        await stop_all_watchers()
-        logger.info("Code Intelligence watchers stopped")
-    except Exception:
-        logger.debug("Code Intel watcher shutdown skipped", exc_info=True)
-
-    # Stop Canvas Layer-2 workspace surface watcher (mirror the code-intel stop)
+    # Stop Canvas Layer-2 workspace surface watcher
     try:
         if _workspace_surface_watcher is not None:
             await _workspace_surface_watcher.stop()

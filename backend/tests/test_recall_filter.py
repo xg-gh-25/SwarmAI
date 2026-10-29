@@ -92,7 +92,7 @@ def test_code_symbol_leg_runs_only_for_code_like_terms(monkeypatch):
     from core.session_router import _unified_recall_body
 
     seen = []
-    monkeypatch.setattr(rm, "_codeintel_recall", lambda q, project=None, limit=8: seen.append(q) or [])
+    monkeypatch.setattr(rm, "_codeintel_recall", lambda q, project=None, limit=8, **kw: seen.append(q) or [])
     _unified_recall_body("build 重启", (None, "no_signal"))
     assert seen == []
     _unified_recall_body("session_router build", (None, "no_signal"))

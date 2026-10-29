@@ -1,8 +1,9 @@
 """Which files the code graph holds has one answer: parser.is_indexed_path.
 
-Every path that writes the graph (full rebuild, watcher, the commit hook) asks it;
-the hand-copied extension and skip lists it replaced had drifted (the watcher missed
-.sql and `target/`, the commit hook re-indexed 5 languages and no test files).
+Every path that writes the graph (the full rebuild, the incremental update) asks it;
+the hand-copied extension and skip lists it replaced had drifted (a file watcher, since
+deleted, missed .sql and `target/`; a commit hook re-indexed 5 languages and no test
+files).
 """
 from __future__ import annotations
 
@@ -16,10 +17,9 @@ from core.code_intel import parser as P
 BACKEND = Path(__file__).resolve().parents[1]
 
 # The modules that decide what goes into the graph, beside parser.py itself.
-_WRITERS = ["core/code_intel", "hooks/code_change_feed.py",
-            "jobs/handlers/code_intel_reindex.py", "hooks/context_health_hook.py"]
+_WRITERS = ["core/code_intel", "jobs/handlers/code_intel_reindex.py"]
 # A suffix list there with another purpose, named with that purpose.
-_OTHER_PURPOSE = {("hooks/code_change_feed.py", "_ARCH_CHANGE_EXTENSIONS")}
+_OTHER_PURPOSE: set = set()
 
 
 @pytest.mark.parametrize("rel,held", [
@@ -72,22 +72,3 @@ def test_the_scan_sees_a_tuple_a_set_and_a_dict(tmp_path) -> None:
     f = tmp_path / "m.py"
     f.write_text('A = (".py", ".ts")\nB = {".py", ".ts"}\nC = {".py": 1, ".ts": 2}\n')
     assert [n for _, n in _suffix_collections(f)] == ["A", "B", "C"]
-
-
-class TestWatcherFilter:
-    def _watcher(self, root: Path):
-        from core.code_intel.watcher import CodeIntelWatcher
-        return CodeIntelWatcher("P", root, object())
-
-    def test_a_repo_under_a_swarm_ai_dir_is_watched(self, tmp_path) -> None:
-        """Bound repos are cloned under ~/.swarm-ai/bindings/: the skip segments match
-        inside the repo only, never on the absolute path."""
-        root = tmp_path / ".swarm-ai" / "bindings" / "repo"
-        root.mkdir(parents=True)
-        w = self._watcher(root)
-        assert w._filter(None, str(root / "src" / "a.go")) is True
-        assert w._filter(None, str(root / "Knowledge" / "a.py")) is False
-        assert w._filter(None, str(root / "node_modules" / "a.js")) is False
-        assert w._filter(None, str(root / "a.md")) is False
-        assert w._filter(None, str(root / "q.sql")) is True
-        assert w._filter(None, str(tmp_path / "elsewhere.py")) is False

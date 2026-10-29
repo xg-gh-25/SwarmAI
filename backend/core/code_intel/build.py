@@ -1,13 +1,15 @@
 """Writing a code graph from a repo: the one full rebuild and the one incremental update.
 
-Every path that rebuilds a graph (the reindex job, ``bind_repo``, the Brain Hub
-re-index button, a library mount) calls ``rebuild``; every path that re-stores
-changed files (the commit hook, the session-start health check) calls
-``update_files``, and the file watcher, which chunks its work, calls
-``GraphStore.incremental_update`` and ``routes_for`` itself. Before this there were
-four rebuilds and three incremental paths, and they disagreed: two rebuilds stored
-no routes, one marked an emptied graph as fresh, and ``clear()`` kept the routes of
-deleted handlers.
+Every path that rebuilds a graph (``bind_repo``, the build child the Brain Hub
+re-index button, a Confirm and a reader start, a library mount) calls ``rebuild``;
+the one incremental path, ``ensure_fresh`` (a reader out of the daemon, the hourly
+job), calls ``update_files``. Before this there were four rebuilds and three
+incremental paths, and they disagreed: two rebuilds stored no routes, one marked an
+emptied graph as fresh, and ``clear()`` kept the routes of deleted handlers.
+
+The daemon never parses (design 2026-10-29-code-intel-unification §0.2): what it
+asks for runs in a child (``spawn_build`` / ``spawn_child``). One writer per graph
+across processes holds ``write_lock``.
 
 What every rebuild now does the same way:
 - An empty parse leaves the graph exactly as it was and unstamped (a transient empty
@@ -19,15 +21,17 @@ What every rebuild now does the same way:
   reader (a library mount). A prefix failure is logged and never fails the write.
 - ``head`` is the commit the CALLER read before the parse: a commit that lands while
   the parse runs stays unindexed and the next incremental update takes it.
-- The write runs under the graph's write lock, so a reader on the same store sees the
-  old graph or the new one, never an emptied one. Parsing and route extraction run
-  before the lock.
+- The write is one SQLite transaction (``GraphStore.transaction``), so a reader in any
+  process sees the old graph or the new one, never an emptied one, and a writer killed
+  half-way leaves the old graph. Parsing and route extraction run before it; router
+  prefixes after it.
 
 The caller owns everything else: which repo, the ownership check, a bind lock,
 mount-specific meta.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import sqlite3
@@ -95,11 +99,14 @@ def _apply_prefixes(graph: GraphStore, root: Path) -> None:
 
 
 def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
-            routes: bool = True, stamp: bool = True) -> RebuildResult:
+            routes: bool = True, stamp: bool = True,
+            meta: dict[str, str] | None = None) -> RebuildResult:
     """Replace *graph* with a fresh parse of *repo_root* (rules in the module doc).
 
     *stamp*: mark the graph fully indexed at *head*. A library mount passes False —
-    its freshness is the mount's own ``last_synced``.
+    its freshness is the mount's own ``last_synced``. *meta*: more ``graph_meta`` keys,
+    written in the same transaction (``clear()`` empties the table, so a key written
+    after the commit would be missing for a moment, and for good if the writer died).
     """
     from .parser import parse_repo_with_coverage
 
@@ -112,7 +119,9 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
         return RebuildResult(empty=True, parse_status=out.status,
                              coverage_holes=out.coverage_holes)
     found = [r for p in results for r in (_file_routes(root, p.file_path) if routes else [])]
-    with graph._conn_lock:
+    # One transaction: a reader in another process sees the old graph or the new one,
+    # and a writer killed half-way leaves the old one (clear() used to commit alone).
+    with graph.transaction():
         graph.clear()
         graph.bulk_insert(results, repo_root=root)
         graph.set_meta("parse_status", out.status)
@@ -121,9 +130,15 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
             graph.set_meta("coverage_commit", head)
         if found:
             graph.insert_routes(found)
-            _apply_prefixes(graph, root)
         if stamp:
             graph.mark_indexed(full=True, head=head)
+        for key, value in (meta or {}).items():
+            graph.set_meta(key, value)
+    if found:
+        # After the commit: a prefix failure must not undo the rebuild, and a reader
+        # seeing the bare decorator paths for a moment is harmless.
+        _apply_prefixes(graph, root)
+    graph.checkpoint_truncate()
     return RebuildResult(empty=False, nodes=sum(len(p.nodes) for p in results),
                          files=len(results), routes=len(found), parse_status=out.status,
                          coverage_holes=out.coverage_holes)
@@ -166,3 +181,261 @@ def update_files(graph: GraphStore, repo_root: str | Path, files: list[str]) -> 
         routes_for(graph, repo_root, restored)
     return UpdateResult(updated=list(res.get("updated", [])), skipped=list(res.get("skipped", [])),
                         failed=list(res.get("failed", [])))
+
+
+# ── building and refreshing the graphs a project owns (run out of the daemon) ──
+
+WRITE_LOCK_WAIT_S = 600  # an explicit rebuild waits this long for another writer
+
+
+def head_of(repo_root: str | Path) -> str | None:
+    """The repo's HEAD commit, read BEFORE a parse (``rebuild``'s contract)."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+@contextlib.contextmanager
+def write_lock(db_path: str | Path, *, wait: bool):
+    """One writer per graph across processes: an ``fcntl`` lock on ``<db>.write.lock``.
+    Yields True when held. ``wait=False`` yields False at once if another process
+    holds it; ``wait=True`` waits up to ``WRITE_LOCK_WAIT_S``, then yields False.
+    (The SQLite transaction keeps a rebuild atomic; this lock only keeps two
+    processes from parsing the same repo at once.)"""
+    import time
+    path = Path(str(db_path) + ".write.lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:          # not POSIX: no second writer to exclude in practice
+        yield True
+        return
+    with open(path, "a+") as fh:
+        deadline = time.monotonic() + (WRITE_LOCK_WAIT_S if wait else 0)
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.5)
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _sync_docs(project_dir: str | Path, repo_root, changed: list[str] | None) -> None:
+    """The repo's documents follow its HEAD (design 2026-10-27 §5.3): re-indexed in
+    place for recall and re-ranked in survey.json. A failure never fails the graph."""
+    try:
+        from core.brain_bootstrap.doc_index import sync_repo_after_head_move
+        sync_repo_after_head_move(project_dir, repo_root, changed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("code intel: repo document sync for %s failed: %s: %s",
+                       repo_root, type(exc).__name__, exc)
+
+
+def build_graph(ref, *, project_dir: str | Path | None = None,
+                only_if_stale: bool = False) -> RebuildResult | None:
+    """Build (or rebuild) the graph of one owned repo (*ref*: a ``CodeIntelDb``) on its
+    own connection, holding its write lock (waiting for another writer). The db file
+    is created when it does not exist. *only_if_stale*: do not wait for the lock, and
+    skip (None) when another process holds it or the graph is already current — what
+    a rebuild started by a reader asks for. With *project_dir*, the repo's documents
+    are re-synced after a rebuild."""
+    from .freshness import check_freshness
+    from .graph_store import GraphStore
+    from core.ddd_bindings import bind_in_progress
+    if ref.repo_root is not None and bind_in_progress(ref.repo_root):
+        # the bind re-clones the repo and rebuilds this graph itself
+        logger.info("code intel: %s is being bound; skipped", ref.repo)
+        return None
+    ref.db_path.parent.mkdir(parents=True, exist_ok=True)
+    with write_lock(ref.db_path, wait=not only_if_stale) as held:
+        if not held:
+            logger.info("code intel: %s is being written by another process; skipped", ref.repo)
+            return None
+        if ref.repo_root is not None and bind_in_progress(ref.repo_root):
+            # a bind started while this waited for the lock: it rebuilds the graph
+            logger.info("code intel: %s is being bound; skipped", ref.repo)
+            return None
+        graph = GraphStore(ref.db_path)
+        try:
+            if only_if_stale and graph.get_meta("repo_root") is not None:
+                fr = check_freshness(graph)
+                if not fr.stale:
+                    return None
+            head = head_of(ref.repo_root)
+            result = rebuild(graph, ref.repo_root, head=head)
+        finally:
+            graph.close()
+    if project_dir is not None and not result.empty:
+        _sync_docs(project_dir, ref.repo_root, None)
+    return result
+
+
+def ensure_graph(project_dir: str | Path, *, repo: str | None = None,
+                 full: bool = False, only_if_stale: bool = False) -> list[dict]:
+    """Build every graph *project_dir* owns that does not exist yet (all of them, or
+    the one named *repo*); with *full*, rebuild those that exist too. One dict per
+    graph: ``{repo, db, action, nodes?, error?}``. A failure is reported, never raised."""
+    from . import owned_graphs
+    out: list[dict] = []
+    for ref in owned_graphs(project_dir):
+        if repo is not None and ref.repo != repo:
+            continue
+        row = {"repo": ref.repo, "db": str(ref.db_path)}
+        if ref.db_path.exists() and not full:
+            out.append({**row, "action": "exists"})
+            continue
+        if ref.repo_root is None or not Path(ref.repo_root).is_dir():
+            out.append({**row, "action": "skipped", "error": "repo not on disk"})
+            continue
+        try:
+            built = build_graph(ref, project_dir=project_dir, only_if_stale=only_if_stale)
+        except Exception as exc:  # noqa: BLE001 — one repo must not stop the others
+            logger.warning("code intel: building %s failed: %s: %s", ref.repo,
+                           type(exc).__name__, exc)
+            out.append({**row, "action": "failed", "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if built is None:
+            out.append({**row, "action": "skipped"})
+        else:
+            out.append({**row, "action": "empty" if built.empty else "built", "nodes": built.nodes})
+    return out
+
+
+def spawn_build(project: str, *, repo: str | None = None, full: bool = False,
+                only_if_stale: bool = False):
+    """Start ``python -m core.code_intel.build`` for *project* as a child in its own
+    session: a parse never runs in the caller's process (the daemon's GIL is the chat
+    loop's; an agent's Bash call has a timeout). Output goes to
+    ``<app data>/logs/code_intel_build.log``. Returns the ``Popen``."""
+    # name=value: a project or checkout name that starts with "-" stays a value
+    args = ["-m", "core.code_intel.build", f"--project={project}"]
+    if repo:
+        args.append(f"--repo={repo}")
+    if full:
+        args.append("--full")
+    if only_if_stale:
+        args.append("--if-stale")
+    return spawn_child(args)
+
+
+def spawn_child(args: list[str]):
+    """``python <args>`` (the backend's own Python, packaged or not) as a detached
+    child in its own session, output appended to ``<app data>/logs/code_intel_build.log``.
+    Every code-graph write the daemon asks for goes through here."""
+    import subprocess
+    from config import get_app_data_dir
+    from utils.backend_bin import py_command
+    log_dir = get_app_data_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with open(log_dir / "code_intel_build.log", "ab") as log:
+        return subprocess.Popen(py_command(*args), stdin=subprocess.DEVNULL, stdout=log,
+                                stderr=log, start_new_session=True)
+
+
+@dataclass
+class Freshness:
+    """What a reader may say about a graph it is about to answer from."""
+    state: str                      # fresh | updated | rebuilding | busy | stale
+    commits_behind: int | None = None
+    changed: list[str] = field(default_factory=list)
+    message: str = ""
+
+    @property
+    def current(self) -> bool:
+        return self.state in ("fresh", "updated")
+
+
+def ensure_fresh(project_dir: str | Path, ref, graph: GraphStore, *,
+                 spawn: bool = True) -> Freshness:
+    """Bring *graph* up to its repo's HEAD before a reader out of the daemon answers.
+
+    No change: nothing is written. Up to ``FULL_REBUILD_FILES`` changed files: an
+    incremental update now (well under a second each for this repo), the commit marker
+    moved when every file landed, the repo's documents re-synced. More, a base rebased
+    away, or never indexed: no rebuild here (it can take minutes, past an agent's Bash
+    timeout); with *spawn*, a detached ``--if-stale`` rebuild child is started, and the
+    answer comes from the graph as it is. The same when an update leaves a file behind
+    (it would fail again next time) or the graph was built from another directory.
+    Another writer holding the graph, or a bind in progress: answered as it is, at once."""
+    from .freshness import check_freshness
+    project_dir = Path(project_dir)
+    root = ref.repo_root
+    if root is not None:
+        from core.ddd_bindings import bind_in_progress
+        if bind_in_progress(root):
+            return Freshness("busy", message="the repo is being bound; answered from the graph as it is")
+    fr = check_freshness(graph)
+    if not fr.stale:
+        return Freshness("fresh")
+    behind, changed = fr.commits_behind, list(fr.changed_files)
+
+    def _rebuild(why: str) -> Freshness:
+        if spawn and ref.repo:
+            try:
+                spawn_build(project_dir.name, repo=ref.repo, full=True, only_if_stale=True)
+            except OSError as exc:
+                logger.warning("code intel: could not start a rebuild of %s: %s", ref.repo, exc)
+                return Freshness("stale", behind, changed, why)
+            return Freshness("rebuilding", behind, changed,
+                             f"{why}; a full rebuild was started, ask again in a minute")
+        return Freshness("stale", behind, changed, why)
+
+    big = fr.suggest_full_rebuild or len(changed) > FULL_REBUILD_FILES
+    if root is None:
+        return _rebuild(fr.reason or "behind the repo")
+    stored = graph.get_meta("repo_root")
+    if stored and Path(stored).resolve() != Path(root).resolve():
+        # the changed files come from the stored repo's history; applied by relative
+        # path to another repo they would mix two repos in one graph
+        return _rebuild("the graph was built from another directory")
+    if big:
+        return _rebuild(fr.reason or "behind the repo")
+    with write_lock(ref.db_path, wait=False) as held:
+        if not held:
+            return Freshness("busy", behind, changed,
+                             "another process is updating the graph; answered from it as it is")
+        upd = update_files(graph, root, changed)
+        if upd.complete and fr.current_head:
+            graph.set_meta("last_indexed_commit", fr.current_head)
+    _sync_docs(project_dir, root, changed)
+    if upd.complete:
+        return Freshness("updated", behind, changed)
+    # A file that fails every time would keep the graph behind for good: the full
+    # parse records it as a coverage hole and moves the marker.
+    return _rebuild(f"{len(upd.failed)} changed files could not be updated")
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(prog="python -m core.code_intel.build",
+                                 description="Build the code graphs a project owns.")
+    ap.add_argument("--project", required=True)
+    ap.add_argument("--repo", default=None, help="only this owned repo (its name)")
+    ap.add_argument("--full", action="store_true", help="rebuild graphs that exist too")
+    ap.add_argument("--if-stale", action="store_true",
+                    help="skip a graph another process is writing or that is already current")
+    args = ap.parse_args(argv)
+    from jobs.paths import PROJECTS_DIR
+    rows = ensure_graph(PROJECTS_DIR / args.project, repo=args.repo, full=args.full,
+                        only_if_stale=args.if_stale)
+    print(json.dumps({"project": args.project, "graphs": rows}, ensure_ascii=False))
+    return 1 if any(r["action"] == "failed" for r in rows) else 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+    sys.exit(main())

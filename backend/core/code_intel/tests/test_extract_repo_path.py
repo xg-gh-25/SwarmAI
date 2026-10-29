@@ -1,9 +1,9 @@
 """Tests for extract_repo_path() — the shared multi-format TECH.md repo-path parser.
 
-run_19eecc9f: routers/code_intel.py:_run_reindex used an inline single-format regex
-(``**Repo Path:**``) that matched ZERO of 8 real projects, so reindex was silently
-dead for every project. The fix extracts a PURE helper (patterns + order + first-match,
-no filesystem I/O) reused by both _run_reindex and _build_project_path_cache.
+run_19eecc9f: an inline single-format regex (``**Repo Path:**``) matched ZERO of 8 real
+projects. The fix is one PURE helper (patterns + order + first-match, no filesystem I/O).
+A TECH.md path no longer grants ownership; the helper seeds a pending local-root
+suggestion (``local_roots.suggest_from_tech_md``).
 
 These tests pin:
   - AC1/AC2: the helper matches every real TECH.md format
@@ -73,16 +73,3 @@ class TestExtractRepoPath:
         (dir-validation is the CALLER's job, not the helper's)."""
         content = "- **Local:** `/does/not/exist/anywhere/xyz`\n"
         assert extract_repo_path(content) == "/does/not/exist/anywhere/xyz"
-
-    def test_real_swarmai_tech_md(self):
-        """AC2 regression: the real SwarmAI TECH.md resolves to the source repo."""
-        from jobs.paths import PROJECTS_DIR
-
-        tech = PROJECTS_DIR / "SwarmAI" / "TECH.md"
-        if not tech.exists():
-            import pytest
-
-            pytest.skip("SwarmAI TECH.md not present in this workspace")
-        got = extract_repo_path(tech.read_text(encoding="utf-8"))
-        assert got is not None
-        assert got.rstrip("/").endswith("swarmai")
