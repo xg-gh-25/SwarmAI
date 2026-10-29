@@ -320,3 +320,17 @@ def test_a_pipeline_run_is_an_attribution_per_model_replaced_by_its_later_measur
     assert got == [("haiku", "reflect", 5, 0, "attribution", "run_abc12345", None),
                    ("opus", "reflect", 200, 4000, "attribution", "run_abc12345", 0.0071)]
     assert spend == 0
+
+
+def test_the_model_probe_is_recorded(monkeypatch):
+    """The Settings model probe's one-token call is in the ledger, under its feature."""
+    import io
+    import json as _json
+    from routers import system
+    got = []
+    monkeypatch.setattr(ua, "record_sync", lambda rows: got.extend(rows))
+    body = io.BytesIO(_json.dumps({"usage": {"input_tokens": 8, "output_tokens": 1}}).encode())
+    system._ledger_probe({"body": body}, "us.anthropic.claude-sonnet-4-6")
+    assert [(r["feature"], r["input"], r["output"], r["model"]) for r in got] == [
+        ("settings.model_probe", 8, 1, "us.anthropic.claude-sonnet-4-6")]
+    system._ledger_probe({"body": io.BytesIO(b"not json")}, "m")          # never raises

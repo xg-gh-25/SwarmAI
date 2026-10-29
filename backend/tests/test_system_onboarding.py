@@ -41,6 +41,25 @@ class TestVerifyAuthBedrock:
         assert "latency_ms" in data
         assert isinstance(data["latency_ms"], int)
 
+    def test_verify_auth_records_the_probe_in_the_usage_ledger(self, client):
+        """The probe's one-token call is in the usage ledger, under its feature."""
+        from core import usage_accounting
+        mock_client = MagicMock()
+        mock_client.invoke_model.return_value = {
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+            "body": MagicMock(read=lambda: b'{"usage":{"input_tokens":8,"output_tokens":1}}'),
+        }
+        got: list = []
+        with patch("routers.system.boto3") as mock_boto3, \
+             patch.object(usage_accounting, "record_sync", side_effect=got.extend), \
+             patch("routers.system._get_auth_config", return_value={
+                 "use_bedrock": True, "aws_region": "us-east-1",
+                 "default_model": "claude-opus-4-6", "bedrock_model_map": None,
+             }):
+            mock_boto3.client.return_value = mock_client
+            assert client.post("/api/system/verify-auth").json()["success"] is True
+        assert [(r["feature"], r["input"], r["output"]) for r in got] == [("settings.model_probe", 8, 1)]
+
     def test_verify_auth_bedrock_expired(self, client):
         """ExpiredTokenException → error_type: expired_credentials."""
         mock_client = MagicMock()

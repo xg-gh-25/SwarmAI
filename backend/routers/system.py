@@ -545,8 +545,9 @@ async def _verify_bedrock(config: dict) -> dict:
             )
         # Blocking network call off the event loop (token already frozen into
         # the client above; no env dependency remains here).
-        await asyncio.to_thread(_invoke)
+        resp = await asyncio.to_thread(_invoke)
         latency = int((time.monotonic() - start) * 1000)
+        _ledger_probe(resp, bedrock_model)
         return {
             "success": True,
             "model": model,
@@ -1010,6 +1011,21 @@ async def get_engine_metrics() -> dict:
     if not ws_path:
         return {"error": "Workspace not initialized"}
     return collect_engine_metrics(ws_path)
+
+
+def _ledger_probe(resp, model_id: str) -> None:
+    """The model probe's one-token call in the usage ledger (feature ``settings.model_probe``);
+    never raises: accounting must not break the probe."""
+    try:
+        import json as _json
+        from core import usage_accounting
+        u = _json.loads(resp["body"].read()).get("usage") or {}
+        usage = {"inputTokens": u.get("input_tokens"), "outputTokens": u.get("output_tokens"),
+                 "cacheReadInputTokens": u.get("cache_read_input_tokens"),
+                 "cacheWriteInputTokens": u.get("cache_creation_input_tokens")}
+        usage_accounting.record_sync([usage_accounting.bedrock_row(usage, model=model_id, feature="settings.model_probe")])
+    except Exception:  # noqa: BLE001
+        logger.debug("usage ledger not written for the model probe", exc_info=True)
 
 
 @router.get("/tokens/usage")
