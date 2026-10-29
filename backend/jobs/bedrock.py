@@ -30,6 +30,42 @@ from typing import Any
 
 logger = logging.getLogger("swarm.jobs.bedrock")
 
+CONNECT_TIMEOUT = 10
+# Added to the configured timeouts before a fail-fast call is abandoned (_wall_bound).
+WALL_GRACE = 30
+
+
+def _wall_bound(read_timeout: float, attempts: int) -> float:
+    """The longest a fail-fast call can take with the timeouts it was built with."""
+    return (CONNECT_TIMEOUT + read_timeout) * max(1, attempts) + WALL_GRACE
+
+
+def _bounded(call: Any, bound: float) -> Any:
+    """Run *call* and give up after *bound* seconds. A CDF judge call sat in an SSL read
+    for 90 minutes with read_timeout=25 configured, and the worker thread with it
+    (2026-10-29): the socket timeout is not the whole guarantee. The abandoned call's
+    thread is a daemon and ends when its socket does."""
+    import threading
+
+    box: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = call()
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the caller
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, name="bedrock-call", daemon=True)
+    worker.start()
+    worker.join(bound)
+    if worker.is_alive():
+        logger.error("Bedrock call still blocked after %.0fs, past its own timeouts; "
+                     "abandoned (its thread ends with its socket)", bound)
+        raise TimeoutError(f"Bedrock call exceeded {bound:.0f}s")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
 # Module-level cached client — reused across calls within the same process.
 # TTL prevents stale credentials from causing persistent auth failures.
 _client: Any | None = None
@@ -267,13 +303,16 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
 
     boto_config = BotoConfig(
         retries={"max_attempts": max_attempts, "mode": "standard"},
-        connect_timeout=10,
+        connect_timeout=CONNECT_TIMEOUT,
         read_timeout=read_timeout,
     )
     creds = _resolve_credentials()
+    # its own session: boto3's default one is not thread-safe, and the CDF worker, the
+    # session-job thread and the run lane build these clients at the same time
+    session = boto3.session.Session()
     if creds:
-        return boto3.client("bedrock-runtime", region_name=region, config=boto_config, **creds)
-    return boto3.client("bedrock-runtime", region_name=region, config=boto_config)
+        return session.client("bedrock-runtime", region_name=region, config=boto_config, **creds)
+    return session.client("bedrock-runtime", region_name=region, config=boto_config)
 
 
 def get_model_id(model_key: str = "claude-sonnet-4-6") -> str:
@@ -395,8 +434,8 @@ def converse_with_retry(
                 client = build_timeout_client(
                     read_timeout=read_timeout, max_attempts=ffa, region=region
                 )
-                return client.converse(**_converse_kwargs(
-                    model_id, messages, system, inference_config, tool_config))
+                kwargs = _converse_kwargs(model_id, messages, system, inference_config, tool_config)
+                return _bounded(lambda: client.converse(**kwargs), _wall_bound(read_timeout, ffa))
             except Exception as e:
                 err_str = str(e).lower()
                 retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)

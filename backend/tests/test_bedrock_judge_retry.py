@@ -317,8 +317,12 @@ def test_build_timeout_client_config_and_no_cache_mutation():
         captured["region"] = kw.get("region_name")
         return fake
 
+    class _Session:
+        def client(self, service, **kw):
+            return _fake_boto_client(service, **kw)
+
     with patch.object(bedrock, "_resolve_credentials", return_value={}), \
-         patch("boto3.client", side_effect=_fake_boto_client):
+         patch("boto3.session.Session", lambda *a, **k: _Session()):
         out = bedrock.build_timeout_client(read_timeout=30, max_attempts=1, region="us-east-1")
 
     assert out is fake
@@ -362,3 +366,49 @@ def test_eval_llm_judge_uses_failfast_timeout_and_keeps_throttle_retry():
     assert result["status"] == "passed"
     assert captured.get("read_timeout") == 60, "judge must use the 60s fail-fast read timeout"
     assert captured.get("max_attempts") == 2, "judge must keep boto throttle-retry (Gate-2 MEDIUM)"
+
+
+def test_failfast_call_ends_when_the_socket_read_never_returns(monkeypatch):
+    """A CDF judge call sat in an SSL read for 90 minutes with read_timeout=25 set, and the
+    worker thread with it: nothing in the session lane was judged (2026-10-29). The call
+    is bounded by the timeouts it was configured with; past that it is abandoned and
+    raises, so the caller defers the unit and moves on."""
+    import threading
+    import time
+    from jobs import bedrock
+    never = threading.Event()
+    client = MagicMock()
+    client.converse.side_effect = lambda **kw: never.wait(10)
+    monkeypatch.setattr(bedrock, "_wall_bound", lambda read_timeout, attempts: 0.3)
+    with patch.object(bedrock, "build_timeout_client", return_value=client):
+        start = time.monotonic()
+        with pytest.raises(TimeoutError):
+            bedrock.converse_with_retry(messages=[], system=[], inference_config={},
+                                        model_id="m", read_timeout=25, max_attempts=2)
+    assert time.monotonic() - start < 5
+    never.set()
+
+
+def test_the_wall_bound_is_the_configured_timeouts():
+    from jobs import bedrock
+    assert bedrock._wall_bound(25, 2) == (bedrock.CONNECT_TIMEOUT + 25) * 2 + bedrock.WALL_GRACE
+
+
+def test_build_timeout_client_uses_its_own_session():
+    """boto3's default session is not thread-safe, and the CDF worker, the session-job
+    thread and the run lane build these clients at the same time."""
+    from jobs import bedrock
+    sessions = []
+
+    class FakeSession:
+        def __init__(self, *a, **k):
+            sessions.append(self)
+
+        def client(self, service, **kw):
+            return ("client", service, kw.get("config").read_timeout)
+
+    with patch.object(bedrock, "_resolve_credentials", return_value={}), \
+         patch("boto3.session.Session", FakeSession), \
+         patch("boto3.client", side_effect=AssertionError("default session used")):
+        out = bedrock.build_timeout_client(read_timeout=30, max_attempts=1, region="us-east-1")
+    assert out == ("client", "bedrock-runtime", 30) and len(sessions) == 1
