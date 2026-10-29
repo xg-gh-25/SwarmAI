@@ -95,6 +95,21 @@ def test_cost_is_summed_from_process_increases():
     assert r["cost_usd"] == pytest.approx(1.8) and r["cost_partial"] is False
 
 
+def test_tokens_count_the_cache_too():
+    # an agent's tokens are mostly cache reads; the cost counts them, so must the tokens
+    u1 = {"input_tokens": 3, "output_tokens": 400, "cache_read_input_tokens": 90_000, "cache_creation_input_tokens": 5_000}
+    u2 = {"input_tokens": 2, "output_tokens": 100, "cache_read_input_tokens": 95_000}
+    r = summarize([U(), A(T("a"), out(usage=u1)), U(), A(T("b"), out(usage=u2))])
+    assert r["tokens"] == {"input": 5, "output": 500, "cache_read": 185_000, "cache_write": 5_000}
+    pub = res.public({"result": r})
+    assert pub["tokens"] == {"input": 5, "output": 500, "cache_read": 185_000, "cache_write": 5_000}
+
+
+def test_a_record_kept_before_the_cache_was_counted_says_so():
+    pub = res.public({"result": {**summarize([U(), A(T("a"), out())]), "tokens": {"input": 88, "output": 18_533}}})
+    assert pub["tokens"] == {"input": 88, "output": 18_533, "cache_read": None, "cache_write": None}
+
+
 def test_unread_older_turns_make_the_cost_partial():
     r = summarize([U(), A(out(cli_cost_total=1.0, cli_pid=5))], has_more=True)
     assert r["older_turns_not_read"] is True and r["cost_partial"] is True

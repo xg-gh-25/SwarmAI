@@ -94,7 +94,10 @@ export interface SwarmOutResult {
   turns: number;
   older_turns_not_read: boolean;
   active_s: number | null;
-  tokens: { input: number; output: number } | null;
+  /** every kind of token the run used: input not read from the cache, output, and the
+   *  prompt cache's reads and writes. The cache fields are null on a record kept before
+   *  they were counted: its total is not known. */
+  tokens: { input: number; output: number; cache_read: number | null; cache_write: number | null } | null;
   cost_usd: number | null;
   /** the cost may be short (a turn without a record, or older turns not read) */
   cost_partial: boolean;

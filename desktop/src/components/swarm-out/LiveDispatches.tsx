@@ -327,15 +327,18 @@ function ResultDetail({ r, full, setFull, onRefreshed, onClose }: {
   );
 }
 
-/** The card's facts as cells (label over value), wrapping to as many columns as fit. */
+/** The card's facts as cells (label over value), wrapping to as many columns as fit; a
+ *  wide cell (the spend) takes two and reads a size up. */
 function Stats({ stats }: { stats: RunStat[] }) {
   return (
     <dl className="mt-2 mb-0 grid gap-x-3 gap-y-1.5 pt-2 border-t border-[var(--color-border)]"
       style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))' }} data-testid="swarm-out-run-numbers">
       {stats.map((x) => (
-        <div key={x.key} className="min-w-0" title={x.title} data-testid={`swarm-out-stat-${x.key}`}>
+        <div key={x.key} className="min-w-0" title={x.title} data-testid={`swarm-out-stat-${x.key}`}
+          style={x.wide ? { gridColumn: 'span 2' } : undefined}>
           <dt className="text-[10.5px] text-[var(--color-text-dim)] truncate">{x.label}</dt>
-          <dd className="m-0 text-[12.5px] tabular-nums truncate" style={x.tone ? { color: TONE_VAR[x.tone] } : undefined}>{x.value}</dd>
+          <dd className={`m-0 tabular-nums truncate ${x.wide ? 'text-[14px] font-semibold' : 'text-[12.5px]'}`}
+            style={x.tone ? { color: TONE_VAR[x.tone] } : undefined}>{x.value}</dd>
           {x.sub && <dd className="m-0 text-[10.5px] truncate" style={{ color: TONE_VAR[x.tone ?? 'unknown'] }}>{x.sub}</dd>}
         </div>
       ))}

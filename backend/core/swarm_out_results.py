@@ -241,12 +241,17 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         ended_at = d.s(rows[-1].get("created_at"), 40)
 
     active_ms = sum(d.i(o.get("duration_ms")) or 0 for o in outcomes)
-    tokens_in = tokens_out = 0
+    # every kind of token a turn used: the model's input not read from the cache, its
+    # output, and what it read from and wrote to the prompt cache. The cache is most of
+    # an agent's tokens, and the cost (the CLI's own total) counts all four.
+    tokens = dict.fromkeys(("input", "output", "cache_read", "cache_write"), 0)
     for o in outcomes:
         u = o.get("usage")
         if isinstance(u, dict):
-            tokens_in += d.i(u.get("input_tokens")) or 0
-            tokens_out += d.i(u.get("output_tokens")) or 0
+            tokens["input"] += d.i(u.get("input_tokens")) or 0
+            tokens["output"] += d.i(u.get("output_tokens")) or 0
+            tokens["cache_read"] += d.i(u.get("cache_read_input_tokens")) or 0
+            tokens["cache_write"] += d.i(u.get("cache_creation_input_tokens")) or 0
     costs, missing = turn_costs(outcomes)
     known = [c for c in costs if c is not None]
     cost = round(sum(known), 6) if known else None
@@ -403,7 +408,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         "error": error, "ended_at": ended_at, "turns": turns,
         "older_turns_not_read": bool(has_more),
         "active_s": round(active_ms / 1000) if outcomes else None,
-        "tokens": {"input": tokens_in, "output": tokens_out} if outcomes else None,
+        "tokens": tokens if outcomes else None,
         "cost_usd": cost, "cost_partial": cost_partial,
         "report": report_full[:REPORT_CHARS], "report_chars": len(report_full),
         "kinds": kinds,
@@ -830,7 +835,11 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> O
         "error": error, "ended_at": _match(_TIME_RE, res.get("ended_at")),
         "turns": _int(res.get("turns")), "older_turns_not_read": res.get("older_turns_not_read") is True,
         "active_s": _opt_int(res.get("active_s")),
-        "tokens": {"input": _int(tokens.get("input")), "output": _int(tokens.get("output"))}
+        # a record kept before the cache was counted has no cache keys: None, so the
+        # panel says the total is not known rather than showing input + output alone
+        "tokens": {"input": _int(tokens.get("input")), "output": _int(tokens.get("output")),
+                   "cache_read": _opt_int(tokens.get("cache_read")),
+                   "cache_write": _opt_int(tokens.get("cache_write"))}
         if isinstance(tokens, dict) else None,
         "cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool)
         and math.isfinite(cost) and cost >= 0 else None,

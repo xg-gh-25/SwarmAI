@@ -36,7 +36,7 @@ const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 
 const result = (over: Partial<SwarmOutResult> = {}, work: Partial<SwarmOutResult['work']> = {}): SwarmOutResult => ({
   ended: 'completed', provisional: false, outcome_recorded: true, hive_records_outcomes: true, error: null, ended_at: ago(0.5), turns: 1,
-  older_turns_not_read: false, active_s: 300, tokens: { input: 10, output: 5 }, cost_usd: 1.234, cost_partial: true,
+  older_turns_not_read: false, active_s: 300, tokens: { input: 10, output: 5, cache_read: 900, cache_write: 85 }, cost_usd: 1.234, cost_partial: true,
   report_chars: 12, kinds: ['answer'], pipeline: null, dropped: 0, ...over,
   work: { repos: null, changes: [], files: [], files_omitted: 0,
     steps: { total: 3, failed: 1, agents: 0, by_tool: { Bash: 2, Read: 1 } },

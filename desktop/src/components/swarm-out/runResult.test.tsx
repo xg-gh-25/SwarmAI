@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import { agentFacts, dailyByOutcome, endedLabel, outcomeBucket, runJudge, runStats, workLines } from './live';
+import { agentFacts, dailyByOutcome, endedLabel, outcomeBucket, runJudge, runStats, tokenCount, workLines } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -24,7 +24,7 @@ const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
 
 const result = (over: Partial<SwarmOutResult> = {}, work: Partial<SwarmOutResult['work']> = {}): SwarmOutResult => ({
   ended: 'completed', provisional: false, outcome_recorded: true, hive_records_outcomes: true, error: null, ended_at: ago(0.5), turns: 1,
-  older_turns_not_read: false, active_s: 300, tokens: { input: 10, output: 5 }, cost_usd: 1.234, cost_partial: false,
+  older_turns_not_read: false, active_s: 300, tokens: { input: 10, output: 5, cache_read: 900, cache_write: 85 }, cost_usd: 1.234, cost_partial: false,
   report_chars: 12, kinds: ['answer'], pipeline: null, dropped: 0, ...over,
   work: { repos: null, changes: [], files: [], files_omitted: 0,
     steps: { total: 3, failed: 1, agents: 0, by_tool: { Bash: 2, Read: 1 } },
@@ -118,20 +118,31 @@ describe('what a run did, for every kind of run', () => {
     expect(runJudge(result())).toBeNull();
   });
 
-  it('facts are separate cells and say what is not known instead of a zero', () => {
+  it('facts are three cells: time, the human loops, and the spend as tokens and cost in one', () => {
     const by = (res: SwarmOutResult) => Object.fromEntries(runStats(res).map((x) => [x.key, x]));
-    const unknown = by(result({ cost_usd: null, active_s: null, tokens: null }, { human: { approved: 1, denied: 0, unanswered: 2, answered_questions: 1 } }));
-    expect(Object.keys(unknown)).toEqual(['ended', 'time', 'tokens', 'cost', 'human', 'failed']);
-    expect([unknown.time.value, unknown.tokens.value, unknown.cost.value]).toEqual(['—', '—', '—']);
-    expect(unknown.cost.title).toBe('没有记录');
+    const unknown = by(result({ cost_usd: null, active_s: null, tokens: null, ended_at: null }, { human: { approved: 1, denied: 0, unanswered: 2, answered_questions: 1 } }));
+    expect(Object.keys(unknown)).toEqual(['time', 'human', 'spend']);
+    expect([unknown.time.value, unknown.spend.value]).toEqual(['—', '— token · —']);
+    expect(unknown.spend.title).toBe('Token 没有记录\n花费没有记录');
     expect(unknown.human).toMatchObject({ value: '4', sub: '2 个没回答', tone: 'attention' });
     expect(unknown.human.title).toBe('批准 1 · 拒绝 0 · 回答 1 · 没回答 2');
-    const known = by(result({ cost_partial: true, tokens: { input: 36000, output: 2200 } }));
-    expect(known.cost.value).toBe('≥ $1.23');
-    expect(known.tokens.value).toMatch(/^3\.8万$|^38\.2K$/);   // compact, in the app's language
-    expect(known.tokens.title).toBe('输入 36,000 · 输出 2,200');
+    // all four kinds of token count; the cache is most of them
+    const known = by(result({ cost_partial: true, cost_usd: 3.7, tokens: { input: 88, output: 18_533, cache_read: 4_630_000, cache_write: 150_000 } }));
+    expect(known.spend).toMatchObject({ value: '4.8M token · ≥ $3.70', wide: true });
+    expect(known.spend.sub).toBe('96% 是缓存读 · 失败步骤 1');
+    expect(known.spend.title).toBe('缓存读 4.6M · 缓存写 150K · 输出 18.5K · 输入 88\n花费至少这么多：有的轮次没有记录');
     expect(known.human.tone).toBeUndefined();
     expect(known.time.value).toBe('5 分钟');
+    expect(known.time.sub).toMatch(/ 结束$/);
+    // a record kept before the cache was counted: input + output alone is not the total
+    const legacy = by(result({ tokens: { input: 88, output: 18_533, cache_read: null, cache_write: null } }));
+    expect(legacy.spend.value).toBe('— token · $1.23');
+    expect(legacy.spend.title).toContain('刷新结果后重算');
+  });
+
+  it('a token count reads as K / M / B in every language', () => {
+    expect([tokenCount(88), tokenCount(18_533), tokenCount(4_798_621), tokenCount(123_400_000), tokenCount(2_300_000_000)])
+      .toEqual(['88', '18.5K', '4.8M', '123M', '2.3B']);
   });
 
   it("the Brain and Project Agent a run went under", () => {
@@ -201,7 +212,7 @@ describe('a run card', () => {
     expect(within(c).getByTestId('swarm-out-run-ended').dataset.tone).toBe('error');
     expect(within(c).getByTestId('swarm-out-run-ended').style.color).toBe('var(--color-status-error)');
     expect(within(c).getByTestId('swarm-out-run-work').textContent).toContain('acme/widget：1 个 commit，改了 4 个文件 +120 −30');
-    expect(within(c).getByTestId('swarm-out-stat-cost').textContent).toBe('花费$1.23');
+    expect(within(c).getByTestId('swarm-out-stat-spend').textContent).toContain('消耗1K token · $1.23');
     expect(within(c).getByTestId('swarm-out-run-brain').textContent).toContain('没走 Project Agent');
   });
 
