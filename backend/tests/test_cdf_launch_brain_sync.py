@@ -49,3 +49,13 @@ def test_an_install_outside_the_live_workspace_records_nothing(safety_corpus, tm
     conn = _connect(safety_corpus["database"])
     assert conn.execute("SELECT COUNT(*) FROM ingestion_writes").fetchone()[0] == 0
     conn.close()
+
+
+def test_a_worker_hive_journals_nothing(safety_corpus, tmp_path, monkeypatch):
+    monkeypatch.setenv("SWARMAI_MODE", "hive")
+    monkeypatch.setenv("SWARMAI_ROLE", "worker")
+    files = _package(tmp_path / "host", "# TECH\n")
+    bs.install(safety_corpus["workspace"], "Lib", files, bs.content_digest(files))
+    conn = _connect(safety_corpus["database"])
+    assert conn.execute("SELECT COUNT(*) FROM ingestion_writes").fetchone()[0] == 0
+    conn.close()

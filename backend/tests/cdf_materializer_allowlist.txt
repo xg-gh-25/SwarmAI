@@ -135,7 +135,6 @@ jobs/executor.py:_send_slack_dm  # exempt: temp MCP config file
 jobs/executor.py:_write_failure_streak_alert  # exempt: job results JSONL
 jobs/executor.py:_write_job_result  # exempt: Knowledge/JobResults (unmanaged log folder)
 jobs/executor.py:execute_job  # exempt: via run_worktree_sweep: pipeline worktrees
-jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via doc_index.sync_repo_after_head_move: knowledge index DB and survey.json under .artifacts/
 jobs/handlers/ddd_weekly_report.py:run_ddd_weekly_report  # exempt: writes Knowledge/Reports/ (not a governed store)
 jobs/handlers/memory_health.py:_update_health_findings  # exempt: health_findings.json
 jobs/handlers/memory_health.py:_write_summary_to_daily  # exempt: DailyActivity summary line (working memory)
@@ -206,6 +205,12 @@ scripts/cdf_rehearsal_replay.py:_drain  # exempt: drives CDF's own worker and wr
 scripts/cdf_rehearsal_replay.py:main  # exempt: writes the JSON report to --report; governed writes go through _drain
 core/project_agent.py:check_sources  # exempt: project-agent source-check JSON (.project-agent-check.json), not a governed knowledge file
 core/project_agent_draft.py:apply  # exempt: project-agent definition draft (YAML) awaiting the Brain Hub review card, not governed knowledge
-routers/ddd_brain.py:_confirm_agent  # exempt: confirms that project-agent draft on the review card (calls project_agent_draft.confirm)
 scripts/eval_runner.py:write_gate_manifest  # exempt: eval gate input-hash manifest
 core/project_agent_session.py:_run_one  # exempt: the gate subprocess I/O files in its own temp dir (in.json / err.txt)
+core/code_intel/local_roots.py:_locked  # exempt: local-roots registry JSON lock (bindings dir)
+core/code_intel/local_roots.py:_write  # exempt: local-roots registry JSON (bindings dir)
+core/ddd_bindings.py:_bind_locked  # exempt: a binding's repo checkout and its code_intel.db
+core/library_mounts.py:index_code_mount  # exempt: a Library mount's code_intel.db
+core/recall_multi.py:_graph_codeintel_hits  # exempt: via code_intel.build.ensure_fresh: the code graph DB
+routers/ddd_brain.py:confirm_local_root._work  # exempt: via local_roots.confirm: local-roots registry JSON
+routers/library_api.py:register_mount._work  # exempt: via library_mounts: mount registry and its code_intel.db

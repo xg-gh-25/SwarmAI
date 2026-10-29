@@ -411,6 +411,9 @@ def _journal_install(root: Path) -> None:
     installed: a failed record is
     logged, and CDF's own precondition still refuses to write over bytes it did not
     expect."""
+    from core.app_role import is_worker
+    if is_worker():
+        return      # a worker Hive's CDF writes nothing, so nothing plans against the files
     from config import get_swarmws
     from core.ingestion.governed_edit import apply_sync, sync_baseline_revision, sync_revision_of
     from core.ingestion.materializer import iter_governed_files

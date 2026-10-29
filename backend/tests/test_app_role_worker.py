@@ -129,6 +129,10 @@ def test_a_reference_hive_starts_the_judge_and_writer(as_role, tmp_path, monkeyp
     handle.start()
     try:
         assert not handle.extract_only
+        import time
+        deadline = time.monotonic() + 10      # the run lane starts after startup recovery
+        while not handle.run_executor._thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
         assert handle._thread.is_alive() and handle.run_executor._thread.is_alive()
         assert handle._maint.ident is None
     finally:
