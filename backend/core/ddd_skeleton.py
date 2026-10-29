@@ -156,9 +156,10 @@ def align_project(project_dir: str | Path, *, apply: bool = False) -> dict:
 # that bypasses CDF (the New Brain bootstrap, design 2026-10-27 §5.5) checks against
 # this table so everything it writes is where CDF would have put it. One table: CDF
 # is asked to derive its matrix check from it (design §5.11 C12).
-# IMPROVEMENT § What to Watch For holds gaps (no evidence yet), written as guideline.
-# PROJECT's Current Focus / Open Items / Blocked By are live state, written by the
-# user, so no writer targets them.
+# IMPROVEMENT § What to Watch For holds risks and gaps (no evidence yet, written as
+# guideline): WATCH_TYPES. PROJECT § Open Items holds entries of any type the user or a
+# session records. PROJECT's Current Focus / Blocked By are live state, written by the
+# user, so no writer targets them (USER_ONLY_SECTIONS).
 _ALL_TYPES = frozenset({"guideline", "pitfall", "decision", "model", "process",
                         "principle", "correction"})
 SECTION_TYPES: dict[tuple[str, str], frozenset[str]] = {
@@ -176,6 +177,45 @@ SECTION_TYPES: dict[tuple[str, str], frozenset[str]] = {
     ("PROJECT.md", "Recent Decisions"): _ALL_TYPES,
 }
 GAP_SECTION = ("IMPROVEMENT.md", "What to Watch For")
+WATCH_TYPES = frozenset({"guideline", "pitfall"})
+# The type an entry written with no [type] is given in each section: the one the
+# section's skeleton comment names first (ddd_format reads an untyped entry by it).
+_DEFAULT_TYPE: dict[tuple[str, str], str] = {
+    ("PRODUCT.md", "Vision"): "principle", ("PRODUCT.md", "What Makes It Different"): "model",
+    ("PRODUCT.md", "Strategic Priorities"): "decision", ("PRODUCT.md", "Success Criteria"): "guideline",
+    ("PRODUCT.md", "Non-Goals"): "pitfall",
+    ("TECH.md", "Architecture"): "decision", ("TECH.md", "Key Subsystems"): "model",
+    ("TECH.md", "Conventions"): "guideline", ("TECH.md", "Runtime Traps"): "pitfall",
+    ("IMPROVEMENT.md", "What Worked"): "guideline", ("IMPROVEMENT.md", "What Failed"): "pitfall",
+    ("IMPROVEMENT.md", "What to Watch For"): "guideline",
+    ("PROJECT.md", "Recent Decisions"): "decision", ("PROJECT.md", "Open Items"): "guideline",
+}
+
+
+def allowed_types(doc: str, section: str) -> frozenset[str] | None:
+    """The entry types that belong in skeleton section *section* of *doc*; None for a
+    user-only section (anything the user writes)."""
+    if section in USER_ONLY_SECTIONS.get(doc, ()):
+        return None
+    if (doc, section) == GAP_SECTION:
+        return WATCH_TYPES
+    if (doc, section) == ("PROJECT.md", "Open Items"):
+        return _ALL_TYPES
+    return SECTION_TYPES[(doc, section)]
+
+
+def default_type(doc: str, section: str) -> str:
+    return _DEFAULT_TYPE[(doc, section)]
+
+
+def home_section(doc: str, etype: str) -> str:
+    """The section of *doc* CDF routes an entry of type *etype* to (its matrix,
+    ``core.ingestion.contracts._DDD_MATRIX``): the first skeleton section whose
+    SECTION_TYPES hold the type."""
+    for s in skeleton_sections(doc):
+        if etype in SECTION_TYPES.get((doc, s), ()):
+            return s
+    raise KeyError(f"no section of {doc} takes [{etype}]")
 # The PRODUCT sections a person is asked about when no evidence covers them (§5.6).
 ASK_SECTIONS = ("Vision", "Non-Goals", "Success Criteria")
 

@@ -5,7 +5,8 @@
 
 ## What Worked
 
-<!-- guideline / principle: approaches that worked, with the evidence. -->
+<!-- guideline / principle / decision / model / process: approaches that worked,
+     with the evidence. -->
 
 ## What Failed
 

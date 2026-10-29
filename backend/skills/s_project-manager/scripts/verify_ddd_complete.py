@@ -288,7 +288,32 @@ def _check_knowledge(d: Path) -> list[tuple[str, str, str]]:
     else:
         out.append((f"{name}/content", STATUS_PASS,
                     "typed entries present; empty PRODUCT sections are recorded as gaps"))
+    out.append(_check_format(d, texts))
     return out
+
+
+def _check_format(d: Path, texts: dict[str, str]) -> tuple[str, str, str]:
+    """② Knowledge/format: every doc is in the shape CDF writes (core.ddd_format): only
+    skeleton sections, each holding typed entries with their metadata line, of a type
+    CDF routes there. Anything else is reference material for 2-understanding/knowledge/
+    — ``artifact_cli ddd-format --apply`` moves it there without losing a line."""
+    name = "② Knowledge/format"
+    try:
+        from core import ddd_format as fmt
+    except ImportError:
+        return (name, STATUS_PENDING, "not checked off a SwarmAI host")
+    parts = []
+    for doc, text in texts.items():
+        found = fmt.check(doc, text)
+        if found:
+            kinds: dict[str, int] = {}
+            for p in found:
+                kinds[p.kind] = kinds.get(p.kind, 0) + 1
+            parts.append(f"{doc}: " + ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in sorted(kinds.items())))
+    if not parts:
+        return (name, STATUS_PASS, "every doc holds only typed entries in its skeleton sections")
+    return (name, STATUS_FAIL, "; ".join(parts)
+            + f" — run artifact_cli ddd-format --project {d.name} --apply")
 
 
 def _check_gates(d: Path) -> tuple[str, str, str]:

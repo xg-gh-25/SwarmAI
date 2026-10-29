@@ -39,16 +39,19 @@ CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
 
 
 def _filled_doc(doc: str, name: str, *, skip: tuple[str, ...] = ()) -> str:
-    """The skeleton of *doc* with one typed entry under every section not in *skip*."""
+    """The skeleton of *doc* with one entry, of the type CDF writes there, under every
+    section not in *skip*."""
     from core.ddd_entry_lifecycle import render_ddd_unit
-    from core.ddd_skeleton import render_skeleton
+    from core.ddd_skeleton import USER_ONLY_SECTIONS, default_type, render_skeleton
     out = []
     for line in render_skeleton(doc, name).splitlines():
         out.append(line)
         if line.startswith("## ") and line[3:].strip() not in skip:
             section = line[3:].strip()
+            user_only = section in USER_ONLY_SECTIONS.get(doc, ())
             out.append(render_ddd_unit(
-                {"type": "model", "title": f"{section} of {name}",
+                {"type": "model" if user_only else default_type(doc, section),
+                 "title": f"{section} of {name}",
                  "what": f"What {name} records under {section}.", "sources": ["README.md"]},
                 date_str="2026-10-27", taint="external"))
     return "\n".join(out) + "\n"

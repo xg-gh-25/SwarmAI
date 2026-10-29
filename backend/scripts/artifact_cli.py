@@ -643,6 +643,22 @@ def cmd_entry_contract(args, reg) -> None:
                       "contract": entry_contract(project_dir)}, indent=2, ensure_ascii=False))
 
 
+def cmd_ddd_format(args, reg) -> None:
+    """Put a brain's four docs in the shape CDF writes (``core.ddd_format``): typed
+    entries with their metadata line, in the skeleton sections their type belongs to;
+    everything else moves, verbatim, to ``2-understanding/knowledge/``. Without
+    ``--apply``: the report only. Exit 1 when a doc is still out of shape after it."""
+    from core import ddd_format
+    project_dir = _get_workspace() / "Projects" / args.project
+    if "/" in args.project or args.project in (".", "..") or not project_dir.is_dir():
+        print(json.dumps({"error": f"Brain '{args.project}' not found"}), file=sys.stderr)
+        sys.exit(2)
+    report = ddd_format.apply_project(project_dir, apply=args.apply)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    if any(v.get("after") for v in report["docs"].values()):
+        sys.exit(1)
+
+
 def cmd_project_agent_draft(args, reg) -> None:
     """Draft a Brain's Project Agent definition (design 2026-10-28-project-agent-flow §5).
 
@@ -944,6 +960,10 @@ def main() -> None:
     p_align.add_argument("--apply", action="store_true", help="Append the missing sections (default: dry-run report)")
 
     # ddd-health
+    p_fmt = sub.add_parser("ddd-format", help="Report (or --apply: move into) the shape CDF writes a brain's 4 docs in")
+    p_fmt.add_argument("--project", required=True)
+    p_fmt.add_argument("--apply", action="store_true",
+                       help="write: reference material to 2-understanding/knowledge/, then each doc")
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
 
@@ -986,6 +1006,7 @@ def main() -> None:
         "project-agent-draft": cmd_project_agent_draft,
         "classify-starter": cmd_classify_starter,
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
+        "ddd-format": cmd_ddd_format,
         "ddd-health": cmd_ddd_health,
         "ddd-retire": cmd_ddd_retire,
         "ddd-noise": cmd_ddd_noise,

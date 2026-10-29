@@ -11,6 +11,6 @@
 
 ## Open Items
 
-<!-- guideline: open questions and work that is not decided yet. -->
+<!-- guideline (or any type): open questions and work that is not decided yet. -->
 
 ## Blocked By

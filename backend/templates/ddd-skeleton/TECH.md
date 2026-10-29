@@ -5,7 +5,8 @@
 
 ## Architecture
 
-<!-- model: the shape of the system — components, data flow, stack. -->
+<!-- decision / principle: the shape of the system — components, data flow, stack —
+     and why it is built that way. -->
 
 ## Key Subsystems
 
@@ -18,4 +19,4 @@
 
 ## Runtime Traps
 
-<!-- pitfall: what breaks at runtime, and when it applies. -->
+<!-- pitfall / correction: what breaks at runtime, and when it applies. -->

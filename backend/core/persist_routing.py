@@ -124,7 +124,7 @@ ROUTING_TABLE: dict[str, dict] = {
     # `principle` route above. safe_auto=False: high-order knowledge is human-curated.
     "project_principle": {
         "doc": "PRODUCT.md",
-        "section": "Design Philosophy — When Beliefs Become Enforcement",
+        "section": "Vision",       # CDF's matrix: a product principle goes to Vision
         "safe_auto": False,
     },
 }

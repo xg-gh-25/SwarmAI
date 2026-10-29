@@ -35,7 +35,7 @@ from core.ddd_entry_lifecycle import VALID_TYPES
     "declared, exp_doc, exp_section",
     [
         ("decision", "PROJECT.md", "Recent Decisions"),
-        ("principle", "PRODUCT.md", "Design Philosophy — When Beliefs Become Enforcement"),
+        ("principle", "PRODUCT.md", "Vision"),
         ("correction", "IMPROVEMENT.md", "What Failed"),
     ],
 )

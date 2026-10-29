@@ -6,7 +6,7 @@
 
 ## Vision
 
-<!-- model: what this is, for whom, and why it exists. -->
+<!-- principle: what this is, for whom, and why it exists. -->
 
 ## What Makes It Different
 
@@ -18,8 +18,8 @@
 
 ## Success Criteria
 
-<!-- guideline: how anyone can tell it is working. -->
+<!-- guideline / process: how anyone can tell it is working. -->
 
 ## Non-Goals
 
-<!-- decision: what it deliberately does not do, and why. -->
+<!-- pitfall / correction: what it deliberately does not do, and why. -->

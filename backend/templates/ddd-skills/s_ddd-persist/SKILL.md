@@ -58,18 +58,25 @@ via the 养成 ladder, not dropped into a knowledge section. Only NON-rule knowl
 
 ### Step 2: Route by content type
 
-| Content type | Destination (section) |
-|---|---|
-| **Failure / bug / regression lesson** | ② `IMPROVEMENT.md` § What Failed |
-| **Success / ROI / caught-a-bug lesson** | ② `IMPROVEMENT.md` § What Worked |
-| **Risk / watch-for / recurring pattern** | ② `IMPROVEMENT.md` § What to Watch For |
-| **Technical convention / rule** | ② `TECH.md` § Conventions |
-| **Runtime trap / env issue** | ② `TECH.md` § Runtime Traps |
-| **Architecture decision** | ② `TECH.md` § Architecture |
-| **Strategic priority** | ② `PRODUCT.md` § Strategic Priorities |
-| **Non-goal / defer** | ② `PRODUCT.md` § Non-Goals |
-| **Project decision (+ rejected alternative)** | ② `PROJECT.md` § Recent Decisions |
-| **Deep reference material / spec** | `Knowledge/` (a standalone, indexed note) |
+| Content type | Destination (section) | Type |
+|---|---|---|
+| **Failure / bug / regression lesson** | ② `IMPROVEMENT.md` § What Failed | pitfall / correction |
+| **Success / ROI / caught-a-bug lesson** | ② `IMPROVEMENT.md` § What Worked | guideline / principle / decision / model / process |
+| **Risk / watch-for / gap with no evidence yet** | ② `IMPROVEMENT.md` § What to Watch For | guideline / pitfall |
+| **Architecture decision or principle** | ② `TECH.md` § Architecture | decision / principle |
+| **A load-bearing subsystem, what it owns** | ② `TECH.md` § Key Subsystems | model |
+| **Technical convention / dev command** | ② `TECH.md` § Conventions | guideline / process |
+| **Runtime trap / env issue** | ② `TECH.md` § Runtime Traps | pitfall / correction |
+| **What it is, for whom, why** | ② `PRODUCT.md` § Vision | principle |
+| **What it does that alternatives do not** | ② `PRODUCT.md` § What Makes It Different | model |
+| **Strategic priority** | ② `PRODUCT.md` § Strategic Priorities | decision |
+| **How anyone can tell it works** | ② `PRODUCT.md` § Success Criteria | guideline / process |
+| **Non-goal / defer** | ② `PRODUCT.md` § Non-Goals | pitfall / correction |
+| **Project decision (+ rejected alternative)** | ② `PROJECT.md` § Recent Decisions | any |
+| **Deep reference material (tables, specs, long notes)** | `2-understanding/knowledge/<topic>.md` | — |
+
+These are the sections and types CDF writes; nothing else goes in the four docs. Every
+entry is `- [type] **Title** what …` followed by its metadata line.
 
 > **The key question when unsure which doc:** *"这条经验，对这个 DDD 的未来判断还有用吗？"*
 > A DDD's four docs ARE its cross-run memory — there is no separate MEMORY.md here. Route
@@ -104,8 +111,9 @@ the bundled writer. It holds an advisory lock for the read-modify-write, so two 
 cannot lose each other's entry. It only adds; it never rewrites an existing entry.
 
 ```bash
-python3 scripts/locked_write.py --file 2-understanding/TECH.md \
-  --section "Runtime Traps" --prepend "- **<complete title>** — <claim>. Why: <why>."
+python3 scripts/locked_write.py --file 2-understanding/TECH.md --section "Runtime Traps" \
+  --prepend "- [pitfall] **<complete title>** <claim> **Why:** <why>.
+  <!-- ref:0 | last:<YYYY-MM-DD> | decay:active | source:manual -->"
 ```
 
 ## Verification
