@@ -38,11 +38,15 @@ One sub-agent per expert, in parallel, with the Agent tool:
   files (or the exact `git diff` command), what the change is for, and anything in
   `.swarmai/review.md`. Ask for findings with severity (CRITICAL / HIGH / MEDIUM / LOW),
   file:line, the failure it causes, and a fix.
-- When the change alters what a function, field or module offers to others and the project
-  has a code graph, paste the callers of each changed symbol into the prompt:
-  `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol> --project <P>`. It
-  names the callers resolved across files, which is where a contract change breaks; the
-  expert greps for what the graph cannot see.
+- Before writing the prompts, run once:
+  `"$SWARM_BACKEND_BIN" py -m core.code_intel.changed --repo <the checkout under review> [--base <ref>]`
+  (`--base` when the change includes commits: the ref before them; default is the
+  uncommitted change). It lists every function, method and class the diff touches, the
+  callers of each outside the change, and the files that name it without a call the
+  graph saw (passed as a value, mocked by its dotted path). Paste its output into every
+  expert's prompt as it is: that is where a contract change breaks, and the expert greps
+  the "named without a call" files. When the checkout has no code graph the output says
+  so; paste that too, so the expert knows to grep the callers itself.
 - When the repository is bound to a project with a DDD, paste the output of
   `"$SWARM_BACKEND_BIN" knowledge map --project <P> --brief` into the prompt and say it may
   look things up there with `knowledge find --project <P> --query "<words>"` when a finding
@@ -56,6 +60,7 @@ EXPERT-ID: correctness
 Prompt file: <skill base dir>/../../experts/code/correctness.md
 Repository: /path/to/repo   Diff: git -C /path/to/repo diff HEAD -- src/a.py src/b.py
 Goal of the change: <one sentence>
+<the output of core.code_intel.changed, as it is>
 Report findings as: SEVERITY | file:line | what breaks | fix. Native review, no pipeline run.
 ```
 
