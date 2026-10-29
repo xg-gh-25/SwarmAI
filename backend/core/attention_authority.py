@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Optional
 import logging
 import math
+import re
 
 from config import get_app_data_dir
 
@@ -792,7 +793,9 @@ def _collect_local_roots() -> list[AttentionItem]:
                     at = at.replace(tzinfo=timezone.utc)
                 if at < cutoff:
                     continue
-                root = str(r.get("path") or "")
+                # the path comes from disk and goes into a message sent in the person's
+                # voice: one line, capped, quoted as data
+                root = re.sub(r"[\x00-\x1f\x7f]", " ", str(r.get("path") or ""))[:300]
                 name = Path(root).name or root
                 items.append(AttentionItem(
                     id=f"local_root:{brain}:{root}",
@@ -805,10 +808,10 @@ def _collect_local_roots() -> list[AttentionItem]:
                             "on the Brain Hub card (Local repositories)."),
                     dispatch={
                         "message": _prompt(
-                            (f"The Brain {brain} now reads the local repository {name}. Tell me "
-                             "in two lines what it is and what reading it gives this Brain; I "
-                             "can remove it in Brain Hub if it should not be read."),
-                            [("path", root), ("added by", str(r.get("source") or "agent"))],
+                            (f"The Brain {brain} now reads the local repository `{name}`. Tell "
+                             "me in two lines what it is and what reading it gives this Brain; "
+                             "I can remove it in Brain Hub if it should not be read."),
+                            [("path", f"`{root}`"), ("added by", str(r.get("source") or "agent"))],
                         ),
                         "context": {"kind": "local_root", "brain": brain, "path": root},
                     },

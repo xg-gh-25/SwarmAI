@@ -1891,8 +1891,11 @@ async def get_local_roots(name: str) -> dict:
 async def get_starter_kind(path: str) -> dict:
     """The role New Brain gives a local path it was handed (read-only: one hardened
     ``git rev-parse`` per directory looked at; design 2026-10-29-code-intel-auto D2).
-    400 when the path does not exist."""
-    from core.code_intel.local_roots import LocalRootError, classify_starter
+    400 when the path does not exist; 403 off the desktop."""
+    from core.code_intel.local_roots import LocalRootError, classify_starter, local_mode
+    if not local_mode():
+        # a Hive: no local root to offer, and no server path to probe
+        raise HTTPException(status_code=403, detail="Local paths are classified on the desktop")
 
     def _work() -> dict:
         try:

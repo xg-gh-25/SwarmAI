@@ -135,7 +135,9 @@ def validate(path: str | Path) -> str:
 # Git on an owned root runs with no hooks, no fsmonitor, explicit bare repos and no
 # signature program: the hourly job and every review read the root outside any
 # session. ``repo_read.GIT_HARDENING`` minus its empty ``diff.external`` (that makes
-# git try to run "" for a patch); a patch diff passes ``--no-ext-diff`` instead.
+# git try to run "" for a patch); a diff passes ``--no-ext-diff --no-textconv`` instead,
+# and a working-tree diff is not run at all in a repo whose config names a filter
+# program (``changed.filter_programs``: git would run its clean filter on dirty files).
 GIT_SAFE: tuple[str, ...] = (
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.fsmonitor=",
@@ -144,6 +146,7 @@ GIT_SAFE: tuple[str, ...] = (
 )
 
 _STARTER_CHILDREN_CAP = 20     # work-tree children listed for a folder of repos
+_STARTER_CHILDREN_EXAMINED = 200   # children a folder scan runs git on, at most
 
 
 def _work_tree_top(d: Path) -> Path | None:
@@ -187,7 +190,7 @@ def classify_starter(path: str | Path) -> dict:
         children = sorted(c for c in real.iterdir() if c.is_dir() and (c / ".git").exists())
     except OSError:
         children = []
-    for child in children:
+    for child in children[:_STARTER_CHILDREN_EXAMINED]:
         t = _work_tree_top(child)
         if t is not None and os.path.realpath(child) == str(t) and _refusal(t) is None:
             roots.append(str(t))
@@ -332,20 +335,25 @@ def remove(project: str, path: str | Path) -> bool:
     """Drop *path* from *project*'s roots (its graph file stays until deleted). The
     removal is remembered, so the install-time migration never adds it back."""
     _require_local()
-    real = os.path.realpath(str(path))
+    given = str(path)
+    real = os.path.realpath(given)
     with _locked() as reg:
         data = _read(reg)
         rows = data["projects"].get(project) or []
         if not isinstance(rows, list):
             raise LocalRootError(f"the registry entry for {project} is not a list")
-        kept = [r for r in rows if not isinstance(r, dict) or r.get("path") != real]
+        # the stored path as the card sends it, or the directory it is now: a root
+        # since replaced by a symlink can still be taken back
+        kept = [r for r in rows if not isinstance(r, dict) or r.get("path") not in (given, real)]
         if len(kept) == len(rows):
             return False
         data["projects"][project] = kept
         # remembered, so the migration does not bring it back
         dismissed = data.setdefault("dismissed", {}).setdefault(project, [])
-        if real not in dismissed:
-            dismissed.append(real)
+        for p in {r.get("path") for r in rows if isinstance(r, dict)} - \
+                {r.get("path") for r in kept if isinstance(r, dict)}:
+            if p not in dismissed:
+                dismissed.append(p)
         _write(reg, data)
         return True
 
@@ -365,13 +373,36 @@ def migrate_once(projects_dir: str | Path) -> dict:
         if (data.get("migrations") or {}).get(MIGRATION_KEY):
             return {"ran": False, "promoted": [], "added": []}
         promoted, added = [], []
-        for name, rows in data["projects"].items():
+        # r3 pending entries: each one is checked as a declaration now would be (a
+        # path still allowed, not removed, not read by another Brain — r3 never
+        # checked that, and opening a card turned any Brain's TECH.md path into one);
+        # one that fails is dropped, not left pending (nothing promotes it later)
+        for name in sorted(data["projects"]):
+            rows = data["projects"][name]
             if not isinstance(rows, list):
                 continue
+            kept, seen = [], set()
             for r in rows:
-                if isinstance(r, dict) and r.get("state") == PENDING:
-                    r.update(state=CONFIRMED, confirmed_at=_now())
-                    promoted.append({"project": name, "path": r.get("path")})
+                if not (isinstance(r, dict) and r.get("state") == PENDING):
+                    kept.append(r)
+                    if isinstance(r, dict):
+                        seen.add(r.get("path"))
+                    continue
+                try:
+                    real = validate(r.get("path") or "")
+                except LocalRootError as exc:
+                    logger.info("local roots: pending %s of %s dropped: %s", r.get("path"), name, exc)
+                    continue
+                if real in seen or real in (data.get("dismissed") or {}).get(name, []) \
+                        or _owner(data, real, besides=name):
+                    logger.info("local roots: pending %s of %s dropped (removed, a duplicate "
+                                "or another Brain's)", real, name)
+                    continue
+                r.update(path=real, state=CONFIRMED, confirmed_at=_now())
+                kept.append(r)
+                seen.add(real)
+                promoted.append({"project": name, "path": real})
+            data["projects"][name] = kept
         projects = Path(projects_dir)
         dirs = sorted(d for d in projects.iterdir() if d.is_dir()) if projects.is_dir() else []
         for d in dirs:
