@@ -715,6 +715,13 @@ def check_entailment(user_text: str, *, what: str, how: str | None,
         return None
 
 
+def _now_iso() -> str:
+    """The ISO time every other writer stamps: CURRENT_TIMESTAMP ('2026-10-29 11:09')
+    sorts before every ISO time of the same day, so comparisons call it hours old."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def requeue_parked(reason: str, key: str) -> int:
     """Requeue matching parked rows without consuming an attempt."""
     if reason not in PARKED_DEFER_REASONS:
@@ -745,9 +752,9 @@ def requeue_parked(reason: str, key: str) -> int:
         marks = ",".join("?" for _ in ids)
         cursor = conn.execute(
             f"""UPDATE ingestion_units SET state='queued',defer_reason=NULL,reason=NULL,
-                       next_attempt_at=NULL,updated_at=CURRENT_TIMESTAMP
+                       next_attempt_at=NULL,updated_at=?
                 WHERE unit_id IN ({marks})""",
-            ids,
+            (_now_iso(), *ids),
         )
         conn.execute(
             f"""UPDATE ingestion_events SET resolved=1
@@ -781,16 +788,18 @@ def requeue_units(reason: str) -> int:
         cursor = conn.execute(
             f"""UPDATE ingestion_units SET state='queued',reason=NULL,defer_reason=NULL,attempts=0,
                        next_attempt_at=NULL,error_class=NULL,error_fingerprint=NULL,
-                       updated_at=CURRENT_TIMESTAMP
-                WHERE unit_id IN ({marks}) AND state IN ('failed_poison','deferred')""", ids)
-        conn.execute(
-            f"UPDATE ingestion_inbox SET state='partial_pending' WHERE state='done' AND id IN "
-            f"({','.join('?' for _ in candidates)})", candidates)
+                       updated_at=?
+                WHERE unit_id IN ({marks}) AND state IN ('failed_poison','deferred')""",
+            (_now_iso(), *ids))
         conn.execute(
             f"""UPDATE ingestion_events SET resolved=1 WHERE kind='poison' AND resolved=0
                   AND json_extract(detail,'$.unit_id') IN ({marks})""", ids)
-        conn.commit()
-        return cursor.rowcount
+        count = cursor.rowcount
+        # recomputed from the units by the one aggregation the worker uses (a candidate
+        # can be done or still in_progress, and the worker selects neither); it commits
+        from .worker import reaggregate_candidates
+        reaggregate_candidates(conn, candidates)
+        return count
     finally:
         conn.close()
 

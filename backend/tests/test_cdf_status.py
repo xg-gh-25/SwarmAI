@@ -176,3 +176,46 @@ def test_requeue_gives_the_units_of_one_reason_a_fresh_start(store):
     assert requeue_units("unknown_domain") == 1
     store.rollback()
     assert store.execute("SELECT state FROM ingestion_units WHERE unit_id='c2.gap'").fetchone()[0] == "queued"
+
+
+def test_requeue_frees_a_candidate_left_in_progress_and_stamps_iso_time(store):
+    """A candidate can stay in_progress while its only unit is poisoned (live 2026-10-29).
+    The worker selects only queued/partial_pending candidates, so flipping just 'done'
+    left that unit queued forever. And CURRENT_TIMESTAMP ('2026-10-29 11:09') sorts
+    before every ISO time of the same day, so the stall check called it an hour old."""
+    from core.ingestion.api_v2 import requeue_units
+    from core.ingestion.status import stalls
+    from core.ingestion.worker import _READY
+    at = NOW.isoformat()
+    store.execute("""INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,
+        content_hash,envelope,project_snapshot,state,created_at)
+        VALUES('c3','kc3','S3','s','session','{}','v','h','{}','{}','in_progress',?)""",
+                  ((NOW - timedelta(hours=3)).isoformat(),))
+    store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,attempts,
+        error_class,error_fingerprint,owner_epoch,updated_at)
+        VALUES('c3.unit','c3','{}','failed_poison','error:OSError',3,'infra','f',1,?)""",
+                  ((NOW - timedelta(hours=3)).isoformat(),))
+    store.commit()
+    assert requeue_units("error:OSError") == 1
+    store.rollback()
+    ready = [r[0] for r in store.execute(f"SELECT id FROM ingestion_inbox WHERE {_READY}", (at,))]
+    assert ready == ["c3"]
+    stamp = store.execute("SELECT updated_at FROM ingestion_units WHERE unit_id='c3.unit'").fetchone()[0]
+    assert "T" in stamp, stamp
+    assert not any("in progress" in item for item in stalls(store))
+
+
+def test_requeue_parked_stamps_iso_time(store):
+    from core.ingestion.pipeline_v2 import requeue_parked
+    at = NOW.isoformat()
+    store.execute("""INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,
+        content_hash,envelope,project_snapshot,state,created_at)
+        VALUES('c4','kc4','S7','s','session','{}','v','h','{}','{}','partial_pending',?)""", (at,))
+    store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,defer_reason,
+        owner_epoch,updated_at) VALUES('c4.unit','c4','{"domain":"rust"}','deferred','unknown_domain',
+        'unknown_domain',1,?)""", (at,))
+    store.commit()
+    assert requeue_parked("unknown_domain", "rust") == 1
+    store.rollback()
+    state, stamp = store.execute("SELECT state,updated_at FROM ingestion_units WHERE unit_id='c4.unit'").fetchone()
+    assert state == "queued" and "T" in stamp, stamp

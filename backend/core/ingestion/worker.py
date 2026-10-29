@@ -541,17 +541,25 @@ def _process_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
     )
 
 
-def reaggregate_candidates(conn: sqlite3.Connection) -> int:
-    """Recompute the state of every candidate not yet done from its units' states.
+def reaggregate_candidates(conn: sqlite3.Connection,
+                           candidate_ids: Iterable[str] | None = None) -> int:
+    """Recompute the state of every candidate not yet done from its units' states, or of
+    *candidate_ids* whatever their state (a requeue reopens done ones too).
 
     Only process_candidate wrote a candidate's state, so a candidate left in_progress
     (the process died mid-judgment, or the writer finished its unit later in recovery)
     was never selected again and its units expired after 30 days. Run after recovery,
     at start and in daily maintenance."""
     changed = 0
-    rows = conn.execute(
-        "SELECT id,state FROM ingestion_inbox WHERE state IN ('in_progress','partial_pending')"
-    ).fetchall()
+    if candidate_ids is None:
+        rows = conn.execute(
+            "SELECT id,state FROM ingestion_inbox WHERE state IN ('in_progress','partial_pending')"
+        ).fetchall()
+    else:
+        ids = sorted(set(candidate_ids))
+        rows = conn.execute(
+            f"SELECT id,state FROM ingestion_inbox WHERE id IN ({','.join('?' for _ in ids)})", ids
+        ).fetchall() if ids else []
     for row in rows:
         states = [item[0] for item in conn.execute(
             "SELECT state FROM ingestion_units WHERE candidate_id=?", (row["id"],))]
