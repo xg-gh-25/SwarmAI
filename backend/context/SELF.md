@@ -57,7 +57,9 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   MEMORY / EVOLUTION / TIMELINE / DDD: six sources submit candidates to an Inbox; cards judge
   type and route, compare with what exists, and the writer appends whole units. MEMORY.md and
   EVOLUTION.md are injected by **whole-unit selection** (24K / 8K tokens): superseded units
-  out, the meta-cognitive layer whole, the rest by score, file order kept; query-independent,
+  never shown, every layer inside the budget with the meta-cognitive layer first, each by
+  score (use outweighs age), file order kept; each such file also has a daily write budget
+  (4 KB; a unit over it waits a UTC day); query-independent,
   recomputed on a file change or once a UTC day (prefix cache and prewarm stay stable), the
   choice recorded in `injection_selection`. A unit not selected stays in the file and is
   reached by the `context_files` recall leg, which reads that record. DailyActivity is
