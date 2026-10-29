@@ -70,6 +70,13 @@
       "cwd": ".",
       "argv": ["bash", "scripts/sync-version.sh", "check"],
       "call_type": "lint"
+    },
+    {
+      "id": "backend-bvt",
+      "paths": ["backend/**/*.py"],
+      "cwd": ".",
+      "argv": ["bash", "scripts/run_bvt.sh"],
+      "call_type": "build"
     }
   ]
 }

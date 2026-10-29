@@ -77,9 +77,10 @@ jobs:
       - name: Lint (value, problem) loaders — the problem value is never dropped
         run: python scripts/lint_problem_values.py
 
-      - name: Build BVT test list
-        id: test-list
-        working-directory: ./backend
+      - name: Run BVT tests
+        # Blocking gate. scripts/run_bvt.sh reads tests/bvt_manifest.txt (a listed file
+        # that does not exist fails the run) and runs pytest with --timeout as a hang-guard
+        # only; validations.json and an agent's checks run the same script.
         # CI is a BARE git checkout on a Linux runner — no ~/.swarm-ai workspace,
         # no AWS creds, no built code-graph, no live corpus. The BVT is therefore
         # an ALLOWLIST, not a denylist: a small curated set of pure OS-layer logic
@@ -93,34 +94,7 @@ jobs:
         # every new heavy file silently re-breaks CI. An allowlist bounds it by
         # construction. Import/syntax/circular breaks are covered by smoke_import.py;
         # deployed-system quality lives in the eval OS, not here.
-        run: |
-          # Read the manifest → space-separated existing test paths.
-          FILES=""
-          while IFS= read -r line; do
-            line="${line%%#*}"                       # strip inline comments
-            line="$(echo "$line" | tr -d '[:space:]')"
-            [ -z "$line" ] && continue
-            f="tests/$line"
-            if [ -f "$f" ]; then
-              FILES="$FILES $f"
-            else
-              echo "::error::bvt_manifest.txt lists a missing file: $line"
-              exit 1
-            fi
-          done < tests/bvt_manifest.txt
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-          COUNT=$(echo $FILES | wc -w)
-          echo "BVT: running $COUNT curated test files"
-
-      - name: Run BVT tests
-        working-directory: ./backend
-        # Blocking gate. The allowlist keeps this fast + green in a bare checkout.
-        # --timeout is a hang-guard only (thread method interrupts blocked workers).
-        run: |
-          SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=60 --timeout-method=thread \
-            -q --tb=short -p no:cacheprovider \
-            -m "not slow and not pbt" \
-            ${{ steps.test-list.outputs.files }}
+        run: bash scripts/run_bvt.sh
         timeout-minutes: 8
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
