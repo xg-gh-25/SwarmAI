@@ -517,3 +517,49 @@ def test_cors_baseline_file_is_written(scan_tree: Path):
     mod = _load_scan_module()
     cors_bl = scan_tree / mod.CORS_BASELINE
     assert cors_bl.exists(), f"{mod.CORS_BASELINE} must be written by --update-baseline"
+
+
+# ── INV8: a file git ignores and does not track is out of scope; a tracked one is not ──
+_LOCAL_ONLY = (
+    'import hashlib\n'
+    'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'
+    'x = hashlib.md5(b"a").hexdigest()\n'
+    'app.add_middleware(CORSMiddleware, allow_origins=["*"])\n'
+)
+
+
+def _git(tmp: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(tmp), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                   check=True, capture_output=True, text=True)
+
+
+def test_inv8_gitignored_untracked_file_is_not_scanned(scan_tree: Path):
+    """A gitignored local file (a .env, a private skill) can never be committed: no
+    bandit, secret or CORS finding in it blocks, and its path never enters a baseline."""
+    _git(scan_tree, "init", "-q")
+    (scan_tree / ".gitignore").write_text("backend/local_only.py\n")
+    (scan_tree / "backend" / "conf.py").write_text("SAFE = 'nothing here'\n")
+    _make_baseline(scan_tree)
+    (scan_tree / "backend" / "local_only.py").write_text(_LOCAL_ONLY)
+    r = _run_scan(scan_tree)
+    assert r.returncode == 0, f"a gitignored file must not block. stdout={r.stdout}"
+    _make_baseline(scan_tree)
+    for name in (".secrets.baseline", "bandit-baseline.json", "cors-baseline.json"):
+        assert "local_only" not in (scan_tree / name).read_text(), name
+
+
+def test_inv8b_tracked_file_is_scanned_even_when_an_ignore_rule_matches(scan_tree: Path):
+    """A file committed before its ignore rule was added is still in the repo: it stays
+    in scope (the 'gitignore is not retroactive' leak)."""
+    _git(scan_tree, "init", "-q")
+    f = scan_tree / "backend" / "leak.py"
+    f.write_text("SAFE = 'nothing here'\n")
+    _git(scan_tree, "add", "backend/leak.py")
+    _git(scan_tree, "commit", "-q", "-m", "x")
+    (scan_tree / ".gitignore").write_text("backend/leak.py\n")
+    _make_baseline(scan_tree)
+    f.write_text(_LOCAL_ONLY)
+    r = _run_scan(scan_tree)
+    assert r.returncode == 1, f"a tracked file must still be scanned. stdout={r.stdout}"
+    for kind in ("[bandit", "[secret", "[cors"):
+        assert kind in r.stdout, (kind, r.stdout)

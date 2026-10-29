@@ -85,6 +85,9 @@ SCAN_SUBDIR = "backend"
 # and _cors_fingerprints._is_excluded which derives from it) — it MUST stay in sync with
 # .gitignore's private-skill globs (s_cmhk-* / s_internal-* / _shared); a source that
 # scans a dir .gitignore hides is a leak door (P8: every finding source honors one scope).
+# Beyond these lists, every finding source drops files git ignores and does not track
+# (_git_ignored): a gitignored file can never be committed, so the lists matter only in
+# a tree that is not a git checkout and to keep bandit from walking private skills.
 # Local caches (.pytest_cache, __pycache__) are .gitignored machine state, regenerated
 # per run (e.g. swarm_select_tests' source-graph cache): scanning them makes the result
 # depend on which tests ran on this machine, and bakes local paths into the baseline.
@@ -117,6 +120,31 @@ EXPECTED_DETECT_SECRETS_VERSION = "1.5.0"
 
 
 # ────────────────────────────── helpers ──────────────────────────────
+def _git_ignored(root: Path, relpaths) -> set[str]:
+    """The *relpaths* (root-relative) that git would never commit: matched by an ignore
+    rule and not tracked. These are machine-local files (a ``.env``, a private skill, a
+    cache) — no finding in them can reach the repo, and a fingerprint of one would bake
+    a local path into the tracked baseline. A TRACKED file stays in scope even when an
+    ignore rule matches it (``git check-ignore`` reports only untracked paths), so a
+    secret committed before its ignore rule was added is still caught.
+
+    Not a git checkout, or git unavailable → empty set: scan everything, the safe side.
+    """
+    paths = sorted({p for p in relpaths if p})
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
+            input="\0".join(paths) + "\0", capture_output=True, text=True,
+        )
+    except OSError:
+        return set()
+    if proc.returncode not in (0, 1):   # 1 = none ignored; 128 = not a repo / fatal
+        return set()
+    return {p for p in proc.stdout.split("\0") if p}
+
+
 def _die(msg: str, code: int = 2) -> "NoReturn":  # type: ignore[name-defined]
     print(f"security_scan: ERROR: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -224,14 +252,19 @@ def _bandit_fingerprints(root: Path) -> dict[str, dict]:
     # Sort by (file, line) so the ordinal is deterministic + move-stable.
     results = sorted(_run_bandit(root),
                      key=lambda r: (r.get("filename", ""), r.get("line_number") or 0))
+    def _rel(r: dict) -> str:
+        # normalize to root-relative regardless of how bandit printed the path
+        try:
+            return str(Path(r["filename"]).resolve().relative_to(root.resolve()))
+        except (ValueError, OSError):
+            return r["filename"]
+    ignored = _git_ignored(root, (_rel(r) for r in results))
     seen: dict[tuple[str, str, str], int] = {}
     out: dict[str, dict] = {}
     for r in results:
-        # normalize to root-relative regardless of how bandit printed the path
-        try:
-            relpath = str(Path(r["filename"]).resolve().relative_to(root.resolve()))
-        except (ValueError, OSError):
-            relpath = r["filename"]
+        relpath = _rel(r)
+        if relpath in ignored:
+            continue
         content = _flagged_line_content(r.get("code", ""), r.get("line_number"))
         group = (r["test_id"], relpath, content)
         occ = seen.get(group, 0)
@@ -306,12 +339,18 @@ def _secret_fingerprints(root: Path) -> dict[str, dict]:
              f"{emitted_ver!r}, expected {EXPECTED_DETECT_SECRETS_VERSION} (fail closed)")
     if not data.get("plugins_used"):
         _die("detect-secrets ran with 0 plugins — misconfigured (fail closed)")
-    out: dict[str, dict] = {}
-    for fn, secrets in data.get("results", {}).items():
+    def _rel(fn: str) -> str:
         try:
-            relpath = str(Path(fn).resolve().relative_to(root.resolve()))
+            return str(Path(fn).resolve().relative_to(root.resolve()))
         except (ValueError, OSError):
-            relpath = fn
+            return fn
+    results = data.get("results", {})
+    ignored = _git_ignored(root, (_rel(fn) for fn in results))
+    out: dict[str, dict] = {}
+    for fn, secrets in results.items():
+        relpath = _rel(fn)
+        if relpath in ignored:
+            continue
         for s in secrets:
             key = f"{s.get('type')}\x00{relpath}\x00{s.get('hashed_secret')}"
             fp = hashlib.sha256(key.encode()).hexdigest()
@@ -389,6 +428,8 @@ def _cors_fingerprints(root: Path) -> dict[str, dict]:
                     and node.value.value.strip() in _CATCHALL_REGEXES:
                 findings.append((relpath, f"{_CORS_REGEX_KW}={node.value.value.strip()}"))
 
+    ignored = _git_ignored(root, (rel for rel, _ in findings))
+    findings = [f for f in findings if f[0] not in ignored]
     # occurrence-ordinal per (relpath, locus) so two identical loci get distinct fps
     seen: dict[tuple[str, str], int] = {}
     out: dict[str, dict] = {}
