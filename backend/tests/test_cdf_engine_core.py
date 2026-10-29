@@ -221,7 +221,8 @@ class TestScheduling:
         floor = ingestion_admission("maintenance", maintenance_floor=True)
         assert floor.run and not floor.llm
 
-    def test_streaming_only_immediate_llm(self, monkeypatch):
+    def test_streaming_holds_no_lane(self, monkeypatch):
+        """A streaming chat holds no lane (2026-10-29-cdf-chat-coexistence.md)."""
         from core.ingestion.worker import ingestion_admission
         from core.resource_monitor import resource_monitor
 
@@ -230,7 +231,7 @@ class TestScheduling:
         monkeypatch.setattr("core.session_unit.is_any_chat_streaming", lambda: True)
         assert ingestion_admission("immediate").llm
         assert ingestion_admission("run").run
-        assert not ingestion_admission("session").run
+        assert ingestion_admission("session").run
 
 
 class TestCleanup:

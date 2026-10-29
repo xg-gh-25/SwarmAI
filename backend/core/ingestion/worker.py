@@ -64,17 +64,18 @@ class Admission:
 
 
 def ingestion_admission(lane: Lane, *, maintenance_floor: bool = False) -> Admission:
-    """Return the pressure × lane × streaming admission decision."""
+    """Return the memory-pressure × lane admission decision.
+
+    A streaming chat does not hold any lane: the CPU the two shared was a quadratic
+    parse (fixed in ``units``), and waiting for every tab to stop starved CDF for the
+    whole working day (2026-10-29-cdf-chat-coexistence.md). The session review's CLI
+    fork has its own check, the chat tabs' spawn budget (``run_session_job``)."""
     from core.resource_monitor import resource_monitor
-    from core.session_unit import is_any_chat_streaming
 
     pressure = resource_monitor.system_memory().pressure_level
-    streaming = is_any_chat_streaming()
     if maintenance_floor:
         return Admission(True, False)
     if pressure in {"warning", "critical"} and lane != "immediate":
-        return Admission(False, False)
-    if streaming and lane not in {"immediate", "run"}:
         return Admission(False, False)
     return Admission(True, True)
 
@@ -586,8 +587,12 @@ def cleanup_expired(
     now: datetime | None = None,
     chunk_size: int = 500,
     vacuum: bool = True,
+    truncate_wal: bool = True,
 ) -> int:
-    """Summarize, archive (eval_log) and delete expired candidates in atomic chunks."""
+    """Summarize, archive (eval_log) and delete expired candidates in atomic chunks.
+
+    *truncate_wal* False checkpoints PASSIVE: a TRUNCATE checkpoint blocks new writers
+    while it waits, and the daily pass runs while chat hooks enqueue (1.5 s budget)."""
     current = now or _utcnow()
     cutoff = (current.astimezone(timezone.utc).date() - timedelta(days=30)).isoformat() + "T00:00:00+00:00"
     total = 0
@@ -662,7 +667,7 @@ def cleanup_expired(
             if updated >= pages:
                 break
             pages = updated
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute(f"PRAGMA wal_checkpoint({'TRUNCATE' if truncate_wal else 'PASSIVE'})")
     return total
 
 
@@ -719,7 +724,6 @@ class IngestionWorker:
         self.scheduler = WeightedLaneScheduler()
         self._paused_sources: dict[str, datetime] = {}
         self._maintenance_due = _utcnow()
-        self._maintenance_waiting_since: datetime | None = None
         self._summary_due = _utcnow()
         from .summary_lane import SummaryLane
         self._summary_lane = SummaryLane(workspace_root)
@@ -776,7 +780,7 @@ class IngestionWorker:
         from .writer import recover
         recover(conn, requeue_grace=None if startup else REQUEUE_GRACE)
         reaggregate_candidates(conn)
-        cleanup_expired(conn)
+        cleanup_expired(conn, truncate_wal=startup)
         _requeue_known_domains(self.workspace_root)
         from .pipeline_v2 import requeue_missing_sections
         requeue_missing_sections(self.workspace_root)
@@ -799,16 +803,9 @@ class IngestionWorker:
             if worked:
                 return True
         if now >= self._maintenance_due:
-            from core.session_unit import is_any_chat_streaming
-            waiting = False
-            if is_any_chat_streaming():
-                self._maintenance_waiting_since = self._maintenance_waiting_since or now
-                waiting = now - self._maintenance_waiting_since < timedelta(minutes=10)
-            if not waiting:   # while maintenance waits for streaming to end, lanes still run
-                self._maintenance_due = now + timedelta(days=1)
-                self._maintenance_waiting_since = None
-                self._maintain(conn)
-                return True
+            self._maintenance_due = now + timedelta(days=1)
+            self._maintain(conn)
+            return True
         rows = conn.execute(
             f"""SELECT lane, MIN(created_at) oldest FROM ingestion_inbox
                WHERE {_READY} GROUP BY lane""", (now.isoformat(),)
@@ -935,6 +932,30 @@ class RunLaneExecutor:
             raise RuntimeError("CDF run-lane executor did not stop")
 
 
+class ReviewPostponed(Exception):
+    """The session review cannot fork its CLI now; the job waits, spending no attempt."""
+
+
+def _can_fork_review() -> bool:
+    """The memory check chat runs before spawning a CLI (``spawn_budget`` with the live
+    session count): the review forks the same kind of process. Unlike chat, there is
+    no exception for zero live tabs (that one exists so a person can always open a
+    tab); a background review waits. A count that cannot be read (the router changing
+    under this thread) also waits: the next look is minutes away."""
+    from core.resource_monitor import resource_monitor
+    alive = 0
+    try:
+        from core import session_registry
+        router = session_registry.session_router
+        if router:
+            alive = router.alive_count
+    except RuntimeError:          # the router's dict changed during the count
+        return False
+    except Exception:  # noqa: BLE001 - no registry: no concurrency penalty, as for chat
+        logger.debug("CDF review: session registry unavailable", exc_info=True)
+    return bool(resource_monitor.spawn_budget(alive_count=alive).can_spawn)
+
+
 def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
                     runner: Any = None) -> dict[str, Any]:
     """One session job (2026-10-29-cdf-session-review.md §16): the S2 user-utterance pass,
@@ -943,6 +964,9 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     from . import s2_jobs
     from .sources import s2_session, s7_review
     session_id = job["session_id"]
+    if runner is None and job.get("sdk_session_id") and not _can_fork_review():
+        # checked before the user pass: a postponed job runs that pass once, not twice
+        raise ReviewPostponed("not enough memory for the review's CLI fork")
     s2_session.extract_session_sync(session_id, passes=("user_utterance",))
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),
@@ -1040,6 +1064,14 @@ class S2JobExecutor:
                     self._extract(job["session_id"])
                 else:
                     run_session_job(conn, job)
+            except ReviewPostponed as exc:
+                logger.info("CDF S2 job %s postponed: %s", job["session_id"], exc)
+                try:
+                    s2_jobs.postpone(conn, job["session_id"], s2_jobs.POSTPONE_DELAY)
+                except Exception:  # noqa: BLE001 - recover would spend the attempt; next pass
+                    logger.exception("CDF S2 job %s could not be postponed", job["session_id"])
+                    break
+                continue
             except Exception as exc:  # recorded on the job, retried up to MAX_ATTEMPTS
                 logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
                 state = s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])

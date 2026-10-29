@@ -6,8 +6,12 @@
 """
 from __future__ import annotations
 
+import bisect
 import hashlib
+import os
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -56,19 +60,53 @@ class Supersedes:
     inactive: bool = False
 
 
-def _byte_offset(text: str, char_offset: int) -> int:
-    return len(text[:char_offset].encode("utf-8"))
+class _Offsets:
+    """Byte offsets of character positions in one text, computed incrementally.
+
+    Encoding the whole prefix for every position made a parse quadratic: about one
+    second for a 1 MB DDD file, on the chat's injection, recall and Read paths too
+    (2026-10-29-cdf-chat-coexistence.md §1). Positions arrive in increasing order, so
+    only the slice since the previous one is encoded; a position before the previous
+    one starts again from 0 (always correct). One instance per parse, never shared
+    between threads."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self._char = 0
+        self._byte = 0
+
+    def __call__(self, char: int) -> int:
+        if char < self._char:
+            self._char, self._byte = 0, 0
+        self._byte += len(self.text[self._char:char].encode("utf-8"))
+        self._char = char
+        return self._byte
 
 
-def _unit(path: str, section: str, text: str, whole: str, start: int,
+class _Sections:
+    """The ``## `` heading in force at a position: one scan, then a binary search
+    (scanning the prefix again for every unit was quadratic as well)."""
+
+    def __init__(self, text: str) -> None:
+        matches = list(_H2.finditer(text))
+        self._starts = [m.start() for m in matches]
+        self._names = [m.group(1).strip() for m in matches]
+
+    def before(self, offset: int) -> str:
+        index = bisect.bisect_left(self._starts, offset)   # headings starting before offset
+        return self._names[index - 1] if index else ""
+
+
+def _unit(path: str, section: str, text: str, offsets: _Offsets, start: int,
           title: str, entry_type: str | None, baseline: Mapping[str, str],
           taint: str | None = None) -> Unit:
     raw = text.encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     marker = _CAND.search(text)
     identity = f"cand:{marker.group(1)}" if marker else baseline.get(digest, digest)
-    return Unit(path=path, section=section, byte_start=_byte_offset(whole, start),
-                byte_end=_byte_offset(whole, start + len(text)), identity=identity,
+    byte_start = offsets(start)
+    return Unit(path=path, section=section, byte_start=byte_start,
+                byte_end=byte_start + len(raw), identity=identity,
                 byte_hash=digest, text=text, title=title, entry_type=entry_type,
                 taint=taint)
 
@@ -80,12 +118,8 @@ def _relative(path: Path, root: Path | None) -> str:
         return path.as_posix()
 
 
-def _section_before(content: str, offset: int) -> str:
-    matches = list(_H2.finditer(content, 0, offset))
-    return matches[-1].group(1).strip() if matches else ""
-
-
 def _parse_evolution(content: str, rel: str, baseline: Mapping[str, str]) -> list[Unit]:
+    offsets, sections = _Offsets(content), _Sections(content)
     matches = list(_H3.finditer(content))
     out: list[Unit] = []
     for index, match in enumerate(matches):
@@ -98,12 +132,13 @@ def _parse_evolution(content: str, rel: str, baseline: Mapping[str, str]) -> lis
         end = min(boundaries)
         block = content[match.start():end].rstrip()
         if block:
-            out.append(_unit(rel, _section_before(content, match.start()), block, content,
+            out.append(_unit(rel, sections.before(match.start()), block, offsets,
                              match.start(), match.group(1).strip(), None, baseline))
     return out
 
 
 def _parse_timeline(content: str, rel: str, baseline: Mapping[str, str]) -> list[Unit]:
+    offsets, sections = _Offsets(content), _Sections(content)
     matches = list(re.finditer(r"^###\s+(\S+)\s+(.+?)\s*$", content, re.MULTILINE))
     out: list[Unit] = []
     for index, match in enumerate(matches):
@@ -116,13 +151,14 @@ def _parse_timeline(content: str, rel: str, baseline: Mapping[str, str]) -> list
         end = min(boundaries)
         block = content[match.start():end].rstrip()
         if block:
-            out.append(_unit(rel, _section_before(content, match.start()), block, content,
+            out.append(_unit(rel, sections.before(match.start()), block, offsets,
                              match.start(), match.group(2).strip(), "event", baseline))
     return out
 
 
 def _parse_special_bullets(content: str, rel: str,
                            baseline: Mapping[str, str]) -> list[Unit]:
+    offsets, sections = _Offsets(content), _Sections(content)
     matches = list(re.finditer(
         r"^- \[(link|gap:[^\]]+)\] \*\*(.+?)\*\*.*$", content, re.MULTILINE))
     out: list[Unit] = []
@@ -137,18 +173,54 @@ def _parse_special_bullets(content: str, rel: str,
         end = min(boundaries)
         block = content[match.start():end].rstrip()
         if block:
-            out.append(_unit(rel, _section_before(content, match.start()), block, content,
+            out.append(_unit(rel, sections.before(match.start()), block, offsets,
                              match.start(), match.group(2).strip(), match.group(1), baseline))
     return out
 
 
+_CACHE_SIZE = 64
+_cache: "OrderedDict[tuple, tuple[Unit, ...]]" = OrderedDict()
+_cache_lock = threading.Lock()
+
+
 def parse_units(path: Path | str, *, root: Path | None = None,
                 baseline: Mapping[str, str] | None = None) -> list[Unit]:
-    """Parse one read-only markdown path into stable-addressable units."""
+    """Parse one read-only markdown path into stable-addressable units.
+
+    Cached by (path, root, inode, mtime, ctime, size) when no baseline is given: card 3 parsed
+    every DDD document again for every unit it judged, and chat's injection, recall
+    and Read paths parse the same files. A changed file has a new key. The caller
+    gets its own list; ``Unit`` is frozen."""
     file_path = Path(path)
+    key = None
+    if not baseline:
+        try:
+            # inode, device and ctime too: a copy that keeps size and mtime (copy2,
+            # rsync -t, os.utime) must not return the old offsets, which the writers
+            # cut the file at. The path as given: Unit.path and the parser follow it.
+            stat = os.stat(file_path)
+            key = (str(file_path), str(root) if root else None, str(file_path.resolve()),
+                   stat.st_ino, stat.st_dev, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+        except OSError:
+            key = None
+        if key is not None:
+            with _cache_lock:
+                hit = _cache.get(key)
+                if hit is not None:
+                    _cache.move_to_end(key)
+                    return list(hit)
+    parsed = _parse_units(file_path, root, baseline or {})
+    if key is not None:
+        with _cache_lock:
+            _cache[key] = tuple(parsed)
+            while len(_cache) > _CACHE_SIZE:
+                _cache.popitem(last=False)
+    return parsed
+
+
+def _parse_units(file_path: Path, root: Path | None, known: Mapping[str, str]) -> list[Unit]:
     content = file_path.read_text(encoding="utf-8")
     rel = _relative(file_path, root)
-    known = baseline or {}
     if file_path.name == "EVOLUTION.md":
         return _parse_evolution(content, rel, known)
     if file_path.name == "TIMELINE.md":
@@ -156,6 +228,7 @@ def parse_units(path: Path | str, *, root: Path | None = None,
 
     special = _parse_special_bullets(content, rel, known)
     special_starts = {unit.byte_start for unit in special}
+    offsets = _Offsets(content)
     entries = parse_entries(content, skip_h3_spans=False)
     out: list[Unit] = list(special)
     cursor = 0
@@ -166,9 +239,9 @@ def parse_units(path: Path | str, *, root: Path | None = None,
         if start < 0:
             continue
         cursor = start + len(entry.raw_text)
-        if _byte_offset(content, start) in special_starts:
+        if offsets(start) in special_starts:
             continue
-        out.append(_unit(rel, entry.section, entry.raw_text, content, start,
+        out.append(_unit(rel, entry.section, entry.raw_text, offsets, start,
                          entry.title, entry.entry_type, known, taint=entry.taint or ""))
     if out:
         return sorted(out, key=lambda unit: unit.byte_start)
@@ -179,7 +252,7 @@ def parse_units(path: Path | str, *, root: Path | None = None,
     start = content.find(stripped)
     title_match = re.search(r"^#\s+(.+?)\s*$", stripped, re.MULTILINE)
     title = title_match.group(1).strip() if title_match else file_path.stem
-    return [_unit(rel, "", stripped, content, start, title, None, known)]
+    return [_unit(rel, "", stripped, _Offsets(content), start, title, None, known)]
 
 
 def layer_for(target_section: str, entry_type: str) -> str:

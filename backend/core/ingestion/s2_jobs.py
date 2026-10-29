@@ -29,6 +29,7 @@ RETRY_DELAY = timedelta(minutes=5)
 # The idle hook fires after 120 s idle (LifecycleManager.IDLE_HOOK_GRACE): 8 more
 # minutes makes the review wait for 10 quiet minutes.
 REVIEW_DELAY = timedelta(minutes=8)
+POSTPONE_DELAY = timedelta(minutes=5)   # a job that waits for memory looks again after this
 _WAKER: Callable[[], None] | None = None
 
 
@@ -133,6 +134,20 @@ def set_watermark(conn: sqlite3.Connection, session_id: str, reviewed_to: str) -
     """Record the last message the review covered (the next review starts after it)."""
     conn.execute("UPDATE ingestion_s2_jobs SET reviewed_to=? WHERE session_id=?",
                  (reviewed_to, session_id))
+
+
+def postpone(conn: sqlite3.Connection, session_id: str, delay: timedelta) -> None:
+    """Put a claimed job back without spending its attempt (it did not run). A request
+    that came while it was claimed is folded in (the job has not run, so it covers it),
+    waiting for whichever is later: the delay or that request's not-before."""
+    retry_at = (datetime.now(timezone.utc) + delay).isoformat()
+    conn.execute(
+        """UPDATE ingestion_s2_jobs SET state='queued', attempts=MAX(attempts-1,0),
+               started_at=NULL, again=0, again_after=NULL,
+               next_attempt_at=MAX(?, COALESCE(again_after, ''))
+           WHERE session_id=? AND state='running'""",
+        (retry_at, session_id))
+    conn.commit()
 
 
 def finish(conn: sqlite3.Connection, session_id: str, *, error: str | None = None) -> str:
