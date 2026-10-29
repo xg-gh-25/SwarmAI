@@ -26,6 +26,7 @@ Key public symbols:
 - ``get_model_context_window()`` — Context window size for a model
 - ``sum_usage_input_tokens()``   — Sum all input token fields (static)
 - ``CLI_SKILL_OVERRIDES``        — CLI-bundled skills turned off (``--settings``)
+- ``SWARM_ATTRIBUTION``          — the commit / PR attribution the CLI asks for (``--settings``)
 
 No subprocess lifecycle, routing, or hook logic lives here.
 """
@@ -95,6 +96,13 @@ def _pipeline_expert_agents():
 #   meta message (session f2eb58c2 jumped 158K → 448K context on its first call).
 #   Model facts come from WebFetch of the official docs instead.
 CLI_SKILL_OVERRIDES: dict[str, str] = {"claude-api": "off"}
+
+# The CLI's `attribution` setting: what it tells the agent to end a git commit / a
+# pull request description with. Code SwarmAI writes is signed by SwarmAI.
+SWARM_ATTRIBUTION: dict[str, str] = {
+    "commit": "Co-Authored-By: Swarm <swarm@swarmai.dev>",
+    "pr": "🐝 Generated with SwarmAI",
+}
 
 
 def assert_core_sections(prompt_text: str) -> list[str]:
@@ -2463,6 +2471,10 @@ class PromptBuilder:
         )
         from .skill_listing import listing_settings, schedule_log_listing
         cli_settings = {
+            # The line the CLI asks the agent to end a commit / a PR with: SwarmAI's,
+            # in every repo, machine and Hive (unset, the CLI asks for its own Claude
+            # co-author line — a repo-local rewrite hook only ever fixed one checkout).
+            "attribution": SWARM_ATTRIBUTION,
             "skillOverrides": CLI_SKILL_OVERRIDES,
             "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
             # Caps each skill description in the CLI's skill listing (core/skill_listing).

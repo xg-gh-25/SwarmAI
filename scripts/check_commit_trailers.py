@@ -19,6 +19,11 @@ rewrote 0df04c34's Claude trailer to Swarm). Earlier versions of this file said 
 hooksPath override REPLACES ``.git/hooks`` so every repo-local hook was shadowed;
 that was wrong, at least for the git-defender in use on 2026-10-22.
 
+Since 2026-10-29 every SwarmAI session also sends the CLI's ``attribution``
+setting (``SWARM_ATTRIBUTION`` in ``backend/core/prompt_builder.py``), so the CLI
+itself asks for the Swarm line, in every repo and on every machine; the hook only
+still matters for another assistant writing the Claude line.
+
 What the hook cannot do is why a verifier is still useful:
 - It only rewrites a Claude trailer that is already there, spelled exactly
   ``Co-Authored-By:`` (the sed is case-sensitive). A commit written with NO

@@ -23,4 +23,5 @@ The three rules people get wrong most often (full detail in AGENTS.md):
    `addopts` stops at 3 failures (`--maxfail=3`): re-run a red scope with `--maxfail=1000`
    before reading its counts.
 3. **Every commit ends with `Co-Authored-By: Swarm <swarm@swarmai.dev>`**, never a
-   Claude/Anthropic identity. Nothing enforces this for a manual commit — write it yourself.
+   Claude/Anthropic identity. A SwarmAI session is told this line by the CLI itself
+   (`SWARM_ATTRIBUTION` in `backend/core/prompt_builder.py`); any other assistant writes it.
