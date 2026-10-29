@@ -13,7 +13,7 @@ from core.run_protocol.engine import EngineError, RunEngine
 
 def test_create_goal_is_refused_with_what_to_do(tmp_path):
     (tmp_path / "ws" / "Projects" / "P").mkdir(parents=True)
-    with pytest.raises(EngineError, match="sequence of runs"):
+    with pytest.raises(EngineError, match="one full run"):
         RunEngine.create(data_dir=tmp_path / "data", workspace=tmp_path / "ws", project="P",
                          profile="goal", session_id="s", repos={"r": str(tmp_path)})
 

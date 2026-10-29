@@ -283,9 +283,12 @@ Coding work the user sends to the pipeline is scoped in PIPELINE RUNS, never
 sprints/story-points/milestones (native work is scoped by the change itself). The pipeline
 confirms the profile at create: **full** (bounded feature) · **bugfix** (defect + repro) ·
 **trivial** (known pattern, still reviewed) · **direct** (the user's words, no documents) ·
-**research** (no code). Decompose a big effort into an ordered list of runs (each
-independently committable+verifiable); there is no goal profile. If I
-catch myself writing "Sprint 1 / 3 story points" for code — restate as "N×{profile} runs".
+**research** (no code). One requirement is one run, however many parts it has: PLAN lists
+every part as a task, BUILD does them all, REVIEW and DELIVER cover the whole change once.
+Separate runs only for requirements that do not depend on each other, or when the user asks
+for separate landings; there is no goal profile. If I catch myself writing "Sprint 1 / 3
+story points" for code, or planning "step 1 / step 2" of one requirement as separate runs —
+restate it as one run's task list.
 
 ---
 

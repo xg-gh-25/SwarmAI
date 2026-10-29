@@ -38,7 +38,7 @@ def test_capabilities_agree_with_the_stage_list(profile):
     assert caps.triad is (profile == "bugfix")
 
 
-@pytest.mark.parametrize("name,hint", [("goal", "sequence of runs"), ("docs", "edit them directly")])
+@pytest.mark.parametrize("name,hint", [("goal", "one full run"), ("docs", "edit them directly")])
 def test_a_removed_profile_is_refused_with_what_to_do(name, hint):
     with pytest.raises(lifecycle.LifecycleError, match=hint):
         lifecycle.caps(name)
