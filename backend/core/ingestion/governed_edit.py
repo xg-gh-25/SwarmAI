@@ -75,7 +75,7 @@ def _blocked(guard: MemoryGuard, text: str) -> "Counter[tuple[str, str]]":
     def hits(chunk: str) -> set[str]:
         return {f.pattern_name for f in guard.scan("\n" + chunk).findings if f.action == "reject"}
 
-    lines = _INVISIBLE_CHARS.sub("", text).splitlines()
+    lines = _INVISIBLE_CHARS.sub("", text.replace("\u2028", "\n").replace("\u2029", "\n")).splitlines()
     norm = [" ".join(ln.split()).casefold() for ln in lines]
     out: Counter[tuple[str, str]] = Counter()
     single = [hits(ln) for ln in lines]

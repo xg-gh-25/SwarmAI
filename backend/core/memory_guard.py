@@ -74,7 +74,7 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     # …" mid-sentence is prose (matching it refused real lessons); "config.system:" is
     # not a sentence end (a space must follow the period).
     ("system_directive", re.compile(
-        r"(?:^|[\r\n\u2028\u2029]|(?<=[.!?;])[ \t\u00a0]+|(?<=[|>\"'\])])[ \t\u00a0]*|```\w*)"
+        r"(?:^|[\r\n\u2028\u2029]|(?<=[.!?;])(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!vs\.)[ \t\u00a0]+|(?<=[|>\"'\])])[ \t\u00a0]*|```\w*)"
         r"[ \t\u00a0\u3000]*(?:(?:[-*+>#|]+|\d+[.)])[ \t\u00a0]*)*"
         r"[*_`\[(<]*[ \t]*system[ \t]*[*_`\])>]*[ \t]*[:\uff1a][ \t]*[*_`]*\s+",
         re.IGNORECASE)),
