@@ -79,7 +79,7 @@ def test_pinned_sections_come_whatever_the_query(ddd):
     hits = rm.recall_ddd("zzz unrelated words", P, "requirement")
     kinds = {(h["kind"], h["section"]) for h in hits}
     assert ("pinned", "Vision") in kinds and ("pointer", "Non-Goals") in kinds
-    assert not any(h["section"] in ("Success Criteria", "Target Users") for h in hits)
+    assert not any(h["section"] == "Success Criteria" for h in hits)
     nongoals = next(h for h in hits if h["section"] == "Non-Goals")
     assert "Not a chatbot" not in nongoals["shown"] and "2-understanding/PRODUCT.md:" in nongoals["shown"] \
         and "(§ Non-Goals)" in nongoals["shown"]
@@ -177,13 +177,13 @@ def test_a_one_line_lead_in_is_not_a_unit(ddd):
 
 
 def test_pinned_sections_do_not_spend_the_ranked_budget(ddd):
-    """Three long pinned sections cannot push the query's own units out."""
+    """Long pinned sections cannot push the query's own units out."""
     body = "Agents run here. " * 85                         # ~1450 characters each
     ddd("PRODUCT.md", "# PRODUCT\n\n## Vision\n\n" + body + "\n\n## Success Criteria\n\n"
-                      + body + "\n\n## Target Users\n\n" + body + "\n\n## Strategy\n\n"
+                      + body + "\n\n## Strategy\n\n"
                       "The quokka plan costs nothing.\n")
     hits = rm.recall_ddd("quokka plan", P, "requirement")
-    assert sum(h["kind"] == "pinned" for h in hits) == 3
+    assert sum(h["kind"] == "pinned" for h in hits) == 2
     assert any(h["kind"] == "block" and "costs nothing" in h["shown"] for h in hits)
     assert not any(h["kind"] == "omitted" for h in hits)
 

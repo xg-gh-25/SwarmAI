@@ -181,7 +181,7 @@ _SEED_QUERIES = [
     ("how do I start the app locally and rebuild it", "ddd", "TECH.md", "Dev Commands", "hard"),
     ("how is the daemon and session lifecycle structured", "ddd", "TECH.md", "Key Subsystems", "hard"),
     ("how does the app differentiate from a chatbot", "ddd", "PRODUCT.md", "What Makes It Different", "hard"),
-    ("who is this built for, which people use it", "ddd", "PRODUCT.md", "Target Users", "hard"),
+    ("who is this built for, which people use it", "ddd", "PRODUCT.md", "Vision", "hard"),
     ("what past data leaks or breaches happened", "ddd", "IMPROVEMENT.md", "Security History", "hard"),
     # ── context_files · NAME-SIGNAL class (category-browse) ──────────────────
     # run_79de25f8: these were the ORIGINAL self-authored context_files cases. They

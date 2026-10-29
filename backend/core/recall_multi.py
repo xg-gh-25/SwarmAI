@@ -991,7 +991,7 @@ DDD_PURPOSES: dict[str, dict] = {
     "requirement": {
         "docs": {"PRODUCT.md": ("block", 3, 4000), "PROJECT.md": ("entry", 4, 3000)},
         "weighted": ("decision", "principle"),
-        "pinned": {"PRODUCT.md": ("Vision", "Success Criteria", "Target Users")},
+        "pinned": {"PRODUCT.md": ("Vision", "Success Criteria")},
         "pointers": {"PRODUCT.md": ("Non-Goals",)},
     },
     "design": {
