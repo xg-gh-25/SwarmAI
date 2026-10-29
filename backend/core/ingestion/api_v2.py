@@ -27,7 +27,7 @@ from .contracts_v2 import (
     EntailmentVerdict, EvidenceRootKind, ExtractionPass, RootTrust, SourceId, SourceUnit,
 )
 
-SCHEMA_V2_VERSION = 7
+SCHEMA_V2_VERSION = 8
 
 # Applied after api.SCHEMA_DDL in the same migration transaction (store.py owns DDL apply).
 SCHEMA_V2_DDL = """

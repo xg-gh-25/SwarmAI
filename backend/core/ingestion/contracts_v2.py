@@ -207,6 +207,13 @@ SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 # ── card 1 v2 answers (re-check) ──────────────────────────────────────────────
+# TIMELINE is injected every turn, so an event must change how the work stands. Stated
+# by both extraction prompts (extract_llm, s7_review) and the card 1 event check.
+EVENT_RULE = ("An event is recorded only when it changes how the work stands: a deliverable "
+              "the user asked for landed, a decision or change of direction, real loss or "
+              "rework. Routine operations are not events whether they succeed or fail: a "
+              "build, a restart, a deploy, an install, a test run, checking a result, "
+              "dispatching the next step of a plan.\n")
 Significance = Literal["direction_change", "loss_or_rework", "milestone", "key_decision", "user_asked"]
 
 

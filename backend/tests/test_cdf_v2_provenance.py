@@ -6,6 +6,7 @@ without touching a live SwarmAI data directory.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -115,7 +116,7 @@ def test_v1_ingestion_database_migrates_without_losing_rows(tmp_path, monkeypatc
     conn.close()
 
     migrated = connect_rw()
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 8
     assert migrated.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='unit_usage'"
     ).fetchone()[0] == "unit_usage"
@@ -558,6 +559,8 @@ def test_enqueue_records_the_project_the_snapshot_declares(tmp_path, monkeypatch
     result = enqueue_unit("S2", "ref", _cognition(["event:input:e1"]), session_id="s1", run_id=None,
                           project_snapshot={key: "Widget"})
     conn = connect_ro()
-    hint = conn.execute("SELECT project_hint FROM ingestion_inbox WHERE id=?", (result.candidate_id,)).fetchone()[0]
+    hint, candidates = conn.execute("SELECT project_hint, project_candidates FROM ingestion_inbox WHERE id=?",
+                                    (result.candidate_id,)).fetchone()
     conn.close()
     assert hint == "Widget"
+    assert json.loads(candidates) == ["Widget"]     # the one project the judge may choose

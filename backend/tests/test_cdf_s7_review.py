@@ -139,7 +139,7 @@ def test_job_falls_back_to_s2_main_and_keeps_the_watermark(cdf_env, tmp_path, mo
     _conversation(cdf_env)
     ran = []
     monkeypatch.setattr(s2_session, "extract_session_sync",
-                        lambda sid, passes=(): ran.append(passes) or {})
+                        lambda sid, passes=(), **_: ran.append(passes) or {})
     monkeypatch.setattr(s2_jobs, "_WAKER", None)
     s2_jobs.request(SESSION, "save_button")
     conn = connect_rw()

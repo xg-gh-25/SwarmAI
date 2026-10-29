@@ -20,7 +20,7 @@ from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION, VALID_TYPES
 CONTRACT_VERSION = "cdf-contract-r15.1-v1"
 NORMALIZER_VERSION = "cdf-normalizer-v1"
 RULES_VERSION = "cdf-rules-r15.1-v1"
-PROMPT_VERSION = "cdf-prompts-r15.1-v3"
+PROMPT_VERSION = "cdf-prompts-r15.1-v4"
 VALID_TYPE = Literal["guideline", "pitfall", "decision", "model", "process", "principle", "correction"]
 Topic = Literal["decision", "product", "architecture", "lesson"]
 ContentForm = Literal["rule", "reference"]

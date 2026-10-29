@@ -38,7 +38,7 @@ class TestStore:
         assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
         conn.close()
         ro = connect_ro()
         assert ro.execute("PRAGMA query_only").fetchone()[0] == 1

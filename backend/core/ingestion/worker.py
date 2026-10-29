@@ -967,10 +967,13 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     if runner is None and job.get("sdk_session_id") and not _can_fork_review():
         # checked before the user pass: a postponed job runs that pass once, not twice
         raise ReviewPostponed("not enough memory for the review's CLI fork")
-    s2_session.extract_session_sync(session_id, passes=("user_utterance",))
+    # the project of the repo the session worked in (s2_jobs.request): a hint the judge
+    # may follow or override, so a session's lessons and gaps can reach that project
+    snapshot = {"explicit_project": job["project"]} if job.get("project") else None
+    s2_session.extract_session_sync(session_id, passes=("user_utterance",), project_snapshot=snapshot)
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),
-        force=job.get("reason") == "save_button", runner=runner)
+        force=job.get("reason") == "save_button", project_snapshot=snapshot, runner=runner)
     if outcome["status"] == "reviewed":
         # recorded before the optional main pass: if that pass fails, the retry must not
         # review the same messages again (a fresh model call, new duplicate units)
@@ -982,7 +985,7 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     main = outcome["status"] == "unresumable" or (
         outcome["status"] == "reviewed" and s7_review.sampled(session_id))
     if main:
-        s2_session.extract_session_sync(session_id, passes=("main",))
+        s2_session.extract_session_sync(session_id, passes=("main",), project_snapshot=snapshot)
     outcome["s2_main"] = main
     logger.info("CDF session job %s: %s", session_id, outcome)
     return outcome

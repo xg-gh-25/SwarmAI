@@ -5,7 +5,10 @@ S2 user-utterance pass and the after-session review (S2 main pass when the sessi
 cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
 
 - ``request(session_id, reason, sdk_session_id=, delay=)`` records (or re-arms) one job
-  per session and wakes the executor when one runs in this process. ``delay`` is a
+  per session and wakes the executor when one runs in this process. It also records the
+  project bound to the repo the session last worked in (``repo_guidance``, the signal
+  recall uses), read now while the session is alive; a later request without one keeps
+  it. The job's passes enqueue with it as ``explicit_project``. ``delay`` is a
   not-before: the idle hook asks with ``REVIEW_DELAY`` and each new request pushes it
   later, so a review waits for 10 quiet minutes; the button asks with no delay. A
   request while the job runs sets ``again`` (with its own not-before) so the session is
@@ -59,6 +62,7 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     if not session_id:
         raise ValueError("session_id is required")
     from .api import connect_rw
+    project = _bound_project(sdk_session_id)
     not_before = (datetime.now(timezone.utc) + delay).isoformat() if delay else None
     conn = connect_rw()
     try:
@@ -96,6 +100,8 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
                        sdk_session_id=COALESCE(?, sdk_session_id) WHERE session_id=?""",
                     (reason, _now(), not_before, sdk_session_id, session_id))
                 state = "queued"
+            conn.execute("UPDATE ingestion_s2_jobs SET project=COALESCE(?, project) WHERE session_id=?",
+                         (project, session_id))
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
@@ -107,12 +113,25 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     return state
 
 
+def _bound_project(sdk_session_id: str | None) -> str | None:
+    """The project bound to the repo this session last worked in, or None."""
+    if not sdk_session_id:
+        return None
+    try:
+        from core import repo_guidance
+        return repo_guidance.session_bound_project(sdk_session_id)
+    except Exception as exc:  # noqa: BLE001 - a missing hint never blocks the job
+        import logging
+        logging.getLogger(__name__).warning("session project unavailable: %s", exc)
+        return None
+
+
 def claim(conn: sqlite3.Connection) -> dict[str, Any] | None:
     """Take the oldest queued job (queued -> running, attempts + 1)."""
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = conn.execute(
-            """SELECT session_id, reason, attempts, sdk_session_id, reviewed_to
+            """SELECT session_id, reason, attempts, sdk_session_id, reviewed_to, project
                FROM ingestion_s2_jobs
                WHERE state='queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                ORDER BY requested_at LIMIT 1""", (_now(),)).fetchone()
@@ -127,7 +146,7 @@ def claim(conn: sqlite3.Connection) -> dict[str, Any] | None:
         conn.execute("ROLLBACK")
         raise
     return {"session_id": row[0], "reason": row[1], "attempts": int(row[2]) + 1,
-            "sdk_session_id": row[3], "reviewed_to": row[4]}
+            "sdk_session_id": row[3], "reviewed_to": row[4], "project": row[5]}
 
 
 def set_watermark(conn: sqlite3.Connection, session_id: str, reviewed_to: str) -> None:

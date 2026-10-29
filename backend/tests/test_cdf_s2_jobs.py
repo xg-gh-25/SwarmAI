@@ -139,7 +139,8 @@ def test_transcript_sync_reads_sent_rows_in_order(tmp_path, monkeypatch) -> None
 
 
 def test_a_v6_database_gains_the_job_table(tmp_path, monkeypatch) -> None:
-    """Schema v6 was already on disk (dev and rehearsal copies): v7 adds the table."""
+    """Schema v6 was already on disk (dev and rehearsal copies): v7 adds the table (and
+    v8 its project column)."""
     data_dir = tmp_path / "d"
     data_dir.mkdir()
     monkeypatch.setenv("SWARM_DATA_DIR", str(data_dir))
@@ -154,8 +155,8 @@ def test_a_v6_database_gains_the_job_table(tmp_path, monkeypatch) -> None:
     raw.close()
     conn = connect_rw()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
-        assert conn.execute("SELECT COUNT(*) FROM ingestion_s2_jobs").fetchone()[0] == 0
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("SELECT COUNT(*) FROM ingestion_s2_jobs WHERE project IS NULL").fetchone()[0] == 0
     finally:
         conn.close()
 

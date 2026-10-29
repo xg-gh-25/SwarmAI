@@ -458,10 +458,12 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     unit = SOURCE_UNIT.validate_python(payload)
     unit_id = str(_get(row, "unit_id") or f"{_get(row, 'id', 'unit')}.unit")
     resolved = _resolved(row)
-    projects = tuple(_json(_get(row, "project_candidates"), []))
     # the column, or for rows queued before it took `project` too, the snapshot itself
     project_hint = (_get(row, "project_hint")
                     or snapshot_project(_json(_get(row, "project_snapshot"), {})))
+    # rows queued before candidates were written: the hint is the one candidate
+    projects = tuple(_json(_get(row, "project_candidates"), [])) or (
+        (str(project_hint),) if project_hint else ())
     group = _group(unit, projects)
     vectors: list[dict[str, Any]] = []
     card0 = _card0(unit, row)

@@ -472,6 +472,8 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
                 if count >= contracts_v2.S1_MAX_UNITS_PER_MESSAGE:
                     conn.execute("ROLLBACK")
                     return _reject(attempt_id, raw, "s1_unit_cap")
+            # the declared project is the one candidate the judge may choose (design §7)
+            hint = contracts_v2.snapshot_project(snapshot)
             cursor = conn.execute(
                 "INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,"
                 "payload_schema,content_hash,envelope,project_snapshot,project_candidates,"
@@ -482,8 +484,8 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
                  f"{typed.kind}:v2", _digest(payload_json),
                  _canonical({"strength": resolved.strength, "tainted": resolved.tainted,
                              "lineage_root_ids": list(resolved.lineage_root_ids)}),
-                 _canonical(snapshot), _canonical([]), now, typed.kind, source,
-                 extraction_pass, evidence_json, contracts_v2.snapshot_project(snapshot), dedup_key),
+                 _canonical(snapshot), _canonical([hint] if hint else []), now, typed.kind, source,
+                 extraction_pass, evidence_json, hint, dedup_key),
             )
             inserted = cursor.fetchone()
             if inserted:

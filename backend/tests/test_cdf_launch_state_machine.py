@@ -229,7 +229,7 @@ def test_the_watermark_is_recorded_before_the_main_pass(cdf_env, monkeypatch):
     s2_jobs.request("s-3", "session_end")
     calls = []
     monkeypatch.setattr(s2_session, "extract_session_sync",
-                        lambda sid, passes: calls.append(passes) or (_ for _ in ()).throw(RuntimeError("x"))
+                        lambda sid, passes, **_: calls.append(passes) or (_ for _ in ()).throw(RuntimeError("x"))
                         if passes == ("main",) else {})
     monkeypatch.setattr(s7_review, "review_session",
                         lambda *a, **k: {"status": "reviewed", "reviewed_to": "m9", "units": 1})

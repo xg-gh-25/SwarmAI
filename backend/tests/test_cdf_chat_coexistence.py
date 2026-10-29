@@ -107,7 +107,7 @@ def test_the_review_waits_for_the_spawn_budget(monkeypatch, tmp_path):
     budget = type("Budget", (), {"can_spawn": False, "reason": "memory 91%"})()
     monkeypatch.setattr(resource_monitor, "spawn_budget", lambda alive_count=0: budget)
     passes = []
-    monkeypatch.setattr(s2_session, "extract_session_sync", lambda sid, passes=(): passes.append(passes))
+    monkeypatch.setattr(s2_session, "extract_session_sync", lambda sid, passes=(), **_: passes.append(passes))
     s2_jobs.request("s-1", "session_end", sdk_session_id="sdk-1")
     conn = connect_rw()
     executor = worker.S2JobExecutor()

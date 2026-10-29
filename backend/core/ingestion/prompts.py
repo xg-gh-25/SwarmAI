@@ -222,13 +222,13 @@ def parse_card3b(text: str) -> Card3bAnswer:
 def card1_v2_prompt(unit: dict[str, Any], project_candidates: tuple[str, ...],
                     known_domain_names: tuple[str, ...]) -> str:
     """Render Event/Gap/Reference card 1 with field guide, example, and schema."""
-    from .contracts_v2 import CARD1_V2_ADAPTER
+    from .contracts_v2 import CARD1_V2_ADAPTER, EVENT_RULE
 
     guides = {
         "event": (
             "Re-check an Event. significance is a list chosen from direction_change, "
             "loss_or_rework, milestone, key_decision, user_asked; an ordinary operation "
-            "uses an empty list. Also answer self_contained and evidenced.",
+            "uses an empty list. " + EVENT_RULE + "Also answer self_contained and evidenced.",
             {"shape": "Event", "significance": ["milestone"],
              "self_contained": True, "evidenced": True},
         ),

@@ -89,6 +89,12 @@ CREATE INDEX IF NOT EXISTS ix_s2_jobs_state ON ingestion_s2_jobs(state, requeste
 """ + _attempts_rebuild()
 
 
+# v8: a session job keeps the project of the repo the session worked in (s2_jobs.request),
+# so its S2 passes and review enqueue with that project (2026-10-29).
+_V8_DDL = """
+ALTER TABLE ingestion_s2_jobs ADD COLUMN project TEXT;
+"""
+
 _V2_MIGRATION_DDL = """
 ALTER TABLE ingestion_units RENAME TO ingestion_units_v1;
 ALTER TABLE ingestion_inbox RENAME TO ingestion_inbox_v1;
@@ -242,7 +248,7 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
                 _assert_one_pragma(conn, name)
             script = (
                 f"BEGIN IMMEDIATE;\n{SCHEMA_DDL}\n{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n"
-                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n"
+                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n"
                 f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
             )
             try:
@@ -258,18 +264,23 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
             if version == SCHEMA_VERSION:
                 script = (
                     f"BEGIN IMMEDIATE;\n{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n"
-                    f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n"
+                    f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n"
                     f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
                 )
                 conn.executescript(script)
-            elif version in {3, 4, 5} and SCHEMA_V2_VERSION == 7:
+            elif version in {3, 4, 5} and SCHEMA_V2_VERSION == 8:
                 conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n"
+                    f"BEGIN IMMEDIATE;\n{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n"
                     f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
                 )
-            elif version == 6 and SCHEMA_V2_VERSION == 7:
+            elif version == 6 and SCHEMA_V2_VERSION == 8:
                 conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{_V7_DDL}\n"
+                    f"BEGIN IMMEDIATE;\n{_V7_DDL}\n{_V8_DDL}\n"
+                    f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
+                )
+            elif version == 7 and SCHEMA_V2_VERSION == 8:
+                conn.executescript(
+                    f"BEGIN IMMEDIATE;\n{_V8_DDL}\n"
                     f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
                 )
         _assert_pragmas(conn)
