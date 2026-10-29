@@ -68,11 +68,16 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("disregard_instructions", re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+instructions", re.IGNORECASE)),
     ("you_are_now", re.compile(r"you\s+are\s+now\s+", re.IGNORECASE)),
     ("special_tokens", re.compile(r"<\|.*?\|>")),
-    # A role directive "system:" opens a line (after optional indentation, a list or
-    # quote marker) — the shape a model reads as a turn. Mid-sentence "the hook
-    # system: …" is prose; matching it refused real lessons.
-    ("system_directive", re.compile(r"(?:^|\n)[ \t]*(?:(?:[-*+>]|\d+[.)])[ \t]+)*\**system\**[ \t]*:\**\s+",
-                                    re.IGNORECASE)),
+    # A role directive "system:" where a reader takes it as a turn: opening a line or a
+    # heading, a list item, a quote, a table cell, after an HTML tag or a fence marker,
+    # after a sentence ends; with bold / brackets / a fullwidth colon. "the hook system:
+    # …" mid-sentence is prose (matching it refused real lessons); "config.system:" is
+    # not a sentence end (a space must follow the period).
+    ("system_directive", re.compile(
+        r"(?:^|[\r\n\u2028\u2029]|(?<=[.!?;])[ \t\u00a0]+|(?<=[|>\"'\])])[ \t\u00a0]*|```\w*)"
+        r"[ \t\u00a0\u3000]*(?:(?:[-*+>#|]+|\d+[.)])[ \t\u00a0]*)*"
+        r"[*_`\[(<]*[ \t]*system[ \t]*[*_`\])>]*[ \t]*[:\uff1a][ \t]*[*_`]*\s+",
+        re.IGNORECASE)),
     # LLM-specific instruction markers
     ("inst_marker", re.compile(r"\[/?INST\]", re.IGNORECASE)),
     ("sys_marker", re.compile(r"<</?SYS>>", re.IGNORECASE)),
@@ -137,9 +142,14 @@ class MemoryGuard:
                 ))
             sanitized = pattern.sub(replacement, sanitized)
 
+        # The reject scans read the text as a model will: invisible characters removed
+        # (a zero-width character must not split a phrase past them), line and
+        # paragraph separators kept as line breaks.
+        visible = _INVISIBLE_CHARS.sub("", content.replace("\u2028", "\n").replace("\u2029", "\n"))
+
         # 2. Detect prompt injection (reject)
         for pattern_name, pattern in _INJECTION_PATTERNS:
-            for m in pattern.finditer(content):
+            for m in pattern.finditer(visible):
                 findings.append(Finding(
                     category="prompt_injection",
                     pattern_name=pattern_name,
@@ -150,7 +160,7 @@ class MemoryGuard:
 
         # 3. Detect role hijack (reject)
         for pattern_name, pattern in _ROLE_HIJACK_PATTERNS:
-            for m in pattern.finditer(content):
+            for m in pattern.finditer(visible):
                 findings.append(Finding(
                     category="role_hijack",
                     pattern_name=pattern_name,
@@ -161,7 +171,7 @@ class MemoryGuard:
 
         # 4. Detect exfiltration (reject)
         for pattern_name, pattern in _EXFILTRATION_PATTERNS:
-            for m in pattern.finditer(content):
+            for m in pattern.finditer(visible):
                 findings.append(Finding(
                     category="exfiltration",
                     pattern_name=pattern_name,

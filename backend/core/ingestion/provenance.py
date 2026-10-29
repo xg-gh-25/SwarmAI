@@ -38,6 +38,17 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _strings(value: Any) -> list[str]:
+    """Every string in *value* (a dict / list tree), keys included, in a stable order."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for k in sorted(value, key=str) for s in (_strings(k) + _strings(value[k]))]
+    if isinstance(value, (list, tuple)):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
 def _digest(data: bytes | str) -> str:
     raw = data if isinstance(data, bytes) else data.encode("utf-8", errors="surrogatepass")
     return hashlib.sha256(raw).hexdigest()
@@ -391,8 +402,12 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
         reason = "credentialed_url" if "credentialed_url" in str(exc) else f"invalid_unit: {exc}"
         return _reject(attempt_id, raw, reason)
 
-    scan = MemoryGuard().scan(_canonical(typed.model_dump(mode="json")))
-    if scan.rejected or scan.sanitized_content != _canonical(typed.model_dump(mode="json")):
+    # Injection patterns read the unit's text as a model will, its string values one per
+    # line (the JSON encoding escapes line breaks, so a role marker that opens a line
+    # could never match there); secret redaction is checked on the canonical form.
+    canonical = _canonical(typed.model_dump(mode="json"))
+    scan = MemoryGuard().scan("\n".join(_strings(typed.model_dump(mode="json"))))
+    if scan.rejected or MemoryGuard().scan(canonical).sanitized_content != canonical:
         return _reject(attempt_id, raw, "unsafe")
     resolved = resolve_evidence(
         list(typed.evidence), session_id=session_id, run_id=run_id,
