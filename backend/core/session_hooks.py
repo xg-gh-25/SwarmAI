@@ -33,7 +33,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -654,3 +654,37 @@ class BackgroundHookExecutor:
             )
         except Exception as exc:
             logger.debug("Failed to persist hook stats: %s", exc)
+
+
+def register_default_hooks(manager: "SessionLifecycleHookManager", *, git_lock: Any,
+                           summarization_pipeline: Any, compliance_tracker: Any) -> list[str]:
+    """Register the product's post-session hooks on *manager*, in order; returns their
+    names. Order matters: DailyActivity remains the working-memory product; S2 is the
+    only semantic session extractor. The CDF kick is registered last by the caller,
+    after the session registry exists."""
+    from hooks.auto_commit_hook import WorkspaceAutoCommitHook
+    from hooks.context_health_hook import ContextHealthHook
+    from hooks.daily_activity_hook import DailyActivityExtractionHook
+    from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+    from hooks.todo_lifecycle_hook import TodoLifecycleHook
+    from core.ingestion.sources.s2_session import SessionExtractionHook
+
+    hooks: list[Any] = [
+        DailyActivityExtractionHook(summarization_pipeline=summarization_pipeline,
+                                    compliance_tracker=compliance_tracker),
+        SessionExtractionHook(),
+        # the shared git lock prevents .git/index.lock contention
+        WorkspaceAutoCommitHook(git_lock=git_lock),
+        ContextHealthHook(),
+        EvolutionMaintenanceHook(),
+        TodoLifecycleHook(),
+    ]
+    # SkillMetricsHook: records skill invocation metrics post-session
+    try:
+        from hooks.skill_metrics_hook import SkillMetricsHook
+        hooks.append(SkillMetricsHook())
+    except Exception as exc:  # noqa: BLE001 — one optional hook never stops the others
+        logger.warning("SkillMetricsHook registration failed: %s", exc)
+    for hook in hooks:
+        manager.register(hook)
+    return [h.name for h in hooks]

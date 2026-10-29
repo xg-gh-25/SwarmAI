@@ -1259,12 +1259,6 @@ async def lifespan(app: FastAPI):
     from core.session_hooks import SessionLifecycleHookManager, BackgroundHookExecutor
     from core.summarization import SummarizationPipeline
     from core.compliance import ComplianceTracker
-    from hooks.daily_activity_hook import DailyActivityExtractionHook
-    from hooks.auto_commit_hook import WorkspaceAutoCommitHook
-    from hooks.context_health_hook import ContextHealthHook
-    from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-    from hooks.todo_lifecycle_hook import TodoLifecycleHook
-    from core.ingestion.sources.s2_session import SessionExtractionHook
     from routers.memory import set_compliance_tracker
 
     summarization_pipeline = SummarizationPipeline()
@@ -1278,30 +1272,15 @@ async def lifespan(app: FastAPI):
     # Create fire-and-forget executor — hooks never block the chat path
     hook_executor = BackgroundHookExecutor(hook_manager)
 
-    # Order matters: DailyActivity remains the working-memory product; S2 is the
-    # only semantic session extractor. CDF kick remains last below.
-    hook_manager.register(DailyActivityExtractionHook(
-        summarization_pipeline=summarization_pipeline,
-        compliance_tracker=compliance_tracker,
-    ))
-    hook_manager.register(SessionExtractionHook())
-    # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention.
-    hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
-    hook_manager.register(ContextHealthHook())
-    hook_manager.register(EvolutionMaintenanceHook())
-    hook_manager.register(TodoLifecycleHook())
-
-    # SkillMetricsHook: records skill invocation metrics post-session
-    try:
-        from hooks.skill_metrics_hook import SkillMetricsHook
-        hook_manager.register(SkillMetricsHook())
-        logger.info("Registered SkillMetricsHook")
-    except Exception as exc:
-        logger.warning("SkillMetricsHook registration failed: %s", exc)
+    # CDF kick remains last below
+    from core.session_hooks import register_default_hooks
+    _hook_names = register_default_hooks(
+        hook_manager, git_lock=hook_executor.git_lock,
+        summarization_pipeline=summarization_pipeline, compliance_tracker=compliance_tracker)
 
     # Wire hooks into session_registry (new architecture)
     set_compliance_tracker(compliance_tracker)
-    logger.info("Session lifecycle hooks registered (8 hooks, background executor)")
+    logger.info("Session lifecycle hooks registered (%s, background executor)", ", ".join(_hook_names))
 
     # ── Initialize new session architecture ──────────────────────────
     session_registry.initialize(app_config)
