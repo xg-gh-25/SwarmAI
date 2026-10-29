@@ -50,7 +50,7 @@ CDF 在 daemon 进程里跑三条线程：调度、run lane、会话任务。为
 
 ### 3.2 解析缓存
 - `parse_units` 按（解析后的路径, `st_mtime_ns`, `st_size`, baseline 版本）缓存，有界 LRU，写法和 `usage._unit_spans` 一样。
-- `Unit` 是 frozen dataclass，缓存时要返回 list 的副本，调用方不能改动缓存内容。实施时先核实 `Unit` 确实是 frozen。
+- `Unit` 是 frozen dataclass（已核实，`units.py:26`），缓存时返回 list 的副本，调用方改不到缓存内容。
 - **测试**：文件改了，下一次解析拿到新内容；没改，第二次解析不再读文件。
 
 ### 3.3 准入
