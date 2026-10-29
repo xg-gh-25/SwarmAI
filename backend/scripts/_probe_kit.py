@@ -13,16 +13,28 @@ A probe checks one product capability. Each check function returns
 eval_runner._run_case_command runs probes with a temporary SWARM_DATA_DIR,
 SWARM_WORKSPACE / SWARMWS and HOME, so a probe can build its fixtures under
 those and never touches a user's real data. Fixtures that must not depend on
-that isolation use ``tempdir()``.
+that isolation use ``tempdir()``. A probe run by hand gets its own data dir
+too (below): ``tempdir()`` isolates only the workspace, and every store the
+product opens without one (the injection selection record, ingestion.db,
+data.db) is the user's real one under ~/.swarm-ai.
 """
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
+import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 from typing import Callable
+
+if not os.environ.get("SWARM_DATA_DIR"):
+    # before any product module is imported: some freeze the data dir at import
+    _DATA_DIR = tempfile.mkdtemp(prefix="swarm-probe-data-")
+    os.environ["SWARM_DATA_DIR"] = _DATA_DIR
+    atexit.register(shutil.rmtree, _DATA_DIR, ignore_errors=True)
 
 BACKEND = Path(__file__).resolve().parents[1]
 if str(BACKEND) not in sys.path:

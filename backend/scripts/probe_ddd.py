@@ -21,8 +21,8 @@ import json
 from argparse import Namespace
 from unittest import mock
 
+from scripts._probe_kit import arun, run, tempdir, verdict  # first: it isolates the data dir
 from core.ddd_paths import ddd_write_path
-from scripts._probe_kit import arun, run, tempdir, verdict
 
 
 # ── skeleton ──────────────────────────────────────────────────────────────────
