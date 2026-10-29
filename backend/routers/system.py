@@ -1016,17 +1016,26 @@ async def get_engine_metrics() -> dict:
 async def get_token_usage() -> dict:
     """Return token usage summary for TopBar display.
 
-    Returns today and total token counts in millions (1 decimal)
-    plus cost in USD. Zero external deps — reads from local SQLite.
+    Returns today and total billed token counts in millions (1 decimal: input, output,
+    cache reads and cache writes together) plus cost in USD, and each kind on its own
+    with the cache hit rate (cache reads over all input-side tokens; null with none).
+    Zero external deps — reads from local SQLite.
     """
     import database
 
     summary = await database.db.get_token_usage_summary()
+
+    def kinds(b: dict) -> dict:
+        side = b["input"] + b["cache_read"] + b["cache_write"]
+        return {**b, "cache_hit_rate": round(b["cache_read"] / side, 4) if side else None}
+
     return {
         "today_tokens_m": round(summary["today_tokens"] / 1_000_000, 1),
         "total_tokens_m": round(summary["total_tokens"] / 1_000_000, 1),
         "today_cost_usd": round(summary["today_cost_usd"], 2),
         "total_cost_usd": round(summary["total_cost_usd"], 2),
+        "today": kinds(summary["today_breakdown"]),
+        "total": kinds(summary["total_breakdown"]),
     }
 
 

@@ -4242,6 +4242,10 @@ class SQLiteDatabase(BaseDatabase):
     ) -> None:
         """Record a token usage event. Fire-and-forget safe — never raises.
 
+        The tokens are this turn's; ``cost_usd`` is the CLI process's running total
+        (``total_cost_usd``), not this turn's cost: readers take the increase over the
+        session's previous row (``get_token_usage_summary``, ``token_cost_rows``).
+
         Uses local time for timestamp so "today" in the TopBar matches
         the user's actual day boundary (not UTC).
         """
@@ -4641,48 +4645,65 @@ class SQLiteDatabase(BaseDatabase):
             return [(r[0], r[1], r[2]) for r in await cursor.fetchall()]
 
     async def get_token_usage_summary(self) -> dict:
-        """Return aggregated token usage: today + total (tokens and cost).
+        """Return aggregated token usage: today + total, the tokens billed and the cost.
+
+        Tokens are every kind the model bills: input (not read from the cache), output,
+        cache reads and cache writes, each kind also returned on its own
+        (``today_breakdown`` / ``total_breakdown``). An agent's tokens are mostly cache
+        reads, and the cost counts them, so a count without them is not what was paid for.
+
+        ``cost_usd`` is the CLI process's running total (``total_cost_usd``), so a
+        row's cost is its increase over the previous row of the same session, a lower
+        value meaning a new process (``core.turn_outcome.cost_increase``, the rule online
+        scoring and Swarm Out use). Summing the column counted every earlier turn again.
 
         Uses local time for "today" boundary (matches record_token_usage).
 
-        Returns dict with keys:
-            today_tokens, total_tokens, today_cost_usd, total_cost_usd
+        Returns dict with keys: today_tokens, total_tokens, today_cost_usd,
+        total_cost_usd, today_breakdown, total_breakdown (input, output, cache_read,
+        cache_write).
         """
+        from core.turn_outcome import cost_increase
+        kinds = ("input", "output", "cache_read", "cache_write")
+        empty = lambda: dict.fromkeys(kinds, 0)  # noqa: E731
         try:
             from datetime import datetime
             today_str = datetime.now().strftime("%Y-%m-%d")
             # Pooled read borrow (run_7e8a2030): TopBar polls this ~30s; route
-            # through the pool to avoid a per-poll connect/thread.
+            # through the pool to avoid a per-poll connect/thread. One pass in id
+            # order: the per-session baseline needs every earlier row of the session.
             async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
-                # Total across all time
-                # Only sum input + output tokens (actual consumption).
-                # cache_read/cache_create are observability metrics, not consumption —
-                # cache_read is prompt cache reuse (10x cheaper), cache_create is
-                # cache warm-up (1.25x).  Including them inflated the number ~350x.
-                cursor = await conn.execute("""
-                    SELECT
-                        COALESCE(SUM(input_tokens + output_tokens), 0),
-                        COALESCE(SUM(cost_usd), 0.0)
-                    FROM token_usage
-                """)
-                total_row = await cursor.fetchone()
-
-                # Today only (local date comparison)
-                cursor = await conn.execute("""
-                    SELECT
-                        COALESCE(SUM(input_tokens + output_tokens), 0),
-                        COALESCE(SUM(cost_usd), 0.0)
-                    FROM token_usage
-                    WHERE date(timestamp) = ?
-                """, (today_str,))
-                today_row = await cursor.fetchone()
-
-                return {
-                    "total_tokens": total_row[0] if total_row else 0,
-                    "total_cost_usd": total_row[1] if total_row else 0.0,
-                    "today_tokens": today_row[0] if today_row else 0,
-                    "today_cost_usd": today_row[1] if today_row else 0.0,
-                }
+                cursor = await conn.execute(
+                    "SELECT session_id, timestamp, input_tokens, output_tokens, "
+                    "cache_read_tokens, cache_create_tokens, cost_usd FROM token_usage ORDER BY id")
+                rows = await cursor.fetchall()
+            total, today = empty(), empty()
+            cost_total = cost_today = 0.0
+            prev: dict = {}
+            for sid, ts, *tok, cost in rows:
+                is_today = str(ts or "").startswith(today_str)
+                for k, v in zip(kinds, tok):
+                    total[k] += v or 0
+                    if is_today:
+                        today[k] += v or 0
+                if cost is None:
+                    continue
+                c = float(cost)
+                # a row without a session has no running total to continue
+                d = cost_increase((sid, prev[sid]) if sid is not None and sid in prev else None, sid, c)
+                if sid is not None:
+                    prev[sid] = c
+                cost_total += d
+                if is_today:
+                    cost_today += d
+            return {
+                "total_tokens": sum(total.values()),
+                "total_cost_usd": cost_total,
+                "today_tokens": sum(today.values()),
+                "today_cost_usd": cost_today,
+                "total_breakdown": total,
+                "today_breakdown": today,
+            }
         except Exception:
             logger.warning("Failed to get token usage summary", exc_info=True)
             return {
@@ -4690,4 +4711,6 @@ class SQLiteDatabase(BaseDatabase):
                 "total_cost_usd": 0.0,
                 "today_tokens": 0,
                 "today_cost_usd": 0.0,
+                "total_breakdown": empty(),
+                "today_breakdown": empty(),
             }

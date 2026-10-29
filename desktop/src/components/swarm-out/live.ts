@@ -314,7 +314,7 @@ export function when(iso: string | null | undefined): string {
 
 /** One of a card's facts, shown as a label over a value. */
 export interface RunStat {
-  key: 'time' | 'human' | 'spend';
+  key: 'time' | 'human' | 'cost' | 'failed' | 'tokens' | 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'cacheHit';
   label: string;
   value: string;
   /** a second, smaller line under the value (e.g. how many questions went unanswered) */
@@ -322,8 +322,8 @@ export interface RunStat {
   /** the breakdown or the reason, on hover */
   title?: string;
   tone?: Tone;
-  /** takes two cells (the spend: tokens and cost read as one number) */
-  wide?: boolean;
+  /** the number the row is read by (the total cost, the billed tokens): a size up */
+  strong?: boolean;
 }
 
 /** A token count as K / M / B in every language ("4.8M"), the unit people quote for
@@ -344,37 +344,58 @@ export function tokenTotal(res: SwarmOutResult): number | null {
   return t.input + t.output + t.cache_read + t.cache_write;
 }
 
-/** The card's facts, three cells: how long it ran (and when it ended), the human loops
- *  (approvals and answered questions), and what it used — tokens and cost as one
- *  number, "4.8M token · $3.70", the share read from the cache under it and the
- *  breakdown on hover. A value not known is "—" with the reason on hover, never a zero. */
+/** The share of the input-side tokens read from the prompt cache: cache reads over
+ *  input + cache reads + cache writes (output is not input). null when not known. */
+export function cacheHitRate(t: { input: number; cache_read: number | null; cache_write: number | null } | null): number | null {
+  if (!t || t.cache_read == null || t.cache_write == null) return null;
+  const side = t.input + t.cache_read + t.cache_write;
+  return side ? t.cache_read / side : null;
+}
+
+/** The card's facts: how long it ran (and when it ended), the human loops (approvals
+ *  and answered questions), the total cost (the CLI's own, per-turn increases) and, when
+ *  any failed, the failed steps. The tokens are a row of their own (tokenStats). A value
+ *  not known is "—" with the reason on hover, never a zero. */
 export function runStats(res: SwarmOutResult): RunStat[] {
   const h = res.work.human;
   const loops = h.approved + h.denied + h.unanswered + h.answered_questions;
-  const tok = res.tokens;
-  const total = tokenTotal(res);
   const dash = '—';
-  const cost = res.cost_usd == null ? dash : `${res.cost_partial ? '≥ ' : ''}$${res.cost_usd.toFixed(2)}`;
-  const cacheShare = total && tok?.cache_read != null ? Math.round((tok.cache_read / total) * 100) : null;
-  const spendSub = [cacheShare != null && i18n.t('swarmOut.stats.cacheShare', { pct: cacheShare }),
-    res.work.steps.failed > 0 && i18n.t('swarmOut.stats.failedSteps', { count: res.work.steps.failed })].filter(Boolean).join(' · ');
-  const spendTitle = [
-    total != null ? i18n.t('swarmOut.stats.tokensTitle', { cacheRead: tokenCount(tok!.cache_read!), cacheWrite: tokenCount(tok!.cache_write!),
-      output: tokenCount(tok!.output), input: tokenCount(tok!.input) })
-      : tok ? i18n.t('swarmOut.stats.tokensLegacy') : i18n.t('swarmOut.stats.tokensNotRecorded'),
-    res.cost_usd == null ? i18n.t('swarmOut.stats.costNotRecorded') : res.cost_partial ? i18n.t('swarmOut.stats.costPartial') : '',
-  ].filter(Boolean).join('\n');
   const ended = when(res.ended_at);
-  return [
+  const out: RunStat[] = [
     { key: 'time', label: i18n.t('swarmOut.stats.time'), value: res.active_s == null ? dash : minutes(res.active_s),
       sub: ended ? i18n.t('swarmOut.stats.endedAt', { when: ended }) : undefined },
     { key: 'human', label: i18n.t('swarmOut.stats.human'), value: String(loops),
       sub: h.unanswered ? i18n.t('swarmOut.stats.unanswered', { count: h.unanswered }) : undefined,
       title: i18n.t('swarmOut.stats.humanTitle', { approved: h.approved, denied: h.denied, answered: h.answered_questions, unanswered: h.unanswered }),
       tone: h.unanswered ? 'attention' : undefined },
-    { key: 'spend', label: i18n.t('swarmOut.stats.spend'), wide: true,
-      value: i18n.t('swarmOut.stats.spendValue', { tokens: total == null ? dash : tokenCount(total), cost }),
-      sub: spendSub || undefined, title: spendTitle },
+    { key: 'cost', label: i18n.t('swarmOut.stats.cost'), strong: true,
+      value: res.cost_usd == null ? dash : `${res.cost_partial ? '≥ ' : ''}$${res.cost_usd.toFixed(2)}`,
+      title: res.cost_usd == null ? i18n.t('swarmOut.stats.costNotRecorded') : res.cost_partial ? i18n.t('swarmOut.stats.costPartial') : undefined },
+  ];
+  if (res.work.steps.failed > 0) out.push({ key: 'failed', label: i18n.t('swarmOut.stats.failed'), value: String(res.work.steps.failed) });
+  return out;
+}
+
+/** The billed tokens of a run, each kind its own cell: the total, input (not read from
+ *  the cache), output, cache reads, cache writes, and the cache hit rate. A record kept
+ *  before the cache was counted, or one with no tokens, is one "—" cell saying why. */
+export function tokenStats(res: SwarmOutResult): RunStat[] {
+  const t = res.tokens;
+  const total = tokenTotal(res);
+  if (total == null || !t) {
+    return [{ key: 'tokens', label: i18n.t('swarmOut.stats.tokensBilled'), value: '—',
+      title: t ? i18n.t('swarmOut.stats.tokensLegacy') : i18n.t('swarmOut.stats.tokensNotRecorded') }];
+  }
+  const hit = cacheHitRate(t);
+  const cell = (key: RunStat['key'], value: number, label: string): RunStat => ({ key, label, value: tokenCount(value), title: value.toLocaleString() });
+  return [
+    { ...cell('tokens', total, i18n.t('swarmOut.stats.tokensBilled')), strong: true },
+    cell('input', t.input, i18n.t('swarmOut.stats.input')),
+    cell('output', t.output, i18n.t('swarmOut.stats.output')),
+    cell('cacheRead', t.cache_read!, i18n.t('swarmOut.stats.cacheRead')),
+    cell('cacheWrite', t.cache_write!, i18n.t('swarmOut.stats.cacheWrite')),
+    { key: 'cacheHit', label: i18n.t('swarmOut.stats.cacheHit'), value: hit == null ? '—' : `${Math.round(hit * 100)}%`,
+      title: i18n.t('swarmOut.stats.cacheHitTitle') },
   ];
 }
 

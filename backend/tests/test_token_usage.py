@@ -40,9 +40,9 @@ class TestTokenUsageDB:
             model="claude-opus-4-6",
         )
         summary = await db.get_token_usage_summary()
-        # Summary counts only input + output (actual consumption).
-        # cache_read/cache_create are stored for observability but not summed.
-        assert summary["total_tokens"] == 60000  # 50k input + 10k output
+        # every kind the model bills: input, output, cache reads and cache writes
+        assert summary["total_tokens"] == 95000
+        assert summary["total_breakdown"] == {"input": 50000, "output": 10000, "cache_read": 30000, "cache_write": 5000}
 
     @pytest.mark.asyncio
     async def test_record_token_usage_background_job(self):
@@ -105,6 +105,19 @@ class TestTokenUsageDB:
         assert abs(summary["total_cost_usd"] - 0.30) < 0.001
 
     @pytest.mark.asyncio
+    async def test_cost_is_the_running_total_increase_per_session(self):
+        """cost_usd is the CLI process's running total: a session's turns cost the
+        increases, a lower value is a new process (its value is that turn's cost),
+        and sessions do not share a baseline."""
+        db = database_module.db
+        for sid, cost in [("a", 1.0), ("a", 1.5), ("b", 2.0), ("a", 2.5), ("a", 0.4), ("a", 0.9), ("b", 2.25)]:
+            await db.record_token_usage(session_id=sid, source="cli", input_tokens=1, output_tokens=1, cost_usd=cost)
+        summary = await db.get_token_usage_summary()
+        # a: 1.0 + 0.5 + 1.0, then a new process 0.4 + 0.5; b: 2.0 + 0.25 — not the 10.55 a SUM gives
+        assert abs(summary["total_cost_usd"] - 5.65) < 1e-9
+        assert abs(summary["today_cost_usd"] - 5.65) < 1e-9
+
+    @pytest.mark.asyncio
     async def test_get_summary_empty_db(self):
         """Summary returns zeros when no data recorded yet."""
         db = database_module.db
@@ -162,6 +175,16 @@ class TestTokenUsageEndpoint:
         assert "total_tokens_m" in data
         assert "today_cost_usd" in data
         assert "total_cost_usd" in data
+        for k in ("today", "total"):
+            assert set(data[k]) == {"input", "output", "cache_read", "cache_write", "cache_hit_rate"}
+
+    def test_cache_hit_rate_is_cache_reads_over_input_side_tokens(self, client):
+        import asyncio
+        asyncio.run(database_module.db.record_token_usage(
+            session_id="hit", source="cli", input_tokens=10, output_tokens=500,
+            cache_read_tokens=900, cache_create_tokens=90, cost_usd=0.5))
+        data = client.get("/api/system/tokens/usage").json()
+        assert data["total"]["cache_hit_rate"] == 0.9   # 900 / (10 + 900 + 90), output not counted
 
     def test_empty_returns_zeros(self, client):
         """Returns 0.0 when no usage recorded."""

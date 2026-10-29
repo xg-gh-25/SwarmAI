@@ -129,6 +129,23 @@ describe('TopBar', () => {
     expect(screen.getByText('Total')).toBeDefined();
   });
 
+  it('shows the billed tokens with the cost, and each kind of token on hover', async () => {
+    setupMocks({ sessionMeta: null });
+    const api = (await import('../../services/api')).default;
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: {
+      today_tokens_m: 2055.2, total_tokens_m: 9300.4, today_cost_usd: 839.49, total_cost_usd: 3412.5,
+      today: { input: 58_070, output: 4_263_272, cache_read: 2_035_598_058, cache_write: 15_459_384, cache_hit_rate: 0.9924 },
+      total: { input: 1, output: 2, cache_read: 3, cache_write: 4, cache_hit_rate: 0.375 },
+    } } as never);
+    renderTopBar();
+    const bar = await screen.findByRole('status', { name: 'Token usage' });
+    await vi.waitFor(() => expect(bar.textContent).toContain('$839.49'));
+    expect(bar.textContent).toContain('2.1B');
+    expect(bar.getAttribute('title')).toBe('Today: $839.49\n  input 58.1K · output 4.3M · cache read 2.04B · cache write 15.5M · cache hit 99%'
+      + '\nTotal: $3,412.50\n  input 1 · output 2 · cache read 3 · cache write 4 · cache hit 38%');
+    get.mockRestore();
+  });
+
   it('does not render context ring (moved to ChatInput)', () => {
     setupMocks({ sessionMeta: { contextPct: 72 } });
     renderTopBar();

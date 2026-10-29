@@ -39,7 +39,7 @@ import { JudgeTag } from './JudgeTag';
 import { ReturnPanel } from './ReturnPanel';
 import { LessonsAccept } from './LessonsAccept';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runStats, stateLabel, useRuns, when, workLines, type RunStat } from './live';
+import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -328,16 +328,15 @@ function ResultDetail({ r, full, setFull, onRefreshed, onClose }: {
 }
 
 /** The card's facts as cells (label over value), wrapping to as many columns as fit; a
- *  wide cell (the spend) takes two and reads a size up. */
-function Stats({ stats }: { stats: RunStat[] }) {
+ *  strong cell (the total cost, the billed tokens) reads a size up. */
+function Stats({ stats, testId = 'swarm-out-run-numbers', min = 104 }: { stats: RunStat[]; testId?: string; min?: number }) {
   return (
     <dl className="mt-2 mb-0 grid gap-x-3 gap-y-1.5 pt-2 border-t border-[var(--color-border)]"
-      style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))' }} data-testid="swarm-out-run-numbers">
+      style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${min}px, 1fr))` }} data-testid={testId}>
       {stats.map((x) => (
-        <div key={x.key} className="min-w-0" title={x.title} data-testid={`swarm-out-stat-${x.key}`}
-          style={x.wide ? { gridColumn: 'span 2' } : undefined}>
+        <div key={x.key} className="min-w-0" title={x.title} data-testid={`swarm-out-stat-${x.key}`}>
           <dt className="text-[10.5px] text-[var(--color-text-dim)] truncate">{x.label}</dt>
-          <dd className={`m-0 tabular-nums truncate ${x.wide ? 'text-[14px] font-semibold' : 'text-[12.5px]'}`}
+          <dd className={`m-0 tabular-nums truncate ${x.strong ? 'text-[14px] font-semibold' : 'text-[12.5px]'}`}
             style={x.tone ? { color: TONE_VAR[x.tone] } : undefined}>{x.value}</dd>
           {x.sub && <dd className="m-0 text-[10.5px] truncate" style={{ color: TONE_VAR[x.tone ?? 'unknown'] }}>{x.sub}</dd>}
         </div>
@@ -391,6 +390,7 @@ function RunResult({ r, full }: { r: SwarmOutRun; full: SwarmOutResult | null })
           style={l === checks && checksIncomplete(res) ? { color: TONE_VAR.attention } : undefined}>{l}</div>
       ))}
       <Stats stats={runStats(res)} />
+      <Stats stats={tokenStats(res)} testId="swarm-out-run-tokens" min={72} />
       {r.result_error && <div className={`text-[11.5px] mt-0.5 ${muted}`}>{t('swarmOut.result.lastCheck', { reason: resultErrorLabel(r.result_error) })}</div>}
     </div>
   );

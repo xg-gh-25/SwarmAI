@@ -100,11 +100,38 @@ interface ThreeColumnLayoutProps {
 // TopBar -- App-level intelligence bar.
 // Shows: context ring (left), token usage metrics (right).
 // Remains draggable for Tauri window move (macOS).
+/** Billed tokens by kind (input not read from the cache, output, cache reads, cache
+ *  writes) and the cache hit rate: cache reads over the input side, null with none. */
+interface TokenKinds {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  cache_hit_rate: number | null;
+}
+
 interface TokenUsageData {
+  /** every billed token: input + output + cache reads + cache writes, in millions */
   today_tokens_m: number;
   total_tokens_m: number;
+  /** the CLI's own cost, summed per turn (not its running totals) */
   today_cost_usd: number;
   total_cost_usd: number;
+  today?: TokenKinds;
+  total?: TokenKinds;
+}
+
+const kCount = (n: number): string => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
+const usd = (v: number): string => `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** The hover of the token bar: per period, the cost and each kind of billed token. */
+function tokenUsageTitle(u: TokenUsageData): string {
+  const line = (name: string, cost: number, k?: TokenKinds) => [
+    `${name}: ${usd(cost)}`,
+    k ? `  input ${kCount(k.input)} · output ${kCount(k.output)} · cache read ${kCount(k.cache_read)} · cache write ${kCount(k.cache_write)}`
+      + (k.cache_hit_rate == null ? '' : ` · cache hit ${Math.round(k.cache_hit_rate * 100)}%`) : '',
+  ].filter(Boolean).join('\n');
+  return `${line('Today', u.today_cost_usd, u.today)}\n${line('Total', u.total_cost_usd, u.total)}`;
 }
 
 function formatTokens(m: number): string {
@@ -158,14 +185,14 @@ function TopBar() {
         className="flex items-center gap-2 pr-5 text-meta text-[var(--color-text-muted)]"
         role="status"
         aria-label="Token usage"
-        title={tokenUsage
-          ? `Today: $${tokenUsage.today_cost_usd.toFixed(2)} | Total: $${tokenUsage.total_cost_usd.toFixed(2)}`
-          : 'Loading...'}
+        title={tokenUsage ? tokenUsageTitle(tokenUsage) : 'Loading...'}
       >
         <span className="text-body">&#x1FA99;</span>
-        <span>Today <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong></span>
+        <span>Today <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong>
+          {tokenUsage && <span className="tabular-nums"> · {usd(tokenUsage.today_cost_usd)}</span>}</span>
         <span className="text-[var(--color-border)]">|</span>
-        <span>Total <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong></span>
+        <span>Total <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong>
+          {tokenUsage && <span className="tabular-nums"> · {usd(tokenUsage.total_cost_usd)}</span>}</span>
       </div>
     </div>
   );
