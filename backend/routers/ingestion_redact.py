@@ -1,11 +1,15 @@
 """User-only CDF redaction route.
 
 The route accepts only a dashboard-marked loopback request.  The mutation itself
-also requires actor="user", so background workers cannot invoke the primitive.
+also requires actor="user", so CDF's own workers cannot invoke the primitive. This is
+not an authentication boundary: like every local endpoint, any process of the same
+user (the agent's Bash included) can send the header; the local API has no
+per-request credential (known, product-wide).
 """
 from __future__ import annotations
 
 import ipaddress
+import logging
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core import executors
 from core.ingestion.governed_edit import redact
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
 
 
@@ -45,5 +50,6 @@ async def redact_ingestion_unit(
             "io", lambda: redact(body.anchor, body.reason, actor="user"),
         )
     except (ValueError, PermissionError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("CDF redact refused for %s: %s", body.anchor, exc)
+        raise HTTPException(status_code=400, detail="This entry cannot be redacted") from exc
     return RedactResponse(revision=revision)

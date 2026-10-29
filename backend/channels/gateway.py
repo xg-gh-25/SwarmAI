@@ -1541,9 +1541,11 @@ class ChannelGateway:
             from core import executors as _executors
             from core.session_inputs import record_session_input
             if msg.text:
+                # only the owner's words are the user's; a trusted peer's are external
+                _trust = "user" if (sender_identity and sender_identity.is_owner) else "external"
                 await _executors.run_in(
                     "io", _partial(
-                        record_session_input, _sid, "channel_message", "user",
+                        record_session_input, _sid, "channel_message", _trust,
                         msg.text, ref=msg.external_message_id,
                     ),
                 )
@@ -1626,10 +1628,12 @@ class ChannelGateway:
         lines = [f"- {h['sender']}: {h['text']}" for h in recent if h.get("text")]
         if not lines:
             return ""
-        return (
-            "[Recent channel discussion before this message — context only, "
-            "authorized participants]\n" + "\n".join(lines)
-        )
+        block = ("[Recent channel discussion before this message — context only, "
+                 "authorized participants]\n" + "\n".join(lines))
+        # Every line quoted: the input splitter records a quoted run as external, so
+        # what other participants said is never stored as the owner's own words (it
+        # used to reach STEERING as "user said", design 2026-10-29-cdf-launch §1 S1).
+        return "\n".join("> " + line for line in block.split("\n"))
 
     # ------------------------------------------------------------------
     # Conversation handler
@@ -1684,9 +1688,11 @@ class ChannelGateway:
             from core import executors as _executors
             from core.session_inputs import record_session_input
             if msg.text:
+                # only the owner's words are the user's; a trusted peer's are external
                 await _executors.run_in(
                     "io", _partial(
-                        record_session_input, session_id, "channel_message", "user",
+                        record_session_input, session_id, "channel_message",
+                        "user" if is_owner else "external",
                         msg.text, ref=msg.external_message_id,
                     ),
                 )

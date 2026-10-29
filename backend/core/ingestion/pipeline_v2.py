@@ -83,6 +83,15 @@ class ReinforcementResult:
 # Session review §9: S7 cognition about the agent itself that may reach EVOLUTION/MEMORY
 # when the user's own words entail it.
 AGENT_SELF_TYPES = frozenset({"correction", "pitfall", "guideline", "process", "model"})
+AGENT_SELF_STORES = frozenset({"EVOLUTION", "MEMORY"})
+USER_CONTEXT_STORES = frozenset({"STEERING", "USER", "TOOLS"})
+
+
+def _volatile(text: str) -> bool:
+    """The DDD D4 rule (rules/ddd.py) for every cognition unit: a count or size that
+    drifts, unless the text says which version it describes."""
+    from .rules.ddd import _VERSIONED, _VOLATILE
+    return bool(_VOLATILE.search(text)) and not _VERSIONED.search(text)
 
 
 def _grounding(anchors: list[str]) -> str:
@@ -476,6 +485,7 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
                 tainted=True,
             )
 
+    tainted_lineage = None    # set when the S7 grounding verdict lifts the taint
     if (resolved.tainted and str(_get(row, "source_v2", _get(row, "source", ""))) == "S7"
             and isinstance(unit, CognitionUnit) and unit.scope == "agent"
             and unit.type in AGENT_SELF_TYPES):
@@ -491,7 +501,9 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
             if verdict.entailed:
                 # The agent's own cognition, backed by what the user said or a measured
                 # result (session review §9): routed as untainted, so it can reach
-                # EVOLUTION and MEMORY.
+                # EVOLUTION and MEMORY -- and only those (checked after routing): the
+                # verdict is a model's, so it never opens STEERING/USER/TOOLS.
+                tainted_lineage = resolved
                 resolved = api_v2.ResolvedEvidence(
                     root_ids=resolved.root_ids, lineage_root_ids=resolved.lineage_root_ids,
                     strength=resolved.strength, tainted=False, unresolved=resolved.unresolved)
@@ -539,6 +551,25 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
         decision = "defer" if reason in {"unknown_domain", "ambiguous_project"} else "reject"
         return _decision(unit_id, decision, decision, reason, vectors=vectors,
                          card0=card0, card1=card1)
+    if tainted_lineage is not None and destination.store not in AGENT_SELF_STORES:
+        # the S7 grounding verdict lifted the taint for EVOLUTION / MEMORY only
+        resolved = tainted_lineage
+        try:
+            destination = route_for_v2(
+                unit.kind, card1, ddd_exists=_ddd_exists(root, selected_project),
+                project_hint=selected_project, tainted=True, domain=domain,
+                existing_domains=domains, source_url=getattr(unit, "source_url", None))
+        except ValueError as exc:
+            return _decision(unit_id, "reject", "reject", str(exc), vectors=vectors,
+                             card0=card0, card1=card1)
+    if destination.store in USER_CONTEXT_STORES and resolved.strength != "user_explicit":
+        # C2: STEERING / USER / TOOLS hold what the user said, never an inference
+        return _decision(unit_id, "reject", "reject", "insufficient_evidence", vectors=vectors,
+                         card0=card0, card1=card1, card2=destination, destination=destination)
+    if isinstance(unit, CognitionUnit) and _volatile(_unit_text(unit)):
+        # D4 / R30#4: a drifting number (line N, N files, N MB) is a snapshot, not cognition
+        return _decision(unit_id, "reject", "reject", "volatile", vectors=vectors,
+                         card0=card0, card1=card1, card2=destination, destination=destination)
     if resolved.tainted and destination.store in PER_TURN_STORES and destination.injectable:
         return _decision(unit_id, "reject", "reject", "trust_floor", vectors=vectors,
                          card0=card0, card1=card1, card2=destination,

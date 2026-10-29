@@ -31,7 +31,7 @@ supersedes-part-of: 2026-10-26-swarm-cognitive-distillation-flow.md §14 阶段 
 | S2 | 渠道消息一律记为 user 信任 | 非 owner 记为 external |
 | S3 | S7 复盘里一个模型的"蕴含"判断就能清掉外部内容的污染，且可以去 STEERING | 清污只对 EVOLUTION / MEMORY 生效，其余目的地仍按污染处理 |
 | S4 | v2 不执行目的地规则 | 移入 v2 两条确定性规则：STEERING/USER/TOOLS 要求 `user_explicit`（C2）；认知单元含易变数字的拒绝（D4，R30#4） |
-| S5 | `/api/ingestion/redact` 只靠回环地址和固定 header，任何本地进程（含被注入的 agent）都能调用 | 要求 wake 凭证（只有 app 持有），错误信息改为通用文本 |
+| S5 | `/api/ingestion/redact` 把内部错误原文返回给客户端 | 返回通用文本，细节记日志。核实：它只靠回环地址和固定 header，任何同用户进程都能调用——但这是整个本地 API 共有的（前端调用本来就没有逐请求密钥，wake 凭证文件 agent 同样读得到），不是 CDF 独有，记为已有问题 |
 
 ## 2. 认知形态：文件可以长，注入有上限，按价值排序，被取代的不再出现
 
