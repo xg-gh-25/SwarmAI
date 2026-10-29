@@ -4244,6 +4244,8 @@ class SessionRouter:
 
     #: hang guard for reading every declared repository at a turn end
     TASK_REPO_FACTS_TIMEOUT_S = 30
+    #: hang guard for bundling their commits on a Hive (core/hive_bundle)
+    TASK_REPO_BUNDLES_TIMEOUT_S = 120
 
     async def _task_repo_facts(self, session_id: Optional[str]) -> Optional[list]:
         """Facts of the repositories the session's dispatch declared
@@ -4269,13 +4271,26 @@ class SessionRouter:
         except (TypeError, ValueError):
             logger.warning("task_repos: session %s has no readable start time", session_id)
         try:
-            return await asyncio.wait_for(
+            facts = await asyncio.wait_for(
                 executors.run_in("turn_changes", task_repos.repo_facts, str(get_swarmws()),
                                  repos, since),
                 self.TASK_REPO_FACTS_TIMEOUT_S)
         except asyncio.TimeoutError:
             return [{"url": r["url"], "ref": r["ref"], "dir": r["dir"], "present": None,
                      "error": task_repos.ERR_TIMEOUT} for r in repos]
+        # on a Hive, each repository's commits as a bundle (core/hive_bundle), under its
+        # own bound: a slow bundle never costs the facts
+        from . import hive_bundle
+        try:
+            return await asyncio.wait_for(
+                executors.run_in("turn_changes", hive_bundle.add_bundles, get_swarmws(), session_id,
+                                 [dict(f) for f in facts]),
+                self.TASK_REPO_BUNDLES_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            for f in facts if hive_bundle.on_hive() else []:
+                if isinstance(f, dict) and f.get("commits_total") and f.get("dir"):
+                    f["bundle"] = {"key": hive_bundle.key(str(f["dir"])), "error": hive_bundle.ERR_FAILED}
+            return facts
 
     async def run_conversation(
         self,

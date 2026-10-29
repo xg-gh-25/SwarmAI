@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
+import { ReturnPanel } from './ReturnPanel';
 import { brainLabel, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, stateLabel, useRuns, workLines } from './live';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -254,6 +255,8 @@ function ResultDetail({ r, onRefreshed }: { r: SwarmOutRun; onRefreshed: () => v
           {x.files.map((f, i) => <div key={`${i}:${f.path}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path} <span className={muted}>+{f.added ?? '?'} −{f.deleted ?? '?'}</span></div>)}
           {x.files_total > x.files.length && <div className={`text-[11.5px] ${muted}`}>还有 {x.files_total - x.files.length} 个文件</div>}
           {x.commits.length > 0 && <div className={`font-mono text-[11.5px] ${muted}`}>{x.commits.map((c) => c.slice(0, 9)).join(' ')}{x.commits_total > x.commits.length ? ` …共 ${x.commits_total} 个` : ''}</div>}
+          {r.project_agent?.delivery === 'bundle' && x.url && x.bundle?.sha256 && <ReturnPanel dispatchId={r.dispatch_id} url={x.url} />}
+          {x.bundle?.error && <div className={`text-[11.5px] ${muted}`} data-testid="swarm-out-return-unavailable">取不回这些 commit：{x.bundle.error}</div>}
         </div>
       ))}
       {(res?.work.files ?? []).length > 0 && (

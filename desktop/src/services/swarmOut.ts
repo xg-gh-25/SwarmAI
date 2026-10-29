@@ -56,6 +56,9 @@ export interface SwarmOutRepoFact {
   files_total: number; added: number; deleted: number; untracked: number;
   pushed: 'yes' | 'no' | 'nothing_to_push' | 'unknown';
   error: string | null;
+  /** The Hive's commits as a bundle the host can take back: /result {key, sha256,
+   *  size} or {key, error}; /runs {available} or {available: false, error}. */
+  bundle?: { key?: string; sha256?: string; size?: number; error?: string; available?: boolean } | null;
 }
 
 /** detail: /result only (null in /runs) */
@@ -196,7 +199,38 @@ export interface SwarmOutHives {
   running: number;
 }
 
+/** One repository's commits taken back and checked on this machine (backend
+ *  core/hive_return.prepare): what the person reviews before they land. Commit
+ *  subjects are the Hive's text, shown as data. */
+export interface SwarmOutReturn {
+  key: string;
+  tip: string;
+  base: string;
+  ref: string;
+  branch: string;
+  files: { path: string; added: number | null; deleted: number | null; protected: boolean }[];
+  files_total: number;
+  protected_files: string[];
+  commits: { sha: string; subject: string }[];
+  /** the checkout has uncommitted edits: landing may refuse if they touch these files */
+  checkout_dirty?: boolean;
+  status: 'prepared' | 'landed' | 'rejected';
+}
+
 export const swarmOutService = {
+  async returnPrepare(dispatchId: string, url: string): Promise<SwarmOutReturn> {
+    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/prepare`, { url });
+    return data as SwarmOutReturn;
+  },
+  async returnLand(dispatchId: string, key: string, tip: string, approveProtected: boolean):
+  Promise<{ landed: boolean; head: string | null; into: string | null }> {
+    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/land`,
+      { key, tip, approve_protected: approveProtected });
+    return data as { landed: boolean; head: string | null; into: string | null };
+  },
+  async returnReject(dispatchId: string, key: string, tip: string): Promise<void> {
+    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/reject`, { key, tip });
+  },
   /** Every Hive with its load: what the panel's fleet and free slots read. No address
    *  or credential (the rows are built from an allow-list of keys). */
   async fleet(): Promise<SwarmOutFleet> {

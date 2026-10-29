@@ -91,6 +91,58 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
                                                body.origin, seen_revision=body.revision))
 
 
+class ReturnBody(BaseModel):
+    url: Optional[str] = Field(default=None, max_length=300)
+    key: Optional[str] = Field(default=None, max_length=16)
+    tip: Optional[str] = Field(default=None, max_length=64)
+    approve_protected: bool = False
+
+
+async def _return(fn, *args) -> dict[str, Any]:
+    from core import hive_return
+    try:
+        res = fn(*args)
+        if hasattr(res, "__await__"):
+            return await res
+        return res
+    except hive_return.ReturnError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except swarm_out.SwarmOutError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("swarm_out return failed")
+        raise HTTPException(status_code=500, detail="taking the commits back failed")
+
+
+@router.post("/runs/{dispatch_id}/return/prepare")
+async def return_prepare(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
+    """Take one declared repository's commits back from the Hive and check them
+    (core/hive_return): nothing lands. The panel shows the result for review."""
+    _require_desktop()
+    from core import hive_return
+    if not body.url:
+        raise HTTPException(status_code=400, detail="name the repository")
+    return await _return(hive_return.prepare, dispatch_id, body.url)
+
+
+@router.post("/runs/{dispatch_id}/return/land")
+async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
+    """Land the prepared commits the person approved (the panel's button)."""
+    _require_desktop()
+    import asyncio
+    from core import hive_return
+    return await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
+                         body.approve_protected)
+
+
+@router.post("/runs/{dispatch_id}/return/reject")
+async def return_reject(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
+    _require_desktop()
+    import asyncio
+    from core import hive_return
+    return await _return(asyncio.to_thread, hive_return.reject, dispatch_id, body.key or "", body.tip or "")
+
+
 @router.post("/route")
 async def route(body: RouteBody) -> dict[str, Any]:
     """Which Brain a task belongs to (core.task_spec.route)."""

@@ -114,6 +114,31 @@ async def put_brain(brain: str, request: Request) -> dict:
             "installed_at": record["installed_at"], "files": len(files)}
 
 
+@router.get("/bundles/{session_id}/{key}")
+async def get_bundle(session_id: str, key: str):
+    """A turn's commits of one declared repository (core/hive_bundle), for the host to
+    take back. Hive only."""
+    _hive_only()
+    from fastapi.responses import StreamingResponse
+    from core import hive_bundle
+    try:
+        fd, size = await asyncio.to_thread(hive_bundle.open_bundle, _workspace(), session_id, key)
+    except OSError:
+        raise HTTPException(status_code=404, detail="no such bundle") from None
+
+    def chunks():
+        try:
+            while True:
+                b = os.read(fd, 1 << 20)
+                if not b:
+                    return
+                yield b
+        finally:
+            os.close(fd)
+    return StreamingResponse(chunks(), media_type="application/octet-stream",
+                             headers={"Content-Length": str(size)})
+
+
 @router.get("/brains")
 async def list_brains() -> dict:
     _hive_only()

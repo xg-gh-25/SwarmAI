@@ -13,12 +13,19 @@ trailer = ""         # one line added to every landing commit message, e.g. a Co
 
 [worktree]
 link = []            # repo-relative dirs of the main checkout symlinked into a run worktree
+
+[hive_return]
+protected = []       # globs: changes a Hive run made there need their own approval
 ```
+
+``[hive_return] protected`` is read by ``hive_return_protected``, which fails closed
+(an unreadable file refuses), unlike the fields above.
 
 An invalid file is ignored as a whole (defaults apply) and logged: a typo must never
 change who a commit is attributed to in a way nobody asked for.
 
-Public: ``RepoPipelineConfig``, ``parse``, ``load_at``, ``SWARM_IDENTITY``.
+Public: ``RepoPipelineConfig``, ``parse``, ``load_at``, ``hive_return_protected``,
+``SWARM_IDENTITY``.
 """
 from __future__ import annotations
 
@@ -93,6 +100,34 @@ def load_at(root: str, rev: str = "HEAD") -> RepoPipelineConfig:
     if p.returncode != 0:
         return DEFAULT       # not committed there: the defaults
     return parse(p.stdout.decode("utf-8", "replace"), where=f"{root}:{rev}:{CONFIG_PATH}")
+
+
+class ConfigError(ValueError):
+    """The file cannot be read for a setting that must not fall back to a default."""
+
+
+def hive_return_protected(root: str, rev: str) -> list[str]:
+    """The ``[hive_return] protected`` globs as committed in *rev* ([] when the file or
+    the table is absent). Raises ConfigError when the file is there but not valid: a
+    typo must not quietly drop a protected path (design 2026-10-28-project-agent-flow
+    §7 ⑨)."""
+    try:
+        p = subprocess.run(["git", "-C", str(root), "show", f"{rev}:{CONFIG_PATH}"],
+                           capture_output=True, timeout=10,
+                           env={**_base_env(), "GIT_OPTIONAL_LOCKS": "0"})
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ConfigError(f"{CONFIG_PATH} could not be read ({type(exc).__name__})") from None
+    if p.returncode != 0:
+        return []
+    try:
+        data = tomllib.loads(p.stdout.decode("utf-8"))
+    except (UnicodeError, tomllib.TOMLDecodeError):
+        raise ConfigError(f"{CONFIG_PATH} is not valid TOML") from None
+    table = data.get("hive_return", {})
+    globs = table.get("protected", []) if isinstance(table, dict) else None
+    if not isinstance(globs, list) or not all(isinstance(g, str) and g.strip() for g in globs):
+        raise ConfigError(f"{CONFIG_PATH}: hive_return.protected must be a list of paths or globs")
+    return [g.strip() for g in globs]
 
 
 def _base_env() -> dict:

@@ -417,6 +417,15 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
 - **落地：** 人批了以后，用 `session_worktree land` 落到本机 main。`land` 自带 rebase 和"不能把别人的改动改回去"的检查。
 - **qualify：** 必须在人批准之后才做，按仓库自己的规则来。SwarmAI 的规则是 STEERING #5：build、部署、看到生效、受影响的测试是绿的。push 仍然只由人决定。
 - **Hive 写的文字不进本机 agent 的上下文：** 落地后，`code_change_feed` 会读 commit 说明，把它当成数据加上界线标记，或者在落地时重写 commit 说明、原文作为引用保留。这样 Hive 写的话不会顺着代码变更流，进到本机 agent 之后的上下文里。
+- **实现（第 9 步）：**
+  - **Hive 端：** `core/hive_bundle.py` 在 turn 结束时，对有 commit 的声明仓库打 `base..HEAD` 的 bundle。key 由本机发出的目录名算出。体积先用 `rev-list --disk-usage` 估，超过上限就不写盘。打包有自己的时限，慢了也不会丢掉仓库事实。下载接口只在 Hive 上开，打开文件时不跟随软链。
+  - **本机端：** `core/hive_return.py`。
+    - prepare：前置提交必须在本机 run 声明的那个分支里，不能只在它的 upstream 里。检出必须是主检出，并且在那个分支上。
+    - 拒绝写到被忽略目录或软链目录下的改动：git 会把这类文件直接写进 virtualenv，实测确认过。名字里带控制字符或 bidi 字符的也拒绝。
+    - `.gitattributes`、`.gitmodules`、`.lfsconfig`、`.husky`、`.githooks`、`.pre-commit-config.yaml` 在所有仓库都算受保护。受保护路径大小写不敏感。
+    - 落地只在对象层做：`merge-tree --write-tree` 加 `commit-tree`，再把分支 fast-forward 过去。整个过程不跑 hook，不跑 lfs filter，Hive 的文件不进任何工作区。
+    - 同一个 run 后面的 turn，只审、只落上次落地之后的新改动。改动超过审阅能显示的文件数时不从这里落。
+  - **已知边界：** 批准由面板发出。本机进程也能直接调这几个接口，这和 Swarm Out 回答问题的接口一样：没有 CLI 命令，按 P5 本机 agent 不在防范范围内。
 - **上面写的是 `delivery: bundle`（默认）。** `self-hosted-main` 的仓库（SwarmAI）落到本机 main。其他仓库在本机落地后，由人决定要不要推送、要不要开 PR。Amazon 内部仓库在本机落地后，由本机的 `s_internal-crux-cr` 准备好 CR 命令，人来执行。
 
 **`delivery: branch-pr`：Hive 推 `hive/**` 分支，再开 PR。**

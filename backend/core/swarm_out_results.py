@@ -49,7 +49,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 4
+SUMMARY_VERSION = 5
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -111,7 +111,24 @@ def _repo_fact(f: Any, d: _Drops) -> Optional[dict]:
             "files": files, "files_total": d.i(f.get("files_total")) or 0,
             "added": d.i(f.get("added")) or 0, "deleted": d.i(f.get("deleted")) or 0,
             "untracked": d.i(f.get("untracked")) or 0, "pushed": pushed,
-            "error": d.s(f.get("error"), 200)}
+            "error": d.s(f.get("error"), 200), "bundle": _bundle_fact(f.get("bundle"))}
+
+
+def _bundle_fact(b: Any) -> Optional[dict]:
+    """A Hive bundle's key, sha256 and size (core/hive_bundle), or its error as one of
+    the fixed texts; None when there is none."""
+    from core import hive_bundle
+    if not isinstance(b, dict) or not isinstance(b.get("key"), str) or not hive_bundle.KEY_RE.fullmatch(b["key"]):
+        return None
+    if b.get("error") is not None:
+        err = b["error"] if b["error"] in (hive_bundle.ERR_TOO_LARGE, hive_bundle.ERR_FAILED,
+                                           hive_bundle.ERR_MOVED) else hive_bundle.ERR_FAILED
+        return {"key": b["key"], "error": err}
+    sha, size = b.get("sha256"), b.get("size")
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha) or not isinstance(size, int) \
+            or isinstance(size, bool) or not 0 < size <= hive_bundle.MAX_BUNDLE_BYTES:
+        return None
+    return {"key": b["key"], "sha256": sha, "size": size}
 
 
 # ── summarize ─────────────────────────────────────────────────────────────────
@@ -632,7 +649,10 @@ def _public_repo(r: dict, host: dict) -> dict:
             "added": _int(r.get("added")), "deleted": _int(r.get("deleted")),
             "untracked": _int(r.get("untracked")),
             "pushed": r.get("pushed") if r.get("pushed") in ("yes", "no", "nothing_to_push", "unknown") else "unknown",
-            "error": err}
+            "error": err,
+            # whether the commits can be taken back (and why not), no Hive text
+            "bundle": None if not isinstance(r.get("bundle"), dict) else
+            ({"available": True} if r["bundle"].get("sha256") else {"available": False, "error": r["bundle"].get("error")})}
 
 
 def _public_agent(res: dict, agent: Any) -> dict:

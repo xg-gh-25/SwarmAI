@@ -10,3 +10,18 @@ trailer = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
 # interpreter. The link is shared, so installing packages inside a worktree changes the main
 # checkout's venv: install in the main checkout.
 link = ["desktop/node_modules", "backend/.venv"]
+
+[hive_return]
+# Changes a Hive run made here need their own approval before they land
+# (docs/design/2026-10-28-project-agent-flow.md §7 ⑨): code that guards the agent,
+# the agent's own configuration and context, what runs at build or in CI, the manifests.
+protected = [
+  "backend/core/security_hooks.py", "backend/core/hook_builder.py", "backend/hooks/**",
+  "backend/core/project_agent_session.py", "backend/core/tool_risk.py",
+  ".claude/**", "CLAUDE.md", "AGENTS.md", "**/AGENTS.md", "backend/context/**",
+  "scripts/**", "backend/scripts/**", ".github/**", "prod.sh", "hive/**",
+  "backend/pyproject.toml", "backend/requirements*.txt", "desktop/package.json",
+  "desktop/package-lock.json", "desktop/src-tauri/**", "desktop/vite.config.*", "desktop/vitest.config.*",
+  "**/package.json", "**/conftest.py", "backend/uv.lock", "**/*.lock", ".swarmai/**",
+  "**/CLAUDE.md", "**/.claude/**",
+]
