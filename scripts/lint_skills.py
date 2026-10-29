@@ -22,12 +22,9 @@ BODY (every tracked file in the corpus)
     run directories are cleaned up. Write the lesson so the sentence stands on its
     own; an identifier adds nothing a reader can use.
 
-    **Where the patterns live.** The run-id pattern is IMPORTED from
-    ``core.ingestion_gate``, which is its single source of truth — the same shape
-    the cognitive-store ingestion door judges, so the two cannot drift. The
-    register and owner-path patterns have no counterpart there, so **this module is
-    their single source of truth**; a consumer that needs them should import from
-    here rather than re-deriving them.
+    **Where the patterns live.** The run-id, register and owner-path patterns are
+    defined here; **this module is their single source of truth**, and a consumer
+    that needs them should import from here rather than re-deriving them.
 
     **Why there is no trailing-provenance exemption here.** The cognitive-store
     rule deliberately permits an identifier in a trailing ``(…, run_xxx)``
@@ -62,7 +59,6 @@ from pathlib import Path
 _BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(_BACKEND_DIR))
 
-from core.ingestion_gate import _SHAPE_BODY_RUNID_RE  # noqa: E402
 from core.skill_manager import SkillParseError, parse_frontmatter  # noqa: E402
 
 # Longest allowed SKILL.md description, whitespace-collapsed, with `when_to_use` joined
@@ -100,8 +96,8 @@ BODY_ONLY_DIRS = [
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The run-id shape, shared with the cognitive-store door so the two cannot drift.
-RUNID_RE = _SHAPE_BODY_RUNID_RE
+# The pipeline run-id shape: ``run_`` followed by at least six hex digits.
+RUNID_RE = re.compile(r"run_[0-9a-f]{6,}")
 
 # Register prefixes used by this project's private stores. Every prefix that
 # appears in a gitignored store belongs here — a missing one is not a narrower

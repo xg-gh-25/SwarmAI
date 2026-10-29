@@ -43,7 +43,7 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
-from core.ddd_cultivation import _confined_doc_path
+from core.ddd_paths import confined_doc_path
 from core.ddd_entry_lifecycle import parse_entries
 from core.project_registry import DDD_CANONICAL_DOCS
 
@@ -307,7 +307,7 @@ def _check_drop_condition(fix: dict, text: str, project_dir: Path) -> tuple[str,
     done_line, rest = None, []
     if "\n" not in fix["done"]:
         for name in DDD_CANONICAL_DOCS:
-            body = _read(_confined_doc_path(project_dir, name))
+            body = _read(confined_doc_path(project_dir, name))
             if body is None or _odd_separators(body) or body.count(fix["done"]) != 1:
                 continue
             didx = body.count("\n", 0, body.index(fix["done"]))
@@ -511,7 +511,7 @@ def check_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path |
         return _open("not one of the three fixes the system can prove")
     if fix["doc"] not in DDD_CANONICAL_DOCS:
         return _open(f"not a DDD document: {fix['doc']}")
-    doc = _confined_doc_path(project_dir, fix["doc"])
+    doc = confined_doc_path(project_dir, fix["doc"])
     if doc is None:
         return _open(f"{fix['doc']} not found in the project")
     try:

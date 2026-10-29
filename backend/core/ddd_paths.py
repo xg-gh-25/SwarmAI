@@ -253,3 +253,87 @@ def ddd_asset_write_path(project_dir, kind: str) -> Path:
     path = root / ASSETS_DIR / kind
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def confined_doc_path(project_dir: Path | str, target_doc: str) -> Path | None:
+    """Resolve ``target_doc`` and return it ONLY if it is a regular file inside
+    ``project_dir``; otherwise ``None`` (the caller turns that into a refusal).
+
+    WHY THIS EXISTS — ``ddd_path`` deliberately passes an UNKNOWN key through
+    unchanged (``ddd_paths.py`` "Unknown key: pass through unchanged") so callers
+    can resolve ad-hoc names like ``.artifacts``. That pass-through also preserves
+    traversal segments, so every write/read target derived from a caller-supplied
+    ``target_doc`` was unbounded: ``"../.context/STEERING.md"`` resolved outside the
+    project and the appliers wrote there. ``ddd_path`` itself must NOT be hardened —
+    it serves READ paths and legitimate ad-hoc keys — so containment belongs at each
+    sink, which is what this helper gives them.
+
+    Confinement root is ``project_dir``, NOT ``2-understanding/``: EVOLUTION.md,
+    KNOWLEDGE.md and MEMORY.md legitimately resolve to the project ROOT (they simply
+    do not exist there, so those keys still fall through to the caller's
+    "doc_missing" branch — a legitimate routing outcome, not an attack).
+
+    This is PATH CONFINEMENT (where may we write), which is orthogonal to ADMISSION
+    AUTHORITY (what is worth writing). It deliberately does NOT re-introduce the
+    doc-identity allowlist that ``admission_band`` removed on purpose — any doc
+    inside the project stays writable.
+
+    Three failure modes are handled because each was measured, not theorised:
+      * ``Path.resolve()`` raises ``RuntimeError`` on a symlink loop and
+        ``ValueError`` on an embedded NUL — both outside the ``OSError`` an
+        ``except OSError`` would catch, so all three are caught here.
+      * BOTH sides are resolved: resolving only the target while ``project_dir``
+        is itself a symlink makes every legitimate path look external.
+      * ``is_file()`` is required, not just containment: a DIRECTORY-valued
+        ``target_doc`` (``""``, ``"."``, or a key ``ddd_paths`` maps to ``"."``)
+        is contained AND exists, so it passed a containment-only guard and then
+        crashed the applier with ``IsADirectoryError``.
+
+    Symlinks are resolved, which is the desired behaviour in both directions: an
+    in-tree symlink pointing at an in-tree file stays allowed (a real DDD does
+    this), while one pointing out of the tree is refused.
+
+    A HARDLINK, however, has no link to follow — it is a second NAME for one inode, so
+    resolution cannot see out of the tree and containment alone reads it as legitimate.
+    That is not symmetric between the two sinks: the append applier commits through
+    ``os.replace`` onto a fresh temp file, which breaks the link and leaves the other
+    name untouched, but an in-place writer (the retire applier did, through
+    ``ddd_entry_lifecycle`` ``write_text``) mutates the shared inode. Measured:
+    an in-tree hardlink to an out-of-tree governance file let a retire proposal DELETE a
+    rule from it, and the intended safety net — asserting no new sibling files appear
+    next to the victim — could not see it, because the archive and lock files land
+    in-tree beside the link. So a multiply-linked file is refused here, at the shared
+    chokepoint, rather than by making one applier's commit strategy load-bearing:
+    measured against the live corpus, all 69 real DDD documents have ``st_nlink == 1``.
+    """
+    try:
+        root = Path(project_dir).resolve()
+        candidate = ddd_path(root, target_doc).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None  # unresolvable → refuse (fail-closed)
+    if candidate != root and root not in candidate.parents:
+        # Escapes the project tree. This ALSO covers a symlink pointing out of the tree,
+        # because both sides are resolved before the comparison — measured: an in-project
+        # `TECH.md` symlinked to an out-of-tree file is refused here, so a separate
+        # blanket `is_symlink()` refusal adds no security and only breaks the in-tree
+        # symlink shape a live project actually uses. It does NOT cover a hardlink —
+        # see the `st_nlink` check below.
+        return None
+    if not candidate.is_file():
+        return None  # missing, or a directory (would raise IsADirectoryError)
+    try:
+        if candidate.stat().st_nlink != 1:
+            return None  # multiply-linked → an in-place write reaches the other name
+    except OSError:
+        return None  # unstattable → refuse (fail-closed)
+    if candidate.suffix.lower() != ".md":
+        # These appliers write a MARKDOWN BULLET under a `## heading`. Appending that to
+        # a structured in-tree file is not a smaller version of a DDD write — it is
+        # corruption: measured, an append to a project's `aim.json` left it unparseable
+        # (JSONDecodeError) and one to `bindings.yaml` broke the YAML. And an in-tree
+        # `AGENTS.md`-style instruction file is the same class of prompt-injection target
+        # as the governance file this containment exists to protect, so "inside the
+        # project" is necessary but not sufficient. The format the writer produces IS
+        # the constraint on what it may write to.
+        return None
+    return candidate

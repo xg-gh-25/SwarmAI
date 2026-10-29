@@ -162,6 +162,35 @@ def cmd_projects(args, reg: ArtifactRegistry) -> None:
     print(json.dumps({"projects": result, "count": len(result)}, indent=2))
 
 
+def _validate_project_name(project: str, projects_root: Path) -> None:
+    """Raise ValueError if ``project`` could escape ``projects_root``.
+
+    Rejects obvious traversal tokens, then proves containment on RESOLVED paths
+    with ``Path.is_relative_to`` (never a string ``startswith``: the macOS default
+    FS is case-insensitive, so a raw prefix compare on resolved output is unsound).
+    An unresolvable path (a NUL byte, a resolve error) counts as escaping — fail
+    closed.
+    """
+    if (
+        not project
+        or not isinstance(project, str)
+        or project in (".", "..")
+        or "/" in project
+        or "\\" in project
+        or "\x00" in project
+        or project != project.strip()
+        or Path(project).is_absolute()
+    ):
+        raise ValueError(f"unsafe project name (path traversal): {project!r}")
+    try:
+        root = projects_root.resolve()
+        contained = (projects_root / project).resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        contained = False
+    if not contained:
+        raise ValueError(f"project dir escapes Projects/: {project!r}")
+
+
 def _ensure_project_dir(project: str) -> Path:
     """Return ``Projects/<project>/``, guaranteeing it exists AND is REGISTERED.
 
@@ -179,13 +208,8 @@ def _ensure_project_dir(project: str) -> Path:
     # Containment guard (adversarial-review HIGH): `project` is a CLI arg that upstream
     # tooling may fill from requirement/LLM text — an unvalidated segment like
     # "../../.ssh" would let mkdir(parents=True) escape the workspace.
-    # SSOT (run_44a06138, Gate-1 amendment A): delegate the project-name
-    # containment to ArtifactRegistry._validate_path_identifiers — the ONE place
-    # that owns "is this caller-supplied identifier safe to build a path from?"
-    # Do NOT re-derive the resolve()/relative_to idiom here (a 2nd copy drifts).
-    from core.artifact_registry import ArtifactRegistry
     projects_root = _get_workspace() / "Projects"
-    ArtifactRegistry(_get_workspace())._validate_path_identifiers(project)
+    _validate_project_name(project, projects_root)
     reject_builtin_brain_name(project)   # before the mkdir: no empty Projects/General is left
     pdir = projects_root / project
     pdir.mkdir(parents=True, exist_ok=True)

@@ -204,3 +204,15 @@ def is_noise_entry(entry: str) -> bool:
         if not has_bold_title and not is_substantial:
             return True
     return False
+
+
+def structural_noise(text: str) -> bool:
+    """True if `text` is STRUCTURAL noise (all-store tier, NO length floor).
+
+    == the semantics of ``is_noise_entry``: table fragments, agent monologue,
+    emoji-prefix status markers, plus empty/whitespace-only text. NO ≥5-word
+    floor, NO machine-broadcast check. Returns True == reject.
+    """
+    if not text or not text.strip():
+        return True
+    return is_noise_entry(text)

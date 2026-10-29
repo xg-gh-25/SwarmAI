@@ -20,8 +20,7 @@ METHODOLOGY
     reimplementation. Three properties carry the suite and each is mutation-proven
     in the run record:
 
-      * the run-id pattern is IMPORTED from the ingestion gate, asserted by object
-        identity, so replacing it with a local copy fails here;
+      * the run-id pattern matches a run id and nothing shorter or non-hex;
       * file enumeration goes through git, so an untracked vendored file is not
         scanned and a shell script IS scanned;
       * the allowlist is keyed on both path and exact matched text, so it cannot
@@ -47,49 +46,18 @@ import lint_skills  # noqa: E402
 
 # ── the imported-pattern contract ─────────────────────────────────────────────
 
-def test_runid_pattern_is_imported_from_the_ingestion_gate_not_recompiled():
-    """The run-id pattern must come from the cognitive-store door, by import.
-
-    An `is` check on the pattern objects would be VACUOUS: ``re.compile`` caches by
-    pattern string, so a local ``re.compile`` of the same text returns the very same
-    object and identity holds under the exact mutation this test exists to catch
-    (confirmed empirically before this assertion was written).
-
-    So assert the IMPORT instead, at the two places that can decay independently:
-    the name must be bound in the module namespace by the import statement, and the
-    source must not re-derive the shape locally. Together these fail when someone
-    swaps the import for a copy — whatever text that copy happens to use.
-    """
-    from core import ingestion_gate
-
-    assert lint_skills._SHAPE_BODY_RUNID_RE is ingestion_gate._SHAPE_BODY_RUNID_RE, (
-        "the gate's pattern is not imported into the linter's namespace"
-    )
-
-    src = Path(lint_skills.__file__).read_text(encoding="utf-8")
-    assert "from core.ingestion_gate import _SHAPE_BODY_RUNID_RE" in src
-    binding = next(l for l in src.splitlines() if l.startswith("RUNID_RE"))
-    assert "_SHAPE_BODY_RUNID_RE" in binding, f"RUNID_RE is not the imported name: {binding}"
-    assert "re.compile" not in binding, f"RUNID_RE re-derives the shape locally: {binding}"
+def test_runid_pattern_matches_a_run_id_and_nothing_shorter():
+    """The linter owns the run-id shape: ``run_`` plus at least six hex digits."""
+    assert lint_skills.RUNID_RE.search("see run_0d60e04e for the trace")
+    assert lint_skills.RUNID_RE.search("run_abcdef")
+    assert not lint_skills.RUNID_RE.search("run_abcde")      # five hex: too short
+    assert not lint_skills.RUNID_RE.search("run_ghijkl")     # not hex
+    assert not lint_skills.RUNID_RE.search("a normal run of the job")
 
 
-def test_register_and_ownerpath_patterns_are_local_because_upstream_has_neither():
-    """The linter owns these two patterns because the ingestion gate has neither.
-
-    Asserted as behaviour, not as prose. An earlier version of this test also
-    checked that the module docstring contained the phrase "single source of
-    truth" — an assertion whose operand is the docstring of the very module under
-    test, so it passes with both patterns deleted. Reworded documentation is not a
-    regression; a pattern that stops matching is.
-    """
-    import core.ingestion_gate as gate
-
-    assert not hasattr(gate, "REGISTER_RE"), (
-        "upstream grew a register pattern — import it rather than own a second copy"
-    )
-    assert not hasattr(gate, "OWNER_PATH_RE"), (
-        "upstream grew an owner-path pattern — import it rather than own a second copy"
-    )
+def test_register_and_ownerpath_patterns_match():
+    """Asserted as behaviour, not as prose: a pattern that stops matching is the
+    regression, reworded documentation is not."""
     assert lint_skills.REGISTER_RE.search("C046")
     assert lint_skills.OWNER_PATH_RE.search("/Users/someone/Desktop")
 

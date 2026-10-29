@@ -755,6 +755,59 @@ def split_blocks_at(body: str) -> "list[tuple[str, str, int]]":
     return out
 
 
+# Leading LEGACY writeback-hook prefix: "**2026-06-08** (session f1f7201b): ".
+# No live writer produces this FRONT-prefix shape any more -- it is retained ONLY
+# so pre-existing archive bullets written in that shape keep the same signature
+# (the old TRAILING-only dedup never matched this front-prefix → 43K dups).
+# Session-id class is deliberately broad ([0-9a-fA-F-]+): 8-hex covers 100% of the
+# real corpus today, but a future context.session_id[:N] slice (dashed UUID /
+# longer) must not silently survive the strip and break cross-format dedup.
+_WRITEBACK_PREFIX_RE = re.compile(
+    r"^\*\*\d{4}-\d{2}-\d{2}\*\*\s*\(session\s+[0-9a-fA-F-]+\)\s*:\s*", re.IGNORECASE
+)
+# Leading "[type] " classification marker (entry form: "- [pitfall] **T**").
+_TYPE_PREFIX_RE = re.compile(r"^\[[a-z]+\]\s*", re.IGNORECASE)
+
+
+def content_signature(line: str) -> str:
+    """Format-AGNOSTIC dedup signature for a knowledge-entry bullet.
+
+    Two bullet shapes exist in DDD docs and archives:
+      - typed entry:      ``- [type] **Title** — text (YYYY-MM-DD, run_x, label)``
+      - legacy writeback: ``- **YYYY-MM-DD** (session xxxxxxxx): text``
+    Both must reduce to the SAME signature for the same lesson so a lesson
+    written in one shape dedups against the other (stripping only the TRAILING
+    attribution left the writeback FRONT-prefix in place, so the signatures never
+    collided — a no-op on the 43K-dup corpus).
+
+    Normalization (whole-string, NOT first-N-chars — a prefix cut would
+    false-merge distinct lessons that share an opening stem, Gate-1 #2):
+      1. strip leading ``- `` bullet marker
+      2. strip the writeback ``**date** (session id):`` FRONT prefix
+      3. strip the trailing ``(date, run, label)`` attribution
+      4. strip a leading ``[type]`` marker
+      5. drop ``**`` bold markers, lowercase, collapse all whitespace to single spaces
+
+    Deterministic + pure. Empty string in → empty string out.
+    """
+    text = line.lstrip()
+    if text.startswith("- "):
+        text = text[2:]
+    text = text.strip()
+    # 2. writeback front-prefix (the load-bearing strip)
+    text = _WRITEBACK_PREFIX_RE.sub("", text)
+    # 3. trailing attribution
+    m = re.search(r"\s*\((?:\d{4}-\d{2}-\d{2}|[0-9a-f]{6,}|run_)[^)]*\)\s*$", text)
+    if m:
+        text = text[: m.start()]
+    # 4. leading [type] marker
+    text = _TYPE_PREFIX_RE.sub("", text)
+    # 5. drop bold markers, lowercase, collapse whitespace
+    text = text.replace("**", " ")
+    text = re.sub(r"\s+", " ", text).strip().lower()
+    return text
+
+
 _ANY_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 
 
@@ -766,14 +819,13 @@ def unit_id(text: str) -> str:
     rewrites nobody would call an edit: comments are removed first (the
     ``<!-- ref:… | last:… | decay:… -->`` line the decay job rewrites, and the
     ``<!-- maturity: … -->`` marker), then an entry is reduced by
-    ``ddd_cultivation.content_signature`` (bullet, writeback prefix, ``[type]``, bold,
+    ``content_signature`` (bullet, writeback prefix, ``[type]``, bold,
     trailing attribution, case, whitespace) -- the same rule the write-side dedup uses
     for "the same lesson" -- and a block's whitespace is collapsed and lowercased.
     Hashing the raw text instead changed the id each time decay touched an entry.
     Knowledge addressing design §2.1."""
     t = _ANY_COMMENT_RE.sub(" ", text or "").strip()
     if t.startswith("- "):
-        from core.ddd_cultivation import content_signature
         norm = content_signature(t)
     else:
         norm = re.sub(r"\s+", " ", t).strip().lower()
@@ -1234,8 +1286,6 @@ def _archived_signatures(archive_path: Path) -> "frozenset[str]":
     hit = _ARCHIVE_SIG_CACHE.get(key)
     if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
         return hit[2]
-    from core.ddd_cultivation import content_signature  # noqa: PLC0415
-
     sigs = {
         content_signature(e.raw_text)
         for e in parse_entries(archive_path.read_text(encoding="utf-8"),
@@ -1604,11 +1654,11 @@ def reclaim_duplicate_entries(
     Distinct from the two adjacent mechanisms — this fills a real gap:
       • ``reclaim_noise_entries`` selects by AGE/decay (ref==0 AND dormant/archived).
         A fresh exact-dup that is still ``active`` is invisible to it.
-      • cultivation's ``content_signature`` intake-dedup only blocks a NEW write
+      • a write-side ``content_signature`` dedup only blocks a NEW write
         against existing entries — it never cleans the backlog already on disk.
-    This sweeps the backlog: group all entries by ``content_signature`` (the SAME
-    format-agnostic normalizer cultivation uses at intake, imported here so a lesson
-    dedups identically whichever path wrote it), and within each collision group
+    This sweeps the backlog: group all entries by ``content_signature`` (the
+    format-agnostic normalizer above, so a lesson dedups identically whichever
+    shape it was written in), and within each collision group
     keep ONE survivor; the rest are the candidates.
 
     Survivor selection (deterministic): highest ``ref_count``, tie → newest
@@ -1630,8 +1680,6 @@ def reclaim_duplicate_entries(
     the C&M entry-health counts. *project_dir*, *archive_name* and *source_path* are
     unused, kept for the callers' signature.
     """
-    from core.ddd_cultivation import content_signature  # unidirectional import (verified: lifecycle imports nothing from core; cultivation already imports lifecycle, never the reverse)
-
     report = ReclaimReport()
     if not content or not content.strip():
         return report
