@@ -1270,7 +1270,9 @@ class RunEngine:
             review_input = orchestrator.r2_input(
                 expert, ids, hunks=hunks, proofs=proofs,
                 reclassifications=handoff["reclassifications"], states=after,
-                allowed=allowed, wrong=wrong, diffs=self._fix_diffs(events, rows, ids, trees))
+                allowed=allowed, wrong=wrong, diffs=self._fix_diffs(events, rows, ids, trees,
+                                      fix_files=handoff.get("fix_files"),
+                                      addressed=handoff["addressed"]))
             if callers:
                 review_input = callers + "\n\n" + review_input
             # an R2 per address pass: after a reopen the expert rechecks again (S6-2)
@@ -1327,40 +1329,61 @@ class RunEngine:
         return r1, r2
 
     def _file_assertion(self, row: Mapping[str, Any], repos: Mapping[str, str],
-                        r1_trees: Mapping[str, Any], r2_trees: Mapping[str, Any] | None
-                        ) -> dict[str, Any]:
-        """The derived diff_assertion proof of *row*, judged on its file (§2.3 point 4).
-        Raises EngineError, before anything is written, when it does not hold."""
-        finding_id, file = row["canonical_id"], row["file"]
+                        r1_trees: Mapping[str, Any], r2_trees: Mapping[str, Any] | None,
+                        *, files: Sequence[str] | None = None) -> dict[str, Any]:
+        """The derived diff_assertion proof of *row*, judged on its fix files (§2.3 point
+        4): *files*, the finding's file when none (``review.fix_files``). Every one must
+        have changed since R1 and be as the R2 that judged it RESOLVED saw it. Raises
+        EngineError, before anything is written, when it does not hold."""
+        finding_id = row["canonical_id"]
         if row.get("r2_status") != "RESOLVED" or r2_trees is None:
             raise EngineError(f"{finding_id}: a diff_assertion needs an R2 that judged the "
                               f"finding RESOLVED (its R2 status is {row.get('r2_status')})")
         reserved = (f".aidlc/deliverables/{self.run_id}/",)
         now = {name: git_tree.write_tree(root, reserved, {}) for name, root in repos.items()}
-        name = _repo_of_finding(
-            file, r1_trees, now,
-            lambda repo, tree, path: repo in repos
-            and (_blob(repos[repo], tree, path) or ("absent",))[0] != "absent")
-        root, r1_tree, r2_tree = repos.get(name), r1_trees.get(name), r2_trees.get(name)
-        if root is None or not r1_tree or not r2_tree:
-            raise EngineError(f"{finding_id}: repo {name} has no tree in the R1 or R2 handout")
-        old, judged, new = (_blob(root, r1_tree, file), _blob(root, r2_tree, file),
-                            _blob(root, now[name], file))
-        problem = _file_assertion_problem(old, judged, new)
-        if problem:
-            raise EngineError(f"{finding_id} ({file}): {problem}")
-        diff = _git(root, "diff", "--unified=0", "--no-renames", r1_tree, now[name], "--", file)
-        return {"finding_id": finding_id, "evidence_type": "diff_assertion", "repo": name,
-                "code_tree": now[name], "result": "asserted", "touches_finding": True,
-                "touches_executable": not _comment_only_diff(file, diff, old=old, new=new),
-                "basis": "file"}
+        names: list[str] = []
+        checked: list[dict[str, Any]] = []
+        executable = False
+        for file in (list(files) if files else [row["file"]]):
+            name = _repo_of_finding(
+                file, r1_trees, now,
+                lambda repo, tree, path: repo in repos
+                and (_blob(repos[repo], tree, path) or ("absent",))[0] != "absent")
+            root, r1_tree, r2_tree = repos.get(name), r1_trees.get(name), r2_trees.get(name)
+            if root is None or not r1_tree or not r2_tree:
+                raise EngineError(f"{finding_id}: repo {name} has no tree in the R1 or R2 handout")
+            old, judged, new = (_blob(root, r1_tree, file), _blob(root, r2_tree, file),
+                                _blob(root, now[name], file))
+            problem = _file_assertion_problem(old, judged, new)
+            if problem:
+                raise EngineError(f"{finding_id} ({file}): {problem}")
+            diff = _git(root, "diff", "--unified=0", "--no-renames", r1_tree, now[name], "--", file)
+            executable = executable or not _comment_only_diff(file, diff, old=old, new=new)
+            names.append(name)
+            checked.append({"path": file, "blob": _blob_id(root, now[name], file)})
+        if len(set(names)) != 1:
+            raise EngineError(f"{finding_id}: its fix_files are in more than one repo "
+                              f"({', '.join(sorted(set(names)))}); one proof binds one repo")
+        name = names[0]
+        proof = {"finding_id": finding_id, "evidence_type": "diff_assertion", "repo": name,
+                 "code_tree": now[name], "result": "asserted", "touches_finding": True,
+                 "touches_executable": executable, "basis": "file"}
+        if files and list(files) != [row["file"]]:
+            proof["fix_files"] = checked     # what stale_closures re-checks
+        return proof
 
     def _fix_diffs(self, events: Sequence[Mapping[str, Any]],
                    rows: Mapping[str, Mapping[str, Any]], ids: Sequence[str],
-                   now_trees: Mapping[str, Any]) -> dict[str, str]:
-        """For each finding closed by a diff_assertion: its file's git diff from the
-        tree R1 reviewed to *now_trees* (the R2 input, §2.3 point 4). A finding whose
-        repo cannot be resolved gets none (the hunk text still goes)."""
+                   now_trees: Mapping[str, Any],
+                   fix_files: Mapping[str, Sequence[str]] | None = None,
+                   addressed: Sequence[str] = ()) -> dict[str, str]:
+        """For each finding closed by a diff_assertion: the git diff of its fix files
+        (``review.fix_files``: its latest address's ``fix_files``, else its own file)
+        from the tree R1 reviewed to *now_trees* (the R2 input, §2.3 point 4). A file
+        whose repo cannot be resolved is left out (the hunk text still goes).
+        *fix_files* / *addressed*: this pass's, whose address events are not in *events*
+        yet: a finding addressed now is judged on what this address names (its own file
+        when it names none), never on an earlier address's files, as the proof will be."""
         repos = self.effective_repos()
         out: dict[str, str] = {}
         for finding_id in ids:
@@ -1371,16 +1394,22 @@ class RunEngine:
             if anchors is None:
                 continue
             r1_trees = anchors[0]
-            try:
-                name = _repo_of_finding(
-                    row["file"], r1_trees, now_trees,
-                    lambda repo, tree, path: repo in repos
-                    and (_blob(repos[repo], tree, path) or ("absent",))[0] != "absent")
-                if r1_trees.get(name) and now_trees.get(name):
-                    out[finding_id] = _git(repos[name], "diff", "--no-renames",
-                                           r1_trees[name], now_trees[name], "--", row["file"])
-            except EngineError:
-                continue
+            diffs = []
+            files = (((fix_files or {}).get(finding_id) or [row["file"]])
+                     if finding_id in addressed else review.fix_files(events, row))
+            for file in files:
+                try:
+                    name = _repo_of_finding(
+                        file, r1_trees, now_trees,
+                        lambda repo, tree, path: repo in repos
+                        and (_blob(repos[repo], tree, path) or ("absent",))[0] != "absent")
+                    if r1_trees.get(name) and now_trees.get(name):
+                        diffs.append(_git(repos[name], "diff", "--no-renames",
+                                          r1_trees[name], now_trees[name], "--", file))
+                except EngineError:
+                    continue
+            if diffs:
+                out[finding_id] = "\n".join(diffs)
         return out
 
     def r2_redispatch_targets(self, events: Sequence[Mapping[str, Any]]
@@ -1435,6 +1464,20 @@ class RunEngine:
             if finding_id in awaiting:
                 problems.append(f"{where}: its R2 handout is not answered yet; dispatch that "
                                 "R2 before addressing it again")
+            files = item.get("fix_files")
+            if files is not None and not review.valid_fix_files(files):
+                problems.append(f"{where}: fix_files must be 1-{review.MAX_FIX_FILES} paths "
+                                "from the repository root")
+            elif files is not None:
+                for path in files:
+                    try:
+                        _name, root = self._finding_repo(path)
+                        ok = (Path(root) / path).is_file()
+                    except EngineError:
+                        ok = False
+                    if not ok:
+                        problems.append(f"{where}: fix_files {path!r} is not a file of exactly "
+                                        "one run repo (give its path from the repository root)")
             proof = item.get("proof")
             etype = proof.get("evidence_type") if isinstance(proof, Mapping) else None
             if etype in ("reported_test", "diff_assertion") and etype != rule["evidence"]:
@@ -1551,7 +1594,8 @@ class RunEngine:
             anchors = (self._finding_trees(all_events, row)
                        if evidence_type == "diff_assertion" else None)
             if anchors is not None:
-                derived.append(self._file_assertion(row, repos, *anchors))
+                derived.append(self._file_assertion(row, repos, *anchors,
+                                                    files=review.fix_files(all_events, row)))
                 continue
             candidates = []
             for name, root in repos.items():

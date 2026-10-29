@@ -30,7 +30,7 @@ GATE0_CLOSES = ("a Gate-0 finding is not fixed in REVIEW: a MEDIUM / LOW one clo
 OUTPUT_CONTRACT = """OUTPUT CONTRACT (exact; prose may precede rows):
 Gate-0 only: first non-empty line is VERDICT: SUPPORTED | SUPPORTED-WITH-CHANGES | UNSUPPORTED | WRONG-FRAME | ALREADY-SATISFIED
 R2 status: {\"finding_id\":\"CF-1234abcd\",\"status\":\"RESOLVED|OPEN|REFUTED|ADEQUATE|TEST_INADEQUATE\",\"kind_confirm\":null,\"note\":\"...\"}
-New finding: {\"severity\":\"HIGH|MEDIUM|LOW\",\"kind\":\"behavior|contract|absence|docs|design|security_policy\",\"file\":\"path\",\"line\":1,\"claim\":\"...\",\"fix\":\"...\"} (line: the line in the file as it is in the tree you review)
+New finding: {\"severity\":\"HIGH|MEDIUM|LOW\",\"kind\":\"behavior|contract|absence|docs|design|security_policy\",\"file\":\"path\",\"line\":1,\"claim\":\"...\",\"fix\":\"...\"} (file: its path from the repository root, as in the diff's file header; line: the line in the file as it is in the tree you review)
 When there are no new findings, include a separate line: NO FINDINGS
 Do not emit a VERDICT line for REVIEW experts."""
 
@@ -190,6 +190,30 @@ def closure_view(rows: Sequence[Mapping[str, Any]],
                     "close_with": close_with(row, ledger.get(cid), uncovered=cid in uncovered,
                                              redispatch=cid in redo)})
     return out
+
+
+MAX_FIX_FILES = 20
+
+
+def valid_fix_files(value: Any) -> bool:
+    """A handoff item's ``fix_files``: 1-MAX_FIX_FILES relative paths without ``..``
+    (design 2026-10-29-pipeline-retro-fixes F3b)."""
+    return isinstance(value, list) and 1 <= len(value) <= MAX_FIX_FILES and all(
+        isinstance(p, str) and p.strip() == p and p and not p.startswith(("/", "./"))
+        and ".." not in p.split("/") and "\\" not in p for p in value)
+
+
+def fix_files(events: Sequence[Mapping[str, Any]], row: Mapping[str, Any]) -> list[str]:
+    """The files a finding's fix is judged on: its latest address's ``fix_files``, or
+    its own file (design 2026-10-29-pipeline-retro-fixes F3b). R2's diff and the
+    diff_assertion both read this, so they judge the same files."""
+    files: list[str] = [row["file"]]
+    for event in events:
+        payload = event.get("payload") or {}
+        if event.get("kind") == "address" and payload.get("canonical_id") == row["canonical_id"]:
+            given = payload.get("fix_files")
+            files = list(given) if isinstance(given, list) and given else [row["file"]]
+    return files
 
 
 class ReviewError(ValueError):
@@ -546,11 +570,12 @@ class ReviewOrchestrator:
         causes: dict[str, str] = {}
         solutions: dict[str, str] = {}
         plans: dict[str, str] = {}
+        fix_files: dict[str, list[str]] = {}
         for index, item in enumerate(items, 1):
             if not isinstance(item, Mapping):
                 raise ReviewError(f"handoff item {index} must be an object")
             allowed = {"finding_id", "hunk", "proof", "reclassify", "cause", "solution",
-                       "evidence_plan"}
+                       "evidence_plan", "fix_files"}
             if set(item) - allowed:
                 raise ReviewError(f"handoff item {index} has unknown fields")
             finding_id, hunk = item.get("finding_id"), item.get("hunk")
@@ -598,6 +623,12 @@ class ReviewOrchestrator:
                     raise ReviewError(f"handoff item {index} evidence_plan must be "
                                       f"{{type: {sorted(EVIDENCE_TYPES)}, ref?: text}}")
                 plans[finding_id] = json.dumps(dict(plan), ensure_ascii=False, sort_keys=True)
+            files = item.get("fix_files")
+            if files is not None:
+                if not valid_fix_files(files):
+                    raise ReviewError(f"handoff item {index} fix_files must be 1-{MAX_FIX_FILES} "
+                                      "paths from the repository root")
+                fix_files[finding_id] = list(dict.fromkeys(files))
         # every item is valid: only now build the pass (no partial pass in the log)
         specs: list[dict[str, Any]] = []
         for finding_id in addressed:
@@ -618,12 +649,14 @@ class ReviewOrchestrator:
                 payload["solution"] = solutions[finding_id]
             if finding_id in plans:
                 payload["evidence_plan"] = plans[finding_id]
+            if finding_id in fix_files:
+                payload["fix_files"] = fix_files[finding_id]
             specs.append({"kind": "address", "at": at, "stage": "review",
                           "attempt": attempt, "payload": payload})
         # the pass lives only in its logged address events (K4, F21): no side file
         return ({"pass": pass_number, "addressed": sorted(addressed),
                  "hunks": hunks, "proofs": proofs, "causes": causes,
-                 "reclassifications": reclassifications}, specs)
+                 "reclassifications": reclassifications, "fix_files": fix_files}, specs)
 
     def _text(self, value: Any) -> str | None:
         """An event payload string, read from its audit blob when it was moved there. A

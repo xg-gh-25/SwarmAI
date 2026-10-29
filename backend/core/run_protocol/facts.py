@@ -114,8 +114,9 @@ def stale_closures(rows: Sequence[Mapping[str, Any]], events: Sequence[Mapping[s
     tree is ITS repo's current tree (tree ids can coincide across repos, so the proof's
     repo decides; a proof without a repo binds only in a one-repo run), or, with
     *blob_of(repo, tree, path)* (a blob id, ``"absent"`` or None when unreadable), when
-    every path the proof judged is the same blob now: the finding's own file, and for
-    a refutation each ``path`` ref too. So a clean rebase that leaves
+    every path the proof judged is the same blob now: the finding's own file (or, for a
+    diff_assertion with ``fix_files``, each of those instead), and for a refutation each
+    ``path`` ref too. So a clean rebase that leaves
     those files alone keeps the closure; any doubt (unreadable) is stale.
 
     ``closed_proven`` is not here: its evidence is a passing test, which the TEST report
@@ -142,6 +143,11 @@ def stale_closures(rows: Sequence[Mapping[str, Any]], events: Sequence[Mapping[s
         # the finding's own file always counts (a refutation's refs may name only
         # events or other files); a refutation adds each path ref's recorded blob
         judged = [(row.get("file"), blob_of(repo, tree, row.get("file")))]
+        if isinstance(payload.get("fix_files"), list) and payload["fix_files"]:
+            # a diff_assertion judged on its fix files (pipeline-retro-fixes F3b): those
+            # are what must still be as judged, not the finding's own file
+            judged = [(f.get("path"), f.get("blob")) if isinstance(f, Mapping) else (None, None)
+                      for f in payload["fix_files"]]
         if payload.get("evidence_type") == "refuted":
             judged += [(ref.get("path"), ref.get("blob")) for ref in payload.get("refs") or ()
                        if isinstance(ref, Mapping) and ref.get("kind") == "path"]

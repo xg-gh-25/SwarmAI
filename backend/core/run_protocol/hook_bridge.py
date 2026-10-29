@@ -224,6 +224,54 @@ def record_relayed(store: AuditStore, handout_event_id: str, final_text: str, *,
                   session_id=None)
 
 
+def _repo_paths(store: AuditStore, code_trees: Any, files: "list[str]") -> dict[str, str]:
+    """A finding's ``file`` as a path from its repository's root (design
+    2026-10-29-pipeline-retro-fixes F3a): an expert may write ``core/x.py`` for
+    ``backend/core/x.py``, and every reader that resolves the file to a repo then finds
+    none. For each file not in any of the handout's reviewed trees, the one path in
+    those trees that ends with ``/<file>``; a file present as given, or with no or more
+    than one such path, is left as it is. Returns {given: repo path} for the changed
+    ones only. Best effort: anything unreadable changes nothing."""
+    import json
+    import subprocess
+    if not isinstance(code_trees, Mapping) or not code_trees or not files:
+        return {}
+    try:
+        contract = json.loads(store.paths.contract.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    roots = contract.get("repo_roots") if isinstance(contract, Mapping) else None
+    if not isinstance(roots, Mapping):
+        return {}
+    listed: dict[str, list[str]] = {}
+    for repo, tree in code_trees.items():
+        root = roots.get(repo)
+        if not root or not isinstance(tree, str) or not tree:
+            continue
+        try:
+            out = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-z", "--name-only",
+                                  tree], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        if out.returncode != 0:
+            return {}
+        listed[repo] = [x for x in out.stdout.decode("utf-8", "replace").split("\0") if x]
+    every = {path for paths in listed.values() for path in paths}
+    changed: dict[str, str] = {}
+    for given in files:
+        name = given.strip()
+        while name.startswith("./"):
+            name = name[2:]
+        if not name or name in every:
+            if name and name != given:
+                changed[given] = name
+            continue
+        matches = {path for path in every if path.endswith("/" + name)}
+        if len(matches) == 1:
+            changed[given] = next(iter(matches))
+    return changed
+
+
 def _write(store, handout, final_text, *, call, source, producer, completed_at, session_id):
     payload = handout["payload"]
     expert, review_round = payload["expert_id"], handout["round"]
@@ -246,6 +294,8 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
     # an open finding) is dropped and noted, so the rest of the answer still counts
     # instead of the whole write being refused (ced6caa3)
     statuses, notes = _applicable_statuses(store, parsed, payload.get("allowed_status"))
+    repo_paths = _repo_paths(store, payload.get("code_trees"),
+                             [f["file"] for f in parsed.findings]) if parsed.findings else {}
 
     cited_refs: list[str] = []      # filled by children(); recorded once the write lands
 
@@ -268,7 +318,8 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
         def _occ(finding: Mapping[str, Any]) -> dict[str, Any]:
             row = {"answer_event_id": answer["event_id"], "expert": expert,
                    "severity": finding["severity"], "finding_kind": finding["kind"],
-                   "file": finding["file"], "line": finding["line"],
+                   "file": repo_paths.get(finding["file"], finding["file"]),
+                   "line": finding["line"],
                    "claim": finding["claim"], "fix": finding["fix"]}
             # a citation counts only for an entry this handout carried (§3.4) or a unit
             # of its project's DDD (addressing §2.5); anything else is dropped

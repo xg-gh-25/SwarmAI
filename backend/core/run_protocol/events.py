@@ -149,7 +149,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # its cause and proof note — FIXING_SPEC and R2 read them from here only
     "address": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
                      "payload.canonical_id", {"canonical_id": str, "pass": int, "hunk": str},
-                     {"cause": str, "proof": str, "solution": str, "evidence_plan": str}),
+                     # fix_files: where the fix landed when not (only) in the finding's
+                     # own file (design 2026-10-29-pipeline-retro-fixes F3b)
+                     {"cause": str, "proof": str, "solution": str, "evidence_plan": str,
+                      "fix_files": list}),
     "proof": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
                    "payload.canonical_id", {"canonical_id": str, "pass": int,
                    "evidence_type": str, "code_tree": str, "result": str},
@@ -162,7 +165,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                     # basis: "file" when a diff_assertion was judged on the file (the R1
                     # and R2 handout trees, design 2026-10-26-pipeline-review-closure §2.3
                     # point 4); absent: the reported line was touched (older runs)
-                    "basis": str}),
+                    "basis": str,
+                    # fix_files: a diff_assertion judged on other files than the finding's
+                    # own (design 2026-10-29-pipeline-retro-fixes F3b): [{path, blob}]
+                    "fix_files": list}),
     # the agent's own test report for one repo (S6-1, design usable-by-anyone §3.3.3):
     # code_tree is computed by the engine at submission, the report itself is a blob
     "validation_report": _spec("cli", ("ordinal",), "payload.repo",
