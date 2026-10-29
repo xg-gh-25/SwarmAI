@@ -159,16 +159,26 @@ def ddd_path(project_dir, key: str) -> Path:
     return new_path
 
 
+def ddd_new_path(project_dir, key: str) -> Path:
+    """Resolve a logical KEY to its NEW physical path, touching nothing on disk.
+
+    For callers that only compute a destination (routing), possibly from a relative
+    ``project_dir``: a relative path resolves against the process cwd, which for the
+    daemon is ``/`` and read-only, so creating anything there fails."""
+    root = Path(project_dir)
+    new_rel = _relpath(key, new=True)
+    return root / new_rel if new_rel else root
+
+
 def ddd_write_path(project_dir, key: str) -> Path:
     """Resolve a logical KEY to its NEW physical path (WRITE — always new).
 
     Never falls back to the old layout: a write must land deterministically at
     the new location, or reads and writes diverge (split-brain). Creates parent
-    dirs so the caller can write immediately.
+    dirs so the caller can write immediately, so ``project_dir`` must be absolute;
+    to only compute a path use ``ddd_new_path``.
     """
-    root = Path(project_dir)
-    new_rel = _relpath(key, new=True)
-    path = root / new_rel if new_rel else root
+    path = ddd_new_path(project_dir, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

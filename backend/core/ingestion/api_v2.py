@@ -213,3 +213,10 @@ def requeue_parked(reason: str, key: str) -> int:
     """
     from .pipeline_v2 import requeue_parked as _impl
     return _impl(reason, key)
+
+
+def requeue_units(reason: str) -> int:
+    """Requeue units poisoned or deferred with exactly ``reason`` after its cause is fixed
+    (attempts reset, candidate pending again, poison events resolved)."""
+    from .pipeline_v2 import requeue_units as _impl
+    return _impl(reason)

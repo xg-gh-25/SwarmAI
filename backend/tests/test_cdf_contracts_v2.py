@@ -176,3 +176,26 @@ def test_event_kind_values():
     ev = {"kind": "event", "when": "2026-10-27", "title": "t", "what": "w", "outcome": "o", "evidence": ["run_event:1"]}
     for k in ("event", "month_summary", "month_supplement"):
         assert c.SOURCE_UNIT.validate_python({**ev, "event_kind": k}).event_kind == k
+
+
+def test_routing_touches_no_filesystem_from_a_read_only_cwd(tmp_path, monkeypatch):
+    """Routing computes a path; it must not create one. The daemon runs with cwd ``/``
+    (read-only), where a relative ``mkdir`` raised OSError and poisoned every unit bound
+    for a project DDD, while tests with a writable cwd passed and left ``Projects/``
+    behind."""
+    import os
+    cwd = tmp_path / "ro"
+    cwd.mkdir()
+    cwd.chmod(0o555)
+    monkeypatch.chdir(cwd)
+    try:
+        routed = []
+        for kind, answer in _cases():
+            dest = c.route_for_v2(kind, answer, ddd_exists=True, project_hint="SwarmAI",
+                                  tainted=False, domain="writing",
+                                  source_url="https://docs.example.com/x")
+            routed.append(dest)
+        assert any(d.store == "DDD" and d.relative_path.startswith("Projects/SwarmAI/") for d in routed)
+        assert os.listdir(cwd) == []
+    finally:
+        cwd.chmod(0o755)

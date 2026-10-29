@@ -783,7 +783,7 @@ def _collect_ingestion() -> list[AttentionItem]:
         "writer_unknown": "Inspect the governed file change that bypassed Cognitive Distillation and tell me what changed.",
         "judge_down": "Check why the Cognitive Distillation judge has been unavailable for over an hour.",
         "user_race": "Inspect the Cognitive Distillation user-race record and preserve the user's version.",
-        "poison": "Inspect the repeatedly failing Cognitive Distillation item and identify the root cause.",
+        "poison": "Inspect the repeatedly failing Cognitive Distillation item and fix the root cause; then run `\"$SWARM_BACKEND_BIN\" ingest requeue --reason <its reason>` so those units are processed again.",
         "restored_orphan": "Inspect the restored Cognitive Distillation orphan without changing the restored file.",
         "missing_section": "Add the missing governed-file section so Cognitive Distillation can continue.",
         "stalled": "Run `\"$SWARM_BACKEND_BIN\" ingest status`, find why Cognitive Distillation stopped moving and fix the cause.",

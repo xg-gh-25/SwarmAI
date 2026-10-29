@@ -302,6 +302,18 @@ def link_file_for(source_url: str) -> str:
     return f"{REFERENCE_FOLDERS['link']}/{host}.md"
 
 
+def snapshot_project(snapshot: object) -> str | None:
+    """The project a source declared for its unit in ``project_snapshot``:
+    ``explicit_project`` (S1, Hive lessons) or ``project`` (S3, S4, S6)."""
+    if not isinstance(snapshot, dict):
+        return None
+    for key in ("explicit_project", "project"):
+        value = snapshot.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _no_ddd_path(project: str | None, domain: str | None, domains: frozenset[str]) -> str:
     if project:
         return f"{LEARNED_REPOS_DIR}/{slugify(project)}.md"
@@ -338,8 +350,8 @@ def route_for_v2(unit_kind: str, answer: Card1Answer | Card1AnswerV2, *,
             raise ValueError("gap needs GapAnswer")
         project = answer.project or project_hint
         if project and ddd_exists:
-            from core.ddd_paths import ddd_write_path
-            rel = ddd_write_path(Path("Projects") / project, "IMPROVEMENT.md").as_posix()
+            from core.ddd_paths import ddd_new_path
+            rel = ddd_new_path(Path("Projects") / project, "IMPROVEMENT.md").as_posix()
             return DestinationV2(store="DDD", relative_path=rel, section="What to Watch For", project=project)
         return DestinationV2(store="COMMON_DDD", relative_path=_no_ddd_path(project, domain, domains),
                              section=COMMON_DDD_GAP_SECTION, project=project, injectable=False)

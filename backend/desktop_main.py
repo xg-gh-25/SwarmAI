@@ -165,6 +165,8 @@ def run_ingest(argv: "list[str]") -> int:
     wake_cmd.add_argument("--wait", type=float, default=0.0)
     status_cmd = commands.add_parser("status")
     status_cmd.add_argument("--json", action="store_true")
+    requeue_cmd = commands.add_parser("requeue")
+    requeue_cmd.add_argument("--reason", required=True)
     eval_cmd = commands.add_parser("eval-export")
     eval_cmd.add_argument("--since", required=True)
     eval_cmd.add_argument("--until")
@@ -188,6 +190,16 @@ def run_ingest(argv: "list[str]") -> int:
             conn.close()
         print(json.dumps(snapshot, ensure_ascii=False, indent=1) if args.json else render(snapshot))
         return 1 if snapshot["stalls"] else 0
+
+    if args.command == "requeue":
+        # After the cause of a poison or a deferral is fixed: give those units a fresh start.
+        from core.ingestion.api_v2 import requeue_units
+        count = requeue_units(args.reason)
+        print(f"requeued {count} unit(s) with reason {args.reason}")
+        if count:
+            from core.ingestion.api import wake
+            wake()
+        return 0
 
     if args.command == "eval-export":
         # Design §14.2: every CDF outcome (judge stage live + archived, extractor

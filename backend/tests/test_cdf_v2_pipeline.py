@@ -231,3 +231,18 @@ def test_event_key_duplicate_is_rejected_without_reinforcement(tmp_path: Path) -
                          self_contained=True, evidenced=True)
     result = run_unit_v2(row(unit), tmp_path, Judge(answer))
     assert (result.decision, result.reason) == ("reject", "already_exists")
+
+
+def test_a_gap_takes_the_project_its_source_declared_in_the_snapshot(tmp_path: Path) -> None:
+    """S3, S4 and S6 declare the project as ``project_snapshot.project``; a run's gap with
+    no project of the judge's own was parked as unknown_domain because only
+    ``explicit_project`` was read (rows already queued that way heal on requeue)."""
+    gap = {"kind": "gap", "gap_kind": "risk", "scope": "project:Widget",
+           "title": "Missing fallback", "what": "The fallback is absent.",
+           "proposed_next": "Add and validate the fallback.", "evidence": ["event:one"]}
+    answer = GapAnswer(shape="Gap", actionable=True, evidenced=True, self_contained=True)
+    queued = row(gap, source="S3")
+    queued["project_snapshot"] = json.dumps({"project": "Widget", "repos": {}})
+    decision = run_unit_v2(queued, tmp_path, Judge(answer))
+    assert decision.decision == "write", decision.reason
+    assert decision.destination.relative_path == "Knowledge/Learned/repos/widget.md"

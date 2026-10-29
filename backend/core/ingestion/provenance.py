@@ -483,7 +483,7 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
                  _canonical({"strength": resolved.strength, "tainted": resolved.tainted,
                              "lineage_root_ids": list(resolved.lineage_root_ids)}),
                  _canonical(snapshot), _canonical([]), now, typed.kind, source,
-                 extraction_pass, evidence_json, snapshot.get("explicit_project"), dedup_key),
+                 extraction_pass, evidence_json, contracts_v2.snapshot_project(snapshot), dedup_key),
             )
             inserted = cursor.fetchone()
             if inserted:

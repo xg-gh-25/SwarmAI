@@ -63,6 +63,7 @@ core/evolution_optimizer.py:run_evolution_cycle  # exempt: writes SKILL.md, skil
 core/ingestion/pipeline_v2.py:reinforce_or_reject  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_missing_sections  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_parked  # exempt: via store.connect_rw: ingestion.db, CDF's own store
+core/ingestion/pipeline_v2.py:requeue_units  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/summary_lane.py:append_daily_summary  # exempt: DailyActivity (working memory, not governed); the summary lane is its writer
 core/ingestion/usage.py:record_usage  # exempt: via store.connect_rw: ingestion.db unit_usage
 core/ingestion_gate.py:_write_telemetry_row  # exempt: gate telemetry JSONL

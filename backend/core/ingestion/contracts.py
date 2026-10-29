@@ -432,9 +432,9 @@ def route_for(answer: Card1Answer) -> Destination:
             raise ValueError("not_global")
         return Destination(store="MEMORY", relative_path=".context/MEMORY.md", section=MEMORY_TYPE_TO_SECTION[answer.entry_type])
     file_name, section = DDD_MATRIX[answer.topic][answer.entry_type]
-    from core.ddd_paths import ddd_write_path  # SSOT for the six-section DDD layout
+    from core.ddd_paths import ddd_new_path  # SSOT for the six-section DDD layout; no mkdir
 
-    rel = ddd_write_path(Path("Projects") / answer.project, file_name).as_posix()
+    rel = ddd_new_path(Path("Projects") / answer.project, file_name).as_posix()
     return Destination(store="DDD", relative_path=rel, section=section, project=answer.project)
 
 

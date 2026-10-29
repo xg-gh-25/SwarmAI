@@ -545,3 +545,19 @@ def test_only_a_person_send_becomes_user_trust(tmp_path, monkeypatch):
     # A later system-built turn makes the person's message stale for S1.
     session_inputs.record_user_input_parts("s1", "cron: weekly digest", None, ref="m-cron")
     assert session_inputs.latest_user_event_id("s1") is None
+
+
+@pytest.mark.parametrize("key", ["explicit_project", "project"])
+def test_enqueue_records_the_project_the_snapshot_declares(tmp_path, monkeypatch, key):
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.ingestion.wake.wake", lambda _lane=None: None)
+    from core.ingestion.api_v2 import enqueue_unit
+    from core.ingestion.store import connect_ro
+
+    _session_root(monkeypatch, tmp_path, "s1", "input:e1", "Use one owner")
+    result = enqueue_unit("S2", "ref", _cognition(["event:input:e1"]), session_id="s1", run_id=None,
+                          project_snapshot={key: "Widget"})
+    conn = connect_ro()
+    hint = conn.execute("SELECT project_hint FROM ingestion_inbox WHERE id=?", (result.candidate_id,)).fetchone()[0]
+    conn.close()
+    assert hint == "Widget"

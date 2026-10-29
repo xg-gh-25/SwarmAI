@@ -25,6 +25,7 @@ from .contracts_v2 import (
     CARD1_V2_ADAPTER,
     PARKED_DEFER_REASONS,
     PER_TURN_STORES,
+    snapshot_project,
     CognitionUnit,
     DestinationV2,
     EntailmentVerdict,
@@ -458,7 +459,9 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     unit_id = str(_get(row, "unit_id") or f"{_get(row, 'id', 'unit')}.unit")
     resolved = _resolved(row)
     projects = tuple(_json(_get(row, "project_candidates"), []))
-    project_hint = _get(row, "project_hint")
+    # the column, or for rows queued before it took `project` too, the snapshot itself
+    project_hint = (_get(row, "project_hint")
+                    or snapshot_project(_json(_get(row, "project_snapshot"), {})))
     group = _group(unit, projects)
     vectors: list[dict[str, Any]] = []
     card0 = _card0(unit, row)
@@ -750,6 +753,40 @@ def requeue_parked(reason: str, key: str) -> int:
                   AND json_extract(detail,'$.unit_id') IN ({marks})""",
             ids,
         )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def requeue_units(reason: str) -> int:
+    """Give units poisoned or deferred with *reason* (``error:OSError``, ``unknown_domain``)
+    a fresh start once its cause is fixed: queued with no attempts, the candidate pending
+    again, their poison events resolved. Only exact-reason matches; returns how many
+    units were requeued. A unit whose cause is still there fails or parks again."""
+    from .store import connect_rw
+    conn = connect_rw()
+    try:
+        rows = conn.execute(
+            "SELECT unit_id,candidate_id FROM ingestion_units WHERE state IN ('failed_poison','deferred') "
+            "AND reason=?",
+            (reason,)).fetchall()
+        if not rows:
+            return 0
+        ids = [str(row[0]) for row in rows]
+        candidates = sorted({str(row[1]) for row in rows})
+        marks = ",".join("?" for _ in ids)
+        cursor = conn.execute(
+            f"""UPDATE ingestion_units SET state='queued',reason=NULL,defer_reason=NULL,attempts=0,
+                       next_attempt_at=NULL,error_class=NULL,error_fingerprint=NULL,
+                       updated_at=CURRENT_TIMESTAMP
+                WHERE unit_id IN ({marks}) AND state IN ('failed_poison','deferred')""", ids)
+        conn.execute(
+            f"UPDATE ingestion_inbox SET state='partial_pending' WHERE state='done' AND id IN "
+            f"({','.join('?' for _ in candidates)})", candidates)
+        conn.execute(
+            f"""UPDATE ingestion_events SET resolved=1 WHERE kind='poison' AND resolved=0
+                  AND json_extract(detail,'$.unit_id') IN ({marks})""", ids)
         conn.commit()
         return cursor.rowcount
     finally:

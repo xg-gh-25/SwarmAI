@@ -137,3 +137,42 @@ def _capture(module, argv):
     finally:
         module._out = real
     return out[-1]
+
+
+def test_requeue_gives_the_units_of_one_reason_a_fresh_start(store):
+    """After a poison's or a deferral's cause is fixed, its units run again; others stay put."""
+    from core.ingestion.api_v2 import requeue_units
+    from core.ingestion.worker import _READY
+    at = NOW.isoformat()
+    for cand in ("c1", "c2"):
+        store.execute("""INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,
+            content_hash,envelope,project_snapshot,state,created_at)
+            VALUES(?,?,'S7','s','session','{}','v','h','{}','{}','done',?)""", (cand, "k" + cand, at))
+    store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,attempts,
+        error_class,error_fingerprint,owner_epoch,updated_at)
+        VALUES('c1.unit','c1','{}','failed_poison','error:OSError',3,'infra','f',1,?),
+              ('c2.unit','c2','{}','failed_poison','error:ValueError',3,'logic','g',1,?)""", (at, at))
+    store.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,'poison',?,0)",
+                  (at, json.dumps({"unit_id": "c1.unit", "reason": "error:OSError"})))
+    store.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,'poison',?,0)",
+                  (at, json.dumps({"unit_id": "c2.unit", "reason": "error:ValueError"})))
+    store.commit()
+
+    assert requeue_units("error:OSError") == 1
+    store.rollback()
+    units = {r[0]: r[1:] for r in store.execute(
+        "SELECT unit_id,state,attempts,error_class,reason FROM ingestion_units")}
+    assert units["c1.unit"] == ("queued", 0, None, None)
+    assert units["c2.unit"][0] == "failed_poison"
+    ready = [r[0] for r in store.execute(f"SELECT id FROM ingestion_inbox WHERE {_READY}", (at,))]
+    assert ready == ["c1"]                      # the worker will take it again
+    open_events = [json.loads(r[0])["unit_id"] for r in store.execute(
+        "SELECT detail FROM ingestion_events WHERE kind='poison' AND resolved=0")]
+    assert open_events == ["c2.unit"]
+    assert requeue_units("error:OSError") == 0
+    store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,defer_reason,
+        owner_epoch,updated_at) VALUES('c2.gap','c2','{}','deferred','unknown_domain','unknown_domain',1,?)""", (at,))
+    store.commit()
+    assert requeue_units("unknown_domain") == 1
+    store.rollback()
+    assert store.execute("SELECT state FROM ingestion_units WHERE unit_id='c2.gap'").fetchone()[0] == "queued"
