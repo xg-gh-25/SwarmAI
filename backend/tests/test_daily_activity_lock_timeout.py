@@ -156,3 +156,16 @@ class TestDailyActivityLockTimeout:
             await hook.execute(mock_context)
 
         assert not hook._lock.locked()
+
+
+def test_no_function_in_the_hook_shadows_the_module_path_import():
+    """A `from pathlib import Path` inside _execute_locked made Path local to the whole
+    function, so the earlier `Path(...)` raised UnboundLocalError and every session's
+    DailyActivity extraction failed (2026-10-29)."""
+    import inspect
+    from hooks import daily_activity_hook as mod
+    for name, obj in vars(mod).items():
+        for fn in ([obj] if inspect.isfunction(obj) else
+                   [v for v in vars(obj).values() if inspect.isfunction(v)] if inspect.isclass(obj) else []):
+            if getattr(fn, "__module__", None) == mod.__name__:
+                assert "Path" not in fn.__code__.co_varnames, f"{name}.{fn.__name__}"

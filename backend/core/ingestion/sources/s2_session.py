@@ -246,6 +246,33 @@ def _input_rows(session_id: str) -> list[dict[str, Any]]:
         return []
 
 
+def _extracted_by_user_pass(session_id: str) -> set[str]:
+    """User messages an earlier user pass of this session already covered (an ok or
+    no_unit attempt). A session job runs after every idle, and each ran the pass over
+    all the session's messages again: 18 messages extracted 9 times gave 83 units of
+    mostly the same lessons (2026-10-29). A failed attempt's messages are tried again."""
+    try:
+        conn = connect_ro()
+        try:
+            rows = conn.execute(
+                "SELECT evidence_range FROM extraction_attempts WHERE source='S2' "
+                "AND status IN ('ok','no_unit')").fetchall()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return set()
+    done: set[str] = set()
+    for row in rows:
+        try:
+            value = json.loads(row[0])
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(value, dict) and value.get("session_id") == session_id
+                and value.get("pass") == "user_utterance"):
+            done.update(str(event) for event in value.get("events") or ())
+    return done
+
+
 def _claimed_by_s1(session_id: str) -> set[str]:
     try:
         conn = connect_ro()
@@ -418,7 +445,8 @@ def extract_session_sync(session_id: str, *, project_snapshot: dict[str, Any] | 
     transcript = _transcript_sync(session_id)
     rows = _input_rows(session_id)
     claimed = _claimed_by_s1(session_id)
-    trusted = (_trusted_pass(session_id, rows, claimed, project_snapshot, llm)
+    trusted = (_trusted_pass(session_id, rows, claimed | _extracted_by_user_pass(session_id),
+                             project_snapshot, llm)
                if "user_utterance" in passes else [])
     main = (_main_pass(session_id, transcript, rows, claimed, project_snapshot, llm)
             if "main" in passes else [])

@@ -456,7 +456,6 @@ class DailyActivityExtractionHook:
                 from core.initialization_manager import initialization_manager
                 ws = initialization_manager.get_cached_workspace_path()
                 if ws:
-                    from pathlib import Path
                     artifacts = Path(ws) / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts"
                     if artifacts.is_dir():
                         GateManager(artifacts).record_trigger("noise_filter")

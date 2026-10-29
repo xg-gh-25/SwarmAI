@@ -78,3 +78,22 @@ def test_from_another_repo_cwd_it_never_imports_that_repos_modules(ws, tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert "HIJACKED" not in proc.stdout + proc.stderr
     assert "Quokka rule" in proc.stdout
+
+
+def test_find_and_get_record_the_cdf_units_they_show(ws, tmp_path, monkeypatch, capsys):
+    """The knowledge CLI is the main way the DDD is read, so its reads feed CDF's usage
+    measure. Matching the shown text against the parsed units' bytes matched nothing on
+    real files (the shown text is not byte-identical); the unit's lines are what match."""
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
+    from core.addressing import find
+    from core.ingestion.store import connect_ro
+    assert knowledge_cli.main(["find", "--project", "P", "--query", "quokkas midnight"]) == 0
+    u = find("P", "quokkas midnight").units[0]
+    assert knowledge_cli.main(["get", "--project", "P", u.id]) == 0
+    capsys.readouterr()
+    conn = connect_ro()
+    rows = conn.execute("SELECT anchor, kind FROM unit_usage ORDER BY kind").fetchall()
+    conn.close()
+    kinds = [kind for _anchor, kind in rows]
+    assert kinds == ["read_by_agent", "recall_injected"], rows
+    assert all("TECH.md" in anchor for anchor, _kind in rows)

@@ -157,3 +157,47 @@ def test_main_pass_extracts_only_the_capped_windows(monkeypatch):
     s2_session._main_pass("s", [{"id": "m0"}], [], set(), None, None)
     assert len(calls) == s2_session.MAX_MAIN_WINDOWS
     assert all(c["windows"] == 20 and c["windows_skipped"] == 12 for c in calls)
+
+
+def test_user_pass_skips_messages_an_earlier_pass_already_extracted(tmp_path, monkeypatch):
+    """A session job runs after every idle, and each ran the user pass over all of the
+    session's messages again: one live session's 18 messages were extracted 9 times
+    (5, 7, 8 ... 18 messages), 83 units of mostly the same lessons. Messages an ok or
+    no_unit attempt already covered are skipped; a failed attempt's are tried again."""
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
+    from core.ingestion import api_v2 as api
+    from core.ingestion.sources import common
+    for status, events in (("ok", ["u1", "u2"]), ("no_unit", ["u3"]), ("failed", ["u4"])):
+        attempt = api.ExtractionAttempt(
+            source="S2", extractor_version="v", attempt_id=f"attempt:{status}",
+            evidence_range={"session_id": "s", "pass": "user_utterance", "events": events})
+        api.record_extraction_attempt(attempt, status=status)
+    other = api.ExtractionAttempt(source="S2", extractor_version="v", attempt_id="attempt:other",
+                                  evidence_range={"session_id": "s2", "pass": "user_utterance",
+                                                  "events": ["u5"]})
+    api.record_extraction_attempt(other, status="ok")
+    main = api.ExtractionAttempt(source="S2", extractor_version="v", attempt_id="attempt:main",
+                                 evidence_range={"session_id": "s", "pass": "main", "events": ["u5"]})
+    api.record_extraction_attempt(main, status="ok")
+    rows = [{"event_id": e, "kind": "user_message"} for e in ("u1", "u2", "u3", "u4", "u5")]
+    monkeypatch.setattr("core.session_inputs.user_authored_text", lambda e: f"text of {e}", raising=False)
+    monkeypatch.setattr(s2_session, "_root_ids", lambda ids: tuple(ids))
+    seen = []
+    monkeypatch.setattr(common, "extract_and_enqueue",
+                        lambda *a, **k: seen.append(k["evidence_range"]["events"]) or [])
+    s2_session._trusted_pass("s", rows, s2_session._claimed_by_s1("s")
+                             | s2_session._extracted_by_user_pass("s"), None, None)
+    assert seen == [["u4", "u5"]]
+
+
+
+def test_the_session_extraction_hands_the_user_pass_what_it_already_extracted(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(s2_session, "_transcript_sync", lambda sid: [])
+    monkeypatch.setattr(s2_session, "_input_rows", lambda sid: [])
+    monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: {"s1-event"})
+    monkeypatch.setattr(s2_session, "_extracted_by_user_pass", lambda sid: {"done-event"})
+    monkeypatch.setattr(s2_session, "_trusted_pass",
+                        lambda sid, rows, claimed, snap, llm: seen.setdefault("claimed", claimed) and [])
+    s2_session.extract_session_sync("s", passes=("user_utterance",))
+    assert seen["claimed"] == {"s1-event", "done-event"}
