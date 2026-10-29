@@ -8,7 +8,8 @@
 import { describe, it, expect } from 'vitest';
 import type { BrainDetail, ReviewData } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
-import { sectionCounts, projectRuns, runTone, needsYouItems, brainEval, hubSummary, hubNeeds, brainSignal } from './brainMapModel';
+import { sectionCounts, projectRuns, runTone, needsYouItems, brainEval, hubSummary, hubNeeds, brainSignal, generalNeed } from './brainMapModel';
+import type { BrainSummary, GeneralBrain } from '../../services/ddd';
 
 const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   id: 'run_a', requirement: 'Fix it', status: 'completed', profile: 'bugfix', progress: '8/8',
@@ -164,3 +165,32 @@ describe('brainMapModel', () => {
     expect(brainSignal(brain('F'), a)).toMatchObject({ tone: 'muted', rank: 3, text: 'No landed change in 30 days' });
   });
 });
+
+describe('the built-in General Brain in Need You (F2)', () => {
+  const g = (status: GeneralBrain['projectAgentStatus']): GeneralBrain =>
+    ({ name: 'General', description: null, library: { files: 1, bytes: 1 }, projectAgentStatus: status, shadowed: false });
+  const shadow = {
+    name: 'General', kind: 'knowledge', lifecycleStage: 'GROW', projectAgentStatus: 'draft',
+    sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: false },
+    health: { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '--' },
+  } as unknown as BrainSummary;
+
+  it('a draft or a broken Runner Agent is one row and one count; a confirmed one is none', () => {
+    for (const st of ['draft', 'invalid'] as const) {
+      expect(hubNeeds([], null, g(st)).map((n) => n.id)).toEqual(['builtin-general-agent']);
+      expect(hubSummary([], null, g(st)).needsYou).toBe(1);
+    }
+    for (const st of ['reviewed', null] as const) {
+      expect(hubNeeds([], null, g(st))).toEqual([]);
+      expect(hubSummary([], null, g(st)).needsYou).toBe(0);
+    }
+    expect(generalNeed(null)).toBeNull();
+  });
+
+  it('a Projects/ Brain with the same name keeps its own row, with another id', () => {
+    const rows = hubNeeds([shadow], null, g('draft'));
+    expect(rows.map((n) => [n.id, !!n.builtin])).toEqual([['General-agent', false], ['builtin-general-agent', true]]);
+    expect(hubSummary([shadow], null, g('draft')).needsYou).toBe(2);
+  });
+});
+

@@ -28,7 +28,8 @@ from typing import Any, Optional
 import yaml
 
 from core import brain_sync
-from core.project_agent import GENERAL_BRAIN, PROJECT_AGENT_FILE, general_brain_dir, normalize, validate
+from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, general_brain_dir, is_general_name,
+                                normalize, validate)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def local_brains(workspace: Path) -> list[dict[str, Any]]:
     if projects.is_dir():
         names += sorted(p.name for p in projects.iterdir()
                         if p.is_dir() and not p.is_symlink() and (p / ".project.json").is_file()
-                        and brain_sync.BRAIN_NAME_RE.fullmatch(p.name) and p.name != GENERAL_BRAIN)
+                        and brain_sync.BRAIN_NAME_RE.fullmatch(p.name) and not is_general_name(p.name))
     return [local_brain(workspace, n) for n in names]
 
 

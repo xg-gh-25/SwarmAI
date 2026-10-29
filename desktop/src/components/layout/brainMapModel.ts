@@ -17,7 +17,7 @@
  *   pendingSplit         health.pending split by source (Runs / proposals / escalations / jobs)
  *   brainSignal          the one signal a Hub card shows, and its sort rank
  */
-import type { BrainDetail, BrainSummary, ReviewData, SectionKey } from '../../services/ddd';
+import type { BrainDetail, BrainSummary, GeneralBrain, ReviewData, SectionKey } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
 
 export const SECTION_ORDER: { key: SectionKey; label: string }[] = [
@@ -162,6 +162,20 @@ export interface HubNeed {
   text: string;
   /** ISO time it started waiting (Runs only) */
   since: string | null;
+  /** the built-in General Brain (opened by its own view, never by the name) */
+  builtin?: boolean;
+}
+
+/** The General Brain's Runner Agent waits on the person (draft or problems). */
+const generalWaits = (g?: GeneralBrain | null) =>
+  !!g && (g.projectAgentStatus === 'draft' || g.projectAgentStatus === 'invalid');
+
+/** The Need You row of the built-in General Brain's Runner Agent, or none. Its id never
+ *  collides with a Projects/ Brain that carries the same name (`<name>-agent`). */
+export function generalNeed(g?: GeneralBrain | null): HubNeed | null {
+  if (!g || !generalWaits(g)) return null;
+  return { brain: g.name, kind: 'agent', id: 'builtin-general-agent', since: null, builtin: true,
+    text: g.projectAgentStatus === 'draft' ? 'Runner Agent draft to confirm' : 'Runner Agent file has problems to fix' };
 }
 
 /** A Project Agent waits on the person while it is a draft (confirm) or has problems (fix). */
@@ -183,7 +197,8 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
  *  rule proposals, escalations, failing jobs and Project Agents to confirm or fix.
  *  Each item is counted once: the attention channel's count per source, with the
  *  Runs named from the analytics where it lists them. */
-export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined): HubNeed[] {
+export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined,
+  general?: GeneralBrain | null): HubNeed[] {
   const out: HubNeed[] = [];
   const runs: HubNeed[] = [];
   for (const b of brains) {
@@ -206,17 +221,20 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
   }));
   const order: HubNeed['kind'][] = ['runs', 'proposals', 'escalations', 'jobs'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
-  return [...runs, ...out, ...agents];
+  const g = generalNeed(general);
+  return [...runs, ...out, ...agents, ...(g ? [g] : [])];
 }
 
-export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null): HubSummary {
+export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
+  general?: GeneralBrain | null): HubSummary {
   const known = new Set(brains.map((b) => b.name));
   const runs = (a?.byProject ?? []).filter((g) => known.has(g.project)).flatMap((g) => g.runs);
   const reported = brains.filter((b) => typeof b.recentActivity === 'number');
   return {
     brains: brains.length,
     // the attention channel already counts waiting Runs (paused_run): never add them twice
-    needsYou: brains.reduce((s, b) => s + (b.health.pending ?? 0), 0) + brains.filter(agentWaits).length,
+    needsYou: brains.reduce((s, b) => s + (b.health.pending ?? 0), 0) + brains.filter(agentWaits).length
+      + (generalWaits(general) ? 1 : 0),
     running: brains.filter((b) => b.health.liveRun).length,
     born: brains.filter((b) => b.setupState === 'setting-up').length,
     learned: reported.length ? reported.reduce((s, b) => s + (b.recentActivity ?? 0), 0) : null,

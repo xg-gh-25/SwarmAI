@@ -351,12 +351,15 @@ def _remove(root_fd: int, rel: str) -> None:
 
 def brain_root(workspace: Path, brain: str) -> tuple[Path, bool]:
     """(the Brain's directory on this machine, is it the General Brain); refuses a bad
-    name and a name that differs from an existing Brain only in case."""
-    from core.project_agent import GENERAL_BRAIN, general_brain_dir
+    name, the General Brain's name in another case, and a name that differs from an
+    existing Brain only in case."""
+    from core.project_agent import GENERAL_BRAIN, general_brain_dir, is_general_name
     if not isinstance(brain, str) or not BRAIN_NAME_RE.fullmatch(brain):
         raise SyncError(f"not a Brain name: {brain!r}")
     if brain == GENERAL_BRAIN:
         return general_brain_dir(workspace), True
+    if is_general_name(brain):        # "general", "GENERAL": never a Projects/ Brain
+        raise SyncError(f"{brain} is the {GENERAL_BRAIN} Brain's name in another case", 409)
     projects = Path(workspace) / "Projects"
     if projects.is_dir():
         for p in projects.iterdir():

@@ -158,6 +158,7 @@ describe('validateBrainName — the backend rule, checked before dispatch', () =
     expect(validateBrainName('con')).toContain('reserved');
     expect(validateBrainName('Com1.txt')).toContain('reserved');
     expect(validateBrainName('SWARMAI', ['SwarmAI'])).toContain('already exists');
+    for (const n of ['General', 'general', 'GENERAL']) expect(validateBrainName(n)).toContain('built-in General Brain');
   });
 });
 

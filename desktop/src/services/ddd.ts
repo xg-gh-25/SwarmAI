@@ -310,12 +310,26 @@ export async function getBrains(): Promise<BrainSummary[]> {
   return resp.data.brains ?? [];
 }
 
+/** The built-in General Brain on the Hub (design 2026-10-29-default-brains-and-project-
+ *  agent-standard §3): not a Projects/ DDD, so it is never in `brains`. `library`: the
+ *  Markdown it takes to a Hive; `shadowed`: a Projects/ Brain carries its name. */
+export interface GeneralBrain {
+  name: string;
+  description: string | null;
+  library: { files: number; bytes: number };
+  projectAgentStatus: 'draft' | 'reviewed' | 'invalid' | null;
+  shadowed: boolean;
+}
+
+export interface BrainsList { brains: BrainSummary[]; pinned: string[]; general: GeneralBrain | null }
+
 /** Gallery + Welcome Top-N need BOTH the summaries AND the pinned order (SwarmAI
- *  first + focus projects, existence-guarded, from the backend registry). One
- *  round-trip: `pinned` is a sibling field on /ddd/brains. */
-export async function getBrainsWithPinned(): Promise<{ brains: BrainSummary[]; pinned: string[] }> {
-  const resp = await api.get<{ brains: BrainSummary[]; pinned?: string[] }>('/ddd/brains');
-  return { brains: resp.data.brains ?? [], pinned: resp.data.pinned ?? [] };
+ *  first + focus projects, existence-guarded, from the backend registry), and the Hub
+ *  the built-in General Brain. One round-trip: `pinned` and `general` are sibling
+ *  fields on /ddd/brains (an older daemon has no `general`: null). */
+export async function getBrainsWithPinned(): Promise<BrainsList> {
+  const resp = await api.get<{ brains: BrainSummary[]; pinned?: string[]; general?: GeneralBrain | null }>('/ddd/brains');
+  return { brains: resp.data.brains ?? [], pinned: resp.data.pinned ?? [], general: resp.data.general ?? null };
 }
 
 /** GET /api/ddd/brains/{name} — Brain view: six-section breakdown. */
@@ -514,7 +528,7 @@ const BRAIN_STALE_MS = 30_000;
 /** Cached GET /ddd/brains — the Gallery summaries + pinned order. Re-opening the
  *  overlay within the window is instant (the aggregate scan is the ~4s cold cost). */
 export function useBrainsWithPinned() {
-  return useQuery<{ brains: BrainSummary[]; pinned: string[] }>(brainsWithPinnedQuery());
+  return useQuery<BrainsList>(brainsWithPinnedQuery());
 }
 
 /** The options of the Gallery query — also what the Brain Hub nav item prefetches. */

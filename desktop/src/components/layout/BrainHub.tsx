@@ -38,7 +38,7 @@ import {
   getLocalRoots, confirmLocalRoot, removeLocalRoot, type LocalRoot,
 } from '../../services/ddd';
 import type {
-  BrainSummary, BrainDetail,
+  BrainSummary, BrainDetail, GeneralBrain,
   ReviewData, ReviewHunk, PendingProposal, RecallHit, SpecDoc, SpecRepo,
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
@@ -54,6 +54,7 @@ import {
   type BrainTab, type MapPanel,
 } from './BrainMapView';
 import { BrainHubHome, Flower } from './BrainHubHome';
+import { GeneralBrainView } from './GeneralBrainView';
 import { bornText, hubSummary } from './brainMapModel';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
@@ -103,7 +104,10 @@ export function hunkSummary(diffText: string): {
 //
 // `mode` is the top-level state: 'gallery' (list) or 'detail' (a brain is selected).
 
-type Mode = 'gallery' | 'detail';
+/** gallery · a Brain's detail · the built-in General Brain's own page */
+type Mode = 'gallery' | 'detail' | 'general';
+/** the built-in General Brain's name (backend project_agent.GENERAL_BRAIN) */
+const GENERAL_NAME = 'General';
 /** The detail views: the seven tabs (one per part of the Brain map, plus Overview)
  *  and Distribute, the last step of a Brain's lifecycle (ship it out). */
 type DetailView = BrainTab | 'distribute';
@@ -126,8 +130,10 @@ const TABS: { key: DetailView; label: string }[] = [
  *  `onDispatch` (item 3) — the overlay ctx `dispatchPrompt` bridge: injects + sends
  *  a chat prompt. OPTIONAL: without it, sends fall back to the clipboard. */
 export function BrainHub(
-  { onRequestClose, onDispatch, defaultView = 'overview' }:
-  { onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; defaultView?: DetailView } = {},
+  { onRequestClose, onDispatch, onOpenLibrary, defaultView = 'overview' }:
+  { onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
+    /** switch to the Library overlay (the General Brain's knowledge) */
+    onOpenLibrary?: () => void; defaultView?: DetailView } = {},
 ) {
   const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
@@ -151,6 +157,10 @@ export function BrainHub(
     setMode('detail');
   }, [defaultView]);
   const backToGallery = useCallback(() => { setMode('gallery'); }, []);
+  /** The built-in General Brain has its own page: never opened by the name, so a
+   *  Projects/ Brain that carries the same name keeps its own detail. */
+  const openGeneral = useCallback(() => { setMode('general'); }, []);
+  const general = bp?.general ?? null;
   /** The Hub home's targets ('map' + a panel, or 'review') → a tab. */
   const openFromHome = useCallback((n: string, t?: { view?: 'map' | 'review'; panel?: MapPanel }) => {
     if (t?.view === 'review') return openBrain(n, 'reflect');
@@ -164,16 +174,20 @@ export function BrainHub(
   // brain's detail view directly. No detail → Gallery, the default.
   useEffect(() => {
     // the event that mounted us has already fired: a target recorded for it waits here
+    // a target named exactly "General" is the built-in General Brain (the agent's
+    // show-brain-hub, a target recorded before mount); a Projects/ Brain carrying that
+    // name in some case is opened from its own card
+    const open = (name: string) => (name === GENERAL_NAME ? openGeneral() : openBrain(name));
     const pending = takeOverlayTarget('brain-hub');
-    if (pending) openBrain(pending);
+    if (pending) open(pending);
     const onShow = (e: Event) => {
       const name = (e as CustomEvent<{ brain?: string }>).detail?.brain;
       takeOverlayTarget('brain-hub');
-      if (name) openBrain(name);
+      if (name) open(name);
     };
     window.addEventListener('swarm:show-brain-hub', onShow);
     return () => window.removeEventListener('swarm:show-brain-hub', onShow);
-  }, [openBrain]);
+  }, [openBrain, openGeneral]);
 
   if (error) {
     return (
@@ -188,12 +202,17 @@ export function BrainHub(
     );
   }
 
+  if (mode === 'general') {
+    return <GeneralBrainView general={general} onBack={backToGallery} onDispatch={onDispatch} onOpenLibrary={onOpenLibrary} />;
+  }
+
   // GALLERY (master) — the brain list is the ONLY top-level surface.
   if (mode === 'gallery' || !selected) {
     return (
       <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
         <div className="flex-1 overflow-auto">
-          <Gallery brains={brains} selfName={selfName} onOpen={openFromHome} onDispatch={onDispatch} />
+          <Gallery brains={brains} selfName={selfName} general={general} onOpenGeneral={openGeneral}
+            onOpenLibrary={onOpenLibrary} onOpen={openFromHome} onDispatch={onDispatch} />
         </div>
       </div>
     );
@@ -447,14 +466,16 @@ function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: st
  * get_pinned_projects, existence-guarded); pinned empty (old daemon) → no marker.
  */
 function Gallery(
-  { brains, selfName, onOpen, onDispatch }:
+  { brains, selfName, general, onOpenGeneral, onOpenLibrary, onOpen, onDispatch }:
   { brains: BrainSummary[] | null; selfName?: string;
+    general: GeneralBrain | null; onOpenGeneral: () => void; onOpenLibrary?: () => void;
     onOpen: (n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => void;
     onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean },
 ) {
   if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains</div>;
-  if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
-  return <BrainHubHome brains={brains} selfName={selfName} onOpen={onOpen} onDispatch={onDispatch} />;
+  if (brains.length === 0 && !general) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
+  return <BrainHubHome brains={brains} selfName={selfName} general={general} onOpenGeneral={onOpenGeneral}
+    onOpenLibrary={onOpenLibrary} onOpen={onOpen} onDispatch={onDispatch} />;
 }
 
 

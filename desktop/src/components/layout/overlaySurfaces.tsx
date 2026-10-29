@@ -17,6 +17,7 @@ import { OVERLAY_CHUNK } from './overlayChunks';
 import { useLayout } from '../../contexts/LayoutContext';
 import type { ToDo } from '../../types/todo';
 import { useBrainsWithPinned } from '../../services/ddd';
+import { useOverlay } from '../../contexts/OverlayContext';
 
 // Every overlay's content is its own chunk (design left-nav-overlay-single-source.md
 // S4; the G2 split of run_06c49540 did three). Each lazy component below is built on
@@ -53,6 +54,15 @@ function SettingsSurface() {
   return <SettingsPage initialTab={settingsTab} />;
 }
 
+/** Brain Hub inside the overlay provider: the General Brain's "Open Library" switches to
+ *  the Library overlay the way its nav card does (Library has no show-event). */
+function BrainHubSurface({ close, dispatchPrompt }: { close: () => void;
+  dispatchPrompt?: (msg: string, opts?: { autoSend?: boolean }) => boolean }) {
+  const { openOverlay } = useOverlay();
+  return <BrainHub onRequestClose={close} onDispatch={dispatchPrompt ?? (() => false)}
+    onOpenLibrary={() => openOverlay('library')} />;
+}
+
 // ── brain-hub (M2 pilot) ────────────────────────────────────────────────────────────
 // Was: BrainHubDemoOverlay + useExclusiveOverlay('swarm:show-brain-hub') + a bespoke
 // <Modal fullscreen>. Now: one registry entry; content is the same <BrainHub/>.
@@ -66,7 +76,7 @@ registerOverlay({
           onDispatch (item 3): the Distribute sub-tab injects + auto-sends the
           `s_ddd-distribute` command via the ChatPage-owned dispatchPrompt bridge —
           replacing the old clipboard-copy handoff. Same bridge NewBrain/Jobs use. */}
-      <BrainHub onRequestClose={close} onDispatch={dispatchPrompt ?? (() => false)} />
+      <BrainHubSurface close={close} dispatchPrompt={dispatchPrompt} />
     </div>
   ),
 });

@@ -175,7 +175,7 @@ def _ensure_project_dir(project: str) -> Path:
     Idempotent + non-destructive: ``ensure_project_metadata`` is only-if-absent, so an
     already-registered project keeps its metadata/history untouched. Returns the dir.
     """
-    from core.swarm_workspace_manager import ensure_project_metadata
+    from core.swarm_workspace_manager import ensure_project_metadata, reject_builtin_brain_name
     # Containment guard (adversarial-review HIGH): `project` is a CLI arg that upstream
     # tooling may fill from requirement/LLM text — an unvalidated segment like
     # "../../.ssh" would let mkdir(parents=True) escape the workspace.
@@ -186,6 +186,7 @@ def _ensure_project_dir(project: str) -> Path:
     from core.artifact_registry import ArtifactRegistry
     projects_root = _get_workspace() / "Projects"
     ArtifactRegistry(_get_workspace())._validate_path_identifiers(project)
+    reject_builtin_brain_name(project)   # before the mkdir: no empty Projects/General is left
     pdir = projects_root / project
     pdir.mkdir(parents=True, exist_ok=True)
     ensure_project_metadata(pdir, project)

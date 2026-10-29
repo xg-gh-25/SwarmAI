@@ -19,8 +19,10 @@ Key public symbols:
 - ``normalize(doc)``       any schema -> the v2 shape (shared part + modes)
 - ``validate(doc, project_dir=None)`` problems ([] = valid); reference checks when a
                            project dir is given
-- ``notes(doc, project_dir)`` advisory remarks that are not problems (a desktop-only
+- ``notes(doc, project_dir)`` advisory remarks that are not problems (where it leaves
+                           the standard, core/project_agent_standard; a desktop-only
                            skill in a mode that may run on a Hive)
+- ``is_general_name(name)`` the General Brain's name, in any case
 - ``revision(project_dir)`` sha256 of the definition + the skill dirs it uses + 3-gates/
 - ``gate_files(project_dir)`` / ``gates_digest(project_dir)`` the gate scripts and the
                            digest a Hive checks before running them
@@ -56,6 +58,13 @@ RESERVED_ACTIONS: frozenset[str] = frozenset(
 #: the Brain of tasks that belong to no project: its knowledge is Knowledge/Library and
 #: its Project Agent is the Runner Agent (design 2026-10-28-project-agent-flow §3, §5)
 GENERAL_BRAIN = "General"
+
+
+def is_general_name(name: object) -> bool:
+    """True for the General Brain's name in any case: no ``Projects/`` Brain may carry it
+    (dispatch, sync and lesson scope treat the name as the General Brain)."""
+    return isinstance(name, str) and name.casefold() == GENERAL_BRAIN.casefold()
+
 _MAX_BYTES = 64 * 1024
 _MODE_ID_RE = re.compile(r"[a-z][a-z0-9-]{0,39}")
 #: files under 3-gates/ that are never part of a gate's content (byte-compiled caches)
@@ -408,13 +417,17 @@ def _reference_problems(d: dict[str, Any], project_dir: Path) -> list[str]:
 
 
 def notes(doc: Any, project_dir: Path) -> list[str]:
-    """Advisory remarks, not problems: a desktop/macos-only skill in a mode that may
-    run on a Hive (the Hive does not project it)."""
+    """Advisory remarks, not problems: where the definition leaves the Project Agent
+    standard (core/project_agent_standard.deviations: a missing summary or handles, fewer
+    reserved actions, a bound repo without a code-change mode), and a desktop/macos-only
+    skill in a mode that may run on a Hive (the Hive does not project it). Shown on the
+    review card; never a reason to refuse a confirm or a dispatch."""
     if not isinstance(doc, dict):
         return []
+    from core.project_agent_standard import deviations
     d = normalize(doc)
     skills, _err = _skills(Path(project_dir))
-    out: list[str] = []
+    out: list[str] = deviations(d, bool(_bindings(Path(project_dir))))
     for m in _modes(d):
         places = _mode_value(m, d, "placements") or []
         if "hive" not in places or skills is None:

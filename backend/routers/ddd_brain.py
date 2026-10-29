@@ -1007,6 +1007,30 @@ def _knowledge_entries(
 _SLOW_GALLERY_MS = 1500
 
 
+def _general_summary() -> dict:
+    """The General Brain on the Hub (design 2026-10-29-default-brains-and-project-agent-
+    standard §3.1): not a ``Projects/`` DDD, so it is its own field, never in ``brains``.
+    ``library`` counts what it really carries to a Hive: the Markdown of the sync
+    whitelist (core/brain_sync, general branch). ``shadowed``: a ``Projects/`` Brain
+    carries its name in some case (made before the name was reserved)."""
+    from core import brain_sync
+    from core.project_agent import GENERAL_BRAIN, general_brain_dir, is_general_name
+    d = general_brain_dir(_workspace_root())
+    files = [r for r in brain_sync._walk(d, True) if r.endswith(".md")]
+    size = 0
+    for r in files:
+        try:
+            size += (d / r).stat().st_size
+        except OSError:
+            pass
+    pa = load_project_agent(d)
+    return {"name": GENERAL_BRAIN,
+            "description": (pa or {}).get("summary") or None,
+            "library": {"files": len(files), "bytes": size},
+            "projectAgentStatus": project_agent_status(d),
+            "shadowed": any(is_general_name(p.name) for p in _list_project_dirs())}
+
+
 @router.get("/brains")
 async def list_brains() -> dict:
     """Gallery: one live summary per DDD project (read-only)."""
@@ -1022,6 +1046,13 @@ async def list_brains() -> dict:
             leg_ms[name] = (_time.perf_counter() - t) * 1000
 
     dirs = await executors.run_nav(_list_project_dirs)
+
+    async def _general_leg() -> Optional[dict]:
+        try:
+            return await executors.run_nav(_general_summary)
+        except Exception as e:  # never 500 the gallery on the General Brain
+            logger.warning("General Brain summary failed: %s", e)
+            return None
 
     # Two producer legs, run concurrently; neither starts a subprocess (design
     # left-nav-backend-and-visual-system.md B3):
@@ -1043,11 +1074,13 @@ async def list_brains() -> dict:
             logger.warning("attention aggregate failed, brains show pending=0: %s", e)
         return by_brain
 
-    _pending_r, _runs_r = await asyncio.gather(
+    _pending_r, _runs_r, general = await asyncio.gather(
         _timed("pending", _pending_leg()),
         _timed("runs", executors.run_nav(_run_facts, _workspace_root())),
+        _timed("general", _general_leg()),
         return_exceptions=True,
     )
+    general = general if isinstance(general, dict) else None
     pending_by_brain = _pending_r if isinstance(_pending_r, dict) else {}
     run_facts = _runs_r if isinstance(_runs_r, dict) else {}
     for _leg, _res in (("pending", _pending_r), ("runs", _runs_r)):
@@ -1081,7 +1114,8 @@ async def list_brains() -> dict:
     # this response, NOT a separate endpoint (Gate-1: one fewer round-trip). The
     # frontend renders these as the top-row bento (SwarmAI big + 2 small stacked)
     # and the Welcome Top-N; the rest fall into the 3-per-row grid.
-    return {"brains": brains, "pinned": get_pinned_projects()}
+    # general: the built-in General Brain, second on the card wall (null if unreadable)
+    return {"brains": brains, "pinned": get_pinned_projects(), "general": general}
 
 
 @router.get("/brains/{name}")

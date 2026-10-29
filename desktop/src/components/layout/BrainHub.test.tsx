@@ -30,6 +30,8 @@ vi.mock('@tanstack/react-query', () => ({
 
 const mockGetBrains = vi.fn();
 const mockGetPinned = vi.fn<[], string[]>(() => []);  // default: no pins → flat-grid fallback
+const mockGetGeneral = vi.fn<[], unknown>(() => null);  // the built-in General Brain (null: an old daemon)
+const mockRunner = vi.fn<[], unknown>(() => ({ data: null }));  // useRunnerAgent's query result
 const mockGetBrainDetail = vi.fn();
 const mockGetReview = vi.fn();
 const mockApproveReview = vi.fn();
@@ -71,7 +73,7 @@ vi.mock('../../services/ddd', async () => {
   return {
     getBrains: (...a: unknown[]) => mockGetBrains(...a),
     useBrainsWithPinned: () =>
-      useAsync(async () => ({ brains: await mockGetBrains(), pinned: mockGetPinned() }), 'brains'),
+      useAsync(async () => ({ brains: await mockGetBrains(), pinned: mockGetPinned(), general: mockGetGeneral() }), 'brains'),
     useBrainDetail: (name: string | null) =>
       useAsync(() => (name ? mockGetBrainDetail(name) : Promise.resolve(undefined)), name),
     useReview: (name: string | null) =>
@@ -86,7 +88,7 @@ vi.mock('../../services/ddd', async () => {
     getLocalRoots: (...a: unknown[]) => mockGetLocalRoots(...a),
     confirmLocalRoot: (...a: unknown[]) => mockConfirmLocalRoot(...a),
     removeLocalRoot: (...a: unknown[]) => mockRemoveLocalRoot(...a),
-    useRunnerAgent: () => ({ data: null }),
+    useRunnerAgent: () => mockRunner(),
     confirmProjectAgent: vi.fn(),
     useBrainSpecs: (name: string, enabled: boolean) =>
       useAsync(() => (enabled ? mockGetSpecs(name) : Promise.resolve(undefined)), `${name}:${enabled}`),
@@ -229,6 +231,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetBrains.mockResolvedValue(GALLERY);
   mockGetPinned.mockReturnValue([]);  // default: flat-grid fallback (existing assertions)
+  mockGetGeneral.mockReturnValue(null);
+  mockRunner.mockReturnValue({ data: null });
   mockGetBrainDetail.mockResolvedValue(DETAIL);
   mockGetLocalRoots.mockResolvedValue([]);
   (getCodeIntelSummary as ReturnType<typeof vi.fn>).mockResolvedValue(null);  // no graph status
@@ -1207,3 +1211,132 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
   });
 });
+
+
+// ── the built-in General Brain (design 2026-10-29-default-brains-and-project-agent-standard) ──
+
+const GENERAL = { name: 'General', description: 'General research, reports and answers that belong to no project',
+  library: { files: 52, bytes: 812345 }, projectAgentStatus: 'draft', shadowed: false };
+
+describe('BrainHub — the built-in General Brain', () => {
+  it('is the second card, after SwarmAI, and says whether its Runner Agent is confirmed (F1)', async () => {
+    mockGetPinned.mockReturnValue(['SwarmAI']);
+    mockGetGeneral.mockReturnValue(GENERAL);
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    const ids = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
+    // SwarmAI first even though AIDLC has proposals waiting; General second
+    expect(ids.slice(0, 3)).toEqual(['hub-card-SwarmAI', 'hub-card-builtin-general', 'hub-card-AIDLC']);
+    expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent to confirm');
+    expect(screen.queryByTestId('hub-runner')).toBeNull();             // the old footer entry is gone
+  });
+
+  it('opens its own page: no DDD tabs, no request for /brains/General (F3)', async () => {
+    mockGetGeneral.mockReturnValue(GENERAL);
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-builtin-general'));
+    await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
+    expect(screen.getByTestId('general-library-count').textContent).toContain('52 Markdown documents');
+    expect(screen.queryByTestId('brainhub-breadcrumb')).toBeNull();
+    expect(mockGetBrainDetail).not.toHaveBeenCalledWith('General');
+    fireEvent.click(screen.getByTestId('general-back'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-card-wall')).toBeTruthy());
+  });
+
+  it('a Projects/ Brain with the same name keeps its own detail page (F3)', async () => {
+    mockGetBrains.mockResolvedValue([...GALLERY, { ...GALLERY[1], name: 'General' }]);
+    mockGetGeneral.mockReturnValue({ ...GENERAL, shadowed: true });
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-General')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-General'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-breadcrumb').textContent).toContain('General'));
+    expect(mockGetBrainDetail).toHaveBeenCalledWith('General');
+    expect(screen.queryByTestId('general-brain')).toBeNull();
+  });
+
+  it('show-brain-hub with the exact name General opens its page, also as a target recorded before mount', async () => {
+    mockGetGeneral.mockReturnValue(GENERAL);
+    const { unmount } = render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    window.dispatchEvent(new CustomEvent('swarm:show-brain-hub', { detail: { brain: 'General' } }));
+    await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
+    expect(mockGetBrainDetail).not.toHaveBeenCalledWith('General');
+    unmount();
+    const { setOverlayTarget } = await import('../../utils/overlayTarget');
+    setOverlayTarget('brain-hub', 'General');
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
+  });
+
+  it('both ways to its knowledge switch to the Library overlay', async () => {
+    mockGetGeneral.mockReturnValue(GENERAL);
+    const openLibrary = vi.fn();
+    render(<BrainHub defaultView="brain" onOpenLibrary={openLibrary} />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('hub-add-knowledge'));
+    fireEvent.click(screen.getByTestId('hub-add-pick-builtin-general'));
+    expect(openLibrary).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('dddcard-builtin-general'));
+    await waitFor(() => expect(screen.getByTestId('general-open-library')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('general-open-library'));
+    expect(openLibrary).toHaveBeenCalledTimes(2);
+  });
+
+  it('its page tells loading and a failed read apart from a missing Runner Agent', async () => {
+    mockGetGeneral.mockReturnValue(GENERAL);
+    const refetch = vi.fn();
+    mockRunner.mockReturnValue({ data: undefined, isLoading: true });
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-builtin-general'));
+    await waitFor(() => expect(screen.getByTestId('general-agent-loading')).toBeTruthy());
+    expect(screen.queryByTestId('general-no-agent')).toBeNull();
+    mockRunner.mockReturnValue({ data: undefined, isError: true, refetch });
+    fireEvent.click(screen.getByTestId('general-back'));
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-builtin-general'));
+    await waitFor(() => expect(screen.getByTestId('general-agent-error')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('general-agent-retry'));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it('counts itself among the Brains, and a Projects/ Brain carrying its name is told to rename', async () => {
+    mockGetBrains.mockResolvedValue([...GALLERY, { ...GALLERY[1], name: 'general', health: { ...GALLERY[1].health, pending: 0 }, pendingBySource: {} }]);
+    mockGetGeneral.mockReturnValue({ ...GENERAL, shadowed: true });
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-general')).toBeTruthy());
+    expect(screen.getByTestId('hub-filter-all').textContent).toContain('4');
+    expect(screen.getByTestId('hub-signal-general').textContent).toContain('built-in name General');
+    expect(screen.getByTestId('hub-signal-AIDLC').textContent).not.toContain('built-in name');
+  });
+
+  it('its Runner Agent draft is one Need You row that opens its page (F2)', async () => {
+    mockGetGeneral.mockReturnValue(GENERAL);
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('hub-filter-need'));
+    await waitFor(() => expect(screen.getByTestId('hub-need-builtin-general-agent')).toBeTruthy());
+    expect(screen.getByTestId('hub-need-builtin-general-agent').textContent).toContain('General (built-in)');
+    expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy();   // a card waiting on you stays in "Need you"
+    fireEvent.click(screen.getByTestId('hub-need-go-builtin-general-agent'));
+    await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
+  });
+
+  it('without a Runner Agent the card warns: a task that belongs to no Brain cannot go out', async () => {
+    mockGetGeneral.mockReturnValue({ ...GENERAL, projectAgentStatus: null });
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('No Runner Agent yet'));
+    expect(screen.getByTestId('hub-signal-builtin-general').className).toContain('status-warning');
+  });
+
+  it('a confirmed Runner Agent waits on nobody and its card leaves the Need you filter', async () => {
+    mockGetGeneral.mockReturnValue({ ...GENERAL, projectAgentStatus: 'reviewed' });
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent confirmed'));
+    fireEvent.click(screen.getByTestId('hub-filter-need'));
+    await waitFor(() => expect(screen.queryByTestId('dddcard-builtin-general')).toBeNull());
+    expect(screen.queryByTestId('hub-need-builtin-general-agent')).toBeNull();
+  });
+});
+

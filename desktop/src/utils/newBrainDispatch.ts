@@ -109,6 +109,9 @@ export function validateBrainName(raw: string, existing: string[] = []): string 
     return 'Use letters, numbers, spaces, - _ or . (start with a letter or number, at most 100).';
   }
   if (RESERVED.has(name.split('.')[0].toUpperCase())) return `"${name}" is a reserved name on Windows.`;
+  // the built-in General Brain (Knowledge/Library); the backend refuses it too
+  // (swarm_workspace_manager.reject_builtin_brain_name)
+  if (name.toLowerCase() === 'general') return `"${name}" is the built-in General Brain (Knowledge/Library); choose another name.`;
   if (existing.some((e) => e.toLowerCase() === name.toLowerCase())) return `A Brain named "${name}" already exists.`;
   return null;
 }

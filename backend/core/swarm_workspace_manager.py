@@ -186,6 +186,17 @@ from core.project_registry import DEFAULT_PROJECT_NAME  # noqa: E402
 DDD_SPEC_VERSION = "1.0"
 
 
+def reject_builtin_brain_name(name: str) -> None:
+    """ValueError for a name only a built-in Brain may carry: ``General`` in any case is
+    the General Brain (Knowledge/Library, its Runner Agent), and dispatch, sync and lesson
+    scope treat that name as it (design 2026-10-29-default-brains-and-project-agent-standard
+    §3.1). Called wherever a ``Projects/<name>/`` Brain is created, renamed or registered."""
+    from core.project_agent import GENERAL_BRAIN, is_general_name
+    if is_general_name(name):
+        raise ValueError(f"'{name}' is the built-in {GENERAL_BRAIN} Brain (Knowledge/Library); "
+                         "choose another name.")
+
+
 def ensure_project_metadata(project_dir: Path, name: str) -> bool:
     """Guarantee ``project_dir/.project.json`` exists (register the project).
 
@@ -198,6 +209,8 @@ def ensure_project_metadata(project_dir: Path, name: str) -> bool:
 
     ONLY-IF-ABSENT + NON-DESTRUCTIVE: if ``.project.json`` already exists, this is a
     no-op returning ``False`` — it NEVER overwrites existing metadata / update_history.
+    A name only a built-in Brain may carry (``reject_builtin_brain_name``) raises
+    ``ValueError`` before anything is written.
     Returns ``True`` iff it wrote a fresh file. The schema mirrors the backfill written
     by ``migrate_project_to_six_section._ensure_metadata`` (stable non-uuid id
     ``<name>-ddd`` — safe per ``_rebuild_uuid_index``, which maps string→path with no
@@ -213,6 +226,7 @@ def ensure_project_metadata(project_dir: Path, name: str) -> bool:
     meta_file = project_dir / ".project.json"
     if meta_file.exists():
         return False
+    reject_builtin_brain_name(name)        # ValueError: never registers the General Brain's name
     now = datetime.now(timezone.utc).isoformat()
     metadata = {
         "id": f"{name.lower()}-ddd",
@@ -2892,6 +2906,7 @@ class SwarmWorkspaceManager:
             raise ValueError(
                 f"'{name}' is a reserved filesystem name and cannot be used."
             )
+        reject_builtin_brain_name(name)   # the General Brain's name, in any case
 
         # Check case-insensitive collision with existing projects
         projects_dir = Path(workspace_path) / "Projects"

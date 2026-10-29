@@ -4,19 +4,19 @@
  *      and Sinking only report) with the two entry points, Add knowledge and New Brain;
  *      choosing Need you also opens the one queue of everything waiting on a person;
  *   2. one card per Brain: the six-petal flower, the name, the ONE most urgent signal
- *      (brainSignal) and a one-line description, cards with something to do first;
- *   3. a footer line for the Run Conductor, the Runner Agent (the General Brain's
- *      Project Agent: its review card opens below) and Eval. Everything else lives
- *      one click down, on the Brain's map.
+ *      (brainSignal) and a one-line description. The two built-in Brains lead: SwarmAI,
+ *      then General (Knowledge/Library and its Runner Agent, opened on its own page);
+ *      the rest follow, cards with something to do first;
+ *   3. a footer line for the Run Conductor and Eval. Everything else lives one click
+ *      down, on the Brain's map.
  *
- * Data: the gallery summaries already fetched by BrainHub, the 30-day pipeline
- * analytics (the same cached query the Brain map uses) and the Runner Agent.
+ * Data: the gallery summaries and the General Brain already fetched by BrainHub, and
+ * the 30-day pipeline analytics (the same cached query the Brain map uses).
  * Exports: BrainHubHome, HubFilter, Flower (the six-petal icon, also in the Brain header)
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useRunnerAgent, type BrainSummary, type ProjectAgent, type SectionKey } from '../../services/ddd';
-import { ProjectAgentCard } from './ProjectAgentCard';
+import type { BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { SECTION_ORDER, brainSignal, hubNeeds, hubSummary, type BrainSignalTone, type HubNeed } from './brainMapModel';
 import { openOverlayAt } from '../../utils/overlayTarget';
@@ -95,11 +95,25 @@ function SumCell({ label, value, sub, tone, filter, active, onPick }: {
   );
 }
 
-export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
+/** The General Brain card's one signal: can a task that belongs to no Brain go out? */
+function generalSignal(g: GeneralBrain): { tone: BrainSignalTone; text: string } {
+  if (g.projectAgentStatus === 'draft') return { tone: 'error', text: 'Runner Agent to confirm' };
+  if (g.projectAgentStatus === 'invalid') return { tone: 'error', text: 'Runner Agent has problems' };
+  if (g.projectAgentStatus === 'reviewed') return { tone: 'muted', text: 'Runner Agent confirmed' };
+  // no definition: a task that belongs to no Brain cannot go out
+  return { tone: 'warning', text: 'No Runner Agent yet' };
+}
+
+export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, onOpenLibrary, onOpen }: {
   brains: BrainSummary[];
   selfName?: string;
+  /** the built-in General Brain (null: an older daemon, or it could not be read) */
+  general?: GeneralBrain | null;
+  onOpenGeneral?: () => void;
+  /** switch to the Library overlay (adding knowledge to the General Brain) */
+  onOpenLibrary?: () => void;
   onOpen: (name: string, target?: OpenTarget) => void;
-  /** sends a prompt to chat (the Runner Agent's "Revise in chat") */
+  /** kept for the callers; the Runner Agent's card now lives on the General page */
   onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
 }) {
   const [filter, setFilter] = useState<HubFilter>('all');
@@ -108,16 +122,17 @@ export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
 
-  const sum = useMemo(() => hubSummary(brains, analytics), [brains, analytics]);
-  const needs = useMemo(() => hubNeeds(brains, analytics), [brains, analytics]);
+  const sum = useMemo(() => hubSummary(brains, analytics, general), [brains, analytics, general]);
+  const needs = useMemo(() => hubNeeds(brains, analytics, general), [brains, analytics, general]);
   const cards = useMemo(() => {
     const withSig = brains.map((b, i) => ({ b, sig: brainSignal(b, analytics), i }));
     const keep = withSig.filter(({ b, sig }) =>
       filter === 'all' || (filter === 'need' && sig.tone === 'error')
       || (filter === 'running' && b.health.liveRun) || (filter === 'born' && b.setupState === 'setting-up'));
-    // things to do first; the self Brain leads its rank; otherwise the incoming order
-    return keep.sort((x, y) => x.sig.rank - y.sig.rank
-      || Number(y.b.name === selfName) - Number(x.b.name === selfName) || x.i - y.i);
+    // the built-in SwarmAI Brain first (General follows it, rendered below); then things
+    // to do first; otherwise the incoming order
+    return keep.sort((x, y) => Number(y.b.name === selfName) - Number(x.b.name === selfName)
+      || x.sig.rank - y.sig.rank || x.i - y.i);
   }, [brains, analytics, filter, selfName]);
 
   const openNewBrain = () => window.dispatchEvent(new CustomEvent('swarm:show-new-brain'));
@@ -125,21 +140,73 @@ export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
    *  proposal in the Brain's Reflect tab, a draft in its Project Agent tab, the rest
    *  (escalations, failing jobs, Runs the analytics did not list) in Need You. */
   const goNeed = (n: HubNeed) => {
-    if (n.kind === 'run') openOverlayAt('pipeline', n.id);
+    if (n.builtin) onOpenGeneral?.();
+    else if (n.kind === 'run') openOverlayAt('pipeline', n.id);
     else if (n.kind === 'proposals') onOpen(n.brain, { view: 'review' });
     else if (n.kind === 'agent') onOpen(n.brain, { view: 'map', panel: 'agent' });
     else window.dispatchEvent(new CustomEvent('swarm:show-needs-you'));
   };
   const openPipelines = () => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
-  const { data: runnerRaw } = useRunnerAgent();
-  const runner = runnerRaw && typeof runnerRaw === 'object' && 'problems' in runnerRaw ? runnerRaw as ProjectAgent : null;
-  const [runnerOpen, setRunnerOpen] = useState(false);
+  /** A Projects/ Brain that carries the built-in General Brain's name (made before the
+   *  name was reserved): its card says so, since dispatch treats the name as General. */
+  const shadowSig = { tone: 'warning' as const, text: 'Uses the built-in name General: rename it (ask in chat)' };
+  const renderCard = ({ b, sig: own }: { b: BrainSummary; sig: ReturnType<typeof brainSignal> }) => {
+    const sig = general?.shadowed && b.name.toLowerCase() === 'general' ? { ...own, ...shadowSig } : own;
+    return (
+          <div key={b.name} className="min-w-0" data-testid={`hub-card-${b.name}`}>
+            <button className="w-full h-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 hover:border-[var(--color-primary)] focus-visible:border-[var(--color-primary)] outline-none"
+              onClick={() => onOpen(b.name)} aria-label={`Open ${b.name}`} data-testid={`dddcard-${b.name}`}>
+              <div className="flex items-center gap-3">
+                <Flower b={b} size={48} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-heading font-semibold">
+                    <span className="truncate">{b.name}</span>
+                    {b.name === selfName && (
+                      <span className="shrink-0 text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]"
+                        data-testid="dddcard-self-tag">SELF</span>
+                    )}
+                  </div>
+                  <div className={`text-small truncate ${TONE_TEXT[sig.tone]}`} data-testid={`hub-signal-${b.name}`}>{sig.text}</div>
+                </div>
+              </div>
+              <div className={`mt-2 text-small line-clamp-2 ${b.description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-faint)]'}`}
+                data-testid={`hub-desc-${b.name}`}>
+                {b.description || 'No description yet'}
+              </div>
+            </button>
+          </div>
+    );
+  };
+  const gSig = general ? generalSignal(general) : null;
+  const showGeneral = !!general && (filter === 'all' || (filter === 'need' && gSig?.tone === 'error'));
+  const generalCard = general && gSig && (
+    <div key="builtin-general" className="min-w-0" data-testid="hub-card-builtin-general">
+      <button className="w-full h-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 hover:border-[var(--color-primary)] focus-visible:border-[var(--color-primary)] outline-none"
+        onClick={() => onOpenGeneral?.()} aria-label="Open General" data-testid="dddcard-builtin-general">
+        <div className="flex items-center gap-3">
+          <span className="material-symbols-outlined shrink-0 w-12 h-12 flex items-center justify-center text-[32px] text-[var(--color-primary)]"
+            aria-hidden="true">local_library</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-heading font-semibold">
+              <span className="truncate">General</span>
+              <span className="shrink-0 text-meta font-semibold px-1.5 rounded-full text-[var(--color-text-muted)] bg-[var(--color-hover)]"
+                data-testid="dddcard-builtin-tag">BUILT-IN</span>
+            </div>
+            <div className={`text-small truncate ${TONE_TEXT[gSig.tone]}`} data-testid="hub-signal-builtin-general">{gSig.text}</div>
+          </div>
+        </div>
+        <div className="mt-2 text-small line-clamp-2 text-[var(--color-text-muted)]" data-testid="hub-desc-builtin-general">
+          {general.description || 'For tasks that belong to no Brain, with the Markdown in Knowledge/Library.'}
+        </div>
+      </button>
+    </div>
+  );
 
   return (
     <div className="p-4" data-testid="brainhub-gallery">
       <div className="flex items-stretch gap-3">
       <div className="flex-1 min-w-0 flex rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden" role="radiogroup" aria-label="Show brains">
-        <SumCell label="BRAINS" value={sum.brains} filter="all" active={filter === 'all'} onPick={setFilter} />
+        <SumCell label="BRAINS" value={sum.brains + (general ? 1 : 0)} filter="all" active={filter === 'all'} onPick={setFilter} />
         <SumCell label="NEED YOU" value={sum.needsYou} tone={sum.needsYou ? 'text-[var(--color-status-error)]' : undefined}
           filter="need" active={filter === 'need'} onPick={setFilter} />
         <SumCell label="RUNNING" value={sum.running} tone={sum.running ? 'text-[var(--color-primary)]' : undefined}
@@ -169,6 +236,13 @@ export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
                   {b.name}
                 </button>
               ))}
+              {general && (
+                <button role="menuitem" className="w-full text-left px-3 py-1.5 text-body hover:bg-[var(--color-hover)]"
+                  data-testid="hub-add-pick-builtin-general"
+                  onClick={() => { setPicking(false); onOpenLibrary?.(); }}>
+                  General (Knowledge/Library)
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -179,7 +253,7 @@ export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
           {needs.length === 0 && <div className="px-4 py-2 text-small text-[var(--color-text-muted)]">Nothing is waiting on you.</div>}
           {needs.map((n) => (
             <div key={n.id} className="flex items-center gap-3 px-4 py-2 border-t border-[var(--color-border)] first:border-t-0 text-small" data-testid={`hub-need-${n.id}`}>
-              <span className="font-semibold shrink-0">{n.brain}</span>
+              <span className="font-semibold shrink-0">{n.builtin ? `${n.brain} (built-in)` : n.brain}</span>
               <span className="flex-1 min-w-0 truncate">{n.text}</span>
               {n.since && <span className="text-meta text-[var(--color-text-muted)] shrink-0">{waited(n.since)}</span>}
               <button className="btn-sm btn-secondary shrink-0" data-testid={`hub-need-go-${n.id}`}
@@ -192,31 +266,11 @@ export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
       )}
 
       <div className="mt-3 grid gap-2.5 content-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} data-testid="brainhub-card-wall">
-        {cards.map(({ b, sig }) => (
-          <div key={b.name} className="min-w-0" data-testid={`hub-card-${b.name}`}>
-            <button className="w-full h-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 hover:border-[var(--color-primary)] focus-visible:border-[var(--color-primary)] outline-none"
-              onClick={() => onOpen(b.name)} aria-label={`Open ${b.name}`} data-testid={`dddcard-${b.name}`}>
-              <div className="flex items-center gap-3">
-                <Flower b={b} size={48} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-heading font-semibold">
-                    <span className="truncate">{b.name}</span>
-                    {b.name === selfName && (
-                      <span className="shrink-0 text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]"
-                        data-testid="dddcard-self-tag">SELF</span>
-                    )}
-                  </div>
-                  <div className={`text-small truncate ${TONE_TEXT[sig.tone]}`} data-testid={`hub-signal-${b.name}`}>{sig.text}</div>
-                </div>
-              </div>
-              <div className={`mt-2 text-small line-clamp-2 ${b.description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-faint)]'}`}
-                data-testid={`hub-desc-${b.name}`}>
-                {b.description || 'No description yet'}
-              </div>
-            </button>
-          </div>
-        ))}
-        {cards.length === 0 && <div className="col-span-full py-6 text-center text-small text-[var(--color-text-muted)]">No Brain matches this filter.</div>}
+        {(() => {
+          const lead = cards.length && cards[0].b.name === selfName ? 1 : 0;
+          return [...cards.slice(0, lead), ...(showGeneral ? ['general' as const] : []), ...cards.slice(lead)];
+        })().map((c) => (c === 'general' ? generalCard : renderCard(c)))}
+        {cards.length === 0 && !showGeneral && <div className="col-span-full py-6 text-center text-small text-[var(--color-text-muted)]">No Brain matches this filter.</div>}
       </div>
 
       <div className="mt-4 pt-2.5 flex items-center justify-between border-t border-[var(--color-border)] text-meta text-[var(--color-text-muted)]">
@@ -224,24 +278,11 @@ export function BrainHubHome({ brains, selfName, onOpen, onDispatch }: {
           Run Conductor · {sum.liveRuns} running in chat tabs · Local Worker and Hive are mocks ›
         </button>
         <span className="flex items-center gap-4">
-          {runner && (
-            <button className={`hover:text-[var(--color-text)] ${runner.status !== 'reviewed' ? 'text-[var(--color-status-error)]' : ''}`}
-              onClick={() => setRunnerOpen((v) => !v)} aria-expanded={runnerOpen} data-testid="hub-runner">
-              Runner Agent · {runner.status === 'reviewed' ? 'reviewed' : 'draft to confirm'} {runnerOpen ? '‹' : '›'}
-            </button>
-          )}
           <span data-testid="hub-eval">
             Eval · last 30 days: {sum.finished ? `${sum.landed} of ${sum.finished} finished Runs landed` : 'no finished Runs'}
           </span>
         </span>
       </div>
-      {runner && runnerOpen && (
-        <div className="mt-2 max-w-[900px] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3" data-testid="hub-runner-card">
-          <div className="text-meta text-[var(--color-text-muted)] mb-1">For tasks that belong to no Brain: research, reports and answers, with the Markdown in Knowledge/Library.</div>
-          <ProjectAgentCard key={`runner:${runner.revision ?? ''}`} brain={null} agent={runner}
-            onRevise={(note) => { onDispatch?.(`Revise the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nKeep it a draft and tell me when it is on the review card.`, { autoSend: true }); }} />
-        </div>
-      )}
     </div>
   );
 }

@@ -1,23 +1,44 @@
-# Project Agent definition of the default SwarmAI Brain, shipped with the product.
-# A draft: confirm it on the Brain Hub review card. It only names what a fresh
-# install has (the four seed documents); on a machine with the SwarmAI repo bound,
-# `artifact_cli project-agent-draft --project SwarmAI` drafts the full definition.
-# Design docs/design/2026-10-28-project-agent-flow.md §5.
+# Project Agent definition: how this Brain's work is taken in, done and delivered.
+# A draft until a person confirms it on the Brain Hub review card.
+# Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.
+# Shipped with SwarmAI: the Project Agent of the default SwarmAI Brain. It names only what a fresh
+# install has (the four seed documents); with the SwarmAI repo bound, `artifact_cli project-agent-draft
+# --project SwarmAI` drafts the full definition (with a code-change mode).
 schema: 2
 status: draft
 reviewed_at: null
 reviewed_by: null
 identity:
-  summary: SwarmAI itself, the self-evolving Agent OS; questions about how it works and designs for changing it
+  summary: 'SwarmAI itself, the self-evolving Agent OS: how it works and how to use it'
+  in_scope:
+  - questions about how SwarmAI works and how to use it
+  - investigations and designs about SwarmAI
+  out_of_scope:
+  - the code of other projects
   source: PRODUCT.md
+intake:
+  handles:
+  - explain how a SwarmAI feature works
+  - investigate why SwarmAI behaved a certain way
+  - write a note or a design about SwarmAI
 gates:
   enforce: []
-reserved_for_human: [open_pr, publish_release, push, send_external_message]
-placements: [chat-tab]
-landing: {approval: human}
+reserved_for_human:
+- open_pr
+- publish_release
+- push
+- send_external_message
+placements:
+- chat-tab
+landing:
+  approval: human
 modes:
-  - id: research
-    when: a question, an investigation or a design about SwarmAI, with no code change
-    profile: research
+- id: research
+  when: a question or an investigation, answered in the conversation
+  profile: research
+- id: write
+  when: a document or a report as the deliverable
+  profile: direct
 default_mode: research
-sources: [PRODUCT.md]
+sources:
+- PRODUCT.md

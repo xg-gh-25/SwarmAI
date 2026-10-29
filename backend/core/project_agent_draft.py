@@ -9,8 +9,10 @@ The model judges, a deterministic tool writes — the same split as
   tox / nox commands, each with an id), the Brain's documents, and the format of the
   proposal the model writes.
 - ``apply(project_dir, proposal)`` builds a ``schema: 2`` draft. Code decides the
-  deterministic fields (``intake.repos``, the ``research`` and ``code-change`` modes,
-  skills, gates, reserved actions, placements, landing). The model's proposal adds the
+  deterministic fields (``intake.repos``, the standard modes of the Brain's shape from
+  core/project_agent_standard — research, plus code-change with a bound repo or write
+  without one — skills, gates, reserved actions, placements, landing) and writes the keys
+  in the standard order. The model's proposal adds the
   judged fields (identity, handles, confidence, watches, extra modes, each mode's
   ``when`` and profile rules, aliases); every judged row names a source, and a row
   whose source does not exist is not written. Every ``setup`` / ``validations``
@@ -37,15 +39,12 @@ import yaml
 
 from core.brain_bootstrap import repo_read as rr
 from core.brain_bootstrap.commands import parse_commands
-from core.project_agent import (PROFILES, PROJECT_AGENT_FILE, RESERVED_ACTIONS, _MODE_ID_RE,
+from core import project_agent_standard as std
+from core.project_agent import (PROFILES, PROJECT_AGENT_FILE, _MODE_ID_RE,
                                 _bindings, _skills, gate_files, repo_roots, validate)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WHEN = {
-    "research": "a question, an investigation or a design, with no code change",
-    "code-change": "a change to the code of a bound repo",
-}
 #: an install / environment step (``setup``), recognised in a declared command
 _SETUP_RE = re.compile(
     r"\b(pip3? install|uv (sync|venv|pip install)|npm (ci|install)|yarn install|"
@@ -72,7 +71,8 @@ PROPOSAL_CONTRACT: dict[str, Any] = {
         "aliases": [{"name": "a module or product name people use for this Brain", "source": "str"}],
         "default_mode": "a mode id",
         "modes": [{
-            "id": "research | code-change | a new id ([a-z][a-z0-9-]*)",
+            "id": ("research | code-change (with a bound repo) | write (without one) | "
+                   "a new id ([a-z][a-z0-9-]*)"),
             "when": "the kind of intent this mode handles (a new `when` needs a source)",
             "source": "str",
             "profile": f"one of {sorted(PROFILES)} (research stays research)",
@@ -83,10 +83,11 @@ PROPOSAL_CONTRACT: dict[str, Any] = {
             "validations": ["a facts.commands id, or {id, command, source, repo, cwd}"],
         }],
     },
-    "defaults": ("research is always there; code-change exists when the Brain has a bound "
-                 "repo, delivery bundle, profile bugfix; its setup / validations default to "
-                 "the install steps / the validations.json entries (else the check commands) "
-                 "the repos declare; placements [chat-tab]; all four reserved actions; "
+    "defaults": ("the standard modes (templates/project-agents/STANDARD.md): research always; "
+                 "code-change when the Brain has a bound repo, delivery bundle, profile bugfix, "
+                 "its setup / validations default to the install steps / the validations.json "
+                 "entries (else the check commands) the repos declare; write (profile direct) "
+                 "when it has none; placements [chat-tab]; all four reserved actions; "
                  "status draft"),
 }
 
@@ -456,22 +457,21 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
                 b.drop(f"gates[{g!r}]", "not a gate of this Brain")
         gates = chosen
     doc["gates"] = {"enforce": gates}
-    doc["reserved_for_human"] = sorted(RESERVED_ACTIONS)
+    doc["reserved_for_human"] = list(std.DEFAULT_RESERVED)
     doc["placements"] = ["chat-tab"]
     doc["landing"] = {"approval": "human"}
 
-    # modes: research always; code-change when a repo is bound; then the proposed ones
-    modes: dict[str, dict[str, Any]] = {"research": {"id": "research", "when": DEFAULT_WHEN["research"],
-                                                     "profile": "research"}}
+    # modes: the standard ones for this shape of Brain (core/project_agent_standard), then
+    # the proposed ones
+    modes: dict[str, dict[str, Any]] = {m["id"]: m for m in std.standard_modes(bool(repo_names))}
     if repo_names:
-        code = {"id": "code-change", "when": DEFAULT_WHEN["code-change"], "profile": "bugfix",
-                "repos": list(repo_names), "delivery": "bundle"}
+        code = modes["code-change"]
+        code["repos"] = list(repo_names)
         cmds = facts["commands"]
         code["setup"] = b.command_rows("code-change.setup", _default_commands(cmds, "setup"),
                                        False, repo_names)
         code["validations"] = b.command_rows("code-change.validations",
                                              _default_commands(cmds, "validation"), True, repo_names)
-        modes = {"code-change": code, **modes}
     assigned: dict[str, list[str]] = {}
     proposed_modes = p.get("modes") if isinstance(p.get("modes"), list) else []
     for i, pm in enumerate(proposed_modes):
@@ -481,8 +481,11 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
             continue
         mid = pm["id"]
         where = f"modes[{mid}]"
-        if mid == "code-change" and "code-change" not in modes:
-            b.drop(where, "this Brain has no bound repo")
+        if mid in std.MODES and mid not in modes:
+            # a standard mode of the other shape of Brain: its `when` would overlap this
+            # shape's modes (core/project_agent_standard.MODES)
+            b.drop(where, "this Brain has no bound repo" if mid == "code-change"
+                   else "a Brain with a bound repo has no write mode (a design is research)")
             continue
         if mid not in modes:
             if not _MODE_ID_RE.fullmatch(mid):
@@ -542,7 +545,7 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
     default = p.get("default_mode") if isinstance(p.get("default_mode"), str) and p["default_mode"] in modes else None
     if p.get("default_mode") is not None and default is None:
         b.drop("default_mode", f"{p.get('default_mode')!r} is not a mode")
-    default = default or ("code-change" if "code-change" in modes else "research")
+    default = default or std.default_mode(bool(repo_names))
     placed = {s for v in assigned.values() for s in v}
     for s in skills:
         if s not in placed:
@@ -556,7 +559,7 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
     doc["modes"] = list(modes.values())
     doc["default_mode"] = default
     doc["sources"] = sorted(b.sources)
-    return doc, b.dropped
+    return std.ordered(doc), b.dropped
 
 
 def apply(project_dir: Path, proposal: Any, *, dry_run: bool = False,
@@ -587,9 +590,7 @@ def apply(project_dir: Path, proposal: Any, *, dry_run: bool = False,
     report["problems"] = validate(doc, project_dir)
     if report["problems"] or dry_run:
         return report
-    text = ("# Project Agent definition — a draft until confirmed on the Brain Hub review card.\n"
-            "# Written by `artifact_cli project-agent-draft`; design docs/design/"
-            "2026-10-28-project-agent-flow.md §4.\n"
+    text = (std.HEADER + "# Written by `artifact_cli project-agent-draft` from this Brain's knowledge.\n"
             + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
     if target.is_file():
         # every replaced draft is kept, by time: one slot would lose a hand edit on the

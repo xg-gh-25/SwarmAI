@@ -5,8 +5,8 @@ Questions these tests answer: is every setup / validations command the generator
 writes one its cited file declares verbatim, and is a command the file does not
 declare (or declares under another working directory) dropped; is a judged row whose
 source does not exist left out; are the deterministic fields decided by code
-(research always, code-change only with a bound repo, skills placed, gates, reserved
-actions, placements); does a draft validate, replace an earlier draft and never a
+(the standard modes: research always, code-change only with a bound repo, write only
+without one; skills placed, gates, reserved actions, placements); does a draft validate, replace an earlier draft and never a
 reviewed definition; does a shipped definition update only while the user has not
 changed it; does the CLI print facts and write the draft.
 """
@@ -340,11 +340,12 @@ def test_judged_rows_without_an_existing_source_are_not_written(brain):
     assert "PRODUCT.md" in doc["sources"] and "NOPE.md" not in doc["sources"]
 
 
-def test_a_brain_without_a_repo_gets_research_only(tmp_path):
+def test_a_brain_without_a_repo_gets_research_and_write(tmp_path):
     b = _brain(tmp_path, None)
     doc, dropped = pad.build(b, {"modes": [{"id": "code-change", "when": "x", "source": "TECH.md"},
                                            {"id": "research", "profile": "full", "validations": ["c1"]}]})
-    assert [m["id"] for m in doc["modes"]] == ["research"] and doc["default_mode"] == "research"
+    # the standard modes of a Brain without a repo (core/project_agent_standard)
+    assert [m["id"] for m in doc["modes"]] == ["research", "write"] and doc["default_mode"] == "research"
     assert "intake" not in doc and validate(doc, b) == []
     assert any("no bound repo" in d for d in dropped)
     assert any("keeps profile research" in d for d in dropped)
@@ -414,7 +415,7 @@ def test_shipped_definitions_validate_on_a_fresh_install(tmp_path):
             assert pad._brain_file(brain_dir, src), (name, src)
     runner = yaml.safe_load((SHIPPED_DIR / "runner.yaml").read_text())
     assert [m["id"] for m in runner["modes"]] == ["research", "write"]
-    assert runner["placements"] == ["chat-tab", "hive"] and "intake" not in runner
+    assert runner["placements"] == ["chat-tab", "hive"] and "repos" not in runner["intake"]
 
 
 def test_a_shipped_definition_updates_only_while_unchanged(tmp_path):
