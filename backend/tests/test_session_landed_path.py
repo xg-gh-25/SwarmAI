@@ -37,6 +37,10 @@ def _iso(tmp_path, monkeypatch):
     (data / "SwarmWS").mkdir(parents=True)
     monkeypatch.setattr("config.get_app_data_dir", lambda: data)
     monkeypatch.setenv("SWARM_SESSION_WORKTREE_ROOT", str(tmp_path / "swt"))
+    # landed_path maps only a checkout under $HOME; the repos live in tmp_path, which is
+    # under the system temp dir, not under the real home (the four mapping tests failed
+    # for that reason alone, and the outside-$HOME test passed without testing anything)
+    monkeypatch.setenv("HOME", os.path.realpath(tmp_path))
     for k, v in {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
                  "GIT_COMMITTER_EMAIL": "t@t"}.items():
         monkeypatch.setenv(k, v)
