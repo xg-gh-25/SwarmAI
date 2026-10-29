@@ -63,13 +63,28 @@ def _archive_path(path: Path, op_id: str) -> Path:
 
 
 def _blocked(guard: MemoryGuard, text: str) -> "Counter[tuple[str, str]]":
-    """The reject findings (injection, role hijack, exfiltration) of *text*, counted by
-    (pattern, matched text), scanned after invisible characters are stripped (a
-    zero-width character must not split a phrase past the scan)."""
+    """The reject findings (injection, role hijack, exfiltration) of *text*, each counted
+    with the line it is on: ``(pattern, line)``, or ``(pattern, line + next line)`` for a
+    phrase split over two lines. Keyed by the whole line, not the matched words, so a
+    kept marker ("you are now ", "system: ") cannot be re-used with a new instruction
+    after it. Scanned after invisible characters are stripped (a zero-width character
+    must not split a phrase past the scan); lines compared lower-cased, whitespace
+    collapsed."""
     from core.memory_guard import _INVISIBLE_CHARS
-    found = guard.scan(_INVISIBLE_CHARS.sub("", text)).findings
-    return Counter((f.pattern_name, " ".join(str(f.match).split()))
-                   for f in found if f.action == "reject")
+
+    def hits(chunk: str) -> set[str]:
+        return {f.pattern_name for f in guard.scan("\n" + chunk).findings if f.action == "reject"}
+
+    lines = _INVISIBLE_CHARS.sub("", text).splitlines()
+    norm = [" ".join(ln.split()).casefold() for ln in lines]
+    out: Counter[tuple[str, str]] = Counter()
+    single = [hits(ln) for ln in lines]
+    for i, names in enumerate(single):
+        out.update((name, norm[i]) for name in names)
+        if i + 1 < len(lines):
+            joined = hits(lines[i] + "\n" + lines[i + 1]) - names - single[i + 1]
+            out.update((name, norm[i] + " / " + norm[i + 1]) for name in joined)
+    return out
 
 
 def _sanitize(path: Path, data: bytes | None, expected_revision: str) -> bytes | None:
