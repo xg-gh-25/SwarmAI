@@ -5,6 +5,7 @@ TDD: tests written first, implementation follows.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -220,13 +221,13 @@ class TestWatcherBatchHandling:
         """Route extraction is chunked (_CHUNK_SIZE), graph update is single call."""
         from core.code_intel.watcher import CodeIntelWatcher, _CHUNK_SIZE
 
-        graph = MagicMock()
-        graph.incremental_update = MagicMock()
-        watcher = CodeIntelWatcher("test-project", Path("/tmp/repo"), graph)
-        watcher._running = True
-
         # Create 35 files — route extraction should be 2 chunks (20 + 15)
         changed_files = [Path(f"/tmp/repo/src/file_{i}.py") for i in range(35)]
+        graph = MagicMock()
+        graph.incremental_update = MagicMock(
+            return_value={"updated": [f"src/file_{i}.py" for i in range(35)]})
+        watcher = CodeIntelWatcher("test-project", Path("/tmp/repo"), graph)
+        watcher._running = True
 
         with patch.object(watcher, '_extract_routes_only') as mock_routes:
             await watcher._trigger_incremental(changed_files)
@@ -435,3 +436,87 @@ class TestWatcherHonorsGitignore:
             with patch.object(watcher, "_trigger_incremental", new_callable=AsyncMock) as trig:
                 await watcher._watch_loop()
                 trig.assert_not_called()
+
+
+class TestWatcherDefersWhileBound:
+    """While a clone's bind lock is held (a bind re-cloning it, or the API re-index
+    parsing it), a batch used to be dropped: an edit made after the re-index had read
+    the file never reached the graph. It is now replayed once the lock is free."""
+
+    def _repo(self, tmp_path):
+        import subprocess
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / "a.py").write_text("def one():\n    return 1\n", encoding="utf-8")
+        return repo
+
+    def test_an_edit_made_during_a_reindex_lands_after_it(self, tmp_path, monkeypatch):
+        import core.code_intel.watcher as w
+        from core.code_intel.build import rebuild
+        from core.code_intel.graph_store import GraphStore
+        from core.ddd_bindings import _bind_lock
+        monkeypatch.setattr(w, "_DEFER_POLL_S", 0.05)
+        repo = self._repo(tmp_path)
+        graph = GraphStore(tmp_path / "g.db")
+        rebuild(graph, repo, head=None, stamp=False)
+        watcher = w.CodeIntelWatcher("p", repo, graph)
+        watcher._running = True
+
+        async def run():
+            lock = _bind_lock(repo, "repo")
+            lock.__enter__()
+            try:
+                (repo / "a.py").write_text("def two():\n    return 2\n", encoding="utf-8")
+                await watcher._trigger_incremental([repo / "a.py"])
+                await asyncio.sleep(0.2)
+                during = [n["id"] for n in graph.get_nodes_by_file("a.py")]
+            finally:
+                lock.__exit__(None, None, None)
+            await asyncio.wait_for(watcher._replay, 5)
+            return during
+        try:
+            during = asyncio.run(run())
+            assert during == ["a.py::one"]                       # nothing written while held
+            assert [n["id"] for n in graph.get_nodes_by_file("a.py")] == ["a.py::two"]
+        finally:
+            graph.close()
+
+    def test_an_unchanged_file_keeps_its_routes_without_a_reparse(self, tmp_path):
+        """A save without an edit, or a replayed file the bind re-created unchanged, is
+        skipped by its content hash; its routes are not parsed again either."""
+        import core.code_intel.watcher as w
+        from core.code_intel.build import rebuild
+        from core.code_intel.graph_store import GraphStore
+        repo = self._repo(tmp_path)
+        graph = GraphStore(tmp_path / "g.db")
+        rebuild(graph, repo, head=None, stamp=False)
+        watcher = w.CodeIntelWatcher("p", repo, graph)
+        watcher._running = True
+        try:
+            with patch.object(watcher, "_extract_routes_only") as routes:
+                asyncio.run(watcher._trigger_incremental([repo / "a.py"]))
+            routes.assert_not_called()
+        finally:
+            graph.close()
+
+    def test_stop_cancels_a_pending_replay(self, tmp_path, monkeypatch):
+        import core.code_intel.watcher as w
+        from core.ddd_bindings import _bind_lock
+        monkeypatch.setattr(w, "_DEFER_POLL_S", 30)      # without the cancel it would still sleep
+        repo = self._repo(tmp_path)
+        graph = MagicMock()
+        watcher = w.CodeIntelWatcher("p", repo, graph)
+        watcher._running = True
+
+        async def run():
+            with _bind_lock(repo, "repo"):
+                await watcher._trigger_incremental([repo / "a.py"])
+                replay = watcher._replay
+                await asyncio.sleep(0.1)   # the replay is now waiting on the lock
+                await watcher.stop()
+                await asyncio.sleep(0.1)
+                return replay.done()       # asked inside the loop: asyncio.run ends tasks
+        assert asyncio.run(run()) is True
+        graph.incremental_update.assert_not_called()
+

@@ -28,6 +28,7 @@ _MAX_WATCHERS = 4
 _DEBOUNCE_MS = 2000  # 2 seconds
 _MAX_BATCH_SIZE = 50  # Skip incremental when too many files change at once
 _CHUNK_SIZE = 20  # Process files in chunks to limit memory spikes
+_DEFER_POLL_S = 2.0  # how often a deferred batch checks whether the bind lock is free
 
 # Which files the graph holds is parser.is_indexed_path (one answer for every path).
 # On top of it the watcher skips these path segments INSIDE the repo: workspace /
@@ -51,6 +52,10 @@ class CodeIntelWatcher:
         self._started_graph = graph_store
         self._task: asyncio.Task | None = None
         self._running = False
+        # Edits seen while the clone's bind lock was held (a bind, or the API
+        # re-index), replayed once it is released: rel path → absolute path.
+        self._deferred: dict[str, Path] = {}
+        self._replay: asyncio.Task | None = None
 
     def _current_graph(self) -> 'GraphStore':
         """The CURRENT cached store for this watcher's db, else the one started with
@@ -80,6 +85,8 @@ class CodeIntelWatcher:
     async def stop(self):
         """Stop watching. Idempotent."""
         self._running = False
+        if self._replay and not self._replay.done():
+            self._replay.cancel()
         if self._task:
             self._task.cancel()
             try:
@@ -173,27 +180,48 @@ class CodeIntelWatcher:
             if not relative_files:
                 return
 
-            # A bind is clearing / re-cloning this checkout and rebuilds the whole graph
-            # itself: its deletes and creates are not edits to replay.
+            # The clone's bind lock is held: a bind is re-cloning it, or the API
+            # re-index is parsing it. Writing now could race the rebuild, but dropping
+            # the batch lost an edit made after the re-index had read the file. So the
+            # batch waits and is replayed once the lock is free; the replay reads the
+            # disk as it is then (a file the bind re-created unchanged is skipped by
+            # its content hash).
             from core.ddd_bindings import bind_in_progress
             if bind_in_progress(self._root):
-                logger.debug("CodeIntelWatcher: %s is being bound — batch skipped",
-                             self._project_name)
+                for rel, f in zip(relative_files, abs_files_valid):
+                    self._deferred[rel] = f
+                if self._replay is None or self._replay.done():
+                    self._replay = asyncio.create_task(self._replay_when_unbound())
+                logger.debug("CodeIntelWatcher: %s is being bound — %d files deferred",
+                             self._project_name, len(self._deferred))
                 return
+            if self._deferred:   # released before the replay ran: take them along
+                for rel, f in self._deferred.items():
+                    if rel not in relative_files:
+                        relative_files.append(rel)
+                        abs_files_valid.append(f)
+                self._deferred.clear()
 
             # The store to write, resolved off the loop (it may read bindings.yaml
             # and open the db).
             graph = await executors.run_in("io", self._current_graph)
 
             # Phase 1: Single graph update (one FTS rebuild, not per-chunk)
-            await executors.run_in(
+            res = await executors.run_in(
                 "io",
                 graph.incremental_update,
                 self._root,
                 relative_files,
             )
 
-            # Phase 2: Route extraction in chunks (tree-sitter parsing is memory-heavy)
+            # Phase 2: Route extraction in chunks (tree-sitter parsing is memory-heavy),
+            # only for the files the update re-stored: one whose content hash is
+            # unchanged (a save without an edit, a replayed file the bind re-created)
+            # keeps its routes.
+            updated = set((res or {}).get("updated", []))
+            pairs = [(r, a) for r, a in zip(relative_files, abs_files_valid) if r in updated]
+            relative_files = [r for r, _a in pairs]
+            abs_files_valid = [a for _r, a in pairs]
             for i in range(0, len(relative_files), _CHUNK_SIZE):
                 if not self._running:
                     break
@@ -216,6 +244,19 @@ class CodeIntelWatcher:
             )
         except Exception as e:
             logger.warning(f"CodeIntelWatcher incremental reindex failed: {e}")
+
+    async def _replay_when_unbound(self) -> None:
+        """Replay the deferred batch once the clone's bind lock is released."""
+        from core.ddd_bindings import bind_in_progress
+        try:
+            while self._running and await executors.run_in("io", bind_in_progress, self._root):
+                await asyncio.sleep(_DEFER_POLL_S)
+            if self._running and self._deferred:
+                files = list(self._deferred.values())
+                self._deferred.clear()
+                await self._trigger_incremental(files)
+        except asyncio.CancelledError:
+            pass
 
     def _extract_routes_only(self, graph: 'GraphStore', relative_files: list[str],
                              abs_files: list[Path]):
