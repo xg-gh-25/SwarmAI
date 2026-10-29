@@ -170,12 +170,6 @@ class _MovesIt(Judge):
                              applicability="When it applies.", claims=["moved"], quality=QUALITY)
 
 
-    def card1_v2(self, unit, *_args):
-        from core.ingestion.contracts_v2 import GapAnswer
-        return GapAnswer(shape="Gap", actionable=True, evidenced=True, self_contained=True,
-                         project=self.project)
-
-
 def _gap(title: str, scope: str) -> dict:
     return {"kind": "gap", "gap_kind": "risk", "scope": scope, "title": title,
             "what": f"{title}: open.", "evidence": ["event:hive-local"]}

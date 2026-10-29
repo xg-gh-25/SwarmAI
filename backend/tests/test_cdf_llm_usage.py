@@ -61,8 +61,8 @@ def test_calls_are_recorded_under_the_attributed_source(data_dir, monkeypatch) -
     assert llm_usage.totals() == {"calls": 4, "input_tokens": 4000, "output_tokens": 200}
 
 
-def test_extractor_and_entailment_attribute_their_source(data_dir, monkeypatch) -> None:
-    from core.ingestion import llm_usage, pipeline_v2
+def test_extractor_attributes_its_source(data_dir, monkeypatch) -> None:
+    from core.ingestion import llm_usage
     from core.ingestion.sources import extract_llm
     seen: list[str] = []
 
@@ -72,18 +72,7 @@ def test_extractor_and_entailment_attribute_their_source(data_dir, monkeypatch) 
             return type("R", (), {"value": [], "raw": "[]"})()
 
     extract_llm.extract_units("S5", "text", (), allowed_kinds=("cognition",), llm=Llm())
-
-    class Judge:
-        def __init__(self, *_, **__) -> None:
-            pass
-
-        def entailment(self, *_):
-            seen.append(llm_usage.current_source())
-            return type("R", (), {"value": None})()
-
-    monkeypatch.setattr("core.ingestion.llm.BedrockJudge", Judge)
-    pipeline_v2.check_entailment("u", what="w", how=None, why=None)
-    assert seen == ["S5", "S1"]
+    assert seen == ["S5"]
     assert llm_usage.current_source() == "-"
 
 

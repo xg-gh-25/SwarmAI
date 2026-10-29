@@ -10,7 +10,7 @@ from core.ingestion.api_v2 import ResolvedEvidence, SCHEMA_V2_DDL
 from core.ingestion.contracts import (
     Card3bAnswer, ExistingClaim, ProjectSingle, QualityAnswers,
 )
-from core.ingestion.pipeline_v2 import _validate_card3b, reinforce_or_reject
+from core.ingestion.pipeline_v2 import reinforce_or_reject
 
 
 QUALITY = QualityAnswers(
@@ -89,22 +89,3 @@ def answer(claims: list[ExistingClaim], effective: str) -> Card3bAnswer:
     return Card3bAnswer(claims=claims, effective_unit=effective, card1=card1)
 
 
-class EntailJudge:
-    def card3b_entailment(self, claims, effective):
-        return [{"claim_id": claim["claim_id"], "entailed": claim["claim"] in effective}
-                for claim in claims]
-
-
-def test_card3b_requires_every_independently_split_old_claim() -> None:
-    old = "What remains. How it works. Why it matters. Another old claim."
-    complete = answer([
-        ExistingClaim(text=value, sentence=value, disposition="preserve", output_sentence=value)
-        for value in ("What remains.", "How it works.", "Why it matters.", "Another old claim.")
-    ], old)
-    assert _validate_card3b(EntailJudge(), old, "candidate", complete, [])
-    for missing in ("What remains.", "How it works.", "Why it matters.", "Another old claim."):
-        mutated = complete.model_copy(update={
-            "claims": [claim for claim in complete.claims if claim.sentence != missing],
-            "effective_unit": old.replace(missing, ""),
-        })
-        assert not _validate_card3b(EntailJudge(), old, "candidate", mutated, [])

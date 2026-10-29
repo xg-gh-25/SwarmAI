@@ -48,20 +48,18 @@ def _cognition(evidence, *, what="Keep the complete semantic claim."):
 
 
 def _assert_tainted_route() -> None:
-    from core.ingestion import contracts
-    from core.ingestion.contracts_v2 import PER_TURN_STORES, route_for_v2
+    from types import SimpleNamespace
 
-    answer = contracts.UserCross.model_validate({
-        "shape": "UserCross", "type": "guideline", "applicability": "When working",
-        "claims": ["Use one owner"], "user_kind": "preference",
-        "quality": {"atomic": True, "valuable": True, "self_contained": True,
-                    "durable": True, "evidenced": True,
-                    "internally_consistent": True, "concise": True},
-    })
-    destination = route_for_v2(
-        "cognition", answer, ddd_exists=False, project_hint=None, tainted=True)
-    assert destination.store not in PER_TURN_STORES
-    assert destination.rerouted_from == "STEERING"
+    from core.ingestion.contracts_v2 import SOURCE_UNIT, route_unit
+    from core.ingestion.pipeline_v2 import _not_grounded
+
+    unit = SOURCE_UNIT.validate_python({
+        "kind": "cognition", "type": "guideline", "scope": "user", "user_kind": "preference",
+        "title": "One owner", "what": "Use one owner", "evidence": ["unit:x"]})
+    destination = route_unit(unit, None)
+    assert destination.store == "STEERING"
+    tainted = SimpleNamespace(tainted=True, strength="user_explicit")
+    assert _not_grounded(destination.store, tainted, "[user_message] Use one owner", True)
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:

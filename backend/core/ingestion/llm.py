@@ -16,9 +16,8 @@ from jobs.bedrock import StructuredOutputError, get_model_id, text
 from . import llm_usage
 from .contracts import CONTRACT_VERSION, NORMALIZER_VERSION, PROMPT_VERSION, RULES_VERSION, Card1Answer, Card3bAnswer, HitJudgment
 from .prompts import (
-    UntypedOutput, card1_prompt, card1_v2_prompt, card3_prompt, card3b_prompt,
-    card3b_entailment_prompt, entailment_prompt, extract_json, parse_card1,
-    parse_card1_v2, parse_card3, parse_card3b, parse_entailment, prompt_hash,
+    UntypedOutput, card1_prompt, card3_prompt, card3b_prompt, extract_json,
+    parse_card1, parse_card3, parse_card3b, prompt_hash,
 )
 
 T = TypeVar("T")
@@ -111,20 +110,3 @@ class BedrockJudge:
         prompt = card3b_prompt(old_unit, candidate)
         return self._invoke(prompt, parse_card3b)
 
-    def card1_v2(self, unit: dict[str, Any], project_candidates: tuple[str, ...],
-                 known_domains: tuple[str, ...]) -> JudgeResult[Any]:
-        """Re-check an Event, Gap, or Reference against the v2 contract."""
-        prompt = card1_v2_prompt(unit, project_candidates, known_domains)
-        return self._invoke(prompt, parse_card1_v2)
-
-    def entailment(self, user_text: str, what: str, how: str | None,
-                   why: str | None) -> JudgeResult[Any]:
-        """Judge S1 entailment with no ambient conversation context."""
-        prompt = entailment_prompt(user_text, what, how, why)
-        return self._invoke(prompt, parse_entailment)
-
-    def card3b_entailment(self, claims: list[dict[str, str]],
-                          effective_unit: str) -> JudgeResult[list[dict[str, Any]]]:
-        """Independently verify every parsed old claim survives the effective unit."""
-        prompt = card3b_entailment_prompt(claims, effective_unit)
-        return self._invoke(prompt, extract_json)

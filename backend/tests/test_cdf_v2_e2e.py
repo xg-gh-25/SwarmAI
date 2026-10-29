@@ -28,7 +28,6 @@ from core.ingestion.contracts import (
     UserCross,
     WorldCrossGlobal,
 )
-from core.ingestion.contracts_v2 import EventAnswer, GapAnswer, ReferenceAnswerV2
 
 
 QUALITY = QualityAnswers(
@@ -63,11 +62,6 @@ class Judge:
         self.entailed = entailed
         self.unavailable = unavailable
 
-    def entailment(self, *_args: Any) -> dict[str, Any]:
-        if self.unavailable:
-            raise RuntimeError("judge unavailable")
-        return {"entailed": self.entailed, "reason": "fixture verdict"}
-
     def card1(self, text: str, projects: tuple[str, ...], context: str = "") -> Any:
         declared = json.loads(context or "{}")
         scope = declared.get("declared_scope", "world")
@@ -88,17 +82,6 @@ class Judge:
                 topic = "decision"
             return ProjectSingle(shape="ProjectSingle", project=project, topic=topic, **common)
         return WorldCrossGlobal(shape="WorldCrossGlobal", global_relevance=True, **common)
-
-    def card1_v2(self, unit: dict[str, Any], *_args: Any) -> Any:
-        if unit["kind"] == "event":
-            return EventAnswer(shape="Event", significance=["milestone"],
-                               self_contained=True, evidenced=True)
-        if unit["kind"] == "gap":
-            project = str(unit.get("scope") or "").removeprefix("project:") or None
-            return GapAnswer(shape="Gap", actionable=True, evidenced=True,
-                             self_contained=True, project=project)
-        return ReferenceAnswerV2(shape="ReferenceV2",
-                                 reference_kind=unit["reference_kind"], quality=QUALITY)
 
     def verify(self, unit: dict[str, Any], grounding: str,
                hits: list[dict[str, Any]]) -> dict[str, Any]:

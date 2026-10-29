@@ -15,31 +15,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-
 from . import api_v2, contracts_v2
-from .card0 import content_fingerprint
-from .card3 import aggregate_hits, relation_for_hit, retrieve
-from .contracts import Card0Answer, Card1Answer, Card3bAnswer, HitJudgment, UnitDecision
+from .card3 import retrieve
+from .contracts import Card0Answer, UnitDecision
 from .contracts_v2 import (
-    CARD1_V2_ADAPTER,
     PARKED_DEFER_REASONS,
-    PER_TURN_STORES,
     snapshot_project,
     CognitionUnit,
     DestinationV2,
-    EntailmentVerdict,
-    EventAnswer,
     EventUnit,
-    GapAnswer,
     GapUnit,
-    ReferenceAnswerV2,
     ReferenceUnit,
     SOURCE_UNIT,
     SourceUnit,
-    expand_projects,
-    known_domains,
-    route_for_v2,
     semantic_urls_have_credentials,
 )
 from .llm import JudgeResult
@@ -48,28 +36,7 @@ from .prompts import UntypedOutput
 
 logger = logging.getLogger(__name__)
 
-_QUALITY_REASONS = {
-    "atomic": "not_atomic",
-    "valuable": "no_judgment_value",
-    "self_contained": "not_self_contained",
-    "durable": "not_durable",
-    "evidenced": "speculative",
-    "internally_consistent": "self_contradictory",
-    "concise": "not_concise",
-}
-_SENTENCE = re.compile(r"(?<=[.!?。！？])(?:\s+|(?=[^.!?。！？]))|\n+")
 _H2 = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
-
-
-class ClaimEntailment(BaseModel):
-    """A second, typed card-3b check for one independently parsed old claim."""
-
-    model_config = ConfigDict(extra="forbid")
-    claim_id: str
-    entailed: bool
-
-
-_CLAIM_ENTAILMENTS = TypeAdapter(list[ClaimEntailment])
 
 
 @dataclass(frozen=True)
@@ -80,10 +47,6 @@ class ReinforcementResult:
     novel_root_ids: tuple[str, ...]
 
 
-
-# Session review §9: S7 cognition about the agent itself that may reach EVOLUTION/MEMORY
-# when the user's own words entail it.
-AGENT_SELF_TYPES = frozenset({"correction", "pitfall", "guideline", "process", "model"})
 AGENT_SELF_STORES = frozenset({"EVOLUTION", "MEMORY"})
 USER_CONTEXT_STORES = frozenset({"STEERING", "USER", "TOOLS"})
 
@@ -249,35 +212,6 @@ def _card0(unit: SourceUnit, row: Any) -> Card0Answer:
     return Card0Answer(passed=True)
 
 
-def _quality_failure(unit: SourceUnit, answer: Any) -> str | None:
-    if isinstance(answer, EventAnswer):
-        if not answer.significance:
-            return "not_significant"
-        if not answer.self_contained:
-            return "not_self_contained"
-        return None if answer.evidenced else "speculative"
-    if isinstance(answer, GapAnswer):
-        if not answer.actionable:
-            return "not_actionable"
-        if not answer.evidenced:
-            return "speculative"
-        return None if answer.self_contained else "not_self_contained"
-    if isinstance(answer, ReferenceAnswerV2):
-        if not answer.quality.self_contained:
-            return "not_self_contained"
-        if not answer.quality.valuable:
-            return "no_reference_value"
-        for field, reason in _QUALITY_REASONS.items():
-            if not getattr(answer.quality, field):
-                return "no_reference_value" if field == "valuable" else reason
-        return None
-    quality = answer.quality
-    for field, reason in _QUALITY_REASONS.items():
-        if not getattr(quality, field):
-            return reason
-    return None
-
-
 def _ddd_exists(root: Path, project: str | None) -> bool:
     if not project:
         return False
@@ -288,11 +222,6 @@ def _ddd_exists(root: Path, project: str | None) -> bool:
                    for name in DDD_CANONICAL_DOCS)
     except (OSError, ValueError):
         return False
-
-
-def _existing_domains(root: Path) -> tuple[str, ...]:
-    folder = root / "Knowledge" / "Learned" / "domains"
-    return tuple(path.stem for path in folder.glob("*.md")) if folder.is_dir() else ()
 
 
 def _section_exists(root: Path, destination: DestinationV2) -> bool:
@@ -314,75 +243,11 @@ def _is_hive_lesson(row: Any) -> bool:
             and str(_get(row, "source_ref", "")).startswith(HIVE_REF_PREFIX))
 
 
-def _answer_projects(answer: Any, fallback: str | None) -> list[str]:
-    projects = getattr(answer, "projects", None)
-    if projects:
-        return [str(value) for value in projects]
-    project = getattr(answer, "project", None) or fallback
-    return [str(project)] if project else []
-
-
-def _judge_card1(judge: Any, unit: SourceUnit, group: ClaimGroup, projects: tuple[str, ...],
-                 domains: tuple[str, ...], vectors: list[dict[str, Any]]) -> Any:
-    if isinstance(unit, CognitionUnit):
-        context = json.dumps({
-            "declared_type": unit.type,
-            "declared_scope": unit.scope,
-            "known_domains": sorted(known_domains(domains)),
-        }, ensure_ascii=False)
-        return _unwrap(judge.card1(group.text, projects, context), vectors)
-    if hasattr(judge, "card1_v2"):
-        return _unwrap(judge.card1_v2(unit.model_dump(mode="json"), projects, domains), vectors)
-    return CARD1_V2_ADAPTER.validate_python(
-        _unwrap(judge.card1(unit.model_dump(mode="json"), projects, domains), vectors)
-    )
-
-
 def _event_key(unit: EventUnit, roots: tuple[str, ...]) -> str:
     day = unit.when[:10]
     title = " ".join(unit.title.casefold().split())
     material = json.dumps([sorted(roots), day, title], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def _split_old_claims(text: str) -> list[tuple[str, str]]:
-    """Parse the old unit first, then deterministically split its complete sentences."""
-    stripped = re.sub(r"<!--\s*cand:[^>]+-->", "", text)
-    stripped = re.sub(r"^-\s+(?:\[[^]]+\]\s+)?\*\*[^*]+\*\*\s*", "", stripped.strip())
-    sentences = [part.strip() for part in _SENTENCE.split(stripped) if part.strip()]
-    return [(f"old-{index:04d}", sentence) for index, sentence in enumerate(sentences, 1)]
-
-
-def _validate_card3b(judge: Any, old_text: str, candidate_text: str,
-                     card3b: Card3bAnswer, vectors: list[dict[str, Any]]) -> bool:
-    parsed = _split_old_claims(old_text)
-    dispositions = {claim.sentence: claim for claim in card3b.claims}
-    if set(dispositions) != {sentence for _, sentence in parsed}:
-        return False
-    required = [(claim_id, sentence) for claim_id, sentence in parsed
-                if dispositions[sentence].disposition in {"preserve", "refine"}]
-    if required:
-        payload = [{"claim_id": claim_id, "claim": sentence} for claim_id, sentence in required]
-        if hasattr(judge, "card3b_entailment"):
-            raw = _unwrap(judge.card3b_entailment(payload, card3b.effective_unit), vectors)
-            checks = _CLAIM_ENTAILMENTS.validate_python(raw)
-        else:
-            checks = [ClaimEntailment(claim_id=claim_id,
-                                      entailed=sentence in card3b.effective_unit)
-                      for claim_id, sentence in required]
-        if {item.claim_id for item in checks} != {claim_id for claim_id, _ in required}:
-            return False
-        if not all(item.entailed for item in checks):
-            return False
-    candidate_claims = set(getattr(card3b.card1, "claims", []))
-    for claim in dispositions.values():
-        if claim.disposition == "refute" and (not claim.candidate_claim or
-                                               claim.candidate_claim not in candidate_claims):
-            return False
-    return _quality_failure(SOURCE_UNIT.validate_python({
-        "kind": "cognition", "type": "guideline", "scope": "world",
-        "title": "effective", "what": card3b.effective_unit, "evidence": ["unit:effective"]
-    }), card3b.card1) is None
 
 
 def _root_rows(conn: sqlite3.Connection) -> dict[str, tuple[str, tuple[str, ...], str]]:
@@ -447,270 +312,6 @@ def _relation_hints(unit: SourceUnit) -> list[dict[str, str]]:
     if kind not in {"supersedes", "derived_from"} or not target:
         return []
     return [{"predicate": kind, "object_anchor": str(target)}]
-
-
-def _legacy_run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecision:
-    """Run one persisted v2 inbox row through cards 0-3 and return its audit decision."""
-    root = Path(workspace_root)
-    payload = _json(_get(row, "payload"), {})
-    unit = SOURCE_UNIT.validate_python(payload)
-    unit_id = str(_get(row, "unit_id") or f"{_get(row, 'id', 'unit')}.unit")
-    resolved = _resolved(row)
-    # the column, or for rows queued before it took `project` too, the snapshot itself
-    project_hint = (_get(row, "project_hint")
-                    or snapshot_project(_json(_get(row, "project_snapshot"), {})))
-    # rows queued before candidates were written: the hint is the one candidate
-    projects = tuple(_json(_get(row, "project_candidates"), [])) or (
-        (str(project_hint),) if project_hint else ())
-    group = _group(unit, projects)
-    vectors: list[dict[str, Any]] = []
-    card0 = _card0(unit, row)
-    if not card0.passed:
-        return _decision(unit_id, "reject", "reject", card0.reason, vectors=vectors, card0=card0)
-
-    if str(_get(row, "source_v2", _get(row, "source", ""))) == "S1" and isinstance(unit, CognitionUnit):
-        envelope = _json(_get(row, "envelope"), {})
-        event_ids = envelope.get("source_event_ids") or envelope.get("event_ids") or []
-        user_text = ""
-        if event_ids:
-            from core.session_inputs import user_authored_text
-            user_text = user_authored_text(str(event_ids[-1])) or ""
-        if not user_text:
-            user_text = str(envelope.get("user_authored_text", ""))
-        try:
-            verdict = _unwrap(judge.entailment(user_text, unit.what, unit.how, unit.why), vectors)
-            verdict = EntailmentVerdict.model_validate(verdict)
-        except Exception as exc:
-            logger.warning("CDF S1 entailment unavailable: %s", type(exc).__name__)
-            return _decision(unit_id, "defer", "defer", "entailment_unavailable",
-                             vectors=vectors, card0=card0)
-        if not verdict.entailed:
-            resolved = api_v2.ResolvedEvidence(
-                root_ids=tuple(_json(_get(row, "envelope"), {}).get("context_root_ids", resolved.root_ids)),
-                lineage_root_ids=tuple(_json(_get(row, "envelope"), {}).get("context_lineage_root_ids", resolved.lineage_root_ids)),
-                strength="inferred",
-                tainted=True,
-            )
-
-    tainted_lineage = None    # set when the S7 grounding verdict lifts the taint
-    if (resolved.tainted and str(_get(row, "source_v2", _get(row, "source", ""))) == "S7"
-            and isinstance(unit, CognitionUnit) and unit.scope == "agent"
-            and unit.type in AGENT_SELF_TYPES):
-        grounding = _grounding(unit.evidence)
-        if grounding:
-            try:
-                verdict = _unwrap(judge.entailment(grounding, unit.what, unit.how, unit.why), vectors)
-                verdict = EntailmentVerdict.model_validate(verdict)
-            except Exception as exc:
-                logger.warning("CDF S7 agent-self entailment unavailable: %s", type(exc).__name__)
-                return _decision(unit_id, "defer", "defer", "entailment_unavailable",
-                                 vectors=vectors, card0=card0)
-            if verdict.entailed:
-                # The agent's own cognition, backed by what the user said or a measured
-                # result (session review §9): routed as untainted, so it can reach
-                # EVOLUTION and MEMORY -- and only those (checked after routing): the
-                # verdict is a model's, so it never opens STEERING/USER/TOOLS.
-                tainted_lineage = resolved
-                resolved = api_v2.ResolvedEvidence(
-                    root_ids=resolved.root_ids, lineage_root_ids=resolved.lineage_root_ids,
-                    strength=resolved.strength, tainted=False, unresolved=resolved.unresolved)
-                vectors.append({"agent_self_grounded": True, "entailment": verdict.reason})
-
-    domains = _existing_domains(root)
-    try:
-        card1 = _judge_card1(judge, unit, group, projects, domains, vectors)
-    except UntypedOutput:
-        return _decision(unit_id, "reject", "reject", "untyped", vectors=vectors, card0=card0)
-    except Exception as exc:
-        return _decision(unit_id, "defer", "defer", f"judge_unavailable:{type(exc).__name__}",
-                         vectors=vectors, card0=card0)
-    failure = _quality_failure(unit, card1)
-    if failure:
-        return _decision(unit_id, "reject", "reject", failure, vectors=vectors,
-                         card0=card0, card1=card1)
-
-    answer_projects = _answer_projects(card1, project_hint)
-    if _is_hive_lesson(row) and any(p != project_hint for p in answer_projects):
-        # a Hive's lesson lands only in the Brain its run used (or in no project for
-        # the General Brain): the judge's own project choice cannot move it elsewhere
-        return _decision(unit_id, "reject", "reject", "project_outside_brain", vectors=vectors,
-                         card0=card0, card1=card1)
-    if len(answer_projects) > 1:
-        expansions = expand_projects(unit_id, answer_projects)
-        # The worker expands these into one row/write each. Keeping the complete expansion
-        # in the audit result makes the fan-out deterministic and restartable.
-        vector = {"project_expansions": expansions}
-        vectors.append(vector)
-    selected_project = answer_projects[0] if len(answer_projects) == 1 else project_hint
-    domain = getattr(card1, "domain", None) or _json(_get(row, "envelope"), {}).get("domain")
-    try:
-        destination = route_for_v2(
-            unit.kind, card1,
-            ddd_exists=_ddd_exists(root, selected_project),
-            project_hint=selected_project,
-            tainted=resolved.tainted,
-            domain=domain,
-            existing_domains=domains,
-            source_url=getattr(unit, "source_url", None),
-        )
-    except ValueError as exc:
-        reason = str(exc)
-        decision = "defer" if reason in {"unknown_domain", "ambiguous_project"} else "reject"
-        return _decision(unit_id, decision, decision, reason, vectors=vectors,
-                         card0=card0, card1=card1)
-    if tainted_lineage is not None and destination.store not in AGENT_SELF_STORES:
-        # the S7 grounding verdict lifted the taint for EVOLUTION / MEMORY only
-        resolved = tainted_lineage
-        try:
-            destination = route_for_v2(
-                unit.kind, card1, ddd_exists=_ddd_exists(root, selected_project),
-                project_hint=selected_project, tainted=True, domain=domain,
-                existing_domains=domains, source_url=getattr(unit, "source_url", None))
-        except ValueError as exc:
-            return _decision(unit_id, "reject", "reject", str(exc), vectors=vectors,
-                             card0=card0, card1=card1)
-    if destination.store in USER_CONTEXT_STORES and resolved.strength != "user_explicit":
-        # C2: STEERING / USER / TOOLS hold what the user said, never an inference
-        return _decision(unit_id, "reject", "reject", "insufficient_evidence", vectors=vectors,
-                         card0=card0, card1=card1, card2=destination, destination=destination)
-    if isinstance(unit, CognitionUnit) and _volatile(_unit_text(unit)):
-        # D4 / R30#4: a drifting number (line N, N files, N MB) is a snapshot, not cognition
-        return _decision(unit_id, "reject", "reject", "volatile", vectors=vectors,
-                         card0=card0, card1=card1, card2=destination, destination=destination)
-    if resolved.tainted and destination.store in PER_TURN_STORES and destination.injectable:
-        return _decision(unit_id, "reject", "reject", "trust_floor", vectors=vectors,
-                         card0=card0, card1=card1, card2=destination,
-                         destination=destination)
-    if not _section_exists(root, destination):
-        return _decision(unit_id, "defer", "defer", "missing_section", vectors=vectors,
-                         card0=card0, card1=card1, card2=destination,
-                         destination=destination)
-
-    if isinstance(unit, EventUnit):
-        event_key = _event_key(unit, resolved.root_ids)
-        group = ClaimGroup(**{**group.__dict__, "evidence": event_key})
-    retrieval = retrieve(group, root, destination)
-    if retrieval.status in {"UNAVAILABLE", "STALE"}:
-        return _decision(unit_id, "defer", "defer", retrieval.status.lower(), vectors=vectors,
-                         card0=card0, card1=card1, card2=destination,
-                         destination=destination, card3=retrieval)
-    if retrieval.status == "OK_EMPTY":
-        result = _decision(unit_id, "write", "add", "new", vectors=vectors,
-                           card0=card0, card1=card1, card2=destination,
-                           destination=destination, card3=retrieval)
-        result.version_vector["relation_hints"] = _relation_hints(unit)
-        if isinstance(unit, EventUnit):
-            result.version_vector["event_key"] = _event_key(unit, resolved.root_ids)
-        return result
-
-    if isinstance(unit, EventUnit):
-        event_key = _event_key(unit, resolved.root_ids)
-        if any(f"event_key:{event_key}" in hit.text for hit in retrieval.hits):
-            return _decision(unit_id, "reject", "reject", "already_exists", vectors=vectors,
-                             card0=card0, card1=card1, card2=destination,
-                             destination=destination, card3=retrieval)
-    hit_payload = [hit.model_dump() | {
-        "candidate_evidence": resolved.strength,
-        "candidate_observed_at": _json(_get(row, "envelope"), {}).get("observed_at"),
-    } for hit in retrieval.hits]
-    try:
-        judgments = _unwrap(judge.card3(group.text, hit_payload), vectors)
-        judgments = [HitJudgment.model_validate(item) for item in judgments]
-    except UntypedOutput:
-        return _decision(unit_id, "reject", "reject", "untyped", vectors=vectors,
-                         card0=card0, card1=card1, card2=destination,
-                         destination=destination, card3=retrieval)
-    except Exception as exc:
-        return _decision(unit_id, "defer", "defer", f"judge_unavailable:{type(exc).__name__}",
-                         vectors=vectors, card0=card0, card1=card1, card2=destination,
-                         destination=destination, card3=retrieval)
-    if len(judgments) != len(retrieval.hits) or {item.anchor for item in judgments} != {
-        item.anchor for item in retrieval.hits
-    }:
-        return _decision(unit_id, "reject", "reject", "untyped", vectors=vectors,
-                         card0=card0, card1=card1, card2=destination,
-                         destination=destination, card3=retrieval,
-                         hit_judgments=judgments)
-
-    relations = [relation_for_hit(item) for item in judgments]
-    aggregate = aggregate_hits(relations)
-    duplicate_target = aggregate.target_anchor if aggregate.reason == "already_exists" else None
-    if duplicate_target and isinstance(unit, CognitionUnit):
-        support = reinforce_or_reject(duplicate_target, resolved, source_unit_id=unit_id)
-        if support.reinforced:
-            return _decision(unit_id, "reinforce", "reinforce", "reinforced", vectors=vectors,
-                             card0=card0, card1=card1, card2=destination,
-                             destination=destination, card3=retrieval,
-                             hit_judgments=judgments)
-    # Refuting roots are evidence even when normal replacement is blocked.  They do not
-    # replace relation semantics; card 3 continues below.
-    for judgment in judgments:
-        if any(claim.verdict == "refutes" for claim in judgment.claim_verdicts):
-            reinforce_or_reject(judgment.anchor, resolved, source_unit_id=unit_id,
-                                polarity="refute")
-
-    if aggregate.action == "reject":
-        return _decision(unit_id, "reject", "reject", aggregate.reason, vectors=vectors,
-                         card0=card0, card1=card1, card2=destination,
-                         destination=destination, card3=retrieval,
-                         hit_judgments=judgments)
-    card3b = None
-    if aggregate.action in {"replace", "refine"}:
-        target = next(hit for hit in retrieval.hits if hit.anchor == aggregate.target_anchor)
-        if target.baseline:
-            try:
-                card3b = _unwrap(judge.card3b(target.text, group.text), vectors)
-                card3b = Card3bAnswer.model_validate(card3b)
-            except UntypedOutput:
-                return _decision(unit_id, "reject", "reject", "untyped", vectors=vectors,
-                                 card0=card0, card1=card1, card2=destination,
-                                 destination=destination, card3=retrieval,
-                                 hit_judgments=judgments)
-            except Exception as exc:
-                return _decision(unit_id, "defer", "defer", f"judge_unavailable:{type(exc).__name__}",
-                                 vectors=vectors, card0=card0, card1=card1, card2=destination,
-                                 destination=destination, card3=retrieval,
-                                 hit_judgments=judgments)
-            effective_ok = _validate_card3b(judge, target.text, group.text, card3b, vectors)
-            if effective_ok and destination.store in {"DDD", "COMMON_DDD"}:
-                effective_ok = all(f"{field}:" in card3b.effective_unit
-                                   for field in ("what", "how", "why"))
-            if effective_ok:
-                try:
-                    effective_destination = route_for_v2(
-                        "cognition", card3b.card1,
-                        ddd_exists=_ddd_exists(root, selected_project),
-                        project_hint=selected_project, tainted=resolved.tainted,
-                        domain=domain, existing_domains=domains,
-                    )
-                    effective_ok = (effective_destination.relative_path == destination.relative_path
-                                    and effective_destination.section == destination.section)
-                except ValueError:
-                    effective_ok = False
-            if not effective_ok:
-                return _decision(unit_id, "reject", "reject", "conflict_unresolved",
-                                 vectors=vectors, card0=card0, card1=card1,
-                                 card2=destination, destination=destination, card3=retrieval,
-                                 hit_judgments=judgments, card3b=card3b)
-    result = _decision(unit_id, "write", aggregate.action, aggregate.reason, vectors=vectors,
-                       card0=card0, card1=card1, card2=destination,
-                       destination=destination, card3=retrieval,
-                       hit_judgments=judgments, card3b=card3b)
-    result.version_vector["relation_hints"] = _relation_hints(unit)
-    return result
-
-
-def check_entailment(user_text: str, *, what: str, how: str | None,
-                     why: str | None) -> EntailmentVerdict | None:
-    """Run the isolated S1 entailment judge with no ambient session context."""
-    try:
-        from .llm import BedrockJudge
-        from .llm_usage import attribute
-        with attribute("S1"):
-            return BedrockJudge().entailment(user_text, what, how, why).value
-    except Exception as exc:
-        logger.warning("CDF isolated entailment failed: %s", type(exc).__name__)
-        return None
 
 
 def _now_iso() -> str:

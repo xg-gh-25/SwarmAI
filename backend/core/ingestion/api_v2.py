@@ -5,7 +5,7 @@ Owners:
 - PROVENANCE: ``provenance.py`` — ``SCHEMA_V2_DDL`` tables below, ``register_root``,
   ``resolve_evidence``, ``record_extraction_attempt``, ``enqueue_unit``.
 - PIPELINE: ``pipeline_v2.py`` / ``writer`` renderers — ``run_unit_v2``, ``reinforce_or_reject``,
-  ``render_unit``, ``check_entailment``, parked-deferral requeue; ``knowledge_store.sync_knowledge_file``
+  ``render_unit``, parked-deferral requeue; ``knowledge_store.sync_knowledge_file``
   (per-unit chunks for multi-unit files).
 - SOURCES: ``sources/s1..s6`` — extractors that call ``enqueue_unit`` /
   ``record_extraction_attempt`` only.
@@ -14,7 +14,7 @@ Owners:
 
 Public symbols: ``SCHEMA_V2_DDL``, ``EvidenceRoot``, ``ResolvedEvidence``,
 ``ExtractionAttempt``, ``register_root``, ``resolve_evidence``,
-``record_extraction_attempt``, ``enqueue_unit``, ``ingest_link_status``, ``check_entailment``,
+``record_extraction_attempt``, ``enqueue_unit``, ``ingest_link_status``,
 ``requeue_parked``.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Any, Literal
 
 from .api import EnqueueResult
 from .contracts_v2 import (
-    EntailmentVerdict, EvidenceRootKind, ExtractionPass, RootTrust, SourceId, SourceUnit,
+    EvidenceRootKind, ExtractionPass, RootTrust, SourceId, SourceUnit,
 )
 
 SCHEMA_V2_VERSION = 8
@@ -196,13 +196,6 @@ def ingest_link_status(url_root_id: str, status: str, *, http_status: int | None
     timeout -> 'unreachable'."""
     from .provenance import ingest_link_status as _impl
     _impl(url_root_id, status, http_status=http_status)
-
-
-def check_entailment(user_text: str, *, what: str, how: str | None, why: str | None) -> EntailmentVerdict | None:
-    """Isolated entailment judge (§9.2): the prompt holds ONLY these arguments. Returns
-    None when the judge failed/unavailable (caller DEFERs ``entailment_unavailable``)."""
-    from .pipeline_v2 import check_entailment as _impl
-    return _impl(user_text, what=what, how=how, why=why)
 
 
 def requeue_parked(reason: str, key: str) -> int:

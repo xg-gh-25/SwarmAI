@@ -1,9 +1,9 @@
 """CDF unit contract v2 (design r16.5 §5.3): the ONE source for unit kinds, ontology,
 routing, trust floors and source ownership.
 
-Every source submits one ``SourceUnit`` (Cognition | Event | Gap | Reference). Card 1
-v2 answers, ``route_for_v2``, the DB CHECK values and the design-doc tables are
-generated from or validated against this module; nothing re-declares them.
+Every source submits one ``SourceUnit`` (Cognition | Event | Gap | Reference).
+``route_unit``, the DB CHECK values and the design-doc tables are generated from or
+validated against this module; nothing re-declares them.
 
 Key public symbols:
 - ``TYPES`` / ``TYPE_TO_LAYER`` / ``layer_of`` — the seven cognition types; layer is
@@ -11,18 +11,14 @@ Key public symbols:
 - ``CognitionUnit`` / ``EventUnit`` / ``GapUnit`` / ``ReferenceUnit`` / ``SourceUnit`` /
   ``SOURCE_UNIT`` — what a source submits; ``SEMANTIC_FIELDS`` lists the fields that
   must never be truncated (first principle).
-- ``EventAnswer`` / ``GapAnswer`` / ``ReferenceAnswerV2`` / ``Card1AnswerV2`` — card 1
-  re-check answers per kind (Cognition reuses the r15 shapes from ``contracts``).
-- ``REFERENCE_FOLDERS``, ``LEARNED_*`` dirs, ``LEARNED_DOMAINS``, ``slugify``,
-  ``link_file_for``, ``DestinationV2``, ``route_for_v2`` — total, deterministic routing
-  incl. the §9.1 reroute of tainted per-turn rules to ``Learned/_common/``.
+- ``REFERENCE_FOLDERS``, ``slugify``, ``link_file_for``, ``DestinationV2``,
+  ``route_unit`` — the destination is a pure function of the unit's own kind, scope,
+  type and topic (design 2026-10-29-cdf-refactor §3.1); there is no reroute.
 - ``URL_CREDENTIAL_PARAMS`` / ``sanitize_source_url`` / ``semantic_urls_have_credentials``
   — §5.12 credential handling (before secret scan).
-- ``S1_MAX_UNITS_PER_MESSAGE``, ``ExtractionPass``, ``TRUSTED_PASS_ROOT_KINDS``,
-  ``EntailmentVerdict`` — §9.1/§9.2.
+- ``S1_MAX_UNITS_PER_MESSAGE``, ``ExtractionPass``, ``TRUSTED_PASS_ROOT_KINDS`` — §9.1.
 - ``DeferReason`` / ``PARKED_DEFER_REASONS`` — deferrals that consume no retry.
 - ``expand_projects`` — §7 D6 deterministic multi-project fan-out.
-- ``PER_TURN_STORES`` / ``trust_floor_allows`` — §9 per-destination trust floor.
 - ``SOURCES_V2`` — S1..S6 lane and owned evidence-root kinds (§5.2).
 - ``EvidenceRootKind`` / ``RootTrust`` / ``ROOT_TRUST_ORDER`` — §9 provenance tiers.
 - ``UnitOutcome`` — terminal/non-terminal unit states incl. ``reinforced``.
@@ -34,9 +30,6 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from .contracts import (
-    DDD_MATRIX, MEMORY_TYPE_TO_SECTION, QualityAnswers, Card1Answer, Destination,
-)
 
 CONTRACT_V2_VERSION = "cdf-contract-r16.5-v1"
 SYSTEM_APPENDIX_HEADING = "## 系统追加（自动提取）"
@@ -231,39 +224,6 @@ def event_date_rule() -> str:
             f"today, {today}.\n")
 
 
-Significance = Literal["direction_change", "loss_or_rework", "milestone", "key_decision", "user_asked"]
-
-
-class EventAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    shape: Literal["Event"]
-    significance: list[Significance]  # empty list => not significant => reject
-    self_contained: bool
-    evidenced: bool
-
-
-class GapAnswer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    shape: Literal["Gap"]
-    actionable: bool
-    evidenced: bool
-    self_contained: bool
-    project: str | None = None
-
-
-class ReferenceAnswerV2(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    shape: Literal["ReferenceV2"]
-    reference_kind: ReferenceKind
-    quality: QualityAnswers  # self_contained + valuable-outside-origin carry the weight
-    project: str | None = None
-
-
-Card1AnswerV2: TypeAlias = Annotated[
-    EventAnswer | GapAnswer | ReferenceAnswerV2, Field(discriminator="shape")]
-CARD1_V2_ADAPTER = TypeAdapter(Card1AnswerV2)
-# A CognitionUnit is re-checked with the r15 ``contracts.Card1Answer`` shapes.
-
 # ── routing (§5.10, §5.12, §9.1) ──────────────────────────────────────────────
 # Reference kinds write only to Learned / Library / Notes (r16.3). Reports/ and Designs/
 # are user deliverables, not governed.
@@ -271,25 +231,10 @@ REFERENCE_FOLDERS: dict[str, str] = {
     "learned": "Knowledge/Learned", "spec": "Knowledge/Library", "link": "Knowledge/Library/Links",
     "analysis": "Knowledge/Notes", "design": "Knowledge/Notes", "note": "Knowledge/Notes",
 }
-# Common DDD layout (r16.5). Learned/ root keeps learned-kind Reference cards only.
-LEARNED_DOMAINS_DIR = "Knowledge/Learned/domains"
-LEARNED_REPOS_DIR = "Knowledge/Learned/repos"
-LEARNED_COMMON_DIR = "Knowledge/Learned/_common"
-COMMON_DDD_GAP_SECTION = "Open Gaps"
 TIMELINE_PATH = ".context/TIMELINE.md"
-# Seed list of domains; the closed list at runtime is this ∪ existing domains/*.md stems.
-# Users add a domain by creating an empty file under domains/ (governed_edit), never by
-# editing this tuple.
-LEARNED_DOMAINS: tuple[str, ...] = ("general-engineering", "product-design", "writing", "data", "ops")
-
+# COMMON_DDD and rerouted_from are no longer produced (no reroute since the 2026-10-29
+# refactor); they stay so a decision recorded before it still validates and writes.
 StoreV2 = Literal["KNOWLEDGE", "COMMON_DDD", "STEERING", "USER", "TOOLS", "EVOLUTION", "DDD", "MEMORY", "TIMELINE"]
-PER_TURN_STORES: frozenset[str] = frozenset({"STEERING", "USER", "TOOLS", "EVOLUTION", "MEMORY", "TIMELINE"})
-# §9.1 reroute target for a tainted rule whose destination is a per-turn file.
-REROUTE_FILE: dict[str, str] = {
-    "STEERING": f"{LEARNED_COMMON_DIR}/user.md", "USER": f"{LEARNED_COMMON_DIR}/user.md",
-    "TOOLS": f"{LEARNED_COMMON_DIR}/user.md", "EVOLUTION": f"{LEARNED_COMMON_DIR}/agent.md",
-    "MEMORY": f"{LEARNED_COMMON_DIR}/world.md",
-}
 
 
 class DestinationV2(BaseModel):
@@ -299,7 +244,7 @@ class DestinationV2(BaseModel):
     section: str | None = None
     project: str | None = None
     injectable: bool = True  # False => recall-only
-    rerouted_from: str | None = None  # §9.1: original per-turn store of a tainted rule
+    rerouted_from: str | None = None  # pre-refactor decisions only (see StoreV2)
 
 
 def slugify(text: str) -> str:
@@ -308,13 +253,6 @@ def slugify(text: str) -> str:
     import unicodedata
     norm = unicodedata.normalize("NFKC", text).lower()
     return re.sub(r"-{2,}", "-", re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "-", norm)).strip("-")
-
-
-def known_domains(existing_stems: tuple[str, ...] | list[str] = ()) -> frozenset[str]:
-    """Closed domain list = seed ∪ existing domains/*.md stems (slugified). '_'-prefixed
-    names are reserved and never a domain."""
-    names = {slugify(n) for n in (*LEARNED_DOMAINS, *existing_stems) if n and not n.startswith("_")}
-    return frozenset(n for n in names if n)
 
 
 def link_file_for(source_url: str) -> str:
@@ -353,80 +291,6 @@ def project_candidates(unit: object, snapshot: object) -> list[str]:
     if isinstance(session, str) and session.strip() and scope.startswith("project:"):
         return [session.strip()]
     return []
-
-
-def _no_ddd_path(project: str | None, domain: str | None, domains: frozenset[str]) -> str:
-    if project:
-        return f"{LEARNED_REPOS_DIR}/{slugify(project)}.md"
-    if domain is not None and slugify(domain) in domains:
-        return f"{LEARNED_DOMAINS_DIR}/{slugify(domain)}.md"
-    raise ValueError("unknown_domain")
-
-
-def route_for_v2(unit_kind: str, answer: Card1Answer | Card1AnswerV2, *,
-                 ddd_exists: bool, project_hint: str | None, tainted: bool,
-                 domain: str | None = None, existing_domains: tuple[str, ...] = (),
-                 source_url: str | None = None) -> DestinationV2:
-    """Total, deterministic routing: every legal combination maps to exactly one file and
-    section. Raises ``ValueError('unknown_domain')`` (parked, §5.10) or ``ValueError`` on an
-    illegal pair. A tainted rule bound for a per-turn file is rerouted, never raised (§9.1)."""
-    domains = known_domains(existing_domains)
-    if unit_kind == "event":
-        if not isinstance(answer, EventAnswer):
-            raise ValueError("event needs EventAnswer")
-        return DestinationV2(store="TIMELINE", relative_path=TIMELINE_PATH, injectable=not tainted)
-    if unit_kind == "reference":
-        if not isinstance(answer, ReferenceAnswerV2):
-            raise ValueError("reference needs ReferenceAnswerV2")
-        if answer.reference_kind == "link":
-            if not source_url:
-                raise ValueError("link needs source_url")
-            rel = link_file_for(source_url)
-        else:
-            rel = REFERENCE_FOLDERS[answer.reference_kind] + "/"
-        return DestinationV2(store="KNOWLEDGE", relative_path=rel,
-                             project=answer.project or project_hint, injectable=False)
-    if unit_kind == "gap":
-        if not isinstance(answer, GapAnswer):
-            raise ValueError("gap needs GapAnswer")
-        project = answer.project or project_hint
-        if project and ddd_exists:
-            from core.ddd_paths import ddd_new_path
-            rel = ddd_new_path(Path("Projects") / project, "IMPROVEMENT.md").as_posix()
-            return DestinationV2(store="DDD", relative_path=rel, section="What to Watch For", project=project)
-        return DestinationV2(store="COMMON_DDD", relative_path=_no_ddd_path(project, domain, domains),
-                             section=COMMON_DDD_GAP_SECTION, project=project, injectable=False)
-    if unit_kind != "cognition":
-        raise ValueError(f"unknown unit kind {unit_kind}")
-    from .contracts import route_for
-    if getattr(answer, "shape", None) == "WorldCrossGlobal" and not getattr(answer, "global_relevance", True):
-        # r16.3: world but not global -> common DDD domain file, keeps its type.
-        section = MEMORY_TYPE_TO_SECTION[answer.entry_type]  # type: ignore[union-attr]
-        return DestinationV2(store="COMMON_DDD", relative_path=_no_ddd_path(None, domain, domains),
-                             section=section, injectable=False)
-    base: Destination = route_for(answer)  # type: ignore[arg-type]
-    if base.store == "KNOWLEDGE":
-        raise ValueError("cognition cannot route to a reference folder")
-    if base.store == "DDD" and not ddd_exists:
-        return DestinationV2(store="COMMON_DDD", relative_path=_no_ddd_path(base.project, domain, domains),
-                             section=base.section, project=base.project, injectable=False)
-    if tainted and base.store in REROUTE_FILE:
-        return DestinationV2(store="COMMON_DDD", relative_path=REROUTE_FILE[base.store], section=base.section,
-                             project=base.project, injectable=False, rerouted_from=base.store)
-    return DestinationV2(store=base.store, relative_path=base.relative_path, section=base.section,
-                         project=base.project, injectable=base.store in PER_TURN_STORES)
-
-
-def trust_floor_allows(store: str) -> bool:
-    """§9: tainted content never reaches a per-turn injected store (TIMELINE takes a
-    tainted event only into its non-injected zone)."""
-    return store not in PER_TURN_STORES
-
-
-def card3_corpus_excludes_common(dest: DestinationV2) -> bool:
-    """§9.1 r16.5: when the destination is a per-turn file, card 3 does NOT search the
-    rerouted copies in Learned/_common/ (a later trusted unit must not be blocked)."""
-    return dest.store in PER_TURN_STORES
 
 
 # ── URL credentials (§5.12) ───────────────────────────────────────────────────
@@ -510,15 +374,6 @@ TRUSTED_PASS_ROOT_KINDS: dict[str, frozenset[str]] = {
     "human_answer": frozenset({"human_answer"}),
 }
 S1_MAX_UNITS_PER_MESSAGE = 3
-
-
-class EntailmentVerdict(BaseModel):
-    """Isolated entailment judge (§9.2): sees ONLY the user message text and the unit's
-    what/how/why. Not a security boundary; failure/unavailability -> DEFER."""
-
-    model_config = ConfigDict(extra="forbid")
-    entailed: bool
-    reason: str = Field(min_length=1)
 
 
 # ── deferrals (§5.10, §9.2, §7) ───────────────────────────────────────────────

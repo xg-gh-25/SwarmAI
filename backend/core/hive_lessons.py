@@ -32,8 +32,9 @@ stays the only writer of a Brain:
 - the Hive's evidence anchors name Hive-local records, so they are replaced by one
   evidence root this machine registers for the unit itself: kind ``agent_document``
   (with no parents its trust is always ``external``), locator ``hive:<dispatch>:<digest>``.
-  External trust taints the unit, and a tainted unit never reaches a per-turn injected
-  store (contracts_v2.trust_floor_allows). ``relation_hint`` is dropped (its target is a
+  External trust taints the unit. It cites no user message or measured result of this
+  machine, so the trust rule (pipeline_v2._not_grounded) keeps it out of every per-turn
+  injected store; it can reach its Brain's DDD. ``relation_hint`` is dropped (its target is a
   Hive anchor).
 - at most ``MAX_LESSONS`` units per run (queued or refused), and ``INGEST_BUDGET_S`` of
   queueing per call; a unit is validated before any row is written for it. A unit

@@ -357,7 +357,7 @@ def test_both_extraction_prompts_state_the_length_rule_and_card0_drops_nothing_f
 def test_routine_operations_are_not_events_in_extraction_or_judgment():
     """TIMELINE is injected every turn: a build, a restart, an install or a dispatched step
     (rehearsal and live 2026-10-29: 6 of 10 written events) is noise there. The one
-    rule is stated by both extraction prompts and the card 1 event check."""
+    rule is stated by both extraction prompts and the verification card."""
     from core.ingestion import prompts
     from core.ingestion.sources import extract_llm, s7_review
     rule = extract_llm.EVENT_RULE
@@ -367,7 +367,7 @@ def test_routine_operations_are_not_events_in_extraction_or_judgment():
     assert rule in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)")
     event = {"kind": "event", "when": "2026-10-29", "title": "T", "what": "W", "outcome": "O",
              "evidence": ["event:e"]}
-    assert rule in prompts.card1_v2_prompt(event, (), ())
+    assert rule.strip() in prompts.verify_prompt(event, "", [])
 
 
 def test_both_extraction_prompts_give_the_date_an_event_falls_back_to():
