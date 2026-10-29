@@ -151,6 +151,32 @@ class TestStreamingRSSKill:
         stream.kill.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_unit_waiting_for_streaming_admission_is_not_evicted(self):
+        """A send() waiting for admission sits in IDLE while memory is under
+        pressure; evicting it would drop the user's new turn. Other IDLE units are
+        still evicted."""
+        waiting = _make_unit("waiting")
+        waiting.state = SessionState.IDLE
+        waiting._admission_waiting = True
+        waiting.kill = AsyncMock()
+        idle = _make_unit("idle")
+        idle.state = SessionState.IDLE
+        idle.kill = AsyncMock()
+        idle._hooks_enqueued = True
+        stream = _make_unit("stream")
+        _set_streaming_with_pid(stream, pid=44444)
+        stream.kill = AsyncMock()
+        mgr, mock_rm, rm_mod = self._pressure_manager([waiting, idle, stream], {44444: int(3 * 1024**3)}, 93.0)
+        orig = rm_mod.resource_monitor
+        rm_mod.resource_monitor = mock_rm
+        try:
+            await mgr._check_memory_pressure()
+        finally:
+            rm_mod.resource_monitor = orig
+        waiting.kill.assert_not_called()
+        idle.kill.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_one_streaming_kill_per_cycle(self):
         """Trigger 1 killed a session this cycle → the pressure pass kills no other."""
         bloated = _make_unit("bloated")

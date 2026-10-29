@@ -202,8 +202,10 @@ export interface SwarmOutFleetHive extends SwarmOutHive {
   reachable: boolean | null;
   /** every session streaming on the Hive (its own jobs and web sessions too) */
   streaming: number | null;
-  max_concurrent: number | null;
+  /** a new task would queue: the Hive's memory is under critical pressure */
   saturated: boolean | null;
+  /** the Hive's memory in use, 0-100; null when unknown (or an older Hive) */
+  memory_percent: number | null;
 }
 
 export interface SwarmOutFleet {

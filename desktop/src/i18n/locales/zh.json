@@ -1305,7 +1305,7 @@
     "kpi": {
       "waiting": "等你回答",
       "onHivePage": "+{{count}} 个要去 Hive 页面处理",
-      "free": "空位，可以马上派",
+      "free": "可以马上派的 Hive",
       "running": "我派出的，在跑"
     },
     "waiting": {
@@ -1317,11 +1317,13 @@
     },
     "fleet": {
       "title": "机群",
-      "note": "占用 = Hive 上所有在跑的会话，包括它自己的",
+      "note": "在跑 = Hive 上所有在跑的会话，包括它自己的；条 = 内存占用，到 90% 且还有别的在跑时新任务排队",
       "failed": "读不到机群，稍后自动重试",
       "unreachable": "连不上",
-      "full": "忙满 · 占用 {{used}}/{{max}}",
-      "used": "占用 {{used}}/{{max}}"
+      "full": "内存吃紧 · {{count}} 个在跑，新任务会排队",
+      "used": "{{count}} 个在跑",
+      "busy": "忙 · {{count}} 个在跑，新任务会排队",
+      "memory": "内存占用 {{percent}}%"
     },
     "detail": {
       "failed": "读不到详情，稍后再试",

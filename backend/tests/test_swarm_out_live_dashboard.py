@@ -128,10 +128,10 @@ def fleet_env(monkeypatch, tmp_path):
         if host == "down":
             raise httpx.ConnectTimeout("slow")
         if host == "bad":
-            return httpx.Response(200, json={"streaming_count": "3", "max_concurrent": 4, "saturated": False})
+            return httpx.Response(200, json={"streaming_count": "3", "saturated": False, "memory_percent": 50})
         if host == "over":
-            return httpx.Response(200, json={"streaming_count": 6, "max_concurrent": 4, "saturated": True})
-        return httpx.Response(200, json={"streaming_count": 1, "max_concurrent": 4, "saturated": False})
+            return httpx.Response(200, json={"streaming_count": 6, "saturated": True, "memory_percent": 93.04})
+        return httpx.Response(200, json={"streaming_count": 1, "saturated": False, "memory_percent": 61.2})
     monkeypatch.setattr(swarm_out, "_instance", instance)
     monkeypatch.setattr(swarm_out, "_client", lambda inst, timeout=None: httpx.AsyncClient(
         base_url=swarm_out._base(inst), transport=httpx.MockTransport(hive)))
@@ -141,11 +141,12 @@ def test_fleet_lists_every_hive_with_validated_load(fleet_env):
     out = asyncio.run(swarm_out.fleet())
     by = {h["name"]: h for h in out["hives"]}
     assert out["running"] == 4
-    assert {k: by["w-ok"][k] for k in ("reachable", "streaming", "max_concurrent", "saturated")} == \
-        {"reachable": True, "streaming": 1, "max_concurrent": 4, "saturated": False}
+    assert {k: by["w-ok"][k] for k in ("reachable", "streaming", "saturated", "memory_percent")} == \
+        {"reachable": True, "streaming": 1, "saturated": False, "memory_percent": 61.2}
     for name in ("w-down", "w-bad"):
         assert by[name]["reachable"] is False and by[name]["streaming"] is None
     assert by["w-over"]["streaming"] == 6 and by["w-over"]["saturated"] is True
+    assert by["w-over"]["memory_percent"] == 93.0
     assert by["w-off"]["reachable"] is None and by["w-off"]["status"] == "stopped"
 
 

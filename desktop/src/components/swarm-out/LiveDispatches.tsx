@@ -195,8 +195,9 @@ function Num({ value, label, tone, testId }: { value: React.ReactNode; label: st
   );
 }
 
-/** The top card: the three numbers in its header, each Hive's slots under them. What
- *  "in use" counts is explained on hover (the title and every status). */
+/** The top card: the three numbers in its header, each Hive's memory under them (a
+ *  Hive queues a new task only when its memory is under critical pressure). What the
+ *  count and the bar mean is explained on hover (the title and every status). */
 function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed?: boolean; numbers: React.ReactNode }) {
   const { t } = useTranslation();
   const hives = fleet?.hives ?? [];
@@ -211,12 +212,16 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
       {fleet === null ? (!failed && <div className={`px-4 pb-3 text-[12px] ${muted}`}>{t('swarmOut.loading')}</div>) : (
         <div className="grid grid-cols-[minmax(80px,220px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-2.5 pb-3 border-t border-[var(--color-border)]">
           {hives.map((h) => {
-            const up = h.status === 'running' && h.reachable && h.max_concurrent != null;
-            const used = { used: h.streaming ?? 0, max: h.max_concurrent ?? 0 };
+            const up = h.status === 'running' && !!h.reachable;
+            const count = { count: h.streaming ?? 0 };
             const status = h.status !== 'running' ? hiveStatusLabel(h.status)
-              : !h.reachable ? t('swarmOut.fleet.unreachable') : h.saturated ? t('swarmOut.fleet.full', used) : t('swarmOut.fleet.used', used);
+              : !h.reachable ? t('swarmOut.fleet.unreachable')
+              // an older Hive reports no memory: its saturated still means a full stream cap
+              : h.saturated ? t(h.memory_percent == null ? 'swarmOut.fleet.busy' : 'swarmOut.fleet.full', count)
+              : t('swarmOut.fleet.used', count);
             const tone = hiveTone(h);
-            const filled = h.saturated ? (h.max_concurrent ?? 0) : (h.streaming ?? 0);
+            const mem = up && h.memory_percent != null ? Math.min(100, Math.max(0, h.memory_percent)) : null;
+            const memTone: Tone = h.saturated ? 'attention' : 'ok';
             return (
               <div key={h.name} className="contents" data-testid="swarm-out-fleet-hive" data-tone={tone}>
                 <div className="font-medium min-w-0 flex items-start gap-2" title={h.name}>
@@ -226,15 +231,14 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
                     <div className={`text-[11.5px] font-normal truncate ${muted}`}>{[h.version, h.instance_type].filter(Boolean).join(' · ')}</div>
                   </div>
                 </div>
-                {/* a slot in use is blue (work going), a free one green (available) */}
-                <div className="flex gap-[4px] min-w-0" style={{ opacity: up ? 1 : 0.4 }}>
-                  {up && Array.from({ length: Math.min(h.max_concurrent ?? 0, 32) }, (_, i) => (
-                    <span key={i} data-testid="swarm-out-slot" data-used={i < filled || undefined}
-                      className="flex-1 min-w-[8px] max-w-[26px] h-[12px] rounded-[3px] border"
-                      style={i < filled
-                        ? { background: TONE_VAR.busy, borderColor: TONE_VAR.busy }
-                        : { background: `color-mix(in srgb, ${TONE_VAR.ok} 14%, transparent)`, borderColor: `color-mix(in srgb, ${TONE_VAR.ok} 55%, transparent)` }} />
-                  ))}
+                {/* the Hive's memory in use: green while a new task starts at once, amber
+                    once it is under critical pressure (a new task queues) */}
+                <div className="min-w-0 h-[12px] rounded-[3px] border overflow-hidden" data-testid="swarm-out-memory"
+                  data-percent={mem ?? undefined}
+                  title={mem != null ? t('swarmOut.fleet.memory', { percent: Math.round(mem) }) : undefined}
+                  style={{ opacity: mem != null ? 1 : 0.4, borderColor: `color-mix(in srgb, ${TONE_VAR[memTone]} 55%, transparent)`,
+                    background: `color-mix(in srgb, ${TONE_VAR[memTone]} 10%, transparent)` }}>
+                  {mem != null && <div className="h-full" style={{ width: `${mem}%`, background: TONE_VAR[memTone] }} />}
                 </div>
                 <div className={`text-[12px] text-right truncate min-w-0 ${tone === 'error' || tone === 'attention' ? '' : muted}`}
                   style={tone === 'error' || tone === 'attention' ? { color: TONE_VAR[tone] } : undefined}

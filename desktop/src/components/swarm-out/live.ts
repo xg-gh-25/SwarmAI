@@ -59,20 +59,14 @@ const fetchFleet = () => swarmOutService.fleet();
 export const useRuns = (hidden: boolean): Polled<SwarmOutRuns> => usePoll(fetchRuns, hidden);
 export const useFleet = (hidden: boolean): Polled<SwarmOutFleet> => usePoll(fetchFleet, hidden);
 
-/** Free slots and capacity over the running Hives that answered: a full (saturated)
- *  Hive has none, and more streams than its cap never makes a negative. null when no
- *  running Hive answered (unknown, not zero). */
+/** How many of the running Hives that answered would start a task now, of how many.
+ *  A Hive has no fixed number of slots: it queues a new task only while its memory is
+ *  under critical pressure (saturated). null when no running Hive answered (unknown,
+ *  not zero). */
 export function capacity(fleet: SwarmOutFleet | null): { free: number; total: number } | null {
-  const up = (fleet?.hives ?? []).filter((h) => h.status === 'running' && h.reachable && h.max_concurrent != null);
+  const up = (fleet?.hives ?? []).filter((h) => h.status === 'running' && h.reachable);
   if (up.length === 0) return null;
-  let free = 0;
-  let total = 0;
-  for (const h of up) {
-    const cap = h.max_concurrent ?? 0;
-    total += cap;
-    free += h.saturated ? 0 : Math.max(0, cap - (h.streaming ?? 0));
-  }
-  return { free, total };
+  return { free: up.filter((h) => !h.saturated).length, total: up.length };
 }
 
 const sentAt = (r: SwarmOutRun): number => Date.parse(r.sent_at);

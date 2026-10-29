@@ -9,8 +9,8 @@
  *    is copy that did not go through the locale files.
  *  - Does a language switch reach a panel already on screen?
  *  - Do the status colours follow ./tone: a failed run red, a stopped one amber, a
- *    done one green, a running one blue; a slot in use blue and a free one green; the
- *    free-slot number green with room and amber when every Hive is full?
+ *    done one green, a running one blue; a Hive's memory bar green, amber when it is
+ *    saturated; the ready-Hive number green with room and amber when every Hive is full?
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
@@ -113,13 +113,13 @@ const RUNS: SwarmOutRuns = {
 
 const hive = (name: string, over: Partial<SwarmOutFleet['hives'][number]> = {}) => ({
   name, status: 'running', region: 'us-east-1', version: '2.3.0-hive3', instance_type: 'm7g.xlarge',
-  reachable: true, streaming: 1, max_concurrent: 4, saturated: false, ...over,
+  reachable: true, streaming: 1, saturated: false, memory_percent: 60, ...over,
 });
 const FLEET: SwarmOutFleet = {
   running: 3,
-  hives: [hive('explorer'), hive('demo', { streaming: 4, saturated: true }), hive('flaky', { reachable: false, streaming: null, max_concurrent: null, saturated: null }),
-    hive('old', { status: 'stopped', reachable: null, streaming: null, max_concurrent: null, saturated: null }),
-    hive('broken', { status: 'error', reachable: null, streaming: null, max_concurrent: null, saturated: null })],
+  hives: [hive('explorer'), hive('demo', { streaming: 4, saturated: true, memory_percent: 93 }), hive('flaky', { reachable: false, streaming: null, saturated: null, memory_percent: null }),
+    hive('old', { status: 'stopped', reachable: null, streaming: null, saturated: null, memory_percent: null }),
+    hive('broken', { status: 'error', reachable: null, streaming: null, saturated: null, memory_percent: null })],
 };
 
 beforeEach(() => {
@@ -216,16 +216,19 @@ describe('status colours follow ./tone', () => {
 
     await screen.findAllByTestId('swarm-out-fleet-hive');
     const explorer = screen.getAllByTestId('swarm-out-fleet-hive').find((h) => h.textContent?.includes('explorer'))!;
-    const slots = within(explorer).getAllByTestId('swarm-out-slot');
-    expect(slots.map((s) => s.style.background)).toEqual(['var(--color-primary)',
-      ...Array(3).fill('color-mix(in srgb, var(--color-status-success) 14%, transparent)')]);
-    // explorer has 3 free of 4, demo is full: room left, so the free number is green
+    const demo = screen.getAllByTestId('swarm-out-fleet-hive').find((h) => h.textContent?.includes('demo'))!;
+    const fill = (h: HTMLElement) => (within(h).getByTestId('swarm-out-memory').firstElementChild as HTMLElement);
+    expect(within(explorer).getByTestId('swarm-out-memory').dataset.percent).toBe('60');
+    expect(fill(explorer).style.width).toBe('60%');
+    expect(fill(explorer).style.background).toBe('var(--color-status-success)');
+    expect(fill(demo).style.background).toBe('var(--color-status-warning)');
+    // explorer takes a task now, demo is saturated: room left, so the number is green
     expect(screen.getByTestId('kpi-free').dataset.tone).toBe('ok');
     expect(screen.getByTestId('kpi-waiting').dataset.tone).toBe('attention');
   });
 
   it('every Hive full: the free number is amber', async () => {
-    vi.mocked(swarmOutService.fleet).mockResolvedValue({ running: 1, hives: [hive('demo', { streaming: 4, saturated: true })] });
+    vi.mocked(swarmOutService.fleet).mockResolvedValue({ running: 1, hives: [hive('demo', { streaming: 4, saturated: true, memory_percent: 93 })] });
     render(<SwarmOutDashboard now={NOW} />);
     await screen.findAllByTestId('swarm-out-fleet-hive');
     expect(screen.getByTestId('kpi-free').dataset.tone).toBe('attention');

@@ -630,10 +630,9 @@ def _restore_streaming_count():
 
     core.session_unit._streaming_count is bumped by every SessionUnit that enters
     STREAMING and only decremented when it leaves. Tests routinely build a unit in
-    STREAMING and drop it, so the count climbed past MAX_CONCURRENT_STREAMS within
-    one worker. Every later send() then sat in _await_streaming_slot for its full
-    120 s admission timeout; under --timeout=120 that killed the xdist worker
-    ("worker crashed" on whichever send()-test came next). Production units always
+    STREAMING and drop it, so the count leaked across tests within one worker and
+    later tests saw streams that were not theirs (the count feeds streaming
+    admission and the admission-state endpoint). Production units always
     transition out, so this is test isolation only.
     """
     mod = _sys.modules.get("core.session_unit")

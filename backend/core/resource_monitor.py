@@ -61,6 +61,10 @@ class SystemMemory:
     available: int
     used: int
     percent_used: float
+    #: False for the pessimistic stand-in system_memory() returns when it cannot
+    #: read the machine: callers that would WAIT on pressure must not treat a
+    #: failed read as pressure (the spawn gate, which refuses, still may).
+    measured: bool = True
 
     @property
     def effective_used(self) -> int:
@@ -165,12 +169,8 @@ class ResourceMonitor:
     # + 1 channel — the slots every machine gets, whatever its free RAM; the other
     # chat tabs are allocated by the RAM formula below, up to the ceiling. Both are UX
     # counts: backend admission is gated by spawn_budget (real RAM, R6a), not here.
-    #
-    # The ceiling and SessionUnit.MAX_CONCURRENT_STREAMS move together: the stream
-    # cap defaults to (ceiling - 1), the number of chat tabs. They once drifted (the
-    # ceiling went to 6 while the stream cap stayed at 3, 2026-08-02), and a tab past
-    # the stream cap waited silently on the 120s stream-admit wait. Deriving one from
-    # the other keeps the openable chat tabs at or below the concurrent-stream cap.
+    # How many of them may stream at once is not a count either: a new turn waits
+    # only under critical memory pressure (session_unit.stream_admission_blocked).
     # On smaller machines the RAM formula gates below the ceiling anyway (a 16GB
     # machine caps at 3-4 depending on load).
     _MAX_TABS_CEILING: int = 5
@@ -215,6 +215,7 @@ class ResourceMonitor:
                 available=1600 * 1024**2,
                 used=int(14.4 * 1024**3),
                 percent_used=90.0,
+                measured=False,
             )
 
     def invalidate_cache(self) -> None:

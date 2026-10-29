@@ -1660,9 +1660,16 @@ class LifecycleManager:
             # pressure. Exempting it would turn an unadopted prewarm into an
             # unreclaimable memory black hole (the regression XG's "B" forbids).
             # Do NOT add a prewarm skip to this loop.
+            # A unit whose send() is waiting for streaming admission is IDLE but
+            # holds the user's new turn; that wait exists because memory is under
+            # pressure, so killing it here would drop the message instead of
+            # queueing it (SessionUnit._await_streaming_slot). Skip it.
+            def _evictable(u) -> bool:
+                return (u.state == SessionState.IDLE
+                        and getattr(u, "_admission_waiting", False) is not True)
+
             idle_units = sorted(
-                [u for u in self._router.list_units()
-                 if u.state == SessionState.IDLE],
+                [u for u in self._router.list_units() if _evictable(u)],
                 key=_rss, reverse=True,
             )
             evicted = 0
@@ -1673,7 +1680,7 @@ class LifecycleManager:
                 # (_build_hook_context, a prior victim's kill). Re-read live state and
                 # skip a unit that is no longer IDLE — never kill a now-active turn.
                 # Mirrors the recheck in _proactive_rss_restart (:490).
-                if victim.state != SessionState.IDLE:
+                if not _evictable(victim):
                     continue
                 logger.warning(
                     "lifecycle.memory_pressure_tier1: %.1f%% — evicting "

@@ -15,8 +15,8 @@ is an integration probe (run live against a daemon); these guard its logic.
 
 MOTIVATION
 ----------
-- OT03: chat_stream falsely timed-out red when the daemon was at the R6
-  MAX_CONCURRENT_STREAMS cap. skip() is the fix; this test pins that a skip
+- OT03: chat_stream falsely timed-out red when a new turn would only have
+  queued (a saturated, busy daemon). skip() is the fix; this test pins that a skip
   never fails the run.
 - PIT49: status taxonomy (pass/fail/skip) prevents the false-negative.
 """

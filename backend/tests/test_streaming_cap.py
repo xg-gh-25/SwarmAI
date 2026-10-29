@@ -1,9 +1,9 @@
-"""R6 Step B — concurrent-streaming admission cap (the two-limit split).
+"""Streaming admission (peak-OOM guard) and its daemon-wide stream counter.
 
-design §9.4: spawn_budget governs how many sessions may EXIST (follows RAM, no
-ceiling); this NEW independent cap governs how many may STREAM AT ONCE (peak-OOM
-guard). They are orthogonal — Step B must NOT touch spawn_budget. 3027ea6c failed
-by conflating both into one number.
+spawn_budget governs how many sessions may EXIST (follows RAM); streaming
+admission governs whether a NEW turn may start streaming now. It follows real
+memory pressure — a turn waits only under critical pressure with another stream
+in flight, never because of a count cap. Admission must NOT touch spawn_budget.
 
 Tests:
 - counter inc/dec is exactly-once per STREAMING entry/exit, across EVERY exit
@@ -11,8 +11,9 @@ Tests:
   _transition.
 - counter never goes negative (clamp).
 - multi-question loop (WAITING_INPUT→STREAMING→WAITING_INPUT) does not leak.
-- _await_streaming_slot returns immediately below cap, blocks at cap, proceeds on
-  timeout.
+- _await_streaming_slot returns at once with no memory pressure (any number of
+  streams), waits under critical pressure with streams in flight, and proceeds
+  when pressure eases or the other streams end.
 - COE05 invariant: resource_monitor.spawn_budget penalty is untouched by Step B.
 """
 from __future__ import annotations
@@ -98,39 +99,96 @@ def test_three_concurrent_streams_counted():
 
 # ── Admission gate ───────────────────────────────────────────────────────────
 
+from core.resource_monitor import SystemMemory, resource_monitor
+
+
+def _mem(percent: float, measured: bool = True) -> SystemMemory:
+    total = 36 * 1024**3
+    return SystemMemory(total=total, available=int(total * (100 - percent) / 100),
+                        used=int(total * percent / 100), percent_used=percent,
+                        measured=measured)
+
+
+@pytest.fixture
+def fast_poll():
+    with patch.object(SessionUnit, "_STREAM_ADMIT_POLL_INTERVAL", 0.02):
+        yield
+
+
 @pytest.mark.asyncio
-async def test_await_slot_returns_immediately_below_cap():
+async def test_many_streams_without_pressure_proceed_at_once():
+    """The reported bug: 4 streams at ~60% memory queued the 5th for 120 s. With
+    no memory pressure a new turn starts at once, however many streams run."""
+    u = _idle_unit()
+    su._streaming_count = 12
+    with patch.object(resource_monitor, "system_memory", return_value=_mem(60.0)):
+        await asyncio.wait_for(u._await_streaming_slot(), timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_critical_pressure_with_no_other_stream_proceeds():
+    """Waiting frees nothing when nothing else streams → proceed at once."""
     u = _idle_unit()
     su._streaming_count = 0
-    # Should not block.
-    await asyncio.wait_for(u._await_streaming_slot(), timeout=1.0)
+    with patch.object(resource_monitor, "system_memory", return_value=_mem(97.0)):
+        await asyncio.wait_for(u._await_streaming_slot(), timeout=0.5)
 
 
 @pytest.mark.asyncio
-async def test_await_slot_blocks_at_cap_then_proceeds_when_freed():
+async def test_unreadable_memory_does_not_queue():
     u = _idle_unit()
-    su._streaming_count = SessionUnit.MAX_CONCURRENT_STREAMS  # at cap
-
-    async def _free_after_delay():
-        await asyncio.sleep(0.25)
-        su._streaming_count -= 1  # a stream finishes
-
-    waiter = asyncio.create_task(u._await_streaming_slot())
-    freer = asyncio.create_task(_free_after_delay())
-    # Without the free, this would run to the 120s timeout; with it, ~0.25s.
-    await asyncio.wait_for(waiter, timeout=5.0)
-    await freer
+    su._streaming_count = 3
+    with patch.object(resource_monitor, "system_memory",
+                      return_value=_mem(90.0, measured=False)):
+        await asyncio.wait_for(u._await_streaming_slot(), timeout=0.5)
 
 
 @pytest.mark.asyncio
-async def test_await_slot_proceeds_on_timeout_does_not_hang_forever():
-    """At cap with nothing freeing: gate must PROCEED on timeout, not deadlock."""
+async def test_critical_pressure_waits_until_pressure_eases(fast_poll):
     u = _idle_unit()
-    su._streaming_count = SessionUnit.MAX_CONCURRENT_STREAMS
-    # Shrink timeout so the test is fast; assert it returns (proceeds), not hangs.
-    with patch.object(SessionUnit, "_STREAM_ADMIT_TIMEOUT", 0.3), \
-         patch.object(SessionUnit, "_STREAM_ADMIT_POLL_INTERVAL", 0.05):
-        await asyncio.wait_for(u._await_streaming_slot(), timeout=3.0)
+    su._streaming_count = 2
+    reading = {"mem": _mem(93.0)}
+    with patch.object(resource_monitor, "system_memory", side_effect=lambda: reading["mem"]):
+        waiter = asyncio.create_task(u._await_streaming_slot())
+        await asyncio.sleep(0.3)
+        assert not waiter.done(), "must hold the turn while memory is critical"
+        reading["mem"] = _mem(70.0)
+        await asyncio.wait_for(waiter, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_critical_pressure_waits_until_other_streams_end(fast_poll):
+    u = _idle_unit()
+    su._streaming_count = 1
+    with patch.object(resource_monitor, "system_memory", return_value=_mem(95.0)):
+        waiter = asyncio.create_task(u._await_streaming_slot())
+        await asyncio.sleep(0.3)
+        assert not waiter.done()
+        su._streaming_count = 0  # the in-flight stream ended
+        await asyncio.wait_for(waiter, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_waiting_unit_is_marked_and_wait_ends_when_it_leaves_idle(fast_poll):
+    """While waiting the unit is marked _admission_waiting (memory-pressure
+    eviction skips it); if it leaves IDLE anyway (a refresh, a kill) the wait ends
+    at once, so send()'s post-wait re-check handles it, and the mark is cleared."""
+    u = _idle_unit()
+    su._streaming_count = 1
+    with patch.object(resource_monitor, "system_memory", return_value=_mem(95.0)):
+        waiter = asyncio.create_task(u._await_streaming_slot())
+        await asyncio.sleep(0.2)
+        assert not waiter.done()
+        assert u._admission_waiting is True
+        u.state = SessionState.COLD  # killed / refreshed during the wait
+        await asyncio.wait_for(waiter, timeout=1.0)
+    assert u._admission_waiting is False
+
+
+def test_no_count_cap_or_timeout_left():
+    """No fixed stream cap and no admission timer exist any more."""
+    assert not hasattr(SessionUnit, "MAX_CONCURRENT_STREAMS")
+    assert not hasattr(SessionUnit, "_STREAM_ADMIT_TIMEOUT")
 
 
 # ── COE05 invariant: spawn_budget untouched ──────────────────────────────────

@@ -2,27 +2,25 @@
 
 WHAT IS TESTED
 --------------
-The admission-state endpoint exposes the daemon-wide concurrent-streaming
-count + cap so a smoke probe can distinguish SATURATED (busy, queue a new
-turn) from a broken daemon — WITHOUT consuming a streaming slot itself.
-
-The endpoint must reflect the REAL module globals (_streaming_count) and the
-REAL cap (SessionUnit.MAX_CONCURRENT_STREAMS), never hardcoded values, and the
-`saturated` flag must flip exactly at the cap boundary.
+The admission-state endpoint tells a smoke probe (and a Host dispatching to a
+Hive) whether a new turn would queue right now — WITHOUT starting a stream itself.
+A new turn queues only while memory is under critical pressure AND another stream
+is in flight; there is no count cap. ``saturated`` must be exactly
+``session_unit.stream_admission_blocked()``, the predicate send() waits on.
 
 METHODOLOGY
 -----------
-Patch the module-level _streaming_count global to simulate 0 / cap-1 / cap
-streaming sessions and assert the endpoint's count/cap/saturated reflect it.
-This is a forcing test: it would fail if the endpoint returned a hardcoded
-number or computed saturation off the wrong threshold.
+Patch the module-level _streaming_count and the memory reading
+(resource_monitor.system_memory) and assert saturated / memory fields follow
+them. Any number of streams with memory not under pressure is not saturated;
+critical pressure with streams in flight is.
 
 MOTIVATION
 ----------
 - OT03: smoke_e2e.py chat_stream falsely timed out (red) when the daemon was
-  merely at the R6 MAX_CONCURRENT_STREAMS cap (busy, not broken).
-- PIT49: a status taxonomy that distinguishes busy from broken prevents the
-  false-negative this endpoint exists to enable.
+  merely busy.
+- A fixed cap of 4 streams queued the 5th turn for 120 s at ~60% memory and then
+  let it through anyway; admission now follows real memory pressure.
 """
 
 from unittest.mock import patch
@@ -30,10 +28,14 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from core.session_unit import SessionUnit
+from core.resource_monitor import SystemMemory, resource_monitor
 
 
-CAP = SessionUnit.MAX_CONCURRENT_STREAMS
+def _mem(percent: float, measured: bool = True) -> SystemMemory:
+    total = 36 * 1024**3
+    return SystemMemory(total=total, available=int(total * (100 - percent) / 100),
+                        used=int(total * percent / 100), percent_used=percent,
+                        measured=measured)
 
 
 @pytest.fixture
@@ -46,56 +48,52 @@ def client():
     return TestClient(app)
 
 
-def test_admission_state_zero_streaming_not_saturated(client):
-    """No streaming sessions → count 0, not saturated."""
-    with patch("core.session_unit._streaming_count", 0):
+def _state(client, streaming: int, mem: SystemMemory) -> dict:
+    with patch("core.session_unit._streaming_count", streaming), \
+         patch.object(resource_monitor, "system_memory", return_value=mem):
         r = client.get("/api/chat/sessions/admission-state")
     assert r.status_code == 200
-    d = r.json()
+    return r.json()
+
+
+def test_admission_state_zero_streaming_not_saturated(client):
+    """No streaming sessions → not saturated, even at critical memory (waiting
+    could free nothing)."""
+    d = _state(client, 0, _mem(95.0))
     assert d["streaming_count"] == 0
-    assert d["max_concurrent"] == CAP
     assert d["saturated"] is False
 
 
-def test_admission_state_below_cap_not_saturated(client):
-    """cap-1 streaming → one slot free, not saturated."""
-    if CAP < 1:
-        pytest.skip("cap must be >= 1 for this boundary")
-    with patch("core.session_unit._streaming_count", CAP - 1):
-        r = client.get("/api/chat/sessions/admission-state")
-    d = r.json()
-    assert d["streaming_count"] == CAP - 1
+def test_many_streams_without_memory_pressure_not_saturated(client):
+    """The old cap (4) and well past it: no memory pressure → a new turn starts."""
+    d = _state(client, 9, _mem(60.0))
+    assert d["streaming_count"] == 9
     assert d["saturated"] is False
+    assert d["memory_percent"] == 60.0
+    assert d["memory_pressure"] == "ok"
+    assert "max_concurrent" not in d
 
 
-def test_admission_state_at_cap_is_saturated(client):
-    """Exactly at cap → saturated True (the boundary that queues a new turn)."""
-    with patch("core.session_unit._streaming_count", CAP):
-        r = client.get("/api/chat/sessions/admission-state")
-    d = r.json()
-    assert d["streaming_count"] == CAP
-    assert d["max_concurrent"] == CAP
+def test_warning_pressure_not_saturated(client):
+    d = _state(client, 5, _mem(85.0))
+    assert d["saturated"] is False
+    assert d["memory_pressure"] == "warning"
+
+
+def test_critical_pressure_with_streams_is_saturated(client):
+    """Critical memory pressure with a stream in flight → a new turn queues."""
+    d = _state(client, 1, _mem(92.0))
     assert d["saturated"] is True
+    assert d["memory_pressure"] == "critical"
 
 
-def test_admission_state_over_cap_is_saturated(client):
-    """Above cap (transient race) → still saturated, count reported truthfully."""
-    with patch("core.session_unit._streaming_count", CAP + 2):
-        r = client.get("/api/chat/sessions/admission-state")
-    d = r.json()
-    assert d["streaming_count"] == CAP + 2
-    assert d["saturated"] is True
-
-
-def test_admission_state_cap_reflects_real_constant_not_hardcoded(client):
-    """max_concurrent must echo SessionUnit.MAX_CONCURRENT_STREAMS — patch the
-    class attr and confirm the endpoint follows it (no hardcoded literal)."""
-    with patch.object(SessionUnit, "MAX_CONCURRENT_STREAMS", 99):
-        with patch("core.session_unit._streaming_count", 50):
-            r = client.get("/api/chat/sessions/admission-state")
-    d = r.json()
-    assert d["max_concurrent"] == 99
-    assert d["saturated"] is False  # 50 < 99
+def test_unreadable_memory_is_not_pressure(client):
+    """system_memory()'s pessimistic stand-in (measured=False, 90%) must not
+    queue turns, and the endpoint reports the memory as unknown."""
+    d = _state(client, 3, _mem(90.0, measured=False))
+    assert d["saturated"] is False
+    assert d["memory_percent"] is None
+    assert d["memory_pressure"] is None
 
 
 def test_admission_state_is_read_only_no_slot_consumed(client):

@@ -669,11 +669,19 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
 
 
 FLEET_KEYS = ("name", "status", "version", "region", "instance_type",
-              "reachable", "streaming", "max_concurrent", "saturated")
+              "reachable", "streaming", "saturated", "memory_percent")
 
 
 def _count(v: Any, low: int) -> Optional[int]:
     return v if isinstance(v, int) and not isinstance(v, bool) and low <= v <= MAX_REPORTED_SESSIONS else None
+
+
+def _percent(v: Any) -> Optional[float]:
+    """A reported memory percentage, or None (absent, unreadable on the Hive, or a
+    Hive from before admission followed memory)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 100:
+        return None
+    return round(float(v), 1)
 
 
 async def _admission(hive_id: str) -> Optional[dict[str, Any]]:
@@ -691,10 +699,11 @@ async def _admission(hive_id: str) -> Optional[dict[str, Any]]:
         return None
     if not isinstance(d, dict):
         return None
-    streaming, cap, saturated = _count(d.get("streaming_count"), 0), _count(d.get("max_concurrent"), 1), d.get("saturated")
-    if streaming is None or cap is None or not isinstance(saturated, bool):
+    streaming, saturated = _count(d.get("streaming_count"), 0), d.get("saturated")
+    if streaming is None or not isinstance(saturated, bool):
         return None
-    return {"streaming": streaming, "max_concurrent": cap, "saturated": saturated}
+    return {"streaming": streaming, "saturated": saturated,
+            "memory_percent": _percent(d.get("memory_percent"))}
 
 
 async def fleet() -> dict[str, Any]:
@@ -717,9 +726,9 @@ async def fleet() -> dict[str, Any]:
         if h["status"] == "running":
             p = probes.get(h["id"])
             row.update({"reachable": p is not None, "streaming": p and p["streaming"],
-                        "max_concurrent": p and p["max_concurrent"], "saturated": p and p["saturated"]})
+                        "saturated": p and p["saturated"], "memory_percent": p and p["memory_percent"]})
         else:
-            row.update({"reachable": None, "streaming": None, "max_concurrent": None, "saturated": None})
+            row.update({"reachable": None, "streaming": None, "saturated": None, "memory_percent": None})
         out.append({k: row[k] for k in FLEET_KEYS})
     return {"hives": out, "running": len(running)}
 

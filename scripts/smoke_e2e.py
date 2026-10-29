@@ -41,7 +41,8 @@ class SmokeResult:
       - "pass": check succeeded.
       - "fail": check genuinely failed → exit 1.
       - "skip": check could not run for a NON-failure reason (e.g. the daemon
-        was at MAX_CONCURRENT_STREAMS so a chat_stream would only queue). A skip
+        was saturated — memory under pressure with streams in flight — so a
+        chat_stream would only queue). A skip
         is NOT a failure — it must never flip exit code to 1. This is the OT03
         fix: a busy-but-healthy daemon scores green-with-skip, never false-red.
     """
@@ -435,11 +436,11 @@ async def run_smoke(
         return result
 
     # ── 4b. Admission pre-flight (OT03) ──
-    # Before spending a model call + a wall-clock timeout, check whether the
-    # daemon is at the R6 concurrent-streaming cap. If saturated, a chat_stream
-    # would only QUEUE behind the cap and hit our TIMEOUT — looking broken when
-    # the daemon is merely busy. Skip (not fail) in that case. Read-only probe,
-    # consumes no slot.
+    # Before spending a model call + a wall-clock timeout, check whether a new
+    # turn would queue (critical memory pressure with streams in flight). If
+    # saturated, a chat_stream would only QUEUE and hit our TIMEOUT — looking
+    # broken when the daemon is merely busy. Skip (not fail) in that case.
+    # Read-only probe, starts no stream.
     try:
         async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
             r = await c.get("/api/chat/sessions/admission-state")
@@ -455,7 +456,8 @@ async def run_smoke(
                         "chat_stream",
                         False,
                         f"saturated by {stalled} STALLED streaming session(s) "
-                        f"(>{adm.get('streaming_count')}/{adm.get('max_concurrent')}) "
+                        f"({adm.get('streaming_count')} streaming, memory "
+                        f"{adm.get('memory_percent')}%) "
                         f"— WEDGE suspected, not legitimate load",
                     )
                 else:
@@ -464,11 +466,11 @@ async def run_smoke(
                     # above already proved the daemon is responsive.
                     result.skip(
                         "chat_stream",
-                        f"daemon busy ({adm.get('streaming_count')}/"
-                        f"{adm.get('max_concurrent')} streaming, 0 stalled) — a "
+                        f"daemon busy ({adm.get('streaming_count')} streaming, "
+                        f"memory {adm.get('memory_percent')}%, 0 stalled) — a "
                         f"new turn would queue; not a failure",
                     )
-                # Either way we do NOT run a model call this turn (no free slot).
+                # Either way we do NOT run a model call this turn (it would queue).
                 # But still run the stuck-session probe (Q1: don't lose the only
                 # wedge detector to an early return).
                 await _check_no_stuck_streaming(base_url, result)

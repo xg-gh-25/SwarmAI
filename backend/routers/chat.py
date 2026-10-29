@@ -845,22 +845,24 @@ async def list_sessions(
 
 @router.get("/sessions/admission-state")
 async def get_admission_state_endpoint():
-    """Return daemon-wide concurrent-streaming admission state (OT03).
+    """Return daemon-wide streaming admission state (OT03).
 
-    Read-only probe that exposes the R6 concurrent-streaming cap so a health
-    check can tell SATURATED (busy — a new turn would queue) apart from a broken
-    daemon. Critically it consumes NO streaming slot: it only READS the
-    module-level counter + the cap constant, never starts a stream.
+    Read-only probe so a health check (and a Host dispatching to this daemon as a
+    Hive) can tell SATURATED (a new turn would queue) apart from a broken daemon.
+    It starts no stream: it only reads the module-level counter and the memory
+    reading.
 
     Used by ``scripts/smoke_e2e.py`` to skip (not fail) the chat_stream check
-    when the daemon is already at ``MAX_CONCURRENT_STREAMS`` — preventing the
-    false-red where a busy-but-healthy daemon looked broken (the smoke would
-    queue behind the cap and hit its wall-clock timeout).
+    while a new turn would queue, and by ``core.swarm_out`` to refuse a dispatch
+    to a saturated Hive and to draw its fleet panel.
 
     Returns:
         streaming_count: sessions currently in STREAMING state (daemon-wide)
-        max_concurrent: the cap (SessionUnit.MAX_CONCURRENT_STREAMS)
-        saturated: streaming_count >= max_concurrent (a new turn would queue)
+        saturated: a new turn would queue right now (stream_admission_blocked:
+            critical memory pressure with another stream in flight). There is no
+            count cap.
+        memory_percent: the machine's memory in use, 0-100 (None: unreadable)
+        memory_pressure: "ok" / "warning" / "critical" (None: unreadable)
         stalled_streaming: count of STREAMING sessions whose last SDK event is
             older than AUTO_RECOVER_STALL_THRESHOLD — i.e. WEDGED, not working.
             This is the discriminator between "legitimately busy" (advancing
@@ -873,12 +875,15 @@ async def get_admission_state_endpoint():
     Must be registered BEFORE /sessions/{session_id} so the path param doesn't
     capture 'admission-state' as a session ID.
     """
-    from core.session_unit import _get_streaming_count, SessionUnit, AUTO_RECOVER_STALL_THRESHOLD
+    from core.session_unit import (
+        _get_streaming_count, stream_admission_blocked, AUTO_RECOVER_STALL_THRESHOLD,
+    )
+    from core.resource_monitor import resource_monitor
 
     from core.session_router import PREWARM_SESSION_PREFIX
 
     streaming_count = _get_streaming_count()
-    max_concurrent = SessionUnit.MAX_CONCURRENT_STREAMS
+    mem = resource_monitor.system_memory()
     sr = _get_router()
     idle_live_units = 0
     stalled_streaming = 0
@@ -895,8 +900,9 @@ async def get_admission_state_endpoint():
             idle_live_units += 1
     return {
         "streaming_count": streaming_count,
-        "max_concurrent": max_concurrent,
-        "saturated": streaming_count >= max_concurrent,
+        "saturated": stream_admission_blocked(mem),
+        "memory_percent": round(float(mem.percent_used), 1) if mem.measured else None,
+        "memory_pressure": mem.pressure_level if mem.measured else None,
         "stalled_streaming": stalled_streaming,
         "idle_live_units": idle_live_units,
     }

@@ -38,13 +38,13 @@ const run = (id: string, state: SwarmOutRun['state'], over: Partial<SwarmOutRun>
 
 const hive = (name: string, over: Partial<SwarmOutFleet['hives'][number]> = {}) => ({
   name, status: 'running', region: 'us-east-1', version: '2.3.0-hive2', instance_type: 'm7g.xlarge',
-  reachable: true, streaming: 1, max_concurrent: 4, saturated: false, ...over,
+  reachable: true, streaming: 1, saturated: false, memory_percent: 60, ...over,
 });
 
 const FLEET: SwarmOutFleet = {
   running: 3,
-  hives: [hive('explorer'), hive('demo', { streaming: 4, saturated: true }), hive('flaky', { reachable: false, streaming: null, max_concurrent: null, saturated: null }),
-    hive('old', { status: 'stopped', reachable: null, streaming: null, max_concurrent: null, saturated: null })],
+  hives: [hive('explorer'), hive('demo', { streaming: 4, saturated: true, memory_percent: 93 }), hive('flaky', { reachable: false, streaming: null, saturated: null, memory_percent: null }),
+    hive('old', { status: 'stopped', reachable: null, streaming: null, saturated: null, memory_percent: null })],
 };
 
 const ask = (id: string, refused = false) => ({
@@ -66,9 +66,9 @@ beforeEach(() => {
 });
 
 describe('the panel numbers', () => {
-  it('free slots: over the running Hives that answered, a full one has none, never negative', () => {
-    expect(capacity(FLEET)).toEqual({ free: 3, total: 8 });
-    expect(capacity({ running: 1, hives: [hive('x', { streaming: 6, max_concurrent: 4, saturated: false })] })).toEqual({ free: 0, total: 4 });
+  it('ready Hives: over the running Hives that answered, a saturated one is not ready, however many stream', () => {
+    expect(capacity(FLEET)).toEqual({ free: 1, total: 2 });
+    expect(capacity({ running: 1, hives: [hive('x', { streaming: 12, saturated: false })] })).toEqual({ free: 1, total: 1 });
     expect(capacity({ running: 1, hives: [hive('x', { reachable: false })] })).toBeNull();
   });
 
@@ -115,7 +115,7 @@ describe('the panel numbers', () => {
 describe('the run view', () => {
   it('shows the numbers waiting first, the waiting question first, refused ones apart', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    expect((await screen.findByTestId('kpi-free')).textContent).toContain('3/ 8');
+    expect((await screen.findByTestId('kpi-free')).textContent).toContain('1/ 2');
     const tiles = screen.getByTestId('kpi-grid').children;
     expect(tiles[0].getAttribute('data-testid')).toBe('kpi-waiting');
     expect(screen.getByTestId('kpi-waiting').textContent).toMatch(/^1\+1 个要去 Hive 页面处理/);
@@ -150,7 +150,7 @@ describe('the run view', () => {
   it('says what each Hive reports', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     const rows = await screen.findAllByTestId('swarm-out-fleet-status');
-    expect(rows.map((r) => r.textContent)).toEqual(['占用 1/4', '忙满 · 占用 4/4', '连不上', '已关机']);
+    expect(rows.map((r) => r.textContent)).toEqual(['1 个在跑', '内存吃紧 · 4 个在跑，新任务会排队', '连不上', '已关机']);
   });
 
   it('a failed fleet read says so instead of loading forever', async () => {

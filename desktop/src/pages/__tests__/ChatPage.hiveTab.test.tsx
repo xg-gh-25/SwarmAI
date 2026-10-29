@@ -37,7 +37,7 @@ function answer(method: string, url: string): unknown {
   if (url === '/agents') return [{ id: 'default', name: 'Swarm', description: '', model: 'm', skillIds: [], mcpIds: [] }];
   if (url.startsWith('/system/max-tabs')) return { max_tabs: 6, chat_max: 4, memory_pressure: 'ok' };
   if (url === '/settings/open-tabs') return method === 'get' ? savedTabs : { status: 'ok' };
-  if (url === '/swarm-out/fleet') return { hives: [{ name: 'hive-a', status: 'running', region: null, version: null, instance_type: null, reachable: true, streaming: 1, max_concurrent: 2, saturated: false }], running: 1 };
+  if (url === '/swarm-out/fleet') return { hives: [{ name: 'hive-a', status: 'running', region: null, version: null, instance_type: null, reachable: true, streaming: 1, saturated: false, memory_percent: 40 }], running: 1 };
   if (url === '/swarm-out/runs') return { runs: [run('d1', 'S1', 'First run'), run('d2', 'S2', 'Second run')], asks: [], errors: [] };
   if (/^\/swarm-out\/remote\/S\d\/relay$/.test(url)) {
     if (relayStatus !== 200) throw Object.assign(new Error('relay'), { response: { status: relayStatus } });

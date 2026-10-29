@@ -197,7 +197,7 @@ beforeEach(() => {
   });
   vi.mocked(swarmOutService.fleet).mockResolvedValue({ running: 1, hives: [{ name: 'explorer', status: 'running',
     region: 'us-east-1', version: '2.3.0-hive3', instance_type: 'm7g.xlarge', reachable: true, streaming: 0,
-    max_concurrent: 4, saturated: false }] });
+    saturated: false, memory_percent: 40 }] });
   vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
     result: { ...RUN.result!, report: 'Done.\n<a href="https://evil.example">click</a> **bold**\n<script>alert(1)</script>\n\n![x](https://evil.example/x.png)', report_chars: 600,
       error: { code: 'MODEL_ERROR', message: 'throttled by the model' } },

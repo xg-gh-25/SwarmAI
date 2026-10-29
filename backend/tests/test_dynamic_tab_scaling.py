@@ -462,20 +462,9 @@ class TestMaxTabsEndpointFallback:
 # The concurrent-stream cap follows the tab ceiling
 # ---------------------------------------------------------------------------
 
-class TestStreamCapFollowsTabCeiling:
-    """Every chat tab the UI lets the user open can stream at once.
-
-    The tab ceiling and the stream cap once drifted (ceiling 6, stream cap 3): a tab
-    past the stream cap waited silently on the 120s stream-admit wait. The stream
-    cap now defaults to the number of chat tabs (ceiling - 1 channel slot).
-    """
-
-    def test_stream_cap_default_is_ceiling_minus_channel_slot(self):
-        import os
-
-        if os.environ.get("SWARMAI_MAX_CONCURRENT_STREAMS"):
-            pytest.skip("stream cap overridden by SWARMAI_MAX_CONCURRENT_STREAMS")
-        assert SessionUnit.MAX_CONCURRENT_STREAMS == ResourceMonitor._MAX_TABS_CEILING - 1
+class TestTabCeilingAndFloor:
+    """The tab ceiling and floor are UX counts; streaming admission follows memory
+    pressure, not a count derived from them."""
 
     def test_floor_holds_one_chat_one_swarm_out_one_channel(self):
         assert ResourceMonitor._MIN_TABS_FLOOR == 3

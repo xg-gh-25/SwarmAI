@@ -46,7 +46,6 @@ from config import get_swarmws as _get_swarmws
 from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
-from .resource_monitor import ResourceMonitor
 from .compaction_guard import EscalationLevel
 from .retry_manager import RetryManager
 from .turn_notice import turn_notice_event
@@ -254,30 +253,59 @@ _OOM_COOLDOWN_CAP: float = 120.0  # max backoff cap for OOM retries
 # See: 2026-04-02 diagnosis — auto_recover_stuck killed session with stall=1s.
 AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
 
-# ── R6 Step B: concurrent-streaming admission cap (peak-OOM guard) ──────────
-# The two-limit split (design §9.4): spawn_budget governs how many sessions may
-# EXIST (idle ≈ 600-800MB → cheap → follows real RAM, NO ceiling). This separate
-# cap governs how many may STREAM AT ONCE (streaming ≈ 2GB peak → expensive →
-# locked). They are ORTHOGONAL — Step B does NOT touch spawn_budget's penalty
-# (R6a lesson: _CONCURRENT_PENALTY_FACTOR IS the COE05 simultaneous-peak floor;
-# changing it reopens COE05). 3027ea6c failed by conflating both into one number.
+# ── Streaming admission (peak-OOM guard) ───────────────────────────────────
+# spawn_budget governs how many sessions may EXIST (idle ≈ 600-800MB, follows real
+# RAM). Streaming admission governs whether a NEW turn may start streaming now
+# (a streaming CLI peaks well above idle). They are orthogonal: admission does NOT
+# touch spawn_budget's penalty (_CONCURRENT_PENALTY_FACTOR is the COE05
+# simultaneous-peak floor; changing it reopens COE05).
+#
+# Admission follows real memory pressure, never a fixed count of streams: a new
+# turn waits only while the machine is at critical memory pressure (the same
+# >=90% line the spawn gate and the tab limit use) AND another stream is in
+# flight, because only a running stream's peak can be given back by waiting. With
+# memory not under pressure, or nothing else streaming, it starts at once. (A fixed
+# cap of 4 with a 120 s wait used to queue the 5th turn on a machine with plenty of
+# free RAM and then let it through anyway, so the wait bought nothing.)
 #
 # _streaming_count is the single source of truth, mutated ONLY inside
-# _transition() (the one sync state chokepoint — verified: :779 self.state= is
-# the ONLY direct assignment, so every STREAMING entry/exit, incl kill/crash,
-# routes through it → the counter cannot leak). A new send() turn
-# waits (poll) when the count is at the cap; continue_with_answer / permission /
-# retry paths COUNT toward the cap but are NEVER blocked (a user waiting on their
-# own answer must not queue behind others). Poll (not Event) is deliberate:
-# _transition is sync, and an Event notify from sync code is the lost-wakeup race
-# that bit run_002eca4c. A 100ms poll on a rare (>cap concurrent) condition is
-# negligible and has zero lost-wakeup surface.
+# _transition() (the one sync state chokepoint, so every STREAMING entry/exit, incl
+# kill/crash, routes through it and the counter cannot leak). Only send() waits;
+# continue_with_answer / permission / retry paths count as streaming but are never
+# blocked (a user waiting on their own answer must not queue behind others). Poll
+# (not Event) is deliberate: _transition is sync, and an Event notify from sync
+# code is the lost-wakeup race that bit an earlier run.
 _streaming_count: int = 0
 
 
 def _get_streaming_count() -> int:
     """Current number of sessions in STREAMING state (daemon-wide)."""
     return _streaming_count
+
+
+def stream_admission_blocked(mem: "Any" = None) -> bool:
+    """Whether a NEW turn would wait for streaming admission right now.
+
+    True only while memory is at critical pressure (ResourceMonitor's >=90% line,
+    shared with the spawn gate) and at least one other stream is in flight. The one
+    predicate both the send() wait and the admission-state endpoint read, so the
+    endpoint's ``saturated`` can never disagree with what a turn actually does.
+    Memory that cannot be read counts as not under pressure (system_memory()'s
+    pessimistic stand-in is marked measured=False): the wait is a hedge (the
+    per-session RSS kill and the spawn gate stay the hard guards), and a broken
+    reading must never queue every turn. ``mem``: a reading the caller already took
+    (the endpoint reports it too, so both fields describe one snapshot).
+    """
+    if _get_streaming_count() <= 0:
+        return False
+    try:
+        if mem is None:
+            from .resource_monitor import resource_monitor
+            mem = resource_monitor.system_memory()
+        return mem.measured and mem.pressure_level == "critical"
+    except Exception:
+        logger.debug("stream_admission_blocked: memory read failed", exc_info=True)
+        return False
 
 
 def is_any_chat_streaming() -> bool:
@@ -1750,39 +1778,58 @@ class SessionUnit:
                 )
 
     async def _await_streaming_slot(self) -> None:
-        """Block a NEW send() turn until a concurrent-streaming slot is free.
+        """Hold a NEW send() turn while memory is under real pressure.
 
-        R6 Step B admission gate (peak-OOM guard). Returns immediately when the
-        daemon-wide streaming count is below MAX_CONCURRENT_STREAMS; otherwise
-        polls every _STREAM_ADMIT_POLL_INTERVAL until a slot frees or
-        _STREAM_ADMIT_TIMEOUT elapses. On timeout it PROCEEDS rather than failing
-        the user (the cap is a soft peak-OOM hedge backed by the hard per-session
-        7GB RSS kill + system-pressure last-resort kill, not a correctness gate)
-        — but logs so sustained saturation is observable.
+        Returns at once unless stream_admission_blocked(): critical memory pressure
+        with another stream in flight. Then it re-checks every
+        _STREAM_ADMIT_POLL_INTERVAL and proceeds as soon as pressure eases or no
+        other stream is left. There is no count cap and no timer: what ends the wait
+        is the machine having memory again or the in-flight streams ending (every
+        stream ends: a finished turn, the stall auto-recovery, the per-session RSS
+        kill). Logged at entry, every minute of waiting and at exit, so a long wait
+        under pressure is visible.
 
-        Poll (not asyncio.Event): _transition decrements the counter from sync
-        code; an Event.set() from there is the lost-wakeup race that bit
-        run_002eca4c. A 100ms poll on a rare (>cap concurrent streams) condition
-        is negligible cost and has zero lost-wakeup surface.
+        While it waits the unit is IDLE, and memory-pressure eviction kills IDLE
+        units at the same 90% line, so it is marked _admission_waiting and
+        LifecycleManager._check_memory_pressure skips it (killing it would drop the
+        user's message, not queue it). If the unit leaves IDLE anyway (a refresh, a
+        kill), the wait ends at once and send()'s post-wait state re-check handles it.
+
+        Poll (not asyncio.Event): _transition changes the counter from sync code,
+        and an Event.set() from there is a lost-wakeup race.
         """
-        if _get_streaming_count() < self.MAX_CONCURRENT_STREAMS:
+        if not stream_admission_blocked():
             return
-        waited = 0.0
+        self._admission_waiting = True
+        try:
+            await self._wait_for_admission()
+        finally:
+            self._admission_waiting = False
+
+    async def _wait_for_admission(self) -> None:
+        """The polling half of _await_streaming_slot (runs with _admission_waiting)."""
+        started = time.monotonic()
+        next_log = started + 60.0
         logger.info(
-            "session_unit.stream_admit_wait session_id=%s streaming=%d/%d — queuing new turn",
-            self.session_id, _get_streaming_count(), self.MAX_CONCURRENT_STREAMS,
+            "session_unit.stream_admit_wait session_id=%s streaming=%d — "
+            "memory under critical pressure, queuing new turn",
+            self.session_id, _get_streaming_count(),
         )
-        while _get_streaming_count() >= self.MAX_CONCURRENT_STREAMS:
-            if waited >= self._STREAM_ADMIT_TIMEOUT:
-                logger.warning(
-                    "session_unit.stream_admit_timeout session_id=%s streaming=%d/%d "
-                    "after %.0fs — proceeding (RSS kills remain the hard OOM guard)",
-                    self.session_id, _get_streaming_count(),
-                    self.MAX_CONCURRENT_STREAMS, waited,
-                )
-                return
+        while self.state == SessionState.IDLE and stream_admission_blocked():
             await asyncio.sleep(self._STREAM_ADMIT_POLL_INTERVAL)
-            waited += self._STREAM_ADMIT_POLL_INTERVAL
+            now = time.monotonic()
+            if now >= next_log:
+                next_log = now + 60.0
+                logger.warning(
+                    "session_unit.stream_admit_still_waiting session_id=%s "
+                    "streaming=%d waited=%.0fs — memory still under critical pressure",
+                    self.session_id, _get_streaming_count(), now - started,
+                )
+        logger.info(
+            "session_unit.stream_admit_proceed session_id=%s waited=%.1fs streaming=%d state=%s",
+            self.session_id, time.monotonic() - started, _get_streaming_count(),
+            self.state.value if self.state else "None",
+        )
 
     def __repr__(self) -> str:
         return (
@@ -2735,11 +2782,11 @@ class SessionUnit:
             if self.state == SessionState.IDLE:
                 self._recycle_kill_pending = False
 
-        # R6 Step B: concurrent-streaming admission gate (peak-OOM guard).
-        # A NEW user turn waits if the daemon is already at MAX_CONCURRENT_STREAMS
-        # simultaneous streams. continue_with_answer / continue_with_permission /
-        # retry paths deliberately do NOT call this — they count toward the cap
-        # but a user waiting on their own answer must never queue behind others.
+        # Streaming admission (peak-OOM guard): a NEW user turn waits only while
+        # memory is under critical pressure and another stream is in flight.
+        # continue_with_answer / continue_with_permission / retry paths
+        # deliberately do NOT call this — a user waiting on their own answer must
+        # never queue behind others.
         await self._await_streaming_slot()
 
         # Subprocess-IO barrier (run_4b74b764): if a compact() is running its
@@ -4812,24 +4859,13 @@ class SessionUnit:
     # └─────────────────────────────────────────────────────────────┘
     STREAMING_RSS_KILL_THRESHOLD: int = 7_000_000_000  # 7GB
 
-    # R6 Step B: concurrent-streaming admission cap (peak-OOM guard). Class attrs
-    # (not module-level) so tests can patch.object(SessionUnit, ...) and the
-    # _await_streaming_slot helper reads them via self. See the module-level
-    # _streaming_count / _get_streaming_count for the daemon-wide counter.
-    # Default = the number of chat tabs (tab ceiling - 1 channel slot), so every
-    # chat tab the UI lets the user open can stream at once (resource_monitor
-    # explains the 2026-08-02 drift this prevents). The count is daemon-wide: the
-    # channel session shares it, so a channel turn can still wait while every chat
-    # tab streams — the same ratio as before (3 chat + channel on a cap of 3).
-    # Env-tunable.
-    MAX_CONCURRENT_STREAMS: int = int(
-        os.environ.get(
-            "SWARMAI_MAX_CONCURRENT_STREAMS",
-            str(ResourceMonitor._MAX_TABS_CEILING - 1),
-        )
-    )
-    _STREAM_ADMIT_POLL_INTERVAL: float = 0.1   # seconds between cap re-checks
-    _STREAM_ADMIT_TIMEOUT: float = 120.0       # max wait for a streaming slot
+    # Streaming admission: how often a turn held by memory pressure re-checks
+    # (stream_admission_blocked; the memory reading itself is cached 5 s). A class
+    # attr so tests can patch.object(SessionUnit, ...).
+    _STREAM_ADMIT_POLL_INTERVAL: float = 0.5
+    # True while a send() turn waits for admission; memory-pressure eviction skips
+    # such a unit (see _await_streaming_slot).
+    _admission_waiting: bool = False
 
     async def _check_rss_and_proactive_restart(self) -> None:
         """Proactive restart: if tree RSS > threshold, compact → kill.

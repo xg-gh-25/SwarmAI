@@ -1305,7 +1305,7 @@
     "kpi": {
       "waiting": "Waiting for your answer",
       "onHivePage": "+{{count}} to handle on the Hive's page",
-      "free": "Free slots, ready to send",
+      "free": "Hives ready to take a task",
       "running": "Sent by me, running"
     },
     "waiting": {
@@ -1317,11 +1317,13 @@
     },
     "fleet": {
       "title": "Fleet",
-      "note": "In use = every session running on the Hive, its own included",
+      "note": "Running = every session running on the Hive, its own included; the bar is its memory in use: at 90% with other work running, a new task queues",
       "failed": "Can't read the fleet, retrying shortly",
       "unreachable": "Unreachable",
-      "full": "Full · {{used}}/{{max}} in use",
-      "used": "{{used}}/{{max}} in use"
+      "full": "Memory tight · {{count}} running, a new task queues",
+      "used": "{{count}} running",
+      "busy": "Busy · {{count}} running, a new task queues",
+      "memory": "Memory in use {{percent}}%"
     },
     "detail": {
       "failed": "Can't read the details, try again later",
