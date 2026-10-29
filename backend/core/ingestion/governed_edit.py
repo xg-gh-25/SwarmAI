@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 import json
 import logging
 import sqlite3
@@ -61,13 +62,29 @@ def _archive_path(path: Path, op_id: str) -> Path:
     return path.parent / ".archive" / f"{path.name}.{op_id.split(':')[-1]}.{digest}"
 
 
-def _sanitize(path: Path, data: bytes | None) -> bytes | None:
+def _blocked(guard: MemoryGuard, text: str) -> "Counter[tuple[str, str]]":
+    """The reject findings (injection, role hijack, exfiltration) of *text*, counted by
+    (pattern, matched text), scanned after invisible characters are stripped (a
+    zero-width character must not split a phrase past the scan)."""
+    from core.memory_guard import _INVISIBLE_CHARS
+    found = guard.scan(_INVISIBLE_CHARS.sub("", text)).findings
+    return Counter((f.pattern_name, " ".join(str(f.match).split()))
+                   for f in found if f.action == "reject")
+
+
+def _sanitize(path: Path, data: bytes | None, expected_revision: str) -> bytes | None:
     """The bytes to write: secrets redacted and invisible characters stripped over the
-    whole text; an injection, role hijack or exfiltration pattern refused when it is on
-    a line the edit adds. A line already in the file was admitted when it was written, and moving or keeping it exposes nothing
-    new; refusing it made a file that quotes such a phrase (a lesson about an injection
-    filter) impossible to edit at all. (When the current bytes are not the version
-    *expected_revision* names, the edit is refused as stale under the lock.)"""
+    whole text; refused when the new text holds a blocked match (injection, role
+    hijack, exfiltration) more often than the current file does.
+
+    Both texts are scanned whole, so a phrase split across lines or two saves, or a
+    role marker on a new line, is seen; counting stops a kept line from being copied.
+    A match already in the file was admitted when it was written, and keeping or moving
+    it exposes nothing new; refusing it made a file that quotes such a phrase (a lesson
+    about an injection filter) impossible to edit at all. The current bytes compared
+    are the version *expected_revision* names, or the edit is stale. Not covered: a
+    match the old text held inside a code fence or a quote that the new text unwraps
+    (the count is the same)."""
     if data is None:
         return None
     try:
@@ -77,11 +94,24 @@ def _sanitize(path: Path, data: bytes | None) -> bytes | None:
             raise ValueError("governed corpus files must be UTF-8")
         return data
     try:
-        kept = set(Path(path).read_bytes().decode("utf-8").splitlines())
-    except (OSError, UnicodeDecodeError):
-        kept = set()
+        current = Path(path).read_bytes()
+    except FileNotFoundError:
+        current = b""
+    if hashlib.sha256(current).hexdigest() != expected_revision and (current or expected_revision):
+        raise StaleRevision(f"expected {expected_revision}, found {hashlib.sha256(current).hexdigest()}")
+    try:
+        old = current.decode("utf-8")
+    except UnicodeDecodeError:
+        old = ""
     guard = MemoryGuard()
-    guard.sanitize("\n".join(ln for ln in text.splitlines() if ln not in kept))  # raises on a new line
+    extra = _blocked(guard, text) - _blocked(guard, old)
+    if extra:
+        from core.memory_guard import MemoryGuardError
+        names = sorted({name for name, _match in extra})
+        raise MemoryGuardError(f"Content rejected by MemoryGuard: {', '.join(names)}")
+    if _blocked(guard, old):
+        logger.warning("governed_edit: %s already holds blocked matches %s (kept, not added)",
+                       path, sorted({n for n, _m in _blocked(guard, old)}))
     return guard.scan(text).sanitized_content.encode("utf-8")
 
 
@@ -123,7 +153,7 @@ def apply_user_edit(path: Path, new_bytes: bytes | None, *, expected_revision: s
     if not is_governed(target):
         raise PermissionError("path is not a governed corpus file")
     target.parent.mkdir(parents=True, exist_ok=True)
-    new_bytes = _sanitize(target, new_bytes)
+    new_bytes = _sanitize(target, new_bytes, expected_revision)
     conn = _connection()
     try:
         ensure_baseline(conn=conn)

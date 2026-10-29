@@ -125,7 +125,7 @@ def _blocks(lines: list[str]) -> list[_Block]:
             i = j
         elif ln.startswith("- "):
             _text_end, _meta, end = _scan_entry(lines, i)
-            end = max(end, i + 1)
+            end = _close_fences(lines, i, max(end, i + 1))
             out.append(_Block("entry" if _ENTRY_RE.match(ln) else "other", lines[i:end], i))
             i = end
         else:
@@ -136,6 +136,28 @@ def _blocks(lines: list[str]) -> list[_Block]:
             out.append(_Block("other", lines[i:j], i))
             i = j
     return out
+
+
+def _close_fences(lines: list[str], start: int, end: int) -> int:
+    """*end*, moved past the closing line of a code fence ``lines[start:end]`` opens and
+    does not close (``_scan_entry`` ends an entry at a blank line, also one inside a
+    fence), then past the continuation, metadata line and indented tail that follow."""
+    n = len(lines)
+    while end < n and sum(1 for ln in lines[start:end] if _FENCE.match(ln)) % 2:
+        j = end
+        while j < n and not _FENCE.match(lines[j]):
+            j += 1
+        end = min(j + 1, n)
+        while end < n and lines[end].strip() and not lines[end].startswith("- ") and not _H2.match(lines[end]):
+            end += 1
+        k = end
+        while k < n and not lines[k].strip():
+            k += 1
+        if k < n and _META_RE.match(lines[k]):
+            end = k + 1
+            while end < n and lines[end].strip() and lines[end][0] in " \t" and not _META_RE.match(lines[end]):
+                end += 1
+    return end
 
 
 def _has_meta(block: _Block) -> bool:
@@ -195,7 +217,17 @@ def _slug(heading: str) -> str:
     return (s[:60].rstrip("-") or "section")
 
 
+_OLD_META = re.compile(r"^\s*<!-- ref:(\d+) \| last:([\w\-]+)")
+
+
 def _meta_line(block: _Block, today: str) -> str:
+    """The metadata line an entry without one gets: its count and date from a metadata
+    comment the lifecycle cannot read (an unknown field), else ref 0 and the entry's own
+    date, else today."""
+    for ln in block.lines[1:]:
+        old = _OLD_META.match(ln)
+        if old:
+            return f"  <!-- ref:{old.group(1)} | last:{old.group(2)} | decay:active | source:manual -->"
     m = _DATE.search(block.lines[0])
     when = m.group(1) if m else today
     try:
@@ -253,6 +285,8 @@ def normalize(doc: str, text: str, *, brain: str, today: Optional[str] = None) -
     preamble_title, preamble_comments = None, []
 
     def _move(rel: str, title: str, lines: list[str]) -> None:
+        if all(not ln.strip() or ln.startswith("## ") for ln in lines):
+            return                                   # nothing but a heading: nothing to move
         body = list(lines)
         while body and not body[-1].strip():
             body.pop()
@@ -297,7 +331,9 @@ def normalize(doc: str, text: str, *, brain: str, today: Optional[str] = None) -
                     res.meta_added += int(not _has_meta(b))
                 else:
                     rest.extend(b.lines)
-            _move(f"{stem}/{_slug(sec.heading)}.md", sec.heading, rest)
+            while rest and not rest[0].strip():
+                rest.pop(0)
+            _move(f"{stem}/{_slug(sec.heading)}.md", sec.heading, [f"## {sec.heading}", ""] + rest)
             continue
         rest = []
         for b in _blocks(sec.lines):
@@ -383,20 +419,33 @@ def apply_project(project_dir: Path, *, apply: bool = False, today: Optional[str
             "after": [f"{p.line}: {p.detail}" for p in check(doc, res.text)]}
         if not apply or not changed:
             continue
-        for rel, body in res.moved.items():
-            target = kdir / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                old = target.read_text(encoding="utf-8").rstrip("\n")
-                # the title and the "moved out" comment are there already; a block an
-                # earlier, interrupted run already moved is not added twice
-                moved_body = body.split("\n", 4)[4]
-                if moved_body.strip() in old:
-                    continue
-                body = old + "\n\n" + moved_body
-            tmp = target.with_name(f".{target.name}.tmp")
-            tmp.write_text(body, encoding="utf-8")
-            tmp.replace(target)
-        from core.ingestion.governed_edit import apply_user_edit
-        apply_user_edit(path, res.text.encode("utf-8"), expected_revision=rev)
+        try:
+            for rel, body in res.moved.items():
+                _append_moved(kdir / rel, body)
+            from core.ingestion.governed_edit import apply_user_edit
+            apply_user_edit(path, res.text.encode("utf-8"), expected_revision=rev)
+        except Exception as exc:  # noqa: BLE001 — reported per doc; the next run retries it
+            report["docs"][doc]["error"] = f"{type(exc).__name__}: {exc}"
     return report
+
+
+def _append_moved(target: Path, body: str) -> None:
+    """Write or append a moved block. Each block carries a ``moved:<digest>`` comment;
+    a block whose digest the file already holds (an earlier run wrote the reference file,
+    then the doc edit failed) is not added again. Matching by digest, not by text, so a
+    short block that happens to occur in the file is never skipped and lost."""
+    head, _, moved_body = body.partition("\n\n<!-- Moved out of ")
+    moved_body = "<!-- Moved out of " + moved_body
+    comment, _, rest = moved_body.partition("\n\n")
+    marker = f"<!-- moved:{hashlib.sha256(rest.strip().encode('utf-8')).hexdigest()[:16]} -->"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        old = target.read_text(encoding="utf-8").rstrip("\n")
+        if marker in old:
+            return
+        text = old + "\n\n" + comment + "\n" + marker + "\n\n" + rest
+    else:
+        text = head + "\n\n" + comment + "\n" + marker + "\n\n" + rest
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(text.rstrip("\n") + "\n", encoding="utf-8")
+    tmp.replace(target)

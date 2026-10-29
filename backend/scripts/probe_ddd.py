@@ -252,7 +252,7 @@ def _bootstrap_holds() -> tuple[bool, str]:
         sys.path.insert(0, str(bundled_path("skills", "s_project-manager", "scripts")))
         import verify_ddd_complete as p6
         checks = {c[0]: (c[1], c[2]) for c in p6._check_knowledge(proj)}
-        for key in ("② Knowledge/structure", "② Knowledge/content"):
+        for key in ("② Knowledge/structure", "② Knowledge/content", "② Knowledge/format"):
             if checks.get(key, ("missing",))[0] != "PASS":
                 return False, f"P6 {key}: {checks.get(key)}"
     return True, ""

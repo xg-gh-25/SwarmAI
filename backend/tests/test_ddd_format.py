@@ -206,3 +206,58 @@ def test_an_interrupted_apply_does_not_move_a_block_twice(tmp_path, monkeypatch)
     F.apply_project(proj, apply=True)
     dev = (proj / "2-understanding" / "knowledge" / "tech" / "dev-commands.md").read_text(encoding="utf-8")
     assert dev.count("- a plain bullet with no title") == 1
+
+
+def test_a_fence_with_a_blank_line_inside_an_entry_stays_in_the_entry():
+    text = ("# T\n\n## Conventions\n\n- [process] **T1** run this:\n  ```bash\n  a\n\n  b\n  ```\n"
+            "  <!-- ref:4 | last:2026-01-01 | decay:active -->\n- [guideline] **T2** keep it.\n"
+            "  <!-- ref:0 | last:2026-01-01 | decay:active -->\n")
+    res = F.normalize("TECH.md", text, brain="P", today="2026-10-29")
+    assert res.moved == {} and F.check("TECH.md", res.text) == []
+    assert "<!-- ref:4 | last:2026-01-01" in res.text and "**T2**" in res.text
+    again = F.normalize("TECH.md", res.text, brain="P", today="2026-10-29")
+    assert again.text == res.text and again.moved == {}
+
+
+def test_an_unreadable_metadata_line_keeps_its_count_and_date():
+    text = "# T\n\n## Conventions\n\n- [guideline] **G** x.\n  <!-- ref:3 | last:2026-02-02 | decay:active | weird:1 -->\n"
+    res = F.normalize("TECH.md", text, brain="P", today="2026-10-29")
+    assert "<!-- ref:3 | last:2026-02-02 | decay:active | source:manual -->" in res.text
+
+
+def test_a_moved_section_keeps_its_heading_even_when_two_share_a_file():
+    text = "# T\n\n## Stack Notes\n\nalpha\n\n## Stack   notes\n\nbeta\n"
+    res = F.normalize("TECH.md", text, brain="P", today="2026-10-29")
+    body = res.moved["tech/stack-notes.md"]
+    assert "## Stack Notes\n\nalpha" in body and "## Stack   notes\n\nbeta" in body
+
+
+def test_a_short_block_already_in_the_reference_file_is_still_moved(tmp_path, monkeypatch):
+    """Skipping is by the block's digest, never by its text occurring in the file."""
+    proj = _workspace_project(tmp_path, monkeypatch)
+    (proj / "2-understanding" / "TECH.md").write_text("# T\n\n## Architecture\n\nUses X\n", encoding="utf-8")
+    k = proj / "2-understanding" / "knowledge" / "tech"
+    k.mkdir(parents=True)
+    (k / "architecture-notes.md").write_text("# Lib — Architecture (notes)\n\nUses Xavier for builds.\n",
+                                             encoding="utf-8")
+    F.apply_project(proj, apply=True)
+    assert "\nUses X\n" in (k / "architecture-notes.md").read_text(encoding="utf-8") + "\n"
+    assert "Uses X" not in (proj / "2-understanding" / "TECH.md").read_text(encoding="utf-8")
+
+
+def test_one_doc_failing_is_reported_and_the_others_are_written(tmp_path, monkeypatch):
+    proj = _workspace_project(tmp_path, monkeypatch)
+    (proj / "2-understanding" / "PROJECT.md").write_text(
+        "# P\n\n## Recent Decisions\n\n- **Untyped** decision.\n", encoding="utf-8")
+    from core.ingestion import governed_edit
+    real = governed_edit.apply_user_edit
+
+    def fail(path, *a, **k):
+        if Path(path).name == "TECH.md":
+            raise RuntimeError("disk full")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(governed_edit, "apply_user_edit", fail)
+    report = F.apply_project(proj, apply=True)
+    assert "disk full" in report["docs"]["TECH.md"]["error"]
+    assert re.search(r"- \[\w+\] \*\*Untyped\*\* decision\.\n  <!-- ref:0", (proj / "2-understanding" / "PROJECT.md").read_text(encoding="utf-8"))

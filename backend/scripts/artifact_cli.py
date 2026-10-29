@@ -655,7 +655,7 @@ def cmd_ddd_format(args, reg) -> None:
         sys.exit(2)
     report = ddd_format.apply_project(project_dir, apply=args.apply)
     print(json.dumps(report, indent=2, ensure_ascii=False))
-    if any(v.get("after") for v in report["docs"].values()):
+    if any(v.get("after") or v.get("error") for v in report["docs"].values()):
         sys.exit(1)
 
 

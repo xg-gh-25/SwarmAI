@@ -228,6 +228,7 @@ def test_end_to_end_a_fixed_entries_file_makes_p6_pass_knowledge(brain: Path) ->
     checks = {c[0]: c[1] for c in v._check_knowledge(brain)}
     assert checks["② Knowledge/structure"] == "PASS"
     assert checks["② Knowledge/content"] == "PASS", checks
+    assert checks["② Knowledge/format"] == "PASS", checks
 
 
 def test_classify_starter(tmp_path: Path, capsys) -> None:
