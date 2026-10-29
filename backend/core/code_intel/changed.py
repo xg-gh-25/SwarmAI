@@ -40,11 +40,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 MAX_SYMBOLS = 25
 MAX_CALLERS = 12
@@ -439,8 +442,8 @@ def _log_usage(rep: Report, caller: str) -> None:
                 "name_only_files": sum(c.unconfirmed for c in rep.symbols),
                 "unexamined": rep.unexamined}
         log_usage(line)
-    except Exception:  # noqa: BLE001 -- measuring must never break the report
-        pass
+    except Exception as exc:  # noqa: BLE001 -- measuring must never break the report
+        logger.warning("code_intel.changed: usage line not written: %s", exc)
 
 
 def log_usage(line: dict) -> None:
