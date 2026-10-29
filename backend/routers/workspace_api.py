@@ -1919,11 +1919,11 @@ async def create_file(request: FolderCreateRequest):
 
     from core.ingestion.api import StaleRevision, apply_user_edit
     if _cdf_is_governed(target):
-        if request.expected_revision is None:
-            raise HTTPException(status_code=409, detail="expected_revision is required")
+        # an explorer "new file" expects no file there: revision "" unless one was sent
+        expected = request.expected_revision if request.expected_revision is not None else ""
         try:
             revision = await asyncio.to_thread(
-                apply_user_edit, target, b"", expected_revision=request.expected_revision,
+                apply_user_edit, target, b"", expected_revision=expected,
                 actor="user",
             )
         except StaleRevision:
@@ -2001,12 +2001,14 @@ async def delete_folder(request: FolderDeleteRequest):
                 detail="Directory contains governed files; delete files individually.",
             )
     elif _cdf_is_governed(target):
-        if request.expected_revision is None:
-            raise HTTPException(status_code=409, detail="expected_revision is required")
+        # an explorer delete/trash acts on the file as it is now: still one journaled,
+        # archived governed edit (the single write path), without a stale check
+        expected = (request.expected_revision if request.expected_revision is not None
+                    else _cdf_revision(target))
         try:
             await asyncio.to_thread(
                 apply_user_edit, target, None,
-                expected_revision=request.expected_revision, actor="user",
+                expected_revision=expected, actor="user",
             )
         except StaleRevision:
             raise HTTPException(status_code=409, detail="The target revision is stale")
@@ -2079,12 +2081,14 @@ async def trash_item(request: FolderDeleteRequest):
                 detail="Directory contains governed files; trash files individually.",
             )
     elif _cdf_is_governed(target):
-        if request.expected_revision is None:
-            raise HTTPException(status_code=409, detail="expected_revision is required")
+        # an explorer delete/trash acts on the file as it is now: still one journaled,
+        # archived governed edit (the single write path), without a stale check
+        expected = (request.expected_revision if request.expected_revision is not None
+                    else _cdf_revision(target))
         try:
             await asyncio.to_thread(
                 apply_user_edit, target, None,
-                expected_revision=request.expected_revision, actor="user",
+                expected_revision=expected, actor="user",
             )
         except StaleRevision:
             raise HTTPException(status_code=409, detail="The target revision is stale")
@@ -2181,10 +2185,25 @@ async def rename_item(request: FolderRenameRequest):
                 detail="Directory contains governed files; only project tree moves are supported.",
             )
     elif _cdf_is_governed(old_target) or _cdf_is_governed(new_target):
-        raise HTTPException(
-            status_code=409,
-            detail="Governed file rename requires the CDF governed move operation.",
-        )
+        if not (_cdf_is_governed(old_target) and _cdf_is_governed(new_target)):
+            raise HTTPException(
+                status_code=409,
+                detail="A file can be moved into or out of the knowledge folders only by copying it.",
+            )
+        from core.ingestion.api import StaleRevision, apply_user_edit
+
+        def _governed_rename() -> None:
+            # two journaled governed edits; a crash between them leaves a copy, never a loss
+            data = old_target.read_bytes()
+            apply_user_edit(new_target, data, expected_revision="", actor="user")
+            apply_user_edit(old_target, None, expected_revision=_cdf_revision(old_target), actor="user")
+        try:
+            await asyncio.to_thread(_governed_rename)
+        except StaleRevision:
+            raise HTTPException(status_code=409, detail="The file changed while it was being moved")
+        _invalidate_tree_cache()
+        logger.info("Renamed governed file '%s' → '%s'", request.old_path, request.new_path)
+        return {"old_path": request.old_path, "new_path": request.new_path}
 
     # If the destination is a directory path, validate depth
     if new_target.suffix == "" or old_target.is_dir():

@@ -37,10 +37,13 @@ SOURCES = ("s2", "s4", "s5", "s6")
 
 def guard_paths(data_dir: Path, workspace: Path) -> None:
     """Refuse the live app data dir, anything inside it, or a missing copy."""
-    live = (Path.home() / ".swarm-ai").resolve()
+    if str(BACKEND) not in sys.path:
+        sys.path.insert(0, str(BACKEND))
+    from config import default_app_data_dir, get_app_data_dir
+    lives = {Path(default_app_data_dir()).resolve(), Path(get_app_data_dir()).resolve()}
     for label, path in (("data dir", data_dir), ("workspace", workspace)):
         resolved = path.expanduser().resolve()
-        if resolved == live or live in resolved.parents:
+        if any(resolved == live or live in resolved.parents for live in lives):
             raise SystemExit(f"refused: the {label} {resolved} is the live ~/.swarm-ai; "
                              "replay only on a copy")
         if not resolved.is_dir():

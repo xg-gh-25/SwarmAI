@@ -33,6 +33,7 @@ import gzip
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import secrets
@@ -46,6 +47,8 @@ from typing import Any, Optional
 import yaml
 
 from core.brain_bootstrap.repo_read import is_secret_path
+
+logger = logging.getLogger(__name__)
 
 MAX_PACKAGE_BYTES = 20 * 1024 * 1024
 MAX_UNPACKED_BYTES = 64 * 1024 * 1024
@@ -396,7 +399,37 @@ def install(workspace: Path, brain: str, files: dict[str, bytes], digest: str) -
         _write(root_fd, STATE_FILE, json.dumps(record, indent=1).encode("utf-8"))
     finally:
         os.close(root_fd)
+    _journal_install(root)
     return record
+
+
+def _journal_install(root: Path) -> None:
+    """Record the install as a sync in the CDF journal, so the baseline holds the
+    installed bytes and the next CDF write to the Brain plans against them (a write
+    the journal does not know reads as an unknown edit). Only governed files count,
+    so an install outside the live workspace records nothing. The files are already
+    installed: a failed record is
+    logged, and CDF's own precondition still refuses to write over bytes it did not
+    expect."""
+    from config import get_swarmws
+    from core.ingestion.governed_edit import apply_sync, sync_baseline_revision, sync_revision_of
+    from core.ingestion.materializer import iter_governed_files
+    from core.ingestion.writer import ensure_baseline
+    try:
+        baseline = ensure_baseline()
+        brain = root.resolve()
+        live = Path(get_swarmws()).resolve()      # baseline names are relative to it
+        # what the Brain has now, and what the baseline had (a file the package dropped)
+        paths = {p.resolve() for p in iter_governed_files() if brain in p.resolve().parents}
+        paths |= {live / name for name in baseline.get("files", {})
+                  if brain in (live / name).parents}
+        if not paths:
+            return
+        before = {str(p): sync_baseline_revision(p, baseline) for p in paths}
+        after = {str(p): sync_revision_of(p) for p in paths}
+        apply_sync(sorted(paths), before, after, "brain-sync")
+    except Exception:  # noqa: BLE001 - logged, see docstring
+        logger.exception("brain sync: recording the install of %s in the CDF journal failed", root.name)
 
 
 def installed_state(workspace: Path, brain: str) -> Optional[dict[str, Any]]:

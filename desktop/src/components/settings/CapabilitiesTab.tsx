@@ -39,15 +39,14 @@ const LABELS: Record<string, string> = {
   recall_engine: 'Memory Recall Engine',
   manifest_loader: 'Skill Manifest Loader',
   llm_optimizer: 'Evolution Optimizer',
-  locked_write: 'Memory Guard (locked_write)',
-  distillation_hook: 'Distillation Hook',
+  worker: 'Cognitive Distillation Flow (CDF worker)',
   frozen: 'PyInstaller Bundle',
   mode: 'Runtime Mode',
 };
 
 /** Group each key into a section. Keys not listed go to "other". */
 const GROUPS: Record<string, string[]> = {
-  core: ['recall_engine', 'manifest_loader', 'locked_write', 'distillation_hook'],
+  core: ['recall_engine', 'manifest_loader', 'worker'],
   optional: ['sqlite_vec', 'psutil', 'slack_bolt', 'llm_optimizer'],
   runtime: ['frozen', 'mode'],
 };

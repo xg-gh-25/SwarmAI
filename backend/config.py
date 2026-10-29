@@ -64,6 +64,12 @@ def get_app_data_dir() -> Path:
     override = os.environ.get("SWARM_DATA_DIR")
     if override:
         return Path(override)
+    return default_app_data_dir()
+
+
+def default_app_data_dir() -> Path:
+    """The production data dir, whatever SWARM_DATA_DIR says (``get_app_data_dir``
+    without the override): what a tool that must never touch live data refuses."""
     return Path.home() / ".swarm-ai"
 
 

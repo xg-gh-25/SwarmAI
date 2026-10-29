@@ -657,6 +657,10 @@ def _load_plan(row: Any) -> dict[str, Any]:
 
 def _target_postcondition(plan: Mapping[str, Any]) -> bool:
     target = _absolute(str(plan["target_path"]))
+    # absent and empty are different states: read as b"" both, a new empty file was
+    # "already written" (never created) and a delete of an empty file "already done"
+    if target.exists() != (plan.get("intended_bytes") is not None):
+        return False
     data = target.read_bytes() if target.exists() else b""
     if _hash(data) != plan.get("after_hash"):
         return False

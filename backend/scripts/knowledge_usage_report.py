@@ -154,10 +154,12 @@ def main(argv: "list[str] | None" = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--days", type=float, default=14)
     p.add_argument("--transcripts", default=os.path.expanduser("~/.claude/projects/*/*.jsonl"))
-    p.add_argument("--workspace", default=os.environ.get("SWARM_WORKSPACE")
-                   or os.path.expanduser("~/.swarm-ai/SwarmWS"))
+    p.add_argument("--workspace", default=None, help="the SwarmWS (default: this install's)")
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
+    if args.workspace is None:
+        from config import get_swarmws          # the one place that resolves it
+        args.workspace = str(get_swarmws())
     since = time.time() - args.days * 86400
     sessions = []
     for f in glob.glob(args.transcripts):

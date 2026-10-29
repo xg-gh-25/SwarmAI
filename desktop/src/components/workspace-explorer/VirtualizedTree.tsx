@@ -35,6 +35,7 @@ import { useTreeData, useSelection, CHANGED_GIT_STATUSES } from '../../contexts/
 import type { SortMode } from '../../contexts/ExplorerContext';
 import { toFileTreeItem } from './toFileTreeItem';
 import { folderService } from '../../services/workspace';
+import { isApiError } from '../../services/api';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../../constants/explorerEvents';
 import { ToastContext } from '../../contexts/ToastContext';
 import TreeNodeRow, { InlineRenameInput } from './TreeNodeRow';
@@ -44,6 +45,13 @@ import FileContextMenu from './FileContextMenu';
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** The backend's reason for a refused rename/move (e.g. a governed file, whose
+ *  409 detail says why), not the generic status text. */
+export function failureReason(err: unknown): string {
+  if (isApiError(err)) return err.detail || err.message;
+  return err instanceof Error ? err.message : 'Unknown error';
+}
 
 /** Zone configuration — maps filesystem paths to semantic zones. */
 export const SEMANTIC_ZONES = [
@@ -825,7 +833,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         console.error('Rename failed:', err);
         toastCtx?.addToast({
           severity: 'error',
-          message: `Rename failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          message: `Rename failed: ${failureReason(err)}`,
         });
       }
       setRenamingPath(null);
@@ -895,7 +903,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         console.error('Move failed:', err);
         toastCtx?.addToast({
           severity: 'error',
-          message: `Move failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          message: `Move failed: ${failureReason(err)}`,
         });
       }
     },

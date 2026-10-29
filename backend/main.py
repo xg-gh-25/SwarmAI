@@ -2028,7 +2028,8 @@ async def get_capabilities():
         caps["slack_bolt"] = False
 
     # Key local modules
-    for mod in ["core.recall_engine", "core.manifest_loader", "core.llm_optimizer"]:
+    for mod in ["core.recall_engine", "core.manifest_loader", "core.llm_optimizer",
+                "core.ingestion.worker"]:
         try:
             __import__(mod)
             caps[mod.split(".")[-1]] = True
