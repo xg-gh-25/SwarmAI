@@ -2962,8 +2962,15 @@ class SwarmWorkspaceManager:
                 trash_root = project_dir.parent / ".trash"
                 trash_root.mkdir(exist_ok=True)
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
+                # What the Brain owns outside its folder (graphs, clones, registry rows,
+                # job bodies, its config name, projected skills) is read now, while the
+                # folder is still in place, and taken away with it (core/brain_teardown).
+                from core import brain_teardown
+                owned = brain_teardown.collect(project_dir, workspace_path)
                 from core.ingestion.governed_edit import move_tree  # journaled (CDF §3.2)
-                move_tree(project_dir, trash_root / f"{name}-{stamp}")
+                dest = trash_root / f"{name}-{stamp}"
+                move_tree(project_dir, dest)
+                brain_teardown.take_away(owned, dest, workspace_path)
                 return name
 
             deleted_name = await anyio.to_thread.run_sync(_find_and_delete)

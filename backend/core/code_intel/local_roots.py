@@ -357,6 +357,20 @@ def remove(project: str, path: str | Path) -> bool:
         return True
 
 
+def forget_project(project: str) -> bool:
+    """Drop every row the registry keeps for *project* (its roots and the ones it
+    dismissed): the Brain was deleted. The graph files are the caller's to move.
+    True when something was dropped."""
+    _require_local()
+    with _locked() as reg:
+        data = _read(reg)
+        had = data["projects"].pop(project, None) is not None
+        had = (data.get("dismissed") or {}).pop(project, None) is not None or had
+        if had:
+            _write(reg, data)
+        return had
+
+
 def migrate_once(projects_dir: str | Path) -> dict:
     """The one-time step of an install moving to r4 (D1), run by the code-intel job:
     every r3 ``pending`` entry becomes owned (declared then, and r4 has no Confirm to
