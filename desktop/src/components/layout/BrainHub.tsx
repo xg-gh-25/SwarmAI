@@ -33,13 +33,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
-  approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
+  approveReview, rejectReviewHunk, aggregateTypeCounts,
   brainRecall, useBrainSpecs, useBrainSpecDoc,
   getLocalRoots, removeLocalRoot, type LocalRoot,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail, GeneralBrain,
-  ReviewData, ReviewHunk, PendingProposal, RecallHit, SpecDoc, SpecRepo,
+  ReviewData, ReviewHunk, RecallHit, SpecDoc, SpecRepo,
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
@@ -255,7 +255,7 @@ function BrainDetailShell(
   const { data: analytics = null } = useQuery<PipelineAnalytics>({
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
-  // same count as the map's You: each Run waiting, each proposal, a Project Agent draft
+  // same count as the map's You: each Run waiting, each Need-You item, a Project Agent draft
   const needs = summary ? hubSummary([summary], analytics).needsYou : 0;
   const pending = summary?.health.pending ?? 0;
 
@@ -590,7 +590,7 @@ function BrainOverview(
         {detail.health?.noise ? (
           <div data-testid="brainhub-healthstrip">
             {/* ontologyOnly (run_115aa182): the §② NeedYouBlock below OWNS needs-you
-                (proposals/reclaimable/sinking); this §① strip is the ontology + facts
+                (reclaimable/sinking); this §① strip is the ontology + facts
                 only, so the two don't render a duplicate "Needs you" block. */}
             <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
               typeCounts={aggregateTypeCounts(detail.sections)} ontologyOnly />
@@ -611,7 +611,7 @@ function BrainOverview(
       </div>
 
       {/* §② Knowledge upkeep — sinking and reclaimable entries. What waits on the
-          person (Runs, proposals) lives in the Needs you tab, not here. */}
+          person (Runs, escalations) lives in the Needs you tab, not here. */}
       <UpkeepBlock
         reclaimable={detail.health?.noise?.reclaimable ?? 0}
         sinking={detail.health?.sinking ?? 0}
@@ -664,7 +664,7 @@ function CoreDocCards(
   { members, signals, projectName, onOpenFile, showWeekly, onToggleWeekly, weekly }:
   {
     members: BrainDetail['sections'][number]['members'];
-    signals: Map<string, { newCount: number; pendingCount: number }>;
+    signals: Map<string, { newCount: number }>;
     projectName: string; onOpenFile: (p: string) => void;
     showWeekly: boolean; onToggleWeekly: () => void; weekly: WeeklyReportModel;
   },
@@ -696,8 +696,8 @@ function CoreDocCards(
 
       <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
         {members.map((m) => {
-          const sig = signals.get(m.path) ?? { newCount: 0, pendingCount: 0 };
-          const marked = sig.newCount > 0 || sig.pendingCount > 0;
+          const sig = signals.get(m.path) ?? { newCount: 0 };
+          const marked = sig.newCount > 0;
           const docName = m.path.split('/').pop() ?? m.path;
           return (
             <button
@@ -716,7 +716,6 @@ function CoreDocCards(
               <div className="text-meta text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
               <div className="flex items-center gap-2 text-meta text-[var(--color-text-faint)]">
                 {sig.newCount > 0 && <span className="text-[var(--color-status-success)]">{sig.newCount} new</span>}
-                {sig.pendingCount > 0 && <span className="text-[var(--color-status-warning)]">{sig.pendingCount} pending</span>}
                 {!marked && <span>up to date</span>}
                 {m.mtime && <span className="ml-auto">{m.mtime}</span>}
               </div>
@@ -750,7 +749,7 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
       </div>
       <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
         <div><span className="text-[var(--color-status-success)] font-semibold">{weekly.autoApplied}</span> auto-cultivated change{weekly.autoApplied === 1 ? '' : 's'} since last review</div>
-        <div><span className="text-[var(--color-status-warning)] font-semibold">{weekly.pending}</span> proposal{weekly.pending === 1 ? '' : 's'} awaiting your decision</div>
+        <div><span className="text-[var(--color-status-warning)] font-semibold">{weekly.pending}</span> item{weekly.pending === 1 ? '' : 's'} waiting in Need You</div>
         <div>
           docs touched: {weekly.changedDocs.length > 0
             ? <span className="font-mono text-[var(--color-text)]">{weekly.changedDocs.join(', ')}</span>
@@ -1200,17 +1199,6 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
     } finally { setBusy(false); }
   }, [name, load]);
 
-  const onProposal = useCallback(async (p: PendingProposal, accept: boolean) => {
-    setBusy(true);
-    try {
-      if (accept) await approveProposal(p.id, name);
-      else await rejectProposal(p.id, name);
-      load();
-    } catch (e) {
-      setActionError(String((e as { message?: string })?.message ?? e));
-    } finally { setBusy(false); }
-  }, [name, load]);
-
   // Open a hunk's file in the Canvas (Run 2). WARNING Gate-1: hunk.file is ALREADY
   // WORKSPACE-relative (backend runs `git diff` at the workspace root with a
   // `Projects/<name>` pathspec → cur_file = "Projects/<name>/…", ddd_brain.py:162/964;
@@ -1228,23 +1216,20 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
   if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="review-error">Failed to load review: {error}</div>;
   if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading review…</div>;
 
-  // Zone A = auto-applied hunks; Zone C = pending risky proposals. (F1: the former
-  // Zone B "decay·sinking" was removed — the backend never emitted that tag, so it
-  // was a permanently-empty misleading zone; the Gallery's health.sinking count
-  // already surfaces dormant/archived entries.)
-  const zoneA = data.hunks.filter((h) => h.tag === 'cultivation·auto-applied');
-  const riskyHunks = data.hunks.filter((h) => h.tag === 'risky·staged');
+  // Every hunk is already-written sediment (CDF writes the Brain; nothing waits for
+  // approval). (F1: the former Zone B "decay·sinking" was removed — the backend never
+  // emitted that tag; the Gallery's health.sinking count surfaces dormant entries.)
+  const zoneA = data.hunks;
 
   // Item 6 — de-jargon: the primary header is plain language ("N changes since
   // your last review · M awaiting approval"). The engineer-facing git details
   // (watermark SHA → HEAD, scoped path) are FOLDED into a muted <details> below,
   // still present in the DOM (kept for the power user + the header contract test).
   const changeCount = data.hunks.length;
-  const pendingCount = riskyHunks.length;
 
   return (
     <div className="p-4" data-testid="brainhub-review">
-      <div className="mb-3"><Hint>After every Run, Reflect writes what it learned. Facts go straight into the Brain and can be undone here; a change to its rules waits for your OK.</Hint></div>
+      <div className="mb-3"><Hint>What the Brain learned since your last review. It is already written; Reject undoes one.</Hint></div>
       {/* diff header — plain language first, git internals folded */}
       <div className="mb-3" data-testid="review-diff-header">
         <div className="flex items-center gap-2 text-body text-[var(--color-text)]">
@@ -1253,7 +1238,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
             {changeCount === 0
               ? 'No changes since your last review'
               : <>{changeCount} change{changeCount === 1 ? '' : 's'} since your last review
-                  {pendingCount > 0 && <> · <span className="text-[var(--color-status-warning)]">{pendingCount} awaiting your approval</span></>}</>}
+                  </>}
           </span>
           <button
             onClick={onApproveAll}
@@ -1305,36 +1290,6 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
             className="ml-auto text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline">dismiss</button>
         </div>
       )}
-
-      {/* Zone C — pending risky proposals (the ONLY true Approve/Reject gate) */}
-      <ReviewZone
-        testid="review-zone-c" title="Waiting for your OK"
-        desc="Changes to how this Brain judges (its rules). Nothing is written until you approve."
-        color="var(--color-status-warning)"
-      >
-        {data.proposals.length === 0 && riskyHunks.length === 0
-          ? <ZoneEmpty text="No rule changes waiting for you." />
-          : data.proposals.map((p) => (
-            <div key={p.id} className="rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-status-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_6%,transparent)] p-2 mb-1.5" data-testid="review-proposal">
-              <div className="flex items-center gap-1.5 mb-1 text-meta">
-                <span className="font-mono text-[var(--color-status-warning)]">{p.target_doc}</span>
-                <span className="text-[var(--color-text-faint)]">· {p.target_section}</span>
-                {/* F4: confidence is the human-gate decision signal — render it
-                    (null-guarded: an un-scored proposal shows "—", never "null"). */}
-                <span className="text-meta text-[var(--color-text-muted)]" data-testid="proposal-confidence" title="cultivation confidence">
-                  conf {p.confidence != null ? p.confidence.toFixed(2) : '—'}
-                </span>
-                <div className="ml-auto flex gap-1">
-                  <button onClick={() => onProposal(p, true)} disabled={busy}
-                    className="btn-sm btn-success disabled:opacity-40">Approve</button>
-                  <button onClick={() => onProposal(p, false)} disabled={busy}
-                    className="btn-sm btn-danger disabled:opacity-40">Reject</button>
-                </div>
-              </div>
-              <div className="text-meta text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
-            </div>
-          ))}
-      </ReviewZone>
 
       {/* Zone A — auto-cultivated (already committed) */}
       <ReviewZone

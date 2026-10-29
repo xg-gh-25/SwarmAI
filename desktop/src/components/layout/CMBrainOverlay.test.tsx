@@ -36,25 +36,17 @@ const TOKEN_BLOCK = {
   ],
 };
 
-// Real-shaped Review proposals (DDD cultivation) — the fields the card renders.
-const REVIEW_PROPS = [
-  { id: 'proposal_a8e14d', target_doc: 'IMPROVEMENT.md', target_section: 'What Failed', content: 'Trace the decisive line before asserting a root cause.', confidence: 0.82 },
-  { id: 'proposal_1d7c2e', target_doc: 'TECH.md', target_section: 'Architecture', content: 'Record the lite-endpoint split as a TECH decision.', confidence: 0.71 },
-  { id: 'proposal_e65e4b', target_doc: 'PRODUCT.md', target_section: 'C&M overlay', content: 'Locked context files open read-only in Canvas.', confidence: 0.64 },
-];
 // Real-shaped governance (Approve) proposals — GC rows: gc_id / proposed_rule / checked.
 const GOV_PROPS = [
   { id: 'GC14', gc_id: 'GC14', occurrence_count: 3, proposed_rule: 'Any runtime/deploy-state claim must cite a same-turn observation.', checked: 'checked against: R16b — new because it names the same-turn rule' },
   { id: 'GC15', gc_id: 'GC15', occurrence_count: 3, proposed_rule: 'Block commit when a self-authored test patches the symbol-under-change.', checked: 'checked against: R28 — new because it names the patch' },
 ];
 
-// lite endpoint shape: exactly { token_block, pending_proposals, governance_pending_count }
-function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[]; reviewProps?: unknown[] } = {}) {
-  const reviewProps = opts.reviewProps ?? REVIEW_PROPS;
+// lite endpoint shape: exactly { token_block, governance_pending_count }
+function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[] } = {}) {
   const govN = opts.governancePending ?? 0;
   const lite = {
     token_block: TOKEN_BLOCK,
-    pending_proposals: reviewProps,
     governance_pending_count: govN,
     ...overrides,
   };
@@ -146,7 +138,7 @@ describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
       if (url.includes('archive-list')) return Promise.resolve({ data: { files: [], total_files: 0, source: url.includes('evolution') ? 'evolution' : 'memory' } });
       if (url.includes('archive-search')) return Promise.resolve({ data: { results: [], q: '', source: url.includes('evolution') ? 'evolution' : 'memory' } });
       // lite (default)
-      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
     });
   }
 
@@ -200,7 +192,7 @@ describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
           { type: 'model', count: 0, active: 0, dormant: 0 },
         ], drill: {}, total: 0 } });
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { pending_proposals: [], token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
     });
     renderOverlay();
     openOverlay();
@@ -348,14 +340,15 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     await waitFor(() => expect(rail.textContent).toMatch(/100[,.]?0?K?/));
   });
 
-  it('Needs-you Review = pending_proposals; Approve/Action wired to governance/pending (DoD4)', async () => {
+  it('Needs-you holds only Approve, wired to the governance count (DoD4)', async () => {
     mockHealth({}, { governancePending: 2 }); // 2 governance proposals awaiting decision
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-overview-rail');
-    expect((await screen.findByTestId('cm-needs-review')).textContent).toContain('3'); // pending_proposals
-    // Approve reads governance/pending .total (real wiring, not hardcoded 0)
+    // Approve reads the governance count (real wiring, not hardcoded 0)
     await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    // knowledge needs no queue (CDF judges and writes it): no Review button
+    expect(screen.queryByTestId('cm-needs-review')).toBeNull();
   });
 });
 
@@ -385,13 +378,13 @@ describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-panel-context');
-    // click Review → main area swaps to the filtered list
-    act(() => { screen.getByTestId('cm-needs-review').click(); });
+    // click Approve → main area swaps to the filtered list
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
     const list = await screen.findByTestId('cm-needs-list');
     expect(list).toBeInTheDocument();
     expect(screen.queryByTestId('cm-panel-context')).toBeNull(); // tab content hidden
-    // AC6: the rail Review button shows an ACTIVE state while its list is open
-    expect(screen.getByTestId('cm-needs-review').getAttribute('data-active')).toBe('true');
+    // AC6: the rail Approve button shows an ACTIVE state while its list is open
+    expect(screen.getByTestId('cm-needs-approve').getAttribute('data-active')).toBe('true');
     // AC6: an explicit Back header (breadcrumb) exists, labeled with the return target
     const back = await screen.findByTestId('cm-needs-back');
     expect(back.textContent).toMatch(/back/i);
@@ -399,7 +392,7 @@ describe('CMBrainOverlay — overview rail growth-trend + Needs-you filter (DoD4
     act(() => { back.click(); });
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
     expect(screen.queryByTestId('cm-needs-list')).toBeNull();
-    expect(screen.getByTestId('cm-needs-review').getAttribute('data-active')).toBe('false');
+    expect(screen.getByTestId('cm-needs-approve').getAttribute('data-active')).toBe('false');
   });
 });
 
@@ -464,43 +457,7 @@ describe('CMBrainOverlay — AC2 rows open in Canvas', () => {
   });
 });
 
-describe('CMBrainOverlay — AC3/4/5 proposal cards + dual-route actions', () => {
-  it('Review cards render real fields (target_doc/section/content), not a raw id subject', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    act(() => { screen.getByTestId('cm-needs-review').click(); });
-    const list = await screen.findByTestId('cm-needs-list');
-    // the human-readable target + content appear
-    expect(list.textContent).toMatch(/IMPROVEMENT\.md/);
-    expect(list.textContent).toMatch(/What Failed/);
-    expect(list.textContent).toMatch(/decisive line/);
-    // the id is NOT the card's headline (it may appear as a demoted footnote only)
-    const card = await screen.findByTestId('cm-proposal-proposal_a8e14d');
-    const head = card.querySelector('[data-testid="cm-card-what"]');
-    expect(head).not.toBeNull();
-    expect(head!.textContent).not.toContain('proposal_a8e14d');
-  });
-
-  it('Review Accept POSTs the cultivation route (not governance)', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    act(() => { screen.getByTestId('cm-needs-review').click(); });
-    const card = await screen.findByTestId('cm-proposal-proposal_a8e14d');
-    act(() => { (card.querySelector('[data-testid="cm-card-accept"]') as HTMLElement).click(); });
-    await waitFor(() => {
-      const posts = (api.post as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
-      // bare path — the axios interceptor (api.ts) prepends /api. A hard-coded
-      // '/api/cultivation/...' here would become '/api/api/...' → 404 (the bug fixed
-      // 2026-08-09). Assert the exact bare path so the double-prefix can't return.
-      expect(posts.some((u) => u.startsWith('/cultivation/proposals/proposal_a8e14d/approve'))).toBe(true);
-      expect(posts.some((u) => u.startsWith('/api/cultivation/'))).toBe(false);
-    });
-  });
-
+describe('CMBrainOverlay — AC3/4/5 governance cards + actions', () => {
   it('Approve cards render governance fields + Defer POSTs the governance route', async () => {
     mockHealth({}, { governancePending: 2 });
     renderOverlay();
@@ -514,7 +471,7 @@ describe('CMBrainOverlay — AC3/4/5 proposal cards + dual-route actions', () =>
     const list = screen.getByTestId('cm-needs-list');
     expect(list.textContent).toMatch(/GC14/);
     expect(list.textContent).toMatch(/same-turn observation/);
-    // governance card has a Defer action (cultivation does not)
+    // governance card has a Defer action
     act(() => { (card.querySelector('[data-testid="cm-card-defer"]') as HTMLElement).click(); });
     await waitFor(() => {
       const calls = (api.post as ReturnType<typeof vi.fn>).mock.calls;
@@ -532,10 +489,10 @@ describe('CMBrainOverlay — Gate-2: lazy Approve list shows loading, not a fals
     let resolveGov: (v: unknown) => void = () => {};
     const govPromise = new Promise((r) => { resolveGov = r; });
     (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: REVIEW_PROPS, governance_pending_count: 2 } });
+      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 2 } });
       if (url.includes('governance/pending')) return govPromise.then(() => ({ data: { proposals: GOV_PROPS, total: 2 } }));
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 2 } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 2 } });
     });
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
     renderOverlay();
@@ -579,22 +536,8 @@ describe('CMBrainOverlay — AC7 honest over-budget alert', () => {
 });
 
 describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion + pct tint', () => {
-  // AC1: each opened queue carries an intent-bearing heading + a one-line explainer
-  // that states WHAT it governs and WHAT its conf means (knowledge vs governance).
-  it('Review (knowledge) list shows an intent-bearing heading + a conf-meaning explainer', async () => {
-    mockHealth();
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    act(() => { screen.getByTestId('cm-needs-review').click(); });
-    await screen.findByTestId('cm-needs-list');
-    const explainer = await screen.findByTestId('cm-needs-explainer');
-    // states what this queue governs (knowledge sedimentation → DDD docs) …
-    expect(explainer.textContent).toMatch(/knowledge|sediment|DDD|doc/i);
-    // … and what conf means HERE (extraction quality, not should-sediment)
-    expect(explainer.textContent).toMatch(/extract/i);
-  });
-
+  // AC1: the opened queue carries an intent-bearing heading + a one-line explainer
+  // that states WHAT it governs and WHAT its conf means.
   it('Approve (governance) list shows an intent-bearing heading + an admission explainer', async () => {
     mockHealth({}, { governancePending: 2 });
     renderOverlay();
@@ -622,17 +565,6 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     const card = await screen.findByTestId('cm-proposal-GC14');
     expect(card.querySelector('[data-testid="cm-gc-id"]')!.textContent).toBe('GC14');
     expect(card.textContent).toMatch(/checked against: R16b/);
-  });
-
-  it('does NOT apply the demotion cut to Review items (Review conf = extraction quality)', async () => {
-    mockHealth(); // REVIEW_PROPS includes a 0.64 item
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-panel-context');
-    act(() => { screen.getByTestId('cm-needs-review').click(); });
-    // the 0.64 Review proposal must NOT be demoted (0.7 cut is Approve-only)
-    const card = await screen.findByTestId('cm-proposal-proposal_e65e4b');
-    expect(card.querySelector('[data-testid="cm-demoted"]')).toBeNull();
   });
 
   // AC4 (run_5f040023, user override of the prior subtle-tint): explicit visible
@@ -708,7 +640,7 @@ describe('CMBrainOverlay — Evolution tab + file-list ArchivePanel (Run C)', ()
       }
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
       if (url.includes('brain-graph')) return Promise.resolve({ data: isEvo ? (opts.evoGraph ?? EVO_GRAPH) : { nodes: [], drill: {}, total: 0 } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 0 } });
+      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
     });
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue({ data: { status: 'ok' } });
   }

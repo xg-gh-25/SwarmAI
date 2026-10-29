@@ -90,7 +90,6 @@ function Dot({ tone }: { tone: BrainSignalTone }) {
 const CHIP: Record<string, { label: (n: number) => string }> = {
   runs: { label: (n) => `${n} Run${n === 1 ? '' : 's'} waiting` },
   escalations: { label: (n) => `${n} escalation${n === 1 ? '' : 's'} to decide` },
-  proposals: { label: (n) => `${n} proposal${n === 1 ? '' : 's'} to review` },
   jobs: { label: (n) => `${n} other item${n === 1 ? '' : 's'}` },
   'agent-fix': { label: (n) => `${n} agent file${n === 1 ? '' : 's'} to fix` },
   agent: { label: (n) => `${n} agent${n === 1 ? '' : 's'} to confirm` },
@@ -214,13 +213,12 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
 
   const openNewBrain = () => window.dispatchEvent(new CustomEvent('swarm:show-new-brain'));
   /** Each open item opens where it is handled: a Run on its Pipelines drawer, a
-   *  proposal in the Brain's Reflect tab, a draft in its Project Agent tab, a newly read
+   *  draft in its Project Agent tab, a newly read
    *  repository on the Brain's map, the rest (escalations, failing jobs, Runs the
    *  analytics did not list) in Need You. */
   const goNeed = (n: HubNeed) => {
     if (n.builtin) onOpenGeneral?.();
     else if (n.kind === 'run') openOverlayAt('pipeline', n.id);
-    else if (n.kind === 'proposals') onOpen(n.brain, { view: 'review' });
     else if (n.kind === 'agent') onOpen(n.brain, { view: 'map', panel: 'agent' });
     else if (n.kind === 'repos') onOpen(n.brain, { view: 'map' });
     else window.dispatchEvent(new CustomEvent('swarm:show-needs-you'));
@@ -292,7 +290,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
                   <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]">{n.text}</span>
                   {n.since && <span className="text-meta text-[var(--color-text-muted)] shrink-0">{waited(n.since)}</span>}
                   <button className="btn-sm btn-secondary shrink-0" data-testid={`hub-need-go-${n.id}`} onClick={() => goNeed(n)}>
-                    {n.kind === 'run' ? 'Answer' : n.kind === 'proposals' ? 'Review' : 'Open'}
+                    {n.kind === 'run' ? 'Answer' : 'Open'}
                   </button>
                 </div>
               ))}

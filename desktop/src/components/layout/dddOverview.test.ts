@@ -2,15 +2,13 @@
  * dddOverview — pure-helper tests (run_6c68088f).
  *
  * The two data helpers behind the Brain-detail Overview tab:
- *   - docSignalMap(members, review) → per-canonical-doc {newCount, pendingCount}
+ *   - docSignalMap(members, review) → per-canonical-doc {newCount}
  *   - weeklyReportModel(detail, review) → current-DDD-only weekly summary
  *
  * Gate-1 correctness fixes pinned here (BLOCK→PASS):
  *   F2a: match hunks by BASENAME + exclude the 2-understanding/knowledge/ recall
  *        corpus (mirrors backend _tag_hunk ddd_brain.py:985) — member.path may be
  *        '2-understanding/TECH.md' (migrated) OR bare 'PRODUCT.md' (fallback).
- *   F2b: proposal.target_doc is a BARE filename ('TECH.md') → match by
- *        basename(member.path), never full-path equality.
  *   F4:  weeklyReportModel emits the trust DISTRIBUTION, never a collapsed
  *        trustPct rollup (backend Gate-1 refused a project-composite).
  */
@@ -36,14 +34,10 @@ const REVIEW: ReviewData = {
     // ⚠️ F2a collision trap: a recall-CORPUS PRODUCT.md — must NOT count as the canonical PRODUCT.md doc
     { file: 'Projects/SwarmAI/2-understanding/knowledge/designs/PRODUCT.md', signature: 'sigCorpus', tag: 'cultivation·auto-applied', diff_text: '@@ -1 +1 @@\n-x\n+y' },
   ],
-  proposals: [
-    // F2b: target_doc is a BARE filename
-    { id: 'p1', target_doc: 'PRODUCT.md', target_section: 'Strategic', content: '...', confidence: 0.7, source_run_id: 'run_x' },
-  ],
   diff_incomplete: false,
 };
 
-describe('docSignalMap (AC5, F2a/F2b)', () => {
+describe('docSignalMap (AC5, F2a)', () => {
   it('aggregates auto-applied hunks per canonical doc by basename', () => {
     const m = docSignalMap(MEMBERS, REVIEW);
     expect(m.get('2-understanding/TECH.md')?.newCount).toBe(2);
@@ -51,25 +45,19 @@ describe('docSignalMap (AC5, F2a/F2b)', () => {
 
   it('F2a: a recall-corpus /knowledge/ PRODUCT.md does NOT count as the canonical PRODUCT.md', () => {
     const m = docSignalMap(MEMBERS, REVIEW);
-    // The only PRODUCT.md signal is the proposal (pending), NOT the corpus hunk.
+    // The corpus hunk is the only PRODUCT.md-named hunk; it must not count.
     expect(m.get('2-understanding/PRODUCT.md')?.newCount).toBe(0);
-  });
-
-  it('F2b: proposal.target_doc (bare filename) maps to the canonical doc by basename', () => {
-    const m = docSignalMap(MEMBERS, REVIEW);
-    expect(m.get('2-understanding/PRODUCT.md')?.pendingCount).toBe(1);
-    expect(m.get('2-understanding/TECH.md')?.pendingCount).toBe(0);
   });
 
   it('docs with no signal are present with zero counts (fixed layout, always 4)', () => {
     const m = docSignalMap(MEMBERS, REVIEW);
-    expect(m.get('2-understanding/IMPROVEMENT.md')).toEqual({ newCount: 0, pendingCount: 0 });
-    expect(m.get('2-understanding/PROJECT.md')).toEqual({ newCount: 0, pendingCount: 0 });
+    expect(m.get('2-understanding/IMPROVEMENT.md')).toEqual({ newCount: 0 });
+    expect(m.get('2-understanding/PROJECT.md')).toEqual({ newCount: 0 });
   });
 
   it('null review (not loaded) → all-zero, never throws', () => {
     const m = docSignalMap(MEMBERS, null);
-    expect(m.get('2-understanding/TECH.md')).toEqual({ newCount: 0, pendingCount: 0 });
+    expect(m.get('2-understanding/TECH.md')).toEqual({ newCount: 0 });
   });
 
   it('bare-path member (un-migrated fallback) still matches its hunk', () => {
@@ -108,7 +96,7 @@ describe('weeklyReportModel (AC7, F4)', () => {
   it('lists which of the 4 core docs changed (by name)', () => {
     const r = weeklyReportModel(DETAIL, REVIEW);
     expect(r.changedDocs).toContain('TECH.md');
-    expect(r.changedDocs).toContain('PRODUCT.md');   // has a pending proposal
+    expect(r.changedDocs).not.toContain('PRODUCT.md');   // only a recall-corpus hunk (F2a)
     expect(r.changedDocs).not.toContain('IMPROVEMENT.md');
   });
 

@@ -1,7 +1,8 @@
 /**
  * brainMapModel tests — the pure builders behind the Brain map.
  * Properties: counts come from the detail as-is; a brain's Runs are only its own;
- * the needs-you queue holds exactly the Runs with needsYou plus every proposal;
+ * the needs-you queue holds exactly the Runs with needsYou (plus the attention
+ * channel's escalations / jobs and a Project Agent draft);
  * Eval never invents a number (null when unmeasured, tokens null unless every Run
  * was measured).
  */
@@ -36,8 +37,7 @@ const detail = {
 } as unknown as BrainDetail;
 const review: ReviewData = {
   last_reviewed_sha: 'a', head_sha: 'b', diff_incomplete: false,
-  hunks: [{ file: 'K.md', signature: 's1', tag: 'cultivation·auto-applied', diff_text: '' }, { file: 'G.md', signature: 's2', tag: 'risky·staged', diff_text: '' }],
-  proposals: [{ id: 'p1', target_doc: 'TECH.md', target_section: 'Gates', content: 'Add a reviewer', confidence: 0.8, source_run_id: 'run_a' }],
+  hunks: [{ file: 'K.md', signature: 's1', tag: 'cultivation·auto-applied', diff_text: '' }],
 };
 
 describe('brainMapModel', () => {
@@ -66,24 +66,24 @@ describe('brainMapModel', () => {
   });
 
   it('needsYouItems: a Project Agent draft (or a broken file) waits on the person; a reviewed one does not', () => {
-    expect(needsYouItems([], null, { status: 'draft', problems: [] }).map((i) => i.title)).toEqual(['Confirm the Project Agent draft']);
-    expect(needsYouItems([], null, { status: 'reviewed', problems: ['bad profile'] })[0]).toMatchObject({ kind: 'agent', detail: 'bad profile' });
-    expect(needsYouItems([], null, { status: 'reviewed', problems: [] })).toEqual([]);
-    expect(needsYouItems([], null, null)).toEqual([]);
+    expect(needsYouItems([], { status: 'draft', problems: [] }).map((i) => i.title)).toEqual(['Confirm the Project Agent draft']);
+    expect(needsYouItems([], { status: 'reviewed', problems: ['bad profile'] })[0]).toMatchObject({ kind: 'agent', detail: 'bad profile' });
+    expect(needsYouItems([], { status: 'reviewed', problems: [] })).toEqual([]);
+    expect(needsYouItems([], null)).toEqual([]);
   });
 
-  it('needsYouItems: Runs with needsYou plus every proposal, nothing else', () => {
-    const items = needsYouItems([run({ id: 'r1', needsYou: true, pauseKind: 'decision' }), run({ id: 'r2' })], review);
-    expect(items.map((i) => i.kind + ':' + i.id)).toEqual(['run:r1', 'proposal:p1']);
+  it('needsYouItems: Runs with needsYou, nothing else', () => {
+    const items = needsYouItems([run({ id: 'r1', needsYou: true, pauseKind: 'decision' }), run({ id: 'r2' })]);
+    expect(items.map((i) => i.kind + ':' + i.id)).toEqual(['run:r1']);
     expect(items[0].detail).toContain('question');
   });
 
   it('needsYouItems: what Need You holds beyond the lists is a counted row, and the counts add up to the header', () => {
-    const items = needsYouItems([run({ id: 'r1', needsYou: true })], review, null,
-      { paused_run: 2, cultivation: 1, escalation: 2, job: 1, local_root: 1, other_source: 1 });
+    const items = needsYouItems([run({ id: 'r1', needsYou: true })], null,
+      { paused_run: 2, escalation: 2, job: 1, local_root: 1, other_source: 1 });
     expect(items.map((i) => `${i.id}:${i.count}`)).toEqual(
-      ['r1:1', 'p1:1', 'runs-unlisted:1', 'escalations:2', 'jobs:1', 'repos:1', 'other:1']);
-    expect(needsCount(items)).toBe(2 + 1 + 2 + 1 + 1 + 1);   // the attention channel's pending
+      ['r1:1', 'runs-unlisted:1', 'escalations:2', 'jobs:1', 'repos:1', 'other:1']);
+    expect(needsCount(items)).toBe(2 + 2 + 1 + 1 + 1);   // the attention channel's pending
   });
 
   it('brainHiveRuns: a Brain\'s Hive runs of the last 30 days, newest first; humanPerRun over the recorded ones', () => {
@@ -107,7 +107,7 @@ describe('brainMapModel', () => {
     expect(e.runs.completionRate).toBe(1);   // only finished Runs count
     expect(e.runs.tokens).toBeNull();        // one Run unmeasured -> no total
     expect(e.runs.avgCycleMin).toBe(20);
-    expect(e.brain).toMatchObject({ entries: 3, sinking: 1, reclaimable: 2, recentActivity: 4, autoApplied: 1, pending: 1 });
+    expect(e.brain).toMatchObject({ entries: 3, sinking: 1, reclaimable: 2, recentActivity: 4, autoApplied: 1 });
     const empty = brainEval([], null, null);
     expect(empty.runs.completionRate).toBeNull();
     expect(empty.runs.avgCycleMin).toBeNull();
@@ -125,7 +125,7 @@ describe('brainMapModel', () => {
 
   it('hubSummary: Need you is the attention count (a waiting Run is in it once) plus Project Agent drafts', () => {
     const brains = [
-      brain('A', { recentActivity: 5, setupState: 'setting-up', pendingBySource: { paused_run: 1, cultivation: 2 } },
+      brain('A', { recentActivity: 5, setupState: 'setting-up', pendingBySource: { paused_run: 1, escalation: 2 } },
         { pending: 3, liveRun: true, sinking: 3 }),
       brain('B', { recentActivity: 0 }, { sinking: 4 }),
       brain('C'),
@@ -142,26 +142,26 @@ describe('brainMapModel', () => {
     expect(hubSummary([brain('C')], null).learned).toBeNull();
   });
 
-  it('hubNeeds: Runs waiting on you oldest first, then each brain with proposals, then Project Agents', () => {
+  it('hubNeeds: Runs waiting on you oldest first, then each brain\'s escalations and jobs, then Project Agents', () => {
     const a = an({ A: [
       run({ id: 'new', needsYou: true, pauseKind: 'decision', requirement: 'Pick a column', updatedAt: '2026-10-25T00:00:00Z' }),
       run({ id: 'old', needsYou: true, pauseKind: 'stopped', requirement: 'Resume me', updatedAt: '2026-10-20T00:00:00Z' }),
     ] });
     const items = hubNeeds([
       brain('A', { projectAgentStatus: 'reviewed', pendingBySource: { paused_run: 3 } }, { pending: 3 }),
-      brain('B', { projectAgentStatus: 'draft', pendingBySource: { cultivation: 1, escalation: 2, job: 1 } }, { pending: 4 }),
+      brain('B', { projectAgentStatus: 'draft', pendingBySource: { escalation: 2, job: 1 } }, { pending: 3 }),
       brain('C', { projectAgentStatus: 'invalid' })], a);
     // A: 3 Runs wait, the analytics names 2 -> one "1 Run waiting on you" row for the rest
-    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'A-runs', 'B-proposals', 'B-escalations', 'B-jobs', 'B-agent', 'C-agent']);
+    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'A-runs', 'B-escalations', 'B-jobs', 'B-agent', 'C-agent']);
     expect(items[2].text).toBe('1 Run waiting on you');
-    expect(items[4].text).toBe('2 escalations to decide');
+    expect(items[3]).toMatchObject({ brain: 'B', kind: 'escalations', text: '2 escalations to decide' });
+    expect(items[4]).toMatchObject({ brain: 'B', kind: 'jobs', text: '1 other item in Need You' });
     expect(items[1].text).toBe('Run question: Pick a column');
-    expect(items[3]).toMatchObject({ brain: 'B', kind: 'proposals', text: '1 rule proposal to review' });
-    expect(items[6]).toMatchObject({ kind: 'agent', text: 'Project Agent draft to confirm', severity: 'setup' });
-    // severity: a Run or an escalation blocks on the person; a proposal waits for a review
-    expect(items.map((i) => i.severity)).toEqual(['urgent', 'urgent', 'urgent', 'review', 'urgent', 'review', 'setup', 'review']);
+    expect(items[5]).toMatchObject({ kind: 'agent', text: 'Project Agent draft to confirm', severity: 'setup' });
+    // severity: a Run or an escalation blocks on the person; a failing job waits for a review
+    expect(items.map((i) => i.severity)).toEqual(['urgent', 'urgent', 'urgent', 'urgent', 'review', 'setup', 'review']);
     expect(items[2].count).toBe(1);
-    expect(items[4].count).toBe(2);
+    expect(items[3].count).toBe(2);
     expect(hubSummary([brain('B', { projectAgentStatus: 'draft' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
   });
 
@@ -174,13 +174,12 @@ describe('brainMapModel', () => {
   it('brainSignal picks the one most pressing thing: blocked > review > running > setup > notice', () => {
     const a = an({ A: [run({ needsYou: true })] });
     expect(brainSignal(brain('A', {}, { liveRun: true }), a)).toMatchObject({ tone: 'urgent', rank: 0, text: 'A Run needs you' });
-    expect(brainSignal(brain('B', { pendingBySource: { cultivation: 2 } }, { pending: 2 }), a).text).toBe('2 proposals to review');
     expect(brainSignal(brain('B2', { pendingBySource: { escalation: 1 } }, { pending: 1 }), a).text).toBe('1 escalation to decide');
     // a Run the analytics does not list still counts (the attention channel saw it)
     expect(brainSignal(brain('B3', { pendingBySource: { paused_run: 2 } }, { pending: 2 }), null).text).toBe('2 Runs need you');
-    // no split (old daemon): never called proposals
+    // no split (old daemon): one unnamed bucket
     expect(brainSignal(brain('B4', {}, { pending: 2 }), null).text).toBe('2 items in Need You');
-    expect(brainSignal(brain('B', { pendingBySource: { cultivation: 2 } }, { pending: 2 }), a).tone).toBe('review');
+    expect(brainSignal(brain('B', { pendingBySource: { job: 2 } }, { pending: 2 }), a).tone).toBe('review');
     expect(brainSignal(brain('B2', { pendingBySource: { escalation: 1 } }, { pending: 1 }), a).tone).toBe('urgent');
     expect(brainSignal(brain('C', { setupState: 'setting-up' }, { liveRun: true }), a)).toMatchObject({ tone: 'live', rank: 2 });
     expect(brainSignal(brain('D', { setupState: 'setting-up' }), a)).toMatchObject({ tone: 'setup', text: 'Being born' });

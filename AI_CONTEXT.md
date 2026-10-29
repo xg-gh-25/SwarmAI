@@ -52,7 +52,7 @@ The codebase is both the product AND the evidence. The interesting parts are not
 | Prompt assembly | `backend/core/prompt_builder.py` | System prompt constructed from context files + progressive memory + DailyActivity + metadata |
 | Autonomous pipeline | `backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` | 9 stages · 3 gates (Gate 0 framing / Gate 1 plan / Gate 2 build-adversarial) · 2 modes (Full one-shot + Goal loop-to-DoD). Convergence loop + fresh-context adversarial review. The "coding as black box" implementation. |
 | Session state machine | `backend/core/session_unit.py` | 5-state FSM (COLD→IDLE→STREAMING→WAITING_INPUT→DEAD) with protected states, retry semantics, hook firing |
-| DDD cultivation | `backend/core/ddd_cultivation.py` | Automated domain knowledge growth from normal work |
+| Cognitive Distillation Flow (CDF) | `backend/core/ingestion/` | Judges what a session produced and writes it into the right Brain doc or memory file |
 | Resource-aware scheduling | `backend/core/resource_monitor.py` | Dynamic compute_max_tabs() based on actual RAM, not hardcoded limits |
 
 ### Scale Indicators (not vanity metrics)

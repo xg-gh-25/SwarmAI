@@ -70,7 +70,6 @@ interface TokenBlock {
 // heavy scans. The overlay's Context tab + rail + Review count consume this.
 interface ContextHealthLite {
   token_block?: TokenBlock | null;
-  pending_proposals?: Array<Record<string, unknown>>;
   governance_pending_count?: number;
 }
 
@@ -90,15 +89,10 @@ interface ArchiveListResp { files: ArchiveFile[]; total_files: number; source: A
 interface ArchiveSearchHit { title: string; snippet: string; source_file: string; shard: string; }
 interface ArchiveSearchResp { results: ArchiveSearchHit[]; q: string; source: ArchiveSource; }
 
-// Per-queue meta: the intent-bearing label + a one-line explainer stating WHAT the
-// queue governs AND what its `conf` means there — the two queues govern different
-// objects (knowledge sedimentation vs rule/gate governance) and their conf axes differ.
-const QUEUE_META: Record<'review' | 'approve', { label: string; conf_meaning: string; explainer: string }> = {
-  review: {
-    label: 'Knowledge',
-    conf_meaning: 'extraction quality',
-    explainer: 'Proposals to sediment learning into the DDD knowledge docs. Here “conf” = extraction quality (how cleanly the point was captured), not whether it should be kept — that judgment is yours.',
-  },
+// The Needs-you queue's intent-bearing label + a one-line explainer stating WHAT it
+// governs and what its `conf` means there. (Knowledge needs no queue: CDF judges and
+// writes it.)
+const QUEUE_META: Record<'approve', { label: string; conf_meaning: string; explainer: string }> = {
   approve: {
     label: 'Governance',
     conf_meaning: 'recurrence confidence',
@@ -149,14 +143,13 @@ export function CMBrainContent() {
   // Always fetch: the host mounts this only while the surface is open.
   const { data, isError: healthErr, error: healthError, refetch: refetchHealth } = useContextHealth(true);
   const block = data?.token_block ?? null;
-  const reviewCount = data?.pending_proposals?.length ?? 0;
   // AC1: Approve BADGE count comes from the lite payload — no first-paint
   // governance/pending fetch. The governance LIST is fetched lazily (below) only
   // when the user opens the Approve list.
   const approveCount = data?.governance_pending_count ?? 0;
 
   // Which Needs-you list is filtered into the main area (null = show the tab).
-  const [needsFilter, setNeedsFilter] = useState<null | 'review' | 'approve'>(null);
+  const [needsFilter, setNeedsFilter] = useState<null | 'approve'>(null);
 
   // Lazy governance LIST — only fetched once the Approve list is opened (the badge
   // count already came from lite). Keeps first paint to a single lite request.
@@ -172,18 +165,10 @@ export function CMBrainContent() {
   // Growth-trend series for the rail (same source as the Memory size-trend).
   const { data: trend } = useQuery(overlayQuery.contextTrend<BrainTrend>());
 
-  // Dual-route decision handler (AC3/AC4): Review items (DDD cultivation) and Approve
-  // items (governance) live in DIFFERENT queues with DIFFERENT endpoints — a single
-  // endpoint would 404. On success, invalidate the lite query (Review count + badge)
-  // and the governance list (Approve).
-  async function decide(kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') {
-    if (kind === 'review') {
-      // cultivation: accept→approve, reject→reject (no defer); query-param route, no body.
-      const verb = decision === 'accept' ? 'approve' : 'reject';
-      await api.post(`/cultivation/proposals/${encodeURIComponent(id)}/${verb}?project=SwarmAI`);
-    } else {
-      await api.post('/eval/governance/decision', { proposal_id: id, decision });
-    }
+  // Decision on a governance candidate. On success, invalidate the lite query (the
+  // badge) and the governance list.
+  async function decide(_kind: 'approve', id: string, decision: 'accept' | 'reject' | 'defer') {
+    await api.post('/eval/governance/decision', { proposal_id: id, decision });
     await Promise.all([
       qc.invalidateQueries({ queryKey: LITE_QUERY_KEY }),
       qc.invalidateQueries({ queryKey: ['cm-governance-pending'] }),
@@ -194,7 +179,6 @@ export function CMBrainContent() {
   // never shows a FALSE "nothing to approve" during the lazy governance fetch (Gate-2 HIGH-1).
   const govLoading = needsFilter === 'approve' && gov === undefined && !govErr;
   const needsMeta = {
-    review: { label: 'Review', count: reviewCount, items: (data?.pending_proposals ?? []) as Array<Record<string, unknown>> },
     approve: { label: 'Approve', count: approveCount, items: govLoading ? null : ((gov?.proposals ?? []) as Array<Record<string, unknown>>) },
   };
 
@@ -246,7 +230,6 @@ export function CMBrainContent() {
               />
             ) : (
               <div className="mt-2 flex flex-col gap-1.5">
-                <NeedsBtn testid="cm-needs-review" label={QUEUE_META.review.label} count={reviewCount} tint="var(--color-status-success)" active={needsFilter === 'review'} onClick={() => setNeedsFilter('review')} />
                 <NeedsBtn testid="cm-needs-approve" label={QUEUE_META.approve.label} count={approveCount} tint="var(--color-status-warning)" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
               </div>
             )}
@@ -356,46 +339,35 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
   );
 }
 
-// A Need-You proposal rendered as a What / Where / Why card with actions — the id is
-// a demoted footnote, never the subject. Review (DDD cultivation) and Approve
-// (governance) have different fields + different action routes (dual-route).
+// A Need-You governance candidate rendered as a What / Where / Why card with actions —
+// the id is a demoted footnote, never the subject.
 function ProposalCard({
   kind, item, onDecide,
 }: {
-  kind: 'review' | 'approve';
+  kind: 'approve';
   item: Record<string, unknown>;
-  onDecide: (kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
+  onDecide: (kind: 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
 }) {
   const id = String(item.id ?? 'unknown');
   const [state, setState] = useState<null | string>(null);
   const conf = typeof item.confidence === 'number' ? (item.confidence as number) : null;
 
-  // What / Where / Why differ by queue.
-  let what: string, where: ReactNode, why: string, tag: ReactNode = null;
-  if (kind === 'review') {
-    const doc = String(item.target_doc ?? '');
-    const section = String(item.target_section ?? '');
-    what = `Add to ${doc || 'a DDD doc'}`;
-    where = <>propose in <span className="font-mono" style={{ color: 'var(--color-primary)' }}>{doc}{section ? ` › ${section}` : ''}</span></>;
-    why = String(item.content ?? '');
-  } else {
-    // A Governance Candidate (EVOLUTION.md GC row): 3× evidence, already checked
-    // against the existing rules. The GC id is the tag; the Checked text is the why.
-    const gcId = String(item.gc_id ?? id);
-    const occ = item.occurrence_count;
-    what = `Add rule: ${String(item.proposed_rule ?? '(no rule text)')}`;
-    where = <>governance rule · EVOLUTION.md {gcId}</>;
-    why = `${String(item.checked ?? '')}${typeof occ === 'number' ? ` · seen ${occ}×` : ''}`;
-    tag = (
-      <span
-        data-testid="cm-gc-id"
-        className="mr-1.5 rounded px-1.5 py-[1px] text-meta font-semibold font-mono"
-        style={{ color: 'var(--color-primary)', background: 'color-mix(in srgb, var(--color-primary) 14%, transparent)' }}
-      >
-        {gcId}
-      </span>
-    );
-  }
+  // A Governance Candidate (EVOLUTION.md GC row): 3× evidence, already checked
+  // against the existing rules. The GC id is the tag; the Checked text is the why.
+  const gcId = String(item.gc_id ?? id);
+  const occ = item.occurrence_count;
+  const what = `Add rule: ${String(item.proposed_rule ?? '(no rule text)')}`;
+  const where: ReactNode = <>governance rule · EVOLUTION.md {gcId}</>;
+  const why = `${String(item.checked ?? '')}${typeof occ === 'number' ? ` · seen ${occ}×` : ''}`;
+  const tag: ReactNode = (
+    <span
+      data-testid="cm-gc-id"
+      className="mr-1.5 rounded px-1.5 py-[1px] text-meta font-semibold font-mono"
+      style={{ color: 'var(--color-primary)', background: 'color-mix(in srgb, var(--color-primary) 14%, transparent)' }}
+    >
+      {gcId}
+    </span>
+  );
 
   async function act(decision: 'accept' | 'reject' | 'defer') {
     setState(decision);
@@ -425,7 +397,7 @@ function ProposalCard({
             {/* Gate-2 MEDIUM: disabled during an in-flight decision — no double-submit. */}
             <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="btn-sm btn-success disabled:opacity-50">Accept</button>
             <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="btn-sm btn-secondary disabled:opacity-50">Reject</button>
-            {kind === 'approve' && <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="btn-sm btn-secondary disabled:opacity-50">Defer</button>}
+            <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="btn-sm btn-secondary disabled:opacity-50">Defer</button>
           </div>
         )}
       </div>
@@ -438,11 +410,11 @@ function ProposalCard({
 function NeedsList({
   kind, meta, backLabel, onBack, onDecide,
 }: {
-  kind: 'review' | 'approve';
+  kind: 'approve';
   meta: { label: string; count: number; items: Array<Record<string, unknown>> | null };
   backLabel: string;
   onBack: () => void;
-  onDecide: (kind: 'review' | 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
+  onDecide: (kind: 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
 }) {
   const items = meta.items;
   const qm = QUEUE_META[kind];

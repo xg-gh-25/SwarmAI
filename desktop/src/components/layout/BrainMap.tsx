@@ -31,7 +31,7 @@ export interface BrainMapProps {
   /** Runs in the last 30 days, per lane: the source pills' counts */
   sources: { chat: number; hive: number };
   needs: number;
-  reflect: { auto: number; pending: number };
+  reflect: { auto: number };
   /** one line under the Project Agent and Eval titles (status / headline number) */
   agentLine?: string;
   evalLine?: string;
@@ -235,7 +235,7 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
         <text x={P.evo.x} y={P.evo.y - 14} textAnchor="middle" className={TITLE}>Reflect</text>
         <text x={P.evo.x} y={P.evo.y + 4} textAnchor="middle" className={SUB}>learns from Runs</text>
         <text x={P.evo.x} y={P.evo.y + 22} textAnchor="middle"
-          className={reflect.pending ? 'text-small fill-[var(--color-status-error)]' : SUB}>{reflect.auto} auto · {reflect.pending} to review</text>
+          className={SUB}>{reflect.auto} written since review</text>
       </Part>
 
       {/* You, Eval */}

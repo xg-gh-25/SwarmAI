@@ -16,7 +16,7 @@
  *   brainEval            the Eval numbers for one brain (null = not measured)
  *   hubSummary           Brain Hub home totals across all brains
  *   hubNeeds             Brain Hub home: everything waiting on you, all brains
- *   pendingSplit         health.pending split by source (Runs / proposals / escalations / jobs)
+ *   pendingSplit         health.pending split by source (Runs / escalations / jobs)
  *   brainSignal          the one signal a Hub card shows, and its sort rank
  */
 import type { BrainDetail, BrainSummary, GeneralBrain, ReviewData, SectionKey } from '../../services/ddd';
@@ -62,7 +62,7 @@ export function runTone(r: PipelineRunSummary): RunTone {
 }
 
 export interface NeedItem {
-  kind: 'run' | 'proposal' | 'agent' | 'other';
+  kind: 'run' | 'agent' | 'other';
   id: string;
   title: string;
   detail: string;
@@ -70,14 +70,13 @@ export interface NeedItem {
   count: number;
 }
 
-/** Everything in this brain that waits for a person, in one list: Runs, rule
- *  proposals, and a Project Agent draft to confirm (or a file with problems), then one
+/** Everything in this brain that waits for a person, in one list: Runs, and a Project Agent draft to confirm (or a file with problems), then one
  *  row per kind the attention channel holds that neither list names (escalations,
- *  failing jobs, newly read repositories, Runs or proposals not listed, anything else).
+ *  failing jobs, newly read repositories, Runs not listed, anything else).
  *  The rows' counts add up to the Brain header's count (the attention channel's
  *  pending + a Project Agent waiting), so the header, the map's You and this list agree. */
 export function needsYouItems(
-  runs: PipelineRunSummary[], review: ReviewData | null,
+  runs: PipelineRunSummary[],
   agent?: { status?: string; problems?: string[] } | null,
   bySource?: Record<string, number>,
 ): NeedItem[] {
@@ -89,20 +88,12 @@ export function needsYouItems(
       : r.checkpointReason || 'waiting on you';
     items.push({ kind: 'run', id: r.id, title: r.requirement || r.id, detail: `${r.id} · ${why}`, count: 1 });
   }
-  const proposals = review?.proposals ?? [];
-  for (const p of proposals) {
-    items.push({
-      kind: 'proposal', id: p.id, title: p.content, count: 1,
-      detail: `rule proposal · ${p.target_doc}${p.target_section ? ' / ' + p.target_section : ''}${p.source_run_id ? ' · from ' + p.source_run_id : ''}`,
-    });
-  }
   // what the attention channel holds that the lists above do not name one by one
   if (bySource) {
     const split = pendingSplit({ health: { pending: 0 } as BrainSummary['health'], pendingBySource: bySource });
     const listedRuns = items.filter((i) => i.kind === 'run').length;
     const rest: [string, number, string, string][] = [
       ['runs-unlisted', split.runs - listedRuns, plural(split.runs - listedRuns, 'more Run waiting', 'more Runs waiting'), 'open Need You to answer'],
-      ['proposals-unlisted', split.proposals - proposals.length, plural(split.proposals - proposals.length, 'more proposal to review', 'more proposals to review'), 'open Need You to review'],
       ['escalations', split.escalations, `${plural(split.escalations, 'escalation')} to decide`, 'open Need You to answer'],
       ['jobs', split.jobs, plural(split.jobs, 'failing job'), 'open Need You to triage'],
       ['repos', split.repos, `${plural(split.repos, 'repository', 'repositories')} newly read`, 'the Brain started reading it; open Need You to see it'],
@@ -148,7 +139,7 @@ export function humanPerRun(local: PipelineRunSummary[], hive: SwarmOutRun[]): {
 
 export interface BrainEval {
   runs: { total: number; landed: number; completionRate: number | null; avgCycleMin: number | null; tokens: number | null; needsYou: number };
-  brain: { entries: number; sinking: number | null; reclaimable: number | null; recentActivity: number | null; autoApplied: number; pending: number };
+  brain: { entries: number; sinking: number | null; reclaimable: number | null; recentActivity: number | null; autoApplied: number };
 }
 
 export function brainEval(
@@ -175,15 +166,14 @@ export function brainEval(
       reclaimable: detail?.health?.noise.reclaimable ?? null,
       recentActivity: detail?.health?.recentActivity ?? null,
       autoApplied: (review?.hunks ?? []).filter((h) => h.tag === 'cultivation·auto-applied').length,
-      pending: review?.proposals.length ?? 0,
     },
   };
 }
 
 export interface HubSummary {
   brains: number;
-  /** items waiting on a person: the attention channel's count (Runs, rule
-   *  proposals, escalations, failing jobs) + Project Agents to confirm or fix */
+  /** items waiting on a person: the attention channel's count (Runs, escalations,
+   *  failing jobs) + Project Agents to confirm or fix */
   needsYou: number;
   /** brains with a Run in progress */
   running: number;
@@ -202,7 +192,7 @@ export interface HubSummary {
 }
 
 /** How much an open item asks of the person, most first: a Run or an escalation is
- *  blocked on them; a proposal or a failing job waits for a review; a Project Agent
+ *  blocked on them; a failing job waits for a review; a Project Agent
  *  draft or a Brain being born is setup; a repository a Brain started reading is a
  *  notice. Only urgent and review carry a warm color on the Hub. */
 export type Severity = 'urgent' | 'review' | 'setup' | 'notice';
@@ -211,8 +201,8 @@ export const SEVERITY_ORDER: Severity[] = ['urgent', 'review', 'setup', 'notice'
 export interface HubNeed {
   brain: string;
   /** run: one Run (from the analytics); runs: Runs waiting that the analytics did
-   *  not list; proposals / escalations / jobs / repos: counted per brain; agent: a draft */
-  kind: 'run' | 'runs' | 'proposals' | 'escalations' | 'jobs' | 'agent' | 'repos';
+   *  not list; escalations / jobs / repos: counted per brain; agent: a draft */
+  kind: 'run' | 'runs' | 'escalations' | 'jobs' | 'agent' | 'repos';
   id: string;
   text: string;
   /** how many items this row stands for (a per-brain count, or 1) */
@@ -245,17 +235,17 @@ const agentWaits = (b: BrainSummary) => b.projectAgentStatus === 'draft' || b.pr
  *  without the split counts everything as one unnamed bucket. */
 export function pendingSplit(b: Pick<BrainSummary, 'health' | 'pendingBySource'>) {
   const by = b.pendingBySource;
-  if (!by) return { runs: 0, proposals: 0, escalations: 0, jobs: 0, repos: 0, other: b.health?.pending ?? 0 };
-  const runs = by.paused_run ?? 0, proposals = by.cultivation ?? 0, escalations = by.escalation ?? 0, jobs = by.job ?? 0;
+  if (!by) return { runs: 0, escalations: 0, jobs: 0, repos: 0, other: b.health?.pending ?? 0 };
+  const runs = by.paused_run ?? 0, escalations = by.escalation ?? 0, jobs = by.job ?? 0;
   const repos = by.local_root ?? 0;   // a repository it started reading: a notice, not a task
   const total = Object.values(by).reduce((x, y) => x + y, 0);
-  return { runs, proposals, escalations, jobs, repos, other: total - runs - proposals - escalations - jobs - repos };
+  return { runs, escalations, jobs, repos, other: total - runs - escalations - jobs - repos };
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** Every item across all brains that waits for a person: Runs oldest first, then
- *  rule proposals, escalations, failing jobs and Project Agents to confirm or fix.
+ *  escalations, failing jobs and Project Agents to confirm or fix.
  *  Each item is counted once: the attention channel's count per source, with the
  *  Runs named from the analytics where it lists them. */
 export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined,
@@ -274,7 +264,6 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
     const row = (kind: HubNeed['kind'], count: number, severity: Severity, text: string) =>
       out.push({ brain: b.name, kind, id: `${b.name}-${kind}`, text, since: null, count, severity });
     if (unlisted > 0) row('runs', unlisted, 'urgent', `${plural(unlisted, 'Run')} waiting on you`);
-    if (split.proposals) row('proposals', split.proposals, 'review', `${plural(split.proposals, 'rule proposal')} to review`);
     if (split.escalations) row('escalations', split.escalations, 'urgent', `${plural(split.escalations, 'escalation')} to decide`);
     if (split.jobs + split.other) row('jobs', split.jobs + split.other, 'review', `${plural(split.jobs + split.other, 'other item')} in Need You`);
     if (split.repos) row('repos', split.repos, 'notice', `now reads ${plural(split.repos, 'new repository', 'new repositories')}`);
@@ -285,7 +274,7 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
     severity: b.projectAgentStatus === 'draft' ? 'setup' : 'review',
     text: b.projectAgentStatus === 'draft' ? 'Project Agent draft to confirm' : 'Project Agent file has problems to fix',
   }));
-  const order: HubNeed['kind'][] = ['runs', 'proposals', 'escalations', 'jobs', 'repos'];
+  const order: HubNeed['kind'][] = ['runs', 'escalations', 'jobs', 'repos'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
   const g = generalNeed(general);
   return [...runs, ...out, ...agents, ...(g ? [g] : [])];
@@ -325,7 +314,6 @@ export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): Brai
   const runNeeds = Math.max(runs.filter((r) => r.needsYou).length, split.runs);
   if (runNeeds) return { tone: 'urgent', rank: 0, text: runNeeds === 1 ? 'A Run needs you' : `${runNeeds} Runs need you` };
   if (split.escalations) return { tone: 'urgent', rank: 0, text: `${plural(split.escalations, 'escalation')} to decide` };
-  if (split.proposals) return { tone: 'review', rank: 1, text: `${plural(split.proposals, 'proposal')} to review` };
   if (split.jobs + split.other) return { tone: 'review', rank: 1, text: `${plural(split.jobs + split.other, 'item')} in Need You` };
   if (b.projectAgentStatus === 'invalid') return { tone: 'review', rank: 1, text: 'Project Agent has problems' };
   if (b.health.liveRun) return { tone: 'live', rank: 2, text: 'Run in progress' };

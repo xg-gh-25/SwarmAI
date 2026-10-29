@@ -7,7 +7,7 @@
  * Extracted so the mapping logic is mutation-testable (GUI33 extract-intent-to-
  * pure-helper); the component is a thin renderer over these.
  *
- *   docSignalMap(members, review)  → per-canonical-doc {newCount, pendingCount}
+ *   docSignalMap(members, review)  → per-canonical-doc {newCount}
  *   weeklyReportModel(detail, review) → current-DDD-only weekly summary model
  *
  * ── Gate-1 correctness contracts (do NOT regress — each has a pinned test) ──
@@ -28,13 +28,11 @@
  */
 import type { BrainDetail, ReviewData, SectionMember } from '../../services/ddd';
 
-/** Per-doc signal for a core-doc card. Both counts are "since last review"
- *  (the getReview watermark window), NOT a calendar week. */
+/** Per-doc signal for a core-doc card: "since last review" (the getReview
+ *  watermark window), NOT a calendar week. */
 export interface DocSignal {
   /** auto-applied hunks touching this doc since the last review (watermark). */
   newCount: number;
-  /** pending proposals targeting this doc awaiting a human decision. */
-  pendingCount: number;
 }
 
 /** basename of a project-relative member path ('2-understanding/TECH.md' → 'TECH.md';
@@ -60,7 +58,7 @@ function hunkMatchesDoc(hunkFile: string, member: SectionMember): boolean {
 }
 
 /**
- * Map each canonical ② doc member to its {newCount, pendingCount} signal.
+ * Map each canonical ② doc member to its {newCount} signal.
  *
  * Returns a Map keyed by the FULL member.path (the stable card identity), so the
  * caller can look up a signal per card. EVERY passed member gets an entry (zero
@@ -74,27 +72,16 @@ export function docSignalMap(
   review: ReviewData | null,
 ): Map<string, DocSignal> {
   const out = new Map<string, DocSignal>();
-  for (const m of members) out.set(m.path, { newCount: 0, pendingCount: 0 });
+  for (const m of members) out.set(m.path, { newCount: 0 });
   if (!review) return out;
 
   for (const h of review.hunks) {
-    // Only auto-applied cultivation hunks count as "new since review" content;
-    // risky·staged hunks are surfaced as pending via the proposals list instead.
+    // Only auto-applied hunks count as "new since review" content.
     if (h.tag !== 'cultivation·auto-applied') continue;
     for (const m of members) {
       if (hunkMatchesDoc(h.file, m)) {
         out.get(m.path)!.newCount += 1;
         break;   // a hunk belongs to at most one canonical doc
-      }
-    }
-  }
-
-  for (const p of review.proposals) {
-    // F2b: target_doc is a bare filename → match against basename(member.path).
-    for (const m of members) {
-      if (basename(m.path) === p.target_doc) {
-        out.get(m.path)!.pendingCount += 1;
-        break;
       }
     }
   }
@@ -121,9 +108,9 @@ export interface TrustDistribution {
 export interface WeeklyReportModel {
   /** auto-applied hunks across ALL canonical docs since the last review. */
   autoApplied: number;
-  /** pending proposals across the brain (the escalation queue). */
+  /** this brain's Need-You items (the escalation queue). */
   pending: number;
-  /** basenames of the core docs with any signal (new or pending) — "what moved". */
+  /** basenames of the core docs with any signal (new) — "what moved". */
   changedDocs: string[];
   /** section-trust distribution (F4 — never a single collapsed percentage). */
   trustDistribution: TrustDistribution;
@@ -153,12 +140,11 @@ export function weeklyReportModel(
   for (const m of members) {
     const sig = signals.get(m.path)!;
     autoApplied += sig.newCount;
-    if (sig.newCount > 0 || sig.pendingCount > 0) changedDocs.push(basename(m.path));
+    if (sig.newCount > 0) changedDocs.push(basename(m.path));
   }
 
-  // pending = the brain's escalation queue (proposals). Prefer the detail health
-  // count (authoritative), fall back to the review proposals length.
-  const pending = detail.health?.escalationPending ?? review?.proposals.length ?? 0;
+  // pending = the brain's escalation queue (the detail health count).
+  const pending = detail.health?.escalationPending ?? 0;
 
   // F4: trust DISTRIBUTION, never a rollup. trust is doc→section→level|null.
   const trustDistribution: TrustDistribution = { full: 0, high: 0, moderate: 0, low: 0, unscored: 0 };

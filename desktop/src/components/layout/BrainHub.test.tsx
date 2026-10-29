@@ -36,8 +36,6 @@ const mockGetBrainDetail = vi.fn();
 const mockGetReview = vi.fn();
 const mockApproveReview = vi.fn();
 const mockRejectHunk = vi.fn();
-const mockApproveProposal = vi.fn();
-const mockRejectProposal = vi.fn();
 const mockGetDistribution = vi.fn();
 const mockBrainRecall = vi.fn();
 const mockGetSpecs = vi.fn();
@@ -81,8 +79,6 @@ vi.mock('../../services/ddd', async () => {
       useAsync(() => (name ? mockGetDistribution(name) : Promise.resolve(undefined)), name),
     approveReview: (...a: unknown[]) => mockApproveReview(...a),
     rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
-    approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
-    rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
     brainRecall: (...a: unknown[]) => mockBrainRecall(...a),
     getLocalRoots: (...a: unknown[]) => mockGetLocalRoots(...a),
     removeLocalRoot: (...a: unknown[]) => mockRemoveLocalRoot(...a),
@@ -172,7 +168,7 @@ const GALLERY: BrainSummary[] = [
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: true },
     lifecycleStage: 'CREATE',
     health: { sinking: 0, pending: 2, liveRun: false, lastChangeRelative: '5d ago' },
-    pendingBySource: { cultivation: 2 },
+    pendingBySource: { escalation: 2 },
   },
 ];
 
@@ -221,9 +217,6 @@ const REVIEW = {
     { file: 'Projects/SwarmAI/2-understanding/TECH.md', signature: 'sigA1', tag: 'cultivation·auto-applied' as const,
       diff_text: 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new' },
   ],
-  proposals: [
-    { id: 'prop-1', target_doc: 'PRODUCT.md', target_section: 'Strategic', content: 'a risky proposal', confidence: 0.7, source_run_id: 'run_x' },
-  ],
   diff_incomplete: false,
 };
 
@@ -239,8 +232,6 @@ beforeEach(() => {
   mockGetReview.mockResolvedValue(REVIEW);
   mockApproveReview.mockResolvedValue({ last_reviewed_sha: REVIEW.head_sha });
   mockRejectHunk.mockResolvedValue({ reverted: true });
-  mockApproveProposal.mockResolvedValue({});
-  mockRejectProposal.mockResolvedValue({});
   mockBrainRecall.mockResolvedValue([]);  // default: no hits (search idle)
   mockGetDistribution.mockResolvedValue({
     declared_targets: ['open-plugin'], visibility: 'internal',
@@ -281,18 +272,18 @@ describe('BrainHub — Gallery (AC3)', () => {
     expect(screen.getByTestId('hub-card-AIDLC').querySelector('[data-testid="dddcard-self-tag"]')).toBeNull();
   });
 
-  it('a brain with proposals says so on its card; cards keep an alphabetical place (Hub home)', async () => {
+  it('a brain with escalations says so on its card; cards keep an alphabetical place (Hub home)', async () => {
     mockGetBrains.mockResolvedValue([{ ...GALLERY[1], name: 'Zeta' }, GALLERY[0], GALLERY[1]]);
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
-    // AIDLC pending=2 -> its one status is the proposals, a review (amber), not red
-    expect(screen.getByTestId('hub-signal-AIDLC').textContent).toBe('2 proposals to review');
-    expect(screen.getByTestId('hub-signal-AIDLC').getAttribute('data-tone')).toBe('review');
-    // Zeta has the same proposals yet stays last: what waits is in the attention band
+    // AIDLC pending=2 -> its one status is the escalations, urgent
+    expect(screen.getByTestId('hub-signal-AIDLC').textContent).toBe('2 escalations to decide');
+    expect(screen.getByTestId('hub-signal-AIDLC').getAttribute('data-tone')).toBe('urgent');
+    // Zeta has the same escalations yet stays last: what waits is in the attention band
     const ids = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
     expect(ids).toEqual(['hub-card-AIDLC', 'hub-card-SwarmAI', 'hub-card-Zeta']);
     expect(screen.getByTestId('hub-open-count').textContent).toBe('4 open items');
-    expect(screen.getByTestId('hub-chip-proposals').textContent).toBe('4 proposals to review');
+    expect(screen.getByTestId('hub-chip-escalations').textContent).toBe('4 escalations to decide');
   });
 
   it('the front page has one action, New Brain: adding knowledge belongs to a Brain', async () => {
@@ -781,16 +772,19 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
   }
 
-  it('renders 2 zones (A + C) + diff header with both SHAs — Zone B removed (F1)', async () => {
+  it('renders Zone A + diff header with both SHAs — Zone B (F1) and Zone C removed', async () => {
     await openReview();
     expect(screen.getByTestId('review-zone-a')).toBeTruthy();
-    expect(screen.getByTestId('review-zone-c')).toBeTruthy();
+    // the proposal gate (Zone C) is gone: every hunk is already written
+    expect(screen.queryByTestId('review-zone-c')).toBeNull();
     // F1: the dead "decay·sinking" Zone B (backend never emitted the tag) is gone.
     expect(screen.queryByTestId('review-zone-b')).toBeNull();
     const hdr = screen.getByTestId('review-diff-header').textContent ?? '';
     expect(hdr).toContain('a00ae46');   // last-reviewed short sha
     expect(hdr).toContain('ddbcfcd8');  // HEAD short sha
     expect(hdr).toContain('Projects/SwarmAI/');
+    expect(hdr).toContain('1 change since your last review');
+    expect(hdr).not.toContain('awaiting');
   });
 
   it('reject-hunk calls rejectReviewHunk with the content SIGNATURE (not an index)', async () => {
@@ -848,14 +842,6 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     expect(mockApproveReview).not.toHaveBeenCalled();      // never confirmed
   });
 
-  it('Zone C proposal Approve delegates to cultivation (approveProposal)', async () => {
-    await openReview();
-    const zoneC = screen.getByTestId('review-zone-c');
-    const approveBtn = Array.from(zoneC.querySelectorAll('button')).find((b) => b.textContent === 'Approve')!;
-    fireEvent.click(approveBtn);
-    await waitFor(() => expect(mockApproveProposal).toHaveBeenCalledWith('prop-1', 'SwarmAI'));
-  });
-
   it('F3: reject-hunk API error is SURFACED inline (transient) — does NOT blank the queue', async () => {
     mockRejectHunk.mockRejectedValueOnce(new Error('409 hunk no longer applies'));
     await openReview();
@@ -867,23 +853,6 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     expect(screen.getByTestId('brainhub-review')).toBeTruthy();
     expect(screen.getByTestId('review-zone-a')).toBeTruthy();
     expect(screen.queryByTestId('review-error')).toBeNull();
-  });
-
-  it('F4: Zone C proposal card renders the confidence signal', async () => {
-    await openReview();
-    const conf = screen.getByTestId('proposal-confidence');
-    expect(conf.textContent).toContain('0.70');   // confidence 0.7 shown, not hidden
-  });
-
-  it('F4: a null-confidence proposal renders gracefully (— not "null")', async () => {
-    mockGetReview.mockResolvedValue({
-      ...REVIEW,
-      proposals: [{ id: 'p2', target_doc: 'TECH.md', target_section: 'X', content: 'c', confidence: null, source_run_id: 'r' }],
-    });
-    await openReview();
-    const conf = screen.getByTestId('proposal-confidence');
-    expect(conf.textContent).toContain('—');
-    expect(conf.textContent).not.toContain('null');
   });
 
   it('F8: diff_incomplete DISABLES "Mark all seen" + shows a warning with a Retry', async () => {
@@ -942,13 +911,6 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     } finally {
       document.removeEventListener('swarm:open-file', onOpen);
     }
-  });
-
-  it('AC4-neg: proposals have NO Open-file button (target_doc is a bare filename, no resolvable path — Gate-1)', async () => {
-    await openReview();
-    const zoneC = screen.getByTestId('review-zone-c');
-    // Zone C proposal has Approve/Reject but NOT an Open-file affordance
-    expect(zoneC.querySelector('[data-testid^="proposal-open-file"]')).toBeNull();
   });
 });
 
@@ -1374,7 +1336,7 @@ describe('BrainHub — the built-in General Brain', () => {
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
     expect(screen.queryByTestId('hub-signal-builtin-general')).toBeNull();
-    fireEvent.click(screen.getByTestId('hub-needs-toggle'));       // AIDLC's proposals keep the band
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));       // AIDLC's escalations keep the band
     await waitFor(() => expect(screen.getByTestId('hub-needs')).toBeTruthy());
     expect(screen.queryByTestId('hub-need-builtin-general-agent')).toBeNull();
   });

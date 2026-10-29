@@ -291,7 +291,7 @@ export interface AgentConfirmResult {
 
 /** Provenance tag for a review hunk. (decay·sinking removed — the backend
  *  _tag_hunk never emits it; the Gallery's health.sinking count carries that signal.) */
-export type HunkTag = 'cultivation·auto-applied' | 'risky·staged';
+export type HunkTag = 'cultivation·auto-applied';
 
 export interface ReviewHunk {
   file: string;         // project-relative path the hunk touches
@@ -301,20 +301,10 @@ export interface ReviewHunk {
   diff_text: string;    // self-contained single-hunk patch (@@ … block)
 }
 
-export interface PendingProposal {
-  id: string;
-  target_doc: string;
-  target_section: string;
-  content: string;
-  confidence: number | null;
-  source_run_id: string;
-}
-
 export interface ReviewData {
   last_reviewed_sha: string;
   head_sha: string;
   hunks: ReviewHunk[];
-  proposals: PendingProposal[];
   /** true if the scoped git-diff timed out — the hunk list is INCOMPLETE, so
    *  "Mark all seen" must be disabled (advancing the watermark over an
    *  empty-because-timed-out queue would silently mark unreviewed work as seen). */
@@ -547,23 +537,6 @@ export async function rejectReviewHunk(
   const resp = await api.post(
     `/ddd/brains/${encodeURIComponent(name)}/review/reject`,
     { file, hunk_signature: hunkSignature },
-  );
-  return resp.data;
-}
-
-// ── Zone C: risky proposals delegate to the EXISTING cultivation router ────────
-// (no reinvented apply logic — cultivation.py already stages + applies/reverts)
-
-export async function approveProposal(id: string, project: string): Promise<unknown> {
-  const resp = await api.post(
-    `/cultivation/proposals/${encodeURIComponent(id)}/approve?project=${encodeURIComponent(project)}`,
-  );
-  return resp.data;
-}
-
-export async function rejectProposal(id: string, project: string): Promise<unknown> {
-  const resp = await api.post(
-    `/cultivation/proposals/${encodeURIComponent(id)}/reject?project=${encodeURIComponent(project)}`,
   );
   return resp.data;
 }

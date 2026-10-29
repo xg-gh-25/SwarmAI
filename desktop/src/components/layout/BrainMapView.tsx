@@ -4,7 +4,7 @@
  * Agent, Conductor · Runs, Reflect · Evolution, Eval); clicking a map part opens its
  * tab.
  *   BrainMapView      Overview: the Brain map, and beside it Needs you + Eval summary
- *   BrainNeedsView    Needs you: Runs, rule proposals, a Project Agent draft
+ *   BrainNeedsView    Needs you: Runs, a Project Agent draft
  *   BrainAgentView    Project Agent: review / revise / confirm, and Start a Run
  *   BrainRunsView     Conductor · Runs: the Chat tab and Hive lanes, each Run one card
  *   BrainEvalView     Eval: the five dimensions, UNKNOWN where nobody measures
@@ -73,7 +73,7 @@ function useBrainData(name: string) {
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
   const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
-  const needs = useMemo(() => needsYouItems(runs, review, detail?.projectAgent, detail?.pendingBySource), [runs, review, detail]);
+  const needs = useMemo(() => needsYouItems(runs, detail?.projectAgent, detail?.pendingBySource), [runs, detail]);
   const ev = useMemo(() => brainEval(runs, detail, review), [runs, detail, review]);
   return { detail, review, runs, needs, ev };
 }
@@ -100,7 +100,7 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: 
   return {
     identity: base('identity'),
     knowledge: has('knowledge') ? ((ev.brain.sinking ?? 0) > 0 ? 'attention' : 'ok') : 'attention',
-    gates: ev.brain.pending ? 'needs' : base('gates'),
+    gates: base('gates'),
     capabilities: base('capabilities'),
     delivery: base('delivery'),
     refresher: base('refresher'),
@@ -108,7 +108,7 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: 
       : (pa.problems.length || pa.status !== 'reviewed') ? 'needs' : 'ok',
     conductor: runs.some((r) => r.needsYou) || hive.some((r) => r.state === 'waiting') ? 'needs'
       : runs.some((r) => r.status === 'running') || hive.some(hiveLive) ? 'busy' : runs.length || hive.length ? 'ok' : undefined,
-    reflect: ev.brain.pending ? 'needs' : ev.brain.autoApplied ? 'ok' : undefined,
+    reflect: ev.brain.autoApplied ? 'ok' : undefined,
   };
 }
 
@@ -170,7 +170,7 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
           lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, hive: hive.filter(hiveLive).length }}
           sources={{ chat: runs.length, hive: hive.length }}
           needs={needN}
-          reflect={{ auto: ev.brain.autoApplied, pending: ev.brain.pending }}
+          reflect={{ auto: ev.brain.autoApplied }}
           agentLine={agentLine(detail?.projectAgent)}
           evalLine={`${ev.runs.landed} of ${ev.runs.total} Runs landed`}
           tones={mapTones(detail, runs, hive, ev)}
@@ -229,7 +229,6 @@ function NeedList({ items, onGoTo }: { items: ReturnType<typeof needsYouItems>; 
           </div>
           {it.kind === 'run' && <button className="btn-sm btn-secondary shrink-0" onClick={() => openRun(it.id)}>Answer</button>}
           {it.kind === 'other' && <button className="btn-sm btn-secondary shrink-0" onClick={openNeedYou}>Open</button>}
-          {it.kind === 'proposal' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('reflect')}>Review</button>}
           {it.kind === 'agent' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('agent')}>Open</button>}
         </div>
       ))}
@@ -271,7 +270,7 @@ export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: Bra
   return (
     <div className="p-4" data-testid="bm-needs-view">
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
-        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, rule proposals from Reflect, a Project Agent draft to confirm, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
+        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, a Project Agent draft to confirm, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
         <NeedList items={needs} onGoTo={onGoTo} />
       </div>
     </div>
