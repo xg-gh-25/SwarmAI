@@ -1104,6 +1104,16 @@ async def lifespan(app: FastAPI):
         phase_timings["workspace_ms"] = round((t_workspace - t_db) * 1000)
         logger.info("Phase: workspace/init pipeline — %dms", phase_timings["workspace_ms"])
 
+        # A Hive that becomes a worker sets aside what it wrote as a full SwarmAI, once
+        # (core/worker_reset: moved, never deleted)
+        try:
+            from core.worker_reset import set_aside as _set_aside_inherited
+            _ws = initialization_manager.get_cached_workspace_path()
+            if _ws:
+                await asyncio.to_thread(_set_aside_inherited, Path(_ws))
+        except Exception:
+            logger.exception("Worker Hive: setting aside inherited cognition failed")
+
         # refresh_defaults_ms: set to 0 if not already set (full init runs it synchronously)
         if "refresh_defaults_ms" not in phase_timings:
             phase_timings["refresh_defaults_ms"] = 0
