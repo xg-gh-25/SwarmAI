@@ -176,8 +176,11 @@ class RelayManager:
             task.cancel()
             try:
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — stopping
-                pass
+            except asyncio.CancelledError:
+                pass                     # the cancel just sent: stopping
+            except Exception as exc:  # noqa: BLE001 — stopping: an end the task reached first
+                logger.debug("swarm_out_relay: %s ended with %s while stopping", relay.sid[:8],
+                             type(exc).__name__)
         hub = session_events.hub()
         hub.reset_relayed(relay.sid)
         hub.unmark_relayed(relay.sid)

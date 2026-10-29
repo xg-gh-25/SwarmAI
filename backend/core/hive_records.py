@@ -428,7 +428,9 @@ def seal_turn(workspace: Path, session_id: str, rows: Optional[list[dict]],
         try:
             return append(workspace, session_id, "turn",
                           data=json.dumps({"rows": [], "error": type(exc).__name__}).encode())
-        except Exception:  # noqa: BLE001
+        except Exception as again:  # noqa: BLE001 — the record never breaks the turn
+            logger.error("hive_records: the gap of %s not sealed either (%s)", session_id,
+                         type(again).__name__)
             return None
 
 
@@ -675,22 +677,45 @@ async def _get_listing(client: Any, path: str, after: int) -> tuple[int, Any]:
         return 200, None
 
 
+WRITE_CHUNK = 1 << 20     # bytes buffered before a write in a worker thread
+
+
+async def write_stream(chunks: Any, dest: Path, check: Any) -> None:
+    """Write an async byte stream to ``dest`` with every file call in a worker thread
+    (up to a bundle's size: never on the event loop). ``check(chunk)`` sees each chunk
+    first and raises to stop; ``dest`` is left for the caller to remove."""
+    f = await asyncio.to_thread(open, dest, "wb")
+    try:
+        buf = bytearray()
+        async for chunk in chunks:
+            check(chunk)
+            buf += chunk
+            if len(buf) >= WRITE_CHUNK:
+                await asyncio.to_thread(f.write, bytes(buf))
+                buf.clear()
+        if buf:
+            await asyncio.to_thread(f.write, bytes(buf))
+        await asyncio.to_thread(f.flush)
+        await asyncio.to_thread(os.fsync, f.fileno())
+    finally:
+        await asyncio.to_thread(f.close)
+
+
 async def _get_file(client: Any, path: str, cap: int, dest: Path) -> tuple[str, int]:
     """Stream a file to ``dest`` (a temporary path); (sha256, size), or ValueError past ``cap``."""
     h = hashlib.sha256()
     size = 0
+
+    def check(chunk: bytes) -> None:
+        nonlocal size
+        size += len(chunk)
+        if size > cap:
+            raise ValueError("too_large")
+        h.update(chunk)
     async with client.stream("GET", path) as r:
         if r.status_code != 200:
             raise ValueError(f"http_{r.status_code}")
-        with open(dest, "wb") as f:
-            async for chunk in r.aiter_bytes():
-                size += len(chunk)
-                if size > cap:
-                    raise ValueError("too_large")
-                h.update(chunk)
-                f.write(chunk)
-            f.flush()
-            await asyncio.to_thread(os.fsync, f.fileno())   # up to a bundle's size: off the loop
+        await write_stream(r.aiter_bytes(), dest, check)
     return h.hexdigest(), size
 
 
@@ -798,13 +823,14 @@ async def pull(row: dict, inst: dict) -> dict:
                                                     e["size"], tmp)   # what it listed (≤ the kind's cap)
                         if sha != e["sha256"] or size != e["size"]:
                             raise ValueError("sha_mismatch")
-                        os.replace(tmp, d / name)
+                        await asyncio.to_thread(os.replace, tmp, d / name)
                     except ValueError as exc:
-                        tmp.unlink(missing_ok=True)
+                        await asyncio.to_thread(tmp.unlink, missing_ok=True)
                         out["error"] = str(exc)[:40]
                         break
                     except BaseException:
-                        tmp.unlink(missing_ok=True)
+                        # a cancel: the removal still runs to its end in its thread
+                        await asyncio.shield(asyncio.to_thread(tmp.unlink, missing_ok=True))
                         raise
                     entry = {"seq": e["seq"], "kind": e["kind"], "file": name, "sha256": sha,
                              "size": size, "at": _now(), **({"key": e["key"]} if e["kind"] == "bundle" else {})}

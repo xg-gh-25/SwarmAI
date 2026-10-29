@@ -4,7 +4,6 @@
   "channels/streaming.py": 6,
   "core/backup_manager.py": 1,
   "core/claude_environment.py": 1,
-  "core/code_intel/__init__.py": 1,
   "core/code_intel/clustering.py": 1,
   "core/code_intel/freshness.py": 1,
   "core/code_intel/graph_store.py": 4,

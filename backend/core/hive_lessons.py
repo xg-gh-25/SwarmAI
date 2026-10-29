@@ -46,6 +46,7 @@ Hive text.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -370,6 +371,15 @@ def accept(row: dict, prev: Optional[dict], shown: list[str]) -> dict:
     return pending_state(did, brain, rec, error=None)
 
 
+def _keep_legacy(did: str, lessons: list[dict]) -> None:
+    """Keep what an older Hive returned (``take``), replacing what was kept before."""
+    path = _legacy_path(did)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"lessons": lessons}, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
     """From a Hive that keeps no run records: fetch the run's lessons and keep them here
     (nothing is queued: the person takes them, ``accept``). The new ``lessons`` part, or
@@ -400,12 +410,8 @@ async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
         return pending_state(did, brain, old, error="unexpected_body")
     lessons = [{"source": x.get("source"), "unit": x.get("unit")} for x in body["lessons"][:MAX_LESSONS]
                if isinstance(x, dict)]
-    path = _legacy_path(did)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"lessons": lessons}, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
-    return pending_state(did, brain, old, truncated=body.get("truncated") is True)
+    await asyncio.to_thread(_keep_legacy, did, lessons)
+    return await asyncio.to_thread(pending_state, did, brain, old, truncated=body.get("truncated") is True)
 
 
 _DONE = ("written", "reinforced", "merged")
@@ -430,7 +436,8 @@ def states(candidates: list[str]) -> dict[str, int]:
         marks = ",".join("?" for _ in ids)
         rows = conn.execute(f"SELECT candidate_id, state FROM ingestion_units WHERE candidate_id IN ({marks})",
                             ids).fetchall()
-    except Exception:  # noqa: BLE001 — unreadable: shown as not judged
+    except Exception as exc:  # noqa: BLE001 — unreadable: shown as not judged
+        logger.warning("hive_lessons: lesson states unreadable (%s)", type(exc).__name__)
         rows = []
     finally:
         conn.close()

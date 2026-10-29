@@ -228,25 +228,28 @@ async def _download(row: dict, b: dict, dest: Path) -> None:
     stale = ("the Hive's bundle is not the one in the result shown (a later turn may have made a new one); "
              "refresh the result, then take the commits back")
     import httpx
+    from core import hive_records
+
+    def check(chunk: bytes) -> None:
+        nonlocal n
+        n += len(chunk)
+        if n > hive_bundle.MAX_BUNDLE_BYTES or n > b["size"]:
+            raise ReturnError(stale)
+        h.update(chunk)
     try:
         async with swarm_out._client(inst, 300) as client:
             async with client.stream("GET", f"/api/hive/bundles/{row['session_id']}/{b['key']}") as r:
                 if r.status_code != 200:
                     raise ReturnError(f"the Hive did not send the bundle (HTTP {r.status_code})")
-                with open(tmp, "wb") as f:
-                    async for chunk in r.aiter_bytes():
-                        n += len(chunk)
-                        if n > hive_bundle.MAX_BUNDLE_BYTES or n > b["size"]:
-                            raise ReturnError(stale)
-                        h.update(chunk)
-                        f.write(chunk)
+                await hive_records.write_stream(r.aiter_bytes(), tmp, check)
         if n != b["size"] or h.hexdigest() != b["sha256"]:
             raise ReturnError(stale)
-        os.replace(tmp, dest)
+        await asyncio.to_thread(os.replace, tmp, dest)
     except httpx.HTTPError as e:
         raise ReturnError(f"the Hive did not answer ({type(e).__name__}); nothing was taken back") from None
     finally:
-        tmp.unlink(missing_ok=True)
+        # a cancel too: the removal runs to its end in its thread
+        await asyncio.shield(asyncio.to_thread(tmp.unlink, missing_ok=True))
 
 
 def _bundle_header(path: Path) -> tuple[list[str], list[tuple[str, str]]]:

@@ -40,6 +40,8 @@ GATE_CLASS = {
     "expert_type_gate": RUN, "expert_budget_gate": RUN, "worktree_write_gate": RUN,
     "main_dirty_reporter": RUN, "v1_reflect_trigger": RUN, "pipeline_run_mapping": RUN,
     "v1_review_handout_tracker": RUN,
+    # a Project Agent session only: the gates of the definition the person confirmed
+    "brain_gate": RUN,
     "governance_file_gate": ADVISORY, "memory_edit_guard": ADVISORY,
     "persist_skill_tracker": ADVISORY, "persist_skill_tracker_reset": ADVISORY,
     "repo_guidance": ADVISORY, "repo_guidance_pre": ADVISORY, "shared_checkout": ADVISORY,
