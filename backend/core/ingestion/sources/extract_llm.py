@@ -42,6 +42,9 @@ class ExtractResult:
     raw: str = ""
 
 
+INVALID_RETRIES = 1  # extra calls when a reply does not decode (see BedrockExtractor.extract)
+
+
 class BedrockExtractor(BedrockJudge):
     """The source extractor: one ``structured()`` call per input (design §5.4 r16.14).
 
@@ -57,20 +60,27 @@ class BedrockExtractor(BedrockJudge):
         self.allowed_kinds = tuple(allowed_kinds or _UNIT_DEFS().keys())
 
     def extract(self, prompt: str) -> JudgeResult[list[Any]]:
-        usage: dict[str, int] = {}
-        try:
-            answer = structured(
-                prompt, schema=unit_schema(self.allowed_kinds), model_id=self.model_id,
-                max_tokens=self.max_tokens, name=TOOL_NAME,
-                description="Record every unit extracted from the source (an empty list "
-                            "when nothing qualifies).",
-                temperature=self.temperature, read_timeout=self.read_timeout,
-                max_attempts=2, usage=usage)
-        except StructuredOutputError as exc:
-            raise UntypedOutput(f"reply {exc.kind}: {exc.detail}", raw=exc.raw) from exc
-        finally:
-            if usage:
-                llm_usage.record(usage)
+        # One more call when the reply does not decode: the same window failed 1 of 8
+        # calls on real data (a list sent as JSON text the repair could not read), the
+        # rest succeeded, so a second call recovers it at the cost of one call.
+        for attempt in range(INVALID_RETRIES + 1):
+            usage: dict[str, int] = {}
+            try:
+                answer = structured(
+                    prompt, schema=unit_schema(self.allowed_kinds), model_id=self.model_id,
+                    max_tokens=self.max_tokens, name=TOOL_NAME,
+                    description="Record every unit extracted from the source (an empty list "
+                                "when nothing qualifies).",
+                    temperature=self.temperature, read_timeout=self.read_timeout,
+                    max_attempts=2, usage=usage)
+                break
+            except StructuredOutputError as exc:
+                if exc.kind == "invalid" and attempt < INVALID_RETRIES:
+                    continue
+                raise UntypedOutput(f"reply {exc.kind}: {exc.detail}", raw=exc.raw) from exc
+            finally:
+                if usage:
+                    llm_usage.record(usage)
         units = units_from_answer(answer, self.allowed_kinds)
         return JudgeResult(units, self.version_vector(prompt),
                            json.dumps(answer, ensure_ascii=False))
@@ -164,8 +174,9 @@ def units_from_answer(answer: Any, kinds: Iterable[str]) -> list[Any]:
     out: list[Any] = []
     for kind in dict.fromkeys(kinds):
         for item in (answer or {}).get(f"{kind}_units") or []:
-            out.append({"kind": kind, **{k: v for k, v in item.items() if v is not None}}
-                       if isinstance(item, dict) else item)
+            # the list decides the kind: a "kind" the model added to an item does not
+            out.append({**{k: v for k, v in item.items() if v is not None and k != "kind"},
+                        "kind": kind} if isinstance(item, dict) else item)
     return out
 
 

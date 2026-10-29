@@ -2191,12 +2191,22 @@ async def rename_item(request: FolderRenameRequest):
                 detail="A file can be moved into or out of the knowledge folders only by copying it.",
             )
         from core.ingestion.api import StaleRevision, apply_user_edit
+        from core.ingestion.writer import _installed_project
+        if _installed_project(old_target) != _installed_project(new_target):
+            # trust follows the path: an installed Brain package's file moved out of it
+            # would read as the user's own text
+            raise HTTPException(
+                status_code=409,
+                detail="A file of an installed Brain package can be moved only within its project.",
+            )
 
         def _governed_rename() -> None:
             # two journaled governed edits; a crash between them leaves a copy, never a loss
             data = old_target.read_bytes()
             apply_user_edit(new_target, data, expected_revision="", actor="user")
-            apply_user_edit(old_target, None, expected_revision=_cdf_revision(old_target), actor="user")
+            # the revision of the bytes copied: a change made since refuses the delete
+            apply_user_edit(old_target, None, expected_revision=hashlib.sha256(data).hexdigest(),
+                            actor="user")
         try:
             await asyncio.to_thread(_governed_rename)
         except StaleRevision:

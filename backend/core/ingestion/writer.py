@@ -519,6 +519,8 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
         prior = _plain_unit_body(old_unit.text)
         current = str(group.get("what") or group.get("text") or "").strip()
         group["what"] = " ".join(part for part in (prior, current) if part)
+        # and its taint: external text merged into an untainted entry stays external
+        group["tainted"] = bool(group["tainted"] or _unit_external(old_unit))
     sequence = 1
     if store == "EVOLUTION":
         answer = _decision_value(decision, "card1")
@@ -847,6 +849,14 @@ def apply_unit(decision: UnitDecision | Mapping[str, Any], unit_row: Any,
     target = _target_path(decision, unit_id, group)
     target.parent.mkdir(parents=True, exist_ok=True)
     with md_lock(target, blocking=True):
+        if _entry_on_disk(target, unit_id):
+            # an earlier plan wrote this entry and was then abandoned (the file changed
+            # after the write, or a later step raised): the entry is there, never twice
+            conn.execute("UPDATE ingestion_units SET state='written',updated_at=? "
+                         "WHERE unit_id=? AND state='writing'", (_iso(), unit_id))
+            _event(conn, "already_written", {"unit_id": unit_id, "target_path": _relative(target)})
+            conn.commit()
+            return "done"
         plan = _build_plan(decision, enriched)
         epoch = _current_epoch(conn, unit_row)
         _insert_plan(conn, plan, epoch)
@@ -854,9 +864,21 @@ def apply_unit(decision: UnitDecision | Mapping[str, Any], unit_row: Any,
     return _execute_plan(conn, _load_plan(row))
 
 
-def recover(conn: sqlite3.Connection) -> dict[str, int]:
+def _entry_on_disk(target: Path, unit_id: str) -> bool:
+    """Whether *target* already holds the entry of *unit_id* (its ``cand:`` marker)."""
+    if not target.is_file():
+        return False
+    text = target.read_text(encoding="utf-8", errors="replace")
+    return re.search(r"cand:" + re.escape(unit_id) + r"(?![\w.:-])", text) is not None
+
+
+def recover(conn: sqlite3.Connection, *, requeue_grace: timedelta | None = None) -> dict[str, int]:
     """Resume journal plans from postconditions, each on its own (a plan that raises is
-    abandoned), and requeue judged or writing units that have no plan."""
+    abandoned), and requeue judged or writing units that have no live plan.
+
+    With *requeue_grace* a unit is requeued only when it has not moved for that long:
+    the daily pass runs while the run lane may be between its claim and its plan (at
+    startup the run lane has not started yet, so every such unit is stranded)."""
     counts = {"recovered": 0, "abandoned": 0, "requeued": 0}
     rows = conn.execute("SELECT * FROM ingestion_writes WHERE step NOT IN ('done','abandoned') ORDER BY created_at").fetchall()
     for row in rows:
@@ -870,7 +892,7 @@ def recover(conn: sqlite3.Connection) -> dict[str, int]:
                 conn.rollback()
             _defer(conn, plan, "stale_plan", event_kind="recovery_failed")
             counts["abandoned"] += 1
-    _finish_recovery(conn, counts)
+    _finish_recovery(conn, counts, requeue_grace)
     return counts
 
 
@@ -906,7 +928,8 @@ def _recover_plan(conn: sqlite3.Connection, plan: dict[str, Any], counts: dict[s
     counts["recovered" if result == "done" else "abandoned"] += 1
 
 
-def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int]) -> None:
+def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int],
+                     requeue_grace: timedelta | None = None) -> None:
     conn.execute(
         """UPDATE ingestion_units SET state='written',updated_at=?
         WHERE state='writing' AND EXISTS (
@@ -932,16 +955,61 @@ def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int]) -> None:
         (_iso(),),
     )
     # judged, or writing whose plan was never inserted (the writer raised, or the
-    # process died, between the worker's claim and the plan): judge again
+    # process died, between the worker's claim and the plan), or whose last plan was
+    # abandoned: judge again
+    settled = _iso(_now() - requeue_grace) if requeue_grace else _iso(_now() + timedelta(days=1))
     missing = conn.execute(
         "SELECT unit_id,state FROM ingestion_units u WHERE state IN ('judged','writing') "
-        "AND NOT EXISTS (SELECT 1 FROM ingestion_writes w WHERE w.unit_id=u.unit_id)"
+        "AND updated_at<? AND NOT EXISTS (SELECT 1 FROM ingestion_writes w "
+        "WHERE w.unit_id=u.unit_id AND w.step<>'abandoned')", (settled,)
     ).fetchall()
     for row in missing:
         conn.execute("UPDATE ingestion_units SET state='queued',updated_at=? WHERE unit_id=? AND state=?",
                      (_iso(), row[0], row[1]))
         counts["requeued"] += 1
     conn.commit()
+
+
+_GLOBAL_QUOTA_STORES = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"})
+
+
+def _quota_usage(store: str, project: str | None, day: str,
+                 conn: sqlite3.Connection) -> tuple[int, int, int, int | None]:
+    """(bytes used, entries used, byte cap, entry cap) of *store* on UTC *day*."""
+    if store in _GLOBAL_QUOTA_STORES:
+        cap, count_cap = 4096, None
+    elif store == "DDD":
+        cap, count_cap = 20 * 1024, None
+    elif store == "KNOWLEDGE":
+        cap, count_cap = 5 * 1024 * 1024, 50
+    else:
+        raise ValueError(f"unknown quota store: {store}")
+    # a file injected into every session has one daily budget, whatever the project
+    # of the units that spend it; a project's DDD has its own
+    if store in _GLOBAL_QUOTA_STORES:
+        scope, args = "1=1", (store, day)
+    elif project is None:
+        scope, args = "project IS NULL", (store, day)
+    else:
+        scope, args = "project=?", (store, day, project)
+    row = conn.execute(
+        f"SELECT COALESCE(SUM(bytes),0),COUNT(*) FROM ingestion_quota WHERE store=? AND utc_day=? "
+        f"AND {scope} AND status IN ('reserved','committed')",
+        args,
+    ).fetchone()
+    return int(row[0]), int(row[1]), cap, count_cap
+
+
+def quota_still_full(unit_id: str, conn: sqlite3.Connection) -> bool:
+    """Whether the entry a unit was refused for (``reserve_quota`` keeps its size as a
+    ``released`` row) still does not fit today: the worker then waits another day
+    without judging the unit again."""
+    row = conn.execute("SELECT store,project,bytes FROM ingestion_quota WHERE unit_id=? "
+                       "AND status='released'", (unit_id,)).fetchone()
+    if row is None:
+        return False
+    used, count, cap, count_cap = _quota_usage(str(row[0]), row[1], _now().date().isoformat(), conn)
+    return used + int(row[2]) > cap or (count_cap is not None and count + 1 > count_cap)
 
 
 def reserve_quota(unit_id: str, store: str, project: str | None, byte_count: int,
@@ -955,29 +1023,16 @@ def reserve_quota(unit_id: str, store: str, project: str | None, byte_count: int
         return True
     day = now.date().isoformat()
     normalized = store.upper()
-    if normalized in {"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"}:
-        cap, count_cap = 4096, None
-    elif normalized == "DDD":
-        cap, count_cap = 20 * 1024, None
-    elif normalized == "KNOWLEDGE":
-        cap, count_cap = 5 * 1024 * 1024, 50
-    else:
-        raise ValueError(f"unknown quota store: {store}")
-    # a file injected into every session has one daily budget, whatever the project
-    # of the units that spend it; a project's DDD has its own
-    if normalized in {"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"}:
+    used, count, cap, count_cap = _quota_usage(normalized, project, day, conn)
+    if normalized in _GLOBAL_QUOTA_STORES:
         project = None
-        scope, args = "1=1", (normalized, day)
-    elif project is None:
-        scope, args = "project IS NULL", (normalized, day)
-    else:
-        scope, args = "project=?", (normalized, day, project)
-    row = conn.execute(
-        f"SELECT COALESCE(SUM(bytes),0),COUNT(*) FROM ingestion_quota WHERE store=? AND utc_day=? "
-        f"AND {scope} AND status IN ('reserved','committed')",
-        args,
-    ).fetchone()
-    if int(row[0]) + max(0, byte_count) > cap or (count_cap is not None and int(row[1]) + 1 > count_cap):
+    if used + max(0, byte_count) > cap or (count_cap is not None and count + 1 > count_cap):
+        # not counted (released); kept so quota_still_full knows what the unit needs
+        conn.execute(
+            "INSERT OR REPLACE INTO ingestion_quota(unit_id,store,project,utc_day,bytes,status,expires_at) "
+            "VALUES (?,?,?,?,?,'released',?)",
+            (unit_id, normalized, project, day, max(0, byte_count), _iso(now)),
+        )
         conn.commit()
         return False
     conn.execute(

@@ -316,6 +316,19 @@ def _obviously_deictic(unit: Any) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _window(extract: Any, session_id: str, index: int) -> list[Any]:
+    """One window's extraction. A reply that still does not decode loses that window
+    only (its attempt is recorded as failed); the session's other windows still run,
+    where raising failed the whole job and a retry paid for every window again. Any
+    other error (Bedrock, the database) still fails the job, which retries it."""
+    from core.ingestion.prompts import UntypedOutput
+    try:
+        return extract()
+    except UntypedOutput as exc:
+        logger.warning("CDF S2 %s window %s: no usable reply (%s)", session_id, index, exc)
+        return []
+
+
 def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str],
                   project_snapshot: dict[str, Any] | None, llm: Any | None) -> list[Any]:
     from core import session_inputs
@@ -338,7 +351,7 @@ def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str]
     outcomes: list[Any] = []
     for index, chunk in enumerate(chunks, 1):
         events = sorted({str(p.get("event_id") or p.get("part_of")) for p in chunk})
-        outcomes += common.extract_and_enqueue(
+        outcomes += _window(lambda: common.extract_and_enqueue(
             "S2", session_id, json.dumps(chunk, ensure_ascii=False),
             tuple(f"event:{event}" for event in events),
             evidence_range={**evidence_range, "events": events,
@@ -346,7 +359,8 @@ def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str]
             session_id=session_id, read_root_ids=_root_ids(tuple(events)),
             project_snapshot=project_snapshot, extraction_pass="user_utterance",
             allowed_kinds=_ALLOWED, llm=llm,
-            unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None)
+            unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None),
+            session_id, index)
     return outcomes
 
 
@@ -375,13 +389,13 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
         own = window_roots(session_id, chunk)
         shown, evidence = _with_anchors(chunk, own, user_events)
         roots = tuple(dict.fromkeys(user_roots + _root_ids(tuple(e for ids in own for e in ids))))
-        outcomes += common.extract_and_enqueue(
+        outcomes += _window(lambda: common.extract_and_enqueue(
             "S2", session_id, json.dumps(shown, ensure_ascii=False, default=str), evidence,
             evidence_range={**evidence_range, "window": index, "windows": len(chunks),
                             "windows_skipped": skipped},
             session_id=session_id, read_root_ids=roots,
             project_snapshot=project_snapshot, extraction_pass="main",
-            allowed_kinds=_ALLOWED, llm=llm)
+            allowed_kinds=_ALLOWED, llm=llm), session_id, index)
     return outcomes
 
 

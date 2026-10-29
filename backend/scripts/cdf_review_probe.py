@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"no CLI transcript for {sdk}")
     before = path.read_bytes()
     cwd = s7_review._cwd_of(sdk)
-    schema = extract_llm.flat_unit_schema(s7_review.ALLOWED_KINDS)
+    schema = extract_llm.unit_schema(s7_review.ALLOWED_KINDS)
     schema = {**schema, "properties": {
         "last_user_request": {"type": "string",
                               "description": "the user's last request in this conversation, quoted"},

@@ -67,7 +67,7 @@ ReferenceKind = Literal["learned", "analysis", "design", "spec", "note", "link"]
 GapKind = Literal["debt", "risk", "deferred_finding", "process_issue", "follow_up"]
 
 
-# What _valid_scope accepts, in words: shown to the extractor (extract_llm.flat_unit_schema),
+# What _valid_scope accepts, in words: shown to the extractor (extract_llm.unit_schema),
 # which cannot see this validator. Change both together.
 SCOPE_RULE = 'one of "user", "agent", "world", or "project:<project name>"'
 # The model validators below, in words, per kind (same contract: change both together).

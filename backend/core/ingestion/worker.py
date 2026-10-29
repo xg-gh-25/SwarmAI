@@ -50,6 +50,9 @@ INFRA_REASONS = frozenset({
 OUTAGE_REASONS = frozenset({"unavailable", "stale", "db_busy", "user_race", "stale_plan"})
 INFRA_ATTEMPTS = 30     # judge outages: 1, 2, 4 ... 60 min backoff, about a day in all
 LOOP_BACKOFF_SECONDS = 30  # a background loop that raised waits this long, then goes on
+# the daily recovery requeues a unit stranded between claim and plan only after this
+# long without a move (the run lane may be between the two at that moment)
+REQUEUE_GRACE = timedelta(minutes=15)
 
 
 @dataclass(frozen=True)
@@ -284,7 +287,7 @@ def _defer_until_tomorrow(conn: sqlite3.Connection, owner: Owner, unit_id: str, 
 
 def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exception) -> None:
     """Record *exc* on the unit it happened to. A malformed payload is rejected. A unit
-    with a write plan belongs to ``writer.recover``. Otherwise the unit (queued, or
+    with a live write plan belongs to ``writer.recover``. Otherwise the unit (queued, or
     ``writing`` with no plan yet) is deferred with the error's fingerprint, so the
     bounded retries apply and it is poisoned instead of retried forever."""
     from pydantic import ValidationError
@@ -292,7 +295,10 @@ def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exce
     fresh = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
     if fresh is None or fresh["state"] in TERMINAL_STATES:
         return
-    if conn.execute("SELECT 1 FROM ingestion_writes WHERE unit_id=?", (unit_id,)).fetchone():
+    # an abandoned plan stays in the journal until the unit is planned again; it is
+    # not recovery's, so it must not keep the unit from being deferred here
+    if conn.execute("SELECT 1 FROM ingestion_writes WHERE unit_id=? AND step<>'abandoned'",
+                    (unit_id,)).fetchone():
         return
     if fresh["state"] == "writing":
         if not owner.claim_unit_step(conn, unit_id, "writing", "queued"):
@@ -387,6 +393,11 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
         # error fingerprint and poisoned after the bounded retries), never raised out of
         # the worker, whose thread would otherwise end and leave this candidate in_progress.
         try:
+            from .writer import quota_still_full
+            if unit_row["reason"] == "quota" and quota_still_full(unit_id, conn):
+                # the store's budget is still spent: judging again would only be refused
+                _defer_until_tomorrow(conn, owner, unit_id, "quota")
+                continue
             decision = run_unit_v2(unit_input, workspace_root, judge)
             fields = _decision_fields(decision)
             if decision.decision == "defer":
@@ -703,6 +714,7 @@ class IngestionWorker:
         self.workspace_root = workspace_root
         self.judge_factory = judge_factory
         self.stop_event = asyncio.Event()
+        self.on_ready: Any = None        # called once startup recovery is done
         self.wake_event = asyncio.Event()
         self.scheduler = WeightedLaneScheduler()
         self._paused_sources: dict[str, datetime] = {}
@@ -721,9 +733,12 @@ class IngestionWorker:
         try:
             self.owner.adopt(conn)
             try:
-                self._maintain(conn)
+                self._maintain(conn, startup=True)
             except Exception:  # start anyway; maintenance is retried in a day
                 logger.exception("CDF startup maintenance failed")
+            finally:
+                if self.on_ready is not None:
+                    self.on_ready()       # the run lane starts once recovery is done
             self._maintenance_due = _utcnow() + timedelta(days=1)
             while not self.stop_event.is_set():
                 try:
@@ -751,11 +766,15 @@ class IngestionWorker:
         except asyncio.TimeoutError:
             pass
 
-    def _maintain(self, conn: sqlite3.Connection) -> None:
+    def _maintain(self, conn: sqlite3.Connection, *, startup: bool = False) -> None:
         """Recovery and housekeeping: resume write plans, recompute stranded
-        candidates, clean up, requeue parked units whose domain or section now exists."""
+        candidates, clean up, requeue parked units whose domain or section now exists.
+
+        At startup the run lane has not started, so every unit between its claim and
+        its plan is stranded; the daily pass leaves alone a unit that moved in the last
+        ``REQUEUE_GRACE`` (the run lane may be writing it)."""
         from .writer import recover
-        recover(conn)
+        recover(conn, requeue_grace=None if startup else REQUEUE_GRACE)
         reaggregate_candidates(conn)
         cleanup_expired(conn)
         _requeue_known_domains(self.workspace_root)
@@ -861,6 +880,8 @@ class RunLaneExecutor:
         self._thread = threading.Thread(target=self._run, name="cdf-run-lane", daemon=True)
 
     def start(self) -> None:
+        if self._stop.is_set():
+            return
         self._thread.start()
         self._wake.set()
 
@@ -905,6 +926,8 @@ class RunLaneExecutor:
     def stop_and_join(self, timeout: float = 30) -> None:
         self._stop.set()
         self._wake.set()
+        if self._thread.ident is None:       # stopped before the worker started it
+            return
         self._thread.join(timeout)
         if self._thread.is_alive():
             raise RuntimeError("CDF run-lane executor did not stop")
@@ -926,8 +949,12 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
         # recorded before the optional main pass: if that pass fails, the retry must not
         # review the same messages again (a fresh model call, new duplicate units)
         s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
+    # a retry after a failed main pass finds the messages reviewed already
+    # ("nothing_new"): the sampled main pass is still owed
+    retry = int(job.get("attempts") or 0) > 1 and outcome["status"] == "nothing_new"
     main = outcome["status"] == "unresumable" or (
-        outcome["status"] == "reviewed" and s7_review.sampled(session_id))
+        outcome["status"] in ("reviewed",) + (("nothing_new",) if retry else ())
+        and s7_review.sampled(session_id))
     if main:
         s2_session.extract_session_sync(session_id, passes=("main",))
     outcome["s2_main"] = main
@@ -963,7 +990,7 @@ class S2JobExecutor:
         from . import s2_jobs
         conn = connect_rw()
         try:
-            s2_jobs.recover(conn)
+            self._recover(conn)
             while not self._stop.is_set():
                 self._wake.wait(self.POLL_SECONDS)
                 self._wake.clear()
@@ -974,9 +1001,21 @@ class S2JobExecutor:
                     if conn.in_transaction:
                         conn.rollback()
                     self._stop.wait(LOOP_BACKOFF_SECONDS)
-                    s2_jobs.recover(conn)   # a job left running by the failure goes back to the queue
+                    self._recover(conn)   # a job left running by the failure goes back to the queue
         finally:
             conn.close()
+
+    @staticmethod
+    def _recover(conn: sqlite3.Connection) -> None:
+        """``s2_jobs.recover``; a failure (database still busy) is logged, never the
+        end of the thread: the next pass recovers again."""
+        from . import s2_jobs
+        try:
+            s2_jobs.recover(conn)
+        except Exception:
+            logger.exception("CDF session job recovery failed; retrying after the next pass")
+            if conn.in_transaction:
+                conn.rollback()
 
     def drain(self, conn: sqlite3.Connection) -> int:
         from . import s2_jobs
@@ -1055,8 +1094,10 @@ class WorkerHandle:
             self._loop.close()
 
     def start(self) -> None:
-        """Start the scheduler and dedicated run-lane threads (on a worker Hive, the
-        extraction and its maintenance only)."""
+        """Start the scheduler and the session-job threads; the run lane starts when
+        the scheduler's startup recovery is done (it requeues units the run lane
+        could otherwise be writing at the same time). On a worker Hive, the
+        extraction and its maintenance only."""
         from core.app_role import is_worker
         self.extract_only = is_worker()
         if self.extract_only:
@@ -1067,8 +1108,8 @@ class WorkerHandle:
                 self.s2_executor.stop_and_join(10)
                 raise
             return
+        self.worker.on_ready = self.run_executor.start
         self._thread.start()
-        self.run_executor.start()
         self.s2_executor.start()
 
     def wake_run(self) -> None:
