@@ -18,6 +18,21 @@ from unittest.mock import patch
 import database as database_module
 
 
+_N = iter(range(10**9))
+
+
+async def _spend(db, *, session_id=None, source="cli", input_tokens=0, output_tokens=0,
+                 cache_read_tokens=0, cache_create_tokens=0, cost_usd=None, model=None):
+    """One usage-ledger spend row (core/usage_accounting), the record the summary reads;
+    ``cost_usd`` is the row's own cost."""
+    from core import usage_accounting as ua
+    row = ua._row(surface="chat" if source == "cli" else "background", model=model,
+                  tokens={"input": input_tokens, "output": output_tokens, "cache_read": cache_read_tokens,
+                          "cache_write": cache_create_tokens},
+                  cost=cost_usd, cost_source="cli", dedup_key=f"t:{next(_N)}", session_id=session_id)
+    await db.insert_usage_rows([row])
+
+
 # ---------------------------------------------------------------------------
 # DB-level tests
 # ---------------------------------------------------------------------------
@@ -29,7 +44,7 @@ class TestTokenUsageDB:
     async def test_record_token_usage_basic(self):
         """AC1: Record a CLI result event's token usage."""
         db = database_module.db
-        await db.record_token_usage(
+        await _spend(db, 
             session_id="sess-1",
             source="cli",
             input_tokens=50000,
@@ -40,7 +55,7 @@ class TestTokenUsageDB:
             model="claude-opus-4-6",
         )
         summary = await db.get_token_usage_summary()
-        # every kind the model bills: input, output, cache reads and cache writes
+        # the ledger's spend rows; every kind the model bills: input, output, cache reads, cache writes
         assert summary["total_tokens"] == 95000
         assert summary["total_breakdown"] == {"input": 50000, "output": 10000, "cache_read": 30000, "cache_write": 5000}
 
@@ -48,7 +63,7 @@ class TestTokenUsageDB:
     async def test_record_token_usage_background_job(self):
         """AC2: Record a background boto3 call's token usage."""
         db = database_module.db
-        await db.record_token_usage(
+        await _spend(db, 
             session_id=None,
             source="background_job",
             input_tokens=1000,
@@ -62,7 +77,7 @@ class TestTokenUsageDB:
         """AC3: Summary distinguishes today's tokens from all-time total."""
         db = database_module.db
         # Insert today's usage
-        await db.record_token_usage(
+        await _spend(db, 
             session_id="sess-today",
             source="cli",
             input_tokens=1_000_000,
@@ -77,7 +92,7 @@ class TestTokenUsageDB:
     async def test_get_summary_returns_millions(self):
         """AC3: Summary provides values convertible to M (millions)."""
         db = database_module.db
-        await db.record_token_usage(
+        await _spend(db, 
             session_id="sess-x",
             source="cli",
             input_tokens=5_000_000,
@@ -92,11 +107,11 @@ class TestTokenUsageDB:
     async def test_get_summary_includes_costs(self):
         """Summary includes cost aggregation."""
         db = database_module.db
-        await db.record_token_usage(
+        await _spend(db, 
             session_id="s1", source="cli",
             input_tokens=100, output_tokens=50, cost_usd=0.10,
         )
-        await db.record_token_usage(
+        await _spend(db, 
             session_id="s2", source="cli",
             input_tokens=200, output_tokens=100, cost_usd=0.20,
         )
@@ -105,17 +120,20 @@ class TestTokenUsageDB:
         assert abs(summary["total_cost_usd"] - 0.30) < 0.001
 
     @pytest.mark.asyncio
-    async def test_cost_is_the_running_total_increase_per_session(self):
-        """cost_usd is the CLI process's running total: a session's turns cost the
-        increases, a lower value is a new process (its value is that turn's cost),
-        and sessions do not share a baseline."""
+    async def test_today_is_this_machines_local_day(self):
+        """A row from 23:00 local yesterday is in the total, not in today."""
+        from datetime import datetime, timedelta, timezone
+        from core import usage_accounting as ua
         db = database_module.db
-        for sid, cost in [("a", 1.0), ("a", 1.5), ("b", 2.0), ("a", 2.5), ("a", 0.4), ("a", 0.9), ("b", 2.25)]:
-            await db.record_token_usage(session_id=sid, source="cli", input_tokens=1, output_tokens=1, cost_usd=cost)
+        local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        late = (local_midnight - timedelta(hours=1)).astimezone(timezone.utc).isoformat(timespec="seconds")
+        early = (local_midnight + timedelta(minutes=1)).astimezone(timezone.utc).isoformat(timespec="seconds")
+        rows = [ua._row(surface="chat", model="m", tokens={"output": n}, cost=c, cost_source="cli",
+                        dedup_key=f"day:{n}", at_utc=at) for n, c, at in ((100, 1.0, late), (7, 0.25, early))]
+        await db.insert_usage_rows(rows)
         summary = await db.get_token_usage_summary()
-        # a: 1.0 + 0.5 + 1.0, then a new process 0.4 + 0.5; b: 2.0 + 0.25 — not the 10.55 a SUM gives
-        assert abs(summary["total_cost_usd"] - 5.65) < 1e-9
-        assert abs(summary["today_cost_usd"] - 5.65) < 1e-9
+        assert (summary["total_tokens"], summary["today_tokens"]) == (107, 7)
+        assert (summary["total_cost_usd"], summary["today_cost_usd"]) == (1.25, 0.25)
 
     @pytest.mark.asyncio
     async def test_get_summary_empty_db(self):
@@ -131,7 +149,7 @@ class TestTokenUsageDB:
     async def test_record_with_minimal_fields(self):
         """Record works with only required fields (input_tokens, output_tokens)."""
         db = database_module.db
-        await db.record_token_usage(
+        await _spend(db, 
             session_id=None,
             source="cli",
             input_tokens=100,
@@ -145,7 +163,7 @@ class TestTokenUsageDB:
         """Multiple records sum correctly."""
         db = database_module.db
         for i in range(5):
-            await db.record_token_usage(
+            await _spend(db, 
                 session_id=f"sess-{i}",
                 source="cli",
                 input_tokens=1000,
@@ -180,7 +198,7 @@ class TestTokenUsageEndpoint:
 
     def test_cache_hit_rate_is_cache_reads_over_input_side_tokens(self, client):
         import asyncio
-        asyncio.run(database_module.db.record_token_usage(
+        asyncio.run(_spend(database_module.db, 
             session_id="hit", source="cli", input_tokens=10, output_tokens=500,
             cache_read_tokens=900, cache_create_tokens=90, cost_usd=0.5))
         data = client.get("/api/system/tokens/usage").json()
@@ -197,7 +215,7 @@ class TestTokenUsageEndpoint:
     async def test_with_recorded_data(self, async_client):
         """Returns correct M values after recording."""
         db = database_module.db
-        await db.record_token_usage(
+        await _spend(db, 
             session_id="test-sess",
             source="cli",
             input_tokens=2_500_000,

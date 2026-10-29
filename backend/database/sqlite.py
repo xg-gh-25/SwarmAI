@@ -2117,6 +2117,14 @@ _USAGE_LEDGER_COLUMNS = (
 )
 
 
+def _local_midnight_utc() -> str:
+    """This machine's local midnight today, as the ledger's UTC ISO text (rows compare as
+    strings: every ``at_utc`` is written the same way, ``YYYY-MM-DDTHH:MM:SS+00:00``)."""
+    from datetime import datetime, timezone
+    local = datetime.now().astimezone()
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def usage_ledger_insert_sql() -> str:
     """The one INSERT of usage ledger rows (async pool and sync writers share it); a row
     whose ``dedup_key`` is already there is skipped."""
@@ -4722,62 +4730,37 @@ class SQLiteDatabase(BaseDatabase):
             return [(r[0], r[1], r[2]) for r in await cursor.fetchall()]
 
     async def get_token_usage_summary(self) -> dict:
-        """Return aggregated token usage: today + total, the tokens billed and the cost.
+        """Return aggregated usage for the top bar: today + total, the tokens billed and
+        the book cost, from the usage ledger's spend rows (core/usage_accounting: every
+        machine, every surface; attribution rows split spend and are never added).
 
-        Tokens are every kind the model bills: input (not read from the cache), output,
-        cache reads and cache writes, each kind also returned on its own
-        (``today_breakdown`` / ``total_breakdown``). An agent's tokens are mostly cache
-        reads, and the cost counts them, so a count without them is not what was paid for.
-
-        ``cost_usd`` is the CLI process's running total (``total_cost_usd``), so a
-        row's cost is its increase over the previous row of the same session, a lower
-        value meaning a new process (``core.turn_outcome.cost_increase``, the rule online
-        scoring and Swarm Out use). Summing the column counted every earlier turn again.
-
-        Uses local time for "today" boundary (matches record_token_usage).
+        Tokens are every kind the model bills (input, output, cache reads, cache
+        writes), each kind also returned on its own (``today_breakdown`` /
+        ``total_breakdown``). Each ledger row holds its own cost, so the cost is a plain
+        sum. "Today" is this machine's local day of the row's UTC time.
 
         Returns dict with keys: today_tokens, total_tokens, today_cost_usd,
         total_cost_usd, today_breakdown, total_breakdown (input, output, cache_read,
         cache_write).
         """
-        from core.turn_outcome import cost_increase
         kinds = ("input", "output", "cache_read", "cache_write")
         empty = lambda: dict.fromkeys(kinds, 0)  # noqa: E731
         try:
-            from datetime import datetime
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            # Pooled read borrow (run_7e8a2030): TopBar polls this ~30s; route
-            # through the pool to avoid a per-poll connect/thread. One pass in id
-            # order: the per-session baseline needs every earlier row of the session.
+            # Pooled read borrow (run_7e8a2030): the top bar polls this ~30s.
+            sums = ", ".join(f"COALESCE(SUM({k}), 0)" for k in kinds) + ", COALESCE(SUM(cost_usd), 0.0)"
             async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
-                cursor = await conn.execute(
-                    "SELECT session_id, timestamp, input_tokens, output_tokens, "
-                    "cache_read_tokens, cache_create_tokens, cost_usd FROM token_usage ORDER BY id")
-                rows = await cursor.fetchall()
-            total, today = empty(), empty()
-            cost_total = cost_today = 0.0
-            prev: dict = {}
-            for sid, ts, *tok, cost in rows:
-                is_today = str(ts or "").startswith(today_str)
-                for k, v in zip(kinds, tok):
-                    total[k] += v or 0
-                    if is_today:
-                        today[k] += v or 0
-                if cost is None:
-                    continue
-                c = float(cost)
-                # a row without a session has no running total to continue
-                d = cost_increase((sid, prev[sid]) if sid is not None and sid in prev else None, sid, c)
-                if sid is not None:
-                    prev[sid] = c
-                cost_total += d
-                if is_today:
-                    cost_today += d
+                total_row = await (await conn.execute(
+                    f"SELECT {sums} FROM usage_ledger WHERE kind = 'spend'")).fetchone()
+                today_row = await (await conn.execute(
+                    f"SELECT {sums} FROM usage_ledger WHERE kind = 'spend' "
+                    "AND at_utc >= ?", (_local_midnight_utc(),))).fetchone()
+            total = dict(zip(kinds, total_row[:4]))
+            today = dict(zip(kinds, today_row[:4]))
             return {
                 "total_tokens": sum(total.values()),
-                "total_cost_usd": cost_total,
+                "total_cost_usd": float(total_row[4]),
                 "today_tokens": sum(today.values()),
-                "today_cost_usd": cost_today,
+                "today_cost_usd": float(today_row[4]),
                 "total_breakdown": total,
                 "today_breakdown": today,
             }
