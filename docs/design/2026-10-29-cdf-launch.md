@@ -3,7 +3,7 @@ title: CDF 上线修复 —— 一次切换前要修完的问题
 created: 2026-10-29
 updated: 2026-10-29
 project: SwarmAI
-status: 实施中
+status: 待上线
 supersedes-part-of: 2026-10-26-swarm-cognitive-distillation-flow.md §14 阶段 B（切换方式按用户 2026-10-29 决定：一次切换、无开关、无影子）
 ---
 
@@ -79,4 +79,22 @@ supersedes-part-of: 2026-10-26-swarm-cognitive-distillation-flow.md §14 阶段 
 
 ## 7. 结果
 
-（实施后填写。）
+**实现**：§1–§4 全部落地（e2ef73aea、07f45b39b、4f77a17f5、45ad22808、8a813a220、af2058cdd），之后是两轮审查修复（9670a9cca、2aa15b6ca）和回放修复（3853e6687）。B2 的 v1 引擎、§4 的两个死 hook 留到上线后删。
+
+**测试**：每个修复撤掉后测试都变红（mutation 共 52 处，全部抓到）。`tests/test_cdf*.py` 48 个文件分三块跑，加上 workspace_api、brain_sync、cdf167 的测试，全绿。唯一的失败是 `test_cdf_engine_core::test_busy_returns_within_bound`：在 main 上同样失败（这台机器负载高，1.8 秒超过 1.7 秒上限），和本次无关。
+
+**审查**：
+- 第一轮 correctness / state-machine / security。HIGH 1 个：被放弃的写入计划让单元卡在 writing，或者热循环。MEDIUM 7 个：重复写入、恢复和 run lane 竞争、S2 线程会死、抽样主提取丢失、额度满时每天重判、refine 丢 taint、重命名的信任和竞争。全部修了。
+- 第二轮 state-machine，无 HIGH。它发现第一轮的防重复检查不完整，根因是「放弃一个条目已经写进文件的计划」。改法是 recover 对 target_applied 之后的计划只完成、不放弃，并删掉了第一轮加的磁盘检查。抽样主提取的重试猜测也撤掉了：它是测量样本，猜错会把整段会话重新提取一遍。
+- 没修：旧版 writer 留下的 next_attempt_at 为空的 deferred 行（线上 ingestion.db 还没有任何单元）；进程内重启时 owner 获取线程不释放（生产不会进程内重启）。
+
+**真实回放**（线上数据副本，最终代码）：S2 跑了 3 个会话。大会话共 17 个窗口，主提取取 8 个。判官处理 168 个单元：写入 52，强化 8，拒绝 108。拒绝原因：66 个 not_atomic，23 个 speculative，7 个 already_exists，其余是 untyped / conflict / volatile。写入的去向：DDD 25，公共 DDD 10，TIMELINE 16，EVOLUTION 1；MEMORY 0（没有一条达到「每次会话都要注入」的门槛）。按 Principle 1 逐条看了写入内容：
+- 约 30 条是能直接改变判断的具体教训。例如凭证脱敏正则漏了 `aws_secret_access_key`；pipeline CLI 加 `2>&1` 会破坏 JSON；SSM 以 root 运行触发 git 的 dubious ownership；baselines.json 没有打进二进制；worktree 闸门把 heredoc 里的路径字符串当成写入目标；main 推进会耗尽落地次数。
+- 约 5 条是带版本或日期的快照，价值低但不是错的。
+- 发现并修了三类问题：MEMORY/EVOLUTION 条目被渲染成「what: …; applicability: …」字段名；refine 一个 TIMELINE 事件时把上一个事件整块抄进来；同一条教训用中英文各写了一次（判重读的是词）。修完后重跑会话 1：英文输出，旧条目判为 reinforced / already_exists，没有重复。
+- 一个窗口的回复 8 次里有 1 次解不开。现在会再调一次；单个窗口失败只丢那个窗口，所有窗口都失败时任务才失败重试。
+- 成本：这次回放加探针约 200 万输入 token、22 万输出 token。
+
+**治理文字**（系统文件，等用户批准后改 `backend/context/` 再 rebuild）：AGENT R22 和 SELF「Memory management」里写的「meta-cognitive layer always whole」现在不对了，应改成「meta-cognitive layer first, inside the budget」，并补一句：每个每轮注入的文件每天有写入上限（4 KB；DDD 每个项目 20 KB），超了的单元等到下一个 UTC 日。SWARMAI 的 Darwinian 推论讲的是 DDD 的衰减和归档，和这次改动不冲突，不用改。
+
+**切换**：落地 main → `cdf_cutover_snapshot.py snapshot` 做快照 → 用户批准后 build、重启 → 看日志里的 `CDF ingestion owner worker started` 和第一个会话 S2 任务的结果。
