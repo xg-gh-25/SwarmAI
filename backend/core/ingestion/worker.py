@@ -967,9 +967,9 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     if runner is None and job.get("sdk_session_id") and not _can_fork_review():
         # checked before the user pass: a postponed job runs that pass once, not twice
         raise ReviewPostponed("not enough memory for the review's CLI fork")
-    # the project of the repo the session worked in (s2_jobs.request): a hint the judge
-    # may follow or override, so a session's lessons and gaps can reach that project
-    snapshot = {"explicit_project": job["project"]} if job.get("project") else None
+    # the project of the repo the session worked in (s2_jobs.request): offered to the
+    # judge for a project-scoped unit, never declared (contracts_v2.project_candidates)
+    snapshot = {"session_project": job["project"]} if job.get("project") else None
     s2_session.extract_session_sync(session_id, passes=("user_utterance",), project_snapshot=snapshot)
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),

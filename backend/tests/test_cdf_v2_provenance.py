@@ -564,3 +564,30 @@ def test_enqueue_records_the_project_the_snapshot_declares(tmp_path, monkeypatch
     conn.close()
     assert hint == "Widget"
     assert json.loads(candidates) == ["Widget"]     # the one project the judge may choose
+
+
+@pytest.mark.parametrize("scope,offered", [("project:SwarmAI", True), ("agent", False),
+                                           ("user", False), ("world", False)])
+def test_the_session_project_is_a_candidate_only_for_a_project_scoped_unit(
+        tmp_path, monkeypatch, scope, offered):
+    """Offered the session's project, the judge moved agent, user and world lessons into
+    it (A/B on 54 live units, 2026-10-29), where other projects cannot reach them. So it
+    is offered only to a unit its extractor scoped to a project, and never becomes the
+    hint the router falls back to when the judge gives no project."""
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.ingestion.wake.wake", lambda _lane=None: None)
+    from core.ingestion.api_v2 import enqueue_unit
+    from core.ingestion.store import connect_ro
+
+    _session_root(monkeypatch, tmp_path, "s1", "input:e1", "Use one owner")
+    unit = dict(_cognition(["event:input:e1"]), scope=scope)
+    if scope == "user":
+        unit["user_kind"] = "preference"
+    result = enqueue_unit("S2", "ref", unit, session_id="s1", run_id=None,
+                          project_snapshot={"session_project": "SwarmAI"})
+    conn = connect_ro()
+    hint, candidates = conn.execute("SELECT project_hint, project_candidates FROM ingestion_inbox WHERE id=?",
+                                    (result.candidate_id,)).fetchone()
+    conn.close()
+    assert hint is None
+    assert json.loads(candidates) == (["SwarmAI"] if offered else [])

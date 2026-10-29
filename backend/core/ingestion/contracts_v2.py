@@ -330,6 +330,23 @@ def snapshot_project(snapshot: object) -> str | None:
     return None
 
 
+def project_candidates(unit: object, snapshot: object) -> list[str]:
+    """The projects the judge may choose for *unit*. A project the source declared
+    (``snapshot_project``) is the one candidate, and the router falls back to it when the
+    judge gives none. The project a session worked in (``session_project``) is only
+    offered, and only to a unit its extractor scoped to a project: offered to an agent,
+    user or world unit, the judge moved it into that project (A/B on 54 live units,
+    2026-10-29), where sessions of other projects cannot reach it."""
+    declared = snapshot_project(snapshot)
+    if declared:
+        return [declared]
+    session = snapshot.get("session_project") if isinstance(snapshot, dict) else None
+    scope = getattr(unit, "scope", None) or ""
+    if isinstance(session, str) and session.strip() and scope.startswith("project:"):
+        return [session.strip()]
+    return []
+
+
 def _no_ddd_path(project: str | None, domain: str | None, domains: frozenset[str]) -> str:
     if project:
         return f"{LEARNED_REPOS_DIR}/{slugify(project)}.md"

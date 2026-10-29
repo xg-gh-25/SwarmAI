@@ -37,10 +37,14 @@ def store(tmp_path, monkeypatch):
 def test_request_records_the_sessions_bound_project(store, monkeypatch):
     from core import repo_guidance
     from core.ingestion import s2_jobs
-    monkeypatch.setitem(repo_guidance._STATE, "sdk-1", {"repos": {}, "written": set(),
+    # the hook keeps its state under the APP session id (hook_builder: session_context
+    # ["sdk_session_id"] holds the app id); the job's sdk id is a different value
+    monkeypatch.setitem(repo_guidance._STATE, "app-1", {"repos": {}, "written": set(),
                                                         "bound_project": "SwarmAI"})
+    monkeypatch.setitem(repo_guidance._STATE, "sdk-2", {"repos": {}, "written": set(),
+                                                        "bound_project": "Wrong"})
     s2_jobs.request("app-1", "session_end", sdk_session_id="sdk-1")
-    repo_guidance._STATE.pop("sdk-1")
+    repo_guidance._STATE.pop("app-1")
     s2_jobs.request("app-1", "save_button", sdk_session_id="sdk-1")   # state gone: kept
     s2_jobs.request("app-2", "session_end", sdk_session_id="sdk-2")   # never bound
     rows = dict(store.execute("SELECT session_id, project FROM ingestion_s2_jobs"))
@@ -62,7 +66,9 @@ def test_the_session_job_gives_its_passes_the_project(monkeypatch):
     worker.run_session_job(None, {"session_id": "app-1", "reason": "session_end",
                                   "sdk_session_id": None, "reviewed_to": None,
                                   "project": "SwarmAI"}, runner=object())
-    assert seen and all(snap == {"explicit_project": "SwarmAI"} for _, snap in seen), seen
+    # the session project is offered to the judge, never declared: a declared project
+    # is a fallback for a unit the judge gives none (contracts_v2.project_candidates)
+    assert seen and all(snap == {"session_project": "SwarmAI"} for _, snap in seen), seen
     seen.clear()
     worker.run_session_job(None, {"session_id": "app-2", "reason": "session_end",
                                   "sdk_session_id": None, "reviewed_to": None,
@@ -111,3 +117,15 @@ def test_the_gap_judge_is_offered_the_hint_as_its_candidate(tmp_path):
     decision = run_unit_v2(row, tmp_path, Judge())
     assert offered == [("Widget",)]
     assert decision.decision == "write" and decision.destination.project == "Widget"
+
+
+def test_recall_reads_the_bound_project_under_the_app_session_id(monkeypatch):
+    """Recall's signal 2 looked the hook state up by the SDK id and never found it."""
+    from types import SimpleNamespace
+    from core import repo_guidance, session_router
+    monkeypatch.setitem(repo_guidance._STATE, "app-9", {"repos": {}, "written": set(),
+                                                        "bound_project": "SwarmAI"})
+    unit = SimpleNamespace(session_id="app-9", _sdk_session_id="sdk-9")
+    assert session_router._session_bound_project(unit) == "SwarmAI"
+    adopted = SimpleNamespace(session_id="prewarm-x", _app_session_id="app-9", _sdk_session_id="sdk-9")
+    assert session_router._session_bound_project(adopted) == "SwarmAI"

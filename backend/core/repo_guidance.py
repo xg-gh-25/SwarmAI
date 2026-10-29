@@ -80,8 +80,9 @@ def forget(session_id: str) -> None:
 
 def session_bound_project(session_id: str) -> "str | None":
     """The project bound (``bindings.yaml``) to the repo this session last worked
-    in, or None. Read-only view of the state the hooks keep; recall uses it to
-    find the session's DDD (design 2026-10-26 D3)."""
+    in, or None. Read-only view of the state the hooks keep, keyed by the APP session
+    id (the hook's ``session_context["sdk_session_id"]`` holds the app id); recall and
+    the CDF session job use it to find the session's project (design 2026-10-26 D3)."""
     state = _STATE.get(session_id or "")
     return state.get("bound_project") if state else None
 

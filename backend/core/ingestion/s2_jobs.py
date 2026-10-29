@@ -8,7 +8,7 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
   per session and wakes the executor when one runs in this process. It also records the
   project bound to the repo the session last worked in (``repo_guidance``, the signal
   recall uses), read now while the session is alive; a later request without one keeps
-  it. The job's passes enqueue with it as ``explicit_project``. ``delay`` is a
+  it. The job's passes enqueue with it as ``session_project``. ``delay`` is a
   not-before: the idle hook asks with ``REVIEW_DELAY`` and each new request pushes it
   later, so a review waits for 10 quiet minutes; the button asks with no delay. A
   request while the job runs sets ``again`` (with its own not-before) so the session is
@@ -62,7 +62,7 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     if not session_id:
         raise ValueError("session_id is required")
     from .api import connect_rw
-    project = _bound_project(sdk_session_id)
+    project = _bound_project(session_id)
     not_before = (datetime.now(timezone.utc) + delay).isoformat() if delay else None
     conn = connect_rw()
     try:
@@ -113,13 +113,14 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     return state
 
 
-def _bound_project(sdk_session_id: str | None) -> str | None:
-    """The project bound to the repo this session last worked in, or None."""
-    if not sdk_session_id:
+def _bound_project(session_id: str | None) -> str | None:
+    """The project bound to the repo this session last worked in, or None. The hook
+    keeps that state under the APP session id, never the SDK's."""
+    if not session_id:
         return None
     try:
         from core import repo_guidance
-        return repo_guidance.session_bound_project(sdk_session_id)
+        return repo_guidance.session_bound_project(session_id)
     except Exception as exc:  # noqa: BLE001 - a missing hint never blocks the job
         import logging
         logging.getLogger(__name__).warning("session project unavailable: %s", exc)

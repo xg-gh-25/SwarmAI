@@ -1111,6 +1111,15 @@ def _deliver_block(options: Any, unit: Any, block: str, should_mutate_system_pro
         unit._recall_query_block = (prev + "\n\n" + block.strip()) if prev else block.strip()
 
 
+def _session_bound_project(unit: Any) -> "str | None":
+    """The project bound to the repo this session last touched. repo_guidance keeps it
+    under the hook's session id, which is the APP session id (hook_builder), never the
+    SDK's."""
+    from core import repo_guidance
+    return repo_guidance.session_bound_project(
+        getattr(unit, "_app_session_id", None) or getattr(unit, "session_id", "") or "")
+
+
 async def _maybe_inject_ddd(
     user_message: str, options: Any, unit: Any, editor_context: Optional[dict],
     should_mutate_system_prompt: bool,
@@ -1125,7 +1134,7 @@ async def _maybe_inject_ddd(
     from core import executors, repo_guidance
 
     editor_fp = editor_context.get("file_path") if editor_context else None
-    bound = repo_guidance.session_bound_project(getattr(unit, "_sdk_session_id", None) or "")
+    bound = _session_bound_project(unit)
     try:
         project = await asyncio.wait_for(
             executors.run_in("io", _resolve_active_project, editor_fp, user_message, bound),
