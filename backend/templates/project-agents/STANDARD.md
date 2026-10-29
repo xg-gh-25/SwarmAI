@@ -66,7 +66,9 @@ modes of one shape of Brain therefore never overlap:
 | `write` | a Brain without a repo | a document or a report as the deliverable | `direct` |
 
 The model may propose more modes (a release mode, a reporting mode), each with a `when`
-and the source it comes from. Commands in `setup` and `validations` are copied verbatim
+and the source it comes from. A mode whose checks need a tool only one place has (a Rust
+toolchain on the desktop, a local daemon) narrows its own `placements`, so the person
+can add `hive` to the shared part without sending that work where it cannot run. Commands in `setup` and `validations` are copied verbatim
 from a file the repo declares them in, never written by hand.
 
 ## Remarks the review card shows

@@ -79,6 +79,8 @@ PROPOSAL_CONTRACT: dict[str, Any] = {
             "profile_rules": [{"when": "str", "profile": "str", "source": "str"}],
             "skills": ["names from facts.skills; a skill no mode lists goes to the default mode"],
             "repos": ["names from facts.repos (new modes only; code-change has them all)"],
+            "placements": ("where this mode may run, a subset of the shared placements, for work "
+                           "that needs tools only one place has (the mode's source says why)"),
             "setup": ["a facts.commands id, or {command, source, repo, cwd}"],
             "validations": ["a facts.commands id, or {id, command, source, repo, cwd}"],
         }],
@@ -526,6 +528,14 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
                 rules.append({"when": _text(r["when"]), "profile": r["profile"]})
         if rules:
             m["profile_rules"] = rules
+        if "placements" in pm:
+            places = pm["placements"]
+            if not isinstance(places, list) or not places or not all(
+                    isinstance(x, str) and x in doc["placements"] for x in places):
+                b.drop(f"{where}.placements",
+                       f"must be a non-empty subset of the shared placements {doc['placements']}")
+            elif b.sourced(f"{where}.placements", pm):
+                m["placements"] = list(dict.fromkeys(places))
         if isinstance(pm.get("skills"), list):
             for s in pm["skills"]:
                 names = assigned.setdefault(mid, [])

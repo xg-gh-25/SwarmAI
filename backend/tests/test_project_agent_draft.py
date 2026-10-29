@@ -502,3 +502,27 @@ def test_cli_general_brain(tmp_path, monkeypatch, capsys):
     assert out["brain"] == "General" and out["written"]
     doc = yaml.safe_load((ws / "Knowledge" / "Library" / "project-agent.yaml").read_text())
     assert [m["id"] for m in doc["modes"]] == ["research", "write"]
+
+
+def test_a_mode_may_narrow_where_it_runs_and_never_widen(brain):
+    """A mode whose checks need a tool only one place has (a Rust toolchain on the
+    desktop) says so with its own placements; a placement outside the shared ones, or
+    one without a source, is dropped and the mode inherits the shared placements."""
+    proposal = {"modes": [
+        {"id": "shell", "when": "a change to the native shell", "source": "TECH.md",
+         "profile": "bugfix", "repos": ["lib"], "placements": ["chat-tab"]},
+        {"id": "wide", "when": "anything", "source": "TECH.md", "profile": "direct",
+         "placements": ["chat-tab", "hive"]},
+        {"id": "code-change", "placements": ["chat-tab"]},
+    ]}
+    doc, dropped = pad.build(brain, proposal)
+    assert validate(doc, brain) == []
+    modes = {m["id"]: m for m in doc["modes"]}
+    assert modes["shell"]["placements"] == ["chat-tab"]
+    assert "placements" not in modes["wide"]
+    assert "placements" not in modes["code-change"]
+    assert any("modes[wide].placements" in d for d in dropped)
+    assert any("modes[code-change].placements" in d and "no source" in d for d in dropped)
+    # the person adds hive on the card: the narrowed mode stays where it can run
+    doc["placements"] = ["chat-tab", "hive"]
+    assert validate(doc, brain) == []
