@@ -102,7 +102,7 @@ def _normalize_git_url(url: str | None) -> str | None:
 # L2 tables to export (irreplaceable data only)
 L2_TABLES = [
     "messages", "sessions", "channel_messages", "channel_sessions",
-    "channels", "todos", "token_usage", "skill_metrics",
+    "channels", "todos", "token_usage", "usage_ledger", "skill_metrics",
     "hive_instances", "hive_accounts", "agents", "mcp_servers",
     "app_settings", "workspace_config",
 ]

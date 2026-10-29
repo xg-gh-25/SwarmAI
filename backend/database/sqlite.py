@@ -2105,7 +2105,41 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 15 — transcript revisions: session_revs + transcript_revs, kept by triggers (2026-10-23)
 # 16 — session_inputs: append-only provenance ledger for CDF (2026-10-27)
 # 17 — session_inputs.root_id + measured trust for CDF v2 (2026-10-27)
-CURRENT_SCHEMA_VERSION = 17
+# 18 — usage_ledger: the platform's one record of model usage and spend (2026-10-29)
+CURRENT_SCHEMA_VERSION = 18
+
+#: usage_ledger (v18). ``kind``: spend rows are what was spent and the only rows any
+#: total adds; attribution rows split spend rows (a pipeline run inside a chat turn).
+_USAGE_LEDGER_COLUMNS = (
+    "at_utc", "machine", "surface", "feature", "session_id", "run_id", "stage", "job_id",
+    "dispatch_id", "model", "input", "output", "cache_read", "cache_write", "cost_usd",
+    "cost_source", "cli_pid", "cli_cost_total", "kind", "imported", "dedup_key",
+)
+_USAGE_LEDGER_DDL = (
+    """CREATE TABLE IF NOT EXISTS usage_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at_utc TEXT NOT NULL,
+        machine TEXT NOT NULL DEFAULT 'host',
+        surface TEXT NOT NULL,
+        feature TEXT,
+        session_id TEXT, run_id TEXT, stage TEXT, job_id TEXT, dispatch_id TEXT,
+        model TEXT,
+        input INTEGER NOT NULL DEFAULT 0,
+        output INTEGER NOT NULL DEFAULT 0,
+        cache_read INTEGER NOT NULL DEFAULT 0,
+        cache_write INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL,
+        cost_source TEXT NOT NULL DEFAULT 'none',
+        cli_pid INTEGER, cli_cost_total REAL,
+        kind TEXT NOT NULL DEFAULT 'spend' CHECK (kind IN ('spend', 'attribution')),
+        imported INTEGER NOT NULL DEFAULT 0,
+        dedup_key TEXT NOT NULL UNIQUE
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_usage_ledger_at ON usage_ledger(at_utc)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_ledger_session ON usage_ledger(session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_ledger_run ON usage_ledger(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_ledger_dispatch ON usage_ledger(dispatch_id)",
+)
 
 
 # ── Transcript feed (core/transcript_feed) ─────────────────────────────────
@@ -3498,6 +3532,23 @@ class SQLiteDatabase(BaseDatabase):
                 await conn.execute("PRAGMA user_version = 17")
                 await conn.commit()
             logger.info("Migration v17: session input evidence roots")
+
+        if current_version < 18 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 17:
+            # Version 18: the platform's one usage ledger (core/usage_accounting, design
+            # 2026-10-29-usage-accounting): one row per model per billed call or CLI
+            # result, the four kinds of token apart, the row's own cost (never a running
+            # total), who spent it. New table only: nothing existing is touched.
+            await conn.execute("BEGIN")
+            try:
+                for stmt in _USAGE_LEDGER_DDL:
+                    await conn.execute(stmt)
+                await conn.execute("PRAGMA user_version = 18")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v18: usage ledger")
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 
@@ -4228,6 +4279,21 @@ class SQLiteDatabase(BaseDatabase):
         return await self._messages.cleanup_expired()
 
     # ── Token Usage Tracking ─────────────────────────────────────────────
+    async def insert_usage_rows(self, rows: list[dict]) -> int:
+        """Insert usage ledger rows (core/usage_accounting); a row whose ``dedup_key``
+        is already there is skipped. Returns how many were written."""
+        if not rows:
+            return 0
+        cols = _USAGE_LEDGER_COLUMNS
+        sql = (f"INSERT OR IGNORE INTO usage_ledger({', '.join(cols)}) "
+               f"VALUES ({', '.join('?' for _ in cols)})")
+        values = [tuple(r.get(c) for c in cols) for r in rows]
+        async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
+            before = conn.total_changes
+            await conn.executemany(sql, values)
+            await conn.commit()
+            return conn.total_changes - before
+
     async def record_token_usage(
         self,
         *,

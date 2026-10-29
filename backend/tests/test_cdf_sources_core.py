@@ -39,7 +39,7 @@ async def test_v17_migration_adds_session_input_root_id_and_measured_trust(tmp_p
     async with aiosqlite.connect(db_path) as conn:
         await database._run_versioned_migrations(conn, 16)
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 18   # v17, then v18 chains on
         columns = {row[1] for row in conn.execute("PRAGMA table_info(session_inputs)")}
         assert columns == {"event_id", "session_id", "kind", "trust", "content_hash",
                            "ref", "root_id", "created_at"}
