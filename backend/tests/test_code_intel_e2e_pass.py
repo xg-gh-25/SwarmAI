@@ -653,3 +653,61 @@ def test_a_field_set_by_tuple_assignment_is_a_field():
     old = "class R:\n    def __init__(self):\n        self.a = 1\n        self.b = 2\n"
     new = "class R:\n    def __init__(self):\n        self.a, self.b = 1, 3\n"
     assert delta(interfaces(old, "python")["R"], interfaces(new, "python")["R"]).removed_fields == []
+
+
+# ── the commit check (scripts/precommit_breaks.sh runs this) ──────────────────
+
+def test_the_commit_check_reads_the_index_and_exits_1_on_a_break(project, capsys):
+    from core.code_intel.changed import main
+    (project / "lib.py").write_text(_LIB.replace(", *, dry_run=True", ""))
+    assert main(["--repo", str(project), "--staged", "--breaks"]) == 0     # not staged yet
+    assert capsys.readouterr().out == ""
+    _git(project, "add", "lib.py")
+    assert main(["--repo", str(project), "--staged", "--breaks"]) == 1
+    out = capsys.readouterr().out
+    # use.py, edited.py and fixed.py all still pass dry_run= (none is staged)
+    assert out.startswith("3 callers will break:") and "use.py: run — L5: passes `dry_run=`" in out
+    assert "edited.py: tool" in out and "fixed.py: fixed" in out and "helper" not in out
+
+
+def test_the_commit_check_passes_a_compatible_change(project, capsys):
+    from core.code_intel.changed import main
+    (project / "lib.py").write_text(_LIB.replace(", *, dry_run=True", ", *, dry_run=True, x=0"))
+    _git(project, "add", "lib.py")
+    assert main(["--repo", str(project), "--staged", "--breaks"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_a_call_the_change_itself_adds_is_checked(project, capsys):
+    """A new call written the old way: in the changed file, or in a changed file that
+    imports the name from it; another module's same-named function is not it."""
+    from core.code_intel.changed import main
+    (project / "lib.py").write_text(_LIB.replace(", *, dry_run=True", "") +
+                                    "\n\ndef again(c):\n    return reclaim(c, dry_run=True)\n")
+    (project / "newuse.py").write_text("from lib import reclaim\n\n\ndef go(c):\n"
+                                       "    return reclaim(c, dry_run=True)\n")
+    (project / "other.py").write_text("from elsewhere import reclaim\n\n\ndef go(c):\n"
+                                      "    return reclaim(c, dry_run=True)\n")
+    _git(project, "add", "lib.py", "newuse.py", "other.py")
+    assert main(["--repo", str(project), "--staged", "--breaks"]) == 1
+    out = capsys.readouterr().out
+    assert "lib.py: a call this change adds — L12: passes `dry_run=`" in out
+    assert "newuse.py: a call this change adds — L5: passes `dry_run=`" in out
+    assert "other.py" not in out
+
+
+def test_an_existing_caller_in_the_changed_file_is_checked(project, capsys):
+    from core.code_intel import load_project_graphs
+    from core.code_intel.build import ensure_fresh
+    from core.code_intel.changed import main
+    with_again = _LIB + "\n\ndef again(c):\n    return reclaim(c, dry_run=True)\n"
+    (project / "lib.py").write_text(with_again)
+    _git(project, "commit", "-qam", "a caller in the same file")
+    (ref, g), = load_project_graphs("Demo")
+    ensure_fresh(project.parent / "ws" / "Projects" / "Demo", ref, g)     # the graph has it
+    (project / "lib.py").write_text(with_again.replace(", *, dry_run=True", ""))
+    _git(project, "add", "lib.py")
+    assert main(["--repo", str(project), "--staged", "--breaks"]) == 1
+    out = capsys.readouterr().out
+    assert "lib.py: again — L12: passes `dry_run=`" in out
+    assert "a call this change adds" not in out           # the graph's edge, not a new call

@@ -587,6 +587,28 @@ def call_sites(text: str, language: str, line: int, name: str, *, suffix: str = 
     return out
 
 
+def bare_calls(text: str, language: str, name: str, *, suffix: str = "", tree=None) -> list[Site]:
+    """Every call of *name* as a bare identifier (``name(…)``, ``new Name(…)``) in
+    *text*: the calls a change adds, which no graph edge has yet."""
+    if language not in LANGS:
+        return []
+    tree = tree or _parse(text, language, suffix)
+    if tree is None:
+        return []
+    lines: set[int] = set()
+    stack = [tree.root_node]
+    while stack:
+        n = stack.pop()
+        if n.type in _CALLS:
+            fn = n.child_by_field_name("function") or n.child_by_field_name("constructor")
+            if fn is not None and fn.type == "identifier" and _t(fn) == name:
+                lines.add(n.start_point[0] + 1)
+        stack.extend(n.children)
+    return [s for ln in sorted(lines)
+            for s in call_sites(text, language, ln, name, suffix=suffix, tree=tree)
+            if not s.through_class]
+
+
 def breaks(d: Delta, new: Iface | None, site: Site, *, is_method: bool,
            language: str = "python") -> list[str]:
     """Why *site* breaks under *d* — only for what the change removed or required. In

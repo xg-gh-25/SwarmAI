@@ -23,6 +23,13 @@ among the callers. Code files that name a symbol count only when the name is a c
 token (or a mock's dotted path), never a comment or a docstring.
 
     "$SWARM_BACKEND_BIN" py -m core.code_intel.changed --repo <checkout> [--base REF] [--json]
+    … --staged --breaks [--budget S]     # a commit check: exit 1 when a caller will break
+
+``--staged`` reviews what the index would commit; ``--breaks`` prints only the callers
+that will break (including calls the change itself adds, written the old way) and
+exits 1 when there is one, so a repository's own pre-commit can run it (this repo's:
+``scripts/precommit_breaks.sh``). It never refreshes the graph and never parses a
+repo, so it costs about a second.
 
 *--repo* is the checkout being reviewed (a session worktree is fine: its graph is the
 one of the checkout it belongs to). The change is the working tree against *--base*
@@ -87,7 +94,8 @@ class Changed:
     unconfirmed: int = 0    # files outside the change linked to it by the method name alone
     guessed: list[str] = field(default_factory=list)
     builtin_named: int = 0  # … more such files where the name is a builtin type's method
-    breaking: int = 0       # outside call sites this change breaks (each caller's "breaks")
+    breaking: int = 0       # call sites this change breaks (each caller's "breaks")
+    new_breaks: list[dict] = field(default_factory=list)    # calls the change adds that break
     field_reads: list[dict] = field(default_factory=list)   # reads of a removed field
 
 
@@ -106,7 +114,8 @@ class Report:
     unexamined: int = 0      # touched symbols not looked up (MAX_EXAMINED or the budget)
     unexamined_signature: int = 0   # of those, signature changes
     comments_only: list[str] = field(default_factory=list)  # changed only in comments
-    breaks: int = 0                  # outside call sites this change breaks
+    breaks: int = 0                  # call sites this change breaks
+    unchecked: int = 0               # interface changes the budget left unchecked for breaks
     note: str = ""
 
 
@@ -475,7 +484,7 @@ class _Breaks:
 
         for src, line, edge_type, conf in _edge_rows(self.graph, c.id):
             file = src.split("::", 1)[0]
-            if is_by_name(edge_type, conf) or file == c.file:
+            if is_by_name(edge_type, conf):
                 continue
             inside = file in self.in_change
             if d.removed and not inside:
@@ -503,6 +512,42 @@ class _Breaks:
                 continue
             for why in breaks(d, new_iface, site, is_method=is_method, language=lang or ""):
                 add(src, f"L{n}: {why}")
+        return out
+
+    def new_calls(self, c: "Changed", d, new_iface) -> list[dict]:
+        """Calls this change ADDS that break under *d*: no graph edge has them. Only a
+        function or a class called by its bare name, in its own file or in a changed
+        file that imports it from that file's module; a line holding one call of it."""
+        from .interface import bare_calls, breaks
+        from .parser import scan_imports
+        key = c.id.split("::", 1)[-1]
+        if "." in key:
+            return []                              # a method: its receiver is not known
+        stem = Path(c.file).stem
+        out: list[dict] = []
+        for f in sorted(self.in_change):
+            lang, text, tree = self.new.get(f)
+            if text is None or not lang:
+                continue
+            if f != c.file and not any(
+                    ref.name == c.name and ref.module.replace(".", "/").rstrip("/").split("/")[-1]
+                    in (stem, stem.removesuffix(".js")) for ref in scan_imports(text, lang)):
+                continue
+            seen_now: set[int] = set()            # lines the graph's own edges cover now
+            for src, line, _t, _conf in _edge_rows(self.graph, c.id):
+                if line is not None and src.split("::", 1)[0] == f:
+                    seen_now.update(self._lines_now(f, line))
+            sites = bare_calls(text, lang, c.name, suffix=Path(f).suffix, tree=tree)
+            per_line: dict[int, list] = {}
+            for site in sites:
+                per_line.setdefault(site.line, []).append(site)
+            for line, here in sorted(per_line.items()):
+                if line in seen_now or len(here) != 1:
+                    continue
+                why = (["calls it, and this change removes it"] if d.removed
+                       else breaks(d, new_iface, here[0], is_method=False, language=lang))
+                if why:
+                    out.append({"file": f, "line": line, "breaks": [f"L{line}: {w}" for w in why]})
         return out
 
 
@@ -552,19 +597,22 @@ def _project_graph_for(checkout: Path, project: str | None = None):
 
 def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True,
            tree: str | None = None, project: str | None = None,
-           budget_s: float | None = None, caller: str = "native") -> Report:
+           budget_s: float | None = None, caller: str = "native",
+           breaks_only: bool = False) -> Report:
     """The callers report of the change in *repo* from *base* (to the working tree, or
     to *tree*). *project*: look only at that Brain's graph. *budget_s*: stop looking up
     callers when it runs out (the rest is counted in ``unexamined``). *caller*: who
-    asked, for the usage log."""
+    asked, for the usage log. *breaks_only*: list only the symbols with a caller that
+    will break (what a commit check asks; nothing else is looked up)."""
     rep = _report(Path(repo).resolve(), base=base, refresh=refresh, tree=tree,
-                  project=project, budget_s=budget_s)
+                  project=project, budget_s=budget_s, breaks_only=breaks_only)
     _log_usage(rep, caller)
     return rep
 
 
 def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
-            project: str | None, budget_s: float | None) -> Report:
+            project: str | None, budget_s: float | None,
+            breaks_only: bool = False) -> Report:
     import time
     from .build import ensure_fresh
     from .impact import _callers
@@ -664,15 +712,19 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
         if d is None or not d.interface:
             continue
         if deadline is not None and time.monotonic() > deadline:
-            break
+            rep.unchecked += 1
+            continue
         b = checker.of(c, d, new_iface)
-        if b:
+        added = checker.new_calls(c, d, new_iface)
+        if added:
+            c.new_breaks = added
+        if b or added:
             broken_by[c.id] = b
     plans.sort(key=lambda p: (-len(broken_by.get(p[1].id, {})), p[0], p[1].file, p[1].line))
     must = sum(1 for p in plans if p[1].id in broken_by)
     shown: list[Changed] = []
     for i, (rank, c, d, new_iface) in enumerate(plans):
-        if i >= max(MAX_EXAMINED, must) or (
+        if i >= (must if breaks_only else max(MAX_EXAMINED, must)) or (
                 i >= must and deadline is not None and time.monotonic() > deadline):
             rep.unexamined = len(plans) - i
             rep.unexamined_signature = sum(1 for p in plans[i:] if p[0] <= 2)
@@ -691,7 +743,7 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
         outside.sort(key=lambda x: (not x["breaks"], x["file"], x["line"] or 0))
         inside = [x for x in callers if x["file"] in in_change]
         inside.sort(key=lambda x: (not x["breaks"], x["file"], x["line"] or 0))
-        c.breaking = sum(1 for x in outside + inside if x["breaks"])
+        c.breaking = sum(1 for x in outside + inside if x["breaks"]) + len(c.new_breaks)
         c.inside = inside[:max(MAX_CALLERS, sum(1 for x in inside if x["breaks"]))]
         cap = max(MAX_CALLERS, c.breaking)            # every break is listed
         c.outside, c.more_callers = outside[:cap], max(0, len(outside) - cap)
@@ -783,6 +835,9 @@ def _cleaned(rep: Report) -> Report:
             row["breaks"] = [_clean(b) for b in row.get("breaks", [])]
         for row in c.field_reads:
             row["file"], row["field"] = _clean(row["file"]), _clean(row["field"])
+        for row in c.new_breaks:
+            row["file"] = _clean(row["file"])
+            row["breaks"] = [_clean(b) for b in row["breaks"]]
         c.mentions = [_clean(m) for m in c.mentions]
         c.guessed = [_clean(g) for g in c.guessed]
     return rep
@@ -813,12 +868,14 @@ def render(rep: Report) -> str:
         breaking = [x for x in c.outside if x.get("breaks")]
         breaking_in = [x for x in c.inside if x.get("breaks")]
         rest = [x for x in c.outside if not x.get("breaks")]
-        if breaking or breaking_in:
-            lines.append(f"  - will break ({len(breaking) + len(breaking_in)}):")
+        if breaking or breaking_in or c.new_breaks:
+            lines.append(f"  - will break ({len(breaking) + len(breaking_in) + len(c.new_breaks)}):")
             lines += [f"    - {x['file']}: {x['symbol']} — " + "; ".join(x["breaks"])
                       for x in breaking]
             lines += [f"    - {x['file']}: {x['symbol']} (a file this change edits) — "
                       + "; ".join(x["breaks"]) for x in breaking_in]
+            lines += [f"    - {x['file']}: a call this change adds — " + "; ".join(x["breaks"])
+                      for x in c.new_breaks]
         if rest:
             total = len(rest) + c.more_callers
             label = "other callers outside this change" if breaking else "callers outside this change"
@@ -877,21 +934,63 @@ def render(rep: Report) -> str:
     return "\n".join(lines)
 
 
+def staged_tree(repo: Path) -> str | None:
+    """The tree the index would commit (``git write-tree``): what a pre-commit check
+    reviews, untouched working-tree edits left out."""
+    out = _git(repo, "write-tree")
+    return out.strip() if out and out.strip() else None
+
+
+def render_breaks(rep: Report) -> str:
+    """Only the callers that will break, with the reason: a commit check's output."""
+    rep = _cleaned(rep)
+    lines = []
+    for c in rep.symbols:
+        rows = [x for x in c.outside + c.inside if x.get("breaks")]
+        if not rows and not c.new_breaks:
+            continue
+        what = "removed" if c.removed else c.delta or "interface changed"
+        lines.append(f"- `{c.id}` ({what})")
+        lines += [f"    {x['file']}: {x['symbol']} — " + "; ".join(x["breaks"]) for x in rows]
+        lines += [f"    {x['file']}: a call this change adds — " + "; ".join(x["breaks"])
+                  for x in c.new_breaks]
+    head = [f"{rep.breaks} caller{'s' if rep.breaks != 1 else ''} will break:"] if rep.breaks else []
+    tail = ([f"({rep.unchecked} interface changes were not checked: the time budget ran out)"]
+            if rep.unchecked else [])
+    return "\n".join(head + lines + tail)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m core.code_intel.changed",
                                  description="Callers of the code a change touches.")
     ap.add_argument("--repo", default=".", help="the checkout under review")
     ap.add_argument("--base", default="HEAD",
                     help="compare the working tree with this ref (default HEAD)")
+    ap.add_argument("--staged", action="store_true",
+                    help="the change is what the index would commit (a pre-commit check)")
+    ap.add_argument("--breaks", action="store_true",
+                    help="print only the callers that will break; exit 1 when there is one")
+    ap.add_argument("--budget", type=float, default=None,
+                    help="seconds for the checks (the rest is counted, not checked)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--no-refresh", action="store_true")
     args = ap.parse_args(argv)
-    rep = report(args.repo, base=args.base, refresh=not args.no_refresh)
+    repo = Path(args.repo).resolve()
+    tree = staged_tree(repo) if args.staged else None
+    if args.staged and tree is None:
+        return 0                                  # nothing readable to check: not a block
+    rep = report(repo, base=args.base, tree=tree, budget_s=args.budget,
+                 refresh=not (args.no_refresh or args.breaks), breaks_only=args.breaks,
+                 caller="commit" if args.breaks else "native")
     if args.json:
         print(json.dumps(asdict(rep), ensure_ascii=False, indent=1))
+    elif args.breaks:
+        text = render_breaks(rep)
+        if text:
+            print(text)
     else:
         print(render(rep))
-    return 0
+    return 1 if args.breaks and rep.breaks else 0
 
 
 if __name__ == "__main__":  # pragma: no cover
