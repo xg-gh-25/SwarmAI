@@ -132,3 +132,28 @@ def test_read_roots_fail_closed_when_an_event_has_no_bound_root(tmp_path, monkey
         conn.execute("INSERT INTO session_inputs VALUES('e1','root-1'),('e2',NULL)")
     monkeypatch.setattr(session_inputs, "_db_path", lambda: db)
     assert s2_session._root_ids(("e1", "e2", "e3")) == ("root-1", "e2", "e3")
+
+
+def test_main_pass_windows_are_capped_and_spread():
+    """One session cut into 273 windows cost about $100; at most MAX_MAIN_WINDOWS are
+    extracted, evenly spaced with the first and last (2026-10-29-cdf-launch §3 P1)."""
+    from core.ingestion.sources import s2_session
+    picked = s2_session.spread(list(range(273)), s2_session.MAX_MAIN_WINDOWS)
+    indexes = [i for i, _ in picked]
+    assert len(picked) == s2_session.MAX_MAIN_WINDOWS
+    assert indexes[0] == 1 and indexes[-1] == 273 and indexes == sorted(set(indexes))
+    assert s2_session.spread(list(range(3)), 8) == [(1, 0), (2, 1), (3, 2)]
+
+
+def test_main_pass_extracts_only_the_capped_windows(monkeypatch):
+    from core.ingestion.sources import common, s2_session
+    calls = []
+    monkeypatch.setattr(s2_session, "windows", lambda *a, **k: [[{"id": f"m{i}"}] for i in range(20)])
+    monkeypatch.setattr(s2_session, "window_roots", lambda sid, chunk: [])
+    monkeypatch.setattr(s2_session, "_with_anchors", lambda chunk, own, ue: (chunk, ()))
+    monkeypatch.setattr(s2_session, "_root_ids", lambda ids: ())
+    monkeypatch.setattr(common, "extract_and_enqueue",
+                        lambda *a, **k: calls.append(k["evidence_range"]) or [])
+    s2_session._main_pass("s", [{"id": "m0"}], [], set(), None, None)
+    assert len(calls) == s2_session.MAX_MAIN_WINDOWS
+    assert all(c["windows"] == 20 and c["windows_skipped"] == 12 for c in calls)

@@ -59,13 +59,17 @@ def _record_one(session_id: str, kind: str, trust: Trust, content: Any, *,
     locator = str(ref or raw) if root_kind == "web_document" else f"{session_id}:{event_id}"
     from core.ingestion.api_v2 import register_root
     root_id = register_root(root_kind, locator, raw, root_trust)
-    with sqlite3.connect(str(_db_path()), timeout=5.0) as conn:
-        conn.execute(
-            "INSERT INTO session_inputs(event_id, session_id, kind, trust, content_hash, ref, "
-            "root_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (event_id, session_id, kind, trust, content_hash, ref, root_id,
-             datetime.now(timezone.utc).isoformat()),
-        )
+    conn = sqlite3.connect(str(_db_path()), timeout=5.0)
+    try:                       # "with connect()" commits but never closes the connection
+        with conn:
+            conn.execute(
+                "INSERT INTO session_inputs(event_id, session_id, kind, trust, content_hash, ref, "
+                "root_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (event_id, session_id, kind, trust, content_hash, ref, root_id,
+                 datetime.now(timezone.utc).isoformat()),
+            )
+    finally:
+        conn.close()
     return event_id
 
 

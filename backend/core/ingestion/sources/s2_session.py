@@ -33,6 +33,22 @@ PAGE_SIZE = 200
 WINDOW_CHARS = 150_000
 # Each main-pass window repeats up to this share of the previous one (design §12 r16.13).
 WINDOW_OVERLAP = 0.1
+# Main-pass windows extracted per session: one session cut into 273 windows (~$100).
+# The main pass reads agent and tool content (tainted by construction); the user's own
+# words go through the uncapped user-utterance pass.
+MAX_MAIN_WINDOWS = 8
+
+
+def spread(chunks: list[Any], limit: int) -> list[tuple[int, Any]]:
+    """At most *limit* of *chunks* as ``(1-based index, chunk)``, evenly spaced, the
+    first and the last always included."""
+    if len(chunks) <= limit:
+        return list(enumerate(chunks, 1))
+    if limit <= 1:
+        return [(len(chunks), chunks[-1])]
+    step = (len(chunks) - 1) / (limit - 1)
+    picks = sorted({round(i * step) for i in range(limit)})
+    return [(i + 1, chunks[i]) for i in picks]
 
 
 def windows(items: list[dict[str, Any]], key: str, *, limit: int = WINDOW_CHARS,
@@ -349,8 +365,10 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
     # inputs plus this window's own agent and tool content (window_roots).
     user_roots = _root_ids(tuple(row["event_id"] for row in owned))
     chunks = windows(transcript, "id", overlap=WINDOW_OVERLAP)
+    picked = spread(chunks, MAX_MAIN_WINDOWS)
+    skipped = len(chunks) - len(picked)
     outcomes: list[Any] = []
-    for index, chunk in enumerate(chunks, 1):
+    for index, chunk in picked:
         # Each item shows the anchors it can be cited by; the allow-list is exactly the
         # window's anchors (2026-10-29: a session-wide list of bare user event ids, with
         # no way to tell which message each was, left 262 of 273 windows empty).
@@ -359,7 +377,8 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
         roots = tuple(dict.fromkeys(user_roots + _root_ids(tuple(e for ids in own for e in ids))))
         outcomes += common.extract_and_enqueue(
             "S2", session_id, json.dumps(shown, ensure_ascii=False, default=str), evidence,
-            evidence_range={**evidence_range, "window": index, "windows": len(chunks)},
+            evidence_range={**evidence_range, "window": index, "windows": len(chunks),
+                            "windows_skipped": skipped},
             session_id=session_id, read_root_ids=roots,
             project_snapshot=project_snapshot, extraction_pass="main",
             allowed_kinds=_ALLOWED, llm=llm)

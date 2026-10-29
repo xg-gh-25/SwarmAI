@@ -368,3 +368,28 @@ def test_usage_owned_paths_never_truncate_semantic_fields() -> None:
                 if any(name in expression for name in semantic_names):
                     violations.append(expression)
         assert violations == [], f"{module.__name__}: {violations}"
+
+
+def test_unit_spans_are_parsed_once_per_file_version(tmp_path, monkeypatch):
+    """Every Read/Grep hit re-parsed the whole file (2026-10-29-cdf-launch §3 P4): the
+    spans are cached per (path, mtime, size) and a changed file is parsed again."""
+    import os
+    from core.ingestion import usage, units
+    ws = tmp_path / "SwarmWS"
+    ctx = ws / ".context"
+    ctx.mkdir(parents=True)
+    monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
+    monkeypatch.setattr("core.ingestion.materializer.is_governed", lambda p: True)
+    path = ctx / "MEMORY.md"
+    path.write_text("# M\n\n## Guidelines\n- [guideline] **A** one. <!-- cand:a.1 -->\n", encoding="utf-8")
+    calls = []
+    real = units.parse_units
+    monkeypatch.setattr(units, "parse_units", lambda *a, **k: calls.append(1) or real(*a, **k))
+    usage._unit_spans.cache_clear()
+    first = usage._units_overlapping_lines(path, 4, 4)
+    assert usage._units_overlapping_lines(path, 4, 4) == first and len(calls) == 1
+    assert first and first[0].endswith("cand:a.1")
+    path.write_text(path.read_text(encoding="utf-8") + "- [guideline] **B** two. <!-- cand:b.1 -->\n",
+                    encoding="utf-8")
+    os.utime(path, ns=(path.stat().st_mtime_ns + 10_000_000,) * 2)
+    assert usage._units_overlapping_lines(path, 5, 5)[0].endswith("cand:b.1") and len(calls) == 2

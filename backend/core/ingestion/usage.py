@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import functools
 import sqlite3
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
@@ -143,38 +144,49 @@ def collapse_old_usage(conn: sqlite3.Connection, *, now: datetime | None = None)
     return int(cursor.rowcount)
 
 
-def _units_overlapping_lines(path: Any, start_line: int, end_line: int | None) -> list[str]:
-    """Return exact parse-unit anchors overlapping a 1-based line interval."""
+@functools.lru_cache(maxsize=64)
+def _unit_spans(path_str: str, _mtime_ns: int, _size: int) -> tuple[tuple[str, int, int, str], ...]:
+    """``(anchor, first line, last line, text)`` of every unit of one file version.
+    Cached per (path, mtime, size): every Read/Grep hit re-parsed the whole file and
+    counted its newlines once per unit (about 12 ms of GIL per hit on MEMORY.md)."""
+    from bisect import bisect_right
     from pathlib import Path
     from config import get_swarmws
-    from .materializer import is_governed
     from .units import parse_units
+
+    target = Path(path_str)
+    raw = target.read_bytes()
+    breaks = [i for i, byte in enumerate(raw) if byte == 10]          # "\n" offsets
+    out = []
+    for unit in parse_units(target, root=get_swarmws()):
+        out.append((unit.anchor, bisect_right(breaks, unit.byte_start - 1) + 1,
+                    bisect_right(breaks, unit.byte_end - 1) + 1, unit.text))
+    return tuple(out)
+
+
+def _spans(path: Any) -> tuple[tuple[str, int, int, str], ...]:
+    from pathlib import Path
+    from .materializer import is_governed
 
     target = Path(path).expanduser().resolve(strict=False)
     if not target.is_file() or not is_governed(target):
-        return []
-    raw = target.read_bytes()
-    high = end_line if end_line is not None else raw.count(b"\n") + 1
-    anchors: list[str] = []
-    for unit in parse_units(target, root=get_swarmws()):
-        first = raw[:unit.byte_start].count(b"\n") + 1
-        last = raw[:unit.byte_end].count(b"\n") + 1
-        if first <= high and last >= start_line:
-            anchors.append(unit.anchor)
-    return anchors
+        return ()
+    stat = target.stat()
+    return _unit_spans(str(target), stat.st_mtime_ns, stat.st_size)
+
+
+def _units_overlapping_lines(path: Any, start_line: int, end_line: int | None) -> list[str]:
+    """Return exact parse-unit anchors overlapping a 1-based line interval."""
+    spans = _spans(path)
+    high = end_line if end_line is not None else max((last for _a, _f, last, _t in spans), default=0)
+    return [anchor for anchor, first, last, _text in spans if first <= high and last >= start_line]
 
 
 def _units_in_content(path: Any, content: str) -> list[str]:
     """Return units whose complete bytes occur in recalled content."""
-    from pathlib import Path
-    from config import get_swarmws
-    from .materializer import is_governed
-    from .units import parse_units
-
-    target = Path(path).expanduser().resolve(strict=False)
-    if not content or not target.is_file() or not is_governed(target):
+    if not content:
         return []
-    return [unit.anchor for unit in parse_units(target, root=get_swarmws()) if unit.text in content]
+    return [anchor for anchor, _f, _l, text in _spans(path) if text in content]
 
 
 def record_recalled_result(result: Any, session_id: str, *, project: str | None = None) -> None:
