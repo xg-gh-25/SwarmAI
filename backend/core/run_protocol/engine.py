@@ -990,6 +990,24 @@ class RunEngine:
         tokens_in, tokens_out = token_totals(events)
         if isinstance(tokens_in, (int, float)) and isinstance(tokens_out, (int, float)):
             out["usage"] = {"input_tokens": int(tokens_in), "output_tokens": int(tokens_out)}
+        # every token billed and its book cost (run_protocol.usage.measure): the latest
+        # measurement of each (its highest attempt, then the last written), for the card
+        latest: dict[str, float] = {}
+        rank: dict[str, tuple] = {}
+        for i, event in enumerate(events):
+            payload = event.get("payload") or {}
+            value = payload.get("value")
+            if event.get("kind") == "metric" and payload.get("name") in ("billed_tokens", "book_cost_usd") \
+                    and isinstance(value, (int, float)) and not isinstance(value, bool):
+                key = (event.get("attempt") or 0, i)
+                if key >= rank.get(payload["name"], (-1, -1)):
+                    rank[payload["name"]], latest[payload["name"]] = key, value
+        if latest:
+            usage = out.setdefault("usage", {})
+            if "billed_tokens" in latest:
+                usage["billed_tokens"] = int(latest["billed_tokens"])
+            if "book_cost_usd" in latest:
+                usage["book_cost_usd"] = float(latest["book_cost_usd"])
         return out
 
     def write_projection(self) -> Path:

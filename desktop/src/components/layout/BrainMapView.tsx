@@ -6,15 +6,16 @@
  *   BrainMapView      Overview: the Brain map, and beside it Needs you + Eval summary
  *   BrainNeedsView    Needs you: Runs, rule proposals, a Project Agent draft
  *   BrainAgentView    Project Agent: review / revise / confirm, and Start a Run
- *   BrainRunsView     Conductor · Runs: the three lanes with this Brain's Runs
+ *   BrainRunsView     Conductor · Runs: the Chat tab and Hive lanes, each Run one card
  *   BrainEvalView     Eval: the five dimensions, UNKNOWN where nobody measures
  *   BrainAddKnowledge Brain (DDD): add files / folders / links / repos, distilled in chat
  * The tab bar, header and the Brain (DDD) / Reflect bodies live in BrainHub.
  *
  * Reads only records that already exist: the brain detail + review queue (cached
- * ddd hooks) and the 30-day pipeline analytics (one cached query, the same payload
- * the Pipelines overlay reads). Nothing here recomputes on the backend.
- * What is not built yet (Conductor / Project Agent eval) is shown and labelled `mock`.
+ * ddd hooks), the 30-day pipeline analytics (one cached query, the same payload the
+ * Pipelines overlay reads) and, on the tabs that show them, the Hive runs Swarm Out
+ * reads (GET /api/swarm-out/runs, polled while shown). Nothing here is a sample: what
+ * nobody records is UNKNOWN or "—" (design docs/design/2026-10-30-brain-runs-one-card.md).
  * The Project Agent definition is real: project-agent.yaml, a skeleton at creation and
  * drafted from the DDD. Its form (ProjectAgentForm) shows the standard template's eight
  * sections, saves changes and confirms through the backend; bigger changes go to chat.
@@ -27,7 +28,12 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useBrainDetail, useReview, type BrainDetail, type ProjectAgent, type SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } from '../../services/pipelines';
-import { Stat, SectionLabel, StatusBadge, Hint, type Tone } from '../overlay';
+import type { SwarmOutRun } from '../../services/swarmOut';
+import { RunCard } from '../swarm-out/LiveDispatches';
+import { runTone as hiveTone } from '../swarm-out/tone';
+import { useRuns } from '../swarm-out/live';
+import { LocalRunCard } from './LocalRunCard';
+import { Stat, SectionLabel, StatusBadge, Hint } from '../overlay';
 import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from './BrainMap';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import { ProjectAgentForm } from './ProjectAgentForm';
@@ -35,7 +41,7 @@ import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/new
 import { openOverlayAt } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
 import {
-  sectionCounts, projectRuns, runTone, needsYouItems, brainEval, type RunTone,
+  sectionCounts, projectRuns, runTone, needsYouItems, type RunTone, needsCount, brainEval, brainHiveRuns, hiveLive, humanPerRun,
 } from './brainMapModel';
 
 /** The detail tabs of a Brain: one per part of the Brain map, plus Overview. */
@@ -45,16 +51,6 @@ export type MapPanel = 'need' | 'agent' | 'add';
 
 type Dispatch = (msg: string, opts?: { autoSend?: boolean }) => boolean;
 
-const TONE_OF: Record<RunTone, Tone> = {
-  running: 'primary', needs: 'error', landed: 'success', failed: 'warning', stopped: 'neutral',
-};
-const TONE_LABEL: Record<RunTone, string> = {
-  running: 'running', needs: 'needs you', landed: 'landed', failed: 'not landed', stopped: 'stopped',
-};
-
-function Mock() {
-  return <span className="ml-1.5 text-meta font-semibold text-[var(--color-status-warning)]" data-testid="bm-mock">mock</span>;
-}
 /** Pipelines, opened on one Run's drawer (its question, its report). */
 function openRun(id: string) { openOverlayAt('pipeline', id); }
 function openNeedYou() { window.dispatchEvent(new CustomEvent('swarm:show-needs-you')); }
@@ -82,8 +78,22 @@ function useBrainData(name: string) {
   return { detail, review, runs, needs, ev };
 }
 
+/** This Brain's Hive runs (Swarm Out), polled while the tab is shown. */
+function useBrainHiveRuns(name: string) {
+  const { data, failed, reload } = useRuns(false);
+  const hive = useMemo(() => brainHiveRuns(data?.runs, name), [data, name]);
+  return { hive, loaded: !!data, failed: failed && !data, reload };
+}
+
 /** Status dots on the map, from the same records as the numbers. */
-function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], ev: ReturnType<typeof brainEval>): BrainMapProps['tones'] {
+/** A Hive run's dot on the map, in the local Runs' tones. */
+function hiveDot(r: SwarmOutRun): RunTone {
+  const t = hiveTone(r);
+  return t === 'busy' ? 'running' : t === 'ok' ? 'landed' : t === 'error' ? 'failed'
+    : t === 'attention' && r.state === 'waiting' ? 'needs' : 'stopped';
+}
+
+function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: SwarmOutRun[], ev: ReturnType<typeof brainEval>): BrainMapProps['tones'] {
   const has = (k: SectionKey) => (detail?.sections.find((s) => s.key === k)?.members.length ?? 0) > 0;
   const base = (k: SectionKey): MapTone => (has(k) ? 'ok' : 'attention');
   const pa = detail?.projectAgent;
@@ -96,7 +106,8 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], ev: Re
     refresher: base('refresher'),
     agent: pa === undefined ? undefined : pa === null ? 'attention'
       : (pa.problems.length || pa.status !== 'reviewed') ? 'needs' : 'ok',
-    conductor: runs.some((r) => r.needsYou) ? 'needs' : runs.some((r) => r.status === 'running') ? 'busy' : runs.length ? 'ok' : undefined,
+    conductor: runs.some((r) => r.needsYou) || hive.some((r) => r.state === 'waiting') ? 'needs'
+      : runs.some((r) => r.status === 'running') || hive.some(hiveLive) ? 'busy' : runs.length || hive.length ? 'ok' : undefined,
     reflect: ev.brain.pending ? 'needs' : ev.brain.autoApplied ? 'ok' : undefined,
   };
 }
@@ -117,6 +128,13 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
   onRequestClose?: () => void;
 }) {
   const { detail, review, runs, needs, ev } = useBrainData(name);
+  const { hive } = useBrainHiveRuns(name);
+  const needN = needsCount(needs);
+  // both lanes' Runs, newest first (the map draws the first twelve)
+  const dots = useMemo(() => [
+    ...runs.map((r) => ({ at: Date.parse(r.updatedAt || r.createdAt), id: r.id, title: r.requirement || r.id, tone: runTone(r) })),
+    ...hive.map((r) => ({ at: Date.parse(r.sent_at), id: r.dispatch_id, title: `${r.title} (Hive ${r.hive})`, tone: hiveDot(r) })),
+  ].sort((x, y) => (y.at || 0) - (x.at || 0)).map(({ id, title, tone }) => ({ id, title, tone })), [runs, hive]);
   const send = useSend(onDispatch, onRequestClose);
   const version = review?.head_sha ? `@ ${review.head_sha.slice(0, 7)}` : 'DDD';
 
@@ -148,13 +166,14 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
         <BrainMap
           version={version}
           counts={sectionCounts(detail)}
-          runs={runs.map((r) => ({ id: r.id, title: r.requirement || r.id, tone: runTone(r) }))}
-          lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, worker: 0, hive: 0 }}
-          needs={needs.length}
+          runs={dots}
+          lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, hive: hive.filter(hiveLive).length }}
+          sources={{ chat: runs.length, hive: hive.length }}
+          needs={needN}
           reflect={{ auto: ev.brain.autoApplied, pending: ev.brain.pending }}
           agentLine={agentLine(detail?.projectAgent)}
           evalLine={`${ev.runs.landed} of ${ev.runs.total} Runs landed`}
-          tones={mapTones(detail, runs, ev)}
+          tones={mapTones(detail, runs, hive, ev)}
           onOpen={open}
         />
         <div className="flex flex-wrap items-center justify-center gap-4 pt-1 text-meta text-[var(--color-text-muted)]">
@@ -173,7 +192,8 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="bm-panel-need">
           <div className="flex items-center justify-between px-3 py-2">
             <span className="text-small font-semibold">Needs you</span>
-            <span className={`text-small font-semibold ${needs.length ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}>{needs.length}</span>
+            <span className={`text-small font-semibold ${needN ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}
+              data-testid="bm-need-count">{needN}</span>
           </div>
           <NeedList items={needs} onGoTo={onGoTo} />
         </div>
@@ -251,7 +271,7 @@ export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: Bra
   return (
     <div className="p-4" data-testid="bm-needs-view">
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
-        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, rule proposals from Reflect, and a Project Agent draft to confirm.</Hint></div>
+        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, rule proposals from Reflect, a Project Agent draft to confirm, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
         <NeedList items={needs} onGoTo={onGoTo} />
       </div>
     </div>
@@ -273,22 +293,27 @@ export function BrainAgentView({ name, onDispatch, onRequestClose }: {
   );
 }
 
-/** Conductor · Runs tab: the three lanes and this Brain's Runs. */
+/** Conductor · Runs tab: the Chat tab lane and the Hive lane, each Run one card. */
 export function BrainRunsView({ name }: { name: string }) {
   const { runs } = useBrainData(name);
+  const hive = useBrainHiveRuns(name);
   return (
-    <div className="p-4 max-w-[900px]" data-testid="bm-panel-runs">
-      <RunsPanel runs={runs} />
+    <div className="p-4 max-w-[1240px]" data-testid="bm-panel-runs">
+      <RunsPanel name={name} runs={runs} hive={hive} />
     </div>
   );
 }
 
 /** Eval tab: every dimension, full width. */
 export function BrainEvalView({ name }: { name: string }) {
-  const { ev } = useBrainData(name);
+  const { ev, runs } = useBrainData(name);
+  const { hive, loaded } = useBrainHiveRuns(name);
+  const human = useMemo(() => humanPerRun(runs, hive), [runs, hive]);
   return (
     <div className="p-4" data-testid="bm-panel-eval">
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3"><EvalPanel ev={ev} /></div>
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+        <EvalPanel ev={ev} human={human} hiveLoaded={loaded} />
+      </div>
     </div>
   );
 }
@@ -409,47 +434,53 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
   );
 }
 
-function RunsPanel({ runs }: { runs: PipelineRunSummary[] }) {
+const RUN_GRID = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))' };
+
+function RunsPanel({ name, runs, hive }: {
+  name: string; runs: PipelineRunSummary[];
+  hive: { hive: SwarmOutRun[]; loaded: boolean; failed: boolean; reload: () => void };
+}) {
+  const live = hive.hive.filter(hiveLive).length;
+  const going = runs.filter((r) => r.status === 'running' || r.needsYou).length;
   return (
-    <div className="flex flex-col gap-2">
-      <Hint>One Conductor for the whole machine. This shows the Runs of this Brain from the last 30 days.</Hint>
-      <Lane title="Chat tab (inline)" meta={`${runs.length} Runs`}>
-        {runs.length === 0 && <div className="text-meta text-[var(--color-text-muted)]">No Runs in the last 30 days.</div>}
-        {runs.map((r) => {
-          const t = runTone(r);
-          return (
-            <button key={r.id} type="button" onClick={() => openRun(r.id)} data-testid={`bm-runrow-${r.id}`}
-              className="w-full text-left py-1.5 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-hover)]">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-small truncate">{r.requirement || r.id}</span>
-                <StatusBadge tone={TONE_OF[t]}>{TONE_LABEL[t]}</StatusBadge>
-              </div>
-              <div className="text-meta text-[var(--color-text-muted)]">
-                {r.id} · {r.profile || '--'} · stage {r.progress || '--'}{r.cycleTimeMin != null ? ` · ${r.cycleTimeMin} min` : ''}
-              </div>
-            </button>
-          );
-        })}
+    <div className="flex flex-col gap-4">
+      <Hint>One Conductor for the whole machine. This shows the Runs of this Brain from the last 30 days: those a chat tab drove on this machine, and those sent to a Hive under this Brain&apos;s Project Agent. Each card shows the same facts; a fact the Run did not record says —.</Hint>
+      <Lane title="Chat tab" meta={`${runs.length} Run${runs.length === 1 ? '' : 's'}${going ? ` · ${going} going` : ''}`} testId="bm-lane-chat">
+        {runs.length === 0 ? <div className="text-meta text-[var(--color-text-muted)]">No Runs in the last 30 days.</div> : (
+          <div className="grid gap-3" style={RUN_GRID}>
+            {runs.map((r) => <LocalRunCard key={r.id} r={r} brain={name} />)}
+          </div>
+        )}
       </Lane>
-      <Lane title="Local Worker" meta="0/1 slots" mock><div className="text-meta text-[var(--color-text-muted)]">Background Runs, one at a time. Comes with Conductor V1.</div></Lane>
-      <Lane title="Hive" meta="0/2 slots" mock><div className="text-meta text-[var(--color-text-muted)]">Remote Runs on another machine. Later.</div></Lane>
+      <Lane title="Hive" meta={hive.loaded ? `${hive.hive.length} Run${hive.hive.length === 1 ? '' : 's'}${live ? ` · ${live} going` : ''}` : ''} testId="bm-lane-hive">
+        {hive.failed ? <div className="text-meta text-[var(--color-text-muted)]" data-testid="bm-hive-unreadable">Could not read the Hive runs. They show again on the next check (every 30 s).</div>
+          : !hive.loaded ? <div className="text-meta text-[var(--color-text-muted)]">Reading the Hive runs…</div>
+          : hive.hive.length === 0 ? <div className="text-meta text-[var(--color-text-muted)]" data-testid="bm-hive-empty">No Run went to a Hive under this Brain in the last 30 days. Swarm Out sends one.</div>
+          : (
+            <div className="grid gap-3" style={RUN_GRID}>
+              {hive.hive.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={hive.reload} />)}
+            </div>
+          )}
+      </Lane>
     </div>
   );
 }
 
-function Lane({ title, meta, mock, children }: { title: string; meta: string; mock?: boolean; children: React.ReactNode }) {
+function Lane({ title, meta, testId, children }: { title: string; meta: string; testId: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] px-3 py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-small font-semibold">{title}{mock && <Mock />}</span>
-        <span className="text-meta text-[var(--color-text-muted)]">{meta}</span>
+    <section data-testid={testId}>
+      <div className="flex items-baseline gap-2 mb-2">
+        <span className="text-small font-semibold">{title}</span>
+        <span className="text-meta text-[var(--color-text-muted)] tabular-nums">{meta}</span>
       </div>
-      <div className="mt-1">{children}</div>
-    </div>
+      {children}
+    </section>
   );
 }
 
-function EvalPanel({ ev }: { ev: ReturnType<typeof brainEval> }) {
+function EvalPanel({ ev, human, hiveLoaded }: {
+  ev: ReturnType<typeof brainEval>; human: { avg: number | null; runs: number }; hiveLoaded: boolean;
+}) {
   const grid = 'grid grid-cols-2 gap-2 mt-1';
   return (
     <div className="flex flex-col gap-3">
@@ -460,13 +491,9 @@ function EvalPanel({ ev }: { ev: ReturnType<typeof brainEval> }) {
         <Stat label="Average cycle" value={num(ev.runs.avgCycleMin, ' min')} />
         <Stat label="Tokens" value={ev.runs.tokens == null ? 'UNKNOWN' : `${Math.round(ev.runs.tokens / 1000)}k`} hint="only when every Run was measured" />
       </div></div>
-      <div><SectionLabel>Conductor<Mock /></SectionLabel><div className={grid}>
-        <Stat label="Queue wait" value="UNKNOWN" hint="no queue until Conductor V1" />
-        <Stat label="Worker busy" value="UNKNOWN" hint="no Local Worker yet" />
-      </div></div>
-      <div><SectionLabel>Project Agent<Mock /></SectionLabel><div className={grid}>
-        <Stat label="Interventions per Run" value="UNKNOWN" hint="needs human-loop v2 records" />
-        <Stat label="Change requests" value="UNKNOWN" hint="needs human-loop v2 records" />
+      <div><SectionLabel>Project Agent</SectionLabel><div className={grid}>
+        <Stat label="Human decisions per Run" value={human.avg == null ? 'UNKNOWN' : String(Math.round(human.avg * 10) / 10)}
+          hint={human.runs ? `over ${human.runs} Run${human.runs === 1 ? '' : 's'} that recorded them${hiveLoaded ? ', local and Hive' : ', local (Hive runs not read yet)'}` : 'no Run recorded them'} />
       </div></div>
       <div><SectionLabel>Brain</SectionLabel><div className={grid}>
         <Stat label="Knowledge entries" value={ev.brain.entries} hint={`${num(ev.brain.recentActivity)} changes in 30 days`} />

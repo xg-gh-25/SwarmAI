@@ -17,7 +17,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Query
 
@@ -335,7 +335,48 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         report_path=(f"Projects/{project}/.artifacts/runs/{raw.get('id')}/REPORT.md"
                      if report.is_file() else None),
         audit_card=raw.get("audit_card"),
+        **_card_facts(raw, status),
     )
+
+
+def _num(v: Any) -> Optional[float]:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _card_facts(raw: dict, status: str) -> dict[str, Any]:
+    """What a Run's card shows beside a Hive run's, from the projection (run.json): each
+    None when the run never recorded it (design 2026-10-30-brain-runs-one-card)."""
+    summary = raw.get("audit_summary") if isinstance(raw.get("audit_summary"), dict) else {}
+    usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
+    tc = summary.get("token_cost") if isinstance(summary.get("token_cost"), dict) else {}
+    billed = _num(usage.get("billed_tokens"))
+    if billed is None and all(_num(tc.get(k)) is not None
+                              for k in ("input_tokens", "output_tokens", "cache_read_tokens")):
+        billed = sum(_num(tc.get(k)) or 0 for k in ("input_tokens", "output_tokens", "cache_read_tokens"))
+    autonomy = summary.get("autonomy") if isinstance(summary.get("autonomy"), dict) else {}
+    human = raw.get("human_decisions")
+    if not isinstance(human, int) or isinstance(human, bool):
+        human = autonomy.get("human_decisions") if isinstance(autonomy.get("human_decisions"), int) else None
+    attempts = raw.get("stage_attempts") if isinstance(raw.get("stage_attempts"), dict) else None
+    rework = (sum(max(0, int(v) - 1) for v in attempts.values() if isinstance(v, int))
+              if attempts else None)
+    speed = summary.get("speed") if isinstance(summary.get("speed"), dict) else {}
+    landing = raw.get("landing") if isinstance(raw.get("landing"), str) else None
+    rows = raw.get("audit_rows") if isinstance(raw.get("audit_rows"), list) else []
+    return {
+        "finished_at": raw.get("finished_at") if isinstance(raw.get("finished_at"), str) else None,
+        "active_s": _num(speed.get("active_seconds")),
+        "billed_tokens": int(billed) if billed is not None else None,
+        "cost_usd": _num(usage.get("book_cost_usd")),
+        "human_decisions": human,
+        "landing": landing,
+        "not_landed_reason": (_text(raw.get("reason"))[:200] or None)
+        if status == "completed" and landing == "not_landed" else None,
+        "rework": rework,
+        "audit": [{"dim": _text(r.get("dim"))[:40], "verdict": _text(r.get("verdict"))[:16],
+                   "detail": _text(r.get("detail"))[:200]}
+                  for r in rows if isinstance(r, dict) and r.get("dim")][:8],
+    }
 
 
 @router.get("/analytics", response_model=PipelineAnalytics)

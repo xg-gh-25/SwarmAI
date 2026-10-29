@@ -2,7 +2,7 @@
  * brainMapModel — pure builders for the Brain map (Brain Hub detail "Map" view and
  * the Hub map above the card wall). No React, no fetch: every number comes from a
  * record the backend already produced (GET /ddd/brains[/{name}], the brain's review
- * queue, GET /pipelines/analytics). What does not exist yet is marked `mock`, and a
+ * queue, GET /pipelines/analytics, GET /swarm-out/runs). A
  * value nobody measures is `null` (shown as UNKNOWN), never a guess.
  *
  * Exports:
@@ -10,7 +10,9 @@
  *   sectionCounts        per-section count line from a BrainDetail
  *   projectRuns          this brain's Runs from the 30-day analytics payload
  *   runTone              Run status -> map dot tone
- *   needsYouItems        one queue: Runs waiting on you + proposals waiting on you
+ *   needsYouItems        one queue: everything waiting on you in one Brain (needsCount: its total)
+ *   brainHiveRuns        the Hive runs of one brain (30 days); hiveLive: one that is going
+ *   humanPerRun          human decisions per Run, local and Hive
  *   brainEval            the Eval numbers for one brain (null = not measured)
  *   hubSummary           Brain Hub home totals across all brains
  *   hubNeeds             Brain Hub home: everything waiting on you, all brains
@@ -18,6 +20,7 @@
  *   brainSignal          the one signal a Hub card shows, and its sort rank
  */
 import type { BrainDetail, BrainSummary, GeneralBrain, ReviewData, SectionKey } from '../../services/ddd';
+import type { SwarmOutRun } from '../../services/swarmOut';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
 
 export const SECTION_ORDER: { key: SectionKey; label: string }[] = [
@@ -63,10 +66,16 @@ export interface NeedItem {
   id: string;
   title: string;
   detail: string;
+  /** how many of the Brain's waiting items this row stands for (an escalations row: N) */
+  count: number;
 }
 
 /** Everything in this brain that waits for a person, in one list: Runs, rule
- *  proposals, and a Project Agent draft to confirm (or a file with problems). */
+ *  proposals, and a Project Agent draft to confirm (or a file with problems), then one
+ *  row per kind the attention channel holds that neither list names (escalations,
+ *  failing jobs, newly read repositories, Runs or proposals not listed, anything else).
+ *  The rows' counts add up to the Brain header's count (the attention channel's
+ *  pending + a Project Agent waiting), so the header, the map's You and this list agree. */
 export function needsYouItems(
   runs: PipelineRunSummary[], review: ReviewData | null,
   agent?: { status?: string; problems?: string[] } | null,
@@ -78,24 +87,63 @@ export function needsYouItems(
     const why = r.pauseKind === 'decision' ? 'a question is waiting'
       : r.pauseKind === 'stopped' ? 'stopped, needs a resume'
       : r.checkpointReason || 'waiting on you';
-    items.push({ kind: 'run', id: r.id, title: r.requirement || r.id, detail: `${r.id} · ${why}` });
+    items.push({ kind: 'run', id: r.id, title: r.requirement || r.id, detail: `${r.id} · ${why}`, count: 1 });
   }
-  for (const p of review?.proposals ?? []) {
+  const proposals = review?.proposals ?? [];
+  for (const p of proposals) {
     items.push({
-      kind: 'proposal', id: p.id, title: p.content,
+      kind: 'proposal', id: p.id, title: p.content, count: 1,
       detail: `rule proposal · ${p.target_doc}${p.target_section ? ' / ' + p.target_section : ''}${p.source_run_id ? ' · from ' + p.source_run_id : ''}`,
     });
   }
-  // what the attention channel holds that neither list above carries
-  const esc = bySource?.escalation ?? 0, jobs = bySource?.job ?? 0;
-  if (esc) items.push({ kind: 'other', id: 'escalations', title: `${esc} escalation${esc === 1 ? '' : 's'} to decide`, detail: 'open Need You to answer' });
-  if (jobs) items.push({ kind: 'other', id: 'jobs', title: `${jobs} failing job${jobs === 1 ? '' : 's'}`, detail: 'open Need You to triage' });
+  // what the attention channel holds that the lists above do not name one by one
+  if (bySource) {
+    const split = pendingSplit({ health: { pending: 0 } as BrainSummary['health'], pendingBySource: bySource });
+    const listedRuns = items.filter((i) => i.kind === 'run').length;
+    const rest: [string, number, string, string][] = [
+      ['runs-unlisted', split.runs - listedRuns, plural(split.runs - listedRuns, 'more Run waiting', 'more Runs waiting'), 'open Need You to answer'],
+      ['proposals-unlisted', split.proposals - proposals.length, plural(split.proposals - proposals.length, 'more proposal to review', 'more proposals to review'), 'open Need You to review'],
+      ['escalations', split.escalations, `${plural(split.escalations, 'escalation')} to decide`, 'open Need You to answer'],
+      ['jobs', split.jobs, plural(split.jobs, 'failing job'), 'open Need You to triage'],
+      ['repos', split.repos, `${plural(split.repos, 'repository', 'repositories')} newly read`, 'the Brain started reading it; open Need You to see it'],
+      ['other', split.other, plural(split.other, 'other item'), 'open Need You'],
+    ];
+    for (const [id, n, title, detail] of rest) if (n > 0) items.push({ kind: 'other', id, title, detail, count: n });
+  }
   if (agent && agent.problems && agent.problems.length) {
-    items.push({ kind: 'agent', id: 'project-agent', title: 'The Project Agent file has problems to fix', detail: agent.problems.join(' · ') });
+    items.push({ kind: 'agent', id: 'project-agent', title: 'The Project Agent file has problems to fix', detail: agent.problems.join(' · '), count: 1 });
   } else if (agent && agent.status !== 'reviewed') {
-    items.push({ kind: 'agent', id: 'project-agent', title: 'Confirm the Project Agent draft', detail: 'generated from this Brain; review it, then confirm or revise' });
+    items.push({ kind: 'agent', id: 'project-agent', title: 'Confirm the Project Agent draft', detail: 'generated from this Brain; review it, then confirm or revise', count: 1 });
   }
   return items;
+}
+
+/** How many waiting items a needs list stands for. */
+export const needsCount = (items: NeedItem[]): number => items.reduce((s, i) => s + i.count, 0);
+
+/** The Hive runs (Swarm Out) whose Project Agent is this Brain, sent in the last 30 days,
+ *  newest first. The Brain is the dispatch record's, else the run's result's. */
+export function brainHiveRuns(runs: SwarmOutRun[] | null | undefined, name: string, now = Date.now()): SwarmOutRun[] {
+  const since = now - 30 * 24 * 3600 * 1000;
+  return (runs ?? [])
+    .filter((r) => (r.project_agent?.brain ?? r.result?.project_agent?.brain) === name)
+    .filter((r) => { const t = Date.parse(r.sent_at); return !Number.isNaN(t) && t >= since; })
+    .sort((x, y) => Date.parse(y.sent_at) - Date.parse(x.sent_at));
+}
+
+/** A Hive run that is going: running, or waiting on the person. */
+export const hiveLive = (r: SwarmOutRun): boolean => r.state === 'running' || r.state === 'waiting';
+
+/** Human decisions per Run, over every Run that recorded them: a local Run's
+ *  human_decisions, a Hive run's approvals + denials + answered questions. */
+export function humanPerRun(local: PipelineRunSummary[], hive: SwarmOutRun[]): { avg: number | null; runs: number } {
+  const n: number[] = [];
+  for (const r of local) if (r.humanDecisions != null) n.push(r.humanDecisions);
+  for (const r of hive) {
+    const h = r.result?.work?.human;
+    if (h) n.push(h.approved + h.denied + h.answered_questions);
+  }
+  return { avg: n.length ? n.reduce((a, b) => a + b, 0) / n.length : null, runs: n.length };
 }
 
 export interface BrainEval {

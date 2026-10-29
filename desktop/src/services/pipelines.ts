@@ -125,6 +125,17 @@ export interface PipelineRunSummary {
    *  IS "has a report" — no separate bool (run_929024a8). */
   reportPath: string | null;
   auditCard: string | null;
+  /** The facts a Run's card shows beside a Hive run's (design 2026-10-30-brain-runs-
+   *  one-card); null when the run never recorded them (an older daemon too). */
+  finishedAt: string | null;
+  activeS: number | null;
+  billedTokens: number | null;
+  costUsd: number | null;
+  humanDecisions: number | null;
+  landing: string | null;
+  notLandedReason: string | null;
+  rework: number | null;
+  audit: { dim: string; verdict: string; detail: string }[];
 }
 
 export interface PipelineProjectGroup {
@@ -212,8 +223,24 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     notLanded: r.not_landed === true,
     reportPath: (r.report_path as string | null) ?? null,
     auditCard: (r.audit_card as string | null) ?? null,
+    finishedAt: typeof r.finished_at === 'string' ? r.finished_at : null,
+    activeS: num(r.active_s),
+    billedTokens: num(r.billed_tokens),
+    costUsd: num(r.cost_usd),
+    humanDecisions: num(r.human_decisions),
+    landing: typeof r.landing === 'string' ? r.landing : null,
+    notLandedReason: typeof r.not_landed_reason === 'string' ? r.not_landed_reason : null,
+    rework: num(r.rework),
+    audit: Array.isArray(r.audit)
+      ? (r.audit as { dim?: unknown; verdict?: unknown; detail?: unknown }[])
+        .filter((a) => typeof a?.dim === 'string')
+        .map((a) => ({ dim: a.dim as string, verdict: typeof a.verdict === 'string' ? a.verdict : '',
+          detail: typeof a.detail === 'string' ? a.detail : '' }))
+      : [],
   };
 }
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 export const pipelinesService = {
   /** Resume a stopped v1 run (appends a signed ``resume`` event). Nothing drives the

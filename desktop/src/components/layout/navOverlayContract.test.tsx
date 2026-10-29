@@ -41,7 +41,7 @@ import { OVERLAY_CHUNK } from './overlayChunks';
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k, i18n: { language: 'en' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k, i18n: { language: 'en' } }), initReactI18next: { type: '3rdParty', init: () => {} } }));
 vi.mock('../../services/tauri', async () => {
   const actual = await vi.importActual<typeof import('../../services/tauri')>('../../services/tauri');
   return { ...actual, isDesktop: () => true };

@@ -214,3 +214,52 @@ def test_a_run_the_user_cancelled_does_not_need_them(tmp_path, monkeypatch):
     assert by_id["paused_run:run_c3"].summary == "c"
     assert by_id["paused_run:run_c3"].dispatch["context"]["owner_session_id"] == "s-own"
     assert "checks_exhausted" in by_id["paused_run:run_c2"].dispatch["message"]
+
+
+def test_a_runs_card_facts_come_from_its_projection(tmp_path, monkeypatch):
+    """design 2026-10-30-brain-runs-one-card: the billed tokens and book cost a run
+    measured reach its analytics row; a run that measured nothing has none."""
+    from core.run_protocol.store import NEXT
+    engine, client = _real_v1(tmp_path, monkeypatch, "run_cardfacts1")
+    try:
+        row = client.get("/api/pipelines/analytics").json()["by_project"][0]["runs"][0]
+        assert row["billed_tokens"] is None and row["cost_usd"] is None
+        # as usage.measure writes them: a re-measurement is the next attempt
+        for name, value, attempt in (("billed_tokens", 9000, 1), ("book_cost_usd", 0.25, 1),
+                                     ("billed_tokens", 9500, 2)):
+            engine.store.append_new(writer=engine.authority.writer("cli"), kind="metric",
+                                    at="2026-10-30T00:00:00+00:00", stage="reflect",
+                                    attempt=attempt, ordinal=NEXT, payload={"name": name, "value": value})
+        engine.write_projection()
+        from core import run_index
+        run_index._clear_for_tests()
+        row = client.get("/api/pipelines/analytics").json()["by_project"][0]["runs"][0]
+        assert row["billed_tokens"] == 9500 and row["cost_usd"] == 0.25    # the latest
+    finally:
+        client._v1_patcher.stop()  # type: ignore[attr-defined]
+
+
+def test_card_facts_read_a_real_projection_and_none_from_a_bare_one():
+    from routers.pipelines import _card_facts
+    raw = {
+        "status": "completed", "landing": "not_landed", "reason": "final_stale",
+        "finished_at": "2026-10-29T10:59:32+00:00", "human_decisions": 2,
+        "stage_attempts": {"build": 1, "deliver": 2, "land": 3},
+        "audit_rows": [{"dim": "Run Isolation", "verdict": "PASS", "detail": "x"},
+                       {"dim": "Speed", "verdict": "BLOCK"}],
+        "audit_summary": {"speed": {"active_seconds": 2314.2},
+                          "token_cost": {"input_tokens": 350861, "output_tokens": 61511,
+                                         "cache_read_tokens": 24665603}},
+    }
+    facts = _card_facts(raw, "completed")
+    assert facts == {
+        "finished_at": "2026-10-29T10:59:32+00:00", "active_s": 2314.2,
+        "billed_tokens": 350861 + 61511 + 24665603, "cost_usd": None, "human_decisions": 2,
+        "landing": "not_landed", "not_landed_reason": "final_stale", "rework": 3,
+        "audit": [{"dim": "Run Isolation", "verdict": "PASS", "detail": "x"},
+                  {"dim": "Speed", "verdict": "BLOCK", "detail": ""}],
+    }
+    assert _card_facts({}, "running") == {
+        "finished_at": None, "active_s": None, "billed_tokens": None, "cost_usd": None,
+        "human_decisions": None, "landing": None, "not_landed_reason": None, "rework": None,
+        "audit": []}

@@ -314,7 +314,7 @@ export function when(iso: string | null | undefined): string {
 
 /** One of a card's facts, shown as a label over a value. */
 export interface RunStat {
-  key: 'time' | 'human' | 'cost' | 'failed' | 'tokens' | 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'cacheHit';
+  key: 'time' | 'human' | 'cost' | 'failed' | 'rework' | 'tokens' | 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'cacheHit';
   label: string;
   value: string;
   /** a second, smaller line under the value (e.g. how many questions went unanswered) */

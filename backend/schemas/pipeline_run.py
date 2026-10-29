@@ -102,6 +102,17 @@ class PipelineRunSummary(BaseModel):
         ),
     )
     audit_card: Optional[str] = None
+    # the facts a Run's card shows beside a Hive run's (design 2026-10-30-brain-runs-one-card);
+    # None when the run never recorded them
+    finished_at: Optional[str] = None
+    active_s: Optional[float] = Field(None, description="seconds the run was working (audit speed)")
+    billed_tokens: Optional[int] = Field(None, description="every token billed, cache reads too")
+    cost_usd: Optional[float] = Field(None, description="book cost (run_protocol.usage.measure)")
+    human_decisions: Optional[int] = None
+    landing: Optional[str] = Field(None, description="landed | not_landed | partial | … as recorded")
+    not_landed_reason: Optional[str] = None
+    rework: Optional[int] = Field(None, description="stage attempts beyond the first, summed")
+    audit: list[dict] = Field(default_factory=list, description="the audit's rows: dim, verdict, detail")
 
 
 class PipelineProjectGroup(BaseModel):

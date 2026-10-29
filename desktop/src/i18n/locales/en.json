@@ -1583,7 +1583,11 @@
       "cacheRead": "Cache read",
       "cacheWrite": "Cache write",
       "cacheHit": "Cache hit rate",
-      "cacheHitTitle": "Cache reads ÷ (input + cache reads + cache writes): the share of the input side served from the prompt cache"
+      "cacheHitTitle": "Cache reads ÷ (input + cache reads + cache writes): the share of the input side served from the prompt cache",
+      "rework": "Stages re-run",
+      "reworkTitle": "Stage attempts beyond the first, summed",
+      "humanLocalTitle": "Decisions the pipeline recorded from you",
+      "notRecorded": "This Run did not record it"
     },
     "hiveTab": {
       "open": "Open {{title}} in the Hive tab",
@@ -1603,6 +1607,19 @@
       "files": "Files",
       "answer": "Answer only",
       "none": "No output"
+    },
+    "local": {
+      "chatTab": "Chat tab",
+      "open": "Open Run",
+      "notLanded": "Not landed: {{reason}}",
+      "notLandedBare": "Not landed",
+      "state": {
+        "running": "running",
+        "needs": "needs you",
+        "landed": "landed",
+        "failed": "not landed",
+        "stopped": "stopped"
+      }
     }
   }
 }

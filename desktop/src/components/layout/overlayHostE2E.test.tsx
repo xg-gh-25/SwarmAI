@@ -28,7 +28,7 @@ import { OVERLAY_CHUNK } from './overlayChunks';
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }), initReactI18next: { type: '3rdParty', init: () => {} } }));
 
 // Stub every service a registered surface self-fetches, to a benign empty shape.
 vi.mock('../../services/todos', () => ({

@@ -1583,7 +1583,11 @@
       "cacheRead": "缓存读",
       "cacheWrite": "缓存写",
       "cacheHit": "缓存命中率",
-      "cacheHitTitle": "缓存读 ÷（输入 + 缓存读 + 缓存写）：输入这一侧有多少是从缓存读的"
+      "cacheHitTitle": "缓存读 ÷（输入 + 缓存读 + 缓存写）：输入这一侧有多少是从缓存读的",
+      "rework": "返工",
+      "reworkTitle": "各阶段第一次之后的重跑次数之和",
+      "humanLocalTitle": "pipeline 记下的你的决定",
+      "notRecorded": "这个 Run 没有记录"
     },
     "hiveTab": {
       "open": "在 Hive tab 里打开 {{title}}",
@@ -1603,6 +1607,19 @@
       "files": "写文件",
       "answer": "只回答",
       "none": "没有产出"
+    },
+    "local": {
+      "chatTab": "聊天标签页",
+      "open": "打开 Run",
+      "notLanded": "未落地：{{reason}}",
+      "notLandedBare": "未落地",
+      "state": {
+        "running": "在跑",
+        "needs": "等你",
+        "landed": "已落地",
+        "failed": "未落地",
+        "stopped": "已停止"
+      }
     }
   }
 }

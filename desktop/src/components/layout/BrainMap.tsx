@@ -1,6 +1,7 @@
 /**
  * BrainMap — the Brain map picture: the six DDD sections as a hex flower around the
- * Brain, with You (review & judge), the Project Agent, the request sources, the one
+ * Brain, with You (review & judge), the Project Agent, where Runs come from (a chat
+ * tab on this machine, a Hive), the one
  * Run Conductor, Reflect / Evolution and Eval laid out around it, and arrows that
  * say who does what. Each arrow's meaning is written ON the map, in a label pill
  * beside the line ("drafts, you submit", "writes rules after your OK"), coloured by what
@@ -25,7 +26,10 @@ export interface BrainMapProps {
   version: string;
   counts: Record<SectionKey, string>;
   runs: { id: string; title: string; tone: RunTone }[];
-  lanes: { chat: number; worker: number; hive: number };
+  /** Runs going now (running or waiting on you), per lane */
+  lanes: { chat: number; hive: number };
+  /** Runs in the last 30 days, per lane: the source pills' counts */
+  sources: { chat: number; hive: number };
   needs: number;
   reflect: { auto: number; pending: number };
   /** one line under the Project Agent and Eval titles (status / headline number) */
@@ -47,8 +51,8 @@ const P = {
   agent: { x: 92, y: 246 }, conductor: { x: 360, y: 500 }, evo: { x: 622, y: 412 },
   need: { x: 70, y: 56 }, eval: { x: 620, y: 56 },
 };
-/** request sources; only the chat tab exists today (the others are drawn as mocks) */
-const SRC = [{ name: 'Chat tab', mock: false }, { name: 'Slack', mock: true }, { name: 'Schedule', mock: true }];
+/** where a Brain's Runs come from: a chat tab on this machine, or a Hive (Swarm Out) */
+const SRC = [{ key: 'chat', name: 'Chat tab' }, { key: 'hive', name: 'Hive' }] as const;
 
 function secPos(k: SectionKey) {
   const a = (ANG[k] * Math.PI) / 180;
@@ -134,7 +138,7 @@ function Part({ label, onClick, testid, children }: {
   );
 }
 
-export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLine, evalLine, tones = {}, onOpen }: BrainMapProps) {
+export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect, agentLine, evalLine, tones = {}, onOpen }: BrainMapProps) {
   const d = secPos('delivery'), k = secPos('knowledge'), g = secPos('gates');
   // outlines: the muted text colour (the border colour sinks into a dark card), and a
   // fixed width on screen however wide the map is drawn
@@ -198,11 +202,11 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
         {agentLine && <text x={P.agent.x} y={P.agent.y + 24} textAnchor="middle" className={SUB}>{agentLine}</text>}
       </Part>
       {SRC.map((s, i) => (
-        <Part key={s.name} label={`Source: ${s.name}${s.mock ? ' (mock)' : ''}`} onClick={() => onOpen('agent')} testid={`bm-src-${i}`}>
-          <rect x={30} y={432 + i * 44} width={82} height={28} rx={14} className={box} {...OUTLINE} strokeDasharray={s.mock ? '4 3' : undefined} />
-          <text x={71} y={450 + i * 44} textAnchor="middle"
-            className={`text-small ${s.mock ? 'fill-[var(--color-text-muted)]' : 'fill-[var(--color-text)]'}`}>{s.name}</text>
-          {s.mock && <text x={71} y={475 + i * 44} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]" data-testid="bm-map-mock">mock</text>}
+        <Part key={s.key} label={`${s.name}: ${sources[s.key]} Runs in 30 days`} onClick={() => onOpen('runs')} testid={`bm-src-${s.key}`}>
+          <rect x={18} y={432 + i * 44} width={94} height={28} rx={14} className={box} {...OUTLINE} />
+          <text x={65} y={450 + i * 44} textAnchor="middle" className="text-small fill-[var(--color-text)]">
+            {s.name} <tspan className="fill-[var(--color-text-muted)]">{sources[s.key]}</tspan>
+          </text>
         </Part>
       ))}
 
@@ -212,10 +216,8 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
         <Dot x={P.conductor.x - 118} y={cTop + 14} tone={tones.conductor} />
         <text x={P.conductor.x} y={cTop + 22} textAnchor="middle" className={TITLE}>Run Conductor</text>
         <text x={P.conductor.x} y={cTop + 40} textAnchor="middle" className={SUB}>
-          Chat tab {lanes.chat} · Local Worker {lanes.worker}/1 · Hive {lanes.hive}/2
+          {lanes.chat + lanes.hive ? `Chat tab ${lanes.chat} · Hive ${lanes.hive} going` : 'nothing going now'}
         </text>
-        <text x={P.conductor.x} y={cTop + 56} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]"
-          data-testid="bm-map-mock">Local Worker and Hive are mocks</text>
         {shown.map((r, i) => (
           <circle key={r.id} cx={P.conductor.x - 99 + i * 18} cy={cTop + 80} r={6.5} className={RUN_FILL[r.tone]} data-testid={`bm-run-${r.id}`}>
             <title>{r.title}</title>

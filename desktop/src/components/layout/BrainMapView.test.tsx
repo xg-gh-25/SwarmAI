@@ -3,8 +3,10 @@
  * Services are mocked at the boundary (ddd hooks, pipeline analytics). Checks: the
  * map shows real counts and this brain's Runs only; clicking map parts opens the
  * matching panel or the Browse view; Needs you lists Runs + proposals; the Project
- * Agent submits to chat through onDispatch; unbuilt parts are labelled mock; Eval
- * says UNKNOWN for what nobody measures; the Hub home filters, queues and opens.
+ * Agent submits to chat through onDispatch; the map, Runs and Eval draw only what
+ * exists (Chat tab and Hive, no mock); a local Run's card has the Hive card's cells;
+ * the needs count is one count; Eval says UNKNOWN for what nobody measures; the Hub
+ * home filters, queues and opens.
  */
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -37,6 +39,13 @@ vi.mock('../../services/ddd', () => ({
   getStarterKind: () => Promise.resolve({ path: '', role: 'DISTILL', why: '', roots: [] }),
 }));
 vi.mock('../../services/pipelines', () => ({ pipelinesService: { fetchAnalytics: vi.fn() } }));
+const hiveRuns = vi.fn();
+vi.mock('../../services/swarmOut', () => ({ swarmOutService: { runs: () => hiveRuns() } }));
+const hiveRun = (id: string, brain: string, o: Record<string, unknown> = {}) => ({
+  dispatch_id: id, hive_id: 'h1', hive: 'worker-1', session_id: null, title: `Hive ${id}`, origin: 'swarm-out',
+  sent_at: new Date(Date.now() - 3600_000).toISOString(), state: 'running', running: true, waiting: false,
+  project_agent: { brain, mode: 'change', profile: 'bugfix', revision: 'r1', delivery: 'bundle', acceptance: null }, ...o,
+});
 
 import { BrainMapView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge, BrainNeedsView } from './BrainMapView';
 import { BrainHubHome } from './BrainHubHome';
@@ -44,10 +53,13 @@ import { BrainHubHome } from './BrainHubHome';
 const run = (id: string, o: Record<string, unknown> = {}) => ({
   id, requirement: `Req ${id}`, status: 'completed', profile: 'bugfix', progress: '8/8', cycleTimeMin: 10,
   tokensActual: null, createdAt: '', updatedAt: '2026-10-20', pauseKind: null, needsYou: false,
-  checkpointReason: null, ownerSessionId: null, notLanded: false, reportPath: null, auditCard: null, ...o,
+  checkpointReason: null, ownerSessionId: null, notLanded: false, reportPath: null, auditCard: null,
+  finishedAt: null, activeS: null, billedTokens: null, costUsd: null, humanDecisions: null, landing: null,
+  notLandedReason: null, rework: null, audit: [], ...o,
 });
 
 beforeEach(() => {
+  hiveRuns.mockResolvedValue({ runs: [], asks: [], errors: [] });
   mockAnalytics.mockReturnValue({
     window: '30d', overall: {}, trend: [],
     byProject: [
@@ -98,11 +110,25 @@ describe('BrainMapView', () => {
     delete (DETAIL as Record<string, unknown>).pendingBySource;
   });
 
-  it('the map draws the unbuilt sources and lanes as mocks', () => {
+  it('the map draws what exists: Chat tab and Hive with their counts, nothing labelled mock', async () => {
+    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P'), hiveRun('d9', 'Other')], asks: [], errors: [] });
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
-    expect(screen.getByTestId('bm-src-0').querySelector('[data-testid="bm-map-mock"]')).toBeNull();   // Chat tab is real
-    expect(screen.getByTestId('bm-src-1').querySelector('[data-testid="bm-map-mock"]')).toBeTruthy(); // Slack
-    expect(screen.getByTestId('bm-conductor').textContent).toContain('Local Worker and Hive are mocks');
+    await waitFor(() => expect(screen.getByTestId('bm-src-hive').textContent).toBe('Hive 1'));
+    expect(screen.getByTestId('bm-src-chat').textContent).toBe('Chat tab 2');
+    expect(screen.queryByTestId('bm-src-2')).toBeNull();
+    expect(screen.getByTestId('bm-conductor').textContent).toContain('Chat tab 1 · Hive 1 going');
+    expect(screen.getByTestId('bm-run-d1')).toBeTruthy();
+    expect(screen.queryByTestId('bm-run-d9')).toBeNull();
+    expect(screen.getByTestId('brain-map-view').textContent?.toLowerCase()).not.toContain('mock');
+  });
+
+  it('one needs count: a newly read repository counts on the map and in the panel, as in the header', () => {
+    (DETAIL as Record<string, unknown>).pendingBySource = { paused_run: 1, cultivation: 1, local_root: 1 };
+    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
+    expect(screen.getByTestId('bm-need-count').textContent).toBe('3');   // the Run, the proposal, the repository
+    expect(screen.getByTestId('bm-you').textContent).toContain('3');
+    expect(screen.getByTestId('bm-need-repos').textContent).toContain('1 repository newly read');
+    delete (DETAIL as Record<string, unknown>).pendingBySource;
   });
 
   it('each map part opens its tab', () => {
@@ -113,7 +139,7 @@ describe('BrainMapView', () => {
     expect(go('bm-brain')).toBe('brain');
     expect(go('bm-sec-gates')).toBe('brain');
     expect(go('bm-agent')).toBe('agent');
-    expect(go('bm-src-1')).toBe('agent');
+    expect(go('bm-src-hive')).toBe('runs');
     expect(go('bm-conductor')).toBe('runs');
     expect(go('bm-reflect')).toBe('reflect');
     expect(go('bm-eval')).toBe('eval');
@@ -131,13 +157,60 @@ describe('BrainMapView', () => {
     expect(screen.getByTestId('bm-reflect').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('needs');
   });
 
-  it('Conductor · Runs and Eval tabs show this Brain only', () => {
+  it('Conductor · Runs: a Chat tab lane and a Hive lane of this Brain only, no mock lane', async () => {
+    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P'), hiveRun('d9', 'Other')], asks: [], errors: [] });
     render(<BrainRunsView name="P" />);
-    expect(screen.getByTestId('bm-runrow-run_2')).toBeTruthy();
-    expect(screen.queryByTestId('bm-runrow-run_9')).toBeNull();
-    cleanup();
+    expect(screen.getByTestId('bm-runcard-run_2')).toBeTruthy();
+    expect(screen.queryByTestId('bm-runcard-run_9')).toBeNull();
+    const hive = screen.getByTestId('bm-lane-hive');
+    await waitFor(() => expect(hive.querySelectorAll('[data-testid="swarm-out-run"]')).toHaveLength(1));
+    expect(hive.textContent).toContain('Hive d1');
+    expect(hive.textContent).not.toContain('Hive d9');
+    expect(screen.getByTestId('bm-panel-runs').textContent).not.toContain('Local Worker');
+    expect(screen.getByTestId('bm-panel-runs').textContent?.toLowerCase()).not.toContain('mock');
+  });
+
+  it('a local Run card shows the Hive card\'s cells, and — for what the Run did not record', () => {
+    mockAnalytics.mockReturnValue({
+      window: '30d', overall: {}, trend: [],
+      byProject: [{ project: 'P', runs: [
+        run('run_2', { activeS: 600, finishedAt: '2026-10-29T10:00:00Z', humanDecisions: 2, costUsd: 1.234,
+          billedTokens: 4_800_000, rework: 1, landing: 'landed',
+          audit: [{ dim: 'Run Isolation', verdict: 'PASS', detail: 'isolated' }, { dim: 'Speed', verdict: 'WARN', detail: '10 min' }] }),
+        run('run_3', { notLanded: true, landing: 'not_landed', notLandedReason: 'final_stale' }),
+      ] }],
+    });
+    render(<BrainRunsView name="P" />);
+    const full = screen.getByTestId('bm-runcard-run_2');
+    const cell = (card: HTMLElement, k: string) => card.querySelector(`[data-testid="swarm-out-stat-${k}"]`)?.textContent ?? '';
+    expect(cell(full, 'cost')).toContain('$1.23');
+    expect(cell(full, 'tokens')).toContain('4.8M');
+    expect(cell(full, 'human')).toContain('2');
+    expect(cell(full, 'rework')).toContain('1');
+    expect(full.querySelector('[data-testid="judge-tag"]')).toBeTruthy();
+    expect(full.querySelector('[data-testid="bm-runcard-brain"]')?.textContent).toContain('P');
+    const bare = screen.getByTestId('bm-runcard-run_3');
+    for (const k of ['time', 'human', 'cost', 'tokens']) expect(cell(bare, k)).toContain('—');
+    expect(bare.querySelector('[data-testid="swarm-out-stat-rework"]')).toBeNull();
+    expect(bare.querySelector('[data-testid="judge-tag"]')).toBeNull();
+    expect(bare.querySelector('[data-testid="bm-runcard-ended"]')?.textContent).toContain('final_stale');
+  });
+
+  it('Eval: no mock section; human decisions per Run from local and Hive records', async () => {
+    mockAnalytics.mockReturnValue({
+      window: '30d', overall: {}, trend: [],
+      byProject: [{ project: 'P', runs: [run('run_2', { humanDecisions: 2 }), run('run_3')] }],
+    });
+    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P', { state: 'stopped',
+      result: { work: { human: { approved: 3, denied: 0, unanswered: 5, answered_questions: 1 } } } })], asks: [], errors: [] });
     render(<BrainEvalView name="P" />);
-    expect(screen.getByTestId('bm-panel-eval').textContent).toContain('UNKNOWN');
+    const panel = screen.getByTestId('bm-panel-eval');
+    await waitFor(() => expect(panel.textContent).toContain('over 2 Runs that recorded them, local and Hive'));
+    expect(panel.textContent).toContain('Human decisions per Run3');   // (2 + 4) / 2
+    expect(panel.textContent).toContain('UNKNOWN');
+    expect(panel.textContent?.toLowerCase()).not.toContain('mock');
+    expect(panel.textContent).not.toContain('Change requests');
+    expect(panel.textContent).not.toContain('Queue wait');
   });
 
   it('the Project Agent page submits a request to chat and shows no mock intake', async () => {

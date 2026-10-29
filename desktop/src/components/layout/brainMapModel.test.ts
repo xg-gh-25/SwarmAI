@@ -8,8 +8,9 @@
 import { describe, it, expect } from 'vitest';
 import type { BrainDetail, ReviewData } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
-import { sectionCounts, projectRuns, runTone, needsYouItems, brainEval, hubSummary, hubNeeds, brainSignal, generalNeed } from './brainMapModel';
+import { sectionCounts, projectRuns, runTone, needsYouItems, needsCount, brainHiveRuns, humanPerRun, brainEval, hubSummary, hubNeeds, brainSignal, generalNeed } from './brainMapModel';
 import type { BrainSummary, GeneralBrain } from '../../services/ddd';
+import type { SwarmOutRun } from '../../services/swarmOut';
 
 const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   id: 'run_a', requirement: 'Fix it', status: 'completed', profile: 'bugfix', progress: '8/8',
@@ -75,6 +76,28 @@ describe('brainMapModel', () => {
     const items = needsYouItems([run({ id: 'r1', needsYou: true, pauseKind: 'decision' }), run({ id: 'r2' })], review);
     expect(items.map((i) => i.kind + ':' + i.id)).toEqual(['run:r1', 'proposal:p1']);
     expect(items[0].detail).toContain('question');
+  });
+
+  it('needsYouItems: what Need You holds beyond the lists is a counted row, and the counts add up to the header', () => {
+    const items = needsYouItems([run({ id: 'r1', needsYou: true })], review, null,
+      { paused_run: 2, cultivation: 1, escalation: 2, job: 1, local_root: 1, other_source: 1 });
+    expect(items.map((i) => `${i.id}:${i.count}`)).toEqual(
+      ['r1:1', 'p1:1', 'runs-unlisted:1', 'escalations:2', 'jobs:1', 'repos:1', 'other:1']);
+    expect(needsCount(items)).toBe(2 + 1 + 2 + 1 + 1 + 1);   // the attention channel's pending
+  });
+
+  it('brainHiveRuns: a Brain\'s Hive runs of the last 30 days, newest first; humanPerRun over the recorded ones', () => {
+    const now = Date.parse('2026-10-30T00:00:00Z');
+    const h = (id: string, brain: string | null, sent: string, o: Record<string, unknown> = {}) =>
+      ({ dispatch_id: id, sent_at: sent, project_agent: brain ? { brain } : null, ...o }) as unknown as SwarmOutRun;
+    const got = brainHiveRuns([
+      h('old', 'P', '2026-09-01T00:00:00Z'), h('a', 'P', '2026-10-20T00:00:00Z'), h('b', 'P', '2026-10-29T00:00:00Z'),
+      h('other', 'Q', '2026-10-29T00:00:00Z'), h('res', null, '2026-10-28T00:00:00Z', { result: { project_agent: { brain: 'P' } } }),
+    ], 'P', now);
+    expect(got.map((r) => r.dispatch_id)).toEqual(['b', 'res', 'a']);
+    const withHuman = h('x', 'P', '2026-10-29T00:00:00Z', { result: { work: { human: { approved: 1, denied: 1, unanswered: 9, answered_questions: 2 } } } });
+    expect(humanPerRun([run({ humanDecisions: 0 }), run({ humanDecisions: null })], [withHuman, got[0]])).toEqual({ avg: 2, runs: 2 });
+    expect(humanPerRun([], [])).toEqual({ avg: null, runs: 0 });
   });
 
   it('brainEval never invents a number', () => {
