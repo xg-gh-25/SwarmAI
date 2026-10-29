@@ -1842,10 +1842,18 @@ class LifecycleManager:
 
                 # Skip only if today's DailyActivity already holds this session's
                 # SUMMARY. Its checkpoint / crash-recovery block carries the full id
-                # too, and that session still needs its post-session hooks.
-                from core.daily_activity_writer import has_session_summary
-                if has_session_summary(da_content, sid):
-                    continue
+                # too, and that session still needs its post-session hooks. A worker
+                # Hive keeps no DailyActivity: there, a session whose S2/S7 job exists
+                # already had its (only) hook (core/app_role).
+                from core.app_role import is_worker
+                if is_worker():
+                    from core.ingestion import s2_jobs
+                    if await asyncio.to_thread(s2_jobs.known, sid):
+                        continue
+                else:
+                    from core.daily_activity_writer import has_session_summary
+                    if has_session_summary(da_content, sid):
+                        continue
 
                 msg_count = await db.messages.count_by_session(sid)
                 if msg_count < 2:

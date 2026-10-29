@@ -1984,12 +1984,16 @@ def register_runtime_hooks(
         matcher="Agent|Task",
     )
 
-    # Phase 2: PostToolUse session checkpoint
-    registry.register(
-        "PostToolUse",
-        create_session_checkpoint(session_context),
-        "session_checkpoint",
-    )
+    # Phase 2: PostToolUse session checkpoint (it upserts DailyActivity and leaves a
+    # crash checkpoint the next session's resume context reads: neither on a worker
+    # Hive, where the next session is another dispatched task, core/app_role)
+    from core.app_role import is_worker
+    if not is_worker():
+        registry.register(
+            "PostToolUse",
+            create_session_checkpoint(session_context),
+            "session_checkpoint",
+        )
 
     # PreToolUse: persist-skill tracker (records s_persist/s_self-evolution this turn)
     registry.register(
@@ -2039,12 +2043,14 @@ def register_runtime_hooks(
         "post_compact_injection",
     )
 
-    # Phase 2: UserPromptSubmit high-signal observation capture
-    registry.register(
-        "UserPromptSubmit",
-        create_high_signal_capture(session_context),
-        "high_signal_capture",
-    )
+    # Phase 2: UserPromptSubmit high-signal observation capture (it writes DailyActivity,
+    # which a worker Hive does not keep: core/app_role)
+    if not is_worker():
+        registry.register(
+            "UserPromptSubmit",
+            create_high_signal_capture(session_context),
+            "high_signal_capture",
+        )
 
     # UserPromptSubmit: reset per-turn persist-skill tracker (new turn = clean slate)
     registry.register(

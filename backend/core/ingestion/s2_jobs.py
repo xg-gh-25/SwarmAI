@@ -41,6 +41,17 @@ def set_waker(fn: Callable[[], None] | None) -> None:
     _WAKER = fn
 
 
+def known(session_id: str) -> bool:
+    """Whether a session job was ever requested for ``session_id`` (any state)."""
+    from .api import connect_rw
+    conn = connect_rw()
+    try:
+        return conn.execute("SELECT 1 FROM ingestion_s2_jobs WHERE session_id=?",
+                            (session_id,)).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
             delay: timedelta = timedelta(0)) -> str:
     """Queue a session job for ``session_id``; returns the job's state after the request."""

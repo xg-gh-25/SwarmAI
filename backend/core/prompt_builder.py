@@ -1341,7 +1341,10 @@ class PromptBuilder:
                         bootstrap = ""
                 daily_activity = ""
                 daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
-                if daily_activity_dir.is_dir() and not is_channel:
+                from core.app_role import is_worker
+                # a worker Hive injects none: what is there is an earlier dispatched
+                # task's text, which must not reach the next one (core/app_role)
+                if daily_activity_dir.is_dir() and not is_channel and not is_worker():
                     from core.memory_injection import select_daily_activity
                     selection = select_daily_activity(
                         Path(working_directory),

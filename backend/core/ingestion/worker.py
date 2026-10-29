@@ -466,7 +466,8 @@ def _stats_key(row: sqlite3.Row) -> tuple[str, str, str, str, str, str, str]:
     digest = hashlib.sha256(json.dumps(vector, sort_keys=True).encode()).hexdigest()[:16] if vector else "-"
     return (
         row["created_at"][:10], row["source"], row["lane"], destination.get("store") or "-",
-        row["state"], row["reason"] or "-", digest,
+        # a candidate never split into units (a worker Hive judges nothing) expired as it was
+        row["state"] or "expired_unprocessed", row["reason"] or "-", digest,
     )
 
 
@@ -502,8 +503,8 @@ def cleanup_expired(
                 (_utcnow().isoformat(), *ids),
             )
             rows = conn.execute(
-                f"""SELECT i.created_at, i.source, i.lane, u.state, u.reason, u.decision,
-                            u.destination, u.unit_id
+                f"""SELECT i.id AS candidate_id, i.created_at, i.source, i.lane, u.state, u.reason,
+                            u.decision, u.destination, u.unit_id
                      FROM ingestion_inbox i LEFT JOIN ingestion_units u ON u.candidate_id=i.id
                      WHERE i.id IN ({marks})""",
                 ids,
@@ -512,7 +513,7 @@ def cleanup_expired(
             for row in rows:
                 key = _stats_key(row)
                 values = grouped.setdefault(key, [set(), 0, 0])
-                values[0].add(next(candidate for candidate in ids if row["unit_id"] is None or row["unit_id"].startswith(candidate + ".")))
+                values[0].add(row["candidate_id"])
                 values[1] += 1 if row["unit_id"] else 0
             for key, values in grouped.items():
                 conn.execute(
@@ -878,7 +879,15 @@ class S2JobExecutor:
 
 
 class WorkerHandle:
-    """Thread owner that joins the worker before releasing its owner lock."""
+    """Thread owner that joins the worker before releasing its owner lock.
+
+    On a worker Hive (core/app_role) only the extraction runs: the S2/S7 session jobs,
+    plus a daily expiry of old inbox rows. The judge and writer (the scheduler lane, the
+    run lane, the summary lane) never start, so the Hive writes none of its own
+    cognition; its lessons stay in the inbox for the host (design
+    2026-10-29-hive-run-record-and-worker-role §3.2)."""
+
+    MAINTENANCE_S = 24 * 3600
 
     def __init__(self, owner: Owner, workspace_root: Path) -> None:
         self.owner = owner
@@ -887,6 +896,26 @@ class WorkerHandle:
         self.s2_executor = S2JobExecutor()
         self._thread = threading.Thread(target=self._run, name="cdf-ingestion", daemon=True)
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.extract_only = False
+        self._maint_stop = threading.Event()
+        self._maint = threading.Thread(target=self._maintain, name="cdf-worker-maintenance", daemon=True)
+
+    def _maintain(self) -> None:
+        """Worker role: expire old inbox rows at start and once a day (the job the
+        scheduler lane does on a full instance)."""
+        while True:
+            try:
+                conn = connect_rw()
+                try:
+                    removed = cleanup_expired(conn)
+                finally:
+                    conn.close()
+                if removed:
+                    logger.info("CDF worker maintenance: %d expired candidates removed", removed)
+            except Exception:  # noqa: BLE001 — tried again on the next tick
+                logger.warning("CDF worker maintenance failed", exc_info=True)
+            if self._maint_stop.wait(self.MAINTENANCE_S):
+                return
 
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
@@ -896,7 +925,18 @@ class WorkerHandle:
             self._loop.close()
 
     def start(self) -> None:
-        """Start the scheduler and dedicated run-lane threads."""
+        """Start the scheduler and dedicated run-lane threads (on a worker Hive, the
+        extraction and its maintenance only)."""
+        from core.app_role import is_worker
+        self.extract_only = is_worker()
+        if self.extract_only:
+            self.s2_executor.start()
+            try:
+                self._maint.start()
+            except BaseException:
+                self.s2_executor.stop_and_join(10)
+                raise
+            return
         self._thread.start()
         self.run_executor.start()
         self.s2_executor.start()
@@ -907,6 +947,15 @@ class WorkerHandle:
 
     def stop_and_join(self, timeout: float = 30) -> None:
         """Stop and join all worker activity, then release ownership."""
+        if self.extract_only:
+            self._maint_stop.set()
+            self.s2_executor.stop_and_join(timeout)
+            if self._maint.ident is not None:
+                self._maint.join(timeout)
+            if self._maint.is_alive():
+                raise RuntimeError("CDF worker maintenance did not stop")
+            self.owner.release()
+            return
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self.worker.stop)
         self.run_executor.stop_and_join(timeout)

@@ -2,7 +2,7 @@
 title: Hive 的 run 记录和 worker 角色 —— 一个 run 的产物封存一次、取回一次，Hive 不再自己长大脑
 created: 2026-10-29
 updated: 2026-10-29
-status: draft (r2)
+status: accepted (r3), step 1 implemented
 project: SwarmAI
 extends:
   - docs/design/2026-10-28-project-agent-flow.md（第 7–10 步：派发、记录、代码回来、经验回流）
@@ -10,6 +10,11 @@ extends:
 ---
 
 # Hive 的 run 记录和 worker 角色
+
+**r3（XG 2026-10-29）：** D1–D4 按建议定（默认 worker、关 DailyActivity、人收下才交判官、保留 30 天）。第 1 步已经实现，按实现和它的评审改了 §3：
+- **expiry 清理的位置：** 不放在调度器任务里，放进 `WorkerHandle` 自己的每日维护线程。
+- **每轮的检查点：** 它也会写 DailyActivity，还会留下一个崩溃检查点，下一个会话的 resume 上下文会读它。所以在 worker 上不注册，也不读检查点。
+- **启动失败的条件：** 只有拿到了 owner 锁、抽取却没启动起来时，才拒绝启动。锁被另一个活着的后端占着时照常启动，因为抽取由那个后端在做。
 
 **r2（2026-10-29）：** r1 经过一次零上下文的前提审查（correctness），对着源码核实。审查结论：问题 A–C 都是真的，r1 引用的代码位置基本准确。审查找出 3 个 HIGH 和 6 个 MED，这一版按原因一次改完：
 
@@ -82,7 +87,7 @@ Hive 改成纯执行者（worker 角色）：不写自己的大脑，只把一�
 
 默认值见决策 D1。角色只在启动时读一次。所有地方都调同一个函数 `core/app_role.py: is_worker()` 来判断。
 
-worker 不能没有抽取线程。如果 CDF 的 owner 锁被别的进程占着，现在的做法是只记一条 info（`main.py:1426-1427`）。worker 上改成启动失败并报错：没有抽取，就没有教训，也就没有 `closed`。
+worker 不能没有抽取线程：拿到了 owner 锁、抽取却没能启动时，worker 拒绝启动并报错。没有抽取，就没有教训，也就没有 `closed`。owner 锁被另一个活着的后端占着时照常启动（和现在一样只记一条 info），因为抽取由那个后端在做。
 
 ### 3.2 worker 上关什么、留什么
 
@@ -90,18 +95,15 @@ worker 不能没有抽取线程。如果 CDF 的 owner 锁被别的进程占着�
 |---|---|---|
 | S2/S7 抽取（`S2JobExecutor`，`worker.py:814-877`）。S3 在 pipeline 落地时入收件箱（`reflect_job.py:24-36`） | **留** | 教训从这里来 |
 | CDF 判官和写入器：`IngestionWorker`（含 summary lane 和启动时的 `recover`、`requeue_*`，`worker.py:613-697`），以及 `RunLaneExecutor`（`:733-788`） | **关**。在 `WorkerHandle.start`（`worker.py:898-902`）里判断：worker 只启动 `S2JobExecutor` | Hive 不写自己的大脑。没有写入器，也就没有日志需要 `recover` |
-| 收件箱过期清理 `cleanup_expired` | 现在只在 `IngestionWorker.run` 启动时调（`worker.py:620-629`）。worker 上改由调度器白名单里的 `records-sweep` 每天调一次 | 收件箱不会无限增长 |
-| DailyActivity 的写入：会话关闭、高信号捕获、启动时补写 | **关**（决策 D2）。会话关闭的在钩子注册处判断（`main.py:1258-1317`），高信号捕获在它的注册处判断（`runtime_hooks.py:2043-2047`），启动补写在 `main.py:1250-1256` 判断 | 去掉跨派发任务的串扰 |
+| 收件箱过期清理 `cleanup_expired` | 现在只在 `IngestionWorker.run` 启动时调（`worker.py:620-629`）。worker 上由 `WorkerHandle` 的维护线程在启动时和之后每天调一次。顺带修了一个问题：一直没被拆成单元的候选（worker 上全是这种）过期时会撞 NOT NULL 约束，统计也会少算 | 收件箱不会无限增长 |
+| DailyActivity 的写入和读取：会话关闭、高信号捕获、每轮检查点（它也往 DailyActivity 写一块，并留下 `state/session_checkpoint.json`）、启动时补写，以及 prompt 里的注入和 resume 上下文里的崩溃检查点 | **全关**（决策 D2）。分别在 `core/session_hooks.register_default_hooks`、`runtime_hooks.register_runtime_hooks`、`main.py` 的崩溃恢复、`prompt_builder` 的 DailyActivity 注入、`context_injector._build_checkpoint` 里判断。worker 上，启动时补跑会话钩子的扫描改成跳过已经有 S2 任务的会话 | 去掉跨派发任务的串扰：那里的"上一个会话"是另一个派发任务 |
 | 会话关闭钩子 | 只留 `SessionExtractionHook`（排 S2/S7 任务）和 `IngestionSessionKickHook`。关掉：`ContextHealthHook`（deep pass 写 `AGENTS.md`、搬 DailyActivity，`context_health_hook.py:1293-1303,2063-2091`）、`WorkspaceAutoCommitHook`、`EvolutionMaintenanceHook`、`TodoLifecycleHook`、`SkillMetricsHook`（往 SkillEvals 写纠错，是 evolution 的输入） | 这些钩子写的是 Hive 自己的认知、工作区，或者 Hive 上没人用的状态 |
-| 调度器 | 照常启动，系统任务改成白名单：`worktree-sweep`、`log-patrol`、`session-health-probe`、`records-sweep`。新加的系统任务默认不在 worker 上跑 | 运维要留，写认知的不跑。用白名单，新任务默认关 |
-| 每轮的观察类钩子：纠错捕获、子 agent 捕获、错误模式检测（写 `state/corrections.jsonl`，`runtime_hooks.py:194,303,1326`），以及每轮检查点（写 `state/session_checkpoint.json`） | **留** | 写的是 `state/` 下的运行数据，不是认知存储。它们的读者（evolution）在 worker 上不跑 |
+| 调度器 | 照常启动，系统任务改成白名单（`jobs/scheduler.WORKER_SYSTEM_JOBS`）：`worktree-sweep`、`log-patrol`、`session-health-probe`，第 2 步再加 `records-sweep`。用户任务也不跑。新加的系统任务默认不在 worker 上跑 | 运维要留，写认知的不跑。用白名单，新任务默认关 |
+| 每轮的观察类钩子：纠错捕获、子 agent 捕获、错误模式检测（写 `state/corrections.jsonl`，`runtime_hooks.py:194,303,1326`） | **留** | 写的是 `state/` 下的运行数据，不是认知存储。它们的读者（evolution）在 worker 上不跑 |
 | prompt 组装时写的 `.context/` 模板和 L1 缓存（`context_directory_loader.py:747-819,912,1359-1379`） | **留** | 派生缓存，每次都从模板重建。I1 按名字排除它们 |
 | bridge、Brain 安装、会话、钩子、gate | **留** | 执行面本身 |
 
-**步骤 1 的一部分（审查列为没核实）：** 动手前，要把 worker 上一次完整会话的实际写入目标全部列出来：
-- **方法：** 在测试里对工作区做前后快照，逐个比对文件。
-- **要覆盖的写入方：** pipeline 引擎、`run_knowledge`、code intel、skill 投影、S7 复盘用的那个 fork 会话。
-- **快照里出现表外的写入：** 要么补进上表，要么说明为什么可以留。不能靠扩大 I1 的排除范围把它消掉。
+**完整会话的写入快照放到第 5 步：** 一次完整会话（pipeline 引擎、`run_knowledge`、code intel、skill 投影、S7 复盘用的 fork 会话）只能在真机 Hive 上跑，单元测试起不了 CLI。所以第 1 步的测试逐个覆盖上表的每个判断点，I1 的全会话快照在第 5 步的真机端到端里做。快照里出现表外的写入，要么补进上表，要么说明为什么可以留，不能靠扩大 I1 的排除范围消掉。
 
 ### 3.3 Brain 漂移计数的新含义
 
@@ -182,7 +184,7 @@ Hive/records/<session>/
 
 ### 4.5 Hive 上的保留期
 
-记录保留 30 天（决策 D4），由 `records-sweep` 删掉过期的会话目录。会话被删不影响它的记录。
+记录保留 30 天（决策 D4），由调度器白名单里的 `records-sweep`（第 2 步新增）删掉过期的会话目录。会话被删不影响它的记录。
 
 ### 4.6 迁移完成后删掉什么
 
@@ -226,11 +228,11 @@ Hive/records/<session>/
 
 | 步 | 内容 | 删掉什么 | 评审 |
 |---|---|---|---|
-| 1 | worker 角色：`app_role.is_worker()`，以及 §3.2 的各个判断点，包括列全写入目标的那份快照测试 | 不再有"Hive 自己写 Brain、下次同步还原" | correctness |
+| 1 ✅ | worker 角色：`app_role.is_worker()`，以及 §3.2 的各个判断点（每个判断点一个测试，变异检查全部抓到） | 不再有"Hive 自己写 Brain、下次同步还原" | correctness（2 个 MED 已修：检查点漏关、启动失败条件太宽） |
 | 2 | 记录的骨架和教训：会话目录、清单、`lessons`/`closed` 的增量封存、两个记录接口、`records-sweep`。本机的 `pull` 和教训读取方改读本机记录，老 Hive 回退 | 教训的 24 小时窗口和"会话没了就拿不到"，`hive_lessons.take`、`/api/hive/lessons` | correctness、security |
 | 3 | `bundle` 和 `turn` 的封存，结果汇总和 `prepare` 改读记录 | 取消息那一套、`checks_partial`、`_download`、`/api/hive/bundles` | correctness、security |
 | 4 | 按 D3 的选择改教训的入队时机，同时改第 10 步的测试 | — | security |
-| 5 | 两台 Hive 更新后跑真机端到端，按 §4.6 删剩下的旧通道 | 回退路径 | correctness |
+| 5 | 两台 Hive 更新后跑真机端到端（含 I1 的全会话快照），按 §4.6 删剩下的旧通道 | 回退路径 | correctness |
 
 **最后要成立的不变量（测试在设计定下时一起写）：**
 - **I1：** worker 上跑一个完整会话之后（含一个 pipeline run 和会话复盘），受治理的认知文件 sha256 和之前一致，收件箱里有这个会话的教训单元。

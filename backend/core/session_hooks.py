@@ -661,13 +661,23 @@ def register_default_hooks(manager: "SessionLifecycleHookManager", *, git_lock: 
     """Register the product's post-session hooks on *manager*, in order; returns their
     names. Order matters: DailyActivity remains the working-memory product; S2 is the
     only semantic session extractor. The CDF kick is registered last by the caller,
-    after the session registry exists."""
+    after the session registry exists.
+
+    A worker Hive (core/app_role) registers the S2/S7 extraction only: the other hooks
+    write its own cognition (DailyActivity, AGENTS.md, SkillEvals), commit its workspace
+    or move ToDos nobody there has (design 2026-10-29-hive-run-record-and-worker-role
+    §3.2)."""
+    from core.app_role import is_worker
+    from core.ingestion.sources.s2_session import SessionExtractionHook
+    if is_worker():
+        hook = SessionExtractionHook()
+        manager.register(hook)
+        return [hook.name]
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
     from hooks.context_health_hook import ContextHealthHook
     from hooks.daily_activity_hook import DailyActivityExtractionHook
     from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
     from hooks.todo_lifecycle_hook import TodoLifecycleHook
-    from core.ingestion.sources.s2_session import SessionExtractionHook
 
     hooks: list[Any] = [
         DailyActivityExtractionHook(summarization_pipeline=summarization_pipeline,

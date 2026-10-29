@@ -62,6 +62,10 @@ def load_feeds(config: dict) -> list[Feed]:
     return feeds
 
 
+#: the system jobs a worker Hive runs (core/app_role); an allowlist, so a new job is off there
+WORKER_SYSTEM_JOBS = frozenset({"worktree-sweep", "log-patrol", "session-health-probe"})
+
+
 def load_jobs() -> list[Job]:
     """Load system jobs (from code) + user jobs (from user-jobs.yaml).
 
@@ -71,6 +75,12 @@ def load_jobs() -> list[Job]:
     """
     all_jobs: list[Job] = list(get_all_system_jobs())
     seen_ids: set[str] = set(SYSTEM_JOB_IDS)
+    from core.app_role import is_worker
+    if is_worker():
+        # a worker Hive runs only the operational jobs it needs; every other job, and
+        # any job added later, writes cognition it must not keep (design
+        # 2026-10-29-hive-run-record-and-worker-role §3.2). No user jobs either.
+        return [j for j in all_jobs if j.id in WORKER_SYSTEM_JOBS]
 
     # Load user jobs from YAML
     if USER_JOBS_FILE.exists():

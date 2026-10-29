@@ -948,8 +948,10 @@ def _build_checkpoint(messages: list[dict], directives_char_budget: int = 0) -> 
         dir_lines = "\n".join(f"  - \"{d}\"" for d in directives)
         sections.append(f"**User directives:**\n{dir_lines}")
 
-    # 10. Crash checkpoint (if prior session crashed)
-    crash_info = _merge_crash_checkpoint()
+    # 10. Crash checkpoint (if prior session crashed). Not on a worker Hive: a
+    # checkpoint there is another dispatched task's (core/app_role)
+    from core.app_role import is_worker
+    crash_info = None if is_worker() else _merge_crash_checkpoint()
     if crash_info:
         sections.append(f"**Crash recovery:** {crash_info}")
 

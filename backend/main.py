@@ -1247,11 +1247,14 @@ async def lifespan(app: FastAPI):
         logger.warning("Failed to generate permissions.json (non-critical): %s", exc)
 
     # ── Recover crash checkpoint (if any) before session infra starts ─
+    # (not on a worker Hive: it writes no DailyActivity of its own, core/app_role)
+    from core.app_role import is_worker as _is_worker
     try:
-        from hooks.daily_activity_hook import recover_crash_checkpoint as _recover_checkpoint
-        _recovered = _recover_checkpoint()
-        if _recovered:
-            logger.info("Crash checkpoint recovered into DailyActivity")
+        if not _is_worker():
+            from hooks.daily_activity_hook import recover_crash_checkpoint as _recover_checkpoint
+            _recovered = _recover_checkpoint()
+            if _recovered:
+                logger.info("Crash checkpoint recovered into DailyActivity")
     except Exception:
         logger.debug("Crash checkpoint recovery skipped (non-fatal)", exc_info=True)
 
@@ -1393,21 +1396,30 @@ async def lifespan(app: FastAPI):
     # CDF runs in every full HTTP mode, but the file lock permits one owner per data dir.
     _ingestion_handle = None
     _ingestion_owner = None
+    _ingestion_failed = False
     try:
         from core.ingestion.owner import acquire as _acquire_ingestion_owner
         from core.ingestion.worker import WorkerHandle as _IngestionWorkerHandle
         from core.project_registry import get_swarmws as _ingestion_workspace
         _ingestion_owner = await asyncio.to_thread(_acquire_ingestion_owner)
         if _ingestion_owner is not None:
-            _ingestion_handle = _IngestionWorkerHandle(_ingestion_owner, _ingestion_workspace())
-            _ingestion_handle.start()
+            _handle = _IngestionWorkerHandle(_ingestion_owner, _ingestion_workspace())
+            _handle.start()
+            _ingestion_handle = _handle   # only a started handle is stopped at shutdown
             logger.info("CDF ingestion owner worker started")
         else:
             logger.info("CDF ingestion owner held by another backend; this process is enqueue/read-only")
     except Exception:
+        _ingestion_failed = True
         if _ingestion_handle is None and _ingestion_owner is not None:
             _ingestion_owner.release()
         logger.exception("CDF ingestion worker startup failed (non-fatal)")
+    if _ingestion_failed and _is_worker():
+        # a worker Hive whose extraction could not start would end every run with no
+        # lessons and no record of being done: refuse to start instead (design §3.1).
+        # The owner lock held by another live backend is not this: that one extracts.
+        raise RuntimeError("a worker Hive needs its CDF extraction, which did not start "
+                           "(see the log above)")
 
     # Resolve the bundled CLI version once at boot; never run it in /health.
     global _cli_version
