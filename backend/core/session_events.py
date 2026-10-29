@@ -171,6 +171,39 @@ class SessionEventHub:
         self._logs: dict[str, _Log] = {}
         self._subs: set[_Subscriber] = set()
         self._activity_clock = 0
+        # sessions whose events a relay republishes from a Hive (core/swarm_out_relay):
+        # their activity seq comes from the Hive's clock, so local activity writes skip them
+        self._relayed: set[str] = set()
+
+    # ── relayed sessions (docs/design/2026-10-29-swarm-out-hive-session-tab.md §3) ──
+    def mark_relayed(self, session_id: str) -> None:
+        self._relayed.add(session_id)
+
+    def unmark_relayed(self, session_id: str) -> None:
+        self._relayed.discard(session_id)
+
+    def is_relayed(self, session_id: str) -> bool:
+        return session_id in self._relayed
+
+    def reset_relayed(self, session_id: str) -> None:
+        """Forget a relayed session's buffer and turn in progress, keeping its seq.
+
+        A relay that stops (or whose Hive restarted) mid-turn would otherwise leave
+        an active turn here that no turn_end ever closes: a later JOIN would replay
+        it and ``open_turn_id`` would never clear. The seq is kept for the same
+        reason as in ``drop_session``. Unlike ``drop_session`` it does not touch the
+        activity (that is the Hive's, not this process's clock)."""
+        log = self._logs.get(session_id)
+        if log is None:
+            return
+        log.buf.clear()
+        log.active = None
+        log.active_turn = None
+        log.phase = None
+        log.claim = None
+        log.claim_phase = None
+        log.claim_task = None
+        log.waiters = False
 
     # ── publishing ───────────────────────────────────────────────────
     def publish(self, session_id: str, event: Mapping[str, Any], *, turn_id: str,
@@ -317,7 +350,10 @@ class SessionEventHub:
         The seq is microseconds since the epoch, bumped past the last one handed
         out: strictly increasing per session within a process AND across a daemon
         restart (a tab holding the old process's seq must accept the new one's),
-        and it survives ``drop_session``."""
+        and it survives ``drop_session``. A relayed session is left alone: its
+        activity seq is the Hive's (``mark_relayed``)."""
+        if session_id in self._relayed:
+            return None
         log = self._logs.get(session_id)
         if log is None:
             log = self._logs[session_id] = _Log(self._buffer_size)
@@ -331,7 +367,10 @@ class SessionEventHub:
     def drop_session(self, session_id: str) -> None:
         """Free a released session's replay buffer. The seq counter is kept: a
         tab may still hold a cursor for the session, and a counter that started
-        over within one epoch would make its next events look like duplicates."""
+        over within one epoch would make its next events look like duplicates.
+        A relayed session is not this process's to release (``reset_relayed``)."""
+        if session_id in self._relayed:
+            return
         log = self._logs.get(session_id)
         if log is not None:
             log.buf.clear()
@@ -351,14 +390,17 @@ class SessionEventHub:
 
     # ── subscribing ──────────────────────────────────────────────────
     async def subscribe(self, cursors: Mapping[str, int],
-                        epoch: Optional[str]) -> AsyncIterator[dict]:
+                        epoch: Optional[str], *, only: bool = False) -> AsyncIterator[dict]:
+        """``only``: deliver the sessions named in ``cursors`` and no others (a relay
+        that watches one session of this daemon need not download all of them)."""
         sub = _Subscriber(self._queue_size)
         self._subs.add(sub)  # register BEFORE reading any buffer
         try:
             yield {
                 "type": "events_hello",
                 "epoch": self.epoch,
-                "seqs": {sid: log.seq for sid, log in self._logs.items()},
+                "seqs": {sid: log.seq for sid, log in self._logs.items()
+                         if not only or sid in cursors},
             }
             high: dict[str, int] = {}
             same_epoch = epoch == self.epoch
@@ -403,6 +445,8 @@ class SessionEventHub:
                 while sub.queue:
                     env = sub.queue.popleft()
                     sid = env["sessionId"]
+                    if only and sid not in cursors:
+                        continue
                     if env["eventSeq"] <= high.get(sid, 0):
                         continue
                     high[sid] = env["eventSeq"]

@@ -1652,6 +1652,11 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("In-process scheduler stopped")
+    try:
+        from core import swarm_out_relay
+        await swarm_out_relay.manager().stop_all()
+    except Exception as exc:  # noqa: BLE001 — shutdown goes on
+        logger.debug("swarm_out_relay stop failed: %s", exc)
     await _svc_mgr.stop_all()
     logger.info("Managed services stopped")
     await channel_gateway.shutdown()
@@ -1789,6 +1794,9 @@ from routers.hive_brains import router as hive_brains_router  # noqa: E402
 app.include_router(hive_brains_router, prefix="/api/hive", tags=["hive"])
 from routers.swarm_out import router as swarm_out_router  # noqa: E402
 app.include_router(swarm_out_router, prefix="/api/swarm-out", tags=["swarm-out"])
+from routers.swarm_out_remote import router as swarm_out_remote_router  # noqa: E402
+# a dispatched Hive session opened in a tab (docs/design/2026-10-29-swarm-out-hive-session-tab.md)
+app.include_router(swarm_out_remote_router, prefix="/api/swarm-out/remote", tags=["swarm-out"])
 app.include_router(apps_router, prefix="/api/apps", tags=["apps"])
 
 # DDD Cultivation API (list/approve/reject proposals)

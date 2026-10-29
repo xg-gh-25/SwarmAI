@@ -242,8 +242,13 @@ def publish(router, session_id: str) -> None:
 
 async def snapshot(router, session_id: str):
     """The state a (re)connecting subscription gets for a session: the poll's
-    entry, or None when the session has no unit (the poll lists it not at all)."""
+    entry, or None when the session has no unit (the poll lists it not at all). A
+    session relayed from a Hive (core/swarm_out_relay) gets the relay's cached entry."""
     from .session_router import PREWARM_SESSION_PREFIX
+    from . import swarm_out_relay
+    relayed = swarm_out_relay.manager().state_entry(session_id)
+    if relayed is not None:
+        return relayed   # a Hive session relayed here: the Hive's state, as last read
     unit = router.get_unit(session_id) if router is not None else None
     if unit is None or session_id.startswith(PREWARM_SESSION_PREFIX):
         return None

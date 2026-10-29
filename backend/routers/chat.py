@@ -656,6 +656,23 @@ async def answer_question(request: Request):
                 )
                 return
 
+            # An answer for a question that waits on another session's prompt board is
+            # refused, so a caller's session id check (the Host's Swarm Out proxy) bounds
+            # what gets answered. A tool_use_id on no board goes on as before (the
+            # board is where every AskUserQuestion is published; refusing an unknown
+            # one would risk a local tab's answer).
+            owner = _pm.session_of_prompt(answer_request.tool_use_id)
+            if owner is not None and owner != answer_request.session_id:
+                logger.warning("answer-question: tool_use %s belongs to another session — refusing",
+                               answer_request.tool_use_id)
+                yield _build_error_event(
+                    code="ANSWER_WRONG_SESSION",
+                    message="This question belongs to another session",
+                    detail="The answer was not delivered.",
+                    suggested_action="Answer the question in the session that asked it.",
+                )
+                return
+
             answer_text = json.dumps(answer_request.answers) if answer_request.answers else ""
             async for msg in _get_router().continue_with_answer(
                 session_id=answer_request.session_id,
@@ -707,6 +724,7 @@ async def session_events_stream(
     request: Request,
     cursors: Optional[str] = Query(None, max_length=65536),
     epoch: Optional[str] = Query(None, max_length=64),
+    only: Optional[int] = Query(None, ge=0, le=1),
 ):
     """Subscribe to every session's turn events (one stream per desktop window).
 
@@ -717,7 +735,8 @@ async def session_events_stream(
     owned by it.
     """
     parsed = session_events.parse_cursors(cursors)
-    sub = session_events.hub().subscribe(parsed, epoch)
+    # only=1: just the sessions named in cursors (the Host's Swarm Out relay watches one)
+    sub = session_events.hub().subscribe(parsed, epoch, only=bool(only))
 
     async def stream() -> AsyncIterator[str]:
         nxt: Optional[asyncio.Task] = None
@@ -909,6 +928,12 @@ async def get_streaming_state_endpoint():
         if not unit.session_id or unit.session_id.startswith(PREWARM_SESSION_PREFIX):
             continue
         result[unit.session_id] = await session_state_entry(unit, sr)
+    # A Hive session this daemon relays (core/swarm_out_relay) has no local unit; while
+    # its relay is registered it is listed from the relay's cached Hive state, so the
+    # reconcile poll never reads "no entry" as "the session ended".
+    from core import swarm_out_relay
+    for sid, entry in swarm_out_relay.manager().state_entries().items():
+        result.setdefault(sid, entry)
     return {"sessions": result}
 
 
@@ -1570,6 +1595,16 @@ async def cmd_permission_continue(request: Request):
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    # A decision for a request of another session is refused, so a caller's session id
+    # check (the Host's Swarm Out proxy) bounds what gets approved. Every stored
+    # request carries its session_id (core/security_hooks); one without goes on.
+    owner = perm_req.get("session_id")
+    if owner and owner != permission_request.session_id:
+        raise ValidationException(
+            message="Invalid request data",
+            detail="The permission request belongs to another session.",
         )
 
     # Get agent_id from the session

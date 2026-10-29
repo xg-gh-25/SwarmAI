@@ -382,6 +382,14 @@ class PermissionManager:
             return _aqm.is_open(key)
         return self.is_open(key)
 
+    def session_of_prompt(self, key: str) -> Optional[str]:
+        """The session whose board holds the prompt ``key`` (a requestId or an
+        AskUserQuestion tool_use_id), None when no board holds it."""
+        for session_id, board in list(self._prompts.items()):
+            if key in board:
+                return session_id
+        return None
+
     def prompt_session_ids(self) -> list[str]:
         """Sessions that currently have something on their board (the Hive bridge
         walks these to mirror open prompts; ``open_prompts`` drops dead ones)."""
