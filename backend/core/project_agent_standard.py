@@ -131,8 +131,7 @@ TEMPLATE: tuple[Field, ...] = (
           "choice", "default_mode", propose=("default_mode", "a mode id")),
     # 4 Guardrails
     Field("reserved_for_human", "guardrails", "Always ask me before",
-          "Each time, it stops and waits for your approval.", "you", "names", "reserved_for_human",
-          required=True),
+          "Each time, it stops and waits for your approval.", "you", "names", "reserved_for_human"),
     Field("gates", "guardrails", "Brain gates",
           "Checks from this Brain's 3-gates/, run on every command. Untick one to stop enforcing it.",
           "brain", "names", "gates.enforce", removable=True,
@@ -142,7 +141,7 @@ TEMPLATE: tuple[Field, ...] = (
     Field("landing", "guardrails", "Code lands", "Who approves code before it reaches main.", "fixed", "view"),
     # 5 Runs in
     Field("placements", "runs", "Where it may run", "Hive lets it run unattended on your cloud SwarmAI.",
-          "you", "names", "placements", required=True),
+          "you", "names", "placements"),
     # 6 Intake
     Field("handles", "intake", "Typical requests", "3-5 requests it handles, one sentence each.",
           "edit", "list", "intake.handles", required=True, example="Fix a reproducible bug in the API",

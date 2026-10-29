@@ -234,16 +234,44 @@ describe('BrainMapView · Project Agent form', () => {
     openAgent();
     expect((screen.getByTestId('bm-agent-confirm') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId('pa-missing').textContent).toContain('Typical requests');
+    expect(screen.getByTestId('pa-bar-note').textContent).toContain('Fill in first');
   });
 
-  it('a new revision starts the form afresh', () => {
+  it('a change under the page keeps the unsaved changes and says so', () => {
     (DETAIL as Record<string, unknown>).projectAgent = AGENT;
     const { rerender } = render(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
     fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'x' } });
-    expect(screen.getByTestId('pa-count')).toBeTruthy();
     (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, revision: 'r9' };
     rerender(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
-    expect(screen.queryByTestId('pa-count')).toBeNull();
+    expect(screen.getByTestId('pa-count').textContent).toBe('1 change');
+    expect((screen.getByTestId('pa-input-identity.summary') as HTMLInputElement).value).toBe('x');
+    expect(screen.getByTestId('pa-notice').textContent).toContain('kept');
+  });
+
+  it('a 409 keeps the changes', async () => {
+    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
+    editProjectAgent.mockRejectedValue({ response: { status: 409, data: { detail: 'changed' } } });
+    openAgent();
+    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'y' } });
+    fireEvent.click(screen.getByTestId('pa-save'));
+    await waitFor(() => expect(screen.getByTestId('pa-error').textContent).toContain('kept'));
+    expect(screen.getByTestId('pa-count').textContent).toBe('1 change');
+  });
+
+  it('saving a confirmed definition says it becomes a draft again', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed' };
+    openAgent();
+    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'z' } });
+    expect(screen.getByTestId('pa-save').textContent).toBe('Save as draft');
+    expect(screen.getByTestId('pa-bar-note').textContent).toContain('draft again');
+  });
+
+  it('on a Hive the form is read-only', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, form: { ...FORM, readOnly: true } };
+    openAgent();
+    expect(screen.getByTestId('pa-read-only')).toBeTruthy();
+    expect(screen.queryByTestId('pa-input-identity.summary')).toBeNull();
+    expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();
   });
 
   it('a revise note goes to chat; a confirmed definition has no confirm button', () => {

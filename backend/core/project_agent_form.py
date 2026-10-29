@@ -78,10 +78,11 @@ def _public_url(url: Optional[str]) -> Optional[str]:
         return None
     try:
         parts = urlsplit(url)
+        port = parts.port               # raises on a port that is not a number
     except ValueError:
         return None
     if parts.scheme in ("http", "https", "ssh") and parts.hostname:
-        netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
+        netloc = parts.hostname + (f":{port}" if port else "")
         return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
     return url if "@" not in url and "://" not in url else None
 
@@ -181,7 +182,7 @@ def _value(f: std.Field, v: Any) -> Any:
 
 
 def _choices(f: std.Field, d: dict[str, Any], project_dir: Path, mode: Optional[dict[str, Any]]) -> Optional[list]:
-    if f.key == "profile":
+    if f.key in ("profile", "profile_rules"):
         return sorted(PROFILES)
     if f.key == "delivery":
         return ["bundle", "branch-pr"]
@@ -217,7 +218,9 @@ def _view(f: std.Field, d: dict[str, Any], project_dir: Path, name: str, general
     if f.key == "product_guards":
         return [{"name": a, "what": b} for a, b in PRODUCT_GUARDS]
     if f.key == "landing":
-        return "You approve every landing: a Hive's commits come back as a bundle you review."
+        pr = any(m.get("delivery") == "branch-pr" for m in _modes(d))
+        return ("You approve every landing: a Hive's commits come back as a bundle you review"
+                + (", or as a branch you open a pull request from." if pr else "."))
     if f.key == "profiles":
         from core.run_protocol.lifecycle import PROFILE_STAGES
         starts = {}
@@ -247,6 +250,21 @@ def _hive_row(d: dict[str, Any], project_dir: Path) -> dict[str, Any]:
     return {"local_modes": local}
 
 
+def missing_required(doc: dict[str, Any]) -> list[str]:
+    """The required fields still empty in a (normalized) definition: shared ones by
+    label, a mode's own ones as ``label (mode)``. A finished draft has none."""
+    out: list[str] = []
+    for f in std.TEMPLATE:
+        if not (f.required and f.store):
+            continue
+        if f.store.startswith("modes[]."):
+            key = f.store[len("modes[]."):]
+            out += [f"{f.label} ({m.get('id')})" for m in _modes(doc) if _empty(_value(f, m.get(key)))]
+        elif _empty(_value(f, _get(doc, f.store))):
+            out.append(f.label)
+    return out
+
+
 def build_form(doc: dict[str, Any], project_dir: Path, name: Optional[str] = None) -> dict[str, Any]:
     """The form for a normalized (schema 2) definition *doc* of the Brain at
     *project_dir*: ``{sections, modes, missing, enforced}``."""
@@ -256,7 +274,6 @@ def build_form(doc: dict[str, Any], project_dir: Path, name: Optional[str] = Non
     modes = _modes(doc)
     std_ids = set(std.MODES)
     sections: list[dict[str, Any]] = []
-    missing: list[str] = []
     for sid, title, purpose in std.SECTIONS:
         fields = []
         for f in std.TEMPLATE:
@@ -273,15 +290,11 @@ def build_form(doc: dict[str, Any], project_dir: Path, name: Optional[str] = Non
                 out["values"] = {str(m.get("id")): _value(f, m.get(key)) for m in modes}
                 out["paths"] = {str(m.get("id")): f"modes[{m.get('id')}].{key}" for m in modes}
                 out["choices"] = _choices(f, doc, project_dir, None)
-                if f.required:
-                    missing += [f"{f.label} ({mid})" for mid, v in out["values"].items() if _empty(v)]
             elif f.store:
                 out["scope"] = "shared"
                 out["value"] = _value(f, _get(doc, f.store))
                 out["path"] = f.store
                 out["choices"] = _choices(f, doc, project_dir, None)
-                if f.required and _empty(out["value"]):
-                    missing.append(f.label)
             else:
                 out["scope"] = "shared"
                 out["value"] = _view(f, doc, project_dir, name, general)
@@ -296,8 +309,10 @@ def build_form(doc: dict[str, Any], project_dir: Path, name: Optional[str] = Non
                    "placements": _str_list(_mode_value(m, doc, "placements")),
                    "ownPlacements": "placements" in m}
                   for m in modes],
-        "missing": missing,
+        "missing": missing_required(doc),
         "skeleton": std.is_skeleton(doc),
+        # a Hive runs the definitions the host syncs to it: there it is read-only
+        "readOnly": os.environ.get("SWARMAI_MODE") == "hive",
         # where the definition's own guardrails run (design §8)
         "enforced": "The guardrails of this definition are enforced when the agent runs on a Hive. "
                     "In a chat tab, SwarmAI's own guards apply.",

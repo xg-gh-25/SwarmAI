@@ -64,11 +64,11 @@ Who changes a field:
 | Modes | Skills | Skills of this Brain the mode may use. | Editable | `modes[].skills` |
 | Modes | Delivers | How code comes back: bundle = you review the commits, then they land on main. | Editable | `modes[].delivery` |
 | Modes | Default mode | The mode used when a request names none. | Editable | `default_mode` |
-| Guardrails | Always ask me before (required) | Each time, it stops and waits for your approval. | Your choice | `reserved_for_human` |
+| Guardrails | Always ask me before | Each time, it stops and waits for your approval. | Your choice | `reserved_for_human` |
 | Guardrails | Brain gates | Checks from this Brain's 3-gates/, run on every command. Untick one to stop enforcing it. | From the Brain (rows may be dropped) | `gates.enforce` |
 | Guardrails | SwarmAI guards | The product's own guards. Every session runs them. | Fixed | the product |
 | Guardrails | Code lands | Who approves code before it reaches main. | Fixed | the product |
-| Runs in | Where it may run (required) | Hive lets it run unattended on your cloud SwarmAI. | Your choice | `placements` |
+| Runs in | Where it may run | Hive lets it run unattended on your cloud SwarmAI. | Your choice | `placements` |
 | Intake | Typical requests (required) | 3-5 requests it handles, one sentence each. | Editable | `intake.handles` |
 | Intake | Other names | Names people use for this Brain. Each routes a request here; the ones you keep move into aim.json when you confirm. | Your choice | `intake.proposed_aliases` |
 | Judgment | When unsure | What it does before acting on a guess. | Editable | `confidence` |

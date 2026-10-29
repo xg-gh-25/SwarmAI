@@ -390,7 +390,7 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
       ) : (
         agent === null
           ? <AgentNone onGenerate={() => send(`Draft the Project Agent of the ${name} Brain from its DDD (s_project-manager P3b, artifact_cli project-agent-draft) and tell me when it is on the Brain Hub form.`, 'draft the Project Agent')} />
-          : <ProjectAgentForm key={`${name}:${agent.revision ?? ''}`} brain={name} agent={agent}
+          : <ProjectAgentForm key={name} brain={name} agent={agent}
               onRevise={(note) => send(`Revise the Project Agent of the ${name} Brain (project-agent.yaml): ${note}\nGive each change its source, keep it a draft, and tell me when it is on the Brain Hub form.`, 'revise the Project Agent')} />
       )}
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4" data-testid="bm-agent-send">

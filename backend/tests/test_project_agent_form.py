@@ -210,3 +210,26 @@ def test_the_front_end_holds_no_field_list():
         if f.store and not f.store.startswith("modes[]."):
             for q in ("'", '"', "`"):
                 assert f"{q}{f.store}{q}" not in tsx, f.store
+
+
+# ── review round 1 ───────────────────────────────────────────────────────────
+
+def test_a_redraft_takes_in_gates_and_skills_added_since(tmp_path):
+    b = _brain(tmp_path)
+    pad.apply(b, {"identity": {"summary": "A lib", "source": "PRODUCT.md"}})
+    (b / "3-gates").mkdir(exist_ok=True)
+    (b / "3-gates" / "newgate.py").write_text("import sys\nsys.exit(0)\n")
+    (b / "4-capabilities" / "s_new").mkdir()
+    (b / "4-capabilities" / "s_new" / "SKILL.md").write_text("---\nname: s_new\n---\n")
+    pad.apply(b, {})
+    doc = yaml.safe_load((b / "project-agent.yaml").read_text())
+    assert "newgate" in doc["gates"]["enforce"]
+    assert any("s_new" in (m.get("skills") or []) for m in doc["modes"])
+
+
+def test_a_bad_port_in_a_clone_url_does_not_break_the_form(tmp_path):
+    assert _public_url("https://host:99999/x") is None
+    b = _brain(tmp_path)
+    _bind(b, _repo(tmp_path), clone="https://github.com:99999/acme/lib.git")
+    pad.apply(b, {"identity": {"summary": "A lib", "source": "PRODUCT.md"}})
+    assert load_project_agent(b)["form"] is not None

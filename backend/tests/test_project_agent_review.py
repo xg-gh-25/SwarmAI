@@ -323,3 +323,46 @@ def test_p6_without_the_validator_reads_a_v2_definition(tmp_path, monkeypatch):
     bad = {**DOC, "modes": [{**DOC["modes"][0], "profile": "turbo"}]}
     (b / "project-agent.yaml").write_text(yaml.safe_dump(bad))
     assert mod._check_project_agent(b)[1] == mod.STATUS_FAIL
+
+
+# ── review round 1 (form) ────────────────────────────────────────────────────
+
+def test_withdrawing_the_hive_keeps_a_hive_only_mode_valid(tmp_path):
+    doc = yaml.safe_load(yaml.safe_dump(DOC))
+    doc["placements"] = ["chat-tab", "hive"]
+    doc["modes"][1]["placements"] = ["hive"]
+    b = _brain(tmp_path, doc)
+    _edit(b, {"path": "placements", "value": ["chat-tab"]})
+    assert _doc(b)["modes"][1]["placements"] == ["chat-tab"]
+
+
+def test_a_definition_too_large_to_show_is_not_written(tmp_path, monkeypatch):
+    import core.project_agent as pa
+    b = _brain(tmp_path)
+    before = (b / "project-agent.yaml").read_bytes()
+    monkeypatch.setattr(pa, "_MAX_BYTES", len(before) + 200)        # the Hub's read limit
+    big = [{"area": f"a{i}", "why": "w" * 390, "source": "PRODUCT.md"} for i in range(5)]
+    with pytest.raises(ReviewError) as e:
+        _edit(b, {"path": "watches", "value": big})
+    assert e.value.status == 422 and (b / "project-agent.yaml").read_bytes() == before
+
+
+def test_confirm_refuses_an_unfinished_draft(tmp_path):
+    b = _brain(tmp_path, {**DOC, "identity": {}, "intake": {}})
+    with pytest.raises(ReviewError) as e:
+        _ok(b)
+    assert e.value.status == 422 and "Summary" in e.value.problems and "Typical requests" in e.value.problems
+
+
+def test_an_alias_that_names_another_brain_is_never_kept(tmp_path):
+    root = tmp_path / "Projects"
+    root.mkdir()
+    b = _brain(tmp_path)
+    b = b.rename(root / "Brain")
+    (root / "Billing").mkdir()
+    intake = {**DOC["intake"], "proposed_aliases": [{"name": "billing", "source": "PRODUCT.md"},
+                                                     {"name": "general", "source": "PRODUCT.md"},
+                                                     {"name": "signer", "source": "PRODUCT.md"}]}
+    (b / "project-agent.yaml").write_text(yaml.safe_dump({**DOC, "intake": intake}))
+    r = _ok(b)
+    assert r["aliasesAdded"] == ["signer"] and r["aliasesRefused"] == ["billing", "general"]

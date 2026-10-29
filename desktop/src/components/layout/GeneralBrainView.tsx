@@ -79,7 +79,7 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
                   <button className="btn-sm btn-secondary" onClick={() => void refetch()} data-testid="general-agent-retry">Retry</button>
                 </div>
               : agent
-              ? <ProjectAgentForm key={`runner:${agent.revision ?? ''}`} brain={null} agent={agent}
+              ? <ProjectAgentForm key="runner" brain={null} agent={agent}
                   onRevise={(note) => { onDispatch?.(`Revise the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nKeep it a draft and tell me when it is on the Brain Hub form.`, { autoSend: true }); }} />
               : <div className="text-small text-[var(--color-text-muted)]" data-testid="general-no-agent">
                   No Runner Agent definition here yet: it is written when the workspace starts.

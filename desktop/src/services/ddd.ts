@@ -272,6 +272,8 @@ export interface AgentForm {
   skeleton: boolean;
   /** where the definition's own guardrails are enforced */
   enforced: string;
+  /** on a Hive: it runs what the desktop sends, so the form is read-only */
+  readOnly?: boolean;
 }
 
 /** One change the form sends: a new value, or a row to drop. */

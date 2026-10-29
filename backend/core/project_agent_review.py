@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -50,6 +52,7 @@ def _missing(path: str) -> ReviewError:
 _MODE_PATH_RE = re.compile(r"\Amodes\[(?P<mode>[a-z][a-z0-9-]{0,39})\]\.(?P<key>[a-z_]{1,40})\Z")
 _TEXT_MAX = 400
 _LIST_MAX = 20
+_CHANGES_MAX = 200
 
 
 def _field_for(path: Any) -> tuple[std.Field, Optional[str], str]:
@@ -165,7 +168,7 @@ def _apply_change(doc: dict[str, Any], project_dir: Path, change: Any) -> None:
             if "hive" not in new:   # a mode only narrows: nothing of it may run on a Hive either
                 for mode in _list_of_dicts(doc.get("modes")):
                     if isinstance(mode.get("placements"), list):
-                        mode["placements"] = [p for p in mode["placements"] if p != "hive"]
+                        mode["placements"] = [p for p in mode["placements"] if p != "hive"] or ["chat-tab"]
         else:
             new = _names_value(path, v, set(), cur, only_drop=True)
     if f.key == "gates":
@@ -210,12 +213,36 @@ def _load_seen(project_dir: Path, seen_revision: str) -> tuple[Path, dict[str, A
     return target, normalize(doc)
 
 
-def _write(target: Path, doc: dict[str, Any], note: str) -> None:
+def _text_of(doc: dict[str, Any], note: str) -> str:
+    """The file a write would produce; refused when the Brain Hub could not read it back."""
+    from core.project_agent import _MAX_BYTES
     text = (std.HEADER + f"# {note}\n"
             + yaml.safe_dump(std.ordered(doc), sort_keys=False, allow_unicode=True, width=100))
-    tmp = target.with_name(f".{target.name}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, target)
+    if len(text.encode("utf-8")) > _MAX_BYTES:
+        raise ReviewError(422, f"the definition would be larger than {_MAX_BYTES // 1024} KB; shorten it")
+    return text
+
+
+def _write(target: Path, text: str) -> None:
+    # a temp name of its own, so two writers never replace each other's half-written file
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+#: one writer at a time per Brain: the revision check and the write are one step
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _brain_lock(project_dir: Path) -> threading.Lock:
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(str(Path(project_dir).resolve()), threading.Lock())
 
 
 def edit(project_dir: Path, *, seen_revision: str, changes: list[Any]) -> dict[str, Any]:
@@ -223,9 +250,14 @@ def edit(project_dir: Path, *, seen_revision: str, changes: list[Any]) -> dict[s
     Raises ReviewError: 404 no definition, 409 changed since it was seen, 400 a change
     the form may not make, 422 the result does not validate (nothing is written)."""
     project_dir = Path(project_dir)
+    if not isinstance(changes, list) or not changes or len(changes) > _CHANGES_MAX:
+        raise ReviewError(400, f"send 1-{_CHANGES_MAX} changes")
+    with _brain_lock(project_dir):
+        return _edit_locked(project_dir, seen_revision, changes)
+
+
+def _edit_locked(project_dir: Path, seen_revision: str, changes: list[Any]) -> dict[str, Any]:
     target, doc = _load_seen(project_dir, seen_revision)
-    if not isinstance(changes, list) or not changes:
-        raise ReviewError(400, "nothing to change")
     for change in changes:
         _apply_change(doc, project_dir, change)
     doc["status"] = "draft"
@@ -234,7 +266,7 @@ def edit(project_dir: Path, *, seen_revision: str, changes: list[Any]) -> dict[s
     problems = validate(doc, project_dir)
     if problems:
         raise ReviewError(422, "the changed definition would not be valid", problems)
-    _write(target, doc, "Changed on the Brain Hub form; confirm it there.")
+    _write(target, _text_of(doc, "Changed on the Brain Hub form; confirm it there."))
     return {"revision": revision(project_dir), "status": "draft"}
 
 
@@ -264,9 +296,7 @@ def _write_aliases(project_dir: Path, data: Optional[dict[str, Any]], names: lis
     if not added:
         return []
     data["aliases"] = have + added
-    tmp = aim.with_name(f".{aim.name}.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, aim)
+    _write(aim, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return added
 
 
@@ -276,12 +306,40 @@ def confirm(project_dir: Path, *, seen_revision: str, reviewer: str,
     since it was seen, 409 aim.json unreadable, 422 the result does not validate
     (nothing is written)."""
     project_dir = Path(project_dir)
+    with _brain_lock(project_dir):
+        return _confirm_locked(project_dir, seen_revision, reviewer, now)
+
+
+def _alias_taken(project_dir: Path, name: str) -> bool:
+    """An alias that names the General Brain or another Brain would route that Brain's
+    requests here: it is never kept."""
+    from core.project_agent import is_general_name
+    if is_general_name(name):
+        return True
+    root = project_dir.parent
+    try:
+        others = {p.name.casefold() for p in root.iterdir() if p.is_dir() and p != project_dir} \
+            if root.name == "Projects" else set()
+    except OSError:
+        others = set()
+    return name.casefold() in others
+
+
+def _confirm_locked(project_dir: Path, seen_revision: str, reviewer: str,
+                    now: Optional[str]) -> dict[str, Any]:
+    from core.project_agent_form import missing_required
     target, doc = _load_seen(project_dir, seen_revision)
+    missing = missing_required(doc)
+    if missing:
+        raise ReviewError(422, "fill these in before confirming", missing)
     intake = doc.get("intake") if isinstance(doc.get("intake"), dict) else {}
     accepted: list[str] = []
+    refused: list[str] = []
     for a in _list_of_dicts(intake.get("proposed_aliases")):
         name = str(a.get("name") or "").strip()
-        if name and len(name) <= _ALIAS_MAX and name not in accepted:
+        if name and _alias_taken(project_dir, name):
+            refused.append(name)
+        elif name and len(name) <= _ALIAS_MAX and name not in accepted:
             accepted.append(name)
     intake.pop("proposed_aliases", None)       # the ones the person kept move to aim.json
 
@@ -293,9 +351,14 @@ def confirm(project_dir: Path, *, seen_revision: str, reviewer: str,
         raise ReviewError(422, "the confirmed definition would not be valid", problems)
 
     aim = _read_aim(project_dir) if accepted else None
-    _write(target, doc, "Confirmed on the Brain Hub form.")
-    # the aliases go in only once the definition they belong to is confirmed on disk
-    added = _write_aliases(project_dir, aim, accepted)
+    text = _text_of(doc, "Confirmed on the Brain Hub form.")
+    # the aliases go in first: if writing aim.json fails, the definition is still a
+    # draft that holds them, and confirming again keeps them
+    try:
+        added = _write_aliases(project_dir, aim, accepted)
+    except OSError as exc:
+        raise ReviewError(409, f"aim.json cannot be written ({type(exc).__name__}); nothing was confirmed") from None
+    _write(target, text)
     check = check_sources(project_dir)
     return {"revision": revision(project_dir), "reviewedAt": doc["reviewed_at"],
-            "reviewedBy": reviewer, "aliasesAdded": added, "sourceCheck": check}
+            "reviewedBy": reviewer, "aliasesAdded": added, "aliasesRefused": refused, "sourceCheck": check}

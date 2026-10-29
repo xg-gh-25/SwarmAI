@@ -566,7 +566,9 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
     does not decide (design 2026-10-29-project-agent-standard-template §6.3): the judged
     fields, a person's choices on the form (reserved actions, placements, gates, aliases)
     and every mode the proposal does not name. A standard mode keeps its judged fields
-    and the rows a person left; checks of a repo bound since are added."""
+    and the rows a person left; checks of a repo bound since are added. Gates are not
+    kept (every gate is enforced again), and a skill no mode lists goes to the default
+    mode."""
     from core.project_agent import PLACEMENTS, RESERVED_ACTIONS, normalize
     old = normalize(old)
     if "identity" not in proposal and isinstance(old.get("identity"), dict) and old["identity"]:
@@ -582,9 +584,9 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
     for key in ("confidence", "watches"):
         if key not in proposal and old.get(key):
             doc[key] = old[key]
-    gates = set(gate_files(project_dir))
-    if "gates" not in proposal and isinstance(old.get("gates"), dict):
-        doc["gates"] = {"enforce": [g for g in old["gates"].get("enforce") or [] if g in gates]}
+    # gates are not kept: a redraft enforces every gate of the Brain again (the safe
+    # direction; a gate added since the earlier draft is never left out), unless the
+    # proposal narrows them
     if isinstance(old.get("reserved_for_human"), list):
         doc["reserved_for_human"] = [a for a in old["reserved_for_human"] if a in RESERVED_ACTIONS]
     if isinstance(old.get("placements"), list):
@@ -612,10 +614,23 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
                 covered = {r.get("repo") for r in om[k] if isinstance(r, dict)} | set(om.get("repos") or [])
                 nm[k] = list(om[k]) + [r for r in nm.get(k) or [] if r.get("repo") not in covered]
     ids = {m["id"] for m in doc["modes"]}
+    # a skill no mode lists goes to the default mode (the proposal contract), so a skill
+    # added to the Brain since the earlier draft is not left out
+    placed = {s for m in doc["modes"] for s in m.get("skills") or []}
+    loose = [s["name"] for s in survey_skills(project_dir) if s["name"] not in placed]
     if "default_mode" not in proposal and old.get("default_mode") in ids \
             and not (old["default_mode"] == "research" and "code-change" in ids and "code-change" not in
                      {m.get("id") for m in old.get("modes") or [] if isinstance(m, dict)}):
         doc["default_mode"] = old["default_mode"]       # but a newly bound repo makes code-change the default
+    if loose:
+        target = next(m for m in doc["modes"] if m["id"] == doc["default_mode"])
+        target["skills"] = list(target.get("skills") or []) + loose
+
+
+def survey_skills(project_dir: Path) -> list[dict[str, str]]:
+    """The Brain's own skills, as ``survey`` lists them."""
+    skills, _err = _skills(Path(project_dir))
+    return [{"name": k, "platform": v} for k, v in sorted((skills or {}).items())]
 
 
 def ensure_skeleton(project_dir: Path) -> Optional[dict[str, Any]]:

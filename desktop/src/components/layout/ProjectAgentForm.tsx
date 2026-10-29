@@ -18,7 +18,7 @@
  *
  * Exports: ProjectAgentForm
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   confirmProjectAgent, editProjectAgent, type AgentChange, type AgentChoice, type AgentFormField, type ProjectAgent,
@@ -168,14 +168,19 @@ function Editor({ f, value, path, canEdit, pending, onSet, onDrop }: {
         {items.map((x, i) => (
           <div key={i} className="flex justify-between gap-3 px-2.5 py-1.5 border-b border-[var(--color-border)] text-small">
             <span>{x}</span>
-            {writable && <button className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title="Remove"
+            {writable && <button className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title="Remove" aria-label={`Remove "${x}"`}
               onClick={() => onSet(path, items.filter((_, j) => j !== i))}>×</button>}
           </div>))}
         {writable && (
           <div className="flex gap-2 px-2.5 py-1.5">
-            <input className="flex-1 bg-transparent text-small outline-none" value={draft} placeholder="+ Add"
+            <input className="flex-1 bg-transparent text-small outline-none" value={draft} placeholder="+ Add a line"
+              aria-label={`Add to ${f.label}`}
               onChange={(e) => setDraft(e.target.value)}
+              onBlur={() => { if (draft.trim()) { onSet(path, [...items, draft.trim()]); setDraft(''); } }}
               onKeyDown={(e) => { if (e.key === 'Enter' && draft.trim()) { onSet(path, [...items, draft.trim()]); setDraft(''); } }} />
+            <button className="text-meta text-[var(--color-text-muted)] disabled:opacity-40" disabled={!draft.trim()}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { onSet(path, [...items, draft.trim()]); setDraft(''); }}>Add</button>
           </div>)}
       </div>
     );
@@ -185,7 +190,7 @@ function Editor({ f, value, path, canEdit, pending, onSet, onDrop }: {
     return (
       <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden" data-testid={`pa-choice-${path}`}>
         {opts.map((o) => (
-          <button key={o.value} disabled={!writable}
+          <button key={o.value} disabled={!writable} aria-pressed={o.value === current}
             className={`px-3 py-1 text-meta border-r border-[var(--color-border)] last:border-r-0 ${o.value === current ? 'bg-[var(--color-hover)] font-semibold text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}
             onClick={() => onSet(path, o.value)}>{o.label}</button>))}
       </div>
@@ -209,6 +214,7 @@ function Editor({ f, value, path, canEdit, pending, onSet, onDrop }: {
               <span><b className="font-semibold">{o.label}</b>{o.where && <span className="ml-2 text-[10.5px] border border-[var(--color-border)] rounded px-1 text-[var(--color-text-muted)]">{o.where}</span>}
                 {o.help && <span className="block text-meta text-[var(--color-text-muted)]">{o.help}</span>}
                 {o.available === false && <span className="block text-meta text-[var(--color-status-warning)]">not available yet</span>}
+                {f.kind === 'brain' && f.removable && !original.has(o.value) && <span className="block text-meta text-[var(--color-text-muted)]">not enforced; redraft from the Brain to enforce it again</span>}
               </span>
             </label>);
         })}
@@ -232,22 +238,30 @@ function Editor({ f, value, path, canEdit, pending, onSet, onDrop }: {
             </div>
             {canEdit && (removeOnly ? f.removable : writable) && (
               <button className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title={dropped.has(i) ? 'Keep' : 'Remove'}
+                aria-label={dropped.has(i) ? 'Keep this row' : 'Remove this row'}
                 onClick={() => removeOnly ? onDrop(path, i) : onSet(path, rows.filter((_, j) => j !== i))}>{dropped.has(i) ? 'undo' : '×'}</button>)}
           </div>))}
-        {writable && !removeOnly && cols.length > 0 && <RowAdder cols={cols} onAdd={(row) => onSet(path, [...rows, row])} />}
+        {writable && !removeOnly && cols.length > 0 && <RowAdder cols={cols} choices={(f.choices ?? []).map((c) => choiceOf(c).value)}
+          onAdd={(row) => onSet(path, [...rows, row])} />}
       </div>
     );
   }
   return null;
 }
 
-function RowAdder({ cols, onAdd }: { cols: string[]; onAdd: (row: Record<string, string>) => void }) {
+function RowAdder({ cols, choices, onAdd }: { cols: string[]; choices: string[]; onAdd: (row: Record<string, string>) => void }) {
   const [row, setRow] = useState<Record<string, string>>({});
   const full = cols.every((c) => (row[c] ?? '').trim());
   return (
     <div className="flex gap-2 px-2.5 py-1.5">
-      {cols.map((c) => <input key={c} className="flex-1 min-w-0 bg-transparent text-small outline-none" placeholder={`+ ${c}`}
-        value={row[c] ?? ''} onChange={(e) => setRow({ ...row, [c]: e.target.value })} />)}
+      {cols.map((c) => c === 'profile' && choices.length > 0
+        // a profile is one of the pipeline's, never free text
+        ? <select key={c} className="bg-transparent text-small" aria-label="profile" value={row[c] ?? ''}
+            onChange={(e) => setRow({ ...row, [c]: e.target.value })}>
+            <option value="">profile…</option>{choices.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        : <input key={c} className="flex-1 min-w-0 bg-transparent text-small outline-none" placeholder={`+ ${c}`} aria-label={c}
+            value={row[c] ?? ''} onChange={(e) => setRow({ ...row, [c]: e.target.value })} />)}
       <button className="text-meta text-[var(--color-text-muted)] disabled:opacity-40" disabled={!full}
         onClick={() => { onAdd(Object.fromEntries(cols.map((c) => [c, row[c].trim()]))); setRow({}); }}>Add</button>
     </div>
@@ -267,11 +281,15 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [seenRevision, setSeenRevision] = useState(agent.revision);
   const problems = agent.problems ?? [];
   const reviewed = agent.status === 'reviewed';
-  const canEdit = !busy;
+  const readOnly = form?.readOnly === true;
+  const canEdit = !busy && !readOnly;
   const count = pending.set.size + [...pending.drop.values()].reduce((n, s) => n + s.size, 0);
-  const selectedMode = modeId ?? form?.modes.find((m) => m.isDefault)?.id ?? form?.modes[0]?.id ?? null;
+  const selectedMode = (modeId && form?.modes.some((m) => m.id === modeId) ? modeId : null)
+    ?? form?.modes.find((m) => m.isDefault)?.id ?? form?.modes[0]?.id ?? null;
 
   const onSet = (path: string, v: unknown) => setPending((p) => ({ ...p, set: new Map(p.set).set(path, v) }));
   const onDrop = (path: string, i: number) => setPending((p) => {
@@ -283,11 +301,20 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
   });
   const refresh = () => void qc.invalidateQueries({ queryKey: brain === null ? ['runner-agent'] : ['brain-detail', brain] });
 
+  // The definition changed under the page (a save, chat, the agent): unsaved changes
+  // are kept, never dropped, and the person is told to check them before saving.
+  useEffect(() => {
+    if (agent.revision === seenRevision) return;
+    setSeenRevision(agent.revision);
+    if (count > 0) setNotice(`The definition changed since you started. Your ${count} unsaved ${count === 1 ? 'change is' : 'changes are'} kept: check ${count === 1 ? 'it' : 'them'}, then save.`);
+  }, [agent.revision, seenRevision, count]);
+
   const run = async (work: () => Promise<unknown>) => {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setNotice(null);
     try {
       await work();
       setPending({ set: new Map(), drop: new Map() });
+      setSeenRevision(undefined);          // the next revision is ours, not a change under the page
       refresh();
       void qc.invalidateQueries({ queryKey: ['brains-with-pinned'] });
     } catch (e: unknown) {
@@ -298,11 +325,16 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
           ? `${(d as { message: string }).message}: ${((d as { problems?: string[] }).problems ?? []).join(' · ')}`
           : 'Could not save. Try again.';
       if (resp?.status === 409) refresh();
-      setError(resp?.status === 409 ? 'The definition changed since it was shown. The current version is loading; check it again.' : msg);
+      setError(resp?.status === 409 ? 'The definition changed meanwhile. Your changes are kept; check them against the current version and save again.' : msg);
     } finally {
       setBusy(false);
     }
   };
+  // why Confirm is not offered, or true when it is
+  const confirmBlock: true | string = !agent.revision ? 'The definition could not be read; open the YAML.'
+    : problems.length > 0 ? 'Fix the problems listed at the top first.'
+    : (form?.missing.length ?? 0) > 0 ? `Fill in first: ${form!.missing.join(', ')}.`
+    : true;
   const save = () => {
     const changes: AgentChange[] = [...pending.set.entries()].map(([path, value]) => ({ path, value }));
     for (const [path, idx] of pending.drop) {
@@ -362,15 +394,31 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
       <>
         <table className="w-full text-small mt-1" data-testid="pa-modes">
           <thead><tr>{['Mode', 'Used when', 'Starts as', 'Checks'].map((h) => <th key={h} className="text-left font-normal text-meta text-[var(--color-text-muted)] pb-1.5 pr-3 border-b border-[var(--color-border)]">{h}</th>)}</tr></thead>
-          <tbody>{form.modes.map((m) => (
-            <tr key={m.id} className={`cursor-pointer ${m.id === selectedMode ? 'bg-[var(--color-hover)]' : ''}`} onClick={() => setModeId(m.id)} data-testid={`pa-mode-${m.id}`}>
+          <tbody>{form.modes.map((m) => {
+            // what the table shows is what Save would write: unsaved values included
+            const live = (f: AgentFormField | undefined) => {
+              const path = f?.paths?.[m.id];
+              return path && pending.set.has(path) ? pending.set.get(path) : f?.values?.[m.id];
+            };
+            const edited = modeFields.some((f) => {
+              const path = f.paths?.[m.id];
+              return !!path && (pending.set.has(path) || pending.drop.has(path));
+            });
+            const dropped = checks?.paths?.[m.id] ? (pending.drop.get(checks.paths[m.id])?.size ?? 0) : 0;
+            return (
+            <tr key={m.id} className={`cursor-pointer ${m.id === selectedMode ? 'bg-[var(--color-hover)]' : ''}`} onClick={() => setModeId(m.id)}
+              tabIndex={0} role="button" aria-pressed={m.id === selectedMode}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setModeId(m.id); } }}
+              data-testid={`pa-mode-${m.id}`}>
               <td className="py-2 pr-3 align-top border-b border-[var(--color-border)]"><b>{m.id}</b>
+                {edited && <span className="ml-1.5 text-[var(--color-status-warning)]" title="unsaved changes" data-testid={`pa-mode-edited-${m.id}`}>●</span>}
                 {m.isDefault && <span className="ml-1.5 text-[10.5px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1">default</span>}
                 {m.standard && <span className="ml-1.5 text-[10.5px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1">standard</span>}</td>
-              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)] text-[var(--color-text-muted)]">{String(when?.values?.[m.id] ?? '')}</td>
-              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)]">{String(prof?.values?.[m.id] ?? '')}</td>
-              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)] text-[var(--color-text-muted)]">{((checks?.values?.[m.id] as Rows) ?? []).length}</td>
-            </tr>))}</tbody>
+              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)] text-[var(--color-text-muted)]">{String(live(when) ?? '')}</td>
+              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)]">{String(live(prof) ?? '')}</td>
+              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)] text-[var(--color-text-muted)]">{((checks?.values?.[m.id] as Rows) ?? []).length - dropped}</td>
+            </tr>);
+          })}</tbody>
         </table>
         {selectedMode && (
           <div className="mt-3 rounded-lg border border-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] px-4" data-testid="pa-mode-editor">
@@ -381,7 +429,7 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
               if ((f.key === 'setup' || f.key === 'validations' || f.key === 'delivery') && ((repos?.values?.[selectedMode] as string[]) ?? []).length === 0) return null;
               if (f.key === 'mode_repos' && ((v as string[]) ?? []).length === 0) return null;
               return (
-                <FieldRow key={f.key} f={f} agent={agent}>
+                <FieldRow key={`${f.key}:${selectedMode}`} f={f} agent={agent}>
                   {f.shape === 'names' && f.kind === 'brain'
                     ? <div className="text-small py-1">{((v as string[]) ?? []).join(' · ')}</div>
                     : <Editor f={f} value={v} path={f.paths[selectedMode]} canEdit={canEdit} pending={pending} onSet={onSet} onDrop={onDrop} />}
@@ -409,10 +457,12 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
           onClick={() => openPath(brain === null ? 'Knowledge/Library/project-agent.yaml' : `Projects/${brain}/project-agent.yaml`)}>Open YAML</button>
       </div>
       <p className="mt-2 text-small text-[var(--color-text-muted)]" data-testid="pa-intro">
-        The agent that takes this Brain&apos;s work: <b className="text-[var(--color-text)]">what it accepts, how it does each kind of work, and what it never does without you.</b> Every Brain has this same form. It is drafted when the Brain is created; check each field, change what you want, and confirm. It acts only after you confirm.
+        The agent that takes this Brain&apos;s work: <b className="text-[var(--color-text)]">what it accepts, how it does each kind of work, and what it never does without you.</b> Every Brain has this same form. It starts as a skeleton when the Brain is created and is drafted from the Brain&apos;s documents; check each field, change what you want, and confirm. A Hive takes its work only once you have confirmed it.
       </p>
       <div className="mt-2 flex flex-wrap gap-4">{KIND_LEGEND.map(([k, l, d]) => (
         <span key={k} className="flex items-center gap-1.5 text-meta text-[var(--color-text-muted)]"><KindTag kind={k} label={l} />{d}</span>))}</div>
+      {readOnly && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-read-only">This Hive runs the definition your desktop sends it: change and confirm it on the desktop.</div>}
+      {notice && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-notice">{notice}</div>}
       {problems.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-error)]" data-testid="bm-agent-problems">{problems.join(' · ')}</div>}
       {(agent.notes ?? []).length > 0 && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-notes">{(agent.notes ?? []).join(' · ')}</div>}
       {form.missing.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-missing">Still empty: {form.missing.join(' · ')}</div>}
@@ -446,14 +496,21 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Or ask in chat for a bigger change"
           className="flex-1 min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2 py-1 text-small" data-testid="bm-agent-note" />
         <button className="btn-sm btn-secondary" disabled={!note.trim()} onClick={() => { onRevise(note.trim()); setNote(''); }} data-testid="bm-agent-revise">Ask in chat</button>
-        {count > 0
+        {readOnly
+          ? null
+          : count > 0
           ? <>
-              <button className="btn-sm btn-ghost" disabled={busy} onClick={() => setPending({ set: new Map(), drop: new Map() })} data-testid="pa-discard">Discard</button>
-              <button className="btn-sm btn-primary" disabled={busy || !agent.revision} onClick={() => void save()} data-testid="pa-save">Save {count === 1 ? 'change' : 'changes'}</button>
+              <button className="btn-sm btn-ghost" disabled={busy} onClick={() => { setPending({ set: new Map(), drop: new Map() }); setError(null); setNotice(null); }} data-testid="pa-discard">Discard</button>
+              <button className="btn-sm btn-primary" disabled={busy || !agent.revision} onClick={() => void save()} data-testid="pa-save">
+                {reviewed ? 'Save as draft' : `Save ${count === 1 ? 'change' : 'changes'}`}</button>
             </>
-          : !reviewed && <button className="btn-sm btn-primary" disabled={busy || !agent.revision || problems.length > 0 || form.missing.length > 0}
-              title={form.missing.length > 0 ? `Fill in first: ${form.missing.join(', ')}` : undefined} onClick={() => void confirm()} data-testid="bm-agent-confirm">Confirm</button>}
+          : !reviewed && <button className="btn-sm btn-primary" disabled={busy || confirmBlock !== true} onClick={() => void confirm()}
+              title={confirmBlock === true ? undefined : confirmBlock} data-testid="bm-agent-confirm">Confirm</button>}
       </div>
+      {!readOnly && (count > 0 && reviewed || (count === 0 && !reviewed && confirmBlock !== true)) && (
+        <div className="mt-1 text-meta text-[var(--color-text-muted)]" data-testid="pa-bar-note">
+          {count > 0 ? 'Saving makes this a draft again: it does not run on a Hive until you confirm it.' : confirmBlock}
+        </div>)}
     </div>
   );
 }
