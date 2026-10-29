@@ -24,8 +24,9 @@ time budget (the pipeline's REVIEW) asks it not to.
 Bounded in work, not only in output: at most ``MAX_EXAMINED`` touched symbols are
 looked up (signature changes first), and a caller's *budget_s* stops the lookups when
 it runs out; what was not looked up is counted. Every report appends one line of
-counts to ``<app data>/logs/code_intel_usage.jsonl`` (no code, no paths but the repo's
-name) so its use is measured without anyone collecting it (design
+counts to ``<app data>/logs/code_intel_usage.jsonl`` (no code, no path but the repo's
+name; a pipeline's REVIEW adds a line with the repo files its findings and the reports
+had in common) so its use is measured without anyone collecting it (design
 2026-10-29-code-intel-auto D5).
 
 How lines map onto the graph: the graph's symbols carry line spans at the commit it was
@@ -82,6 +83,7 @@ class Report:
     quiet: list[str] = field(default_factory=list)  # touched; no caller or name outside
     new: int = 0                                    # symbols of files new in this change
     unexamined: int = 0      # touched symbols not looked up (MAX_EXAMINED or the budget)
+    unexamined_signature: int = 0   # of those, signature changes
     note: str = ""
 
 
@@ -144,18 +146,77 @@ def _hunk_ranges(diff: str, side: str) -> dict[str, list[tuple[int, int]]]:
 
 def touched_lines(repo: Path, commit: str, files: list[str],
                   base: str = "HEAD", tree: str | None = None) -> dict[str, list[tuple[int, int]]]:
-    """The lines of *files* at *commit* (the graph's) that the change touches: lines
-    *commit* changed since *base* (the new side of ``base..commit``) and lines the
-    working tree (or *tree*) changed since *commit* (the old side of ``commit..worktree``).
-    Both sides are in *commit*'s coordinates, whatever the checkout's HEAD is."""
+    """The lines of *files* at *commit* (the graph's) that the change touches, in
+    *commit*'s coordinates, whatever the checkout's HEAD is.
+
+    Working tree (*tree* None): lines *commit* changed since *base* (the new side of
+    ``base..commit``) plus lines the working tree changed since *commit* (the old side
+    of ``commit..worktree``). *tree* (a pipeline review): exactly the lines of *tree*
+    that differ from *base* (the new side of ``base..tree``), carried back to
+    *commit* through ``commit..tree`` — so an incremental review, whose *base* is the
+    tree the last review saw, gets only what changed since, and a graph commit ahead of
+    the fork base adds nothing of its own."""
     out: dict[str, list[tuple[int, int]]] = {}
+    if tree is not None:
+        change = _git(repo, "diff", "-U0", "--no-renames", "--no-color", base, tree, "--", *files)
+        through = _hunks(_git(repo, "diff", "-U0", "--no-renames", "--no-color", commit, tree,
+                              "--", *files) or "")
+        for f, rs in _hunk_ranges(change or "", "new").items():
+            out[f] = [_to_commit(r, through.get(f, [])) for r in rs]
+        return out
     committed = _git(repo, "diff", "-U0", "--no-renames", "--no-color", base, commit, "--", *files)
-    working = _git(repo, "diff", "-U0", "--no-renames", "--no-color", commit,
-                   *([tree] if tree else []), "--", *files)
+    working = _git(repo, "diff", "-U0", "--no-renames", "--no-color", commit, "--", *files)
     for ranges in (_hunk_ranges(committed or "", "new"), _hunk_ranges(working or "", "old")):
         for f, rs in ranges.items():
             out.setdefault(f, []).extend(rs)
     return out
+
+
+def _hunks(diff: str) -> dict[str, list[tuple[int, int, int, int]]]:
+    """Per file, each ``-U0`` hunk as (old start, old count, new start, new count)."""
+    out: dict[str, list[tuple[int, int, int, int]]] = {}
+    old_name = current = None
+    for line in diff.splitlines():
+        if line.startswith("--- "):
+            old_name = line[6:] if line.startswith("--- a/") else None
+        elif line.startswith("+++ "):
+            current = line[6:] if line.startswith("+++ b/") else old_name
+        elif current and (m := _HUNK.match(line)):
+            out.setdefault(current, []).append((
+                int(m.group(1)), int(m.group(2)) if m.group(2) is not None else 1,
+                int(m.group(3)), int(m.group(4)) if m.group(4) is not None else 1))
+    return out
+
+
+def _line_to_commit(n: int, hunks: list[tuple[int, int, int, int]]) -> tuple[int, int]:
+    """Tree line *n* in commit coordinates: the line itself shifted by the hunks before
+    it, or, inside a hunk, that hunk's commit lines (``(l, -l)``: between l and l+1 when
+    the hunk adds lines the commit does not have)."""
+    offset = 0
+    for os_, ol, ns, nl in sorted(hunks, key=lambda h: h[2]):
+        if nl == 0:                       # lines the tree does not have, after line ns
+            if n > ns:
+                offset += ol
+                continue
+            break
+        if n < ns:
+            break
+        if n <= ns + nl - 1:
+            return (os_, os_ + ol - 1) if ol else (os_, -os_)
+        offset += ol - nl
+    return (n + offset, n + offset)
+
+
+def _to_commit(rng: tuple[int, int], hunks: list[tuple[int, int, int, int]]) -> tuple[int, int]:
+    """A tree range (``_hunk_ranges`` form) in commit coordinates."""
+    a, b = rng
+    if b < 0:                             # between tree lines a and a+1
+        end = abs(_line_to_commit(a, hunks)[1]) if a > 0 else 0
+        return (end, -end)
+    lo, hi = _line_to_commit(a, hunks), _line_to_commit(b, hunks)
+    if lo[1] < 0 and hi[1] < 0 and lo[0] == hi[0]:
+        return lo
+    return (lo[0], max(abs(hi[1]), lo[0]))
 
 
 def _touches(node_start: int, node_end: int, rng: tuple[int, int]) -> bool:
@@ -321,16 +382,13 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
     new_files = {f for f in {c.file for c in changed}
                  if _git(repo, "cat-file", "-e", f"{base}:{f}") is None}
     shown: list[Changed] = []
-    examined = 0
-    for i, c in enumerate(changed):
-        if c.file in new_files:
-            rep.new += 1
-            continue
-        if examined >= MAX_EXAMINED or (deadline is not None and time.monotonic() > deadline):
-            # signature changes come first (symbols_touched): what is left is body-only
-            rep.unexamined = sum(1 for x in changed[i:] if x.file not in new_files)
+    rep.new = sum(1 for c in changed if c.file in new_files)
+    todo = [c for c in changed if c.file not in new_files]   # signature changes first
+    for i, c in enumerate(todo):
+        if i >= MAX_EXAMINED or (deadline is not None and time.monotonic() > deadline):
+            rep.unexamined = len(todo) - i
+            rep.unexamined_signature = sum(1 for x in todo[i:] if x.signature)
             break
-        examined += 1
         found = _callers(graph, [c.id], 1)
         callers = [{"file": x.file, "symbol": x.symbol, "line": x.line, "how": x.how}
                    for x in found if not x.by_name]
@@ -366,9 +424,9 @@ def listed_files(rep: Report) -> list[str]:
 def _log_usage(rep: Report, caller: str) -> None:
     """One line of counts per report (D5). Never fails the report."""
     try:
-        from config import get_app_data_dir
         from datetime import datetime, timezone
         state = ("none" if rep.project is None else
+                 "unmatched" if rep.note else
                  "behind" if rep.freshness else "current")
         line = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "kind": "report", "caller": caller,
@@ -473,8 +531,10 @@ def render(rep: Report) -> str:
         lines.append(f"- {rep.new} symbols are in files new in this change "
                      "(nothing outside can call them yet)")
     if rep.unexamined:
-        lines.append(f"- {rep.unexamined} more changed symbols (body changes) were not looked "
-                     "up: the change is large; run `core.code_intel.impact <symbol>` for one")
+        sig = (f", {rep.unexamined_signature} of them signature changes"
+               if rep.unexamined_signature else ", all body changes")
+        lines.append(f"- {rep.unexamined} more changed symbols were not looked up{sig}: the "
+                     "change is large; run `core.code_intel.impact <symbol>` for one")
     lines.append("The graph sees direct calls. Check the files that name a symbol without a "
                  "call, and dynamic dispatch (getattr, registries, string routes), by hand.")
     return "\n".join(lines)

@@ -315,20 +315,22 @@ def build_graph(ref, *, project_dir: str | Path | None = None,
         logger.info("code intel: %s is being bound; skipped", ref.repo)
         return None
     ref.db_path.parent.mkdir(parents=True, exist_ok=True)
-    with write_lock(ref.db_path, wait=not only_if_stale) as held:
-        if not held:
-            logger.info("code intel: %s is being written by another process; skipped", ref.repo)
+    # A queued child takes the machine-wide turn FIRST and the graph's own lock only
+    # then: waiting for its turn while holding the graph's lock would keep a bind
+    # (which waits WRITE_LOCK_WAIT_S for it) and every reader's update out for as
+    # long as the queue. Nothing waits for the turn while holding a graph lock.
+    with (rebuild_turn() if queue else contextlib.nullcontext(True)) as turn:
+        if not turn:
+            logger.info("code intel: %s waited %ss for its turn to parse; skipped",
+                        ref.repo, REBUILD_TURN_WAIT_S)
             return None
-        if ref.repo_root is not None and bind_in_progress(ref.repo_root):
-            # a bind started while this waited for the lock: it rebuilds the graph
-            logger.info("code intel: %s is being bound; skipped", ref.repo)
-            return None
-        # The graph's own lock first (one queued child per graph, a reader's update
-        # answers "busy"), then the machine-wide turn.
-        with (rebuild_turn() if queue else contextlib.nullcontext(True)) as turn:
-            if not turn:
-                logger.info("code intel: %s waited %ss for its turn to parse; skipped",
-                            ref.repo, REBUILD_TURN_WAIT_S)
+        with write_lock(ref.db_path, wait=not only_if_stale) as held:
+            if not held:
+                logger.info("code intel: %s is being written by another process; skipped", ref.repo)
+                return None
+            if ref.repo_root is not None and bind_in_progress(ref.repo_root):
+                # a bind started while this waited: it rebuilds the graph
+                logger.info("code intel: %s is being bound; skipped", ref.repo)
                 return None
             graph = GraphStore(ref.db_path)
             try:
@@ -441,17 +443,20 @@ REBUILD_REQUEST_EVERY_S = 600
 
 
 def request_rebuild(project: str, ref) -> bool:
-    """Start a full ``--if-stale`` rebuild child for one owned graph, unless one was
-    asked for in the last ``REBUILD_REQUEST_EVERY_S`` (a ``<db>.rebuild-requested``
-    marker). For a reader in the daemon: it starts a child, it never parses. True when
-    a child was started."""
+    """Ask for a full ``--if-stale`` rebuild child of one owned graph: one is started
+    unless one was asked for in the last ``REBUILD_REQUEST_EVERY_S`` (a
+    ``<db>.rebuild-requested`` marker, written once a child started). Every reader
+    that finds a graph to rebuild asks through here, in the daemon or out of it, so
+    repeated reads start one child, not one each. It starts a child, it never parses.
+    True when a rebuild is on its way (started now or recently); False when no child
+    could be started."""
     import time
     if not ref.repo:
         return False
     marker = Path(str(ref.db_path) + ".rebuild-requested")
     try:
         if time.time() - marker.stat().st_mtime < REBUILD_REQUEST_EVERY_S:
-            return False
+            return True
     except OSError:
         pass
     try:
@@ -459,8 +464,11 @@ def request_rebuild(project: str, ref) -> bool:
     except OSError as exc:
         logger.warning("code intel: could not start a rebuild of %s: %s", ref.repo, exc)
         return False
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.touch()
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        pass
     return True
 
 
@@ -484,9 +492,10 @@ def ensure_fresh(project_dir: str | Path, ref, graph: GraphStore, *,
     No change: nothing is written. Up to ``FULL_REBUILD_FILES`` changed files: an
     incremental update now (well under a second each for this repo), the commit marker
     moved when every file landed, the repo's documents re-synced. More, a base rebased
-    away, or never indexed: no rebuild here (it can take minutes, past an agent's Bash
-    timeout); with *spawn*, a detached ``--if-stale`` rebuild child is started, and the
-    answer comes from the graph as it is. The same when an update leaves a file behind
+    away, never indexed, or written by an older parser: no rebuild here (it can take
+    minutes, past an agent's Bash timeout); with *spawn*, a detached ``--if-stale``
+    rebuild child is asked for (``request_rebuild``: one per ten minutes per graph), and
+    the answer comes from the graph as it is. The same when an update leaves a file behind
     (it would fail again next time) or the graph was built from another directory.
     Another writer holding the graph, or a bind in progress: answered as it is, at once."""
     from .freshness import check_freshness
@@ -503,10 +512,7 @@ def ensure_fresh(project_dir: str | Path, ref, graph: GraphStore, *,
 
     def _rebuild(why: str) -> Freshness:
         if spawn and ref.repo:
-            try:
-                spawn_build(project_dir.name, repo=ref.repo, full=True, only_if_stale=True)
-            except OSError as exc:
-                logger.warning("code intel: could not start a rebuild of %s: %s", ref.repo, exc)
+            if not request_rebuild(project_dir.name, ref):
                 return Freshness("stale", behind, changed, why)
             return Freshness("rebuilding", behind, changed,
                              f"{why}; a full rebuild was started, ask again in a minute")

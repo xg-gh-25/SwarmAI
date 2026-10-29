@@ -2093,8 +2093,6 @@ class RunEngine:
             raise EngineError(f"stale: the run is in {stage}, not {expected_stage}")
         for document in ("REQUIREMENTS", "DESIGN_SPEC"):   # the decisions' projection
             self._sync_decision_document(document)
-        if stage == "review":
-            self._log_callers_join()
         if stage in validation_report.STAGES and artifact and "reports" in artifact:
             self._record_validation_reports(stage, artifact)
         if stage == "deliver":
@@ -2204,6 +2202,8 @@ class RunEngine:
         self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
         self._settle()
+        if stage == "review":
+            self._log_callers_join()        # REVIEW completed: measure the callers report
         design = self._recall_design_knowledge() if stage == "evaluate" else None
         if stage in {"review", "test", "deliver"} and "review" in lifecycle.PROFILE_STAGES[profile]:
             self._write_review_documents()          # its checks and evidence moved on (F20)
@@ -2693,9 +2693,11 @@ class RunEngine:
         2026-10-29-code-intel-auto D4): the functions the change touches and their
         callers outside it, from the repo's code graph. Computed once per (repo, base,
         tree) and kept in the audit area, so a retried or resumed review-start, and
-        every expert, get the same facts. Never parses (the graph is read as it is),
-        bounded by ``_CALLERS_BUDGET_S``; a repo without a graph gets the line saying
-        so; a failure gives a line too, never a blocked review."""
+        every expert, get the same facts. Never parses (the graph is read as it is);
+        the caller lookups stop at ``_CALLERS_BUDGET_S`` (the git calls that find the
+        changed lines are not counted). A repo without a graph gets the line saying
+        so; a failure gives a line too and is not kept, so the next review-start tries
+        again; it never blocks a review."""
         import hashlib
         parts = []
         for name in sorted(per_repo):
@@ -2714,18 +2716,21 @@ class RunEngine:
                             "listed": changed.listed_files(rep)}
                 except Exception as exc:  # noqa: BLE001 -- a handout without it is still one
                     logger.warning("run %s: callers report for %s failed: %s", self.run_id, name, exc)
-                    data = {"repo": name, "listed": [],
-                            "text": "## Callers of the code this change touches\n"
-                                    f"The report could not be made ({type(exc).__name__}): "
-                                    "grep the callers of the changed functions."}
-                try:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = path.with_suffix(".tmp")
-                    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-                    os.replace(tmp, path)
-                except OSError as exc:
-                    logger.warning("run %s: callers report not kept: %s", self.run_id, exc)
-            parts.append((f"### {name}\n" if len(per_repo) > 1 else "") + str(data["text"]))
+                    data = None
+                    parts.append((f"### {name}\n" if len(per_repo) > 1 else "")
+                                 + "## Callers of the code this change touches\n"
+                                 f"The report could not be made ({type(exc).__name__}): "
+                                 "grep the callers of the changed functions.")
+                if data is not None:
+                    try:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        tmp = path.with_suffix(".tmp")
+                        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                        os.replace(tmp, path)
+                    except OSError as exc:
+                        logger.warning("run %s: callers report not kept: %s", self.run_id, exc)
+            if data is not None:
+                parts.append((f"### {name}\n" if len(per_repo) > 1 else "") + str(data["text"]))
         if not parts:
             return ""
         body = "\n\n".join(parts)
@@ -2736,35 +2741,43 @@ class RunEngine:
                 f"{fence}text\n{body}\n{fence}")
 
     def _log_callers_join(self) -> None:
-        """When REVIEW completes, once per run: how many findings name a file the
-        callers report listed (D5) — the files in common, which came from the report,
-        and counts; never a finding's text. Best effort."""
+        """Each time REVIEW completes (D5): how many findings name a file a callers
+        report of this run listed — matched per repo, the files in common (they came
+        from the report) and counts; never a finding's text. A run whose REVIEW
+        completes again (an incremental review) logs again: a reader keeps the last line
+        per run. Best effort."""
         folder = self._callers_dir()
-        marker = folder / "joined"
-        if not folder.is_dir() or marker.exists():
+        if not folder.is_dir():
             return
         try:
-            listed: set[str] = set()
+            listed: dict[str, set[str]] = {}
             for p in sorted(folder.glob("*.json")):
                 data = self._read_json(p, {})
-                listed.update(f for f in (data.get("listed") or []) if isinstance(f, str))
+                if isinstance(data, dict):
+                    listed.setdefault(str(data.get("repo")), set()).update(
+                        f for f in (data.get("listed") or []) if isinstance(f, str))
+            roots = {name: str(Path(r).resolve()) + "/" for name, r in self.effective_repos().items()}
             rows = review.ReviewOrchestrator(self.store, self.run_dir).findings()
-            roots = [str(Path(r).resolve()) + "/" for r in self.effective_repos().values()]
 
-            def _rel(f: str) -> str:
-                f = f.strip().removeprefix("./")
-                for root in roots:
-                    if f.startswith(root):
-                        return f[len(root):]
-                return f
-            files = [_rel(str(r.get("file") or "")) for r in rows]
-            hits = sorted({f for f in files if f in listed})
+            def _hit(raw: str) -> str | None:
+                f = re.sub(r":\d+(:\d+)?$", "", raw.strip()).removeprefix("./")
+                if f.startswith("/"):
+                    f = str(Path(f).resolve())
+                for name, files in sorted(listed.items()):
+                    rel = f
+                    if name in roots and f.startswith(roots[name]):
+                        rel = f[len(roots[name]):]
+                    elif f.startswith(name + "/"):
+                        rel = f[len(name) + 1:]
+                    if rel in files:
+                        return f"{name}:{rel}"
+                return None
+            hits = [h for h in (_hit(str(r.get("file") or "")) for r in rows) if h]
             from core.code_intel.changed import log_usage
             log_usage({"at": _now(), "kind": "review_join", "caller": f"pipeline:{self.run_id}",
-                       "findings": len(rows),
-                       "findings_on_listed": sum(1 for f in files if f in listed),
-                       "listed": len(listed), "hit_files": hits})
-            marker.write_text(_now(), encoding="utf-8")
+                       "findings": len(rows), "findings_on_listed": len(hits),
+                       "listed": sum(len(v) for v in listed.values()),
+                       "hit_files": sorted(set(hits))})
         except Exception:  # noqa: BLE001 -- measuring never stops a stage
             logger.warning("run %s: callers join not logged", self.run_id, exc_info=True)
 

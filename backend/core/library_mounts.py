@@ -730,10 +730,13 @@ def main(argv: list[str] | None = None) -> int:
     from jobs.paths import DB_PATH
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
+    from core.code_intel.build import rebuild_turn
     try:
         store = LibraryMounts(conn)
         store.ensure_table()
-        result = index_code_mount(store, args[1])
+        # a child: one full parse at a time across the machine, as the build children
+        with rebuild_turn() as turn:
+            result = index_code_mount(store, args[1]) if turn else {"status": "no_turn"}
     finally:
         conn.close()
     print(json.dumps({"mount": args[1], **result}))

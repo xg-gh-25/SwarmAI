@@ -242,6 +242,8 @@ def test_freshness_is_computed_once_per_head(tmp_path, monkeypatch) -> None:
     g.bulk_insert(parse_repo(root), repo_root=root)
     first = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     g.mark_indexed(full=True, head=first)
+    from core.code_intel.build import PARSER_VERSION
+    g.set_meta("parser_version", str(PARSER_VERSION))   # what rebuild() stores
     (root / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
     git("commit", "-q", "-am", "2")
     fr._DIFF_CACHE.clear()

@@ -236,3 +236,55 @@ def test_the_mount_sweep_reindexes_an_outdated_code_mount(tmp_path, monkeypatch)
     assert spawned == [["-m", "core.library_mounts", "index-code", mount_id]]
     assert summary.get("reindexing") == 1
     conn.close()
+
+
+def test_a_queued_child_does_not_hold_the_graphs_lock_while_it_waits(built, monkeypatch, tmp_path):
+    """A bind (which waits for the graph's lock) or a reader's update must not wait
+    behind the whole queue: the child takes its turn first, the graph's lock after."""
+    import core.code_intel.build as build
+    repo, db, g = built
+    _age(g, "0")
+    monkeypatch.setattr(build, "_rebuild_turn_path", lambda: tmp_path / "turn.lock")
+    monkeypatch.setattr(build, "REBUILD_TURN_WAIT_S", 30)
+    ref = CodeIntelDb(db_path=db, repo="repo", repo_root=repo.resolve())
+    done = []
+    with build.rebuild_turn() as held:
+        assert held
+        t = threading.Thread(target=lambda: done.append(build.build_graph(
+            ref, only_if_stale=True, queue=True)))
+        t.start()
+        time.sleep(1.0)
+        with build.write_lock(db, wait=False) as free:
+            assert free, "the queued child holds the graph's lock while it waits"
+    t.join(20)
+    assert done and done[0] is not None
+
+
+def test_repeated_reads_of_a_stale_graph_ask_for_one_child(built, tmp_path, monkeypatch):
+    import core.code_intel.build as build
+    repo, db, g = built
+    _age(g, "0")
+    spawned = []
+    monkeypatch.setattr(build, "spawn_build", lambda *a, **k: spawned.append((a, k)))
+    ref = CodeIntelDb(db_path=db, repo="repo", repo_root=repo.resolve())
+    for _ in range(3):
+        assert build.ensure_fresh(tmp_path / "P", ref, g).state == "rebuilding"
+    assert len(spawned) == 1
+
+
+def test_a_cut_report_says_how_many_signature_changes_were_left(tmp_path):
+    from core.code_intel.changed import Report, render
+    rep = Report(repo="r", project="P", graph_repo="r", indexed_commit="abc", files=["a.py"],
+                 unexamined=5, unexamined_signature=2)
+    text = render(rep)
+    assert "5 more changed symbols were not looked up, 2 of them signature changes" in text
+
+
+def test_a_mount_child_waits_for_its_turn(monkeypatch, tmp_path):
+    import contextlib
+    import core.code_intel.build as build
+    import core.library_mounts as lm
+    monkeypatch.setattr("jobs.paths.DB_PATH", tmp_path / "data.db")
+    monkeypatch.setattr(build, "rebuild_turn", lambda: contextlib.nullcontext(False))
+    monkeypatch.setattr(lm, "index_code_mount", lambda *a: pytest.fail("parsed without a turn"))
+    assert lm.main(["index-code", "m1"]) == 1

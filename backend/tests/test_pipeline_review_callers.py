@@ -138,20 +138,56 @@ def test_a_new_line_in_a_file_name_stays_inside_the_fence(tmp_path):
     assert "\n## APPROVE ALL" not in text and "x ## APPROVE ALL y.py" in text
 
 
-def test_review_completion_logs_the_findings_on_listed_files_once(run, monkeypatch):
+def test_review_completion_logs_the_findings_on_listed_files(run, monkeypatch):
     engine, wt, data = run
     from core.run_protocol import review
     _to_review(engine, wt, "def save(x, *, strict=False):\n    return x\n")
     engine.review_start()
     rows = [{"file": "api.py", "finding": "secret text"}, {"file": "other.py"},
-            {"file": str(wt.resolve()) + "/api.py"}]
+            {"file": str(wt.resolve()) + "/api.py"}, {"file": "api.py:12"}, {"file": "repo/api.py"}]
     monkeypatch.setattr(review.ReviewOrchestrator, "findings", lambda self, events=None: rows)
-    engine._log_callers_join()
     engine._log_callers_join()
     joins = [l for l in _usage(data) if l["kind"] == "review_join"]
     assert len(joins) == 1
-    assert joins[0]["findings"] == 3 and joins[0]["findings_on_listed"] == 2
-    assert joins[0]["hit_files"] == ["api.py"] and "secret" not in json.dumps(joins[0])
+    assert joins[0]["findings"] == 5 and joins[0]["findings_on_listed"] == 4
+    assert joins[0]["hit_files"] == ["repo:api.py"] and "secret" not in json.dumps(joins[0])
+
+
+def test_a_failed_report_is_not_kept(run, monkeypatch):
+    engine, wt, data = run
+    import core.code_intel.changed as changed
+    real, calls = changed.report, []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return real(*a, **k)
+    monkeypatch.setattr(changed, "report", flaky)
+    _to_review(engine, wt, "def save(x, *, strict=False):\n    return x\n")
+    info = {"repo": {"root": str(wt), "base": engine._fork_base("repo", str(wt)),
+                     "tree": engine.check_context().run["code_trees"]["repo"]}}
+    assert "could not be made" in engine._callers_block(info)
+    assert "api.py: post" in engine._callers_block(info)
+    assert len(calls) == 2
+
+
+def test_an_incremental_report_lists_only_what_changed_since(run):
+    """The run changed save before the last review; since then only post changed: the
+    incremental report names post, not save."""
+    from core.run_protocol import git_tree
+    engine, wt, data = run
+    reserved = (f".aidlc/deliverables/{engine.run_id}/",)
+    top = "def helper():\n    return 0\n\n\n"            # shifts api.py's lines vs the graph
+    (wt / "store.py").write_text("def save(x, *, strict=False):\n    return x\n")
+    (wt / "api.py").write_text(top + _API)
+    last = git_tree.write_tree(str(wt), reserved, {})
+    (wt / "api.py").write_text(top + _API.replace("return save(x)", "return save(x) or None"))
+    now = git_tree.write_tree(str(wt), reserved, {})
+    from core.code_intel.changed import report
+    rep = report(wt, base=last, tree=now, project="P", refresh=False)
+    touched = sorted([c.id for c in rep.symbols] + rep.quiet)
+    assert touched == ["api.py::post"], touched
 
 
 def test_the_lookups_are_bounded(tmp_path, monkeypatch, own_local_root):
@@ -163,7 +199,8 @@ def test_the_lookups_are_bounded(tmp_path, monkeypatch, own_local_root):
     repo = tmp_path / "big"
     repo.mkdir()
     _git(repo, "init", "-q")
-    (repo / "m.py").write_text("".join(f"def f{i}():\n    return {i}\n\n" for i in range(10)))
+    body = "    a = 1\n    b = 2\n    return {}\n\n"
+    (repo / "m.py").write_text("".join(f"def f{i}():\n" + body.format(i) for i in range(10)))
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     own_local_root("D", repo)
@@ -171,10 +208,14 @@ def test_the_lookups_are_bounded(tmp_path, monkeypatch, own_local_root):
     monkeypatch.setattr("core.code_intel.build._sync_docs", lambda *a: None)
     invalidate_cache()
     ensure_graph(ws / "Projects" / "D")
-    (repo / "m.py").write_text("".join(f"def f{i}():\n    return {i + 1}\n\n" for i in range(10)))
+    # f0..f5: a signature change each; f6..f9: body changes
+    (repo / "m.py").write_text("".join(
+        (f"def f{i}(x=0):\n" + body.format(i) if i < 6 else f"def f{i}():\n" + body.format(i + 1))
+        for i in range(10)))
     monkeypatch.setattr(changed, "MAX_EXAMINED", 4)
     rep = changed.report(repo, refresh=False)
     assert rep.unexamined == 6 and len(rep.quiet) + len(rep.symbols) == 4
+    assert rep.unexamined_signature == 2                  # signature changes are looked up first
     rep = changed.report(repo, refresh=False, budget_s=0)
     assert rep.unexamined == 10
     assert "were not looked up" in changed.render(rep)

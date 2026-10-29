@@ -2,7 +2,7 @@
 title: "Code intel r4: fully automatic once a Brain has a repo"
 created: 2026-10-29
 updated: 2026-10-29
-status: r2, built (D1–D7); review fixes in progress
+status: built (D1–D7), reviewed (security on D1+D2, correctness on D3–D5), fixes in
 ---
 
 # Code intel r4: fully automatic once a Brain has a repo
@@ -275,3 +275,32 @@ on D3 + D4. One round each.
 | LOW report text into prompts | D4 fenced data, stripped |
 | LOW usage log fields | D5 names and counts only, intersection only |
 | LOW citation lines | §1 corrected |
+
+## 7. Implementation reviews (one round each, fixed in one pass)
+
+**Security on D1 + D2.** Fixed: the migration checks each r3 pending entry as a
+declaration (allowed, not removed, not another Brain's) and drops one that fails;
+`starter-kind` is 403 off the desktop; Remove matches the stored path; the Need You
+message quotes the path on one line; a folder scan runs git on at most 200 children;
+diffs pass `--no-textconv` and a working tree with a git filter program is not diffed.
+Accepted, not built: an agent can declare a root and its survey can reach the Brain's
+docs before the person reads the Need You item — the same agent can already copy those
+files into the docs by hand, so ownership opens no new route; `--source` is a label
+anyone can pass. Residual (LOW): a root swapped for a symlink between the owner check
+and the start of the parse is parsed (same-user race).
+
+**Correctness on D3–D5.** Fixed: a queued child takes the machine-wide turn before the
+graph's lock (it no longer blocks a bind or a reader's update for the length of the
+queue); every reader's rebuild goes through `request_rebuild` (one child per ten
+minutes per graph); a mount child takes the turn; a tree-mode report maps the
+change's lines (`base..tree`) into the graph commit through `commit..tree`, so an
+incremental review lists only what changed since; signature changes left unlooked-up
+are counted; a failed report is not cached; the REVIEW join runs after REVIEW really
+completes, per repo, and logs again on each completion. Residual: an outdated graph
+whose rebuild parses empty stays outdated (a child every ten minutes).
+
+**Out of scope, recorded:** `repo_read.GIT_HARDENING`'s empty `diff.external` breaks a
+patch diff (no caller does one today); `ddd_bindings._git_toplevel` runs git
+unhardened; the `MEM_RECLAIM` probe fails on main (`reclaim_noise_entries` lost its
+`dry_run` argument in another change).
+
