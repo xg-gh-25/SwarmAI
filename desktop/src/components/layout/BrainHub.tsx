@@ -60,6 +60,7 @@ import { pipelinesService, type PipelineAnalytics } from '../../services/pipelin
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { takeOverlayTarget } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
+import { BackToHubButton } from './BackToHubButton';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -171,7 +172,8 @@ export function BrainHub(
   }, [openBrain]);
 
   // Deep-link: `swarm:show-brain-hub` MAY carry `detail.brain` to open a specific
-  // brain's detail view directly. No detail → Gallery, the default.
+  // brain's detail view directly. No detail → Gallery: the default on mount, and on an
+  // already-open Hub the way home (the host title, a nav click, the agent's show).
   useEffect(() => {
     // the event that mounted us has already fired: a target recorded for it waits here
     // a target named exactly "General" is the built-in General Brain (the agent's
@@ -184,10 +186,11 @@ export function BrainHub(
       const name = (e as CustomEvent<{ brain?: string }>).detail?.brain;
       takeOverlayTarget('brain-hub');
       if (name) open(name);
+      else backToGallery();
     };
     window.addEventListener('swarm:show-brain-hub', onShow);
     return () => window.removeEventListener('swarm:show-brain-hub', onShow);
-  }, [openBrain, openGeneral]);
+  }, [openBrain, openGeneral, backToGallery]);
 
   if (error) {
     return (
@@ -329,8 +332,7 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
     <div className="flex items-start gap-3 px-4 pt-3 pb-2 flex-shrink-0" data-testid="brainhub-breadcrumb">
       {summary ? <Flower b={summary} size={44} /> : <span className="w-11" />}
       <div className="flex-1 min-w-0">
-        <button data-testid="brainhub-back" onClick={onBack}
-          className="text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)]">‹ All brains</button>
+        <BackToHubButton testid="brainhub-back" onClick={onBack} />
         <div className="flex items-center gap-2 relative">
           <button data-testid="brainhub-switcher" aria-haspopup="menu" aria-expanded={menu === 'switch'}
             onClick={() => setMenu(menu === 'switch' ? 'none' : 'switch')}

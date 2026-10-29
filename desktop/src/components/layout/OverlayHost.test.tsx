@@ -298,3 +298,48 @@ describe('OverlayHost — a layer: Escape and focus (hooks/useLayer)', () => {
     expect(fireEvent.keyDown(plain, { key: 'Tab' })).toBe(true);   // left to the browser
   });
 });
+
+describe('OverlayHost — the way back to a parent surface and to a surface home (navTable parent / titleGoesHome)', () => {
+  registerOverlay({ id: 'new-brain', render: () => <div data-testid="new-brain-content" /> });
+  registerOverlay({ id: 'brain-hub', render: () => <div data-testid="brain-hub-content" /> });
+  function H() {
+    const { openOverlay } = useOverlay();
+    return (
+      <div>
+        <button data-testid="open-nb" onClick={() => openOverlay('new-brain')}>nb</button>
+        <button data-testid="open-hub" onClick={() => openOverlay('brain-hub')}>hub</button>
+        <OverlayHost />
+      </div>
+    );
+  }
+
+  it('New Brain shows Brain Hub as a breadcrumb, and clicking it opens Brain Hub', () => {
+    render(<OverlayProvider><H /></OverlayProvider>);
+    act(() => screen.getByTestId('open-nb').click());
+    const parent = screen.getByTestId('overlay-host-parent');
+    expect(parent.textContent).toContain('Brain Hub');
+    act(() => parent.click());
+    expect(screen.getByTestId('brain-hub-content')).toBeInTheDocument();
+    expect(screen.queryByTestId('overlay-host-parent')).toBeNull();
+  });
+
+  it('the Brain Hub title fires swarm:show-brain-hub with no target (the Hub reads it as go home)', () => {
+    render(<OverlayProvider><H /></OverlayProvider>);
+    act(() => screen.getByTestId('open-hub').click());
+    const seen: unknown[] = [];
+    const on = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:show-brain-hub', on);
+    act(() => screen.getByTestId('overlay-host-title-home').click());
+    window.removeEventListener('swarm:show-brain-hub', on);
+    expect(seen).toHaveLength(1);
+    expect((seen[0] as { brain?: string } | null)?.brain).toBeUndefined();
+    expect(screen.getByTestId('brain-hub-content')).toBeInTheDocument();
+  });
+
+  it('a surface without these fields keeps a plain title and no breadcrumb', () => {
+    renderHost();
+    act(() => screen.getByTestId('open').click());
+    expect(screen.queryByTestId('overlay-host-parent')).toBeNull();
+    expect(screen.queryByTestId('overlay-host-title-home')).toBeNull();
+  });
+});

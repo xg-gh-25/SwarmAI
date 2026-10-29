@@ -15,6 +15,7 @@
  */
 import { useRunnerAgent, type GeneralBrain, type ProjectAgent } from '../../services/ddd';
 import { ProjectAgentForm } from './ProjectAgentForm';
+import { BackToHubButton } from './BackToHubButton';
 
 export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }: {
   general: GeneralBrain | null;
@@ -32,8 +33,7 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="general-brain">
       <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
-        <button className="text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)]" onClick={onBack}
-          aria-label="Back to all brains" data-testid="general-back">‹ All brains</button>
+        <BackToHubButton testid="general-back" onClick={onBack} />
         <div className="mt-1 flex items-center gap-2">
           <span className="material-symbols-outlined text-[var(--color-primary)]" aria-hidden="true">local_library</span>
           <h2 className="text-title font-semibold">General</h2>

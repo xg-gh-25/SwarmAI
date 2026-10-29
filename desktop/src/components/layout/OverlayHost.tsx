@@ -61,7 +61,7 @@ const NUB = 20;         // spout square size
 const EXIT_MS = 300;    // exit-transition backstop (> the 280ms card transform)
 
 export function OverlayHost() {
-  const { activeOverlay, closeOverlay, agentId } = useOverlay();
+  const { activeOverlay, openOverlay, closeOverlay, agentId } = useOverlay();
   // optional: the host also renders without a QueryClientProvider (its own tests)
   const queryClient = useContext(QueryClientContext);
   const spec = getOverlaySpec(activeOverlay);
@@ -189,6 +189,7 @@ export function OverlayHost() {
 
   // chrome from navTable; an id with no nav row (tests) falls back to its id as title
   const chrome = navEntry(renderedId);
+  const parentChrome = chrome?.parent ? navEntry(chrome.parent) : undefined;
   const width = OVERLAY_WIDTH[chrome?.width ?? 'l'];
 
   return (
@@ -256,7 +257,37 @@ export function OverlayHost() {
               {chrome.mode}
             </span>
           )}
-          <h2 className="font-semibold text-heading tracking-tight text-[var(--color-text)]">{chrome?.navLabel ?? renderedId}</h2>
+          {parentChrome && chrome?.parent && (
+            <>
+              <button
+                type="button"
+                onClick={() => openOverlay(chrome.parent!)}
+                className="flex items-center gap-1 font-semibold text-heading tracking-tight text-[var(--color-text-muted)] hover:text-[var(--panel-accent)] transition-colors"
+                aria-label={`Back to ${parentChrome.navLabel}`}
+                data-testid="overlay-host-parent"
+              >
+                <span className="material-symbols-outlined icon-md" aria-hidden>arrow_back</span>
+                {parentChrome.navLabel}
+              </button>
+              <span className="text-heading text-[var(--color-text-faint)]" aria-hidden>/</span>
+            </>
+          )}
+          {chrome?.titleGoesHome ? (
+            <h2 className="font-semibold text-heading tracking-tight text-[var(--color-text)]">
+              <button
+                type="button"
+                // no target: the surface reads it as "go to your home" (BrainHub → gallery)
+                onClick={() => window.dispatchEvent(new CustomEvent(`swarm:show-${renderedId}`))}
+                className="hover:text-[var(--panel-accent)] transition-colors"
+                title={`${chrome.navLabel} home`}
+                data-testid="overlay-host-title-home"
+              >
+                {chrome.navLabel}
+              </button>
+            </h2>
+          ) : (
+            <h2 className="font-semibold text-heading tracking-tight text-[var(--color-text)]">{chrome?.navLabel ?? renderedId}</h2>
+          )}
           {chrome?.subtitle && (
             <span className="text-small text-[var(--color-text-muted)] truncate" data-testid="overlay-host-subtitle">
               {chrome.subtitle}

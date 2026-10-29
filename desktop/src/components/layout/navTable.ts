@@ -43,6 +43,13 @@ export interface NavEntry {
   mode: string;
   /** Overlay width tier (OverlayHost OVERLAY_WIDTH). */
   width: 's' | 'm' | 'l' | 'xl';
+  /** The surface this one is opened from: the header shows it as a breadcrumb before
+   *  the title, and clicking it opens that surface (New Brain → Brain Hub). */
+  parent?: OverlayId;
+  /** The title is a button back to the surface's own home: the host fires the
+   *  surface's `swarm:show-<id>` event with no target, which the surface reads as
+   *  "go home" (Brain Hub → its gallery). Only for ids in ALL_SHOW_EVENTS. */
+  titleGoesHome?: boolean;
 }
 
 export const NAV: Record<OverlayId, NavEntry> = {
@@ -53,8 +60,8 @@ export const NAV: Record<OverlayId, NavEntry> = {
   // Cognition zone
   context: { zone: 'cognitive', navLabel: 'C&M', subtitle: 'Global Brain', mode: 'BRAIN', width: 'xl' },
   library: { zone: 'cognitive', navLabel: 'Library', subtitle: 'Bookshelf', mode: 'LIBRARY', width: 'xl' },
-  'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'what each project knows, delivers and learns', mode: 'BRAIN', width: 'xl' },
-  'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'xl' },
+  'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'what each project knows, delivers and learns', mode: 'BRAIN', width: 'xl', titleGoesHome: true },
+  'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'xl', parent: 'brain-hub' },
   // Work zone
   todo: { zone: 'work', navLabel: 'ToDo', mode: 'TODO', width: 'xl' },
   // width 'm': a file tree fills ~45% of an 'xl' panel and leaves a void

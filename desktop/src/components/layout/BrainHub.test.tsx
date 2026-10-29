@@ -13,7 +13,7 @@
  * Service + heavy children are mocked at the boundary (ddd.ts, agents, the file
  * preview modal) — the components under test are our own code, exercised directly.
  */
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BrainSummary, BrainDetail } from '../../services/ddd';
 
@@ -338,6 +338,26 @@ describe('BrainHub — Gallery (AC3)', () => {
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'));
     // no target → stays on Gallery, does not jump to a brain view
+    expect(screen.queryByTestId('brainhub-brain')).toBeNull();
+  });
+
+  it('show-brain-hub with NO target on an open Brain goes back to the Hub home (the host title click)', async () => {
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    act(() => { window.dispatchEvent(new CustomEvent('swarm:show-brain-hub')); });
+    await waitFor(() => expect(screen.queryByTestId('brainhub-brain')).toBeNull());
+    expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy();
+  });
+
+  it('the Back to Brain Hub button on a Brain returns to the Hub home', async () => {
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Brain Hub' }));
+    await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     expect(screen.queryByTestId('brainhub-brain')).toBeNull();
   });
 });
