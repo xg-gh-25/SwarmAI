@@ -488,8 +488,53 @@ _INT_TEXT = re.compile(r"[+-]?\d+")
 _NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
 
 
+_STRUCTURAL_AFTER = frozenset(',:}]')
+
+
+def _repair_inner_quotes(text: str) -> str:
+    """*text* with every double quote inside a string value escaped, when the writer
+    left it raw (``"why": "遵循"不碰历史数据"的规则"``). A quote closes a string only when
+    the next non-space character is structural (``, : } ]``) or the text ends there."""
+    out: list[str] = []
+    in_string = escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                rest = text[i + 1:].lstrip()
+                if rest and rest[0] not in _STRUCTURAL_AFTER:
+                    out.append('\\"')
+                    continue
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        out.append(ch)
+    return "".join(out)
+
+
+def _decode_text_json(value: str, kind: str) -> Any:
+    """A list or object the model sent as JSON text instead of a value (it does this
+    when a string field holds a straight double quote, measured 2026-10-29: 5/5
+    extractions with such text). Decoded as written, else with its inner quotes
+    escaped; anything that is still not a *kind* is returned unchanged for the type
+    check to refuse."""
+    import json as _json
+    for candidate in (value, _repair_inner_quotes(value)):
+        try:
+            decoded = _json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(decoded, list if kind == "array" else dict):
+            return decoded
+    return value
+
+
 def _validate(value: Any, schema: dict, path: str = "$") -> Any:
-    """*value* checked against *schema* (the subset above). A number written as
+    """*value* checked against *schema* (the subset above). A list or object sent as
+    JSON text is decoded (``_decode_text_json``); a number written as
     decimal text ("0.95") is converted, and an integer may be written "3" or 3.0; a
     number must be finite, so NaN, Infinity and an overflowing "1e400" are refused
     (a NaN score would read as a perfect one). Raises ValueError naming the path."""
@@ -499,6 +544,8 @@ def _validate(value: Any, schema: dict, path: str = "$") -> Any:
         if not (_INT_TEXT if t == "integer" else _NUMBER_TEXT).fullmatch(text):
             raise ValueError(f"{path}: expected {t}, got {value[:40]!r}")
         value = int(text) if t == "integer" else float(text)
+    if t in ("array", "object") and isinstance(value, str):
+        value = _decode_text_json(value, t)
     if t == "integer" and isinstance(value, float) and math.isfinite(value) and value.is_integer():
         value = int(value)
     ok = {

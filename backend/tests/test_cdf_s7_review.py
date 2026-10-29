@@ -92,14 +92,14 @@ def test_review_session_end_to_end(cdf_env, tmp_path, monkeypatch) -> None:
 
     def runner(sdk_id, cwd, prompt, schema):
         seen.update(sdk=sdk_id, cwd=cwd, prompt=prompt, schema=schema)
-        return {"units": [_agent_correction(f"event:{users[1]}"),
+        return {"cognition_units": [_agent_correction(f"event:{users[1]}"),
                           _agent_correction("event:not-in-index")]}
 
     out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=runner)
     assert out["status"] == "reviewed" and out["units"] == 1 and out["invalid"] == 1
     assert seen["sdk"] == sdk and seen["cwd"] == "/w"
     from core.ingestion.sources import extract_llm
-    assert seen["schema"] == extract_llm.flat_unit_schema(s7_review.ALLOWED_KINDS)
+    assert seen["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS)
     prompt = seen["prompt"]
     for needle in ("After-action review", "brainstorming", "decks", f"event:{users[1]}",
                    "以后都要先出 mockup", "m2", 'scope "agent"'):
@@ -152,7 +152,7 @@ def test_job_falls_back_to_s2_main_and_keeps_the_watermark(cdf_env, tmp_path, mo
         ran.clear()
         monkeypatch.setattr(s7_review, "sampled", lambda sid: False)
         out = worker.run_session_job(conn, {**job, "sdk_session_id": sdk},
-                                     runner=lambda *a: {"units": []})
+                                     runner=lambda *a: {"cognition_units": []})
         assert out["status"] == "reviewed" and ran == [("user_utterance",)]
         assert conn.execute("SELECT reviewed_to FROM ingestion_s2_jobs WHERE session_id=?",
                             (SESSION,)).fetchone()[0] == out["reviewed_to"]
@@ -171,7 +171,7 @@ def test_agent_self_correction_reaches_evolution_only_when_entailed(
         "content": [{"type": "tool_use", "name": "WebFetch", "input": {"url": "x"}},
                     {"type": "tool_result", "content": "some page"}]}))
     s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
-                             runner=lambda *a: {"units": [_agent_correction(f"event:{users[1]}")]})
+                             runner=lambda *a: {"cognition_units": [_agent_correction(f"event:{users[1]}")]})
     rows = _drain(cdf_env, Judge(entailed=entailed))
     assert rows
     context = cdf_env["workspace"] / ".context"
@@ -188,7 +188,7 @@ def test_button_reviews_below_the_threshold(cdf_env, tmp_path, monkeypatch) -> N
                                             "content": "好"}))
     monkeypatch.setattr(s7_review, "_rule_patterns", lambda: ())   # no rule signal either
     asked = []
-    run = lambda *a: asked.append(1) or {"units": []}  # noqa: E731
+    run = lambda *a: asked.append(1) or {"cognition_units": []}  # noqa: E731
     assert s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
                                     runner=run)["status"] == "below_threshold"
     assert s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, force=True,
@@ -300,7 +300,7 @@ def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
         anchor = next(line.split()[1] for line in prompt.splitlines()
                       if "(measured exit_code)" in line)
         seen["prompt_has_value"] = "(measured exit_code): 1" in prompt
-        return {"units": [{
+        return {"cognition_units": [{
             "kind": "cognition", "type": "pitfall", "scope": "agent",
             "title": "Run the suite before claiming done",
             "what": "Run the test suite before saying a change is finished.",
@@ -348,3 +348,16 @@ def test_review_health_counts_what_the_user_withdrew(cdf_env) -> None:
         conn.close()
     assert (out["agent_self_written"], out["agent_self_withdrawn"],
             out["agent_self_withdrawn_rate"]) == (2, 1, 0.5)
+
+
+
+def test_one_review_enqueues_at_most_max_units(cdf_env, tmp_path, monkeypatch) -> None:
+    """Every unit costs 2-5 judge calls; a review's extra units are recorded, not enqueued
+    (2026-10-29-cdf-launch §3 P2)."""
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    users = _conversation(cdf_env)
+    many = [{**_agent_correction(f"event:{users[1]}"), "title": f"Lesson {i}"}
+            for i in range(s7_review.MAX_UNITS + 4)]
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
+                                   runner=lambda *a: {"cognition_units": many})
+    assert out["units"] == s7_review.MAX_UNITS and out["invalid"] == 4

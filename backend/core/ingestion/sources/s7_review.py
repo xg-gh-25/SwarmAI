@@ -30,7 +30,8 @@ from . import extract_llm, s2_session
 
 logger = logging.getLogger(__name__)
 
-REVIEW_VERSION = "cdf-review-r16.15-v1"
+MAX_UNITS = 15  # units one review may enqueue (cost bound, design 2026-10-29-cdf-launch §3 P2)
+REVIEW_VERSION = "cdf-review-r16.15-v2"
 ALLOWED_KINDS = ("cognition", "gap", "reference")   # events come from S3/S4 (§4)
 MIN_USER_MESSAGES = 3
 MIN_TOOL_CALLS = 10
@@ -252,7 +253,7 @@ Allowed kinds: {", ".join(allowed)}. Rules the validator enforces:
 
 Do not record operational trivia, unverified guesses, restatements of memory you were given,
 task-local state, or a log of what you did. Recording nothing is a valid answer.
-
+{extract_llm.QUOTE_RULE}
 Evidence: cite only anchors from this index (user messages and measured results since your
 last review). Cite every one the unit rests on.
 {index or "(no citable evidence: record nothing)"}
@@ -368,7 +369,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
         return {"status": "unresumable", "reviewed_to": watermark, "units": 0, "reason": str(exc)}
     index, anchors, read = evidence(session_id, rows, s2_session._input_rows(session_id))
     prompt = build_prompt(ALLOWED_KINDS, sig, index)
-    schema = extract_llm.flat_unit_schema(ALLOWED_KINDS)
+    schema = extract_llm.unit_schema(ALLOWED_KINDS)
     attempt = api_v2.ExtractionAttempt(
         source="S7", attempt_id=f"attempt:{uuid.uuid4().hex}", extractor_version=REVIEW_VERSION,
         evidence_range={"session_id": session_id, "pass": "review", "from": watermark,
@@ -383,8 +384,13 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     except Exception as exc:
         api_v2.record_extraction_attempt(attempt, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
         raise
-    raw_units = [extract_llm.strip_to_kind(u) for u in (answer.get("units") or [])]
+    raw_units = extract_llm.units_from_answer(answer, ALLOWED_KINDS)
     result = extract_llm._validate(raw_units, ALLOWED_KINDS)
+    # every unit costs 2-5 judge calls: one review contributes at most MAX_UNITS, the
+    # rest are recorded as invalid (dropped, never silently)
+    for unit in result.units[MAX_UNITS:]:
+        result.invalid_units.append({"raw": unit.model_dump(mode="json"), "reason": "over_unit_cap"})
+    result.units = result.units[:MAX_UNITS]
     bad = [u for u in result.units if not set(u.evidence) <= set(anchors)]
     for unit in bad:
         result.invalid_units.append({"raw": unit.model_dump(mode="json"),
