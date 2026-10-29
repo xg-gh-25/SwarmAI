@@ -428,46 +428,12 @@ class TestSourceAnchorDrift:
     # ── Gate-2 F1: uppercase-stored anchor must NOT false-drift (case-insensitive) ──
 
 
-class TestEntryLifecycleArchiveIsAMove:
-    """The decay pass archives an entry ONCE and removes it from the live doc.
-
-    Regression for the archive runaway: the pass used to append an archived entry to
-    IMPROVEMENT-archive.md and leave its bullet live (still decay:dormant), so every
-    later pass appended it again (one entry reached 1,375 copies).
+class TestDecayGateAndReclaimAgree:
+    """The three readers of "may this entry leave the live doc" pick the same entries:
+    decay's ``may_leave_live_doc``, the noise gauge (``compute_reclaimable_noise``) and
+    the reclaim selector (``reclaim_noise_entries``). Since CDF stage B no pass moves an
+    entry out of the file; the selection still feeds the C&M entry-health counts.
     """
-
-    # Default fixture: a DATED idle [guideline] past grace, the shape that may leave
-    # the live doc (may_leave_live_doc). Before the fix it was archived by the decay
-    # pass and left live, so every pass appended it again. An UNDATED entry (the
-    # bulk of the real runaway) must instead stay live as dormant: its age cannot be
-    # proven, the same rule reclaim applies.
-    KEEP = "- [guideline] **Fresh lesson** — still in use. ({today})"
-
-    def _doc(self, root: Path, *, old_meta: str = "decay:dormant", dated: bool = True,
-             title: str = "Old idle lesson", entry_type: str = "guideline") -> Path:
-        from datetime import date as _d
-        self.OLD = f"- [{entry_type}] **{title}** -- something nobody used."
-        if dated:
-            self.OLD += " (2025-01-01)"
-        doc = root / "Projects" / "P" / "2-understanding" / "IMPROVEMENT.md"
-        doc.parent.mkdir(parents=True)
-        doc.write_text(
-            "# Improvement\n\n## What Worked\n\n"
-            f"{self.OLD}\n  <!-- ref:0 | last:none | {old_meta} -->\n\n"
-            f"{self.KEEP.format(today=_d.today().isoformat())}\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n",
-            encoding="utf-8",
-        )
-        return doc
-
-    def _run(self, root: Path) -> list:
-        from core.ddd_orchestrator import DddCultivationOrchestrator
-        return DddCultivationOrchestrator()._ch_entry_lifecycle(root, str(root))
-
-
-
-
-
 
     def test_decay_move_reclaim_and_gate_select_the_same_entries(self, tmp_path):
         # Parity on a fixture with no duplicate (title, section) pairs.

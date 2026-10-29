@@ -1,52 +1,18 @@
-"""REPORT knowledge line and REFLECT candidates from knowledge.md (design
-docs/design/2026-10-26-run-knowledge.md §3.5).
+"""REPORT knowledge line (design docs/design/2026-10-26-run-knowledge.md §3.5).
 
 What is tested:
-- A candidate from ``candidates_for`` can be annotated: it names the entry by its text
-  without the bullet (red before: the candidate kept "- " and annotate_entry, which
-  strips it, never found the entry -- run_bb7b1850 lost two refines that way).
-- The candidates of a lesson include the DDD entries recalled into knowledge.md at
-  create (from the contract, which the agent cannot edit), merged with the keyword
-  recall and de-duplicated.
 - REPORT carries one line ``Knowledge: <purpose> <status> · N ... · cited M`` and no recalled
   text; M counts the distinct ids cited by REQUIREMENTS / DESIGN_SPEC knowledge_refs and
   by findings; a run created before step 3 has no line.
+- A whole run: create recalls the DDD entry, REQUIREMENTS cites it, the run lands, and
+  REPORT counts the citation.
+
+(REFLECT's knowledge candidates and their annotation of DDD entries were removed by
+CDF stage B: REFLECT now only enqueues its lessons, tested in test_cdf_v2_e2e.)
 """
 import pytest
 
-from core.run_protocol import audit, reflect_job, run_knowledge as rk
-
-pytestmark = pytest.mark.skip(reason="r16.5 removed REFLECT candidate annotation and direct writes")
-
-ENTRY = "- **Quokka rule**: never feed quokkas after midnight."
-
-
-def _ws(tmp_path):
-    doc = tmp_path / "Projects" / "P" / "2-understanding" / "TECH.md"
-    doc.parent.mkdir(parents=True)
-    doc.write_text(f"# TECH\n\n## Traps\n\n{ENTRY}\n", encoding="utf-8")
-    return doc
-
-
-def test_a_recalled_candidate_can_be_annotated(tmp_path, monkeypatch):
-    doc = _ws(tmp_path)
-    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-    cands = reflect_job.candidates_for([{"id": "L1", "statement": "never feed quokkas after midnight"}], "P")
-    assert cands["L1"], cands
-    assert reflect_job.annotate_entry(tmp_path, "P", cands["L1"][0], "reinforced by run_x L1") == "applied"
-    assert "  - reinforced by run_x L1" in doc.read_text(encoding="utf-8")
-
-
-def test_knowledge_entries_join_the_candidates(tmp_path, monkeypatch):
-    _ws(tmp_path)
-    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-    known = [{"id": rk.item_id(ENTRY), "source": "TECH.md#Traps", "head": "**Quokka rule**: never feed quokkas after midnight."}]
-    cands = reflect_job.candidates_for([{"id": "L1", "statement": "unrelated words entirely"}], "P",
-                                       knowledge=known)
-    assert cands["L1"] == ["TECH.md#Traps: **Quokka rule**: never feed quokkas after midnight."]
-    both = reflect_job.candidates_for([{"id": "L1", "statement": "never feed quokkas after midnight"}], "P",
-                                      knowledge=known)
-    assert len(both["L1"]) == 1, both            # the same entry from both sources, once
+from core.run_protocol import audit, run_knowledge as rk
 
 
 def test_head_is_the_first_line_without_the_bullet():
@@ -91,12 +57,10 @@ def test_no_knowledge_line_for_an_older_run():
     assert "Knowledge:" not in audit.render(_build(), fmt="report")
 
 
-def test_end_to_end_cited_entry_reaches_report_and_reflect(tmp_path, monkeypatch):
-    """A full run: create recalls the DDD entry, REQUIREMENTS cites it, REFLECT
-    reinforces it through the knowledge candidate, the run lands; REPORT counts the
-    citation and the DDD entry got its note."""
-    import json
-    from tests.pipeline_v1_rig import PROJECT, Rig, SWARM, documents
+def test_end_to_end_a_cited_entry_reaches_report(tmp_path, monkeypatch):
+    """A full run: create recalls the DDD entry, REQUIREMENTS cites it, the run lands;
+    REPORT counts the citation and carries no recalled text."""
+    from tests.pipeline_v1_rig import PROJECT, Rig, documents
     from tests.test_pipeline_v1_run_knowledge import _ddd
     r = Rig(tmp_path, monkeypatch, profile="full")
     _ddd(r)
@@ -108,50 +72,13 @@ def test_end_to_end_cited_entry_reaches_report_and_reflect(tmp_path, monkeypatch
     cited = record["ddd"][0]
     req = {**documents("full")["evaluate"], "knowledge_refs": [cited["id"]]}
     assert r.v1("stage-complete", "--artifact", r.artifact("requirements", req)).get("ok") is True
-    r.drive(until="deliver")
-    lesson = {"id": "L1", "type": "pitfall", "scope": f"domain:{PROJECT}",
-              # no words shared with the entry: only knowledge.md can offer it as a candidate
-              "statement": "xylophone tuning stays out of scope", "tell": "seen in this run",
-              "evidence": [r.events()[0]["event_id"]],
-              "relation": {"kind": "reinforces", "entry": f"{cited['source']}: {cited['head']}"}}
-    design = [e for e in r.events() if e["kind"] == "knowledge_recalled"][0]["payload"]
-    tech_entry = next(row for row in design["ddd"] if row["source"].startswith("TECH.md#"))
-    lesson2 = {**lesson, "id": "L2", "statement": "marimba tuning stays out of scope",
-               # only knowledge_design.md (the event, not the contract) offers this one
-               "relation": {"kind": "reinforces",
-                            "entry": f"{tech_entry['source']}: {tech_entry['head']}"}}
-    from core.ingestion.api import EnqueueResult
-    enqueued = []
-    monkeypatch.setattr(
-        "core.ingestion.api.enqueue",
-        lambda *args, **kwargs: enqueued.append((args, kwargs)) or EnqueueResult(
-            status="queued", candidate_id="cand-reflect"),
-    )
-    project_doc = r.ws / "Projects" / PROJECT / "2-understanding" / "PROJECT.md"
-    tech_path = r.ws / "Projects" / PROJECT / "2-understanding" / "TECH.md"
-    before = (project_doc.read_bytes(), tech_path.read_bytes())
-    prep = r.v1("reflect-prepare", "--artifact",
-                r.artifact("reflect", {"lessons": [lesson, lesson2]}))
-    assert prep.get("ok") is True, prep
-    engine = r.engine()
-    monkeypatch.setattr(engine, "reflect_complete", lambda **_kwargs: None)
-    reflect_job._process_run(engine)
-    r.v1("land", "--message", "fix: swap the operands" + SWARM)
+    r.drive()
     state = r.state()
     assert state["status"] == "completed" and state["landing"] == "landed", state
+    design = [e for e in r.events() if e["kind"] == "knowledge_recalled"][0]["payload"]
     report = (r.repo / ".aidlc" / "deliverables" / r.run_id / "REPORT.md").read_text(encoding="utf-8")
     assert (f"Knowledge: requirement recalled · {len(record['items'])} · "
             f"design recalled · {len(design['items'])} · cited 1") in report, report
     assert "feeder only skips midnight" not in report         # no recalled text in REPORT
     assert cited["source"].startswith("PROJECT.md#")
-    # CDF stage B: REFLECT only enqueues; the governed DDD docs are untouched
-    assert len(enqueued) == 2
-    for args, kwargs in enqueued:
-        assert args[0:2] == ("reflect", r.run_id)
-        assert args[2].startswith("lesson:")
-        assert args[3]["kind"] == "reflect"
-        assert kwargs["envelope"]["writer"] == "reflect"
-        assert kwargs["project_snapshot"]["project"] == PROJECT
-    assert {a[3]["lessons"][0]["statement"] for a, _ in enqueued} == {
-        "xylophone tuning stays out of scope", "marimba tuning stays out of scope"}
-    assert (project_doc.read_bytes(), tech_path.read_bytes()) == before
+    r.close()
