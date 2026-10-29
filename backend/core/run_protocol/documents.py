@@ -192,17 +192,21 @@ def complete_stage(store: AuditStore, *, profile: str, stage: str, variant: str 
     )
     results: list[dict[str, Any]] = []
     for check_id in roster:
+        cause = None
         if check_id in forced:
             passed, detail = False, forced[check_id]
         elif forced:
             passed, detail = False, "not evaluated: the document was refused"
+            cause = "not_evaluated"
         else:
             passed, detail = checks.evaluate(check_id, context)
+        payload = {"stage_attempt_event_id": attempt_event["event_id"],
+                   "check_id": check_id, "passed": passed, "detail": detail}
+        if cause is not None:
+            payload["cause"] = cause
         event, _ = store.append_new(
             writer=store.authority.writer("cli"), kind="check", at=at,
-            stage=stage, attempt=attempt,
-            payload={"stage_attempt_event_id": attempt_event["event_id"],
-                     "check_id": check_id, "passed": passed, "detail": detail},
+            stage=stage, attempt=attempt, payload=payload,
         )
         results.append({"id": check_id, "passed": passed,
                         "detail": detail, "event_id": event["event_id"]})

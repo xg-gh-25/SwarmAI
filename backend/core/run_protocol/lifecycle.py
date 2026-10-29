@@ -45,6 +45,12 @@ CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch",
 # BASE_MOVED_PREFIX) count apart from the run's own 3, up to this many
 BASE_MOVED_CAP = 10
 BASE_MOVED_PREFIX = "base_moved:"
+# a failed check's cause, as its producer records it (check payload ``cause``): the
+# landing guards' outcome is classified by it. A long detail is stored as a blob the
+# fold cannot read, so the detail text is never where a cause comes from; an older
+# event without ``cause`` is classified by its detail's prefix, which works only when
+# the detail stayed inline (``_cause_of``).
+CHECK_CAUSES = frozenset({"not_evaluated", "base_moved", "merge_conflict"})
 # how often TEST may send the run back to REVIEW (S6-2)
 REVIEW_REOPEN_CAP = 2
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
@@ -287,7 +293,7 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     run["stage_attempts"][stage] = expected
     run["open_attempt"] = {
         "event_id": event["event_id"], "stage": stage, "attempt": expected,
-        "check_ids": tuple(check_ids), "results": {}, "details": {},
+        "check_ids": tuple(check_ids), "results": {}, "details": {}, "causes": {},
     }
 
 
@@ -302,10 +308,10 @@ def _set_pending(run: dict[str, Any], reason: str) -> None:
 def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str]) -> None:
     attempt = run["open_attempt"]
     stage, number = attempt["stage"], attempt["attempt"]
-    details = attempt.get("details") or {}
     run["open_attempt"] = None
+    cause = {cid: _cause_of(attempt, cid) for cid in failed}
     # a guard recorded "not evaluated" did not fail on its own: classify by the rest
-    evaluated = {cid for cid in failed if not details.get(cid, "").startswith("not evaluated")}
+    evaluated = {cid for cid in failed if cause[cid] != "not_evaluated"}
     failed = evaluated or failed
     if stage == "deliver":
         if failed <= RF_CHECKS and number >= 3 and run.get("reflect") is None:
@@ -316,14 +322,14 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
         run["last_land_intent"], run["last_report_render"] = None, None
         if failed & {"LG-3", "DV-1"}:
             _set_pending(run, "report_mismatch")
-        elif failed == {"LG-1"} and str(details.get("LG-1", "")).startswith(BASE_MOVED_PREFIX):
+        elif failed == {"LG-1"} and cause["LG-1"] == "base_moved":
             # failed only because the sync moved the tree: counts apart (§5.2 point 2)
             run["base_moved_failures"] = run.get("base_moved_failures", 0) + 1
             if run["base_moved_failures"] >= BASE_MOVED_CAP:
                 _set_pending(run, "base_kept_moving")
         elif failed & {"LG-1", "LG-4"}:
             if number - run.get("base_moved_failures", 0) >= 3:
-                conflict = str(details.get("LG-4", "")).startswith("merge_conflict")
+                conflict = cause.get("LG-4") == "merge_conflict"
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
         return
     if number - run["attempt_base"].get(stage, 0) >= 3:
@@ -332,6 +338,20 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
         run["stage"] = "deliver"
         run["stages"]["deliver"] = "open"
         _schedule(run, event, "active")
+
+
+def _cause_of(attempt: Mapping[str, Any], check_id: str) -> str | None:
+    """A failed check's cause: the one its event recorded, else (an event written before
+    ``cause`` existed) its detail's prefix; a detail moved into a blob has none."""
+    recorded = (attempt.get("causes") or {}).get(check_id)
+    if recorded:
+        return recorded
+    detail = (attempt.get("details") or {}).get(check_id, "")
+    for prefix, name in (("not evaluated", "not_evaluated"), (BASE_MOVED_PREFIX, "base_moved"),
+                         ("merge_conflict", "merge_conflict")):
+        if detail.startswith(prefix):
+            return name
+    return None
 
 
 def _check(run: dict[str, Any], event: Mapping[str, Any]) -> None:
@@ -343,6 +363,8 @@ def _check(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise LifecycleError("check is undeclared or duplicated")
     attempt["results"][check_id] = event["payload"]["passed"]
     attempt["details"][check_id] = str(event["payload"].get("detail") or "")
+    if event["payload"].get("cause") in CHECK_CAUSES:
+        attempt.setdefault("causes", {})[check_id] = event["payload"]["cause"]
     if len(attempt["results"]) == len(attempt["check_ids"]):
         failed = {cid for cid, passed in attempt["results"].items() if passed is not True}
         if failed:

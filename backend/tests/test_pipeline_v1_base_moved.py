@@ -30,9 +30,38 @@ def _run() -> dict:
             "base_moved_failures": 0, "attempt_base": {}, "stages": {}, "stage": "deliver"}
 
 
-def _fail_land(run: dict, number: int, details: dict) -> None:
-    run["open_attempt"] = {"stage": "land", "attempt": number, "details": details}
+def _fail_land(run: dict, number: int, details: dict, causes: dict | None = None) -> None:
+    run["open_attempt"] = {"stage": "land", "attempt": number, "details": details,
+                           "causes": causes or {}}
     lifecycle._failed_stage(run, {"event_id": f"e{number}"}, set(details))
+
+
+# what the fold holds for a detail that was moved into a blob (str of the event's value)
+BLOB = "{'blob': '" + "0" * 64 + "'}"
+
+
+def test_a_long_base_moved_detail_counts_apart_by_its_recorded_cause():
+    """Bugfix: the base-moved note names every TEST command, so in a real run it passes
+    the inline limit and is stored as a blob; the fold read the prefix out of the blob
+    reference, found none, and ended the run final_stale at the third move."""
+    run = _run()
+    for n in range(1, 6):
+        _fail_land(run, n, {"LG-1": BLOB, "LG-4": BLOB},
+                   {"LG-1": "base_moved", "LG-4": "not_evaluated"})
+    assert run["pending_landing"] is None and run["base_moved_failures"] == 5, run
+
+
+def test_a_long_merge_conflict_detail_ends_land_conflict_by_its_recorded_cause():
+    run = _run()
+    for n in (1, 2, 3):
+        _fail_land(run, n, {"LG-1": BLOB, "LG-4": BLOB}, {"LG-4": "merge_conflict"})
+    assert run["pending_landing"]["reason"] == "land_conflict", run
+
+
+def test_an_older_event_without_a_cause_is_classified_by_its_inline_prefix():
+    run = _run()
+    _fail_land(run, 1, {"LG-1": "base_moved: main moved", "LG-4": "not evaluated: x"})
+    assert run["base_moved_failures"] == 1 and run["pending_landing"] is None, run
 
 
 def test_base_moved_failures_count_apart_up_to_their_cap():
@@ -121,3 +150,30 @@ def test_a_failing_report_before_the_sync_gets_no_prefix(rig):
     r.commit_on_main({"elsewhere.py": "y = 1\n"})
     out = _land(r)
     assert out.get("ok") is False and _lg1(out) and not _lg1(out).startswith("base_moved"), out
+
+
+def test_main_moving_three_times_with_long_test_commands_still_lands(rig):
+    """The same three moves with a TEST report whose commands make the base-moved note
+    longer than an event keeps inline (every real run's): the run still lands."""
+    r = rig
+    r.create()
+    r.drive(until="deliver")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
+
+    def long_report() -> dict:
+        report = r.report()
+        report["reports"][0]["commands"][0]["command"] = (
+            "python -m pytest backend/tests/test_x.py " + " ".join(
+                f"backend/tests/test_x.py::test_case_{i}" for i in range(40)))
+        return report
+
+    r.v1("report-tests", "--artifact", r.artifact("long0", long_report()))
+    for i in range(3):
+        r.commit_on_main({f"other{i}.py": f"x = {i}\n"})
+        out = _land(r)
+        assert out.get("ok") is False and _lg1(out).startswith("base_moved:"), out
+        assert len(_lg1(out).encode()) > 1024, len(_lg1(out))
+        assert r.state()["status"] == "active" and r.state().get("pending_landing") is None
+        r.v1("report-tests", "--artifact", r.artifact(f"long{i + 1}", long_report()))
+    out = _land(r)
+    assert out.get("ok") is True or r.state().get("landing") == "landed", out

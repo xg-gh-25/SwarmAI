@@ -3328,18 +3328,21 @@ class RunEngine:
             stage="land", attempt=attempt, payload={"check_ids": guard_ids})
         results: dict[str, tuple[bool, str]] = {}
 
-        def record(check_id: str, passed: bool, detail: str) -> None:
+        def record(check_id: str, passed: bool, detail: str,
+                   cause: str | None = None) -> None:
             results[check_id] = (passed, detail)
+            payload = {"stage_attempt_event_id": opened["event_id"], "check_id": check_id,
+                       "passed": passed, "detail": detail}
+            if cause is not None:
+                payload["cause"] = cause    # what the fold classifies by (CHECK_CAUSES)
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="check", at=_now(),
-                stage="land", attempt=attempt,
-                payload={"stage_attempt_event_id": opened["event_id"], "check_id": check_id,
-                         "passed": passed, "detail": detail})
+                stage="land", attempt=attempt, payload=payload)
 
         def close(why: str) -> None:
             for check_id in guard_ids:
                 if check_id not in results:
-                    record(check_id, False, f"not evaluated: {why}")
+                    record(check_id, False, f"not evaluated: {why}", "not_evaluated")
 
         try:
             carry_error: IntegrationRequired | None = None
@@ -3358,14 +3361,17 @@ class RunEngine:
             context = dataclasses.replace(context, run=run_facts,
                                           events=tuple(self.store.read_events()))
             lg1_passed, lg1_detail = checks.evaluate("LG-1", context)
+            lg1_cause = None
             if not lg1_passed and carry_error is None:
                 moved = self._base_moved_note(before_sync)
                 if moved:
                     lg1_detail = f"{lifecycle.BASE_MOVED_PREFIX} {moved} | {lg1_detail}"[:1500]
-            record("LG-1", lg1_passed, lg1_detail)
+                    lg1_cause = "base_moved"
+            record("LG-1", lg1_passed, lg1_detail, lg1_cause)
             if carry_error is not None:
-                prefix = "merge_conflict: " if carry_error.code == "merge_conflict" else ""
-                record("LG-4", False, prefix + str(carry_error))
+                conflict = carry_error.code == "merge_conflict"
+                record("LG-4", False, ("merge_conflict: " if conflict else "") + str(carry_error),
+                       "merge_conflict" if conflict else None)
             if not all(passed for passed, _ in results.values()):
                 close("an earlier landing guard failed")
                 return self._land_failed(results)

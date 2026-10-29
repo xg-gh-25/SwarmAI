@@ -166,7 +166,8 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
    同一个判断用于 `stale_closures`（§2.3 第 5 点）：上次证明之后 tree 的变化只在文档类文件里时，代码类 finding 的关闭不失效；docs 类用 `diff_assertion` 关闭的 finding，看它自己的文件有没有再改。否则一次只改文档的 TEST 修改会让已关闭的 HIGH 变成"未关闭"，又回到本文要修的那类错误结论。
 2. **main 在动，不耗 run 自己的落地次数（D2）。** 今天落地上限就是 land 的 attempt 序号（`lifecycle.py:308` 的 `number >= 3`），没有单独的计数器。改法：
    - 一次落地尝试满足以下全部条件时，LG-1 的 detail 写成 `base_moved: …`（和 LG-4 的 `merge_conflict:` 前缀同一种做法）：这次同步把至少一个仓库的 base 往前移了；同步前后 run 自己的 patch id 不变；没有合并冲突，其他守卫都通过；每个仓库最新 TEST 报告的 tree 等于同步前的 tree（同步前报告是新的，失败只因为同步）。
-   - fold 只把**不带**这个前缀的 LG-1/LG-4 失败计入 3 次上限；带前缀的另计，上限 `BASE_MOVED_CAP = 10`（lifecycle 里一个常量），到了就以新原因 `base_kept_moving` 结束（不落地），`REASON_CAPS` 里映射到新的 cap 名 `base_moved`（`CAPS` 加这个名字）。这个原因进 `QUALITY_BLOCK_REASONS`，和其他不落地原因一样 Quality 为 BLOCK，REPORT 写明"main 一直在动"。
+   - 分类依据是 check 事件上生产方写的 `cause` 字段（`base_moved`、`merge_conflict`、`not_evaluated`，lifecycle `CHECK_CAUSES`），不是 detail 的前缀：这段说明列出全部 TEST 命令，真实 run 里几乎总超过事件内联上限（1 KB），被存成 blob，fold 读不到正文，曾因此把 main 连动的 run 判成 `final_stale`。没有 `cause` 的旧事件仍按内联 detail 的前缀分类。
+   - fold 只把 `cause` **不是** `base_moved` 的 LG-1/LG-4 失败计入 3 次上限；带前缀的另计，上限 `BASE_MOVED_CAP = 10`（lifecycle 里一个常量），到了就以新原因 `base_kept_moving` 结束（不落地），`REASON_CAPS` 里映射到新的 cap 名 `base_moved`（`CAPS` 加这个名字）。这个原因进 `QUALITY_BLOCK_REASONS`，和其他不落地原因一样 Quality 为 BLOCK，REPORT 写明"main 一直在动"。
    - detail 里记下同步前的 base（同步会覆盖记录），`next` 和这次返回据此列出：上一份 TEST 报告的命令原文和 cwd；新进来的 main commit 里改到了这次 run 改过的文件的那些。后者只是信息，不放行任何东西。
 3. **heredoc 拒绝时说清楚怎么过（D3）。** 拒绝照旧：heredoc 候选命中 main checkout 或任何 run 的 worktree 都拒绝。改的是拒绝信息：写出哪几个字符串被当成了可能的写入目标、为什么（这段 heredoc 交给了一个解释器，正文里有写入调用），以及两条通路：把脚本写进文件再运行（`python3 /tmp/x.py` 不经过 heredoc 解析）；或者先 `cd` 到 checkout 之外，让相对路径不再落进 checkout。不放松的原因：`main_dirty_scan` 只扫本会话 run 的 main checkout（`main_dirty_scan.py:134-145`），不扫别的 run 的 worktree，不报被 ignore 的文件，扫描忙时会跳过，所以它兜不住被放行的那部分写入。
 4. **同一个文件不重复报（D4）。** 在 `main_dirty_scan` 的状态文件里另存一份"已报过的路径"（今天的 seen 只是每次整份替换的快照，`main_dirty_scan.py:153-155`；worktree 创建时记下的 baseline 路径算作已报过，因为它们在创建时已经报给 agent）。已报过的路径之后再变化，只在报告末尾汇成一行，写出文件名（"仍在变化、之前报过：a, b"）；新路径照旧完整报告。
@@ -276,6 +277,7 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
   - C 的 baseline 机制撤掉，改为照实写（HIGH 2、MEDIUM 6、LOW 14、15）；
   - §2.2 根因改写（LOW 16）；当时 §6（今 §8）的"重放本次 run"改成续跑场景测试（MEDIUM 9），补上审查列出的缺失测试。
 - r3（2026-10-27）：当时 §8（今 §10）三条由 XG 决定，全部按 r2 的写法实施；补上 absence 检查需要的 `proof.tests_changed` 字段。
+- r5（2026-10-29）：§5.2 第 2 点的分类改按 check 事件的 `cause` 字段，不读 detail 前缀（长 detail 进 blob，fold 读不到）。
 - r4（2026-10-27）：并入 `run_85e81059` 的问题：A8（R2 名单从账本算）；§5 问题 D（只改文档时引擎完成增量审查、`base_moved` 计数、heredoc 拒绝信息写清通路、重复提示合并、三处说明）；§6 问题 E（基线按安装算，修好从未打包的 `baselines.json`；无基线为 N/A；Token 不含缓存读）。核实后不改的：stdout 本来只有 JSON（两次都是调用方合并了 stderr）；知识召回由另一个 session 处理。
   - 对新增部分做了一轮零上下文审查（2 HIGH、6 MEDIUM、4 LOW），按原因一次并入：D3 不再放松拒绝，改为说清候选和通路（HIGH 1，`main_dirty_scan` 不扫别的 run 的 worktree、不报 ignore 文件、扫描会跳过，MEDIUM 8）；D1 不再动 LG-1，改为"只改文档时引擎自己完成增量审查"，`stale_closures` 用同一判断，审计列出没送审的文档类文件（HIGH 2、MEDIUM 3、4）；D2 写清 fold 怎么计数（detail 前缀、单独常量、新原因和 cap 名、Quality BLOCK、"报告在同步前是新的"条件、记下同步前的 base）（MEDIUM 5）；Token 新增 `cache_read_tokens` 指标，改错误的注释（MEDIUM 6）；N/A 排在 BLOCK 和不完整 WARN 之后，仪表板汇总句一起改（MEDIUM 7）；A8 补上空 items 派 R2 和 REVIEW 完成检查，hunk 取自各自的 address（LOW 9）；基线的数据源、"已落地"、`baseline_runs`、读取上限（LOW 10）；§6.1 措辞（LOW 11）；§8 补上审查列出的测试和变异（LOW 12）。
 - r5（2026-10-27，实施后）：按 §8 实施完 14 步，与本文的出入如下（均已在代码和测试里）：

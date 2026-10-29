@@ -173,7 +173,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                            {"check_ids": list}),
     "check": _spec("cli", ("payload.stage_attempt_event_id", "payload.check_id"),
                    "payload.check_id", {"stage_attempt_event_id": str, "check_id": str,
-                   "passed": bool, "detail": str}),
+                   "passed": bool, "detail": str},
+                   # cause: why a failed check failed, when the fold classifies by it
+                   # (lifecycle.CHECK_CAUSES); the detail is text a long one of which is
+                   # moved into a blob, so the fold never reads a cause out of it
+                   {"cause": str}),
     # the producer of the triggering event signs its transition (the lifecycle decides
     # what it must say; a transition that differs from the expected one never folds)
     "transition": _spec("cli", ("payload.from", "payload.to", "payload.trigger_event_id"),
