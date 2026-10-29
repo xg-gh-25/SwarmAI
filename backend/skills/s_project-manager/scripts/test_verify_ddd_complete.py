@@ -77,6 +77,7 @@ def _make_ddd(
     code_intel: bool = False,
     numbered_layout: bool = False,
     project_agent: str | None = "schema: 2\nstatus: draft\nplacements: [chat-tab]\n"
+                                "identity: {summary: a test brain}\n"
                                 "modes:\n  - {id: research, when: a question, profile: research}\n"
                                 "default_mode: research\n",
 ) -> Path:

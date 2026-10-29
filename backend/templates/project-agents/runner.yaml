@@ -1,5 +1,5 @@
 # Project Agent definition: how this Brain's work is taken in, done and delivered.
-# A draft until a person confirms it on the Brain Hub review card.
+# A draft until a person confirms it on the Brain Hub form.
 # Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.
 # Shipped with SwarmAI: the Runner Agent, the Project Agent of the General Brain, for tasks that
 # belong to no project. Its knowledge is the Markdown in Knowledge/Library; no repo, no gates of its own.
@@ -15,24 +15,6 @@ identity:
   out_of_scope:
   - changing the code of any project
   - work that belongs to one of your Brains
-intake:
-  handles:
-  - research a topic and summarize what the sources say
-  - answer a question from the general knowledge in the Library
-  - write a report or a brief that belongs to no project
-  - compare a few options and recommend one
-gates:
-  enforce: []
-reserved_for_human:
-- open_pr
-- publish_release
-- push
-- send_external_message
-placements:
-- chat-tab
-- hive
-landing:
-  approval: human
 modes:
 - id: research
   when: a question or an investigation, answered in the conversation
@@ -41,3 +23,19 @@ modes:
   when: a document or a report as the deliverable
   profile: direct
 default_mode: research
+reserved_for_human:
+- open_pr
+- publish_release
+- push
+- send_external_message
+gates:
+  enforce: []
+placements:
+- chat-tab
+- hive
+intake:
+  handles:
+  - research a topic and summarize what the sources say
+  - answer a question from the general knowledge in the Library
+  - write a report or a brief that belongs to no project
+  - compare a few options and recommend one

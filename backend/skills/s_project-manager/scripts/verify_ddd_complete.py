@@ -410,7 +410,7 @@ try:
     from core.project_agent import validate as _validate_project_agent
 except ImportError:
     _PROFILES = frozenset({"full", "bugfix", "trivial", "direct", "research"})  # profile-fallback
-    _PLACEMENTS = frozenset({"chat-tab", "local-worker", "hive"})
+    _PLACEMENTS = frozenset({"chat-tab", "hive"})
     _validate_project_agent = None
 
 
@@ -418,7 +418,8 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
     """⑤ PROJECT AGENT: project-agent.yaml, drafted at P3b from the Brain's knowledge.
 
     Missing → FAIL (every Brain has one; draft it with ``artifact_cli
-    project-agent-draft``). Present with any problem ``core.project_agent.validate``
+    project-agent-draft``). A skeleton (written by code when the Brain was created: no
+    summary, no typical requests) → FAIL until the drafting step fills it in. Present with any problem ``core.project_agent.validate``
     reports for this Brain (either schema; names checked against the Brain on disk) →
     FAIL. Valid and a draft → PENDING (it waits for the person on the Brain Hub review
     card, which does not fail the gate). Valid and reviewed → PASS. Off a SwarmAI host
@@ -437,6 +438,17 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         return (name, STATUS_FAIL, f"project-agent.yaml could not be parsed: {type(exc).__name__}")
     if not isinstance(doc, dict):
         return (name, STATUS_FAIL, "project-agent.yaml is not a mapping")
+    # a skeleton (code wrote it when the Brain was created) is not a draft yet: the
+    # drafting step has not filled in a summary or typical requests (same test as
+    # core.project_agent_standard.is_skeleton, inlined so the gate runs portable)
+    ident = doc.get("identity") if isinstance(doc.get("identity"), dict) else {}
+    intake = doc.get("intake") if isinstance(doc.get("intake"), dict) else {}
+    handles = intake.get("handles") if isinstance(intake.get("handles"), list) else []
+    if (doc.get("schema") == 2 and not str(ident.get("summary") or "").strip()
+            and not any(isinstance(h, str) and h.strip() for h in handles)):
+        return (name, STATUS_FAIL, "project-agent.yaml is a skeleton with no summary and no typical "
+                                   "requests — draft it (artifact_cli project-agent-draft, "
+                                   "s_project-manager P3b)")
     problems = None
     if _validate_project_agent is not None:
         try:

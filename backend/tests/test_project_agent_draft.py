@@ -476,16 +476,16 @@ def test_cli_prints_facts_and_writes_the_draft(tmp_path, monkeypatch, capsys):
     b = _brain(tmp_path, repo)
     b.rename(ws / "Projects" / "Lib")
     cli = _cli(monkeypatch, ws)
-    cli.cmd_project_agent_draft(SimpleNamespace(general=False, project="Lib", apply=None, dry_run=False), None)
+    cli.cmd_project_agent_draft(SimpleNamespace(general=False, project="Lib", apply=None, dry_run=False, fresh=False), None)
     facts = json.loads(capsys.readouterr().out)["facts"]
     assert facts["repos"][0]["name"] == "lib"
     prop = tmp_path / "p.json"
     prop.write_text(json.dumps({"identity": {"summary": "lib", "source": "PRODUCT.md"}}))
-    cli.cmd_project_agent_draft(SimpleNamespace(general=False, project="Lib", apply=str(prop), dry_run=False), None)
+    cli.cmd_project_agent_draft(SimpleNamespace(general=False, project="Lib", apply=str(prop), dry_run=False, fresh=False), None)
     out = json.loads(capsys.readouterr().out)
     assert out["written"] and (ws / "Projects" / "Lib" / "project-agent.yaml").is_file()
     with pytest.raises(SystemExit) as e:
-        cli.cmd_project_agent_draft(SimpleNamespace(general=False, project="..", apply=None, dry_run=False), None)
+        cli.cmd_project_agent_draft(SimpleNamespace(general=False, project="..", apply=None, dry_run=False, fresh=False), None)
     assert e.value.code == 2
 
 
@@ -497,7 +497,7 @@ def test_cli_general_brain(tmp_path, monkeypatch, capsys):
     prop = tmp_path / "p.json"
     prop.write_text(json.dumps({"modes": [{"id": "write", "when": "a report", "source": "note.md",
                                            "profile": "direct"}]}))
-    cli.cmd_project_agent_draft(SimpleNamespace(general=True, project=None, apply=str(prop), dry_run=False), None)
+    cli.cmd_project_agent_draft(SimpleNamespace(general=True, project=None, apply=str(prop), dry_run=False, fresh=False), None)
     out = json.loads(capsys.readouterr().out)
     assert out["brain"] == "General" and out["written"]
     doc = yaml.safe_load((ws / "Knowledge" / "Library" / "project-agent.yaml").read_text())

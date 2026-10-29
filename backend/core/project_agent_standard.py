@@ -1,42 +1,250 @@
-"""The Project Agent standard: how a definition is written by default (design
-docs/design/2026-10-29-default-brains-and-project-agent-standard.md §4).
+"""The Project Agent standard: one form every Brain's definition fills (design
+docs/design/2026-10-29-project-agent-standard-template.md §3, §5).
 
-One source for what the draft generator (core/project_agent_draft), the two definitions
-shipped with the product (templates/project-agents/) and the review card's remarks
-(``project_agent.notes``) share. The field guide for people is
-templates/project-agents/STANDARD.md.
+``TEMPLATE`` is the one list of the definition's fields: eight sections in a fixed
+order, each field with its label, its purpose, who may change it and where it is
+stored. Everything else that names fields is generated from it:
+
+- ``SHARED_ORDER`` / ``MODE_ORDER`` / ``IDENTITY_ORDER`` / ``INTAKE_ORDER``: the key
+  order a written definition uses (``ordered``);
+- ``proposal_keys()``: the format the drafting agent proposes in
+  (``project_agent_draft.PROPOSAL_CONTRACT``);
+- ``editable(field)``: which stored fields the Brain Hub form may change
+  (``project_agent_review.edit``);
+- ``core.project_agent_form``: the sections the Brain Hub shows;
+- ``standard_md_table()``: the field table of templates/project-agents/STANDARD.md (a
+  test compares the file with it).
 
 What a standard is NOT: a validation rule. ``project_agent.validate`` decides what is
-wrong; this says what a draft looks like, and ``deviations`` lists where a definition
-leaves it as advisory remarks a person may keep on purpose.
+wrong; ``required`` says what a finished draft has (P6 reports a skeleton), and
+``deviations`` lists where a definition leaves the standard as advisory remarks.
 
-- ``SHARED_ORDER`` / ``MODE_ORDER``: the order of a definition's keys and of a mode's.
 - ``MODES``: the standard modes, for which shape of Brain, their ``when`` and profile.
-  A Brain "has a repo" when its ``bindings.yaml`` binds one (``project_agent._bindings``,
-  the same test the generator uses).
+  A Brain "has a repo" when its ``bindings.yaml`` binds one (``project_agent._bindings``).
 - ``standard_modes(has_repo)`` / ``default_mode(has_repo)``: a draft's mode skeleton.
-- ``ordered(doc)``: the definition with its keys in the standard order.
 - ``HEADER``: the comment every definition file starts with.
-- ``deviations(doc, has_repo)``: where a definition leaves the standard: a person removed
-  something, or the model proposed no summary or handles.
+- ``is_skeleton(doc)``: a definition code wrote that no one has drafted yet.
 """
 from __future__ import annotations
 
 import copy
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
-from core.project_agent import RESERVED_ACTIONS
+from core.project_agent import PROFILES, RESERVED_ACTIONS
 
-SHARED_ORDER: tuple[str, ...] = (
-    "schema", "status", "reviewed_at", "reviewed_by", "drafted_at",
-    "identity", "intake", "confidence", "watches", "gates",
-    "reserved_for_human", "placements", "landing",
-    "modes", "default_mode", "sources")
-IDENTITY_ORDER: tuple[str, ...] = ("summary", "in_scope", "out_of_scope", "source")
-INTAKE_ORDER: tuple[str, ...] = ("handles", "repos", "proposed_aliases")
-MODE_ORDER: tuple[str, ...] = (
-    "id", "when", "profile", "profile_rules", "placements", "repos", "setup",
-    "validations", "skills", "gates", "reserved_for_human", "delivery")
+#: how a field may change. edit: drafted from the Brain's documents, changed on the form;
+#: brain: read from the Brain's files, changed there (``removable``: rows may be dropped
+#: here); you: only a person sets it; fixed: the product's, the same for every Brain.
+KINDS: dict[str, str] = {
+    "edit": "Editable", "brain": "From the Brain", "you": "Your choice", "fixed": "Fixed"}
+
+
+@dataclass(frozen=True)
+class Field:
+    """One field of the form. ``store``: its path in the file (``identity.summary``,
+    ``modes[].when`` for a mode's own field), None when it is read from the Brain or the
+    product. ``shape``: text | list | rows | names | choice | view."""
+    key: str
+    section: str
+    label: str
+    help: str
+    kind: str
+    shape: str
+    store: Optional[str] = None
+    required: bool = False
+    removable: bool = False
+    example: str = ""
+    columns: tuple[str, ...] = ()
+    propose: Optional[tuple[str, Any]] = None     # (proposal key, contract text)
+
+
+#: (id, title, purpose): the order a person reads the form in — what it is and has, its
+#: limits, how work comes in and when you are brought in, then the reference.
+SECTIONS: tuple[tuple[str, str, str], ...] = (
+    ("identity", "Identity",
+     "Who this agent is and what it is attached to. Routing reads the summary and scope."),
+    ("capabilities", "Capabilities",
+     "What the Brain gives it to work with. Defined in the Brain; the agent only uses it."),
+    ("modes", "Modes",
+     "The kinds of work it does. The agent picks the mode whose \"used when\" matches the request."),
+    ("guardrails", "Guardrails",
+     "What it never does on its own, and what checks it. Every mode inherits these and can only add to them."),
+    ("runs", "Runs in",
+     "Where its work may run. A mode that needs this machine stays here even when the cloud is allowed."),
+    ("intake", "Intake", "How a request reaches it: a new request is compared with these."),
+    ("judgment", "Judgment", "When it decides on its own and when it brings you in."),
+    ("profiles", "Pipeline profiles",
+     "For reference: what each profile runs. A run is created with its mode's profile, raised by "
+     "Judgment; it does not change afterwards."),
+)
+
+TEMPLATE: tuple[Field, ...] = (
+    # 1 Identity
+    Field("name", "identity", "Name", "The agent is named after its Brain.", "brain", "view"),
+    Field("brain", "identity", "Brain", "The Brain (DDD) it works from: its knowledge, skills and gates.",
+          "brain", "view"),
+    Field("repos", "identity", "Repositories",
+          "The code it may change: where it is checked out here, and where it lives remotely. "
+          "From bindings.yaml.", "brain", "view", columns=("name", "local", "remote")),
+    Field("summary", "identity", "Summary",
+          "One sentence: what the work in this Brain usually is. Shown wherever the agent is listed.",
+          "edit", "text", "identity.summary", required=True,
+          example="Fix and extend the billing service and its jobs",
+          propose=("identity", {"summary": "str", "in_scope": ["str"], "out_of_scope": ["str"],
+                                "source": "str"})),
+    Field("in_scope", "identity", "Takes on", "The kinds of work it accepts.", "edit", "list",
+          "identity.in_scope", example="bugs and features in the API"),
+    Field("out_of_scope", "identity", "Refuses", "Work that must go elsewhere. Routing excludes it.",
+          "edit", "list", "identity.out_of_scope", example="another team's services"),
+    # 2 Capabilities
+    Field("skills", "capabilities", "Skills",
+          "The Brain's own skills (4-capabilities/). Which mode may use each is set in Modes.",
+          "brain", "view", columns=("name", "description", "modes", "hive")),
+    Field("tools", "capabilities", "Tools and MCP", "Scripts and MCP servers the Brain declares (aim.json).",
+          "brain", "view", columns=("name", "kind", "hive")),
+    Field("jobs", "capabilities", "Jobs", "Scheduled work this Brain owns.", "brain", "view"),
+    # 3 Modes (a mode's own fields)
+    Field("when", "modes", "Used when", "The kind of request this mode handles. Modes must not overlap.",
+          "edit", "text", "modes[].when", required=True,
+          propose=("when", "the kind of intent this mode handles (a new `when` needs a source)")),
+    Field("profile", "modes", "Starts as",
+          "The pipeline profile a run of this mode is created with. Judgment can raise it.",
+          "edit", "choice", "modes[].profile",
+          propose=("profile", f"one of {sorted(PROFILES)} (research stays research)")),
+    Field("mode_repos", "modes", "Repositories", "The repos this mode works in.", "brain", "names",
+          "modes[].repos", propose=("repos", ["names from facts.repos (new modes only; code-change has them all)"])),
+    Field("setup", "modes", "Setup",
+          "Installs run before the checks, copied from the file the repo declares them in.",
+          "brain", "rows", "modes[].setup", removable=True, columns=("command", "cwd", "source"),
+          propose=("setup", ["a facts.commands id, or {command, source, repo, cwd}"])),
+    Field("validations", "modes", "Checks a run must pass",
+          "Commands from the repo's validations.json or CI, copied verbatim.",
+          "brain", "rows", "modes[].validations", removable=True, columns=("id", "command", "cwd", "source"),
+          propose=("validations", ["a facts.commands id, or {id, command, source, repo, cwd}"])),
+    Field("mode_skills", "modes", "Skills", "Skills of this Brain the mode may use.", "edit", "names",
+          "modes[].skills",
+          propose=("skills", ["names from facts.skills; a skill no mode lists goes to the default mode"])),
+    Field("delivery", "modes", "Delivers", "How code comes back: bundle = you review the commits, then "
+          "they land on main.", "edit", "choice", "modes[].delivery"),
+    Field("default_mode", "modes", "Default mode", "The mode used when a request names none.", "edit",
+          "choice", "default_mode", propose=("default_mode", "a mode id")),
+    # 4 Guardrails
+    Field("reserved_for_human", "guardrails", "Always ask me before",
+          "Each time, it stops and waits for your approval.", "you", "names", "reserved_for_human",
+          required=True),
+    Field("gates", "guardrails", "Brain gates",
+          "Checks from this Brain's 3-gates/, run on every command. Untick one to stop enforcing it.",
+          "brain", "names", "gates.enforce", removable=True,
+          propose=("gates", ["names from facts.gates to enforce; omitted = all of them"])),
+    Field("product_guards", "guardrails", "SwarmAI guards", "The product's own guards. Every session runs them.",
+          "fixed", "view"),
+    Field("landing", "guardrails", "Code lands", "Who approves code before it reaches main.", "fixed", "view"),
+    # 5 Runs in
+    Field("placements", "runs", "Where it may run", "Hive lets it run unattended on your cloud SwarmAI.",
+          "you", "names", "placements", required=True),
+    # 6 Intake
+    Field("handles", "intake", "Typical requests", "3-5 requests it handles, one sentence each.",
+          "edit", "list", "intake.handles", required=True, example="Fix a reproducible bug in the API",
+          propose=("handles", [{"text": "a typical intent, one sentence", "source": "str"}])),
+    Field("aliases", "intake", "Other names",
+          "Names people use for this Brain. Each routes a request here; the ones you keep move into "
+          "aim.json when you confirm.", "you", "rows", "intake.proposed_aliases", removable=True,
+          columns=("name", "source"),
+          propose=("aliases", [{"name": "a module or product name people use for this Brain",
+                                "source": "str"}])),
+    # 7 Judgment
+    Field("confidence", "judgment", "When unsure", "What it does before acting on a guess.", "edit", "text",
+          "confidence", example="Research first; ask before changing a public API",
+          propose=("confidence", {"text": "str", "source": "str"})),
+    Field("profile_rules", "judgment", "When to use more process",
+          "Requests that need a heavier profile than the mode starts with.", "edit", "rows",
+          "modes[].profile_rules", columns=("when", "profile"),
+          propose=("profile_rules", [{"when": "str", "profile": "str", "source": "str"}])),
+    Field("watches", "judgment", "Review focus",
+          "What every review of work here checks, each with the document it comes from.", "edit", "rows",
+          "watches", columns=("area", "why", "source"),
+          propose=("watches", [{"area": "str", "why": "str", "source": "str"}])),
+    # 8 Pipeline profiles
+    Field("profiles", "profiles", "Profiles", "The profiles a pipeline run can use.", "fixed", "view",
+          columns=("name", "for", "stages")),
+)
+
+#: the definition's own bookkeeping, written by code before the template's fields
+_META = ("schema", "status", "reviewed_at", "reviewed_by")
+
+
+def _order_from_template(prefix: str) -> tuple[str, ...]:
+    out: list[str] = []
+    for f in TEMPLATE:
+        if f.store and f.store.startswith(prefix):
+            k = f.store[len(prefix):].split(".")[0]
+            if k and k not in out:
+                out.append(k)
+    return tuple(out)
+
+
+def _shared_order() -> tuple[str, ...]:
+    out: list[str] = list(_META)
+    for f in TEMPLATE:
+        if not f.store:
+            continue
+        top = f.store.split(".")[0].split("[")[0]
+        if top not in out:
+            out.append(top)
+    out.append("sources")
+    return tuple(out)
+
+
+SHARED_ORDER: tuple[str, ...] = _shared_order()
+IDENTITY_ORDER: tuple[str, ...] = _order_from_template("identity.") + ("source",)
+INTAKE_ORDER: tuple[str, ...] = _order_from_template("intake.")
+MODE_ORDER: tuple[str, ...] = ("id",) + _order_from_template("modes[].") + (
+    "placements", "gates", "reserved_for_human", "pr_remote", "source")
+
+
+def field(key: str) -> Field:
+    return next(f for f in TEMPLATE if f.key == key)
+
+
+def editable(f: Field) -> bool:
+    """A stored field the form may change: kind edit or you, or rows it may drop."""
+    return bool(f.store) and (f.kind in ("edit", "you") or f.removable)
+
+
+def proposal_keys() -> dict[str, Any]:
+    """The top-level keys the drafting agent may propose, from the template, in order."""
+    return {f.propose[0]: f.propose[1] for f in TEMPLATE
+            if f.propose and not (f.store or "").startswith("modes[].")}
+
+
+def mode_proposal_keys() -> dict[str, Any]:
+    """The keys of one proposed mode, from the template, in order."""
+    return {f.propose[0]: f.propose[1] for f in TEMPLATE
+            if f.propose and (f.store or "").startswith("modes[].")}
+
+
+def standard_md_table() -> str:
+    """The field table of STANDARD.md, generated from the template."""
+    rows = ["| Section | Field | What it is for | Who changes it | Stored as |", "|---|---|---|---|---|"]
+    titles = {s: t for s, t, _ in SECTIONS}
+    for f in TEMPLATE:
+        rows.append(f"| {titles[f.section]} | {f.label}{' (required)' if f.required else ''} | "
+                    f"{f.help.replace('|', '/')} | {KINDS[f.kind]}{' (rows may be dropped)' if f.removable and f.kind == 'brain' else ''} | "
+                    f"{'`' + f.store + '`' if f.store else 'read from the Brain' if f.kind == 'brain' else 'the product'} |")
+    return "\n".join(rows)
+
+
+def is_skeleton(doc: dict[str, Any]) -> bool:
+    """A definition code wrote and no one has drafted yet: it has neither a summary nor
+    typical requests (design §6.2). P6 reports it, so a Brain is not ready on it."""
+    ident = doc.get("identity") if isinstance(doc.get("identity"), dict) else {}
+    intake = doc.get("intake") if isinstance(doc.get("intake"), dict) else {}
+    has_summary = isinstance(ident.get("summary"), str) and bool(ident["summary"].strip())
+    handles = intake.get("handles")
+    has_handles = isinstance(handles, list) and any(isinstance(h, str) and h.strip() for h in handles)
+    return not has_summary and not has_handles
+
 
 #: the actions a draft reserves for a person: all the product knows
 DEFAULT_RESERVED: tuple[str, ...] = tuple(sorted(RESERVED_ACTIONS))
@@ -56,7 +264,7 @@ MODES: dict[str, dict[str, Any]] = {
 }
 
 HEADER = ("# Project Agent definition: how this Brain's work is taken in, done and delivered.\n"
-          "# A draft until a person confirms it on the Brain Hub review card.\n"
+          "# A draft until a person confirms it on the Brain Hub form.\n"
           "# Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.\n")
 
 

@@ -266,6 +266,10 @@ def ensure_project_metadata(project_dir: Path, name: str) -> bool:
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
+    # a registered Brain has a Project Agent skeleton, however it was minted (design
+    # 2026-10-29-project-agent-standard-template §6.1); never raises
+    from core.project_agent_draft import ensure_skeleton
+    ensure_skeleton(project_dir)
     return True
 
 # The canonical short NAMES of the six DDD sections (DDD-agent-brain spec §3.6),
@@ -2708,6 +2712,10 @@ class SwarmWorkspaceManager:
 
         # Provision DDD document templates for the new project
         await self.provision_project_ddd(project_name, workspace_path)
+        # the Project Agent skeleton: what code decides from the Brain; the drafting
+        # step (s_project-manager P3b) fills in the rest (design 2026-10-29 §6.1)
+        from core.project_agent_draft import ensure_skeleton
+        await anyio.to_thread.run_sync(lambda: ensure_skeleton(project_dir))
 
         # A NEW project starts its setup (P0..P6): the Brain Hub shows it as being
         # born until the P6 gate records `ready` (core.ddd_setup_state).

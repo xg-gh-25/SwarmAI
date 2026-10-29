@@ -11,7 +11,7 @@ The model judges, a deterministic tool writes — the same split as
 - ``apply(project_dir, proposal)`` builds a ``schema: 2`` draft. Code decides the
   deterministic fields (``intake.repos``, the standard modes of the Brain's shape from
   core/project_agent_standard — research, plus code-change with a bound repo or write
-  without one — skills, gates, reserved actions, placements, landing) and writes the keys
+  without one — skills, gates, reserved actions, placements) and writes the keys
   in the standard order. The model's proposal adds the
   judged fields (identity, handles, confidence, watches, extra modes, each mode's
   ``when`` and profile rules, aliases); every judged row names a source, and a row
@@ -57,32 +57,22 @@ _COMMAND_KINDS = ("ci_run", "make", "just", "npm_script", "tox_env", "nox_sessio
 _TEXT_MAX = 400
 _DRAFT_DIR = ".artifacts/project-agent"
 
+#: the proposal format the drafting agent reads; its keys come from the template
+#: (core/project_agent_standard.TEMPLATE), so the agent sees the same fields as the form
 PROPOSAL_CONTRACT: dict[str, Any] = {
     "format": "one JSON object; every key is optional; every judged row names a source",
     "source": ("a Brain document (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md, AGENTS.md, "
                "bindings.yaml or any file under the Brain), or '<repo>:<path>' for a file "
                "in a bound repo; a row whose source does not exist is not written"),
     "keys": {
-        "identity": {"summary": "str", "in_scope": ["str"], "out_of_scope": ["str"], "source": "str"},
-        "handles": [{"text": "a typical intent, one sentence", "source": "str"}],
-        "confidence": {"text": "str", "source": "str"},
-        "watches": [{"area": "str", "why": "str", "source": "str"}],
-        "gates": ["names from facts.gates to enforce; omitted = all of them"],
-        "aliases": [{"name": "a module or product name people use for this Brain", "source": "str"}],
-        "default_mode": "a mode id",
+        **std.proposal_keys(),
         "modes": [{
             "id": ("research | code-change (with a bound repo) | write (without one) | "
                    "a new id ([a-z][a-z0-9-]*)"),
-            "when": "the kind of intent this mode handles (a new `when` needs a source)",
             "source": "str",
-            "profile": f"one of {sorted(PROFILES)} (research stays research)",
-            "profile_rules": [{"when": "str", "profile": "str", "source": "str"}],
-            "skills": ["names from facts.skills; a skill no mode lists goes to the default mode"],
-            "repos": ["names from facts.repos (new modes only; code-change has them all)"],
+            **std.mode_proposal_keys(),
             "placements": ("where this mode may run, a subset of the shared placements, for work "
                            "that needs tools only one place has (the mode's source says why)"),
-            "setup": ["a facts.commands id, or {command, source, repo, cwd}"],
-            "validations": ["a facts.commands id, or {id, command, source, repo, cwd}"],
         }],
     },
     "defaults": ("the standard modes (templates/project-agents/STANDARD.md): research always; "
@@ -403,8 +393,7 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
     repo_names = [r["name"] for r in facts["repos"]]
     skills = [s["name"] for s in facts["skills"]]
 
-    doc: dict[str, Any] = {"schema": 2, "status": "draft", "reviewed_at": None, "reviewed_by": None,
-                           "drafted_at": now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    doc: dict[str, Any] = {"schema": 2, "status": "draft", "reviewed_at": None, "reviewed_by": None}
 
     ident = p.get("identity")
     if ident is not None:
@@ -461,7 +450,6 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
     doc["gates"] = {"enforce": gates}
     doc["reserved_for_human"] = list(std.DEFAULT_RESERVED)
     doc["placements"] = ["chat-tab"]
-    doc["landing"] = {"approval": "human"}
 
     # modes: the standard ones for this shape of Brain (core/project_agent_standard), then
     # the proposed ones
@@ -572,10 +560,102 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
     return std.ordered(doc), b.dropped
 
 
+def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
+           project_dir: Path) -> None:
+    """Keep in the new draft *doc* what the earlier draft *old* holds and the proposal
+    does not decide (design 2026-10-29-project-agent-standard-template §6.3): the judged
+    fields, a person's choices on the form (reserved actions, placements, gates, aliases)
+    and every mode the proposal does not name. A standard mode keeps its judged fields
+    and the rows a person left; checks of a repo bound since are added."""
+    from core.project_agent import PLACEMENTS, RESERVED_ACTIONS, normalize
+    old = normalize(old)
+    if "identity" not in proposal and isinstance(old.get("identity"), dict) and old["identity"]:
+        doc["identity"] = old["identity"]
+    oi = old.get("intake") if isinstance(old.get("intake"), dict) else {}
+    intake = doc.setdefault("intake", {})
+    if "handles" not in proposal and oi.get("handles"):
+        intake["handles"] = oi["handles"]
+    if "aliases" not in proposal and oi.get("proposed_aliases"):
+        intake["proposed_aliases"] = oi["proposed_aliases"]
+    if not intake:
+        doc.pop("intake")
+    for key in ("confidence", "watches"):
+        if key not in proposal and old.get(key):
+            doc[key] = old[key]
+    gates = set(gate_files(project_dir))
+    if "gates" not in proposal and isinstance(old.get("gates"), dict):
+        doc["gates"] = {"enforce": [g for g in old["gates"].get("enforce") or [] if g in gates]}
+    if isinstance(old.get("reserved_for_human"), list):
+        doc["reserved_for_human"] = [a for a in old["reserved_for_human"] if a in RESERVED_ACTIONS]
+    if isinstance(old.get("placements"), list):
+        doc["placements"] = [x for x in old["placements"] if x in PLACEMENTS] or ["chat-tab"]
+    named = {pm.get("id") for pm in proposal.get("modes") or [] if isinstance(pm, dict)} \
+        if isinstance(proposal.get("modes"), list) else set()
+    new_modes = {m["id"]: m for m in doc["modes"]}
+    for om in old.get("modes") or []:
+        if not isinstance(om, dict) or om.get("id") in named:
+            continue
+        nm = new_modes.get(om.get("id"))
+        if nm is None:
+            if om.get("id") not in std.MODES:      # a standard mode of the Brain's old shape goes
+                doc["modes"].append(om)
+            continue
+        standard_whens = {std.standard_when(nm["id"], r) for r in (True, False)} if nm["id"] in std.MODES else set()
+        for k in ("when", "profile", "profile_rules", "skills", "placements", "delivery", "pr_remote",
+                  "source", "gates", "reserved_for_human"):
+            if k in om and not (k == "when" and om[k] in standard_whens):
+                nm[k] = om[k]
+        for k in ("setup", "validations"):
+            if isinstance(om.get(k), list):
+                # the repos the earlier draft already decided for (a row a person dropped
+                # stays dropped); only a repo bound since brings its rows in
+                covered = {r.get("repo") for r in om[k] if isinstance(r, dict)} | set(om.get("repos") or [])
+                nm[k] = list(om[k]) + [r for r in nm.get(k) or [] if r.get("repo") not in covered]
+    ids = {m["id"] for m in doc["modes"]}
+    if "default_mode" not in proposal and old.get("default_mode") in ids \
+            and not (old["default_mode"] == "research" and "code-change" in ids and "code-change" not in
+                     {m.get("id") for m in old.get("modes") or [] if isinstance(m, dict)}):
+        doc["default_mode"] = old["default_mode"]       # but a newly bound repo makes code-change the default
+
+
+def ensure_skeleton(project_dir: Path) -> Optional[dict[str, Any]]:
+    """Write the skeleton definition when the Brain has none (design §6.1): what code
+    can decide from the Brain, no summary and no typical requests, so P6 reports it
+    until the drafting step fills them in. Never raises; returns the apply report, or
+    None when a definition is already there or it could not run."""
+    project_dir = Path(project_dir)
+    target = project_dir / PROJECT_AGENT_FILE
+    if target.exists() or target.is_symlink():
+        return None
+    try:
+        return apply(project_dir, {}, merge=False)
+    except Exception as exc:  # noqa: BLE001 — creating a Brain never fails on its agent draft
+        logger.warning("project_agent_draft: no skeleton for %s: %s", project_dir, exc)
+        return None
+
+
+def refresh_draft(project_dir: Path) -> Optional[dict[str, Any]]:
+    """After a repo is bound: redraft a draft (or the missing definition) in merge mode,
+    so a code-change mode and the new repo's checks appear and nothing judged is lost.
+    A reviewed definition is left alone (the form remarks on a repo without a
+    code-change mode). Never raises."""
+    project_dir = Path(project_dir)
+    existing = _existing(project_dir)
+    if existing is _UNREADABLE or (existing and existing.get("status") == "reviewed"):
+        return None
+    try:
+        return apply(project_dir, {})
+    except Exception as exc:  # noqa: BLE001 — a bind never fails on its agent draft
+        logger.warning("project_agent_draft: draft of %s not refreshed: %s", project_dir, exc)
+        return None
+
+
 def apply(project_dir: Path, proposal: Any, *, dry_run: bool = False,
-          now: Optional[str] = None) -> dict[str, Any]:
+          now: Optional[str] = None, merge: bool = True) -> dict[str, Any]:
     """Build the draft and write it unless a reviewed definition is there or the draft
-    does not validate. Returns ``{written, path, dropped, problems, definition}``."""
+    does not validate. With *merge* (the default) an earlier draft's judged fields,
+    the person's choices and its other modes are kept where the proposal does not
+    decide them (``_merge``). Returns ``{written, path, dropped, problems, definition}``."""
     project_dir = Path(project_dir)
     target = project_dir / PROJECT_AGENT_FILE
     report: dict[str, Any] = {"written": False, "path": str(target), "dropped": [], "problems": []}
@@ -595,6 +675,9 @@ def apply(project_dir: Path, proposal: Any, *, dry_run: bool = False,
     if report["problems"]:
         return report
     doc, dropped = build(project_dir, proposal, now)
+    if merge and existing and isinstance(proposal, dict):
+        _merge(doc, existing, proposal, project_dir)
+        doc = std.ordered(doc)
     report["dropped"] = dropped
     report["definition"] = doc
     report["problems"] = validate(doc, project_dir)

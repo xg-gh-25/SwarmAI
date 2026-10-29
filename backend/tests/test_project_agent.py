@@ -59,7 +59,6 @@ def test_valid_definition_parses(tmp_path):
     assert pa["reviewFocus"][0]["source"] == "TECH.md"
     assert pa["validations"][0]["command"] == "pytest -q"
     assert pa["placements"] == ["chat-tab"]
-    assert pa["landing"] == {"approval": "human", "via": "github-pr"}
 
 
 def test_unsupported_values_are_reported():

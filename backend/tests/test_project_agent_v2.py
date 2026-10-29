@@ -27,7 +27,6 @@ V2 = {
     "gates": {"enforce": ["no_git_push"]},
     "reserved_for_human": ["push", "open_pr", "publish_release", "send_external_message"],
     "placements": ["chat-tab", "hive"],
-    "landing": {"approval": "human"},
     "modes": [
         {"id": "code-change", "when": "change the library code", "profile": "bugfix",
          "profile_rules": [{"when": "a public API change", "profile": "full"}],
@@ -88,8 +87,8 @@ def test_v2_parses_with_v1_keys_from_the_default_mode(tmp_path):
 
 
 def test_a_mode_only_narrows(tmp_path):
-    joined = " | ".join(validate(_with_mode(placements=["chat-tab", "local-worker"])))
-    assert "['local-worker'] are not in the shared placements" in joined
+    joined = " | ".join(validate({**_with_mode(placements=["chat-tab", "hive"]), "placements": ["chat-tab"]}))
+    assert "['hive'] are not in the shared placements" in joined
     joined = " | ".join(validate(_with_mode(reserved_for_human=["push"])))
     assert "drops ['open_pr', 'publish_release', 'send_external_message']" in joined
     joined = " | ".join(validate(_with_mode(gates={"enforce": []})))
@@ -178,7 +177,7 @@ def test_p6_uses_the_same_validator(tmp_path):
     b = _brain(tmp_path)
     name, status, detail = mod._check_project_agent(b)
     assert status == mod.STATUS_PENDING and "2 modes, default code-change" in detail
-    (b / "project-agent.yaml").write_text(yaml.safe_dump(_with_mode(placements=["local-worker"])))
+    (b / "project-agent.yaml").write_text(yaml.safe_dump({**_with_mode(placements=["hive"]), "placements": ["chat-tab"]}))
     status, detail = mod._check_project_agent(b)[1:]
     assert status == mod.STATUS_FAIL and "a mode only narrows" in detail
 
@@ -198,3 +197,9 @@ def test_source_check_is_stored_per_revision(tmp_path):
     assert source_check_current(b)["ok"] is True
     (b / "project-agent.yaml").write_text((b / "project-agent.yaml").read_text() + "\n# edited\n")
     assert source_check_current(b) is None                      # stale after an edit
+
+
+def test_local_worker_is_not_a_placement():
+    """It was never implemented: no writer, no runtime branch (design
+    2026-10-29-project-agent-standard-template §4)."""
+    assert "placements has unknown values ['local-worker']" in validate({**V2, "placements": ["chat-tab", "local-worker"]})

@@ -6,7 +6,7 @@ default. The code that applies it is `core/project_agent_standard.py`. What coun
 error is decided by `project_agent.validate`, not by this page.
 
 Every definition starts as a **draft**. It acts only after a person confirms it on the
-Brain Hub review card. Where a definition leaves this standard, the card shows a
+Brain Hub form. Where a definition leaves this standard, the form shows a
 remark ("standard: ..."). A remark never blocks a confirm or a dispatch: you may keep a
 change on purpose.
 
@@ -23,31 +23,67 @@ confirm yourself.
 A Brain with a repo bound in `bindings.yaml` gets `code-change` and `research` instead
 (draft it with `artifact_cli project-agent-draft --project <Brain>`).
 
-## Shared part
+## The form
 
-Written once and inherited by every mode, in this order:
+Every Brain's definition is the same form: eight sections, always in this order. The
+Brain Hub shows it; each field says what it is for and who changes it.
 
-| Field | What it does | Written by | Default |
-|---|---|---|---|
-| `schema` | the definition format | code | `2` |
-| `status` | `draft` until a person confirms; only `reviewed` goes to a Hive | code, then the person | `draft` |
-| `reviewed_at` / `reviewed_by` | when and by whom it was confirmed | the review card | `null` |
-| `drafted_at` | when the generator wrote it | code | the time |
-| `identity.summary` | one sentence: what the work here usually is (routing and the card show it) | the model, from the Brain's documents | — |
-| `identity.in_scope` / `out_of_scope` | what this Brain takes and what it refuses (routing excludes the latter) | the model | — |
-| `identity.source` | the document the identity comes from | the model | — |
-| `intake.handles` | 3-5 typical tasks, one sentence each: routing compares a new task with them | the model | — |
-| `intake.repos` | the repos in `bindings.yaml`: work in them belongs to this Brain | code | the bound repos |
-| `intake.proposed_aliases` | names people use for this Brain; confirming moves them into `aim.json` | the model | — |
-| `confidence` | what to do when unsure (for example: research before changing code) | the model | — |
-| `watches` | what a review of work here should look at, each with its source | the model | — |
-| `gates.enforce` | the Brain's own gates (`3-gates/`) every session runs | code, the person may untick | all of them |
-| `reserved_for_human` | actions a person approves every time | code, the person may remove | `open_pr`, `publish_release`, `push`, `send_external_message` |
-| `placements` | where the work may run: `chat-tab`, `local-worker`, `hive` | code, the person may add `hive` | `chat-tab` |
-| `landing` | how code comes back | code | `{approval: human}` |
-| `modes` | the kinds of work (below) | code + the model | the standard modes |
-| `default_mode` | the mode used when none is named | code | `code-change` with a repo, else `research` |
-| `sources` | every document a row was taken from | code | — |
+1. **Identity**: Who this agent is and what it is attached to. Routing reads the summary and scope.
+2. **Capabilities**: What the Brain gives it to work with. Defined in the Brain; the agent only uses it.
+3. **Modes**: The kinds of work it does. The agent picks the mode whose "used when" matches the request.
+4. **Guardrails**: What it never does on its own, and what checks it. Every mode inherits these and can only add to them.
+5. **Runs in**: Where its work may run. A mode that needs this machine stays here even when the cloud is allowed.
+6. **Intake**: How a request reaches it: a new request is compared with these.
+7. **Judgment**: When it decides on its own and when it brings you in.
+8. **Pipeline profiles**: For reference: what each profile runs. A run is created with its mode's profile, raised by Judgment; it does not change afterwards.
+
+Who changes a field:
+
+- **Editable**: drafted from the Brain's documents; change it on the form.
+- **From the Brain**: read from the Brain's files; change it there (some rows may be dropped here).
+- **Your choice**: only a person sets it.
+- **Fixed**: the product's, the same for every Brain.
+
+<!-- TEMPLATE:BEGIN (generated from core/project_agent_standard.TEMPLATE; a test keeps it equal) -->
+| Section | Field | What it is for | Who changes it | Stored as |
+|---|---|---|---|---|
+| Identity | Name | The agent is named after its Brain. | From the Brain | read from the Brain |
+| Identity | Brain | The Brain (DDD) it works from: its knowledge, skills and gates. | From the Brain | read from the Brain |
+| Identity | Repositories | The code it may change: where it is checked out here, and where it lives remotely. From bindings.yaml. | From the Brain | read from the Brain |
+| Identity | Summary (required) | One sentence: what the work in this Brain usually is. Shown wherever the agent is listed. | Editable | `identity.summary` |
+| Identity | Takes on | The kinds of work it accepts. | Editable | `identity.in_scope` |
+| Identity | Refuses | Work that must go elsewhere. Routing excludes it. | Editable | `identity.out_of_scope` |
+| Capabilities | Skills | The Brain's own skills (4-capabilities/). Which mode may use each is set in Modes. | From the Brain | read from the Brain |
+| Capabilities | Tools and MCP | Scripts and MCP servers the Brain declares (aim.json). | From the Brain | read from the Brain |
+| Capabilities | Jobs | Scheduled work this Brain owns. | From the Brain | read from the Brain |
+| Modes | Used when (required) | The kind of request this mode handles. Modes must not overlap. | Editable | `modes[].when` |
+| Modes | Starts as | The pipeline profile a run of this mode is created with. Judgment can raise it. | Editable | `modes[].profile` |
+| Modes | Repositories | The repos this mode works in. | From the Brain | `modes[].repos` |
+| Modes | Setup | Installs run before the checks, copied from the file the repo declares them in. | From the Brain (rows may be dropped) | `modes[].setup` |
+| Modes | Checks a run must pass | Commands from the repo's validations.json or CI, copied verbatim. | From the Brain (rows may be dropped) | `modes[].validations` |
+| Modes | Skills | Skills of this Brain the mode may use. | Editable | `modes[].skills` |
+| Modes | Delivers | How code comes back: bundle = you review the commits, then they land on main. | Editable | `modes[].delivery` |
+| Modes | Default mode | The mode used when a request names none. | Editable | `default_mode` |
+| Guardrails | Always ask me before (required) | Each time, it stops and waits for your approval. | Your choice | `reserved_for_human` |
+| Guardrails | Brain gates | Checks from this Brain's 3-gates/, run on every command. Untick one to stop enforcing it. | From the Brain (rows may be dropped) | `gates.enforce` |
+| Guardrails | SwarmAI guards | The product's own guards. Every session runs them. | Fixed | the product |
+| Guardrails | Code lands | Who approves code before it reaches main. | Fixed | the product |
+| Runs in | Where it may run (required) | Hive lets it run unattended on your cloud SwarmAI. | Your choice | `placements` |
+| Intake | Typical requests (required) | 3-5 requests it handles, one sentence each. | Editable | `intake.handles` |
+| Intake | Other names | Names people use for this Brain. Each routes a request here; the ones you keep move into aim.json when you confirm. | Your choice | `intake.proposed_aliases` |
+| Judgment | When unsure | What it does before acting on a guess. | Editable | `confidence` |
+| Judgment | When to use more process | Requests that need a heavier profile than the mode starts with. | Editable | `modes[].profile_rules` |
+| Judgment | Review focus | What every review of work here checks, each with the document it comes from. | Editable | `watches` |
+| Pipeline profiles | Profiles | The profiles a pipeline run can use. | Fixed | the product |
+<!-- TEMPLATE:END -->
+
+A draft also records `schema` (`2`), `status` (`draft` until a person confirms; only
+`reviewed` goes to a Hive), `reviewed_at` / `reviewed_by`, the bound repos
+(`intake.repos`) and `sources` (every document a row was taken from).
+
+A Brain gets a skeleton definition when it is created: the standard modes, its repos'
+checks, every reserved action, a chat tab. It has no summary and no typical requests, so
+the Brain is not ready until the drafting step fills them in.
 
 ## Modes
 
@@ -71,7 +107,7 @@ toolchain on the desktop, a local daemon) narrows its own `placements`, so the p
 can add `hive` to the shared part without sending that work where it cannot run. Commands in `setup` and `validations` are copied verbatim
 from a file the repo declares them in, never written by hand.
 
-## Remarks the review card shows
+## Remarks the form shows
 
 - `identity.summary` or `intake.handles` is missing.
 - An action is no longer reserved for a person.

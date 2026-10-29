@@ -484,7 +484,16 @@ def cmd_bind(args, reg) -> None:
             learned = _summarize_learned(sync_project(_get_workspace() / "Projects" / args.project))
         except Exception as e:  # noqa: BLE001
             learned = {"error": f"{type(e).__name__}: {e}"}
+    # ... and its Project Agent draft gains the repo's code-change mode and checks
+    # (design 2026-10-29-project-agent-standard-template §6.4); a reviewed definition
+    # is left for the person
+    agent = None
+    if any(o.status == "bound" for o in outcomes):
+        from core.project_agent_draft import refresh_draft
+        r = refresh_draft(_get_workspace() / "Projects" / args.project)
+        agent = None if r is None else {"written": r.get("written"), "problems": r.get("problems")}
     print(json.dumps({"project": args.project, "bindings": payload, "learned": learned,
+                      "project_agent": agent,
                       "counts": {
                           "bound": sum(1 for o in outcomes if o.status == "bound"),
                           "deferred": sum(1 for o in outcomes if o.status == "deferred"),
@@ -669,7 +678,7 @@ def cmd_project_agent_draft(args, reg) -> None:
             print(json.dumps({"error": f"cannot read the proposal: {type(exc).__name__}: {exc}"}),
                   file=sys.stderr)
             sys.exit(2)
-    report = pad.apply(project_dir, proposal, dry_run=args.dry_run)
+    report = pad.apply(project_dir, proposal, dry_run=args.dry_run, merge=not args.fresh)
     print(json.dumps({"brain": name, **report}, indent=2, ensure_ascii=False))
     if report["problems"]:
         sys.exit(1)
@@ -922,6 +931,8 @@ def main() -> None:
     p_pad_target.add_argument("--general", action="store_true", help="The General Brain (Runner Agent)")
     p_pad.add_argument("--apply", default=None, help="Proposal JSON file ('-' = no proposal: deterministic fields only)")
     p_pad.add_argument("--dry-run", action="store_true", help="Build and check; write nothing")
+    p_pad.add_argument("--fresh", action="store_true",
+                       help="Start over: keep nothing of the earlier draft (default: keep what the proposal does not decide)")
 
     # classify-starter (design 2026-10-27 §5.10: GOVERN / DISTILL / SHELF for a starter path)
     p_cls = sub.add_parser("classify-starter", help="GOVERN / DISTILL / SHELF for a New Brain starter path")

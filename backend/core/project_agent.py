@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 
 PROJECT_AGENT_FILE = "project-agent.yaml"
 PROFILES: frozenset[str] = frozenset(PROFILE_STAGES)
-PLACEMENTS: frozenset[str] = frozenset({"chat-tab", "local-worker", "hive"})
+#: where a Project Agent's work may run (a Slack channel is not one yet)
+PLACEMENTS: frozenset[str] = frozenset({"chat-tab", "hive"})
 STATUSES: frozenset[str] = frozenset({"draft", "reviewed"})
 DELIVERIES: frozenset[str] = frozenset({"bundle", "branch-pr"})
 PR_REMOTES: frozenset[str] = frozenset({"fork", "origin"})
@@ -111,7 +112,6 @@ def normalize(doc: dict[str, Any]) -> dict[str, Any]:
         "gates": {"enforce": []},
         "reserved_for_human": sorted(RESERVED_ACTIONS),
         "placements": doc.get("placements") or [],
-        "landing": doc.get("landing") or {},
         "modes": [mode],
         "default_mode": "default",
         "sources": doc.get("sources") or [],
@@ -577,8 +577,6 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "reservedForHuman": _str_list(d.get("reserved_for_human")),
         "gates": _str_list((d.get("gates") or {}).get("enforce")),
         "placements": _str_list(d.get("placements")),
-        "landing": {str(k): str(v) for k, v in (d.get("landing") or {}).items()}
-        if isinstance(d.get("landing"), dict) else {},
         "modes": modes,
         "defaultMode": d.get("default_mode"),
         "defaultProfile": default["profile"] if default else None,
@@ -590,7 +588,19 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "notes": notes(doc, project_dir),
         "sourceCheck": source_check_current(project_dir),
         "sourcePaths": _source_paths(d, project_dir),
+        "form": _form(d, project_dir),
     }
+
+
+def _form(d: dict[str, Any], project_dir: Path) -> dict[str, Any] | None:
+    """The Brain Hub form (core/project_agent_form); None when it cannot be built, so
+    the rest of the definition still shows."""
+    try:
+        from core.project_agent_form import build_form
+        return build_form(d, project_dir)
+    except Exception as exc:  # noqa: BLE001 — the form is a view; its failure must not hide the definition
+        logger.warning("project_agent: the form of %s could not be built: %s", project_dir, exc)
+        return None
 
 
 def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:

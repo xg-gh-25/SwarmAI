@@ -1,5 +1,5 @@
 # Project Agent definition: how this Brain's work is taken in, done and delivered.
-# A draft until a person confirms it on the Brain Hub review card.
+# A draft until a person confirms it on the Brain Hub form.
 # Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.
 # Shipped with SwarmAI: the Project Agent of the default SwarmAI Brain. It names only what a fresh
 # install has (the four seed documents); with the SwarmAI repo bound, `artifact_cli project-agent-draft
@@ -16,22 +16,6 @@ identity:
   out_of_scope:
   - the code of other projects
   source: PRODUCT.md
-intake:
-  handles:
-  - explain how a SwarmAI feature works
-  - investigate why SwarmAI behaved a certain way
-  - write a note or a design about SwarmAI
-gates:
-  enforce: []
-reserved_for_human:
-- open_pr
-- publish_release
-- push
-- send_external_message
-placements:
-- chat-tab
-landing:
-  approval: human
 modes:
 - id: research
   when: a question or an investigation, answered in the conversation
@@ -40,5 +24,19 @@ modes:
   when: a document or a report as the deliverable
   profile: direct
 default_mode: research
+reserved_for_human:
+- open_pr
+- publish_release
+- push
+- send_external_message
+gates:
+  enforce: []
+placements:
+- chat-tab
+intake:
+  handles:
+  - explain how a SwarmAI feature works
+  - investigate why SwarmAI behaved a certain way
+  - write a note or a design about SwarmAI
 sources:
 - PRODUCT.md
