@@ -38,10 +38,10 @@ supersedes-part-of: 2026-10-26-swarm-cognitive-distillation-flow.md §14 阶段 
 | # | 问题 | 修法 |
 |---|---|---|
 | C1 | 每日写入上限 `reserve_quota` 没有生产调用者 | 交给 writer 前预留；MEMORY / EVOLUTION / STEERING / USER / TOOLS 按全局计（不按项目）；超限延后到次日 |
-| C2 | 注入预算对 meta 层豁免，EVOLUTION 的 meta 层已超预算 | meta 层也受预算约束：先在 meta 层内按分数取，再取其余层 |
+| C2 | 注入预算对 meta 层豁免，EVOLUTION 的 meta 层已超预算 | meta 层也受预算约束：仍然最先取，在预算内按分数取，再取其余层。**这改变了原设计阶段 C 的验收项「元认知层完整保留」**：不改的话 CDF 写进 EVOLUTION 的每条纠错都永久、无上限地进每轮 prompt |
 | C3 | 预算内按 `1/(1+年龄)` 排序，年龄决定去留 | 改为慢半衰期（90 天减半，meta 层不衰减）乘使用次数的对数，使用价值主导 |
 | C4 | 被取代（supersede）的条目只在超预算时被过滤 | 注入时总是过滤被取代的条目 |
-| C5 | refine 不删旧条目，新旧同时注入 | refine 指向 CDF 写的条目时和 replace 一样先归档再移除，新条目带上旧内容 |
+| C5 | refine 的合并写进了渲染器不读的字段，新条目只有新内容；旧条目被取代后（C4 不再注入）它的内容就丢了 | 新条目的 what 带上旧条目内容；旧条目字节保留（审计、recall），由 C4 在注入时过滤 |
 | C6 | STEERING/USER/TOOLS 的元数据注释格式读不出；多行字段会造出新标题 | `project_hint` 等放进 cand 标记；每轮注入的存储一律单行渲染，含注释标记的单元在卡 0 拒绝 |
 | C7 | 标题被 `strip(" -*#.")` 改坏（`Use C#` → `Use C`）；DDD 标题含 `|` / `**` 会抛错并无限重试 | 只去空白；格式字符替换 |
 

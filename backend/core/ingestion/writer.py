@@ -257,8 +257,16 @@ def _title_and_body(group: dict[str, Any], answer: Any) -> tuple[str, str]:
     if not title:
         claims = list(_model_value(answer, "claims", []) or [])
         title = str(claims[0] if claims else "Untitled")
-    title = title.strip(" -*#.") or "Untitled"
+    # whitespace and a leading list marker only: stripping "#" or "." from the ends
+    # changed meaning ("Use C#" -> "Use C", ".NET pinning" -> "NET pinning")
+    title = re.sub(r"^(?:[-*+]\s+)+", "", _one_line(title)).strip() or "Untitled"
     return title, text
+
+
+def _one_line(value: Any) -> str:
+    """*value* on one line: an entry in a per-turn file is one line, and a field with a
+    line break ended the entry early or started a new heading in MEMORY.md."""
+    return re.sub(r"\s*\n\s*", " ", str(value or "")).strip()
 
 
 def _meta_value(value: Any) -> str:
@@ -315,6 +323,9 @@ def _render_ddd(unit_id: str, group: Mapping[str, Any], *, answer: Any = None,
     from core.ddd_entry_lifecycle import render_ddd_unit
 
     title, fallback_body = _title_and_body(dict(group), answer)
+    # render_ddd_unit refuses "|" and "**" in a title (they end the bold title or a
+    # table cell); refused, the unit was re-judged and refused again forever
+    title = title.replace("**", "").replace("|", "/")
     source = re.sub(r"\W", "_", str(group.get("source") or "ingestion")) or "ingestion"
     rendered = render_ddd_unit(
         _ddd_entry(group, title, fallback_body, answer, effective),
@@ -402,6 +413,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
         body = "; ".join(f"{name}: {value}" for name, value in fields if value is not None)
     else:
         body = str(effective or _cognition_body(group, fallback_body)).strip()
+    body = _one_line(body)
     marker = f"<!-- cand:{unit_id} -->"
 
     if store == "EVOLUTION":
@@ -411,15 +423,19 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     if store == "MEMORY":
         lead, meta = format_memory_entry(entry_type, title, body, today, source=source)
         return f"{lead} {marker}\n{meta}"
+    # The metadata comment holds only _META_RE's fields, in order (ref, last, decay,
+    # source, taint); anything else made the whole comment unreadable, so the entry's
+    # own marker carries project_hint / rerouted_from, as in a common-DDD file.
     meta = ["ref:0", f"last:{today}", "decay:active", f"source:{source}"]
-    if project_hint:
-        meta.append(f"project_hint:{_meta_value(project_hint)}")
     if tainted:
         meta.append("taint:external")
+    cand = [f"cand:{unit_id}"]
+    if project_hint:
+        cand.append(f"project_hint:{_meta_value(project_hint)}")
     rerouted = _model_value(destination, "rerouted_from")
     if rerouted:
-        meta.append(f"rerouted_from:{rerouted}")
-    return (f"- [{entry_type}] **{title}** {body} {marker}\n"
+        cand.append(f"rerouted_from:{rerouted}")
+    return (f"- [{entry_type}] **{title}** {body} <!-- {' | '.join(cand)} -->\n"
             f"  <!-- {' | '.join(meta)} -->")
 
 
@@ -498,15 +514,19 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     archive_path: Path | None = None
     action = str(_decision_value(decision, "action", "add"))
     if action == "refine" and old_unit is not None and not _decision_value(decision, "card3b"):
+        # the refined entry carries the old one's content (renderers read "what", so
+        # merging into "text" was ignored and refine wrote a plain second entry)
         prior = _plain_unit_body(old_unit.text)
-        candidate_text = str(group.get("text") or "").strip()
-        group["text"] = " ".join(part for part in (prior, candidate_text) if part)
+        current = str(group.get("what") or group.get("text") or "").strip()
+        group["what"] = " ".join(part for part in (prior, current) if part)
     sequence = 1
     if store == "EVOLUTION":
         answer = _decision_value(decision, "card1")
         prefix = "C" if str(_model_value(answer, "agent_kind", "")) == "correction" else "K"
         sequence = _next_evolution_id(content, section, prefix)
     block = _render_block(decision, unit_id, group, sequence=sequence)
+    # refine keeps the old entry's bytes (audit, recall): it is superseded, and the
+    # injection selector never shows a superseded entry, so the new one carries its content
     if action == "replace" and old_unit is not None and old_unit.identity.startswith("cand:"):
         content_bytes = _remove_unit_bytes(original, old_unit)
         content = content_bytes.decode("utf-8")
@@ -939,8 +959,15 @@ def reserve_quota(unit_id: str, store: str, project: str | None, byte_count: int
         cap, count_cap = 5 * 1024 * 1024, 50
     else:
         raise ValueError(f"unknown quota store: {store}")
-    scope = "project IS NULL" if project is None else "project=?"
-    args: tuple[Any, ...] = (normalized, day) if project is None else (normalized, day, project)
+    # a file injected into every session has one daily budget, whatever the project
+    # of the units that spend it; a project's DDD has its own
+    if normalized in {"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"}:
+        project = None
+        scope, args = "1=1", (normalized, day)
+    elif project is None:
+        scope, args = "project IS NULL", (normalized, day)
+    else:
+        scope, args = "project=?", (normalized, day, project)
     row = conn.execute(
         f"SELECT COALESCE(SUM(bytes),0),COUNT(*) FROM ingestion_quota WHERE store=? AND utc_day=? "
         f"AND {scope} AND status IN ('reserved','committed')",

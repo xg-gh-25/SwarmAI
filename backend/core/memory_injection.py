@@ -25,7 +25,8 @@ DAILY_ACTIVITY_BUDGET = 4000
 TIMELINE_BUDGET = 1500
 MEMORY_INJECTION_BUDGET = 24_000
 EVOLUTION_INJECTION_BUDGET = 8_000
-SCORE_SNAPSHOT_VERSION = "cdf-r16.7-v1"
+SCORE_SNAPSHOT_VERSION = "cdf-launch-v2"
+DECAY_HALF_LIFE_DAYS = 90
 
 
 @dataclass(frozen=True)
@@ -343,10 +344,13 @@ def _score_unit(conn: sqlite3.Connection | None, path: Path, unit: object,
     timestamps = [item for item in (evidence_at, last_used, written_at, *metadata_times) if item]
     newest = max(timestamps) if timestamps else datetime(1970, 1, 1, tzinfo=timezone.utc)
     age_days = max(0, (current.date() - newest.date()).days)
-    decay = 1.0 if layer == "meta-cognitive" else 1.0 / (1.0 + age_days)
+    # Value decides, age only slowly: halves every DECAY_HALF_LIFE_DAYS (meta-cognition
+    # does not age), while each use keeps counting. 1/(1+age) let a 3-day-old entry
+    # outrank a 30-day-old one with full support and use.
+    decay = 1.0 if layer == "meta-cognitive" else 0.5 ** (age_days / DECAY_HALF_LIFE_DAYS)
     support_factor = (1.0 + support / (1.0 + support)) / (1.0 + refute)
     trust_factor = {3: 1.0, 2: 0.8, 1: 0.5, 0: 0.3}[strength] if timestamps else 1.0
-    usage_factor = 1.0 + usage_count / (1.0 + usage_count)
+    usage_factor = 1.0 + math.log1p(usage_count)
     score = decay * support_factor * trust_factor * usage_factor
     return _RankedUnit(unit, layer, score, strength, evidence_at or newest)
 
@@ -399,8 +403,8 @@ def select_context_file(
     """Select MEMORY/EVOLUTION whole units without any user-query input.
 
     Results are recomputed only after a source hash change or a UTC day boundary.
-    Meta-cognitive units are indivisible and always retained. Lower layers compete
-    by score, while rendering always follows original file order.
+    Superseded units are never injected. Over budget, whole units compete by score
+    layer by layer, meta-cognition first; rendering always follows file order.
     """
     path = Path(path)
     if path.name not in {"MEMORY.md", "EVOLUTION.md"} or not path.is_file():
@@ -460,24 +464,26 @@ def select_context_file(
         if path.name == "MEMORY.md" else _prompt_form(raw.decode("utf-8"))
     superseded = _superseded_anchors(conn)
     over_budget = estimate(full_text) > budget
+    # A superseded unit is never injected, under budget too: its replacement says it
+    # better, and the two together say two things.
     candidates = [item for item in ranked
-                  if not over_budget or (item.unit.anchor not in superseded
-                      and not getattr(metadata_by_anchor.get(item.unit.anchor), "superseded_by", None))]
-    if not over_budget:
+                  if item.unit.anchor not in superseded
+                  and not getattr(metadata_by_anchor.get(item.unit.anchor), "superseded_by", None)]
+    if not over_budget and len(candidates) == len(ranked):
         selected = {item.unit.anchor for item in candidates}
         text = full_text
+    elif not over_budget:
+        selected = {item.unit.anchor for item in candidates}
+        text = _render_selected(candidates, selected)
     else:
-        selected = {item.unit.anchor for item in candidates if item.layer == "meta-cognitive"}
+        # Every layer competes inside the budget, meta-cognition first: kept whole and
+        # unbudgeted, it was already over the EVOLUTION budget and grew with every
+        # correction CDF writes (2026-10-29-cdf-launch §2 C2).
+        selected: set[str] = set()
         admission_order: list[str] = []
         selected_sections: set[str] = set()
         used = 0
-        for item in candidates:
-            if item.unit.anchor not in selected:
-                continue
-            prefix = f"## {item.unit.section}\n\n" if item.unit.section not in selected_sections else ""
-            used += estimate(prefix + _prompt_form(item.unit.text) + "\n\n")
-            selected_sections.add(item.unit.section)
-        for layer in ("cognitive", "operational"):
+        for layer in ("meta-cognitive", "cognitive", "operational"):
             ordered = sorted(
                 (item for item in candidates if item.layer == layer),
                 key=lambda item: (-item.score, -item.evidence_strength,
@@ -492,9 +498,8 @@ def select_context_file(
                     admission_order.append(item.unit.anchor)
                     used += cost
         text = _render_selected(candidates, selected)
-        # The estimator is caller-supplied and need not be additive. Preserve all
-        # meta-cognition, then remove the latest lower-layer admission until its
-        # estimate confirms the rendered result is within the hard cap.
+        # The estimator is caller-supplied and need not be additive: remove the latest
+        # admission until its estimate confirms the rendered result is within the cap.
         while estimate(text) > budget and admission_order:
             selected.remove(admission_order.pop())
             text = _render_selected(candidates, selected)

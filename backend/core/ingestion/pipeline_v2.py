@@ -239,6 +239,10 @@ def _card0(unit: SourceUnit, row: Any) -> Card0Answer:
         return Card0Answer(passed=False, reason="noisy")
     if isinstance(unit, CognitionUnit) and len(text) > 600:
         return Card0Answer(passed=False, reason="not_atomic")
+    if not isinstance(unit, ReferenceUnit) and ("<!--" in text or "-->" in text):
+        # an HTML comment marker inside an entry ends or opens the metadata comment of
+        # the line it lands on; the prompt form then cuts the text after it
+        return Card0Answer(passed=False, reason="unrenderable")
     if isinstance(unit, ReferenceUnit) and len(text.encode("utf-8")) > 16_384:
         return Card0Answer(passed=False, reason="too_large_incomplete")
     if isinstance(unit, ReferenceUnit) and semantic_urls_have_credentials(unit.summary, unit.body):

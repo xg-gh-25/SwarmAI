@@ -252,6 +252,36 @@ def _hand_to_writer(conn: sqlite3.Connection, owner: Owner, unit_id: str,
         _unit_failed(conn, owner, unit_id, exc)
 
 
+# writer.reserve_quota's stores; the files injected into every session are counted
+# globally (one daily budget per file), not once per project
+_QUOTA_STORE = {"DDD": "DDD", "COMMON_DDD": "DDD", "KNOWLEDGE": "KNOWLEDGE", "MEMORY": "MEMORY",
+                "EVOLUTION": "EVOLUTION", "STEERING": "STEERING", "USER": "USER", "TOOLS": "TOOLS"}
+_GLOBAL_QUOTA = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"})
+
+
+def _quota_reserved(conn: sqlite3.Connection, decision: Any, unit_row: Any) -> bool:
+    """Reserve the rendered entry's bytes against its store's daily cap (writer.reserve_quota).
+    It had no caller, so nothing bounded what reached MEMORY / EVOLUTION each day."""
+    from .writer import render_unit, reserve_quota
+    destination = decision.destination
+    store = _QUOTA_STORE.get(str(getattr(destination, "store", "") or ""))
+    if store is None:
+        return True                    # TIMELINE events: no daily cap
+    group = _json_value(unit_row["claim_group"], {})
+    size = len(render_unit(decision, str(unit_row["unit_id"]), group).encode("utf-8"))
+    project = None if store in _GLOBAL_QUOTA else getattr(destination, "project", None)
+    return reserve_quota(str(unit_row["unit_id"]), store, project, size, conn)
+
+
+def _defer_until_tomorrow(conn: sqlite3.Connection, owner: Owner, unit_id: str, reason: str) -> None:
+    """Wait for the next UTC day; a full daily budget is not the unit's failure, so no
+    attempt is counted (it would be poisoned after a few busy days otherwise)."""
+    tomorrow = datetime.combine(_utcnow().date() + timedelta(days=1), datetime.min.time(),
+                                tzinfo=timezone.utc)
+    owner.claim_unit_step(conn, unit_id, "queued", "deferred", reason=reason,
+                          next_attempt_at=tomorrow.isoformat())
+
+
 def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exception) -> None:
     """Record *exc* on the unit it happened to. A malformed payload is rejected. A unit
     with a write plan belongs to ``writer.recover``. Otherwise the unit (queued, or
@@ -370,6 +400,8 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
                 owner.claim_unit_step(conn, unit_id, "queued", "reinforced", **fields)
             elif decision.decision == "reject":
                 owner.claim_unit_step(conn, unit_id, "queued", "rejected", **fields)
+            elif not _quota_reserved(conn, decision, unit_row):
+                _defer_until_tomorrow(conn, owner, unit_id, "quota")
             else:
                 if not owner.claim_unit_step(conn, unit_id, "queued", "judged", **fields):
                     raise RuntimeError("owner epoch fence rejected v2 judgment")

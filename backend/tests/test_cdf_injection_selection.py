@@ -135,7 +135,10 @@ def test_superseded_unit_is_dropped_only_when_selection_is_needed(tmp_path, monk
     assert "new" in result.text
 
 
-def test_evolution_meta_layer_is_whole(tmp_path, monkeypatch):
+def test_evolution_meta_layer_goes_first_and_inside_the_budget(tmp_path, monkeypatch):
+    """Meta-cognition is admitted first but no longer unbudgeted: kept whole it was
+    already over the EVOLUTION budget and grew with every CDF correction
+    (2026-10-29-cdf-launch §2 C2)."""
     conn = _isolated_store(tmp_path, monkeypatch)
     ctx = tmp_path / "SwarmWS/.context"
     ctx.mkdir(parents=True)
@@ -146,9 +149,12 @@ def test_evolution_meta_layer_is_whole(tmp_path, monkeypatch):
         "\n\n## Capabilities Built\n### K001 Tool\n" + "T" * 500 + "\n",
         encoding="utf-8",
     )
-    evo = select_context_file(evolution, budget=230, estimate=len,
-                              now=datetime(2026, 10, 28, tzinfo=timezone.utc), conn=conn)
+    when = datetime(2026, 10, 28, tzinfo=timezone.utc)
+    evo = select_context_file(evolution, budget=260, estimate=len, now=when, conn=conn)
     assert "C001" in evo.text and "C002" in evo.text and "K001" not in evo.text
+    evolution.write_text(evolution.read_text(encoding="utf-8") + "\n", encoding="utf-8")  # new hash
+    tight = select_context_file(evolution, budget=150, estimate=len, now=when, conn=conn)
+    assert len(tight.text) <= 150 and ("C001" in tight.text) != ("C002" in tight.text)
     conn.close()
 
 
