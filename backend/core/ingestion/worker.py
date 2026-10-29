@@ -878,11 +878,12 @@ class RunLaneExecutor:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="cdf-run-lane", daemon=True)
+        self._start_lock = threading.Lock()
 
     def start(self) -> None:
-        if self._stop.is_set():
-            return
-        self._thread.start()
+        with self._start_lock:       # never started after stop_and_join returned
+            if not self._stop.is_set():
+                self._thread.start()
         self._wake.set()
 
     def wake(self) -> None:
@@ -924,7 +925,8 @@ class RunLaneExecutor:
         return processed
 
     def stop_and_join(self, timeout: float = 30) -> None:
-        self._stop.set()
+        with self._start_lock:
+            self._stop.set()
         self._wake.set()
         if self._thread.ident is None:       # stopped before the worker started it
             return
@@ -949,12 +951,12 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
         # recorded before the optional main pass: if that pass fails, the retry must not
         # review the same messages again (a fresh model call, new duplicate units)
         s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
-    # a retry after a failed main pass finds the messages reviewed already
-    # ("nothing_new"): the sampled main pass is still owed
-    retry = int(job.get("attempts") or 0) > 1 and outcome["status"] == "nothing_new"
+    # A failed main pass of a sampled session is not run again: its retry finds the
+    # messages reviewed ("nothing_new"). It is the measuring sample, not the session's
+    # extraction (the review is); an unresumable session's main pass is retried, as
+    # its watermark never moves.
     main = outcome["status"] == "unresumable" or (
-        outcome["status"] in ("reviewed",) + (("nothing_new",) if retry else ())
-        and s7_review.sampled(session_id))
+        outcome["status"] == "reviewed" and s7_review.sampled(session_id))
     if main:
         s2_session.extract_session_sync(session_id, passes=("main",))
     outcome["s2_main"] = main

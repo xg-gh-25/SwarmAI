@@ -2,17 +2,16 @@
 
 - An abandoned plan is not a live plan: a unit with one is deferred on error and
   requeued by recovery, never left in ``writing`` or retried in a tight loop.
-- A retry whose entry is already on disk marks the unit written; it never appends
-  the entry twice.
+- A plan whose entry is in the file is finished by recovery, never abandoned (the
+  retry of an abandoned one appended the entry twice).
 - The daily recovery leaves alone a unit that moved in the last minutes; startup
   recovery runs before the run lane starts.
-- The session-job thread survives a failing recovery; a failed sampled main pass is
-  run on the retry.
+- The session-job thread survives a failing recovery.
 - A unit refused for quota is not judged again while its store's budget is spent.
 - Refine keeps the old entry's taint; an installed package's file cannot be moved
   out of its project; a rename refuses a change made after the copy.
 - Extraction: the list decides a unit's kind, an undecodable reply is called once
-  more, and one undecodable window does not fail the session.
+  more, and one undecodable window does not fail the session (all of them do).
 """
 from __future__ import annotations
 
@@ -73,19 +72,31 @@ def test_recovery_requeues_a_writing_unit_whose_only_plan_was_abandoned(cdf_env,
     conn.close()
 
 
-def test_a_retry_whose_entry_is_on_disk_does_not_write_it_twice(cdf_env):
+def test_a_plan_whose_entry_is_written_is_finished_not_abandoned(cdf_env, monkeypatch):
+    """Relations failing after the entry is in the file, then the user editing the file:
+    recovery finishes the plan (relations and baseline) and never re-judges the unit,
+    whose retry appended the entry a second time."""
     _gap_to(True, cdf_env)
-    assert _drain(cdf_env)[-1]["state"] == "written"
-    from core.ingestion import api
-    conn = api.connect_rw()           # the write landed, then its plan was abandoned
-    conn.execute("UPDATE ingestion_writes SET step='abandoned'")
-    conn.execute("UPDATE ingestion_units SET state='deferred',reason='stale_plan'")
-    conn.execute("UPDATE ingestion_inbox SET state='partial_pending'")
-    _past(conn); conn.close()
+    import core.ingestion.writer as writer
+    real = writer._write_relations
+    monkeypatch.setattr(writer, "_relations_postcondition", lambda *a, **k: False)
+    monkeypatch.setattr(writer, "_write_relations",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("database is locked")))
     rows = _drain(cdf_env)
-    assert rows[-1]["state"] == "written", rows[-1]
-    text = (cdf_env["ddd"] / "IMPROVEMENT.md").read_text(encoding="utf-8")
-    assert text.count("Retry rate remains high") == 1
+    assert rows[-1]["state"] == "writing", rows[-1]          # the live plan belongs to recovery
+    from core.ingestion import api
+    conn = api.connect_rw()
+    assert conn.execute("SELECT step FROM ingestion_writes").fetchone()[0] == "target_applied"
+    writer.recover(conn)                                     # still failing: kept, not abandoned
+    assert conn.execute("SELECT step FROM ingestion_writes").fetchone()[0] == "target_applied"
+    improvement = cdf_env["ddd"] / "IMPROVEMENT.md"
+    improvement.write_text(improvement.read_text(encoding="utf-8") + "\nuser note\n", encoding="utf-8")
+    monkeypatch.setattr(writer, "_write_relations", real)
+    writer.recover(conn)
+    assert conn.execute("SELECT step FROM ingestion_writes").fetchone()[0] == "done"
+    assert conn.execute("SELECT state FROM ingestion_units").fetchone()[0] == "written"
+    conn.close()
+    assert improvement.read_text(encoding="utf-8").count("Retry rate remains high") == 1
 
 
 def test_the_daily_recovery_leaves_a_unit_that_just_moved(cdf_env):
@@ -138,20 +149,6 @@ def test_the_session_job_thread_survives_a_failing_recovery(cdf_env, monkeypatch
     conn = api.connect_rw()
     S2JobExecutor._recover(conn)      # logged, not raised
     conn.close()
-
-
-def test_a_retry_runs_the_sampled_main_pass_that_failed(cdf_env, monkeypatch):
-    from core.ingestion import worker
-    from core.ingestion.sources import s2_session, s7_review
-    calls = []
-    monkeypatch.setattr(s2_session, "extract_session_sync", lambda sid, passes: calls.append(passes) or {})
-    monkeypatch.setattr(s7_review, "review_session", lambda *a, **k: {"status": "nothing_new"})
-    monkeypatch.setattr(s7_review, "sampled", lambda sid: True)
-    worker.run_session_job(None, {"session_id": "s-9", "attempts": 2})
-    assert ("main",) in calls
-    calls.clear()
-    worker.run_session_job(None, {"session_id": "s-9", "attempts": 1})   # nothing failed before
-    assert ("main",) not in calls
 
 
 def test_a_unit_refused_for_quota_is_not_judged_again_while_the_budget_is_spent(cdf_env):
@@ -211,11 +208,15 @@ def test_an_installed_package_file_cannot_leave_its_project(cdf_env, monkeypatch
     (pkg / "2-understanding").mkdir()
     (pkg / "2-understanding/TECH.md").write_text("# TECH\n")
     (ws / "Projects/Mine/2-understanding").mkdir(parents=True)
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(api.rename_item(api.FolderRenameRequest(
-            old_path="Projects/Pkg/2-understanding/TECH.md",
-            new_path="Projects/Mine/2-understanding/TECH.md")))
-    assert exc.value.status_code == 409 and (pkg / "2-understanding/TECH.md").exists()
+    other = ws / "Projects/Other"
+    (other / ".swarmai").mkdir(parents=True)
+    (other / ".swarmai/installed-package.json").write_text('{"name": "other", "version": "1"}')
+    (other / "2-understanding").mkdir()
+    for dest in ("Projects/Mine/2-understanding/TECH.md", "Projects/Other/2-understanding/TECH.md"):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(api.rename_item(api.FolderRenameRequest(
+                old_path="Projects/Pkg/2-understanding/TECH.md", new_path=dest)))
+        assert exc.value.status_code == 409 and (pkg / "2-understanding/TECH.md").exists()
 
 
 def test_a_rename_refuses_a_change_made_after_the_copy(cdf_env, monkeypatch):
@@ -266,10 +267,15 @@ def test_an_undecodable_reply_is_called_once_more(monkeypatch):
         extract_llm.BedrockExtractor(["cognition"]).extract("p")
 
 
-def test_one_undecodable_window_does_not_fail_the_session(monkeypatch):
+def test_one_undecodable_window_does_not_fail_the_session():
     from core.ingestion.prompts import UntypedOutput
     from core.ingestion.sources import s2_session
-    assert s2_session._window(lambda: (_ for _ in ()).throw(UntypedOutput("bad")), "s", 1) == []
-    assert s2_session._window(lambda: ["u"], "s", 2) == ["u"]
+
+    def bad():
+        raise UntypedOutput("bad")
+    assert s2_session._windows_extracted([bad, lambda: ["u"]], "s") == ["u"]
+    with pytest.raises(UntypedOutput):                       # every window: not one reply
+        s2_session._windows_extracted([bad, bad], "s")
     with pytest.raises(RuntimeError):
-        s2_session._window(lambda: (_ for _ in ()).throw(RuntimeError("bedrock down")), "s", 3)
+        s2_session._windows_extracted([lambda: (_ for _ in ()).throw(RuntimeError("down")),
+                                       lambda: ["u"]], "s")

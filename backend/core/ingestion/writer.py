@@ -849,14 +849,6 @@ def apply_unit(decision: UnitDecision | Mapping[str, Any], unit_row: Any,
     target = _target_path(decision, unit_id, group)
     target.parent.mkdir(parents=True, exist_ok=True)
     with md_lock(target, blocking=True):
-        if _entry_on_disk(target, unit_id):
-            # an earlier plan wrote this entry and was then abandoned (the file changed
-            # after the write, or a later step raised): the entry is there, never twice
-            conn.execute("UPDATE ingestion_units SET state='written',updated_at=? "
-                         "WHERE unit_id=? AND state='writing'", (_iso(), unit_id))
-            _event(conn, "already_written", {"unit_id": unit_id, "target_path": _relative(target)})
-            conn.commit()
-            return "done"
         plan = _build_plan(decision, enriched)
         epoch = _current_epoch(conn, unit_row)
         _insert_plan(conn, plan, epoch)
@@ -864,17 +856,10 @@ def apply_unit(decision: UnitDecision | Mapping[str, Any], unit_row: Any,
     return _execute_plan(conn, _load_plan(row))
 
 
-def _entry_on_disk(target: Path, unit_id: str) -> bool:
-    """Whether *target* already holds the entry of *unit_id* (its ``cand:`` marker)."""
-    if not target.is_file():
-        return False
-    text = target.read_text(encoding="utf-8", errors="replace")
-    return re.search(r"cand:" + re.escape(unit_id) + r"(?![\w.:-])", text) is not None
-
-
 def recover(conn: sqlite3.Connection, *, requeue_grace: timedelta | None = None) -> dict[str, int]:
-    """Resume journal plans from postconditions, each on its own (a plan that raises is
-    abandoned), and requeue judged or writing units that have no live plan.
+    """Resume journal plans from postconditions, each on its own (a plan that raises
+    before its entry is in the file is abandoned; after, it is kept and finished by the
+    next recovery), and requeue judged or writing units that have no live plan.
 
     With *requeue_grace* a unit is requeued only when it has not moved for that long:
     the daily pass runs while the run lane may be between its claim and its plan (at
@@ -885,11 +870,18 @@ def recover(conn: sqlite3.Connection, *, requeue_grace: timedelta | None = None)
         plan = _load_plan(row)
         try:
             _recover_plan(conn, plan, counts)
-        except Exception as exc:  # one bad plan is abandoned; the others still recover
-            logger.warning("CDF recovery abandoned plan %s: %s: %s", plan.get("op_id"),
-                           type(exc).__name__, exc)
+        except Exception as exc:  # one bad plan never stops the others
             if conn.in_transaction:
                 conn.rollback()
+            current = conn.execute("SELECT step FROM ingestion_writes WHERE op_id=?",
+                                   (plan["op_id"],)).fetchone()
+            if current is not None and current[0] not in ("planned", "archive_applied"):
+                # its entry is in the file: kept, and finished by the next recovery
+                logger.warning("CDF recovery of plan %s failed at %s, retried next time: %s: %s",
+                               plan.get("op_id"), current[0], type(exc).__name__, exc)
+                continue
+            logger.warning("CDF recovery abandoned plan %s: %s: %s", plan.get("op_id"),
+                           type(exc).__name__, exc)
             _defer(conn, plan, "stale_plan", event_kind="recovery_failed")
             counts["abandoned"] += 1
     _finish_recovery(conn, counts, requeue_grace)
@@ -918,12 +910,17 @@ def _recover_plan(conn: sqlite3.Connection, plan: dict[str, Any], counts: dict[s
     if plan["step"] == "archive_applied" and _target_postcondition(plan):
         _advance(conn, str(plan["op_id"]), "archive_applied", "target_applied", int(plan.get("owner_epoch") or 0))
         plan["step"] = "target_applied"
-    current_hash = _path_hash(target)
-    expected_hashes = {str(plan.get("before_hash") or ""), str(plan.get("after_hash") or "")}
-    if current_hash not in expected_hashes:
-        _defer(conn, plan, "stale_plan", event_kind=None)
-        counts["abandoned"] += 1
-        return
+    # From target_applied on the entry is in the file and the steps left (relations,
+    # baseline) touch only the database: they are finished whatever the file holds now.
+    # Abandoning there let the retry judge the unit again and append its entry a
+    # second time (to the same file or, after a new judgment, another).
+    if plan["step"] in ("planned", "archive_applied"):
+        current_hash = _path_hash(target)
+        expected_hashes = {str(plan.get("before_hash") or ""), str(plan.get("after_hash") or "")}
+        if current_hash not in expected_hashes:
+            _defer(conn, plan, "stale_plan", event_kind=None)
+            counts["abandoned"] += 1
+            return
     result = _execute_plan(conn, plan)
     counts["recovered" if result == "done" else "abandoned"] += 1
 

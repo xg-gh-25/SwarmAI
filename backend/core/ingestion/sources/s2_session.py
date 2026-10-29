@@ -13,6 +13,7 @@ enqueues the trusted pass before the main pass, and records zero-output attempts
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import sqlite3
@@ -316,17 +317,24 @@ def _obviously_deictic(unit: Any) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _window(extract: Any, session_id: str, index: int) -> list[Any]:
-    """One window's extraction. A reply that still does not decode loses that window
-    only (its attempt is recorded as failed); the session's other windows still run,
-    where raising failed the whole job and a retry paid for every window again. Any
-    other error (Bedrock, the database) still fails the job, which retries it."""
+def _windows_extracted(calls: list[Any], session_id: str) -> list[Any]:
+    """Run each window's extraction. A reply that still does not decode loses that
+    window only (its attempt is recorded as failed) and the other windows run: raising
+    failed the whole job and its retry paid for every window again. When every window
+    fails that way the cause is not one reply, so the job fails and is retried. Any
+    other error (Bedrock, the database) fails the job at once."""
     from core.ingestion.prompts import UntypedOutput
-    try:
-        return extract()
-    except UntypedOutput as exc:
-        logger.warning("CDF S2 %s window %s: no usable reply (%s)", session_id, index, exc)
-        return []
+    outcomes: list[Any] = []
+    failed: list[UntypedOutput] = []
+    for index, extract in enumerate(calls, 1):
+        try:
+            outcomes += extract()
+        except UntypedOutput as exc:
+            logger.warning("CDF S2 %s window %s: no usable reply (%s)", session_id, index, exc)
+            failed.append(exc)
+    if calls and len(failed) == len(calls):
+        raise failed[-1]
+    return outcomes
 
 
 def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str],
@@ -348,10 +356,11 @@ def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str]
         _record_empty(session_id, "user_utterance", evidence_range)
         return []
     chunks = windows(parts, "event_id")
-    outcomes: list[Any] = []
+    calls: list[Any] = []
     for index, chunk in enumerate(chunks, 1):
         events = sorted({str(p.get("event_id") or p.get("part_of")) for p in chunk})
-        outcomes += _window(lambda: common.extract_and_enqueue(
+        calls.append(functools.partial(
+            common.extract_and_enqueue,
             "S2", session_id, json.dumps(chunk, ensure_ascii=False),
             tuple(f"event:{event}" for event in events),
             evidence_range={**evidence_range, "events": events,
@@ -359,9 +368,8 @@ def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str]
             session_id=session_id, read_root_ids=_root_ids(tuple(events)),
             project_snapshot=project_snapshot, extraction_pass="user_utterance",
             allowed_kinds=_ALLOWED, llm=llm,
-            unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None),
-            session_id, index)
-    return outcomes
+            unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None))
+    return _windows_extracted(calls, session_id)
 
 
 def _main_pass(session_id: str, transcript: list[dict[str, Any]],
@@ -381,7 +389,7 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
     chunks = windows(transcript, "id", overlap=WINDOW_OVERLAP)
     picked = spread(chunks, MAX_MAIN_WINDOWS)
     skipped = len(chunks) - len(picked)
-    outcomes: list[Any] = []
+    calls: list[Any] = []
     for index, chunk in picked:
         # Each item shows the anchors it can be cited by; the allow-list is exactly the
         # window's anchors (2026-10-29: a session-wide list of bare user event ids, with
@@ -389,14 +397,15 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
         own = window_roots(session_id, chunk)
         shown, evidence = _with_anchors(chunk, own, user_events)
         roots = tuple(dict.fromkeys(user_roots + _root_ids(tuple(e for ids in own for e in ids))))
-        outcomes += _window(lambda: common.extract_and_enqueue(
+        calls.append(functools.partial(
+            common.extract_and_enqueue,
             "S2", session_id, json.dumps(shown, ensure_ascii=False, default=str), evidence,
             evidence_range={**evidence_range, "window": index, "windows": len(chunks),
                             "windows_skipped": skipped},
             session_id=session_id, read_root_ids=roots,
             project_snapshot=project_snapshot, extraction_pass="main",
-            allowed_kinds=_ALLOWED, llm=llm), session_id, index)
-    return outcomes
+            allowed_kinds=_ALLOWED, llm=llm))
+    return _windows_extracted(calls, session_id)
 
 
 def extract_session_sync(session_id: str, *, project_snapshot: dict[str, Any] | None = None,

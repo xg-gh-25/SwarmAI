@@ -2192,7 +2192,11 @@ async def rename_item(request: FolderRenameRequest):
             )
         from core.ingestion.api import StaleRevision, apply_user_edit
         from core.ingestion.writer import _installed_project
-        if _installed_project(old_target) != _installed_project(new_target):
+
+        def _package(path: Path) -> str | None:
+            parts = path.resolve().relative_to(Path(expanded_path).resolve()).parts
+            return parts[1] if _installed_project(path) and len(parts) > 1 else None
+        if (_package(old_target) or _package(new_target)) and _package(old_target) != _package(new_target):
             # trust follows the path: an installed Brain package's file moved out of it
             # would read as the user's own text
             raise HTTPException(
