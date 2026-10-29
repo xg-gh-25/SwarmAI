@@ -13,7 +13,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .build import FULL_REBUILD_FILES
+from .build import FULL_REBUILD_FILES, parser_outdated
+
+OUTDATED_REASON = "built by an older parser; it is rebuilt in full"
 
 if TYPE_CHECKING:
     from .graph_store import GraphStore
@@ -63,6 +65,14 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
     repo_root = Path(repo_root_str)
     if not repo_root.is_dir():
         return FreshnessResult(stale=True, reason=f"repo not found: {repo_root}")
+
+    # Before every other answer (HEAD equal to the marker, the diff cache, the mtime
+    # path): symbols an older parser wrote are wrong at any commit, and an incremental
+    # update would mix two parsers' output in one graph.
+    if parser_outdated(graph_store):
+        return FreshnessResult(stale=True, suggest_full_rebuild=True,
+                               last_indexed=graph_store.get_meta("last_indexed_commit"),
+                               reason=OUTDATED_REASON)
 
     # Check if it's a git repo
     if not (repo_root / ".git").exists() and not _is_git_worktree(repo_root):
@@ -234,7 +244,9 @@ def _mtime_freshness(graph_store: GraphStore, repo_root: Path) -> FreshnessResul
 def head_stamp(graph_store: GraphStore) -> tuple[bool | None, str | None]:
     """``(stale, head)`` from ONE ``git rev-parse HEAD`` against the graph's commit
     marker — the stamp a reader in the daemon shows (it never refreshes a graph).
-    ``stale`` is None when it cannot tell (no repo root, not a git repo, git failed)."""
+    ``stale`` is None when it cannot tell (no repo root, not a git repo, git failed).
+    It does not read the parser version: a daemon reader asks ``build.parser_outdated``
+    first (an outdated graph is wrong at any commit)."""
     root = graph_store.get_meta("repo_root")
     marker = graph_store.get_meta("last_indexed_commit")
     if not root or not Path(root).is_dir():

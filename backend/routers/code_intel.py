@@ -50,7 +50,9 @@ class CodeIntelSummary(BaseModel):
     languages: dict[str, int]
     last_indexed_at: str | None
     indexed_commit: str | None
-    freshness_status: str  # "fresh" | "stale" | "unknown" (graph commit vs repo HEAD)
+    # "fresh" | "stale" | "unknown" (graph commit vs repo HEAD) | "rebuilding" (written
+    # by an older parser; a rebuild child was asked for)
+    freshness_status: str
 
 
 class ReindexResponse(BaseModel):
@@ -96,18 +98,25 @@ async def get_code_intel_summary(project: str, repo: str | None = None):
     """A graph's status line: counts from the graph, and fresh/stale from one
     ``git rev-parse`` against its commit marker. 404 when the project has no graph.
     Dead code and modules are not here (``analysis`` computes them): this endpoint is
-    read on every Brain Hub open and must stay cheap."""
-    graph = await _graph_or_404(project, repo)
+    read on every Brain Hub open and must stay cheap. A graph an older parser wrote
+    reads "rebuilding": a rebuild child is asked for (at most every ten minutes), so
+    after a deploy that changes the parser nobody has to re-index."""
+    ref, graph = await _found_or_404(project, repo)
 
     def _work() -> CodeIntelSummary:
+        from core.code_intel.build import parser_outdated, request_rebuild
         from core.code_intel.freshness import head_stamp
         c = graph.counts()
-        stale, _head = head_stamp(graph)
+        if parser_outdated(graph):
+            request_rebuild(project, ref)
+            status = "rebuilding"
+        else:
+            stale, _head = head_stamp(graph)
+            status = "unknown" if stale is None else ("stale" if stale else "fresh")
         return CodeIntelSummary(
             symbol_count=c["nodes"], edge_count=c["edges"], file_count=c["files"],
             languages=c["languages"], last_indexed_at=c["last_indexed"],
-            indexed_commit=c["indexed_commit"],
-            freshness_status="unknown" if stale is None else ("stale" if stale else "fresh"),
+            indexed_commit=c["indexed_commit"], freshness_status=status,
         )
 
     return await asyncio.to_thread(_work)
@@ -161,14 +170,19 @@ async def trigger_reindex(project: str):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 async def _graph_or_404(project: str, repo: str | None):
-    """The graph a read endpoint shows (400 on a bad name, 404 when there is none).
-    The lookup reads bindings.yaml and may open the db: it runs off the loop."""
+    """The graph a read endpoint shows (400 on a bad name, 404 when there is none)."""
+    return (await _found_or_404(project, repo))[1]
+
+
+async def _found_or_404(project: str, repo: str | None):
+    """``(ref, graph)`` of the graph a read endpoint shows. The lookup reads
+    bindings.yaml and may open the db: it runs off the loop."""
     if not _SAFE_PROJECT_RE.match(project):
         raise HTTPException(status_code=400, detail="Invalid project name")
     found = await asyncio.to_thread(project_graph, project, repo)
     if found is None:
         what = f"repo '{repo}' of project '{project}'" if repo else f"project '{project}'"
         raise HTTPException(status_code=404, detail=f"Code intelligence not found for {what}")
-    return found[1]
+    return found
 
 

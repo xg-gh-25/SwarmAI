@@ -26,6 +26,9 @@ def mock_graph():
         "last_indexed_commit": "abc123def456",
         "last_full_index": "1700000000.0",
     }.get(key)
+    # no symbols: the parser-version check (test_code_intel_parser_version) stays out
+    # of these git-path tests
+    graph._conn.execute.return_value.fetchone.return_value = None
     return graph
 
 

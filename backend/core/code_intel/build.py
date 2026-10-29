@@ -16,7 +16,8 @@ What every rebuild now does the same way:
   parse — a repo not yet on disk, a parser teardown — must not erase a good graph or
   make an empty one read fresh). A graph that has no ``repo_root`` yet gets it, so a
   first bind of an empty repo still knows where it points.
-- Coverage holes and parse status are stored (the analysis reports them).
+- Coverage holes and parse status are stored (the analysis reports them), and so is
+  ``PARSER_VERSION``: a graph stored by an older parser reads stale (``parser_outdated``).
 - Routes (and router prefixes) are extracted, unless the caller says routes have no
   reader (a library mount). A prefix failure is logged and never fails the write.
 - ``head`` is the commit the CALLER read before the parse: a commit that lands while
@@ -47,6 +48,26 @@ logger = logging.getLogger(__name__)
 # More changed files than this: rebuild instead of updating file by file (also the
 # freshness check's "suggest a full rebuild" line).
 FULL_REBUILD_FILES = 100
+
+# What the parser and the store's resolution emit (node ids, edge kinds, confidence
+# bands, which calls are typed). Bump it with any change to that output: every graph
+# stored with a lower version reads stale and is rebuilt by a child, with no step by
+# a person (design 2026-10-29-code-intel-auto D3). 1: receivers typed, values and
+# patches as references (§0.10).
+PARSER_VERSION = 1
+
+
+def parser_outdated(graph: GraphStore) -> bool:
+    """The graph holds symbols written by an older parser (no version stored, or a
+    lower one). A graph with no symbols is not outdated: there is nothing in it to be
+    wrong, and an empty parse never stamps (it would read stale forever)."""
+    try:
+        stored = int(graph.get_meta("parser_version") or 0)
+    except ValueError:
+        stored = 0
+    if stored >= PARSER_VERSION:
+        return False
+    return graph._conn.execute("SELECT 1 FROM code_nodes LIMIT 1").fetchone() is not None
 
 
 @dataclass
@@ -132,6 +153,7 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
             graph.insert_routes(found)
         if stamp:
             graph.mark_indexed(full=True, head=head)
+        graph.set_meta("parser_version", str(PARSER_VERSION))
         for key, value in (meta or {}).items():
             graph.set_meta(key, value)
     if found:
@@ -202,14 +224,10 @@ def head_of(repo_root: str | Path) -> str | None:
 
 
 @contextlib.contextmanager
-def write_lock(db_path: str | Path, *, wait: bool):
-    """One writer per graph across processes: an ``fcntl`` lock on ``<db>.write.lock``.
-    Yields True when held. ``wait=False`` yields False at once if another process
-    holds it; ``wait=True`` waits up to ``WRITE_LOCK_WAIT_S``, then yields False.
-    (The SQLite transaction keeps a rebuild atomic; this lock only keeps two
-    processes from parsing the same repo at once.)"""
+def _file_lock(path: Path, wait_s: float):
+    """An exclusive ``fcntl`` lock on *path*; yields True when held, False when
+    another process still holds it after *wait_s* seconds (0: do not wait)."""
     import time
-    path = Path(str(db_path) + ".write.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         import fcntl
@@ -217,7 +235,7 @@ def write_lock(db_path: str | Path, *, wait: bool):
         yield True
         return
     with open(path, "a+") as fh:
-        deadline = time.monotonic() + (WRITE_LOCK_WAIT_S if wait else 0)
+        deadline = time.monotonic() + wait_s
         while True:
             try:
                 fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -233,6 +251,36 @@ def write_lock(db_path: str | Path, *, wait: bool):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+@contextlib.contextmanager
+def write_lock(db_path: str | Path, *, wait: bool):
+    """One writer per graph across processes: an ``fcntl`` lock on ``<db>.write.lock``.
+    Yields True when held. ``wait=False`` yields False at once if another process
+    holds it; ``wait=True`` waits up to ``WRITE_LOCK_WAIT_S``, then yields False.
+    (The SQLite transaction keeps a rebuild atomic; this lock only keeps two
+    processes from parsing the same repo at once.)"""
+    with _file_lock(Path(str(db_path) + ".write.lock"),
+                    WRITE_LOCK_WAIT_S if wait else 0) as held:
+        yield held
+
+
+# A full parse at a time across every graph a build child rebuilds: after a deploy
+# that bumps PARSER_VERSION every graph reads stale at once, and N children parsing
+# in parallel would load the machine. A child waits its turn (a queued child is not a
+# hang: the one ahead is parsing); past this it gives up and the next reader or the
+# hourly job asks again.
+REBUILD_TURN_WAIT_S = 3600
+
+
+def _rebuild_turn_path() -> Path:
+    from config import get_app_data_dir
+    return get_app_data_dir() / "code_intel" / "rebuild.lock"
+
+
+def rebuild_turn():
+    """The machine-wide turn for a full parse in a build child (``build_graph``)."""
+    return _file_lock(_rebuild_turn_path(), REBUILD_TURN_WAIT_S)
+
+
 def _sync_docs(project_dir: str | Path, repo_root, changed: list[str] | None) -> None:
     """The repo's documents follow its HEAD (design 2026-10-27 §5.3): re-indexed in
     place for recall and re-ranked in survey.json. A failure never fails the graph."""
@@ -245,13 +293,14 @@ def _sync_docs(project_dir: str | Path, repo_root, changed: list[str] | None) ->
 
 
 def build_graph(ref, *, project_dir: str | Path | None = None,
-                only_if_stale: bool = False) -> RebuildResult | None:
+                only_if_stale: bool = False, queue: bool = False) -> RebuildResult | None:
     """Build (or rebuild) the graph of one owned repo (*ref*: a ``CodeIntelDb``) on its
     own connection, holding its write lock (waiting for another writer). The db file
     is created when it does not exist. *only_if_stale*: do not wait for the lock, and
     skip (None) when another process holds it or the graph is already current — what
     a rebuild started by a reader asks for. With *project_dir*, the repo's documents
-    are re-synced after a rebuild."""
+    are re-synced after a rebuild. *queue* (the build child): wait for the
+    machine-wide turn (``rebuild_turn``) before parsing."""
     from .freshness import check_freshness
     from .graph_store import GraphStore
     from core.ddd_bindings import bind_in_progress
@@ -268,23 +317,31 @@ def build_graph(ref, *, project_dir: str | Path | None = None,
             # a bind started while this waited for the lock: it rebuilds the graph
             logger.info("code intel: %s is being bound; skipped", ref.repo)
             return None
-        graph = GraphStore(ref.db_path)
-        try:
-            if only_if_stale and graph.get_meta("repo_root") is not None:
-                fr = check_freshness(graph)
-                if not fr.stale:
-                    return None
-            head = head_of(ref.repo_root)
-            result = rebuild(graph, ref.repo_root, head=head)
-        finally:
-            graph.close()
+        # The graph's own lock first (one queued child per graph, a reader's update
+        # answers "busy"), then the machine-wide turn.
+        with (rebuild_turn() if queue else contextlib.nullcontext(True)) as turn:
+            if not turn:
+                logger.info("code intel: %s waited %ss for its turn to parse; skipped",
+                            ref.repo, REBUILD_TURN_WAIT_S)
+                return None
+            graph = GraphStore(ref.db_path)
+            try:
+                if only_if_stale and graph.get_meta("repo_root") is not None:
+                    fr = check_freshness(graph)
+                    if not fr.stale:
+                        return None
+                head = head_of(ref.repo_root)
+                result = rebuild(graph, ref.repo_root, head=head)
+            finally:
+                graph.close()
     if project_dir is not None and not result.empty:
         _sync_docs(project_dir, ref.repo_root, None)
     return result
 
 
 def ensure_graph(project_dir: str | Path, *, repo: str | None = None,
-                 full: bool = False, only_if_stale: bool = False) -> list[dict]:
+                 full: bool = False, only_if_stale: bool = False,
+                 queue: bool = False) -> list[dict]:
     """Build every graph *project_dir* owns that does not exist yet (all of them, or
     the one named *repo*); with *full*, rebuild those that exist too. One dict per
     graph: ``{repo, db, action, nodes?, error?}``. A failure is reported, never raised."""
@@ -301,7 +358,8 @@ def ensure_graph(project_dir: str | Path, *, repo: str | None = None,
             out.append({**row, "action": "skipped", "error": "repo not on disk"})
             continue
         try:
-            built = build_graph(ref, project_dir=project_dir, only_if_stale=only_if_stale)
+            built = build_graph(ref, project_dir=project_dir, only_if_stale=only_if_stale,
+                                queue=queue)
         except Exception as exc:  # noqa: BLE001 — one repo must not stop the others
             logger.warning("code intel: building %s failed: %s: %s", ref.repo,
                            type(exc).__name__, exc)
@@ -343,6 +401,61 @@ def spawn_child(args: list[str]):
     with open(log_dir / "code_intel_build.log", "ab") as log:
         return subprocess.Popen(py_command(*args), stdin=subprocess.DEVNULL, stdout=log,
                                 stderr=log, start_new_session=True)
+
+
+def db_parser_outdated(db_path: str | Path) -> bool:
+    """``parser_outdated`` for a graph file, read-only (opening a ``GraphStore`` runs
+    its schema script). False when the file is missing or unreadable."""
+    import sqlite3
+    path = Path(db_path)
+    if not path.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute("SELECT value FROM graph_meta WHERE key = 'parser_version'").fetchone()
+        try:
+            stored = int(row[0]) if row and row[0] else 0
+        except ValueError:
+            stored = 0
+        if stored >= PARSER_VERSION:
+            return False
+        return conn.execute("SELECT 1 FROM code_nodes LIMIT 1").fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+# A reader in the daemon asks for a rebuild at most this often per graph (it is read
+# on every Brain Hub open; the child it starts takes minutes).
+REBUILD_REQUEST_EVERY_S = 600
+
+
+def request_rebuild(project: str, ref) -> bool:
+    """Start a full ``--if-stale`` rebuild child for one owned graph, unless one was
+    asked for in the last ``REBUILD_REQUEST_EVERY_S`` (a ``<db>.rebuild-requested``
+    marker). For a reader in the daemon: it starts a child, it never parses. True when
+    a child was started."""
+    import time
+    if not ref.repo:
+        return False
+    marker = Path(str(ref.db_path) + ".rebuild-requested")
+    try:
+        if time.time() - marker.stat().st_mtime < REBUILD_REQUEST_EVERY_S:
+            return False
+    except OSError:
+        pass
+    try:
+        spawn_build(project, repo=ref.repo, full=True, only_if_stale=True)
+    except OSError as exc:
+        logger.warning("code intel: could not start a rebuild of %s: %s", ref.repo, exc)
+        return False
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    return True
 
 
 @dataclass
@@ -430,8 +543,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="skip a graph another process is writing or that is already current")
     args = ap.parse_args(argv)
     from jobs.paths import PROJECTS_DIR
+    # a child: one full parse at a time across the machine
     rows = ensure_graph(PROJECTS_DIR / args.project, repo=args.repo, full=args.full,
-                        only_if_stale=args.if_stale)
+                        only_if_stale=args.if_stale, queue=True)
     print(json.dumps({"project": args.project, "graphs": rows}, ensure_ascii=False))
     return 1 if any(r["action"] == "failed" for r in rows) else 0
 

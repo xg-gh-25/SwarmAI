@@ -509,6 +509,18 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(triggerReindex).toHaveBeenCalledWith('AIDLC');
   });
 
+  it('a graph an older parser wrote reads "rebuilding for a new parser", not its age', async () => {
+    (getCodeIntelSummary as ReturnType<typeof vi.fn>).mockResolvedValue({
+      symbolCount: 10, edgeCount: 0, fileCount: 1, languages: {}, lastIndexedAt: null,
+      indexedCommit: null, freshnessStatus: 'rebuilding',
+    });
+    await openBrowse();
+    fireEvent.click(await screen.findByTestId('codegraph-toggle'));
+    const age = await screen.findByTestId('codeintel-age');
+    expect(age.textContent).toContain('rebuilding for a new parser');
+    expect(age.textContent).not.toContain('never indexed');
+  });
+
   it('hasSpecs → Repo documents is a collapsed disclosure; opening it lists tier 1 first and fetches a document on click', async () => {
     mockGetBrainDetail.mockResolvedValue({ ...DETAIL, hasSpecs: true });
     mockGetSpecs.mockResolvedValue({ available: true, repos: [{

@@ -12,7 +12,8 @@ export interface CodeIntelSummary {
   lastIndexedAt: string | null;
   indexedCommit: string | null;
   /** The graph's commit against the repo's HEAD (one git call): stale = behind. */
-  freshnessStatus: 'fresh' | 'stale' | 'unknown';
+  /** rebuilding: an older parser wrote the graph; a rebuild child was asked for */
+  freshnessStatus: 'fresh' | 'stale' | 'unknown' | 'rebuilding';
 }
 
 interface RawCodeIntelSummary {
@@ -22,7 +23,7 @@ interface RawCodeIntelSummary {
   languages: Record<string, number>;
   last_indexed_at: string | null;
   indexed_commit: string | null;
-  freshness_status: 'fresh' | 'stale' | 'unknown';
+  freshness_status: 'fresh' | 'stale' | 'unknown' | 'rebuilding';
 }
 
 function toCamelCase(raw: RawCodeIntelSummary): CodeIntelSummary {

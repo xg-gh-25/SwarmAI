@@ -2,7 +2,8 @@
 
 Re-probes every registered mount's health (source-exists + edited-after-index)
 and persists it, so the Library overlay's 🟢/🟡/🔴 dots stay accurate without a
-manual check. Pure read + a health-column write; no LLM, no external calls.
+manual check. A health-column write, and a re-index child for a code mount whose
+graph an older parser wrote; no LLM, no external calls.
 
 Wired as job type 'library_freshness' (system_jobs.py) → executor dispatch.
 """

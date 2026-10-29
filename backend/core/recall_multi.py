@@ -374,10 +374,14 @@ def _graph_codeintel_hits(query: str, ref, graph, limit: int, *,
             stale_flag = not fr.current
             stale_reason = fr.message or None
         else:
-            from .code_intel.freshness import head_stamp
-            stale, _head = head_stamp(graph)
-            stale_flag = bool(stale)
-            stale_reason = "the graph is behind the repo's HEAD" if stale else None
+            from .code_intel.build import parser_outdated
+            from .code_intel.freshness import OUTDATED_REASON, head_stamp
+            if parser_outdated(graph):
+                stale_flag, stale_reason = True, OUTDATED_REASON
+            else:
+                stale, _head = head_stamp(graph)
+                stale_flag = bool(stale)
+                stale_reason = "the graph is behind the repo's HEAD" if stale else None
     except Exception as exc:  # noqa: BLE001 — freshness is best-effort; never block recall
         logger.debug("codeintel recall: freshness check failed (non-fatal): %s", exc)
 

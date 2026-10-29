@@ -2,7 +2,7 @@
 title: "Code intel r4: fully automatic once a Brain has a repo"
 created: 2026-10-29
 updated: 2026-10-29
-status: draft r2 (premise review done: correctness + security; findings folded in §6)
+status: r2, being built (D3 landed)
 ---
 
 # Code intel r4: fully automatic once a Brain has a repo
@@ -101,27 +101,33 @@ r3 decision: ownership of a local checkout no longer waits for a person's Confir
 
 ### D3. Parser version: a graph built by an older parser rebuilds itself
 
-- `PARSER_VERSION` (an integer in `core/code_intel/parser.py`, bumped with any change
-  to what the parser or the store's resolution emits) is written inside `rebuild()`'s
-  transaction on every path, including the empty-parse return (`build.py:116-120`)
-  and `stamp=False`.
+- `PARSER_VERSION` (an integer in `core/code_intel/build.py`, next to `rebuild`; bumped
+  with any change to what the parser or the store's resolution emits) is written
+  inside `rebuild()`'s transaction, `stamp=False` (mounts) included. The empty-parse
+  return writes nothing, as before (it must not touch a good graph); so
+  `parser_outdated` counts only a graph that holds symbols — an empty graph has
+  nothing in it to be wrong, and counting it would spawn a child on every read.
 - `check_freshness`: the version is compared **first**, right after the repo-root
-  checks and before the HEAD-equals-marker return (`:96`), the `_DIFF_CACHE` lookup
-  (`:105`) and the non-git branch (`:66`). Missing or lower → `stale`,
-  `suggest_full_rebuild`. `ensure_fresh` then spawns the full child and never runs an
-  incremental `update_files` on an old-version graph (two parser outputs mixed).
-- `head_stamp` (new code, not a reuse): reads the `parser_version` meta key (no git);
-  lower → status `rebuilding` (a new value of `CodeIntelSummary.freshness_status` and
-  of the desktop type), and the daemon calls `spawn_build(only_if_stale=True)` — it
-  spawns a child, it never parses. Its other caller, `recall_multi.py:378`, shows the
-  same stamp.
-- **Library mounts** (`library_mounts.py:563`, `rebuild(stamp=False)`, never freshness-
-  checked): the hourly job re-indexes a mount whose stored version is lower.
-- **One rebuild at a time.** After a deploy that bumps the version every graph is stale
-  at once. The build child takes a global fcntl lock (`<app data>/code_intel/
-  rebuild.lock`) before parsing and waits for it, so N graphs are rebuilt one after
-  another, not N parses in parallel. Expected: about one minute per graph of this
-  repo's size (measured in D3's test on this repo before it lands).
+  checks and before the HEAD-equals-marker return, the `_DIFF_CACHE` lookup and the
+  non-git branch. Outdated → `stale`, `suggest_full_rebuild`. `ensure_fresh` then
+  spawns the full child and never runs an incremental `update_files` on it (two
+  parsers' output mixed).
+- The daemon's readers (new code, not a reuse): `/summary` checks `parser_outdated`
+  before `head_stamp`; outdated → status `rebuilding` (a new value of
+  `CodeIntelSummary.freshness_status` and the desktop type; Brain Hub shows
+  "rebuilding for a new parser") and `request_rebuild` spawns the `--if-stale` child,
+  at most once per graph per ten minutes (a `<db>.rebuild-requested` marker). The
+  daemon recall leg stamps hits stale with that reason and spawns nothing.
+- **Library mounts** (`rebuild(stamp=False)`, never freshness-checked): the mount
+  sweep (`refresh_all_mounts`, the weekday `library-freshness` job) starts the
+  `index-code` child for a code mount whose graph is outdated
+  (`db_parser_outdated`, read-only).
+- **One parse at a time in build children.** After a deploy that bumps the version
+  every graph is stale at once. A build child takes the graph's write lock (one
+  queued child per graph; a reader's inline update answers "busy"), then the
+  machine-wide turn (`<app data>/code_intel/rebuild.lock`, waits up to an hour), so
+  N graphs are rebuilt one after another. Only the child queues (`queue=True` from
+  `main`): bind, the probe and a person's CLI rebuild never wait for the turn.
 
 ### D4. Pipeline reviews carry the callers report
 

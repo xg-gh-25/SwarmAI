@@ -962,10 +962,13 @@ function CodeIntelStatus({ name }: { name: string }) {
 
   if (!summary) return null;
   const stale = summary.freshnessStatus === 'stale';
+  const rebuilding = summary.freshnessStatus === 'rebuilding';
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] text-meta" data-testid="codeintel-status">
       <span className="tabular-nums text-[var(--color-text-muted)]">{summary.symbolCount.toLocaleString()} symbols</span>
-      <span className={stale ? 'text-amber-500' : 'text-[var(--color-text-faint)]'}>· {_indexedAge(summary.lastIndexedAt)}</span>
+      <span className={stale ? 'text-amber-500' : 'text-[var(--color-text-faint)]'} data-testid="codeintel-age">
+        · {rebuilding ? 'rebuilding for a new parser' : _indexedAge(summary.lastIndexedAt)}
+      </span>
       <button
         data-testid="codeintel-reindex"
         onClick={reindex}

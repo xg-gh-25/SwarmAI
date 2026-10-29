@@ -278,7 +278,8 @@ def _source_max_mtime(root: Path) -> float:
 
 def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None) -> dict:
     """Light periodic freshness job: re-probe every mount's health, persist it,
-    and return a {scanned, fresh, stale, missing} summary. Never raises on one bad
+    start a re-index child for a code mount an older parser wrote, and return a
+    {scanned, fresh, stale, missing[, reindexing]} summary. Never raises on one bad
     mount (best-effort — a broken mount is counted, not fatal)."""
     summary = {"scanned": 0, "fresh": 0, "stale": 0, "missing": 0}
     try:
@@ -295,7 +296,24 @@ def refresh_all_mounts(store: "LibraryMounts", scope: Optional[str] = None) -> d
             continue
         if health in summary:
             summary[health] += 1
+        if row["kind"] == "code" and health != "missing":
+            _reindex_if_outdated(row["id"], summary)
     return summary
+
+
+def _reindex_if_outdated(mount_id: str, summary: dict) -> None:
+    """A code mount's graph written by an older parser is re-indexed by a child
+    (``python -m core.library_mounts index-code``): after a deploy that changes the
+    parser, nobody re-mounts (design 2026-10-29-code-intel-auto D3)."""
+    from core.code_intel.build import db_parser_outdated, spawn_child
+    if not db_parser_outdated(_mount_db_path(mount_id)):
+        return
+    try:
+        spawn_child(["-m", "core.library_mounts", "index-code", mount_id])
+    except OSError as exc:
+        logger.warning("mount %s: could not start a re-index: %s", mount_id, exc)
+        return
+    summary["reindexing"] = summary.get("reindexing", 0) + 1
 
 
 # ── Ownership plan A — parallel predicate + composed oracle ──────────────────
