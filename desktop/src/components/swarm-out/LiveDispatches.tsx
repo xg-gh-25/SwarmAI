@@ -21,7 +21,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
 import { ReturnPanel } from './ReturnPanel';
-import { brainLabel, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, stateLabel, useRuns, workLines } from './live';
+import { brainLabel, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, stateLabel, useRuns, workLines } from './live';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
@@ -288,7 +288,7 @@ function RunResult({ r }: { r: SwarmOutRun }) {
     <div className="mt-1.5" data-testid="swarm-out-run-result">
       <div className={`text-[12.5px] font-medium ${TONE[ended.tone]}`} data-testid="swarm-out-run-ended">{ended.text}</div>
       {work.map((w) => <div key={w} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-work">{w}</div>)}
-      {[checksLine(res), gateLine(res)].filter(Boolean).map((l) => (
+      {[checksLine(res), gateLine(res), lessonsLine(res)].filter(Boolean).map((l) => (
         <div key={l!} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-checks">{l}</div>
       ))}
       <div className={`text-[11.5px] mt-0.5 ${muted}`} data-testid="swarm-out-run-numbers">{numberParts(res).join(' · ')}</div>

@@ -660,6 +660,21 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
   - 判官没通过的，进可恢复的存档，和本地的做法一样。
   - 这一步做完，环才闭合：Brain → Project Agent → 执行 → 证据和教训 → 判官 → Brain。
 
+**实现（第 10 步）：** `core/hive_lessons.py`。
+- **Hive 端：** `GET /api/hive/lessons/{session}`，只读 Hive 自己的 CDF 收件箱。返回这个会话主通道（S2、S7）和它创建的 pipeline run（S3，按 run 合约里的创建会话判断）抽出来的 cognition 和 gap 单元，最早的 50 条，每条最多 8 KB。
+- **本机：** 结果检查（`swarm_out_results`）取回结果之后顺带取教训。每条按本机的合约重新校验，然后走和本地一样的 `enqueue_unit`，用同一个判官、同一套路由，判官没过的照常进存档：
+  - 只收 cognition 和 gap，scope 只收 `project:<这个 run 的 Brain>` 和 `world`（通用 Brain 只收 `world`）。关于用户、agent 或别的项目的说法不收。
+  - Brain 由代码定死，判官改不了：来源 S6，source_ref `hive:<dispatch>`，`project_hint` 是这个 Brain。判官判到别的项目，`pipeline_v2` 直接拒掉（`project_outside_brain`）。这一条是安全评审找出来的 HIGH：原来只靠提示词约束判官，一条被注入的教训可以借判官写进另一个 Brain。
+  - Hive 的证据锚点指向 Hive 本地的记录，本机换成一个自己登记的证据根：`agent_document`，没有父根，信任度固定是 `external`。所以这些单元都带污染标记，进不了每轮注入的文件（MEMORY、EVOLUTION、STEERING、USER、TOOLS），`relation_hint` 也去掉。
+  - 每个 run 最多收 50 条，每次检查最多排 20 秒。响应体读到 512 KB 就停。已经收下或被本机合约拒掉的不再重复送。存储忙或出错的，留到下次检查。
+- **面板：** 卡片上一行"教训：交回 N 条，本机判官写进 Brain x 条、没通过 y 条、待判 z 条"。`/runs` 只有计数，没有 Hive 的文字。
+- **已知限制：**
+  - Hive 只给最早的 50 条。
+  - 只在结果检查的窗口里取（run 停下后 24 小时内）：之后才出来的 S7 复盘取不到，Hive 上已删除的会话也取不到。
+  - Hive 自己的判官仍然会写进它那份 Brain，下一次同步时会被还原。
+  - run 的会话归属只看创建者，不跟踪转交。
+  - 取消息那一步（第 8 步已有的代码）还是整段读进内存，没有上限。这一步的上限只管教训接口。
+
 **还有两个缺口，现在不做，但要记下：**
 - **定义会过期。** Brain 的知识在变：cultivation 会往里写，人也会改。Project Agent 定义是从 Brain 推出来的，Brain 变了，定义也可能需要变。后续可以在 Brain 变化时重新跑一遍生成器、和现有定义做对比，有差异就在 Brain Hub 提示"定义可能需要更新"。这样定义不会悄悄跟 Brain 脱节。
 - **自治程度应该按记录来放开。** 每个 Brain 的 run 都有记录：有多少不需要人介入、校验跑了没有、被 gate 拦了几次。这些数字可以用来决定哪些 Brain 可以少问人（比如路由不再确认、低风险 profile 自动派发），而不是一开始就全部放开。这是 delivery OS HLD 里 Autonomous Delivery Rate 的一个具体用法。

@@ -296,6 +296,12 @@ def _section_exists(root: Path, destination: DestinationV2) -> bool:
     return " ".join(destination.section.split()) in headings
 
 
+def _is_hive_lesson(row: Any) -> bool:
+    from .contracts_v2 import HIVE_REF_PREFIX
+    return (str(_get(row, "source_v2", _get(row, "source", ""))) == "S6"
+            and str(_get(row, "source_ref", "")).startswith(HIVE_REF_PREFIX))
+
+
 def _answer_projects(answer: Any, fallback: str | None) -> list[str]:
     projects = getattr(answer, "projects", None)
     if projects:
@@ -505,6 +511,11 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
                          card0=card0, card1=card1)
 
     answer_projects = _answer_projects(card1, project_hint)
+    if _is_hive_lesson(row) and any(p != project_hint for p in answer_projects):
+        # a Hive's lesson lands only in the Brain its run used (or in no project for
+        # the General Brain): the judge's own project choice cannot move it elsewhere
+        return _decision(unit_id, "reject", "reject", "project_outside_brain", vectors=vectors,
+                         card0=card0, card1=card1)
     if len(answer_projects) > 1:
         expansions = expand_projects(unit_id, answer_projects)
         # The worker expands these into one row/write each. Keeping the complete expansion

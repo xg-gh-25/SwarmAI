@@ -13,6 +13,10 @@ re-scanned and projected, while no turn holds the Brain and no new turn can take
 every other refusal keeps its own status and says why. ``GET /api/hive/brains``: for every Brain installed this
 way, its recorded digest, revision and time, how many of its files changed on the
 Hive since, and how many turns hold it now. Nothing else.
+
+``GET /api/hive/bundles/{session}/{key}``: a turn's commits as a git bundle
+(core/hive_bundle). ``GET /api/hive/lessons/{session}``: the lessons the Hive's CDF
+extracted for a dispatched session (core/hive_lessons).
 """
 from __future__ import annotations
 
@@ -137,6 +141,18 @@ async def get_bundle(session_id: str, key: str):
             os.close(fd)
     return StreamingResponse(chunks(), media_type="application/octet-stream",
                              headers={"Content-Length": str(size)})
+
+
+@router.get("/lessons/{session_id}")
+async def get_lessons(session_id: str) -> dict:
+    """The lessons this Hive's own CDF sources extracted for one dispatched session
+    (core/hive_lessons.collect), for the host's judge. Hive only; read-only."""
+    _hive_only()
+    from core import hive_lessons
+    try:
+        return await asyncio.to_thread(hive_lessons.collect, session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="not a session id") from None
 
 
 @router.get("/brains")

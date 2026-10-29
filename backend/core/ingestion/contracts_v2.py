@@ -440,6 +440,11 @@ SOURCES_V2: dict[str, dict] = {
     "S7": {"name": "session_review", "lane": "session"},
 }
 
+# A Hive run's lessons (core/hive_lessons): S6 units whose source_ref starts with this.
+# Their project is fixed by the host (project_hint = the run's Brain, or none for the
+# General Brain); the judge may not move them to another project (pipeline_v2).
+HIVE_REF_PREFIX = "hive:"
+
 # ── trusted passes, S1, entailment (§9.1, §9.2) ───────────────────────────────
 ExtractionPass = Literal["main", "user_utterance", "human_answer", "s1"]
 # A unit from a trusted pass is accepted only if EVERY evidence root is of these kinds and

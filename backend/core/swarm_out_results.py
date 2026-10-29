@@ -496,7 +496,7 @@ async def _fetch(row: dict) -> dict:
            "etag": prev.get("etag"), "transcript_rev": prev.get("transcript_rev"),
            "fetched_at": prev.get("fetched_at"), "checked_at": _now(),
            "fetch_error": None, "result": prev.get("result"),
-           "summary_version": prev.get("summary_version")}
+           "summary_version": prev.get("summary_version"), "lessons": prev.get("lessons")}
     if not isinstance(sid, str) or not swarm_out.KEY_RE.fullmatch(sid):
         rec["fetch_error"] = "no session"
         return rec
@@ -526,6 +526,12 @@ async def _fetch(row: dict) -> dict:
                 rev = r.headers.get("x-transcript-rev")
                 rec["transcript_rev"] = int(rev) if isinstance(rev, str) and rev.isdigit() else None
                 rec["fetched_at"] = rec["checked_at"]
+        if rec["fetch_error"] is None:
+            # the run's lessons, for this machine's judge (core/hive_lessons, design §13)
+            from core import hive_lessons
+            got = await hive_lessons.take(row, inst, prev.get("lessons"))
+            if got is not None:
+                rec["lessons"] = got
     except swarm_out.SwarmOutError as e:
         rec["fetch_error"] = "hive_not_running" if "not running" in str(e) else "hive_unusable"
     except Exception as e:  # noqa: BLE001 — Hive slow or unreachable: keep the old result
@@ -745,7 +751,32 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> O
         "pipeline": pipeline,
         "dropped": _int(res.get("dropped")),
         **_public_agent(res, agent),
+        "lessons": _public_lessons(record),
     }
+
+
+_LESSON_ERROR_RE = re.compile(r"not_supported|bad_session|too_large|hive_unusable|hive_silent|unexpected_body|not_queued|http_\d{3}")
+
+
+def _public_lessons(record: Optional[dict]) -> Optional[dict]:
+    """The run's lessons as counts (core/hive_lessons): how many the Hive holds, how many
+    went to this machine's judge and what it decided (``lesson_states``, read by
+    ``_read_kept``), how many were skipped (another scope or kind) or refused."""
+    les = (record or {}).get("lessons")
+    if not isinstance(les, dict):
+        return None
+    st = (record or {}).get("lesson_states")
+    st = st if isinstance(st, dict) else {}
+    cands = les.get("candidates")
+    err = les.get("error")
+    return {"returned": _int(les.get("returned")),
+            "sent": len(cands) if isinstance(cands, list) else 0,
+            "written": _int(st.get("written")), "rejected": _int(st.get("rejected")),
+            "pending": _int(st.get("pending")),
+            "skipped": _int(les.get("skipped")),
+            "refused": len(les["refused"]) if isinstance(les.get("refused"), list) else 0,
+            "truncated": les.get("truncated") is True,
+            "error": err if isinstance(err, str) and _LESSON_ERROR_RE.fullmatch(err) else None}
 
 
 def _status(row: dict, hive_status: Optional[str], kept: Optional[dict]) -> str:
@@ -761,7 +792,13 @@ def _status(row: dict, hive_status: Optional[str], kept: Optional[dict]) -> str:
 
 
 def _read_kept(ids: list[str]) -> dict[str, Optional[dict]]:
-    return {i: load(i) for i in ids}
+    out = {i: load(i) for i in ids}
+    for rec in out.values():
+        les = (rec or {}).get("lessons")
+        if isinstance(les, dict) and les.get("candidates"):
+            from core import hive_lessons
+            rec["lesson_states"] = hive_lessons.states(les["candidates"])
+    return out
 
 
 async def attach(rows: list[dict], status_of: dict[str, Optional[str]]) -> None:

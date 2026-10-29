@@ -123,6 +123,14 @@ export interface SwarmOutResult {
   gate_refusals?: Record<string, number> | null;
   /** older turns were not read: a check or refusal there is not seen */
   checks_partial?: boolean;
+  /** the run's lessons (backend core/hive_lessons): how many the Hive holds, how many went
+   *  to this machine's judge and what it decided; null: not a Project Agent run */
+  lessons?: SwarmOutLessons | null;
+}
+
+export interface SwarmOutLessons {
+  returned: number; sent: number; written: number; rejected: number; pending: number;
+  skipped: number; refused: number; truncated: boolean; error: string | null;
 }
 
 /** The whole kept record of one run (GET /swarm-out/runs/{id}/result). */

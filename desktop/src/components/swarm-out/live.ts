@@ -167,6 +167,22 @@ export function gateLine(res: SwarmOutResult): string | null {
   return `Brain gate 拦下 ${total} 次（${g.map(([k, n]) => `${gateName(k)} ${n}`).join('、')}）`;
 }
 
+/** "教训：交回 3 条，本机判官写进 Brain 1 条、没通过 1 条、待判 1 条" for a Project Agent
+ *  run (design §13); null when the run has no lessons part, or nothing came back and
+ *  nothing went wrong. */
+export function lessonsLine(res: SwarmOutResult): string | null {
+  const l = res.lessons;
+  if (!l) return null;
+  if (l.error === 'not_supported') return '教训：这台 Hive 还不能交回教训（需要更新 Hive）';
+  if (l.sent === 0 && l.returned === 0) return l.error ? '教训：这次没取回来，下次检查再试' : null;
+  const parts = [`本机判官写进 Brain ${l.written} 条`];
+  if (l.rejected) parts.push(`没通过 ${l.rejected} 条`);
+  if (l.pending) parts.push(`待判 ${l.pending} 条`);
+  const extra = [l.skipped ? `${l.skipped} 条不是这个 Brain 的，没收` : '',
+    l.refused ? `${l.refused} 条没过本机的检查` : ''].filter(Boolean);
+  return `教训：交回 ${l.sent} 条，${parts.join('、')}${extra.length ? `（${extra.join('，')}）` : ''}`;
+}
+
 export interface BrainRow { brain: string; label: string; runs: number; completed: number; failed: number; checksNotRun: number }
 
 /** The last `days` days' runs by the Brain they went under, Brains by run count;

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { SwarmOutResult, SwarmOutRun } from '../../services/swarmOut';
-import { brainLabel, checksLine, gateLine, runsByBrain } from './live';
+import { brainLabel, checksLine, gateLine, lessonsLine, runsByBrain } from './live';
 
 const NOW = Date.parse('2026-10-29T12:00:00Z');
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -38,6 +38,17 @@ describe('the Brain of a run', () => {
       { id: 'build', status: 'errored' }] }))).toBe('校验：tests 跑了 · lint 没跑 · build 报错了');
     expect(checksLine(res({ checks_partial: true, checks: [{ id: 'lint', status: 'not_run' },
       { id: 'x', status: 'unknown' }] }))).toBe('校验：lint 没看到 · x 跑了但没有结果（只读了最近的轮次）');
+  });
+
+  it('says what came back as lessons and what this machine\'s judge did with them', () => {
+    const l = (o = {}) => ({ returned: 0, sent: 0, written: 0, rejected: 0, pending: 0, skipped: 0,
+      refused: 0, truncated: false, error: null, ...o });
+    expect(lessonsLine(res())).toBeNull();
+    expect(lessonsLine(res({ lessons: l() }))).toBeNull();
+    expect(lessonsLine(res({ lessons: l({ returned: 4, sent: 3, written: 1, rejected: 1, pending: 1, skipped: 1 }) })))
+      .toBe('教训：交回 3 条，本机判官写进 Brain 1 条、没通过 1 条、待判 1 条（1 条不是这个 Brain 的，没收）');
+    expect(lessonsLine(res({ lessons: l({ error: 'not_supported' }) }))).toBe('教训：这台 Hive 还不能交回教训（需要更新 Hive）');
+    expect(lessonsLine(res({ lessons: l({ error: 'hive_silent' }) }))).toBe('教训：这次没取回来，下次检查再试');
   });
 
   it('counts Brain gate refusals by gate', () => {
