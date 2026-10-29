@@ -22,7 +22,8 @@ from pathlib import Path
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
+    from core.code_intel.local_roots import GIT_SAFE
+    return subprocess.run(["git", *GIT_SAFE, "-C", str(repo), *args],
                           check=True, capture_output=True, text=True).stdout
 
 
@@ -31,14 +32,19 @@ def replay(repo: Path, commit: str):
     from core.code_intel.build import rebuild
     from core.code_intel.graph_store import GraphStore
 
-    parent = _git(repo, "rev-parse", f"{commit}~1").strip()
-    sha = _git(repo, "rev-parse", commit).strip()
+    from core.code_intel.changed import filter_programs
+    if commit.startswith("-"):
+        raise SystemExit("a commit, not an option")
+    if filter_programs(repo):
+        raise SystemExit("the repo's config names a filter program; a checkout would run it")
+    parent = _git(repo, "rev-parse", "--verify", "--end-of-options", f"{commit}~1").strip()
+    sha = _git(repo, "rev-parse", "--verify", "--end-of-options", commit).strip()
     with tempfile.TemporaryDirectory(prefix="ci-replay-") as tmp:
         tmp_path = Path(tmp)
         before, after = tmp_path / "before", tmp_path / "after"
-        _git(repo, "worktree", "add", "--detach", "-q", str(before), parent)
-        _git(repo, "worktree", "add", "--detach", "-q", str(after), sha)
         try:
+            _git(repo, "worktree", "add", "--detach", "-q", str(before), parent)
+            _git(repo, "worktree", "add", "--detach", "-q", str(after), sha)
             graph = GraphStore(tmp_path / "g.db")
             rebuild(graph, before, head=parent)
             ref = CodeIntelDb(db_path=tmp_path / "g.db", repo=repo.name, repo_root=before)
@@ -53,9 +59,10 @@ def replay(repo: Path, commit: str):
                 graph.close()
             return rep
         finally:
-            for wt in (before, after):
-                subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)],
-                               capture_output=True)
+            for wt in (before, after):        # the two worktrees this made, nothing else
+                if wt.exists():
+                    subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force",
+                                    str(wt)], capture_output=True)
 
 
 def main(argv: list[str] | None = None) -> int:

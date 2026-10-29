@@ -52,6 +52,7 @@ class Iface:
     methods: set[str] = field(default_factory=set)
     static: bool = False                       # staticmethod / classmethod / TS static
     code_hash: str = ""
+    bases: list[str] = field(default_factory=list)   # a class's base names (as written)
 
 
 @dataclass
@@ -228,27 +229,47 @@ def interfaces(text: str, language: str, suffix: str = "") -> dict[str, Iface]:
     return out
 
 
+_PY_COMPOUND = frozenset({"if_statement", "elif_clause", "else_clause", "try_statement",
+                          "except_clause", "finally_clause", "with_statement", "block"})
+
+
+def _deco_names(item) -> list[str]:
+    return [d.split("(")[0].split(".")[-1] for d in _decorators(item)]
+
+
 def _py_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
+    """Functions, classes and methods under *node*: at module level also inside
+    ``if`` / ``try`` / ``with`` (a definition there binds at module level). The last
+    definition of a name is the one that binds (so ``@overload`` stubs, which come
+    before the implementation, are replaced by it)."""
     for child in node.children:
+        if cls is None and child.type in _PY_COMPOUND:
+            _py_scan(child, None, out)
+            continue
         item = child.child_by_field_name("definition") if child.type == "decorated_definition" else child
         if item is None:
             continue
         if item.type == _PY_FUNC:
             name = _t(item.child_by_field_name("name"))
-            decos = _decorators(item)
-            static = any(d.split("(")[0].split(".")[-1] in ("staticmethod",) for d in decos)
-            classm = any(d.split("(")[0].split(".")[-1] == "classmethod" for d in decos)
+            decos = _deco_names(item)
+            static = "staticmethod" in decos
+            classm = "classmethod" in decos
             key = f"{cls}.{name}" if cls else name
-            out.setdefault(key, Iface(
+            out[key] = Iface(
                 kind="method" if cls else "function", line=item.start_point[0] + 1,
                 params=_py_params(item.child_by_field_name("parameters"),
                                   drop_first=bool(cls) and not static),
-                static=static or classm, code_hash=_code_hash(item, "python")))
+                static=static or classm, code_hash=_code_hash(item, "python"))
         elif item.type == _PY_CLASS:
             name = _t(item.child_by_field_name("name"))
+            supers = item.child_by_field_name("superclasses")
             iface = Iface(kind="class", line=item.start_point[0] + 1,
-                          code_hash=_code_hash(item, "python"))
-            dataclass = any(d.split("(")[0].split(".")[-1] == "dataclass" for d in _decorators(item))
+                          code_hash=_code_hash(item, "python"),
+                          bases=[_t(c).split(".")[-1] for c in (supers.named_children if supers else [])
+                                 if c.type in ("identifier", "attribute")])
+            decos = _decorators(item)
+            dataclass = any(d.split("(")[0].split(".")[-1] == "dataclass" for d in decos)
+            kw_only = any("kw_only=True" in d.replace(" ", "") for d in decos)
             body = item.child_by_field_name("body")
             dc_params: list[Param] = []
             for stmt in (body.children if body is not None else []):
@@ -256,11 +277,14 @@ def _py_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
                     stmt.named_child_count == 1 else stmt
                 if inner.type == "assignment":
                     left = inner.child_by_field_name("left")
+                    ann = inner.child_by_field_name("type")
                     if left is not None and left.type == "identifier":
+                        if ann is not None and _t(ann).split(".")[-1] == "KW_ONLY":
+                            kw_only = True             # `_: KW_ONLY`: the rest are keyword-only
+                            continue
                         iface.fields.add(_t(left))
-                        if dataclass and inner.child_by_field_name("type") is not None and \
-                                "ClassVar" not in _t(inner.child_by_field_name("type")):
-                            dc_params.append(Param(_t(left), "pos",
+                        if dataclass and ann is not None and "ClassVar" not in _t(ann):
+                            dc_params.append(Param(_t(left), "kw" if kw_only else "pos",
                                                    inner.child_by_field_name("right") is not None))
                 deco = stmt.child_by_field_name("definition") if stmt.type == "decorated_definition" else stmt
                 if deco is not None and deco.type == _PY_FUNC:
@@ -270,11 +294,72 @@ def _py_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
                     if mname == "__init__":
                         iface.params = _py_params(deco.child_by_field_name("parameters"),
                                                   drop_first=True)
-            if iface.params is None and dataclass:
+            if iface.params is None and dataclass and not iface.bases:
+                # a dataclass with bases also takes its bases' fields: not judged
                 iface.params = dc_params
-            out.setdefault(name, iface)
+            out[name] = iface
             if body is not None:
                 _py_scan(body, name, out)
+
+
+def bound_names(text: str, language: str, suffix: str = "") -> set[str]:
+    """Every name the module binds at top level: definitions (inside ``if`` / ``try``
+    too), imports (``from b import f`` keeps ``f`` importable from here) and
+    assignments. A symbol gone from its definitions but still bound here was moved,
+    not removed, for a caller that imports it from this module."""
+    if language not in LANGS:
+        return set()
+    tree = _parse(text, language, suffix)
+    if tree is None:
+        return set()
+    out: set[str] = set()
+
+    def last(node) -> str:
+        return _t(node).split(".")[-1].strip()
+
+    stack = list(tree.root_node.children)
+    while stack:
+        n = stack.pop()
+        t = n.type
+        if t in _PY_COMPOUND or t in ("export_statement", "expression_statement",
+                                      "lexical_declaration", "variable_declaration",
+                                      "import_clause", "named_imports", "export_clause"):
+            stack.extend(n.children)
+            continue
+        if t == "decorated_definition":
+            n = n.child_by_field_name("definition") or n
+            t = n.type
+        if t in (_PY_FUNC, _PY_CLASS) or t in _TS_FUNCS or t in _TS_CLASSES:
+            out.add(_t(n.child_by_field_name("name")))
+        elif t == "import_from_statement":               # from m import a, b as c
+            module = n.child_by_field_name("module_name")
+            for c in n.named_children:
+                if module is not None and c.start_byte == module.start_byte:
+                    continue
+                if c.type == "aliased_import":
+                    out.add(_t(c.child_by_field_name("alias")))
+                elif c.type == "dotted_name":
+                    out.add(last(c))
+        elif t == "import_statement" and language == "python":   # import a.b [as c]
+            for c in n.named_children:
+                if c.type == "aliased_import":
+                    out.add(_t(c.child_by_field_name("alias")))
+                elif c.type == "dotted_name":
+                    out.add(_t(c).split(".")[0])
+        elif t == "import_statement":                    # TS/JS import … from
+            stack.extend(n.children)
+        elif t in ("import_specifier", "export_specifier"):
+            out.add(_t(n.child_by_field_name("alias") or n.child_by_field_name("name")))
+        elif t == "namespace_import":
+            out.update(_t(c) for c in n.named_children if c.type == "identifier")
+        elif t == "identifier" and n.parent is not None and n.parent.type == "import_clause":
+            out.add(_t(n))                               # import X from …
+        elif t in ("assignment", "variable_declarator"):
+            left = n.child_by_field_name("left") or n.child_by_field_name("name")
+            if left is not None and left.type == "identifier":
+                out.add(_t(left))
+    out.discard("")
+    return out
 
 
 def _self_attrs(method, fields: set[str]) -> None:
@@ -291,10 +376,14 @@ def _self_attrs(method, fields: set[str]) -> None:
             continue
         if n.type == "assignment":
             left = n.child_by_field_name("left")
-            if left is not None and left.type == "attribute":
-                obj = left.child_by_field_name("object")
+            targets = [left] if left is not None and left.type == "attribute" else (
+                [c for c in left.named_children if c.type == "attribute"]
+                if left is not None and left.type in ("pattern_list", "tuple_pattern",
+                                                       "list_pattern") else [])
+            for t in targets:                    # self.a = … / self.a, self.b = …
+                obj = t.child_by_field_name("object")
                 if obj is not None and _t(obj) == me:
-                    fields.add(_t(left.child_by_field_name("attribute")))
+                    fields.add(_t(t.child_by_field_name("attribute")))
         stack.extend(n.children)
 
 
@@ -312,10 +401,13 @@ def _ts_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
                 continue
             static = any(_t(c) == "static" for c in item.children)
             key = f"{cls}.{name}" if cls and item.type == "method_definition" else name
-            out.setdefault(key, Iface(kind="method" if cls else "function",
-                                      line=item.start_point[0] + 1,
-                                      params=_ts_params(item.child_by_field_name("parameters")),
-                                      static=static, code_hash=_code_hash(item, "typescript")))
+            # an overload signature has no body: the implementation is the one that binds
+            if item.child_by_field_name("body") is None and key in out:
+                continue
+            out[key] = Iface(kind="method" if cls else "function",
+                             line=item.start_point[0] + 1,
+                             params=_ts_params(item.child_by_field_name("parameters")),
+                             static=static, code_hash=_code_hash(item, "typescript"))
         elif item.type in ("lexical_declaration", "variable_declaration") and cls is None:
             for d in item.named_children:
                 if d.type != "variable_declarator":
@@ -335,8 +427,10 @@ def _ts_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
             name = _t(item.child_by_field_name("name"))
             if not name:
                 continue
+            heritage = next((c for c in item.children if c.type == "class_heritage"), None)
             iface = Iface(kind="class", line=item.start_point[0] + 1,
-                          code_hash=_code_hash(item, "typescript"))
+                          code_hash=_code_hash(item, "typescript"),
+                          bases=[_t(c) for c in _ts_heritage(heritage)])
             body = item.child_by_field_name("body")
             for m in (body.children if body is not None else []):
                 if m.type in ("public_field_definition", "field_definition"):
@@ -356,6 +450,17 @@ def _ts_scan(node, cls: str | None, out: dict[str, Iface]) -> None:
             out.setdefault(name, iface)
             if body is not None:
                 _ts_scan(body, name, out)
+
+
+def _ts_heritage(node) -> list:
+    out, stack = [], [node] if node is not None else []
+    while stack:
+        n = stack.pop()
+        if n.type in ("identifier", "type_identifier") and n.parent is not None and \
+                n.parent.type in ("extends_clause", "class_heritage"):
+            out.append(n)
+        stack.extend(n.children)
+    return out
 
 
 def _this_attrs(method, fields: set[str]) -> None:
@@ -459,26 +564,36 @@ def call_sites(text: str, language: str, line: int, name: str, *, suffix: str = 
             if callee is not None and _t(callee) == name:
                 args = n.child_by_field_name("arguments")
                 pos, kws, splat = 0, [], False
-                for a in (args.named_children if args is not None else []):
+                if args is not None and args.type == "generator_expression":
+                    pos = 1                        # f(x for x in y): one argument
+                elif args is not None and args.type not in ("argument_list", "arguments"):
+                    splat = True                   # a tagged template, …: not judged
+                for a in (args.named_children if args is not None and
+                          args.type in ("argument_list", "arguments") else []):
                     if a.type == "keyword_argument":
                         kws.append(_t(a.child_by_field_name("name")))
                     elif a.type in ("list_splat", "dictionary_splat", "spread_element"):
                         splat = True
                     elif a.type not in _COMMENT_TYPES:
                         pos += 1
-                through = receiver is not None and receiver.type == "identifier" and \
-                    class_name is not None and _t(receiver) == class_name
+                # Cls.m(obj, …) through any class (the owner, a subclass, an alias):
+                # self is passed by hand, so the count is off by one
+                through = receiver is not None and receiver.type == "identifier" and (
+                    (class_name is not None and _t(receiver) == class_name)
+                    or _t(receiver)[:1].isupper())
                 out.append(Site(line=line, positional=pos, keywords=kws, splat=splat,
                                 through_class=through))
         stack.extend(n.children)
     return out
 
 
-def breaks(d: Delta, new: Iface | None, site: Site, *, is_method: bool) -> list[str]:
-    """Why *site* breaks under *d* — only for what the change removed or required."""
+def breaks(d: Delta, new: Iface | None, site: Site, *, is_method: bool,
+           language: str = "python") -> list[str]:
+    """Why *site* breaks under *d* — only for what the change removed or required. In
+    JavaScript a missing or extra argument never fails, so only a removal counts."""
     if d.removed:
         return ["calls it, and this change removes it"]
-    if new is None or new.params is None or site.splat:
+    if new is None or new.params is None or site.splat or language == "javascript":
         return []
     if is_method and site.through_class and not new.static:
         return []                                  # Cls.m(obj, …): self passed by hand

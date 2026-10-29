@@ -488,26 +488,36 @@ def request_rebuild(project: str, ref) -> bool:
     repeated reads start one child, not one each. It starts a child, it never parses.
     True when a rebuild is on its way (started now or recently); False when no child
     could be started."""
+    import fcntl
+    import os
     import time
     if not ref.repo:
         return False
     marker = Path(str(ref.db_path) + ".rebuild-requested")
     try:
-        if time.time() - marker.stat().st_mtime < REBUILD_REQUEST_EVERY_S:
-            return True
-    except OSError:
-        pass
-    try:
-        spawn_build(project, repo=ref.repo, full=True, only_if_stale=True)
-    except OSError as exc:
-        logger.warning("code intel: could not start a rebuild of %s: %s", ref.repo, exc)
-        return False
-    try:
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.touch()
+        fd = os.open(str(marker) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     except OSError:
-        pass
-    return True
+        return False                       # no marker can be kept: never an unlimited spawn
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)     # check, claim and spawn as one step
+        try:
+            if time.time() - marker.stat().st_mtime < REBUILD_REQUEST_EVERY_S:
+                return True
+        except OSError:
+            pass
+        try:
+            marker.touch()                 # claimed before the child starts
+        except OSError:
+            return False
+        try:
+            spawn_build(project, repo=ref.repo, full=True, only_if_stale=True)
+        except OSError as exc:
+            logger.warning("code intel: could not start a rebuild of %s: %s", ref.repo, exc)
+            return False
+        return True
+    finally:
+        os.close(fd)
 
 
 def prepare_graph(project: str, repo_root: str | Path) -> str:

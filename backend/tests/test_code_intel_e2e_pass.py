@@ -355,7 +355,11 @@ def hive(tmp_path, monkeypatch):
     clone = ws / "Hive" / "repos" / "github.com" / "acme" / "app"
     clone.mkdir(parents=True)
     _git(clone, "init", "-q")
+    (clone / "a.py").write_text("X = 1\n")
+    _git(clone, "add", "-A")
+    _git(clone, "commit", "-qm", "base")
     _git(clone, "remote", "add", "origin", "https://token@github.com/acme/app.git")
+    _git(clone, "update-ref", "refs/remotes/origin/main", "HEAD")     # what a clone has
     monkeypatch.setenv("SWARMAI_MODE", "hive")
     monkeypatch.setattr("config.get_swarmws", lambda: ws)
     monkeypatch.setattr("jobs.paths.PROJECTS_DIR", ws / "Projects")
@@ -488,3 +492,164 @@ def test_a_survey_diff_runs_no_configured_diff_program(tmp_path):
     out = git(repo, "diff")
     assert out is not None and "-one" in out and "+two" in out     # a real patch
     assert not marker.exists()
+
+
+def test_a_bare_init_a_subdirectory_or_an_inner_link_is_not_a_task_clone(hive, tmp_path):
+    from core.code_intel.local_roots import hive_task_clones
+    proj, clone = hive
+    _git(clone, "update-ref", "-d", "refs/remotes/origin/main")
+    assert hive_task_clones(proj) == []                     # never fetched: not a clone
+    _git(clone, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert hive_task_clones(proj) == [("app", clone.resolve())]
+    # the binding's path is a link to another clone inside Hive/repos
+    other = clone.parent / "other"
+    clone.rename(other)
+    clone.symlink_to(other)
+    assert hive_task_clones(proj) == []
+    clone.unlink()
+    # the binding's path is a plain directory inside some other work tree
+    outer = clone.parent
+    _git(outer, "init", "-q")
+    clone.mkdir()
+    assert hive_task_clones(proj) == []
+
+
+def test_concurrent_readers_start_one_rebuild(tmp_path, monkeypatch):
+    import threading
+    import core.code_intel.build as build
+    from core.code_intel import CodeIntelDb
+    import pathlib
+    import time
+    started = []
+    monkeypatch.setattr(build, "spawn_build", lambda *a, **k: started.append(1))
+    real_stat = pathlib.Path.stat
+
+    def slow_stat(self, *a, **k):                 # widen the check-then-claim window
+        if self.name.endswith(".rebuild-requested"):
+            time.sleep(0.05)
+        return real_stat(self, *a, **k)
+    monkeypatch.setattr(pathlib.Path, "stat", slow_stat)
+    ref = CodeIntelDb(db_path=tmp_path / "g.db", repo="app", repo_root=tmp_path)
+    threads = [threading.Thread(target=build.request_rebuild, args=("P", ref)) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert started == [1]
+
+
+def test_survey_show_and_log_run_no_textconv(tmp_path):
+    from core.brain_bootstrap.repo_read import git
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    marker = tmp_path / "ran"
+    tool = tmp_path / "conv.sh"
+    tool.write_text(f"#!/bin/sh\ntouch {marker}\ncat \"$1\"\n")
+    tool.chmod(0o755)
+    (repo / ".gitattributes").write_text("*.txt diff=ev\n")
+    _git(repo, "config", "diff.ev.textconv", str(tool))
+    (repo / "a.txt").write_text("one\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "1")
+    (repo / "a.txt").write_text("two\n")
+    _git(repo, "commit", "-qam", "2")
+    assert "+two" in (git(repo, "log", "-p", "-1") or "")
+    assert "+two" in (git(repo, "show", "HEAD") or "")
+    assert not marker.exists()
+
+
+def test_the_report_reads_a_file_that_is_not_utf8(project):
+    from core.code_intel.changed import report
+    (project / "latin.py").write_bytes(b"# -*- coding: latin-1 -*-\nNAME = '\xe9'\n\n\ndef f():\n    return 1\n")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-qm", "latin")
+    (project / "latin.py").write_bytes(b"# -*- coding: latin-1 -*-\nNAME = '\xe9'\n\n\ndef f(x):\n    return x\n")
+    report(project, refresh=False)                          # must not raise
+
+
+# ── correctness review: no false "will break", no false EXTERNAL ──────────────
+
+def _sites_why(old, new, caller, line, name, key, cls=None, lang="python"):
+    o, n = interfaces(old, lang), interfaces(new, lang)
+    return [w for s in call_sites(caller, lang, line, name, class_name=cls)
+            for w in breaks(delta(o.get(key), n.get(key)), n.get(key), s,
+                            is_method=bool(cls), language=lang)]
+
+
+def test_argument_shapes_and_languages_that_are_not_judged():
+    old, new = "def f(a, b=1):\n    return a\n", "def f(a):\n    return a\n"
+    assert _sites_why(old, new, "f(x for x in y)\n", 1, "f", "f") == []        # one argument
+    assert _sites_why(old, new, "f(1, 2)\n", 1, "f", "f") != []
+    js_old, js_new = "function f(a) { return a }\n", "function f(a, b) { return a }\n"
+    assert _sites_why(js_old, js_new, "f(1)\n", 1, "f", "f", lang="javascript") == []
+    m_old = "class B:\n    def m(self, a, b=0):\n        return a\n"
+    m_new = "class B:\n    def m(self, a):\n        return a\n"
+    assert _sites_why(m_old, m_new, "Sub.m(obj, 1)\n", 1, "m", "B.m", "B") == []  # unbound
+
+
+def test_an_overload_stub_and_an_inherited_dataclass_are_not_the_signature():
+    impl = "from typing import overload\n\n\ndef g(x, y=None, z=0):\n    return x\n"
+    stub = ("from typing import overload\n\n\n@overload\ndef g(x: bytes, *, z: int): ...\n\n\n"
+            "def g(x, y=None, z=0):\n    return x\n")
+    assert _sites_why(impl, stub, "g(1)\n", 1, "g", "g") == []
+    dc_old = ("from dataclasses import dataclass\n@dataclass\nclass P:\n    a: int\n    b: int\n"
+              "@dataclass\nclass C(P):\n    c: int\n    d: int = 0\n")
+    dc_new = dc_old.replace("    d: int = 0\n", "")
+    assert interfaces(dc_new, "python")["C"].params is None                  # bases: not judged
+    assert _sites_why(dc_old, dc_new, "C(1, 2, 3)\n", 1, "C", "C") == []
+
+
+def test_a_moved_symbol_is_not_removed(project):
+    from core.code_intel.changed import report
+    (project / "moved.py").write_text("def helper2(x):\n    return x\n")
+    (project / "lib.py").write_text(_LIB.replace(
+        "def helper(x):\n    \"\"\"Old words.\"\"\"\n    return x\n",
+        "from moved import helper2 as helper  # moved, re-exported\n"))
+    rep = report(project, refresh=False)
+    c = {c.id: c for c in rep.symbols + []}.get("lib.py::helper")
+    assert rep.breaks == 0, [(x.id, x.delta) for x in rep.symbols]
+    assert c is None or not c.removed
+
+
+def test_two_calls_of_the_name_on_the_line_are_not_judged(project):
+    from core.code_intel.changed import report
+    # two calls named reclaim, both passing dry_run=: which one the edge stands for is
+    # not known, so neither is judged
+    (project / "use.py").write_text(_USE.replace("return reclaim(c, dry_run=False)",
+                                                 "return reclaim(c, dry_run=False) or c.reclaim(dry_run=True)"))
+    _git(project, "commit", "-qam", "two calls")
+    from core.code_intel import load_project_graphs
+    from core.code_intel.build import ensure_fresh
+    (ref, g), = load_project_graphs("Demo")
+    ensure_fresh(project.parent / "ws" / "Projects" / "Demo", ref, g)
+    (project / "lib.py").write_text(_LIB.replace(", *, dry_run=True", ""))
+    rep = report(project, refresh=False)
+    c = {c.id: c for c in rep.symbols}["lib.py::reclaim"]
+    assert not any(x["breaks"] for x in c.outside if x["file"] == "use.py")
+
+
+def test_cast_a_repo_generic_and_an_imported_global_name_keep_their_edges(tmp_path):
+    from core.code_intel.parser import TYPED_CALL_CONFIDENCE
+    g = _graph(tmp_path, {
+        "store.py": ("from typing import Generic, TypeVar\nT = TypeVar('T')\n\n\n"
+                     "class Store:\n    def save(self, x):\n        return x\n\n\n"
+                     "class Node(Generic[T]):\n    def walk(self):\n        return 1\n"),
+        "use.py": ("from typing import cast\nfrom store import Store, Node\n\n\n"
+                   "def a(x):\n    s = cast(Store, x)\n    return s.save(1)\n\n\n"
+                   "def b(n: Node[int]):\n    return n.walk()\n"),
+        "crypto.ts": "export function hash(s: string) { return s; }\n",
+        "app.ts": "import * as crypto from './crypto';\nexport function f() { return crypto.hash('x'); }\n",
+    })
+    try:
+        assert _calls(g, "use.py::a").get("store.py::Store.save") == TYPED_CALL_CONFIDENCE
+        assert _calls(g, "use.py::b").get("store.py::Node.walk") == TYPED_CALL_CONFIDENCE
+        assert any(t.startswith("crypto.ts::hash") for t in _calls(g, "app.ts::f")), _calls(g, "app.ts::f")
+    finally:
+        g.close()
+
+
+def test_a_field_set_by_tuple_assignment_is_a_field():
+    old = "class R:\n    def __init__(self):\n        self.a = 1\n        self.b = 2\n"
+    new = "class R:\n    def __init__(self):\n        self.a, self.b = 1, 3\n"
+    assert delta(interfaces(old, "python")["R"], interfaces(new, "python")["R"]).removed_fields == []

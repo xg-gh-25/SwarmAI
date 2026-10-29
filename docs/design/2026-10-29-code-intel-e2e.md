@@ -2,7 +2,7 @@
 title: Code intel r5 — the end-to-end pass
 created: 2026-10-29
 updated: 2026-10-29
-status: built in one pass (A–D); reviews in §5
+status: built (A–D), reviewed (correctness on A+B, security on C+D), fixed in one pass
 follows: 2026-10-29-code-intel-auto.md (r4)
 ---
 
@@ -335,6 +335,67 @@ it is not judged and is listed as a reference.
 `reclaim_noise_entries` fold into "changed only in comments or docstrings". The
 mentions found earlier only in comments are gone.
 
-## 5. Reviews
+## 5. Reviews (one round each, fixed in one pass)
 
-(Filled in after the reviews.)
+**Correctness (A + B): 1 HIGH, 10 MEDIUM, 3 LOW.** Most were confirmed by a
+reproduction. Grouped by cause and fixed:
+
+- **A moved symbol read as removed (HIGH).** A function re-exported from its old
+  module, a method pulled up into a base, or a def moved into an `if` / `try` block
+  was read as removed. Now "removed" is a break only when the name is no longer
+  reachable. `bound_names` covers imports, assignments and definitions inside compound
+  statements. A method counts as removed only if its class has no base, in this file or
+  elsewhere, that could still provide it. Definitions inside `if` / `try` / `with` are
+  read too.
+- **Other false "will break" cases.** A call is judged only when it is the one call of
+  that name the edge can stand for: two calls of the name on the line, or in a
+  rewritten hunk, are not judged. Arguments are counted only from an argument list (a
+  generator argument counts as one). JavaScript reports only removals, because a
+  missing or extra argument never fails at runtime. A method called through any class
+  name (a subclass, an alias) is not judged. A dataclass with bases is not judged, and
+  `kw_only` / `KW_ONLY` fields are keyword-only. The last definition of a name is the
+  one that binds, so `@overload` stubs are replaced by the implementation.
+- **False EXTERNAL that dropped repo edges.**
+  - `cast` / `copy` / `deepcopy` / `replace` return their argument's type.
+  - A repo generic (`Node[int]`, `Response<T>`) is checked before the builtin and
+    global names, each set used only for its own language.
+  - A TS import named like a global (`import * as crypto`) is not a global.
+- **A non-UTF-8 source escaped `report()`.** The report's git reads now decode with
+  `errors="replace"`.
+- **Field reads.** `self.a, self.b = …` sets fields too.
+- **Declined, with the reason in the code.**
+  - Stdlib-first for an absolute Python import: `import types` reads the stdlib, and
+    the repo-names set holds names at any depth.
+  - The per-process repo-names cache: every parse runs in a short-lived process,
+    never in the daemon.
+
+**Security (C + D): 1 MEDIUM, 3 LOW, no HIGH.** The git hardening held against
+every repo-controlled program tried: external diff, textconv, a pager, fsmonitor,
+filters through `include.path`.
+
+- **MEDIUM: Hive ownership trusts state the agent can write.** Now the path may hold
+  no link (one inside `Hive/repos` would give another clone this binding's name). The
+  directory must be the top of its own tree, and must have fetched from its origin
+  (`refs/remotes/origin/*`), so a bare `git init` no longer counts.
+  - **What remains, recorded:** the origin and the refs are still git state the
+    Hive's agent can write. That agent can write the Brain's documents directly too,
+    so ownership adds no reach it lacked.
+  - **Not built:** a daemon-made clone record. The daemon does not clone task repos
+    today (the agent does), so the record would need a new clone step.
+- **LOW: the rebuild marker was check-then-act.** It is now claimed under an `flock`
+  before the child starts. When the marker cannot be written, no child is started.
+- **LOW: the replay tool.** It uses the hardened git, refuses an option-shaped
+  commit and a repo with a filter program, and removes only the two worktrees it made.
+- **LOW: missing tests.** Added tests for a bare init, a link inside `Hive/repos`, a
+  subdirectory of another tree, concurrent readers (one spawn), textconv on `show` /
+  `log -p`, and a latin-1 source.
+
+**Mutation check.** Every fix of the pass and of the review round, 60 mutations in
+all, was caught by its test. Three needed a sharper test first: two calls on a line,
+the marker race, and tuple-assigned fields. One protection is not observable by a
+test: `_git_toplevel`'s hooks/fsmonitor settings, since `rev-parse` runs neither.
+One review-fix guard turned out to be a no-op (the `@overload` skip, made redundant
+by "the last definition binds") and was deleted.
+
+**After the review round, replay `dcd95e518`:** still the same 11 callers will break,
+every one a real break.

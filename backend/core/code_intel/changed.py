@@ -115,8 +115,9 @@ def _git(repo: Path, *args: str) -> str | None:
         from .local_roots import GIT_SAFE
         if args and args[0] == "diff":     # never a configured diff or textconv program
             args = ("diff", "--no-ext-diff", "--no-textconv", *args[1:])
+        # a source file need not be UTF-8 (a latin-1 file with a coding cookie)
         out = subprocess.run(["git", *GIT_SAFE, "-C", str(repo), *args], capture_output=True,
-                             text=True, timeout=30)
+                             text=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None
@@ -362,11 +363,13 @@ class _Texts:
         return hit
 
 
-def _deltas(repo: Path, base: str, tree: str | None, files: list[str]) -> dict[str, tuple[dict, dict]]:
-    """Per changed file of a language ``interface`` reads: (base interfaces, new ones)."""
-    from .interface import LANGS, interfaces
+def _deltas(repo: Path, base: str, tree: str | None,
+            files: list[str]) -> dict[str, tuple[dict, dict, set]]:
+    """Per changed file of a language ``interface`` reads: (base interfaces, new ones,
+    the names the new version still binds at module level)."""
+    from .interface import LANGS, bound_names, interfaces
     from .parser import LANGUAGE_MAP
-    out: dict[str, tuple[dict, dict]] = {}
+    out: dict[str, tuple[dict, dict, set]] = {}
     for f in files[:MAX_DELTA_FILES]:
         lang = LANGUAGE_MAP.get(Path(f).suffix)
         if lang not in LANGS:
@@ -380,8 +383,33 @@ def _deltas(repo: Path, base: str, tree: str | None, files: list[str]) -> dict[s
             except OSError:
                 new = None
         out[f] = (interfaces(old, lang, Path(f).suffix) if old is not None else {},
-                  interfaces(new, lang, Path(f).suffix) if new is not None else {})
+                  interfaces(new, lang, Path(f).suffix) if new is not None else {},
+                  bound_names(new, lang, Path(f).suffix) if new is not None else set())
     return out
+
+
+def _still_reachable(key: str, new_ifs: dict, new_names: set) -> bool:
+    """Whether a symbol gone from its definitions can still be reached as before: a
+    function still bound at module level (re-exported, ``from b import f``, assigned),
+    a method its class may still inherit (a base defines it, or a base this file does
+    not define). Then it was moved, not removed: no caller is judged."""
+    if "." not in key:
+        return key in new_names
+    cls, member = key.split(".", 1)
+    seen: set[str] = set()
+    todo = [cls]
+    while todo:
+        c = todo.pop()
+        if c in seen:
+            continue
+        seen.add(c)
+        iface = new_ifs.get(c)
+        if iface is None:
+            return c != cls or cls in new_names     # a base from elsewhere may define it
+        if c != cls and (member in iface.methods or f"{c}.{member}" in new_ifs):
+            return True
+        todo.extend(b for b in iface.bases if b not in ("object", "Generic", "Protocol"))
+    return False
 
 
 def _edge_rows(graph, target: str) -> list[tuple[str, int | None, str, float]]:
@@ -461,15 +489,20 @@ class _Breaks:
             if text is None:
                 continue
             lines = self._lines_now(file, line) if inside else [line]
-            for n in lines:
-                sites = call_sites(text, lang or "", n, c.name, suffix=Path(file).suffix,
-                                   class_name=owner, tree=tree)
-                if d.removed and edge_type == "calls" and sites:
-                    add(src, f"L{n}: still calls it, and this change removes it")
-                    continue
-                for site in sites:
-                    for why in breaks(d, new_iface, site, is_method=is_method):
-                        add(src, f"L{n}: {why}")
+            found = [(n, site) for n in lines
+                     for site in call_sites(text, lang or "", n, c.name,
+                                            suffix=Path(file).suffix, class_name=owner, tree=tree)]
+            if len(found) != 1:
+                # none, or more than one call of that name where the graph saw one
+                # (`d.get(k) or get(k)`, a rewritten hunk): which is this edge's is not
+                # known, so none is judged
+                continue
+            n, site = found[0]
+            if d.removed and edge_type == "calls":
+                add(src, f"L{n}: still calls it, and this change removes it")
+                continue
+            for why in breaks(d, new_iface, site, is_method=is_method, language=lang or ""):
+                add(src, f"L{n}: {why}")
         return out
 
 
@@ -586,7 +619,7 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
     # ``__init__``) is not touched in its own first lines: add it, so its readers are
     # looked up (a removed field is an interface change of the class).
     have = {c.id for c in changed}
-    for f, (old_ifs, new_ifs) in deltas.items():
+    for f, (old_ifs, new_ifs, _names) in deltas.items():
         for key, oi in old_ifs.items():
             cid = f"{f}::{key}"
             if oi.kind != "class" or cid in have:
@@ -604,15 +637,19 @@ def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
             continue
         d = new_iface = None
         if c.file in deltas:
-            old_ifs, new_ifs = deltas[c.file]
+            old_ifs, new_ifs, new_names = deltas[c.file]
             key = c.id.split("::", 1)[-1]
             if key in old_ifs or key in new_ifs:
                 d, new_iface = _delta(old_ifs.get(key), new_ifs.get(key)), new_ifs.get(key)
+                if d.removed and _still_reachable(key, new_ifs, new_names):
+                    d.removed = False                 # moved: callers are not judged
+                    c.delta = "moved: still reachable from here (re-exported or inherited)"
         if d is not None and d.comments_only:
             rep.comments_only.append(c.id)
             continue
         if d is not None:
-            c.signature, c.delta, c.removed = d.interface or d.signature, d.describe(), d.removed
+            c.signature, c.removed = d.interface or d.signature, d.removed
+            c.delta = c.delta or d.describe()
         rank = (0 if d is not None and d.removed else 1 if d is not None and d.interface
                 else 2 if c.signature else 3)
         plans.append((rank, c, d, new_iface))

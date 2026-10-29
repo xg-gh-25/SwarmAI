@@ -127,6 +127,8 @@ _LITERALS = frozenset({
     "template_string", "number", "array", "object", "regex", "arrow_function",
 })
 _NULLS = frozenset({"none", "null", "undefined"})
+# Outside functions whose result has their argument's type (not EXTERNAL).
+_PASSTHROUGH = frozenset({"cast", "copy", "deepcopy", "replace"})
 
 _repo_names_cache: dict[str, frozenset[str]] = {}
 
@@ -177,7 +179,9 @@ _PY_BUILTIN_METHODS: frozenset[str] | None = None
 
 def repo_module_names(repo_root) -> frozenset[str]:
     """Every directory name and source-file stem in the repo: a module whose top-level
-    name is none of these is outside the repo. Read once per process and root."""
+    name is none of these is outside the repo. Read once per process and root: every
+    parse runs in a short-lived process (a build child, a CLI's inline update), never in
+    the daemon, so a module added later is seen by the next one."""
     import os
     from pathlib import Path
     if repo_root is None:
@@ -217,6 +221,9 @@ def is_external_module(module: str, language: str, repo_names: frozenset[str]) -
         if module.startswith((".", "/")):
             return False
         top = module.replace("/", ".").split(".")[0]
+        # an absolute import of a stdlib name is the stdlib (the repo's own module of
+        # that name would have to sit on sys.path's root, and repo_names holds names at
+        # any depth: a `types.py` deep in the tree is not what `import types` reads)
         if top in getattr(sys, "stdlib_module_names", ()):
             return True
         return top not in repo_names
@@ -286,9 +293,12 @@ class FileTypes:
                 return types.pop() if len(types) == 1 else None
             if head in ("Any", "TypeVar", "Annotated", "ClassVar", "Final"):
                 return self.ann_type(args[0]) if head in ("ClassVar", "Final") and args else None
-            if head in _PY_BUILTIN_TYPES or head in _TS_GLOBALS or head in self.ext_names:
+            if head in self.classes or (head in self.import_map and head not in self.ext_names):
+                return head                        # a repo generic: Node[int], Response<T>
+            builtin = _PY_BUILTIN_TYPES if self.language == "python" else _TS_GLOBALS
+            if head in builtin or head in self.ext_names:
                 return EXTERNAL
-            return head if head in self.known else None
+            return None
         if t in ("string", "string_fragment", "string_content"):
             inner = [c for c in n.children if c.type in ("string_content", "string_fragment")]
             return self._named(_text(inner[0] if inner else n).split(".")[-1])
@@ -364,6 +374,8 @@ class FileTypes:
                 if name in self.classes or (name in self.known and name not in self.ext_names):
                     return name                              # Store(...)
                 if name in self.ext_names:
+                    if name in _PASSTHROUGH:
+                        return self._passthrough(name, node, scope, enclosing_class, _depth)
                     return EXTERNAL                          # Path(...), defaultdict()
                 if self.language == "python" and name in _PY_BUILTIN_CALLS and \
                         name not in self.top_names and name not in self.import_map:
@@ -379,6 +391,8 @@ class FileTypes:
                     return None
                 if obj.type == "identifier" and _text(obj) in self.ext_modules and \
                         not (scope is not None and _text(obj) in scope.bound):
+                    if _text(attr) in _PASSTHROUGH:          # typing.cast, copy.copy
+                        return self._passthrough(_text(attr), node, scope, enclosing_class, _depth)
                     return EXTERNAL                          # sqlite3.connect()
                 owner = self.value_type(obj, scope, enclosing_class, _depth + 1)
                 if owner == EXTERNAL:
@@ -399,6 +413,18 @@ class FileTypes:
             return None
         return None
 
+    def _passthrough(self, name: str, call, scope, enclosing_class, depth) -> str | None:
+        """An outside function that returns a value of its argument's type: ``cast(T,
+        x)`` is a T, ``copy(x)`` / ``deepcopy(x)`` / ``replace(x, …)`` are x's type."""
+        args = call.child_by_field_name("arguments")
+        first = args.named_children[0] if args is not None and args.named_children else None
+        if first is None:
+            return None
+        if name == "cast":
+            return self.ann_type(first) or (self._named(_text(first).split(".")[-1])
+                                            if first.type in ("identifier", "attribute") else None)
+        return self.value_type(first, scope, enclosing_class, depth + 1)
+
     def _name_type(self, name: str, scope: "Scope | None", enclosing_class: str | None):
         if name in _SELF:
             if name == "this" and scope is not None and not scope.this_ok:
@@ -414,7 +440,8 @@ class FileTypes:
             return name
         if name in self.import_map and name[:1].isupper():
             return name
-        if self.language != "python" and name in _TS_GLOBALS and name not in self.top_names:
+        if self.language != "python" and name in _TS_GLOBALS and name not in self.top_names \
+                and name not in self.import_map:
             return EXTERNAL                                  # JSON.parse, console.log
         return None
 

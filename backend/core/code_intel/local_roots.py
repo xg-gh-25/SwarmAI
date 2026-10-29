@@ -434,7 +434,10 @@ def migrate_once(projects_dir: str | Path) -> dict:
 # at the path a Brain's binding names, whose ``origin`` is that binding's ``clone`` URL,
 # is that Brain's: the Brain's own delivery contract declares the repo, as a bind-managed
 # clone's does on the desktop. Nothing else under ``Hive/repos`` counts, and a desktop
-# never reads this.
+# never reads this. What it does not prove: that the content came from that remote —
+# ``origin`` and the remote refs are git config and refs the Hive's agent can write.
+# That agent can write the Brain's documents directly too, so this adds no reach it
+# lacked (design 2026-10-29-code-intel-e2e §5).
 
 
 def hive_mode() -> bool:
@@ -470,8 +473,12 @@ def hive_task_clones(project_dir: str | Path) -> list[tuple[str, Path]]:
                 rel = task_repos.repo_dir(url)
             except task_repos.TaskRepoError:
                 continue
-            clone = (Path(get_swarmws()) / rel).resolve()
-            if not clone.is_dir() or not task_repos._inside(repos_root, clone) or clone == repos_root:
+            written = Path(get_swarmws()).resolve() / rel
+            clone = written.resolve()
+            # no link anywhere on the path (one inside Hive/repos would hand another
+            # clone this binding's name), inside Hive/repos, the top of its own tree
+            if clone != written or not clone.is_dir() or \
+                    not task_repos._inside(repos_root, clone) or clone == repos_root:
                 continue
             if _work_tree_top(clone) != clone:
                 continue
@@ -481,7 +488,15 @@ def hive_task_clones(project_dir: str | Path) -> list[tuple[str, Path]]:
                                         timeout=10).stdout.strip()
             except (OSError, subprocess.SubprocessError):
                 continue
-            if origin and task_repos._same_repo(task_repos._origin_key(origin), url):
+            if not origin or not task_repos._same_repo(task_repos._origin_key(origin), url):
+                continue
+            try:                                  # fetched from it: a clone, not a bare init
+                fetched = subprocess.run(["git", *GIT_SAFE, "-C", str(clone), "for-each-ref",
+                                          "--count=1", "refs/remotes/origin"],
+                                         capture_output=True, text=True, timeout=10).stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if fetched:
                 out.append((b.repo, clone))
     except Exception as exc:  # noqa: BLE001 — ownership must never raise into a reader
         logger.warning("code intel: Hive task clones of %s unreadable: %s", project_dir, exc)
