@@ -70,7 +70,7 @@ Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compo
 
 2. **Self-correction as architecture** — `evolution_optimizer.py` implements a full MINE→ASSESS→ACT→AUDIT loop, run weekly by a scheduled job. Corrections are confidence-gated (HIGH → change proposal for approval, MED recommends, LOW logs), with regression auto-revert. The system structurally prevents bug recurrence, not just patches.
 
-3. **DDD as judgment substrate** — 4 documents per project (PRODUCT/TECH/IMPROVEMENT/PROJECT) give the AI structured judgment about SHOULD/CAN/TRIED/NOW. `backend/core/ddd_cultivation.py` grows them automatically from normal work (event-driven, not batch).
+3. **DDD as judgment substrate** — 4 documents per project (PRODUCT/TECH/IMPROVEMENT/PROJECT) give the AI structured judgment about SHOULD/CAN/TRIED/NOW. CDF (`backend/core/ingestion/`) grows them from normal work: S2 extraction → judge → writer, with per-entry decay in `ddd_entry_lifecycle.py`.
 
 4. **Quality convergence (measurable, git-verifiable)** — P0 bugs per release trends downward as corrections compound. Verifiable via `git log --all --oneline --grep="P0\|hotfix"` — each incident maps to a tagged release and a fix commit.
 

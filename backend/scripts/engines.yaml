@@ -8,7 +8,7 @@
 engines:
   - name: "DDD Cultivation Engine (event-driven v2)"
     path: "backend/core/cultivation_dispatcher.py"
-    description: "Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking"
+    description: "Event-driven DDD maintenance — queued events run the orchestrator channels (staleness, signal bridge, per-entry decay); DDD knowledge itself is written by CDF (core/ingestion/)"
 
   - name: "Autonomous Pipeline (9-stage)"
     path: "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md"

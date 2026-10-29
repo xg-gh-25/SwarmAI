@@ -20,7 +20,7 @@ export type SectionKey =
 export interface BrainHealth {
   /** count of entries with decay_state ∈ {dormant, archived} — live */
   sinking: number;
-  /** count of staged risky proposals awaiting a human decision */
+  /** count of this project's Need-You items (attention_authority), all sources */
   pending: number;
   /** a pipeline run of this project is in progress (its runs, last 30 days) */
   liveRun: boolean;
@@ -60,8 +60,8 @@ export interface DetailHealth {
   /** doc → section → trust-level string, as stored (no rollup). null = no
    *  scheduled score computed yet. */
   trust: Record<string, Record<string, string | null>> | null;
-  /** count of proposals awaiting a human decision (approve/reject via the
-   *  existing cultivation endpoint). Always present. */
+  /** same count as `pending`: this project's Need-You items awaiting a human
+   *  decision. Always present. */
   escalationPending: number;
   /** recall benchmark — SHOWN BUT EXPERIMENTAL (no cheap per-DDD metric yet):
    *  value is null today; typed number|null so a future score fits without a
@@ -93,7 +93,7 @@ export interface BrainSummary {
   /** project-agent.yaml: 'draft' waits for the person to confirm; 'invalid' has
    *  problems; null/absent = no file (or an old daemon). */
   projectAgentStatus?: 'draft' | 'reviewed' | 'invalid' | null;
-  /** health.pending split by source: escalation | paused_run | cultivation | job. */
+  /** health.pending split by source: escalation | paused_run | job | …. */
   pendingBySource?: Record<string, number>;
   health: BrainHealth;
   /** 7-type histogram for the compact card's 3-layer ontology bar. Rides the

@@ -5,7 +5,7 @@ Design: Knowledge/Designs/2026-08-08-unified-need-you-channel-design.md
 
 WHY this is a read-aggregation layer and NOT a new store/table:
     The sources each own their lifecycle correctly (escalation has resolve,
-    proposal has apply/reject, run has resume). A central "attention" table
+    a governance proposal has a decision, a run has resume). A central "attention" table
     would force every source to dual-write → state drift — the exact lesson from
     2026-08-03-unified-review-trigger ("git is already the authority, don't build
     a new table"). So this module OWNS no state: it READS the sources' existing

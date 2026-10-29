@@ -12,7 +12,7 @@
  *
  * Principle 1 (decouple from chat/streaming): there is NO getStreamingState /
  * waiting-tab source. Need You carries only escalation / paused-decision /
- * cultivation / governance / broken-job.
+ * governance / broken-job.
  *
  * Fails soft: a failed refetch keeps the last-good data (react-query keeps `data`
  * on error), and before the first success the queue is empty.

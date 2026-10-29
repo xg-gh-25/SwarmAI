@@ -125,7 +125,6 @@ def _release_marker_authorizes_head(
       LOCALLY and require it == marker.head_sha (CI green on the exact shipped commit).
     - **HEAD-anchored** (legacy, no `tag`): require marker.head_sha == current HEAD.
     """
-    import subprocess
     if not marker.exists():
         return False, "no CI-green marker (run `artifact_cli.py release-gate --poll` until PASS)"
     try:
@@ -190,8 +189,6 @@ def cmd_release_gate(args, reg) -> None:
     so no long-lived process can be foreground-timeout-killed. Bounded git/gh calls
     each carry a timeout.
     """
-    import subprocess
-    from datetime import datetime, timezone
 
     marker = _release_marker_path(args.project)
 
