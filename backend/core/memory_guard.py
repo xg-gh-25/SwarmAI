@@ -68,7 +68,11 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("disregard_instructions", re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+instructions", re.IGNORECASE)),
     ("you_are_now", re.compile(r"you\s+are\s+now\s+", re.IGNORECASE)),
     ("special_tokens", re.compile(r"<\|.*?\|>")),
-    ("system_directive", re.compile(r"\bsystem:\s+", re.IGNORECASE)),
+    # A role directive "system:" opens a line (after optional indentation, a list or
+    # quote marker) — the shape a model reads as a turn. Mid-sentence "the hook
+    # system: …" is prose; matching it refused real lessons.
+    ("system_directive", re.compile(r"(?:^|\n)[ \t]*(?:(?:[-*+>]|\d+[.)])[ \t]+)*\**system\**[ \t]*:\**\s+",
+                                    re.IGNORECASE)),
     # LLM-specific instruction markers
     ("inst_marker", re.compile(r"\[/?INST\]", re.IGNORECASE)),
     ("sys_marker", re.compile(r"<</?SYS>>", re.IGNORECASE)),
