@@ -512,7 +512,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     contentBlocks.push(
       <div key="output" className={hasResult ? 'mt-5' : ZONE_GAP}>
         <OutputCard changes={changes} deliverables={deliverables} summary={summary}
-          remote={remote} omitted={view.deliverablesOmitted} />
+          remote={remote} omitted={view.deliverablesOmitted} sessionId={sessionId} />
       </div>,
     );
   }

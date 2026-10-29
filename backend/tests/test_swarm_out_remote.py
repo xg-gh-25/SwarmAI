@@ -340,3 +340,10 @@ def test_clean_event_keeps_whitelisted_types(etype):
 @pytest.mark.parametrize("etype", DROPPED)
 def test_clean_event_drops_the_rest(etype):
     assert swarm_out_remote.clean_event({"type": etype, "sessionId": SID}, SID, post_stream=False) is None
+
+
+def test_a_tree_diff_is_forwarded_with_its_query_keys_only(hive, api):
+    hive.routes["/api/canvas/changes/tree-diff"] = lambda r: httpx.Response(200, json={"diff": "@@"})
+    r = api.get(f"{BASE}/canvas/changes/tree-diff?root=/hive/repo&start=a&end=b&path=x.py&evil=1")
+    assert r.status_code == 200 and r.json() == {"diff": "@@"}
+    assert dict(hive.seen[-1].url.params) == {"root": "/hive/repo", "start": "a", "end": "b", "path": "x.py"}

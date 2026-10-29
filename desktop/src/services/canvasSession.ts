@@ -27,6 +27,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import api from './api';
+import { isRemote, remotePath } from './remoteSession';
 import { subscribeFileChanged } from '../hooks/fileChangedBroker';
 
 export interface SessionArtifact {
@@ -129,19 +130,22 @@ const NO_CHANGES: SessionChanges = {
 export const canvasSessionService = {
   async artifacts(sessionId: string): Promise<SessionArtifact[]> {
     const r = await api.get<{ artifacts: SessionArtifact[] | null }>(
-      `/canvas/session/${encodeURIComponent(sessionId)}`, { params: { parts: 'artifacts' } });
+      remotePath(sessionId, `/canvas/session/${encodeURIComponent(sessionId)}`), { params: { parts: 'artifacts' } });
     return r.data?.artifacts ?? [];
   },
   async changes(sessionId: string): Promise<SessionChanges> {
     const r = await api.get<{ changes: Partial<SessionChanges> | null }>(
-      `/canvas/session/${encodeURIComponent(sessionId)}`, { params: { parts: 'changes' } });
+      remotePath(sessionId, `/canvas/session/${encodeURIComponent(sessionId)}`), { params: { parts: 'changes' } });
     const c = r.data?.changes;
     return c ? { ...NO_CHANGES, ...c } : NO_CHANGES;
   },
-  /** One file of a turn card or a landing; null when the diff is not available (404). */
-  async treeDiff(root: string, start: string, end: string, path: string): Promise<string | null> {
+  /** One file of a turn card or a landing; null when the diff is not available (404).
+   *  `sessionId`: the session the card belongs to; a Hive session's roots are paths on
+   *  the Hive, so its diff is read there (services/remoteSession). */
+  async treeDiff(root: string, start: string, end: string, path: string, sessionId?: string): Promise<string | null> {
     try {
-      const r = await api.get<{ diff: string }>('/canvas/changes/tree-diff', { params: { root, start, end, path } });
+      const r = await api.get<{ diff: string }>(remotePath(sessionId, '/canvas/changes/tree-diff'),
+        { params: { root, start, end, path } });
       return r.data?.diff ?? null;
     } catch (e) {
       if ((e as { response?: { status?: number } })?.response?.status === 404) return null;
@@ -149,8 +153,10 @@ export const canvasSessionService = {
     }
   },
   /** The bound repo the session's newest "files changed" card names (the terminal's default
-   *  location, docs/design/terminal-locations.md); null when it has none. */
+   *  location, docs/design/terminal-locations.md); null when it has none, and for a Hive
+   *  session (its repos are on the Hive: the local terminal must not be sent there). */
   async workingRepo(sessionId: string): Promise<{ path: string; name: string } | null> {
+    if (isRemote(sessionId)) return null;
     const r = await api.get<{ workingRepo: { path: string; name: string } | null }>(
       `/canvas/session/${encodeURIComponent(sessionId)}/working-repo`);
     return r.data?.workingRepo ?? null;

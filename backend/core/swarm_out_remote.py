@@ -99,6 +99,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "chat/{sid}/recall"),
     Route("GET", "chat/{sid}/security-scan"),
     Route("GET", "canvas/session/{sid}", query=("parts",)),
+    Route("GET", "canvas/changes/tree-diff", query=("root", "start", "end", "path")),
 )
 
 

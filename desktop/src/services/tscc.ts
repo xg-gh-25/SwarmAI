@@ -20,6 +20,7 @@ import type {
   SecurityScanResult,
 } from '../types';
 import api from './api';
+import { remotePath } from './remoteSession';
 
 // ---------------------------------------------------------------------------
 // snake_case → camelCase converters
@@ -89,7 +90,7 @@ export function toCamelCase(data: Record<string, unknown>): TSCCState {
 
 /** Fetch the current TSCC state for a thread. */
 export async function getTSCCState(threadId: string): Promise<TSCCState> {
-  const response = await api.get(`/chat_threads/${threadId}/tscc`);
+  const response = await api.get(remotePath(threadId, `/chat_threads/${threadId}/tscc`));
   return toCamelCase(response.data as Record<string, unknown>);
 }
 
@@ -124,7 +125,7 @@ export async function getSystemPromptMetadata(
   sessionId: string,
 ): Promise<SystemPromptMetadata | null> {
   try {
-    const response = await api.get(`/chat/${sessionId}/system-prompt`);
+    const response = await api.get(remotePath(sessionId, `/chat/${sessionId}/system-prompt`));
     return promptMetadataToCamelCase(
       response.data as Record<string, unknown>,
     );
@@ -147,7 +148,7 @@ export async function getRecallSnapshot(
   sessionId: string,
 ): Promise<RecallSnapshot | null> {
   try {
-    const response = await api.get(`/chat/${sessionId}/recall`);
+    const response = await api.get(remotePath(sessionId, `/chat/${sessionId}/recall`));
     const data = response.data as Record<string, unknown>;
     const hits = (data.hits as Record<string, unknown>[]) ?? [];
     return {
@@ -183,7 +184,7 @@ export async function getSecurityScan(
   sessionId: string,
 ): Promise<SecurityScanResult | null> {
   try {
-    const response = await api.get(`/chat/${sessionId}/security-scan`);
+    const response = await api.get(remotePath(sessionId, `/chat/${sessionId}/security-scan`));
     const data = response.data as Record<string, unknown>;
     const findings = (data.findings as Record<string, unknown>[]) ?? [];
     return {

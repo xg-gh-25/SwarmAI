@@ -57,9 +57,9 @@ const CHANGES = {
 const DELIV = { type: 'turn_deliverables', files: [{ path: 'notes.md', absolutePath: '/ws/notes.md', kind: 'content', operation: 'written' }] } as ContentBlock;
 const WORK: ContentBlock[] = [tx('I will fix it.'), edit('e1', '/r/src/a.ts'), tr('e1'), tu('b', 'Bash'), tr('b')];
 
-function renderView(content: ContentBlock[], isStreaming = false) {
+function renderView(content: ContentBlock[], isStreaming = false, sessionId?: string) {
   const message: Message = { id: 'm1', role: 'assistant', content, timestamp: new Date().toISOString(), isError: false };
-  return render(<ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} /></ToastProvider>);
+  return render(<ToastProvider><AssistantMessageView message={message} isStreaming={isStreaming} sessionId={sessionId} /></ToastProvider>);
 }
 const row = (path: string) => screen.getAllByTestId('change-row').find((r) => r.getAttribute('data-path') === path)!;
 
@@ -84,6 +84,15 @@ describe('ChangesCard', () => {
     expect(within(row('src/big.ts')).getByText('new')).toBeTruthy();
     expect(within(row('old.py')).getByText('deleted')).toBeTruthy();
     expect(within(row('logo.png')).getByText('binary')).toBeTruthy();
+  });
+
+  it("a row's diff is read for the message's session (a Hive session's repos are on the Hive)", async () => {
+    getTurnDiff.mockResolvedValueOnce(DIFF);
+    renderView([...WORK, CHANGES, tx('Done.')], false, 'hive-sess-1');
+    fireEvent.click(within(row('src/a.ts')).getByRole('button', { name: 'Show diff' }));
+    expect(getTurnDiff).toHaveBeenLastCalledWith(
+      { gitRoot: '/r', start: at.start, end: at.end, path: 'src/a.ts', sessionId: 'hive-sess-1' });
+    await within(row('src/a.ts')).findByTestId('change-diff');
   });
 
   it('opening a row fetches its diff; an oversized one says File only', async () => {

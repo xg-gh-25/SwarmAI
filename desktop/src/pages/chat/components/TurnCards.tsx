@@ -260,12 +260,14 @@ export function RunLine({ summary }: { summary: PipelineSummaryContent }) {
  * neither → no card. A file is in one section only (the caller drops deliverables
  * from the changes rows).
  */
-export function OutputCard({ changes, deliverables, summary, remote = [], omitted = 0 }: {
+export function OutputCard({ changes, deliverables, summary, remote = [], omitted = 0, sessionId }: {
   changes?: TurnChangesContent; deliverables: TurnDeliverable[]; summary?: PipelineSummaryContent;
   /** The turn's remote products (turn_product blocks), in order. */
   remote?: RemoteProduct[];
   /** Deliverable files the backend did not list (it keeps the first 12). */
   omitted?: number;
+  /** The message's session: the changes card reads its diffs there. */
+  sessionId?: string;
 }) {
   const { t } = useTranslation();
   // the run's documents it wrote; one it did not write is not a deliverable (the run
@@ -276,7 +278,7 @@ export function OutputCard({ changes, deliverables, summary, remote = [], omitte
   const title = nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv });
   return (
     <section data-testid="output-card" className="space-y-3">
-      {changes && <ChangesCard block={changes} />}
+      {changes && <ChangesCard block={changes} sessionId={sessionId} />}
       {nDeliv > 0 && (
         <div data-testid="output-deliverables">
           <ItemBox testId="product-box" title={title}>

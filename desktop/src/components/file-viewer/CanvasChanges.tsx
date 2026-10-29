@@ -261,12 +261,13 @@ function usePatch(load: () => Promise<{ diff: string; truncated: boolean } | nul
 /** A turn file's diff: its card row's two trees, read in the row's repo. A binary or
  *  "file only" row (the card's own `binary` / `diffable`) is not requested. */
 function FileDiff({ f }: { f: ChangedFile }) {
+  const { sessionId } = useCanvasSession();
   const noDiff = f.binary === true || f.diffable === false;
   const state = usePatch(async () => {
     if (noDiff) return null;
-    const diff = await canvasSessionService.treeDiff(f.gitRoot, f.start, f.end, f.path);
+    const diff = await canvasSessionService.treeDiff(f.gitRoot, f.start, f.end, f.path, sessionId ?? undefined);
     return diff === null ? null : { diff, truncated: false };
-  }, [f.gitRoot, f.start, f.end, f.path, noDiff]);
+  }, [f.gitRoot, f.start, f.end, f.path, noDiff, sessionId]);
   if (noDiff) {
     return (
       <div data-testid="changes-no-diff" className="py-2 text-[12px] text-[var(--color-text-muted)]">

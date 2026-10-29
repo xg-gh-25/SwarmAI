@@ -25,7 +25,7 @@
  *
  * @exports ChangesCard, diffBar, totals
  */
-import { useContext, useRef, useState } from 'react';
+import { createContext, useContext, useRef, useState } from 'react';
 import { chatService } from '../../../services/chat';
 import { useTranslation } from 'react-i18next';
 import type { TurnChangeFile, TurnChangesContent, TurnLanding } from '../../../types';
@@ -77,9 +77,14 @@ function DiffLines({ diff }: { diff: string }) {
   );
 }
 
+/** The session the card's turn belongs to: its diffs are read where its repos are
+ *  (a Hive session's on the Hive, services/remoteSession). */
+const CardSessionContext = createContext<string | undefined>(undefined);
+
 function ChangeRow({ file }: { file: TurnChangeFile }) {
   const { t } = useTranslation();
   const readOnly = useContext(ReadOnlyContext);
+  const sessionId = useContext(CardSessionContext);
   const [open, setOpen] = useState(false);
   // undefined: not fetched yet; null: gone for good; 'error': failed, retry on reopen.
   const [diff, setDiff] = useState<string | null | undefined | { error: true }>(undefined);
@@ -95,7 +100,7 @@ function ChangeRow({ file }: { file: TurnChangeFile }) {
     const id = ++req.current;
     loading.current = true;
     setDiff(undefined);
-    chatService.getTurnDiff({ gitRoot: file.gitRoot, start: file.start, end: file.end, path: file.path })
+    chatService.getTurnDiff({ gitRoot: file.gitRoot, start: file.start, end: file.end, path: file.path, sessionId })
       .then((d) => { if (id === req.current) setDiff(d); })
       .catch(() => { if (id === req.current) setDiff({ error: true }); })
       .finally(() => { if (id === req.current) loading.current = false; });
@@ -224,8 +229,9 @@ function title(t: Parameters<typeof tf>[0], files: number, commits: number): str
   return tf(t, 'chat.turn.changes.titleNone', 'Changes');
 }
 
-/** `bare`: a section of the turn's output card (TurnCards OutputCard), no frame of its own. */
-export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?: boolean }) {
+/** `bare`: a section of the turn's output card (TurnCards OutputCard), no frame of its own.
+ *  `sessionId`: the session of the message the card is on. */
+export function ChangesCard({ block, bare, sessionId }: { block: TurnChangesContent; bare?: boolean; sessionId?: string }) {
   const { t } = useTranslation();
   const files = block.files ?? [];
   const landed = block.landed ?? [];
@@ -241,6 +247,7 @@ export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?:
       '{{n}} landing records could not be verified.', { n: block.unverified })] : []),
   ];
   return (
+    <CardSessionContext.Provider value={sessionId}>
     <section data-testid="turn-changes" className={bare ? '' : 'rounded-lg border border-[var(--color-border)] overflow-hidden'}>
       <header className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none text-[var(--color-text-muted)]">difference</span>
@@ -263,5 +270,6 @@ export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?:
         <p key={n} data-testid="changes-note" className="px-3 py-1.5 border-t border-[var(--color-border)] text-[12px] italic text-[var(--color-text-muted)]">{n}</p>
       ))}
     </section>
+    </CardSessionContext.Provider>
   );
 }

@@ -169,6 +169,11 @@ remotePath(sid, path)   // '/chat/stream' → '/swarm-out/remote/<sid>/chat/stre
   `default`，`content` 只允许 `text / image / document(base64)` 块；`answer-question`、
   `cmd-permission-continue` 同样各自白名单。今后 `ChatRequest` 加了本机上下文字段，也不会被转发。
 - 上游请求用 `_client` 从头构造，**不带**客户端的任何头（Cookie、Authorization、Origin）。
+- **两个 diff 接口（`chat/turn-diff`、`canvas/changes/tree-diff`）不按会话限定 `root`**：路径里没有 sid，
+  任何一个本机派出的会话都能读那台 Hive 上**任一个已绑定 repo** 的 diff。这是有意的边界：Host 和 Hive 是
+  同一个主人，Hive 侧只读已绑定 repo（`repo_changes.authorized_root`），提交 id 必须是完整 SHA、路径不能含
+  `..`（`turn_changes._valid_diff_args`）。将来 Hive 服务多个主人时，要在代理里先用该会话
+  `canvas/session/{sid}?parts=changes` 的 git root 核对 `root`。
 - `project_agent` 的延续：派发时带的 pin 在后续 turn 上是否保持，第 1 步先在 Hive 上验证；不保持就在
   代理里按派发日志补上，不让前端传。
 
@@ -207,6 +212,7 @@ S3 桥对审批有两个约束：命令超过 `MAX_COMMAND_CHARS`（2000）不�
 |---|---|
 | `ui_command`、`file_changed` | 中继丢弃（§6.3）；前端对 remote tab 再忽略一次（lifecycle :3052、:3120 处按 `isRemote(tab.sessionId)` 跳过） |
 | 消息里的本机路径链接 | Hive tab 的 TabView 外面包一个 `RemoteContentContext`，`MarkdownRenderer` 读到它时，工作区路径和绝对路径链接显示为文本（悬停"在 Hive 上"），外链照旧 |
+| Canvas 的产出列表（artifacts） | 第 2 步起 `artifacts()` 对 remote 会话读的是 Hive 的行，`absolutePath` 是 Hive 上的路径；在本机打开会走本机 `/workspace/file`（本机没有这个会话，被拒，或同名相对路径打开本机的另一个文件）。remote 会话的这些行显示为文本，不打开本机文件 |
 | 终端上下文、UI 感知 `editor_context` | 前端不附带；代理的 body 白名单也不放 |
 | 从工作区拖文件（`path_hint`）、ToDo 拖入 | 拒绝并提示；上传的附件（base64）照常 |
 | `/plugin` 命令、技能开关、记忆保存 | 不显示 |

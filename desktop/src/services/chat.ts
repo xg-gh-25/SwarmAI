@@ -60,6 +60,7 @@ export function toPendingPermission(raw: NonNullable<RawStreamingStateEntry['pen
 import { backgroundAgentsStore } from '../stores/backgroundAgentsStore';
 import { notifyContextUsageStale, type ContextUsageSnapshot } from '../hooks/contextUsage';
 import { getApiBaseUrl } from './tauri';
+import { isRemote, remotePath, remoteWrite, REMOTE_WRITE_HEADERS } from './remoteSession';
 
 // ---------------------------------------------------------------------------
 // Stall detection constant
@@ -512,6 +513,8 @@ function createStallDetection(
 function startSSEFetch(opts: {
   path: string;
   body: Record<string, unknown>;
+  /** Extra request headers (a remote session's write headers, services/remoteSession). */
+  headers?: Readonly<Record<string, string>>;
   label: string;
   onMessage: (event: StreamEvent) => void;
   onError: (error: Error) => void;
@@ -533,7 +536,7 @@ function startSSEFetch(opts: {
 
   fetch(`${apiBase}${opts.path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
     body: JSON.stringify(opts.body),
     credentials: 'include',
     signal: controller.signal,
@@ -557,6 +560,14 @@ function startSSEFetch(opts: {
     });
 
   return () => { clearStallTimer(); controller.abort(); };
+}
+
+/** An SSE endpoint's fetch path and extra headers for a session: the Host proxy's
+ *  for the remote (Hive) session, the local one otherwise (services/remoteSession). */
+function sseRoute(sessionId: string | undefined, endpoint: string): { path: string; headers?: Readonly<Record<string, string>> } {
+  return isRemote(sessionId)
+    ? { path: `/api${remotePath(sessionId, endpoint)}`, headers: REMOTE_WRITE_HEADERS }
+    : { path: `/api${endpoint}` };
 }
 
 /** A session state entry, snake_case wire → StreamingStateEntry. */
@@ -647,7 +658,7 @@ export const chatService = {
     }
 
     return startSSEFetch({
-      path: '/api/chat/stream',
+      ...sseRoute(request.sessionId, '/chat/stream'),
       body: requestBody,
       label: 'streamChat',
       onMessage, onError, onComplete, onDisconnect,
@@ -693,8 +704,11 @@ export const chatService = {
   /** Cancel a queued message (docs/design/chat-turn-liveness.md S3): 'cancelled',
    *  'claimed' (a drain took it — it is being sent: 409) or 'missing' (404). */
   async cancelPending(sessionId: string, clientId: string): Promise<'cancelled' | 'claimed' | 'missing'> {
+    const path = `/chat/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(clientId)}`;
+    const remote = remoteWrite(sessionId);
     try {
-      await api.delete(`/chat/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(clientId)}`);
+      if (remote) await api.delete(remotePath(sessionId, path), { ...remote, data: {} });
+      else await api.delete(path);
       return 'cancelled';
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
@@ -712,7 +726,7 @@ export const chatService = {
 
   // Get a specific session
   async getSession(sessionId: string): Promise<ChatSession> {
-    const response = await api.get<Record<string, unknown>>(`/chat/sessions/${sessionId}`);
+    const response = await api.get<Record<string, unknown>>(remotePath(sessionId, `/chat/sessions/${sessionId}`));
     return toSessionCamelCase(response.data);
   },
 
@@ -725,8 +739,9 @@ export const chatService = {
   /** One file's diff on a turn's "files changed" card (core/turn_changes); null
    *  when it is gone for good (404: the trees were pruned, or the request was
    *  refused). Any other failure (network, 503) throws, so the card can retry. */
-  async getTurnDiff(q: { gitRoot: string; start: string; end: string; path: string }): Promise<string | null> {
-    const response = await api.get<{ diff: string }>('/chat/turn-diff', {
+  async getTurnDiff(q: { gitRoot: string; start: string; end: string; path: string; sessionId?: string }): Promise<string | null> {
+    // A Hive session's git roots are paths on the Hive: its diff is read there.
+    const response = await api.get<{ diff: string }>(remotePath(q.sessionId, '/chat/turn-diff'), {
       params: { git_root: q.gitRoot, start: q.start, end: q.end, path: q.path },
       validateStatus: (s: number) => s === 200 || s === 404,
     });
@@ -740,7 +755,7 @@ export const chatService = {
     if (cached?.etag) headers['If-None-Match'] = cached.etag;
 
     const response = await api.get<Record<string, unknown>[]>(
-      `/chat/sessions/${sessionId}/messages`,
+      remotePath(sessionId, `/chat/sessions/${sessionId}/messages`),
       { headers, validateStatus: (s: number) => s === 200 || s === 304 },
     );
 
@@ -767,7 +782,7 @@ export const chatService = {
     const params = new URLSearchParams();
     if (limit !== undefined) params.set('limit', String(limit));
     if (beforeId !== undefined) params.set('before_id', beforeId);
-    const url = `/chat/sessions/${sessionId}/messages?${params.toString()}`;
+    const url = remotePath(sessionId, `/chat/sessions/${sessionId}/messages?${params.toString()}`);
 
     // ETag only for non-cursor queries (initial load)
     const cached = !beforeId ? this._messageEtags.get(sessionId) : undefined;
@@ -817,7 +832,7 @@ export const chatService = {
     const headers: Record<string, string> = {};
     if (cached?.etag) headers['If-None-Match'] = cached.etag;
 
-    const response = await api.get<Record<string, unknown>[]>(`/chat/sessions/${sessionId}/messages?${params.toString()}`, {
+    const response = await api.get<Record<string, unknown>[]>(remotePath(sessionId, `/chat/sessions/${sessionId}/messages?${params.toString()}`), {
       headers,
       validateStatus: (s: number) => s === 200 || s === 304,
     });
@@ -859,7 +874,7 @@ export const chatService = {
    *  since (`reset`), and the changed rows. */
   async getTranscriptSince(sessionId: string, sinceRev: number): Promise<{ rev: number; reset: boolean; rows: unknown[] }> {
     const response = await api.get<{ rev: number; reset: boolean; rows: unknown[] }>(
-      `/chat/sessions/${sessionId}/transcript?since_rev=${sinceRev}`);
+      remotePath(sessionId, `/chat/sessions/${sessionId}/transcript?since_rev=${sinceRev}`));
     return response.data;
   },
 
@@ -880,7 +895,7 @@ export const chatService = {
     // No If-None-Match header → backend never returns 304 → always 200 with the
     // capped tail. No cache write → the shared slot stays owned by initial-load.
     const response = await api.get<Record<string, unknown>[]>(
-      `/chat/sessions/${sessionId}/messages?limit=${limit}`,
+      remotePath(sessionId, `/chat/sessions/${sessionId}/messages?limit=${limit}`),
       { validateStatus: (s: number) => s === 200 },
     );
     const rev = Number(response.headers?.['x-transcript-rev'] ?? 0);
@@ -904,7 +919,10 @@ export const chatService = {
   // (turn_changes / turn_deliverables / turn_stop, core/turn_stop), already
   // persisted — the frontend aborted the stream, so this is their live route.
   async stopSession(sessionId: string): Promise<{ status: string; message: string; receipt: ContentBlock[] }> {
-    const response = await api.post<{ status: string; message: string; receipt?: unknown[] }>(`/chat/stop/${sessionId}`);
+    const remote = remoteWrite(sessionId);
+    const response = remote
+      ? await api.post<{ status: string; message: string; receipt?: unknown[] }>(remotePath(sessionId, `/chat/stop/${sessionId}`), {}, remote)
+      : await api.post<{ status: string; message: string; receipt?: unknown[] }>(`/chat/stop/${sessionId}`);
     const receipt = Array.isArray(response.data.receipt)
       ? toCamelCaseContent(response.data.receipt) as ContentBlock[] : [];
     return { ...response.data, receipt };
@@ -913,9 +931,11 @@ export const chatService = {
   // Stop ONE sub-agent of the running turn (its SDK task id); the turn goes on.
   // The backend refuses an id this session did not report running (chat turn spec v6 §7.3).
   async stopTask(sessionId: string, taskId: string): Promise<{ status: string; message?: string }> {
-    const response = await api.post<{ status: string; message?: string }>(
-      `/chat/stop/${encodeURIComponent(sessionId)}/task/${encodeURIComponent(taskId)}`,
-    );
+    const path = `/chat/stop/${encodeURIComponent(sessionId)}/task/${encodeURIComponent(taskId)}`;
+    const remote = remoteWrite(sessionId);
+    const response = remote
+      ? await api.post<{ status: string; message?: string }>(remotePath(sessionId, path), {}, remote)
+      : await api.post<{ status: string; message?: string }>(path);
     return response.data;
   },
 
@@ -939,7 +959,7 @@ export const chatService = {
   // (same shape as the context_warning SSE event), so no conversion here.
   async getContextUsage(sessionId: string): Promise<ContextUsageSnapshot> {
     const response = await api.get<ContextUsageSnapshot>(
-      `/chat/sessions/${encodeURIComponent(sessionId)}/context-usage`,
+      remotePath(sessionId, `/chat/sessions/${encodeURIComponent(sessionId)}/context-usage`),
     );
     return response.data;
   },
@@ -949,7 +969,10 @@ export const chatService = {
   // context usage once it succeeds.
   async compactSession(sessionId: string, instructions?: string): Promise<{ status: string; message: string }> {
     const body = instructions ? { instructions } : undefined;
-    const response = await api.post<{ status: string; message: string }>(`/chat/compact/${sessionId}`, body);
+    const remote = remoteWrite(sessionId);
+    const response = remote
+      ? await api.post<{ status: string; message: string }>(remotePath(sessionId, `/chat/compact/${sessionId}`), body ?? {}, remote)
+      : await api.post<{ status: string; message: string }>(`/chat/compact/${sessionId}`, body);
     notifyContextUsageStale(sessionId);
     return response.data;
   },
@@ -957,7 +980,10 @@ export const chatService = {
   // User-triggered context refresh — kills subprocess for resume with summary.
   // The session's identity is dropped, so its context usage becomes "none".
   async refreshSession(sessionId: string): Promise<{ status: string; message: string }> {
-    const response = await api.post<{ status: string; message: string }>(`/chat/refresh/${sessionId}`);
+    const remote = remoteWrite(sessionId);
+    const response = remote
+      ? await api.post<{ status: string; message: string }>(remotePath(sessionId, `/chat/refresh/${sessionId}`), {}, remote)
+      : await api.post<{ status: string; message: string }>(`/chat/refresh/${sessionId}`);
     notifyContextUsageStale(sessionId);
     return response.data;
   },
@@ -984,7 +1010,7 @@ export const chatService = {
     }
 
     return startSSEFetch({
-      path: '/api/chat/answer-question',
+      ...sseRoute(request.sessionId, '/chat/answer-question'),
       body: {
         agent_id: request.agentId,
         session_id: request.sessionId,
@@ -1021,7 +1047,7 @@ export const chatService = {
     }
 
     return startSSEFetch({
-      path: '/api/chat/cmd-permission-continue',
+      ...sseRoute(request.sessionId, '/chat/cmd-permission-continue'),
       body: {
         session_id: request.sessionId,
         request_id: request.requestId,

@@ -22,11 +22,15 @@ import { useState } from 'react';
 const artifacts = vi.fn();
 const changes = vi.fn();
 const treeDiff = vi.fn();
+const treeDiffSession = vi.fn();
 vi.mock('../../../services/canvasSession', async (orig) => {
   const real = await orig<typeof import('../../../services/canvasSession')>();
   real.canvasSessionService.artifacts = (s: string) => artifacts(s);
   real.canvasSessionService.changes = (s: string) => changes(s);
-  real.canvasSessionService.treeDiff = (r: string, a: string, b: string, p: string) => treeDiff(r, a, b, p);
+  real.canvasSessionService.treeDiff = (r: string, a: string, b: string, p: string, sid?: string) => {
+    treeDiffSession(sid);
+    return treeDiff(r, a, b, p);
+  };
   return real;
 });
 
@@ -103,6 +107,7 @@ describe('Changes tab (this session\'s transcript)', () => {
     render(<Tab />);
     fireEvent.click((await screen.findAllByTestId('changes-file'))[2]);
     expect(treeDiff).toHaveBeenCalledWith('/r/swarmai', 's0', 'e0', 'src/a.ts');
+    expect(treeDiffSession).toHaveBeenLastCalledWith('s1');     // read where the session's repos are
     const patch = await screen.findByTestId('changes-patch');
     expect(patch.textContent).toContain('+new');
     expect(patch.textContent).not.toContain('diff --git');
