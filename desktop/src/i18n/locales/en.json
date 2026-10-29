@@ -1186,8 +1186,6 @@
       "noHive": "No Hive yet"
     },
     "daily": {
-      "title": "Runs sent per day",
-      "sub": "Last 14 days · local date · by outcome",
       "day": "{{day}} · {{count}} sent",
       "dayWith": "{{day}} · {{count}} sent: {{parts}}"
     },
@@ -1198,22 +1196,88 @@
       "other": "Not known yet"
     },
     "history": {
-      "title": "Run log",
-      "sub": "Last 7 days · by Hive",
-      "groupingTbd": "Grouping by Brain / Project Agent · TBD: the dispatch log carries no Brain or Project Agent",
-      "empty": "No runs sent in the last 7 days",
-      "count_one": "{{count}} run",
-      "count_other": "{{count}} runs"
+      "empty": "No run sent in this window",
+      "window": {
+        "d7": "Last 7 days",
+        "d30": "Last 30 days",
+        "all": "All"
+      },
+      "verdict_one": "came back done with no one stepping in",
+      "verdict_other": "came back done with no one stepping in",
+      "verdictRest_one": " · {{count}} run: {{parts}}",
+      "verdictRest_other": " · {{count}} runs: {{parts}}",
+      "verdictPart": {
+        "completed": "{{count}} done",
+        "error": "{{count}} failed",
+        "stopped": "{{count}} stopped",
+        "other": "{{count}} ending not known",
+        "running": "{{count}} running"
+      },
+      "sum": {
+        "unattended": "done unattended (of {{known}} with a known ending, {{pct}}%)",
+        "unattendedNone": "done unattended (no run's ending is known yet)",
+        "human_one": "human loop",
+        "human_other": "human loops",
+        "unanswered_one": " ({{count}} question unanswered)",
+        "unanswered_other": " ({{count}} questions unanswered)",
+        "median": "median time",
+        "spend": "spend",
+        "judge_one": "Judge ({{count}} pipeline run)",
+        "judge_other": "Judge ({{count}} pipeline runs)",
+        "tokensMissing_one": "{{count}} run's tokens are not known",
+        "tokensMissing_other": "{{count}} runs' tokens are not known",
+        "costMissing_one": "{{count}} run's cost is not known or only partly",
+        "costMissing_other": "{{count}} runs' cost is not known or only partly"
+      },
+      "breakdown": {
+        "title": "Broken down",
+        "brain": "Brain",
+        "type": "Type",
+        "hive": "Hive",
+        "filterHint": "Click to show only these runs below"
+      },
+      "col": {
+        "runs": "runs",
+        "outcome": "outcome",
+        "unattended": "unattended",
+        "median": "median time",
+        "spend": "spend",
+        "lessons": "lessons back / written",
+        "lessonsTitle": "lessons the Hive returned / written into the Brain by this machine's judge",
+        "run": "run",
+        "agent": "Brain · Agent",
+        "type": "type",
+        "ended": "ended",
+        "time": "time",
+        "human": "human",
+        "sent": "sent"
+      },
+      "dimensions_one": "Five dimensions ({{count}} pipeline run):",
+      "dimensions_other": "Five dimensions ({{count}} pipeline runs):",
+      "outcome": {
+        "completed": "done",
+        "error": "failed",
+        "stopped": "stopped",
+        "other": "not known",
+        "running": "running"
+      },
+      "records": "Runs",
+      "filter": {
+        "all": "All",
+        "error": "Failed",
+        "stopped": "Stopped",
+        "human": "Needed a person",
+        "unknown": "Not known"
+      },
+      "noRecords": "No run matches",
+      "unanswered_one": "{{count}} unanswered",
+      "unanswered_other": "{{count}} unanswered",
+      "more_one": "Show {{count}} earlier",
+      "more_other": "Show {{count}} earlier"
     },
     "tbdParts": {
-      "verdict": "One-line verdict",
-      "verdictMissing": "No cross-run audit summary",
-      "dimensions": "Five dimensions",
-      "dimensionsMissing": "Only pipeline runs carry a five-dimension verdict (in the run card's details); there is no cross-run summary yet",
       "occupancy": "Worker occupancy",
       "occupancyMissing": "Each Hive's concurrency is not sampled over time",
-      "type": "By type",
-      "typeMissing": "The dispatch log carries no task type",
       "scheduled": "Scheduled",
       "scheduledMissing": "No scheduled dispatches yet"
     },
@@ -1303,11 +1367,6 @@
       "unknown": "State unknown"
     },
     "byBrain": {
-      "title": "By Brain (7 days)",
-      "runs_one": "{{count}} run",
-      "runs_other": "{{count}} runs",
-      "done": "{{count}} done",
-      "failed": "{{count}} failed",
       "checks_one": "{{count}} check not run or errored",
       "checks_other": "{{count}} checks not run or errored"
     },
@@ -1509,6 +1568,7 @@
       "human": "Human loops",
       "spend": "Spend",
       "spendValue": "{{tokens}} token · {{cost}}",
+      "spendShort": "{{tokens}} · {{cost}}",
       "cacheShare": "{{pct}}% cache reads",
       "failedSteps_one": "{{count}} failed step",
       "failedSteps_other": "{{count}} failed steps",
@@ -1530,6 +1590,15 @@
       "noLocalFile": "A file on this machine cannot be sent to a Hive session. Attach it as an upload instead.",
       "noTerminal": "This machine's terminal output cannot be sent to a Hive session.",
       "denyOnly": "This command is too long or hides characters: it can only be denied here."
+    },
+    "type": {
+      "unknown": "Not known",
+      "pipeline": "pipeline",
+      "pipelineProfile": "pipeline · {{profile}}",
+      "code": "Code",
+      "files": "Files",
+      "answer": "Answer only",
+      "none": "No output"
     }
   }
 }

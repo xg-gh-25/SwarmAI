@@ -7,7 +7,8 @@
  * each Hive's slots under them), does a Hive need me (the questions waiting, each with
  * its answer controls — the one thing in the accent colour), and how are the runs I
  * sent (running, stopped in the last 24 h, state unknown). What has no data source yet
- * says TBD and which source is missing; nothing on this view is a sample.
+ * says TBD and which source is missing; nothing on this view is a sample. What went
+ * on in the past (the runs by Brain, type, Hive) is the history view's (HistoryView).
  *
  * A run that is not running any more shows what its Hive recorded (design
  * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
@@ -30,16 +31,15 @@
  * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useCallback, useContext, useEffect, useState } from 'react';
-import { OpenSessionContext } from './openSession';
-import { isRemoteId } from '../../services/remoteSession';
+import { useCallback, useEffect, useState } from 'react';
+import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
 import { ReturnPanel } from './ReturnPanel';
 import { LessonsAccept } from './LessonsAccept';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, runStats, stateLabel, useRuns, when, workLines, type RunStat } from './live';
+import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runStats, stateLabel, useRuns, when, workLines, type RunStat } from './live';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -398,16 +398,6 @@ function RunResult({ r, full }: { r: SwarmOutRun; full: SwarmOutResult | null })
 
 /** A run's title: a button that opens its Hive session when the run has one this Host
  *  knows (design docs/design/2026-10-29-swarm-out-hive-session-tab.md §4), else text. */
-/** Opens a run's Hive session in the Hive tab, or null when there is none this Host
- *  knows. The tab is titled run first, then its Hive: a narrow tab still shows which
- *  run it is, and the whole title is on its hover. */
-function useOpenRun(r: SwarmOutRun): (() => void) | null {
-  const open = useContext(OpenSessionContext);
-  const sid = r.session_id;
-  if (!open || !isRemoteId(sid) || r.session_unknown) return null;
-  return () => open(sid, `${r.title} · ${r.hive}`);
-}
-
 export function RunTitle({ r, className }: { r: SwarmOutRun; className: string }) {
   const { t } = useTranslation();
   const open = useOpenRun(r);
@@ -432,7 +422,7 @@ function OpenRunButton({ r, open }: { r: SwarmOutRun; open: () => void }) {
   );
 }
 
-function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
+export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState<SwarmOutResult | null>(null);
@@ -485,29 +475,6 @@ function RunGroup({ title, rows, empty, onReload }: { title: string; rows: Swarm
           {rows.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={onReload} />)}
         </div>
       )}
-    </section>
-  );
-}
-
-/** The last 7 days by the Brain each run went under: how its work goes there. */
-function ByBrain({ runs, now }: { runs: SwarmOutRun[]; now: number }) {
-  const { t } = useTranslation();
-  const rows = runsByBrain(runs, now);
-  if (rows.length === 0) return null;
-  return (
-    <section className="mt-5" data-testid="swarm-out-by-brain">
-      <h3 className="m-0 mb-2 text-[13px] font-semibold">{t('swarmOut.byBrain.title')}</h3>
-      <div className="flex flex-col gap-1">
-        {rows.map((b) => (
-          <div key={b.brain || '-'} className="flex items-baseline gap-3 text-[12.5px]" data-testid="swarm-out-brain-row" data-brain={b.brain}>
-            <span className="w-44 shrink-0 truncate font-medium" title={b.label}>{b.label}</span>
-            <span className="tabular-nums">{t('swarmOut.byBrain.runs', { count: b.runs })}</span>
-            <span className="tabular-nums" style={{ color: TONE_VAR.ok }}>{t('swarmOut.byBrain.done', { count: b.completed })}</span>
-            {b.failed > 0 && <span className="tabular-nums" style={{ color: TONE_VAR.error }}>{t('swarmOut.byBrain.failed', { count: b.failed })}</span>}
-            {b.checksNotRun > 0 && <span className="tabular-nums" style={{ color: TONE_VAR.attention }}>{t('swarmOut.byBrain.checks', { count: b.checksNotRun })}</span>}
-          </div>
-        ))}
-      </div>
     </section>
   );
 }
@@ -579,7 +546,6 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
           {groups.unknown.length > 0 && <RunGroup title={t('swarmOut.groups.unknown')} rows={groups.unknown} empty="" />}
         </>
       )}
-      {data && data.runs.length > 0 && <ByBrain runs={data.runs} now={at} />}
       <Tbd title={t('swarmOut.tbdParts.scheduled')} missing={t('swarmOut.tbdParts.scheduledMissing')} />
     </div>
   );

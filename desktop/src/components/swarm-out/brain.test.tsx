@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { SwarmOutResult, SwarmOutRun } from '../../services/swarmOut';
-import { brainLabel, checksLine, gateLine, lessonsLine, runsByBrain } from './live';
+import { breakdown, brainLabel, checksLine, gateLine, inWindow, lessonsLine } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -69,15 +69,15 @@ describe('the Brain of a run', () => {
   });
 
   it('groups the week by Brain, runs without a Project Agent last', () => {
-    const rows = runsByBrain([
+    const rows = breakdown(inWindow([
       run('1', 'Lib', res({ checks: [{ id: 't', status: 'not_run' }] })),
       run('2', 'Lib', res({ ended: 'error' })),
       run('3', 'General', res()),
       run('4', null, res()),
       run('5', 'Lib', res(), 200),                     // older than 7 days
       run('6', 'Lib', res({ provisional: true, checks: [{ id: 't', status: 'not_run' }] })),   // still going
-    ], NOW);
-    expect(rows.map((r) => [r.label, r.runs, r.completed, r.failed, r.checksNotRun])).toEqual([
-      ['Lib', 3, 2, 1, 1], ['通用（Runner Agent）', 1, 1, 0, 0], ['没走 Project Agent', 1, 1, 0, 0]]);
+    ], NOW, 7), 'brain');
+    expect(rows.map((r) => [r.label, r.agent ?? null, r.tally.runs, r.tally.by.completed, r.tally.by.error, r.tally.checksNotRun])).toEqual([
+      ['Lib', 'code-change · bugfix', 3, 2, 1, 1], ['通用', 'Runner Agent', 1, 1, 0, 0], ['没走 Project Agent', null, 1, 1, 0, 0]]);
   });
 });

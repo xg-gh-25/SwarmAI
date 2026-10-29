@@ -7,9 +7,9 @@
  *  - Runs (LiveDispatches): the fleet on top (its three numbers — questions waiting,
  *    free slots, runs running — and each Hive's slots), the questions waiting under
  *    it, then the runs by state.
- *  - History: runs sent per day and the last week's runs by Hive, from the dispatch log.
- *    The cross-run audit (verdict, five dimensions, by type, occupancy) and grouping by
- *    brain or Project Agent have no data source yet: each says TBD and what is missing.
+ *  - History (HistoryView): how much came back done unattended, the runs by Brain, type
+ *    or Hive, the five audit dimensions, and every run, each opening into its card.
+ *    Worker occupancy has no data source yet: it says TBD.
  *
  * The fleet (/api/swarm-out/fleet) is polled here while the panel is shown: it gives the
  * header's Hive count and decides whether the setup guide (HiveGuide) replaces the run
@@ -19,17 +19,16 @@
  */
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { SwarmOutRun } from '../../services/swarmOut';
 import { HiveGuide } from './HiveGuide';
-import { Dot, LiveDispatches, RunTitle, Tbd } from './LiveDispatches';
+import { HistoryView } from './HistoryView';
+import { LiveDispatches } from './LiveDispatches';
 import { OpenSessionContext } from './openSession';
-import { dailyByOutcome, endedLabel, runsByHive, stateLabel, useFleet, useRuns, when, type OutcomeBucket } from './live';
-import { runTone, TONE_VAR, type Tone } from './tone';
+import { useFleet } from './live';
+import { TONE_VAR } from './tone';
 
 /** Below this panel width (CSS px) the dashboard uses its compact layout. */
 export const COMPACT_BELOW = 820;
 
-const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
 
 /** The panel's own content width, tracked with a ResizeObserver (0 before layout,
@@ -44,105 +43,6 @@ function usePanelWidth(ref: React.RefObject<HTMLElement | null>): number {
     return () => ro.disconnect();
   }, [ref]);
   return w;
-}
-
-/** The history buckets in stacking order (errors on top, so a failure is never buried),
- *  each in its tone's colour: the same colours as the run cards. */
-const BUCKETS: { key: OutcomeBucket; tone: Tone }[] = [
-  { key: 'error', tone: 'error' },
-  { key: 'stopped', tone: 'attention' },
-  { key: 'completed', tone: 'ok' },
-  { key: 'other', tone: 'unknown' },
-];
-const bucketColor = (tone: Tone): string => (tone === 'unknown' ? 'var(--color-border)' : TONE_VAR[tone]);
-
-function DailyBars({ runs, now }: { runs: SwarmOutRun[]; now: number }) {
-  const { t } = useTranslation();
-  const label = (k: OutcomeBucket) => t(`swarmOut.bucket.${k}`);
-  const days = dailyByOutcome(runs, now);
-  const max = Math.max(1, ...days.map((d) => d.count));
-  return (
-    <section className={card} data-testid="swarm-out-daily">
-      <div className="flex items-baseline gap-2 px-4 pt-3 pb-1">
-        <h3 className="m-0 text-[13px] font-semibold">{t('swarmOut.daily.title')}</h3>
-        <span className="text-[12px] text-[var(--color-text-dim)]">{t('swarmOut.daily.sub')}</span>
-      </div>
-      <div className="px-4 pb-3">
-        <div className="flex items-end gap-[6px] h-[90px] border-b border-[var(--color-border)]">
-          {days.map((d) => (
-            <div key={d.label} className="flex-1 flex flex-col justify-end h-full"
-              title={d.count
-                ? t('swarmOut.daily.dayWith', { day: d.label, count: d.count, parts: BUCKETS.filter((b) => d.by[b.key]).map((b) => `${label(b.key)} ${d.by[b.key]}`).join(t('swarmOut.sep.clause')) })
-                : t('swarmOut.daily.day', { day: d.label, count: d.count })}
-              data-testid="swarm-out-day" data-count={d.count} data-error={d.by.error}>
-              {/* top down in BUCKETS order: errors first, so a failure is never buried */}
-              {BUCKETS.map((b) => d.by[b.key] > 0 && (
-                <div key={b.key} style={{ height: `${(d.by[b.key] / max) * 100}%`, background: bucketColor(b.tone) }}
-                  className="first:rounded-t" />
-              ))}
-            </div>
-          ))}
-        </div>
-        <div className={`flex justify-between text-[10.5px] mt-1 ${muted}`}>
-          <span>{days[0].label}</span>
-          <span className="flex gap-2">{BUCKETS.map((b) => (
-            <span key={b.key} className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ background: bucketColor(b.tone) }} />{label(b.key)}</span>
-          ))}</span>
-          <span>{days[days.length - 1].label}</span>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function History({ hidden, now }: { hidden: boolean; now: number }) {
-  const { t } = useTranslation();
-  const { data, failed } = useRuns(hidden);
-  const runs = data?.runs ?? [];
-  const groups = runsByHive(runs, now);
-  return (
-    <div data-testid="swarm-out-history">
-      {failed && <div className={`text-[12px] mb-2 ${muted}`}>{t('swarmOut.runsUnreadable')}</div>}
-      {data ? <DailyBars runs={runs} now={now} /> : !failed && <div className={`text-[12px] ${muted}`}>{t('swarmOut.loading')}</div>}
-      <section className="mt-6" data-testid="run-history">
-        <div className="flex items-baseline gap-2 px-0.5">
-          <h3 className="m-0 text-[13px] font-semibold">{t('swarmOut.history.title')}</h3>
-          <span className="text-[12px] text-[var(--color-text-dim)]">{t('swarmOut.history.sub')}</span>
-        </div>
-        <div className="mt-1 text-[12px] text-[var(--color-text-dim)] px-0.5">{t('swarmOut.history.groupingTbd')}</div>
-        {data && groups.length === 0 && <div className={`mt-2 text-[12.5px] ${muted}`}>{t('swarmOut.history.empty')}</div>}
-        {groups.map((g) => (
-          <div key={g.hive} className="mt-4" data-testid="history-group" data-group={g.hive}>
-            <div className="flex items-baseline gap-2 px-0.5 mb-1.5">
-              <h4 className="m-0 text-[13px] font-semibold">{g.hive}</h4>
-              <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums" data-testid="history-group-count">{t('swarmOut.history.count', { count: g.runs.length })}</span>
-            </div>
-            <ul className={`${card} m-0 list-none px-1.5 py-0.5`}>
-              {g.runs.map((r) => {
-                const tone = runTone(r);
-                return (
-                  <li key={r.dispatch_id} className="px-2 py-2 border-t border-[var(--color-border)] first:border-t-0 min-w-0" data-testid="history-run" data-tone={tone}>
-                    <div className="flex items-start gap-2 min-w-0">
-                      <span className="h-[18px] flex items-center"><Dot tone={tone} /></span>
-                      <RunTitle r={r} className="min-w-0 flex-1 line-clamp-2 leading-[18px]" />
-                      <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
-                    </div>
-                    {/* the status word in its tone; grey (unknown) stays the muted text colour */}
-                    <div className={`text-[11.5px] mt-0.5 pl-[15px] ${tone === 'unknown' || tone === 'busy' ? muted : ''}`}
-                      style={tone === 'unknown' || tone === 'busy' ? undefined : { color: TONE_VAR[tone] }}>{r.result ? endedLabel(r.result).text : stateLabel(r)}</div>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </section>
-      <Tbd title={t('swarmOut.tbdParts.verdict')} missing={t('swarmOut.tbdParts.verdictMissing')} testId="swarm-out-tbd-verdict" />
-      <Tbd title={t('swarmOut.tbdParts.dimensions')} missing={t('swarmOut.tbdParts.dimensionsMissing')} testId="swarm-out-tbd-dimensions" />
-      <Tbd title={t('swarmOut.tbdParts.occupancy')} missing={t('swarmOut.tbdParts.occupancyMissing')} testId="swarm-out-tbd-occupancy" />
-      <Tbd title={t('swarmOut.tbdParts.type')} missing={t('swarmOut.tbdParts.typeMissing')} testId="swarm-out-tbd-type" />
-    </div>
-  );
 }
 
 export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, now }: {
@@ -192,7 +92,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, n
           ? (fleet !== null && fleet.running === 0
             ? <HiveGuide hives={fleet.hives} onOpenHive={onOpenHive} />
             : <LiveDispatches hidden={hidden} fleet={fleet} fleetFailed={fleetFailed} onOpenHive={onOpenHive} now={at} />)
-          : <History hidden={hidden} now={at} />}
+          : <HistoryView hidden={hidden} now={at} compact={compact} />}
       </div>
     </div>
     </OpenSessionContext.Provider>

@@ -1186,8 +1186,6 @@
       "noHive": "还没有 Hive"
     },
     "daily": {
-      "title": "每天派出的 run",
-      "sub": "近 14 天 · 按本机日期 · 按结局",
       "day": "{{day}} · 派出 {{count}} 个",
       "dayWith": "{{day}} · 派出 {{count}} 个：{{parts}}"
     },
@@ -1198,22 +1196,88 @@
       "other": "还不知道"
     },
     "history": {
-      "title": "Run 记录",
-      "sub": "近 7 天 · 按 Hive",
-      "groupingTbd": "按大脑 / Project Agent 分组 · TBD：派发记录里没有大脑和 Project Agent",
-      "empty": "近 7 天没有派出的 run",
-      "count_one": "{{count}} 个 run",
-      "count_other": "{{count}} 个 run"
+      "empty": "这段时间没有派出的 run",
+      "window": {
+        "d7": "近 7 天",
+        "d30": "近 30 天",
+        "all": "全部"
+      },
+      "verdict_one": "个无人值守做完",
+      "verdict_other": "个无人值守做完",
+      "verdictRest_one": " · 共 {{count}} 个 run：{{parts}}",
+      "verdictRest_other": " · 共 {{count}} 个 run：{{parts}}",
+      "verdictPart": {
+        "completed": "{{count}} 个做完",
+        "error": "{{count}} 个失败",
+        "stopped": "{{count}} 个停下",
+        "other": "{{count}} 个结束情况未知",
+        "running": "{{count}} 个在跑"
+      },
+      "sum": {
+        "unattended": "无人值守做完（已知结局 {{known}} 个，{{pct}}%）",
+        "unattendedNone": "无人值守做完（还没有已知结局的 run）",
+        "human_one": "次要人",
+        "human_other": "次要人",
+        "unanswered_one": "（{{count}} 个问题没人答）",
+        "unanswered_other": "（{{count}} 个问题没人答）",
+        "median": "中位时长",
+        "spend": "消耗",
+        "judge_one": "Judge（{{count}} 个 pipeline run）",
+        "judge_other": "Judge（{{count}} 个 pipeline run）",
+        "tokensMissing_one": "{{count}} 个 run 的 token 不知道",
+        "tokensMissing_other": "{{count}} 个 run 的 token 不知道",
+        "costMissing_one": "{{count}} 个 run 的花费没有或不全",
+        "costMissing_other": "{{count}} 个 run 的花费没有或不全"
+      },
+      "breakdown": {
+        "title": "拆开看",
+        "brain": "Brain",
+        "type": "类型",
+        "hive": "Hive",
+        "filterHint": "点一下，下面只看这一组"
+      },
+      "col": {
+        "runs": "runs",
+        "outcome": "结局",
+        "unattended": "无人值守",
+        "median": "中位时长",
+        "spend": "消耗",
+        "lessons": "教训 带回/写入",
+        "lessonsTitle": "Hive 交回的教训 / 本机判官写进 Brain 的",
+        "run": "run",
+        "agent": "Brain · Agent",
+        "type": "类型",
+        "ended": "结局",
+        "time": "时长",
+        "human": "人工",
+        "sent": "派出"
+      },
+      "dimensions_one": "五维（{{count}} 个 pipeline run）：",
+      "dimensions_other": "五维（{{count}} 个 pipeline run）：",
+      "outcome": {
+        "completed": "做完",
+        "error": "失败",
+        "stopped": "停下",
+        "other": "未知",
+        "running": "在跑"
+      },
+      "records": "记录",
+      "filter": {
+        "all": "全部",
+        "error": "失败",
+        "stopped": "停下",
+        "human": "要人",
+        "unknown": "未知"
+      },
+      "noRecords": "没有符合的 run",
+      "unanswered_one": "{{count}} 没答",
+      "unanswered_other": "{{count}} 没答",
+      "more_one": "显示更早的 {{count}} 条",
+      "more_other": "显示更早的 {{count}} 条"
     },
     "tbdParts": {
-      "verdict": "一句话结论",
-      "verdictMissing": "没有跨 run 的审计汇总",
-      "dimensions": "五个维度",
-      "dimensionsMissing": "只有 pipeline run 带五维结论（在 run 卡片的详情里），跨 run 的汇总还没做",
       "occupancy": "工蜂占用",
       "occupancyMissing": "没有按时间采样每台 Hive 的并发",
-      "type": "按类型",
-      "typeMissing": "派发记录不带任务类型",
       "scheduled": "已安排",
       "scheduledMissing": "还没有定时派发"
     },
@@ -1303,11 +1367,6 @@
       "unknown": "状态未知"
     },
     "byBrain": {
-      "title": "按大脑（7 天）",
-      "runs_one": "{{count}} 个",
-      "runs_other": "{{count}} 个",
-      "done": "{{count}} 做完",
-      "failed": "{{count}} 出错",
       "checks_one": "{{count}} 个校验没跑或报错",
       "checks_other": "{{count}} 个校验没跑或报错"
     },
@@ -1509,6 +1568,7 @@
       "human": "人工介入",
       "spend": "消耗",
       "spendValue": "{{tokens}} token · {{cost}}",
+      "spendShort": "{{tokens}} · {{cost}}",
       "cacheShare": "{{pct}}% 是缓存读",
       "failedSteps_one": "失败步骤 {{count}}",
       "failedSteps_other": "失败步骤 {{count}}",
@@ -1530,6 +1590,15 @@
       "noLocalFile": "本机的文件不能发给 Hive 会话，请改用上传附件。",
       "noTerminal": "本机终端的输出不能发给 Hive 会话。",
       "denyOnly": "这条命令太长或含有隐藏字符，这里只能拒绝。"
+    },
+    "type": {
+      "unknown": "未知",
+      "pipeline": "pipeline",
+      "pipelineProfile": "pipeline · {{profile}}",
+      "code": "改代码",
+      "files": "写文件",
+      "answer": "只回答",
+      "none": "没有产出"
     }
   }
 }

@@ -7,7 +7,7 @@
  * does each run sit in the group of its state; does the fleet say what each Hive
  * reports (occupied, full, unreachable, stopped); is every part without a data source
  * marked TBD with what is missing, and no sample left anywhere; does the history count
- * runs per local day and list the week's runs by Hive.
+ * runs per local day, break them down and list them (history.test.tsx goes further).
  */
 // Local-day bucketing is only tested if local time is not UTC.
 process.env.TZ = 'Asia/Shanghai';
@@ -179,7 +179,7 @@ describe('the run view', () => {
     const tbd = screen.getAllByTestId('swarm-out-tbd').map((t) => t.textContent ?? '');
     expect(tbd.some((t) => t.includes('已安排') && t.includes('TBD：还没有定时派发'))).toBe(true);
     expect(tbd.some((t) => t.includes('trace'))).toBe(false);   // the Brain of each run is recorded now
-    expect(screen.getByTestId('swarm-out-by-brain').textContent).toContain('没走 Project Agent');
+    expect(screen.queryByTestId('swarm-out-by-brain')).toBeNull();   // the past is the history view's
     expect(tbd.some((t) => t.includes('结果'))).toBe(false);   // results come from the Hive now
     expect(screen.queryByTestId('swarm-out-sample-notice')).toBeNull();
     expect(document.body.textContent).not.toMatch(/示例|敬请期待/);
@@ -187,18 +187,18 @@ describe('the run view', () => {
 });
 
 describe('the history view', () => {
-  it('counts runs per day, lists the week by Hive, and marks the audit parts TBD', async () => {
+  it('counts the week, breaks it down by Brain, lists every run; only occupancy is TBD', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     fireEvent.click(screen.getByRole('button', { name: '历史' }));
     const groups = await screen.findAllByTestId('history-group');
-    expect(groups.map((g) => g.getAttribute('data-group'))).toEqual(['explorer']);
-    expect(within(groups[0]).getAllByTestId('history-run')).toHaveLength(6);
+    expect(groups.map((g) => g.getAttribute('data-group'))).toEqual(['']);   // none went under a Project Agent
+    expect(screen.getAllByTestId('history-run')).toHaveLength(6);
     const days = screen.getAllByTestId('swarm-out-day').map((d) => Number(d.getAttribute('data-count')));
+    expect(days).toHaveLength(7);
     expect(days.reduce((a, b) => a + b, 0)).toBe(6);
-    for (const id of ['verdict', 'dimensions', 'occupancy', 'type']) {
-      expect(screen.getByTestId(`swarm-out-tbd-${id}`).textContent).toContain('TBD：');
-    }
-    expect(document.body.textContent).not.toMatch(/示例|敬请期待/);
+    expect(screen.getByTestId('swarm-out-tbd-occupancy').textContent).toContain('TBD：');
+    for (const id of ['verdict', 'dimensions', 'type']) expect(screen.queryByTestId(`swarm-out-tbd-${id}`)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/示例|敬请期待|派发记录里没有大脑/);
   });
 });
 

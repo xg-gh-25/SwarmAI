@@ -2,7 +2,7 @@
 title: "Swarm Out 历史视图：从“派过什么”到“派出去的活靠不靠谱”"
 created: 2026-10-29
 updated: 2026-10-29
-status: draft r1（待确认）
+status: 已实现（2026-10-29；mockup Knowledge/Designs/mockups/2026-10-29-swarm-out-run-card-history.html）
 ---
 
 # Swarm Out 历史视图：从"派过什么"到"派出去的活靠不靠谱"
@@ -107,6 +107,8 @@ status: draft r1（待确认）
 - 新增文案只加 `swarmOut.history.*`，en / zh 都加（`swarmOutI18n.test.tsx` 会查两边的 key 是否一致）。
 
 ## 8. 验证计划（定在这里，做完逐行报告）
+
+实现时和设计不同的地方：卡片"消耗"格的拆分是悬停提示（四种 token），不按类别拆金额。CLI 只报总花费，按单价拆是猜的。宽面板一行一条记录，窄面板（`COMPACT_BELOW`）两行。
 
 **最后要守住的不变量（测试）**
 1. 做完 + 失败 + 停下 + 未知 + 在跑 = 窗口内的 run 数；每个比率的分母都等于"已知结局"，而且在页面上写出来。
