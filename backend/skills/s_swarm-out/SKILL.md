@@ -41,7 +41,9 @@ Each prints JSON; a refusal is `{"ok": false, "detail": "..."}`: tell the person
 3. **Write the task so it stands alone.** The Hive sees only this text, the Brain and
    its own workspace: not this conversation, not files on this machine. Include the
    goal, every input it needs (links, pasted content) and where to leave results. The
-   repositories come from the Brain's definition: do not add them.
+   repositories are every one the Brain binds, whatever the mode, at this machine's own
+   commit (the Hive gets that commit before the task starts): do not add them, and do not
+   tell the Hive to clone or pull.
    **Acceptance** is required: one checkable sentence of what done looks like.
 4. **Choose the mode and profile.** Read the `modes` of the Brain's `project-agent.yaml`
    (its directory: `Projects/<B>/`, or `Knowledge/Library/` for General). Pick the mode
@@ -52,8 +54,10 @@ Each prints JSON; a refusal is `{"ok": false, "detail": "..."}`: tell the person
    each one (it names the rule, e.g. the definition is a draft: confirm it in the Brain
    Hub) and stop. Otherwise ask with AskUserQuestion, showing: the Hive, the title, the
    Brain, the mode with its `mode_when`, the profile with its `profile_reason`, the
-   acceptance, the repositories, the delivery, and the first 8 characters of the
-   revision. Dispatch only after the person agrees: the task leaves this machine.
+   acceptance, the repositories (each with its branch and the first 12 characters of its
+   `sha`), the delivery, and the first 8 characters of the revision. A repository whose
+   `dirty` is above 0 has that many files with uncommitted changes, which are not sent:
+   say so, and that they need a commit first if the task depends on them. Dispatch only after the person agrees: the task leaves this machine.
 6. **Dispatch** with the same arguments plus `--revision` = the spec's `revision`: a
    definition changed after the person saw it is refused. Report the Hive, the title and
    `brain_sync` (whether the Brain was synced or restored first), and that its

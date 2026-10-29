@@ -10,7 +10,8 @@ docs/design/2026-10-28-project-agent-flow.md §7 ①–④, ⑥).
 - ``build(workspace, brain, task, acceptance, mode=, profile=, placement=)``: the Task
   Spec. The mode and profile are the agent's choice (they match prose ``when`` rules);
   this checks the choice against the definition and records which rule it rests on.
-  Everything else (repositories, delivery, revision, rules) comes from the definition.
+  Everything else (delivery, revision, rules) comes from the definition; the repositories
+  are every one the Brain binds, at this machine's commit when it has a checkout.
 - ``admit(spec)``: the deterministic admission checks; each refusal names its rule.
 - ``segment(spec)``: the project section put before the task text on the Hive.
 
@@ -121,13 +122,7 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     why_profile = _profile_reason(m, prof)
     if why_profile is None:
         raise SpecError(f"profile {prof!r} is neither mode {mid}'s profile nor one of its profile rules")
-    bindings = _bindings(d)
-    repos = []
-    for name in view["repos"]:
-        b = bindings.get(name)
-        if b is None:
-            raise SpecError(f"mode {mid} works on {name}, which bindings.yaml does not bind")
-        repos.append({"name": name, "url": b.clone, "ref": b.delivery_contract.branch or None})
+    repos = _brain_repos(d, mid, view["repos"])
     skills, _err = _skills(d)
     platform = skills or {}
     usable = [s for s in view["skills"]
@@ -155,6 +150,33 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         if check else None,
         "mode_placements": view["placements"],
     }
+
+
+def _brain_repos(d: Path, mid: str, mode_repos: list[str]) -> list[dict[str, Any]]:
+    """Every repository the Brain binds, whatever the mode (a mode's ``repos`` only says
+    where its setup and checks run). With a checkout on this machine: its branch and HEAD
+    commit (``sha``, what the Hive works on, core/repo_ship) and how many paths have
+    uncommitted changes (not sent); without one: the remote at the delivery branch.
+    (design 2026-10-30-hive-task-repos-from-host §2)"""
+    from core import repo_ship
+    from core.project_agent import repo_roots
+    bindings = _bindings(d)
+    for name in mode_repos:
+        if name not in bindings:
+            raise SpecError(f"mode {mid} works on {name}, which bindings.yaml does not bind")
+    roots = repo_roots(d)
+    out = []
+    for name, b in bindings.items():
+        row: dict[str, Any] = {"name": name, "url": b.clone, "ref": b.delivery_contract.branch or None,
+                               "sha": None, "dirty": None, "checkout": None, "error": None}
+        if name in roots:
+            try:
+                st = repo_ship.state(roots[name])
+                row.update(ref=st["branch"], sha=st["sha"], dirty=st["dirty"], checkout=str(roots[name]))
+            except repo_ship.ShipError as e:
+                row["error"] = str(e)
+        out.append(row)
+    return out
 
 
 def _line(v: Any) -> str:
@@ -189,6 +211,8 @@ def admit(spec: dict[str, Any]) -> list[str]:
         for r in spec["repos"]:
             if not str(r["url"]).startswith(("https://", "git@", "ssh://")):
                 out.append(f"{r['name']} has no remote a Hive can clone ({r['url']!r})")
+            if r.get("error"):
+                out.append(f"{r['name']}: {r['error']}")
         if spec["delivery"] == "branch-pr":
             out.append("delivery branch-pr is not available yet; use bundle")
     if not spec["acceptance"]:
@@ -228,7 +252,10 @@ def segment(spec: dict[str, Any]) -> str:
         lines += [f"- {w['area']}: {w['why']}" for w in spec["watches"]]
     if spec["skills"]:
         lines.append(f"Skills for this task: {', '.join(spec['skills'])}.")
-    if spec["repos"]:
+    if spec["repos"] and spec["profile"] == "research":
+        lines.append("Repositories: they are there to read; this mode changes no code, so do not "
+                     "commit in them.")
+    elif spec["repos"]:
         lines.append("Delivery: commit on the declared branch of each repository and do not push; "
                      "the commits go back to the person's machine, where they review them.")
     if spec["reserved"]:

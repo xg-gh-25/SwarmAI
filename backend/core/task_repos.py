@@ -3,7 +3,9 @@
 Design: docs/design/2026-10-28-swarm-out-run-results.md §4.4. A Swarm Out dispatch
 carries a list of repositories (``[{url, ref}]``). The Host writes them into the task
 text with the directory each one goes to; the Hive records them on the session
-(``sessions.metadata.task_repos``) and the Hive's agent clones or fetches them there.
+(``sessions.metadata.task_repos``). A repository with a ``sha`` (the host's own commit)
+is prepared there by the Hive's daemon before the task starts (core/hive_repo_prepare);
+one without is cloned or fetched by the Hive's agent.
 At every turn end the Hive reads, for each declared repository, what the task changed
 against the version it pulled (``repo_facts``), for the ``turn_outcome`` block.
 
@@ -16,10 +18,10 @@ write a repository's config (and a submodule's), and git runs configured command
 (``base..HEAD``, tree against tree) plus the number of untracked files, and no command
 of the repository's own runs here; uncommitted changes are not measured.
 
-What the task changed is measured from a fixed point: the upstream as it was when
-the task pulled it, read from the remote-tracking ref's reflog at the session's start
-(``_pulled_upstream``), so a task that pushes to the declared branch still shows its
-commits instead of moving its own base.
+What the task changed is measured from a fixed point: the declared ``sha`` when there is
+one, else the upstream as it was when the task pulled it, read from the remote-tracking
+ref's reflog at the session's start (``_pulled_upstream``), so a task that pushes to the
+declared branch still shows its commits instead of moving its own base.
 
 - ``parse(items)``        — validated ``[{url, ref, dir}]``; raises ``TaskRepoError``.
 - ``repo_dir(url)``       — the workspace-relative directory of a repository.
@@ -102,7 +104,8 @@ def _same_repo(a: str, b: str) -> bool:
 
 
 def parse(items: Any) -> list[dict[str, Optional[str]]]:
-    """Validated ``[{url, ref, dir}]`` (``ref`` None = the remote's default branch),
+    """Validated ``[{url, ref, dir[, sha]}]`` (``ref`` None = the remote's default branch;
+    ``sha``: the host's commit, prepared on the Hive before the task, core/hive_repo_prepare),
     one entry per directory. Raises TaskRepoError on anything not accepted."""
     if items is None:
         return []
@@ -123,11 +126,19 @@ def parse(items: Any) -> list[dict[str, Optional[str]]]:
             if not isinstance(ref, str) or not _REF_RE.fullmatch(ref) or ".." in ref \
                     or ref.endswith((".lock", "/", ".")) or "//" in ref:
                 raise TaskRepoError(f"ref {str(ref)[:60]!r} is not a branch or tag name")
+        sha = item.get("sha")
+        if sha is not None and not (isinstance(sha, str) and _SHA_RE.fullmatch(sha)):
+            raise TaskRepoError("a repository's commit is not a sha")
+        if sha is not None and ref is None:
+            raise TaskRepoError("a repository with a commit needs its branch")
         d = repo_dir(url)
         if d in seen:
             continue
         seen.add(d)
-        out.append({"url": url, "ref": ref, "dir": d})
+        entry: dict[str, Optional[str]] = {"url": url, "ref": ref, "dir": d}
+        if sha is not None:
+            entry["sha"] = sha
+        out.append(entry)
     return out
 
 
@@ -135,13 +146,16 @@ def task_text(repos: list[dict[str, Optional[str]]]) -> str:
     """The paragraph that tells the Hive's agent where each repository goes."""
     if not repos:
         return ""
-    lines = ["Repositories for this task (each one goes into the directory shown, "
-             "relative to your workspace; clone it if the directory does not exist, "
-             "otherwise fetch and check out the ref; change code only inside these "
-             "directories):"]
+    lines = ["Repositories for this task (relative to your workspace; change code only "
+             "inside these directories):"]
     for r in repos:
-        ref = r.get("ref") or "the default branch"
-        lines.append(f"- {r['url']} @ {ref} -> {r['dir']}")
+        if r.get("sha"):
+            lines.append(f"- {r['dir']}: ready, on branch {r['ref']} at {r['sha'][:12]} (the person's "
+                         f"own commit of {r['url']}). Do not clone, pull or reset it.")
+        else:
+            ref = r.get("ref") or "the default branch"
+            lines.append(f"- {r['url']} @ {ref} -> {r['dir']} (clone it if the directory does not "
+                         "exist, otherwise fetch and check out the ref)")
     return "\n".join(lines) + "\n\n"
 
 
@@ -315,10 +329,14 @@ def _one(workspace: Path, repo: dict[str, Optional[str]], since: Optional[float]
     if fact["head"] is None:
         fact["error"] = ERR_NO_HEAD
         return fact
-    if upstream is None:
+    declared = repo.get("sha")
+    if declared and _git(str(real), "cat-file", "-e", f"{declared}^{{commit}}") is not None:
+        start = declared                     # the host's commit the task was prepared at
+    elif upstream is None:
         fact["error"] = ERR_NO_REF
         return fact
-    start = _pulled_upstream(str(real), upstream, since) or upstream
+    else:
+        start = _pulled_upstream(str(real), upstream, since) or upstream
     base = (_git(str(real), "merge-base", "HEAD", start) or "").strip()
     if not _SHA_RE.fullmatch(base):
         fact["error"] = ERR_NO_HISTORY

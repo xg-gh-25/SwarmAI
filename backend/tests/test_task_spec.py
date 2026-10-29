@@ -122,11 +122,29 @@ def test_the_spec_comes_from_the_definition(ws):
     s = ts.build(ws, "Lib", "fix it", "the signer test passes")
     assert (s["mode"], s["mode_chosen"], s["profile"], s["profile_reason"]) == (
         "code-change", "the default mode", "bugfix", "the mode's profile")
-    assert s["repos"] == [{"name": "lib", "url": "https://github.com/acme/lib.git", "ref": "main"}]
+    assert s["repos"] == [{"name": "lib", "url": "https://github.com/acme/lib.git", "ref": "main",
+                           "sha": None, "dirty": None, "checkout": None, "error": None}]
+    # every repository of the Brain goes, whatever the mode (research declares none)
+    assert [r["name"] for r in ts.build(ws, "Lib", "why", "an answer", mode="research", profile="research")["repos"]] == ["lib"]
     assert s["delivery"] == "bundle" and s["revision"] and not s["problems"]
     assert s["skills"] == ["s_lib-release"] and s["skills_not_here"] == ["s_lib-desk"]
     s = ts.build(ws, "Lib", "x", "y", mode="code-change", profile="full")
     assert s["mode_chosen"] == "named" and s["profile_reason"] == "profile rule: a public API change"
+
+
+def test_a_checkout_on_this_machine_gives_its_branch_and_commit(ws, tmp_path):
+    import subprocess
+    repo = tmp_path / "lib"
+    subprocess.run(["git", "init", "-q", "-b", "work", str(repo)], check=True)
+    (repo / "a.txt").write_text("a")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"], check=True)
+    (repo / "a.txt").write_text("changed, not committed")
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    b = _brain(ws)
+    (b / "bindings.yaml").write_text(BINDINGS.replace("    kind: external\n", f"    kind: external\n    worktree: {repo}\n"))
+    r = ts.build(ws, "Lib", "why", "an answer", mode="research", profile="research")["repos"][0]
+    assert (r["ref"], r["sha"], r["dirty"], r["checkout"]) == ("work", sha, 1, str(repo.resolve()))
 
 
 @pytest.mark.parametrize("kw,match", [
@@ -193,6 +211,8 @@ def test_the_project_section_tells_the_hive_how_to_work(ws):
     assert "s_lib-desk" not in text and text.endswith("## Task\n")
     runner = ts.segment(ts.build(ws, "General", "x", "y"))
     assert "knowledge find --in library" in runner and "do not push" not in runner
+    research = ts.segment(ts.build(ws, "Lib", "why", "an answer", mode="research", profile="research"))
+    assert "there to read" in research and "commit on the declared branch" not in research
 
 
 # ── dispatch ─────────────────────────────────────────────────────────────────
