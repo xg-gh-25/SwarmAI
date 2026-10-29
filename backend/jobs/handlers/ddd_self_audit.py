@@ -58,8 +58,8 @@ _AUDIT_TOOLS = ["Read", "Grep", "Glob"]
 # Per-project HANG guard (seconds) — the ONLY per-call bound this handler imposes.
 # Rationale (O030): a subprocess.run with no timeout can hang the ENTIRE weekly job
 # forever on a network stall / CLI deadlock; this bounds a genuine hang, it does NOT
-# cap slow-but-progressing work. Cost is governed centrally by the scheduler's global
-# monthly budget (_check_monthly_budget), NOT by a per-call dollar cap in this handler.
+# cap slow-but-progressing work. No per-call dollar cap here: spend is recorded in the
+# usage ledger and read in the usage view.
 _PER_PROJECT_TIMEOUT_S = 240
 
 
@@ -74,9 +74,9 @@ def _classify_review_result(returncode: int, output: dict, stderr: str) -> dict:
         a stderr tail) so the report shows the REAL cause instead of "exit N".
 
     We parse stdout regardless of returncode purely for OBSERVABILITY — to surface
-    WHY a review failed. There is deliberately NO cost/budget branch here: cost is
-    governed centrally (scheduler monthly budget), and a genuine hang is bounded by
-    the subprocess timeout — neither belongs as per-call logic in this handler.
+    WHY a review failed. There is deliberately NO cost/budget branch here: spend is
+    recorded in the usage ledger, and a genuine hang is bounded by the subprocess
+    timeout — neither belongs as per-call logic in this handler.
     """
     result_text = output.get("result", "") or ""
     errors = [e for e in (output.get("errors", []) or []) if isinstance(e, str)]

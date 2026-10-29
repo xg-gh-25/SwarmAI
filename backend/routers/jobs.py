@@ -8,7 +8,6 @@ into a single status view.
 
 from __future__ import annotations
 
-import asyncio
 from core import executors
 import json
 import logging
@@ -21,18 +20,6 @@ from jobs.paths import JOB_RESULTS_DIR, JOB_RESULTS_JSONL
 logger = logging.getLogger("swarm.routers.jobs")
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
-
-
-def _platform_month_spend():
-    from core.usage_report import month_spend
-    v = month_spend()
-    return None if v is None else round(v, 2)
-
-
-def _monthly_budget():
-    from jobs.config_io import read_config
-    from jobs.scheduler import load_defaults
-    return load_defaults(read_config()).max_monthly_spend_usd
 
 # Cap the full last-run output body so a runaway job report can't bloat the drawer.
 _MAX_OUTPUT_BYTES = 32 * 1024
@@ -192,10 +179,7 @@ async def unified_status():
             "healthy": ok,
             "failing": err,
             "never_run": len(active) - ok - err,
-            "monthly_spend_usd": state.monthly_spend_usd,          # the jobs' own spend
-            # the monthly budget is held to the whole platform's spend (usage ledger)
-            "platform_month_spend_usd": await asyncio.to_thread(_platform_month_spend),
-            "monthly_budget_usd": await asyncio.to_thread(_monthly_budget),
+            "monthly_spend_usd": state.monthly_spend_usd,
             "buffered_signals": len(state.raw_signals),
             "dedup_cache_size": len(state.dedup_cache),
         }

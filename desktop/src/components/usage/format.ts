@@ -2,7 +2,7 @@
  * format — the usage view's number text and the pure choices behind it (design
  * docs/design/2026-10-29-usage-accounting.md §5).
  *
- * @exports money, tokens, pct, change, budgetTone, rowCost, SURFACE_COLOR
+ * @exports money, tokens, pct, change, rowCost, SURFACE_COLOR
  */
 import type { UsageTotal } from '../../services/usage';
 
@@ -29,13 +29,6 @@ export function change(cur: number, prev: number | null | undefined): { dir: 'up
   if (prev == null || prev <= 0) return null;
   const p = Math.round(((cur - prev) / prev) * 100);
   return { dir: p > 0 ? 'up' : p < 0 ? 'down' : 'flat', pct: Math.abs(p) };
-}
-
-/** The budget's colour: reached → error, from 80% → warn, else none. */
-export function budgetTone(share: number | null | undefined): 'error' | 'warn' | null {
-  if (share == null) return null;
-  if (share >= 1) return 'error';
-  return share >= 0.8 ? 'warn' : null;
 }
 
 /** A group's cost as shown: unknown when it has tokens and none of them is priced

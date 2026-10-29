@@ -273,8 +273,7 @@ registerOverlay({
   ),
 });
 
-// ── usage — nav card + the top bar's token figures; not agent-openable (it sets the
-// monthly budget) ─────────────────────────────────────────────────────────────────────
+// ── usage — the usage view; nav card + the top bar's token figures ─────────────────────
 registerOverlay({
   id: 'usage',
   render: ({ close, resumeSession }) => (

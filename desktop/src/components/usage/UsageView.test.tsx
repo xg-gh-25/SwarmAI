@@ -4,9 +4,7 @@
  * Questions: (1) does the top line show the window's spend and its change against the
  * window before, and a group with tokens but no price read "cost unknown", never $0;
  * (2) is the pipeline row shown apart as a split of chat, not as a surface of its own;
- * (3) does the budget line show this month's platform spend against the budget, say
- * what stops when it is reached, save a new budget and refuse one that is not above 0;
- * (4) does each of the largest rows open what it names (a session, a run's report, the
+ * (3) is there no budget to see or set; (4) does each of the largest rows open what it names (a session, a run's report, the
  * jobs); (5) does the view say what it cannot see (no Hive reporting, unpriced calls);
  * (6) does a new window ask for that window.
  */
@@ -24,7 +22,7 @@ vi.mock('../../contexts/OverlayContext', () => ({ useOverlay: () => ({ openOverl
 vi.mock('../../services/chat', () => ({ chatService: { getSession: vi.fn() } }));
 vi.mock('../../services/usage', async () => {
   const { useQuery } = await import('@tanstack/react-query');
-  const usageService = { report: vi.fn(), setBudget: vi.fn() };
+  const usageService = { report: vi.fn() };
   return {
     usageService,
     useUsageReport: (w: string) => useQuery({ queryKey: ['usage-report', w], queryFn: () => usageService.report(w) }),
@@ -64,7 +62,6 @@ function report(o: Partial<UsageReport> = {}): UsageReport {
     },
     concentration: { top_sessions: 8, top_sessions_share: 0.846, big_turn_usd: 15, big_turns: 34, big_turns_turn_share: 0.0533, big_turns_cost_share: 0.3514 },
     gaps: { unpriced: [{ surface: 'cdf', calls: 3, tokens: 10_405_034 }], imported_cost_usd: 0, imported_calls: 0, live_since: null, hives_reporting: [] },
-    budget: { month_spend_usd: 8907.65, monthly_usd: 12000, share: 0.7423 },
     ...o,
   };
 }
@@ -101,13 +98,6 @@ describe('usage view', () => {
     expect((await screen.findByTestId('usage-total')).textContent).toBe('花费未知');
   });
 
-  it('(3) keeps the budget in reach when the window has no usage', async () => {
-    fn(usageService.report).mockResolvedValue(report({ total: tot() }));
-    view();
-    await screen.findByTestId('usage-empty');
-    expect(screen.getByTestId('usage-budget-edit')).toBeTruthy();
-  });
-
   it('(2) shows the pipeline as a split of chat, apart from the surfaces', async () => {
     view();
     const a = await screen.findByTestId('usage-attribution');
@@ -115,28 +105,6 @@ describe('usage view', () => {
     expect(screen.getAllByTestId('usage-where-row').map((r) => r.firstChild?.textContent)).toEqual(['chat', 'cdf']);
     fireEvent.click(screen.getByRole('tab', { name: '按功能' }));
     expect(screen.queryByTestId('usage-attribution')).toBeNull();
-  });
-
-  it('(3) holds this month\'s platform spend to the budget and saves a new one', async () => {
-    fn(usageService.setBudget).mockResolvedValue(15000);
-    view();
-    const b = await screen.findByTestId('usage-budget');
-    expect(b.textContent).toContain('本月全平台 $8,908 / 预算 $12,000（74%）');
-    expect(b.textContent).toContain('只停新的 agent job');
-    fireEvent.click(screen.getByTestId('usage-budget-edit'));
-    fireEvent.change(screen.getByTestId('usage-budget-input'), { target: { value: '0' } });
-    fireEvent.click(screen.getByTestId('usage-budget-save'));
-    expect(await screen.findByRole('alert')).toBeTruthy();
-    expect(usageService.setBudget).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByTestId('usage-budget-input'), { target: { value: '15000' } });
-    fireEvent.click(screen.getByTestId('usage-budget-save'));
-    await waitFor(() => expect(usageService.setBudget).toHaveBeenCalledWith(15000));
-  });
-
-  it('(3) says the budget is reached when it is', async () => {
-    fn(usageService.report).mockResolvedValue(report({ budget: { month_spend_usd: 13000, monthly_usd: 12000, share: 1.0833 } }));
-    view();
-    expect((await screen.findByTestId('usage-budget')).textContent).toContain('已到预算');
   });
 
   it('(4) opens what each of the largest rows names', async () => {
@@ -159,6 +127,13 @@ describe('usage view', () => {
     fireEvent.click(screen.getByTestId('usage-top-open'));
     expect(openOverlay).toHaveBeenCalledWith('jobs');
     document.removeEventListener('swarm:open-file', onFile);
+  });
+
+  it('(3) has no budget to see or set', async () => {
+    view();
+    await screen.findByTestId('usage-total');
+    expect(screen.queryByTestId('usage-budget')).toBeNull();
+    expect(screen.getByTestId('usage-view').textContent).not.toContain('预算');
   });
 
   it('(5) says what it cannot see', async () => {

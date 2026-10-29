@@ -194,14 +194,13 @@ def execute_job(
             )
 
         elif job.type == "agent_task":
-            budget_err = _check_monthly_budget(state, defaults)
-            daily_err = _check_daily_agent_limit(state, defaults) if not budget_err else None
+            daily_err = _check_daily_agent_limit(state, defaults)
             # RAM admission gate (run_409392d4): defer the CLI spawn if system
             # memory can't safely host another subprocess, so job bursts don't
             # starve chat-tab spawns. Checked last (cheapest to recover — retry
-            # next tick) and only when the cost/count gates already passed.
-            mem_err = _check_spawn_ram_budget() if not (budget_err or daily_err) else None
-            gate_err = budget_err or daily_err or mem_err
+            # next tick) and only when the count gate already passed.
+            mem_err = _check_spawn_ram_budget() if not daily_err else None
+            gate_err = daily_err or mem_err
             if gate_err:
                 result = JobResult(
                     job_id=job.id, timestamp=start,
@@ -221,20 +220,13 @@ def execute_job(
                 if job.safety.retryable and _is_retryable_failure(result):
                     # Re-check the SAME admission gates before the retry spawn —
                     # the retry is a SECOND ~$-and-RAM subprocess, so it must not
-                    # escape the monthly-budget / daily-agent-limit / RAM caps the
+                    # escape the daily-agent-limit / RAM caps the
                     # first attempt passed (a retry that bypassed them could double
                     # a job's spend in one tick — Gate-2 O-1). If a gate now
                     # declines, skip the retry and keep the original failure.
-                    retry_budget_err = _check_monthly_budget(state, defaults)
-                    retry_daily_err = (
-                        _check_daily_agent_limit(state, defaults)
-                        if not retry_budget_err else None
-                    )
-                    retry_mem_err = (
-                        _check_spawn_ram_budget()
-                        if not (retry_budget_err or retry_daily_err) else None
-                    )
-                    retry_gate_err = retry_budget_err or retry_daily_err or retry_mem_err
+                    retry_daily_err = _check_daily_agent_limit(state, defaults)
+                    retry_mem_err = _check_spawn_ram_budget() if not retry_daily_err else None
+                    retry_gate_err = retry_daily_err or retry_mem_err
                     if retry_gate_err:
                         logger.warning(
                             "Job '%s' failed transiently (%s) but retry gate "
@@ -1670,42 +1662,6 @@ def send_post_job_notification(job: Job, result: JobResult) -> None:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
-
-
-def _platform_month_spend() -> float | None:
-    """The whole platform's spend this local month, from the usage ledger (every
-    machine and surface: chat, pipeline, CDF, jobs, background calls, the Hives); None
-    when the ledger cannot be read."""
-    try:
-        from core.usage_report import month_spend
-        return month_spend()
-    except Exception:  # noqa: BLE001 — a gate that crashes the scheduler is worse
-        return None
-
-
-def _check_monthly_budget(state: SchedulerState, defaults: SchedulerDefaults) -> str | None:
-    """Return a skip reason when the monthly budget is reached, else None.
-
-    The budget (``defaults.max_monthly_spend_usd``) is held to the whole platform's spend
-    this month (design docs/design/2026-10-29-usage-accounting.md §11c). Reaching it only
-    stops the scheduler from starting a new agent job; chat, pipeline runs and work
-    already running are never stopped. The jobs' own spend this month
-    (``state.monthly_spend_usd``) is the floor, and the figure when the ledger cannot be read.
-    """
-    cap = defaults.max_monthly_spend_usd
-    platform = _platform_month_spend()
-    if platform is None:
-        spent, scope = state.monthly_spend_usd, "scheduled jobs (usage ledger unreadable)"
-    else:
-        # never below the jobs' own figure: the ledger can miss rows (begun mid-month,
-        # rows dropped by a full writer queue)
-        spent, scope = max(platform, state.monthly_spend_usd), "whole platform"
-    if spent >= cap:
-        return (
-            f"Monthly budget reached (${spent:.2f}/${cap:.2f}, {scope} this month). "
-            f"Reset on 1st of next month."
-        )
-    return None
 
 
 def _check_spawn_ram_budget() -> str | None:

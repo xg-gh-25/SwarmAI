@@ -1645,17 +1645,6 @@
       "p90": "90th percentile turn",
       "max": "costliest turn"
     },
-    "budget": {
-      "line": "This month, whole platform: {{spent}} / budget {{cap}} ({{pct}}%)",
-      "none": "This month, whole platform: {{spent}} · no budget read",
-      "rule": "At the budget only new agent jobs stop; chat, pipeline runs and running work go on",
-      "reached": "Budget reached: no new agent job starts until the 1st; chat, pipeline runs and running work go on",
-      "edit": "Change budget",
-      "save": "Save",
-      "cancel": "Cancel",
-      "invalid": "The budget must be above 0",
-      "failed": "The budget was not saved"
-    },
     "insight": {
       "top": "The top {{n}} sessions spent {{share}}% of this window",
       "sep": "; ",

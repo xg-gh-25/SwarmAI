@@ -1645,17 +1645,6 @@
       "p90": "每轮 90 分位",
       "max": "最贵的一轮"
     },
-    "budget": {
-      "line": "本月全平台 {{spent}} / 预算 {{cap}}（{{pct}}%）",
-      "none": "本月全平台 {{spent}} · 没读到预算",
-      "rule": "到了预算只停新的 agent job；chat、pipeline 和正在跑的工作不停",
-      "reached": "已到预算：新的 agent job 不再启动，下月 1 号恢复；chat、pipeline 和正在跑的工作不停",
-      "edit": "改预算",
-      "save": "保存",
-      "cancel": "取消",
-      "invalid": "预算要大于 0",
-      "failed": "预算没保存上"
-    },
     "insight": {
       "top": "前 {{n}} 个 session 占了这段时间花费的 {{share}}%",
       "sep": "；",

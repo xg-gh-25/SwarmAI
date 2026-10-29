@@ -4,8 +4,7 @@
  * Knowledge/Designs/mockups/2026-10-30-usage-view.html).
  *
  * Top down it answers: how much this window spent and which way it moves against the
- * window before (the one number that stands out), with this month's spend against the
- * monthly budget; one sentence on where the money concentrates; the daily spend; where
+ * window before (the one number that stands out); one sentence on where the money concentrates; the daily spend; where
  * it went (by surface, feature, model or machine); the largest sessions, pipeline runs,
  * jobs and Hive runs, each row opening what it names; what a turn costs; and what the
  * ledger cannot see. Every figure comes from GET /api/usage/report (services/usage).
@@ -15,21 +14,19 @@
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQueryClient } from '@tanstack/react-query';
 import { chatService } from '../../services/chat';
 import { useOverlay } from '../../contexts/OverlayContext';
 import {
-  usageService, useUsageReport,
+  useUsageReport,
   type UsageDimension, type UsageGroup, type UsageReport, type UsageTop, type UsageWindow,
 } from '../../services/usage';
-import { budgetTone, change, money, pct, rowCost, SURFACE_COLOR, tokens } from './format';
+import { change, money, pct, rowCost, SURFACE_COLOR, tokens } from './format';
 
 const muted = 'text-[var(--color-text-muted)]';
 const dim = 'text-[var(--color-text-dim)]';
 const WINDOWS: { id: UsageWindow; key: string }[] = [{ id: '7d', key: 'd7' }, { id: '30d', key: 'd30' }, { id: 'all', key: 'all' }];
 const DIMENSIONS: UsageDimension[] = ['surface', 'feature', 'model', 'machine'];
 const TOPS: UsageTop[] = ['sessions', 'runs', 'jobs', 'hive'];
-const TONE: Record<string, string> = { error: 'var(--color-status-error)', warn: 'var(--color-status-warning)' };
 
 export interface UsageViewProps {
   close?: () => void;
@@ -80,13 +77,10 @@ export function UsageView({ close, resumeSession }: UsageViewProps) {
 
 function Report({ r, close, resumeSession }: { r: UsageReport } & UsageViewProps) {
   const { t } = useTranslation();
-  if (r.total.rows === 0) {
-    return <><Budget r={r} /><p className={`mt-4 ${muted}`} data-testid="usage-empty">{t('usage.empty')}</p></>;
-  }
+  if (r.total.rows === 0) return <p className={muted} data-testid="usage-empty">{t('usage.empty')}</p>;
   return (
     <>
       <Hero r={r} />
-      <Budget r={r} />
       <Insight r={r} />
       <Bars r={r} />
       <Where r={r} />
@@ -128,61 +122,6 @@ function Hero({ r }: { r: UsageReport }) {
 
 function Fact({ v, label }: { v: string; label: string }) {
   return <span><b className="mr-1 text-body font-semibold text-[var(--color-text)] tabular-nums">{v}</b>{label}</span>;
-}
-
-function Budget({ r }: { r: UsageReport }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const b = r.budget;
-  if (b.month_spend_usd == null) return null;
-  const tone = budgetTone(b.share);
-  const save = async () => {
-    const v = Number(draft);
-    if (!Number.isFinite(v) || v <= 0) { setError(t('usage.budget.invalid')); return; }
-    try {
-      await usageService.setBudget(v);
-      setEditing(false); setError(null);
-      void qc.invalidateQueries({ queryKey: ['usage-report'] });
-      void qc.invalidateQueries({ queryKey: ['overlay', 'jobs', 'overview'] });   // Jobs' "platform / budget"
-    } catch { setError(t('usage.budget.failed')); }
-  };
-  return (
-    <section className="mt-3 text-meta" data-testid="usage-budget">
-      <div className="flex flex-wrap items-center gap-3">
-        <span style={tone ? { color: TONE[tone] } : undefined} className={tone ? '' : 'text-[var(--color-text-secondary)]'}>
-          {b.monthly_usd != null
-            ? t('usage.budget.line', { spent: money(b.month_spend_usd), cap: money(b.monthly_usd), pct: Math.round((b.share ?? 0) * 100) })
-            : t('usage.budget.none', { spent: money(b.month_spend_usd) })}
-        </span>
-        {b.monthly_usd != null && (
-          <span className="h-1.5 w-40 overflow-hidden rounded-full bg-[var(--color-hover)]" aria-hidden="true">
-            <span className="block h-full rounded-full" style={{ width: `${Math.min(100, Math.round((b.share ?? 0) * 100))}%`,
-              background: tone ? TONE[tone] : 'var(--color-zone-system)' }} />
-          </span>
-        )}
-        {!editing && (
-          <button type="button" className="text-[var(--color-primary)] hover:underline" data-testid="usage-budget-edit"
-            onClick={() => { setDraft(b.monthly_usd != null ? String(b.monthly_usd) : ''); setEditing(true); setError(null); }}>
-            {t('usage.budget.edit')}
-          </button>
-        )}
-        {editing && (
-          <span className="inline-flex items-center gap-2">
-            $<input autoFocus inputMode="decimal" value={draft} onChange={(e) => setDraft(e.target.value)} aria-label={t('usage.budget.edit')}
-              onKeyDown={(e) => { if (e.key === 'Enter') void save(); }}
-              className="w-24 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 tabular-nums" data-testid="usage-budget-input" />
-            <button type="button" className="text-[var(--color-primary)]" onClick={() => void save()} data-testid="usage-budget-save">{t('usage.budget.save')}</button>
-            <button type="button" className={muted} onClick={() => { setEditing(false); setError(null); }}>{t('usage.budget.cancel')}</button>
-          </span>
-        )}
-      </div>
-      <div className={`mt-0.5 ${dim}`}>{tone === 'error' ? t('usage.budget.reached') : t('usage.budget.rule')}</div>
-      {error && <div className="mt-0.5 text-[var(--color-status-error)]" role="alert">{error}</div>}
-    </section>
-  );
 }
 
 function Insight({ r }: { r: UsageReport }) {

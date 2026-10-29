@@ -1,16 +1,13 @@
-"""core/usage_report, the usage view's API and the platform-wide monthly budget
-(design docs/design/2026-10-29-usage-accounting.md §5, §11c).
+"""core/usage_report and the usage view's API (design
+docs/design/2026-10-29-usage-accounting.md §5, §11c).
 
 Questions: (1) is a window's total its spend rows only — attribution never added — with
 the window before split at local midnight; (2) is a CLI result written as one row per
 model one call, and are a turn's percentiles and cost table over those calls; (3) do
 tokens with no price count as unpriced, not as $0 spent; (4) are the largest sessions
-chat and channel ones with their titles, the largest runs the attribution rows, a Hive's
-runs grouped by its dispatch; (5) is this month's spend every machine's spend rows since
-local midnight of the 1st; (6) does the scheduler skip a new agent job when the whole
-platform's spend reaches the budget, and use the jobs' own figure when the ledger cannot
-be read; (7) does the API refuse an unknown window and a budget not above 0, and write
-an accepted budget into the scheduler's config.
+this host's chat and channel ones with their titles, the largest runs the attribution
+rows, a Hive's runs grouped by its dispatch; (5) does the API refuse an unknown window
+and a run id outside a project's runs; (6) is there no monthly budget anywhere.
 """
 from __future__ import annotations
 
@@ -122,55 +119,26 @@ def test_the_largest_sessions_runs_and_hive_runs():
     assert r["gaps"]["hives_reporting"] == ["demo"]
 
 
-def test_month_spend_is_every_machine_since_the_first():
-    first = ur._midnight(TODAY.replace(day=1))
-    c = _conn([dict(at_utc=_at(first, 5), cost_usd=2.0), dict(at_utc=_at(first, 6), machine="demo", cost_usd=3.0),
-               dict(at_utc=_at(first, -5), cost_usd=100.0),
-               dict(at_utc=_at(first, 7), kind="attribution", run_id="r", cost_usd=1.0)])
-    assert ur.month_spend(c, NOW) == 5.0
-
-
-def test_the_budget_is_held_to_the_whole_platform(monkeypatch):
-    from jobs import executor
-    from jobs.models import SchedulerDefaults, SchedulerState
-    state, defaults = SchedulerState(monthly_spend_usd=1.0), SchedulerDefaults(max_monthly_spend_usd=100.0)
-    monkeypatch.setattr(ur, "month_spend", lambda *a, **k: 100.0)
-    msg = executor._check_monthly_budget(state, defaults)
-    assert msg and "$100.00/$100.00" in msg and "whole platform" in msg
-    monkeypatch.setattr(ur, "month_spend", lambda *a, **k: 99.0)
-    assert executor._check_monthly_budget(state, defaults) is None
-    monkeypatch.setattr(ur, "month_spend", lambda *a, **k: 10.0)              # the ledger missed job rows
-    assert "$150.00/$100.00" in executor._check_monthly_budget(SchedulerState(monthly_spend_usd=150.0), defaults)
-    monkeypatch.setattr(ur, "month_spend", lambda *a, **k: None)              # ledger unreadable
-    assert executor._check_monthly_budget(SchedulerState(monthly_spend_usd=150.0), defaults).count("scheduled jobs") == 1
-    assert executor._check_monthly_budget(state, defaults) is None
-
-
-def test_the_api_refuses_bad_input_and_writes_the_budget(tmp_path, monkeypatch):
+def test_the_api_refuses_an_unknown_window_and_a_run_id_outside_runs(tmp_path):
     from fastapi import HTTPException
-    import yaml
-    from jobs import config_io
     from routers import usage
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text("defaults:\n  max_daily_agent_tasks: 50\n  max_monthly_spend_usd: 100.0\nfeeds: []\n")
-    monkeypatch.setattr(config_io, "CONFIG_FILE", cfg)
     with pytest.raises(HTTPException) as e:
         asyncio.run(usage.usage_report_view(window="1y"))
     assert e.value.status_code == 400
-    for bad in (0, -5, float("nan"), 1e9):
-        with pytest.raises(HTTPException):
-            asyncio.run(usage.set_budget(usage.BudgetBody(monthly_usd=bad)))
-    assert yaml.safe_load(cfg.read_text())["defaults"]["max_monthly_spend_usd"] == 100.0
-    assert asyncio.run(usage.set_budget(usage.BudgetBody(monthly_usd=12000))) == {"monthly_usd": 12000}
-    data = yaml.safe_load(cfg.read_text())
-    assert data["defaults"] == {"max_daily_agent_tasks": 50, "max_monthly_spend_usd": 12000}
     leak = tmp_path / "Projects" / "P" / ".artifacts" / "x"            # outside runs/
     leak.mkdir(parents=True)
     (leak / "run.json").write_text('{"requirement": "not a run"}')
     (tmp_path / "Projects" / "P" / ".artifacts" / "runs").mkdir()
     assert usage._run_info(str(tmp_path), "../x") is None
-    cfg.write_text("defaults: [unclosed\nfeeds: x\n")                        # corrupt: reads as {}
-    before = cfg.read_text()
-    with pytest.raises(HTTPException) as e:
-        asyncio.run(usage.set_budget(usage.BudgetBody(monthly_usd=500)))
-    assert e.value.status_code == 503 and cfg.read_text() == before
+
+
+def test_there_is_no_monthly_budget():
+    """No budget setting anywhere: the scheduler holds no job to a monthly spend, the
+    API has no budget route, the report no budget (the user's decision, 2026-10-30)."""
+    from jobs import executor
+    from jobs.models import SchedulerDefaults
+    from routers import usage
+    assert not hasattr(executor, "_check_monthly_budget")
+    assert "max_monthly_spend_usd" not in SchedulerDefaults.model_fields
+    assert not [r for r in usage.router.routes if "budget" in r.path]
+    assert "budget" not in ur.report("7d", _conn([]), NOW)

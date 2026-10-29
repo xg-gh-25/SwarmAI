@@ -1,11 +1,11 @@
-"""The usage view's figures and the platform's spend this month (design
+"""The usage view's figures (design
 docs/design/2026-10-29-usage-accounting.md §5 and §11c, mockup
 Knowledge/Designs/mockups/2026-10-30-usage-view.html).
 
 Everything is read from the usage ledger (core/usage_accounting): its spend rows, of
 every machine (this host and the Hives it pulls) and every surface, are what was spent.
 Attribution rows (a pipeline run's share of the session it ran in) split that spend and
-are never added to a total. Days and months are this machine's local calendar.
+are never added to a total. Days are this machine's local calendar.
 
 The view answers, top down: how much this window spent and how that compares with the
 window before it; where it went (by surface, feature, model or machine, each with its
@@ -13,11 +13,7 @@ billed tokens, cache hit rate, calls and spend per call); which sessions, pipeli
 jobs and Hive runs spent the most; what a turn costs; and what the ledger cannot see
 (tokens with no price, imported estimates, Hives that have not reported).
 
-The scheduler's monthly budget is held to ``month_spend()``: the whole platform's spend
-since the start of this local month (jobs/executor._check_monthly_budget).
-
 - ``report(window, conn, now=None)`` — the view's figures for ``"7d"``, ``"30d"`` or ``"all"``
-- ``month_spend(conn=None, now=None)`` — the platform's spend this month, or None when unreadable
 - ``connect(db_path=None)`` — a read-only connection to the ledger's database
 """
 from __future__ import annotations
@@ -78,24 +74,6 @@ def call_key(row: Mapping[str, Any]) -> str:
     return key
 
 
-def month_spend(conn: Optional[sqlite3.Connection] = None, now: Optional[datetime] = None) -> Optional[float]:
-    """The whole platform's spend since local midnight of the 1st of this month (spend
-    rows of every machine and surface; a row with no known cost adds nothing). None when
-    the ledger cannot be read."""
-    own = conn is None
-    try:
-        conn = conn or connect()
-        try:
-            row = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM usage_ledger WHERE kind='spend' AND at_utc >= ?",
-                               (_midnight(_today(now).replace(day=1)),)).fetchone()
-            return float(row[0])
-        finally:
-            if own:
-                conn.close()
-    except sqlite3.Error:
-        return None
-
-
 def _total(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     rows = list(rows)
     kinds = {k: sum(int(r[k] or 0) for r in rows) for k in KINDS}
@@ -153,8 +131,7 @@ def _top(rows: list, key: Callable[[Mapping[str, Any]], Optional[str]], limit: i
 def report(window: str, conn: sqlite3.Connection, now: Optional[datetime] = None, *,
            session_titles: Optional[Callable[[list[str]], Mapping[str, str]]] = None,
            run_info: Optional[Callable[[str], Optional[Mapping[str, Any]]]] = None,
-           dispatch_titles: Optional[Mapping[str, str]] = None,
-           budget_usd: Optional[float] = None) -> dict[str, Any]:
+           dispatch_titles: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
     """The view's figures for ``window`` (``WINDOWS``). The lookups name what the
     ledger holds only an id for; each is optional (a missing title stays None)."""
     if window not in WINDOWS:
@@ -209,7 +186,6 @@ def report(window: str, conn: sqlite3.Connection, now: Optional[datetime] = None
     imported = [r for r in cur if r["imported"]]
     first_live = conn.execute("SELECT MIN(at_utc) FROM usage_ledger WHERE imported=0 AND machine='host'").fetchone()[0]
     hives = [r[0] for r in conn.execute("SELECT DISTINCT machine FROM usage_ledger WHERE machine != 'host' ORDER BY 1")]
-    month = month_spend(conn, now)
     return {
         "window": window, "since": since, "today": today.isoformat(),
         "total": total, "previous": _total(prev) if since else None,
@@ -228,6 +204,4 @@ def report(window: str, conn: sqlite3.Connection, now: Optional[datetime] = None
                  "imported_cost_usd": round(sum(r["cost_usd"] or 0 for r in imported), 2),
                  "imported_calls": len({call_key(r) for r in imported}),
                  "live_since": first_live, "hives_reporting": hives},
-        "budget": {"month_spend_usd": None if month is None else round(month, 2), "monthly_usd": budget_usd,
-                   "share": round(month / budget_usd, 4) if month is not None and budget_usd else None},
     }

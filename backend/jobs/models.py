@@ -237,9 +237,6 @@ class SchedulerDefaults(BaseModel):
     relevance_threshold: float = 0.3
     max_active_feeds: int = 15
     max_daily_agent_tasks: int = 20
-    # the whole platform's spend this month (usage ledger), not only the jobs': reaching
-    # it stops new agent jobs, nothing else (jobs/executor._check_monthly_budget)
-    max_monthly_spend_usd: float = 10.0
 
 
 class UserContext(BaseModel):

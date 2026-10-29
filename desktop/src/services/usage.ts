@@ -1,5 +1,5 @@
 /**
- * usage — the usage view's data (GET /api/usage/report, PUT /api/usage/budget;
+ * usage — the usage view's data (GET /api/usage/report, read only;
  * backend core/usage_report.py, design docs/design/2026-10-29-usage-accounting.md §5).
  *
  * Every figure is the usage ledger's: spend rows of every machine (this host and the
@@ -77,17 +77,12 @@ export interface UsageReport {
     live_since: string | null;
     hives_reporting: string[];
   };
-  budget: { month_spend_usd: number | null; monthly_usd: number | null; share: number | null };
 }
 
 export const usageService = {
   async report(window: UsageWindow): Promise<UsageReport> {
     const r = await api.get<UsageReport>('/usage/report', { params: { window } });
     return r.data;
-  },
-  async setBudget(monthlyUsd: number): Promise<number> {
-    const r = await api.put<{ monthly_usd: number }>('/usage/budget', { monthly_usd: monthlyUsd });
-    return r.data.monthly_usd;
   },
 };
 

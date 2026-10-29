@@ -1818,7 +1818,7 @@ app.include_router(swarm_out_router, prefix="/api/swarm-out", tags=["swarm-out"]
 from routers.swarm_out_remote import router as swarm_out_remote_router  # noqa: E402
 # a dispatched Hive session opened in a tab (docs/design/2026-10-29-swarm-out-hive-session-tab.md)
 app.include_router(swarm_out_remote_router, prefix="/api/swarm-out/remote", tags=["swarm-out"])
-# the usage view and the monthly budget (docs/design/2026-10-29-usage-accounting.md §5, §11c)
+# the usage view (docs/design/2026-10-29-usage-accounting.md §5, §11c)
 from routers.usage import router as usage_router  # noqa: E402
 app.include_router(usage_router, tags=["usage"])  # prefix /api/usage set in router
 app.include_router(apps_router, prefix="/api/apps", tags=["apps"])

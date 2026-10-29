@@ -270,8 +270,7 @@ SYSTEM_JOBS: list[Job] = [
             "todo_max": 40,
         },
         safety=JobSafety(
-            # max_budget_usd=0: NO per-job dollar cap (matches sibling jobs). Cost is
-            # governed centrally by the scheduler's global monthly budget, not by a
+            # max_budget_usd=0: NO per-job dollar cap (matches sibling jobs): no
             # per-job/per-call dollar number. timeout_seconds is the ONLY real control
             # here — it bounds a genuine hang of the outer job (the per-project inner
             # spawns each carry their own _PER_PROJECT_TIMEOUT_S hang guard).

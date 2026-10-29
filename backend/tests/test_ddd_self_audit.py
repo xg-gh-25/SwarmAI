@@ -255,8 +255,8 @@ class TestNoMutation:
 class TestReviewResultClassification:
     """Two-state classification (clean / failed). We parse stdout on ANY exit code
     purely for OBSERVABILITY — a failure surfaces its real cause, not an opaque
-    'exit N'. There is deliberately NO cost/budget branch: cost is governed centrally
-    (scheduler monthly budget), a hang by the subprocess timeout (run_271c39df:
+    'exit N'. There is deliberately NO cost/budget branch: spend is recorded in the
+    usage ledger, a hang is bounded by the subprocess timeout (run_271c39df:
     a per-call dollar cap was WRONG — it截断 real work as a disaster-recovery control)."""
 
     def test_clean_exit_is_clean(self):

@@ -134,7 +134,7 @@ def test_unusable_scores_fall_back_to_keyword_scoring(monkeypatch):
 
 def test_a_cut_markdown_digest_is_replaced_and_its_tokens_still_count(monkeypatch):
     # A cut digest is never returned as complete; the tokens it spent still reach the
-    # job's monthly budget, and the scores call still runs.
+    # job's token count, and the scores call still runs.
     from jobs.handlers import signal_digest as sd
     _digest_converse(monkeypatch, _tool("scores", {"scores": [
         {"idx": 0, "relevance_score": 0.8}]}), md_stop="max_tokens")
