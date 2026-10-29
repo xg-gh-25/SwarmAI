@@ -1,8 +1,8 @@
 ---
 title: Project Agent —— 从 Intent 到 Hive 执行的整条 flow
 created: 2026-10-28
-updated: 2026-10-28
-status: final (r5)
+updated: 2026-10-29
+status: final (r6)
 project: SwarmAI
 supersedes_partial:
   - docs/design/2026-10-28-swarm-out-project-agent-brief.md（r2 的"简报"成为本设计 §6 的同步机制和 §7 的派发内容）
@@ -13,6 +13,8 @@ extends:
 ---
 
 # Project Agent：从 Intent 到 Hive 执行
+
+**r6（XG 2026-10-29）：** 第 1–10 步落地后，§14 改成和代码一致，并写清 Project Agent 在本机和 Hive 两端各起什么作用（§14.2 逐项对照，§14.3 Hive 上一个会话的生命周期）。§7 ⑨ 和 §15 里"用 `session_worktree land` 落地"改成实际的 `hive_return.land`。
 
 **r5（XG 2026-10-28）：**
 - **一个 Brain 对一个 Project Agent，Project Agent 里分多个工作模式（mode）（§4）。** 同一个 Brain 里的活，在在哪跑、跑哪些校验、准备什么环境、用哪些 skill、交付方式上都不一样，只靠 `profile_rules` 装不下。但如果拆成多个独立的 agent，路由会多一层判断，共享的部分要写好几遍，版本也会散开。所以共享的部分只写一次，每个 mode 只能在它的基础上收紧。
@@ -401,7 +403,7 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
   - **sha256 和大小：** sha256 对得上，大小在上限之内。
   - **仓库名：** 和本机的派发记录逐字比对，必须完全一致。本机的任何路径都不从这个名字拼出来。
   - **bundle 本身：** 先 `git bundle verify`，再用 `git bundle list-heads` 确认**只有一个 ref**。
-  - **取进来：** 在一个新的 worktree 里执行 `git -c fetch.fsckObjects=true -c transfer.fsckObjects=true fetch --no-tags --no-recurse-submodules <bundle> <ref>:refs/hive/<session>/<repo>`。只取这一个 ref，只写进 `refs/hive/` 这个命名空间，碰不到本机的 `refs/heads/*` 和 tag。fsck 不让畸形对象进来，比如带非法路径的 `.gitmodules`。
+  - **取进来：** 执行 `git -c fetch.fsckObjects=true -c transfer.fsckObjects=true fetch --no-tags --no-recurse-submodules <bundle> <ref>:refs/hive/<dispatch>/<key>`。只取这一个 ref，只写进 `refs/hive/` 这个命名空间，碰不到本机的 `refs/heads/*` 和 tag。fsck 不让畸形对象进来，比如带非法路径的 `.gitmodules`。
   - **base：** base 必须已经在本机仓库里，并且从本机的 `main` 或 `origin/main` 可达。同时 `merge-base --is-ancestor <base> <tip>` 必须为真。base 的值由本机自己检查，不认 Hive 报的。
 - **人看过才落地（AskUserQuestion）：**
   - **卡片上列出：** 改了哪些文件、增删多少行、每个 commit 的 sha 和说明。commit 说明是 Hive 写的文字，按数据显示，不进 agent 的上下文。
@@ -414,7 +416,7 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
     这份清单放在仓库自己的 `.swarmai/pipeline.toml` 里（新加一节 `[hive_return] protected`）。每个仓库自己定，产品只提供机制。
   - **人拒绝：** `refs/hive/...` 留着，以后还能看，不会落地。
   - **为什么必须有人看：** Hive 上的 agent 会读到不可信的内容，可能被注入。按 P5，它在 Hive 上能绕过任何 gate。如果不经人看就落地，再在 qualify 时 build、执行，被注入的那一轮就能改掉本机的保护代码，而且这些代码会在本机、用你的凭据跑起来。push 由人决定也来不及，因为 qualify 在 push 之前就已经执行了这些代码。
-- **落地：** 人批了以后，用 `session_worktree land` 落到本机 main。`land` 自带 rebase 和"不能把别人的改动改回去"的检查。
+- **落地：** 人批了以后，`hive_return.land` 在对象层把审过的改动合到本机 main 上：生成一个说明由本机写的 commit，再 fast-forward。合不上（冲突）就拒，不跑 hook，Hive 的原 commit 留在 `refs/hive/` 下。（r5 原来写的是 `session_worktree land`。实现时改掉了：在工作区里落地会把文件写穿依赖目录的软链，见下面的实现说明。）
 - **qualify：** 必须在人批准之后才做，按仓库自己的规则来。SwarmAI 的规则是 STEERING #5：build、部署、看到生效、受影响的测试是绿的。push 仍然只由人决定。
 - **Hive 写的文字不进本机 agent 的上下文：** 落地后，`code_change_feed` 会读 commit 说明，把它当成数据加上界线标记，或者在落地时重写 commit 说明、原文作为引用保留。这样 Hive 写的话不会顺着代码变更流，进到本机 agent 之后的上下文里。
 - **实现（第 9 步）：**
@@ -681,41 +683,90 @@ Hive 不推送，也不需要推送凭据。改动以 `git bundle` 的形式回�
 
 ## 14. E2E 流程图
 
+**Project Agent 是什么：** 它不是一个常驻的进程，而是本机 Brain 里的一份定义 `project-agent.yaml`（schema v2，带 modes，有 revision）。同一份定义在三个地方起作用：
+- **本机派发前：** 把 Intent 变成 Task Spec，做准入（①–④）。
+- **Hive 执行时：** Hive 从同步过去的那份 Brain 里重新读这份定义，钉成会话的 pin。会话里的钩子按 pin 执行（⑥）。
+- **本机收回时：** 按本机这份定义核对结果、代码和教训（⑦–⑩）。
+
+本机和 Hive 用的是不是同一份定义，由 revision 保证：本机给你看的是 revision r，Hive 读到的必须也是 r，否则会话不启动。
+
+### 14.1 时序
+
+以 §15 的 SwarmAI 改动为例。
+
 ```mermaid
 sequenceDiagram
     autonumber
     actor XG as 人（XG）
-    participant H as 本机 SwarmAI<br/>（Project Agent · 唯一写入者）
-    participant B as 本机 Brain<br/>Projects/SwarmAI
-    participant HV as Hive<br/>（执行者）
+    participant H as 本机 SwarmAI<br/>（唯一写入者）
+    participant PA as 本机 Brain SwarmAI<br/>+ Project Agent 定义
+    participant HB as Hive 上的 Brain 副本
+    participant HV as Hive 会话<br/>（钉在 Project Agent 上）
     participant G as GitHub（只读 clone）
 
     XG->>H: Intent："Swarm Out 的 run 卡片上显示它属于哪个 Brain"
-    H->>H: ① 路由 detect_active_project<br/>别名"Swarm Out"命中 SwarmAI（或模型提议 + 人选）
-    H->>B: 读 project-agent.yaml（reviewed，revision r）
-    H->>H: ② Task Spec：profile=bugfix（规则命中）· 验收 · 仓库 swarmai@main · placement=hive
-    H->>H: ③ 准入（确定性）：定义有效 · reviewed · 有 hive · 远端可拉 · 验收非空
-    H->>XG: ④ 确认（AskUserQuestion）
+    H->>PA: ① task_spec.route：handles / 别名命中 SwarmAI（拿不准就列出来问你）
+    PA-->>H: project-agent.yaml（reviewed，revision r）
+    H->>H: ② task_spec.build：mode code-change → profile bugfix<br/>仓库 swarmai@main · setup · validations · 验收 · delivery bundle
+    H->>H: ③ task_spec.admit（确定性，拒绝时说是哪一条）
+    H->>XG: ④ 确认：Brain · mode · profile · 验收 · 仓库 · revision r
     XG-->>H: 派
-    H->>HV: ⑤ GET /api/hive/brains → Hive 上 SwarmAI 的 digest 过期
-    H->>HV: PUT /api/hive/brains/SwarmAI（包 + digest）
-    HV->>HV: 锁 · 核对 · 按文件替换 · .brain.json · skill 重扫和投影
-    H->>HV: ⑥ 派发：task + {brain, revision, brain_digest, gates_digest}
-    HV->>G: 按项目段 clone/fetch swarmai 到 Hive/repos/...
-    HV->>HV: setup（uv sync / npm ci）→ pipeline bugfix<br/>Brain gate 检查 · 保留动作要批
-    HV-->>H: （需要时）审批经 bridge 回到本机
-    H-->>XG: Swarm Out 面板"等你"
-    XG-->>H: 批 / 拒
-    HV->>HV: 校验 · 提交到本地 · turn_outcome（结局 · repos · 校验 · bundle sha）
-    HV->>HV: ⑨ git bundle base..HEAD
-    H->>HV: ⑦ 取回结果 + bundle（run-results 通道）
-    H->>H: 核对 sha256 · 单一 ref · fsck · base 在本机历史里 · 仓库名对上派发记录<br/>fetch 到 refs/hive/…（碰不到 main）
-    H->>XG: ⑧ 面板（SwarmAI 一组）：做完 · 1 个 commit · 校验跑了 · 等你看 diff
-    XG-->>H: 看 diff（受保护路径单独批）→ 批
-    H->>H: session_worktree land → 本机 main
+    H->>HB: ⑤ GET /api/hive/brains → digest 过期
+    H->>HB: PUT /api/hive/brains/SwarmAI（包 + digest）<br/>核对后按文件替换，重扫 Brain 的 skill（有 turn 在用就 423）
+    H->>HV: ⑥ dispatch_spec：任务 = 项目段（task_spec.segment）+ Task<br/>pin 请求 = brain · mode · revision r
+    HV->>HB: make_pin：读副本里的定义，revision 必须等于 r<br/>定下 mode · 保留动作 · gates · 3-gates 的 digest，写进会话记录
+    HV->>HV: 每个 turn 持有这个 Brain（brain_use），同步不能中途替换它
+    HV->>G: clone / fetch swarmai 到 Hive/repos/...
+    HV->>HB: knowledge find --project SwarmAI（查自己这份副本）
+    HV->>HV: setup → pipeline bugfix → validations<br/>每次 Bash / Write / Edit 先过：保留动作钩子 · Brain gate（3-gates）
+    HV-->>XG: 保留动作（如 git push）的审批，经 bridge 镜像到本机面板
+    HV->>HV: turn 结束：只在 Hive 本地提交 · 仓库事实 · hive_bundle 打 base..HEAD<br/>gate 拦截数 → turn_outcome
+    H->>HV: ⑦ swarm_out_results.fetch：消息 + turn_outcome
+    H->>H: 按本机定义核对：哪些 validations 跑了 · gate 拦了几次
+    H->>XG: ⑧ 面板（SwarmAI 一组）：做完 · 1 个 commit · 校验跑了 · 可取回改动
+    XG->>H: 取回改动并审阅
+    H->>HV: ⑨ GET /api/hive/bundles/{session}/{key}
+    H->>H: hive_return.prepare：sha256 · 单一 ref · 前置提交在本机分支里 · fsck<br/>只进 refs/hive/{dispatch}/{key} · 列出文件和受保护路径
+    XG-->>H: 批准落地（受保护路径单独勾）
+    H->>H: hive_return.land：merge-tree + commit-tree，生成一个本机写说明的 commit<br/>fast-forward main（不跑 hook，冲突就拒）
     XG->>H: qualify：build · 部署 · 看到生效 → push（人决定）
-    HV-->>H: ⑩ 教训（记录）→ 本机判官 → 写进 SwarmAI Brain
+    HV->>HV: Hive 自己的 CDF：S7 会话复盘、S3 REFLECT 抽出教训
+    H->>HV: ⑩ GET /api/hive/lessons/{session}
+    H->>PA: hive_lessons → 本机判官（同一条 CDF）<br/>只能写进 SwarmAI · 外部信任，进不了每轮注入的文件 → IMPROVEMENT
+    Note over H,PA: 下一次派发同步的，就是吸收了这条教训的 Brain
 ```
+
+### 14.2 定义里的每一项，两端怎么用
+
+| 定义里的 | 本机（派发前、收回时） | Hive（执行时） |
+|---|---|---|
+| `handles`、别名 | ① 路由到这个 Brain | — |
+| `modes[].when` / `profile` | ② 选 mode 和 profile | 项目段里写明用哪个 profile 跑 pipeline |
+| 仓库（`bindings.yaml`）、`delivery` | ② 声明仓库和分支。⑨ 只收声明过的仓库，key 由本机发出的目录名算 | 按项目段 clone。只提交、不推，turn 结束打 bundle |
+| `setup`、`validations` | ③ 命令必须有出处。⑦ 按本机这份清单，对 Hive 的 Bash 调用逐条比，看哪些跑了 | 项目段里列出，agent 照着跑 |
+| `acceptance`、`watches` | ③ 验收不能为空。④ 给你看 | 项目段里列出 |
+| `reservedForHuman` | — | pin 里的保留动作。命中的命令每次都要人批，审批镜像回本机 |
+| `gates`（`3-gates/`） | 同步时只带白名单里的文件 | pin 记下 `3-gates/` 的 digest。每次调用先核对 digest，再在隔离目录里跑 gate，出错也拦。拦截按 gate 计数 |
+| `skills`（`4-capabilities/`） | 同步时带 domain skill，不带 enablement skill | 安装后重扫、投影，会话里可用。项目段里点名本次用哪几个 |
+| 知识（`2-understanding/` 及 archive、data-contract） | ⑩ 教训写回这里 | `knowledge find` 查自己的副本，条目 id 和本机一致 |
+| `revision` | ④ 给你看。⑥ 随派发带过去 | make_pin 比对，不一致就不启动 |
+
+### 14.3 Hive 上一个会话的生命周期
+
+1. **启动：** 收到带 pin 请求的任务。没有 revision 的 pin 直接拒（`routers/chat.py`）。`make_pin` 从 Hive 上的 Brain 副本读定义，比对 revision，把 mode、保留动作、gates、`3-gates/` digest 写进会话记录。会话记录写不进去，会话就不启动。
+2. **每个 turn：** 先持有这个 Brain（`brain_use`），这期间本机推来的新包会收到 423。turn 结束才放开。
+3. **每次调用工具：** 钩子从会话记录读 pin（重启后也是同一份）。读不到 pin 时，Bash、Write、Edit 一律拒。命令命中保留动作，就走审批。`3-gates/` 和 pin 记下的 digest 不一致，或某个 gate 拒绝、出错，这次调用就被拦下并计数。
+4. **turn 结束：** 写 `turn_outcome`，内容是结局、每个仓库的事实（base、head、commit 数、文件数、有没有推）、bundle 的 sha256、gate 拦截数。
+5. **会话之后：** Hive 自己的 CDF 照常复盘，也会写进 Hive 那份 Brain。那些写入下次同步时被还原，教训经 ⑩ 回到本机。
+
+### 14.4 人在哪几处出现
+
+- **④ 派不派。**
+- **⑥ 保留动作批不批。**
+- **⑨ 改动落不落地。** 受保护路径单独批。
+- **qualify 之后，push 不 push。**
+
+其余的路由、准入、同步、核对、教训判定都是确定性的，并留下记录。
 
 ## 15. 推演：一个 SwarmAI 的代码改动
 
@@ -730,19 +781,19 @@ sequenceDiagram
 | ③ 准入 | 定义有效，是 reviewed，`placements` 里有 `hive`。仓库是公开的，Hive 拉得到。4 个开发 skill 是 `platform: desktop`，项目段在 Hive 上不会列出它们 | `4-capabilities/s_swarm-*/SKILL.md` |
 | ④ 确认 | 你看到：SwarmAI · code-change / bugfix · bundle · 验收两条 · swarmai@main · explorer · revision 前 8 位 | — |
 | ⑤ 同步 | explorer 上的 SwarmAI 还是 `--with-live-ddd` 的旧 seed，digest 对不上，先推一个新包（约 5 MB）。装的时候拿锁，没有用 SwarmAI 的 run 在跑 | §6 |
-| ⑥ 执行 | Hive 上的 agent 读到项目段：`AGENTS.md`、知识地图、审查重点（例如"前端改动要先读 `s_frontend-design` 的 design-judgment"）、`setup`、要跑的校验（受影响的 vitest、tsc）、"只提交、不推"、保留动作。它 clone 仓库，跑 setup，进 pipeline bugfix。SwarmAI 的 `3-gates/` 里没有 gate 脚本，所以 Brain gate 这一层什么都不执行。它在 Hive 本地 clone 的 main 上 land（pipeline 的落地），不推 | `.swarmai/pipeline.toml`、`ci.yml` |
+| ⑥ 执行 | Hive 收到任务和 pin 请求。`make_pin` 从它那份 SwarmAI 副本读定义，revision 对得上，定下 mode、保留动作和 gates。agent 读到项目段：Brain 和 mode、用 `knowledge find --project SwarmAI` 查副本、审查重点（例如"前端改动要先读 `s_frontend-design` 的 design-judgment"）、`setup`、要跑的校验（受影响的 vitest、tsc）、"只提交、不推"。它 clone 仓库，跑 setup，进 pipeline bugfix。SwarmAI 的 `3-gates/` 里没有 gate 脚本，所以 Brain gate 这一层什么都不执行，保留动作照样要批。它只在 Hive 本地 clone 的 main 上提交，不推。turn 结束打 bundle | `core/project_agent_session.py`、`task_spec.segment` |
 | ⑦ 记录 | `turn_outcome`：结局 `completed`。`repos[0]`：2 个文件 +40 −3、1 个 commit、`pushed: no`、bundle sha。校验：vitest 跑了，tsc 跑了。`brain: SwarmAI`、`revision`。pipeline 五维 | run-results 设计 |
-| ⑨ 代码回本机 | 本机取回 bundle，核对 sha256。bundle 里只有一个 ref，fsck 通过，base 在本机 main 的历史里，仓库名和派发记录里的 `swarmai` 一致。fetch 到 `refs/hive/<session>/swarmai` | §7 ⑨ |
+| ⑨ 代码回本机 | 你点"取回改动并审阅"。本机取回 bundle，核对 sha256。bundle 里只有一个 ref，fsck 通过，前置提交在本机 main 的历史里，仓库的 URL 和派发记录一致。fetch 到 `refs/hive/<dispatch>/<key>` | §7 ⑨，`core/hive_return.py` |
 | ⑧ 面板 | SwarmAI 一组里，这张卡片写着：做完 · swarmai：1 个 commit，改了 2 个文件 +40 −3 · 校验：vitest、tsc 跑了 · **等你看 diff** | — |
-| 人看 diff | 卡片列出 2 个文件：`LiveDispatches.tsx`、`swarm_out_results.py`。都不在受保护路径里，你看过后批准。然后 `session_worktree land`：本机 main 上有别人的新提交，`land` 先 rebase，再做回退检查，然后 fast-forward | `scripts/session_worktree.py:140` |
+| 人看 diff | 卡片列出 2 个文件：`LiveDispatches.tsx`、`swarm_out_results.py`。都不在受保护路径里，你看过后批准。`hive_return.land`：本机 main 上有别人的新提交，就用 `merge-tree` 把改动合到当前 main 上，生成一个本机写说明的 commit，再 fast-forward。冲突就拒 | `core/hive_return.py` |
 | qualify | 你 build、重启，看到卡片上真的出现 Brain 名。受影响的测试本机再跑一次，是绿的。然后决定 push | STEERING #5 |
-| ⑩ 经验 | REFLECT 出一条教训（例如"`/runs` 白名单要显式加字段，否则新字段到不了卡片"），作为记录交回，过本机判官，写进 SwarmAI 的 IMPROVEMENT | §13 |
+| ⑩ 经验 | Hive 的 REFLECT 出一条教训（例如"`/runs` 白名单要显式加字段，否则新字段到不了卡片"），scope 是 `project:SwarmAI`。本机取结果时经 `/api/hive/lessons` 拿回，换成本机的外部证据，过本机判官，写进 SwarmAI 的 IMPROVEMENT。卡片上：教训交回 1 条，写进 Brain 1 条 | §13，`core/hive_lessons.py` |
 
 **推演暴露出的缺口和处理（已经补进正文）：**
 
 | 缺口 | 处理 |
 |---|---|
-| Hive 上的 commit 回不到本机 | §7 ⑨：bundle，人看 diff，再在本机 `land` |
+| Hive 上的 commit 回不到本机 | §7 ⑨：bundle，人看 diff，再在本机由 `hive_return.land` 落地 |
 | Hive 上没有开发依赖，校验跑不起来 | 每个 mode 加 `setup`，从 CI 里抄 |
 | SwarmAI 的开发 skill 只能在桌面上用 | 校验按 `placements` 标出。项目段在 Hive 上不列出它们 |
 | "Swarm Out"这类说法认不出是 SwarmAI | 生成器提议 `aim.json` 的 `aliases`，人审 |
