@@ -227,7 +227,7 @@ class LLMJudge:
         from jobs.bedrock import structured
 
         model_id, _ = _resolve_bedrock_model()
-        return structured(prompt, schema=self.SCHEMA, system=_JUDGE_SYSTEM_PROMPT,
+        return structured(prompt, schema=self.SCHEMA, system=_JUDGE_SYSTEM_PROMPT, feature="skill.fitness",
                           model_id=model_id, max_tokens=self.MAX_TOKENS, temperature=0.1,
                           name="score", description="Record the score of the output.",
                           region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),

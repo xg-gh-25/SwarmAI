@@ -194,7 +194,7 @@ def _ask_changes(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[dict, LLMUs
 
     model_id, _ = _resolve_bedrock_model()
     raw_usage: dict = {}
-    data = structured(prompt, schema=_CHANGES_SCHEMA, system=system, model_id=model_id,
+    data = structured(prompt, schema=_CHANGES_SCHEMA, system=system, model_id=model_id, feature="skill.optimize",
                       max_tokens=_MAX_TOKENS, temperature=0.3, name="changes",
                       description="Record the proposed text changes.",
                       region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),

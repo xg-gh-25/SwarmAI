@@ -1274,7 +1274,7 @@ Record your verdict with the verdict tool: first each assertion with pass or fai
         # so a stale cred moment self-heals instead of zeroing every LLM-judged case
         # (the 2026-06-28 nightly errored 90/147, all "unable to assume credentials").
         judge_result = structured(
-            judge_prompt, schema=RUBRIC_JUDGE_SCHEMA, system=RUBRIC_JUDGE_SYSTEM,
+            judge_prompt, schema=RUBRIC_JUDGE_SCHEMA, system=RUBRIC_JUDGE_SYSTEM, feature="eval.judge",
             model_id=_get_judge_model(), max_tokens=RUBRIC_JUDGE_MAX_TOKENS,
             temperature=0.0, name="verdict", description="Record the verdict on the case.",
             region=_judge_region(), read_timeout=_JUDGE_READ_TIMEOUT,
@@ -1427,7 +1427,7 @@ def _judge_decision_direction(case: dict, final_text: str) -> dict:
     try:
         # Credential-resilient, fail-fast (see eval_llm_judge); env-first region.
         jr = structured(
-            judge_prompt, schema=DECISION_JUDGE_SCHEMA, system=DECISION_JUDGE_SYSTEM,
+            judge_prompt, schema=DECISION_JUDGE_SCHEMA, system=DECISION_JUDGE_SYSTEM, feature="eval.judge",
             model_id=_get_judge_model(), max_tokens=DECISION_JUDGE_MAX_TOKENS,
             temperature=DECISION_JUDGE_TEMPERATURE, name="verdict",
             description="Record the verdict on the agent's answer.",

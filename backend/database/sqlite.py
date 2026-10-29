@@ -2115,6 +2115,20 @@ _USAGE_LEDGER_COLUMNS = (
     "dispatch_id", "model", "input", "output", "cache_read", "cache_write", "cost_usd",
     "cost_source", "cli_pid", "cli_cost_total", "kind", "imported", "dedup_key",
 )
+
+
+def usage_ledger_insert_sql() -> str:
+    """The one INSERT of usage ledger rows (async pool and sync writers share it); a row
+    whose ``dedup_key`` is already there is skipped."""
+    cols = _USAGE_LEDGER_COLUMNS
+    return (f"INSERT OR IGNORE INTO usage_ledger({', '.join(cols)}) "
+            f"VALUES ({', '.join('?' for _ in cols)})")
+
+
+def usage_ledger_values(rows: list) -> list:
+    return [tuple(r.get(c) for c in _USAGE_LEDGER_COLUMNS) for r in rows]
+
+
 _USAGE_LEDGER_DDL = (
     """CREATE TABLE IF NOT EXISTS usage_ledger (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4284,10 +4298,7 @@ class SQLiteDatabase(BaseDatabase):
         is already there is skipped. Returns how many were written."""
         if not rows:
             return 0
-        cols = _USAGE_LEDGER_COLUMNS
-        sql = (f"INSERT OR IGNORE INTO usage_ledger({', '.join(cols)}) "
-               f"VALUES ({', '.join('?' for _ in cols)})")
-        values = [tuple(r.get(c) for c in cols) for r in rows]
+        sql, values = usage_ledger_insert_sql(), usage_ledger_values(rows)
         async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
             before = conn.total_changes
             await conn.executemany(sql, values)

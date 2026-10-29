@@ -365,6 +365,18 @@ def _converse_kwargs(model_id: str, messages: list, system: list,
     return kw
 
 
+def _ledger(resp: dict, model_id: str, feature: str | None) -> dict:
+    """Write one answered call to the usage ledger; the response passes through. Never
+    raises: accounting must not break the call."""
+    try:
+        from core import usage_accounting
+        usage_accounting.record_sync([usage_accounting.bedrock_row(
+            (resp or {}).get("usage") or {}, model=model_id, feature=feature)])
+    except Exception:  # noqa: BLE001
+        logger.debug("usage ledger not written for a Bedrock call", exc_info=True)
+    return resp
+
+
 def converse_with_retry(
     *,
     messages: list,
@@ -375,8 +387,13 @@ def converse_with_retry(
     read_timeout: int | None = None,
     max_attempts: int | None = None,
     tool_config: dict | None = None,
+    feature: str | None = None,
 ) -> dict:
     """client.converse() with credential eviction + a single auth-error retry.
+
+    Every answered call is written to the usage ledger (core/usage_accounting), its
+    four kinds of token and *feature* (what it is spent for; else the enclosing
+    ``usage_accounting.attribute`` block): the one place every direct model call passes.
 
     The transport under structured() and text(), so every model answer gets it: a
     transient stale-credential moment self-heals instead of zeroing out every
@@ -435,7 +452,8 @@ def converse_with_retry(
                     read_timeout=read_timeout, max_attempts=ffa, region=region
                 )
                 kwargs = _converse_kwargs(model_id, messages, system, inference_config, tool_config)
-                return _bounded(lambda: client.converse(**kwargs), _wall_bound(read_timeout, ffa))
+                return _ledger(_bounded(lambda: client.converse(**kwargs), _wall_bound(read_timeout, ffa)),
+                               model_id, feature)
             except Exception as e:
                 err_str = str(e).lower()
                 retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
@@ -450,8 +468,8 @@ def converse_with_retry(
     for attempt in range(2):
         try:
             client = get_client(force_new=(attempt > 0), region=region)
-            return client.converse(**_converse_kwargs(
-                model_id, messages, system, inference_config, tool_config))
+            return _ledger(client.converse(**_converse_kwargs(
+                model_id, messages, system, inference_config, tool_config)), model_id, feature)
         except Exception as e:
             err_str = str(e).lower()
             retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
@@ -630,7 +648,7 @@ def _record(resp: dict, model_id: str) -> None:
 def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperature: float,
           region: str | None, read_timeout: int | None, max_attempts: int | None,
           tool_config: dict | None, record_usage: bool,
-          usage: dict | None = None) -> tuple[str, list]:
+          usage: dict | None = None, feature: str | None = None) -> tuple[str, list]:
     from model_registry import supports_custom_temperature
 
     inference: dict = {"maxTokens": max_tokens}
@@ -641,7 +659,7 @@ def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperatu
         system=[{"text": system}] if system else [],
         inference_config=inference,
         model_id=model_id, region=region, read_timeout=read_timeout,
-        max_attempts=max_attempts, tool_config=tool_config,
+        max_attempts=max_attempts, tool_config=tool_config, feature=feature,
     )
     if record_usage:
         _record(resp, model_id)
@@ -667,6 +685,7 @@ def structured(
     max_attempts: int | None = None,
     record_usage: bool = False,
     usage: dict | None = None,
+    feature: str | None = None,
 ) -> dict:
     """A model's answer to *prompt* as a dict matching *schema* (an object schema).
 
@@ -677,8 +696,9 @@ def structured(
     (model_registry.supports_custom_temperature). Put a free-text field such as
     ``reasoning`` first in a verdict schema: the model writes its analysis there
     instead of before the answer. Raises StructuredOutputError (truncated / missing /
-    invalid); a Bedrock error propagates as from converse_with_retry. *record_usage*
-    records token usage the way the background jobs always have; a dict passed as
+    invalid); a Bedrock error propagates as from converse_with_retry. *feature* names
+    what the call is spent for in the usage ledger (every call is recorded there).
+    *record_usage* also writes the legacy ``token_usage`` row; a dict passed as
     *usage* is filled with this call's input_tokens and output_tokens.
     """
     from model_registry import supports_forced_tool_choice
@@ -698,7 +718,7 @@ def structured(
     stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
                          temperature=temperature, region=region, read_timeout=read_timeout,
                          max_attempts=max_attempts, record_usage=record_usage, usage=usage,
-                         tool_config={"tools": [tool], "toolChoice": choice})
+                         tool_config={"tools": [tool], "toolChoice": choice}, feature=feature)
     import json as _json
     raw = _json.dumps(blocks, ensure_ascii=False, default=str)
     if stop == "max_tokens":
@@ -726,14 +746,15 @@ def text(
     max_attempts: int | None = None,
     record_usage: bool = False,
     usage: dict | None = None,
+    feature: str | None = None,
 ) -> str:
     """A model's plain-text answer to *prompt*. A reply cut by max_tokens raises
     StructuredOutputError("truncated") instead of being returned as if complete; an
-    empty reply raises ("missing"). *record_usage* and *usage* as in structured()."""
+    empty reply raises ("missing"). *feature*, *record_usage* and *usage* as in structured()."""
     stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
                          temperature=temperature, region=region, read_timeout=read_timeout,
                          max_attempts=max_attempts, tool_config=None, record_usage=record_usage,
-                         usage=usage)
+                         usage=usage, feature=feature)
     out = "".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
     if stop == "max_tokens":
         raise StructuredOutputError("truncated", out, f"reply reached max_tokens={max_tokens}")

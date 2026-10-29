@@ -121,3 +121,171 @@ async def test_a_row_is_written_once():
 def test_the_ledger_is_in_the_backup():
     from core.backup_manager import L2_TABLES
     assert "usage_ledger" in L2_TABLES
+
+
+@pytest.mark.asyncio
+async def test_the_accounting_call_writes_both_once_per_result():
+    """The orchestrator's accounting call: the ledger gets the result's rows, per model
+    and as the process's increase, the legacy token_usage row is still written for older
+    readers, and a result seen by a second path is not counted again. (That the real
+    result paths reach it: test_context_warning_bridge.TestUsageLedgerOnResultPaths.)"""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+    from core.streaming_orchestrator import StreamingOrchestrator
+    parent = SimpleNamespace(session_id="sess-o", pid=4242, is_channel_session=True, _model_name="opus")
+    orch = StreamingOrchestrator(parent)
+    ua.cli_results._last.clear()
+    import database
+    r1, r2 = (result(m.model_usage, m.total_cost_usd, m.usage) for m in (R1, R2))
+    rows: list = []
+    with patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)), \
+            patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)) as legacy:
+        orch._record_token_usage_bg(r1, r1.usage)
+        orch._record_token_usage_bg(r2, r2.usage)
+        orch._record_token_usage_bg(r2, r2.usage)          # another path seeing the same result
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    assert [(r["surface"], r["session_id"], r["cli_pid"], r["cache_write"]) for r in rows] == \
+        [("channel", "sess-o", 4242, 18815), ("channel", "sess-o", 4242, 667)]
+    assert legacy.await_count == 2
+
+
+def test_every_direct_model_call_names_its_feature():
+    """Every call of jobs.bedrock.structured / text in the product passes feature=, so no
+    model call reaches the ledger as 'unattributed' (design §10 invariant 6)."""
+    import ast
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    missing = []
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).as_posix()
+        if rel.startswith(("tests/", ".venv/")) or "/tests/" in rel or rel.endswith("_test.py") or rel == "jobs/bedrock.py":
+            continue
+        src = path.read_text(encoding="utf-8", errors="ignore")
+        if "jobs.bedrock" not in src and "jobs import bedrock" not in src:
+            continue
+        tree = ast.parse(src)
+        names, modules = set(), {"bedrock", "_bedrock"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "jobs.bedrock":
+                names |= {a.asname or a.name for a in node.names if a.name in ("structured", "text", "converse_with_retry")}
+            elif isinstance(node, ast.ImportFrom) and node.module == "jobs":
+                modules |= {a.asname or a.name for a in node.names if a.name == "bedrock"}
+            elif isinstance(node, ast.Import):
+                modules |= {a.asname for a in node.names if a.name == "jobs.bedrock" and a.asname}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            receiver = f.value if isinstance(f, ast.Attribute) else None
+            via_module = isinstance(receiver, ast.Name) and receiver.id in modules or (
+                isinstance(receiver, ast.Attribute) and receiver.attr == "bedrock"
+                and isinstance(receiver.value, ast.Name) and receiver.value.id == "jobs")
+            called = f.id if isinstance(f, ast.Name) and f.id in names else (
+                f.attr if isinstance(f, ast.Attribute) and f.attr in ("structured", "text", "converse_with_retry")
+                and via_module else None)
+            # a **kwargs spread may carry it; only an explicit call without it is reported
+            if called and not any(k.arg in ("feature", None) for k in node.keywords):
+                missing.append(f"{rel}:{node.lineno} {called}()")
+    assert missing == [], missing
+
+
+def test_a_bedrock_answer_is_written_to_the_ledger_with_its_feature(monkeypatch):
+    from jobs import bedrock
+    seen = []
+    monkeypatch.setattr("core.usage_accounting.record_sync", lambda rows: seen.extend(rows))
+    reply = {"output": {"message": {"content": [{"text": "hi"}]}}, "stopReason": "end_turn",
+             "usage": {"inputTokens": 7, "outputTokens": 3, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}}
+    client = SimpleNamespace(converse=lambda **kw: reply)
+    monkeypatch.setattr(bedrock, "get_client", lambda **kw: client)
+    assert bedrock.text("q", model_id="m", max_tokens=10, feature="eval.judge") == "hi"
+    assert [(r["feature"], r["surface"], r["input"], r["output"], r["model"]) for r in seen] == [("eval.judge", "eval", 7, 3, "m")]
+
+
+def _ledger_db(path):
+    import sqlite3
+    from database.sqlite import _USAGE_LEDGER_DDL
+    with sqlite3.connect(path) as conn:
+        for stmt in _USAGE_LEDGER_DDL:
+            conn.execute(stmt)
+
+
+def test_the_writer_thread_writes_queued_rows_once_and_never_waits_the_caller(tmp_path, monkeypatch):
+    """Rows from any thread, with or without a loop, go to one writer thread: the caller
+    returns at once, no event loop is made, a replayed row is not written twice."""
+    import sqlite3
+    import threading
+    db_file = tmp_path / "u.db"
+    _ledger_db(db_file)
+    w = ua._Writer()
+    w._db_path = str(db_file)
+    monkeypatch.setattr(ua, "_writer", w)
+    monkeypatch.setattr("asyncio.run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asyncio.run used")))
+    rows = [ua.bedrock_row({"inputTokens": 1, "outputTokens": 2}, model="m", feature="job.x")]
+    t = threading.Thread(target=ua.record_sync, args=(rows,))
+    t.start(); t.join()
+    ua.record_sync(rows)
+    assert ua.flush(5)
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("SELECT feature, surface, input, output FROM usage_ledger").fetchall() == [("job.x", "job", 1, 2)]
+    assert ua.stats()["written"] == 2 and ua.stats()["lost"] == 0
+
+
+def test_the_writer_never_creates_a_database_and_counts_what_it_lost(tmp_path, monkeypatch):
+    missing = tmp_path / "none.db"
+    w = ua._Writer()
+    w._db_path = str(missing)
+    monkeypatch.setattr(ua, "_writer", w)
+    ua.record_sync([ua.bedrock_row({"inputTokens": 1}, model="m", feature="job.x")])
+    assert ua.flush(10)
+    assert not missing.exists()
+    assert ua.stats()["lost"] == 1
+
+
+def test_a_full_queue_drops_and_counts_instead_of_blocking(monkeypatch):
+    w = ua._Writer()
+    monkeypatch.setattr(w, "_start", lambda: None)          # no writer: the queue only fills
+    monkeypatch.setattr(w, "MAX_QUEUED", 2)
+    import queue as _q
+    w._q = _q.Queue(2)
+    w.put([{"dedup_key": str(i)} for i in range(5)])
+    assert (w._q.qsize(), w.dropped) == (2, 3)
+
+
+def test_keys_never_repeat_across_trackers_and_a_new_pid_is_a_new_process():
+    a, b = ua.CliResults(), ua.CliResults()                # a daemon restart is a new tracker
+    k1 = a.rows(R1, session_id="s", pid=None, surface="chat")[0]["dedup_key"]
+    k2 = b.rows(R1, session_id="s", pid=None, surface="chat")[0]["dedup_key"]
+    assert k1 != k2
+    t = ua.CliResults()
+    t.rows(result(mu("m", 5, 50, 1000, 100, 2.0), 2.0), session_id="s", pid=1, surface="chat")
+    # a new process whose first total is above the old one's: counted whole, not as a difference
+    (r,) = t.rows(result(mu("m", 9, 60, 2000, 200, 3.0), 3.0), session_id="s", pid=2, surface="chat")
+    assert (r["output"], r["cost_usd"], r["cli_pid"]) == (60, 3.0, 2)
+    # a result with no pid (the process already gone) continues the session's last process
+    (r,) = t.rows(result(mu("m", 10, 70, 2000, 200, 3.5), 3.5), session_id="s", pid=None, surface="chat")
+    assert (r["output"], r["cost_usd"], r["cli_pid"]) == (10, 0.5, 2)
+
+
+def test_a_failed_agent_job_still_records_what_it_spent(monkeypatch):
+    """An agent job that exits non-zero spent tokens too: its CLI JSON output reaches the
+    ledger before the failure returns, summed per model, under the job's id."""
+    import json as _json
+    from jobs import executor
+    from jobs.models import Job, JobType, SchedulerState
+    seen = []
+    monkeypatch.setattr("core.usage_accounting.record_sync", lambda rows: seen.extend(rows))
+    for name, value in {"_resolve_claude_cli": lambda: "claude", "_check_claude_auth": lambda p: None,
+                        "_get_aws_credentials": lambda: {}, "_cli_version": lambda p: "2.1.300",
+                        "_cli_supports_bare": lambda p, v: False, "cli_too_old_message": lambda v, m: None,
+                        "_load_mcp_config": lambda: {}, "_build_cli_env": lambda c=None: {}}.items():
+        monkeypatch.setattr(executor, name, value)
+    out = {"is_error": True, "total_cost_usd": 0.9,
+           "modelUsage": {**mu("opus", 10, 100, 1000, 0, 0.8), **mu("haiku", 50, 5, 0, 0, 0.1)}}
+    monkeypatch.setattr(executor.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=1, stdout=_json.dumps(out), stderr="boom"))
+    job = Job(id="j1", name="j", type=list(JobType)[0], schedule="0 0 * * *", config={"prompt": "do it"})
+    res = executor._handle_agent_task(job, SchedulerState())
+    assert res.status == "failed"
+    assert sorted((r["model"], r["surface"], r["job_id"], r["cost_usd"]) for r in seen) == \
+        [("haiku", "job", "j1", 0.1), ("opus", "job", "j1", 0.8)]

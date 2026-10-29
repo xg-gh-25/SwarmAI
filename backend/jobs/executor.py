@@ -907,6 +907,11 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
 
         duration = (datetime.now(timezone.utc) - start).total_seconds()
 
+        # What the run spent goes to the usage ledger whatever its exit code: a failed
+        # run spent tokens too (core/usage_accounting). A run killed by the timeout
+        # prints no JSON, so its spend is not known here.
+        _ledger_cli_run(proc.stdout, surface="job", run_key=f"job:{job.id}:{start.isoformat()}", job_id=job.id)
+
         if proc.returncode != 0:
             error_text = proc.stderr or proc.stdout
             return JobResult(
@@ -924,11 +929,11 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         usage = output.get("usage", {})
         tokens_in = usage.get("input_tokens", 0)
         tokens_out = usage.get("output_tokens", 0)
-        # Also check modelUsage for more accurate counts
+        # modelUsage covers every model the process used: their sum, not the largest
         model_usage = output.get("modelUsage", {})
-        for model_info in model_usage.values():
-            tokens_in = max(tokens_in, model_info.get("inputTokens", 0))
-            tokens_out = max(tokens_out, model_info.get("outputTokens", 0))
+        if model_usage:
+            tokens_in = sum(m.get("inputTokens", 0) for m in model_usage.values())
+            tokens_out = sum(m.get("outputTokens", 0) for m in model_usage.values())
 
         # Use actual cost from CLI if available, otherwise estimate
         actual_cost = output.get("total_cost_usd", 0)
@@ -1609,7 +1614,8 @@ def _send_slack_dm(message: str) -> bool:
         cmd = [
             claude_path, "--print",
             *(["--bare"] if use_bare else []),
-            "--output-format", "text",
+            # json: the reply plus what the run spent (written to the usage ledger)
+            "--output-format", "json",
             "--no-session-persistence",
             "--model", _resolve_job_model(),
             "--max-budget-usd", "1.00",
@@ -1631,9 +1637,13 @@ def _send_slack_dm(message: str) -> bool:
             env=env, cwd=str(SWARMWS),
         )
 
-        if proc.returncode == 0 and (proc.stdout or "").lstrip().startswith("API Error"):
-            # Exit 0 but the CLI never reached the model — nothing was sent.
-            logger.warning("Slack DM failed: CLI returned %s", proc.stdout.strip()[:200])
+        _ledger_cli_run(proc.stdout, surface="job", feature="job.slack_dm")
+        output = _parse_cli_output(proc.stdout or "")
+        reply = str((output.get("result") if isinstance(output, dict) else None) or proc.stdout or "")
+        if proc.returncode == 0 and reply.lstrip().startswith("API Error"):
+            # Exit 0 but the CLI never reached the model — nothing was sent. (Any
+            # other is_error, e.g. the budget, may come after post_message ran.)
+            logger.warning("Slack DM failed: CLI returned %s", reply.strip()[:200])
             return False
         if proc.returncode == 0:
             logger.info("Slack DM sent via CLI")
@@ -1806,6 +1816,22 @@ def _build_script_env() -> dict:
     for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
         env.pop(key, None)
     return env
+
+
+def _ledger_cli_run(stdout: str | None, *, surface: str, run_key: str | None = None, **refs) -> None:
+    """Write one ``claude --print --output-format json`` run's usage to the ledger
+    (core/usage_accounting.rows_from_cli_json); nothing when the output is not JSON."""
+    try:
+        output = json.loads(stdout or "")
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(output, dict):
+        return
+    try:
+        from core import usage_accounting
+        usage_accounting.record_sync(usage_accounting.rows_from_cli_json(output, surface=surface, run_key=run_key, **refs))
+    except Exception:  # noqa: BLE001 — accounting never breaks the run
+        logger.debug("usage ledger not written for a CLI run", exc_info=True)
 
 
 def _parse_cli_output(stdout: str) -> dict:

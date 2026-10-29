@@ -172,7 +172,7 @@ def bedrock_caller(model_id: str) -> Callable[[str], tuple[dict[str, Any], int, 
     def call(prompt: str) -> tuple[dict[str, Any], int, int]:
         usage: dict[str, int] = {}
         try:
-            answer = structured(prompt, schema=LABEL_SCHEMA, model_id=model_id, max_tokens=1000,
+            answer = structured(prompt, schema=LABEL_SCHEMA, model_id=model_id, max_tokens=1000, feature="eval.cdf_batch",
                                 read_timeout=60, max_attempts=2, usage=usage)
         except StructuredOutputError as exc:
             answer = {"error": exc.kind, "raw": exc.raw}

@@ -125,9 +125,11 @@ async def _collect_events(unit):
     # tests assert on emitted events only; with Hypothesis running many examples
     # per test, those writes open aiosqlite pools that the autouse
     # reset_database teardown then hangs closing (flaky shard timeout). Stub the
-    # write — token accounting is not under test here.
+    # writes (the legacy token_usage row and the usage ledger rows) — token
+    # accounting is not under test here.
     import database
-    with patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)):
+    with patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)), \
+            patch("core.usage_accounting.record_sync", lambda rows: None):
         async for event in unit._read_formatted_response():
             events.append(event)
     return events
@@ -637,3 +639,42 @@ class TestBugConditionExploration_SystemPromptMetadataMissing:
         # Verify metadata content is passed through
         assert spm_events[0]["totalTokens"] == 4700
         assert len(spm_events[0]["files"]) == 2
+
+
+# ── Usage ledger: every result path records what it spent (usage_accounting) ──
+
+
+class TestUsageLedgerOnResultPaths:
+    """A ResultMessage reaches the usage ledger whichever branch of the real streaming
+    loop handles it: recorded first, before any branch can yield, kill or return —
+    here the normal end and the user-Stop return (which used to skip it)."""
+
+    async def _run(self, unit, msg):
+        import database
+        rows = []
+        with _patch_sdk_modules(), \
+                patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)), \
+                patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)):
+            async for _ in unit._read_formatted_response():
+                pass
+        return rows
+
+    @pytest.mark.asyncio
+    async def test_the_normal_end_records_the_result(self):
+        unit = _make_unit(session_id="ledger-normal")
+        msg = _make_result_message(input_tokens=1000, output_tokens=50)
+        _wire_client(unit, [msg])
+        rows = await self._run(unit, msg)
+        assert [(r["session_id"], r["input"], r["output"], r["cost_usd"]) for r in rows] == \
+            [("ledger-normal", 1000, 50, 0.01)]
+
+    @pytest.mark.asyncio
+    async def test_a_user_stop_still_records_what_the_result_spent(self):
+        unit = _make_unit(session_id="ledger-stop")
+        msg = _make_result_message(input_tokens=200, output_tokens=7)
+        msg.is_error = True
+        msg.subtype = "error_during_execution"
+        unit._interrupted = True
+        _wire_client(unit, [msg])
+        rows = await self._run(unit, msg)
+        assert [(r["session_id"], r["input"], r["output"]) for r in rows] == [("ledger-stop", 200, 7)]

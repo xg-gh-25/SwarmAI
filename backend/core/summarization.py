@@ -784,7 +784,7 @@ class SummarizationPipeline:
 
         from jobs.bedrock import StructuredOutputError, structured
         try:
-            return structured(prompt, schema=_ENRICHMENT_SCHEMA, model_id=model_id,
+            return structured(prompt, schema=_ENRICHMENT_SCHEMA, model_id=model_id, feature="summarize.session",
                               max_tokens=_ENRICHMENT_MAX_TOKENS, temperature=0.0,
                               name="summary", description="Record the session summary.",
                               region=region, read_timeout=_ENRICHMENT_READ_TIMEOUT_S,

@@ -79,7 +79,7 @@ class BedrockExtractor(BedrockJudge):
             usage: dict[str, int] = {}
             try:
                 answer = structured(
-                    prompt, schema=unit_schema(self.allowed_kinds), model_id=self.model_id,
+                    prompt, schema=unit_schema(self.allowed_kinds), model_id=self.model_id, feature=llm_usage.feature(),
                     max_tokens=self.max_tokens, name=TOOL_NAME,
                     description="Record every unit extracted from the source (an empty list "
                                 "when nothing qualifies).",

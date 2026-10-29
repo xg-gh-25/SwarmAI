@@ -496,6 +496,8 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
             first_failure = first_failure or f"timeout: review timed out after {_PER_PROJECT_TIMEOUT_S}s"
             continue
 
+        from jobs.executor import _ledger_cli_run
+        _ledger_cli_run(proc.stdout, surface="job", feature="job.ddd_self_audit")
         # Parse stdout regardless of exit code — purely for OBSERVABILITY, so a
         # genuine failure surfaces its REAL cause instead of an opaque "exit N".
         # Pure helper → unit-tested without subprocess mocking.

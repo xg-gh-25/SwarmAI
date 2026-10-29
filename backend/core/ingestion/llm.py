@@ -56,7 +56,7 @@ class BedrockJudge:
         """
         usage: dict[str, int] = {}
         try:
-            raw = text(prompt, model_id=self.model_id, max_tokens=self.max_tokens,
+            raw = text(prompt, model_id=self.model_id, max_tokens=self.max_tokens, feature=llm_usage.feature(),
                        temperature=self.temperature, read_timeout=self.read_timeout,
                        max_attempts=2, usage=usage)
         except StructuredOutputError as exc:

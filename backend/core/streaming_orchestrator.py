@@ -362,23 +362,43 @@ class StreamingOrchestrator:
         return True
 
     def _record_token_usage_bg(self, message: Any, usage: dict) -> None:
-        """Fire-and-forget token accounting for a response whose `result` is
-        not forwarded (leak continuation, degeneration abort) — its tokens
-        were still spent."""
+        """Fire-and-forget usage accounting of one CLI result, on every path that sees
+        one (the normal end, the turn limit, an SDK error, a leak continuation, a
+        degeneration abort): its tokens were spent whether or not the result is
+        forwarded. Writes the usage ledger (core/usage_accounting: per model, each
+        result the increase over the previous result of the same process) and the
+        legacy ``token_usage`` row (kept for older readers: online scoring, a rollback;
+        its ``cost_usd`` is the CLI process's running total)."""
+        # once per result, whichever paths see it (the result branch records it first)
+        if getattr(message, "_swarm_usage_recorded", False):
+            return
+        try:
+            message._swarm_usage_recorded = True
+        except Exception:  # noqa: BLE001 — a result type that takes no attribute: record anyway
+            pass
+        parent = self._parent
+        try:
+            from core import usage_accounting
+            usage_accounting.record_sync(usage_accounting.cli_results.rows(
+                message, session_id=parent.session_id, pid=getattr(parent, "pid", None),
+                surface="channel" if getattr(parent, "is_channel_session", False) else "chat",
+                default_model=getattr(parent, "_model_name", None)))
+        except Exception:
+            logger.debug("_record_token_usage_bg: usage ledger not written", exc_info=True)
         if not usage:
             return
         try:
             import database
             asyncio.get_running_loop().create_task(
                 database.db.record_token_usage(
-                    session_id=self._parent.session_id,
+                    session_id=parent.session_id,
                     source="cli",
                     input_tokens=usage.get("input_tokens") or 0,
                     output_tokens=usage.get("output_tokens") or 0,
                     cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
                     cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
                     cost_usd=getattr(message, "total_cost_usd", None),
-                    model=self._parent._model_name,
+                    model=parent._model_name,
                 )
             )
         except Exception:
@@ -2648,6 +2668,9 @@ class StreamingOrchestrator:
 
             # ── ResultMessage — response complete or error ──────────
             if isinstance(message, ResultMessage):
+                # What the result spent is recorded first, before any branch below can
+                # yield (a consumer may stop there), kill the process or raise.
+                self._record_token_usage_bg(message, getattr(message, "usage", None) or {})
                 # ── D6: a steer still to read → read its round, same turn ──
                 # First, before the carry reset and every other branch (turn
                 # limit, API-error continuation, empty-response retry, leak
@@ -2751,25 +2774,6 @@ class StreamingOrchestrator:
                             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
                         } if usage else None,
                     })
-                    # Persist token usage (same as normal result path)
-                    if usage:
-                        try:
-                            import database
-                            asyncio.get_running_loop().create_task(
-                                database.db.record_token_usage(
-                                    session_id=self._parent.session_id,
-                                    source="cli",
-                                    input_tokens=usage.get("input_tokens") or 0,
-                                    output_tokens=usage.get("output_tokens") or 0,
-                                    cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
-                                    cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
-                                    cost_usd=getattr(message, "total_cost_usd", None),
-                                    model=self._parent._model_name,
-                                )
-                            )
-                        except Exception:
-                            logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
-                            pass  # fire-and-forget — never break streaming
 
                     for meta_event in self._parent._emit_post_stream_metadata(
                         usage, num_turns=num_turns or 1,
@@ -2978,25 +2982,6 @@ class StreamingOrchestrator:
                             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
                         } if usage else None,
                     })
-                    # Persist token usage (fire-and-forget)
-                    if usage:
-                        try:
-                            import database
-                            asyncio.get_running_loop().create_task(
-                                database.db.record_token_usage(
-                                    session_id=self._parent.session_id,
-                                    source="cli",
-                                    input_tokens=usage.get("input_tokens") or 0,
-                                    output_tokens=usage.get("output_tokens") or 0,
-                                    cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
-                                    cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
-                                    cost_usd=getattr(message, "total_cost_usd", None),
-                                    model=self._parent._model_name,
-                                )
-                            )
-                        except Exception:
-                            logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
-                            pass  # fire-and-forget
                     # Emit context metadata so frontend updates context
                     # ring/bar — especially important for timeout errors
                     # that correlate with large contexts.
@@ -3221,25 +3206,6 @@ class StreamingOrchestrator:
                     } if usage else None,
                 })
 
-                # ── Persist token usage (fire-and-forget) ─────────
-                if usage:
-                    try:
-                        import database
-                        asyncio.get_running_loop().create_task(
-                            database.db.record_token_usage(
-                                session_id=self._parent.session_id,
-                                source="cli",
-                                input_tokens=usage.get("input_tokens") or 0,
-                                output_tokens=usage.get("output_tokens") or 0,
-                                cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
-                                cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
-                                cost_usd=getattr(message, "total_cost_usd", None),
-                                model=self._parent._model_name,
-                            )
-                        )
-                    except Exception:
-                        logger.debug("_read_formatted_response: suppressed exception on a fail-safe path", exc_info=True)
-                        pass  # fire-and-forget — never break streaming
 
                 # ── Context usage & metadata bridge ────────────────
                 result_num_turns = getattr(message, "num_turns", 1) or 1

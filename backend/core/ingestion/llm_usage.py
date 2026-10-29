@@ -37,6 +37,13 @@ def current_source() -> str:
     return _SOURCE.get()
 
 
+def feature() -> str:
+    """The usage-ledger feature of a CDF call: ``cdf.<source>`` (``cdf`` when no source is
+    set), core/usage_accounting."""
+    src = _SOURCE.get()
+    return f"cdf.{src.lower()}" if src and src != "-" else "cdf"
+
+
 def record(usage: dict[str, Any]) -> None:
     """Add one Bedrock call to today's row for the current source."""
     day = datetime.now(timezone.utc).date().isoformat()

@@ -431,7 +431,7 @@ def _ask_judge(prompt: str) -> dict:
     """The judge's {verdict, reason} for *prompt*. Isolated for mockability.
     Raises jobs.bedrock.StructuredOutputError or a Bedrock error."""
     from jobs.bedrock import structured
-    return structured(prompt, schema=_JUDGE_SCHEMA, model_id=_judge_model(),
+    return structured(prompt, schema=_JUDGE_SCHEMA, model_id=_judge_model(), feature="ingestion.gate",
                       max_tokens=_JUDGE_MAX_TOKENS, temperature=0.0, name="verdict",
                       description="Record the verdict on the candidate entry.",
                       **_JUDGE_TRANSPORT)
@@ -828,7 +828,7 @@ def _distill_entry(text: str) -> str:
     from jobs.bedrock import text as _text
     return _text(_DISTILL_PROMPT.format(text=_neutralize_untrusted(text)),
                  model_id=_judge_model(), max_tokens=_DISTILL_MAX_TOKENS, temperature=0.0,
-                 **_JUDGE_TRANSPORT).strip()
+                 feature="ingestion.distill", **_JUDGE_TRANSPORT).strip()
 
 
 def admit_memory_lesson(raw_text: str) -> "tuple[str, str | None, str, str | None]":

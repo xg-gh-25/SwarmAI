@@ -135,7 +135,7 @@ def _ask(prompt: str) -> dict:
     """The model's {"candidates": [...]} for *prompt* (the default ask_fn).
     Raises jobs.bedrock.StructuredOutputError or a Bedrock error."""
     from jobs.bedrock import get_model_id, structured
-    return structured(prompt, schema=_CANDIDATES_SCHEMA, model_id=get_model_id(),
+    return structured(prompt, schema=_CANDIDATES_SCHEMA, model_id=get_model_id(), feature="conversation.extract",
                       max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2, name="candidates",
                       description="Record the owner-ratified DDD candidates.",
                       record_usage=True)

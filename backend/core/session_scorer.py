@@ -190,7 +190,7 @@ def default_judge_fn(judge_prompt: str) -> dict:
     from scripts.eval_runner import _JUDGE_MAX_ATTEMPTS, _get_judge_model, _judge_region
 
     return structured(
-        judge_prompt, schema=JUDGE_SCHEMA, system=JUDGE_SYSTEM, model_id=_get_judge_model(),
+        judge_prompt, schema=JUDGE_SCHEMA, system=JUDGE_SYSTEM, model_id=_get_judge_model(), feature="eval.session_score",
         max_tokens=JUDGE_MAX_TOKENS, temperature=JUDGE_TEMPERATURE, name=JUDGE_TOOL_NAME,
         description=JUDGE_TOOL_DESCRIPTION, region=_judge_region(),
         read_timeout=JUDGE_READ_TIMEOUT, max_attempts=_JUDGE_MAX_ATTEMPTS,

@@ -294,7 +294,7 @@ def _generate_skill_proposal(gap: dict, context: dict) -> dict:
     from jobs.bedrock import get_model_id, structured
 
     usage: dict = {}
-    proposal = structured(_build_prompt(gap, context), schema=_PROPOSAL_SCHEMA,
+    proposal = structured(_build_prompt(gap, context), schema=_PROPOSAL_SCHEMA, feature="job.skill_proposer",
                           model_id=get_model_id("claude-sonnet-4-6"),
                           max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3, name="proposal",
                           description="Record the proposed skill.", record_usage=True,

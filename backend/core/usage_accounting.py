@@ -27,16 +27,22 @@ Writers:
 - ``bedrock_row`` — one direct Bedrock Converse call.
 - ``attribute(feature)`` — names what the calls inside a block are spent for.
 
-``record(rows)`` / ``record_sync(rows)`` insert them into ``usage_ledger`` (schema
-v18); a row whose ``dedup_key`` is already there is not written again. Recording never
-raises into the caller: accounting must not break the work it accounts for.
+``record_sync(rows)`` (and its awaitable twin ``record``) hands rows to one writer
+thread, which inserts them into ``usage_ledger`` (schema v18) in batches; a row whose
+``dedup_key`` is already there is not written again. A caller never waits on the
+database and never touches the async connection pool (it is per event loop: a write
+from a short-lived loop would leave a pool and its connection thread behind). The
+queue is bounded: when full, rows are dropped and counted (``stats()``), never
+blocking the work they account for. A failed write is logged once a minute at most.
 """
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import contextvars
 import logging
+import queue
+import threading
+import time
 import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -147,27 +153,31 @@ def _increase(prev: Optional[Mapping[str, float]], cur: Mapping[str, float]) -> 
 class CliResults:
     """The usage rows of CLI results, one per model per result, each the increase over
     the previous result of the same process (``model_usage`` is the process's running
-    total). Bounded: the oldest processes are forgotten first; a forgotten process's
-    next result would then count from zero, which only a process with more than
-    ``max_processes`` newer ones can reach."""
+    total). State is per session: a new pid there is a new process, and a result with
+    no pid (the process already gone) continues the session's last process. Keys carry
+    a nonce of this tracker, so a daemon restart never reuses a key already written.
+    Bounded: the oldest sessions are forgotten first."""
 
-    def __init__(self, max_processes: int = 512) -> None:
-        self._last: OrderedDict[tuple, dict] = OrderedDict()
-        self._max = max_processes
+    def __init__(self, max_sessions: int = 512) -> None:
+        self._last: OrderedDict[Optional[str], dict] = OrderedDict()
+        self._max = max_sessions
+        self._nonce = uuid.uuid4().hex[:12]
 
     def rows(self, message: Any, *, session_id: Optional[str], pid: Optional[int], surface: str,
              default_model: Optional[str] = None, **refs: Any) -> list[dict[str, Any]]:
-        key = (session_id, pid)
-        state = self._last.pop(key, None) or {"seq": 0, "models": {}, "cost": None}
+        state = self._last.pop(session_id, None)
+        if state is None or (pid is not None and state["pid"] is not None and pid != state["pid"]):
+            state = {"pid": pid, "models": {}, "cost": None, "seq": 0}
+        if pid is not None:
+            state["pid"] = pid
         state["seq"] += 1
-        self._last[key] = state
+        self._last[session_id] = state
         while len(self._last) > self._max:
             self._last.popitem(last=False)
-        seq = state["seq"]
-        base = f"cli:{session_id}:{pid}:{seq}"
+        base = f"cli:{self._nonce}:{session_id}:{state['pid']}:{state['seq']}"
         total = getattr(message, "total_cost_usd", None)
         total = float(total) if isinstance(total, (int, float)) and not isinstance(total, bool) else None
-        common = dict(surface=surface, session_id=session_id, cli_pid=pid, cost_source="cli", **refs)
+        common = dict(surface=surface, session_id=session_id, cli_pid=state["pid"], cost_source="cli", **refs)
         models = _model_usage(getattr(message, "model_usage", None))
         out: list[dict[str, Any]] = []
         if models:
@@ -212,44 +222,149 @@ def rows_from_cli_json(output: Mapping[str, Any], *, surface: str, run_key: Opti
     return [_row(model=None, tokens=tokens, cost=total, dedup_key=f"{base}:-", **common)]
 
 
+def surface_of(feature: Optional[str]) -> str:
+    """A feature's surface: its prefix when that is one (``cdf.s2`` → cdf, ``eval.judge`` →
+    eval, ``job.signal_digest`` → job), else background."""
+    head = (feature or "").split(".", 1)[0]
+    return head if head in SURFACES else "background"
+
+
 def bedrock_row(usage: Mapping[str, Any], *, model: Optional[str], feature: Optional[str] = None,
-                surface: str = "background", cost: Optional[float] = None, **refs: Any) -> dict[str, Any]:
-    """One direct Bedrock Converse call. ``cost`` when known (a price table); else none."""
+                cost: Optional[float] = None, **refs: Any) -> dict[str, Any]:
+    """One direct Bedrock Converse call, attributed to ``feature`` (else the enclosing
+    ``attribute`` block, else "unattributed"). ``cost`` when known (a price table)."""
     tokens = {k: _n((usage or {}).get(src)) for k, src in _CONVERSE_KEYS.items()}
-    feat = feature or current_feature()
-    return _row(surface="cdf" if (feat or "").startswith("cdf.") else surface, model=model, tokens=tokens,
-                cost=cost, cost_source="priced", dedup_key=f"bedrock:{uuid.uuid4().hex}", feature=feat, **refs)
+    feat = feature or current_feature() or "unattributed"
+    return _row(surface=surface_of(feat), model=model, tokens=tokens, cost=cost, cost_source="priced",
+                dedup_key=f"bedrock:{uuid.uuid4().hex}", feature=feat, **refs)
 
 
 # ── recording ────────────────────────────────────────────────────────────────
 
-async def record(rows: list[dict[str, Any]]) -> None:
-    """Insert ``rows`` into the ledger; never raises."""
-    if not rows:
-        return
-    try:
-        import database
-        await database.db.insert_usage_rows(rows)
-    except Exception:  # noqa: BLE001 — accounting never breaks the work it accounts for
-        logger.warning("usage_accounting: %d row(s) not recorded", len(rows), exc_info=True)
+class _Writer:
+    """One thread that writes queued rows to ``usage_ledger`` in batches, through its own
+    sqlite3 connection (``mode=rw``: it never creates the database file). Callers only
+    enqueue. A batch that fails is retried while the database is busy, then dropped and
+    counted; failures are logged at most once a minute."""
+
+    MAX_QUEUED = 20_000
+    BATCH = 500
+    BUSY_TIMEOUT_S = 5.0
+    LOG_EVERY_S = 60.0
+
+    def __init__(self) -> None:
+        self._q: "queue.Queue[dict]" = queue.Queue(self.MAX_QUEUED)
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self.written = self.dropped = self.lost = 0
+        self._last_log = 0.0
+        self._db_path: Optional[str] = None
+
+    def put(self, rows: list[dict[str, Any]]) -> None:
+        for r in rows:
+            try:
+                self._q.put_nowait(r)
+            except queue.Full:
+                self.dropped += 1
+                self._log("usage ledger queue full: %d row(s) dropped so far", self.dropped)
+        self._start()
+
+    def _start(self) -> None:
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name="usage-ledger-writer", daemon=True)
+                self._thread.start()
+
+    def _path(self) -> str:
+        if self._db_path is None:
+            import database
+            return str(database.db.db_path)
+        return self._db_path
+
+    def _run(self) -> None:
+        while True:
+            batch = [self._q.get()]
+            while len(batch) < self.BATCH:
+                try:
+                    batch.append(self._q.get_nowait())
+                except queue.Empty:
+                    break
+            self._write(batch)
+            for _ in batch:
+                self._q.task_done()
+
+    def _write(self, batch: list[dict[str, Any]]) -> None:
+        import sqlite3
+        from database.sqlite import usage_ledger_insert_sql, usage_ledger_values
+        for attempt in range(3):
+            try:
+                conn = sqlite3.connect(f"file:{self._path()}?mode=rw", uri=True, timeout=self.BUSY_TIMEOUT_S)
+                try:
+                    conn.executemany(usage_ledger_insert_sql(), usage_ledger_values(batch))
+                    conn.commit()
+                finally:
+                    conn.close()
+                self.written += len(batch)
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) or "busy" in str(e):
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                err: Exception = e
+                break
+            except Exception as e:  # noqa: BLE001 — accounting never breaks the work it accounts for
+                err = e
+                break
+        else:
+            err = RuntimeError("database busy")
+        self.lost += len(batch)
+        self._log("usage ledger: %d row(s) not written (%s); %d lost so far", len(batch), err, self.lost)
+
+    def _log(self, msg: str, *args: Any) -> None:
+        now = time.monotonic()
+        if now - self._last_log >= self.LOG_EVERY_S:
+            self._last_log = now
+            logger.warning(msg, *args)
+
+    def flush(self, timeout: float = 5.0) -> bool:
+        """Wait until every queued row is written or given up (tests, shutdown)."""
+        end = time.monotonic() + timeout
+        while self._q.unfinished_tasks:
+            if time.monotonic() > end:
+                return False
+            time.sleep(0.01)
+        return True
+
+
+_writer = _Writer()
+# a process that exits (a standalone job run) writes what it queued first
+import atexit  # noqa: E402
+atexit.register(lambda: _writer.flush(3.0))
 
 
 def record_sync(rows: list[dict[str, Any]]) -> None:
-    """``record`` from a synchronous caller: scheduled on the running loop, or run to the
-    end when there is none (a standalone job)."""
+    """Hand ``rows`` to the ledger writer; returns at once and never raises."""
     if not rows:
         return
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    try:
-        if loop is not None:
-            loop.create_task(record(rows))
-        else:
-            asyncio.run(record(rows))
+        _writer.put(rows)
     except Exception:  # noqa: BLE001
-        logger.warning("usage_accounting: %d row(s) not recorded", len(rows), exc_info=True)
+        logger.debug("usage_accounting: rows not queued", exc_info=True)
+
+
+async def record(rows: list[dict[str, Any]]) -> None:
+    """``record_sync`` for an async caller (it does not wait on the database either)."""
+    record_sync(rows)
+
+
+def flush(timeout: float = 5.0) -> bool:
+    return _writer.flush(timeout)
+
+
+def stats() -> dict[str, int]:
+    """Rows written, dropped (queue full) and lost (a write that failed) since start."""
+    return {"written": _writer.written, "dropped": _writer.dropped, "lost": _writer.lost,
+            "queued": _writer._q.qsize()}
 
 
 #: the CLI results of this daemon (one tracker: a process's results all pass here)
