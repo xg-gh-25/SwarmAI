@@ -16,8 +16,17 @@ run it instead of relying on someone remembering to ask.
 
 *--repo* is the checkout being reviewed (a session worktree is fine: its graph is the
 one of the checkout it belongs to). The change is the working tree against *--base*
-(default ``HEAD``: what is not committed yet). Runs out of the daemon: the graph is
-brought up to its repo's HEAD first (``build.ensure_fresh``).
+(default ``HEAD``: what is not committed yet), or a tree object (``tree=``, what a
+pipeline review reviews, untracked files included). Runs out of the daemon: the graph
+is brought up to its repo's HEAD first (``build.ensure_fresh``), unless a caller with a
+time budget (the pipeline's REVIEW) asks it not to.
+
+Bounded in work, not only in output: at most ``MAX_EXAMINED`` touched symbols are
+looked up (signature changes first), and a caller's *budget_s* stops the lookups when
+it runs out; what was not looked up is counted. Every report appends one line of
+counts to ``<app data>/logs/code_intel_usage.jsonl`` (no code, no paths but the repo's
+name) so its use is measured without anyone collecting it (design
+2026-10-29-code-intel-auto D5).
 
 How lines map onto the graph: the graph's symbols carry line spans at the commit it was
 indexed at (G). The files the change touches come from ``git diff <base>``; the touched
@@ -39,6 +48,7 @@ from pathlib import Path
 MAX_SYMBOLS = 25
 MAX_CALLERS = 12
 MAX_MENTIONS = 8
+MAX_EXAMINED = 80          # touched symbols whose callers are looked up, at most
 _SYMBOL_TYPES = ("function", "method", "class")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -71,19 +81,28 @@ class Report:
     more_symbols: int = 0
     quiet: list[str] = field(default_factory=list)  # touched; no caller or name outside
     new: int = 0                                    # symbols of files new in this change
+    unexamined: int = 0      # touched symbols not looked up (MAX_EXAMINED or the budget)
     note: str = ""
 
 
 def _git(repo: Path, *args: str) -> str | None:
     try:
         from .local_roots import GIT_SAFE
-        if args and args[0] == "diff":     # never a configured external diff program
-            args = ("diff", "--no-ext-diff", *args[1:])
+        if args and args[0] == "diff":     # never a configured diff or textconv program
+            args = ("diff", "--no-ext-diff", "--no-textconv", *args[1:])
         out = subprocess.run(["git", *GIT_SAFE, "-C", str(repo), *args], capture_output=True,
                              text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None
+
+
+def filter_programs(repo: Path) -> list[str]:
+    """The filter programs the repo's config names (``filter.<driver>.clean`` /
+    ``.process`` / ``.smudge``): a diff against the working tree would run a clean
+    filter on a dirty file, so the report does not diff a working tree that has one."""
+    out = _git(repo, "config", "--get-regexp", r"^filter\..*\.(clean|process|smudge)$")
+    return [line.split(" ", 1)[0] for line in (out or "").splitlines() if line.strip()]
 
 
 def main_checkout(repo: Path) -> Path | None:
@@ -95,8 +114,9 @@ def main_checkout(repo: Path) -> Path | None:
     return common_dir.parent.resolve() if common_dir.name == ".git" else common_dir.resolve()
 
 
-def changed_files(repo: Path, base: str) -> list[str]:
-    out = _git(repo, "diff", "--name-only", "--no-renames", base, "--")
+def changed_files(repo: Path, base: str, tree: str | None = None) -> list[str]:
+    """Files changed from *base* to the working tree, or to *tree* when given."""
+    out = _git(repo, "diff", "--name-only", "--no-renames", base, *([tree] if tree else []), "--")
     return sorted({f for f in (out or "").splitlines() if f})
 
 
@@ -123,14 +143,15 @@ def _hunk_ranges(diff: str, side: str) -> dict[str, list[tuple[int, int]]]:
 
 
 def touched_lines(repo: Path, commit: str, files: list[str],
-                  base: str = "HEAD") -> dict[str, list[tuple[int, int]]]:
+                  base: str = "HEAD", tree: str | None = None) -> dict[str, list[tuple[int, int]]]:
     """The lines of *files* at *commit* (the graph's) that the change touches: lines
     *commit* changed since *base* (the new side of ``base..commit``) and lines the
-    working tree changed since *commit* (the old side of ``commit..worktree``). Both
-    sides are in *commit*'s coordinates, whatever the checkout's HEAD is."""
+    working tree (or *tree*) changed since *commit* (the old side of ``commit..worktree``).
+    Both sides are in *commit*'s coordinates, whatever the checkout's HEAD is."""
     out: dict[str, list[tuple[int, int]]] = {}
     committed = _git(repo, "diff", "-U0", "--no-renames", "--no-color", base, commit, "--", *files)
-    working = _git(repo, "diff", "-U0", "--no-renames", "--no-color", commit, "--", *files)
+    working = _git(repo, "diff", "-U0", "--no-renames", "--no-color", commit,
+                   *([tree] if tree else []), "--", *files)
     for ranges in (_hunk_ranges(committed or "", "new"), _hunk_ranges(working or "", "old")):
         for f, rs in ranges.items():
             out.setdefault(f, []).extend(rs)
@@ -216,14 +237,16 @@ def _mentions(repo: Path, c: "Changed", skip: set[str]) -> list[str]:
     return sorted(_anchored(repo, c, named))
 
 
-def _project_graph_for(checkout: Path):
-    """(project name, project dir, ref, graph) of the graph built from *checkout*."""
+def _project_graph_for(checkout: Path, project: str | None = None):
+    """(project name, project dir, ref, graph) of the graph built from *checkout*: of
+    *project* when given (a pipeline run knows its Brain), else the one Brain that reads
+    it (``local_roots`` allows one per root; a bind-managed clone is one Brain's)."""
     from jobs.paths import PROJECTS_DIR
     from . import load_project_graphs, owned_graphs
     if not PROJECTS_DIR.is_dir():
         return None
     for project_dir in sorted(PROJECTS_DIR.iterdir()):
-        if not project_dir.is_dir():
+        if not project_dir.is_dir() or (project is not None and project_dir.name != project):
             continue
         refs = [r for r in owned_graphs(project_dir)
                 if r.repo_root is not None and Path(r.repo_root).resolve() == checkout]
@@ -235,17 +258,39 @@ def _project_graph_for(checkout: Path):
     return None
 
 
-def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True) -> Report:
+def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True,
+           tree: str | None = None, project: str | None = None,
+           budget_s: float | None = None, caller: str = "native") -> Report:
+    """The callers report of the change in *repo* from *base* (to the working tree, or
+    to *tree*). *project*: look only at that Brain's graph. *budget_s*: stop looking up
+    callers when it runs out (the rest is counted in ``unexamined``). *caller*: who
+    asked, for the usage log."""
+    rep = _report(Path(repo).resolve(), base=base, refresh=refresh, tree=tree,
+                  project=project, budget_s=budget_s)
+    _log_usage(rep, caller)
+    return rep
+
+
+def _report(repo: Path, *, base: str, refresh: bool, tree: str | None,
+            project: str | None, budget_s: float | None) -> Report:
+    import time
     from .build import ensure_fresh
     from .impact import _callers
-    repo = Path(repo).resolve()
+    deadline = None if budget_s is None else time.monotonic() + budget_s
     rep = Report(repo=str(repo))
-    rep.files = changed_files(repo, base)
+    if tree is None and filter_programs(repo):
+        # a tree-to-commit diff (the pipeline's) runs no filter; a working tree may
+        rep.note = ("the repo's git config names a filter program, so its working tree is "
+                    "not diffed here: grep the names of the changed functions instead")
+        return rep
+    rep.files = changed_files(repo, base, tree)
     if not rep.files:
         rep.note = f"no change against {base}"
         return rep
     checkout = main_checkout(repo)
-    found = _project_graph_for(checkout) if checkout else None
+    found = _project_graph_for(checkout, project) if checkout else None
+    if found is None and checkout and project is not None:
+        found = _project_graph_for(checkout)     # read by another Brain: its graph
     if found is None:
         rep.note = ("this checkout has no code graph (it is not read by any Brain; "
                     "`artifact_cli bind --local` adds it): grep the names of the changed "
@@ -257,22 +302,35 @@ def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True) -> Rep
         fr = ensure_fresh(project_dir, ref, graph)
         if not fr.current:
             rep.freshness = fr.message or fr.state
+    else:
+        from .build import parser_outdated
+        from .freshness import head_stamp
+        if parser_outdated(graph):
+            rep.freshness = "built by an older parser; it is being rebuilt"
+        elif head_stamp(graph)[0]:
+            rep.freshness = "behind its repo's HEAD"
     commit = graph.get_meta("last_indexed_commit")
     rep.indexed_commit = commit
     if not commit or _git(repo, "cat-file", "-e", f"{commit}^{{commit}}") is None:
         rep.note = ("the graph's commit is not in this checkout, so its lines cannot be "
                     "matched to the diff: grep the names of the changed functions instead")
         return rep
-    changed = symbols_touched(graph, touched_lines(repo, commit, rep.files, base))
+    changed = symbols_touched(graph, touched_lines(repo, commit, rep.files, base, tree))
     in_change = set(rep.files)
     # A file new in this change: nothing outside it can call what it defines yet.
     new_files = {f for f in {c.file for c in changed}
                  if _git(repo, "cat-file", "-e", f"{base}:{f}") is None}
     shown: list[Changed] = []
-    for c in changed:
+    examined = 0
+    for i, c in enumerate(changed):
         if c.file in new_files:
             rep.new += 1
             continue
+        if examined >= MAX_EXAMINED or (deadline is not None and time.monotonic() > deadline):
+            # signature changes come first (symbols_touched): what is left is body-only
+            rep.unexamined = sum(1 for x in changed[i:] if x.file not in new_files)
+            break
+        examined += 1
         found = _callers(graph, [c.id], 1)
         callers = [{"file": x.file, "symbol": x.symbol, "line": x.line, "how": x.how}
                    for x in found if not x.by_name]
@@ -294,7 +352,77 @@ def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True) -> Rep
     return rep
 
 
+def listed_files(rep: Report) -> list[str]:
+    """Every file the report names as a caller, a mention or a name-only lead (repo
+    paths taken from the graph, never from model text)."""
+    out = set()
+    for c in rep.symbols:
+        out.update(x["file"] for x in c.outside)
+        out.update(c.mentions)
+        out.update(c.guessed)
+    return sorted(out)
+
+
+def _log_usage(rep: Report, caller: str) -> None:
+    """One line of counts per report (D5). Never fails the report."""
+    try:
+        from config import get_app_data_dir
+        from datetime import datetime, timezone
+        state = ("none" if rep.project is None else
+                 "behind" if rep.freshness else "current")
+        line = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "kind": "report", "caller": caller,
+                "repo": rep.graph_repo or Path(rep.repo).name, "graph": state,
+                "files": len(rep.files),
+                "symbols": len(rep.symbols) + rep.more_symbols + len(rep.quiet)
+                + rep.new + rep.unexamined,
+                "with_outside_callers": sum(1 for c in rep.symbols if c.outside),
+                "callers_listed": sum(len(c.outside) for c in rep.symbols),
+                "name_only_files": sum(c.unconfirmed for c in rep.symbols),
+                "unexamined": rep.unexamined}
+        log_usage(line)
+    except Exception:  # noqa: BLE001 -- measuring must never break the report
+        pass
+
+
+def log_usage(line: dict) -> None:
+    """Append *line* to ``<app data>/logs/code_intel_usage.jsonl``."""
+    from config import get_app_data_dir
+    path = get_app_data_dir() / "logs" / "code_intel_usage.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+_UNSAFE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean(text: str) -> str:
+    """A repo path or symbol id on one line: control characters (a newline that would
+    start a heading in a prompt) become spaces."""
+    return _UNSAFE.sub(" ", str(text))
+
+
+def _cleaned(rep: Report) -> Report:
+    """*rep* with every string from the repo on one line (``_clean``): the rendered
+    report goes into a reviewer's prompt, and a file name may carry a newline."""
+    import copy
+    rep = copy.deepcopy(rep)
+    rep.project = _clean(rep.project) if rep.project else rep.project
+    rep.graph_repo = _clean(rep.graph_repo) if rep.graph_repo else rep.graph_repo
+    rep.files = [_clean(f) for f in rep.files]
+    rep.quiet = [_clean(q) for q in rep.quiet]
+    for c in rep.symbols:
+        c.id, c.file = _clean(c.id), _clean(c.file)
+        for row in (*c.outside, *c.inside):
+            row["file"], row["symbol"] = _clean(row["file"]), _clean(row["symbol"])
+        c.mentions = [_clean(m) for m in c.mentions]
+        c.guessed = [_clean(g) for g in c.guessed]
+    return rep
+
+
 def render(rep: Report) -> str:
+    rep = _cleaned(rep)
     lines = ["## Callers of the code this change touches"]
     if rep.note and not rep.symbols:
         lines.append(f"{len(rep.files)} files changed; {rep.note}.")
@@ -302,11 +430,11 @@ def render(rep: Report) -> str:
     where = rep.project + (f" · repo {rep.graph_repo}" if rep.graph_repo else "")
     lines.append(f"Code graph of {where}, indexed at {(rep.indexed_commit or '?')[:9]}"
                  + (f" ({rep.freshness})" if rep.freshness else "") + ".")
-    if not (rep.symbols or rep.quiet or rep.new):
+    if not (rep.symbols or rep.quiet or rep.new or rep.unexamined):
         lines.append(f"{len(rep.files)} files changed; no function, method or class the "
                      "graph holds is touched.")
         return "\n".join(lines)
-    if not rep.symbols:
+    if not rep.symbols and not rep.unexamined:
         lines.append("No changed function, method or class is called or named outside this change.")
     for c in rep.symbols:
         what = "signature or first lines changed" if c.signature else "body changed"
@@ -344,6 +472,9 @@ def render(rep: Report) -> str:
     if rep.new:
         lines.append(f"- {rep.new} symbols are in files new in this change "
                      "(nothing outside can call them yet)")
+    if rep.unexamined:
+        lines.append(f"- {rep.unexamined} more changed symbols (body changes) were not looked "
+                     "up: the change is large; run `core.code_intel.impact <symbol>` for one")
     lines.append("The graph sees direct calls. Check the files that name a symbol without a "
                  "call, and dynamic dispatch (getattr, registries, string routes), by hand.")
     return "\n".join(lines)

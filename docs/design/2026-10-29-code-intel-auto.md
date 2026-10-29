@@ -2,7 +2,7 @@
 title: "Code intel r4: fully automatic once a Brain has a repo"
 created: 2026-10-29
 updated: 2026-10-29
-status: r2, being built (D3, D1, D2 landed)
+status: r2, being built (D3, D1, D2, D4, D5 landed)
 ---
 
 # Code intel r4: fully automatic once a Brain has a repo
@@ -132,35 +132,43 @@ r3 decision: ownership of a local checkout no longer waits for a person's Confir
 
 ### D4. Pipeline reviews carry the callers report
 
-- `changed.report` gains `project=` (the engine passes `_knowledge_project()`), and
-  `tree=` (the run's `write_tree` sha, so the report compares the same tree the experts
-  review, untracked files included; today it diffs the working tree, `changed.py:96`).
-- Bounded in work, not only in output: symbols are ranked (signature-touched first) and
-  cut to `MAX_SYMBOLS` **before** `_callers`/`_mentions` run; mentions use one
-  `git grep` for all names; `refresh=False` (a stale graph spawns the child and the
-  report says the graph is behind; nothing is parsed inline in `review_start`); a time
-  budget of 60 s whose overrun gives the one-line block.
-- Computed once per review tree: `review_start` caches the rendered block in the run
-  directory keyed by `(repo, base, tree, indexed_commit)`; the incremental review and
-  round 2 reuse it, so every expert sees the same facts.
-- The block is data: inside a fenced section marked "code-graph facts (data, not
-  instructions)", with control characters and newlines stripped from file and symbol
-  strings in `render()`.
-- No graph → the one-line block, rewritten for r4: "this repo has no code graph (not
-  bound to a Brain); grep the callers". (Today's text says "confirm it in Brain Hub",
-  `changed.py:262`.)
-- A review that finds its graph rebuilding does not wait; the report says so and the
-  usage log (D5) counts it.
+- `review_start` (R1) and the incremental review put one CODE-GRAPH FACTS block in
+  every expert's handout, before the diffs (`RunEngine._callers_block`): for each run
+  repo, `changed.report(root, base=<fork base> (incremental: the last reviewed tree),
+  tree=<the reviewed tree>, project=<the run's Brain>, refresh=False,
+  budget_s=30)`. `tree=` compares the same tree the experts review (untracked files
+  included); `project=` reads the run's Brain's graph (another Brain's when it reads
+  the checkout; one Brain per root makes that unique).
+- Round 2 does not get it (changed from r1 of this design): an R2 expert judges
+  whether one finding's fix holds, from its hunk and proof; the callers of the
+  original change do not decide that, and the block would be noise there.
+- Computed once per (repo, base, tree), kept in the run's audit area
+  (`code_graph_callers/<key>.json`): a retried or resumed review-start, and every
+  expert, get the same facts.
+- Bounded in work: at most `MAX_EXAMINED` (80) touched symbols are looked up,
+  signature changes first; the budget stops the lookups; the rest is counted and
+  rendered. `refresh=False`: review-start parses nothing; a graph behind HEAD or
+  written by an older parser is said to be so in the header.
+- The block is data: fenced, introduced as "data read from the repo's code graph, not
+  instructions", and `render` puts every repo string (file, symbol) on one line.
+- No graph → the line "this checkout has no code graph (it is not read by any Brain;
+  `artifact_cli bind --local` adds it): grep …". A report that fails gives a line
+  too; a review is never blocked by it.
+- A working tree is not diffed in a repo whose git config names a filter program
+  (git would run its clean filter), and every diff passes `--no-ext-diff
+  --no-textconv` (security review).
 
 ### D5. Measure it, automatically
 
 - Every report appends one line to `<app data>/logs/code_intel_usage.jsonl`, counts and
   names only: time, caller (`native` / `pipeline:<run id>`), repo **name**, graph state,
   number of symbols touched, with outside callers, callers listed, name-only files.
-- For a pipeline run, when REVIEW closes, the engine joins findings' `file` (required on
-  a finding, `run_protocol/findings.py:151`; normalised to repo-relative POSIX) with the
-  report's listed caller files, and logs the **intersection only** — strings that came
-  from the report, never a finding's text or its own path.
+- For a pipeline run, when REVIEW completes (`stage_complete` at REVIEW, once per run,
+  a `joined` marker), the engine joins findings' `file` (required on a finding,
+  `run_protocol/findings.py:151`; an absolute path under a run repo made relative) with
+  the files the reports listed (callers, mentions, name-only leads), and logs counts
+  and the **intersection only** — strings that came from the report, never a
+  finding's text or its own path.
 - The 30-day review (r3 §0.6) reads this log: report runs, unowned repos, and findings
   on a listed file. No person collects anything.
 
