@@ -388,8 +388,12 @@ def apply_project(project_dir: Path, *, apply: bool = False, today: Optional[str
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 old = target.read_text(encoding="utf-8").rstrip("\n")
-                # the title and the "moved out" comment are there already
-                body = old + "\n\n" + body.split("\n", 4)[4]
+                # the title and the "moved out" comment are there already; a block an
+                # earlier, interrupted run already moved is not added twice
+                moved_body = body.split("\n", 4)[4]
+                if moved_body.strip() in old:
+                    continue
+                body = old + "\n\n" + moved_body
             tmp = target.with_name(f".{target.name}.tmp")
             tmp.write_text(body, encoding="utf-8")
             tmp.replace(target)

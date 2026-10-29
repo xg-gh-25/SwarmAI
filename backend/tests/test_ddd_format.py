@@ -182,3 +182,27 @@ def test_p6_reports_the_shape(tmp_path, monkeypatch):
     F.apply_project(proj, apply=True)
     checks = {n: st for n, st, _dt in mod._check_knowledge(proj)}
     assert checks["② Knowledge/format"] == mod.STATUS_PASS
+
+
+def test_an_interrupted_apply_does_not_move_a_block_twice(tmp_path, monkeypatch):
+    """The reference files are written before the doc; when the doc write fails, the
+    next run must not add the same block to them again."""
+    proj = _workspace_project(tmp_path, monkeypatch)
+    from core.ingestion import governed_edit
+
+    real = governed_edit.apply_user_edit
+
+    def fail(path, *a, **k):
+        if Path(path).name == "TECH.md":
+            raise RuntimeError("disk full")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(governed_edit, "apply_user_edit", fail)
+    try:
+        F.apply_project(proj, apply=True)
+    except RuntimeError:
+        pass
+    monkeypatch.setattr(governed_edit, "apply_user_edit", real)
+    F.apply_project(proj, apply=True)
+    dev = (proj / "2-understanding" / "knowledge" / "tech" / "dev-commands.md").read_text(encoding="utf-8")
+    assert dev.count("- a plain bullet with no title") == 1

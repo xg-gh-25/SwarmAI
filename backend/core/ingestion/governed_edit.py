@@ -62,6 +62,12 @@ def _archive_path(path: Path, op_id: str) -> Path:
 
 
 def _sanitize(path: Path, data: bytes | None) -> bytes | None:
+    """The bytes to write: secrets redacted and invisible characters stripped over the
+    whole text; an injection, role hijack or exfiltration pattern refused when it is on
+    a line the edit adds. A line already in the file was admitted when it was written, and moving or keeping it exposes nothing
+    new; refusing it made a file that quotes such a phrase (a lesson about an injection
+    filter) impossible to edit at all. (When the current bytes are not the version
+    *expected_revision* names, the edit is refused as stale under the lock.)"""
     if data is None:
         return None
     try:
@@ -70,7 +76,13 @@ def _sanitize(path: Path, data: bytes | None) -> bytes | None:
         if is_governed(path):
             raise ValueError("governed corpus files must be UTF-8")
         return data
-    return MemoryGuard().sanitize(text).encode("utf-8")
+    try:
+        kept = set(Path(path).read_bytes().decode("utf-8").splitlines())
+    except (OSError, UnicodeDecodeError):
+        kept = set()
+    guard = MemoryGuard()
+    guard.sanitize("\n".join(ln for ln in text.splitlines() if ln not in kept))  # raises on a new line
+    return guard.scan(text).sanitized_content.encode("utf-8")
 
 
 def _baseline_anchors(path: Path) -> list[str]:
