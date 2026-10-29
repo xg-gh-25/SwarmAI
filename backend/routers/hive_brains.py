@@ -36,7 +36,6 @@ from core import brain_sync, brain_use
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_refresh_lock = asyncio.Lock()      # one skill re-scan at a time (it sets the workspace)
 
 
 def _hive_only() -> None:
@@ -67,17 +66,8 @@ async def _read_body(request: Request) -> bytes:
 
 async def refresh_skills(workspace: Path) -> None:
     """Re-scan the domain skills and project them, as a workspace refresh does."""
-    from core import ddd_skill_registry
-    from core.projection_layer import ProjectionLayer
-    from core.skill_manager import skill_manager
-    async with _refresh_lock:
-        try:
-            skill_manager.workspace_root = workspace
-            await asyncio.to_thread(ddd_skill_registry.build_manifest, workspace, skill_manager.builtin_path)
-            await skill_manager.scan_all()
-            await ProjectionLayer(skill_manager).project_skills(workspace, allow_all=True)
-        except Exception as exc:  # noqa: BLE001 — the Brain is installed; its skills show on the next refresh
-            logger.error("hive brains: skill refresh after an install failed: %s", exc)
+    from core.projection_layer import refresh_workspace_skills
+    await refresh_workspace_skills(workspace, why="hive brain install")
 
 
 @router.put("/brains/{brain}")

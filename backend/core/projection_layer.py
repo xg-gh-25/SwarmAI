@@ -581,3 +581,31 @@ class ProjectionLayer:
                 continue
 
         return False
+
+
+_refresh_lock: "asyncio.Lock | None" = None   # one skill re-scan at a time (it sets the workspace)
+
+
+async def refresh_workspace_skills(workspace: Path, *, why: str) -> None:
+    """Re-scan the domain skills and project them, as a workspace refresh does.
+
+    Rebuilds the domain-skill manifest from ``Projects/``, re-scans every tier and
+    re-projects ``.claude/skills/`` (``project_skills`` drops a copy whose source is
+    gone). Called after a Brain is installed or deleted. One at a time; a failure is
+    logged (*why* names the caller) and never raised: the change itself has already
+    happened and its skills follow on the next refresh."""
+    import asyncio
+
+    global _refresh_lock
+    if _refresh_lock is None:
+        _refresh_lock = asyncio.Lock()
+    from core import ddd_skill_registry
+    from core.skill_manager import skill_manager
+    async with _refresh_lock:
+        try:
+            skill_manager.workspace_root = workspace
+            await asyncio.to_thread(ddd_skill_registry.build_manifest, workspace, skill_manager.builtin_path)
+            await skill_manager.scan_all()
+            await ProjectionLayer(skill_manager).project_skills(workspace, allow_all=True)
+        except Exception as exc:  # noqa: BLE001 — see the docstring
+            logger.error("skill refresh after %s failed: %s", why, exc)
