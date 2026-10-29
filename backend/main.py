@@ -1245,6 +1245,21 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_prewarm_tree_sitter_body)
     asyncio.create_task(_prewarm_tree_sitter())
 
+    # Bring the usage recorded before the usage ledger into it (core/usage_import):
+    # read-only on the old tables, idempotent, so it runs at every start. Off the loop.
+    async def _import_usage_history():
+        try:
+            from config import get_app_data_dir
+            from core import usage_import
+            import database as _database
+            counts = await asyncio.to_thread(
+                usage_import.run, Path(_database.db.db_path), Path(get_app_data_dir()) / "ingestion.db")
+            if any(counts.values()):
+                logger.info("usage ledger: imported %s from the old usage records", counts)
+        except Exception:
+            logger.warning("usage ledger: history import failed (will retry next start)", exc_info=True)
+    asyncio.create_task(_import_usage_history())
+
     # Generate permissions.json for user visibility
     try:
         ws_path = getattr(initialization_manager, '_cached_workspace_path', None)
