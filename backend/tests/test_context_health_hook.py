@@ -142,19 +142,25 @@ class TestDeepCheck:
             hook._deep_check(workspace, str(workspace))
         assert any("EMPTY: SOUL.md" in r.message for r in caplog.records)
 
+    def test_the_deep_check_runs_the_ddd_shape_check(self, hook, workspace, caplog, monkeypatch):
+        monkeypatch.setattr(hook, "_check_ddd_shape", lambda root: ["[drift/low] DDD-REFS: marker"])
+        with caplog.at_level(logging.INFO, logger="hooks.context_health_hook"):
+            hook._deep_check(workspace, str(workspace))
+        assert any("DDD-REFS: marker" in r.message for r in caplog.records)
+
     def test_passes_when_healthy(self, hook, workspace, caplog):
         """Deep check passes when all files are healthy (no warnings)."""
         # Create today's DailyActivity so that check passes
         today_file = workspace / "Knowledge" / "DailyActivity" / f"{date.today().isoformat()}.md"
         today_file.write_text("# Today\n\nActivity.\n")
 
-        # Ensure all 4 DDD docs exist for every project (prevents DDD staleness findings)
+        # Every project has all 4 DDD docs, in the shape CDF writes (the skeleton): no
+        # staleness, completeness or shape finding
+        from core.ddd_skeleton import render_skeleton
         for proj_dir in (workspace / "Projects").iterdir():
             if proj_dir.is_dir():
                 for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
-                    p = proj_dir / doc
-                    if not p.exists():
-                        p.write_text(f"# {doc.replace('.md', '')}\n\nContent.\n")
+                    (proj_dir / doc).write_text(render_skeleton(doc, proj_dir.name))
 
         # Commit everything so git health check finds no uncommitted files
         subprocess.run(["git", "add", "-A"], cwd=workspace, capture_output=True)

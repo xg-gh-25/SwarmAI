@@ -1338,6 +1338,7 @@ class ContextHealthHook:
         #     cross-project index refs + leaves EVALUATE without a PRODUCT/TECH
         #     base. (run_5a29f00c)
         findings += self._check_ddd_completeness(root)
+        findings += self._check_ddd_shape(root)
 
         # 14. README six-section drift — the platform Projects/README.md must keep
         #     describing all six canonical DDD sections (SSOT:
@@ -1405,6 +1406,35 @@ class ContextHealthHook:
                 f"DDD completeness check failed (non-fatal): "
                 f"{type(e).__name__}: {e}"
             )
+        return findings
+
+    def _check_ddd_shape(self, root: Path) -> list[str]:
+        """Per Brain: docs out of the shape CDF writes, and paths the docs name that do
+        not exist (core.ddd_format). Nothing writes; each finding says the fix. Fail-open:
+        a Brain that cannot be read is reported, never raised."""
+        findings: list[str] = []
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return findings
+        from core import ddd_format
+        for d in sorted(projects_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith(".") or not ddd_path(d, "PRODUCT.md").exists():
+                continue
+            try:
+                problems = sum(len(v) for v in ddd_format.project_report(d).values())
+                if problems:
+                    findings.append(
+                        f"[drift/medium] DDD-FORMAT: Brain '{d.name}' has {problems} line(s) out of "
+                        f"the shape CDF writes — `artifact_cli ddd-format --project {d.name}` lists "
+                        f"them, `--apply` moves them losslessly.")
+                refs = ddd_format.dangling_references(d, root)
+                if refs:
+                    f, line, ref = refs[0]
+                    findings.append(
+                        f"[drift/low] DDD-REFS: Brain '{d.name}' names {len(refs)} path(s) that do "
+                        f"not exist (first: {f}:{line} `{ref}`) — correct them, or keep a dated one.")
+            except Exception as e:  # noqa: BLE001 — fail-open by design
+                findings.append(f"DDD shape check of '{d.name}' failed (non-fatal): {type(e).__name__}: {e}")
         return findings
 
     def _check_recall_degradation(self) -> list[str]:

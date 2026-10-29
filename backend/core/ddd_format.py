@@ -31,10 +31,14 @@ returns the doc in shape plus the reference material it moved out, and loses not
 
 Running it again changes nothing. ``artifact_cli ddd-format`` is the command; the P6
 gate (``verify_ddd_complete``) reports ``check`` as "② Knowledge/format".
+
+``dangling_references(project_dir)`` lists backticked paths that point at files that do
+not exist (P6 "② Knowledge/references", and the daily health check).
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -44,6 +48,8 @@ from typing import Optional
 from core.ddd_entry_lifecycle import _ENTRY_RE, _META_RE, _scan_entry, VALID_TYPES, classify_entry_type
 from core.ddd_skeleton import (USER_ONLY_SECTIONS, allowed_types, default_type, home_section,
                                load_skeleton, normalize_heading, skeleton_sections)
+
+logger = logging.getLogger(__name__)
 
 _H2 = re.compile(r"^## (?!#)(.+?)\s*$")
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -449,3 +455,83 @@ def _append_moved(target: Path, body: str) -> None:
     tmp = target.with_name(f".{target.name}.tmp")
     tmp.write_text(text.rstrip("\n") + "\n", encoding="utf-8")
     tmp.replace(target)
+
+
+# ── references to files that do not exist ────────────────────────────────────
+#
+# A path in backticks that resolves unambiguously and is not there. Resolved only when
+# its base is known: ``~/`` and absolute paths (when their mount exists), workspace
+# paths (``Projects/``, ``Knowledge/``, …), Brain paths (``2-understanding/``,
+# ``knowledge/``, ``3-gates/``, …) and paths under a bound or confirmed repo whose top
+# directory the repo has. Anything else is skipped: a reference the check cannot place
+# is not reported. A dangling reference is a lead, not an error — a dated lesson may cite
+# a file that was later deleted — so the P6 gate and the daily health check list them
+# for review and never fail on them.
+
+_TICK = re.compile(r"`([^`\n]{3,200})`")
+_BRAIN_TOP = frozenset({"2-understanding", "3-gates", "4-capabilities", "assets", "knowledge", "templates"})
+_WS_TOP = frozenset({"Projects", "Knowledge", "Services", ".context", ".claude"})
+REFERENCE_FILES = ("2-understanding/PRODUCT.md", "2-understanding/TECH.md",
+                   "2-understanding/IMPROVEMENT.md", "2-understanding/PROJECT.md",
+                   "AGENTS.md", "REFRESHER.md")
+
+
+def _path_candidate(span: str) -> Optional[str]:
+    s = span.strip().rstrip(".,;:")
+    if any(c in s for c in " *{}<>$…|\"'?") or "://" in s or "..." in s or s.startswith("-"):
+        return None
+    s = re.sub(r":\d+(?:[-–]\d+)?$", "", s).split("#")[0]
+    if "/" not in s.strip("/") or ".git/" in s or s.startswith(".git"):
+        return None
+    if not re.search(r"\.\w{1,6}$|/$", s):
+        return None
+    return s
+
+
+def _resolve_reference(s: str, brain: Path, workspace: Path, roots: list[Path]) -> Optional[Path]:
+    if s.startswith("~/"):
+        return Path(s).expanduser()
+    if s.startswith("/"):
+        p = Path(s)
+        return p if Path(*p.parts[:3]).exists() else None
+    top = s.split("/")[0]
+    if top in _WS_TOP:
+        return workspace / s
+    if top in _BRAIN_TOP:
+        return brain / ("2-understanding/" + s if top == "knowledge" else s)
+    for r in roots:
+        if (r / top).exists():
+            return r / s
+    return None
+
+
+def dangling_references(project_dir: Path, workspace: Optional[Path] = None) -> list[tuple[str, int, str]]:
+    """``(file, line, path)`` for each backticked path in the Brain's four docs,
+    AGENTS.md and REFRESHER.md that resolves (see above) and does not exist."""
+    project_dir = Path(project_dir)
+    workspace = Path(workspace) if workspace else project_dir.parent.parent
+    roots: list[Path] = []
+    try:
+        from core.project_agent import repo_roots
+        roots += list(repo_roots(project_dir).values())
+    except Exception as exc:  # noqa: BLE001 — no repo roots: repo paths are skipped
+        logger.debug("ddd_format: repo roots of %s unreadable: %s", project_dir, exc)
+    try:
+        from core.code_intel import local_roots
+        roots += [Path(p) for p in local_roots.confirmed(project_dir.name)]
+    except Exception as exc:  # noqa: BLE001 — local roots unavailable (Hive, no registry)
+        logger.debug("ddd_format: local roots of %s unreadable: %s", project_dir, exc)
+    out: list[tuple[str, int, str]] = []
+    for rel in REFERENCE_FILES:
+        p = project_dir / rel
+        if not p.is_file():
+            continue
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            for m in _TICK.finditer(line):
+                cand = _path_candidate(m.group(1))
+                if not cand:
+                    continue
+                target = _resolve_reference(cand, project_dir, workspace, roots)
+                if target is not None and not target.exists():
+                    out.append((rel, i, cand))
+    return out

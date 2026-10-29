@@ -289,7 +289,27 @@ def _check_knowledge(d: Path) -> list[tuple[str, str, str]]:
         out.append((f"{name}/content", STATUS_PASS,
                     "typed entries present; empty PRODUCT sections are recorded as gaps"))
     out.append(_check_format(d, texts))
+    out.append(_check_references(d))
     return out
+
+
+def _check_references(d: Path) -> tuple[str, str, str]:
+    """② Knowledge/references: backticked paths in the docs, AGENTS.md and REFRESHER.md
+    that point at a file that does not exist (core.ddd_format.dangling_references).
+    PENDING, never FAIL: a dated lesson may cite a file that was later deleted, so each
+    one is a lead to fix or keep, not an error."""
+    name = "② Knowledge/references"
+    try:
+        from core import ddd_format as fmt
+    except ImportError:
+        return (name, STATUS_PENDING, "not checked off a SwarmAI host")
+    found = fmt.dangling_references(d)
+    if not found:
+        return (name, STATUS_PASS, "every path the docs name exists")
+    shown = "; ".join(f"{f}:{line} {ref}" for f, line, ref in found[:5])
+    more = f" (+{len(found) - 5} more)" if len(found) > 5 else ""
+    return (name, STATUS_PENDING,
+            f"{len(found)} path(s) point at nothing: {shown}{more} — correct them, or keep a dated one")
 
 
 def _check_format(d: Path, texts: dict[str, str]) -> tuple[str, str, str]:

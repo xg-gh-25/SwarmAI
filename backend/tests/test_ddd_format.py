@@ -261,3 +261,44 @@ def test_one_doc_failing_is_reported_and_the_others_are_written(tmp_path, monkey
     report = F.apply_project(proj, apply=True)
     assert "disk full" in report["docs"]["TECH.md"]["error"]
     assert re.search(r"- \[\w+\] \*\*Untyped\*\* decision\.\n  <!-- ref:0", (proj / "2-understanding" / "PROJECT.md").read_text(encoding="utf-8"))
+
+
+def test_dangling_references_reports_only_paths_it_can_place(tmp_path, monkeypatch):
+    """A Brain path, a workspace path and a home path that do not exist are reported;
+    a path under an unknown base, a .git path and an existing file are not."""
+    proj = _workspace_project(tmp_path, monkeypatch)
+    ws = proj.parent.parent
+    (proj / "2-understanding" / "knowledge").mkdir()
+    (proj / "2-understanding" / "knowledge" / "here.md").write_text("x\n")
+    (proj / "2-understanding" / "TECH.md").write_text(
+        "# T\n\n## Architecture\n\n- [decision] **Refs** see `knowledge/here.md`, `knowledge/gone.md`, "
+        "`Knowledge/Notes/gone.md`, `core/unknown_base.py`, `.git/index.lock`, `~/no-such-dir-xyz/a.md`.\n"
+        "  <!-- ref:0 | last:2026-10-29 | decay:active -->\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    from core.code_intel import local_roots
+    monkeypatch.setattr(local_roots, "confirmed", lambda project: [str(repo)])
+    found = {ref for _f, _line, ref in F.dangling_references(proj, ws)}
+    assert found == {"knowledge/gone.md", "Knowledge/Notes/gone.md", "~/no-such-dir-xyz/a.md"}
+
+
+def test_p6_lists_dangling_references_without_failing(tmp_path, monkeypatch):
+    proj = _workspace_project(tmp_path, monkeypatch)
+    (proj / "AGENTS.md").write_text("Members: `3-gates/missing.py`\n", encoding="utf-8")
+    p = Path(__file__).resolve().parents[1] / "skills/s_project-manager/scripts/verify_ddd_complete.py"
+    spec = importlib.util.spec_from_file_location("verify_ddd_complete_refs", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    checks = {n: (st, dt) for n, st, dt in mod._check_knowledge(proj)}
+    status, detail = checks["② Knowledge/references"]
+    assert status == mod.STATUS_PENDING and "AGENTS.md:1 3-gates/missing.py" in detail
+
+
+def test_the_daily_health_check_reports_shape_and_references(tmp_path, monkeypatch):
+    proj = _workspace_project(tmp_path, monkeypatch)
+    (proj / "AGENTS.md").write_text("Members: `3-gates/missing.py`\n", encoding="utf-8")
+    from hooks.context_health_hook import ContextHealthHook
+    hook = ContextHealthHook.__new__(ContextHealthHook)
+    found = hook._check_ddd_shape(proj.parent.parent)
+    assert any("DDD-FORMAT: Brain 'Lib'" in f for f in found)             # MESSY_TECH is out of shape
+    assert any("DDD-REFS: Brain 'Lib'" in f and "3-gates/missing.py" in f for f in found)
