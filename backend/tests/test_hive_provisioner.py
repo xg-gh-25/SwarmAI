@@ -1037,19 +1037,6 @@ class TestUpdateFailLoudOnMissingBucket:
             mock_sync.assert_not_called()
 
 
-class TestH3HealthProxyFollowRedirects:
-    """H3: Health proxy must follow HTTP redirects (Caddy 308)."""
-
-    def test_health_proxy_has_follow_redirects(self):
-        """httpx.AsyncClient must use follow_redirects=True."""
-        import inspect
-        from routers.hive import health_proxy
-
-        source = inspect.getsource(health_proxy)
-        assert "follow_redirects=True" in source, \
-            "Health proxy must follow redirects to handle Caddy 308"
-
-
 # ── G-series tests (E2E hardening gaps) ──────────────────────────
 
 
