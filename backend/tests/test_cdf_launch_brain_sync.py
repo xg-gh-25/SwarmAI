@@ -52,10 +52,15 @@ def test_an_install_outside_the_live_workspace_records_nothing(safety_corpus, tm
 
 
 def test_a_worker_hive_journals_nothing(safety_corpus, tmp_path, monkeypatch):
+    from core.ingestion.writer import ensure_baseline
+    ws = safety_corpus["workspace"]
+    first = _package(tmp_path / "host1", "# TECH\n\n## Conventions\n\n- [guideline] **A** One.\n")
+    bs.install(ws, "Lib", first, bs.content_digest(first))
+    ensure_baseline()
     monkeypatch.setenv("SWARMAI_MODE", "hive")
     monkeypatch.setenv("SWARMAI_ROLE", "worker")
-    files = _package(tmp_path / "host", "# TECH\n")
-    bs.install(safety_corpus["workspace"], "Lib", files, bs.content_digest(files))
+    second = _package(tmp_path / "host2", "# TECH\n\n## Conventions\n\n- [guideline] **B** Two.\n")
+    bs.install(ws, "Lib", second, bs.content_digest(second))
     conn = _connect(safety_corpus["database"])
     assert conn.execute("SELECT COUNT(*) FROM ingestion_writes").fetchone()[0] == 0
     conn.close()
