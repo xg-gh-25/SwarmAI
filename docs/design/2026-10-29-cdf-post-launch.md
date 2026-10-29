@@ -27,6 +27,7 @@ CDF 一次切换上线之后要做的事。原则不变：不加开关、不加�
 |---|---|---|
 | owner 起来了 | 日志里有 `CDF ingestion owner worker started` | 只看到 `owner not taken` 而且一直重试 |
 | 会话任务在跑 | `ingestion_s2_jobs` 按 state 计数；`extraction_attempts` 按 status 计数 | 有 `running` 超过 1 小时；`failed` 占比持续上升 |
+| 会话任务没被饿死 | `ingestion_s2_jobs` 里 queued 且 `next_attempt_at` 早于现在的行，看它等了多久 | 白天一直排着。原因：只要有任何一个 tab 在 streaming，或者内存压力为 warning，S2 就不领任务（`worker.ingestion_admission`）。多 tab 一直开着用的时候，S2 可能要等到全部 tab 都停下才跑。这条看第 1 天的数据再决定要不要改 |
 | 没有卡住的单元 | `ingestion_units` 里 state 为 judged / writing、`updated_at` 早于 1 小时前的行；`ingestion_inbox` 里 in_progress 超过 1 小时的行 | 计数不为 0（按 B3 修复，启动恢复和每日维护应当把它们归零） |
 | 毒化有没有爆 | `failed_poison` 按 `error_class` 分组 | 同一个 error_class 反复出现：说明是确定性错误，要修代码，不是重试能解决的 |
 | 用户冲突 | `ingestion_events` 里的 user_race / writer_unknown / recovery_failed | 有 writer_unknown：说明有人绕过 CDF 写了受管文件 |
