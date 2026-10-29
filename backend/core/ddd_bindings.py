@@ -276,6 +276,9 @@ def classify_project(project_dir: str | Path) -> str:
 
 # ── PULL + codeIntel ─────────────────────────────────────────────────────────
 
+_ROOT_RESERVED = frozenset({"local", "hive"})
+
+
 def binding_worktree(binding: Binding, worktree_root: str | Path | None = None) -> Path:
     """Where ``bind_repo`` clones *binding*: confined under the bindings root.
 
@@ -302,10 +305,17 @@ def binding_worktree(binding: Binding, worktree_root: str | Path | None = None) 
     # Exactly one level below the root: not the root itself (a re-bind would move every
     # project's clones), and not nested inside another clone, whose committed files
     # can then act as a git dir with its own config (core.fsmonitor runs a command).
-    # ...and not a name this module keeps beside the clones (lock, db, preserved copy).
+    # ...and not a name the root keeps beside the clones: this module's lock, db and
+    # preserved copy, and code-intel's local-root graphs, Hive graphs and local-roots
+    # registry (core/code_intel/local_roots.py). A bind clears its worktree first, and
+    # deleting a Brain moves it; neither may reach those. Compared case-folded: on a
+    # case-insensitive disk (macOS's default) "Local" IS the directory "local".
+    folded = candidate.name.casefold()
     if candidate.parent == root and (
-            candidate.name.endswith((".bind.lock", ".code_intel.db"))
-            or ".preserved-" in candidate.name):
+            folded.endswith((".bind.lock", ".code_intel.db"))
+            or ".preserved-" in folded
+            or folded in _ROOT_RESERVED
+            or folded.startswith("local_roots.json")):
         raise ValueError(
             f"binding worktree name '{candidate.name}' is reserved under the bindings root")
     if candidate.parent != root:

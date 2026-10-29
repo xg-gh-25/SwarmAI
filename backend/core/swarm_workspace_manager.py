@@ -2963,10 +2963,11 @@ class SwarmWorkspaceManager:
                 trash_root.mkdir(exist_ok=True)
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
                 # What the Brain owns outside its folder (graphs, clones, registry rows,
-                # job bodies, its config name, projected skills) is read now, while the
-                # folder is still in place, and taken away with it (core/brain_teardown).
+                # job bodies, its config name) is read now, while the folder is still in
+                # place, and taken away with it (core/brain_teardown); its skills follow
+                # with the registry refresh below.
                 from core import brain_teardown
-                owned = brain_teardown.collect(project_dir, workspace_path)
+                owned = brain_teardown.collect(project_dir)
                 from core.ingestion.governed_edit import move_tree  # journaled (CDF §3.2)
                 dest = trash_root / f"{name}-{stamp}"
                 move_tree(project_dir, dest)
@@ -2974,6 +2975,8 @@ class SwarmWorkspaceManager:
                 return name
 
             deleted_name = await anyio.to_thread.run_sync(_find_and_delete)
+            from core import brain_teardown
+            await brain_teardown.refresh_registries(workspace_path)
 
         # Clean up in-memory caches (outside lock — lock object itself is being removed)
         self._uuid_index.pop(project_id, None)
