@@ -74,11 +74,11 @@ class UpdateResult:
 
 def _file_routes(repo_root: Path, rel_path: str) -> list:
     """The routes one file declares (pure: reads the file, stores nothing)."""
-    from .parser import LANGUAGE_MAP
+    from .parser import LANGUAGE_MAP, resolves_inside
     from .route_parser import extract_routes
     full = repo_root / rel_path
     lang = LANGUAGE_MAP.get(full.suffix)
-    if lang is None or not full.is_file():
+    if lang is None or not full.is_file() or not resolves_inside(repo_root, full):
         return []
     try:
         return extract_routes(rel_path, full.read_text(encoding="utf-8", errors="replace"), lang)

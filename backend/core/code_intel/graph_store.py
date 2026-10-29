@@ -1587,7 +1587,8 @@ class GraphStore:
     ) -> dict:
         """Re-store *changed_files* (repo-relative) so the graph matches the disk.
 
-        Per file: a deleted file loses its nodes, edges and routes; an unchanged file
+        Per file: a deleted file, or one that is now a symlink to a file outside the
+        repo, loses its nodes, edges and routes; an unchanged file
         (same content hash as stored) or a path that is not a regular file (a submodule
         bump) is skipped; otherwise it is parsed and its nodes
         and outbound edges replaced via ``store_file_nodes_edges`` (inbound edges whose
@@ -1605,7 +1606,7 @@ class GraphStore:
         Returns a dict with ``updated``, ``skipped``, ``failed``, ``dependents``
         (files with callers into the updated files, for callers that want them).
         """
-        from .parser import parse_file
+        from .parser import parse_file, resolves_inside
 
         repo_root = Path(repo_root)
         updated: list[str] = []
@@ -1614,8 +1615,9 @@ class GraphStore:
 
         for fpath in changed_files:
             full = repo_root / fpath
-            if not full.exists():
-                # File was deleted — remove its nodes/edges and any routes it had.
+            # Deleted, or a symlink to a file outside the repo (its target is not the
+            # repo's content and is never read): either way it leaves the graph.
+            if not full.exists() or not resolves_inside(repo_root, full):
                 try:
                     self.remove_file(fpath)
                     self.delete_routes_for_file(fpath)

@@ -212,20 +212,21 @@ def resolve_router_prefixes(graph: GraphStore, repo_root: Path) -> int:
 
     ``build.routes_for`` stores routes as the decorator path only (e.g.
     ``/sessions``); the mount prefix (``/api/chat``) lives in the entrypoint's
-    ``include_router()`` call. EVERY path that (re)stores routes — the reindex job
-    AND the FS watcher — must call this afterwards, or the stored path stays bare
+    ``include_router()`` call. EVERY path that (re)stores routes (``build.rebuild``,
+    ``build.routes_for``) must call this afterwards, or the stored path stays bare
     and a route query for ``/api/chat/sessions`` resolves to the wrong handler
     (GS_COD010 flake). Idempotent: an already-prefixed path is skipped.
 
     Returns the number of routes updated.
     """
+    from .parser import resolves_inside
     from .route_parser import build_prefix_map, _make_route_id
 
     entrypoint_path = None
     entrypoint_content = None
     for candidate in _PREFIX_ENTRYPOINT_CANDIDATES:
         fp = repo_root / candidate
-        if fp.exists():
+        if fp.exists() and resolves_inside(repo_root, fp):
             entrypoint_path = candidate
             entrypoint_content = fp.read_text(encoding="utf-8", errors="replace")
             break

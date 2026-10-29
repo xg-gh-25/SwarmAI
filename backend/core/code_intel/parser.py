@@ -773,6 +773,21 @@ def is_skipped_location(rel_path: str | PurePath) -> bool:
     return any(f"{sfx}/" in f"{rel_posix}/" for sfx in _SKIP_PATH_SUFFIXES)
 
 
+def resolves_inside(repo_root: Path, path: Path) -> bool:
+    """Whether *path*, with every symlink followed, is still inside *repo_root*.
+
+    A repo can track a symlink to anywhere (``notes.py -> ~/.aws/…``); its target is
+    not part of the repo, and reading it would put another directory's content into
+    this repo's graph, and from there into a Brain's docs. Every reader of repo files
+    for the graph asks this first. Never raises: a path that cannot be resolved is
+    outside."""
+    try:
+        Path(path).resolve().relative_to(Path(repo_root).resolve())
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 def is_indexed_path(rel_path: str | PurePath) -> bool:
     """Whether a repo-relative path is one the code graph holds: an extension in
     LANGUAGE_MAP, outside the skipped directories. The ONE answer for every path
@@ -2269,6 +2284,7 @@ def parse_repo_with_coverage(
     unknown_ext_counts: dict[str, int] = {}
     unknown_ext_examples: dict[str, list[str]] = {}
 
+    outside: list[str] = []
     for path in repo_root.rglob("*"):
         if not path.is_file():
             continue
@@ -2276,6 +2292,11 @@ def parse_repo_with_coverage(
         # Skipped directories (SKIP_DIRS components, and path-scoped skips such as
         # `src-tauri/binaries`, the Tauri sidecar bundle): out of scope, not a hole.
         if is_skipped_location(rel):
+            continue
+        # A symlink to a file outside the repo is not the repo's content: never read.
+        # (rglob does not descend into a directory symlink; a file symlink it lists.)
+        if path.is_symlink() and not resolves_inside(repo_root, path):
+            outside.append(str(rel))
             continue
         suffix = path.suffix
         if suffix in LANGUAGE_MAP:
@@ -2329,6 +2350,16 @@ def parse_repo_with_coverage(
                                f"{_MAX_UNKNOWN_EXT_EXAMPLES}). Out of scope by the "
                                f"repo's own rules — recorded, never silently dropped."),
                 })
+
+    if outside:
+        status = "partial"
+        for ex in sorted(outside)[:_MAX_UNKNOWN_EXT_EXAMPLES]:
+            coverage_holes.append({
+                "ref": ex, "kind": "outside_repo",
+                "reason": (f"a symlink to a file outside the repo ({len(outside)} file(s) "
+                           f"total; showing up to {_MAX_UNKNOWN_EXT_EXAMPLES}) — its "
+                           f"target is not this repo's content and was not read."),
+            })
 
     # Emit bounded unknown-extension holes (one row per example, capped; the reason
     # on every row carries the TRUE total for that extension so the count is honest).

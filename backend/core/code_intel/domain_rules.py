@@ -39,6 +39,7 @@ listed in the §9 traceability matrix. Fail-closed (no matrix section → FAIL).
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .clustering import compute_graph_clusters
 
@@ -133,6 +134,26 @@ def _detect_deprecated(symbol_writes: dict[str, set[str]]) -> set[str]:
     return deprecated
 
 
+def repo_source_reader(repo_root):
+    """The text of a repo-relative file, "" when it cannot be read or (a symlink)
+    resolves outside *repo_root*: a target out of the repo is not its content."""
+    import os
+    from .parser import resolves_inside
+
+    def read(fp):  # noqa: ANN001
+        # Node file_paths are repo-RELATIVE; resolve against repo_root so the
+        # disposition scan can actually open them (else silent all-null).
+        path = os.path.join(repo_root, fp) if repo_root else fp
+        if repo_root and not resolves_inside(Path(repo_root), Path(path)):
+            return ""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+    return read
+
+
 def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph=None,
                          clusters=None) -> dict:
     """Extract per-domain business rules from the shared graph.
@@ -193,17 +214,7 @@ def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph
     deprecated = _detect_deprecated(symbol_targets)
 
     if source_reader is None:
-        import os
-
-        def source_reader(fp):  # noqa: ANN001
-            # Node file_paths are repo-RELATIVE; resolve against repo_root so the
-            # disposition scan can actually open them (else silent all-null).
-            path = os.path.join(repo_root, fp) if repo_root else fp
-            try:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    return fh.read()
-            except OSError:
-                return ""
+        source_reader = repo_source_reader(repo_root)
 
     # Cache disposition scans per file (Gate-1 M1: once per file, not per rule).
     _disp_cache: dict[str, dict[str, str]] = {}
