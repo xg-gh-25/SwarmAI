@@ -18,7 +18,7 @@
     "0f1e862ee88037a106f4dc90b61329609b9ec772fe613a9b24a1baffb8dbb2b5": {
       "test_id": "B602",
       "file": "backend/jobs/executor.py",
-      "line": 1084,
+      "line": 1080,
       "text": "subprocess call with shell=True identified, security issue."
     },
     "32a8598efef7ed8d7a4eff97a582c6c305b83fa157c6d5bcb02c4e52df351214": {
@@ -36,7 +36,7 @@
     "7c04331cab1e6cf30ca7d29a38d8eec60a95526df824cf5f0a8dd34ec6cc70e2": {
       "test_id": "B602",
       "file": "backend/scripts/refresh_ai_docs.py",
-      "line": 128,
+      "line": 123,
       "text": "subprocess call with shell=True identified, security issue."
     },
     "8dbc8caa2e96cf79afcd97e6cb8bf5dcc5272e505fe50bcaf1a79b8cae56e344": {

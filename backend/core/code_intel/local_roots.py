@@ -77,7 +77,7 @@ def db_path(root: str | Path) -> Path:
     """Where a local root's graph lives: keyed by its real path, so two Brains naming
     the same checkout share one graph."""
     real = os.path.realpath(str(root))
-    return _bindings_root() / "local" / f"{hashlib.sha1(real.encode()).hexdigest()[:16]}.code_intel.db"
+    return _bindings_root() / "local" / f"{hashlib.sha1(real.encode(), usedforsecurity=False).hexdigest()[:16]}.code_intel.db"
 
 
 def _refusal(p: Path) -> str | None:
@@ -446,7 +446,7 @@ def hive_mode() -> bool:
 
 def hive_db_path(root: str | Path) -> Path:
     real = os.path.realpath(str(root))
-    return _bindings_root() / "hive" / f"{hashlib.sha1(real.encode()).hexdigest()[:16]}.code_intel.db"
+    return _bindings_root() / "hive" / f"{hashlib.sha1(real.encode(), usedforsecurity=False).hexdigest()[:16]}.code_intel.db"
 
 
 def hive_task_clones(project_dir: str | Path) -> list[tuple[str, Path]]:

@@ -2775,7 +2775,7 @@ class RunEngine:
         parts = []
         for name in sorted(per_repo):
             info = per_repo[name]
-            key = hashlib.sha1(f"{name}\0{info['base']}\0{info.get('tree')}".encode()).hexdigest()[:16]
+            key = hashlib.sha1(f"{name}\0{info['base']}\0{info.get('tree')}".encode(), usedforsecurity=False).hexdigest()[:16]
             path = self._callers_dir() / f"{key}.json"
             data = self._read_json(path, None)
             if not isinstance(data, dict) or "text" not in data:

@@ -163,7 +163,7 @@ def _code_hash(node, language: str) -> str:
                         and first.named_children[0].type == "string")):
                     skip.add(first.start_byte)       # the docstring (bare or wrapped)
             stack.extend(n.children)
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)
     stack = [node]
     while stack:
         n = stack.pop()
@@ -380,7 +380,7 @@ def _java_scan_types(node, out: dict[str, Iface]) -> None:
                 else:                              # an overload: one more version
                     got.arities.append(spec)
                     got.sigs.append(sig)
-                    got.code_hash = hashlib.sha1((got.code_hash + h).encode()).hexdigest()
+                    got.code_hash = hashlib.sha1((got.code_hash + h).encode(), usedforsecurity=False).hexdigest()
             elif m.type == "constructor_declaration":
                 ctors.append(_java_sig(m.child_by_field_name("parameters")))
             elif m.type == "field_declaration" and not _java_private(m):
