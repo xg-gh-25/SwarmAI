@@ -1138,95 +1138,6 @@ class TestMidSessionContentCheckpoint:
         assert not da_file.exists()
 
 
-class TestHighSignalCapture:
-
-    @pytest.mark.asyncio
-    async def test_decision_captured_to_daily_activity(self, tmp_path, session_context):
-        """'I decided to use rebase' writes to DailyActivity."""
-        from core.runtime_hooks import create_high_signal_capture
-
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": "I decided to always use rebase instead of merge"}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert da_file.exists()
-        content = da_file.read_text()
-        assert "High-signal capture" in content
-        assert "rebase" in content
-
-    @pytest.mark.asyncio
-    async def test_chinese_decision_captured(self, tmp_path, session_context):
-        """'我们决定' triggers capture."""
-        from core.runtime_hooks import create_high_signal_capture
-
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": "我们决定以后所有的 API 都用 snake_case"}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert da_file.exists()
-        assert "snake_case" in da_file.read_text()
-
-    @pytest.mark.asyncio
-    async def test_normal_prompt_not_captured(self, tmp_path, session_context):
-        """Normal prompts don't trigger capture."""
-        from core.runtime_hooks import create_high_signal_capture
-
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": "Can you help me write a function?"}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert not da_file.exists()
-
-    @pytest.mark.asyncio
-    async def test_dedup_within_session(self, tmp_path, session_context):
-        """Same prompt repeated doesn't write twice."""
-        from core.runtime_hooks import create_high_signal_capture
-
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-
-        for _ in range(3):
-            await hook({"prompt": "I decided to use TypeScript for all new code"}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        content = da_file.read_text()
-        assert content.count("High-signal capture") == 1
-
-    @pytest.mark.asyncio
-    async def test_short_prompt_ignored(self, tmp_path, session_context):
-        """Prompts shorter than 10 chars are ignored even if they match."""
-        from core.runtime_hooks import create_high_signal_capture
-
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": "decided"}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert not da_file.exists()
-
-    @pytest.mark.asyncio
-    async def test_lesson_pattern_captured(self, tmp_path, session_context):
-        """'lesson: ...' triggers capture."""
-        from core.runtime_hooks import create_high_signal_capture
-
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": "lesson: never run full test suite proactively"}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert da_file.exists()
-        assert "full test suite" in da_file.read_text()
-
-
 class TestHookRegistryChain:
 
     @pytest.mark.asyncio
@@ -2416,26 +2327,6 @@ class TestHooksSeeOnlyUserText:
         ui = ("## Current UI State\nThis is what you are currently showing the user in the app:\n"
               "- Open file: `a.md`")
         return f"{resume}\n\n{recall}\n\n{ui}\n\n{user}"
-
-    @pytest.mark.asyncio
-    async def test_high_signal_ignores_injected_blocks(self, tmp_path, session_context):
-        from core.runtime_hooks import create_high_signal_capture
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": self._prompt("继续")}, None, MagicMock())
-        assert not _today_file(ws).exists()
-
-    @pytest.mark.asyncio
-    async def test_high_signal_captures_user_text_on_one_line(self, tmp_path, session_context):
-        from core.runtime_hooks import create_high_signal_capture
-        ws = tmp_path / "SwarmWS"
-        hook = create_high_signal_capture(session_context, workspace_dir=str(ws))
-        await hook({"prompt": self._prompt("I decided to ship weekly\n## not a header")},
-                   None, MagicMock())
-        text = _today_file(ws).read_text()
-        assert "I decided to ship weekly ## not a header" in text
-        assert "use rebase" not in text and "RESUMED" not in text
-        assert "\n## not a header" not in text
 
     @pytest.mark.asyncio
     async def test_correction_detector_ignores_quoted_history(self, corrections_file, session_context):

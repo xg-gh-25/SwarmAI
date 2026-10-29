@@ -296,6 +296,10 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
         def card1(self, *_args):
             return answer
 
+        def verify(self, *_args):
+            return {"grounded": True, "durable": True, "self_contained": True, "hits": []}
+
+    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "user: verify first")
     payload = {
         "kind": "cognition", "type": "guideline", "scope": "world",
         "title": "Verify current state", "what": "Verify current state before editing.",

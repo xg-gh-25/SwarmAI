@@ -391,8 +391,8 @@ structure, operations silent. (SOUL P1)
 **R22. Memory is written by CDF and injected as whole units within a fixed budget.** Every
 write to MEMORY.md / EVOLUTION.md goes through CDF: its sources only submit candidates; CDF
 judges, routes and writes. Each file injected every turn has a daily write budget (4 KB a day
-for each of MEMORY / EVOLUTION / STEERING / USER / TOOLS, 20 KB for each project's DDD);
-a unit over it waits for the next UTC day. Injection is a fixed, query-independent layer: a
+for each of MEMORY / EVOLUTION / STEERING / USER / TOOLS; a project's DDD, read on demand
+and never injected every turn, has none); a unit over it waits for the next UTC day. Injection is a fixed, query-independent layer: a
 superseded unit is never injected, and a file over its budget (MEMORY 24K / EVOLUTION 8K
 tokens) is injected as selected whole units — every layer inside the budget, the
 meta-cognitive layer first, each layer by score (use counts more than age) — in file order,

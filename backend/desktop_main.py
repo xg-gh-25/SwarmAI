@@ -323,8 +323,9 @@ def run_ingest(argv: "list[str]") -> int:
                     destination = json.loads(item["destination"] or "{}")
                     item["destination"] = destination
                     item["text"] = payloads[0] if len(payloads) == 1 else payloads
-                    if destination.get("store") == "COMMON_DDD":
-                        item["hint"] = "要让它每轮生效，请用一句话直接说出这条规则。"
+                    if item.get("reason") == "not_grounded":
+                        # the user's message does not say it: nothing was kept (refactor §3.2)
+                        item["hint"] = "你的消息里没有直接说出这条规则，所以没有记下；要记住它，请用一句话直接说出来。"
                     rendered_units.append(item)
                 print(json.dumps({
                     "status": "done", "candidate_id": result.candidate_id,

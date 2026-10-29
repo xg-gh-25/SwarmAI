@@ -263,6 +263,14 @@ def _title_and_body(group: dict[str, Any], answer: Any) -> tuple[str, str]:
     return title, text
 
 
+def _evolution_prefix(group: Mapping[str, Any], answer: Any) -> str:
+    """C for a correction, K for the rest: from the unit's own type (the extractor
+    declares it), or a legacy card 1 answer's agent_kind."""
+    correction = (str(group.get("type") or "") == "correction"
+                  or str(_model_value(answer, "agent_kind", "")) == "correction")
+    return "C" if correction else "K"
+
+
 def _one_line(value: Any) -> str:
     """*value* on one line: an entry in a per-turn file is one line, and a field with a
     line break ended the entry early or started a new heading in MEMORY.md."""
@@ -419,7 +427,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     marker = f"<!-- cand:{unit_id} -->"
 
     if store == "EVOLUTION":
-        prefix = "C" if str(_model_value(answer, "agent_kind", "")) == "correction" else "K"
+        prefix = _evolution_prefix(group, answer)
         label = "Correction" if prefix == "C" else "Competence"
         return f"### {prefix}{sequence:03d} | {today}\n- **{label}**: **{_one_line(title)}** {body}\n{marker}"
     if store == "MEMORY":
@@ -511,7 +519,8 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     rerouted = bool(_model_value(destination, "rerouted_from"))
     non_injected_timeline = store == "TIMELINE" and not bool(
         _model_value(destination, "injectable", True))
-    group["tainted"] = bool(group.get("tainted") or rerouted or non_injected_timeline)
+    inferred = bool(vector.get("inferred"))          # pipeline_v2: no verified evidence
+    group["tainted"] = bool(group.get("tainted") or rerouted or non_injected_timeline or inferred)
     section = str(_model_value(destination, "section", "") or "")
     content = original.decode("utf-8") if original else ""
     old_anchor = _candidate_target(decision)
@@ -530,8 +539,7 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
         group["tainted"] = bool(group["tainted"] or _unit_external(old_unit))
     sequence = 1
     if store == "EVOLUTION":
-        answer = _decision_value(decision, "card1")
-        prefix = "C" if str(_model_value(answer, "agent_kind", "")) == "correction" else "K"
+        prefix = _evolution_prefix(group, _decision_value(decision, "card1"))
         sequence = _next_evolution_id(content, section, prefix)
     block = _render_block(decision, unit_id, group, sequence=sequence)
     # refine keeps the old entry's bytes (audit, recall): it is superseded, and the
@@ -977,19 +985,22 @@ def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int],
 _GLOBAL_QUOTA_STORES = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"})
 
 
+def daily_cap(store: str) -> int:
+    """Bytes *store* may take in one UTC day (AGENT R22)."""
+    if store in _GLOBAL_QUOTA_STORES:
+        return 4096
+    if store == "KNOWLEDGE":
+        return 5 * 1024 * 1024
+    raise ValueError(f"unknown quota store: {store}")
+
+
 def _quota_usage(store: str, project: str | None, day: str,
                  conn: sqlite3.Connection) -> tuple[int, int, int, int | None]:
     """(bytes used, entries used, byte cap, entry cap) of *store* on UTC *day*."""
-    if store in _GLOBAL_QUOTA_STORES:
-        cap, count_cap = 4096, None
-    elif store == "DDD":
-        cap, count_cap = 20 * 1024, None
-    elif store == "KNOWLEDGE":
-        cap, count_cap = 5 * 1024 * 1024, 50
-    else:
-        raise ValueError(f"unknown quota store: {store}")
+    cap = daily_cap(store)
+    count_cap = 50 if store == "KNOWLEDGE" else None
     # a file injected into every session has one daily budget, whatever the project
-    # of the units that spend it; a project's DDD has its own
+    # of the units that spend it; KNOWLEDGE is counted per project
     if store in _GLOBAL_QUOTA_STORES:
         scope, args = "1=1", (store, day)
     elif project is None:
@@ -1010,8 +1021,10 @@ def quota_still_full(unit_id: str, conn: sqlite3.Connection) -> bool:
     without judging the unit again."""
     row = conn.execute("SELECT store,project,bytes FROM ingestion_quota WHERE unit_id=? "
                        "AND status='released'", (unit_id,)).fetchone()
-    if row is None:
-        return False
+    if row is None or str(row[0]) not in _GLOBAL_QUOTA_STORES | {"KNOWLEDGE"}:
+        return False        # no cap (a project's DDD): judged again and written
+    if int(row[2]) > daily_cap(str(row[0])):
+        return False        # never fits: judged again, the worker refuses it as too large
     used, count, cap, count_cap = _quota_usage(str(row[0]), row[1], _now().date().isoformat(), conn)
     return used + int(row[2]) > cap or (count_cap is not None and count + 1 > count_cap)
 

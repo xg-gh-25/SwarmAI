@@ -95,30 +95,6 @@ def test_a_v7_store_gains_the_project_column(tmp_path, monkeypatch):
         conn.close()
 
 
-def test_the_gap_judge_is_offered_the_hint_as_its_candidate(tmp_path):
-    from core.ingestion.contracts_v2 import GapAnswer
-    from core.ingestion.pipeline_v2 import run_unit_v2
-    offered: list[tuple] = []
-
-    class Judge:
-        def card1_v2(self, _unit, projects, _domains):
-            offered.append(tuple(projects))
-            return GapAnswer(shape="Gap", actionable=True, evidenced=True, self_contained=True,
-                             project=projects[0] if projects else None)
-
-    gap = {"kind": "gap", "gap_kind": "risk", "scope": "project:Widget", "title": "Missing fallback",
-           "what": "The fallback is absent.", "proposed_next": "Add and validate the fallback.",
-           "evidence": ["event:one"]}
-    row = {"id": "c", "unit_id": "c.unit", "unit_kind": "gap", "source_v2": "S7",
-           "payload": json.dumps(gap), "evidence_root_ids": json.dumps(["root-1"]),
-           "envelope": json.dumps({"root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
-                                   "strength": "user_explicit", "tainted": False}),
-           "project_candidates": "[]", "project_hint": "Widget"}
-    decision = run_unit_v2(row, tmp_path, Judge())
-    assert offered == [("Widget",)]
-    assert decision.decision == "write" and decision.destination.project == "Widget"
-
-
 def test_recall_reads_the_bound_project_under_the_app_session_id(monkeypatch):
     """Recall's signal 2 looked the hook state up by the SDK id and never found it."""
     from types import SimpleNamespace

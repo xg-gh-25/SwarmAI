@@ -109,9 +109,26 @@ class UntypedOutput(ValueError):
         self.raw = raw
 
 
+_FENCE_TAG = re.compile(
+    r"[<\uff1c]\s*[/\uff0f]?\s*(?:CANDIDATE|EXISTING|OLD|GROUNDING)[\s_\-\uff3f]*(?:DATA|HITS|UNIT)"
+    r"[^>\uff1e]*[>\uff1e]", re.I)
+
+
 def _data(value: Any) -> str:
+    """Text placed inside a data fence, with every fence-like tag (open or close, any
+    case, spacing, separator or attributes, fullwidth brackets; invisible characters
+    dropped first) removed until none is left: a tag nested in another rebuilds itself
+    after a single pass. Nothing else is rewritten: the judge answers with the anchors
+    it was shown, which must match the retrieved ones byte for byte (a fullwidth
+    "（" folded to "(" made every hit in a STEERING appendix unmatchable)."""
+    import unicodedata
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return text.replace("</CANDIDATE_DATA>", "").replace("</EXISTING_HITS>", "").replace("</OLD_UNIT>", "")
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    while True:
+        stripped = _FENCE_TAG.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
 
 
 def _hits_for_prompt(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -315,3 +332,55 @@ def card3b_entailment_prompt(claims: list[dict[str, str]], effective_unit: str) 
         + "\n<OLD_UNIT>" + _data(claims) + "</OLD_UNIT>"
         + "\n<CANDIDATE_DATA>" + _data(effective_unit) + "</CANDIDATE_DATA>"
     )
+
+
+VERIFY_VERSION = "cdf-verify-v2"
+_VERIFY_GUIDE = """You check ONE knowledge unit before it is stored. The agent that wrote it had the full
+conversation; you do not, so you do not re-classify it. You answer only what the data lets you check.
+
+Output: exactly ONE JSON object matching the schema. No code fence, no prose.
+
+- grounded: GROUNDING_DATA holds the user's own words and measured results the unit cites. true when
+  every specific claim of the unit (what to do, why, a cause, a date, a project, a number) is stated
+  in or directly follows from GROUNDING_DATA. false when the unit adds a specific the data does not
+  support, or GROUNDING_DATA is empty. List the unsupported claims in "ungrounded".
+- durable: true when the unit stays true and useful after this conversation. A one-time instruction
+  about the task at hand ("fix 2 and 3 before the build"), progress, status or a run log is false.
+- self_contained: true when a reader who never saw the conversation understands it: no "above",
+  "this", "Plan A" or other reference to something it does not define.
+- significant (events only; true for other kinds): """ + "{EVENT_RULE}" + """
+- hits: for EVERY item in EXISTING_HITS, its id (copy "h1", "h2", ... into "anchor") and how the
+  unit relates to it: "same" (the unit
+  says nothing the hit does not), "adds" (same subject, the unit adds something new), "contradicts"
+  (the unit says the hit is wrong or no longer true), "unrelated".
+"""
+
+
+def verify_prompt(unit: Any, grounding: str, hits: list[dict[str, Any]]) -> str:
+    """The one verification card (design 2026-10-29-cdf-refactor §3.3)."""
+    from .contracts_v2 import EVENT_RULE, VerifyAnswer
+    guide = _VERIFY_GUIDE.replace("{EVENT_RULE}", EVENT_RULE.strip())
+    return (guide + _schema(VerifyAnswer) + "\n\n" + _DATA_RULE
+            + f"\n<CANDIDATE_DATA>{_data(unit)}</CANDIDATE_DATA>"
+            + f"\n<GROUNDING_DATA>{_data(grounding)}</GROUNDING_DATA>"
+            + f"\n<EXISTING_HITS>{_data(_verify_hits(hits))}</EXISTING_HITS>")
+
+
+def verify_hit_ids(hits: list[dict[str, Any]]) -> dict[str, str]:
+    """The short id each hit is shown under -> its anchor. The judge answers by id: a
+    64-hex anchor copied back by a model came back with digits wrong, and the relation
+    was lost (cdf-refactor acceptance replay)."""
+    return {f"h{index}": str(hit.get("anchor")) for index, hit in enumerate(hits, 1)}
+
+
+def _verify_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{"id": hit_id, "file": anchor.split("#", 1)[0], "text": hit.get("text")}
+            for (hit_id, anchor), hit in zip(verify_hit_ids(hits).items(), hits)]
+
+
+def parse_verify(text: str) -> Any:
+    from .contracts_v2 import VerifyAnswer
+    try:
+        return VerifyAnswer.model_validate(extract_json(text))
+    except (ValidationError, ValueError) as exc:
+        raise UntypedOutput(f"verify: {exc}") from exc

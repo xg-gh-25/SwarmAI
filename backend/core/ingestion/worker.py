@@ -257,24 +257,28 @@ def _hand_to_writer(conn: sqlite3.Connection, owner: Owner, unit_id: str,
 
 
 # writer.reserve_quota's stores; the files injected into every session are counted
-# globally (one daily budget per file), not once per project
-_QUOTA_STORE = {"DDD": "DDD", "COMMON_DDD": "DDD", "KNOWLEDGE": "KNOWLEDGE", "MEMORY": "MEMORY",
+# globally (one daily budget per file), not once per project. A project's DDD is read
+# on demand, never injected every turn, so it has no daily cap.
+_QUOTA_STORE = {"KNOWLEDGE": "KNOWLEDGE", "MEMORY": "MEMORY",
                 "EVOLUTION": "EVOLUTION", "STEERING": "STEERING", "USER": "USER", "TOOLS": "TOOLS"}
 _GLOBAL_QUOTA = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"})
 
 
-def _quota_reserved(conn: sqlite3.Connection, decision: Any, unit_row: Any) -> bool:
-    """Reserve the rendered entry's bytes against its store's daily cap (writer.reserve_quota).
-    It had no caller, so nothing bounded what reached MEMORY / EVOLUTION each day."""
-    from .writer import render_unit, reserve_quota
+def _quota_reserved(conn: sqlite3.Connection, decision: Any, unit_row: Any) -> str:
+    """Reserve the rendered entry's bytes against its store's daily cap (writer.reserve_quota):
+    "ok", "full" (wait for the next day) or "too_large" (larger than a whole day's cap,
+    so it could never be written: refused instead of deferred every day forever)."""
+    from .writer import daily_cap, render_unit, reserve_quota
     destination = decision.destination
     store = _QUOTA_STORE.get(str(getattr(destination, "store", "") or ""))
     if store is None:
-        return True                    # TIMELINE events: no daily cap
+        return "ok"                    # TIMELINE events: no daily cap
     group = _json_value(unit_row["claim_group"], {})
     size = len(render_unit(decision, str(unit_row["unit_id"]), group).encode("utf-8"))
+    if size > daily_cap(store):
+        return "too_large"
     project = None if store in _GLOBAL_QUOTA else getattr(destination, "project", None)
-    return reserve_quota(str(unit_row["unit_id"]), store, project, size, conn)
+    return "ok" if reserve_quota(str(unit_row["unit_id"]), store, project, size, conn) else "full"
 
 
 def _defer_until_tomorrow(conn: sqlite3.Connection, owner: Owner, unit_id: str, reason: str) -> None:
@@ -354,17 +358,13 @@ def _upsert_v2_unit(conn: sqlite3.Connection, row: dict[str, Any], unit_id: str,
 
 def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
                           workspace_root: Path, judge: Any) -> None:
-    """Process one v2 source unit; each selected project receives its own durable row."""
-    from .contracts_v2 import expand_projects
+    """Process one v2 source unit (one durable unit row)."""
     from .pipeline_v2 import run_unit_v2
 
     value = _row_dict(row)
-    payload = _json_value(value.get("payload"), {})
-    projects = list(_json_value(value.get("project_candidates"), []))
-    base_id = f"{value['id']}.unit"
-    expanded = (expand_projects(base_id, projects)
-                if payload.get("kind") == "cognition" and projects
-                else [(base_id, value.get("project_hint"))])
+    # one unit per candidate, with the project its source declared (the inbox's
+    # project_hint); the destination comes from the unit itself (pipeline_v2)
+    expanded = [(f"{value['id']}.unit", value.get("project_hint"))]
     conn.execute("BEGIN IMMEDIATE")
     try:
         conn.execute("UPDATE ingestion_inbox SET state='in_progress',owner_epoch=? WHERE id=?",
@@ -412,7 +412,10 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
                 owner.claim_unit_step(conn, unit_id, "queued", "reinforced", **fields)
             elif decision.decision == "reject":
                 owner.claim_unit_step(conn, unit_id, "queued", "rejected", **fields)
-            elif not _quota_reserved(conn, decision, unit_row):
+            elif (quota := _quota_reserved(conn, decision, unit_row)) == "too_large":
+                owner.claim_unit_step(conn, unit_id, "queued", "rejected",
+                                      **{**fields, "reason": "too_large_for_store"})
+            elif quota == "full":
                 _defer_until_tomorrow(conn, owner, unit_id, "quota")
             else:
                 if not owner.claim_unit_step(conn, unit_id, "queued", "judged", **fields):
@@ -975,9 +978,11 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     if runner is None and job.get("sdk_session_id") and not _can_fork_review():
         # checked before the user pass: a postponed job runs that pass once, not twice
         raise ReviewPostponed("not enough memory for the review's CLI fork")
-    # the project of the repo the session worked in (s2_jobs.request): offered to the
-    # judge for a project-scoped unit, never declared (contracts_v2.project_candidates)
+    # the project of the repo the session worked in (s2_jobs.request): the DDD searched
+    # for duplicates and the fallback project, never a declaration (pipeline_v2.run_unit_v2)
     snapshot = {"session_project": job["project"]} if job.get("project") else None
+    # first and whole: the one channel to the user's own files (cdf-refactor §3.6); a
+    # review failure afterwards cannot cost it
     s2_session.extract_session_sync(session_id, passes=("user_utterance",), project_snapshot=snapshot)
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),

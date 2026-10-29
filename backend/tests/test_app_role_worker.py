@@ -169,8 +169,8 @@ def test_a_worker_keeps_no_daily_activity_or_crash_checkpoint_per_turn(as_role):
         registry.register = spy
         register_runtime_hooks(registry, {})
         seen[mode or "personal"] = names
-    assert {"high_signal_capture", "session_checkpoint"} <= set(seen["personal"])
-    assert set(seen["personal"]) - set(seen["hive"]) == {"high_signal_capture", "session_checkpoint"}
+    assert {"session_checkpoint"} <= set(seen["personal"])
+    assert set(seen["personal"]) - set(seen["hive"]) == {"session_checkpoint"}
 
 
 def test_a_worker_injects_no_daily_activity(as_role, tmp_path):

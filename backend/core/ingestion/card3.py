@@ -42,7 +42,16 @@ class AggregateAction:
     target_anchor: str | None = None
 
 
-def corpus_paths(root: Path, destination: Destination) -> list[Path]:
+# Stores a cognition unit or gap can land in: card 3 looks at all the ones a reader
+# reads (the per-turn files and the unit's project DDD), so a lesson kept in one is not
+# written again into another (design 2026-10-29-cdf-refactor §3.4). Hits only tell
+# whether it is known; one in another file is never rewritten. Knowledge/Learned/_common,
+# domains/ and repos/ (the old reroute targets) are left out: nothing reads them, and a
+# tainted copy there must not keep a trusted unit out of a file that is read (r16.5).
+_COGNITIVE_STORES = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS", "DDD", "COMMON_DDD"})
+
+
+def corpus_paths(root: Path, destination: Destination, *, project: str | None = None) -> list[Path]:
     """Return the bounded read-only corpus paths for one destination."""
     paths: set[Path] = {root / ".context" / name for name in _ALWAYS}
     target = root / destination.relative_path
@@ -50,27 +59,21 @@ def corpus_paths(root: Path, destination: Destination) -> list[Path]:
         paths.add(target)
     elif target.is_dir():
         paths.update(p for p in target.rglob("*.md") if p.is_file())
-    if destination.store == "DDD" and destination.project:
-        from core.ddd_paths import ddd_path  # read resolver: new layout, old-layout fallback
-
-        project = root / "Projects" / destination.project
-        from core.project_registry import DDD_CANONICAL_DOCS  # the one DDD four-doc list
-        paths.update(ddd_path(project, name) for name in DDD_CANONICAL_DOCS)
-    if destination.store in {"DDD", "COMMON_DDD"}:
-        learned = root / "Knowledge" / "Learned"
-        for folder in (learned / "domains", learned / "repos"):
-            if folder.is_dir():
-                paths.update(item for item in folder.glob("*.md") if item.is_file())
-    # A rerouted _common destination searches its original per-turn file.  Those files
-    # are already in _ALWAYS.  Conversely a per-turn destination never adds _common.
+    if destination.store in _COGNITIVE_STORES:
+        project = project or getattr(destination, "project", None)
+        if project:
+            from core.ddd_paths import ddd_path  # read resolver: new layout, old-layout fallback
+            from core.project_registry import DDD_CANONICAL_DOCS  # the one DDD four-doc list
+            paths.update(ddd_path(root / "Projects" / project, name) for name in DDD_CANONICAL_DOCS)
     return sorted(path for path in paths if path.is_file())
 
 
-def load_corpus(root: Path, destination: Destination, *, exclude_anchor: str | None = None) -> tuple[list[Unit], str]:
+def load_corpus(root: Path, destination: Destination, *, exclude_anchor: str | None = None,
+                project: str | None = None) -> tuple[list[Unit], str]:
     """Parse the selected snapshot without writing or touching metadata."""
     units: list[Unit] = []
     digest = hashlib.sha256()
-    for path in corpus_paths(root, destination):
+    for path in corpus_paths(root, destination, project=project):
         file_units = parse_units(path, root=root)
         for unit in file_units:
             digest.update(unit.anchor.encode("utf-8"))
@@ -88,10 +91,11 @@ def retrieve(
     expected_digest: str | None = None,
     exclude_anchor: str | None = None,
     evidence_by_anchor: Mapping[str, tuple[str, str | None]] | None = None,
+    project: str | None = None,
 ) -> RetrievalResult:
     """Retrieve the union of exact, title/anchor, and BM25 top-eight candidates."""
     try:
-        units, digest = load_corpus(root, destination, exclude_anchor=exclude_anchor)
+        units, digest = load_corpus(root, destination, exclude_anchor=exclude_anchor, project=project)
     except (OSError, UnicodeError, ValueError) as exc:
         return RetrievalResult(status="UNAVAILABLE", reason=type(exc).__name__)
     if expected_digest is not None and expected_digest != digest:

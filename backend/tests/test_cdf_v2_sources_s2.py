@@ -198,6 +198,6 @@ def test_the_session_extraction_hands_the_user_pass_what_it_already_extracted(mo
     monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: {"s1-event"})
     monkeypatch.setattr(s2_session, "_extracted_by_user_pass", lambda sid: {"done-event"})
     monkeypatch.setattr(s2_session, "_trusted_pass",
-                        lambda sid, rows, claimed, snap, llm: seen.setdefault("claimed", claimed) and [])
+                        lambda sid, rows, claimed, snap, llm, **_: seen.setdefault("claimed", claimed) and [])
     s2_session.extract_session_sync("s", passes=("user_utterance",))
     assert seen["claimed"] == {"s1-event", "done-event"}

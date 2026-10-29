@@ -69,10 +69,15 @@ GapKind = Literal["debt", "risk", "deferred_finding", "process_issue", "follow_u
 
 # What _valid_scope accepts, in words: shown to the extractor (extract_llm.unit_schema),
 # which cannot see this validator. Change both together.
-# card 0 refuses a cognition unit whose fields together are longer than this; the
-# extraction prompts state it (extract_llm.UNIT_SIZE_RULE)
+# how long a cognition unit should be, stated to the extractors (extract_llm.UNIT_SIZE_RULE)
+# as a writing rule; nothing refuses a unit for its length (design 2026-10-29-cdf-refactor
+# §3.5: card 0 counted characters and dropped the most complete units)
 MAX_COGNITION_CHARS = 600
 SCOPE_RULE = 'one of "user", "agent", "world", or "project:<project name>"'
+TOPIC_RULE = ('for scope=project:X only, which project document it belongs in: "decision" (a '
+              'project decision), "product" (what the product is for, its users, non-goals), '
+              '"architecture" (how it is built, conventions, runtime traps), "lesson" (what '
+              'worked or failed while building it)')
 # The model validators below, in words, per kind (same contract: change both together).
 UNIT_RULES: dict[str, tuple[str, ...]] = {
     "cognition": (
@@ -118,6 +123,9 @@ class CognitionUnit(_Unit):
     why: str | None = None
     applicability: str | None = None
     rejected_alternatives: str | None = None
+    # which project document a scope=project:X unit belongs in (DDD_MATRIX); the
+    # extractor, who has the context, says it (design 2026-10-29-cdf-refactor §3.1)
+    topic: Literal["decision", "product", "architecture", "lesson"] | None = None
 
     @model_validator(mode="after")
     def _conditional(self):
@@ -538,3 +546,74 @@ UnitOutcome = Literal[
 TERMINAL_OUTCOMES = frozenset({"merged", "written", "reinforced", "rejected", "failed_poison", "expired_unprocessed"})
 
 __all__ = [n for n in dir() if not n.startswith("_")]
+
+
+# ── refactor 2026-10-29 (design 2026-10-29-cdf-refactor) ──────────────────────
+# The destination is a pure function of what the extractor declared (§3.1); one
+# verification call answers what a context-free checker can answer (§3.3).
+
+class HitVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    anchor: str
+    relation: Literal["same", "adds", "contradicts", "unrelated"]
+
+
+class VerifyAnswer(BaseModel):
+    """The one judge call per unit: grounded in the cited evidence, durable, readable
+    without the session, (events) significant, and its relation to each hit."""
+    model_config = ConfigDict(extra="forbid")
+    grounded: bool
+    durable: bool
+    self_contained: bool
+    significant: bool = False          # read for events only; a reply without it fails closed
+    ungrounded: list[str] = Field(default_factory=list)
+    hits: list[HitVerdict] = Field(default_factory=list)
+
+
+USER_KIND_FILE = {"preference": "STEERING", "profile": "USER", "environment": "TOOLS"}
+# a project unit that did not say which document (an S3 run report has no topic):
+# what was learned while building it is a lesson, a decision a decision, a model or
+# principle of how it is built its architecture
+_DEFAULT_TOPIC = {"pitfall": "lesson", "correction": "lesson", "guideline": "lesson",
+                  "process": "lesson", "decision": "decision", "model": "architecture",
+                  "principle": "architecture"}
+
+
+def route_unit(unit: "SourceUnit", project: str | None) -> DestinationV2:
+    """Where *unit* goes, from its own declaration and the resolved *project* (the
+    existing project its scope or its source named). Raises ``ValueError(reason)``."""
+    from .contracts import DDD_MATRIX, MEMORY_TYPE_TO_SECTION
+    if isinstance(unit, EventUnit):
+        return DestinationV2(store="TIMELINE", relative_path=TIMELINE_PATH)
+    if isinstance(unit, ReferenceUnit):
+        if unit.reference_kind == "link":
+            if not unit.source_url:
+                raise ValueError("link needs source_url")
+            rel = link_file_for(unit.source_url)
+        else:
+            rel = REFERENCE_FOLDERS[unit.reference_kind] + "/"
+        return DestinationV2(store="KNOWLEDGE", relative_path=rel, project=project, injectable=False)
+    from core.ddd_paths import ddd_new_path
+    if isinstance(unit, GapUnit):
+        if not project:
+            raise ValueError("gap_without_project")
+        rel = ddd_new_path(Path("Projects") / project, "IMPROVEMENT.md").as_posix()
+        return DestinationV2(store="DDD", relative_path=rel, section="What to Watch For",
+                             project=project, injectable=False)
+    scope = unit.scope
+    if scope == "user":
+        store = USER_KIND_FILE[unit.user_kind or "preference"]
+        return DestinationV2(store=store, relative_path=f".context/{store}.md")
+    if scope == "agent":
+        section = "Corrections Captured" if unit.type == "correction" else "Competence Learned"
+        return DestinationV2(store="EVOLUTION", relative_path=".context/EVOLUTION.md", section=section)
+    if scope == "world":
+        return DestinationV2(store="MEMORY", relative_path=".context/MEMORY.md",
+                             section=MEMORY_TYPE_TO_SECTION[unit.type])
+    if not project:
+        raise ValueError("unknown_project")
+    topic = unit.topic or _DEFAULT_TOPIC[unit.type]
+    file_name, section = DDD_MATRIX[topic][unit.type]
+    rel = ddd_new_path(Path("Projects") / project, file_name).as_posix()
+    return DestinationV2(store="DDD", relative_path=rel, section=section, project=project,
+                         injectable=False)

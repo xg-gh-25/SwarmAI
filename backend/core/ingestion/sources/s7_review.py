@@ -104,6 +104,19 @@ def signals(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "rule_messages": rule_ids}
 
 
+def _without_user_units(units: list[Any]) -> tuple[list[Any], list[dict[str, Any]]]:
+    """The user's own units come from the user's-words pass, the one channel no external
+    content reaches (§9): one from the review could never be written, so it is dropped
+    (before the unit cap, so it takes no other unit's place)."""
+    kept, dropped = [], []
+    for unit in units:
+        if getattr(unit, "scope", None) == "user":
+            dropped.append({"raw": unit.model_dump(mode="json"), "reason": "owned_by_user_pass"})
+        else:
+            kept.append(unit)
+    return kept, dropped
+
+
 def qualifies(sig: dict[str, Any]) -> bool:
     return (sig["user_messages"] >= MIN_USER_MESSAGES or sig["tool_calls"] >= MIN_TOOL_CALLS
             or bool(sig["files_written"]) or bool(sig["rule_messages"]))
@@ -392,6 +405,8 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
         raise
     raw_units = extract_llm.units_from_answer(answer, ALLOWED_KINDS)
     result = extract_llm._validate(raw_units, ALLOWED_KINDS)
+    result.units, dropped = _without_user_units(result.units)
+    result.invalid_units.extend(dropped)
     # every unit costs 2-5 judge calls: one review contributes at most MAX_UNITS, the
     # rest are recorded as invalid (dropped, never silently)
     for unit in result.units[MAX_UNITS:]:

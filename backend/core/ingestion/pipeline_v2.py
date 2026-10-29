@@ -238,8 +238,6 @@ def _card0(unit: SourceUnit, row: Any) -> Card0Answer:
     text = _unit_text(unit)
     if not text.strip():
         return Card0Answer(passed=False, reason="noisy")
-    if isinstance(unit, CognitionUnit) and len(text) > contracts_v2.MAX_COGNITION_CHARS:
-        return Card0Answer(passed=False, reason="not_atomic")
     if not isinstance(unit, ReferenceUnit) and ("<!--" in text or "-->" in text):
         # an HTML comment marker inside an entry ends or opens the metadata comment of
         # the line it lands on; the prompt form then cuts the text after it
@@ -451,7 +449,7 @@ def _relation_hints(unit: SourceUnit) -> list[dict[str, str]]:
     return [{"predicate": kind, "object_anchor": str(target)}]
 
 
-def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecision:
+def _legacy_run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecision:
     """Run one persisted v2 inbox row through cards 0-3 and return its audit decision."""
     root = Path(workspace_root)
     payload = _json(_get(row, "payload"), {})
@@ -836,3 +834,214 @@ def requeue_missing_sections(workspace_root: Path | str, target_path: Path | str
                 "section": destination.section or "",
             }, sort_keys=True))
     return sum(requeue_parked("missing_section", key) for key in dict.fromkeys(keys))
+
+
+# ── refactor 2026-10-29: whoever holds the context decides ────────────────────
+# Design 2026-10-29-cdf-refactor. The destination is the extractor's declaration
+# (contracts_v2.route_unit); trust is the unit's own cited evidence; one verification
+# call (judge.verify) answers what a context-free checker can; a hit in another file is
+# linked, never rewritten or hidden.
+
+def _project_key(name: str) -> str:
+    return re.sub(r"[\s_\-]+", "", name).casefold()
+
+
+def _resolve_project(root: Path, name: str | None) -> str | None:
+    """The existing project *name* refers to (case, spaces, - and _ ignored), or None:
+    an invented name ("Hive Tab Pipeline") never becomes a new file."""
+    if not name:
+        return None
+    projects = root / "Projects"
+    if not projects.is_dir():
+        return None
+    key = _project_key(name)
+    # the folder's own spelling: a case-insensitive file system also opens "widget"
+    matches = [folder.name for folder in sorted(projects.iterdir())
+               if folder.is_dir() and _project_key(folder.name) == key]
+    exact = [found for found in matches if found == name]
+    for found in exact + matches:
+        if _ddd_exists(root, found):
+            return found
+    return None
+
+
+def _grounding_kinds(grounding: str) -> tuple[bool, bool]:
+    """(has the user's words, has a measured result) in a _grounding() text."""
+    parts = [part for part in grounding.split("\n\n") if part.strip()]
+    measured = any(part.startswith("measured ") for part in parts)
+    return any(not part.startswith("measured ") for part in parts), measured
+
+
+def _not_grounded(store: str, resolved: Any, grounding: str, grounded: bool | None) -> bool:
+    """The trust rule (§3.2): may a unit with this evidence reach *store*?
+
+    With the session's text in hand (a cited user message or measured result) the
+    verification decides (*grounded*; ``None`` before it ran: only the deterministic
+    part is checked, so a unit that can never pass costs no model call). A unit citing
+    none keeps a measured strength derived from its own roots (an S5 metric) when no
+    external content reached it. The user's own files take only an untainted unit
+    (S1, the user's-words pass) with words the verification read: which input shaped a
+    reviewed unit is not knowable, so a tainted one never gets there, whatever a model
+    says (§9)."""
+    if grounding:
+        words, measured = _grounding_kinds(grounding) if grounded is not False else (False, False)
+    else:
+        words, measured = False, not resolved.tainted and resolved.strength == "measured"
+    if store in USER_CONTEXT_STORES:
+        return resolved.tainted or resolved.strength != "user_explicit" or not words
+    if store in AGENT_SELF_STORES:
+        return not (words or measured)
+    return False
+
+
+def _project_home(unit: SourceUnit, destination: Any, project: str | None) -> Any:
+    """Where an agent or world lesson goes when nothing it cites shows it to be true (the
+    agent's own reading of tool output, cdf-refactor §3.2): the DDD of the project it was
+    learned in, marked as rerouted (the writer files it tainted; it is recalled there on
+    demand, never injected every turn). None when there is no such project, and for the
+    user's own files, which take only the user's words."""
+    if not (isinstance(unit, CognitionUnit) and destination.store in AGENT_SELF_STORES and project):
+        return None
+    home = contracts_v2.route_unit(unit.model_copy(update={"scope": f"project:{project}"}), project)
+    return home.model_copy(update={"rerouted_from": destination.store})
+
+
+def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecision:
+    """Judge one unit: route it by its declaration, verify it once, decide."""
+    root = Path(workspace_root)
+    unit = SOURCE_UNIT.validate_python(_json(_get(row, "payload"), {}))
+    unit_id = str(_get(row, "unit_id") or f"{_get(row, 'id', 'unit')}.unit")
+    resolved = _resolved(row)
+    vectors: list[dict[str, Any]] = []
+    card0 = _card0(unit, row)
+    if not card0.passed:
+        return _decision(unit_id, "reject", "reject", card0.reason, vectors=vectors, card0=card0)
+
+    # the project: one a source fixed (an S3 run's Brain, a Hive lesson, S1's explicit
+    # project; the inbox's project_hint) wins for a project unit or gap; otherwise the
+    # unit's own scope=project:X. The project the session worked in is not a declaration:
+    # it names the DDD searched for duplicates, and the project of a gap that names none.
+    snapshot = _json(_get(row, "project_snapshot"), {})
+    declared = _get(row, "project_hint") or snapshot_project(snapshot)
+    session_project = snapshot.get("session_project") if isinstance(snapshot, dict) else None
+    scope = getattr(unit, "scope", None) or ""
+    scope_project = scope[len("project:"):].strip() if scope.startswith("project:") else None
+    if _is_hive_lesson(row) and scope_project and (
+            not declared or _resolve_project(root, scope_project) != _resolve_project(root, declared)):
+        # a Hive lesson lands only in the Brain its run used (none for the General Brain)
+        return _decision(unit_id, "reject", "reject", "project_outside_brain", vectors=vectors, card0=card0)
+    # only a gap and a project lesson need a project to have a destination; an event or a
+    # reference goes where its kind says, whatever its scope names
+    wants_project = isinstance(unit, GapUnit) or (isinstance(unit, CognitionUnit) and bool(scope_project))
+    session_home = _resolve_project(root, session_project)
+    if wants_project:
+        project = _resolve_project(root, declared or scope_project)
+        if project is None and not declared and not _is_hive_lesson(row):
+            # a project the extractor named that does not exist (a subsystem's name, the
+            # workspace) is the session's own project when it has one
+            project = session_home
+        if project is None:
+            return _decision(unit_id, "reject", "reject", "unknown_project", vectors=vectors, card0=card0)
+    else:
+        project = _resolve_project(root, declared)
+    corpus_project = project or session_home
+    try:
+        destination = contracts_v2.route_unit(unit, project)
+    except ValueError as exc:
+        return _decision(unit_id, "reject", "reject", str(exc), vectors=vectors, card0=card0)
+    if isinstance(unit, CognitionUnit) and _volatile(_unit_text(unit)):
+        # D4 / R30#4: a drifting number (line N, N files, N MB) is a snapshot, not cognition
+        return _decision(unit_id, "reject", "reject", "volatile", vectors=vectors,
+                         card0=card0, destination=destination)
+    grounding = _grounding(list(unit.evidence))
+    if not grounding and str(_get(row, "source_v2", "")) == "S1":
+        envelope = _json(_get(row, "envelope"), {})
+        event_ids = envelope.get("source_event_ids") or envelope.get("event_ids") or []
+        if event_ids:
+            from core.session_inputs import user_authored_text
+            grounding = user_authored_text(str(event_ids[-1])) or ""
+        grounding = grounding or str(envelope.get("user_authored_text", ""))
+    if _not_grounded(destination.store, resolved, grounding, None):
+        destination = _project_home(unit, destination, corpus_project)
+        if destination is None:
+            return _decision(unit_id, "reject", "reject", "not_grounded", vectors=vectors, card0=card0)
+
+    group = _group(unit, (project,) if project else ())
+    event_key = None
+    if isinstance(unit, EventUnit):
+        event_key = _event_key(unit, resolved.root_ids)
+        group = ClaimGroup(**{**group.__dict__, "evidence": event_key})
+    retrieval = retrieve(group, root, destination, project=corpus_project)
+    if retrieval.status in {"UNAVAILABLE", "STALE"}:
+        return _decision(unit_id, "defer", "defer", retrieval.status.lower(), vectors=vectors,
+                         card0=card0, destination=destination, card3=retrieval)
+    if event_key and any(f"event_key:{event_key}" in hit.text for hit in retrieval.hits):
+        return _decision(unit_id, "reject", "reject", "already_exists", vectors=vectors,
+                         card0=card0, destination=destination, card3=retrieval)
+
+    hits = [{"anchor": hit.anchor, "text": hit.text} for hit in retrieval.hits]
+    try:
+        verdict = contracts_v2.VerifyAnswer.model_validate(
+            _unwrap(judge.verify(unit.model_dump(mode="json"), grounding, hits), vectors))
+    except UntypedOutput:
+        return _decision(unit_id, "reject", "reject", "untyped", vectors=vectors,
+                         card0=card0, destination=destination, card3=retrieval)
+    except Exception as exc:
+        return _decision(unit_id, "defer", "defer", f"judge_unavailable:{type(exc).__name__}",
+                         vectors=vectors, card0=card0, destination=destination, card3=retrieval)
+    vectors.append({"verify": verdict.model_dump(mode="json")})
+    done = dict(vectors=vectors, card0=card0, destination=destination, card3=retrieval)
+    if isinstance(unit, EventUnit) and not verdict.significant:
+        return _decision(unit_id, "reject", "reject", "not_significant", **done)
+    if not verdict.self_contained:
+        return _decision(unit_id, "reject", "reject", "not_self_contained", **done)
+    if not verdict.durable:
+        return _decision(unit_id, "reject", "reject", "not_durable", **done)
+
+    # an answer naming an unsupported claim is not grounded, whatever its flag says
+    grounded = verdict.grounded and not verdict.ungrounded
+    if _not_grounded(destination.store, resolved, grounding, grounded):
+        destination = _project_home(unit, destination, corpus_project)
+        if destination is None:
+            return _decision(unit_id, "reject", "reject", "not_grounded", **done)
+        done["destination"] = destination
+    # verified against the cited words or measurement, or (citing none) measured by
+    # provenance with no external content reaching it, as _not_grounded allows
+    supported = grounded if grounding else not resolved.tainted and resolved.strength == "measured"
+    if destination.store == "TIMELINE":
+        # an event's taint decides where it is filed (writer: tainted → "Not injected")
+        destination = destination.model_copy(update={"injectable": not resolved.tainted})
+        done["destination"] = destination
+
+    from .prompts import verify_hit_ids
+    shown = verify_hit_ids(hits)
+    known = {hit.anchor for hit in retrieval.hits}
+    relations = [(shown.get(item.anchor, item.anchor), item.relation) for item in verdict.hits
+                 if shown.get(item.anchor, item.anchor) in known]
+    same = [anchor for anchor, relation in relations if relation == "same"]
+    if same:
+        if isinstance(unit, CognitionUnit):
+            support = reinforce_or_reject(same[0], resolved, source_unit_id=unit_id)
+            if support.reinforced:
+                return _decision(unit_id, "reinforce", "reinforce", "reinforced", **done)
+        return _decision(unit_id, "reject", "reject", "already_exists", **done)
+    # last before writing: a unit refused or already known never asks for a section
+    if not _section_exists(root, destination):
+        return _decision(unit_id, "defer", "defer", "missing_section", **done)
+    hints = _relation_hints(unit)
+    target_file = destination.relative_path
+    for anchor, relation in relations:
+        if relation == "contradicts" and anchor.split("#", 1)[0] == target_file:
+            hints.append({"predicate": "supersedes", "object_anchor": anchor})
+        elif relation in {"contradicts", "adds"}:
+            hints.append({"predicate": "derived_from", "object_anchor": anchor})
+    reason = next((r for _a, r in relations if r in {"contradicts", "adds"}), "new")
+    result = _decision(unit_id, "write", "add", reason, **done)
+    result.version_vector["relation_hints"] = hints
+    if not supported and destination.store == "DDD":
+        # an inferred project unit (§3.2): written to its project, marked as not from the
+        # user's words or a measurement (the writer files it tainted)
+        result.version_vector["inferred"] = True
+    if event_key:
+        result.version_vector["event_key"] = event_key
+    return result

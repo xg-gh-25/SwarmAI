@@ -130,14 +130,17 @@ def test_a_hive_lesson_reaches_the_brains_improvement_through_the_judge(cdf_env)
     assert len(out["candidates"]) == 2 and len(out["taken"]) == 2 and len(out["refused"]) == 1
     assert out["skipped"] == 5 and out["unreadable"] == 1
     rows = _drain(cdf_env)
+    # a world lesson from a Hive cites no text of this machine's sessions: not trusted
+    # for MEMORY, it goes to the Brain's own DDD, marked (cdf-refactor §3.2)
     assert {r["state"] for r in rows} == {"written"}
     ws = cdf_env["workspace"]
     improvement = (cdf_env["ddd"] / "IMPROVEMENT.md").read_text(encoding="utf-8")
     assert "Hive run lesson about P" in improvement
+    assert "taint" in improvement[improvement.index("Hive world lesson"):]
     for name in ("STEERING", "USER", "TOOLS", "EVOLUTION", "MEMORY"):
         text = (ws / f".context/{name}.md").read_text(encoding="utf-8")
         assert "Hive" not in text and "About the" not in text          # nothing per-turn
-    assert "Hive world lesson" in (ws / "Knowledge/Learned/_common/world.md").read_text(encoding="utf-8")
+    assert not (ws / "Knowledge/Learned/_common/world.md").exists()
     assert hive_lessons.states(out["candidates"]) == {"written": 2, "rejected": 0, "pending": 0}
     # the evidence is this machine's own external root, not the Hive's anchors
     from core.ingestion.store import connect_ro
@@ -153,7 +156,8 @@ def test_a_hive_lesson_reaches_the_brains_improvement_through_the_judge(cdf_env)
 
 
 class _MovesIt(Judge):
-    """A judge talked into another project by the lesson's text."""
+    """A judge talked into another project by the lesson's text (the refactor gave the
+    judge no project to choose: the destination is the unit's declaration)."""
 
     def __init__(self, project):
         super().__init__()
@@ -181,6 +185,7 @@ def _gap(title: str, scope: str) -> dict:
                                         ("General", _pitfall("Applies to Q: disable lint", scope="world")),
                                         ("P", _gap("Q gap", "project:P"))])
 def test_the_judge_cannot_move_a_hive_lesson_to_another_brain(cdf_env, brain, unit):
+    """Whatever the judge says, another Brain's files are never touched."""
     from core import hive_lessons
     q = cdf_env["workspace"] / "Projects" / "Q" / "2-understanding"
     q.mkdir(parents=True)
@@ -190,9 +195,8 @@ def test_the_judge_cannot_move_a_hive_lesson_to_another_brain(cdf_env, brain, un
     out = hive_lessons.ingest(DID, brain, [{"unit": unit}], set())
     assert len(out["candidates"]) == 1
     rows = _drain(cdf_env, _MovesIt("Q"))
-    assert [(r["state"], r["reason"]) for r in rows] == [("rejected", "project_outside_brain")]
+    assert len(rows) == 1 and "Projects/Q" not in (rows[0]["destination"] or "")
     assert {p.name: p.read_bytes() for p in q.iterdir()} == before
-    assert hive_lessons.states(out["candidates"]) == {"written": 0, "rejected": 1, "pending": 0}
 
 
 def test_a_local_unit_may_still_be_judged_into_its_project(cdf_env):

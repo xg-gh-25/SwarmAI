@@ -3,9 +3,10 @@
 - S1: a channel's history preamble is quoted, so the input splitter records what other
   participants said as external, never as the owner's own words.
 - S2: an observed group message is the user's only when its sender is the owner.
-- S3: the S7 grounding verdict lifts the taint for EVOLUTION / MEMORY only.
-- S4: STEERING / USER / TOOLS need user_explicit evidence (C2); a cognition unit with a
-  drifting number is rejected (D4 / R30#4).
+- S3/S4 (refactor 2026-10-29): what reaches a per-turn file is decided by the unit's own
+  cited evidence, verified: STEERING / USER / TOOLS only on the user's own words; a
+  measured result opens MEMORY / EVOLUTION, never them; the session's taint does not
+  decide. A cognition unit with a drifting number is rejected (D4 / R30#4).
 """
 from __future__ import annotations
 
@@ -15,24 +16,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.ingestion.contracts import QualityAnswers, UserCross, WorldCrossGlobal
 from core.ingestion.pipeline_v2 import run_unit_v2
 
-QUALITY = QualityAnswers(atomic=True, valuable=True, self_contained=True, durable=True,
-                         evidenced=True, internally_consistent=True, concise=True)
 
 
 class Judge:
-    def __init__(self, answer, entailed=True):
-        self.answer, self.entailed = answer, entailed
+    def __init__(self, grounded=True):
+        self.grounded = grounded
 
-    def card1(self, *_a):
-        return self.answer
-
-    card1_v2 = card1
-
-    def entailment(self, *_a):
-        return {"entailed": self.entailed, "reason": "fixture"}
+    def verify(self, unit, grounding, hits):
+        return {"grounded": self.grounded and bool(grounding), "durable": True,
+                "self_contained": True, "significant": True, "hits": []}
 
 
 def _row(unit, *, source="S2", strength="user_explicit", tainted=False):
@@ -62,37 +56,41 @@ def ws(tmp_path: Path) -> Path:
     return tmp_path
 
 
-USER_ANSWER = UserCross(shape="UserCross", user_kind="preference", type="guideline",
-                        applicability="When answering.", claims=["two sentences"], quality=QUALITY)
-WORLD_ANSWER = WorldCrossGlobal(shape="WorldCrossGlobal", type="guideline", applicability="When editing.",
-                                claims=["verify"], quality=QUALITY, global_relevance=True)
+def _words(monkeypatch, text):
+    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: text)
 
 
-def test_user_context_needs_the_users_own_words(ws):
-    ok = run_unit_v2(_row(_unit()), ws, Judge(USER_ANSWER))
-    assert ok.decision == "write" and ok.destination.store in {"STEERING", "USER", "TOOLS"}
-    inferred = run_unit_v2(_row(_unit(), strength="inferred"), ws, Judge(USER_ANSWER))
-    assert (inferred.decision, inferred.reason) == ("reject", "insufficient_evidence")
+def test_user_context_needs_the_users_own_words(ws, monkeypatch):
+    _words(monkeypatch, "user: two sentences, please")
+    ok = run_unit_v2(_row(_unit()), ws, Judge())
+    assert ok.decision == "write" and ok.destination.store == "STEERING"
+    tainted = run_unit_v2(_row(_unit(), source="S7", tainted=True), ws, Judge())
+    assert (tainted.decision, tainted.reason) == ("reject", "not_grounded")
+    unsupported = run_unit_v2(_row(_unit()), ws, Judge(grounded=False))
+    assert (unsupported.decision, unsupported.reason) == ("reject", "not_grounded")
+    _words(monkeypatch, "")
+    none = run_unit_v2(_row(_unit()), ws, Judge())
+    assert (none.decision, none.reason) == ("reject", "not_grounded")
 
 
-def test_s7_grounding_opens_memory_but_never_user_context(ws, monkeypatch):
-    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "user: do it this way")
-    agent = _unit(scope="agent", user_kind=None)
+def test_a_measured_result_opens_memory_but_never_user_context(ws, monkeypatch):
+    _words(monkeypatch, "measured exit_code = 1")
+    agent = _unit(scope="agent")
     agent.pop("user_kind")
-    memory = run_unit_v2(_row(agent, source="S7", strength="inferred", tainted=True), ws, Judge(WORLD_ANSWER))
-    assert memory.decision == "write" and memory.destination.store == "MEMORY"
-    steering = run_unit_v2(_row(agent, source="S7", strength="inferred", tainted=True), ws, Judge(USER_ANSWER))
-    assert steering.decision == "write" and steering.destination.store not in {"STEERING", "USER", "TOOLS"}
-    assert steering.destination.injectable is False
+    memory = run_unit_v2(_row(agent, source="S7", strength="inferred", tainted=True), ws, Judge())
+    assert memory.decision == "write" and memory.destination.store == "EVOLUTION"
+    steering = run_unit_v2(_row(_unit(), source="S7", strength="inferred", tainted=True), ws, Judge())
+    assert (steering.decision, steering.reason) == ("reject", "not_grounded")
 
 
-def test_a_drifting_number_is_not_cognition(ws):
+def test_a_drifting_number_is_not_cognition(ws, monkeypatch):
+    _words(monkeypatch, "user: the index holds 4200 files")
     world = _unit(scope="world", what="The index holds 4200 files and takes 3 MB.")
     world.pop("user_kind")
-    out = run_unit_v2(_row(world), ws, Judge(WORLD_ANSWER))
+    out = run_unit_v2(_row(world), ws, Judge())
     assert (out.decision, out.reason) == ("reject", "volatile")
     versioned = dict(world, what="As of version 3 the index holds 4200 files.")
-    assert run_unit_v2(_row(versioned), ws, Judge(WORLD_ANSWER)).decision == "write"
+    assert run_unit_v2(_row(versioned), ws, Judge()).decision == "write"
 
 
 @pytest.mark.asyncio

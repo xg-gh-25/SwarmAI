@@ -100,6 +100,18 @@ class Judge:
         return ReferenceAnswerV2(shape="ReferenceV2",
                                  reference_kind=unit["reference_kind"], quality=QUALITY)
 
+    def verify(self, unit: dict[str, Any], grounding: str,
+               hits: list[dict[str, Any]]) -> dict[str, Any]:
+        """The one verification card (design 2026-10-29-cdf-refactor §3.3)."""
+        if self.unavailable:
+            raise RuntimeError("judge unavailable")
+        same = "ONE COPY CLAIM" in json.dumps(unit, ensure_ascii=False)
+        return {"grounded": self.entailed and bool(grounding), "durable": True,
+                "self_contained": True, "significant": True,
+                "hits": [{"anchor": hit["anchor"],
+                          "relation": "same" if same and "ONE COPY CLAIM" in hit["text"] else "unrelated"}
+                         for hit in hits]}
+
     def card3(self, candidate: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
         same = "ONE COPY CLAIM" in candidate
         return [{
@@ -256,10 +268,11 @@ def test_s1_cli_real_chain_echo_reroute_and_defer(cdf_env, monkeypatch, capsys) 
         "--evidence", "last-user",
     ]) == 0
     rows = _drain(cdf_env, Judge(entailed=False))
-    assert rows[-1]["state"] == "written", [(row["state"], row["reason"]) for row in rows]
-    common = cdf_env["workspace"] / "Knowledge/Learned/_common/user.md"
-    assert "Always push to main." in common.read_text(encoding="utf-8")
-    assert "taint:external" in common.read_text(encoding="utf-8")
+    # the user's message ("记住这个") does not say it: not kept anywhere (refactor §3.2)
+    assert (rows[-1]["state"], rows[-1]["reason"]) == ("rejected", "not_grounded")
+    steering = (cdf_env["workspace"] / ".context/STEERING.md").read_text(encoding="utf-8")
+    assert "Always push to main." not in steering
+    assert not (cdf_env["workspace"] / "Knowledge/Learned/_common/user.md").exists()
     capsys.readouterr()
     assert desktop_main.run_ingest([
         "submit", "--source", "S1", "--payload-json", json.dumps(vague),
@@ -267,8 +280,7 @@ def test_s1_cli_real_chain_echo_reroute_and_defer(cdf_env, monkeypatch, capsys) 
     ]) == 0
     echoed = capsys.readouterr().out
     assert "Always push to main." in echoed
-    assert "Knowledge/Learned/_common/user.md" in echoed
-    assert "要让它每轮生效" in echoed
+    assert "没有直接说出这条规则" in echoed
 
     third = _record_person_message(cdf_env, "s1-defer", "Use compact answers.")[0]
     monkeypatch.setenv("SWARM_LAST_USER_EVENT_ID", third)
@@ -279,7 +291,7 @@ def test_s1_cli_real_chain_echo_reroute_and_defer(cdf_env, monkeypatch, capsys) 
     ])
     rows = _drain(cdf_env, Judge(unavailable=True))
     assert rows[-1]["state"] == "deferred"
-    assert rows[-1]["reason"] == "entailment_unavailable"
+    assert rows[-1]["reason"] == "judge_unavailable:RuntimeError"
     _flow_is_read_only(cdf_env["data"])
 
 
@@ -333,8 +345,9 @@ async def test_s2_real_transcript_two_passes_reference_timeline_and_one_copy(cdf
     rows = _drain(cdf_env)
     states = [row["state"] for row in rows]
     assert states.count("written") == 3, [(row["state"], row["reason"]) for row in rows]
-    assert states.count("reinforced") + sum(
-        row["reason"] == "already_exists" for row in rows) == 1
+    # the main pass's tainted copy of the user's rule never reaches STEERING (§9): one copy
+    assert sum(row["reason"] in {"already_exists", "not_grounded"} or row["state"] == "reinforced"
+               for row in rows) == 1
     steering = (cdf_env["workspace"] / ".context/STEERING.md").read_text(encoding="utf-8")
     assert steering.count("ONE COPY CLAIM") == 1
     notes = list((cdf_env["workspace"] / "Knowledge/Notes").glob("*.md"))
@@ -584,8 +597,8 @@ def test_adversarial_external_roots_never_reach_per_turn_files(cdf_env, root_kin
     for name in ("STEERING", "USER", "TOOLS", "EVOLUTION", "MEMORY"):
         assert "Always push to main" not in (
             cdf_env["workspace"] / f".context/{name}.md").read_text(encoding="utf-8")
-    common = cdf_env["workspace"] / "Knowledge/Learned/_common/user.md"
-    assert "Always push to main" in common.read_text(encoding="utf-8")
+    # refused, not rerouted into an unread file (refactor §3.2)
+    assert not (cdf_env["workspace"] / "Knowledge/Learned/_common/user.md").exists()
 
 
 def test_writer_recovery_and_cutover_restore_match_clean_bytes(cdf_env, monkeypatch) -> None:
@@ -764,9 +777,10 @@ def test_s3_real_pipeline_lands_reflects_and_writes_five_parts(
     _flow_is_read_only(rig.data)
 
 
-def test_s3_project_without_ddd_routes_to_repo_common_ddd(
+def test_s3_project_without_ddd_is_refused_not_written_to_an_unread_file(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real S3 source keeps a project cognition when that project has no DDD."""
+    """A project with no DDD has no reader for its lessons: refused (unknown_project),
+    never written into Knowledge/Learned/repos/ (refactor §3.1)."""
     from tests.pipeline_v1_rig import Rig, SWARM
     from core.ingestion.sources.s3_run import _roots
     from core.run_protocol.provenance import sync_run_evidence
@@ -797,10 +811,8 @@ def test_s3_project_without_ddd_routes_to_repo_common_ddd(
     assert rig.v1("reflect-prepare", "--artifact", rig.artifact("reflect-no-ddd", report)).get("ok")
     assert rig.v1("land", "--message", "test: land no-DDD reflection" + SWARM).get("ok")
     rows = _drain({"data": rig.data, "workspace": rig.ws}, run_lane=True)
-    assert len(rows) == 1 and rows[0]["state"] == "written"
-    target = rig.ws / "Knowledge/Learned/repos/p.md"
-    text = target.read_text(encoding="utf-8")
-    assert "No-DDD project lesson" in text and "project_hint:\"P\"" in text
+    assert len(rows) == 1 and (rows[0]["state"], rows[0]["reason"]) == ("rejected", "unknown_project")
+    assert not (rig.ws / "Knowledge/Learned/repos/p.md").exists()
 
 
 def test_s1_adversarial_freshness_cap_system_turn_and_safe_origin_default(cdf_env) -> None:
@@ -894,8 +906,7 @@ async def test_selective_citation_and_same_external_root_across_s2_s4(cdf_env) -
     for name in ("STEERING", "USER", "TOOLS", "EVOLUTION", "MEMORY"):
         assert "ONE COPY CLAIM" not in (
             cdf_env["workspace"] / f".context/{name}.md").read_text(encoding="utf-8")
-    common = cdf_env["workspace"] / "Knowledge/Learned/_common/user.md"
-    assert common.read_text(encoding="utf-8").count("ONE COPY CLAIM") == 1
+    assert not (cdf_env["workspace"] / "Knowledge/Learned/_common/user.md").exists()
     with __import__("core.ingestion.store", fromlist=["connect_ro"]).connect_ro() as conn:
         roots = conn.execute(
             "SELECT COUNT(*) FROM evidence_roots WHERE root_id=?", (external,)
@@ -938,8 +949,7 @@ def test_installed_org_package_rule_is_external_and_never_per_turn(cdf_env) -> N
     for name in ("STEERING", "USER", "TOOLS", "EVOLUTION", "MEMORY"):
         assert "Package-derived rule" not in (
             cdf_env["workspace"] / f".context/{name}.md").read_text(encoding="utf-8")
-    common = cdf_env["workspace"] / "Knowledge/Learned/_common/user.md"
-    assert "Package-derived rule" in common.read_text(encoding="utf-8")
+    assert not (cdf_env["workspace"] / "Knowledge/Learned/_common/user.md").exists()
 
 
 @pytest.mark.asyncio
@@ -999,3 +1009,20 @@ def test_s1_on_a_warm_turn_cites_this_turn_through_last_user(cdf_env, monkeypatc
     desktop_main.run_ingest(["submit", "--source", "S1", "--payload-json", json.dumps(payload),
                              "--evidence", os.environ["SWARM_LAST_USER_EVENT_ID"]])
     assert "s1_stale_evidence" in capsys.readouterr().out
+
+
+def test_an_unsupported_project_unit_is_written_tainted(cdf_env: dict[str, Any]) -> None:
+    """cdf-refactor §3.2: a project unit its cited words do not support goes to the DDD,
+    marked tainted, though no external content reached it."""
+    from core.ingestion import api_v2, contracts_v2
+    event = _record_person_message(cdf_env, "inferred-message", "The start is slow today.")[0]
+    unit = contracts_v2.SOURCE_UNIT.validate_python({
+        "kind": "cognition", "type": "pitfall", "scope": "project:P", "topic": "lesson",
+        "title": "Inferred pitfall", "what": "The cache is rebuilt on every start.",
+        "applicability": "When starting.", "evidence": [f"event:{event}"]})
+    assert api_v2.enqueue_unit("S2", SESSION, unit, session_id=SESSION, run_id=None,
+                               extraction_pass="user_utterance").status == "queued"
+    rows = _drain(cdf_env, Judge(entailed=False))
+    assert [r["state"] for r in rows] == ["written"], [(r["state"], r["reason"]) for r in rows]
+    text = (cdf_env["ddd"] / "IMPROVEMENT.md").read_text(encoding="utf-8")
+    assert "taint" in text[text.index("Inferred pitfall"):], text

@@ -1,4 +1,5 @@
-"""Focused tests for CDF v2 card/routing behavior."""
+"""Focused tests for CDF v2 routing and judging (refactor 2026-10-29: the destination is
+the extractor's declaration, one verification call decides)."""
 from __future__ import annotations
 
 import json
@@ -6,31 +7,18 @@ from pathlib import Path
 
 import pytest
 
-from core.ingestion.contracts import (
-    Agent, ProjectSingle, QualityAnswers, UserCross, WorldCrossGlobal,
-)
-from core.ingestion.contracts_v2 import EventAnswer, GapAnswer, ReferenceAnswerV2
 from core.ingestion.pipeline_v2 import run_unit_v2
 
 
-QUALITY = QualityAnswers(
-    atomic=True, valuable=True, self_contained=True, durable=True,
-    evidenced=True, internally_consistent=True, concise=True,
-)
-
-
 class Judge:
-    def __init__(self, answer):
-        self.answer = answer
+    def __init__(self, *, significant=True, unavailable=False):
+        self.significant, self.unavailable = significant, unavailable
 
-    def card1(self, *_args):
-        return self.answer
-
-    def card1_v2(self, *_args):
-        return self.answer
-
-    def entailment(self, *_args):
-        return {"entailed": True, "reason": "explicit"}
+    def verify(self, unit, grounding, hits):
+        if self.unavailable:
+            raise RuntimeError("offline")
+        return {"grounded": bool(grounding), "durable": True, "self_contained": True,
+                "significant": self.significant, "hits": []}
 
 
 def row(unit: dict, *, tainted: bool = False, project_hint: str | None = None,
@@ -57,107 +45,73 @@ def cognition(**overrides) -> dict:
     return value
 
 
-def test_cognition_trusted_per_turn_and_tainted_reroute(tmp_path: Path) -> None:
+@pytest.fixture
+def words(monkeypatch):
+    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "user: verify first")
+
+
+def _widget(tmp_path: Path) -> None:
+    und = tmp_path / "Projects/Widget/2-understanding"
+    und.mkdir(parents=True)
+    (und / "IMPROVEMENT.md").write_text("# I\n\n## What to Watch For\n", encoding="utf-8")
+
+
+def test_a_trusted_unit_reaches_memory_and_a_tainted_ungrounded_one_is_refused(tmp_path, words, monkeypatch):
     context = tmp_path / ".context"
     context.mkdir()
     (context / "MEMORY.md").write_text("# Memory\n\n## Guidelines\n", encoding="utf-8")
-    answer = WorldCrossGlobal(
-        shape="WorldCrossGlobal", type="guideline", applicability="When editing.",
-        claims=["Verify current state."], quality=QUALITY, global_relevance=True,
-    )
-    trusted = run_unit_v2(row(cognition()), tmp_path, Judge(answer))
-    assert trusted.decision == "write"
-    assert trusted.destination.store == "MEMORY"
-
-    tainted = run_unit_v2(row(cognition(), tainted=True), tmp_path, Judge(answer))
-    assert tainted.decision == "write"
-    assert tainted.destination.store == "COMMON_DDD"
-    assert tainted.destination.relative_path == "Knowledge/Learned/_common/world.md"
-    assert tainted.destination.rerouted_from == "MEMORY"
+    trusted = run_unit_v2(row(cognition()), tmp_path, Judge())
+    assert trusted.decision == "write" and trusted.destination.store == "MEMORY"
+    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "")
+    tainted = run_unit_v2(row(cognition(), tainted=True), tmp_path, Judge())
+    assert (tainted.decision, tainted.reason) == ("reject", "not_grounded")
+    assert not (tmp_path / "Knowledge/Learned/_common/world.md").exists()
 
 
-def test_no_ddd_keeps_cognition_type_and_routes_to_repo(tmp_path: Path) -> None:
-    unit = cognition(scope="project:Widget")
-    answer = ProjectSingle(
-        shape="ProjectSingle", type="guideline", applicability="When editing Widget.",
-        claims=["Use one source of truth."], quality=QUALITY,
-        project="Widget", topic="architecture",
-    )
-    decision = run_unit_v2(row(unit, project_hint="Widget"), tmp_path, Judge(answer))
-    assert decision.decision == "write"
-    assert decision.destination.store == "COMMON_DDD"
-    assert decision.destination.relative_path == "Knowledge/Learned/repos/widget.md"
-    assert decision.destination.section == "Conventions"
+def test_a_project_without_a_ddd_is_refused(tmp_path, words):
+    decision = run_unit_v2(row(cognition(scope="project:Widget"), project_hint="Widget"), tmp_path, Judge())
+    assert (decision.decision, decision.reason) == ("reject", "unknown_project")
 
 
 @pytest.mark.parametrize(
-    "unit,answer,expected",
+    "unit,expected",
     [
         ({"kind": "event", "when": "2026-10-27", "title": "Landed CDF",
           "what": "The CDF pipeline landed.", "impact": "Knowledge now compounds.",
           "event_kind": "event", "evidence": ["event:one"]},
-         EventAnswer(shape="Event", significance=["milestone"], self_contained=True, evidenced=True),
          ("TIMELINE", ".context/TIMELINE.md")),
         ({"kind": "gap", "gap_kind": "risk", "scope": "project:Widget",
           "title": "Missing fallback", "what": "The fallback is absent.",
           "proposed_next": "Add and validate the fallback.", "evidence": ["event:one"]},
-         GapAnswer(shape="Gap", actionable=True, evidenced=True, self_contained=True,
-                   project="Widget"),
-         ("COMMON_DDD", "Knowledge/Learned/repos/widget.md")),
+         ("DDD", "Projects/Widget/2-understanding/IMPROVEMENT.md")),
         ({"kind": "reference", "reference_kind": "note", "title": "CDF notes",
           "summary": "These notes explain the complete CDF contract.",
           "body": "The reference remains useful outside the source conversation.",
           "evidence": ["event:one"]},
-         ReferenceAnswerV2(shape="ReferenceV2", reference_kind="note", quality=QUALITY),
          ("KNOWLEDGE", "Knowledge/Notes/")),
     ],
 )
-def test_every_non_cognition_kind_reaches_its_store(tmp_path: Path, unit, answer, expected) -> None:
-    decision = run_unit_v2(row(unit, project_hint="Widget"), tmp_path, Judge(answer))
-    assert decision.decision == "write"
+def test_every_non_cognition_kind_reaches_its_store(tmp_path, words, unit, expected) -> None:
+    _widget(tmp_path)
+    decision = run_unit_v2(row(unit, project_hint="Widget"), tmp_path, Judge())
+    assert decision.decision == "write", decision.reason
     assert (decision.destination.store, decision.destination.relative_path) == expected
 
 
-def test_kind_specific_quality_rejections(tmp_path: Path) -> None:
+def test_an_event_that_changes_nothing_is_refused(tmp_path, words) -> None:
     event = {"kind": "event", "when": "2026-10-27", "title": "Routine",
              "what": "Ran a routine command.", "outcome": "It completed.",
              "evidence": ["event:one"]}
-    decision = run_unit_v2(
-        row(event), tmp_path,
-        Judge(EventAnswer(shape="Event", significance=[], self_contained=True, evidenced=True)),
-    )
+    decision = run_unit_v2(row(event), tmp_path, Judge(significant=False))
     assert (decision.decision, decision.reason) == ("reject", "not_significant")
 
-    reference = {"kind": "reference", "reference_kind": "note", "title": "Weak",
-                 "summary": "This note is complete.", "body": "It has no later value.",
-                 "evidence": ["event:one"]}
-    weak = QUALITY.model_copy(update={"valuable": False})
-    decision = run_unit_v2(row(reference), tmp_path,
-                           Judge(ReferenceAnswerV2(shape="ReferenceV2", reference_kind="note",
-                                                   quality=weak)))
-    assert (decision.decision, decision.reason) == ("reject", "no_reference_value")
 
-
-def test_unknown_domain_is_parked_and_entailment_failure_defers(tmp_path: Path) -> None:
-    world = cognition()
-    answer = WorldCrossGlobal(
-        shape="WorldCrossGlobal", type="guideline", applicability="When editing.",
-        claims=["Keep it scoped."], quality=QUALITY, global_relevance=False,
-    )
-    decision = run_unit_v2(row(world), tmp_path, Judge(answer))
-    assert (decision.decision, decision.reason) == ("defer", "unknown_domain")
-
-    class Broken(Judge):
-        def entailment(self, *_args):
-            raise RuntimeError("offline")
-
-    s1_answer = UserCross(
-        shape="UserCross", type="guideline", applicability="When responding.",
-        claims=["Use Chinese."], quality=QUALITY, user_kind="preference",
-    )
-    decision = run_unit_v2(row(cognition(scope="user", user_kind="preference"), source="S1"),
-                           tmp_path, Broken(s1_answer))
-    assert (decision.decision, decision.reason) == ("defer", "entailment_unavailable")
+def test_an_unavailable_judge_defers(tmp_path, words) -> None:
+    context = tmp_path / ".context"
+    context.mkdir()
+    (context / "MEMORY.md").write_text("# Memory\n\n## Guidelines\n", encoding="utf-8")
+    decision = run_unit_v2(row(cognition(), source="S1"), tmp_path, Judge(unavailable=True))
+    assert (decision.decision, decision.reason) == ("defer", "judge_unavailable:RuntimeError")
 
 
 def test_normalize_preserves_semantic_fields_except_outer_whitespace() -> None:
@@ -227,22 +181,18 @@ def test_event_key_duplicate_is_rejected_without_reinforcement(tmp_path: Path) -
         f"<!-- cand:prior | event_key:{key} | source:S3 | event_kind:event -->\n",
         encoding="utf-8",
     )
-    answer = EventAnswer(shape="Event", significance=["milestone"],
-                         self_contained=True, evidenced=True)
-    result = run_unit_v2(row(unit), tmp_path, Judge(answer))
+    result = run_unit_v2(row(unit), tmp_path, Judge())
     assert (result.decision, result.reason) == ("reject", "already_exists")
 
 
-def test_a_gap_takes_the_project_its_source_declared_in_the_snapshot(tmp_path: Path) -> None:
-    """S3, S4 and S6 declare the project as ``project_snapshot.project``; a run's gap with
-    no project of the judge's own was parked as unknown_domain because only
-    ``explicit_project`` was read (rows already queued that way heal on requeue)."""
-    gap = {"kind": "gap", "gap_kind": "risk", "scope": "project:Widget",
+def test_a_gap_takes_the_project_its_source_declared_in_the_snapshot(tmp_path: Path, words) -> None:
+    """S3, S4 and S6 declare the project as ``project_snapshot.project``."""
+    _widget(tmp_path)
+    gap = {"kind": "gap", "gap_kind": "risk", "scope": "agent",
            "title": "Missing fallback", "what": "The fallback is absent.",
            "proposed_next": "Add and validate the fallback.", "evidence": ["event:one"]}
-    answer = GapAnswer(shape="Gap", actionable=True, evidenced=True, self_contained=True)
     queued = row(gap, source="S3")
     queued["project_snapshot"] = json.dumps({"project": "Widget", "repos": {}})
-    decision = run_unit_v2(queued, tmp_path, Judge(answer))
+    decision = run_unit_v2(queued, tmp_path, Judge())
     assert decision.decision == "write", decision.reason
-    assert decision.destination.relative_path == "Knowledge/Learned/repos/widget.md"
+    assert decision.destination.relative_path == "Projects/Widget/2-understanding/IMPROVEMENT.md"

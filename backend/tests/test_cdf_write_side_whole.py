@@ -14,41 +14,6 @@ def _da(ws):
     return ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
 
 
-@pytest.mark.asyncio
-async def test_high_signal_capture_keeps_the_whole_message(tmp_path):
-    from core.runtime_hooks import create_high_signal_capture
-    ws = tmp_path / "ws"
-    hook = create_high_signal_capture({"sdk_session_id": "s1"}, workspace_dir=str(ws))
-    prompt = "I decided to always use rebase " + "because the history stays linear " * 20 + "END"
-    await hook({"prompt": prompt}, None, MagicMock())
-    assert " ".join(prompt.split()) in _da(ws).read_text()
-
-
-@pytest.mark.asyncio
-async def test_a_too_long_high_signal_message_is_named_not_cut(tmp_path):
-    from core.runtime_hooks import HIGH_SIGNAL_LINE_MAX, create_high_signal_capture
-    ws = tmp_path / "ws"
-    hook = create_high_signal_capture({"sdk_session_id": "s9"}, workspace_dir=str(ws))
-    prompt = "I decided " + "word " * HIGH_SIGNAL_LINE_MAX
-    await hook({"prompt": prompt}, None, MagicMock())
-    text = _da(ws).read_text()
-    assert "word word" not in text and "it is in session s9" in text
-
-
-@pytest.mark.asyncio
-async def test_two_messages_sharing_a_long_opening_are_both_captured(tmp_path):
-    from core.runtime_hooks import create_high_signal_capture
-    ws = tmp_path / "ws"
-    hook = create_high_signal_capture({"sdk_session_id": "s2"}, workspace_dir=str(ws))
-    head = "I decided " + "x" * 120
-    await hook({"prompt": head + " ALPHA"}, None, MagicMock())
-    await hook({"prompt": head + " BETA"}, None, MagicMock())
-    text = _da(ws).read_text()
-    assert "ALPHA" in text and "BETA" in text
-
-
-
-
 def test_backflow_title_is_a_whole_line_or_the_default():
     from hooks.knowledge_backflow_hook import _TITLE_MAX, _extract_title
     assert _extract_title("A short first line\nbody") == "A short first line"

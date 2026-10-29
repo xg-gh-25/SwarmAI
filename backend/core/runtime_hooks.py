@@ -1637,73 +1637,6 @@ _HIGH_SIGNAL_PATTERNS = re.compile(
 
 # A high-signal capture is one DailyActivity line; a longer message is named instead
 # (the whole text is in the session transcript), never cut.
-HIGH_SIGNAL_LINE_MAX = 2000
-
-
-def create_high_signal_capture(
-    session_context: Optional[dict] = None,
-    workspace_dir: Optional[str] = None,
-):
-    """Factory: creates a UserPromptSubmit hook that captures high-signal observations.
-
-    Detects decision/lesson/rule signals in user prompts and appends them
-    to today's DailyActivity file.  Does NOT write to MEMORY.md — distillation
-    pipeline decides what gets promoted.  This is "faster capture without
-    skipping the quality gate."
-
-    Deduplication: tracks captured prompts in session_context to avoid
-    writing the same signal twice if the user repeats.
-    """
-    ctx = session_context or {}
-    from jobs.paths import SWARMWS as _SWARMWS_hs
-    ws = workspace_dir or str(_SWARMWS_hs)
-    captured_key = "_high_signal_captured"
-
-    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
-        from core.injected_blocks import strip_injected_blocks
-        # Match on what the user TYPED: a resumed-history, recall or UI-state block
-        # glued onto the query is system text, and capturing it (as before) filled
-        # DailyActivity with the system's own preambles.
-        prompt = strip_injected_blocks(_extract_field(input_data, "prompt", ""))
-        if not isinstance(prompt, str) or len(prompt) < 10:
-            return {}
-
-        if not _HIGH_SIGNAL_PATTERNS.search(prompt):
-            return {}
-
-        # Dedup within session
-        if captured_key not in ctx:
-            ctx[captured_key] = set()
-        sig = hashlib.sha256(prompt.encode("utf-8")).hexdigest()   # the whole prompt
-        sid = ctx.get("sdk_session_id", "unknown")
-        if sig in ctx[captured_key]:
-            return {}
-        ctx[captured_key].add(sig)
-
-        # Append to today's DailyActivity as ONE line, under the day file's lock
-        # (core.daily_activity_writer.append_daily_text): a multi-line capture used to
-        # carry '## ' lines into the file and nothing serialized it with the writers.
-        try:
-            from datetime import datetime
-            from core.daily_activity_writer import append_daily_text
-            now = datetime.now()
-            # whole, on one line (whitespace folded so no '## ' line enters the file);
-            # a message too long for a DailyActivity line is named, never cut
-            one_line = " ".join(prompt.split())
-            if len(one_line) > HIGH_SIGNAL_LINE_MAX:
-                one_line = (f"(a {len(one_line)}-character message, not copied here so it "
-                            f"stays whole; it is in session {sid})")
-            entry = f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): {one_line}\n"
-            da_file = Path(ws) / "Knowledge" / "DailyActivity" / f"{now.strftime('%Y-%m-%d')}.md"
-            # OFF-LOOP (run_a1f4c2d8): fires the instant the user hits send.
-            await asyncio.to_thread(append_daily_text, da_file, entry)
-            logger.debug("High-signal captured to DailyActivity: %.80s", prompt)
-        except Exception:
-            logger.exception("Failed to write high-signal to DailyActivity")
-
-        return {}
-
-    return _hook
 
 
 # ---------------------------------------------------------------------------
@@ -2041,15 +1974,6 @@ def register_runtime_hooks(
         "post_compact_injection",
     )
 
-    # Phase 2: UserPromptSubmit high-signal observation capture (it writes DailyActivity,
-    # which a worker Hive does not keep: core/app_role)
-    if not is_worker():
-        registry.register(
-            "UserPromptSubmit",
-            create_high_signal_capture(session_context),
-            "high_signal_capture",
-        )
-
     # UserPromptSubmit: reset per-turn persist-skill tracker (new turn = clean slate)
     registry.register(
         "UserPromptSubmit",
@@ -2079,5 +2003,5 @@ def register_runtime_hooks(
         "Runtime hooks registered: correction_capture, error_pattern_detector, "
         "failure_tracker_reset, file_tracker, session_checkpoint, memory_edit_guard, "
         "subagent_capture, user_correction_detector, post_compact_injection, "
-        "high_signal_capture, observation_recorder, observation_completer"
+        "observation_recorder, observation_completer"
     )

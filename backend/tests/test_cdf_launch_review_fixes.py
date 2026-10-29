@@ -336,9 +336,9 @@ def test_units_are_extracted_in_one_language():
     assert "Write every unit in English" in extract_llm.QUOTE_RULE
 
 
-def test_both_extraction_prompts_state_card0s_length_limit():
-    """Card 0 drops a cognition unit over the limit whole, without a model call; a
-    prompt that does not say so loses exactly the units written most completely."""
+def test_both_extraction_prompts_state_the_length_rule_and_card0_drops_nothing_for_it():
+    """The length is a writing rule both prompts state; card 0 no longer refuses a long
+    unit (it dropped exactly the units written most completely, refactor §3.5)."""
     from core.ingestion import contracts_v2
     from core.ingestion.pipeline_v2 import _card0
     from core.ingestion.sources import extract_llm, s7_review
@@ -351,7 +351,7 @@ def test_both_extraction_prompts_state_card0s_length_limit():
     unit = contracts_v2.SOURCE_UNIT.validate_python({
         "kind": "cognition", "type": "guideline", "scope": "world", "title": "T",
         "what": "x" * limit, "applicability": "Always.", "evidence": ["event:e"]})
-    assert _card0(unit, {"envelope": "{}"}).reason == "not_atomic"
+    assert _card0(unit, {"envelope": "{}"}).passed
 
 
 def test_routine_operations_are_not_events_in_extraction_or_judgment():

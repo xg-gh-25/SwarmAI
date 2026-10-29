@@ -312,9 +312,9 @@ def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
     assert seen["prompt_has_value"]
 
     class Seeing(Judge):
-        def entailment(self, text, *rest):
-            seen["grounding"] = text
-            return super().entailment(text, *rest)
+        def verify(self, unit, grounding, hits):
+            seen["grounding"] = grounding
+            return super().verify(unit, grounding, hits)
 
     _drain(cdf_env, Seeing(entailed=True))
     assert "measured exit_code = 1" in seen["grounding"]
