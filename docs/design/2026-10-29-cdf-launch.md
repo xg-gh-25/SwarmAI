@@ -19,7 +19,7 @@ supersedes-part-of: 2026-10-26-swarm-cognitive-distillation-flow.md §14 阶段 
 |---|---|---|
 | A1 | **S2/S6 提取 100% 失败**：三类单元共用 24 字段的扁平 schema（含一个无字段的 `relation_hint` object），模型把 `units` 写成字符串，且字符串里中文引号未转义。实测 3/3 失败，对照实验 8 种写法定位 | schema 改成每个 kind 一个数组，元素只带该 kind 的字段；提取不再要 `relation_hint`（实测 4/4 成功） |
 | B1 | 停放的单元（`unknown_domain` / `missing_section`）被 `_READY` 当作就绪，worker 空转并饿死所有车道 | `_READY` 只认 `next_attempt_at IS NOT NULL AND <= now` 的 deferred |
-| B2 | v1 管线仍有生产者（context_health 从 DailyActivity 抽纠正/决定），v1 路径停放后每轮调 Bedrock | **删除 v1 处理路径**：v1 入队一律拒绝（`v1_retired`），worker 遇到 v1 行直接拒绝；删掉 context_health 的 cultivation 调用和三个已无人注册的 hook |
+| B2 | v1 分支对停放的单元每轮重判（调 Bedrock）| v1 分支同样跳过停放的单元。核实：v1 在生产里已没有活着的生产者（context_health 的 cultivation 早已返回 False，两个 hook 未注册），v1 引擎代码仍被十几个引擎测试当作夹具，删除留到上线后 |
 | B3 | 候选卡在 `in_progress` 无出路 | 启动和每日维护时按单元状态重算候选状态；`writing` 且无写入计划的单元回到 `queued` |
 | B4 | 重试的写入被标成"已写入"（op_id 固定 + `INSERT OR IGNORE` 读回已放弃的旧计划） | 同一单元已放弃的计划在插入前删除；`_hand_to_writer` 不再自己标 written，只认 writer 的结果 |
 | B5 | 一个坏的写入计划让 worker 每次启动都崩；关系写入失败在文件已写之后抛错 | `recover` 每个计划单独 try，出错即放弃该计划；无效关系跳过并记事件，不抛错；关系主语锚点从写入后的内容解析 |
@@ -57,7 +57,7 @@ supersedes-part-of: 2026-10-26-swarm-cognitive-distillation-flow.md §14 阶段 
 ## 4. 接口与收尾
 
 - 文件浏览器：新建、移到废纸篓对受管文件带上 `expected_revision`；重命名/移动受管文件时把后端的 409 原因显示给用户（受管文件的重命名走 CDF 的树级操作，前端首版不提供）。
-- 删除已无人注册的 `knowledge_backflow_hook`、`improvement_writeback_hook`、`code_change_feed` 及其测试；Capabilities 页去掉已删除的条目；`verify_build` 加 `core.ingestion.worker`。
+- Capabilities 页去掉已删除的条目；`verify_build` 加 `core.ingestion.worker`。（`knowledge_backflow_hook`、`improvement_writeback_hook` 是未注册的死代码，上线后与 v1 引擎一起删；`code_change_feed` 仍被 code_intel 使用，不是死代码。）
 - `brain_sync` 的写入登记进 materializer 清单（从 Hive 安装整个 brain 目录，记为同步来源）。
 - 治理文字与新机制一致：SWARMAI.md 的 Darwinian 推论、SELF.md 的 Memory management、AGENT.md R22–R24 改成描述"写入上限 + 注入选择 + 被取代过滤"。AGENT/SWARMAI/SELF 属系统文件，和重启一起交用户批准。
 

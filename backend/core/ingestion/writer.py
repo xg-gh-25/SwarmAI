@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -37,6 +38,8 @@ _SYSTEM_APPENDIX_DEFAULT_SECTIONS = {
     "USER": "Preferences",
     "TOOLS": "Environment Notes",
 }
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -541,6 +544,9 @@ def _current_epoch(conn: sqlite3.Connection, unit_row: Any = None) -> int:
 
 def _insert_plan(conn: sqlite3.Connection, plan: dict[str, Any], epoch: int) -> None:
     now = _iso()
+    # op_id is per unit: a retry after user_race / stale_plan must get a new plan, not
+    # load the abandoned one back (which skipped every step and reported success)
+    conn.execute("DELETE FROM ingestion_writes WHERE op_id=? AND step='abandoned'", (plan["op_id"],))
     conn.execute(
         """INSERT OR IGNORE INTO ingestion_writes
         (op_id,op_kind,unit_id,target_path,before_hash,intended_bytes,after_hash,
@@ -587,14 +593,27 @@ def _event(conn: sqlite3.Connection, kind: str, detail: dict[str, Any]) -> None:
                  (_iso(), kind, json.dumps(detail, ensure_ascii=False, sort_keys=True)))
 
 
+DEFER_LIMIT = 5   # a unit whose writes keep racing is poisoned after this many attempts
+
+
 def _defer(conn: sqlite3.Connection, plan: Mapping[str, Any], reason: str, *,
            event_kind: str | None = "user_race") -> None:
+    """Abandon *plan*; its unit (if still writing) is deferred with a backoff and one
+    more attempt counted, poisoned after DEFER_LIMIT -- without them a target the user
+    keeps editing was re-judged and re-planned in a tight loop."""
     conn.execute("UPDATE ingestion_writes SET step='abandoned',updated_at=? WHERE op_id=?",
                  (_iso(), plan["op_id"]))
     if plan.get("unit_id"):
+        row = conn.execute("SELECT attempts FROM ingestion_units WHERE unit_id=?",
+                           (plan["unit_id"],)).fetchone()
+        attempts = int(row[0] or 0) + 1 if row else 1
+        poison = attempts >= DEFER_LIMIT
+        next_at = None if poison else _iso(_now() + timedelta(seconds=min(3600, 60 * 2 ** (attempts - 1))))
         conn.execute(
-            "UPDATE ingestion_units SET state='deferred',reason=?,error_class=?,updated_at=? WHERE unit_id=?",
-            (reason, reason, _iso(), plan["unit_id"]),
+            "UPDATE ingestion_units SET state=?,reason=?,error_class=?,attempts=?,next_attempt_at=?,"
+            "updated_at=? WHERE unit_id=? AND state='writing'",
+            ("failed_poison" if poison else "deferred", "retries_exhausted" if poison else reason,
+             reason, attempts, next_at, _iso(), plan["unit_id"]),
         )
     if event_kind is not None:
         _event(conn, event_kind, {"op_id": plan["op_id"], "target_path": plan["target_path"], "reason": reason})
@@ -699,18 +718,27 @@ def _active_relation_head(conn: sqlite3.Connection, anchor: str) -> str:
 
 
 def _write_relations(conn: sqlite3.Connection, plan: Mapping[str, Any]) -> None:
+    """Record *plan*'s relations. This step runs after the entry is on disk, so a
+    relation that cannot be recorded (unknown predicate, missing anchor, a second head,
+    a cycle) is skipped with an event: raising here left the plan at target_applied and
+    stopped the worker at every start."""
     for relation in plan.get("relations", []):
         predicate = relation.get("predicate")
         subject = str(relation.get("subject_anchor") or "")
         object_anchor = str(relation.get("object_anchor") or "")
-        if predicate not in {"supersedes", "derived_from"}:
-            raise ValueError("incompatible_hits")
-        if not _anchor_exists(subject) or not _anchor_exists(object_anchor):
-            raise ValueError("incompatible_hits")
-        if predicate == "supersedes":
-            object_anchor = _active_relation_head(conn, object_anchor)
-            if _would_create_cycle(conn, subject, object_anchor):
-                raise ValueError("incompatible_hits")
+        try:
+            if predicate not in {"supersedes", "derived_from"}:
+                raise ValueError("unknown predicate")
+            if not _anchor_exists(subject) or not _anchor_exists(object_anchor):
+                raise ValueError("anchor not found")
+            if predicate == "supersedes":
+                object_anchor = _active_relation_head(conn, object_anchor)
+                if _would_create_cycle(conn, subject, object_anchor):
+                    raise ValueError("cycle")
+        except ValueError as exc:
+            _event(conn, "relation_skipped", {"op_id": plan.get("op_id"), "relation": dict(relation),
+                                              "reason": str(exc)})
+            continue
         conn.execute(
             "INSERT OR IGNORE INTO ingestion_relations(subject_anchor,predicate,object_anchor,created,inactive) "
             "VALUES (?,?,?,?,0)",
@@ -803,39 +831,58 @@ def apply_unit(decision: UnitDecision | Mapping[str, Any], unit_row: Any,
 
 
 def recover(conn: sqlite3.Connection) -> dict[str, int]:
-    """Resume journal plans from postconditions and requeue unplanned judged units."""
+    """Resume journal plans from postconditions, each on its own (a plan that raises is
+    abandoned), and requeue judged or writing units that have no plan."""
     counts = {"recovered": 0, "abandoned": 0, "requeued": 0}
     rows = conn.execute("SELECT * FROM ingestion_writes WHERE step NOT IN ('done','abandoned') ORDER BY created_at").fetchall()
     for row in rows:
         plan = _load_plan(row)
-        if plan.get("op_kind") == "user_tree_move":
-            from .governed_edit import recover_tree_plan
-
-            result = recover_tree_plan(conn, plan)
-            counts["recovered" if result == "done" else "abandoned"] += 1
-            continue
-        if plan.get("op_kind") == "user_redact":
-            from .governed_edit import recover_redact_plan
-
-            result = recover_redact_plan(conn, plan)
-            counts["recovered" if result == "done" else "abandoned"] += 1
-            continue
-        target = _absolute(str(plan["target_path"]))
-        step = str(plan["step"])
-        if step == "planned" and _archive_postcondition(plan):
-            _advance(conn, str(plan["op_id"]), "planned", "archive_applied", int(plan.get("owner_epoch") or 0))
-            plan["step"] = "archive_applied"
-        if plan["step"] == "archive_applied" and _target_postcondition(plan):
-            _advance(conn, str(plan["op_id"]), "archive_applied", "target_applied", int(plan.get("owner_epoch") or 0))
-            plan["step"] = "target_applied"
-        current_hash = _path_hash(target)
-        expected_hashes = {str(plan.get("before_hash") or ""), str(plan.get("after_hash") or "")}
-        if current_hash not in expected_hashes:
-            _defer(conn, plan, "stale_plan", event_kind=None)
+        try:
+            _recover_plan(conn, plan, counts)
+        except Exception as exc:  # one bad plan is abandoned; the others still recover
+            logger.warning("CDF recovery abandoned plan %s: %s: %s", plan.get("op_id"),
+                           type(exc).__name__, exc)
+            if conn.in_transaction:
+                conn.rollback()
+            _defer(conn, plan, "stale_plan", event_kind="recovery_failed")
             counts["abandoned"] += 1
-            continue
-        result = _execute_plan(conn, plan)
+    _finish_recovery(conn, counts)
+    return counts
+
+
+def _recover_plan(conn: sqlite3.Connection, plan: dict[str, Any], counts: dict[str, int]) -> None:
+    """Resume one journal plan from its postconditions."""
+    if plan.get("op_kind") == "user_tree_move":
+        from .governed_edit import recover_tree_plan
+
+        result = recover_tree_plan(conn, plan)
         counts["recovered" if result == "done" else "abandoned"] += 1
+        return
+    if plan.get("op_kind") == "user_redact":
+        from .governed_edit import recover_redact_plan
+
+        result = recover_redact_plan(conn, plan)
+        counts["recovered" if result == "done" else "abandoned"] += 1
+        return
+    target = _absolute(str(plan["target_path"]))
+    step = str(plan["step"])
+    if step == "planned" and _archive_postcondition(plan):
+        _advance(conn, str(plan["op_id"]), "planned", "archive_applied", int(plan.get("owner_epoch") or 0))
+        plan["step"] = "archive_applied"
+    if plan["step"] == "archive_applied" and _target_postcondition(plan):
+        _advance(conn, str(plan["op_id"]), "archive_applied", "target_applied", int(plan.get("owner_epoch") or 0))
+        plan["step"] = "target_applied"
+    current_hash = _path_hash(target)
+    expected_hashes = {str(plan.get("before_hash") or ""), str(plan.get("after_hash") or "")}
+    if current_hash not in expected_hashes:
+        _defer(conn, plan, "stale_plan", event_kind=None)
+        counts["abandoned"] += 1
+        return
+    result = _execute_plan(conn, plan)
+    counts["recovered" if result == "done" else "abandoned"] += 1
+
+
+def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int]) -> None:
     conn.execute(
         """UPDATE ingestion_units SET state='written',updated_at=?
         WHERE state='writing' AND EXISTS (
@@ -860,16 +907,17 @@ def recover(conn: sqlite3.Connection) -> dict[str, int]:
         )""",
         (_iso(),),
     )
+    # judged, or writing whose plan was never inserted (the writer raised, or the
+    # process died, between the worker's claim and the plan): judge again
     missing = conn.execute(
-        "SELECT unit_id FROM ingestion_units u WHERE state='judged' "
+        "SELECT unit_id,state FROM ingestion_units u WHERE state IN ('judged','writing') "
         "AND NOT EXISTS (SELECT 1 FROM ingestion_writes w WHERE w.unit_id=u.unit_id)"
     ).fetchall()
     for row in missing:
-        conn.execute("UPDATE ingestion_units SET state='queued',updated_at=? WHERE unit_id=? AND state='judged'",
-                     (_iso(), row[0]))
+        conn.execute("UPDATE ingestion_units SET state='queued',updated_at=? WHERE unit_id=? AND state=?",
+                     (_iso(), row[0], row[1]))
         counts["requeued"] += 1
     conn.commit()
-    return counts
 
 
 def reserve_quota(unit_id: str, store: str, project: str | None, byte_count: int,

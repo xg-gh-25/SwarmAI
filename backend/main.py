@@ -1394,32 +1394,55 @@ async def lifespan(app: FastAPI):
                     backend_port, backend_mode)
 
     # CDF runs in every full HTTP mode, but the file lock permits one owner per data dir.
-    _ingestion_handle = None
-    _ingestion_owner = None
-    _ingestion_failed = False
-    try:
+    # The lock may still be held by the process this one replaces (a restart overlaps
+    # its shutdown), so a backend that does not get it keeps trying every 30 s instead
+    # of staying enqueue/read-only until the next restart.
+    _ingestion: dict = {"handle": None}
+
+    async def _try_ingestion_owner() -> bool:
+        """Take the owner lock and start the worker; False when another backend holds it."""
         from core.ingestion.owner import acquire as _acquire_ingestion_owner
         from core.ingestion.worker import WorkerHandle as _IngestionWorkerHandle
         from core.project_registry import get_swarmws as _ingestion_workspace
-        _ingestion_owner = await asyncio.to_thread(_acquire_ingestion_owner)
-        if _ingestion_owner is not None:
-            _handle = _IngestionWorkerHandle(_ingestion_owner, _ingestion_workspace())
-            _handle.start()
-            _ingestion_handle = _handle   # only a started handle is stopped at shutdown
-            logger.info("CDF ingestion owner worker started")
-        else:
-            logger.info("CDF ingestion owner held by another backend; this process is enqueue/read-only")
+        owner = await asyncio.to_thread(_acquire_ingestion_owner)
+        if owner is None:
+            return False
+        try:
+            handle = _IngestionWorkerHandle(owner, _ingestion_workspace())
+            handle.start()
+        except BaseException:
+            owner.release()
+            raise
+        _ingestion["handle"] = handle   # only a started handle is stopped at shutdown
+        logger.info("CDF ingestion owner worker started")
+        return True
+
+    async def _ingestion_owner_loop() -> None:
+        while True:
+            await asyncio.sleep(30)
+            try:
+                if await _try_ingestion_owner():
+                    return
+            except Exception:
+                logger.exception("CDF ingestion worker startup failed; retrying in 30 s")
+
+    _ingestion_owner_task = None
+    try:
+        _ingestion_started = await _try_ingestion_owner()
     except Exception:
-        _ingestion_failed = True
-        if _ingestion_handle is None and _ingestion_owner is not None:
-            _ingestion_owner.release()
-        logger.exception("CDF ingestion worker startup failed (non-fatal)")
-    if _ingestion_failed and _is_worker():
-        # a worker Hive whose extraction could not start would end every run with no
-        # lessons and no record of being done: refuse to start instead (design §3.1).
-        # The owner lock held by another live backend is not this: that one extracts.
-        raise RuntimeError("a worker Hive needs its CDF extraction, which did not start "
-                           "(see the log above)")
+        if _is_worker():
+            # a worker Hive whose extraction could not start would end every run with no
+            # lessons and no record of being done: refuse to start instead (design §3.1).
+            # The owner lock held by another live backend is not this: that one extracts.
+            logger.exception("CDF ingestion worker startup failed")
+            raise RuntimeError("a worker Hive needs its CDF extraction, which did not start "
+                               "(see the log above)") from None
+        logger.exception("CDF ingestion worker startup failed; retrying every 30 s")
+        _ingestion_started = False
+    if not _ingestion_started:
+        logger.info("CDF ingestion owner not taken; this process is enqueue/read-only and "
+                    "retries every 30 s")
+        _ingestion_owner_task = asyncio.create_task(_ingestion_owner_loop())
 
     # Resolve the bundled CLI version once at boot; never run it in /health.
     global _cli_version
@@ -1554,9 +1577,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
-    if _ingestion_handle is not None:
+    if _ingestion_owner_task is not None and not _ingestion_owner_task.done():
+        _ingestion_owner_task.cancel()
+    if _ingestion["handle"] is not None:
         try:
-            await asyncio.to_thread(_ingestion_handle.stop_and_join)
+            await asyncio.to_thread(_ingestion["handle"].stop_and_join)
             logger.info("CDF ingestion owner worker stopped")
         except Exception:
             logger.exception("CDF ingestion worker did not stop cleanly")

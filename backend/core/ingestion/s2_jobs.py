@@ -78,9 +78,13 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
                     (reason, not_before, sdk_session_id, session_id))
                 state = "running"
             elif row[0] == "queued":
-                # a later request pushes the not-before (more activity); no delay = now
+                # a later request pushes the not-before (more activity); no delay = now.
+                # An explicit save (no delay) is never turned back into a delayed
+                # session-end job by the idle hook that fires after it.
                 conn.execute(
-                    """UPDATE ingestion_s2_jobs SET reason=?, next_attempt_at=?,
+                    """UPDATE ingestion_s2_jobs SET
+                       reason=CASE WHEN reason='save_button' THEN reason ELSE ? END,
+                       next_attempt_at=CASE WHEN reason='save_button' THEN next_attempt_at ELSE ? END,
                        sdk_session_id=COALESCE(?, sdk_session_id) WHERE session_id=?""",
                     (reason, not_before, sdk_session_id, session_id))
                 state = "queued"
@@ -142,6 +146,8 @@ def finish(conn: sqlite3.Connection, session_id: str, *, error: str | None = Non
                                         else (MAX_ATTEMPTS, 0, None))
         if error is None:
             state = "queued" if again else "done"
+        elif again:
+            state = "queued"    # a request that came during the failed run is new work
         else:
             state = "failed" if attempts >= MAX_ATTEMPTS else "queued"
         if error is not None and state == "queued":
@@ -151,9 +157,9 @@ def finish(conn: sqlite3.Connection, session_id: str, *, error: str | None = Non
         conn.execute(
             """UPDATE ingestion_s2_jobs SET state=?, finished_at=?, error=?, next_attempt_at=?,
                    again=0, again_after=NULL,
-                   attempts=CASE WHEN ?='queued' AND ? IS NULL THEN 0 ELSE attempts END
+                   attempts=CASE WHEN ?='queued' AND (? IS NULL OR ?) THEN 0 ELSE attempts END
                WHERE session_id=?""",
-            (state, _now(), error, retry_at, state, error, session_id))
+            (state, _now(), error, retry_at, state, error, again, session_id))
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

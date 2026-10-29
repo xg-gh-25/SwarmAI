@@ -45,6 +45,11 @@ INFRA_REASONS = frozenset({
     "unavailable", "stale", "ambiguous_project", "missing_section", "user_race",
     "stale_plan", "db_busy",
 })
+# what an outage or a busy store produces (unlike ambiguous_project, which the same
+# input reproduces)
+OUTAGE_REASONS = frozenset({"unavailable", "stale", "db_busy", "user_race", "stale_plan"})
+INFRA_ATTEMPTS = 30     # judge outages: 1, 2, 4 ... 60 min backoff, about a day in all
+LOOP_BACKOFF_SECONDS = 30  # a background loop that raised waits this long, then goes on
 
 
 @dataclass(frozen=True)
@@ -208,11 +213,17 @@ def _defer_or_poison(
             )
         return
     attempts = int(unit["attempts"]) + 1
-    same_errors = fingerprint is not None and fingerprint == unit["error_fingerprint"]
-    poison = attempts >= 5 or (same_errors and attempts >= 3)
+    # The judge (Bedrock) being unavailable says nothing about the unit: back off up to
+    # an hour and give up only after about a day, so an outage does not poison every
+    # unit tried during it. Anything else is the unit's own failure: short, bounded.
+    infra = reason.startswith(("judge_unavailable", "entailment_unavailable")) or reason in OUTAGE_REASONS
+    limit = INFRA_ATTEMPTS if infra else 5
+    same_errors = not infra and fingerprint is not None and fingerprint == unit["error_fingerprint"]
+    poison = attempts >= limit or (same_errors and attempts >= 3)
     target = "failed_poison" if poison else "deferred"
-    final_reason = "retries_exhausted" if attempts >= 5 else reason
-    next_at = None if poison else (_utcnow() + timedelta(seconds=min(300, 5 * 2 ** (attempts - 1)))).isoformat()
+    final_reason = "retries_exhausted" if attempts >= limit else reason
+    delay = min(3600, 60 * 2 ** (attempts - 1)) if infra else min(300, 5 * 2 ** (attempts - 1))
+    next_at = None if poison else (_utcnow() + timedelta(seconds=delay)).isoformat()
     if not owner.claim_unit_step(
         conn, unit["unit_id"], "queued", target, attempts=attempts,
         next_attempt_at=next_at, reason=final_reason,
@@ -228,24 +239,42 @@ def _defer_or_poison(
 
 def _hand_to_writer(conn: sqlite3.Connection, owner: Owner, unit_id: str,
                     decision: contracts.UnitDecision) -> None:
-    """Run the journaled writer for one ``writing`` unit, then mark it written."""
+    """Run the journaled writer for one ``writing`` unit. The writer marks the unit
+    ``written`` itself, and only when its plan reached ``done``: claiming it here as
+    well marked a unit written whose plan had been abandoned (nothing on disk)."""
     from .writer import apply_unit
     writing_row = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
     try:
         apply_unit(decision, writing_row, conn)
-    except Exception as exc:  # plan state is durable; recovery decides what happened
-        logger.warning("CDF writer failed for %s: %s", unit_id, exc)
-        return
-    state = conn.execute("SELECT state FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
-    if state and state["state"] == "writing":
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            if not owner.claim_unit_step(conn, unit_id, "writing", "written"):
-                raise RuntimeError("owner epoch fence rejected write completion")
-            conn.execute("COMMIT")
-        except BaseException:
+    except Exception as exc:
+        if conn.in_transaction:
             conn.execute("ROLLBACK")
-            raise
+        _unit_failed(conn, owner, unit_id, exc)
+
+
+def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exception) -> None:
+    """Record *exc* on the unit it happened to. A malformed payload is rejected. A unit
+    with a write plan belongs to ``writer.recover``. Otherwise the unit (queued, or
+    ``writing`` with no plan yet) is deferred with the error's fingerprint, so the
+    bounded retries apply and it is poisoned instead of retried forever."""
+    from pydantic import ValidationError
+    logger.warning("CDF unit %s failed: %s: %s", unit_id, type(exc).__name__, exc)
+    fresh = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
+    if fresh is None or fresh["state"] in TERMINAL_STATES:
+        return
+    if conn.execute("SELECT 1 FROM ingestion_writes WHERE unit_id=?", (unit_id,)).fetchone():
+        return
+    if fresh["state"] == "writing":
+        if not owner.claim_unit_step(conn, unit_id, "writing", "queued"):
+            return
+        fresh = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
+    if fresh["state"] != "queued":
+        return
+    if isinstance(exc, ValidationError):
+        owner.claim_unit_step(conn, unit_id, "queued", "rejected", reason="malformed_payload")
+        return
+    _defer_or_poison(conn, owner, fresh, f"error:{type(exc).__name__}",
+                     fingerprint=error_fingerprint(exc))
 
 
 def _json_value(value: Any, default: Any) -> Any:
@@ -315,35 +344,42 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
             continue
         if unit_row["state"] == "deferred":
             from .contracts_v2 import PARKED_DEFER_REASONS
-            if unit_row["reason"] in PARKED_DEFER_REASONS:
-                continue
-            next_at = (datetime.fromisoformat(unit_row["next_attempt_at"])
-                       if unit_row["next_attempt_at"] else _utcnow())
-            if next_at > _utcnow() or not owner.claim_unit_step(conn, unit_id, "deferred", "queued"):
+            if unit_row["reason"] in PARKED_DEFER_REASONS or unit_row["next_attempt_at"] is None:
+                continue        # parked: waits for requeue_parked
+            if (datetime.fromisoformat(unit_row["next_attempt_at"]) > _utcnow()
+                    or not owner.claim_unit_step(conn, unit_id, "deferred", "queued")):
                 continue
             unit_row = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
         unit_input = dict(value)
         unit_input.update(unit_id=unit_id, project_hint=project,
                           project_candidates=json.dumps([project] if project else []))
-        decision = run_unit_v2(unit_input, workspace_root, judge)
-        fields = _decision_fields(decision)
-        if decision.decision == "defer":
-            _defer_or_poison(
-                conn, owner, unit_row, decision.reason,
-                destination=decision.destination,
-            )
-        elif decision.decision == "merged":
-            owner.claim_unit_step(conn, unit_id, "queued", "merged", **fields)
-        elif decision.decision == "reinforce":
-            owner.claim_unit_step(conn, unit_id, "queued", "reinforced", **fields)
-        elif decision.decision == "reject":
-            owner.claim_unit_step(conn, unit_id, "queued", "rejected", **fields)
-        else:
-            if not owner.claim_unit_step(conn, unit_id, "queued", "judged", **fields):
-                raise RuntimeError("owner epoch fence rejected v2 judgment")
-            if not owner.claim_unit_step(conn, unit_id, "judged", "writing"):
-                raise RuntimeError("owner epoch fence rejected v2 writer handoff")
-            _hand_to_writer(conn, owner, unit_id, decision)
+        # One unit's failure is that unit's: recorded on it (rejected, or deferred with its
+        # error fingerprint and poisoned after the bounded retries), never raised out of
+        # the worker, whose thread would otherwise end and leave this candidate in_progress.
+        try:
+            decision = run_unit_v2(unit_input, workspace_root, judge)
+            fields = _decision_fields(decision)
+            if decision.decision == "defer":
+                _defer_or_poison(
+                    conn, owner, unit_row, decision.reason,
+                    destination=decision.destination,
+                )
+            elif decision.decision == "merged":
+                owner.claim_unit_step(conn, unit_id, "queued", "merged", **fields)
+            elif decision.decision == "reinforce":
+                owner.claim_unit_step(conn, unit_id, "queued", "reinforced", **fields)
+            elif decision.decision == "reject":
+                owner.claim_unit_step(conn, unit_id, "queued", "rejected", **fields)
+            else:
+                if not owner.claim_unit_step(conn, unit_id, "queued", "judged", **fields):
+                    raise RuntimeError("owner epoch fence rejected v2 judgment")
+                if not owner.claim_unit_step(conn, unit_id, "judged", "writing"):
+                    raise RuntimeError("owner epoch fence rejected v2 writer handoff")
+                _hand_to_writer(conn, owner, unit_id, decision)
+        except Exception as exc:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            _unit_failed(conn, owner, unit_id, exc)
 
     states = [item[0] for item in conn.execute(
         "SELECT state FROM ingestion_units WHERE candidate_id=?", (value["id"],)
@@ -394,8 +430,10 @@ def _process_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
         if unit["state"] in ("judged", "writing"):
             continue  # an in-flight write belongs to writer.recover(), never re-judged
         if unit["state"] == "deferred":
-            next_at = datetime.fromisoformat(unit["next_attempt_at"]) if unit["next_attempt_at"] else _utcnow()
-            if next_at > _utcnow():
+            from .contracts_v2 import PARKED_DEFER_REASONS
+            if unit["reason"] in PARKED_DEFER_REASONS or unit["next_attempt_at"] is None:
+                continue        # parked: waits for requeue_parked, never re-judged here
+            if datetime.fromisoformat(unit["next_attempt_at"]) > _utcnow():
                 continue
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -457,6 +495,34 @@ def _process_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
         "UPDATE ingestion_inbox SET state=?, versions=? WHERE id=? AND owner_epoch=?",
         (aggregate, versions, candidate.id, owner.epoch),
     )
+
+
+def reaggregate_candidates(conn: sqlite3.Connection) -> int:
+    """Recompute the state of every candidate not yet done from its units' states.
+
+    Only process_candidate wrote a candidate's state, so a candidate left in_progress
+    (the process died mid-judgment, or the writer finished its unit later in recovery)
+    was never selected again and its units expired after 30 days. Run after recovery,
+    at start and in daily maintenance."""
+    changed = 0
+    rows = conn.execute(
+        "SELECT id,state FROM ingestion_inbox WHERE state IN ('in_progress','partial_pending')"
+    ).fetchall()
+    for row in rows:
+        states = [item[0] for item in conn.execute(
+            "SELECT state FROM ingestion_units WHERE candidate_id=?", (row["id"],))]
+        if not states:
+            aggregate, counts = "queued", {}
+        else:
+            # a unit judged/writing with no live writer is put back by writer.recover;
+            # whatever is still in flight here is the run lane's, so it stays in_progress
+            aggregate, counts = aggregate_candidate_state(states)
+        if aggregate != row["state"]:
+            conn.execute("UPDATE ingestion_inbox SET state=?,versions=? WHERE id=?",
+                         (aggregate, json.dumps({"terminal_counts": counts}, sort_keys=True), row["id"]))
+            changed += 1
+    conn.commit()
+    return changed
 
 
 def _stats_key(row: sqlite3.Row) -> tuple[str, str, str, str, str, str, str]:
@@ -558,10 +624,13 @@ def cleanup_expired(
 
 
 # A candidate is ready only when it has a unit that can run now (no head-of-line blocking
-# behind a unit still backing off).
+# behind a unit still backing off). A parked unit (unknown_domain, missing_section) has
+# no next_attempt_at: it waits for requeue_parked, so it is never ready -- counting it
+# made the worker spin on a pass that does nothing and starved every lane.
 _READY = """(state='queued' OR (state='partial_pending' AND EXISTS (
                  SELECT 1 FROM ingestion_units u WHERE u.candidate_id=ingestion_inbox.id
-                 AND (u.state='queued' OR (u.state='deferred' AND (u.next_attempt_at IS NULL OR u.next_attempt_at<=?))))))"""
+                 AND (u.state='queued' OR (u.state='deferred' AND u.next_attempt_at IS NOT NULL
+                                           AND u.next_attempt_at<=?)))))"""
 
 
 def _candidate_order(conn: sqlite3.Connection) -> str:
@@ -620,28 +689,46 @@ class IngestionWorker:
         try:
             self.owner.adopt(conn)
             try:
-                from .writer import recover
-                recover(conn)
-            except ImportError:
-                logger.info("CDF writer not installed yet; recovery deferred")
-            cleanup_expired(conn)
-            _requeue_known_domains(self.workspace_root)
-            from .pipeline_v2 import requeue_missing_sections
-            requeue_missing_sections(self.workspace_root)
+                self._maintain(conn)
+            except Exception:  # start anyway; maintenance is retried in a day
+                logger.exception("CDF startup maintenance failed")
             self._maintenance_due = _utcnow() + timedelta(days=1)
             while not self.stop_event.is_set():
-                worked = self.run_once(conn)
+                try:
+                    worked = self.run_once(conn)
+                except Exception:
+                    # one bad pass must not end the worker for the rest of the process
+                    logger.exception("CDF worker pass failed; retrying in %ss", LOOP_BACKOFF_SECONDS)
+                    if conn.in_transaction:
+                        conn.rollback()
+                    worked = False
+                    await self._sleep(LOOP_BACKOFF_SECONDS)
+                    continue
                 if worked:
                     await asyncio.sleep(0)
                     continue
-                self.wake_event.clear()
-                try:
-                    await asyncio.wait_for(self.wake_event.wait(), timeout=60)
-                except asyncio.TimeoutError:
-                    pass
+                await self._sleep(60)
         finally:
             uninstall_owner_event()
             conn.close()
+
+    async def _sleep(self, seconds: float) -> None:
+        self.wake_event.clear()
+        try:
+            await asyncio.wait_for(self.wake_event.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    def _maintain(self, conn: sqlite3.Connection) -> None:
+        """Recovery and housekeeping: resume write plans, recompute stranded
+        candidates, clean up, requeue parked units whose domain or section now exists."""
+        from .writer import recover
+        recover(conn)
+        reaggregate_candidates(conn)
+        cleanup_expired(conn)
+        _requeue_known_domains(self.workspace_root)
+        from .pipeline_v2 import requeue_missing_sections
+        requeue_missing_sections(self.workspace_root)
 
     def run_once(self, conn: sqlite3.Connection) -> bool:
         """Process one eligible candidate selected by lane policy."""
@@ -662,19 +749,15 @@ class IngestionWorker:
                 return True
         if now >= self._maintenance_due:
             from core.session_unit import is_any_chat_streaming
+            waiting = False
             if is_any_chat_streaming():
                 self._maintenance_waiting_since = self._maintenance_waiting_since or now
-                if now - self._maintenance_waiting_since < timedelta(minutes=10):
-                    return False
-            from .writer import recover
-            recover(conn)
-            cleanup_expired(conn)
-            _requeue_known_domains(self.workspace_root)
-            from .pipeline_v2 import requeue_missing_sections
-            requeue_missing_sections(self.workspace_root)
-            self._maintenance_due = now + timedelta(days=1)
-            self._maintenance_waiting_since = None
-            return True
+                waiting = now - self._maintenance_waiting_since < timedelta(minutes=10)
+            if not waiting:   # while maintenance waits for streaming to end, lanes still run
+                self._maintenance_due = now + timedelta(days=1)
+                self._maintenance_waiting_since = None
+                self._maintain(conn)
+                return True
         rows = conn.execute(
             f"""SELECT lane, MIN(created_at) oldest FROM ingestion_inbox
                WHERE {_READY} GROUP BY lane""", (now.isoformat(),)
@@ -760,7 +843,13 @@ class RunLaneExecutor:
             while not self._stop.is_set():
                 self._wake.wait(60)
                 self._wake.clear()
-                self._drain(conn)
+                try:
+                    self._drain(conn)
+                except Exception:
+                    logger.exception("CDF run lane pass failed; retrying in %ss", LOOP_BACKOFF_SECONDS)
+                    if conn.in_transaction:
+                        conn.rollback()
+                    self._stop.wait(LOOP_BACKOFF_SECONDS)
         finally:
             conn.close()
 
@@ -801,12 +890,14 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),
         force=job.get("reason") == "save_button", runner=runner)
+    if outcome["status"] == "reviewed":
+        # recorded before the optional main pass: if that pass fails, the retry must not
+        # review the same messages again (a fresh model call, new duplicate units)
+        s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
     main = outcome["status"] == "unresumable" or (
         outcome["status"] == "reviewed" and s7_review.sampled(session_id))
     if main:
         s2_session.extract_session_sync(session_id, passes=("main",))
-    if outcome["status"] == "reviewed":
-        s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
     outcome["s2_main"] = main
     logger.info("CDF session job %s: %s", session_id, outcome)
     return outcome
@@ -844,7 +935,14 @@ class S2JobExecutor:
             while not self._stop.is_set():
                 self._wake.wait(self.POLL_SECONDS)
                 self._wake.clear()
-                self.drain(conn)
+                try:
+                    self.drain(conn)
+                except Exception:
+                    logger.exception("CDF session job pass failed; retrying in %ss", LOOP_BACKOFF_SECONDS)
+                    if conn.in_transaction:
+                        conn.rollback()
+                    self._stop.wait(LOOP_BACKOFF_SECONDS)
+                    s2_jobs.recover(conn)   # a job left running by the failure goes back to the queue
         finally:
             conn.close()
 
