@@ -11,13 +11,19 @@
  * A run that is not running any more shows what its Hive recorded (design
  * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
  * numbers; the details (the reply, code per repository, files, steps, a pipeline's
- * five rows) open on demand.
+ * five rows) open on demand, across the whole row, with a second Hide at their end.
+ * Every card names its Brain and Project Agent as two labelled fields, and its facts
+ * (ended, duration, tokens, cost, human loops, failed steps) as a row of cells.
+ *
+ * The reply is the agent's markdown, rendered by the app's own MarkdownRenderer (the
+ * chat's: no raw HTML, remote images dropped, an external link opens only on a click,
+ * in the browser).
  *
  * Status colours follow ./tone (green done or free, blue running, amber needs you or
  * did not finish, red failed, grey unknown): only the dot and the status word are
  * coloured. Labels come from the locale files (swarmOut.*); everything a Hive wrote
- * (question text, command, reason, the reply, paths) is data: never translated, shown
- * as plain text, never rendered as markdown or HTML. Polls /api/swarm-out/runs every 30 s while shown;
+ * (question text, command, reason, the reply, paths) is data, never translated; all of
+ * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -25,7 +31,8 @@ import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
 import { ReturnPanel } from './ReturnPanel';
-import { brainLabel, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, numberParts, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, stateLabel, useRuns, when, workLines } from './live';
+import MarkdownRenderer from '../common/MarkdownRenderer';
+import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runsByBrain, runStats, stateLabel, useRuns, when, workLines, type RunStat } from './live';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -230,7 +237,7 @@ function Fleet({ fleet, failed }: { fleet: SwarmOutFleet | null; failed?: boolea
   );
 }
 
-function ResultDetail({ r, onRefreshed }: { r: SwarmOutRun; onRefreshed: () => void }) {
+function ResultDetail({ r, onRefreshed, onClose }: { r: SwarmOutRun; onRefreshed: () => void; onClose: () => void }) {
   const { t } = useTranslation();
   const [full, setFull] = useState<SwarmOutResult | null>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'failed'>('loading');
@@ -270,7 +277,9 @@ function ResultDetail({ r, onRefreshed }: { r: SwarmOutRun; onRefreshed: () => v
       {full?.report ? (
         <>
           <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.lastReply')}</div>
-          <pre className="mt-1 mb-0 p-2 rounded-md bg-[var(--color-hover)] text-[12px] whitespace-pre-wrap break-words font-sans max-h-[320px] overflow-auto" data-testid="swarm-out-run-report">{full.report}</pre>
+          <div className="mt-1 px-3 py-2 rounded-md bg-[var(--color-hover)] text-[12.5px] max-h-[480px] overflow-auto" data-testid="swarm-out-run-report">
+            <MarkdownRenderer content={full.report} />
+          </div>
           {full.report_chars > full.report.length && <div className={`mt-1 text-[11.5px] ${muted}`}>{t('swarmOut.detail.fullReport', { count: full.report_chars })}</div>}
         </>
       ) : full && <div className={muted}>{t('swarmOut.detail.noReply')}</div>}
@@ -295,7 +304,46 @@ function ResultDetail({ r, onRefreshed }: { r: SwarmOutRun; onRefreshed: () => v
           {t('swarmOut.detail.toolCalls', { count: res!.work.steps.total, list: tools.map(([n, c]) => `${n} ${c}`).join(' · ') })}
         </div>
       )}
-      <div className="mt-2"><button type="button" className={btn} disabled={state === 'loading'} onClick={() => { void refresh(); }}>{t('swarmOut.detail.refresh')}</button></div>
+      <div className="mt-2 flex gap-2">
+        <button type="button" className={btn} disabled={state === 'loading'} onClick={() => { void refresh(); }}>{t('swarmOut.detail.refresh')}</button>
+        {/* the details can be long: Hide is also at their end, not only at the top */}
+        <button type="button" className={btn} onClick={onClose} data-testid="swarm-out-run-collapse">{t('swarmOut.detail.collapse')}</button>
+      </div>
+    </div>
+  );
+}
+
+/** The card's facts as cells (label over value), wrapping to as many columns as fit. */
+function Stats({ stats }: { stats: RunStat[] }) {
+  return (
+    <dl className="mt-2 mb-0 grid gap-x-3 gap-y-1.5 pt-2 border-t border-[var(--color-border)]"
+      style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))' }} data-testid="swarm-out-run-numbers">
+      {stats.map((x) => (
+        <div key={x.key} className="min-w-0" title={x.title} data-testid={`swarm-out-stat-${x.key}`}>
+          <dt className="text-[10.5px] text-[var(--color-text-dim)] truncate">{x.label}</dt>
+          <dd className="m-0 text-[12.5px] tabular-nums truncate" style={x.tone ? { color: TONE_VAR[x.tone] } : undefined}>{x.value}</dd>
+          {x.sub && <dd className="m-0 text-[10.5px] truncate" style={{ color: TONE_VAR[x.tone ?? 'unknown'] }}>{x.sub}</dd>}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** The Brain and the Project Agent, each a labelled field. */
+function AgentFacts({ r }: { r: SwarmOutRun }) {
+  const { t } = useTranslation();
+  const f = agentFacts(r);
+  const field = (icon: string, label: string, value: string, testId: string, title?: string) => (
+    <span className="inline-flex items-center gap-1 min-w-0 max-w-full" title={title} data-testid={testId}>
+      <span className="material-symbols-outlined text-[14px] text-[var(--color-text-dim)]" aria-hidden>{icon}</span>
+      <span className="text-[var(--color-text-dim)]">{label}</span>
+      <span className={`truncate ${f.none ? muted : 'text-[var(--color-text)] font-medium'}`}>{value}</span>
+    </span>
+  );
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] min-w-0" data-testid="swarm-out-run-brain">
+      {field('psychology', t('swarmOut.card.brain'), f.brain, 'swarm-out-run-brain-name')}
+      {field('smart_toy', t('swarmOut.card.agent'), f.agent, 'swarm-out-run-agent', f.title)}
     </div>
   );
 }
@@ -320,7 +368,7 @@ function RunResult({ r }: { r: SwarmOutRun }) {
         <div key={l!} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-checks"
           style={l === checks && checksIncomplete(res) ? { color: TONE_VAR.attention } : undefined}>{l}</div>
       ))}
-      <div className={`text-[11.5px] mt-0.5 ${muted}`} data-testid="swarm-out-run-numbers">{numberParts(res).join(' · ')}</div>
+      <Stats stats={runStats(res)} />
       {r.result_error && <div className={`text-[11.5px] mt-0.5 ${muted}`}>{t('swarmOut.result.lastCheck', { reason: resultErrorLabel(r.result_error) })}</div>}
     </div>
   );
@@ -334,21 +382,28 @@ function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
   return (
     // only a failed run, or one waiting on the person, tints its border: a stopped run keeps
     // its amber dot and word but does not need anything, so it does not compete with them
-    <div className={`${card} px-3.5 py-3 min-w-0`} style={tone === 'error' || r.state === 'waiting' ? cardTint(tone) : undefined} data-testid="swarm-out-run" data-state={r.state ?? 'unknown'} data-tone={tone}>
+    // open, a card takes the whole row so the reply has room to be read
+    <div className={`${card} px-3.5 py-3 min-w-0`}
+      style={{ ...(tone === 'error' || r.state === 'waiting' ? cardTint(tone) : {}), ...(open ? { gridColumn: '1 / -1' } : {}) }}
+      data-testid="swarm-out-run" data-state={r.state ?? 'unknown'} data-tone={tone} data-open={open || undefined}>
       <div className="flex items-start gap-2 min-w-0">
         <span className="h-[18px] flex items-center"><Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} /></span>
         <span className="font-medium min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
         <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
       </div>
       <div className={`text-[11.5px] mt-0.5 truncate ${muted}`}>
-        {r.hive} · <span data-testid="swarm-out-run-brain" title={r.project_agent?.acceptance ? t('swarmOut.card.acceptance', { text: r.project_agent.acceptance }) : undefined}>{brainLabel(r)}{r.project_agent?.mode ? ` / ${r.project_agent.mode}` : ''}</span> · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
+        {r.hive} · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
       </div>
+      <AgentFacts r={r} />
       <RunResult r={r} />
       {canOpen && (
-        <button type="button" className={`mt-1.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
-          onClick={() => setOpen((o) => !o)} data-testid="swarm-out-run-toggle">{open ? t('swarmOut.card.collapse') : t('swarmOut.card.details')}</button>
+        <button type="button" className={`mt-1.5 inline-flex items-center gap-0.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
+          onClick={() => setOpen((o) => !o)} data-testid="swarm-out-run-toggle">
+          {open ? t('swarmOut.card.collapse') : t('swarmOut.card.details')}
+          <span className="material-symbols-outlined text-[16px]" aria-hidden>{open ? 'expand_less' : 'expand_more'}</span>
+        </button>
       )}
-      {open && <ResultDetail r={r} onRefreshed={onReload ?? (() => {})} />}
+      {open && <ResultDetail r={r} onRefreshed={onReload ?? (() => {})} onClose={() => setOpen(false)} />}
     </div>
   );
 }

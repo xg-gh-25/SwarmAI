@@ -1271,7 +1271,8 @@
       "filesWritten": "Files written (paths on the Hive)",
       "toolCalls_one": "{{count}} tool call: {{list}}",
       "toolCalls_other": "{{count}} tool calls: {{list}}",
-      "refresh": "Refresh result"
+      "refresh": "Refresh result",
+      "collapse": "Hide details"
     },
     "result": {
       "pending": "Fetching the result from the Hive",
@@ -1281,7 +1282,16 @@
     "card": {
       "acceptance": "Acceptance: {{text}}",
       "collapse": "Hide",
-      "details": "Details"
+      "details": "Details",
+      "brain": "Brain",
+      "agent": "Agent",
+      "noBrain": "None",
+      "noAgent": "No Project Agent",
+      "generalBrain": "General",
+      "runnerAgent": "Runner Agent",
+      "agentDefault": "Project Agent",
+      "revision": "revision {{rev}}",
+      "delivery": "delivery: {{delivery}}"
     },
     "groups": {
       "running": "Running",
@@ -1474,19 +1484,6 @@
       "minutes_one": "{{count}} minute",
       "minutes_other": "{{count}} minutes"
     },
-    "numbers": {
-      "ended": "Ended {{at}}",
-      "time": "Took {{time}}",
-      "timeUnknown": "Took —",
-      "cost": "Cost {{cost}}",
-      "costAtLeast": "Cost at least {{cost}}",
-      "costUnknown": "Cost — (not recorded)",
-      "asked_one": "Asked {{count}} time",
-      "asked_other": "Asked {{count}} times",
-      "unanswered": " ({{count}} unanswered)",
-      "failed_one": "{{count}} step failed",
-      "failed_other": "{{count}} steps failed"
-    },
     "resultError": {
       "sessionGone": "The Hive no longer has this session",
       "hiveSilent": "The Hive didn't answer, try again later",
@@ -1495,6 +1492,20 @@
       "unexpectedBody": "The Hive returned something unexpected",
       "noSession": "No session id",
       "http": "The Hive returned {{code}}"
+    },
+    "stats": {
+      "ended": "Ended",
+      "time": "Duration",
+      "tokens": "Tokens",
+      "cost": "Cost",
+      "human": "Human loops",
+      "failed": "Failed steps",
+      "tokensTitle": "in {{input}} · out {{output}}",
+      "notRecorded": "Not recorded",
+      "costPartial": "At least this much: some turns have no record",
+      "unanswered_one": "{{count}} unanswered",
+      "unanswered_other": "{{count}} unanswered",
+      "humanTitle": "approved {{approved}} · denied {{denied}} · answered {{answered}} · unanswered {{unanswered}}"
     }
   }
 }

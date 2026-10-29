@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import { dailyByOutcome, endedLabel, numberParts, outcomeBucket, runJudge, workLines } from './live';
+import { agentFacts, dailyByOutcome, endedLabel, outcomeBucket, runJudge, runStats, workLines } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -118,12 +118,32 @@ describe('what a run did, for every kind of run', () => {
     expect(runJudge(result())).toBeNull();
   });
 
-  it('numbers say what is not known instead of a zero', () => {
-    const parts = numberParts(result({ cost_usd: null, active_s: null }, { human: { approved: 0, denied: 0, unanswered: 2, answered_questions: 0 } }));
-    expect(parts).toContain('花费 —（没有记录）');
-    expect(parts).toContain('用时 —');
-    expect(parts).toContain('问人 2 次（2 个没回答）');
-    expect(numberParts(result({ cost_partial: true }))).toContain('花费 至少 $1.23');
+  it('facts are separate cells and say what is not known instead of a zero', () => {
+    const by = (res: SwarmOutResult) => Object.fromEntries(runStats(res).map((x) => [x.key, x]));
+    const unknown = by(result({ cost_usd: null, active_s: null, tokens: null }, { human: { approved: 1, denied: 0, unanswered: 2, answered_questions: 1 } }));
+    expect(Object.keys(unknown)).toEqual(['ended', 'time', 'tokens', 'cost', 'human', 'failed']);
+    expect([unknown.time.value, unknown.tokens.value, unknown.cost.value]).toEqual(['—', '—', '—']);
+    expect(unknown.cost.title).toBe('没有记录');
+    expect(unknown.human).toMatchObject({ value: '4', sub: '2 个没回答', tone: 'attention' });
+    expect(unknown.human.title).toBe('批准 1 · 拒绝 0 · 回答 1 · 没回答 2');
+    const known = by(result({ cost_partial: true, tokens: { input: 36000, output: 2200 } }));
+    expect(known.cost.value).toBe('≥ $1.23');
+    expect(known.tokens.value).toMatch(/^3\.8万$|^38\.2K$/);   // compact, in the app's language
+    expect(known.tokens.title).toBe('输入 36,000 · 输出 2,200');
+    expect(known.human.tone).toBeUndefined();
+    expect(known.time.value).toBe('5 分钟');
+  });
+
+  it("the Brain and Project Agent a run went under", () => {
+    const base = { dispatch_id: 'x', hive_id: 'h', hive: 'h', session_id: 's', title: 't', origin: 'o', sent_at: ago(1), waiting: false, running: false } as SwarmOutRun;
+    expect(agentFacts({ ...base, project_agent: { brain: 'SwarmAI', mode: 'build', revision: 'r3', profile: 'full', delivery: 'bundle', acceptance: 'tests green' } }))
+      .toEqual({ brain: 'SwarmAI', agent: 'build · full', title: '版本 r3\n交付方式：bundle\n验收：tests green', none: false });
+    expect(agentFacts({ ...base, project_agent: { brain: 'General', mode: '', revision: '', profile: '', delivery: '', acceptance: '' } }))
+      .toMatchObject({ brain: '通用', agent: 'Runner Agent' });
+    expect(agentFacts(base)).toMatchObject({ brain: '无', agent: '没走 Project Agent', none: true });
+    // a run from before the dispatch record carried it: the result's own record
+    expect(agentFacts({ ...base, result: result({ project_agent: { brain: 'Lib', mode: 'ask', profile: null, delivery: null } }) }))
+      .toMatchObject({ brain: 'Lib', agent: 'ask' });
   });
 });
 
@@ -162,7 +182,7 @@ beforeEach(() => {
     region: 'us-east-1', version: '2.3.0-hive3', instance_type: 'm7g.xlarge', reachable: true, streaming: 0,
     max_concurrent: 4, saturated: false }] });
   vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
-    result: { ...RUN.result!, report: 'Done.\n<a href="https://evil.example">click</a> **bold**', report_chars: 60,
+    result: { ...RUN.result!, report: 'Done.\n<a href="https://evil.example">click</a> **bold**\n<script>alert(1)</script>\n\n![x](https://evil.example/x.png)', report_chars: 600,
       error: { code: 'MODEL_ERROR', message: 'throttled by the model' } },
     fetch_error: null, checked_at: ago(0), fetched_at: ago(0) } });
   vi.mocked(swarmOutService.refresh).mockResolvedValue({ result: RUN.result!, result_error: null });
@@ -181,7 +201,8 @@ describe('a run card', () => {
     expect(within(c).getByTestId('swarm-out-run-ended').dataset.tone).toBe('error');
     expect(within(c).getByTestId('swarm-out-run-ended').style.color).toBe('var(--color-status-error)');
     expect(within(c).getByTestId('swarm-out-run-work').textContent).toContain('acme/widget：1 个 commit，改了 4 个文件 +120 −30');
-    expect(within(c).getByTestId('swarm-out-run-numbers').textContent).toContain('花费 $1.23');
+    expect(within(c).getByTestId('swarm-out-stat-cost').textContent).toBe('花费$1.23');
+    expect(within(c).getByTestId('swarm-out-run-brain').textContent).toContain('没走 Project Agent');
   });
 
   it('says a result is being fetched, or why it could not be', async () => {
@@ -189,19 +210,27 @@ describe('a run card', () => {
     expect(within(await card('failed one')).getByTestId('swarm-out-run-result').textContent).toContain('Hive 上已经没有这个会话');
   });
 
-  it('the details show the reply as plain text and the error message, and can refresh', async () => {
+  it('the details render the reply as markdown with no raw HTML, show the error, refresh, and close from their end', async () => {
     const c = await card('fix the widget');
     fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
+    expect(c.dataset.open).toBe('true');
+    expect(c.style.gridColumn).toBe('1 / -1');   // open: the whole row
     const report = await within(c).findByTestId('swarm-out-run-report');
-    expect(report.textContent).toContain('<a href="https://evil.example">click</a> **bold**');
-    expect(report.querySelector('a')).toBeNull();
+    expect(report.querySelector('strong')?.textContent).toBe('bold');   // markdown, not its source
+    expect(report.textContent).not.toContain('**');
+    expect(report.querySelector('a[href^="https://evil"]')).toBeNull();   // raw HTML is never rendered
+    expect(report.querySelector('script, iframe')).toBeNull();
     expect(within(c).getByText('throttled by the model')).toBeTruthy();
-    expect(within(c).getByText('全文 60 字，去 Hive 页面看')).toBeTruthy();
+    expect(within(c).getByText('全文 600 字，去 Hive 页面看')).toBeTruthy();
     expect(within(c).getByTestId('swarm-out-run-repo').textContent).toContain('src/x.py');
     expect(vi.mocked(swarmOutService.result)).toHaveBeenCalledTimes(1);
     fireEvent.click(within(c).getByText('刷新结果'));
     await vi.waitFor(() => expect(vi.mocked(swarmOutService.refresh)).toHaveBeenCalledWith(RUN.dispatch_id));
     expect(within(c).queryByTestId('judge-tag')).toBeNull();   // not a pipeline run: no five rows
+    expect(report.querySelector('img[src^="https://evil"]')).toBeNull();   // remote images dropped
+    fireEvent.click(within(c).getByTestId('swarm-out-run-collapse'));
+    expect(within(c).queryByTestId('swarm-out-run-detail')).toBeNull();
+    expect(c.dataset.open).toBeUndefined();
   });
 
   it('the details wait for the whole record: /runs counts are never shown as file lists', async () => {

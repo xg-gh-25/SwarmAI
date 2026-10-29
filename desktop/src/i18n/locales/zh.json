@@ -1271,7 +1271,8 @@
       "filesWritten": "写了的文件（Hive 上的路径）",
       "toolCalls_one": "{{count}} 次工具调用：{{list}}",
       "toolCalls_other": "{{count}} 次工具调用：{{list}}",
-      "refresh": "刷新结果"
+      "refresh": "刷新结果",
+      "collapse": "收起详情"
     },
     "result": {
       "pending": "正在从 Hive 取回结果",
@@ -1281,7 +1282,16 @@
     "card": {
       "acceptance": "验收：{{text}}",
       "collapse": "收起",
-      "details": "详情"
+      "details": "详情",
+      "brain": "Brain",
+      "agent": "Agent",
+      "noBrain": "无",
+      "noAgent": "没走 Project Agent",
+      "generalBrain": "通用",
+      "runnerAgent": "Runner Agent",
+      "agentDefault": "Project Agent",
+      "revision": "版本 {{rev}}",
+      "delivery": "交付方式：{{delivery}}"
     },
     "groups": {
       "running": "在跑",
@@ -1474,19 +1484,6 @@
       "minutes_one": "{{count}} 分钟",
       "minutes_other": "{{count}} 分钟"
     },
-    "numbers": {
-      "ended": "结束于 {{at}}",
-      "time": "用时 {{time}}",
-      "timeUnknown": "用时 —",
-      "cost": "花费 {{cost}}",
-      "costAtLeast": "花费 至少 {{cost}}",
-      "costUnknown": "花费 —（没有记录）",
-      "asked_one": "问人 {{count}} 次",
-      "asked_other": "问人 {{count}} 次",
-      "unanswered": "（{{count}} 个没回答）",
-      "failed_one": "失败 {{count}} 步",
-      "failed_other": "失败 {{count}} 步"
-    },
     "resultError": {
       "sessionGone": "Hive 上已经没有这个会话",
       "hiveSilent": "Hive 没回答，稍后再试",
@@ -1495,6 +1492,20 @@
       "unexpectedBody": "Hive 返回的内容不对",
       "noSession": "没有会话 id",
       "http": "Hive 返回 {{code}}"
+    },
+    "stats": {
+      "ended": "结束",
+      "time": "用时",
+      "tokens": "Token",
+      "cost": "花费",
+      "human": "人工介入",
+      "failed": "失败步数",
+      "tokensTitle": "输入 {{input}} · 输出 {{output}}",
+      "notRecorded": "没有记录",
+      "costPartial": "至少这么多：有的轮次没有记录",
+      "unanswered_one": "{{count}} 个没回答",
+      "unanswered_other": "{{count}} 个没回答",
+      "humanTitle": "批准 {{approved}} · 拒绝 {{denied}} · 回答 {{answered}} · 没回答 {{unanswered}}"
     }
   }
 }

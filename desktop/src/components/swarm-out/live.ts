@@ -344,21 +344,58 @@ export function when(iso: string | null | undefined): string {
   return Number.isNaN(t) ? '' : new Date(t).toLocaleString(i18n.language || undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-/** The card's numbers: when it ended, time, cost, people asked, failed steps. A value
- *  not known is "—" with the reason, never a zero. */
-export function numberParts(res: SwarmOutResult): string[] {
+/** One of a card's facts, shown as a label over a value. */
+export interface RunStat {
+  key: 'ended' | 'time' | 'tokens' | 'cost' | 'human' | 'failed';
+  label: string;
+  value: string;
+  /** a second, smaller line under the value (e.g. how many questions went unanswered) */
+  sub?: string;
+  /** the breakdown or the reason, on hover */
+  title?: string;
+  tone?: Tone;
+}
+
+const compact = (n: number): string =>
+  new Intl.NumberFormat(i18n.language || undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+
+/** The card's facts, each its own cell: when it ended, how long it ran, tokens, cost,
+ *  the human loops (approvals and answered questions) and failed steps. A value not
+ *  known is "—" with the reason on hover, never a zero. */
+export function runStats(res: SwarmOutResult): RunStat[] {
   const h = res.work.human;
-  const asked = h.approved + h.denied + h.unanswered + h.answered_questions;
-  const ended = when(res.ended_at);
-  const cost = res.cost_usd == null ? '' : `$${res.cost_usd.toFixed(2)}`;
+  const loops = h.approved + h.denied + h.unanswered + h.answered_questions;
+  const tok = res.tokens;
+  const dash = '—';
   return [
-    ended ? i18n.t('swarmOut.numbers.ended', { at: ended }) : '',
-    res.active_s == null ? i18n.t('swarmOut.numbers.timeUnknown') : i18n.t('swarmOut.numbers.time', { time: minutes(res.active_s) }),
-    res.cost_usd == null ? i18n.t('swarmOut.numbers.costUnknown')
-      : i18n.t(res.cost_partial ? 'swarmOut.numbers.costAtLeast' : 'swarmOut.numbers.cost', { cost }),
-    i18n.t('swarmOut.numbers.asked', { count: asked }) + (h.unanswered ? i18n.t('swarmOut.numbers.unanswered', { count: h.unanswered }) : ''),
-    i18n.t('swarmOut.numbers.failed', { count: res.work.steps.failed }),
-  ].filter(Boolean);
+    { key: 'ended', label: i18n.t('swarmOut.stats.ended'), value: when(res.ended_at) || dash },
+    { key: 'time', label: i18n.t('swarmOut.stats.time'), value: res.active_s == null ? dash : minutes(res.active_s) },
+    { key: 'tokens', label: i18n.t('swarmOut.stats.tokens'), value: tok ? compact(tok.input + tok.output) : dash,
+      title: tok ? i18n.t('swarmOut.stats.tokensTitle', { input: tok.input.toLocaleString(), output: tok.output.toLocaleString() }) : i18n.t('swarmOut.stats.notRecorded') },
+    { key: 'cost', label: i18n.t('swarmOut.stats.cost'),
+      value: res.cost_usd == null ? dash : `${res.cost_partial ? '≥ ' : ''}$${res.cost_usd.toFixed(2)}`,
+      title: res.cost_usd == null ? i18n.t('swarmOut.stats.notRecorded') : res.cost_partial ? i18n.t('swarmOut.stats.costPartial') : undefined },
+    { key: 'human', label: i18n.t('swarmOut.stats.human'), value: String(loops),
+      sub: h.unanswered ? i18n.t('swarmOut.stats.unanswered', { count: h.unanswered }) : undefined,
+      title: i18n.t('swarmOut.stats.humanTitle', { approved: h.approved, denied: h.denied, answered: h.answered_questions, unanswered: h.unanswered }),
+      tone: h.unanswered ? 'attention' : undefined },
+    { key: 'failed', label: i18n.t('swarmOut.stats.failed'), value: String(res.work.steps.failed) },
+  ];
+}
+
+/** The Brain and the Project Agent a run went under, for the card's two labelled
+ *  fields (the dispatch record's, else the result's). No Project Agent: both say so. */
+export function agentFacts(r: SwarmOutRun): { brain: string; agent: string; title?: string; none: boolean } {
+  const pa = r.project_agent;
+  const brain = pa?.brain ?? r.result?.project_agent?.brain ?? null;
+  if (!brain) return { brain: i18n.t('swarmOut.card.noBrain'), agent: i18n.t('swarmOut.card.noAgent'), none: true };
+  if (brain === 'General') return { brain: i18n.t('swarmOut.card.generalBrain'), agent: i18n.t('swarmOut.card.runnerAgent'), none: false };
+  const mode = pa?.mode ?? r.result?.project_agent?.mode ?? null;
+  const profile = pa?.profile ?? r.result?.project_agent?.profile ?? null;
+  const parts = [pa?.revision && i18n.t('swarmOut.card.revision', { rev: pa.revision }),
+    pa?.delivery && i18n.t('swarmOut.card.delivery', { delivery: pa.delivery }),
+    pa?.acceptance && i18n.t('swarmOut.card.acceptance', { text: pa.acceptance })].filter(Boolean);
+  return { brain, agent: [mode, profile].filter(Boolean).join(' · ') || i18n.t('swarmOut.card.agentDefault'), title: parts.join('\n') || undefined, none: false };
 }
 
 /** A pipeline run's five audit rows as the JudgeTag's shape (in its dimension order;

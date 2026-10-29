@@ -18,7 +18,7 @@ import { swarmOutService, type SwarmOutFleet, type SwarmOutResult, type SwarmOut
 import { SwarmOutDashboard } from './SwarmOutDashboard';
 import { HiveGuide } from './HiveGuide';
 import { judgeSummary } from './judge';
-import { ENDINGS, endedLabel, gateLine, HIVE_STATUSES, hiveStatusLabel, lessonsLine, numberParts, resultErrorLabel, stateLabel, workLines } from './live';
+import { ENDINGS, endedLabel, gateLine, HIVE_STATUSES, hiveStatusLabel, lessonsLine, resultErrorLabel, runStats, stateLabel, workLines } from './live';
 import { hiveTone, runTone } from './tone';
 import i18n from '../../i18n';
 
@@ -168,7 +168,7 @@ describe('in English, nothing on the panel is Chinese', () => {
       ...HIVE_STATUSES.map(hiveStatusLabel),
       ...['session_gone', 'hive_silent', 'hive_not_running', 'hive_unusable', 'unexpected_body', 'no session', 'http_404'].map(resultErrorLabel),
       ...RUNS.runs.map(stateLabel),
-      ...workLines(RICH), ...workLines(result()), ...numberParts(RICH),
+      ...workLines(RICH), ...workLines(result()), ...runStats(RICH).flatMap((x) => [x.label, x.value, x.sub ?? '', x.title ?? '']),
       lessonsLine(RICH) ?? '', lessonsLine(result({ lessons: { ...LESSONS, sent: 0, returned: 0, error: 'x' } })) ?? '',
       gateLine(RICH) ?? '', gateLine(result({ project_agent: { brain: 'b', mode: null, profile: null, delivery: null }, gate_refusals: null })) ?? '',
       ...[['PASS', 'PASS', 'PASS', 'PASS', 'PASS'], ['PASS', 'PASS', 'PENDING', 'PASS', 'PASS'], ['PASS', 'PASS', 'PASS', 'NA', 'PASS'],
