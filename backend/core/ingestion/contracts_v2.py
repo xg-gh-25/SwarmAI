@@ -69,6 +69,9 @@ GapKind = Literal["debt", "risk", "deferred_finding", "process_issue", "follow_u
 
 # What _valid_scope accepts, in words: shown to the extractor (extract_llm.unit_schema),
 # which cannot see this validator. Change both together.
+# card 0 refuses a cognition unit whose fields together are longer than this; the
+# extraction prompts state it (extract_llm.UNIT_SIZE_RULE)
+MAX_COGNITION_CHARS = 600
 SCOPE_RULE = 'one of "user", "agent", "world", or "project:<project name>"'
 # The model validators below, in words, per kind (same contract: change both together).
 UNIT_RULES: dict[str, tuple[str, ...]] = {

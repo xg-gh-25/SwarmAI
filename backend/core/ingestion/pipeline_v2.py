@@ -17,7 +17,7 @@ from typing import Any, Iterable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from . import api_v2
+from . import api_v2, contracts_v2
 from .card0 import content_fingerprint
 from .card3 import aggregate_hits, relation_for_hit, retrieve
 from .contracts import Card0Answer, Card1Answer, Card3bAnswer, HitJudgment, UnitDecision
@@ -237,7 +237,7 @@ def _card0(unit: SourceUnit, row: Any) -> Card0Answer:
     text = _unit_text(unit)
     if not text.strip():
         return Card0Answer(passed=False, reason="noisy")
-    if isinstance(unit, CognitionUnit) and len(text) > 600:
+    if isinstance(unit, CognitionUnit) and len(text) > contracts_v2.MAX_COGNITION_CHARS:
         return Card0Answer(passed=False, reason="not_atomic")
     if not isinstance(unit, ReferenceUnit) and ("<!--" in text or "-->" in text):
         # an HTML comment marker inside an entry ends or opens the metadata comment of

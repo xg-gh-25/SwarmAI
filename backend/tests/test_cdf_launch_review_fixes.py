@@ -334,3 +334,21 @@ def test_a_refined_block_entry_carries_its_text_without_heading_or_labels():
 def test_units_are_extracted_in_one_language():
     from core.ingestion.sources import extract_llm
     assert "Write every unit in English" in extract_llm.QUOTE_RULE
+
+
+def test_both_extraction_prompts_state_card0s_length_limit():
+    """Card 0 drops a cognition unit over the limit whole, without a model call; a
+    prompt that does not say so loses exactly the units written most completely."""
+    from core.ingestion import contracts_v2
+    from core.ingestion.pipeline_v2 import _card0
+    from core.ingestion.sources import extract_llm, s7_review
+    limit = contracts_v2.MAX_COGNITION_CHARS
+    prompt = extract_llm.build_prompt("S2", "text", ("event:e",), ("cognition",))
+    assert f"{limit} characters" in prompt
+    assert f"{limit} characters" in extract_llm.UNIT_SIZE_RULE
+    review = s7_review.build_prompt(("cognition",), s7_review.signals([]), "(index)")
+    assert f"{limit} characters" in review
+    unit = contracts_v2.SOURCE_UNIT.validate_python({
+        "kind": "cognition", "type": "guideline", "scope": "world", "title": "T",
+        "what": "x" * limit, "applicability": "Always.", "evidence": ["event:e"]})
+    assert _card0(unit, {"envelope": "{}"}).reason == "not_atomic"

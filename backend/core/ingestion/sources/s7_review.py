@@ -31,7 +31,7 @@ from . import extract_llm, s2_session
 logger = logging.getLogger(__name__)
 
 MAX_UNITS = 15  # units one review may enqueue (cost bound, design 2026-10-29-cdf-launch §3 P2)
-REVIEW_VERSION = "cdf-review-r16.15-v3"
+REVIEW_VERSION = "cdf-review-r16.15-v4"
 ALLOWED_KINDS = ("cognition", "gap", "reference")   # events come from S3/S4 (§4)
 MIN_USER_MESSAGES = 3
 MIN_TOOL_CALLS = 10
@@ -253,7 +253,7 @@ Allowed kinds: {", ".join(allowed)}. Rules the validator enforces:
 
 Do not record operational trivia, unverified guesses, restatements of memory you were given,
 task-local state, or a log of what you did. Recording nothing is a valid answer.
-{extract_llm.QUOTE_RULE}
+{extract_llm.QUOTE_RULE}{extract_llm.UNIT_SIZE_RULE}
 Evidence: cite only anchors from this index (user messages and measured results since your
 last review). Cite every one the unit rests on.
 {index or "(no citable evidence: record nothing)"}

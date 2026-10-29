@@ -11,7 +11,7 @@ follows: 2026-10-29-cdf-launch.md（切换前的修复）；2026-10-26-swarm-cog
 
 CDF 一次切换上线之后要做的事。原则不变：不加开关、不加新存储、不过度设计；能用现成机制（§14.2 的批量评测、`ingest eval-export`、`ingestion.db` 里已有的表）就不新建。每条都对源码核实过（2026-10-29）。
 
-## 0. 建议在 build 之前先修的一条
+## 0. 建议在 build 之前先修的一条（已修，build 前落地）
 
 **提取不知道卡 0 的长度上限，超长的认知单元整条被丢弃。** `pipeline_v2._card0` 对认知单元做确定性检查：title、what、how、why、applicability、rejected_alternatives 合计超过 600 字符就判 `not_atomic`，整条丢弃，不调模型。可是提取的 prompt（`extract_llm.build_prompt`、`s7_review` 的复盘 prompt）一处都没有提这个上限。写的一方不知道读的一方的约束，所以写得完整的长教训正好被丢掉。回放里 108 条拒绝中有 66 条是 `not_atomic`，但卡 0 和判官各占多少当时没拆开。
 
