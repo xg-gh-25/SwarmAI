@@ -359,3 +359,58 @@ def test_a_relative_import_with_no_module_path_guesses_nothing(tmp_path):
         assert ("other.py::helper", "references") not in _edges(g, "pkg/a.py::go")
     finally:
         g.close()
+
+
+def _call_lines(g, source: str, target_suffix: str) -> set[int]:
+    return {r[0] for r in g._conn.execute(
+        "SELECT line_number FROM code_edges WHERE source_id = ? AND edge_type = 'calls' "
+        "AND target_id LIKE ?", (source, "%" + target_suffix))}
+
+
+def test_an_element_taken_out_of_a_container_keeps_its_link(tmp_path):
+    """`d: dict[str, Store]` is a builtin container (EXTERNAL), but what `d.get(k)`,
+    `xs.pop()`, `max(xs, …)` return is an element, which may be the repo's: a call on
+    it is linked by name (as before receivers were typed), never dropped. A method
+    whose result is the builtin's own (`k.strip()`, `p.resolve()`) still gets none."""
+    g = _graph(tmp_path, {
+        "store.py": _STORE,
+        "api.py": (
+            "from collections import deque\nfrom pathlib import Path\nfrom queue import Queue\n"
+            "from store import Store\n\n\n"
+            "def element(d: dict[str, Store], q: deque, xs: list[Store], jobs: Queue, k):\n"
+            "    d.get(k).load(1)\n"                    # L8
+            "    d.setdefault(k, Store()).load(2)\n"    # L9
+            "    xs.pop().load(3)\n"                     # L10
+            "    q.popleft().load(4)\n"                  # L11
+            "    max(xs, key=id).load(5)\n"              # L12
+            "    min(xs, key=id).load(6)\n"              # L13
+            "    next(iter(xs)).load(7)\n"               # L14
+            "    xs[0].load(8)\n"                        # L15
+            "    jobs.get_nowait().load(9)\n\n\n"        # L16
+            "def outside(k: str, p: Path):\n"
+            "    k.strip().load(1)\n"
+            "    p.resolve().load(2)\n"
+            "    ', '.join([]).load(3)\n"),
+    })
+    try:
+        assert _call_lines(g, "api.py::element", "Store.load") == set(range(8, 17))
+        assert _call_lines(g, "api.py::outside", "Store.load") == set()
+    finally:
+        g.close()
+
+
+def test_typescript_container_elements_keep_their_link(tmp_path):
+    g = _graph(tmp_path, {
+        "store.ts": ("export class Store {\n  save(x: number) { return this.flush(); }\n"
+                     "  flush() { return 1; }\n}\n"),
+        "api.ts": ("import { Store } from './store';\n"
+                   "export function el(m: Map<string, Store>, xs: Store[]) {\n"
+                   "  m.get('k')!.flush();\n  xs.find((s) => true)!.flush();\n"
+                   "  xs.pop()!.flush();\n  xs.at(0)!.flush();\n}\n"
+                   "export function out(s: string) {\n  s.trim().flush();\n}\n"),
+    })
+    try:
+        assert _call_lines(g, "api.ts::el", "Store.flush") == {3, 4, 5, 6}
+        assert _call_lines(g, "api.ts::out", "Store.flush") == set()
+    finally:
+        g.close()

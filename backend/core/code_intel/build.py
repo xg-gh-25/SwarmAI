@@ -60,8 +60,10 @@ FULL_REBUILD_FILES = 100
 # .ruff_cache) are not read. 4: a call on a chain through a call (``X.builder().build()``)
 # is a call on a value, not on X. 5: Java receivers typed (parameters, locals, `var`,
 # declared fields, static calls, same-file returns, casts; JDK and outside-library
-# values get no edge); `this::m` / `Store::m` are references.
-PARSER_VERSION = 5
+# values get no edge); `this::m` / `Store::m` are references. 6: an element taken out
+# of a builtin container (`d.get(k)`, `xs.pop()`, `max(xs)`, ts `m.get(k)`) is no
+# longer EXTERNAL: a call on it is linked by name.
+PARSER_VERSION = 6
 
 
 def parser_outdated(graph: GraphStore) -> bool:

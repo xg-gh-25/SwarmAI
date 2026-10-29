@@ -30,7 +30,9 @@ those sites. This module reads what the source states, nothing more:
   (the stdlib, a package), a builtin or outside annotation (``str``, ``list[X]``,
   ``Path``, ``string``, ``T[]``, ``Map<…>``), a TS global (``new Map()``,
   ``JSON.parse``) — and any member or call on one (``Path(x).resolve()``). A call on
-  such a value gets no edge: no repo method can be its target.
+  such a value gets no edge: no repo method can be its target. Except an element
+  taken out of a builtin container (``d.get(k)``, ``xs.pop()``, ``max(xs, …)``, ts
+  ``m.get(k)``): it may be the repo's, so a call on it keeps its link by name.
 - **Value references** (``value_reference``): a function or class name, or
   ``self.method`` / ``this.method``, in a value position — an argument, a keyword
   value, the right side of an assignment, a list/tuple/dict/array element, a return
@@ -111,9 +113,17 @@ _PY_BUILTIN_TYPES = frozenset({
 _PY_BUILTIN_CALLS = frozenset({
     "str", "int", "float", "bool", "bytes", "bytearray", "list", "dict", "set",
     "frozenset", "tuple", "open", "sorted", "reversed", "enumerate", "zip", "map",
-    "filter", "range", "iter", "repr", "format", "len", "sum", "min", "max", "abs",
+    "filter", "range", "iter", "repr", "format", "len", "sum", "abs",
     "round", "vars", "dir", "chr", "ord", "hex", "bin", "oct", "hash", "id",
 })
+# What a builtin container hands back is one of its elements, which may be the repo's
+# (`d.get(k)`, `xs.pop()`, `q.popleft()`, ts `m.get(k)`, `xs.find(…)`): a call on it is
+# linked by name, not dropped. Python's `min` / `max` / `next` are not EXTERNAL either.
+_ELEMENT_METHODS = {
+    "python": frozenset({"get", "pop", "popleft", "setdefault", "get_nowait"}),
+    "typescript": frozenset({"get", "pop", "shift", "find", "findLast", "at"}),
+    "javascript": frozenset({"get", "pop", "shift", "find", "findLast", "at"}),
+}
 _TS_UNKNOWN_TYPES = frozenset({"any", "unknown"})
 _TS_GLOBALS = frozenset({
     "Array", "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "Promise", "Date", "RegExp",
@@ -523,8 +533,9 @@ class FileTypes:
                         return self._passthrough(_text(attr), node, scope, enclosing_class, _depth)
                     return EXTERNAL                          # sqlite3.connect()
                 owner = self.value_type(obj, scope, enclosing_class, _depth + 1)
-                if owner == EXTERNAL:
-                    return EXTERNAL                          # Path(x).resolve()
+                if owner == EXTERNAL:                        # Path(x).resolve(); d.get(k)
+                    elements = _ELEMENT_METHODS.get(self.language, frozenset())
+                    return None if _text(attr) in elements else EXTERNAL
                 if owner is not None:
                     return self.returns.get(f"{owner}.{_text(attr)}")
             return None
