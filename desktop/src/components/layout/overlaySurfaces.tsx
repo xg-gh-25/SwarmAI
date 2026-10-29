@@ -9,7 +9,8 @@
  * via OverlayShell. Each entry is pure data + a content render fn; the host owns all
  * chrome/geometry.
  */
-import { lazy } from 'react';
+import { lazy, useMemo } from 'react';
+import { OpenSessionContext, overlaySessionOpener } from '../swarm-out/openSession';
 import { registerOverlay } from './overlayRegistry';
 import WorkspaceOverlay from '../workspace-explorer/WorkspaceOverlay';
 import { continueInSession } from './continueInSession';
@@ -55,12 +56,19 @@ function SettingsSurface() {
 }
 
 /** Brain Hub inside the overlay provider: the General Brain's "Open Library" switches to
- *  the Library overlay the way its nav card does (Library has no show-event). */
-function BrainHubSurface({ close, dispatchPrompt }: { close: () => void;
-  dispatchPrompt?: (msg: string, opts?: { autoSend?: boolean }) => boolean }) {
+ *  the Library overlay the way its nav card does (Library has no show-event); a Hive run
+ *  card in a Brain's Runs tab opens its session as Swarm Out's does. */
+function BrainHubSurface({ close, dispatchPrompt, openHiveSession }: { close: () => void;
+  dispatchPrompt?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
+  openHiveSession?: (sessionId: string, title: string) => void }) {
   const { openOverlay } = useOverlay();
-  return <BrainHub onRequestClose={close} onDispatch={dispatchPrompt ?? (() => false)}
-    onOpenLibrary={() => openOverlay('library')} />;
+  const opener = useMemo(() => overlaySessionOpener(close, openHiveSession), [close, openHiveSession]);
+  return (
+    <OpenSessionContext.Provider value={opener}>
+      <BrainHub onRequestClose={close} onDispatch={dispatchPrompt ?? (() => false)}
+        onOpenLibrary={() => openOverlay('library')} />
+    </OpenSessionContext.Provider>
+  );
 }
 
 // ── brain-hub (M2 pilot) ────────────────────────────────────────────────────────────
@@ -68,7 +76,7 @@ function BrainHubSurface({ close, dispatchPrompt }: { close: () => void;
 // <Modal fullscreen>. Now: one registry entry; content is the same <BrainHub/>.
 registerOverlay({
   id: 'brain-hub',
-  render: ({ close, dispatchPrompt }) => (
+  render: ({ close, dispatchPrompt, openHiveSession }) => (
     <div className="flex-1 overflow-hidden" data-testid="brain-hub-overlay">
       {/* onRequestClose=close (run_a607f2b0): opening a DDD doc closes this overlay
           BEFORE dispatching swarm:open-file so the Canvas isn't rendered under the
@@ -76,7 +84,7 @@ registerOverlay({
           onDispatch (item 3): the Distribute sub-tab injects + auto-sends the
           `s_ddd-distribute` command via the ChatPage-owned dispatchPrompt bridge —
           replacing the old clipboard-copy handoff. Same bridge NewBrain/Jobs use. */}
-      <BrainHubSurface close={close} dispatchPrompt={dispatchPrompt} />
+      <BrainHubSurface close={close} dispatchPrompt={dispatchPrompt} openHiveSession={openHiveSession} />
     </div>
   ),
 });

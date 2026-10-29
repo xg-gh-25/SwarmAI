@@ -80,8 +80,9 @@ denials + answered questions); the unmeasured `Change requests` stat is deleted.
 
 ## 5. Limits (as built)
 
-- A Hive card in a Brain's Runs tab cannot open its Hive session: that opener
-  (`OpenSessionContext`) is provided by the Swarm Out dashboard only, so the card shows
-  the run without the Open button there. Swarm Out still opens it.
+- A Hive card in a Brain's Runs tab opens its Hive session like Swarm Out's: ChatPage
+  publishes `openHiveSession` on the overlay bridge, the Brain Hub surface provides it
+  (`overlaySessionOpener`: close the Hub, then open the Hive tab under it). A run with no
+  session this Host knows shows no Open, as in Swarm Out.
 - The map's Run dots are both lanes', newest first, at most twelve.
 - A Hive run older than 30 days is not shown, as the Chat tab lane.

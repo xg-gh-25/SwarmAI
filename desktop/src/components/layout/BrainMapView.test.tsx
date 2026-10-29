@@ -49,6 +49,7 @@ const hiveRun = (id: string, brain: string, o: Record<string, unknown> = {}) => 
 
 import { BrainMapView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge, BrainNeedsView } from './BrainMapView';
 import { BrainHubHome } from './BrainHubHome';
+import { OpenSessionContext } from '../swarm-out/openSession';
 
 const run = (id: string, o: Record<string, unknown> = {}) => ({
   id, requirement: `Req ${id}`, status: 'completed', profile: 'bugfix', progress: '8/8', cycleTimeMin: 10,
@@ -168,6 +169,16 @@ describe('BrainMapView', () => {
     expect(hive.textContent).not.toContain('Hive d9');
     expect(screen.getByTestId('bm-panel-runs').textContent).not.toContain('Local Worker');
     expect(screen.getByTestId('bm-panel-runs').textContent?.toLowerCase()).not.toContain('mock');
+  });
+
+  it('a Hive card in a Brain\'s Runs tab opens its session through the overlay\'s opener', async () => {
+    hiveRuns.mockResolvedValue({ runs: [hiveRun('d1', 'P', { session_id: 'sess_1' }), hiveRun('d2', 'P', { session_id: null })], asks: [], errors: [] });
+    const open = vi.fn();
+    render(<OpenSessionContext.Provider value={open}><BrainRunsView name="P" /></OpenSessionContext.Provider>);
+    const hive = screen.getByTestId('bm-lane-hive');
+    await waitFor(() => expect(hive.querySelectorAll('[data-testid="swarm-out-run-open-button"]')).toHaveLength(1));
+    fireEvent.click(hive.querySelector('[data-testid="swarm-out-run-open-button"]')!);
+    expect(open).toHaveBeenCalledWith('sess_1', 'Hive d1 · worker-1');
   });
 
   it('a local Run card shows the Hive card\'s cells, and — for what the Run did not record', () => {

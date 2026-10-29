@@ -44,6 +44,9 @@ export interface OverlayRenderCtx {
   resumeSession?: (session: unknown) => boolean;
   /** Delete a session (ChatPage's delete-confirm flow). */
   deleteSession?: (session: unknown) => void;
+  /** Open a dispatched run's Hive session in the Hive tab (ChatPage.openHiveSession):
+   *  a Hive run card outside Swarm Out (a Brain's Runs tab) opens it through this. */
+  openHiveSession?: (sessionId: string, title: string) => void;
   /** Current agent scope (ChatPage.selectedAgentId) — History's session query key.
    *  Sourced by the host from OverlayContext (REACTIVE), NOT the module bridge: an open
    *  History overlay re-renders + re-queries when the agent switches while open
@@ -63,6 +66,7 @@ export interface OverlayCtxBridge {
   openFile?: (file: unknown, autoDiff?: boolean) => void;
   resumeSession?: (session: unknown) => boolean;
   deleteSession?: (session: unknown) => void;
+  openHiveSession?: (sessionId: string, title: string) => void;
 }
 const _bridge: OverlayCtxBridge = {};
 
@@ -77,6 +81,7 @@ export function setOverlayCtxBridge(b: OverlayCtxBridge): void {
   _bridge.openFile = b.openFile;
   _bridge.resumeSession = b.resumeSession;
   _bridge.deleteSession = b.deleteSession;
+  _bridge.openHiveSession = b.openHiveSession;
 }
 
 /** OverlayHost reads the current bridge handlers when assembling a render ctx. */

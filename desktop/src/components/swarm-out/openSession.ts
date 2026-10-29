@@ -3,7 +3,10 @@
  * docs/design/2026-10-29-swarm-out-hive-session-tab.md §4). Provided by
  * SwarmOutDashboard; null outside ChatPage, where run titles stay plain text.
  *
- * @exports OpenSessionContext, useOpenRun
+ * Outside Swarm Out (a Brain's Runs tab, inside the Brain Hub overlay) the overlay host
+ * provides it through overlaySessionOpener: close the overlay, then open the tab.
+ *
+ * @exports OpenSessionContext, useOpenRun, overlaySessionOpener
  */
 import { createContext, useContext } from 'react';
 import { isRemoteId } from '../../services/remoteSession';
@@ -19,4 +22,12 @@ export function useOpenRun(r: SwarmOutRun): (() => void) | null {
   const sid = r.session_id;
   if (!open || !isRemoteId(sid) || r.session_unknown) return null;
   return () => open(sid, `${r.title} · ${r.hive}`);
+}
+
+/** A Hive run card's opener inside an overlay: close the overlay, then open the run's
+ *  Hive session in the Hive tab (the tab sits under the overlay). null when ChatPage has
+ *  not published the opener: the cards then show no Open, as outside the app shell. */
+export function overlaySessionOpener(close: () => void, open?: (sessionId: string, title: string) => void) {
+  if (!open) return null;
+  return (sessionId: string, title: string) => { close(); open(sessionId, title); };
 }
