@@ -464,7 +464,6 @@ class TestReclaimNoiseEndToEnd:
             content, today, tmp_path, archive_name="MEMORY-archive.md",
             source_path=src
         )
-        assert report.archived == 0
         assert src.read_text() == content, "non-qualifying file was modified"
 
 
@@ -499,7 +498,6 @@ class TestRetireEntry:
         report = retire_entry(content, title="Cache invalidation", section="Pitfalls",
                               project_dir=tmp_path, source_path=src)
         assert report.candidates == ["Cache invalidation"], "dry-run should name the candidate"
-        assert report.archived == 0, "dry-run must not archive"
         assert src.read_text() == content, "dry-run must not mutate source"
 
     def test_retire_refuses_when_no_match(self, tmp_path):
@@ -843,10 +841,9 @@ class TestReclaimNoiseEntries:
         report = reclaim_noise_entries(
             _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path
         )
-        # No archive file written, no content mutation returned.
+        # No archive file written, nothing else in the report but the selection.
         assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
-        assert report.new_content is None
-        assert report.archived == 0
+        assert not hasattr(report, "new_content") and not hasattr(report, "archived")
 
 
 
@@ -868,21 +865,9 @@ class TestReclaimNoiseEntries:
         assert report.candidates == []
         assert report.kept_protected == 1
 
-    def test_idempotent_second_call_reclaims_nothing(self, tmp_path):
-        from core.ddd_entry_lifecycle import reclaim_noise_entries
-        r1 = reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path
-        )
-        r2 = reclaim_noise_entries(
-            r1.new_content, _RECLAIM_TODAY, tmp_path
-        )
-        assert r2.archived == 0
-        assert r2.candidates == []
-
     def test_empty_content_no_crash(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         report = reclaim_noise_entries("", _RECLAIM_TODAY, tmp_path)
-        assert report.archived == 0
         assert report.candidates == []
 
 
@@ -1118,7 +1103,7 @@ class TestProseIsolatedFromAutonomousPaths:
 """
         # NO evergreen_sections passed (mirrors ddd_orchestrator IMPROVEMENT path)
         report = reclaim_noise_entries(aged, today, None)
-        assert report.archived == 0, "aged emoji prose reclaimed via default parser — HIGH-2 regression"
+        assert report.candidates == [], "aged emoji prose selected via default parser — HIGH-2 regression"
 
 
 class TestRetireStillProtectsRealEntries:
@@ -1335,7 +1320,6 @@ class TestReclaimDuplicateEntries:
             source_path=None
         )
         # exactly ONE non-survivor selected for reclaim (the ref=0 dup)
-        assert report.archived == 0  # dry_run
         assert len(report.candidates) == 1
 
     def test_keep_class_dup_in_one_section_is_selected(self, tmp_path):
@@ -1381,3 +1365,19 @@ class TestReclaimDuplicateEntries:
 
 
 
+
+
+def test_the_ddd_retire_cli_reports_the_candidate(tmp_path, capsys):
+    """The CLI reports what a name picks (CDF stage B retired its apply path); it
+    called retire_entry with an argument that no longer exists and crashed."""
+    import argparse
+    import json as _json
+    import scripts.artifact_cli as cli
+    doc = tmp_path / "IMPROVEMENT.md"
+    doc.write_text("## Pitfalls\n- [pitfall] **Cache invalidation** stale. (2025-01-01)\n"
+                   "  <!-- ref:0 | last:none | decay:dormant -->\n", encoding="utf-8")
+    cli.cmd_ddd_retire(argparse.Namespace(file=str(doc), title="Cache invalidation",
+                                          section="Pitfalls", archive_name=None, force=False), None)
+    out = _json.loads(capsys.readouterr().out)
+    assert out["candidate"] == "Cache invalidation" and out["retired"] is False
+    assert "Cache invalidation" in doc.read_text(encoding="utf-8")

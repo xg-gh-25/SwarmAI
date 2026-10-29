@@ -182,7 +182,6 @@ scripts/probe_ingestion.py:_preserve_holds  # exempt: probe writes into its own 
 scripts/probe_ingestion.py:preserve  # exempt: probe writes into its own temp workspace
 scripts/probe_knowledge.py:_mount_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_memory.py:_inject_holds  # exempt: probe writes into its own temp workspace
-scripts/probe_memory.py:_reclaim_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_recall.py:_archive_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_recall.py:_seed_projects  # exempt: probe writes into its own temp workspace
 scripts/recall_replay.py:cmd_replay  # exempt: replay output dir
@@ -214,5 +213,9 @@ core/code_intel/local_roots.py:_write  # exempt: local-roots registry JSON (bind
 core/ddd_bindings.py:_bind_locked  # exempt: a binding's repo checkout and its code_intel.db
 core/library_mounts.py:index_code_mount  # exempt: a Library mount's code_intel.db
 core/recall_multi.py:_graph_codeintel_hits  # exempt: via code_intel.build.ensure_fresh: the code graph DB
-routers/ddd_brain.py:confirm_local_root._work  # exempt: via local_roots.confirm: local-roots registry JSON
 routers/library_api.py:register_mount._work  # exempt: via library_mounts: mount registry and its code_intel.db
+core/library_mounts.py:_reindex_if_outdated  # exempt: via code_intel.build.spawn_child: starts a mount's re-index child (its code_intel.db); log under app data
+core/library_mounts.py:main  # exempt: the mount re-index child: the mount's code_intel.db and the rebuild-turn lock under app data
+jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via local_roots.migrate_once and code_intel.build: local-roots registry JSON and code graph DBs
+scripts/artifact_cli.py:_bind_local  # exempt: via local_roots.declare and build.spawn_build: local-roots registry JSON; the graph is built by a child
+routers/ddd_brain.py:_confirm_agent  # exempt: via project_agent_review.confirm: the person's confirm writes project-agent.yaml (a definition file, not governed knowledge)

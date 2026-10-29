@@ -354,28 +354,6 @@ cases:
   gating: gate
   eval_method: programmatic
   validated_by_4gate: 9ea346ec376a8652
-- id: MEM_RECLAIM
-  category: memory
-  dimension: cognition
-  level: tool_call
-  title: Long-unused entries move to the archive file
-  purpose:
-    en: A long-unused dormant entry moves out to the archive file, the memory file gets smaller and used
-      entries stay. If this breaks, noise piles up in every prompt.
-    zh: 很久不用的休眠条目移到归档文件，记忆文件变小，在用的条目保留。坏了意味着每次 prompt 里堆满噪声。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory reclaim'
-    expected_contains: MEM_RECLAIM_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory reclaim negative'
-    negative_expected_contains: MEM_RECLAIM_TEETH
-  evaluators:
-  - canary_pass
-  affected_by:
-  - backend/core/ddd_entry_lifecycle.py
-  tier: stable
-  gating: gate
-  eval_method: programmatic
-  validated_by_4gate: 6c53d0cb77d88b5c
 - id: ING_JUDGE_DOWN
   category: ingestion
   dimension: cognition

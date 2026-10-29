@@ -77,8 +77,8 @@ MEMORY_PREFIX_TO_SECTION = {v["prefix"]: k for k, v in MEMORY_SECTIONS.items()}
 # SHOULD decay), KNOWLEDGE.md is almost ENTIRELY load-bearing reference: the
 # runtime Self-Identity Anchor, context-file assembly specs, hook/pipeline/schema
 # architecture. Those entries are typed `guideline`/`pitfall` (not a keep-TYPE),
-# so is_keep_class would NOT protect them — reclaim would archive+strip
-# mission-critical facts after dormancy (Gate-1 CRITICAL, run_a1ec08e7: verified
+# so is_keep_class would NOT protect them — reclaim would select (before CDF:
+# archive+strip) mission-critical facts after dormancy (Gate-1 CRITICAL, run_a1ec08e7: verified
 # ~23 reference entries were strip-eligible). This frozenset protects EVERY real
 # reference section by name; only genuinely disposable non-reference sections
 # (e.g. scratch notes) and the auto-managed "Knowledge Index" fall through to
@@ -299,7 +299,7 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
     decay/reclaim). Never matches emoji-prefixed curated prose (protects it from being
     stamped/stripped by background jobs).
     include_prose=True: _ENTRY_RE_PROSE — ONLY the by-name ddd-retire path opts in, so
-    a curator can archive+strip a hand-curated Open-Threads bullet deliberately.
+    a curator can name a hand-curated Open-Threads bullet deliberately.
     Both return group(1)=type, group(2)=title.
     """
     return (_ENTRY_RE_PROSE if include_prose else _ENTRY_RE).match(line)
@@ -527,11 +527,10 @@ class DecayTransition:
 
 @dataclass
 class ReclaimReport:
-    """Result of a reclaim pass (CLEAN). dry_run leaves new_content None."""
-    candidates: list[str] = field(default_factory=list)   # titles selected for reclaim
-    archived: int = 0                                      # count actually moved (0 if dry_run)
+    """What a reclaim / retire selector picked. Read-only: since CDF stage B no
+    automated path archives or strips an entry (design 2026-10-26 CDF §8)."""
+    candidates: list[str] = field(default_factory=list)   # titles selected
     kept_protected: int = 0                                # noisy-but-keep-class count
-    new_content: Optional[str] = None                      # source with bullets stripped (None if dry_run)
 
 
 @dataclass
@@ -797,7 +796,7 @@ def parse_entries(content: str, *, include_prose: bool = False,
     lifecycle path (inject/decay/reclaim) must use, so emoji-prefixed curated
     prose bullets are NOT treated as decay-managed entries (never stamped/stripped
     by background jobs). include_prose=True: the by-name ddd-retire path opts in so
-    a curator can archive+strip a hand-curated Open-Threads bullet deliberately.
+    a curator can name a hand-curated Open-Threads bullet deliberately.
 
     Returns list of EntryMetadata in document order.
     """
@@ -1532,26 +1531,18 @@ def reclaim_noise_entries(
     source_path: "Path | None" = None,
     skip_h3_spans: bool = False,
 ) -> ReclaimReport:
-    """Reclaim (archive + physically strip) stale operational-noise entries.
+    """Select the stale operational-noise entries (read-only).
 
     Selection = exactly the set compute_entry_noise flags as noisy
     (ref_count==0 AND age>=grace AND decay∈{dormant,archived}), MINUS any
     entry protected by is_keep_class. This keeps the gauge and the action
     consistent (measure == action).
 
-    Why a dedicated strip step (Gate-1 finding, verified): neither
-    archive_entries nor inject_entry_metadata removes a bullet from the
-    source — archived entries otherwise persist with decay:archived and are
-    still counted as noise. This function is the ONLY path that lowers a
-    doc's noise_rate.
-
-    dry_run=True (default): pure preview — selects candidates, counts
-    protected, writes nothing, returns new_content=None. dry_run=False:
-    archives the candidates to `archive_name` and returns new_content with
-    those bullets physically removed (caller persists it).
-
-    Idempotent: a second call on the stripped content reclaims nothing
-    (the noisy bullets are gone).
+    It writes nothing: since CDF stage B automated maintenance is read-only (design
+    2026-10-26 CDF §8) — the file keeps every unit and the injection budget decides
+    what reaches a prompt. The report (candidates, kept_protected) feeds the C&M
+    entry-health counts. *project_dir*, *archive_name* and *source_path* are unused,
+    kept for the callers' signature.
     """
     report = ReclaimReport()
     if not content or not content.strip():
@@ -1608,7 +1599,7 @@ def reclaim_duplicate_entries(
     source_path: "Path | None" = None,
     skip_h3_spans: bool = False,
 ) -> ReclaimReport:
-    """Reclaim ALREADY-ACCUMULATED EXACT duplicates (archive + physically strip).
+    """Select ALREADY-ACCUMULATED EXACT duplicates (read-only).
 
     Distinct from the two adjacent mechanisms — this fills a real gap:
       • ``reclaim_noise_entries`` selects by AGE/decay (ref==0 AND dormant/archived).
@@ -1618,7 +1609,7 @@ def reclaim_duplicate_entries(
     This sweeps the backlog: group all entries by ``content_signature`` (the SAME
     format-agnostic normalizer cultivation uses at intake, imported here so a lesson
     dedups identically whichever path wrote it), and within each collision group
-    keep ONE survivor, archive+strip the rest.
+    keep ONE survivor; the rest are the candidates.
 
     Survivor selection (deterministic): highest ``ref_count``, tie → newest
     ``created_date`` (a date-less entry sorts oldest). The survivor is the entry
@@ -1635,15 +1626,9 @@ def reclaim_duplicate_entries(
     ddd_cultivation.py supersession-language note); similarity-based deletion is a
     non-goal.
 
-    Recovery: reuses ``_archive_and_strip`` (archive succeeds BEFORE the source is
-    stripped; if ``archive_entries`` raises, the strip never runs). For the
-    non-git-tracked ``.context/*.md`` files, the forward-append archive is the ONLY
-    recovery path (git recovery does not apply) — so archive-before-strip is
-    load-bearing, not just tidy.
-
-    dry_run=True (default): pure preview (candidates listed, nothing written).
-    dry_run=False: archive the non-survivors and persist the stripped source.
-    Idempotent: a second sweep on the stripped content reclaims nothing.
+    It writes nothing (CDF stage B, design 2026-10-26 CDF §8): the candidates feed
+    the C&M entry-health counts. *project_dir*, *archive_name* and *source_path* are
+    unused, kept for the callers' signature.
     """
     from core.ddd_cultivation import content_signature  # unidirectional import (verified: lifecycle imports nothing from core; cultivation already imports lifecycle, never the reverse)
 
@@ -1723,13 +1708,13 @@ def retire_entry(
 ) -> ReclaimReport:
     """Agent-directed retire of ONE named (title, section) entry — the sanctioned
     'out' side of the knowledge layer (mirrors s_self-evolution's RETIRE for the
-    governance layer). Reuses the same archive+strip machinery as
-    reclaim_noise_entries via _archive_and_strip; the ONLY difference is selection:
-    exactly the one entry the caller names, not the autonomous noise set.
+    governance layer). Since CDF stage B it only reports the candidate: the
+    selection is exactly the one entry the caller names, not the autonomous noise
+    set; the edit itself goes through ``governed_edit``.
 
-    This is why a raw markdown Edit-to-delete is NOT the sanctioned path: it skips
-    the archive (→ lost from FTS5 recall) and the (title, section) identity-strip
-    (→ can destroy a same-title sibling). Route removals through here.
+    It tells a curator whether the name picks exactly one entry before they remove
+    it through ``governed_edit`` (a raw markdown Edit-to-delete can hit a same-title
+    sibling).
 
     Safety (Gate-1, run_186a5f15):
     - EXACTLY-ONE match required. Zero matches → RetireError (never a silent
@@ -1740,8 +1725,9 @@ def retire_entry(
       retire permanent knowledge by name (the point of agent-directed removal),
       but never by accident.
 
-    dry_run=True (default): preview only — sets report.candidates, writes nothing.
-    dry_run=False: archive + strip + persist (recovery = archive + git, no .bak).
+    Read-only: it sets report.candidates and writes nothing (CDF stage B retired the
+    apply path; an edit goes through ``governed_edit``). *project_dir*,
+    *archive_name* and *source_path* are unused, kept for the callers' signature.
 
     For a MOVE across files: the CALLER must add-to-target FIRST (via s_persist,
     dedup-checked) and retire-from-source SECOND — so the entry is durable in its

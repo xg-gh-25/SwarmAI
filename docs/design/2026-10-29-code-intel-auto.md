@@ -301,6 +301,6 @@ whose rebuild parses empty stays outdated (a child every ten minutes).
 
 **Out of scope, recorded:** `repo_read.GIT_HARDENING`'s empty `diff.external` breaks a
 patch diff (no caller does one today); `ddd_bindings._git_toplevel` runs git
-unhardened; the `MEM_RECLAIM` probe fails on main (`reclaim_noise_entries` lost its
-`dry_run` argument in another change).
+unhardened. (The `MEM_RECLAIM` probe that failed on main was deleted with its case:
+CDF stage B retired the reclaim apply path it checked.)
 

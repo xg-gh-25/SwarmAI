@@ -245,10 +245,8 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 | Recall | RCL_ENTRY | 大段落深处的一条匹配记忆也能被找到 | （沿用 GS_RCHAIN_ENTRY_LEVEL） |
 | Recall | RCL_DDD_SCOPE | 项目文档的 recall 只在当前项目内；判断不出是哪个项目时什么都不注入 | 指名两个项目的问题；跨项目哨兵 |
 | Recall | RCL_ARCHIVE | 被归档的旧记忆仍能通过 library 找到；正在用的 MEMORY.md 不进索引 | 删掉 Knowledge/ 后归档不可达 |
-| Memory | MEM_SIZE_VALVE | MEMORY 超过上限时把价值最低的操作类条目移进归档，判断类条目全部保留 | 空实现时体积仍超上限 |
 | Memory | MEM_INJECT | 活跃条目原样注入，休眠条目不注入 | 休眠条目出现在 prompt 里 |
 | Memory | MEM_JUDGMENT_IMMUNE | 原则、决定、纠错、教训不会因为时间久了被埋掉；操作类条目会 | 去掉保护后出现衰减 |
-| Memory | MEM_RECLAIM | 很久不用的操作类条目移到归档文件，文件变小，归档仍可检索 | （合并 GS_MCHAIN_RECLAIM_SHRINK / ARCHIVE_RECALL，去掉对 sqlite-vec 的依赖） |
 | Ingestion | ING_JUDGE_DOWN | 记忆的 judge 不可用（预算用完、报错）时，条目进待定队列，不被丢弃 | judge 判定 suspect 时必须丢弃 |
 | Ingestion | ING_FLOORS | 不联网时确定性底线照样拦住：太短的、改治理规则的、写错存储的 | 太短的内容被自动收下 |
 | Ingestion | ING_DDD_ARCHIVE | 项目文档拒收的提案写进可恢复的归档，不是直接丢掉 | 归档目录不可写时必须报告失败 |

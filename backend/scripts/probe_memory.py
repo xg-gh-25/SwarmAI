@@ -5,8 +5,11 @@ Contract: scripts/_probe_kit.py. Subcommands:
   inject      active MEMORY entries reach the prompt intact; dormant ones do not
   immune      judgment entries (decision / correction / pitfall) never decay with
               age; an operational guideline does
-  reclaim     a long-unused dormant entry is moved out to the archive file: the
-              memory file gets smaller, the entry is in the archive, used entries stay
+
+(``reclaim`` is gone: since CDF stage B no automated path moves an entry out of a
+memory file — the file keeps every unit and the injection budget decides what reaches
+the prompt, which ``inject`` checks; design 2026-10-26-swarm-cognitive-distillation-flow
+§8, §12.)
 """
 from __future__ import annotations
 
@@ -79,42 +82,5 @@ def immune(negative: bool) -> int:
                    lambda: _immune_holds(False))
 
 
-# ── reclaim ───────────────────────────────────────────────────────────────────
-
-def _reclaim_holds(reclaim) -> tuple[bool, str]:
-    today = date(2026, 10, 26)
-    original = ("## Guidelines\n"
-                "- [guideline] **Keep me, still used** recent. (2026-10-24)\n"
-                "  <!-- ref:5 | last:2026-10-24 | decay:active -->\n\n"
-                "## Pitfalls\n"
-                "- [pitfall] **Reclaim me, long unused** stale. (2025-09-01)\n"
-                "  <!-- ref:0 | last:none | decay:dormant -->\n")
-    with tempdir() as d:
-        src = d / "MEMORY.md"
-        src.write_text(original, encoding="utf-8")
-        reclaim(original, today, d, archive_name="MEMORY-archive.md", source_path=src,
-                dry_run=False)
-        now = src.read_text(encoding="utf-8")
-        archive = d / "MEMORY-archive.md"
-        archived = archive.exists() and "Reclaim me" in archive.read_text(encoding="utf-8")
-    if "Reclaim me" in now or len(now) >= len(original):
-        return False, "the unused entry stayed in the memory file"
-    if "Keep me" not in now:
-        return False, "a used entry was reclaimed"
-    if not archived:
-        return False, "the reclaimed entry is not in the archive file"
-    return True, ""
-
-
-def reclaim(negative: bool) -> int:
-    from core.ddd_entry_lifecycle import reclaim_noise_entries
-
-    def relabel_only(*a, **k):  # reports what it would move, moves nothing
-        return reclaim_noise_entries(*a, **{**k, "dry_run": True})
-    return verdict("MEM_RECLAIM", negative, lambda: _reclaim_holds(reclaim_noise_entries),
-                   lambda: _reclaim_holds(relabel_only))
-
-
 if __name__ == "__main__":
-    raise SystemExit(run({"inject": inject, "immune": immune,
-                          "reclaim": reclaim}))
+    raise SystemExit(run({"inject": inject, "immune": immune}))

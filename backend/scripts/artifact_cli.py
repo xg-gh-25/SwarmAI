@@ -753,8 +753,7 @@ def cmd_ddd_retire(args, reg) -> None:
         report = retire_entry(
             content, title=args.title, section=args.section,
             project_dir=p.parent, archive_name=archive_name,
-            source_path=None,
-            dry_run=True, force=bool(args.force),
+            source_path=None, force=bool(args.force),
             # MEMORY.md's evergreen sections (Open Threads, Standing Preferences,
             # etc.) need --force parity with the autonomous reclaim path.
             evergreen_sections=MEMORY_EVERGREEN_SECTIONS if p.name == "MEMORY.md" else None,

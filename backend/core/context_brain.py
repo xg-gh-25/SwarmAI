@@ -138,20 +138,16 @@ def _entry_health_counts(filename: str, content: str) -> "dict | None":
             "KNOWLEDGE.md": KNOWLEDGE_EVERGREEN_SECTIONS,
             "EVOLUTION.md": EVOLUTION_EVERGREEN_SECTIONS,
         }.get(filename)
-        # reclaimable + duplicate = what a sweep would ACTUALLY archive (dry_run, no
-        # write). Both use the ACTION's own predicate (keep-class + evergreen
-        # filtered), NOT the wider compute_entry_noise gauge — so the panel number
-        # equals what the sweep removes (gate==action). A raw noise count would show
-        # "5 reclaimable" while the sweep strips 0 (all keep-class) — a misleading
-        # number, the exact honesty bug this project exists to fix. project_dir is
-        # unused on the dry_run path, so any Path is fine.
+        # reclaimable + duplicate: the entries the reclaim selectors pick (keep-class
+        # and evergreen filtered), NOT the wider compute_entry_noise gauge. Since CDF
+        # stage B nothing removes them from the file (automated maintenance is
+        # read-only, design 2026-10-26 CDF §8); the counts say how much of the file is
+        # stale or repeated. Both selectors are read-only; project_dir is unused.
         noise_r = reclaim_noise_entries(
-            content, today, Path("/tmp"),
-            evergreen_sections=evergreen, dry_run=True,
+            content, today, Path("/tmp"), evergreen_sections=evergreen,
         )
         dup = reclaim_duplicate_entries(
-            content, today, Path("/tmp"),
-            evergreen_sections=evergreen, dry_run=True,
+            content, today, Path("/tmp"), evergreen_sections=evergreen,
         )
         return {
             "active": counts.get("active", 0),
