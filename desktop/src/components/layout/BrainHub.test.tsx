@@ -281,13 +281,26 @@ describe('BrainHub — Gallery (AC3)', () => {
     expect(screen.getByTestId('hub-card-AIDLC').querySelector('[data-testid="dddcard-self-tag"]')).toBeNull();
   });
 
-  it('a brain with proposals says so on its card and comes first (Hub home)', async () => {
+  it('a brain with proposals says so on its card; cards keep an alphabetical place (Hub home)', async () => {
+    mockGetBrains.mockResolvedValue([{ ...GALLERY[1], name: 'Zeta' }, GALLERY[0], GALLERY[1]]);
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
-    // AIDLC pending=2 -> its one signal is the proposals, and it leads the wall
+    // AIDLC pending=2 -> its one status is the proposals, a review (amber), not red
     expect(screen.getByTestId('hub-signal-AIDLC').textContent).toBe('2 proposals to review');
-    const wall = screen.getByTestId('brainhub-card-wall');
-    expect(wall.firstElementChild?.getAttribute('data-testid')).toBe('hub-card-AIDLC');
+    expect(screen.getByTestId('hub-signal-AIDLC').getAttribute('data-tone')).toBe('review');
+    // Zeta has the same proposals yet stays last: what waits is in the attention band
+    const ids = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
+    expect(ids).toEqual(['hub-card-AIDLC', 'hub-card-SwarmAI', 'hub-card-Zeta']);
+    expect(screen.getByTestId('hub-open-count').textContent).toBe('4 open items');
+    expect(screen.getByTestId('hub-chip-proposals').textContent).toBe('4 proposals to review');
+  });
+
+  it('the front page has one action, New Brain: adding knowledge belongs to a Brain', async () => {
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
+    expect(screen.getByTestId('hub-new-brain')).toBeTruthy();
+    expect(screen.queryByTestId('hub-add-knowledge')).toBeNull();
+    expect(screen.queryByTestId('hub-filter-need')).toBeNull();   // the filter strip is gone
   });
 
   it('a CALM gallery card no longer shows the redundant-ink widgets (presence / 2×2 cheap grid)', async () => {
@@ -1250,10 +1263,13 @@ describe('BrainHub — the built-in General Brain', () => {
     mockGetGeneral.mockReturnValue(GENERAL);
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
-    const ids = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
-    // SwarmAI first even though AIDLC has proposals waiting; General second
-    expect(ids.slice(0, 3)).toEqual(['hub-card-SwarmAI', 'hub-card-builtin-general', 'hub-card-AIDLC']);
+    // the two built-in Brains in their own row, SwarmAI first; the person's own after
+    const builtIn = [...screen.getByTestId('brainhub-builtin-wall').children].map((c) => c.getAttribute('data-testid'));
+    expect(builtIn).toEqual(['hub-card-SwarmAI', 'hub-card-builtin-general']);
+    const own = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
+    expect(own).toEqual(['hub-card-AIDLC']);
     expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent to confirm');
+    expect(screen.getByTestId('hub-signal-builtin-general').getAttribute('data-tone')).toBe('setup');
     expect(screen.queryByTestId('hub-runner')).toBeNull();             // the old footer entry is gone
   });
 
@@ -1295,18 +1311,15 @@ describe('BrainHub — the built-in General Brain', () => {
     await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
   });
 
-  it('both ways to its knowledge switch to the Library overlay', async () => {
+  it('its page is the way to its knowledge: the Library overlay', async () => {
     mockGetGeneral.mockReturnValue(GENERAL);
     const openLibrary = vi.fn();
     render(<BrainHub defaultView="brain" onOpenLibrary={openLibrary} />);
     await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('hub-add-knowledge'));
-    fireEvent.click(screen.getByTestId('hub-add-pick-builtin-general'));
-    expect(openLibrary).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('dddcard-builtin-general'));
     await waitFor(() => expect(screen.getByTestId('general-open-library')).toBeTruthy());
     fireEvent.click(screen.getByTestId('general-open-library'));
-    expect(openLibrary).toHaveBeenCalledTimes(2);
+    expect(openLibrary).toHaveBeenCalledTimes(1);
   });
 
   it('its page tells loading and a failed read apart from a missing Runner Agent', async () => {
@@ -1332,7 +1345,7 @@ describe('BrainHub — the built-in General Brain', () => {
     mockGetGeneral.mockReturnValue({ ...GENERAL, shadowed: true });
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-general')).toBeTruthy());
-    expect(screen.getByTestId('hub-filter-all').textContent).toContain('4');
+    expect(screen.getByTestId('hub-count').textContent).toBe('4 Brains');
     expect(screen.getByTestId('hub-signal-general').textContent).toContain('built-in name General');
     expect(screen.getByTestId('hub-signal-AIDLC').textContent).not.toContain('built-in name');
   });
@@ -1341,10 +1354,10 @@ describe('BrainHub — the built-in General Brain', () => {
     mockGetGeneral.mockReturnValue(GENERAL);
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('hub-filter-need'));
+    expect(screen.getByTestId('hub-chip-agent').textContent).toBe('1 agent to confirm');
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
     await waitFor(() => expect(screen.getByTestId('hub-need-builtin-general-agent')).toBeTruthy());
     expect(screen.getByTestId('hub-need-builtin-general-agent').textContent).toContain('General (built-in)');
-    expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy();   // a card waiting on you stays in "Need you"
     fireEvent.click(screen.getByTestId('hub-need-go-builtin-general-agent'));
     await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
   });
@@ -1353,15 +1366,16 @@ describe('BrainHub — the built-in General Brain', () => {
     mockGetGeneral.mockReturnValue({ ...GENERAL, projectAgentStatus: null });
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('No Runner Agent yet'));
-    expect(screen.getByTestId('hub-signal-builtin-general').className).toContain('status-warning');
+    expect(screen.getByTestId('hub-signal-builtin-general').getAttribute('data-tone')).toBe('review');
   });
 
-  it('a confirmed Runner Agent waits on nobody and its card leaves the Need you filter', async () => {
+  it('a confirmed Runner Agent waits on nobody: no status on its card, no open item', async () => {
     mockGetGeneral.mockReturnValue({ ...GENERAL, projectAgentStatus: 'reviewed' });
     render(<BrainHub defaultView="brain" />);
-    await waitFor(() => expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent confirmed'));
-    fireEvent.click(screen.getByTestId('hub-filter-need'));
-    await waitFor(() => expect(screen.queryByTestId('dddcard-builtin-general')).toBeNull());
+    await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
+    expect(screen.queryByTestId('hub-signal-builtin-general')).toBeNull();
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));       // AIDLC's proposals keep the band
+    await waitFor(() => expect(screen.getByTestId('hub-needs')).toBeTruthy());
     expect(screen.queryByTestId('hub-need-builtin-general-agent')).toBeNull();
   });
 });

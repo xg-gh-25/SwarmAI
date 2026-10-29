@@ -153,13 +153,23 @@ export interface HubSummary {
   liveRuns: number;
 }
 
+/** How much an open item asks of the person, most first: a Run or an escalation is
+ *  blocked on them; a proposal or a failing job waits for a review; a Project Agent
+ *  draft or a Brain being born is setup; a repository a Brain started reading is a
+ *  notice. Only urgent and review carry a warm color on the Hub. */
+export type Severity = 'urgent' | 'review' | 'setup' | 'notice';
+export const SEVERITY_ORDER: Severity[] = ['urgent', 'review', 'setup', 'notice'];
+
 export interface HubNeed {
   brain: string;
   /** run: one Run (from the analytics); runs: Runs waiting that the analytics did
-   *  not list; proposals / escalations / jobs: counted per brain; agent: a draft */
-  kind: 'run' | 'runs' | 'proposals' | 'escalations' | 'jobs' | 'agent';
+   *  not list; proposals / escalations / jobs / repos: counted per brain; agent: a draft */
+  kind: 'run' | 'runs' | 'proposals' | 'escalations' | 'jobs' | 'agent' | 'repos';
   id: string;
   text: string;
+  /** how many items this row stands for (a per-brain count, or 1) */
+  count: number;
+  severity: Severity;
   /** ISO time it started waiting (Runs only) */
   since: string | null;
   /** the built-in General Brain (opened by its own view, never by the name) */
@@ -174,8 +184,10 @@ const generalWaits = (g?: GeneralBrain | null) =>
  *  collides with a Projects/ Brain that carries the same name (`<name>-agent`). */
 export function generalNeed(g?: GeneralBrain | null): HubNeed | null {
   if (!g || !generalWaits(g)) return null;
-  return { brain: g.name, kind: 'agent', id: 'builtin-general-agent', since: null, builtin: true,
-    text: g.projectAgentStatus === 'draft' ? 'Runner Agent draft to confirm' : 'Runner Agent file has problems to fix' };
+  const draft = g.projectAgentStatus === 'draft';
+  return { brain: g.name, kind: 'agent', id: 'builtin-general-agent', since: null, builtin: true, count: 1,
+    severity: draft ? 'setup' : 'review',
+    text: draft ? 'Runner Agent draft to confirm' : 'Runner Agent file has problems to fix' };
 }
 
 /** A Project Agent waits on the person while it is a draft (confirm) or has problems (fix). */
@@ -185,10 +197,11 @@ const agentWaits = (b: BrainSummary) => b.projectAgentStatus === 'draft' || b.pr
  *  without the split counts everything as one unnamed bucket. */
 export function pendingSplit(b: Pick<BrainSummary, 'health' | 'pendingBySource'>) {
   const by = b.pendingBySource;
-  if (!by) return { runs: 0, proposals: 0, escalations: 0, jobs: 0, other: b.health?.pending ?? 0 };
+  if (!by) return { runs: 0, proposals: 0, escalations: 0, jobs: 0, repos: 0, other: b.health?.pending ?? 0 };
   const runs = by.paused_run ?? 0, proposals = by.cultivation ?? 0, escalations = by.escalation ?? 0, jobs = by.job ?? 0;
+  const repos = by.local_root ?? 0;   // a repository it started reading: a notice, not a task
   const total = Object.values(by).reduce((x, y) => x + y, 0);
-  return { runs, proposals, escalations, jobs, other: total - runs - proposals - escalations - jobs };
+  return { runs, proposals, escalations, jobs, repos, other: total - runs - proposals - escalations - jobs - repos };
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -206,20 +219,25 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
     const listed = (a?.byProject.find((g) => g.project === b.name)?.runs ?? []).filter((r) => r.needsYou);
     for (const r of listed) {
       const why = r.pauseKind === 'decision' ? 'question' : r.pauseKind === 'stopped' ? 'stopped' : 'waiting';
-      runs.push({ brain: b.name, kind: 'run', id: r.id, text: `Run ${why}: ${r.requirement || r.id}`, since: r.updatedAt || null });
+      runs.push({ brain: b.name, kind: 'run', id: r.id, text: `Run ${why}: ${r.requirement || r.id}`,
+        since: r.updatedAt || null, count: 1, severity: 'urgent' });
     }
     const unlisted = split.runs - listed.length;
-    if (unlisted > 0) out.push({ brain: b.name, kind: 'runs', id: `${b.name}-runs`, text: `${plural(unlisted, 'Run')} waiting on you`, since: null });
-    if (split.proposals) out.push({ brain: b.name, kind: 'proposals', id: `${b.name}-proposals`, text: `${plural(split.proposals, 'rule proposal')} to review`, since: null });
-    if (split.escalations) out.push({ brain: b.name, kind: 'escalations', id: `${b.name}-escalations`, text: `${plural(split.escalations, 'escalation')} to decide`, since: null });
-    if (split.jobs + split.other) out.push({ brain: b.name, kind: 'jobs', id: `${b.name}-jobs`, text: `${plural(split.jobs + split.other, 'other item')} in Need You`, since: null });
+    const row = (kind: HubNeed['kind'], count: number, severity: Severity, text: string) =>
+      out.push({ brain: b.name, kind, id: `${b.name}-${kind}`, text, since: null, count, severity });
+    if (unlisted > 0) row('runs', unlisted, 'urgent', `${plural(unlisted, 'Run')} waiting on you`);
+    if (split.proposals) row('proposals', split.proposals, 'review', `${plural(split.proposals, 'rule proposal')} to review`);
+    if (split.escalations) row('escalations', split.escalations, 'urgent', `${plural(split.escalations, 'escalation')} to decide`);
+    if (split.jobs + split.other) row('jobs', split.jobs + split.other, 'review', `${plural(split.jobs + split.other, 'other item')} in Need You`);
+    if (split.repos) row('repos', split.repos, 'notice', `now reads ${plural(split.repos, 'new repository', 'new repositories')}`);
   }
   runs.sort((x, y) => (x.since || '').localeCompare(y.since || ''));
   const agents: HubNeed[] = brains.filter(agentWaits).map((b) => ({
-    brain: b.name, kind: 'agent', id: `${b.name}-agent`, since: null,
+    brain: b.name, kind: 'agent', id: `${b.name}-agent`, since: null, count: 1,
+    severity: b.projectAgentStatus === 'draft' ? 'setup' : 'review',
     text: b.projectAgentStatus === 'draft' ? 'Project Agent draft to confirm' : 'Project Agent file has problems to fix',
   }));
-  const order: HubNeed['kind'][] = ['runs', 'proposals', 'escalations', 'jobs'];
+  const order: HubNeed['kind'][] = ['runs', 'proposals', 'escalations', 'jobs', 'repos'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
   const g = generalNeed(general);
   return [...runs, ...out, ...agents, ...(g ? [g] : [])];
@@ -246,26 +264,27 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
   };
 }
 
-export type BrainSignalTone = 'error' | 'primary' | 'warning' | 'muted';
+/** A card's status: an open item's severity, `live` for a Run in progress, `calm`
+ *  when nothing is going on (the card then shows no status at all). */
+export type BrainSignalTone = Severity | 'live' | 'calm';
 export interface BrainSignal { tone: BrainSignalTone; text: string; rank: number }
 
-/** The ONE most urgent thing to say about a brain on its Hub card, and its sort rank. */
+/** The ONE most pressing thing to say about a brain on its Hub card: what blocks on the
+ *  person, then what waits for a review, a Run in progress, setup, a notice. */
 export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): BrainSignal {
   const runs = a?.byProject.find((g) => g.project === b.name)?.runs ?? [];
   const split = pendingSplit(b);
   const runNeeds = Math.max(runs.filter((r) => r.needsYou).length, split.runs);
-  if (runNeeds) return { tone: 'error', rank: 0, text: runNeeds === 1 ? 'A Run needs you' : `${runNeeds} Runs need you` };
-  if (split.proposals) return { tone: 'error', rank: 0, text: `${plural(split.proposals, 'proposal')} to review` };
-  if (split.escalations) return { tone: 'error', rank: 0, text: `${plural(split.escalations, 'escalation')} to decide` };
-  if (split.jobs + split.other) return { tone: 'error', rank: 0, text: `${plural(split.jobs + split.other, 'item')} in Need You` };
-  if (b.projectAgentStatus === 'draft') return { tone: 'error', rank: 0, text: 'Project Agent to confirm' };
-  if (b.projectAgentStatus === 'invalid') return { tone: 'error', rank: 0, text: 'Project Agent has problems' };
-  if (b.health.liveRun) return { tone: 'primary', rank: 1, text: 'Run in progress' };
-  if (b.setupState === 'setting-up') {
-    return { tone: 'warning', rank: 2, text: bornText(b.setupProgress) };
-  }
-  const last = b.health.lastChangeRelative;
-  return { tone: 'muted', rank: 3, text: last && last !== '--' ? `Last landed ${last}` : 'No landed change in 30 days' };
+  if (runNeeds) return { tone: 'urgent', rank: 0, text: runNeeds === 1 ? 'A Run needs you' : `${runNeeds} Runs need you` };
+  if (split.escalations) return { tone: 'urgent', rank: 0, text: `${plural(split.escalations, 'escalation')} to decide` };
+  if (split.proposals) return { tone: 'review', rank: 1, text: `${plural(split.proposals, 'proposal')} to review` };
+  if (split.jobs + split.other) return { tone: 'review', rank: 1, text: `${plural(split.jobs + split.other, 'item')} in Need You` };
+  if (b.projectAgentStatus === 'invalid') return { tone: 'review', rank: 1, text: 'Project Agent has problems' };
+  if (b.health.liveRun) return { tone: 'live', rank: 2, text: 'Run in progress' };
+  if (b.setupState === 'setting-up') return { tone: 'setup', rank: 3, text: bornText(b.setupProgress) };
+  if (b.projectAgentStatus === 'draft') return { tone: 'setup', rank: 3, text: 'Project Agent to confirm' };
+  if (split.repos) return { tone: 'notice', rank: 4, text: `Reads ${plural(split.repos, 'new repository', 'new repositories')}` };
+  return { tone: 'calm', rank: 5, text: '' };
 }
 
 /** What each P6 check asks for, as the next thing to do (verify_ddd_complete.py names).

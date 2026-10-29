@@ -912,7 +912,7 @@ function LocalRootsCard({ name }: { name: string }) {
         <div key={r.path} className="py-1.5" data-testid="local-root">
           <div className="flex items-center gap-2">
             {/* the repo's name first: a path cut at its end would hide which one it is */}
-            <span className="text-small font-medium flex-shrink-0">{r.path.split('/').filter(Boolean).pop() ?? r.path}</span>
+            <span className="text-small font-semibold flex-shrink-0">{r.path.split('/').filter(Boolean).pop() ?? r.path}</span>
             <span className="text-meta text-[var(--color-text-muted)] truncate" style={{ direction: 'rtl', textAlign: 'left' }} title={r.path}>
               {`\u200e${r.path}\u200e`}{/* LRM: keep the path's own order inside rtl */}
             </span>
@@ -937,7 +937,7 @@ function LocalRootsCard({ name }: { name: string }) {
           </div>
         </div>
       ))}
-      {error && <div className="text-meta text-amber-500 mt-1">{error}</div>}
+      {error && <div className="text-meta text-[var(--color-status-warning)] mt-1">{error}</div>}
     </div>
   );
 }
@@ -985,7 +985,7 @@ function CodeIntelStatus({ name, repo }: { name: string; repo?: string }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] text-meta" data-testid="codeintel-status">
       <span className="tabular-nums text-[var(--color-text-muted)]">{summary.symbolCount.toLocaleString()} symbols</span>
-      <span className={stale ? 'text-amber-500' : 'text-[var(--color-text-faint)]'} data-testid="codeintel-age">
+      <span className={stale ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text-faint)]'} data-testid="codeintel-age">
         · {rebuilding ? 'rebuilding for a new parser' : _indexedAge(summary.lastIndexedAt)}
       </span>
       <button

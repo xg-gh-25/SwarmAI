@@ -363,31 +363,35 @@ describe('BrainHubHome', () => {
   ];
   const order = () => screen.getAllByTestId(/^hub-card-[^a]/).map((e) => e.getAttribute('data-testid'));
 
-  it('summary row: counts, learned + sinking totals; cards with something to do come first', () => {
+  it('one lead line, one attention band; the built-in Brain leads, the rest are alphabetical', () => {
     render(<BrainHubHome brains={brains as never} selfName="P" onOpen={vi.fn()} />);
+    expect(screen.getByTestId('hub-count').textContent).toBe('5 Brains');
+    expect(screen.getByTestId('hub-ambient').textContent).toContain('+9 learned in 30 days');
     // each item once: P's Run (counted by the attention channel, not again from the
-    // analytics) + Q's 2 proposals + Q's escalation
-    expect(screen.getByTestId('hub-filter-need').textContent).toContain('4');
-    expect(screen.getByTestId('hub-filter-running').textContent).toContain('1');
-    expect(screen.getByTestId('hub-filter-born').textContent).toContain('1');
-    expect(screen.getByTestId('hub-sum-learned').textContent).toContain('+9');
-    expect(screen.getByTestId('hub-sum-sinking').textContent).toContain('5');
+    // analytics) + Q's 2 proposals + Q's escalation; the worst one sets the band's tone
+    expect(screen.getByTestId('hub-open-count').textContent).toBe('4 open items');
+    expect(screen.getByTestId('hub-attention').getAttribute('data-tone')).toBe('urgent');
+    const chips = screen.getAllByTestId(/^hub-chip-/).map((c) => c.textContent);
+    expect(chips).toEqual(['1 Run waiting', '1 escalation to decide', '2 proposals to review']);
     expect(order()).toEqual(['hub-card-P', 'hub-card-Q', 'hub-card-R', 'hub-card-S', 'hub-card-T']);
+    expect([...screen.getByTestId('brainhub-builtin-wall').children].map((c) => c.getAttribute('data-testid')))
+      .toEqual(['hub-card-P']);
     expect(screen.getByTestId('hub-signal-P').textContent).toBe('A Run needs you');
+    expect(screen.getByTestId('hub-signal-P').getAttribute('data-tone')).toBe('urgent');
     expect(screen.getByTestId('hub-card-P').querySelector('[data-testid="dddcard-self-tag"]')).toBeTruthy();
     expect(screen.getByTestId('hub-desc-Q').textContent).toContain('No description yet');
-    expect(screen.getByTestId('hub-signal-Q').textContent).toBe('2 proposals to review');
+    expect(screen.getByTestId('hub-signal-Q').textContent).toBe('1 escalation to decide');
+    expect(screen.getByTestId('hub-signal-R').getAttribute('data-tone')).toBe('live');
+    expect(screen.queryByTestId('hub-signal-T')).toBeNull();          // a quiet Brain shows no status
     expect(screen.getByTestId('hub-eval').textContent).toContain('1 of 1 finished Runs landed');
   });
 
-  it('a count filters the cards; Need you also opens the queue, whose buttons open the right place', () => {
+  it('Review opens the queue, whose buttons open the right place; cards never move or filter out', () => {
     const onOpen = vi.fn();
     render(<BrainHubHome brains={brains as never} onOpen={onOpen} />);
     expect(screen.queryByTestId('hub-needs')).toBeNull();
-    fireEvent.click(screen.getByTestId('hub-filter-running'));
-    expect(order()).toEqual(['hub-card-R']);
-    fireEvent.click(screen.getByTestId('hub-filter-need'));
-    expect(order()).toEqual(['hub-card-Q', 'hub-card-P']);   // same rank: incoming order
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
+    expect(order()).toEqual(['hub-card-P', 'hub-card-Q', 'hub-card-R', 'hub-card-S', 'hub-card-T']);
     const shown: CustomEvent[] = [];
     const listen = (e: Event) => shown.push(e as CustomEvent);
     window.addEventListener('swarm:show-pipeline', listen);
@@ -402,39 +406,58 @@ describe('BrainHubHome', () => {
     expect(shown[1].type).toBe('swarm:show-needs-you');
     window.removeEventListener('swarm:show-pipeline', listen);
     window.removeEventListener('swarm:show-needs-you', listen);
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
+    expect(screen.queryByTestId('hub-needs')).toBeNull();
   });
 
-  it('a Project Agent draft is a Need-you item that opens the Project Agent panel', () => {
+  it('a Project Agent draft is setup (grey), an open item that opens the Project Agent panel', () => {
     const onOpen = vi.fn();
     render(<BrainHubHome brains={[brain('T', { projectAgentStatus: 'draft' })] as never} onOpen={onOpen} />);
-    expect(screen.getByTestId('hub-filter-need').textContent).toContain('1');
+    expect(screen.getByTestId('hub-open-count').textContent).toBe('1 open item');
+    expect(screen.getByTestId('hub-attention').getAttribute('data-tone')).toBe('setup');
     expect(screen.getByTestId('hub-signal-T').textContent).toBe('Project Agent to confirm');
-    fireEvent.click(screen.getByTestId('hub-filter-need'));
+    expect(screen.getByTestId('hub-signal-T').getAttribute('data-tone')).toBe('setup');
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
     fireEvent.click(screen.getByTestId('hub-need-go-T-agent'));
     expect(onOpen).toHaveBeenLastCalledWith('T', { view: 'map', panel: 'agent' });
   });
 
-  it('a whole card opens its brain; Add knowledge picks a brain and opens its Add panel; New Brain opens the form', () => {
+  it('a repository a Brain started reading is a notice that opens the Brain', () => {
+    const onOpen = vi.fn();
+    render(<BrainHubHome brains={[brain('T', { pendingBySource: { local_root: 2 } }, { pending: 2 })] as never} onOpen={onOpen} />);
+    expect(screen.getByTestId('hub-chip-repos').textContent).toBe('2 repositories newly read');
+    expect(screen.getByTestId('hub-signal-T').getAttribute('data-tone')).toBe('notice');
+    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
+    fireEvent.click(screen.getByTestId('hub-need-go-T-repos'));
+    expect(onOpen).toHaveBeenLastCalledWith('T', { view: 'map' });
+  });
+
+  it('nothing open: no band. A whole card opens its brain; New Brain is the one page action', () => {
     const onOpen = vi.fn();
     const shown: string[] = [];
     const listen = (e: Event) => shown.push(e.type);
     window.addEventListener('swarm:show-new-brain', listen);
-    render(<BrainHubHome brains={brains as never} onOpen={onOpen} />);
+    render(<BrainHubHome brains={[brain('T'), brain('S', { recentActivity: 2 })] as never} onOpen={onOpen} />);
+    expect(screen.queryByTestId('hub-attention')).toBeNull();
     fireEvent.click(screen.getByTestId('dddcard-T'));
     expect(onOpen).toHaveBeenLastCalledWith('T');
-    expect(screen.queryByTestId('hub-card-add-T')).toBeNull();   // no hidden hover action on a card
-    fireEvent.click(screen.getByTestId('hub-add-knowledge'));
-    fireEvent.click(screen.getByTestId('hub-add-pick-S'));
-    expect(onOpen).toHaveBeenLastCalledWith('S', { view: 'map', panel: 'add' });
-    expect(screen.queryByTestId('hub-add-pick')).toBeNull();
+    expect(screen.queryByTestId('hub-add-knowledge')).toBeNull();     // a Brain's own action, on its page
     fireEvent.click(screen.getByTestId('hub-new-brain'));
     expect(shown).toEqual(['swarm:show-new-brain']);
     window.removeEventListener('swarm:show-new-brain', listen);
   });
 
-  it('an old daemon without recentActivity shows LEARNED as UNKNOWN, not +0', () => {
-    render(<BrainHubHome brains={[brain('T')] as never} onOpen={vi.fn()} />);
-    expect(screen.getByTestId('hub-sum-learned').textContent).toContain('UNKNOWN');
+  it('a card footer: entries, what it learned, when it last landed', () => {
+    render(<BrainHubHome brains={[brain('T', { recentActivity: 3, typeCounts: { guideline: 10, pitfall: 2 } },
+      { lastChangeRelative: '5h ago' })] as never} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('hub-facts-T').textContent).toBe('12 entries · +3 in 30 days · landed 5h ago');
+    expect(screen.getByTestId('hub-ambient').textContent).toContain('12 knowledge entries');
   });
+
+  it('an old daemon without recentActivity shows no learned count, never +0', () => {
+    render(<BrainHubHome brains={[brain('T')] as never} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('hub-ambient').textContent).not.toContain('learned');
+  });
+
 });
 

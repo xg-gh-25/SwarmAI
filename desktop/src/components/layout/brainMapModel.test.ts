@@ -134,21 +134,33 @@ describe('brainMapModel', () => {
     expect(items[4].text).toBe('2 escalations to decide');
     expect(items[1].text).toBe('Run question: Pick a column');
     expect(items[3]).toMatchObject({ brain: 'B', kind: 'proposals', text: '1 rule proposal to review' });
-    expect(items[6]).toMatchObject({ kind: 'agent', text: 'Project Agent draft to confirm' });
+    expect(items[6]).toMatchObject({ kind: 'agent', text: 'Project Agent draft to confirm', severity: 'setup' });
+    // severity: a Run or an escalation blocks on the person; a proposal waits for a review
+    expect(items.map((i) => i.severity)).toEqual(['urgent', 'urgent', 'urgent', 'review', 'urgent', 'review', 'setup', 'review']);
+    expect(items[2].count).toBe(1);
+    expect(items[4].count).toBe(2);
     expect(hubSummary([brain('B', { projectAgentStatus: 'draft' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
   });
 
-  it('brainSignal picks the one most urgent thing: needs you > running > being born > last change', () => {
+  it('hubNeeds: a repository a Brain started reading is a notice, not "other items"', () => {
+    const items = hubNeeds([brain('R', { pendingBySource: { local_root: 3 } }, { pending: 3 })], null);
+    expect(items).toEqual([expect.objectContaining({ kind: 'repos', count: 3, severity: 'notice',
+      text: 'now reads 3 new repositories' })]);
+  });
+
+  it('brainSignal picks the one most pressing thing: blocked > review > running > setup > notice', () => {
     const a = an({ A: [run({ needsYou: true })] });
-    expect(brainSignal(brain('A', {}, { liveRun: true }), a)).toMatchObject({ tone: 'error', rank: 0, text: 'A Run needs you' });
+    expect(brainSignal(brain('A', {}, { liveRun: true }), a)).toMatchObject({ tone: 'urgent', rank: 0, text: 'A Run needs you' });
     expect(brainSignal(brain('B', { pendingBySource: { cultivation: 2 } }, { pending: 2 }), a).text).toBe('2 proposals to review');
     expect(brainSignal(brain('B2', { pendingBySource: { escalation: 1 } }, { pending: 1 }), a).text).toBe('1 escalation to decide');
     // a Run the analytics does not list still counts (the attention channel saw it)
     expect(brainSignal(brain('B3', { pendingBySource: { paused_run: 2 } }, { pending: 2 }), null).text).toBe('2 Runs need you');
     // no split (old daemon): never called proposals
     expect(brainSignal(brain('B4', {}, { pending: 2 }), null).text).toBe('2 items in Need You');
-    expect(brainSignal(brain('C', { setupState: 'setting-up' }, { liveRun: true }), a)).toMatchObject({ tone: 'primary', rank: 1 });
-    expect(brainSignal(brain('D', { setupState: 'setting-up' }), a)).toMatchObject({ tone: 'warning', text: 'Being born' });
+    expect(brainSignal(brain('B', { pendingBySource: { cultivation: 2 } }, { pending: 2 }), a).tone).toBe('review');
+    expect(brainSignal(brain('B2', { pendingBySource: { escalation: 1 } }, { pending: 1 }), a).tone).toBe('urgent');
+    expect(brainSignal(brain('C', { setupState: 'setting-up' }, { liveRun: true }), a)).toMatchObject({ tone: 'live', rank: 2 });
+    expect(brainSignal(brain('D', { setupState: 'setting-up' }), a)).toMatchObject({ tone: 'setup', text: 'Being born' });
     expect(brainSignal(brain('D2', { setupState: 'setting-up', setupProgress: { done: 4, total: 7 } }), a).text)
       .toBe('Being born · 4 of 7 checks');
     expect(brainSignal(brain('D3', { setupState: 'setting-up',
@@ -157,12 +169,16 @@ describe('brainMapModel', () => {
     expect(brainSignal(brain('D4', { setupState: 'setting-up',
       setupProgress: { done: 8, total: 9, next: '⑦ Something New' } }), a).text)
       .toBe('Being born · next: Something New (8/9)');
-    expect(brainSignal(brain('G', { projectAgentStatus: 'draft' }, { liveRun: true }), a))
-      .toMatchObject({ tone: 'error', rank: 0, text: 'Project Agent to confirm' });
-    expect(brainSignal(brain('H', { projectAgentStatus: 'invalid' }), a).text).toBe('Project Agent has problems');
-    expect(brainSignal(brain('I', { projectAgentStatus: 'reviewed' }), a).tone).toBe('muted');
-    expect(brainSignal(brain('E', {}, { lastChangeRelative: '2h ago' }), a).text).toBe('Last landed 2h ago');
-    expect(brainSignal(brain('F'), a)).toMatchObject({ tone: 'muted', rank: 3, text: 'No landed change in 30 days' });
+    // a Project Agent draft is setup: grey, after a Run in progress
+    expect(brainSignal(brain('G', { projectAgentStatus: 'draft' }, { liveRun: true }), a)).toMatchObject({ tone: 'live' });
+    expect(brainSignal(brain('G2', { projectAgentStatus: 'draft' }), a))
+      .toMatchObject({ tone: 'setup', text: 'Project Agent to confirm' });
+    expect(brainSignal(brain('H', { projectAgentStatus: 'invalid' }), a)).toMatchObject({ tone: 'review', text: 'Project Agent has problems' });
+    expect(brainSignal(brain('J', { pendingBySource: { local_root: 1 } }, { pending: 1 }), a))
+      .toMatchObject({ tone: 'notice', text: 'Reads 1 new repository' });
+    // nothing going on: no status (the card's footer carries its recency)
+    expect(brainSignal(brain('I', { projectAgentStatus: 'reviewed' }), a)).toMatchObject({ tone: 'calm', text: '' });
+    expect(brainSignal(brain('F'), a)).toMatchObject({ tone: 'calm', rank: 5 });
   });
 });
 
