@@ -52,6 +52,11 @@ def _by_id(rep):
     return {c.id: c for c in rep.symbols}
 
 
+def _touched(rep):
+    """Every touched symbol id: those shown in full and the quiet ones."""
+    return sorted([c.id for c in rep.symbols] + rep.quiet)
+
+
 def test_a_signature_change_lists_its_callers_and_the_files_that_name_it(project):
     from core.code_intel.changed import render, report
     (project / "store.py").write_text(_STORE.replace("def save_all(rows):", "def save_all(rows, *, strict):"))
@@ -69,24 +74,23 @@ def test_a_signature_change_lists_its_callers_and_the_files_that_name_it(project
 def test_a_method_body_change_names_the_method_not_its_class(project):
     from core.code_intel.changed import report
     (project / "store.py").write_text(_STORE.replace("        return k\n", "        return k * 2\n"))
-    ids = list(_by_id(report(project)))
-    assert ids == ["store.py::Store.load"]
+    assert _touched(report(project)) == ["store.py::Store.load"]
 
 
 def test_an_insertion_after_a_function_does_not_touch_it(project):
     from core.code_intel.changed import report
     (project / "api.py").write_text(_API + "\n\ndef extra():\n    return 1\n")
-    assert report(project).symbols == []
+    assert _touched(report(project)) == []
 
 
 def test_a_committed_change_is_found_with_a_base(project):
     from core.code_intel.changed import report
     (project / "store.py").write_text(_STORE.replace("return x\n", "return x or None\n"))
     _git(project, "commit", "-qam", "save")
-    assert report(project).symbols == []                    # nothing uncommitted
+    assert _touched(report(project)) == []                  # nothing uncommitted
     rep = report(project, base="HEAD~1")
-    assert list(_by_id(rep)) == ["store.py::Store.save"]
-    assert [x["file"] for x in _by_id(rep)["store.py::Store.save"].inside] == ["store.py"]
+    assert _touched(rep) == ["store.py::Store.save"]
+    assert rep.quiet == ["store.py::Store.save"]            # called only from its own file
 
 
 def test_a_linked_work_tree_uses_the_graph_of_its_checkout(project, tmp_path):
@@ -128,3 +132,65 @@ def test_a_caller_the_change_also_edits_is_listed_apart(project):
     (project / "api.py").write_text(_API.replace("save_all(rows)\n", "save_all(rows, 1)\n"))
     c = _by_id(report(project))["store.py::save_all"]
     assert c.outside == [] and [x["file"] for x in c.inside] == ["api.py"]
+
+
+def _noisy(project):
+    """Another module with its own `save_all`, a doc naming ours, and a file named
+    after ours without the module: none of them refers to store.save_all."""
+    (project / "other.py").write_text("def save_all(x):\n    return x\n")
+    (project / "notes.md").write_text("store.save_all is the bulk writer\n")
+    (project / "cli.py").write_text("SAVE = 'save_all'\n")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-q", "-m", "noise")
+
+
+def test_a_name_counts_only_in_code_that_also_names_its_module(project):
+    from core.code_intel.changed import report
+    _noisy(project)
+    (project / "store.py").write_text(_STORE.replace("def save_all(rows):", "def save_all(rows, x):"))
+    c = _by_id(report(project))["store.py::save_all"]
+    assert c.mentions == ["jobs.py", "test_store.py"]
+
+
+def test_what_is_called_from_outside_comes_first_and_the_rest_is_one_line(project):
+    from core.code_intel.changed import render, report
+    (project / "store.py").write_text(
+        _STORE.replace("        return k\n", "        return k * 2\n")
+              .replace("def save_all(rows):", "def save_all(rows, x):"))
+    rep = report(project)
+    assert [c.id for c in rep.symbols] == ["store.py::save_all"]
+    assert rep.quiet == ["store.py::Store.load"]
+    assert "1 more changed symbols have no caller and no mention" in render(rep)
+
+
+def test_symbols_of_a_new_file_are_counted_not_listed(project):
+    from core.code_intel.changed import render, report
+    (project / "fresh.py").write_text("def brand_new():\n    return 1\n")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-q", "-m", "fresh")
+    from core.code_intel import load_project_graphs
+    from core.code_intel.build import ensure_fresh
+    (ref, g), = load_project_graphs("Demo")
+    ensure_fresh(project.parent / "ws" / "Projects" / "Demo", ref, g)
+    rep = report(project, base="HEAD~1")
+    assert rep.new == 1 and _touched(rep) == []
+    assert "1 symbols are in files new in this change" in render(rep)
+
+
+def test_a_method_caller_linked_by_name_alone_is_left_out(project):
+    """`conn.save(...)` on some other object reaches `Store.save` by its name; a file
+    that names neither `Store` nor the module is not counted as its caller."""
+    from core.code_intel import load_project_graphs
+    from core.code_intel.build import ensure_fresh
+    from core.code_intel.changed import report
+    (project / "db.py").write_text("def flush(conn):\n    return conn.save(1)\n")
+    (project / "use.py").write_text("from store import Store\n\n\ndef go():\n    return Store().save(2)\n")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-q", "-m", "callers")
+    (ref, g), = load_project_graphs("Demo")
+    ensure_fresh(project.parent / "ws" / "Projects" / "Demo", ref, g)
+    (project / "store.py").write_text(_STORE.replace("    def save(self, x):", "    def save(self, x, y=0):"))
+    rep = report(project)
+    c = _by_id(rep)["store.py::Store.save"]
+    files = [x["file"] for x in c.outside]
+    assert "use.py" in files and "db.py" not in files

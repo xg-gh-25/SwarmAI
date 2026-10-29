@@ -42,10 +42,10 @@ One sub-agent per expert, in parallel, with the Agent tool:
   `"$SWARM_BACKEND_BIN" py -m core.code_intel.changed --repo <the checkout under review> [--base <ref>]`
   (`--base` when the change includes commits: the ref before them; default is the
   uncommitted change). It lists every function, method and class the diff touches, the
-  callers of each outside the change, and the files that name it without a call the
-  graph saw (passed as a value, mocked by its dotted path). Paste its output into every
-  expert's prompt as it is: that is where a contract change breaks, and the expert greps
-  the "named without a call" files. When the checkout has no code graph the output says
+  callers of each outside the change (those first), and the code files that name it
+  without a call the graph saw (passed as a value, mocked by its dotted path). Paste its
+  output into every expert's prompt as it is: that is where a contract change breaks,
+  and the expert greps the files that name a symbol without a call. When the checkout has no code graph the output says
   so; paste that too, so the expert knows to grep the callers itself.
 - When the repository is bound to a project with a DDD, paste the output of
   `"$SWARM_BACKEND_BIN" knowledge map --project <P> --brief` into the prompt and say it may

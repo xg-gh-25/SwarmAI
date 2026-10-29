@@ -3,10 +3,14 @@
 A contract change breaks where the changed function is called, and the reviewer of a
 diff sees the diff, not its callers. This reads the diff, finds the functions, methods
 and classes whose lines it touches in the repo's code graph, and lists each one's
-callers, with the files that name it without a call the graph saw (a function passed as
-a value, a test that mocks it by its dotted path, prose) for the reviewer to grep. It is
-deterministic: the same diff and graph give the same report, so a review step can run
-it instead of relying on someone remembering to ask.
+callers, with the code files that name it (and its module or class) without a call the
+graph saw — a function passed as a value, a test that mocks it by its dotted path — for
+the reviewer to grep. What can break outside the change comes first; symbols called
+only inside it fold into one line, and those of files new in the change are counted.
+A method or short name is linked by the graph by its name alone when the receiver's
+type is unknown, so such a caller counts only in a file that names the class or module.
+It is deterministic: the same diff and graph give the same report, so a review step can
+run it instead of relying on someone remembering to ask.
 
     "$SWARM_BACKEND_BIN" py -m core.code_intel.changed --repo <checkout> [--base REF] [--json]
 
@@ -51,6 +55,7 @@ class Changed:
     mentions: list[str] = field(default_factory=list)   # named, no call seen
     more_callers: int = 0
     more_mentions: int = 0
+    unconfirmed: int = 0    # callers linked by name only, in files naming neither class nor module
 
 
 @dataclass
@@ -61,8 +66,10 @@ class Report:
     indexed_commit: str | None = None
     freshness: str = ""
     files: list[str] = field(default_factory=list)
-    symbols: list[Changed] = field(default_factory=list)
+    symbols: list[Changed] = field(default_factory=list)   # called or named from outside
     more_symbols: int = 0
+    quiet: list[str] = field(default_factory=list)  # touched; no caller or name outside
+    new: int = 0                                    # symbols of files new in this change
     note: str = ""
 
 
@@ -161,13 +168,55 @@ def symbols_touched(graph, ranges: dict[str, list[tuple[int, int]]]) -> list[Cha
     return found
 
 
-def _mentions(repo: Path, name: str, skip: set[str]) -> list[str]:
-    """Files that contain *name* as a word but where the graph saw no call. Names too
-    short to grep meaningfully give none."""
+def _code_pathspecs() -> list[str]:
+    from .parser import LANGUAGE_MAP
+    return [f"*{ext}" for ext in sorted(LANGUAGE_MAP)]
+
+
+def _anchors(c: "Changed") -> list[str]:
+    """A word a file that really refers to *c* also carries: for a method its class,
+    otherwise its module's name (a package's ``__init__`` by its directory)."""
+    symbol = c.id.split("::", 1)[-1]
+    if "." in symbol:
+        words = [symbol.split(".")[0]]
+    else:
+        stem = Path(c.file).stem
+        words = [Path(c.file).parent.name if stem in ("__init__", "index", "mod") else stem]
+    return [w for w in words if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", w or "")]
+
+
+def _by_name_only(c: "Changed") -> bool:
+    """The graph links a call to a method, or to a short name, by its name when it
+    cannot see the receiver's type (``conn.execute()`` reaches every ``execute``), so
+    such a caller is kept only when its file also names the class or module."""
+    return "." in c.id.split("::", 1)[-1] or len(c.name) < 4
+
+
+def _anchored(repo: Path, c: "Changed", files: list[str]) -> set[str]:
+    """The subset of *files* that carry one of *c*'s anchors as a word."""
+    anchors = _anchors(c)
+    if not anchors or not files:
+        return set()
+    args = ["grep", "-l", "-w", "-I"]
+    for w in anchors:
+        args += ["-e", w]
+    out = _git(repo, *args, "--", *sorted(set(files)))
+    return {f for f in (out or "").splitlines() if f}
+
+
+def _mentions(repo: Path, c: "Changed", skip: set[str]) -> list[str]:
+    """Code files that name *c* without a call the graph saw: the file contains the
+    name as a word AND one of its anchors (``_anchors``), so another module's own
+    ``take`` or ``_now`` does not count. Docs and prose are not code files."""
+    name = c.name
     if len(name) < 4 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
         return []
-    out = _git(repo, "grep", "-l", "-w", "-I", "-e", name, "--")
-    return sorted(f for f in (out or "").splitlines() if f and f not in skip)
+    anchors = _anchors(c)
+    if not anchors:
+        return []
+    out = _git(repo, "grep", "-l", "-w", "-I", "-e", name, "--", *_code_pathspecs())
+    named = [f for f in (out or "").splitlines() if f and f not in skip]
+    return sorted(_anchored(repo, c, named))
 
 
 def _project_graph_for(checkout: Path):
@@ -218,17 +267,34 @@ def report(repo: str | Path, *, base: str = "HEAD", refresh: bool = True) -> Rep
                     "matched to the diff: grep the names of the changed functions instead")
         return rep
     changed = symbols_touched(graph, touched_lines(repo, commit, rep.files, base))
-    rep.symbols, rep.more_symbols = changed[:MAX_SYMBOLS], max(0, len(changed) - MAX_SYMBOLS)
     in_change = set(rep.files)
-    for c in rep.symbols:
+    # A file new in this change: nothing outside it can call what it defines yet.
+    new_files = {f for f in {c.file for c in changed}
+                 if _git(repo, "cat-file", "-e", f"{base}:{f}") is None}
+    shown: list[Changed] = []
+    for c in changed:
+        if c.file in new_files:
+            rep.new += 1
+            continue
         callers = [{"file": x.file, "symbol": x.symbol, "line": x.line}
                    for x in _callers(graph, [c.id], 1)]
+        if _by_name_only(c):
+            keep = _anchored(repo, c, [x["file"] for x in callers if x["file"] != c.file]) | {c.file}
+            c.unconfirmed = sum(1 for x in callers if x["file"] not in keep)
+            callers = [x for x in callers if x["file"] in keep]
         outside = [x for x in callers if x["file"] not in in_change]
         c.inside = [x for x in callers if x["file"] in in_change][:MAX_CALLERS]
         c.outside, c.more_callers = outside[:MAX_CALLERS], max(0, len(outside) - MAX_CALLERS)
-        seen = {x["file"] for x in callers} | {c.file}
-        mentions = _mentions(repo, c.name, seen)
+        mentions = _mentions(repo, c, {x["file"] for x in callers} | in_change)
         c.mentions, c.more_mentions = mentions[:MAX_MENTIONS], max(0, len(mentions) - MAX_MENTIONS)
+        if c.outside or c.mentions:
+            shown.append(c)
+        else:
+            rep.quiet.append(c.id)
+    # What can break outside this change first: most outside callers, then names.
+    shown.sort(key=lambda c: (-(len(c.outside) + c.more_callers),
+                              -(len(c.mentions) + c.more_mentions), not c.signature, c.file, c.line))
+    rep.symbols, rep.more_symbols = shown[:MAX_SYMBOLS], max(0, len(shown) - MAX_SYMBOLS)
     return rep
 
 
@@ -240,10 +306,12 @@ def render(rep: Report) -> str:
     where = rep.project + (f" · repo {rep.graph_repo}" if rep.graph_repo else "")
     lines.append(f"Code graph of {where}, indexed at {(rep.indexed_commit or '?')[:9]}"
                  + (f" ({rep.freshness})" if rep.freshness else "") + ".")
-    if not rep.symbols:
+    if not (rep.symbols or rep.quiet or rep.new):
         lines.append(f"{len(rep.files)} files changed; no function, method or class the "
                      "graph holds is touched.")
         return "\n".join(lines)
+    if not rep.symbols:
+        lines.append("No changed function, method or class is called or named outside this change.")
     for c in rep.symbols:
         what = "signature or first lines changed" if c.signature else "body changed"
         lines.append(f"- `{c.id}` ({what})")
@@ -255,17 +323,30 @@ def render(rep: Report) -> str:
                 lines.append(f"    - … {c.more_callers} more (run `core.code_intel.impact {c.id}`)")
         else:
             lines.append("  - no caller outside this change in the graph")
+        if c.unconfirmed:
+            lines.append(f"  - {c.unconfirmed} more calls linked by the name alone, in files "
+                         "that name neither its class nor its module: left out")
         if c.inside:
             lines.append("  - callers inside this change: "
                          + ", ".join(f"{x['file']}: {x['symbol']}" for x in c.inside))
         if c.mentions:
             more = f" (+{c.more_mentions} more)" if c.more_mentions else ""
-            lines.append("  - named without a call the graph saw (passed as a value, mocked "
-                         "by its dotted path, or prose): " + ", ".join(c.mentions) + more)
+            lines.append("  - code files that name it with its module or class but no call "
+                         "the graph saw (passed as a value, mocked by its dotted path): "
+                         + ", ".join(c.mentions) + more)
     if rep.more_symbols:
-        lines.append(f"- … {rep.more_symbols} more changed symbols not shown")
-    lines.append("The graph sees direct calls. Check the \"named without a call\" files with "
-                 "grep, and dynamic dispatch (getattr, registries, string routes) by hand.")
+        lines.append(f"- … {rep.more_symbols} more changed symbols called or named outside "
+                     "this change (run with --json for all)")
+    if rep.quiet:
+        listed = ", ".join(f"`{q}`" for q in rep.quiet[:15])
+        more = f" (+{len(rep.quiet) - 15} more)" if len(rep.quiet) > 15 else ""
+        lines.append(f"- {len(rep.quiet)} more changed symbols have no caller and no mention "
+                     f"outside this change: {listed}{more}")
+    if rep.new:
+        lines.append(f"- {rep.new} symbols are in files new in this change "
+                     "(nothing outside can call them yet)")
+    lines.append("The graph sees direct calls. Check the files that name a symbol without a "
+                 "call, and dynamic dispatch (getattr, registries, string routes), by hand.")
     return "\n".join(lines)
 
 
