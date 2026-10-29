@@ -61,6 +61,8 @@ class _Relay:
         self.high = 0               # highest Hive eventSeq published in ``epoch``
         self.joined = False
         self.version = 0            # bumped whenever an event changes ``entry``
+        self.refresh_started = 0    # ticket of the latest state read started
+        self.refresh_applied = 0    # ticket of the latest state read applied
         self.gen = 0
         self.task: Optional[asyncio.Task] = None
 
@@ -270,6 +272,10 @@ class RelayManager:
             await self._refresh_state(relay, gen)
 
     async def _refresh_state(self, relay: _Relay, gen: int) -> None:
+        # The poller and the reconnect path can each have a read out: a read that
+        # finishes after a later-started one was applied carries the older state.
+        relay.refresh_started += 1
+        ticket = relay.refresh_started
         version = relay.version
         try:
             entry = await read_state(relay.inst, relay.sid)
@@ -280,6 +286,9 @@ class RelayManager:
             return
         if relay.version != version:
             return   # an event changed the state while the read was out: it is newer
+        if ticket <= relay.refresh_applied:
+            return   # a read started after this one was applied: it is newer
+        relay.refresh_applied = ticket
         if entry is None:
             if relay.entry.get("activity") != "idle" or relay.entry.get("streaming"):
                 relay.entry = _idle(relay.entry)

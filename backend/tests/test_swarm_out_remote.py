@@ -55,9 +55,14 @@ def hive(monkeypatch):
         return swarm_out._validate_instance(INST, {"id": "a1"})
     monkeypatch.setattr(swarm_out, "_instance", instance)
 
-    def client(inst, timeout=None):
-        return httpx.AsyncClient(base_url=swarm_out._base(inst), headers=swarm_out._auth(inst),
-                                 transport=httpx.MockTransport(fake.handler))
+    real_client = swarm_out._client
+
+    def client(inst, timeout=swarm_out.HTTP_TIMEOUT_S):
+        # The production client (its headers and event hooks), with only the
+        # transport swapped for the fake Hive.
+        c = real_client(inst, timeout)
+        c._transport = httpx.MockTransport(fake.handler)
+        return c
     monkeypatch.setattr(swarm_out, "_client", client)
     from core.session_manager import session_manager
 
@@ -347,3 +352,57 @@ def test_a_tree_diff_is_forwarded_with_its_query_keys_only(hive, api):
     r = api.get(f"{BASE}/canvas/changes/tree-diff?root=/hive/repo&start=a&end=b&path=x.py&evil=1")
     assert r.status_code == 200 and r.json() == {"diff": "@@"}
     assert dict(hive.seen[-1].url.params) == {"root": "/hive/repo", "start": "a", "end": "b", "path": "x.py"}
+
+
+# ── A Hive's answer is never decoded (bugfix: compressed answers past the caps) ──
+
+def test_the_hive_client_asks_for_identity_and_refuses_an_encoded_answer():
+    import asyncio
+    client = swarm_out._client(INST)
+    assert client.headers["accept-encoding"] == "identity"
+    assert swarm_out._refuse_encoded in client.event_hooks["response"]
+
+    async def go():
+        await client.aclose()
+        req = httpx.Request("GET", "https://abc123.cloudfront.net/x")
+        for enc in ("gzip", "br", "deflate", " GZIP "):
+            with pytest.raises(httpx.DecodingError):
+                await swarm_out._refuse_encoded(httpx.Response(200, headers={"content-encoding": enc}, request=req))
+        for enc in (None, "identity", "Identity"):
+            headers = {"content-encoding": enc} if enc else {}
+            await swarm_out._refuse_encoded(httpx.Response(200, headers=headers, request=req))
+    asyncio.run(go())
+
+
+def _gzip(raw: bytes) -> bytes:
+    import gzip
+    return gzip.compress(raw)
+
+
+def test_every_proxied_request_asks_for_identity(hive, api):
+    hive.routes[f"/api/chat/sessions/{SID}"] = lambda r: httpx.Response(200, json={"id": SID})
+    assert api.get(f"{BASE}/chat/sessions/{SID}").status_code == 200
+    assert hive.seen[-1].headers["accept-encoding"] == "identity"
+
+
+def test_a_compressed_answer_is_refused_without_decoding(hive, api):
+    hive.routes[f"/api/chat/sessions/{SID}"] = lambda r: httpx.Response(
+        200, content=_gzip(json.dumps({"id": SID}).encode()), headers={"content-encoding": "gzip"})
+    r = api.get(f"{BASE}/chat/sessions/{SID}")
+    assert r.status_code == 502
+    assert SID not in r.text
+
+
+def test_a_compressed_stream_is_refused(hive, api):
+    hive.routes["/api/chat/stream"] = lambda r: httpx.Response(
+        200, content=_gzip(_sse({"type": "result", "sessionId": SID})),
+        headers={"content-type": "text/event-stream", "content-encoding": "gzip"})
+    r = api.post(f"{BASE}/chat/stream", headers=APP_HEADERS, json={"session_id": SID, "message": "hi"})
+    assert r.status_code == 502
+    assert '"result"' not in r.text
+
+
+def test_an_uncompressed_answer_within_the_cap_is_forwarded_as_before(hive, api):
+    hive.routes[f"/api/chat/sessions/{SID}"] = lambda r: httpx.Response(200, json={"id": SID, "n": 1})
+    r = api.get(f"{BASE}/chat/sessions/{SID}")
+    assert r.status_code == 200 and r.json() == {"id": SID, "n": 1}

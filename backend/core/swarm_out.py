@@ -151,9 +151,29 @@ def _validate_instance(inst: dict[str, Any], acct: Optional[dict[str, Any]]) -> 
     return {**inst, "cloudfront_domain": domain, "_account": acct}
 
 
+# Every answer a Hive gives is read uncompressed: the Host's size caps count the bytes
+# it buffers, and a decoded compressed answer could expand far past them before any cap
+# runs. So every request asks for identity, and an answer that comes back encoded anyway
+# is refused before a body byte is read (an httpx error, which every reader built on
+# _client already handles as a failed call).
+HIVE_HEADERS: dict[str, str] = {"Accept-Encoding": "identity"}
+
+
+async def _refuse_encoded(response: httpx.Response) -> None:
+    encoding = response.headers.get("content-encoding", "").strip().lower()
+    if encoding not in ("", "identity"):
+        raise httpx.DecodingError("the Hive sent a compressed answer", request=response.request)
+
+
+def hive_event_hooks() -> dict[str, list]:
+    """The event hooks every client to a Hive carries (see HIVE_HEADERS)."""
+    return {"response": [_refuse_encoded]}
+
+
 def _client(inst: dict[str, Any], timeout: float = HTTP_TIMEOUT_S) -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=_base(inst), headers=_auth(inst),
-                             timeout=timeout, follow_redirects=False)
+    return httpx.AsyncClient(base_url=_base(inst), headers={**_auth(inst), **HIVE_HEADERS},
+                             timeout=timeout, follow_redirects=False,
+                             event_hooks=hive_event_hooks())
 
 
 def _auth(inst: dict[str, Any]) -> dict[str, str]:

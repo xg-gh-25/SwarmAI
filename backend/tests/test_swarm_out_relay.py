@@ -72,8 +72,14 @@ def env(monkeypatch):
     monkeypatch.setattr(swarm_out_relay, "BACKOFF_S", (0,))
     monkeypatch.setattr(swarm_out_relay, "STATE_POLL_S", 0.05)
 
-    def client(inst, timeout=None):
-        return httpx.AsyncClient(base_url="https://abc123.cloudfront.net", transport=httpx.MockTransport(hive.handler))
+    real_client = swarm_out._client
+
+    def client(inst, timeout=swarm_out.HTTP_TIMEOUT_S):
+        # The production client (its headers and event hooks), with only the
+        # transport swapped for the fake Hive.
+        c = real_client(inst, timeout)
+        c._transport = httpx.MockTransport(lambda request: hive.handler(request))
+        return c
     monkeypatch.setattr(swarm_out, "_client", client)
     return hive
 
@@ -395,5 +401,76 @@ def test_an_unexpected_error_on_hive_data_reconnects(env, monkeypatch):
         env.push(hello(), ev("turn_start", 1))                               # the second call raises
         await until(lambda: len(env.connects) >= 2)                          # it reconnected
         assert m.is_relayed(SID)
+        await m.release(SID, "w1")
+    asyncio.run(go())
+
+
+# ── bugfix: compressed answers and the order of state reads ──
+
+def _gz(raw: bytes) -> bytes:
+    import gzip
+    return gzip.compress(raw)
+
+
+def test_a_compressed_events_stream_is_never_read_and_the_relay_reconnects(env, monkeypatch):
+    real = env.handler
+
+    def handler(request):
+        if request.url.path == "/api/chat/events":
+            env.connects.append(dict(request.url.params))
+            body = _gz(f"data: {json.dumps({'type': 'assistant', 'sessionId': SID, 'turnId': 't', 'eventSeq': 1})}\n\n".encode())
+            return httpx.Response(200, content=body, headers={"content-type": "text/event-stream", "content-encoding": "gzip"})
+        return real(request)
+    monkeypatch.setattr(env, "handler", handler)
+
+    async def go():
+        m = swarm_out_relay.manager()
+        await m.acquire(SID, "w1", INST)
+        await until(lambda: len(env.connects) >= 2)
+        assert not [e for e in published() if e.get("type") == "assistant"]
+        assert m.state_entry(SID)["relay_connected"] is False
+        await m.release(SID, "w1")
+    asyncio.run(go())
+
+
+def test_a_compressed_state_answer_keeps_the_last_state(env):
+    async def go():
+        m = swarm_out_relay.manager()
+        await m.acquire(SID, "w1", INST)
+        relay = m._relays[SID]
+        before = dict(m.state_entry(SID))
+        env.state_reply = lambda: httpx.Response(
+            200, content=_gz(json.dumps({"sessions": {}}).encode()), headers={"content-encoding": "gzip"})
+        await m._refresh_state(relay, relay.gen)
+        assert m.state_entry(SID)["state"] == before["state"] == "streaming"
+        await m.release(SID, "w1")
+    asyncio.run(go())
+
+
+def test_an_earlier_state_read_that_finishes_last_is_discarded(env, monkeypatch):
+    # The poller sleeps for an hour from the start, so only this test's reads run.
+    monkeypatch.setattr(swarm_out_relay, "STATE_POLL_S", 3600)
+
+    async def go():
+        m = swarm_out_relay.manager()
+        await m.acquire(SID, "w1", INST)
+        relay = m._relays[SID]
+        gate = asyncio.Event()
+        calls = []
+
+        async def fake(inst, sid):
+            calls.append(1)
+            if len(calls) == 1:
+                await gate.wait()
+                return {**STATE, "state": "older"}
+            return {**STATE, "state": "newer"}
+        monkeypatch.setattr(swarm_out_relay, "read_state", fake)
+        first = asyncio.create_task(m._refresh_state(relay, relay.gen))
+        await until(lambda: len(calls) == 1)
+        await m._refresh_state(relay, relay.gen)
+        assert m.state_entry(SID)["state"] == "newer"
+        gate.set()
+        await first
+        assert m.state_entry(SID)["state"] == "newer"
         await m.release(SID, "w1")
     asyncio.run(go())
