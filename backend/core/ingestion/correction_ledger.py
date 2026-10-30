@@ -26,6 +26,12 @@ This module is the only writer of the ``correction_ledger`` table (the CDF store
 - ``rate(window_days, brain=None, now=None)`` — the rate with its coverage figures.
 - ``record_chat_message(session_id, client_id, text)`` — the chat send path's entry:
   detect, find the session's Brain and the reply being corrected, open a row.
+- ``record_swarm_out_reject(dispatch_id)`` — a Hive run's delivery the person sent back.
+- ``record_escalation(esc)`` — an escalation the person resolved against Swarm's pick.
+
+A pipeline ``human_override`` is a rescue (the person lands past a gate), counted by the
+run scorecard, not a correction of the agent's output; withdrawing a Brain entry gets its
+entry when the brain-driven withdrawal lands (design §2.2).
 """
 from __future__ import annotations
 
@@ -56,7 +62,7 @@ CREATE TABLE IF NOT EXISTS correction_ledger (
   surface TEXT NOT NULL CHECK (surface IN
     ('chat','pipeline_override','swarm_out_reject','brain_withdraw','escalation')),
   session_id TEXT,
-  client_id TEXT,
+  client_id TEXT NOT NULL,          -- the source's own key: a chat message's client id, a dispatch id, an escalation id
   brain TEXT,
   run_id TEXT,
   text TEXT NOT NULL,
@@ -67,7 +73,7 @@ CREATE TABLE IF NOT EXISTS correction_ledger (
   confirmed_at TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_correction_ledger_message
-  ON correction_ledger(surface, session_id, client_id);
+  ON correction_ledger(surface, ifnull(session_id, ''), client_id);
 CREATE INDEX IF NOT EXISTS ix_correction_ledger_at ON correction_ledger(at);
 """
 
@@ -196,16 +202,19 @@ def candidates(text: str, reply: str = "", *, brain: Optional[str] = None,
 
 # ── writes ───────────────────────────────────────────────────────────────────
 
-def open_row(*, surface: str, text: str, session_id: Optional[str] = None,
-             client_id: Optional[str] = None, brain: Optional[str] = None,
+def open_row(*, surface: str, text: str, client_id: str, session_id: Optional[str] = None,
+             brain: Optional[str] = None,
              run_id: Optional[str] = None, reply: str = "",
              workspace: Optional[Path] = None, now: Optional[datetime] = None) -> Optional[str]:
-    """Record a correction waiting for the person's choice. Returns its id, or the id
-    of the row already recorded for this (surface, session, client id)."""
+    """Record a correction waiting for the person's choice. ``client_id`` is the
+    source's own key (a chat message's client id, a dispatch id, an escalation id).
+    Returns the row's id, or the id of the row already recorded for that source."""
     if surface not in SURFACES:
         raise LedgerError(f"unknown surface {surface!r}")
     if not isinstance(text, str) or not text.strip():
         raise LedgerError("a correction needs its text")
+    if not isinstance(client_id, str) or not client_id:
+        raise LedgerError("a correction needs its source's key")
     at = _now(now)
     conn = _rw()
     try:
@@ -354,3 +363,38 @@ def record_chat_message(session_id: Optional[str], client_id: Optional[str], tex
         return None
     return open_row(surface="chat", text=text, session_id=session_id, client_id=client_id,
                     brain=session_brain(session_id, text), reply=reply)
+
+
+# ── explicit actions ─────────────────────────────────────────────────────────
+
+def record_swarm_out_reject(dispatch_id: str) -> Optional[str]:
+    """The person sent a Hive run's delivery back: a correction of that run."""
+    from core.swarm_out import _log_row_of
+    row = _log_row_of(dispatch_id)
+    agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
+    title = str(row.get("title") or dispatch_id)
+    return open_row(surface="swarm_out_reject", client_id=dispatch_id,
+                    session_id=row.get("session_id") or None,
+                    brain=agent.get("brain") or None, run_id=dispatch_id,
+                    text=f"Delivery sent back: {title}")
+
+
+def _norm(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def record_escalation(esc: Any) -> Optional[str]:
+    """An escalation the person resolved with something other than Swarm's pick. One
+    with no pick (a genuinely open question), or resolved by timeout or by Swarm, is
+    not a correction."""
+    if getattr(esc, "resolved_by", None) != "user" or not getattr(esc, "recommendation", None):
+        return None
+    picks = {_norm(esc.recommendation)}
+    picks |= {_norm(o.label) for o in (getattr(esc, "options", None) or [])
+              if getattr(o, "is_recommendation", False)}
+    resolution = getattr(esc, "resolution", "") or ""
+    if _norm(resolution) in picks:
+        return None
+    return open_row(surface="escalation", client_id=str(esc.id),
+                    brain=getattr(esc, "project", None) or None,
+                    text=f"{esc.title}: chose {resolution!s:.300}, not the recommended {esc.recommendation!s:.300}")

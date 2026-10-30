@@ -143,3 +143,36 @@ def test_last_reply_is_the_newest_assistant_text():
                                               {"type": "text", "text": "new answer"}]}]
     assert cl.last_reply(msgs) == "new answer"
     assert cl.last_reply([]) == ""
+
+
+def test_every_row_has_its_sources_key(ws):
+    with pytest.raises(cl.LedgerError):
+        cl.open_row(surface="escalation", text="x", client_id="")
+
+
+def test_a_sent_back_hive_delivery_is_a_correction_of_that_run(ws, monkeypatch):
+    rows = {"so_1": {"dispatch_id": "so_1", "session_id": "hs1", "title": "fix the refund report",
+                     "project_agent": {"brain": "Billing"}}}
+    monkeypatch.setattr("core.swarm_out._log_row_of", lambda d: rows[d])
+    rid = cl.record_swarm_out_reject("so_1")
+    assert cl.record_swarm_out_reject("so_1") == rid          # one row per dispatch
+    row = cl.pending(brain="Billing")[0]
+    assert (row["surface"], row["run_id"], row["session_id"]) == ("swarm_out_reject", "so_1", "hs1")
+
+
+def test_an_escalation_is_a_correction_only_against_swarms_pick(ws):
+    from core.escalation import Escalation, Option
+
+    def esc(resolution, by="user", rec="Use the settlement date"):
+        return Escalation(id=f"esc-{resolution}-{by}", level=1, trigger="t", title="Refund date",
+                          situation="s", options=[Option("Use the settlement date", "d", is_recommendation=True),
+                                                  Option("Use the order date", "d")],
+                          recommendation=rec, project="Billing", status="resolved",
+                          resolved_by=by, resolution=resolution)
+    assert cl.record_escalation(esc("use the settlement  date")) is None     # took the pick
+    assert cl.record_escalation(esc("Use the order date", by="timeout")) is None
+    assert cl.record_escalation(esc("Use the order date", rec=None)) is None  # no pick: an open question
+    rid = cl.record_escalation(esc("Use the order date"))
+    assert cl.record_escalation(esc("Use the order date")) == rid   # no session: still one row
+    row = [r for r in cl.pending(brain="Billing") if r["id"] == rid][0]
+    assert row["surface"] == "escalation" and "not the recommended" in row["text"]
