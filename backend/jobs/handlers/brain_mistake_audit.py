@@ -2,7 +2,8 @@
 
 Design docs/design/2026-10-30-brain-driven.md §2.8. Read-only: it reads run audits, the
 CDF records and the main cognition files, and writes only its report
-(``Knowledge/JobResults/<date>-brain-mistake-audit.md`` and ``.json``).
+(``Knowledge/JobResults/<YYYY-MM>-brain-mistake-audit.md`` and ``.json``, one per
+audited month; a month before the CDF records begin is skipped).
 
 For each real mistake of the month — a review finding of a pipeline run, a correction the
 user made in a session (a CDF unit of type ``correction``) — it answers:
@@ -343,6 +344,11 @@ def run_brain_mistake_audit(config: dict | None = None, *, ask: Callable[[str, d
         logger.warning("brain_mistake_audit: ingestion store unreadable", exc_info=True)
         return {"status": "failed", "summary": "CDF records unreadable", "error": str(exc), "output_path": None}
     try:
+        first = conn.execute("SELECT MIN(created_at) FROM ingestion_writes").fetchone()[0]
+        if not first or str(first) >= end:
+            # the records begin after this month: there is nothing to audit (a first run
+            # on a new install audits the month before it existed)
+            return {"status": "skipped", "summary": f"{month}: no CDF records yet", "output_path": None}
         mistakes = _pipeline_findings(ws, start, end) + _corrections(conn, start, end)
         judged = _classify(mistakes, ask)
         rows: list[dict] = []
@@ -381,7 +387,7 @@ def run_brain_mistake_audit(config: dict | None = None, *, ask: Callable[[str, d
     table = _table(rows)
     prev_month, prev = _previous(out_dir, month)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"{now.strftime('%Y-%m-%d')}-{REPORT_SUFFIX}"
+    stem = f"{month}-{REPORT_SUFFIX}"     # one report per audited month; a rerun replaces it
     md = out_dir / f"{stem}.md"
     md.write_text(_render(month, rows, table, prev_month, prev, summary_counts, conflicts, unjudged),
                   encoding="utf-8")

@@ -43,8 +43,19 @@ def _hashes(ws: Path) -> dict[str, str]:
             for p in sorted(ws.rglob("*.md")) if "JobResults" not in str(p)}
 
 
+def _a_record_before_the_month():
+    """The CDF records began before the audited month (else the month is skipped)."""
+    from core.ingestion.api import connect_rw
+    conn = connect_rw()
+    conn.execute("INSERT OR IGNORE INTO ingestion_writes(op_id,op_kind,target_path,step,created_at,updated_at) "
+                 "VALUES ('w0','user_edit','x','done','2026-10-01T00:00:00+00:00','2026-10-01T00:00:00+00:00')")
+    conn.commit()
+    conn.close()
+
+
 def _setup(cdf_env, *, knowledge_ids=()):
     ws = cdf_env["workspace"]
+    _a_record_before_the_month()
     (cdf_env["ddd"] / "TECH.md").write_text(TECH, encoding="utf-8")
     run = ws / "Projects/P/.artifacts/runs/run_x"
     (run / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -137,3 +148,16 @@ def test_an_entry_written_the_day_of_the_mistake_was_not_there_before():
     from jobs.handlers.brain_mistake_audit import _outcome
     assert _outcome("2026-11-20", "2026-11-20", True, False) == "事先没有"
     assert _outcome("2026-11-19", "2026-11-20", True, False) == "送到仍犯"
+
+
+def test_a_month_before_the_records_is_skipped_and_reports_are_named_by_month(cdf_env):
+    from core.ingestion.api import connect_rw
+    from jobs.handlers.brain_mistake_audit import run_brain_mistake_audit
+    connect_rw().close()
+    ws = cdf_env["workspace"]
+    (cdf_env["ddd"] / "TECH.md").write_text(TECH, encoding="utf-8")
+    early = run_brain_mistake_audit({"workspace": str(ws)}, ask=_ask, now=NOW)
+    assert early["status"] == "skipped" and early["output_path"] is None
+    _setup(cdf_env)
+    res = run_brain_mistake_audit({"workspace": str(ws)}, ask=_ask, now=NOW)
+    assert Path(res["output_path"]).name == "2026-11-brain-mistake-audit.md"

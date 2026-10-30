@@ -293,7 +293,7 @@ def execute_job(
             duration = (datetime.now(timezone.utc) - start).total_seconds()
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
-                status="success" if audit.get("status") == "success" else "failed",
+                status=audit.get("status") if audit.get("status") in ("success", "skipped") else "failed",
                 summary=audit.get("summary", "Brain mistake audit"),
                 output_path=audit.get("output_path"),
                 duration_seconds=duration,
