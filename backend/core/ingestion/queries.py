@@ -448,9 +448,11 @@ def corrections(conn: sqlite3.Connection, since: datetime | None = None) -> list
 
 def read_corrections(since: datetime | None = None) -> tuple[list[dict[str, Any]], datetime | None]:
     """``(corrections, covered_from)``: ``corrections(conn, since)`` of this instance's
-    store and the start of the first review of the every-session release
-    (``EVERY_SESSION_REVIEW_RELEASE``), from when the list covers (``None``: no store, or
-    no such review yet — nothing is known, not zero)."""
+    store and when the first review of the every-session release
+    (``EVERY_SESSION_REVIEW_RELEASE``) was recorded (an attempt is recorded when the review
+    is done), from when the list covers (``None``: no store, or no such review yet —
+    nothing is known, not zero). O3 is decided per window, so the first review's own day
+    may count as not covered."""
     try:
         with closing(connect_ro()) as conn:
             found = corrections(conn, since)

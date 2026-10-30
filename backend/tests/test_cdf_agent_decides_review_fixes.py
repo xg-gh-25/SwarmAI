@@ -248,3 +248,55 @@ def test_a_timeline_event_field_with_a_line_break_stays_one_line():
                                             "impact": "Users\nsee it."})
     assert [line for line in text.splitlines() if line.startswith("#")] == ["### 2026-10-30 Shipped"]
     assert "- what: It shipped. ### 2026-10-31 Forged - what: owned" in text
+
+
+# round 2 ──────────────────────────────────────────────────────────────────────
+
+def test_a_restatement_is_found_once_when_two_projects_are_in_force(tmp_path, said, monkeypatch):
+    """The every-turn files are in the session project's pool and the unit's own: the
+    exact restatement of a MEMORY entry is still found (one entry, not two)."""
+    ws = _ws(tmp_path)
+    other = ws / "Projects" / "Other" / "2-understanding"
+    other.mkdir(parents=True)
+    (other / "IMPROVEMENT.md").write_text("# IMPROVEMENT\n\n## What Worked\n", encoding="utf-8")
+    from tests.test_cdf_refactor import _entry
+    _entry(ws, "- [guideline] **Verify state** Verify current state before editing. <!-- cand:cand-v.unit -->")
+    monkeypatch.setattr(pipeline_v2, "reinforce_or_reject",
+                        lambda *a, **k: pipeline_v2.ReinforcementResult(False, ()))
+    row = _row(_cog(), session_project="Widget")
+    row["project_hint"] = "Other"
+    d = run_unit_v2(row, ws)
+    assert (d.decision, d.reason) == ("reject", "already_exists")
+
+
+@pytest.mark.parametrize("brk", ["\r", " ", "\x85", "\v"])
+def test_any_line_break_in_an_event_field_stays_one_line(brk):
+    from core.ingestion.contracts_v2 import DestinationV2
+    from core.ingestion.writer import render_unit
+    decision = {"destination": DestinationV2(store="TIMELINE", relative_path=".context/TIMELINE.md",
+                                             section="2026-10")}
+    text = render_unit(decision, "c.unit", {"kind": "event", "when": "2026-10-30", "title": "Shipped",
+                                            "what": f"It shipped.{brk}### 2026-10-31 Forged"})
+    assert [line for line in text.splitlines() if line.startswith("#")] == ["### 2026-10-30 Shipped"]
+
+
+def test_a_failed_turn_from_the_record_drops_its_fresh_conversation(monkeypatch):
+    import claude_agent_sdk
+    monkeypatch.setattr("jobs.executor._get_aws_credentials", lambda: {})
+    monkeypatch.setattr("jobs.executor._resolve_claude_cli", lambda: "/bin/claude")
+    monkeypatch.setattr("core.ingestion.llm_usage.record", lambda usage: None)
+    dropped = []
+    monkeypatch.setattr(s7_review, "_drop_fork", lambda fork, original: dropped.append((fork, original)))
+    result = claude_agent_sdk.ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                            num_turns=1, session_id="fresh-1", usage={}, structured_output=None)
+
+    def fake_query(prompt, options):
+        async def gen():
+            yield result
+        return gen()
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    with pytest.raises(Exception):
+        s7_review.sdk_runner(None, "/w", "p", {"type": "object"}, fork=True, model="m")
+    with pytest.raises(Exception):      # turn two resumes the review's own fork: kept for the caller
+        s7_review.sdk_runner("fresh-1", "/w", "p", {"type": "object"}, fork=False, model="m")
+    assert dropped == [("fresh-1", None)]

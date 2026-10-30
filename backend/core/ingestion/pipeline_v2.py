@@ -661,7 +661,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     # another project declares against that one's too: both are in force
     entries = relations_v2.pool(root, corpus_project)
     if session_home and session_home != corpus_project:
-        entries += relations_v2.pool(root, session_home)
+        known = {e.anchor for e in entries}       # the every-turn files are in both pools
+        entries += [e for e in relations_v2.pool(root, session_home) if e.anchor not in known]
     entries += relations_v2.withdrawn_entries(withdrawn_all)
     refused: list[dict[str, str]] = []
     declared_rel: dict[str, Any] = {}

@@ -273,7 +273,8 @@ def _evolution_prefix(group: Mapping[str, Any], answer: Any) -> str:
 def _one_line(value: Any) -> str:
     """*value* on one line: an entry in a per-turn file is one line, and a field with a
     line break ended the entry early or started a new heading in MEMORY.md."""
-    return re.sub(r"\s*\n\s*", " ", str(value or "")).strip()
+    # every line break a reader may honour (\r, \u2028, ... — str.splitlines' set)
+    return " ".join(part.strip() for part in str(value or "").splitlines() if part.strip())
 
 
 def _meta_value(value: Any) -> str:

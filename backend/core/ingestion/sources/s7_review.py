@@ -489,9 +489,10 @@ def sdk_runner(resume: str | None, cwd: str, prompt: str, schema: dict, *, fork:
     try:
         return asyncio.run(asyncio.wait_for(run(), REVIEW_TIMEOUT_S))
     except BaseException:
-        # a forking turn that fails after the CLI wrote the fork (no structured output, an
-        # error result, the timeout) leaves no id for the caller to drop: drop it here
-        if resume and fork and seen.get("id") and seen["id"] != resume:
+        # a turn that fails after the CLI wrote its own conversation (a fork, or a fresh
+        # one from the record: no structured output, an error result, the timeout) leaves
+        # no id for the caller to drop: drop it here. The conversation it resumed is kept.
+        if seen.get("id") and seen["id"] != resume:
             _drop_fork(seen["id"], resume)
         raise
 
