@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_cdf_v2_e2e import (  # noqa: F401  (cdf_env is a fixture)
-    SESSION, Extractor, Judge, _cognition, _record_person_message, cdf_env,
+    SESSION, Extractor, _cognition, _record_person_message, cdf_env,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -56,8 +56,7 @@ def test_replay_runs_one_session_end_to_end(cdf_env) -> None:
                       [f"event:{event_ids[0]}"])
     unit["user_quote"] = "Prefer one writer for every governed file."
     report = replay_mod.replay(cdf_env["data"], cdf_env["workspace"], sources=("s2",),
-                               max_usd=1.0, llm=lambda *a, **k: {"cognition_units": [unit]},
-                               judge_factory=Judge)
+                               max_usd=1.0, llm=lambda *a, **k: {"cognition_units": [unit]})
     s2 = report["sources"]["s2"]
     assert s2["items"] == 1 and s2["receipts"] >= 1 and s2["errors"] == 0, s2
     assert report["outcomes"]["S7"].get("written", 0) >= 1, report["outcomes"]
@@ -84,7 +83,7 @@ def test_budget_counts_this_run_only(cdf_env, monkeypatch) -> None:
 
     monkeypatch.setattr(replay_mod, "_enqueue", costly)
     report = replay_mod.replay(cdf_env["data"], cdf_env["workspace"], sources=("s2",),
-                               max_usd=2.0, llm=Extractor(), judge_factory=Judge)
+                               max_usd=2.0, llm=Extractor())
     assert ran == [SESSION]                                   # the first item ran
     assert report["stopped"].startswith("budget")             # the second did not
     assert report["usage_in_copy_before_run"]["input_tokens"] == 50_000_000

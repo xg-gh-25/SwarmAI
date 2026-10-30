@@ -52,7 +52,6 @@ def test_semantic_fields_are_never_sliced_or_shortened():
 PRODUCERS = {
     "core/summarization.py": {"_extract_topics", "_extract_first_sentence",
                               "_extract_decisions", "_extract_open_questions"},
-    "hooks/knowledge_backflow_hook.py": {"_extract_title"},
     "core/runtime_hooks.py": {"create_session_checkpoint"},
 }
 _LOCATOR = ("id", "hash", "digest", "sha")

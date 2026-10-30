@@ -57,6 +57,8 @@ CDF 一次切换上线之后要做的事。原则不变：不加开关、不加�
 
 删的时候先把引用全部 grep 出来（包括测试和注释），每次删一类，跑一次 CDF 测试。
 
+**已执行（2026-10-30，agent-decides 之后）**：上表"`card0` / `card3` / `normalize` v2 仍在用"不成立——v2 从不导入 `card0` / `normalize`，也从不产生会让 writer 调 `card3` 的 `replace`。因此整条 v1 路径一起删了：`pipeline.py`、`card0/2/3.py`、`rules/`、`taint.py`、`normalize.py`、`inbox.py`、`api.enqueue`、worker 的 v1 分支和 judge 参数、writer 的 `replace` 分支、`knowledge_backflow_hook`、`session_inputs.derive_envelope`、`scripts/ingestion_replay.py` 及只测它们的测试。`contracts.py` 只留 `UnitDecision` 和它字段引用的类型（已存决策 JSON 仍含 v1 的 card 答案）以及 `DDD_MATRIX`；`llm.py` 只留 `BedrockJudge` 基类（模型 id 与 version vector）和 `JudgeResult`；`prompts.py` 只留 `UntypedOutput`、`prompt_hash`。没有来源数据的旧 v1 候选会被 worker 直接关闭（库里为 0 条）。
+
 ## 4. 遗留问题：处理或者接受
 
 | # | 问题 | 处理 |

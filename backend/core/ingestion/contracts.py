@@ -1,21 +1,22 @@
-"""CDF Phase A contracts and routing authorities.
+"""The shapes CDF's stored decisions keep, and the DDD routing matrix.
 
-- ``Card1Answer`` is the seven-shape discriminated union.
-- ``SOURCE_PAYLOAD`` validates every Phase A source payload.
-- ``route_for`` is the single-row deterministic routing table.
+- ``UnitDecision`` (with ``Card0Answer`` and the answer types its fields name): what
+  pipeline_v2 decides for a unit and the worker stores; decisions judged by the retired
+  v1 cards (2026-10-29) carry the card answers, v2 ones leave them empty.
+- ``DDD_MATRIX`` / ``validate_ddd_matrix``: which project document and section a project
+  unit of a topic and type goes to (contracts_v2.route_unit).
+- The version strings a model call records (llm.BedrockJudge.version_vector).
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from pathlib import Path
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION, VALID_TYPES
+from core.ddd_entry_lifecycle import VALID_TYPES
 
 CONTRACT_VERSION = "cdf-contract-r15.1-v1"
 NORMALIZER_VERSION = "cdf-normalizer-v1"
@@ -25,11 +26,6 @@ VALID_TYPE = Literal["guideline", "pitfall", "decision", "model", "process", "pr
 Topic = Literal["decision", "product", "architecture", "lesson"]
 ContentForm = Literal["rule", "reference"]
 EvidenceStrength = Literal["inferred", "run_lesson", "review", "measured", "user_explicit"]
-EVIDENCE_ORDER: dict[str, int] = {
-    "inferred": 0, "run_lesson": 1, "review": 2, "measured": 3, "user_explicit": 4,
-}
-
-
 class StrictModel(BaseModel):
     """Forbid accidental fields in persisted or judged structures."""
 
@@ -234,138 +230,6 @@ class UnitDecision(StrictModel):
     version_vector: dict = Field(default_factory=dict)
 
 
-class Envelope(StrictModel):
-    """Trust-derived candidate envelope used by offline replay."""
-
-    source_event_ids: list[str]
-    evidence: EvidenceStrength
-    tainted: bool
-    writer: str | None = None
-    observed_at: str | None = None
-
-
-class RememberPayload(StrictModel):
-    """Payload for explicit persistence requests."""
-
-    kind: Literal["remember"] = "remember"
-    text: str
-    user_intent: str | None = None
-    target_hint: str | None = None
-
-
-class CorrectionPayload(StrictModel):
-    """Payload for an immediate user correction."""
-
-    kind: Literal["correction"] = "correction"
-    wrong: str
-    right: str
-    trigger: str
-
-
-class Lesson(StrictModel):
-    """A distilled session lesson."""
-
-    text: str
-    type_hint: VALID_TYPE | None = None
-
-
-class DistillationPayload(StrictModel):
-    """Payload for session-end distillation."""
-
-    kind: Literal["distillation"] = "distillation"
-    lessons: list[Lesson]
-
-
-class DailyActivityPayload(StrictModel):
-    """Payload for one DailyActivity decision or correction."""
-
-    kind: Literal["daily_activity"] = "daily_activity"
-    activity_kind: Literal["decision", "correction"]
-    text: str
-    why: str | None = None
-
-
-class BackflowPayload(StrictModel):
-    """Payload for a self-contained backflow document."""
-
-    kind: Literal["backflow"] = "backflow"
-    title: str
-    body: str
-    message_id: str
-
-
-class ExtractedPayload(StrictModel):
-    """Payload for generic memory extraction."""
-
-    kind: Literal["extracted"] = "extracted"
-    text: str
-    type_hint: VALID_TYPE | None = None
-
-
-class EvolutionPayload(StrictModel):
-    """Payload for an evolution observation."""
-
-    kind: Literal["evolution"] = "evolution"
-    skill: str
-    change: str
-    result: str
-
-
-class ReflectLesson(StrictModel):
-    """One run REFLECT lesson."""
-
-    statement: str
-    kind: VALID_TYPE
-    relation_hint: str | None = None
-    evidence: str
-
-
-class ReflectPayload(StrictModel):
-    """Payload emitted by a completed run."""
-
-    kind: Literal["reflect"] = "reflect"
-    lessons: list[ReflectLesson]
-    run_id: str
-    repo: str
-
-
-class Proposal(StrictModel):
-    """A cultivation proposal before CDF judgment."""
-
-    doc_hint: str | None = None
-    section_hint: str | None = None
-    text: str
-    why: str
-
-
-class CultivationPayload(StrictModel):
-    """Payload for signal, learn, and code-change cultivation."""
-
-    kind: Literal["cultivation"] = "cultivation"
-    proposal: Proposal
-
-
-SourcePayload: TypeAlias = Annotated[
-    RememberPayload | CorrectionPayload | DistillationPayload | DailyActivityPayload
-    | BackflowPayload | ExtractedPayload | EvolutionPayload | ReflectPayload | CultivationPayload,
-    Field(discriminator="kind"),
-]
-SOURCE_PAYLOAD = TypeAdapter(SourcePayload)
-
-
-class Candidate(StrictModel):
-    """Offline replay candidate contract."""
-
-    id: str
-    source: str
-    payload: SourcePayload
-    envelope: Envelope
-    project_snapshot: dict = Field(default_factory=dict)
-    cluster_id: str
-    origin: dict[str, str] | None = None
-    project_candidates: list[str] = Field(default_factory=list)
-
-
 _DDD_MATRIX: dict[str, dict[str, tuple[str, str]]] = {
     "decision": {t: ("PROJECT.md", "Recent Decisions") for t in VALID_TYPES},
     "product": {
@@ -383,17 +247,6 @@ _DDD_MATRIX: dict[str, dict[str, tuple[str, str]]] = {
     "lesson": {t: ("IMPROVEMENT.md", "What Failed" if t in {"pitfall", "correction"} else "What Worked") for t in VALID_TYPES},
 }
 DDD_MATRIX = _DDD_MATRIX
-REROUTE_ALLOWED: dict[str, frozenset[str]] = {
-    "Reference": frozenset(),
-    "UserCross": frozenset({"UserSingle"}),
-    "UserSingle": frozenset({"UserCross", "ProjectSingle"}),
-    "Agent": frozenset(),
-    "ProjectSingle": frozenset({"UserSingle", "WorldSingle"}),
-    "WorldSingle": frozenset({"ProjectSingle", "WorldCrossGlobal"}),
-    "WorldCrossGlobal": frozenset(),
-}
-
-
 def _norm_heading(value: str) -> str:
     return " ".join(value.split())
 
@@ -416,69 +269,4 @@ def validate_ddd_matrix(template_root: Path | None = None) -> None:
         raise ValueError(f"DDD matrix headings missing from templates: {sorted(missing)!r}")
 
 
-def route_for(answer: Card1Answer) -> Destination:
-    """Return exactly one destination row for a valid card 1 answer."""
-    if answer.shape == "Reference":
-        folder = {"learned": "Learned", "analysis": "Notes", "spec": "Library"}[answer.reference_kind]
-        return Destination(store="KNOWLEDGE", relative_path=f"Knowledge/{folder}/")
-    if answer.shape == "UserCross":
-        file_name = {"preference": "STEERING.md", "profile": "USER.md", "environment": "TOOLS.md"}[answer.user_kind]
-        return Destination(store=file_name.removesuffix(".md"), relative_path=f".context/{file_name}")
-    if answer.shape == "Agent":
-        section = "Corrections Captured" if answer.agent_kind == "correction" else "Competence Learned"
-        return Destination(store="EVOLUTION", relative_path=".context/EVOLUTION.md", section=section)
-    if answer.shape == "WorldCrossGlobal":
-        if not answer.global_relevance:
-            raise ValueError("not_global")
-        return Destination(store="MEMORY", relative_path=".context/MEMORY.md", section=MEMORY_TYPE_TO_SECTION[answer.entry_type])
-    file_name, section = DDD_MATRIX[answer.topic][answer.entry_type]
-    from core.ddd_paths import ddd_new_path  # SSOT for the six-section DDD layout; no mkdir
-
-    rel = ddd_new_path(Path("Projects") / answer.project, file_name).as_posix()
-    return Destination(store="DDD", relative_path=rel, section=section, project=answer.project)
-
-
 validate_ddd_matrix()
-
-
-class SourceContract(StrictModel):
-    """Static Phase A source registration."""
-
-    lane: Literal["immediate", "session", "run", "scheduled"]
-    payload_kind: str
-    idem_algorithm: str
-    target_hint: str | None = None
-
-
-SOURCE_CONTRACTS: dict[str, SourceContract] = {
-    "remember": SourceContract(lane="immediate", payload_kind="remember", idem_algorithm="events+schema+semantic_hash"),
-    "correction": SourceContract(lane="immediate", payload_kind="correction", idem_algorithm="events+schema+semantic_hash"),
-    "distillation": SourceContract(lane="session", payload_kind="distillation", idem_algorithm="events+schema+lesson_hash"),
-    "daily_activity": SourceContract(lane="session", payload_kind="daily_activity", idem_algorithm="events+schema+semantic_hash"),
-    "backflow": SourceContract(lane="session", payload_kind="backflow", idem_algorithm="message_id"),
-    "memory_extractor": SourceContract(lane="session", payload_kind="extracted", idem_algorithm="events+schema+semantic_hash"),
-    "evolution_optimizer": SourceContract(lane="session", payload_kind="evolution", idem_algorithm="events+schema+semantic_hash"),
-    "reflect": SourceContract(lane="run", payload_kind="reflect", idem_algorithm="run_id+lesson_hash"),
-    "cultivation": SourceContract(lane="scheduled", payload_kind="cultivation", idem_algorithm="events+schema+semantic_hash"),
-}
-
-
-def idem_key(source: str, payload: SourcePayload, envelope: Envelope, *, semantic_slot: str = "") -> str:
-    """Return a stable source-specific idempotency key; never use array position."""
-    contract = SOURCE_CONTRACTS.get(source)
-    if contract is None or payload.kind != contract.payload_kind:
-        raise ValueError("unsupported_schema")
-    if payload.kind == "backflow":
-        material = f"{source}|{CONTRACT_VERSION}|{payload.message_id}"
-    elif payload.kind == "reflect":
-        lesson_hash = hashlib.sha256(
-            json.dumps([item.model_dump(mode="json") for item in payload.lessons], sort_keys=True).encode("utf-8")
-        ).hexdigest()
-        material = f"{source}|{CONTRACT_VERSION}|{payload.run_id}|{lesson_hash}|{semantic_slot}"
-    else:
-        event_ids = ",".join(sorted(set(envelope.source_event_ids)))
-        semantic = hashlib.sha256(
-            json.dumps(payload.model_dump(mode="json"), ensure_ascii=False, sort_keys=True).encode("utf-8")
-        ).hexdigest()
-        material = f"{source}|{CONTRACT_VERSION}|{event_ids}|{semantic}|{semantic_slot}"
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()

@@ -30,7 +30,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 BACKEND = Path(__file__).resolve().parents[1]
 SOURCES = ("s2", "s4", "s5", "s6")
@@ -96,8 +96,7 @@ def _delta(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
     return {key: after[key] - before.get(key, 0) for key in after}
 
 
-def _drain(workspace: Path, judge_factory: Callable[[], Any] | None, max_steps: int,
-           *, summary: bool = False) -> int:
+def _drain(workspace: Path, max_steps: int, *, summary: bool = False) -> int:
     """Process queued candidates under the real owner lock until the lanes are idle.
 
     Maintenance keeps its production cadence (a day out). The daily summary lane runs
@@ -116,7 +115,7 @@ def _drain(workspace: Path, judge_factory: Callable[[], Any] | None, max_steps: 
         try:
             owner.adopt(conn)
             recover(conn)
-            worker = IngestionWorker(owner, workspace, judge_factory=judge_factory)
+            worker = IngestionWorker(owner, workspace)
             later = datetime.now(timezone.utc) + timedelta(days=1)
             worker._maintenance_due = later
             if not summary:
@@ -239,7 +238,7 @@ def backfill_user_inputs(data_dir: Path, session_id: str) -> int:
 def replay(data_dir: Path, workspace: Path, *, days: int = 7,
            sources: tuple[str, ...] = SOURCES, max_usd: float = 0.0,
            price_in: float = 3.0, price_out: float = 15.0, dry_run: bool = False,
-           llm: Any | None = None, judge_factory: Callable[[], Any] | None = None,
+           llm: Any | None = None,
            max_steps: int = 100_000, s2_sample: int = 0) -> dict[str, Any]:
     """Replay *sources* over the copy; stop before the next item once *max_usd* is spent.
 
@@ -287,12 +286,12 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
                       file=sys.stderr, flush=True)
             # drain per item, as the live worker does, so the budget check above also
             # sees the cards' spend before the next item
-            entry["drain_steps"] += _drain(workspace, judge_factory, max_steps)
+            entry["drain_steps"] += _drain(workspace, max_steps)
         entry["usage"] = _delta(usage_snapshot(), before)
         if report["stopped"]:
             break
     if not dry_run:
-        report["summary_drain_steps"] = _drain(workspace, judge_factory, max_steps, summary=True)
+        report["summary_drain_steps"] = _drain(workspace, max_steps, summary=True)
         report["outcomes"] = _outcomes()
     usage = _delta(usage_snapshot(), baseline)
     report["usage_in_copy_before_run"] = baseline

@@ -491,7 +491,8 @@ def route_general(unit: "SourceUnit", subject: str | None) -> DestinationV2:
 def route_unit(unit: "SourceUnit", project: str | None) -> DestinationV2:
     """Where *unit* goes, from its own declaration and the resolved *project* (the
     existing project its scope or its source named). Raises ``ValueError(reason)``."""
-    from .contracts import DDD_MATRIX, MEMORY_TYPE_TO_SECTION
+    from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
+    from .contracts import DDD_MATRIX
     if isinstance(unit, EventUnit):
         return DestinationV2(store="TIMELINE", relative_path=TIMELINE_PATH)
     if isinstance(unit, ReferenceUnit):

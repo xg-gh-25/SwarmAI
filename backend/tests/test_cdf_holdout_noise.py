@@ -37,3 +37,13 @@ def test_observed_rate_formula_and_bounds() -> None:
     assert h.observed_rate(1.0, 0.0) == 1.0
     with pytest.raises(ValueError):
         h.observed_rate(0.9, 0.5)
+
+
+def test_holdout_output_is_pinned():
+    assert h.render_table() == """| metric | n | k | assumed true rate | threshold | label error | lower 95% | power | minimal n |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| write precision | 220 | 202 | 0.97 | 0.88 | 0.042 | 0.8811 | 0.8061 | 218 |
+| write recall | 180 | 145 | 0.83 | 0.75 | 0.000 | 0.7506 | 0.8350 | 167 |
+| DDD routing | 150 | 129 | 0.88 | 0.80 | 0.000 | 0.8047 | 0.8126 | 135 |
+| D1 missing why | 130 | 123 | 0.96 | 0.90 | 0.000 | 0.9012 | 0.8491 | 116 |
+| duplicate unchanged | 90 | 86 | 0.97 | 0.90 | 0.000 | 0.9012 | 0.8659 | 76 |"""

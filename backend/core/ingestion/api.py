@@ -6,7 +6,7 @@ below is owned (implemented) by exactly one workstream; the others import it.
 
 - SCHEMA_DDL / SCHEMA_VERSION / PRAGMAS: ingestion.db layout (§4). Owner: ENGINE.
 - ingestion_db_path(), connect_ro(), connect_rw(): DB access. Owner: ENGINE.
-- EnqueueResult, enqueue(): the only way a source hands a candidate to CDF (§4.1, §5). Owner: ENGINE.
+- EnqueueResult: the outcome of handing a unit to CDF (api_v2.enqueue_unit, §4.1, §5). Owner: ENGINE.
 - wake(): nudge the owner worker (in-process event or loopback POST). Owner: ENGINE.
 - Materializer protocol + get_materializer(): the ONLY filesystem write API for
   governed paths (§3.2). Owner: WRITER.
@@ -17,7 +17,7 @@ below is owned (implemented) by exactly one workstream; the others import it.
 - Flow read API (flow_overview / list_items / item_detail / daily_stats) is
   owned by FLOW and reads the SCHEMA below only through connect_ro().
 
-Each function below DELEGATES to the owning module (store.py / inbox.py / wake.py
+Each function below DELEGATES to the owning module (store.py / wake.py
 / materializer.py / governed_edit.py / core/session_inputs.py). Owners implement
 those modules and never edit this file; signatures here are frozen. A change
 needs all owners' agreement.
@@ -28,7 +28,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 SCHEMA_VERSION = 1
 DB_FILENAME = "ingestion.db"
@@ -43,10 +43,10 @@ CREATE TABLE IF NOT EXISTS ingestion_inbox (
   source TEXT NOT NULL,
   source_ref TEXT NOT NULL,
   lane TEXT NOT NULL CHECK (lane IN ('immediate','session','run','scheduled','maintenance')),
-  payload TEXT NOT NULL,              -- JSON, contracts.SourcePayload
+  payload TEXT NOT NULL,              -- JSON, one contracts_v2 source unit
   payload_schema TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  envelope TEXT NOT NULL,             -- JSON, contracts.Envelope
+  envelope TEXT NOT NULL,             -- JSON, the unit's resolved evidence (provenance)
   project_snapshot TEXT NOT NULL,     -- JSON
   project_candidates TEXT NOT NULL DEFAULT '[]',
   state TEXT NOT NULL DEFAULT 'queued'
@@ -162,20 +162,6 @@ CREATE TABLE IF NOT EXISTS ingestion_events (   -- Need-You-worthy anomalies (§
 
 Lane = Literal["immediate", "session", "run", "scheduled", "maintenance"]
 
-# §5 source registry: source name -> (lane, payload kind). Owner: ENGINE (data); SOURCES call it.
-SOURCE_LANES: dict[str, tuple[Lane, str]] = {
-    "remember": ("immediate", "remember"),
-    "correction": ("immediate", "correction"),
-    "distillation": ("session", "distillation"),
-    "backflow": ("session", "backflow"),
-    "memory_extractor": ("session", "extracted"),
-    "evolution_optimizer": ("session", "evolution"),
-    "reflect": ("run", "reflect"),
-    "cultivation": ("scheduled", "cultivation"),
-    "eval_governance": ("scheduled", "extracted"),
-}
-
-
 @dataclass(frozen=True)
 class EnqueueResult:
     """Outcome of one enqueue call."""
@@ -201,15 +187,6 @@ def connect_rw(*, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
     """Writable connection; creates/migrates the DB on first use (§4 建库)."""
     from .store import connect_rw as _impl
     return _impl(busy_timeout_ms=busy_timeout_ms)
-
-
-def enqueue(source: str, source_ref: str, slot: str, payload: dict[str, Any], *,
-            envelope: dict[str, Any], project_snapshot: dict[str, Any] | None = None) -> EnqueueResult:
-    """Validate payload against contracts.SourcePayload for SOURCE_LANES[source], compute
-    idem_key = sha256(source|source_ref|payload_schema|slot), INSERT ... ON CONFLICT DO NOTHING,
-    busy timeout 500 ms x 2 retries -> 'busy'. Never blocks longer than ~1.5 s. Then wake()."""
-    from .inbox import enqueue as _impl
-    return _impl(source, source_ref, slot, payload, envelope=envelope, project_snapshot=project_snapshot)
 
 
 def wake(lane: Lane | None = None) -> None:

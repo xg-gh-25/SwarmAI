@@ -215,7 +215,6 @@ def test_bootstrap_progress_counts_candidates_by_project(conn) -> None:
 def test_missing_section_parks_without_retry_then_requeues_and_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from core.ingestion.contracts import QualityAnswers, WorldCrossGlobal
     from core.ingestion.owner import acquire
     from core.ingestion.pipeline_v2 import requeue_missing_sections
     from core.ingestion.store import connect_rw
@@ -228,22 +227,6 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
     memory.write_text("# Memory\n", encoding="utf-8")
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
-    quality = QualityAnswers(
-        atomic=True, valuable=True, self_contained=True, durable=True,
-        evidenced=True, internally_consistent=True, concise=True,
-    )
-    answer = WorldCrossGlobal(
-        shape="WorldCrossGlobal", type="guideline", applicability="When editing.",
-        claims=["Verify current state."], quality=quality, global_relevance=True,
-    )
-
-    class Judge:
-        def card1(self, *_args):
-            return answer
-
-        def verify(self, *_args):
-            return {"grounded": True, "durable": True, "self_contained": True, "hits": []}
-
     monkeypatch.setattr("core.ingestion.pipeline_v2._user_texts",
                         lambda unit, row: ["verify current state before editing, please"])
     payload = {
@@ -269,7 +252,7 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
         }), now),
     )
     row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='missing'").fetchone()
-    process_candidate(conn, owner, row, workspace, Judge())
+    process_candidate(conn, owner, row, workspace)
     parked = conn.execute(
         "SELECT state,attempts,next_attempt_at,defer_reason,destination FROM ingestion_units"
     ).fetchone()
@@ -286,7 +269,7 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
         "SELECT resolved FROM ingestion_events WHERE kind='missing_section'"
     ).fetchone()[0] == 1
     row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='missing'").fetchone()
-    process_candidate(conn, owner, row, workspace, Judge())
+    process_candidate(conn, owner, row, workspace)
     assert conn.execute("SELECT state FROM ingestion_units").fetchone()[0] == "written"
     assert "Verify current state" in memory.read_text(encoding="utf-8")
     conn.close()

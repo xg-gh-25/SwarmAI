@@ -15,12 +15,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from tests.test_cdf_v2_e2e import Judge, _drain, cdf_env  # noqa: F401
+from tests.test_cdf_v2_e2e import _drain, cdf_env  # noqa: F401
 from tests.test_cdf_launch_state_machine import _gap_to, _owned, _worker
 
 
@@ -233,32 +232,6 @@ def test_memory_and_evolution_entries_read_as_text_not_field_names():
         assert "what:" not in out and "applicability:" not in out
         assert "**Applies when:** When a heredoc holds a path." in out
     assert "- **Correction**: **Guard paths** The guard reads" in evo
-
-
-def test_refine_of_a_timeline_event_does_not_copy_the_earlier_event(tmp_path, monkeypatch):
-    from tests.test_cdf_writer_core import (ClaimVerdict, HitJudgment, _connect, _decision, _unit,
-                                            corpus as _corpus)
-    from core.ingestion.writer import apply_unit
-    corpus = _corpus.__wrapped__(tmp_path, monkeypatch)
-    timeline = corpus["workspace"] / ".context/TIMELINE.md"
-    timeline.parent.mkdir(parents=True, exist_ok=True)
-    timeline.write_text("# Timeline\n\n## Not injected\n\n### 2026-10-26 Earlier run\n"
-                        "- what: The earlier run landed.\n<!-- cand:old.1 | event_key: | source:S2 -->\n",
-                        encoding="utf-8")
-    anchor = ".context/TIMELINE.md#Not injected#cand:old.1"
-    judgment = HitJudgment(anchor=anchor, overlap="related", same_topic=True,
-                           claim_verdicts=[ClaimVerdict(verdict="refines", existing_sentence="The earlier run landed.")],
-                           scope_relation="equal", candidate_evidence="measured", existing_evidence="inferred")
-    conn = _connect(corpus["db"])
-    row = _unit(conn, "new.1", "The design was updated.", title="Design updated")
-    decision = _decision("new.1", "TIMELINE", ".context/TIMELINE.md", "Not injected",
-                         action="refine", judgments=[judgment])
-    assert apply_unit(decision, row, conn) == "done"
-    conn.close()
-    text = timeline.read_text(encoding="utf-8")
-    start = text.index("Design updated")
-    new = text[start:text.index("cand:new.1", start)]
-    assert "The design was updated" in new and "earlier run landed" not in new
 
 
 def test_units_are_extracted_in_one_language():

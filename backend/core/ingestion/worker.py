@@ -19,11 +19,10 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
-from . import contracts, pipeline
+from . import contracts
 from .api import Lane
-from .normalize import ClaimGroup, normalize_candidate
 from .owner import Owner
 from .store import connect_rw
 
@@ -137,29 +136,6 @@ def error_fingerprint(exc: BaseException) -> str:
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _candidate_from_row(row: sqlite3.Row) -> contracts.Candidate:
-    payload = contracts.SOURCE_PAYLOAD.validate_python(json.loads(row["payload"]))
-    envelope = contracts.Envelope.model_validate(json.loads(row["envelope"]))
-    return contracts.Candidate(
-        id=row["id"], source=row["source"], payload=payload, envelope=envelope,
-        project_snapshot=json.loads(row["project_snapshot"]), cluster_id=row["source_ref"],
-        project_candidates=json.loads(row["project_candidates"]),
-    )
-
-
-def _upsert_units(conn: sqlite3.Connection, candidate: contracts.Candidate, epoch: int) -> list[ClaimGroup]:
-    groups = normalize_candidate(candidate)
-    now = _utcnow().isoformat()
-    for group in groups:
-        conn.execute(
-            """INSERT INTO ingestion_units(unit_id, candidate_id, claim_group, owner_epoch, updated_at)
-               VALUES (?, ?, ?, ?, ?) ON CONFLICT(unit_id) DO NOTHING""",
-            (f"{candidate.id}.{group.slot}", candidate.id,
-             json.dumps(group.__dict__, ensure_ascii=False, sort_keys=True), epoch, now),
-        )
-    return groups
 
 
 def _decision_fields(decision: contracts.UnitDecision) -> dict[str, Any]:
@@ -441,106 +417,26 @@ def process_candidate(
     owner: Owner,
     row: sqlite3.Row,
     workspace_root: Path,
-    judge: Any,
 ) -> None:
     """Process every nonterminal unit for one candidate with isolated DB writes."""
     from .llm_usage import attribute
     value = _row_dict(row)
     with attribute(value.get("source_v2") or value.get("source")):
-        _process_candidate(conn, owner, row, workspace_root, judge)
+        _process_candidate(conn, owner, row, workspace_root)
 
 
 def _process_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
-                       workspace_root: Path, judge: Any) -> None:
+                       workspace_root: Path) -> None:
     if _is_v2_row(row):
         _process_v2_candidate(conn, owner, row, workspace_root)
         return
-    candidate = _candidate_from_row(row)
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute(
-            "UPDATE ingestion_inbox SET state='in_progress', owner_epoch=? WHERE id=?",
-            (owner.epoch, candidate.id),
-        )
-        groups = _upsert_units(conn, candidate, owner.epoch)
+    # a candidate of the retired v1 path (no source unit): nothing produces one any more,
+    # and nothing can judge it; it is closed, its record kept until the 30-day cleanup
+    logger.warning("CDF: candidate %s has no source unit (retired v1 shape); closed unprocessed",
+                   _row_dict(row).get("id"))
+    conn.execute("UPDATE ingestion_inbox SET state='done' WHERE id=?", (_row_dict(row)["id"],))
+    if conn.in_transaction:
         conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-
-    for group in groups:
-        unit_id = f"{candidate.id}.{group.slot}"
-        unit = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
-        if unit is None or unit["state"] in TERMINAL_STATES:
-            continue
-        if unit["state"] in ("judged", "writing"):
-            continue  # an in-flight write belongs to writer.recover(), never re-judged
-        if unit["state"] == "deferred":
-            from .contracts_v2 import PARKED_DEFER_REASONS
-            if unit["reason"] in PARKED_DEFER_REASONS or unit["next_attempt_at"] is None:
-                continue        # parked: waits for requeue_parked, never re-judged here
-            if datetime.fromisoformat(unit["next_attempt_at"]) > _utcnow():
-                continue
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                if not owner.claim_unit_step(conn, unit_id, "deferred", "queued"):
-                    conn.execute("ROLLBACK")
-                    continue
-                conn.execute("COMMIT")
-            except BaseException:
-                if conn.in_transaction:
-                    conn.execute("ROLLBACK")
-                raise
-            unit = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
-        try:
-            decision = pipeline.run_unit(
-                candidate, workspace_root, judge, group=group, exclude_origin=False,
-            )
-            conn.execute("SAVEPOINT candidate_unit")
-            try:
-                fields = _decision_fields(decision)
-                if decision.decision == "defer":
-                    _defer_or_poison(conn, owner, unit, decision.reason)
-                elif decision.decision == "merged":
-                    owner.claim_unit_step(conn, unit_id, "queued", "merged", **fields)
-                elif decision.decision == "reject":
-                    owner.claim_unit_step(conn, unit_id, "queued", "rejected", **fields)
-                else:
-                    if not owner.claim_unit_step(conn, unit_id, "queued", "judged", **fields):
-                        raise RuntimeError("owner epoch fence rejected judgment")
-                    if not owner.claim_unit_step(conn, unit_id, "judged", "writing"):
-                        raise RuntimeError("owner epoch fence rejected writer handoff")
-                conn.execute("RELEASE SAVEPOINT candidate_unit")
-            except BaseException:
-                conn.execute("ROLLBACK TO SAVEPOINT candidate_unit")
-                conn.execute("RELEASE SAVEPOINT candidate_unit")
-                raise
-            if decision.decision not in ("defer", "merged", "reject"):
-                # The writer commits its own immutable plan before any side effect (§4.3),
-                # so it must run OUTSIDE any worker transaction. A crash from here on is
-                # owned by writer.recover(), never re-judged.
-                _hand_to_writer(conn, owner, unit_id, decision)
-        except Exception as exc:
-            fresh = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
-            if fresh and fresh["state"] == "queued":
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    _defer_or_poison(conn, owner, fresh, str(exc), fingerprint=error_fingerprint(exc))
-                    conn.execute("COMMIT")
-                except BaseException:
-                    conn.execute("ROLLBACK")
-                    raise
-            logger.warning("CDF unit %s deferred: %s", unit_id, exc)
-
-    states = [item[0] for item in conn.execute(
-        "SELECT state FROM ingestion_units WHERE candidate_id=?", (candidate.id,)
-    )]
-    aggregate, counts = aggregate_candidate_state(states)
-    versions = json.dumps({"terminal_counts": counts}, sort_keys=True)
-    conn.execute(
-        "UPDATE ingestion_inbox SET state=?, versions=? WHERE id=? AND owner_epoch=?",
-        (aggregate, versions, candidate.id, owner.epoch),
-    )
 
 
 def reaggregate_candidates(conn: sqlite3.Connection,
@@ -707,12 +603,9 @@ class IngestionWorker:
         self,
         owner: Owner,
         workspace_root: Path,
-        *,
-        judge_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.owner = owner
         self.workspace_root = workspace_root
-        self.judge_factory = judge_factory
         self.stop_event = asyncio.Event()
         self.on_ready: Any = None        # called once startup recovery is done
         self.wake_event = asyncio.Event()
@@ -823,15 +716,9 @@ class IngestionWorker:
         ).fetchone()
         if row is None or self._paused_sources.get(row["source"], now) > now:
             return False
-        judge = self.judge_factory() if self.judge_factory else self._default_judge()
-        process_candidate(conn, self.owner, row, self.workspace_root, judge)
+        process_candidate(conn, self.owner, row, self.workspace_root)
         self._update_breaker(conn, row["source"], now)
         return True
-
-    @staticmethod
-    def _default_judge() -> Any:
-        from .llm import BedrockJudge
-        return BedrockJudge()
 
     def _update_breaker(self, conn: sqlite3.Connection, source: str, now: datetime) -> None:
         since = (now - timedelta(hours=1)).isoformat()
@@ -867,11 +754,9 @@ class RunLaneExecutor:
 
     MAX_RUN_SECONDS = 10 * 60
 
-    def __init__(self, owner: Owner, workspace_root: Path,
-                 judge_factory: Callable[[], Any] | None = None) -> None:
+    def __init__(self, owner: Owner, workspace_root: Path) -> None:
         self.owner = owner
         self.workspace_root = workspace_root
-        self.judge_factory = judge_factory
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="cdf-run-lane", daemon=True)
@@ -916,8 +801,7 @@ class RunLaneExecutor:
             ).fetchone()
             if row is None:
                 break
-            judge = self.judge_factory() if self.judge_factory else IngestionWorker._default_judge()
-            process_candidate(conn, self.owner, row, self.workspace_root, judge)
+            process_candidate(conn, self.owner, row, self.workspace_root)
             processed += 1
         return processed
 

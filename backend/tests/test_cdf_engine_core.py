@@ -67,53 +67,6 @@ class TestStore:
         assert list(tmp_path.glob("ingestion.db.corrupt-*"))
 
 
-class TestEnqueue:
-    def test_idempotency_collision_and_validation(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
-        monkeypatch.setattr("core.ingestion.wake.wake", lambda _lane=None: None)
-        from core.ingestion.inbox import enqueue
-
-        first = enqueue("remember", "message-1", "lesson", _remember(), envelope=_envelope())
-        duplicate = enqueue("remember", "message-1", "lesson", _remember(), envelope=_envelope())
-        collision = enqueue("remember", "message-1", "lesson", _remember("Different"), envelope=_envelope())
-        wrong_kind = enqueue("remember", "message-2", "lesson", {"kind": "backflow"}, envelope=_envelope())
-        assert first.status == "queued"
-        assert duplicate.status == "duplicate" and duplicate.candidate_id == first.candidate_id
-        assert collision.status == "id_collision" and collision.candidate_id == first.candidate_id
-        assert wrong_kind.status == "rejected"
-
-    def test_project_candidates_are_resolved(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
-        monkeypatch.setattr("core.ingestion.wake.wake", lambda _lane=None: None)
-        from core.ingestion.inbox import enqueue
-        from core.ingestion.store import connect_ro
-
-        result = enqueue(
-            "remember", "message-2", "lesson", _remember(), envelope=_envelope(),
-            project_snapshot={"explicit_project": "Alpha"},
-        )
-        conn = connect_ro()
-        row = conn.execute("SELECT project_candidates FROM ingestion_inbox WHERE id=?", (result.candidate_id,)).fetchone()
-        conn.close()
-        assert json.loads(row[0]) == ["Alpha"]
-
-    def test_busy_returns_within_bound(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
-        from core.ingestion.inbox import enqueue
-        from core.ingestion.store import connect_rw
-
-        locker = connect_rw()
-        locker.execute("BEGIN EXCLUSIVE")
-        started = time.monotonic()
-        try:
-            result = enqueue("remember", "busy", "slot", _remember(), envelope=_envelope())
-        finally:
-            locker.execute("ROLLBACK")
-            locker.close()
-        assert result.status == "busy"
-        assert time.monotonic() - started < 1.7
-
-
 class TestOwner:
     def test_single_acquirer_epoch_fence_and_adopt(self, tmp_path, monkeypatch):
         monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
@@ -377,36 +330,6 @@ class TestWakeAndCli:
         assert desktop_main.run_ingest(["wake"]) == 0
         assert json.loads(capsys.readouterr().out)["flow"] is None
 
-def test_in_flight_write_is_never_rejudged(tmp_path, monkeypatch):
-    """A unit left judged/writing by a crash belongs to writer.recover(); the worker skips it."""
-    import json as _json
-    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path / "ws"))
-    from core.ingestion import api, worker
-    from core.ingestion.owner import acquire
-    res = api.enqueue("remember", "m1", "0", {"kind": "remember", "text": "Use Chinese."},
-                      envelope={"source_event_ids": ["e"], "evidence": "user_explicit", "tainted": False})
-    owner = acquire()
-    try:
-        conn = api.connect_rw()
-        owner.adopt(conn)
-        row = conn.execute("SELECT * FROM ingestion_inbox WHERE id=?", (res.candidate_id,)).fetchone()
-        calls = []
-        monkeypatch.setattr(worker.pipeline, "run_unit", lambda *a, **k: calls.append(1))
-        # seed the unit as a crashed in-flight write, then process
-        cand = worker._candidate_from_row(row)
-        conn.execute("BEGIN IMMEDIATE")
-        worker._upsert_units(conn, cand, owner.epoch)
-        conn.execute("UPDATE ingestion_units SET state='writing' WHERE candidate_id=?", (res.candidate_id,))
-        conn.execute("COMMIT")
-        worker.process_candidate(conn, owner, row, tmp_path / "ws", judge=None)
-        assert calls == []
-        assert {r[0] for r in conn.execute("SELECT state FROM ingestion_units")} == {"writing"}
-        conn.close()
-    finally:
-        owner.release()
-
-
 def test_cleanup_skips_candidate_with_partially_applied_write(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
     from core.ingestion.store import connect_rw
@@ -463,3 +386,27 @@ def test_parking_does_not_consume_retry(tmp_path, monkeypatch):
     state = conn.execute("SELECT state,attempts,next_attempt_at FROM ingestion_units").fetchone()
     assert tuple(state) == ("deferred", 0, None)
     conn.close(); owner.release()
+
+
+def test_a_candidate_without_a_source_unit_is_closed_not_judged(tmp_path, monkeypatch):
+    """The v1 path is gone: a candidate of its shape (no unit_kind / source_v2) is closed
+    by the worker, never left queued to spin it."""
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
+    from core.ingestion import worker
+    from core.ingestion.owner import acquire
+    from core.ingestion.store import connect_rw
+    owner = acquire()
+    try:
+        conn = connect_rw()
+        owner.adopt(conn)
+        conn.execute("""INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,
+            content_hash,envelope,project_snapshot,created_at) VALUES('v1','k','remember','r','immediate',
+            '{"kind":"remember","text":"x"}','v','h','{}','{}','2026-10-30T00:00:00+00:00')""")
+        conn.commit()
+        row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='v1'").fetchone()
+        worker.process_candidate(conn, owner, row, tmp_path / "ws")
+        assert conn.execute("SELECT state FROM ingestion_inbox WHERE id='v1'").fetchone()[0] == "done"
+        assert conn.execute("SELECT COUNT(*) FROM ingestion_units").fetchone()[0] == 0
+        conn.close()
+    finally:
+        owner.release()

@@ -21,24 +21,8 @@ from typing import Any
 
 import pytest
 
-from core.ingestion.contracts import (
-    Agent,
-    ProjectSingle,
-    QualityAnswers,
-    UserCross,
-    WorldCrossGlobal,
-)
 
 
-QUALITY = QualityAnswers(
-    atomic=True,
-    valuable=True,
-    self_contained=True,
-    durable=True,
-    evidenced=True,
-    internally_consistent=True,
-    concise=True,
-)
 SESSION = "cdf-e2e-session"
 
 
@@ -53,61 +37,6 @@ class Extractor:
         self.prompts.append(prompt)
         assert self.replies, prompt
         return SimpleNamespace(value=self.replies.pop(0), raw="typed fixture")
-
-
-class Judge:
-    """Typed card judge whose decisions are derived only from submitted units and hits."""
-
-    def __init__(self, *, entailed: bool = True, unavailable: bool = False) -> None:
-        self.entailed = entailed
-        self.unavailable = unavailable
-
-    def card1(self, text: str, projects: tuple[str, ...], context: str = "") -> Any:
-        declared = json.loads(context or "{}")
-        scope = declared.get("declared_scope", "world")
-        entry_type = declared.get("declared_type", "guideline")
-        claims = [line for line in text.splitlines() if line][:1] or ["complete claim"]
-        common = dict(type=entry_type, applicability="When the stated condition applies.",
-                      claims=claims, quality=QUALITY)
-        if scope == "user":
-            return UserCross(shape="UserCross", user_kind="preference", **common)
-        if scope == "agent":
-            return Agent(shape="Agent", agent_kind=("correction" if entry_type == "correction"
-                                                     else "competence"), **common)
-        if scope.startswith("project:"):
-            project = scope.split(":", 1)[1]
-            topic = "architecture" if any(word in text.lower() for word in (
-                "architecture", "subsystem", "source boundary")) else "lesson"
-            if entry_type == "decision":
-                topic = "decision"
-            return ProjectSingle(shape="ProjectSingle", project=project, topic=topic, **common)
-        return WorldCrossGlobal(shape="WorldCrossGlobal", global_relevance=True, **common)
-
-    def verify(self, unit: dict[str, Any], grounding: str,
-               hits: list[dict[str, Any]]) -> dict[str, Any]:
-        """The one verification card (design 2026-10-29-cdf-refactor §3.3)."""
-        if self.unavailable:
-            raise RuntimeError("judge unavailable")
-        same = "ONE COPY CLAIM" in json.dumps(unit, ensure_ascii=False)
-        return {"grounded": self.entailed and bool(grounding), "durable": True,
-                "self_contained": True, "significant": True,
-                "hits": [{"anchor": hit["anchor"],
-                          "relation": "same" if same and "ONE COPY CLAIM" in hit["text"] else "unrelated"}
-                         for hit in hits]}
-
-    def card3(self, candidate: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        same = "ONE COPY CLAIM" in candidate
-        return [{
-            "anchor": hit["anchor"],
-            "overlap": "same" if same and "ONE COPY CLAIM" in hit["text"] else "unrelated",
-            "same_topic": bool(same and "ONE COPY CLAIM" in hit["text"]),
-            "claim_verdicts": [],
-            "scope_relation": "equal" if same and "ONE COPY CLAIM" in hit["text"] else "disjoint",
-            "candidate_evidence": hit.get("candidate_evidence", "inferred"),
-            "existing_evidence": hit.get("existing_evidence", "inferred"),
-            "candidate_observed_at": hit.get("candidate_observed_at"),
-            "existing_observed_at": hit.get("existing_observed_at"),
-        } for hit in hits]
 
 
 @pytest.fixture
@@ -159,7 +88,7 @@ def cdf_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return {"data": data, "workspace": workspace, "db": message_db, "ddd": ddd}
 
 
-def _drain(env: dict[str, Any], judge: Judge | None = None, *, run_lane: bool = False) -> list[dict[str, Any]]:
+def _drain(env: dict[str, Any], *, run_lane: bool = False) -> list[dict[str, Any]]:
     """Drain real candidates under the real owner epoch and return durable unit rows."""
     from core.ingestion import api
     from core.ingestion.owner import acquire
@@ -173,9 +102,9 @@ def _drain(env: dict[str, Any], judge: Judge | None = None, *, run_lane: bool = 
         owner.adopt(conn)
         recover(conn)
         if run_lane:
-            executor = RunLaneExecutor(owner, env["workspace"], judge_factory=lambda: judge or Judge())
+            executor = RunLaneExecutor(owner, env["workspace"])
             executor._drain(conn)
-        worker = IngestionWorker(owner, env["workspace"], judge_factory=lambda: judge or Judge())
+        worker = IngestionWorker(owner, env["workspace"])
         worker._summary_due = datetime.now(timezone.utc) + timedelta(days=1)
         worker._maintenance_due = datetime.now(timezone.utc) + timedelta(days=1)
         for _ in range(100):
@@ -919,7 +848,7 @@ def test_an_unsupported_project_unit_is_written_inferred_not_external(cdf_env: d
         "applicability": "When starting.", "evidence": [f"event:{event}"]})
     assert api_v2.enqueue_unit("S2", SESSION, unit, session_id=SESSION, run_id=None,
                                extraction_pass="user_utterance").status == "queued"
-    rows = _drain(cdf_env, Judge(entailed=False))
+    rows = _drain(cdf_env)
     assert [r["state"] for r in rows] == ["written"], [(r["state"], r["reason"]) for r in rows]
     text = (cdf_env["ddd"] / "IMPROVEMENT.md").read_text(encoding="utf-8")
     assert "taint" not in text[text.index("Inferred pitfall"):], text

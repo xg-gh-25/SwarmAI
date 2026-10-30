@@ -280,27 +280,6 @@ def test_installed_package_rule_stays_out_of_per_turn_stores(
     )
     assert (result.status, result.detail) == ("queued", "")
 
-    quality = {"atomic": True, "valuable": True, "self_contained": True,
-               "durable": True, "evidenced": True,
-               "internally_consistent": True, "concise": True}
-
-    class PackageJudge:
-        def card1(self, text, projects, context_text=""):
-            del text, projects, context_text
-            from core.ingestion.contracts import ProjectSingle
-            return ProjectSingle.model_validate({
-                "shape": "ProjectSingle", "project": "Demo", "topic": "lesson",
-                "content_form": "rule", "type": "guideline",
-                "applicability": "when delivering code", "claims": ["require review"],
-                "quality": quality, "reroute_to": None,
-            })
-
-        def card3(self, text, hits):
-            del text
-            return [{"anchor": hit["anchor"], "overlap": "unrelated",
-                     "same_topic": False, "claim_verdicts": [],
-                     "scope_relation": "disjoint"} for hit in hits]
-
     from core.ingestion.pipeline_v2 import run_unit_v2
     from core.ingestion.store import connect_rw
     from core.ingestion.writer import apply_unit

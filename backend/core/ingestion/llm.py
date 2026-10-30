@@ -1,8 +1,8 @@
-"""Thin CDF judge client with complete version-vector capture.
+"""The base of CDF's model clients (the source extractor, sources/extract_llm).
 
-- ``BedrockJudge`` reuses the repository's timeout-scoped Bedrock client.
-- Every invocation returns typed output plus reproducibility metadata.
-- Every invocation's token usage is recorded per source by ``llm_usage.record``.
+- ``BedrockJudge``: the model id and the reproducibility fields (``version_vector``) every
+  call records; the calls themselves are the subclass's (``structured()``).
+- ``JudgeResult``: a typed answer with its version vector and raw reply.
 """
 
 from __future__ import annotations
@@ -11,14 +11,10 @@ import platform
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from jobs.bedrock import StructuredOutputError, get_model_id, text
+from jobs.bedrock import get_model_id
 
-from . import llm_usage
-from .contracts import CONTRACT_VERSION, NORMALIZER_VERSION, PROMPT_VERSION, RULES_VERSION, Card1Answer, Card3bAnswer, HitJudgment
-from .prompts import (
-    UntypedOutput, card1_prompt, card3_prompt, card3b_prompt, extract_json,
-    parse_card1, parse_card3, parse_card3b, prompt_hash,
-)
+from .contracts import CONTRACT_VERSION, NORMALIZER_VERSION, PROMPT_VERSION, RULES_VERSION
+from .prompts import prompt_hash
 
 T = TypeVar("T")
 
@@ -32,7 +28,7 @@ class JudgeResult(Generic[T]):
 
 
 class BedrockJudge:
-    """Fail-closed synchronous judge for offline online-mode evaluation."""
+    """The model a CDF call runs on, and what it records about each call."""
 
     provider = "aws-bedrock"
     temperature = 0.0
@@ -45,30 +41,6 @@ class BedrockJudge:
 
     def __init__(self, model_id: str | None = None) -> None:
         self.model_id = model_id or get_model_id("claude-sonnet-4-6")
-
-    def _invoke(self, prompt: str, parser: Any) -> JudgeResult[Any]:
-        """One call through jobs.bedrock.text(); the card's strict parser types the reply.
-
-        A reply cut at max_tokens, or an empty one, is UntypedOutput with its kind in the
-        message: deterministic for the same input, so it is not retried (design
-        2026-10-28-structured-model-output §5.4).
-        """
-        usage: dict[str, int] = {}
-        try:
-            raw = text(prompt, model_id=self.model_id, max_tokens=self.max_tokens, feature=llm_usage.feature(),
-                       temperature=self.temperature, read_timeout=self.read_timeout,
-                       max_attempts=2, usage=usage)
-        except StructuredOutputError as exc:
-            raise UntypedOutput(f"reply {exc.kind}: {exc.detail}", raw=exc.raw) from exc
-        finally:
-            if usage:
-                llm_usage.record(usage)
-        try:
-            value = parser(raw)
-        except UntypedOutput as exc:
-            exc.raw = raw  # keep the exact reply for recording and dev tuning
-            raise
-        return JudgeResult(value, self.version_vector(prompt), raw)
 
     def version_vector(self, prompt: str) -> dict[str, Any]:
         """Return all fixed and invocation-derived Phase A version fields."""
@@ -86,19 +58,3 @@ class BedrockJudge:
             "prompt_version": PROMPT_VERSION,
             "runtime": f"python-{platform.python_version()}",
         }
-
-    def card1(self, text: str, project_candidates: tuple[str, ...], context: str = "") -> JudgeResult[Card1Answer]:
-        """Judge one normalized claim-group."""
-        prompt = card1_prompt(text, project_candidates, context)
-        return self._invoke(prompt, parse_card1)
-
-    def card3(self, text: str, hits: list[dict[str, Any]]) -> JudgeResult[list[HitJudgment]]:
-        """Judge every retrieved hit."""
-        prompt = card3_prompt(text, hits)
-        return self._invoke(prompt, lambda raw: parse_card3(raw, hits))
-
-    def card3b(self, old_unit: str, candidate: str) -> JudgeResult[Card3bAnswer]:
-        """Generate and validate a baseline effective unit."""
-        prompt = card3b_prompt(old_unit, candidate)
-        return self._invoke(prompt, parse_card3b)
-

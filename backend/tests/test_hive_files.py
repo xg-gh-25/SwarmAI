@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 
 import pytest
 
@@ -194,8 +193,6 @@ def test_a_file_over_the_kept_budget_never_stops_the_pull(host, hive_ws, tmp_pat
 def test_returned_files_are_not_knowledge(tmp_path):
     import sqlite3
     from core import hive_files
-    from core.ingestion import card3
-    from core.ingestion.contracts import Destination
     from core.knowledge_store import KnowledgeStore, sync_knowledge_index
     assert hive_files.is_returned(("Library", "deliverables", "hive", "x", "r.md"))
     assert not hive_files.is_returned(("Library", "deliverables", "r.md"))
@@ -207,8 +204,7 @@ def test_returned_files_are_not_knowledge(tmp_path):
     sync_knowledge_index(store, kdir)
     indexed = set(store.get_indexed_files())
     assert "Library/note.md" in indexed and not any("deliverables" in k for k in indexed)
-    corpus = card3.corpus_paths(tmp_path, Destination(store="KNOWLEDGE", relative_path="Knowledge/Library"))
-    assert kdir / "Library" / "note.md" in corpus and Path(returned) not in corpus
+    assert returned                                   # written, and still not indexed
 
 
 def test_a_fifo_or_a_non_file_path_is_never_taken(hive_ws):

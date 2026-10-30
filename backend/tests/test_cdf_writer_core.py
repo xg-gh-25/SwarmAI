@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from core.ingestion import api
-from core.ingestion.contracts import ClaimVerdict, HitJudgment
+from core.ingestion.contracts import HitJudgment
 from core.ingestion.contracts_v2 import SYSTEM_APPENDIX_HEADING
 from core.ingestion.governed_edit import (
     StaleRevision,
@@ -233,29 +233,6 @@ def test_library_frontmatter_carries_source_and_external_taint(corpus: dict[str,
     text = output.read_text(encoding="utf-8")
     assert "source: backflow" in text
     assert "taint: external" in text
-    conn.close()
-
-
-def test_replace_archives_then_removes_candidate_unit(corpus: dict[str, Path]) -> None:
-    target = corpus["workspace"] / "Projects/P/2-understanding/TECH.md"
-    target.parent.mkdir(parents=True)
-    old = "- [guideline] **Old** obsolete <!-- cand:old.2 -->"
-    original = f"# T\n\n## Conventions\n\n{old}\n"
-    target.write_text(original, encoding="utf-8")
-    anchor = "Projects/P/2-understanding/TECH.md#Conventions#cand:old.2"
-    judgment = HitJudgment(
-        anchor=anchor, overlap="related", same_topic=True,
-        claim_verdicts=[ClaimVerdict(verdict="refutes", existing_sentence="obsolete")],
-        scope_relation="equal", candidate_evidence="measured", existing_evidence="inferred",
-    )
-    conn = _connect(corpus["db"])
-    row = _unit(conn, "new.2", "Use the corrected rule.", title="New")
-    decision = _decision("new.2", "DDD", "Projects/P/2-understanding/TECH.md", "Conventions",
-                         action="replace", judgments=[judgment])
-    assert apply_unit(decision, row, conn) == "done"
-    assert "cand:old.2" not in target.read_text(encoding="utf-8")
-    archives = list((target.parent / ".archive").iterdir())
-    assert len(archives) == 1 and archives[0].read_text(encoding="utf-8") == original
     conn.close()
 
 

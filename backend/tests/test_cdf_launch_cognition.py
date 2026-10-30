@@ -15,7 +15,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from tests.test_cdf_v2_e2e import Judge, _drain, cdf_env  # noqa: F401
+from tests.test_cdf_v2_e2e import _drain, cdf_env  # noqa: F401
 from tests.test_cdf_launch_state_machine import _owned, _worker
 
 

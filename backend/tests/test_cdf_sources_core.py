@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from types import SimpleNamespace
 
 import aiosqlite
 import pytest
@@ -47,7 +46,7 @@ async def test_v17_migration_adds_session_input_root_id_and_measured_trust(tmp_p
             "INSERT INTO session_inputs VALUES('e','s','measured_field','measured','h',NULL,NULL,'t')")
 
 
-def test_session_input_registers_roots_and_deprecates_envelope(monkeypatch, tmp_path):
+def test_session_input_registers_roots(monkeypatch, tmp_path):
     from core import session_inputs
 
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
@@ -65,34 +64,7 @@ def test_session_input_registers_roots_and_deprecates_envelope(monkeypatch, tmp_
     assert tool in {row["event_id"] for row in rows}
     assert all(row["root_id"] for row in rows)
     assert {row["trust"] for row in rows} == {"user", "external", "measured"}
-    with pytest.raises(DeprecationWarning):
-        session_inputs.derive_envelope("s1", (user,))
-
-
-@pytest.mark.asyncio
-async def test_backflow_enqueues_stable_message_slot_and_never_writes(monkeypatch):
-    from core.ingestion import api
-    from hooks import knowledge_backflow_hook as module
-
-    text = "## Analysis\n" + ("word " * 510) + "\n## Findings\nroot cause and trade-off"
-    monkeypatch.setattr(module.db.messages, "list_by_session_paginated", lambda *a, **k: None)
-
-    async def messages(*args, **kwargs):
-        return [{"id": "message-7", "role": "assistant", "content": text}]
-
-    monkeypatch.setattr(module.db.messages, "list_by_session_paginated", messages)
-    monkeypatch.setattr(module, "derive_envelope", None, raising=False)
-    calls = []
-    monkeypatch.setattr(api, "enqueue", lambda *a, **k: calls.append((a, k)) or SimpleNamespace(status="queued"))
-    monkeypatch.setattr("core.session_inputs.derive_envelope", lambda *a, **k: {
-        "source_event_ids": [], "evidence": "inferred", "tainted": True, "writer": "backflow"})
-
-    await module.KnowledgeBackflowHook()._execute_inner(
-        module.HookContext("s1", "a", 1, "", "title"))
-    args, kwargs = calls[0]
-    assert args[:3] == ("backflow", "message-7", "document")
-    assert args[3]["kind"] == "backflow" and args[3]["message_id"] == "message-7"
-    assert kwargs["envelope"]["tainted"] is True
+    assert not hasattr(session_inputs, "derive_envelope")     # the v1 envelope is gone
 
 
 @pytest.mark.asyncio

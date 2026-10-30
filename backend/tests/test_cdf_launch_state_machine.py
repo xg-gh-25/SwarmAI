@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from tests.test_cdf_v2_e2e import Extractor, Judge, _cognition, _drain, cdf_env  # noqa: F401
+from tests.test_cdf_v2_e2e import Extractor, _cognition, _drain, cdf_env  # noqa: F401
 
 
 def _gap_to(section_present: bool, env):
@@ -39,9 +39,9 @@ def _gap_to(section_present: bool, env):
                                llm=Extractor([gap]))
 
 
-def _worker(env, owner, judge=None):
+def _worker(env, owner):
     from core.ingestion.worker import IngestionWorker
-    worker = IngestionWorker(owner, env["workspace"], judge_factory=lambda: judge or Judge())
+    worker = IngestionWorker(owner, env["workspace"])
     worker._summary_due = datetime.now(timezone.utc) + timedelta(days=1)
     worker._maintenance_due = datetime.now(timezone.utc) + timedelta(days=1)
     return worker

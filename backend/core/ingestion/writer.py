@@ -479,35 +479,6 @@ def _next_evolution_id(content: str, section: str, prefix: str) -> int:
     return max(values, default=0) + 1
 
 
-def _candidate_target(decision: UnitDecision | Mapping[str, Any]) -> str | None:
-    action = str(_decision_value(decision, "action", ""))
-    if action != "replace":
-        return None
-    judgments = list(_decision_value(decision, "hit_judgments", []) or [])
-    if not judgments:
-        return None
-    from .card3 import aggregate_hits, relation_for_hit
-
-    aggregate = aggregate_hits(relation_for_hit(item) for item in judgments)
-    return aggregate.target_anchor
-
-
-def _unit_for_anchor(target: Path, anchor: str | None) -> Any | None:
-    if not anchor or not target.is_file():
-        return None
-    return next((unit for unit in parse_units(target, root=_workspace()) if unit.anchor == anchor), None)
-
-
-def _remove_unit_bytes(content: bytes, unit: Any) -> bytes:
-    start, end = unit.byte_start, unit.byte_end
-    tail = content[end:]
-    metadata = re.match(rb"\r?\n[ \t]*<!-- ref:[^\r\n]*-->[ \t]*(?:\r?\n)?", tail)
-    if metadata:
-        end += metadata.end()
-    before, after = content[:start].rstrip(b"\r\n"), content[end:].lstrip(b"\r\n")
-    return before + (b"\n\n" if before and after else b"") + after
-
-
 def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> dict[str, Any]:
     unit_id = str(_row_value(unit_row, "unit_id") or _decision_value(decision, "unit_id"))
     group = dict(_json_value(_row_value(unit_row, "claim_group"), {}))
@@ -537,24 +508,15 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     group["cited_external"] = basis == "external"
     section = str(_model_value(destination, "section", "") or "")
     content = original.decode("utf-8") if original else ""
-    old_anchor = _candidate_target(decision)
-    old_unit = _unit_for_anchor(target, old_anchor)
-    archive_path: Path | None = None
-    action = str(_decision_value(decision, "action", "add"))
+    archive_path: Path | None = None       # an add archives nothing (v1's replace is retired)
     sequence = 1
     if store == "EVOLUTION":
         prefix = _evolution_prefix(group, _decision_value(decision, "card1"))
         sequence = _next_evolution_id(content, section, prefix)
     block = _render_block(decision, unit_id, group, sequence=sequence)
-    if action == "replace" and old_unit is not None and old_unit.identity.startswith("cand:"):
-        content_bytes = _remove_unit_bytes(original, old_unit)
-        content = content_bytes.decode("utf-8")
-        archive_path = target.parent / ".archive" / f"{target.name}.{unit_id}.{_hash(original)[:12]}"
     intended = _compose_intended(content, target, store, section, group, block)
     new_anchor = f"{_relative(target)}#{section}#cand:{unit_id}"
     relations = []
-    if old_anchor and action == "replace":
-        relations.append({"subject_anchor": new_anchor, "predicate": "supersedes", "object_anchor": old_anchor})
     for hint in vector.get("relation_hints", []):
         predicate = hint.get("predicate")
         object_anchor = hint.get("object_anchor")
@@ -568,7 +530,7 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
         "archive_path": _relative(archive_path) if archive_path else None,
         "archive_hash": _hash(original) if archive_path else None,
         "anchors_present": [f"cand:{unit_id}"],
-        "anchors_absent": [old_unit.identity] if archive_path and old_unit else [],
+        "anchors_absent": [],
         "relations": relations,
     }
 

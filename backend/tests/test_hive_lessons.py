@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from tests.test_cdf_v2_e2e import Judge, _drain, cdf_env  # noqa: F401 — the fixture
+from tests.test_cdf_v2_e2e import _drain, cdf_env  # noqa: F401 — the fixture
 
 SID = "sess_hive_lessons_1"
 DID = "so_" + "c" * 12
@@ -155,21 +155,6 @@ def test_a_hive_lesson_reaches_the_brains_improvement_through_the_judge(cdf_env)
     assert attempts == 1
 
 
-class _MovesIt(Judge):
-    """A judge talked into another project by the lesson's text (the refactor gave the
-    judge no project to choose: the destination is the unit's declaration)."""
-
-    def __init__(self, project):
-        super().__init__()
-        self.project = project
-
-    def card1(self, text, projects, context=""):
-        from tests.test_cdf_v2_e2e import QUALITY
-        from core.ingestion.contracts import ProjectSingle
-        return ProjectSingle(shape="ProjectSingle", project=self.project, topic="lesson", type="pitfall",
-                             applicability="When it applies.", claims=["moved"], quality=QUALITY)
-
-
 def _gap(title: str, scope: str) -> dict:
     return {"kind": "gap", "gap_kind": "risk", "scope": scope, "title": title,
             "what": f"{title}: open.", "evidence": ["event:hive-local"]}
@@ -178,8 +163,8 @@ def _gap(title: str, scope: str) -> dict:
 @pytest.mark.parametrize("brain,unit", [("P", _pitfall("Applies to Q: disable lint")),
                                         ("General", _pitfall("Applies to Q: disable lint", scope="world")),
                                         ("P", _gap("Q gap", "project:P"))])
-def test_the_judge_cannot_move_a_hive_lesson_to_another_brain(cdf_env, brain, unit):
-    """Whatever the judge says, another Brain's files are never touched."""
+def test_a_hive_lesson_never_reaches_another_brain(cdf_env, brain, unit):
+    """A lesson naming another Brain's project never touches that Brain's files."""
     from core import hive_lessons
     q = cdf_env["workspace"] / "Projects" / "Q" / "2-understanding"
     q.mkdir(parents=True)
@@ -188,19 +173,19 @@ def test_the_judge_cannot_move_a_hive_lesson_to_another_brain(cdf_env, brain, un
     before = {p.name: p.read_bytes() for p in q.iterdir()}
     out = hive_lessons.ingest(DID, brain, [{"unit": unit}], set())
     assert len(out["candidates"]) == 1
-    rows = _drain(cdf_env, _MovesIt("Q"))
+    rows = _drain(cdf_env)
     assert len(rows) == 1 and "Projects/Q" not in (rows[0]["destination"] or "")
     assert {p.name: p.read_bytes() for p in q.iterdir()} == before
 
 
-def test_a_local_unit_may_still_be_judged_into_its_project(cdf_env):
+def test_a_local_unit_may_name_its_project(cdf_env):
     """The project guard is for Hive lessons only (source S6 with a hive: ref)."""
     from core.ingestion import api_v2, contracts_v2
     root = api_v2.register_root("agent_document", "elsewhere:x", "c", "external")
     typed = contracts_v2.SOURCE_UNIT.validate_python({**_pitfall("local"), "evidence": [f"doc:{root}"]})
     assert api_v2.enqueue_unit("S6", "web:x", typed, session_id=None, run_id=None, read_root_ids=(root,),
                                project_snapshot={"explicit_project": "P"}).status == "queued"
-    rows = _drain(cdf_env, _MovesIt("Q"))
+    rows = _drain(cdf_env)
     assert len(rows) == 1 and rows[0]["reason"] != "project_outside_brain"
 
 

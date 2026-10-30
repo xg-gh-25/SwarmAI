@@ -40,6 +40,14 @@ def _unit(**over):
     return unit
 
 
+@pytest.fixture(autouse=True)
+def user_check_agrees(monkeypatch):
+    """The isolated user check (decision D) says yes: these tests pin the source facts;
+    the check itself is in test_cdf_user_check."""
+    from core.ingestion import user_check
+    monkeypatch.setattr(user_check, "says", lambda claim, texts: user_check.Verdict(True, "said"))
+
+
 @pytest.fixture
 def ws(tmp_path: Path) -> Path:
     ctx = tmp_path / ".context"

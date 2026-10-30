@@ -134,17 +134,6 @@ def session_input_ids(session_id: str) -> tuple[str, ...]:
     return tuple(str(row[0]) for row in rows)
 
 
-def derive_envelope(
-    session_id: str,
-    source_event_ids: Sequence[str] = (),
-    *,
-    writer: str | None = None,
-) -> dict:
-    """Deprecated v1 boundary; v2 callers must use ``enqueue_unit`` evidence anchors."""
-    del session_id, source_event_ids, writer
-    raise DeprecationWarning("derive_envelope was removed; call api_v2.enqueue_unit")
-
-
 def _split_user_input_parts(
     message: str | None, content: Sequence[object] | str | None,
 ) -> tuple[str, tuple[tuple[str, str, int], ...]]:

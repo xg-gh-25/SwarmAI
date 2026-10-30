@@ -5,7 +5,7 @@ What is tested:
   caller attributed (worker per candidate, extractor per source, S1 entailment), and
   calls outside any attribution land under "-".
 - Two calls the same day for one source add up in one row; ``totals`` sums all rows.
-- Recording is fail-open: a broken store never fails the judge.
+- Recording is fail-open: a broken store never fails the call.
 - A v5 database migrates to v6: the usage table appears and the daily-stats
   llm_calls/tokens columns (which never held usage) are gone.
 """
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -26,16 +25,10 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return data
 
 
-def _judge(monkeypatch: pytest.MonkeyPatch, tokens_in: int, tokens_out: int):
-    """BedrockJudge whose jobs.bedrock.text() call is faked, filling usage like the real one."""
-    from core.ingestion import llm
-
-    def fake_text(prompt, *, usage, **_):
-        usage.update(input_tokens=tokens_in, output_tokens=tokens_out)
-        return "{}"
-
-    monkeypatch.setattr(llm, "text", fake_text)
-    return llm.BedrockJudge(model_id="test-model")
+def _call(tokens_in: int, tokens_out: int) -> None:
+    """One Bedrock call's usage, recorded as every CDF caller records it."""
+    from core.ingestion import llm_usage
+    llm_usage.record({"input_tokens": tokens_in, "output_tokens": tokens_out})
 
 
 def _rows(data: Path) -> list[tuple]:
@@ -50,13 +43,12 @@ def _rows(data: Path) -> list[tuple]:
 
 def test_calls_are_recorded_under_the_attributed_source(data_dir, monkeypatch) -> None:
     from core.ingestion import llm_usage
-    judge = _judge(monkeypatch, 1000, 50)
     with llm_usage.attribute("S2"):
-        judge._invoke("p", lambda raw: raw)
-        judge._invoke("p", lambda raw: raw)
+        _call(1000, 50)
+        _call(1000, 50)
     with llm_usage.attribute("S4"):
-        judge._invoke("p", lambda raw: raw)
-    judge._invoke("p", lambda raw: raw)
+        _call(1000, 50)
+    _call(1000, 50)
     assert _rows(data_dir) == [("-", 1, 1000, 50), ("S2", 2, 2000, 100), ("S4", 1, 1000, 50)]
     assert llm_usage.totals() == {"calls": 4, "input_tokens": 4000, "output_tokens": 200}
 
@@ -81,36 +73,19 @@ def test_worker_attributes_each_candidate_to_its_source(monkeypatch) -> None:
     seen: list[str] = []
     monkeypatch.setattr(worker, "_process_candidate",
                         lambda *a, **k: seen.append(llm_usage.current_source()))
-    worker.process_candidate(None, None, {"source": "remember", "source_v2": "S3"}, Path("."), None)
-    worker.process_candidate(None, None, {"source": "remember", "source_v2": None}, Path("."), None)
+    worker.process_candidate(None, None, {"source": "remember", "source_v2": "S3"}, Path("."))
+    worker.process_candidate(None, None, {"source": "remember", "source_v2": None}, Path("."))
     assert seen == ["S3", "remember"]
-
-
-def test_truncated_reply_is_untyped_and_still_recorded(data_dir, monkeypatch) -> None:
-    from core.ingestion import llm
-    from core.ingestion.prompts import UntypedOutput
-    from jobs.bedrock import StructuredOutputError
-
-    def cut(prompt, *, usage, **_):
-        usage.update(input_tokens=500, output_tokens=4096)
-        raise StructuredOutputError("truncated", "half a reply", "reply reached max_tokens=4096")
-
-    monkeypatch.setattr(llm, "text", cut)
-    with pytest.raises(UntypedOutput) as caught:
-        llm.BedrockJudge(model_id="m")._invoke("p", lambda raw: raw)
-    assert "truncated" in str(caught.value) and caught.value.raw == "half a reply"
-    assert _rows(data_dir) == [("-", 1, 500, 4096)]
 
 
 def test_recording_fails_open(data_dir, monkeypatch) -> None:
     from core.ingestion import api
-    judge = _judge(monkeypatch, 10, 1)
 
     def broken(**_):
         raise sqlite3.OperationalError("disk I/O error")
 
     monkeypatch.setattr(api, "connect_rw", broken)
-    assert judge._invoke("p", lambda raw: raw).raw == "{}"
+    _call(10, 1)                      # no exception: a broken store never fails the call
 
 
 def test_v5_database_migrates_to_v6(data_dir) -> None:

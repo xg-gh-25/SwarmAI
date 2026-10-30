@@ -92,40 +92,12 @@ def test_every_non_cognition_kind_reaches_its_store(tmp_path, words, unit, expec
     assert (decision.destination.store, decision.destination.relative_path) == expected
 
 
-def test_normalize_preserves_semantic_fields_except_outer_whitespace() -> None:
-    from core.ingestion.contracts import Candidate, Envelope, RememberPayload
-    from core.ingestion.normalize import normalize_candidate
-    text = "  Keep session_id=abc, /scratch/runtime-x/path, abcdef1234567.\nSecond line.  "
-    candidate = Candidate(
-        id="c", source="remember", payload=RememberPayload(text=text),
-        envelope=Envelope(source_event_ids=["e"], evidence="user_explicit", tainted=False),
-        cluster_id="session",
-    )
-    [group] = normalize_candidate(candidate)
-    assert group.text == text.strip()
-
-
-def test_per_turn_card3_corpus_excludes_common_reroutes(tmp_path: Path) -> None:
-    from core.ingestion.card3 import corpus_paths
-    from core.ingestion.contracts_v2 import DestinationV2
-    common = tmp_path / "Knowledge/Learned/_common/world.md"
-    common.parent.mkdir(parents=True)
-    common.write_text("# Common\n", encoding="utf-8")
-    memory = tmp_path / ".context/MEMORY.md"
-    memory.parent.mkdir(parents=True)
-    memory.write_text("# Memory\n", encoding="utf-8")
-    paths = corpus_paths(tmp_path, DestinationV2(
-        store="MEMORY", relative_path=".context/MEMORY.md", section="Guidelines"))
-    assert memory in paths
-    assert common not in paths
-
-
 def test_owned_semantic_paths_have_no_constant_truncation_slice() -> None:
     import ast
     import inspect
-    from core.ingestion import normalize, pipeline_v2, writer
+    from core.ingestion import pipeline_v2, writer
 
-    for module in (normalize, pipeline_v2, writer):
+    for module in (pipeline_v2, writer):
         tree = ast.parse(inspect.getsource(module))
         semantic_names = {"title", "text", "body", "summary", "what", "how", "why",
                           "applicability", "rejected_alternatives", "impact", "outcome",
