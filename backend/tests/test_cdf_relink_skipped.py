@@ -96,3 +96,33 @@ def test_apply_relinks_what_is_sound_and_closes_every_event(store):
         assert check.execute("SELECT COUNT(*) FROM ingestion_events WHERE resolved=0").fetchone()[0] == 4
     finally:
         check.close()
+
+
+def test_the_backup_check_holds_while_the_store_is_written(tmp_path):
+    """The daemon writes while a one-time script backs up: the copy is checked against the
+    snapshot it was taken from, not against the live table (that compare never held)."""
+    import threading
+    from scripts.cdf_move_misrouted import _backup
+    db = tmp_path / "live.db"
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t(x)")
+    conn.executemany("INSERT INTO t VALUES (?)", [(i,) for i in range(20000)])
+    conn.commit()
+    stop = threading.Event()
+
+    def writer():
+        w = sqlite3.connect(db)
+        while not stop.is_set():
+            w.execute("INSERT INTO t VALUES (1)")
+            w.commit()
+        w.close()
+    thread = threading.Thread(target=writer)
+    thread.start()
+    try:
+        for _ in range(5):
+            assert Path(_backup(db)).is_file()
+    finally:
+        stop.set()
+        thread.join()
+        conn.close()

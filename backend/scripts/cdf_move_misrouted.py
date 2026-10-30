@@ -39,18 +39,24 @@ from pathlib import Path
 def _backup(db: Path) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     dest = db.with_name(f"{db.name}.pre-move-misrouted-{stamp}.bak")
-    src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    # one read transaction for the copy and the counts: the daemon keeps writing, and a
+    # count read after the copy compared a snapshot with a live table (never equal while
+    # the worker runs). The copy must hold every row of the snapshot it was taken from.
+    src = sqlite3.connect(f"file:{db}?mode=ro", uri=True, isolation_level=None)
     try:
+        src.execute("BEGIN")
+        tables = [name for (name,) in src.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        counts = {table: src.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in tables}
         copy = sqlite3.connect(dest)
         src.backup(copy)
         copy.close()
+        src.execute("COMMIT")
         check = sqlite3.connect(f"file:{dest}?mode=ro", uri=True)
         try:
             assert check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-            for (table,) in src.execute("SELECT name FROM sqlite_master WHERE type='table' "
-                                        "AND name NOT LIKE 'sqlite_%'"):
-                assert (check.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-                        == src.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]), table
+            for table in tables:
+                assert check.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == counts[table], table
         finally:
             check.close()
     finally:
