@@ -371,7 +371,9 @@ class StreamingOrchestrator:
         forwarded. Writes the usage ledger (core/usage_accounting: per model, each
         result the increase over the previous result of the same process), the one
         record of spend every reader uses. ``usage`` is unused here: the ledger reads
-        the result's ``model_usage``, which counts sub-agents too."""
+        the result itself (its ``model_usage``, which counts sub-agents too; the first
+        result of a resumed process, whose totals include the restored history, is
+        told apart by ``resumed``)."""
         # once per result, whichever paths see it (the result branch records it first)
         if getattr(message, "_swarm_usage_recorded", False):
             return
@@ -385,7 +387,8 @@ class StreamingOrchestrator:
             usage_accounting.record_sync(usage_accounting.cli_results.rows(
                 message, session_id=parent.session_id, pid=getattr(parent, "pid", None),
                 surface="channel" if getattr(parent, "is_channel_session", False) else "chat",
-                default_model=getattr(parent, "_model_name", None)))
+                default_model=getattr(parent, "_model_name", None),
+                resumed=bool(getattr(parent, "_spawned_with_resume", False))))
         except Exception:
             logger.debug("_record_token_usage_bg: usage ledger not written", exc_info=True)
 

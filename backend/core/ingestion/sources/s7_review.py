@@ -332,13 +332,15 @@ def sdk_runner(sdk_session_id: str, cwd: str, prompt: str, schema: dict) -> dict
     async def run() -> dict:
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, ResultMessage):
-                # the fork is its own process: its running totals are this review's.
+                # a resumed fork starts from the session's restored totals: only this
+                # review's own turn is its cost (core/usage_accounting.CliResults).
                 # Queued for the ledger's writer thread: this loop is a short-lived one.
                 import uuid
                 from core import usage_accounting
                 usage_accounting.record_sync(usage_accounting.CliResults().rows(
                     message, session_id=f"cdf.s7:{sdk_session_id}:{uuid.uuid4().hex}", pid=None,
-                    surface="cdf", feature="cdf.s7"))
+                    surface="cdf", feature="cdf.s7", resumed=True,
+                    default_model=getattr(options, "model", None)))
                 usage = message.usage or {}
                 llm_usage.record({"input_tokens": int(usage.get("input_tokens") or 0)
                                   + int(usage.get("cache_read_input_tokens") or 0)

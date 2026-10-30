@@ -334,3 +334,104 @@ def test_the_model_probe_is_recorded(monkeypatch):
     assert [(r["feature"], r["input"], r["output"], r["model"]) for r in got] == [
         ("settings.model_probe", 8, 1, "us.anthropic.claude-sonnet-4-6")]
     system._ledger_probe({"body": io.BytesIO(b"not json")}, "m")          # never raises
+
+
+# ── a resumed process starts from the totals the CLI restored ────────────────
+# measured 2026-10-30 (claude-sonnet-4-6): one process of two one-line turns, then the
+# same session resumed in a new process; the resumed first result's model_usage is the
+# previous process's last totals plus its own turn (usage: 421 input, 5 output)
+P_LAST = result(mu("sonnet", 1469, 20, 0, 0, 0.00471), 0.00471,
+                {"input_tokens": 377, "output_tokens": 5})
+RES_1 = result(mu("sonnet", 1890, 25, 0, 0, 0.00604), 0.00604,
+               {"input_tokens": 421, "output_tokens": 5})
+RES_2 = result(mu("sonnet", 2355, 30, 0, 0, 0.00751), 0.00751,
+               {"input_tokens": 465, "output_tokens": 5})
+
+
+def test_a_resumed_process_is_counted_from_the_previous_process_it_restored():
+    t = ua.CliResults()
+    t.rows(P_LAST, session_id="s", pid=1, surface="chat")
+    (r,) = t.rows(RES_1, session_id="s", pid=2, surface="chat", resumed=True)
+    assert (r["input"], r["output"], r["cli_pid"]) == (421, 5, 2)
+    assert abs(r["cost_usd"] - 0.00133) < 1e-9 and r["cost_source"] == "cli"
+    (r,) = t.rows(RES_2, session_id="s", pid=2, surface="chat", resumed=True)
+    assert (r["input"], r["output"]) == (465, 5)
+
+
+def test_a_resumed_process_with_no_known_start_counts_only_its_own_turn():
+    # a daemon restart, or an S7 review fork: the tracker never saw the process before
+    t = ua.CliResults()
+    (r,) = t.rows(RES_1, session_id="s", pid=None, surface="cdf", resumed=True, default_model="sonnet")
+    assert (r["model"], r["input"], r["output"], r["cache_read"]) == ("sonnet", 421, 5, 0)
+    assert r["cost_usd"] is None and r["cost_source"] == "none"      # the writer prices it
+    # and the restored totals are the baseline of the next result
+    (r,) = t.rows(RES_2, session_id="s", pid=None, surface="cdf", resumed=True, default_model="sonnet")
+    assert (r["input"], r["output"], round(r["cost_usd"], 5)) == (465, 5, 0.00147)
+
+
+def test_a_resumed_process_that_restored_nothing_counts_its_own_turn():
+    # the CLI restored another state (or none): a part is below the previous process's
+    t = ua.CliResults()
+    t.rows(result(mu("opus", 50, 900, 10_000_000, 80_000, 40.0), 40.0), session_id="s", pid=1, surface="chat")
+    (r,) = t.rows(result(mu("opus", 3, 30, 5000, 900, 0.2), 0.2, {"input_tokens": 3, "output_tokens": 30,
+                  "cache_read_input_tokens": 5000, "cache_creation_input_tokens": 900}),
+                  session_id="s", pid=2, surface="chat", resumed=True, default_model="opus")
+    assert (r["output"], r["cache_read"], r["cache_write"]) == (30, 5000, 900)
+
+
+def test_the_orchestrator_and_the_review_tell_the_ledger_a_process_was_resumed():
+    """The callers pass ``resumed`` (a new process started with --resume): the chat
+    orchestrator from the unit's spawn, the S7 review always (it resumes a fork)."""
+    from unittest.mock import patch
+    from core.streaming_orchestrator import StreamingOrchestrator
+    ua.cli_results._last.clear()
+    parent = SimpleNamespace(session_id="sess-r", pid=7, is_channel_session=False, _model_name="sonnet",
+                             _spawned_with_resume=True)
+    rows: list = []
+    with patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)):
+        StreamingOrchestrator(parent)._record_token_usage_bg(RES_1, RES_1.usage)
+    assert [(r["input"], r["cost_usd"]) for r in rows] == [(421, None)]
+    # the review: a fork's result with the session's whole history in its totals
+    import claude_agent_sdk
+    from core.ingestion.sources import s7_review
+    fork = claude_agent_sdk.ResultMessage(
+        subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+        session_id="fork-1", total_cost_usd=118.93, result="", structured_output={"units": []},
+        usage={"input_tokens": 2, "output_tokens": 1902, "cache_read_input_tokens": 1157,
+               "cache_creation_input_tokens": 4261},
+        model_usage=mu("opus", 17869, 1023846, 344961408, 3667171, 118.9))
+
+    async def fake_query(prompt, options):
+        yield fork
+    rows.clear()
+    with patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)), \
+            patch.object(claude_agent_sdk, "query", fake_query), \
+            patch.object(s7_review, "review_options", lambda *a: SimpleNamespace(model="opus")), \
+            patch.object(s7_review, "_drop_fork", lambda *a: None), \
+            patch("core.ingestion.llm_usage.record", lambda *a: None):
+        assert s7_review.sdk_runner("sdk-1", "/tmp", "p", {}) == {"units": []}
+    assert [(r["model"], r["output"], r["cache_read"], r["cost_usd"], r["feature"]) for r in rows] == \
+        [("opus", 1902, 1157, None, "cdf.s7")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume, expected", [("sdk-1", True), (None, False)])
+async def test_a_spawn_records_whether_its_process_was_resumed(resume, expected):
+    """The unit remembers whether its CLI was started with --resume, which the
+    orchestrator hands to the ledger on every result of that process."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from core.session_unit import SessionUnit
+    unit = SessionUnit(session_id="spawn-r", agent_id="agent-1")
+    wrapper = MagicMock()
+    wrapper.__aenter__ = AsyncMock(return_value=MagicMock())
+    with patch("core.session_unit._oom_cooldown_until", 0), \
+            patch("core.session_unit._spawn_lock", asyncio.Lock()), \
+            patch("core.resource_monitor.resource_monitor.spawn_budget",
+                  return_value=MagicMock(can_spawn=True, reason="")), \
+            patch("core.claude_environment._ClaudeClientWrapper", return_value=wrapper), \
+            patch("core.executors.run_in", new_callable=AsyncMock), \
+            patch.object(unit, "_start_stream_reader"), patch.object(unit, "_transition"):
+        from claude_agent_sdk import ClaudeAgentOptions
+        await unit._spawn(ClaudeAgentOptions(resume=resume), None)
+    assert unit._spawned_with_resume is expected

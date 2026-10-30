@@ -22,6 +22,14 @@ Writers:
   over the previous result of the same process; a total that went down means a new
   process. Without ``model_usage`` (an older CLI) the result's own ``usage`` and the
   increase of ``total_cost_usd`` are used, as one row.
+  A process started with ``--resume`` (a cold chat resume, an S7 review fork) does not
+  start from zero: the CLI restores the previous process's totals (measured
+  2026-10-30: a resumed one-line turn reported the previous process's 1090 input
+  tokens plus its own 374), so its first result is mostly history. Its share is the
+  increase over the previous process of the session when this tracker saw it and no
+  part went down; otherwise only the result's own ``usage`` (that turn, the main
+  model, priced by the writer) is counted, and the restored totals become the
+  baseline. What that misses is the first turn's sub-agent use.
 - ``rows_from_cli_json`` — the rows of one ``claude --print --output-format json`` run
   (its ``modelUsage`` covers the whole process).
 - ``bedrock_row`` — one direct Bedrock Converse call.
@@ -164,10 +172,18 @@ class CliResults:
         self._nonce = uuid.uuid4().hex[:12]
 
     def rows(self, message: Any, *, session_id: Optional[str], pid: Optional[int], surface: str,
-             default_model: Optional[str] = None, **refs: Any) -> list[dict[str, Any]]:
+             default_model: Optional[str] = None, resumed: bool = False,
+             **refs: Any) -> list[dict[str, Any]]:
+        """``resumed``: the process was started with ``--resume`` (read on its first
+        result only)."""
         state = self._last.pop(session_id, None)
         if state is None or (pid is not None and state["pid"] is not None and pid != state["pid"]):
-            state = {"pid": pid, "models": {}, "cost": None, "seq": 0}
+            before = state
+            state = {"pid": pid, "models": {}, "cost": None, "seq": 0, "restored": None}
+            if resumed:
+                # the previous process's last totals, the CLI's restored starting point
+                state["restored"] = {"models": dict(before["models"]), "cost": before["cost"]} \
+                    if before is not None else {}
         if pid is not None:
             state["pid"] = pid
         state["seq"] += 1
@@ -180,6 +196,17 @@ class CliResults:
         common = dict(surface=surface, session_id=session_id, cli_pid=state["pid"], cost_source="cli", **refs)
         models = _model_usage(getattr(message, "model_usage", None))
         out: list[dict[str, Any]] = []
+        restored, state["restored"] = state["restored"], None
+        if restored is not None:
+            seen = restored.get("models") or {}
+            if not models or not seen or any(
+                    cur[k] < seen.get(m, {}).get(k, 0) for m, cur in models.items() for k in (*KINDS, "cost")):
+                # the starting point is unknown: this turn's own usage, the restored totals the baseline
+                state["models"] = models
+                if total is not None:
+                    state["cost"] = total
+                return self._own_turn(message, base, models, default_model, total, common)
+            state["models"] = seen
         if models:
             for model, cur in models.items():
                 d = _increase(state["models"].get(model), cur)
@@ -199,6 +226,20 @@ class CliResults:
         if total is not None:
             state["cost"] = total
         return out
+
+    @staticmethod
+    def _own_turn(message: Any, base: str, models: Mapping[str, Any], default_model: Optional[str],
+                  total: Optional[float], common: dict) -> list[dict[str, Any]]:
+        """One row of a result's own ``usage`` (its turn, the main model), unpriced: the
+        writer prices it (core/usage_prices)."""
+        usage = getattr(message, "usage", None) or {}
+        tokens = {k: _n(usage.get(src)) for k, src in _USAGE_KEYS.items()} if isinstance(usage, Mapping) else {}
+        if not any(tokens.values()):
+            return []
+        model = default_model if (default_model in models or not models) else \
+            max(models, key=lambda m: models[m]["cost"])
+        return [_row(model=model, tokens=tokens, cost=None, dedup_key=f"{base}:own",
+                     cli_cost_total=total, **common)]
 
 
 def rows_from_cli_json(output: Mapping[str, Any], *, surface: str, run_key: Optional[str] = None,

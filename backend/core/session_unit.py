@@ -4102,6 +4102,9 @@ class SessionUnit:
 
         self._wrapper = wrapper
         self._client = client
+        # the usage ledger counts a resumed process's first result from the totals the
+        # CLI restored, not from zero (core/usage_accounting.CliResults)
+        self._spawned_with_resume = bool(getattr(options, "resume", None))
         if getattr(options, "resume", None):
             try:
                 from functools import partial
