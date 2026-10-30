@@ -1684,6 +1684,7 @@ async def lifespan(app: FastAPI):
         _swarm_out_bridge_task.cancel()
     if _swarm_out_refresh_task and not _swarm_out_refresh_task.done():
         _swarm_out_refresh_task.cancel()
+    if backend_mode != "hive":
         from core.swarm_out import cancel_refresh as _swarm_out_cancel_refresh
         _swarm_out_cancel_refresh()
     if _scheduler_task and not _scheduler_task.done():

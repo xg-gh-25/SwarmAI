@@ -67,7 +67,7 @@ def world(tmp_path, monkeypatch):
         computed["n"] += 1
         return {"runs": [], "asks": [], "errors": [], "refusals": []}
     monkeypatch.setattr(swarm_out, "_compute_runs", compute)
-    swarm_out._SNAPSHOT.update(at=None, data=None, task=None)
+    swarm_out._SNAPSHOT.update(at=None, data=None, task=None, task_gen=0, gen=0)
     return {"row": row, "calls": calls, "code": code, "computed": computed}
 
 

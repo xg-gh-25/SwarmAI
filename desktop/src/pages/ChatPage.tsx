@@ -1595,10 +1595,10 @@ export default function ChatPage() {
     // Only a session the proxy accepts can be a Hive tab (addHiveTab refuses the rest):
     // checked first, so nothing of the current tabs changes for one it would refuse.
     if (!isRemoteId(sid)) return;
-    setReadOnlyHiveSid(readOnly ? sid : null);
     const map = tabMapRef.current;
     const old = hiveTabOf(map.values());
     if (old && old.sessionId === sid) {
+      setReadOnlyHiveSid(readOnly ? sid : null);
       void handleTabSelect(old.id);
       return;
     }
@@ -1623,6 +1623,7 @@ export default function ChatPage() {
       inputValueMapRef.current.set(currentTabId, inputValueRef.current);
     }
     if (old) doCloseTab(old.id, old.sessionId, false);
+    setReadOnlyHiveSid(readOnly ? sid : null);    // only once the switch is not refused
     const tab = addHiveTab(sid, title, selectedAgentId || 'default');
     if (!tab) return;
     initTabState(tab.id, []);

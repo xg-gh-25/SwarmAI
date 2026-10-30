@@ -123,8 +123,7 @@ async def _return(fn, *args) -> dict[str, Any]:
     try:
         res = fn(*args)
         if hasattr(res, "__await__"):
-            return await res
-        return res
+            res = await res
     except hive_return.ReturnError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except swarm_out.SwarmOutError as e:
@@ -132,8 +131,8 @@ async def _return(fn, *args) -> dict[str, Any]:
     except Exception:
         logger.exception("swarm_out return failed")
         raise HTTPException(status_code=500, detail="taking the commits back failed")
-    finally:
-        swarm_out._refresh_soon()              # a landing changes the run: settle it now
+    swarm_out._refresh_soon()                  # a landing changes the run: settle it now
+    return res
 
 
 @router.post("/runs/{dispatch_id}/return/prepare")
@@ -212,11 +211,11 @@ async def _settle(fn, *args) -> dict[str, Any]:
     import asyncio
     from core import swarm_out_settle
     try:
-        return await asyncio.to_thread(fn, *args)
+        out = await asyncio.to_thread(fn, *args)
     except swarm_out_settle.SettleError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        swarm_out._refresh_soon()              # settle it now, not at the next look
+    swarm_out._refresh_soon()                  # settled now, not at the next look
+    return out
 
 
 @router.post("/runs/{dispatch_id}/verdict")

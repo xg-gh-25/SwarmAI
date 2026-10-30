@@ -67,7 +67,9 @@ const cardTint = (tone: Tone): React.CSSProperties | undefined =>
 
 /** One question a Hive waits on, with its answer controls (the run's big card shows
  *  the questions of its session; the run view, those of no listed run). */
-export function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
+export function AskCard({ ask, onDone, onDirty }: { ask: SwarmOutAsk; onDone: () => void;
+  /** whether something picked or typed has not been sent (the run's card keeps it) */
+  onDirty?: (dirty: boolean) => void }) {
   const { t } = useTranslation();
   // single-select / typed answers: the text; multi-select: the picked labels
   const [picks, setPicks] = useState<Record<string, string>>({});
@@ -106,6 +108,9 @@ export function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void 
   const picked = (q: SwarmOutQuestion, label: string) =>
     isMulti(q) ? (multi[q.question] ?? []).includes(label) : picks[q.question] === label;
   const omitted = (ask.omitted?.questions ?? 0) + (ask.omitted?.options ?? 0);
+  const dirty = Object.values(picks).some((v) => v.trim()) || Object.values(multi).some((v) => v.length > 0);
+  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
+  useEffect(() => () => onDirty?.(false), [onDirty]);
 
   return (
     <div className={`${card} px-4 py-3`} style={{ borderLeft: `3px solid ${TONE_VAR.attention}`, ...cardTint('attention') }} data-testid="swarm-out-ask">

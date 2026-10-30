@@ -304,6 +304,39 @@ describe('the run list', () => {
     expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();
   });
 
+  it('a half-given answer to the run\'s question is kept from J, a click outside and Esc', async () => {
+    const ask = { kind: 'question' as const, hive: 'explorer', hive_id: 'h1', session_id: sid(1), request_id: 'q1', asked_at: '2026-10-31T09:00:00Z',
+      dispatch_title: 'task q1', questions: [{ question: 'Which port?', header: 'p', multiSelect: false, options: [] }] };
+    render(<OpenSessionContext.Provider value={vi.fn()}>
+      <RunList runs={[run('q1', 'needs_answer'), run('a2', 'awaiting')]} asks={[ask]} now={NOW} onReload={vi.fn()} /></OpenSessionContext.Provider>);
+    fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    fireEvent.change(within(overlay).getByLabelText(/Which port\?/), { target: { value: '80' } });
+    fireEvent.keyDown(document.body, { key: 'j' });
+    fireEvent.mouseDown(overlay);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.getByTestId('swarm-out-review-position').textContent).toBe('Waiting for you 1 / 2');
+    expect((within(overlay).getByLabelText(/Which port\?/) as HTMLInputElement).value).toBe('80');
+  });
+
+  it('closing the card puts focus back on the row that opened it', async () => {
+    list([run('a1', 'awaiting')]);
+    const row = screen.getAllByTestId('swarm-out-row')[0];
+    row.focus();
+    fireEvent.click(row);
+    fireEvent.click(await screen.findByTestId('swarm-out-review-close'));
+    expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();
+    expect(document.activeElement).toBe(screen.getAllByTestId('swarm-out-row')[0]);
+  });
+
+  it('a command key pressed in a layer above the card is not the card\'s', () => {
+    render(<><div data-testid="above"><button data-testid="above-btn">x</button></div>
+      <OpenSessionContext.Provider value={vi.fn()}><RunList runs={[run('a1', 'awaiting')]} asks={[]} now={NOW} onReload={vi.fn()} /></OpenSessionContext.Provider></>);
+    fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);
+    fireEvent.keyDown(screen.getByTestId('above-btn'), { key: 'a' });
+    expect(svc.accept).not.toHaveBeenCalled();
+  });
+
   it('the card closes when its session opens, or when the panel goes off screen', async () => {
     const open = vi.fn();
     const { rerender } = render(<OpenSessionContext.Provider value={open}><PanelHiddenContext.Provider value={false}>

@@ -115,8 +115,10 @@ function landable(full: SwarmOutResult | null) {
 }
 
 /** What came back: the question waiting, the commits, the files, the report. */
-function DeliverableTab({ r, full, asks, onAnswered, onLeave }: {
+function DeliverableTab({ r, full, asks, onAnswered, onLeave, onDirty }: {
   r: SwarmOutRun; full: SwarmOutResult | null; asks: SwarmOutAsk[]; onAnswered: () => void;
+  /** an answer is half given (the card keeps it from J / K, a click outside, Esc) */
+  onDirty: (dirty: boolean) => void;
   /** close the card before something opens beneath it */
   onLeave: () => void;
 }) {
@@ -127,7 +129,7 @@ function DeliverableTab({ r, full, asks, onAnswered, onLeave }: {
   const showSwarmOut = getOverlayCtxBridge().showSwarmOut;
   return (
     <div className="flex flex-col gap-3" data-testid="swarm-out-review-deliverable">
-      {mine.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={onAnswered} />)}
+      {mine.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={onAnswered} onDirty={onDirty} />)}
       {stage === 'needs_answer' && mine.length === 0 && (
         <div className="text-[12.5px] flex items-center gap-2" data-testid="swarm-out-review-answer-elsewhere">
           <span className={muted}>{t('swarmOut.review.answerElsewhere')}</span>
@@ -166,6 +168,14 @@ function DeliverableTab({ r, full, asks, onAnswered, onLeave }: {
   );
 }
 
+/** A key belongs to the card when it is pressed inside it, or with focus on the page
+ *  itself (nothing focused). No scope: every key (the panel on its own). */
+function inScope(scope: React.RefObject<HTMLElement | null> | undefined, target: EventTarget | null): boolean {
+  if (!scope) return true;
+  if (!(target instanceof Node) || target === document.body) return true;
+  return !!scope.current?.contains(target);
+}
+
 const STAGE_TONE: Record<string, string> = {
   running: TONE_VAR.busy, needs_answer: TONE_VAR.attention, awaiting: TONE_VAR.attention, stopped: TONE_VAR.error,
   accepted: TONE_VAR.ok, discarded: 'var(--color-text-muted)', expired: 'var(--color-text-muted)',
@@ -174,7 +184,7 @@ const STAGE_TONE: Record<string, string> = {
 /** The right column: what can be done now, as the backend said. The mode (the commands,
  *  or one of them taking words or a confirmation) is the card's, so Esc and J / K can
  *  respect it. */
-export function CommandPanel({ r, full, fullFailed = false, onRetry, asks = [], mode, setMode, onDone, onShowDeliverable, onLeave, onReload, now }: {
+export function CommandPanel({ r, full, fullFailed = false, onRetry, asks = [], mode, setMode, onDone, onShowDeliverable, onLeave, onReload, now, scope }: {
   r: SwarmOutRun; full: SwarmOutResult | null;
   /** the whole record could not be read (landing needs it) */
   fullFailed?: boolean; onRetry?: () => void;
@@ -187,6 +197,9 @@ export function CommandPanel({ r, full, fullFailed = false, onRetry, asks = [], 
   onLeave?: () => void;
   onReload?: () => void;
   now?: number;
+  /** the card: its single-key commands answer only a key pressed inside it (or with
+   *  focus nowhere), never one meant for a layer opened above it */
+  scope?: React.RefObject<HTMLElement | null>;
 }) {
   const { t } = useTranslation();
   const openRun = useOpenRun(r);
@@ -241,13 +254,13 @@ export function CommandPanel({ r, full, fullFailed = false, onRetry, asks = [], 
   // the panel's own keys (never while the cursor is in a field)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (mode !== 'list' || typingIn(e.target)) return;
+      if (mode !== 'list' || typingIn(e.target) || !inScope(scope, e.target)) return;
       const a = commandForKey(actions, e);
       if (a) { e.preventDefault(); give(a); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [actions, give, mode]);
+  }, [actions, give, mode, scope]);
 
   const submitBox = () => {
     if (busy) return;
@@ -407,10 +420,16 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
   const [full, setFull] = useState<SwarmOutResult | null>(null);
   const [fullFailed, setFullFailed] = useState(false);
   const [fetchKey, setFetchKey] = useState(0);
+  // an answer half given in the question card: kept like a half-written correction
+  const [askDirty, setAskDirty] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  // focus goes back to what opened the card when it closes (it closes by unmounting)
+  const opener = useRef<HTMLElement | null>(typeof document === 'undefined' ? null : document.activeElement as HTMLElement | null);
+  useEffect(() => () => { const el = opener.current; if (el && el.isConnected) el.focus(); }, []);
   const openRun = useOpenRun(r ?? ({ session_id: null } as SwarmOutRun));
   const endedAt = r?.result?.ended_at ?? null;
-  useEffect(() => { setTab('deliverable'); setMode('list'); }, [id]);
+  useEffect(() => { setTab('deliverable'); setMode('list'); setAskDirty(false); }, [id]);
+  const keeps = mode !== 'list' || askDirty;     // something typed that a step away would lose
   useEffect(() => {
     let alive = true;
     setFull(null); setFullFailed(false);
@@ -437,16 +456,16 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
   }, [id, onClose, onReload, onSelect, onSettled, order, pos]);
 
   // Esc: back from a box / landing / confirmation to the commands, else out
-  useDialogLayer(true, dialogRef, () => { if (mode !== 'list') setMode('list'); else onClose(); });
+  useDialogLayer(true, dialogRef, () => { if (mode !== 'list') setMode('list'); else if (!askDirty) onClose(); });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (mode !== 'list' || typingIn(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (keeps || typingIn(e.target) || !inScope(dialogRef, e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === 'j' || e.key === 'J') { e.preventDefault(); step(1); }
       if (e.key === 'k' || e.key === 'K') { e.preventDefault(); step(-1); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, step]);
+  }, [keeps, step]);
 
   const res = full ?? r?.result ?? null;
   const word = useMemo(() => autonomyWord(res), [res]);
@@ -469,7 +488,7 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
 
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'color-mix(in srgb, #000 55%, transparent)' }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget && mode === 'list') onClose(); }} data-testid="swarm-out-review-overlay">
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !keeps) onClose(); }} data-testid="swarm-out-review-overlay">
       <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={r.title}
         className="flex flex-col w-[1080px] max-w-full h-[min(780px,calc(100vh-32px))] rounded-[14px] border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl overflow-hidden text-[13px] outline-none">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 border-b border-[var(--color-border)] min-w-0">
@@ -484,8 +503,8 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
           <div className={`ml-auto flex flex-wrap items-center gap-1.5 text-[12px] ${muted}`}>
             {pos >= 0 && <>
               <span className="whitespace-nowrap" data-testid="swarm-out-review-position">{t('swarmOut.review.position', { n: pos + 1, total: order.length })}</span>
-              <button type="button" className={btn} onClick={() => step(-1)} disabled={mode !== 'list'} aria-label={t('swarmOut.review.previous')}>K</button>
-              <button type="button" className={btn} onClick={() => step(1)} disabled={mode !== 'list'} aria-label={t('swarmOut.review.next')}>J</button>
+              <button type="button" className={btn} onClick={() => step(-1)} disabled={keeps} aria-label={t('swarmOut.review.previous')}>K</button>
+              <button type="button" className={btn} onClick={() => step(1)} disabled={keeps} aria-label={t('swarmOut.review.next')}>J</button>
             </>}
             {openRun && actionsOf(r).some((a) => a.key === 'open_session') && (
               <button type="button" className={`${btn} font-semibold whitespace-nowrap`} style={{ color: 'var(--color-primary)', borderColor: 'var(--color-primary)' }}
@@ -520,7 +539,7 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
               ))}
             </div>
             <div className="flex-1 md:overflow-auto px-4 py-3.5" role="tabpanel">
-              {tab === 'deliverable' && <DeliverableTab r={r} full={full} asks={asks} onAnswered={onReload} onLeave={leaveTo} />}
+              {tab === 'deliverable' && <DeliverableTab r={r} full={full} asks={asks} onAnswered={onReload} onLeave={leaveTo} onDirty={setAskDirty} />}
               {tab === 'reply' && (full?.report
                 ? <div className="text-[12.5px]"><MarkdownRenderer content={full.report} /></div>
                 : <div className={muted}>{t('swarmOut.detail.noReply')}</div>)}
@@ -542,7 +561,7 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
           <div className="p-3.5 bg-[var(--color-bg-chrome)] md:overflow-auto border-t md:border-t-0 border-[var(--color-border)]">
             <CommandPanel r={r} full={full} fullFailed={fullFailed} onRetry={() => setFetchKey((k) => k + 1)} asks={asks}
               mode={mode} setMode={setMode} onDone={onDone} onShowDeliverable={() => setTab('deliverable')}
-              onLeave={leaveTo} onReload={onReload} now={now} />
+              onLeave={leaveTo} onReload={onReload} now={now} scope={dialogRef} />
           </div>
         </div>
       </div>
