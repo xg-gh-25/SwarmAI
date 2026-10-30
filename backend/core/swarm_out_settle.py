@@ -21,7 +21,8 @@ design: answer > running > accept > review code > none), and whether it settles:
 - the verdict is decided (pass, abandoned, or the Hive is gone);
 - the code is handled (landed in every repository that brought commits back, or all
   rejected, landed by hand, or none came back);
-- the files are here: every file the run returned is placed in the Brain;
+- the files are here: every returned file the release would remove (under
+  ``Outputs/<id>/``) is placed in the Brain;
 - the lessons are in: the Hive's run record is closed (or the run has none) and every
   lesson it brought is queued for this machine's CDF; or nothing more is pulled (the
   Hive is stopped or gone, or no new entry for the records backstop). No one takes or
@@ -221,11 +222,28 @@ def _final(res: Optional[dict]) -> bool:
     return isinstance(res, dict) and res.get("ended") in ENDED and res.get("provisional") is not True
 
 
-def _files_here(kept_result: dict) -> bool:
-    """Every file the run returned is placed in the Brain (core/hive_files), so removing
-    ``Outputs/<id>/`` on the Hive loses none."""
-    files = ((kept_result.get("work") or {}).get("files") or [])
-    return all(isinstance(f, dict) and isinstance(f.get("local"), str) and f["local"] for f in files)
+def _files_here(dispatch_id: str, kept_result: dict) -> bool:
+    """Every returned file the release would remove is here: one under ``Outputs/<id>/``
+    (core/hive_workspace.outputs_rel, the only file directory the release removes) is
+    placed in the Brain, as core/hive_files.placed records it. A file elsewhere on the
+    Hive is not touched by the release, so it holds nothing back. Read from the
+    placement record, never from the ``local`` the result summary carries: a summary
+    written before that field existed never has it, though its files are placed."""
+    from core import hive_files, hive_workspace
+    rel = hive_workspace.outputs_rel(dispatch_id).strip("/") + "/"
+    here: set = set()
+    for p in hive_files.placed(dispatch_id):
+        if isinstance(p, dict) and isinstance(p.get("local"), str) and p["local"]:
+            here.update(x for x in (p.get("listed"), p.get("path")) if isinstance(x, str))
+    for f in ((kept_result.get("work") or {}).get("files") or []):
+        if not isinstance(f, dict):
+            continue
+        names = [x for x in (f.get("abs"), f.get("path")) if isinstance(x, str) and x]
+        if not any(("/" + n.lstrip("/")).find("/" + rel) >= 0 for n in names):
+            continue                                   # not in the release's scope
+        if not here & set(names):                      # placed under the path it was listed by
+            return False
+    return True
 
 
 def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
@@ -265,7 +283,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     closed = recs.get("closed") if recs else None           # None: this run keeps no record
     lessons_done = abandoned or pulled_out or (closed is not False and not unqueued)
     code_done = abandoned or gone or code in ("none", "landed", "rejected")
-    files_done = abandoned or gone or _files_here(kept_res)
+    files_done = abandoned or gone or _files_here(row["dispatch_id"], kept_res)
     decided = verdict in ("pass", "abandoned", "gone")
     # no result will come: none can be fetched for good (a passing fetch error, the Hive
     # silent or unusable, may still bring it)

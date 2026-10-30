@@ -328,14 +328,42 @@ def test_unsealed_commits_hold_until_landed_by_hand_or_given_up(env):
     assert st.derive(rows[DID], K(True))["settles"]
 
 
-def test_files_not_placed_hold(env):
+HOME_OUT = "/home/swarm/.swarm-ai/SwarmWS/Outputs/" + DID + "/r.md"
+
+
+def test_files_not_placed_hold(env, monkeypatch):
+    from core import hive_files
     rows, _ = env
     rows[DID] = _row("document")
     st.set_verdict(DID, "pass", "", ENDED)
+    placed: list = []
+    monkeypatch.setattr(hive_files, "placed", lambda d: placed)
     kept = K(True)
-    kept["result"] = {"work": {"files": [{"path": "Outputs/so_x/r.md", "local": None, "not_placed": True}]}}
-    assert st.derive(rows[DID], kept)["why_not"] == ["files"]
-    kept["result"]["work"]["files"][0]["local"] = "Projects/A/deliverables/hive/r.md"
+    kept["result"] = {"work": {"files": [{"path": HOME_OUT, "abs": HOME_OUT}]}}
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]          # in the release's scope
+    placed.append({"listed": HOME_OUT, "path": f"Outputs/{DID}/r.md", "local": None, "error": "OSError"})
+    assert st.derive(rows[DID], kept)["why_not"] == ["files"]          # placing it failed
+    placed[0]["local"] = "Projects/A/deliverables/hive/r.md"
+    assert st.derive(rows[DID], kept)["settles"]
+
+
+def test_files_are_read_from_the_placement_record_not_the_summary(env, monkeypatch):
+    """A summary written before ``abs`` / ``local`` existed (a run from before them) never
+    carries ``local``: the placement record decides, and a file outside Outputs/<id>/ is
+    not the release's to remove."""
+    from core import hive_files
+    rows, _ = env
+    rows[DID] = _row(None)
+    st.set_verdict(DID, "pass", "", ENDED)
+    monkeypatch.setattr(hive_files, "placed", lambda d: [])
+    kept = K(True)
+    kept["result"] = {"work": {"files": [
+        {"path": "/home/swarm/.swarm-ai/SwarmWS/Knowledge/Reports/r.md", "kind": "content"},
+        {"path": "Projects/SwarmAI/.artifacts/runs/run_x/REPORT.md", "kind": "knowledge"}]}}
+    assert st.derive(rows[DID], kept)["settles"]
+    monkeypatch.setattr(hive_files, "placed", lambda d: [
+        {"listed": HOME_OUT, "path": f"Outputs/{DID}/r.md", "local": "Projects/A/d/r.md", "error": None}])
+    kept["result"] = {"work": {"files": [{"path": HOME_OUT, "kind": "content"}]}}     # no abs, no local
     assert st.derive(rows[DID], kept)["settles"]
 
 
@@ -375,7 +403,7 @@ def test_a_file_that_never_came_asks_the_person(env):
     rows[DID] = _row("document")
     st.set_verdict(DID, "pass", "", ENDED)
     kept = K(True)
-    kept["result"] = {"work": {"files": [{"path": "Outputs/so_x/big.bin"}]}}       # skipped
+    kept["result"] = {"work": {"files": [{"path": f"Outputs/{DID}/big.bin"}]}}      # skipped
     d = st.derive(rows[DID], kept)
     assert d["next"] == "accept" and d["why_not"] == ["files"]
 
