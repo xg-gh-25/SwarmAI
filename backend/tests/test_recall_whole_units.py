@@ -42,7 +42,7 @@ The quarterly zebra ladder survey lists every xylophone migration.
 | a | b |
 
 - **Old rule**: retired zebra wording.
-  <!-- ref:0 | last:none | decay:active | superseded_by:Lock order -->
+  <!-- ref:0 | last:none | decay:active | superseded_by:Other rule -->
 """
 
 
@@ -59,9 +59,10 @@ def test_entry_keeps_sub_bullets_and_metadata():
     assert "|" not in hits[0]["content"].replace("<!-- ref:0 | last:none | decay:active -->", "")
 
 
-def test_superseded_entry_still_filtered():
+def test_a_superseded_mark_never_filters_an_entry():
+    """Every entry in a main file is in force (brain-driven I4)."""
     hits = _ddd_entry_hits("retired zebra wording", {"TECH.md": DOC}, top_n=5)
-    assert all("Old rule" not in h["content"] for h in hits), hits
+    assert any("Old rule" in h["content"] for h in hits), hits
 
 
 def test_memory_outside_prompt_entries_end_at_their_boundary():

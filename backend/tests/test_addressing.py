@@ -88,8 +88,10 @@ def test_id_is_unit_id_and_get_finds_it_by_id_and_by_path_line(ws):
     assert a.get("P", "/etc/passwd:1") is None
 
 
-def test_done_items_are_not_found_by_default(ws):
-    assert all("done item" not in u.text for u in a.find("P", "done item quokkas").units)
+def test_find_filters_no_entry_for_a_tick(ws):
+    """No reader filters (brain-driven I4): a ticked item leaves the file by the daily
+    withdrawal (gaps.withdraw_ticked), not by being hidden."""
+    assert any("done item" in u.text for u in a.find("P", "done item quokkas").units)
 
 
 def test_find_keeps_units_whole_and_names_the_rest(ws):

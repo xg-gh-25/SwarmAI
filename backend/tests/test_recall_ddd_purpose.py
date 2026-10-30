@@ -5,7 +5,8 @@ rule of the table:
 
 - each doc is ranked on its own, so a big doc cannot crowd a small one out (the
   one shared-corpus ranking of all docs is shown losing the same entry);
-- ``- [x]`` done items are never recalled;
+- a ``- [x]`` item is recalled like any entry (it leaves the file by the daily
+  withdrawal, brain-driven I4);
 - typed entries are soft-weighted: ranked up, the untyped ones are not dropped;
 - pinned template sections come whatever the query, a pointer section is named only,
   a missing template section is skipped;
@@ -53,12 +54,12 @@ def test_a_small_doc_is_not_crowded_out_by_a_big_one(ddd):
     assert sum(h["doc"] == "TECH.md" for h in hits) == 2         # its own quota only
 
 
-def test_done_items_are_not_recalled(ddd):
+def test_no_reader_filters_a_ticked_item(ddd):
     ddd("PROJECT.md", "# PROJECT\n\n## Open Items\n\n"
                       "- [x] quokka feeder shipped\n- [ ] quokka feeder docs\n")
     hits = rm.recall_ddd("quokka feeder", P, "requirement")
     texts = [h["content"] for h in hits]
-    assert any("docs" in t for t in texts) and not any("shipped" in t for t in texts)
+    assert any("docs" in t for t in texts) and any("shipped" in t for t in texts)
 
 
 def test_typed_entries_rank_up_but_untyped_stay(ddd):

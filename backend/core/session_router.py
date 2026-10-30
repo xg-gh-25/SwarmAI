@@ -1814,7 +1814,7 @@ def _best_entry_of_section(hit: dict, base, docs_text: dict, keywords: str) -> d
         from core.ddd_paths import ddd_path
         path = ddd_path(base, doc)
         units = [u for u in addressing._file_units("doc", doc, Path(path), Path(base), text)
-                 if u.section == sec and u.live]
+                 if u.section == sec]
         if not units:
             return hit
         raw = memory_index._bm25_scores(keywords, {str(i): u.text for i, u in enumerate(units)})

@@ -341,7 +341,6 @@ class TestSupersession:
 
 
 class TestSupersessionRecall:
-    # AC3 — recall excludes superseded by default (non-vacuous); AC4 — flag re-includes
     def _doc(self, superseded: bool):
         mark = " | superseded_by:new-x" if superseded else ""
         return {
@@ -353,19 +352,13 @@ class TestSupersessionRecall:
             )
         }
 
-    def test_recall_excludes_superseded_by_default(self):
+    def test_recall_never_filters_a_superseded_mark(self):
+        """Every entry in a main file is in force (brain-driven §2.3, I4): a mark never
+        hides an entry from recall; a replaced entry leaves the file instead."""
         from core.recall_multi import _ddd_entry_hits
         q = "zebra quokka mechanism"
-        active_hits = _ddd_entry_hits(q, self._doc(superseded=False), 5)
-        superseded_hits = _ddd_entry_hits(q, self._doc(superseded=True), 5)
-        assert len(active_hits) >= 1, "active entry should be recalled (non-vacuous)"
-        assert superseded_hits == [], "superseded entry must be filtered from default recall"
-
-    def test_recall_includes_superseded_with_flag(self):
-        from core.recall_multi import _ddd_entry_hits
-        q = "zebra quokka mechanism"
-        hits = _ddd_entry_hits(q, self._doc(superseded=True), 5, include_superseded=True)
-        assert len(hits) >= 1, "lineage flag must re-include the superseded entry (filtered, not deleted)"
+        assert len(_ddd_entry_hits(q, self._doc(superseded=False), 5)) >= 1
+        assert len(_ddd_entry_hits(q, self._doc(superseded=True), 5)) >= 1
 
 
 class TestSupersessionGate2Fixes:

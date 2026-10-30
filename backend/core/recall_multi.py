@@ -95,7 +95,6 @@ def _parse_docs_sections(docs_text: dict[str, str]) -> dict[str, dict[str, str]]
 
 
 def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
-                    include_superseded: bool = False,
                     sections_by_doc: Optional[dict[str, dict[str, str]]] = None,
                     ) -> list[dict]:
     """Entry-level BM25 over the ``- [type]``/``- ``-prefixed entries of MULTIPLE
@@ -120,17 +119,6 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
     from core import memory_index
     from core.ddd_entry_lifecycle import split_entries
 
-    # Bi-temporal supersession (run_24299917): a superseded DDD entry is filtered
-    # from default recall (its lineage is preserved on disk, but it must not
-    # surface as live judgment). Anchored to the ENTRY METADATA COMMENT
-    # (`<!-- ... | superseded_by:<anchor> -->`), NOT a bare substring over the
-    # whole chunk — a legit ACTIVE entry whose BODY prose mentions
-    # "superseded_by:x" (e.g. this feature's own lesson entry) must NOT be filtered
-    # (Gate-2 MED, run_24299917). The `null` sentinel is treated as not-superseded.
-    # `[^|]+?` (not [^\s|]) so a spaced TITLE anchor is matched; `-->` terminator
-    # bounds it. Requires the comment prefix so only the metadata line can trigger.
-    _SUPERSEDED_RE = _re.compile(r"<!--[^>]*\|\s*superseded_by:(?!null\b)[^|]+?-->")
-
     entries: dict[str, str] = {}           # key → entry text
     entry_doc: dict[str, str] = {}         # key → owning doc
     entry_section: dict[str, str] = {}     # key → owning section name
@@ -147,8 +135,6 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
             # One entry = what ddd_entry_lifecycle reads as one (run-knowledge §3.0
             # R1); a ``###`` subsection or table after a bullet is not part of it.
             for e in split_entries(body):
-                if not include_superseded and _SUPERSEDED_RE.search(e):
-                    continue  # filtered from default recall (lineage kept on disk)
                 k = str(len(entries))
                 entries[k] = e
                 entry_doc[k] = doc
@@ -1020,10 +1006,7 @@ DDD_PURPOSES: dict[str, dict] = {
 }
 PINNED_MAX = 1500          # a pinned section longer than this is named, not shown;
                            # pinned sections do not spend the doc's ranked budget
-_DONE_RE = re.compile(r"^-\s*\[[xX]\]")
 _TYPE_RE = re.compile(r"^-\s*\[(\w+)\]")
-# the bi-temporal supersession marker (same rule as _ddd_entry_hits)
-_SUPERSEDED_RE = re.compile(r"<!--[^>]*\|\s*superseded_by:(?!null\b)[^|]+?-->")
 _META_RE = re.compile(r"[ \t]*<!--.*?-->[ \t]*\n?", re.S)
 # a one-line block that only introduces what follows it ("Three beliefs:") is not a unit
 _LEAD_IN_RE = re.compile(r"[:：]\s*$")
@@ -1046,8 +1029,6 @@ def _doc_entries(query: str, doc: str, text: str, sections: dict, quota: int,
                            sections_by_doc={doc: sections})
     out = []
     for h in hits:
-        if _DONE_RE.match(h["content"].lstrip()):
-            continue                     # a done item is not judgment
         score = h["score"] * (weight if _entry_type(h["content"]) in weighted else 1.0)
         out.append({**h, "score": score, "kind": "entry"})
     out.sort(key=lambda h: h["score"], reverse=True)
@@ -1071,8 +1052,9 @@ def _lead_in(text: str) -> bool:
 def _doc_blocks(query: str, doc: str, sections: dict, quota: int, skip: set,
                 weighted: tuple, weight: float) -> list[dict]:
     """The doc's best *quota* units -- entries and the prose blocks between them
-    (``split_blocks``) -- ranked in one corpus per doc. Done items, superseded entries,
-    blocks that are only headings / comments and one-line lead-ins are not candidates."""
+    (``split_blocks``) -- ranked in one corpus per doc. Every entry in a main file is in
+    force (brain-driven §2.3); blocks that are only headings / comments and one-line
+    lead-ins are not candidates."""
     from core import memory_index
     from core.ddd_entry_lifecycle import split_blocks
     units: dict[str, tuple[str, str, str]] = {}      # key -> (section, kind, text)
@@ -1080,8 +1062,6 @@ def _doc_blocks(query: str, doc: str, sections: dict, quota: int, skip: set,
         if section in skip:
             continue
         for kind, text in split_blocks(body):
-            if kind == "entry" and (_DONE_RE.match(text) or _SUPERSEDED_RE.search(text)):
-                continue
             if _bare(text) or (kind == "block" and _lead_in(text)):
                 continue
             units[str(len(units))] = (section, kind, text)
@@ -1219,8 +1199,6 @@ def _pooled(query: str, docs_text: dict, cfg: dict, project: Optional[str]) -> l
     hits = _ddd_entry_hits(query, texts, top * 4 + 8, sections_by_doc=sections_by_doc)
     out = []
     for h in hits:
-        if _DONE_RE.match(h["content"].lstrip()):
-            continue
         out.append({**h, "kind": "entry", "shown": _readable(h["content"])})
     return out[:top]
 

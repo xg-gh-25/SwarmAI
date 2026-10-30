@@ -130,7 +130,7 @@ def test_a_written_event_withdraws_its_gap_into_the_records(ws):
     from core import addressing
     from core.ingestion import withdrawn
     path = _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh"), _gap_line(B, "Other")])
-    assert any(u.live and A in u.text for u in addressing.ddd_units("P").units)
+    assert any(A in u.text for u in addressing.ddd_units("P").units)
     conn = _connect(ws["db"])
     _written_event(conn, "u1", [A])
     assert gaps.close_declared(conn, "u1") == 1

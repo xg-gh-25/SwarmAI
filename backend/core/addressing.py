@@ -40,8 +40,6 @@ CORPUS_MAX_BYTES = 512 * 1024
 FIND_TOP = 8
 FIND_BUDGET = 12_000          # characters of unit text one find prints
 
-_DONE_RE = re.compile(r"^-\s*\[[xX]\]")
-_SUPERSEDED_RE = re.compile(r"<!--[^>]*\|\s*superseded_by:(?!null\b)[^|]+?-->")
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 
 
@@ -65,11 +63,6 @@ class Unit:
     @property
     def title(self) -> str:
         return self.first_line(self.text)
-
-    @property
-    def live(self) -> bool:
-        """Not a done item and not superseded: what find returns by default."""
-        return not (_DONE_RE.match(self.text.lstrip()) or _SUPERSEDED_RE.search(self.text))
 
 
 @dataclass
@@ -367,8 +360,8 @@ class Found:
 
 
 def find(project: str, query: str, *, doc: Optional[str] = None, top: int = FIND_TOP,
-         budget: int = FIND_BUDGET, include_all: bool = False) -> Found:
-    """The best *top* live units of *project*'s DDD for *query*, whole, while they fit
+         budget: int = FIND_BUDGET) -> Found:
+    """The best *top* units of *project*'s DDD for *query*, whole, while they fit
     *budget* characters; the rest of the top are returned as ``omitted``. All units in
     scope are ranked in ONE BM25 corpus, so a strong match anywhere beats a weak one
     elsewhere (ranking each file on its own gave every file's best the same score and
@@ -378,7 +371,7 @@ def find(project: str, query: str, *, doc: Optional[str] = None, top: int = FIND
     archive, or one corpus file by its relative path."""
     from core import memory_index
     table = ddd_units(project)
-    pool = [u for u in table.units if include_all or u.live]
+    pool = list(table.units)          # every unit in a main file is in force
     if doc:
         stem = Path(doc).stem
         pool = [u for u in pool if u.doc == doc or u.rel == doc
@@ -399,8 +392,8 @@ _STORE_RANK = {"doc": 0, "corpus": 1, "data-contract": 2, "archive": 3}
 
 
 def _ranked(units: list[Unit]) -> list[Unit]:
-    """Live units before done / superseded ones, docs before corpus, data contract and archive."""
-    return sorted(units, key=lambda u: (not u.live, _STORE_RANK.get(u.store, 9), u.rel, u.line))
+    """Docs before corpus, data contract and archive."""
+    return sorted(units, key=lambda u: (_STORE_RANK.get(u.store, 9), u.rel, u.line))
 
 
 def matches(project: str, ref: str) -> list[Unit]:
