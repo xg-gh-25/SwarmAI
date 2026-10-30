@@ -20,10 +20,6 @@
  * ``metadata.steered``. A queued message names what it waits for
  * (``queuedReason`` question / permission), else keeps the plain label.
  *
- * Correction ledger (docs/design/2026-10-30-autonomy-tenets-gaps.md §2): when the
- * backend recorded this message as a stated mistake, ``CorrectionPicker`` shows one line
- * under it for the person to file it under a class.
- *
  * Overflow detection uses a ResizeObserver on the text container to
  * re-evaluate clamping when the chat area width changes (e.g., sidebar
  * toggle or window resize), satisfying Requirement 8.1.
@@ -35,7 +31,6 @@ import { tf } from '../tf';
 import type { Message } from '../../../types';
 import MarkdownRenderer from '../../../components/common/MarkdownRenderer';
 import { STOP_TURN_EVENT } from '../turnZones';
-import { CorrectionPicker } from './CorrectionPicker';
 // USER_MESSAGE_MAX_LINES (= 5) from constants defines the truncation threshold.
 // Tailwind requires static class names, so we use `line-clamp-5` directly.
 
@@ -204,12 +199,6 @@ export function UserMessageView({ message, onCancelQueued, onRetrySend, sessionI
               </button>
             )}
           </div>
-        )}
-        {/* Correction ledger: the person files a stated mistake under its class */}
-        {!message.isQueued && message.sendState !== 'failed' && (
-          <CorrectionPicker sessionId={sessionId}
-            clientId={typeof message.metadata?.client_id === 'string' ? message.metadata.client_id : message.id}
-            sentAt={message.timestamp} />
         )}
         {(steered === 'during' || steered === 'after') && !message.isQueued && (
           <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-muted)] justify-end">

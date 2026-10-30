@@ -568,18 +568,6 @@
         "openBrain": "打开 {{brain}}",
         "retryHint": "处理好之后说「继续派」"
       }
-    },
-    "correction": {
-      "label": "这是在纠正吗？",
-      "question": "在纠正我吗？归到：",
-      "new": "新的一类",
-      "notCorrection": "不是纠正",
-      "failed": "没保存成功，再点一次",
-      "kind": {
-        "entry": "知识条目",
-        "golden": "golden task",
-        "ledger": "以往的纠正"
-      }
     }
   },
   "tasks": {
@@ -1203,20 +1191,7 @@
     "extractionCoverage": "提取覆盖率",
     "parkedDomains": "待加入领域：{{values}}",
     "sameOrigin": "注入文件与改投副本同源：{{count}}",
-    "rates": "写入 {{written}}% · 强化 {{reinforced}}% · 分母 {{denominator}}（written + reinforced + rejected）",
-    "corrections": {
-      "title": "纠正",
-      "none": "{{days}} 天内还没有归过类的纠正",
-      "rate": "重复纠正率 {{pct}}（{{repeat}}/{{confirmed}}，{{days}} 天）· 门槛 {{bar}}",
-      "smallCount": "{{confirmed}} 次归过类的纠正里有 {{repeat}} 次重复（{{days}} 天；不到 10 次时，超过 2 次算超标）",
-      "waiting": "{{n}} 条等你归类",
-      "failed": "读不到纠正记录",
-      "surface": {
-        "chat": "对话",
-        "swarm_out_reject": "Hive 交付被打回",
-        "escalation": "决策升级"
-      }
-    }
+    "rates": "写入 {{written}}% · 强化 {{reinforced}}% · 分母 {{denominator}}（written + reinforced + rejected）"
   },
   "swarmWorkspace": {
     "warning": {

@@ -104,14 +104,6 @@ async def resolve_escalation(project: str, escalation_id: str, body: ResolveRequ
 
     resolved_esc = resolve(esc, resolution=body.resolution, resolved_by=body.resolved_by)
     save_escalation(_get_workspace_root(), resolved_esc)
-    # resolved against Swarm's pick: a correction for the ledger to classify
-    # (core/ingestion/correction_ledger); it never fails the resolve
-    try:
-        import asyncio
-        from core.ingestion import correction_ledger
-        await asyncio.to_thread(correction_ledger.record_escalation, resolved_esc)
-    except Exception:  # noqa: BLE001
-        logger.warning("correction ledger: escalation %s not recorded", escalation_id, exc_info=True)
 
     logger.info(
         "escalation.resolved id=%s resolution=%s resolved_by=%s project=%s",

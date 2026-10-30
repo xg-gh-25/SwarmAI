@@ -173,15 +173,7 @@ async def return_reject(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     _require_desktop()
     import asyncio
     from core import hive_return
-    out = await _return(asyncio.to_thread, hive_return.reject, dispatch_id, body.key or "", body.tip or "")
-    # the person sent the delivery back: a correction for the ledger to classify
-    # (core/ingestion/correction_ledger); it never undoes the reject
-    try:
-        from core.ingestion import correction_ledger
-        await asyncio.to_thread(correction_ledger.record_swarm_out_reject, dispatch_id)
-    except Exception:  # noqa: BLE001
-        logger.warning("correction ledger: reject of %s not recorded", dispatch_id, exc_info=True)
-    return out
+    return await _return(asyncio.to_thread, hive_return.reject, dispatch_id, body.key or "", body.tip or "")
 
 
 @router.post("/route")

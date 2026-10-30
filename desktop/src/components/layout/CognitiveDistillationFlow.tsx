@@ -16,7 +16,6 @@ import {
 } from '../../services/ingestion';
 import { Hint, SectionLabel, Segmented, Stat, StatusBadge, tableHeadClass } from '../overlay';
 import { OverlayEmpty, OverlayError, OverlayLoading } from './OverlayState';
-import { CorrectionLedgerBlock } from './CorrectionLedgerBlock';
 
 const WINDOWS: Array<{ key: IngestionWindow; label: string }> = [
   { key: '24h', label: '24h' }, { key: '7d', label: '7d' }, { key: '30d', label: '30d' },
@@ -209,7 +208,6 @@ export function CognitiveDistillationFlow() {
               row.missRate == null ? '—' : `${(row.missRate * 100).toFixed(0)}%（${row.missed}/${row.missed + row.covered}）`];
           })}
         />}
-        <CorrectionLedgerBlock />
       </section>
 
       <section className="space-y-2">

@@ -2574,17 +2574,7 @@ def _report_follow_ups(run_result: dict, history: list, golden_set: dict, root: 
                             _state(".session-quality-state.json"),
                             shadowed=(golden_set or {}).get("shadowed_private_ids") or (),
                             daily_canary=_state(".eval-canary-daily.json"),
-                            include_session_text=False,
-                            corrections=_correction_rate())
-
-
-def _correction_rate():
-    """The correction ledger's 28-day rate (counts only), or None when unreadable."""
-    try:
-        from core.ingestion.correction_ledger import rate
-        return rate(28)
-    except Exception:  # noqa: BLE001 — the report never fails because of it
-        return None
+                            include_session_text=False)
 
 
 def _render_follow_ups(items: list) -> str:

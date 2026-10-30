@@ -15,9 +15,6 @@ const items = vi.fn();
 const detail = vi.fn();
 const health = vi.fn();
 const stats = vi.fn();
-const corrRate = vi.fn();
-const corrPending = vi.fn();
-const corrConfirm = vi.fn();
 
 vi.mock('../../services/attention', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -29,13 +26,6 @@ vi.mock('../../services/ingestion', async (orig) => ({
     flow: (...args: unknown[]) => flow(...args), items: (...args: unknown[]) => items(...args),
     detail: (...args: unknown[]) => detail(...args), health: (...args: unknown[]) => health(...args),
     stats: (...args: unknown[]) => stats(...args),
-  },
-}));
-vi.mock('../../services/corrections', async (orig) => ({
-  ...(await orig<Record<string, unknown>>()),
-  correctionsService: {
-    rate: (...args: unknown[]) => corrRate(...args), pendingAll: (...args: unknown[]) => corrPending(...args),
-    confirm: (...args: unknown[]) => corrConfirm(...args), pending: async () => [],
   },
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({
@@ -71,15 +61,10 @@ function defaults() {
   attention.mockResolvedValue({ items: [], counts: { blocking: 0, review: 0 } });
   flow.mockResolvedValue(overview); items.mockResolvedValue(itemPage); detail.mockResolvedValue(detailData);
   health.mockResolvedValue(healthData); stats.mockResolvedValue({ days: 365, rows: [] });
-  corrRate.mockResolvedValue({ windowDays: 28, confirmed: 20, unconfirmed: 1, repeat: 5, rate: 0.25,
-    smallSample: false, bar: 0.2 });
-  corrPending.mockResolvedValue([{ id: 'cor-9', at: '2026-10-30T06:00:00Z', surface: 'swarm_out_reject', clientId: 'so_1', text: 'Delivery sent back: fix the refund report',
-    candidates: [{ key: 'k1', kind: 'entry', title: 'Refunds counted by order date' }] }]);
-  corrConfirm.mockResolvedValue(undefined);
 }
 
 beforeEach(() => {
-  for (const mock of [attention, flow, items, detail, health, stats, corrRate, corrPending, corrConfirm]) mock.mockReset();
+  for (const mock of [attention, flow, items, detail, health, stats]) mock.mockReset();
   defaults();
 });
 
@@ -92,15 +77,7 @@ describe('Need You Flow tabs', () => {
     fireEvent.click(screen.getByTestId('cdf-tab'));
     await waitFor(() => expect(flow).toHaveBeenCalledOnce());
     expect(screen.getByTestId('cdf-flow')).toBeInTheDocument();
-    // the correction ledger: the rate against its bar, and what waits for the person's choice
-    expect(await screen.findByText(/ingestion\.corrections\.rate:25%\/5\/20\/28/)).toBeInTheDocument();
-    expect(screen.getByText('Delivery sent back: fix the refund report')).toBeInTheDocument();
-    expect(screen.getByText(/ingestion\.corrections\.waiting:1/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /chat\.correction\.kind\.entry.*Refunds counted by order date/ }));
-    await waitFor(() => expect(corrConfirm).toHaveBeenCalledWith('cor-9', 'k1'));
-    // answered: gone from the list at once, before any refetch
-    await waitFor(() => expect(screen.queryByText('Delivery sent back: fix the refund report')).toBeNull());
-    expect(screen.getByText('2400')).toBeInTheDocument();
+    expect(await screen.findByText('2400')).toBeInTheDocument();
     // after-session review metrics, per session type (session review §12)
     expect(screen.getByText('写过非代码文件')).toBeInTheDocument();
     expect(screen.getByText('25%（1/4）')).toBeInTheDocument();
