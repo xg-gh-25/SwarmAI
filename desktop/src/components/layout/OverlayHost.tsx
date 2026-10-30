@@ -34,6 +34,10 @@
  *
  * Chrome (enter/exit state machine, Esc, ref-counted scroll-lock, header, spout nub) is
  * ported faithfully from Modal's fullscreen branch — only the POSITIONING model changes.
+ *
+ * A surface that throws while rendering shows its error inside its own panel (an
+ * ErrorBoundary around the content, below the header): the header's close still
+ * works and nothing else in the app is affected.
  */
 import { Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { QueryClientContext } from '@tanstack/react-query';
@@ -44,6 +48,7 @@ import { getOverlaySpec, getOverlayCtxBridge } from './overlayRegistry';
 import { navEntry, ZONE_TINT } from './navTable';
 import { overlayTiming, timingOpen, timingMounted, timingClose } from './overlayTiming';
 import { useEscape, useLayerFocus } from '../../hooks/useLayer';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 
 // Responsive width tiers — CSS clamp(min, preferred%, max), resolved by the browser
 // against the panel's containing block (the scrim = MainContentArea). Ported verbatim
@@ -314,6 +319,10 @@ export function OverlayHost() {
             throws "suspended on synchronous input" (run_06c49540, Gate 1). Eager
             surfaces never suspend, so the fallback only shows during a lazy chunk fetch. */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {/* One surface's render error stays inside its panel (variant "panel"): without
+              this boundary it reached the app-level one and the whole app showed
+              "Something went wrong". Keyed by surface, so opening another one starts clean. */}
+          <ErrorBoundary key={renderedId ?? ''} variant="panel">
           <Suspense
             fallback={
               <div
@@ -330,6 +339,7 @@ export function OverlayHost() {
             {renderSpec.render({ close: closeOverlay, agentId, ...getOverlayCtxBridge() })}
             {overlayTiming.enabled && <ContentMountMark id={renderedId} />}
           </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     </div>

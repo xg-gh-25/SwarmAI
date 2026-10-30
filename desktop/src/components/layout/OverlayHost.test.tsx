@@ -343,3 +343,39 @@ describe('OverlayHost — the way back to a parent surface and to a surface home
     expect(screen.queryByTestId('overlay-host-title-home')).toBeNull();
   });
 });
+
+
+describe('OverlayHost — a surface that throws stays inside its panel', () => {
+  function Boom(): never { throw new Error('l.data.recurrence is undefined'); }
+  registerOverlay({ id: 'artifacts', render: () => <Boom /> });
+
+  function CrashHarness() {
+    const { openOverlay, closeOverlay } = useOverlay();
+    return (
+      <div>
+        <div data-testid="rest-of-app">chat</div>
+        <button data-testid="open-bad" onClick={() => openOverlay('artifacts')}>bad</button>
+        <button data-testid="open-good" onClick={() => openOverlay('todo')}>good</button>
+        <button data-testid="close-any" onClick={() => closeOverlay()}>close</button>
+        <OverlayHost />
+      </div>
+    );
+  }
+
+  it('shows the error in the panel, keeps the header and the rest of the app', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<OverlayProvider><CrashHarness /></OverlayProvider>);
+      act(() => screen.getByTestId('open-bad').click());
+      expect(screen.getByTestId('overlay-panel-error').textContent).toContain('recurrence is undefined');
+      expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();   // the header survives
+      expect(screen.getByTestId('rest-of-app')).toBeInTheDocument();
+      // another surface opens clean: the boundary is per surface
+      act(() => screen.getByTestId('open-good').click());
+      expect(screen.queryByTestId('overlay-panel-error')).toBeNull();
+      expect(screen.getByTestId('test-surface-content')).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

@@ -2956,6 +2956,10 @@ export default function ChatPage() {
             when !isOpen (see FileViewerPanel's isOpen=false branch). isOpen is passed
             as a prop — its SEMANTICS are unchanged (ChatHeader pill + agent SENSE
             still read canvas.isOpen), it only selects the panel's render branch. */}
+        {/* The Canvas has its own boundary: a renderer that throws on one file shows the
+            error in the Canvas, not "Something went wrong" over the whole app. No key: a
+            remount would replay the width reveal and drop the content cache. */}
+        <ErrorBoundary variant="region">
         {(
           <FileViewerPanel
             // tabScopeKey (NOT a React `key`): FileViewer keeps its OWN internal
@@ -2985,6 +2989,7 @@ export default function ChatPage() {
             onRevealCanvas={canvas.reveal}
           />
         )}
+        </ErrorBoundary>
 
         {/* SwarmRadar removed (2026-08-02): all 3 sections have live replacements —
             Changes → Canvas (CanvasOutputRail), Attention → ChatHeader AlertsPill

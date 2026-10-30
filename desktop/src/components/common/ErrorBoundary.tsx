@@ -5,7 +5,9 @@ import { ErrorCodes } from '../../types';
 
 interface Props {
   children: ReactNode;
-  variant?: 'tab' | 'app' | 'default';
+  /** tab: one chat tab · panel: one surface (an overlay, the Canvas) · region: one strip of
+   *  the layout (nav, bars, terminal) · app: the whole app */
+  variant?: 'tab' | 'panel' | 'region' | 'app' | 'default';
   fallback?: ReactNode;
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
   onRetry?: () => void;
@@ -62,6 +64,33 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               Reload Tab
             </button>
+          </div>
+        );
+      }
+
+      if (variant === 'panel') {
+        // One surface failed: say so inside it. The host's header (title, close) is
+        // outside this boundary, so the person can close it and keep working.
+        return (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center" role="alert"
+            data-testid="overlay-panel-error">
+            <span className="material-symbols-outlined icon-lg text-red-500">error</span>
+            <p className="text-sm font-medium text-[var(--color-text)]">This panel hit an error</p>
+            <p className="text-xs text-[var(--color-text-muted)] max-w-md break-words">{this.state.error?.message}</p>
+            <p className="text-xs text-[var(--color-text-faint)]">Close it (Esc) — the rest of the app keeps working.</p>
+            <button onClick={this.handleRetry} className="btn-md btn-primary">Try again</button>
+          </div>
+        );
+      }
+
+      if (variant === 'region') {
+        // A strip of the layout failed: one line where it was, nothing else moves.
+        return (
+          <div role="alert" data-testid="layout-region-error"
+            className="flex items-center gap-2 px-2 py-1 text-xs text-[var(--color-text-muted)]">
+            <span className="material-symbols-outlined icon-xs text-red-500">error</span>
+            <span className="truncate" title={this.state.error?.message}>This area hit an error</span>
+            <button onClick={this.handleRetry} className="underline hover:text-[var(--color-text)]">Retry</button>
           </div>
         );
       }

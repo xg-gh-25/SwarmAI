@@ -11,6 +11,7 @@ import { NAV, ZONE_TINT } from './navTable';
 import { prefetchNav } from './overlayQueries';
 import type { OverlayId } from './overlayIds';
 import TerminalPanel from '../terminal/TerminalPanel';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 import { terminalLocation } from '../../stores/terminalLocation';
 import { keyOfCwd } from '../../stores/TerminalStore';
 import { EXPLORER_OPEN_TERMINAL } from '../../constants/explorerEvents';
@@ -947,14 +948,17 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     <div className="flex flex-col h-full overflow-hidden bg-[var(--color-bg)]">
       <>
 
+        {/* Each strip of the layout has its own ErrorBoundary (variant "region"): one that
+            throws while rendering shows one line where it was, and the rest of the app
+            keeps working (a render error used to reach the app-level boundary). */}
         {/* Top bar -- session context, draggable */}
-        <TopBar onOpenUsage={() => openOverlay('usage')} />
+        <ErrorBoundary variant="region"><TopBar onOpenUsage={() => openOverlay('usage')} /></ErrorBoundary>
 
         {/* Main layout below top bar — min-h-0 overrides flex auto-min-height
             (which uses intrinsic content size and prevents shrinking). Without this,
             AutoSizer can't get a resolved height from the flex algorithm. */}
         <div className="flex flex-1 overflow-hidden min-h-0 bg-[var(--color-bg-chrome)]">
-          <LeftSidebar />
+          <ErrorBoundary variant="region"><LeftSidebar /></ErrorBoundary>
           {/* A10 redesign: the workspace explorer is no longer an always-on
               column — it opens on demand as SwarmWSOverlay (below). */}
           {/* Canvas (FileViewerPanel) moved INTO ChatPage (below ChatHeader) so
@@ -970,14 +974,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
             collapse/reopen preserves xterm scrollback + live PTYs instead of
             unmount → term.dispose() → history loss. The Ctrl/Cmd-` hotkey / ▾
             button flip panelOpen, which drives the self-hide. */}
-        <TerminalPanel />
+        <ErrorBoundary variant="region"><TerminalPanel /></ErrorBoundary>
 
         {/* SwarmWS lives in the OverlayHost registry (overlaySurfaces.tsx). Its
             ExplorerProvider is mounted by the Workspace overlay itself, so the tree
             is fetched only while that overlay is open (no app-wide poll). */}
 
         {/* Bottom status bar */}
-        <BottomBar />
+        <ErrorBoundary variant="region"><BottomBar /></ErrorBoundary>
       </>
 
       {/* Swarm Workspace Warning Dialog */}
