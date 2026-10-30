@@ -1,11 +1,16 @@
 ---
 title: "Autonomous Pipeline v3 — Dual-Mode Execution Architecture"
 created: 2026-06-11
-updated: 2026-06-11
-discussion: https://github.com/xg-gh-25/SwarmAI/discussions/68
+updated: 2026-10-14
+status: published
 ---
+<!-- GitHub Discussion #68: https://github.com/xg-gh-25/SwarmAI/discussions/68 -->
 
-<!-- GitHub Discussion: https://github.com/xg-gh-25/SwarmAI/discussions/68 -->
+![SwarmAI Autonomous Pipeline — one-page panorama (9 stages · 3 gates · 2 modes · 6 profiles · 16 review/adversarial roles)](https://github.com/xg-gh-25/SwarmAI/raw/main/docs/assets/discussions/2026-10-14-pipeline-panorama.png)
+
+> **The whole pipeline on one page** — intent → delivery, on a DDD layer it reads and writes. Full walkthrough: [#111](https://github.com/xg-gh-25/SwarmAI/discussions/111).
+
+---
 
 ## From Concept to Mechanical Enforcement
 
@@ -15,7 +20,7 @@ Then we shipped it. And reality happened.
 
 11 instances of the agent skipping adversarial review ("this is too simple"). Profile downgrades at DELIVER to bypass gates. Tests passing while features were 100% broken. Silent fallbacks masquerading as working code.
 
-Each failure earned a mechanical fix — not a "reminder" or "best practice", but a **code-enforced gate** that makes the failure structurally impossible. The result is v3: 779 lines of architecture that reflects what actually runs in production.
+Each failure earned a mechanical fix — not a "reminder" or "best practice", but a **code-enforced gate** that makes the failure structurally impossible. The result is v3: ~800 lines of architecture that reflects what actually runs in production.
 
 ---
 
@@ -70,7 +75,7 @@ Fresh-context sub-agents detect problems (they don't share the builder's assumpt
 
 ### 4. 40 Runtime Patterns + 8 Operational Invariants
 
-Every production bug that escaped review became a pattern (RP1-RP40). Every infrastructure failure became an invariant (OP1-OP8). Reviewers must explicitly verify or mark N/A for each applicable pattern. Silence = unchecked = fail.
+Every production bug that escaped review became a pattern (RP1-RP51). Every infrastructure failure became an invariant (OP1-OP8). Reviewers must explicitly verify or mark N/A for each applicable pattern. Silence = unchecked = fail.
 
 ### 5. Push-Ready Is Binary, Not Scored
 
@@ -85,7 +90,7 @@ No "8.5/10 confidence." The delivery is either PUSH-READY (all 6 layers pass) or
 | Stage documents | 10 files, ~250K tokens of mechanical instructions |
 | Review agents | 4 domain agents (spec, quality, security, UX) |
 | Specialists | 9 deep reviewers (correctness, concurrency, state-machine, etc.) |
-| Runtime patterns | RP1-RP40 (40 production-proven bug patterns) |
+| Runtime patterns | RP1-RP51 (51 production-proven bug patterns) |
 | Operational patterns | OP1-OP8 (8 system-level invariants) |
 | Scripts | 5 Python utilities (artifact_cli, confidence_score, goal_metrics, wtf_gate, pipeline_pr) |
 | Profiles | 6 (full, bugfix, trivial, research, docs, goal) |

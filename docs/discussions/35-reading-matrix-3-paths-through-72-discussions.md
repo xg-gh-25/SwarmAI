@@ -1,7 +1,7 @@
 ---
-title: "Reading Matrix — 3 Paths Through 75 Discussions (Builder / Architect / Leader)"
+title: "Reading Matrix — 3 Paths Through 80 Discussions (Builder / Architect / Leader)"
 created: 2026-06-20
-updated: 2026-07-18
+updated: 2026-10-14
 status: published
 ---
 <!-- GitHub Discussion #35: https://github.com/xg-gh-25/SwarmAI/discussions/35 -->
@@ -244,6 +244,9 @@ Then pick your path ↓
 | [28](https://github.com/xg-gh-25/SwarmAI/discussions/28) | [Same Pattern at Every Scale](https://github.com/xg-gh-25/SwarmAI/discussions/28) | EN | AI replaces routing, not people | ~ [#11](https://github.com/xg-gh-25/SwarmAI/discussions/11) |
 | [46](https://github.com/xg-gh-25/SwarmAI/discussions/46) | [Stop Selling, Start Showing](https://github.com/xg-gh-25/SwarmAI/discussions/46) | EN | "Live Demo of Yourself" > pitch deck | ~ [#28](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
 | [47](https://github.com/xg-gh-25/SwarmAI/discussions/47) | [One Builder + AI = One Team](https://github.com/xg-gh-25/SwarmAI/discussions/47) | EN | The thesis — proof that one person + AI = team-scale output | ~ [#46](https://github.com/xg-gh-25/SwarmAI/discussions/46) |
+| [106](https://github.com/xg-gh-25/SwarmAI/discussions/106) | [AI-Native Transformation — 打造你的复利组织](https://github.com/xg-gh-25/SwarmAI/discussions/106) | CN | Compound org = humans + AI agents; evolution, not big-bang | None |
+| [108](https://github.com/xg-gh-25/SwarmAI/discussions/108) | [外界怎么解读 AI-Native?](https://github.com/xg-gh-25/SwarmAI/discussions/108) | CN | Transformation is evolution, not one-step — the outward read of #106 | ~ [#106](https://github.com/xg-gh-25/SwarmAI/discussions/106) |
+| [110](https://github.com/xg-gh-25/SwarmAI/discussions/110) | [AI-Native Transformation V13 — 一条主线,五个 Theme](https://github.com/xg-gh-25/SwarmAI/discussions/110) | CN | One spine, five themes, 23 pages | ~ [#106](https://github.com/xg-gh-25/SwarmAI/discussions/106) |
 
 ### Theme 5: Community / Interactive
 
@@ -253,6 +256,7 @@ Then pick your path ↓
 | [17](https://github.com/xg-gh-25/SwarmAI/discussions/17) | [Memory Architecture Poll](https://github.com/xg-gh-25/SwarmAI/discussions/17) | EN | Q&A | [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3) |
 | [18](https://github.com/xg-gh-25/SwarmAI/discussions/18) | [Show Your Setup](https://github.com/xg-gh-25/SwarmAI/discussions/18) | EN | Show & tell | Any |
 | [42](https://github.com/xg-gh-25/SwarmAI/discussions/42) | [100 ⭐ — Thank You (and What's Next)](https://github.com/xg-gh-25/SwarmAI/discussions/42) | EN | Announcement | None |
+| [104](https://github.com/xg-gh-25/SwarmAI/discussions/104) | [Could SwarmAI Runs Become Shareable Run Stories?](https://github.com/xg-gh-25/SwarmAI/discussions/104) | EN | Show & tell / Ideas | Any |
 
 ---
 
@@ -388,15 +392,18 @@ Then pick your path ↓
 | [98](https://github.com/xg-gh-25/SwarmAI/discussions/98) | [AI Agent for Data 续篇 — L3 契约层 + L2 受约束 NL2SQL](https://github.com/xg-gh-25/SwarmAI/discussions/98) | Architecture | CN |
 | [102](https://github.com/xg-gh-25/SwarmAI/discussions/102) | [How SwarmAI's Living Knowledge Compares to Code-Understanding Tools](https://github.com/xg-gh-25/SwarmAI/discussions/102) | Architecture | EN |
 | [103](https://github.com/xg-gh-25/SwarmAI/discussions/103) | [SwarmAI 的「活知识」对比几款代码理解工具](https://github.com/xg-gh-25/SwarmAI/discussions/103) | Architecture | CN |
+| [111](https://github.com/xg-gh-25/SwarmAI/discussions/111) | [Autonomous Pipeline — The Whole Thing on One Page](https://github.com/xg-gh-25/SwarmAI/discussions/111) | Architecture | EN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 77 (including Welcome + Reading Matrix)
-- **Content articles:** 75
+- **Total discussions:** 82 (including Welcome + Reading Matrix)
+- **Content articles:** 80
 - **Bilingual pairs (EN+CN):** 21 pairs (42 discussions)
-- **English only:** 29
-- **Themes:** Foundations (8), Architecture (48), Governance (11), Strategy (5), Community (4)
+- **English only:** 31
+- **Themes:** Foundations (8), Architecture (49), Governance (11), Strategy (8), Community (5)
 - **Avg reading time per article:** ~5-8 min
 - **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~47 min
+
+_Last updated: 2026-10-14 — now covers all live discussions through #111 (Autonomous Pipeline one-page panorama) + the AI-Native Transformation series (#106/#108/#110)._

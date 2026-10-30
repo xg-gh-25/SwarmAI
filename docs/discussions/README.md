@@ -42,7 +42,7 @@
 | 32 | [人格陷阱：为什么 "有主见的 AI Agent" 会破坏指令遵从](32-人格陷阱为什么-有主见的-ai-agent-会破坏指令遵从.md) | Show and tell | 2026-05-20 |
 | 33 | [What Is an Agent Harness? The Self-Driving Car Analogy for AI Autonomy Levels](33-what-is-an-agent-harness-the-self-driving-car-analogy-for-ai.md) | General | 2026-05-21 |
 | 34 | [Agent Harness 是什么？用自动驾驶的思路理解 AI Agent 自治五级](34-agent-harness-是什么用自动驾驶的思路理解-ai-agent-自治五级.md) | General | 2026-05-21 |
-| 35 | [Reading Matrix — 3 Paths Through 75 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-72-discussions.md) | General | 2026-05-21 |
+| 35 | [Reading Matrix — 3 Paths Through 80 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-72-discussions.md) | General | 2026-05-21 |
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
@@ -89,6 +89,11 @@
 | 100 | [Ontology isn't a knowledge graph — it's a decision layer: how one lightweight ontology runs an entire self-evolving Agent OS](100-ontology-isnt-a-knowledge-graph-its-a-decision-layer.md) | Show and tell | 2026-07-10 |
 | 102 | [How SwarmAI's living knowledge compares to code-understanding tools (Graphify, Understand-Anything, xx-Spec-Studio)](102-how-swarmai-s-living-knowledge-compares-to-code.md) | Show and tell | 2026-07-18 |
 | 103 | [SwarmAI 的「活知识」对比几款代码理解工具(Graphify、Understand-Anything、xx-Spec-Studio)](103-swarmai-的-活知识-对比几款代码理解工具-graphify-understand-anything-xx.md) | Show and tell | 2026-07-18 |
+| 104 | [Could SwarmAI runs become shareable, cinematic run stories?](104-could-swarmai-runs-become-shareable-cinematic-run-stories.md) | Show and tell | 2026-07-30 |
+| 106 | [AI-Native Transformation —— 打造你的复利组织 (人+AI Agents)](106-ai-native-transformation-打造你的复利组织-人-ai-agents.md) | Show and tell | 2026-09-07 |
+| 108 | [外界怎么解读 AI-Native？—— Transformation 是演进，不是一步到位（#106 的对外解读）](108-外界怎么解读-ai-native-transformation-是演进-不是一步到位-106-的对外解读.md) | Show and tell | 2026-09-07 |
+| 110 | [AI-Native Transformation V13 —— 一条主线,五个 Theme (23 页)](110-ai-native-transformation-v13-一条主线-五个-theme-23-页.md) | Show and tell | 2026-10-08 |
+| 111 | [SwarmAI Autonomous Pipeline — the whole thing on one page](111-swarmai-autonomous-pipeline-one-page-panorama.md) | Show and tell | 2026-10-14 |
 
 ---
 
