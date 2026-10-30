@@ -17,7 +17,7 @@
  * - `SearchBar`      — Floating Cmd+F search bar
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import hljs from 'highlight.js';
@@ -44,7 +44,12 @@ import {
   GUTTER_LINE_HEIGHT,
   GUTTER_VIRTUALIZE_MIN_LINES,
 } from './gutterVirtualization';
-import CommentPopover from './CommentPopover';
+import CommentPopover, {
+  COMMENT_POPOVER_CLASS,
+  COMMENT_TEXTAREA_CLASS,
+  COMMENT_TEXTAREA_ROWS,
+  clampToViewport,
+} from './CommentPopover';
 import { dispatchInjectChatInput } from '../../pages/chat/injectChatInput';
 
 // HIGHLIGHT_MAX_CHARS / shouldProcessSync live in ./editorLimits (shared with the
@@ -301,6 +306,15 @@ function SelectionCommentPopover({
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
+  // Keep the (large) popover on screen: measure after mount, clamp to the viewport.
+  const anchorTop = position.top + 28;
+  const [clamped, setClamped] = useState<{ top: number; left: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = popoverRef.current;
+    if (!el) return;
+    setClamped(clampToViewport(anchorTop, position.left, el.offsetWidth, el.offsetHeight));
+  }, [anchorTop, position.left]);
+
   // Click-outside dismisses
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -326,8 +340,8 @@ function SelectionCommentPopover({
   return createPortal(
     <div
       ref={popoverRef}
-      className="fixed z-[1000] w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
-      style={{ top: position.top + 28, left: position.left }}
+      className={COMMENT_POPOVER_CLASS}
+      style={clamped ?? { top: anchorTop, left: position.left }}
       data-testid="selection-comment-popover"
     >
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-hover)] rounded-t-lg">
@@ -348,8 +362,8 @@ function SelectionCommentPopover({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type your instruction..."
-          rows={2}
-          className="w-full px-2 py-1.5 text-xs rounded bg-[var(--color-background)] text-[var(--color-text)] border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-none"
+          rows={COMMENT_TEXTAREA_ROWS}
+          className={COMMENT_TEXTAREA_CLASS}
           data-testid="selection-comment-input"
         />
       </div>

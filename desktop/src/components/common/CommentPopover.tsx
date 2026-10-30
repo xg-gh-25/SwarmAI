@@ -1,17 +1,45 @@
 /**
  * CommentPopover — Inline popover for adding/editing review comments.
  *
- * Positioned next to the clicked gutter line. Shows a small text input
- * with Save/Cancel actions. Supports both new comment creation and
- * editing existing comments.
+ * Positioned next to the clicked gutter line and kept inside the viewport.
+ * Shows a multi-line text input (user-resizable vertically) with Save/Cancel
+ * actions. Supports both new comment creation and editing existing comments.
  *
  * Key exports:
  * - `CommentPopover` (default) — Popover component
+ * - `COMMENT_POPOVER_CLASS` / `COMMENT_TEXTAREA_CLASS` / `COMMENT_TEXTAREA_ROWS`
+ *   — shared sizing, also used by FileEditorCore's selection-comment popover
+ * - `clampToViewport` — keeps a fixed-position popover fully on screen
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useEscape } from '../../hooks/useLayer';
+
+/** Popover shell: wide enough for a sentence or two of feedback per line. */
+export const COMMENT_POPOVER_CLASS =
+  'fixed z-[1000] w-[28rem] max-w-[calc(100vw-16px)] bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl';
+/** Comment input: readable text size, drag to grow up to 60% of the viewport. */
+export const COMMENT_TEXTAREA_CLASS =
+  'w-full px-2.5 py-2 text-sm leading-5 rounded bg-[var(--color-background)] text-[var(--color-text)] border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-y min-h-[7.5rem] max-h-[60vh]';
+export const COMMENT_TEXTAREA_ROWS = 6;
+
+const VIEWPORT_MARGIN = 8;
+
+/** Clamp a fixed popover's top-left so a `width`×`height` box stays on screen. */
+export function clampToViewport(
+  top: number,
+  left: number,
+  width: number,
+  height: number,
+): { top: number; left: number } {
+  const maxTop = window.innerHeight - height - VIEWPORT_MARGIN;
+  const maxLeft = window.innerWidth - width - VIEWPORT_MARGIN;
+  return {
+    top: Math.max(VIEWPORT_MARGIN, Math.min(top, maxTop)),
+    left: Math.max(VIEWPORT_MARGIN, Math.min(left, maxLeft)),
+  };
+}
 
 interface CommentPopoverProps {
   /** 1-based line number this popover is anchored to. */
@@ -53,15 +81,9 @@ export default function CommentPopover({
   const recalcPosition = useCallback(() => {
     if (!anchorRef?.current) return;
     const rect = anchorRef.current.getBoundingClientRect();
-    const measuredHeight = popoverRef.current?.offsetHeight ?? 180;
-    let top = rect.top + topOffset;
-    // Clamp: don't let popover go below viewport
-    if (top + measuredHeight > window.innerHeight - 8) {
-      top = window.innerHeight - measuredHeight - 8;
-    }
-    // Clamp: don't let popover go above viewport
-    if (top < 8) top = 8;
-    setPosition({ top, left: rect.right + 4 });
+    const measuredHeight = popoverRef.current?.offsetHeight ?? 260;
+    const measuredWidth = popoverRef.current?.offsetWidth ?? 448;
+    setPosition(clampToViewport(rect.top + topOffset, rect.right + 4, measuredWidth, measuredHeight));
   }, [anchorRef, topOffset]);
 
   // Initial position + reposition on scroll/resize
@@ -120,7 +142,7 @@ export default function CommentPopover({
   const popoverContent = (
     <div
       ref={popoverRef}
-      className="fixed z-[1000] w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
+      className={COMMENT_POPOVER_CLASS}
       style={position ? { top: position.top, left: position.left } : { top: topOffset, left: 0 }}
       data-testid="comment-popover"
     >
@@ -146,8 +168,8 @@ export default function CommentPopover({
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Type your feedback..."
-          rows={2}
-          className="w-full px-2 py-1.5 text-xs rounded bg-[var(--color-background)] text-[var(--color-text)] border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-none"
+          rows={COMMENT_TEXTAREA_ROWS}
+          className={COMMENT_TEXTAREA_CLASS}
           data-testid="comment-input"
         />
       </div>
