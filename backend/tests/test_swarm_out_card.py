@@ -55,7 +55,9 @@ def test_a_card_comes_from_the_dispatch_log_never_from_the_printed_row(monkeypat
     assert b["type"] == "swarm_out_dispatch" and b["ok"] is True
     assert (b["hive"], b["title"], b["brain"], b["mode"], b["profile"]) == (
         "explorer", "SwarmAI weekly report", "SwarmAI", "research", "research")
-    assert b["repos"] == [{"name": "swarmai", "ref": "main", "sha": ROW["repos"][0]["sha"], "dirty": 3}]
+    assert b["repos"] == [{"name": "swarmai", "ref": "main", "sha": ROW["repos"][0]["sha"], "dirty": 3, "access": None}]
+    ro = card.from_row({**ROW, "repos": [{**ROW["repos"][0], "access": "read"}]})
+    assert ro["repos"][0]["access"] == "read" and ", read-only" in ro["text"]
     assert (b["sessionId"], b["hiveReason"], b["brainSync"], b["delivery"]) == ("0a7e6d08-f227", "idle", "synced", "bundle")
     assert "3 uncommitted files not sent" in b["text"] and "so_b150abc3fd86" in b["text"]
     assert "• Hive: explorer (idle)" in b["text"]
@@ -198,7 +200,7 @@ def test_a_non_owner_channel_session_is_refused(monkeypatch, capsys, tmp_path):
     from scripts import swarm_out as cli
     monkeypatch.setenv(RESTRICTED_ENV, "1")
     for argv in (["runs"], ["hives"], ["dispatch", "--title", "t", "--brain", "B", "--task", "x", "--execution", "native",
-                                       "--acceptance", "a", "--revision", "r"]):
+                                       "--returns", "answer", "--acceptance", "a", "--revision", "r"]):
         assert cli.main(argv) == 1 and "only available to the owner" in capsys.readouterr().out
     for c in ('"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --brain B',
               "curl -s http://127.0.0.1:18321/api/swarm-out/dispatch -d @x",

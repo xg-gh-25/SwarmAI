@@ -21,8 +21,8 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 ```bash
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <file> [--brain <B>] [--file <path>] [--bound-project <P>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" [--mode <m>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --revision <revision from spec> [--hive <name>] [--mode <m>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits [--mode <m>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits --revision <revision from spec> [--hive <name>] [--mode <m>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 ```
 
@@ -42,7 +42,7 @@ and carry out (the autonomy principle): the person sees the result on the dispat
 | the task fits two modes whose results differ (a report vs commits) | ask: each mode with what it will produce, the one you recommend first |
 | you cannot write a checkable acceptance from what was said | ask what done looks like |
 | which Hive | do not ask: leave out `--hive` (the daemon picks the least busy running one) unless the person named one |
-| how it runs (`--execution`), title, brief | do not ask: step 3's table; you write title and brief. Unsure between two: take the lighter and say why in `--why` |
+| how it runs (`--execution`), what comes back (`--returns`), title, brief | do not ask: step 3's tables; you write title and brief. Unsure between two: take the lighter and say why in `--why` |
 | uncommitted files (`dirty` > 0) | do not ask: the card says they were not sent |
 | `spec` refuses | do not ask and do not dispatch: the dispatch card says why when you run `dispatch`; or tell the person the rule (for example: confirm the Project Agent in the Brain Hub) |
 
@@ -60,8 +60,9 @@ numbered text options ("reply with a number"). One question at a time, and only 
    its own workspace: not this conversation, not files on this machine. Include the
    goal, every input it needs (links, pasted content) and where to leave results. The
    repositories are every one the Brain binds, whatever the mode, at this machine's own
-   commit (the Hive is sent that commit and told how to check it out): do not add them,
-   and do not write your own clone or pull instructions.
+   commit: the Hive prepares a worktree of each before the task starts and tells the
+   task where it is. Do not add them, and do not write clone, pull or checkout
+   instructions.
    **Acceptance** is required: one checkable sentence of what done looks like.
    **Brief**: one or two sentences of what the task is, for the card.
 3. **Choose the mode and how it runs.** Read the `modes` of the Brain's
@@ -83,6 +84,13 @@ numbered text options ("reply with a number"). One question at a time, and only 
    | the same, a known pattern | `pipeline:trivial` |
    | the same, the person's words are the whole spec and read only one way | `pipeline:direct` |
 
+   Then what comes back, `--returns`: `commits` when the deliverable is a change in a
+   repository (code or a document there; the repositories are writable on their own
+   branch), `document` for a file that is not in a repository (a report, data: written
+   to the task's outputs directory and brought back to the Brain), `answer` for a reply.
+   Only `commits` makes the repositories writable; a pipeline profile that lands code
+   needs `commits`, `pipeline:research` cannot have it (`spec` refuses the mismatch).
+
    For a change, look at what it touches before you judge the risk: on a Brain with a
    code graph, `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol> --project
    <B>` lists the callers. The Hive does not change this choice.
@@ -91,7 +99,7 @@ numbered text options ("reply with a number"). One question at a time, and only 
    `--revision` = the spec's `revision` and `--brief`; no confirmation is asked. Run it
    in the foreground with a Bash `timeout` of 330000 ms, alone in its command (no
    `echo` or other command after it): it can take up to five minutes (a Brain sync,
-   then the Hive naming the session), and a call stopped early leaves it unknown
+   the Hive preparing the workspace, then naming the session), and a call stopped early leaves it unknown
    whether the task went out. The
    backend shows the result as a dispatch card in this conversation (from the dispatch
    log: the Hive, the Brain and Project Agent, the repositories at their commit, the

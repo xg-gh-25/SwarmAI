@@ -43,7 +43,7 @@ const OK: SwarmOutDispatchContent = {
   hive: 'explorer', hiveReason: 'least_busy:1', brain: 'SwarmAI', mode: 'research', profile: 'research',
   execution: 'pipeline', executionWhy: 'a report from the week of commits',
   revision: 'fcdbf4dc' + '0'.repeat(56), brainSync: 'synced',
-  repos: [{ name: 'swarmai', ref: 'main', sha: 'a680d1a0' + '0'.repeat(32), dirty: 3 }],
+  repos: [{ name: 'swarmai', ref: 'main', sha: 'a680d1a0' + '0'.repeat(32), dirty: 3, access: 'read' }],
   acceptance: 'a report exists', delivery: 'bundle', error: null, at: '2026-10-30T05:25:50Z', text: 'x',
 };
 const REFUSED: SwarmOutDispatchContent = {
@@ -88,11 +88,12 @@ describe('a dispatch that went out', () => {
     expect(screen.getByTestId('dispatch-row-hive').textContent).toContain('explorer');
     expect(screen.getByTestId('dispatch-row-hive').textContent).toContain('the least busy (1 running)');
     expect(screen.getByTestId('dispatch-row-execution').textContent).toContain('pipeline · research');
-    expect(screen.getByTestId('dispatch-row-execution').textContent).toContain('a report from the week');
+    expect(screen.getByTestId('dispatch-execution-why').textContent).toBe('a report from the week of commits');
     expect(screen.getByTestId('dispatch-row-agent').textContent).toContain('fcdbf4dc');
     expect(screen.getByTestId('dispatch-row-agent').textContent).toContain('Brain synced');
     expect(screen.getByTestId('dispatch-row-repo').textContent).toContain('swarmai @ main a680d1a0');
     expect(screen.getByTestId('dispatch-dirty').textContent).toContain('3 uncommitted');
+    expect(screen.getByTestId('dispatch-repo-readonly').textContent).toContain('read-only');
     expect(card.textContent).toContain('so_b150abc3fd86');
     expect(card.textContent).not.toContain('Nothing was sent');
     const live = await screen.findByTestId('dispatch-live');

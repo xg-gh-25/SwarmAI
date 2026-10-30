@@ -1,12 +1,10 @@
 """Where a Hive keeps the host's commit of a dispatched task's repository (design
 docs/design/2026-10-30-hive-task-repos-from-host.md §3).
 
-The host sends a git bundle of its commit (core/repo_ship); this daemon only stores it,
-as ``Hive/incoming/<sha>.bundle`` in the workspace, and the Hive's agent fetches it into
-the repository itself (the task text says how, core/task_repos.task_text). The daemon
-never runs git and never reads what the agent wrote: the agent's git runs as the agent,
-under the agent's own gates, so anything planted in a repository's ``.git`` reaches no
-one but the agent.
+The host sends a git bundle of its commit (core/repo_ship); receiving it only stores it,
+as ``Hive/incoming/<sha>.bundle`` in the workspace, and runs no git. The backend fetches
+it into the shared clone when it prepares the task's workspace (core/hive_workspace),
+with git that runs nothing the agent configured (that module's doc).
 
 The file is written like a Brain's files (core/brain_sync): through directory
 descriptors opened without following a link (a linked ``Hive/`` or ``incoming/`` is
@@ -27,10 +25,10 @@ from pathlib import Path
 
 from core import brain_sync
 
-#: the directory, relative to the workspace (the agent reads the bundle from there)
+#: the directory, relative to the workspace (core/hive_workspace reads the bundle there)
 INCOMING = ("Hive", "incoming")
-#: a bundle older than this is removed when the next one arrives (the agent fetches it at
-#: the start of its task)
+#: a bundle older than this is removed when the next one arrives (it is fetched when the
+#: task's workspace is prepared, right after it arrives)
 KEEP_S = 2 * 24 * 3600
 #: what a git bundle file starts with (v2 or v3); anything else is refused before it is kept
 _HEADERS = (b"# v2 git bundle\n", b"# v3 git bundle\n")

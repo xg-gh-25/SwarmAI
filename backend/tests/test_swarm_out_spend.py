@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from core import swarm_out_model, swarm_out_results as res
+from tests import _hive_work_fake as _work
 from core.swarm_out_results import summarize
 
 DID = "so_0123456789ab"
@@ -210,7 +211,9 @@ def _dispatching_hive(monkeypatch, tmp_path, *, takes=True, busy=False):
         if request.url.path == "/api/system/verify-auth":
             return httpx.Response(200, json={"success": True, "model": json.loads(request.content)["default_model"]})
         if request.url.path == "/api/chat/sessions/admission-state":
-            return httpx.Response(200, json={"saturated": busy})
+            return httpx.Response(200, json={**_work.ADMISSION, "saturated": busy})
+        if _work.answer(request) is not None:
+            return _work.answer(request)
         if request.url.path == "/api/chat/stream":
             return httpx.Response(200, text='data: {"type": "session_start", "session_id": "sess-42"}\n\n',
                                   headers={"content-type": "text/event-stream"})

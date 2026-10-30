@@ -210,14 +210,25 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
           </Row>
         )}
         {block.ok && block.execution && (
-          <Row testId="dispatch-row-execution" k={k('row.execution', 'Runs')} why={block.executionWhy}>
+          <Row testId="dispatch-row-execution" k={k('row.execution', 'Runs')}>
             {block.execution === 'native' ? k('native', 'native: in the session, no pipeline run')
               : k('pipeline', 'pipeline · {{profile}}', { profile: block.profile ?? '?' })}
+            {/* the reason is a sentence: it wraps under the value, not in the one-line column */}
+            {block.executionWhy && (
+              <span data-testid="dispatch-execution-why" className="block text-[12px] text-[var(--color-text-dim)]">
+                {block.executionWhy}
+              </span>
+            )}
           </Row>
         )}
         {block.ok && block.repos.map((r) => (
           <Row key={`${r.name}@${r.ref}`} testId="dispatch-row-repo" k={k('row.repo', 'Repository')} why={k('commit', "this machine's commit")}>
             {r.name} @ {r.ref ?? '?'} {r.sha && <Mono>{r.sha.slice(0, 8)}</Mono>}
+            {r.access === 'read' && (
+              <span data-testid="dispatch-repo-readonly" className="ml-1.5 text-[12.5px] text-[var(--color-text-muted)]">
+                · {k('readOnly', 'read-only')}
+              </span>
+            )}
             {r.dirty > 0 && (
               <div data-testid="dispatch-dirty" className="mt-0.5 text-[12.5px] text-[var(--color-status-warning)]">
                 ⚠ {k('dirty', '{{count}} uncommitted files here were not sent', { count: r.dirty })}

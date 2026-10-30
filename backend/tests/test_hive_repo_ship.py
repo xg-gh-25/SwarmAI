@@ -2,9 +2,9 @@
 
 Real git, temporary repositories: a bare "remote" stands for the repository's URL
 (``url.insteadOf``). Questions: (1) does the host ship only what the remote lacks when
-the checkout tracks it, and do the task text's own commands, run as the agent would,
-end on the declared branch at exactly the host's commit; (2) with no tracking branch,
-does the whole branch go and do the commands still get there when the clone is refused;
+the checkout tracks it, and does the Hive's prepared worktree (core/hive_workspace) end
+at exactly the host's commit; (2) with no tracking branch, does the whole branch go and
+does the worktree still get there when the clone is refused;
 (3) is a checkout that moved while packing refused; (4) does the Hive keep the upload as
 ``Hive/incoming/<sha>.bundle`` and nothing else, never through a link, refusing a body
 that is not a bundle, removing only old regular bundle files; (5) does what the task
@@ -48,6 +48,8 @@ def world(tmp_path, monkeypatch):
     gitconfig = tmp_path / "gitconfig"
     gitconfig.write_text(f'[url "{remote}"]\n\tinsteadOf = {URL}\n')
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    from core import hive_workspace
+    monkeypatch.setattr(hive_workspace, "GLOBAL_CONFIG", str(gitconfig))
     host = tmp_path / "host"
     _g(tmp_path, "clone", "-q", URL, str(host))
     _g(host, "checkout", "-q", "-b", "main")
@@ -76,44 +78,32 @@ def _sh(ws: Path, cmd: str) -> bool:
     return subprocess.run(cmd, shell=True, cwd=str(ws), capture_output=True).returncode == 0
 
 
-def _agent(ws: Path, text: str) -> None:
-    """Run the task text's commands for one repository the way they read."""
-    m = re.search(r"1\. if (\S+) does not exist: (.+); otherwise: (.+)", text)
-    d, clone, fetch_origin = m.groups()
-    fallback = re.search(r"\(if the clone is refused and (\S+) exists: (.+)\)", text).groups()
-    step2 = re.search(r"2\. if (\S+) exists: (.+)", text).groups()
-    step3 = re.search(r"3\. (git .+)", text).group(1)
-    if not (ws / d).exists():
-        if not _sh(ws, clone) and (ws / fallback[0]).exists():
-            assert _sh(ws, fallback[1])
-    else:
-        _sh(ws, fetch_origin)
-    if (ws / step2[0]).exists():
-        assert _sh(ws, step2[1])
-    assert _sh(ws, step3)
+def _prepare(w, sha: str, n: int = 1) -> Path:
+    """The Hive's backend prepares a writable worktree at *sha* (core/hive_workspace)."""
+    from core import hive_workspace as hw
+    order = hw.prepare(w["ws"], f"so_{n:012x}", [{"url": URL, "ref": "main", "sha": sha, "name": "lib",
+                                                  "access": "write"}])
+    return w["ws"] / order["repos"][0]["dir"]
 
 
 def _declared(sha):
     return task_repos.parse([{"url": URL, "ref": "main", "sha": sha}])
 
 
-def test_a_thin_bundle_and_the_task_text_put_the_hive_on_the_host_commit(world):
+def test_a_thin_bundle_puts_the_hives_worktree_on_the_host_commit(world):
     st, path, base = _ship(world)
     assert (st["branch"], st["sha"], st["dirty"]) == ("main", world["c"], 0)
     assert base == world["a"]
     assert _keep(world["ws"], world["c"], path.read_bytes()) == f"Hive/incoming/{world['c']}.bundle"
-    declared = _declared(world["c"])
-    _agent(world["ws"], task_repos.task_text(declared))
-    repo = world["ws"] / declared[0]["dir"]
+    repo = _prepare(world, world["c"])
     assert _g(repo, "rev-parse", "HEAD") == world["c"]
-    assert _g(repo, "symbolic-ref", "--short", "HEAD") == "main"
     assert _g(repo, "config", "--get", "remote.origin.url") == URL
-    # a second task on the same directory: the next commit, over the first
+    # a second task on the same repository: the next commit, in its own worktree
     d = _commit(world["host"], "d")
     st, path, _ = _ship(world)
     _keep(world["ws"], d, path.read_bytes())
-    _agent(world["ws"], task_repos.task_text(_declared(d)))
-    assert _g(repo, "rev-parse", "HEAD") == d
+    assert _g(_prepare(world, d, 2), "rev-parse", "HEAD") == d
+    assert _g(repo, "rev-parse", "HEAD") == world["c"]
 
 
 def test_with_no_tracking_branch_the_whole_branch_goes_and_works_without_the_remote(world):
@@ -121,9 +111,7 @@ def test_with_no_tracking_branch_the_whole_branch_goes_and_works_without_the_rem
     assert base is None
     _keep(world["ws"], world["c"], path.read_bytes())
     world["gitconfig"].write_text(f'[url "{world["ws"]}/nowhere.git"]\n\tinsteadOf = {URL}\n')  # clone refused
-    declared = _declared(world["c"])
-    _agent(world["ws"], task_repos.task_text(declared))
-    repo = world["ws"] / declared[0]["dir"]
+    repo = _prepare(world, world["c"])
     assert _g(repo, "rev-parse", "HEAD") == world["c"]
     assert _g(repo, "config", "--get", "remote.origin.url") == URL
 
@@ -133,13 +121,11 @@ def test_a_checkout_that_moved_while_packing_is_refused(world):
         repo_ship.pack(world["host"], URL, "main", world["b"])
 
 
-def test_nothing_is_sent_when_the_remote_has_the_commit_and_the_text_still_gets_there(world):
+def test_nothing_is_sent_when_the_remote_has_the_commit_and_the_hive_still_gets_there(world):
     _g(world["host"], "push", "-q", "origin", "main")
     st = repo_ship.state(world["host"])
     assert repo_ship.pack(world["host"], URL, "main", st["sha"]) == (None, st["sha"], 0)
-    declared = _declared(st["sha"])
-    _agent(world["ws"], task_repos.task_text(declared))       # no bundle in Hive/incoming
-    assert _g(world["ws"] / declared[0]["dir"], "rev-parse", "HEAD") == world["c"]
+    assert _g(_prepare(world, st["sha"]), "rev-parse", "HEAD") == world["c"]   # no bundle in Hive/incoming
 
 
 def test_the_hive_keeps_only_a_bundle_and_never_through_a_link(world, tmp_path):
@@ -211,10 +197,11 @@ def test_the_hive_endpoint_keeps_the_upload(world, monkeypatch):
 def test_what_the_task_changed_counts_from_the_declared_commit(world, monkeypatch):
     st, path, _ = _ship(world, full=True)
     _keep(world["ws"], world["c"], path.read_bytes())
-    declared = _declared(world["c"])
-    _agent(world["ws"], task_repos.task_text(declared))
+    repo = _prepare(world, world["c"])
+    declared = task_repos.parse([{"url": URL, "ref": "main", "sha": world["c"], "name": "lib", "access": "write",
+                                  "dir": str(repo.relative_to(world["ws"]))}])
     monkeypatch.delenv("GIT_CONFIG_GLOBAL")                          # facts read the origin as configured
-    _commit(world["ws"] / declared[0]["dir"], "hive-work")
+    _commit(repo, "hive-work")
     fact = task_repos.repo_facts(str(world["ws"]), declared)[0]
     assert (fact["error"], fact["base"], fact["commits_total"]) == (None, world["c"], 1)
     with pytest.raises(task_repos.TaskRepoError):

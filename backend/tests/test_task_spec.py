@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+from tests import _hive_work_fake as _work
 import yaml
 
 from core import task_spec as ts
@@ -119,8 +121,9 @@ def test_no_signal_or_several_asks_with_every_brain_and_the_runner(ws):
 # ── ② spec ───────────────────────────────────────────────────────────────────
 
 def _build(*a, **k):
-    """``task_spec.build`` with how the task runs given (native unless the test says)."""
-    return ts.build(*a, **{"execution": "native", **k})
+    """``task_spec.build`` with how the task runs and what comes back given (native,
+    commits, unless the test says)."""
+    return ts.build(*a, **{"execution": "native", "returns": "commits", **k})
 
 
 def test_the_spec_comes_from_the_definition(ws):
@@ -130,7 +133,7 @@ def test_the_spec_comes_from_the_definition(ws):
     assert (s["mode"], s["mode_chosen"], s["execution"], s["profile"]) == (
         "code-change", "the default mode", {"how": "native", "profile": None}, None)
     assert s["repos"] == [{"name": "lib", "url": "https://github.com/acme/lib.git", "ref": "main",
-                           "sha": None, "dirty": None, "checkout": None, "error": None}]
+                           "sha": None, "dirty": None, "checkout": None, "error": None, "access": "write"}]
     # every repository of the Brain goes, whatever the mode (research declares none)
     assert [r["name"] for r in _build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research")["repos"]] == ["lib"]
     assert s["delivery"] == "bundle" and s["revision"] and not s["problems"]
@@ -224,10 +227,21 @@ def test_the_project_section_tells_the_hive_how_to_work(ws):
                  "no_git_push", "Done when: the signer test passes"):
         assert part in text, part
     assert "s_lib-desk" not in text and text.endswith("## Task\n")
-    runner = ts.segment(_build(ws, "General", "x", "y"))
+    runner = ts.segment(_build(ws, "General", "x", "y", returns="answer"))
     assert "knowledge find --in library" in runner and "do not push" not in runner
-    research = ts.segment(_build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research"))
-    assert "there to read" in research and "commit on the declared branch" not in research
+    assert "your answer, in your final reply" in runner
+    research = ts.segment(_build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research",
+                                 returns="document"))
+    assert "there to read" in research and "commit on" not in research and "outputs directory" in research
+    # what comes back must fit how it runs (run-spec §2.1): decided here, not on the Hive
+    assert any("lands code" in r for r in ts.admit(_build(ws, "Lib", "x", "y", execution="pipeline:bugfix",
+                                                          returns="answer")))
+    assert any("changes no code" in r for r in ts.admit(_build(ws, "Lib", "x", "y", execution="pipeline:research",
+                                                               returns="commits")))
+    assert any("binds no repository" in r for r in ts.admit(_build(ws, "General", "x", "y")))
+    with pytest.raises(ts.SpecError, match="say what comes back"):
+        _build(ws, "Lib", "x", "y", returns=None)
+    assert {r["access"] for r in _build(ws, "Lib", "x", "y", returns="document")["repos"]} == {"read"}
 
 
 # ── dispatch ─────────────────────────────────────────────────────────────────
@@ -258,6 +272,10 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
     monkeypatch.setattr(host, "hive_brains", hive_brains)
     monkeypatch.setattr(host, "sync", sync)
     monkeypatch.setattr(so, "dispatch", dispatch)
+
+    async def can_prepare(inst):
+        return None
+    monkeypatch.setattr(so, "_require_work_orders", can_prepare)
     return calls
 
 
@@ -268,10 +286,10 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     b = _brain(ws)
     rev = revision(b)
     calls = _fake_hive(monkeypatch, "0" * 64)
-    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
+    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev))
     assert calls["sync"] == ["Lib"] and out["brain_sync"] == "synced"
     d = calls["dispatch"][0]
-    assert d["repos"] == [{"url": "https://github.com/acme/lib.git", "ref": "main"}]
+    assert d["repos"] == [{"url": "https://github.com/acme/lib.git", "ref": "main", "name": "lib", "access": "write"}]
     assert d["agent"]["brain"] == "Lib" and d["agent"]["mode"] == "code-change" and d["agent"]["revision"]
     # how it runs is the dispatch's choice, recorded on the row (not the mode's profile: bugfix)
     assert (d["agent"]["execution"], d["agent"]["profile"], d["agent"]["execution_why"]) == ("native", None, "")
@@ -281,16 +299,16 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     # up to date: no sync
     digest = host.local_brain(ws, "Lib")["digest"]
     calls = _fake_hive(monkeypatch, digest)
-    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
+    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev))
     assert calls["sync"] == [] and len(calls["dispatch"]) == 1 and out["brain_sync"] == "up to date"
     # the same version, but the Hive changed files of it: restored
     calls = _fake_hive(monkeypatch, digest, current="1" * 64)
-    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
+    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev))
     assert calls["sync"] == ["Lib"] and out["brain_sync"].startswith("restored 2")
     # a definition changed since the person was shown it
     calls = _fake_hive(monkeypatch, digest)
     with pytest.raises(so.SwarmOutError, match="changed since it was shown"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision="0" * 64))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision="0" * 64))
     assert calls["dispatch"] == []
 
 
@@ -306,7 +324,7 @@ def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypat
                           {"name": "calm", "status": "running", "reachable": True, "saturated": False,
                            "streaming": 0, "memory_percent": 50.0}]}
     monkeypatch.setattr(so, "fleet", fleet)
-    asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev,
+    asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev,
                                  brief="  fix   the\nthing  "))
     d = calls["dispatch"][0]
     assert d["hive"] == "calm"
@@ -314,7 +332,7 @@ def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypat
                           "repo_notes": [{"name": d["extra"]["repo_notes"][0]["name"],
                                           "url": "https://github.com/acme/lib.git", "dirty": 0}]}
     calls = _fake_hive(monkeypatch, "0" * 64)
-    asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
+    asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", returns="commits", seen_revision=rev))
     assert calls["dispatch"][0]["hive"] == "hive3" and calls["dispatch"][0]["extra"]["hive_reason"] == "named"
 
 
@@ -325,15 +343,15 @@ def test_a_refused_spec_or_an_old_hive_sends_nothing(ws, monkeypatch):
     d = _brain(ws, doc={**DEF, "status": "draft"})
     calls = _fake_hive(monkeypatch, None)
     with pytest.raises(so.SwarmOutError, match="draft"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "x", "y", execution="native", seen_revision=revision(d)))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "x", "y", execution="native", returns="commits", seen_revision=revision(d)))
     ok = _brain(ws, "Ok")
     calls = _fake_hive(monkeypatch, None, supported=False)
     with pytest.raises(so.SwarmOutError, match="update it once"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", execution="native", seen_revision=revision(ok)))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", execution="native", returns="commits", seen_revision=revision(ok)))
     assert calls["dispatch"] == [] and calls["sync"] == []
     calls = _fake_hive(monkeypatch, None, sync_error=httpx.ReadTimeout("slow"))
     with pytest.raises(so.SwarmOutError, match="nothing was sent"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", execution="native", seen_revision=revision(ok)))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", execution="native", returns="commits", seen_revision=revision(ok)))
     assert calls["dispatch"] == []
 
 
@@ -375,7 +393,9 @@ def test_the_real_dispatch_posts_the_pin_and_the_project_section(monkeypatch, tm
 
     def handler(request):
         if request.url.path.endswith("/admission-state"):
-            return httpx.Response(200, json={"saturated": False})
+            return httpx.Response(200, json=_work.ADMISSION)
+        if _work.answer(request) is not None:
+            return _work.answer(request)
         posted.update(json.loads(request.content))
         if posted.get("project_agent", {}).get("revision") == "stale":
             return httpx.Response(400, json={"detail": "<b>hive text</b>"})
@@ -437,10 +457,10 @@ def test_the_cli_sends_brain_mode_execution_and_acceptance(monkeypatch):
     monkeypatch.setattr(cli, "_call", lambda m, p, b=None, timeout=120: seen.append((m, p, b, timeout)) or 0)
     assert cli.main(["dispatch", "--hive", "h", "--title", "t", "--brain", "Lib", "--task", "x",
                      "--acceptance", "done", "--mode", "code-change", "--execution", "pipeline:bugfix",
-                     "--why", "a defect with a repro", "--revision", "abc"]) == 0
+                     "--why", "a defect with a repro", "--returns", "commits", "--revision", "abc"]) == 0
     assert seen[-1] == ("POST", "/dispatch", {"brain": "Lib", "task": "x", "acceptance": "done",
                                               "mode": "code-change", "execution": "pipeline:bugfix",
-                                              "why": "a defect with a repro",
+                                              "why": "a defect with a repro", "returns": "commits",
                                               "hive": "h", "title": "t", "brief": "", "revision": "abc"},
                         cli.DISPATCH_TIMEOUT_S)
     assert cli.DISPATCH_TIMEOUT_S > 2 * 120

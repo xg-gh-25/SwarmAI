@@ -2,7 +2,8 @@
 docs/design/2026-10-28-project-agent-flow.md §7 ⑨, Hive side).
 
 At a turn's end, for each declared repository whose facts (core/task_repos) show
-commits ``base..head``, ``make`` writes ``git bundle create <tmp> <base>..HEAD`` to a
+commits ``base..head`` (a writable one: a work order's read-only worktree is never
+bundled, core/hive_workspace), ``make`` writes ``git bundle create <tmp> <base>..HEAD`` to a
 temporary file of the session's run record (core/hive_records); ``seal_bundles``, run by
 the turn's coroutine once the bundling thread returned, seals each one as a ``bundle``
 entry and puts ``{key, sha256, size, seq}`` in the fact (``bundle``); a turn that made no
@@ -64,11 +65,12 @@ def make(workspace: Path, session_id: str, fact: dict[str, Any]) -> Optional[dic
     base, head, rdir = fact.get("base"), fact.get("head"), fact.get("dir")
     if (fact.get("error") or not fact.get("commits_total") or not isinstance(base, str)
             or not isinstance(head, str) or not _SHA_RE.fullmatch(base) or not _SHA_RE.fullmatch(head)
-            or not isinstance(rdir, str) or not SESSION_RE.fullmatch(session_id or "")):
-        return None
+            or not isinstance(rdir, str) or not SESSION_RE.fullmatch(session_id or "")
+            or fact.get("access") == "read"):
+        return None                  # a read-only worktree is never bundled (core/hive_workspace)
     ws = Path(workspace).resolve()
     repo = (ws / rdir).resolve()
-    if not repo.is_relative_to(ws.joinpath("Hive", "repos")):
+    if not (repo.is_relative_to(ws.joinpath("Hive", "repos")) or repo.is_relative_to(ws.joinpath("Hive", "work"))):
         return None
     from core import hive_records
     k = key(rdir)

@@ -9,8 +9,8 @@ backend builds from the dispatch log (core/swarm_out_card).
 
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <f> [--brain <B>]
-    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> [--mode <m>]
-    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title <t> --brief <one or two sentences> --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --revision <r> [--hive <name>] [--mode <m>]
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits [--mode <m>]
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title <t> --brief <one or two sentences> --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits --revision <r> [--hive <name>] [--mode <m>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 
 Every task goes under a Brain's Project Agent (``General`` = the Runner Agent, for a
@@ -110,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         d.add_argument("--mode")
         d.add_argument("--execution", required=True, help="native, or pipeline:<profile>")
         d.add_argument("--why", default="", help="one sentence: why this execution")
+        d.add_argument("--returns", required=True, choices=("answer", "document", "commits"),
+                       help="what comes back; only commits makes the repositories writable")
         if name == "dispatch":
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
@@ -127,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
                                         "session_bound_project": args.bound_project})
     if args.cmd in ("spec", "dispatch"):
         body = {"brain": args.brain, "task": _task(args), "acceptance": args.acceptance,
-                "mode": args.mode, "execution": args.execution, "why": args.why}
+                "mode": args.mode, "execution": args.execution, "why": args.why,
+                "returns": args.returns}
         if args.cmd == "spec":
             return _call("POST", "/spec", body)
         # a dispatch may sync the Brain first (up to 2 minutes) and then waits for the

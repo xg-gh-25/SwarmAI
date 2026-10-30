@@ -16,8 +16,12 @@ Hive since, and how many turns hold it now. Nothing else.
 
 ``PUT /api/hive/repos?url=&branch=&sha=``: keep the host's commit of a dispatched
 task's repository (body = a git bundle from core/repo_ship) as
-``Hive/incoming/<sha>.bundle`` for the Hive's agent to fetch (core/hive_repo_inbox). No
-git runs in this daemon; the agent puts its repository on the commit itself.
+``Hive/incoming/<sha>.bundle`` (core/hive_repo_inbox). No git runs for this request; the
+backend fetches it when it prepares the task's workspace (``POST /api/hive/work``).
+
+``POST /api/hive/work`` / ``POST /api/hive/work/{id}/release``: prepare a dispatched
+task's workspace before its session starts, and remove it when the Host settled the
+task (core/hive_workspace).
 
 ``GET /api/hive/usage?after_id=``: this Hive's usage ledger rows after an id, the
 accounting columns only (core/usage_accounting.rows_after), for the host's ledger.
@@ -35,6 +39,7 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from core import brain_sync, brain_use
 
@@ -121,7 +126,7 @@ async def put_brain(brain: str, request: Request) -> dict:
 async def put_repo(request: Request, url: str, branch: str, sha: str) -> dict:
     """Keep a dispatched task's repository at the host's commit: body = a git bundle
     (core/repo_ship), stored as ``Hive/incoming/<sha>.bundle`` (core/hive_repo_inbox) for
-    the Hive's agent to fetch. No git runs here. Hive only."""
+    ``POST /work`` to fetch (core/hive_workspace). No git runs here. Hive only."""
     _hive_only()
     from core import hive_repo_inbox, repo_ship, task_repos
     length = request.headers.get("content-length")
@@ -153,6 +158,50 @@ async def put_repo(request: Request, url: str, branch: str, sha: str) -> dict:
         raise
     logger.info("hive repos: kept %s for %s (%d bytes)", rel, branch, size)
     return {"bundle": rel, "sha": sha, "bytes": size}
+
+
+class WorkBody(BaseModel):
+    work_id: str = Field(max_length=40)
+    repos: list[dict] = Field(default_factory=list, max_length=10)
+
+
+def session_busy(session_id: str) -> bool:
+    """A session of this daemon has a turn open (SessionRouter.is_busy); False when the
+    router is not running here."""
+    from core import session_registry
+    r = session_registry.session_router
+    return bool(r is not None and r.is_busy(session_id))
+
+
+@router.post("/work")
+async def prepare_work(body: WorkBody) -> dict:
+    """Make a dispatched task's work order real before its session starts: each
+    repository's worktree at its commit, read-only or on ``hive/<work_id>``, and
+    ``Outputs/<work_id>/`` (core/hive_workspace). 422 with a fixed reason when it cannot
+    be; nothing is left then. Hive only."""
+    _hive_only()
+    from core import hive_workspace
+    try:
+        order = await asyncio.to_thread(hive_workspace.prepare, _workspace(), body.work_id, body.repos)
+    except hive_workspace.WorkError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    logger.info("hive work: prepared %s (%d repositories)", body.work_id, len(order["repos"]))
+    return order
+
+
+@router.post("/work/{work_id}/release")
+async def release_work(work_id: str) -> dict:
+    """The Host settled the task: remove its worktrees, ``Hive/work/<work_id>/`` and
+    ``Outputs/<work_id>/`` (core/hive_workspace.release). 409 while its session runs.
+    Hive only."""
+    _hive_only()
+    from core import hive_workspace
+    try:
+        done = await asyncio.to_thread(hive_workspace.release, _workspace(), work_id, session_busy)
+    except hive_workspace.WorkError as exc:
+        status = 409 if str(exc) == hive_workspace.ERR_BUSY else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from None
+    return {"released": done}
 
 
 @router.get("/bundles/{session_id}/{key}")

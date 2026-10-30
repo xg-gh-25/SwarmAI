@@ -1,18 +1,18 @@
 """The repositories a dispatched task works on, and what the task did to each.
 
 Design: docs/design/2026-10-28-swarm-out-run-results.md §4.4. A Swarm Out dispatch
-carries a list of repositories (``[{url, ref}]``). The Host writes them into the task
-text with the directory each one goes to; the Hive records them on the session
-(``sessions.metadata.task_repos``). The Hive's agent clones or fetches each one there;
-for a repository with a ``sha`` (the host's own commit) it also fetches the bundle the
-host left in ``Hive/incoming/`` (core/hive_repo_inbox) and checks that commit out.
-At every turn end the Hive reads, for each declared repository, what the task changed
+carries a list of repositories (``[{url, ref}]``). Before the session starts the Hive's
+backend prepares a worktree of each at the declared commit (core/hive_workspace, design
+2026-10-30-run-spec §4.3); the Host writes the prepared workspace into the task text
+(``task_text``) and the Hive records it on the session (``sessions.metadata.task_repos``,
+each entry's ``dir`` the worktree). At every turn end the Hive reads, for each declared repository, what the task changed
 against the version it pulled (``repo_facts``), for the ``turn_outcome`` block.
 
-The directory comes from the URL alone (``repo_dir``), so the Host and the Hive name
-the same one without asking each other. Only the git commands below run, with fixed
+The shared clone's directory comes from the URL alone (``repo_dir``), and a worktree's
+from the work order (``Hive/work/<id>/repos/<name>``), so the Host and the Hive name the
+same one without asking each other. Only the git commands below run, with fixed
 arguments, no shell, external diff, textconv and fsmonitor off, and only inside
-``<workspace>/Hive/repos/``. The working tree is never read: the Hive's agent can
+``<workspace>/Hive/repos/`` or a work order's ``Hive/work/<id>/repos/``. The working tree is never read: the Hive's agent can
 write a repository's config (and a submodule's), and git runs configured commands
 (filter drivers) whenever it reads working-tree files. So only commits are counted
 (``base..HEAD``, tree against tree) plus the number of untracked files, and no command
@@ -25,7 +25,8 @@ declared branch still shows its commits instead of moving its own base.
 
 - ``parse(items)``        — validated ``[{url, ref, dir}]``; raises ``TaskRepoError``.
 - ``repo_dir(url)``       — the workspace-relative directory of a repository.
-- ``task_text(repos)``    — the paragraph the Host puts before the task.
+- ``task_text(order)``    — the paragraph the Host puts before the task, from the
+  work order the Hive prepared (core/hive_workspace).
 - ``repo_facts(workspace, repos, since)`` — per repository: present, origin, base,
   commits, changed files, untracked count, pushed. Blocking (runs git): call it in a
   pool. ``since``: the session's start (unix seconds), the point the base is read at.
@@ -104,10 +105,17 @@ def _same_repo(a: str, b: str) -> bool:
         return False
 
 
+#: a work order's worktree of a repository (core/hive_workspace.repo_rel)
+_WORK_DIR_RE = re.compile(rf"Hive/work/so_[0-9a-f]{{12}}/repos/{_SEG}")
+
+
 def parse(items: Any) -> list[dict[str, Optional[str]]]:
-    """Validated ``[{url, ref, dir[, sha]}]`` (``ref`` None = the remote's default branch;
-    ``sha``: the host's commit, its bundle kept on the Hive, core/hive_repo_inbox),
-    one entry per directory. Raises TaskRepoError on anything not accepted."""
+    """Validated ``[{url, ref, dir[, sha, name, access]}]`` (``ref`` None = the remote's
+    default branch; ``sha``: the host's commit, its bundle kept on the Hive,
+    core/hive_repo_inbox), one entry per directory. ``dir``: the shared clone's
+    (``repo_dir``), or a work order's worktree when the entry names one
+    (``Hive/work/<id>/repos/<name>``, design 2026-10-30-run-spec §4.3) with its ``name``
+    and ``access`` (``read`` / ``write``). Raises TaskRepoError on anything not accepted."""
     if items is None:
         return []
     if not isinstance(items, list):
@@ -133,44 +141,46 @@ def parse(items: Any) -> list[dict[str, Optional[str]]]:
         if sha is not None and ref is None:
             raise TaskRepoError("a repository with a commit needs its branch")
         d = repo_dir(url)
+        work = item.get("dir")
+        if work == d:
+            work = None                    # the shared clone's own (a record from before work orders)
+        if work is not None:
+            if not (isinstance(work, str) and _WORK_DIR_RE.fullmatch(work)
+                    and item.get("access") in ("read", "write")
+                    and isinstance(item.get("name"), str) and work.rsplit("/", 1)[1] == item["name"]):
+                raise TaskRepoError("a repository's worktree is not one a work order makes")
+            d = work
         if d in seen:
             continue
         seen.add(d)
         entry: dict[str, Optional[str]] = {"url": url, "ref": ref, "dir": d}
         if sha is not None:
             entry["sha"] = sha
+        if work is not None:
+            entry["name"], entry["access"] = item["name"], item["access"]
         out.append(entry)
     return out
 
 
-def task_text(repos: list[dict[str, Optional[str]]]) -> str:
-    """The paragraph that tells the Hive's agent where each repository goes and, for one
-    with the person's own commit, how to put it there (the commands run from the
-    workspace; the bundle path inside ``git -C`` is relative to the repository)."""
-    if not repos:
+def task_text(order: Optional[dict[str, Any]]) -> str:
+    """The paragraph that tells the Hive's agent the workspace its backend prepared
+    (core/hive_workspace): each repository's worktree, read-only or on its branch, and
+    the directory for deliverables. It names no command: nothing is to be cloned or
+    checked out."""
+    if not order:
         return ""
-    from core.hive_repo_inbox import bundle_rel
-    lines = ["Repositories for this task (relative to your workspace; change code only "
-             "inside these directories):"]
-    for r in repos:
-        d = r["dir"]
-        if r.get("sha"):
-            bundle = bundle_rel(r["sha"])
-            from_repo = "/".join([".."] * len(d.split("/")) + [bundle])
-            lines += [
-                f"- {d}: the person's own commit {r['sha'][:12]} of {r['url']}, branch {r['ref']} "
-                "(newer than the remote). Before working, run from your workspace:",
-                f"  1. if {d} does not exist: git clone {r['url']} {d}; otherwise: git -C {d} fetch origin",
-                f"     (if the clone is refused and {bundle} exists: git clone {bundle} {d} && "
-                f"git -C {d} remote set-url origin {r['url']})",
-                f"  2. if {bundle} exists: git -C {d} fetch {from_repo} HEAD",
-                f"  3. git -C {d} checkout -B {r['ref']} {r['sha']}",
-                "  Then do not pull or reset it; what you change is counted from this commit.",
-            ]
+    lines = ["Workspace (prepared for this task; paths are relative to your workspace):"]
+    for r in order.get("repos") or []:
+        sha = str(r.get("sha") or "")[:12]
+        if r.get("access") == "write":
+            lines.append(f"- {r['dir']}: {r['name']} at {sha} on branch {r['branch']}. Change code "
+                         "and commit here; do not push, do not switch or reset the branch.")
         else:
-            ref = r.get("ref") or "the default branch"
-            lines.append(f"- {r['url']} @ {ref} -> {d} (clone it if the directory does not "
-                         "exist, otherwise fetch and check out the ref)")
+            lines.append(f"- {r['dir']}: {r['name']} at {sha}, read-only. Do not commit here: "
+                         "nothing in it comes back.")
+    lines.append(f"- {order['outputs']}/: put documents, data and other deliverables that do not "
+                 "go into a repository here.")
+    lines.append("Do not clone, fetch, pull or check out anything: the workspace is ready.")
     return "\n".join(lines) + "\n\n"
 
 
@@ -309,11 +319,14 @@ def _numstat(out: str) -> tuple[list[dict[str, Any]], int, int, int]:
 
 def _one(workspace: Path, repo: dict[str, Optional[str]], since: Optional[float] = None) -> dict[str, Any]:
     fact: dict[str, Any] = {"url": repo["url"], "ref": repo.get("ref"), "dir": repo["dir"],
+                            "access": repo.get("access"),
                             "present": False, "origin_matches": None, "base": None,
                             "head": None, "commits": [], "commits_total": 0, "files": [],
                             "files_total": 0, "added": 0, "deleted": 0, "untracked": 0,
                             "pushed": "unknown", "error": None}
-    root = (workspace / Path(*REPOS_ROOT)).resolve()
+    # a work order's worktree is checked inside its own Hive/work/<id>/repos
+    root = (workspace / Path(*(repo["dir"].split("/")[:4] if repo["dir"].startswith("Hive/work/")
+                               else REPOS_ROOT))).resolve()
     target = (workspace / repo["dir"])
     try:
         real = target.resolve()

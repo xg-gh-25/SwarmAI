@@ -522,7 +522,8 @@ export interface SwarmOutDispatchContent {
   revision: string | null;
   /** what the Brain sync did: up to date / synced / restored … */
   brainSync: string | null;
-  repos: { name: string; ref: string | null; sha: string | null; dirty: number }[];
+  /** ``access``: how the Hive prepared it (read-only worktree or its branch); null on an older row */
+  repos: { name: string; ref: string | null; sha: string | null; dirty: number; access?: 'read' | 'write' | null }[];
   acceptance: string | null;
   delivery: string | null;
   error: string | null;

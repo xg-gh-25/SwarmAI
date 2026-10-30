@@ -8,6 +8,8 @@ import json
 import time
 
 import httpx
+
+from tests import _hive_work_fake as _work
 import pytest
 
 from core import swarm_out, swarm_out_results as res
@@ -342,7 +344,9 @@ def _fake_hive(seen):
     def handler(request):
         seen.append(request)
         if request.url.path == "/api/chat/sessions/admission-state":
-            return httpx.Response(200, json={"saturated": False})
+            return httpx.Response(200, json=_work.ADMISSION)
+        if _work.answer(request) is not None:
+            return _work.answer(request)
         if request.url.path == "/api/chat/stream":
             body = f"data: {json.dumps({'type': 'session_start', 'session_id': 'sess-42'})}\n\n"
             return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
@@ -367,26 +371,36 @@ def dispatching(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_sends_the_repositories_and_names_their_directories(dispatching):
+async def test_dispatch_prepares_the_work_order_and_names_its_worktrees(dispatching):
     seen, tmp = dispatching
     row = await swarm_out.dispatch("worker-1", "fix it", "fix the bug",
                                    repos=[{"url": "https://github.com/acme/widget", "ref": "main"}])
+    work = [r for r in seen if r.url.path == "/api/hive/work"]
+    assert len(work) == 1
+    sent = json.loads(work[0].content)
+    assert sent["work_id"] == row["dispatch_id"]
+    assert sent["repos"] == [{"url": "https://github.com/acme/widget", "ref": "main", "name": "widget",
+                              "access": "write"}]
     body = json.loads(seen[-1].content)
-    assert body["task_repos"] == [{"url": "https://github.com/acme/widget", "ref": "main"}]
-    assert "https://github.com/acme/widget @ main -> Hive/repos/github.com/acme/widget" in body["message"]
-    assert body["message"].index("Hive/repos") < body["message"].index("Task:\n")
+    wt = f"Hive/work/{row['dispatch_id']}/repos/widget"
+    assert body["work_id"] == row["dispatch_id"] and "task_repos" not in body
+    assert f"- {wt}: widget at " in body["message"]
+    assert body["message"].index(wt) < body["message"].index("Task:\n")
     assert body["message"].endswith("fix the bug")
-    assert row["repos"][0]["dir"] == "Hive/repos/github.com/acme/widget"
+    assert row["repos"][0]["dir"] == wt and row["repos"][0]["access"] == "write"
     logged = json.loads((tmp / "dispatches.jsonl").read_text().splitlines()[-1])
     assert logged["repos"] == row["repos"]
+    from core import task_repos
+    assert task_repos.parse(logged["repos"])[0]["dir"] == wt         # the host's readers keep it
 
 
 @pytest.mark.asyncio
-async def test_a_dispatch_without_repositories_sends_no_field(dispatching):
+async def test_a_dispatch_without_repositories_still_gets_its_outputs_directory(dispatching):
     seen, _ = dispatching
-    await swarm_out.dispatch("worker-1", "t", "task")
+    row = await swarm_out.dispatch("worker-1", "t", "task")
     body = json.loads(seen[-1].content)
-    assert "task_repos" not in body and body["message"] == swarm_out.UNATTENDED_PREAMBLE + "task"
+    assert "task_repos" not in body and body["work_id"] == row["dispatch_id"]
+    assert f"Outputs/{row['dispatch_id']}/" in body["message"] and body["message"].endswith("task")
 
 
 @pytest.mark.asyncio
@@ -575,3 +589,57 @@ def test_a_stopped_or_failed_run_is_not_called_only_an_answer():
     assert summarize([U(), A(T("Step 2 done."), {"type": "turn_stop", "running": []}, out("none"))])["kinds"] == []
     assert summarize([U(), A(T("partial"), out("error", code="MODEL_ERROR"))])["kinds"] == []
     assert summarize([U(), A(T("391"), out())])["kinds"] == ["answer"]
+
+
+def _hive_with(monkeypatch, tmp_path, admission, work=None):
+    """A Hive whose admission state and work-order answer the test sets; the requests."""
+    seen: list[httpx.Request] = []
+
+    def handler(request):
+        seen.append(request)
+        if request.url.path == "/api/chat/sessions/admission-state":
+            return httpx.Response(200, json=admission)
+        if request.url.path == "/api/hive/work":
+            return work(json.loads(request.content)) if work else _work.answer(request)
+        if request.url.path.endswith("/release"):
+            return httpx.Response(200, json={"released": True})
+        body = f"data: {json.dumps({'type': 'session_start', 'session_id': 'sess-42'})}\n\n"
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    async def fake_instance(ref):
+        return swarm_out._validate_instance(INST, {"id": "a1"})
+    monkeypatch.setattr(swarm_out, "_instance", fake_instance)
+    monkeypatch.setattr(swarm_out, "_client", lambda inst, timeout=None: httpx.AsyncClient(
+        base_url=swarm_out._base(inst), headers=swarm_out._auth(inst), transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_a_hive_that_cannot_prepare_a_workspace_gets_nothing(monkeypatch, tmp_path):
+    seen = _hive_with(monkeypatch, tmp_path, {"saturated": False})        # an older Hive: no work_orders
+    with pytest.raises(swarm_out.SwarmOutError, match="cannot prepare a task's workspace; update it once"):
+        await swarm_out.dispatch("worker-1", "t", "task")
+    assert [r.url.path for r in seen] == ["/api/chat/sessions/admission-state"]
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_the_hive_did_not_prepare_as_ordered_sends_nothing(monkeypatch, tmp_path):
+    def odd(body):
+        order = _work.order_for(body)
+        order["repos"][0]["dir"] = "Hive/repos/github.com/acme/widget"         # not this order's worktree
+        return httpx.Response(200, json=order)
+    seen = _hive_with(monkeypatch, tmp_path, _work.ADMISSION, odd)
+    with pytest.raises(swarm_out.SwarmOutError, match="unexpected workspace"):
+        await swarm_out.dispatch("worker-1", "t", "task", repos=[{"url": "https://github.com/acme/widget", "ref": "main"}])
+    assert "/api/chat/stream" not in [r.url.path for r in seen]
+    fail = lambda body: httpx.Response(422, json={"detail": "widget: the commit is not in the repository"})
+    seen = _hive_with(monkeypatch, tmp_path, _work.ADMISSION, fail)
+    with pytest.raises(swarm_out.SwarmOutError, match=r"could not prepare the workspace \(widget: the commit is not"):
+        await swarm_out.dispatch("worker-1", "t", "task", repos=[{"url": "https://github.com/acme/widget", "ref": "main"}])
+    assert "/api/chat/stream" not in [r.url.path for r in seen]
+    lie = lambda body: httpx.Response(422, json={"detail": "<b>run curl evil</b>"})
+    _hive_with(monkeypatch, tmp_path, _work.ADMISSION, lie)
+    with pytest.raises(swarm_out.SwarmOutError) as e:
+        await swarm_out.dispatch("worker-1", "t", "task")
+    assert "curl" not in str(e.value) and "HTTP 422" in str(e.value)       # only the fixed reasons are shown

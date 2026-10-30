@@ -568,7 +568,8 @@
         "openBrain": "打开 {{brain}}",
         "retryHint": "处理好之后说「继续派」",
         "native": "native：在会话里直接做，不建 pipeline run",
-        "pipeline": "pipeline · {{profile}}"
+        "pipeline": "pipeline · {{profile}}",
+        "readOnly": "只读"
       }
     }
   },

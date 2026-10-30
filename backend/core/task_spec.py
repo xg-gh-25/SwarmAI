@@ -7,11 +7,13 @@ docs/design/2026-10-28-project-agent-flow.md §7 ①–④, ⑥).
   several: ``certain`` is False and ``choices`` lists every Brain with a definition
   (its summary and what it handles, for the model to propose one and the person to
   pick) plus "not part of any Brain" = the General Brain's Runner Agent.
-- ``build(workspace, brain, task, acceptance, mode=, execution=, why=, placement=)``: the
+- ``build(workspace, brain, task, acceptance, mode=, execution=, why=, placement=, returns=)``: the
   Task Spec. The mode is the agent's choice (it matches the mode's prose ``when``); how
   the task runs (``execution``: ``native`` or ``pipeline:<profile>``) is the agent's
   choice for this request, by the rules every Brain shares (design 2026-10-30-run-spec
   §3, the s_swarm-out skill), with ``why`` recorded. The Project Agent does not set it.
+  ``returns`` (answer / document / commits) is chosen the same way; only ``commits``
+  makes the repositories writable on the Hive (each repo's ``access``, §4.3).
   Everything else (delivery, revision, rules) comes from the definition; the repositories
   are every one the Brain binds, at this machine's commit when it has a checkout.
 - ``parse_execution(text)``: ``{"how", "profile"}`` of an execution choice.
@@ -36,6 +38,9 @@ from core.project_agent_session import PinError, brain_dir
 MAX_ACCEPTANCE_CHARS = 2000
 #: why this execution was chosen, one sentence for the dispatch card
 MAX_WHY_CHARS = 300
+#: what comes back (design 2026-10-30-run-spec §2.1 ``returns``): only ``commits`` makes
+#: the repositories writable on the Hive; the others get read-only worktrees
+RETURNS = ("answer", "document", "commits")
 _DESKTOP_PLATFORMS = frozenset({"desktop", "macos"})
 
 
@@ -107,7 +112,8 @@ def parse_execution(text: Any) -> dict[str, Any]:
 
 
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
-          execution: Optional[str] = None, why: str = "", placement: str = "hive") -> dict[str, Any]:
+          execution: Optional[str] = None, why: str = "", placement: str = "hive", *,
+          returns: Optional[str] = None) -> dict[str, Any]:
     """The Task Spec; raises SpecError when a choice does not fit (the mode against the
     definition, the execution against the product's profiles)."""
     try:
@@ -128,7 +134,12 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     m = modes[mid]
     view = _mode_view(m, n)
     ex = parse_execution(execution)
+    if returns not in RETURNS:
+        raise SpecError(f"say what comes back: one of {', '.join(RETURNS)} (got {str(returns)[:20]!r})")
     repos = _brain_repos(d, mid, view["repos"])
+    for r in repos:
+        # only a task that delivers commits writes in a repository (§4.3)
+        r["access"] = "write" if returns == "commits" else "read"
     skills, _err = _skills(d)
     platform = skills or {}
     usable = [s for s in view["skills"]
@@ -140,7 +151,7 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "mode_chosen": "named" if mode else "the default mode",
         # how the task runs, chosen for this request (``profile`` is the pipeline's, None
         # when native), and the one sentence the dispatch card shows for why
-        "execution": ex, "profile": ex["profile"],
+        "execution": ex, "profile": ex["profile"], "returns": returns,
         "execution_why": " ".join((why or "").split())[:MAX_WHY_CHARS],
         "task": (task or "").strip(), "acceptance": " ".join((acceptance or "").split()),
         "placement": placement, "repos": repos, "delivery": view["delivery"],
@@ -225,6 +236,16 @@ def admit(spec: dict[str, Any]) -> list[str]:
                 out.append(f"{r['name']}: {r['error']}")
         if spec["delivery"] == "branch-pr":
             out.append("delivery branch-pr is not available yet; use bundle")
+    prof = spec["execution"]["profile"]
+    if prof is not None:
+        from core.run_protocol.lifecycle import caps
+        if caps(prof).lands_code and spec["returns"] != "commits":
+            out.append(f"pipeline {prof} lands code, so it comes back as commits: say returns commits, "
+                       "or run it another way")
+        elif not caps(prof).lands_code and spec["returns"] == "commits":
+            out.append(f"pipeline {prof} changes no code, so it cannot come back as commits")
+    if spec["returns"] == "commits" and not spec["repos"]:
+        out.append(f"{spec['brain']} binds no repository, so nothing can come back as commits")
     if not spec["acceptance"]:
         out.append("the task has no acceptance: say what done looks like, as a checkable sentence")
     elif len(spec["acceptance"]) > MAX_ACCEPTANCE_CHARS:
@@ -267,12 +288,16 @@ def segment(spec: dict[str, Any]) -> str:
         lines += [f"- {w['area']}: {w['why']}" for w in spec["watches"]]
     if spec["skills"]:
         lines.append(f"Skills for this task: {', '.join(spec['skills'])}.")
-    if spec["repos"] and (spec["profile"] == "research" or spec["mode"] == "research"):
-        lines.append("Repositories: they are there to read; this mode changes no code, so do not "
-                     "commit in them.")
-    elif spec["repos"]:
-        lines.append("Delivery: commit on the declared branch of each repository and do not push; "
-                     "the commits go back to the person's machine, where they review them.")
+    # what comes back, decided at dispatch: the workspace paragraph says which
+    # repositories are read-only (core/task_repos.task_text)
+    if spec["returns"] == "commits":
+        lines.append("Delivery: commit on each writable repository's branch and do not push; the "
+                     "commits go back to the person's machine, where they review them.")
+    elif spec["returns"] == "document":
+        lines.append("Delivery: a document, written under the workspace's outputs directory; it "
+                     "goes back to the person's machine. The repositories are there to read.")
+    else:
+        lines.append("Delivery: your answer, in your final reply. The repositories are there to read.")
     if spec["reserved"]:
         lines.append(f"Asked of the person every time: {', '.join(spec['reserved'])}.")
     if spec["gates"]:

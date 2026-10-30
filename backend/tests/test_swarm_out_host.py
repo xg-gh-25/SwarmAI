@@ -4,6 +4,8 @@ import json
 import time
 
 import httpx
+
+from tests import _hive_work_fake as _work
 import pytest
 
 from core import swarm_out
@@ -51,7 +53,9 @@ def _fake_hive(saturated=False, events=None, seen=None):
         if seen is not None:
             seen.append(request)
         if request.url.path == "/api/chat/sessions/admission-state":
-            return httpx.Response(200, json={"saturated": saturated})
+            return httpx.Response(200, json={**_work.ADMISSION, "saturated": saturated})
+        if _work.answer(request) is not None:
+            return _work.answer(request)
         if request.url.path == "/api/chat/stream":
             body = "".join(f"data: {json.dumps(e)}\n\n" for e in events)
             return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
@@ -83,7 +87,8 @@ def test_dispatch_returns_the_session_and_records_no_credentials(patched, monkey
     log = (patched / "dispatches.jsonl").read_text()
     assert "s3cret-pass" not in json.dumps(row) and "s3cret-pass" not in log
     sent = json.loads(seen[-1].content)
-    assert sent["message"].startswith(swarm_out.UNATTENDED_PREAMBLE) and sent["message"].endswith("do X")
+    pre = swarm_out.UNATTENDED_PREAMBLE.removesuffix("Task:\n")
+    assert sent["message"].startswith(pre) and sent["message"].endswith("Task:\ndo X")
 
 
 def test_the_row_keeps_what_the_card_shows_never_over_its_own_fields(patched, monkeypatch):

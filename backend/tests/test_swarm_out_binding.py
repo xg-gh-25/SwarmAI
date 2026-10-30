@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import pytest
 
 from core import swarm_out
+from tests import _hive_work_fake as _work
 from core.swarm_out_bridge import MAX_COMMAND_CHARS, _ask_record, approval_digest, approval_view
 
 
@@ -184,7 +185,9 @@ def test_a_read_timeout_is_recorded_like_a_timeout(monkeypatch, tmp_path):
 
     def handler(request):
         if request.url.path == "/api/chat/sessions/admission-state":
-            return httpx.Response(200, json={"saturated": False})
+            return httpx.Response(200, json=_work.ADMISSION)
+        if _work.answer(request) is not None:
+            return _work.answer(request)
         raise httpx.ReadTimeout("slow", request=request)
     monkeypatch.setattr(swarm_out, "_client", lambda inst, timeout=None: httpx.AsyncClient(
         base_url=swarm_out._base(inst), transport=httpx.MockTransport(handler)))

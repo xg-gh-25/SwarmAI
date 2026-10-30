@@ -568,7 +568,8 @@
         "openBrain": "Open {{brain}}",
         "retryHint": "Once it is fixed, say \"send it again\"",
         "native": "native: in the session, no pipeline run",
-        "pipeline": "pipeline · {{profile}}"
+        "pipeline": "pipeline · {{profile}}",
+        "readOnly": "read-only"
       }
     }
   },

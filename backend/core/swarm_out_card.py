@@ -134,7 +134,9 @@ def from_row(row: dict) -> dict:
         n = notes.get(r.get("url")) or {}
         name = _s(n.get("name")) or (str(r.get("url") or "").rstrip("/").rsplit("/", 1)[-1].removesuffix(".git"))
         repos.append({"name": name, "ref": _s(r.get("ref"), 100), "sha": _s(r.get("sha"), 64),
-                      "dirty": n.get("dirty") if isinstance(n.get("dirty"), int) else 0})
+                      "dirty": n.get("dirty") if isinstance(n.get("dirty"), int) else 0,
+                      # how the Hive prepared it (core/hive_workspace); None on an older row
+                      "access": r.get("access") if r.get("access") in ("read", "write") else None})
     block = {
         "type": BLOCK_TYPE, "ok": True, "maybeSent": False,
         "dispatchId": row.get("dispatch_id"), "sessionId": row.get("session_id"),
@@ -227,6 +229,8 @@ def _text_of(b: dict) -> str:
     for r in b.get("repos") or []:
         sha = (r.get("sha") or "")[:8]
         line = f"• Repository: {r.get('name')} @ {r.get('ref') or '?'}" + (f" {sha}" if sha else "")
+        if r.get("access") == "read":
+            line += ", read-only"
         if r.get("dirty"):
             line += f" ({r['dirty']} uncommitted files not sent)"
         lines.append(line)

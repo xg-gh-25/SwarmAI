@@ -39,6 +39,8 @@ class DispatchBody(BaseModel):
     mode: Optional[str] = Field(default=None, max_length=80)
     execution: Optional[str] = Field(default=None, max_length=40)
     why: Optional[str] = Field(default=None, max_length=600)
+    # what comes back: answer / document / commits (core/task_spec.RETURNS)
+    returns: Optional[str] = Field(default=None, max_length=20)
     acceptance: Optional[str] = Field(default=None, max_length=4000)
     # the revision /spec showed the person: a definition changed since is refused
     revision: Optional[str] = Field(default=None, max_length=64)
@@ -62,6 +64,7 @@ class SpecBody(BaseModel):
     mode: Optional[str] = Field(default=None, max_length=80)
     execution: Optional[str] = Field(default=None, max_length=40)
     why: Optional[str] = Field(default=None, max_length=600)
+    returns: Optional[str] = Field(default=None, max_length=20)
 
 
 class AnswerBody(BaseModel):
@@ -98,7 +101,8 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
     return await _call(swarm_out.dispatch_spec(body.hive or None, body.title, body.brain, body.task,
                                                body.acceptance or "", body.mode, body.execution,
                                                body.origin, seen_revision=body.revision,
-                                               brief=body.brief or "", why=body.why or ""))
+                                               brief=body.brief or "", why=body.why or "",
+                                               returns=body.returns))
 
 
 class ReturnBody(BaseModel):
@@ -203,7 +207,8 @@ async def spec(body: SpecBody) -> dict[str, Any]:
     from core.project_registry import get_swarmws
     try:
         s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
-                                    body.acceptance, body.mode, body.execution, body.why or "", "hive")
+                                    body.acceptance, body.mode, body.execution, body.why or "", "hive",
+                                    returns=body.returns)
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"spec": {k: v for k, v in s.items() if k != "task"},

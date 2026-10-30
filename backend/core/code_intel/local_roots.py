@@ -442,9 +442,10 @@ def migrate_once(projects_dir: str | Path) -> dict:
 
 # ── a Hive's task clones (design 2026-10-29-code-intel-e2e F8) ─────────────────
 #
-# On a Hive the agent clones a task's repos under ``<SwarmWS>/Hive/repos/<host>/<path>``
-# (``core.task_repos.repo_dir``), and a pipeline run's worktrees fork from there: that
-# clone is the repo every Hive review reads, and no local root can exist there. A clone
+# On a Hive the backend clones a task's repos under ``<SwarmWS>/Hive/repos/<host>/<path>``
+# (``core.task_repos.repo_dir``) and works each task in its own worktree of it
+# (``core.hive_workspace``); the newest such worktree, else the clone, is the repo every
+# Hive review reads, and no local root can exist there. A clone
 # at the path a Brain's binding names, whose ``origin`` is that binding's ``clone`` URL,
 # is that Brain's: the Brain's own delivery contract declares the repo, as a bind-managed
 # clone's does on the desktop. Nothing else under ``Hive/repos`` counts, and a desktop
@@ -487,12 +488,17 @@ def hive_task_clones(project_dir: str | Path) -> list[tuple[str, Path]]:
                 rel = task_repos.repo_dir(url)
             except task_repos.TaskRepoError:
                 continue
-            written = Path(get_swarmws()).resolve() / rel
+            # the newest work order's worktree of it when there is one (the shared
+            # clone under Hive/repos is only fetched into, core/hive_workspace)
+            from core import hive_workspace
+            wt = hive_workspace.latest_worktree(Path(get_swarmws()), url)
+            root = (Path(get_swarmws()) / Path(*hive_workspace.WORK_ROOT)).resolve() if wt else repos_root
+            written = Path(get_swarmws()).resolve() / (wt or rel)
             clone = written.resolve()
             # no link anywhere on the path (one inside Hive/repos would hand another
-            # clone this binding's name), inside Hive/repos, the top of its own tree
+            # clone this binding's name), inside its root, the top of its own tree
             if clone != written or not clone.is_dir() or \
-                    not task_repos._inside(repos_root, clone) or clone == repos_root:
+                    not task_repos._inside(root, clone) or clone == root:
                 continue
             if _work_tree_top(clone) != clone:
                 continue

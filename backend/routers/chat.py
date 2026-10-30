@@ -420,7 +420,19 @@ async def chat_stream(request: Request):
     # recorded on the session once its id is known (core/task_repos). A request for an
     # existing session does not change what that session declared.
     task_repos: list = []
-    if chat_request.task_repos and chat_request.session_id is None:
+    work_id = None
+    if chat_request.work_id and chat_request.session_id is None:
+        # the workspace the Hive's backend prepared (core/hive_workspace): the session
+        # works on its worktrees, and the order is bound to the session once it has an id
+        from core import hive_workspace
+        from core.project_registry import get_swarmws
+        order = await asyncio.to_thread(hive_workspace.load, get_swarmws(), chat_request.work_id)
+        if order is None or order.get("session_id") is not None:
+            raise ValidationException(message="Invalid work order",
+                                      detail="no unstarted work order of that id was prepared here")
+        work_id = chat_request.work_id
+        task_repos = hive_workspace.task_repos_of(order)
+    elif chat_request.task_repos and chat_request.session_id is None:
         from core import task_repos as _task_repos
         try:
             task_repos = _task_repos.parse(chat_request.task_repos)
@@ -498,6 +510,13 @@ async def chat_stream(request: Request):
             async for msg in _turn_stream:
                 if captured_session_id is None:
                     captured_session_id = msg.get("sessionId") or msg.get("session_id")
+                    if captured_session_id is not None and work_id:
+                        from core import hive_workspace
+                        from core.project_registry import get_swarmws
+                        if not await asyncio.to_thread(hive_workspace.bind, get_swarmws(), work_id,
+                                                       captured_session_id):
+                            logger.error("hive work: %s could not be bound to session %s",
+                                         work_id, captured_session_id)
                     if captured_session_id is not None and task_repos:
                         await _record_task_repos(captured_session_id, task_repos)
                     # A NEW session's id first arrives here — register now so the
@@ -914,6 +933,9 @@ async def get_admission_state_endpoint():
         "memory_pressure": mem.pressure_level if mem.measured else None,
         "stalled_streaming": stalled_streaming,
         "idle_live_units": idle_live_units,
+        # this daemon prepares a dispatched task's workspace (POST /api/hive/work,
+        # core/hive_workspace): a Host sends a task only to a daemon that says so
+        "work_orders": True,
     }
 
 
