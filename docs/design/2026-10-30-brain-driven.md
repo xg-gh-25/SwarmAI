@@ -157,7 +157,8 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 
 ## 3. 不变量（最终测试集，每条都用 mutation check）
 
-- I1 判官给出 `adds`、同一文件时，主文件里只有一条合成后的条目，包含旧条目的完整内容；旧原文在归档里。
+- I1 （合并开启后）判官给出 `adds`、同一文件时，主文件里只有一条合成后的条目，包含旧条目的完整内容；旧原文在归档里。
+- I0 合并开关未打开时，判官给出 `adds` 的行为和今天一样：新增一条并挂 `derived_from`；判官回归集在提示词、模型或参数变化时必须重跑。
 - I2 纠正覆盖只在 S7/S3 的合格声明，或用户操作时发生。以下情况都不改动任何条目：
   判官的 `contradicts`、来源不在白名单、复核失败、判官给出 `same`。
 - I3 CDF 不改人写的条目，也不改 STEERING、USER、TOOLS 的非系统部分。
@@ -178,7 +179,8 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 | 1 | 统计 `brain_changes`，修撤回计数 | correctness |
 | 2 | 需要历史的读取方改读撤回记录；防写回指纹 | correctness、security |
 | 3 | 撤回不留墓碑；gap 关闭、事项完成改为撤回 | correctness、state-machine |
-| 4 | 覆盖：`adds` 改为合并；S7/S3 的 `overrides`；白名单；删掉判官 supersedes 隐藏 MEMORY 条目的逻辑；边界 | correctness、security、concurrency |
+| 0 | 判官准确度（§5.1）：抽样、盲标、混淆矩阵、错误归因、回归集。只读，不改代码 | 零利害标注 + XG 裁定 |
+| 4 | 覆盖：S7/S3 的 `overrides`；白名单；删掉判官 supersedes 隐藏 MEMORY 条目的逻辑；边界。**`adds` 改为合并，只在第 0 步达标后开启** | correctness、security、concurrency |
 | 5 | 去掉"挂起"和衰减；删死字段（先迁移读取方） | correctness |
 | 6 | 一次性清理（先出清单） | correctness |
 | 7 | 删除每周自审、`.ddd-usage.json`、`refine` | 不需要，测试证明 |
@@ -193,6 +195,48 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 
 缓解办法：让 S7 更容易声明（它能看到会话里查过的 id），同时在月度报告里统计未决冲突的数量。
 如果这个数量不小，再讨论是否要给判官更大的权限。
+
+### 5.1 后续行动：判官准不准、错在哪、怎么改准（XG 2026-10-30）
+
+**为什么必须先做**：判官的裁决在 v5 里直接决定文件内容，判错的后果各不相同。10-28 以来的裁决分布
+（`ingestion_units` 的 `reason` 字段）如下：
+
+| 判官说 | 次数（10-28 起） | v5 里的后果 | 判错的后果 |
+|---|---|---|---|
+| `same` | 106（reinforce 55 + already_exists 51） | 新单元被拒，或者只给旧条目加强 | **新知识被当成重复丢掉**，违反"有用的不能丢"（今天就存在的风险） |
+| `adds` | 115 | §2.1 自动合并 | 不相关的两条被拼成一条，主文件变脏 |
+| `contradicts` | 7 | 记为未决冲突 | 冲突清单里有噪声 |
+| `unrelated` / `new` | 159 | 新增一条 | 应该判 `same` 的变成重复；应该判 `contradicts` 的变成无人知晓的冲突 |
+
+所以**判官准确度达标，是 §2.1 合并能上线的前提**。达标之前，`adds` 保持今天的行为：新增一条，挂 `derived_from` 关系。
+
+**数据**：现成的，不需要新埋点。
+- 每次裁决都存在 `ingestion_units.decision.version_vector.verify.hits`（h1…hN 各自的 relation），以及 `relation_hints`（被判 adds 或 contradicts 的那条现存条目的锚点）；
+- 新单元的原文在 `ingestion_inbox.payload` 里；
+- 现存条目的原文在文件或归档里。
+
+**做法**：
+1. **抽样**：从 CDF v2 切换以来的裁决里，`contradicts` 全取，`adds`、`same` 各取 60 条，判为 `unrelated` 的头部命中取 40 条。
+2. **盲标**：两个零利害的 agent 各自独立标注，看不到判官的结论。两者不一致的条目由我裁定，拿不准的给 XG。
+   结果是每种 relation 一张混淆矩阵。
+3. **定位错误原因**：逐条读判错的案例，按原因归类。可能的原因：
+   - relation 的定义含糊，比如"同一主题"的粒度没有定义；
+   - 现存条目给判官看的形式有问题（是不是完整的、有没有截断）；
+   - 候选命中本身就不相关：每次给 8 条，大多是 unrelated；
+   - 一次调用同时判 grounded、durable、self_contained、significant、hits 五件事，负担过重；
+   - 模型和参数本身。
+4. **改法由数据决定，不预设。** 候选包括：
+   - 拿判错的案例做反例，把定义写清楚；
+   - 把 relation 判断拆成单独一次调用；
+   - 判 `same`、`adds`、`contradicts` 时，必须摘出双方重叠的那句原文，由代码确定性地核对这句话确实同时出现在两边，核不上的降级为 `unrelated`。
+     这一条能把"凭空认定的关系"挡在门外，我认为最值得先试。
+5. **固化**：标好的案例变成判官的回归集，作为私有 golden case 加入 eval。以后每次改判官的提示词、模型或参数，都要重跑。
+
+**合并上线的门槛**（事先定好，量完再改要说明理由）：
+- `adds` 的精度 ≥ 90%；
+- `same` 的误判（实际不是重复）≤ 5%。
+
+达不到就不开合并，并把根因修复作为下一步。
 
 ## 9. 早期版本里被推翻的部分
 
