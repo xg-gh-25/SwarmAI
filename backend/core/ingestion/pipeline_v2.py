@@ -83,8 +83,8 @@ def _user_texts(unit: SourceUnit, row: Any) -> list[str]:
         except sqlite3.Error:
             found = []
         texts += [session_inputs.user_authored_text(event_id) or "" for event_id in found]
-    if str(_get(row, "source_v2", "")) == "S1" and envelope.get("user_authored_text"):
-        texts.append(str(envelope["user_authored_text"]))
+    # only text read back (hash-checked) from session_inputs counts: nothing a payload or
+    # an envelope carries is the user's words
     return [t for t in texts if t.strip()]
 
 
