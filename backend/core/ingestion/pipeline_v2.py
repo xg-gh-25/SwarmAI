@@ -629,8 +629,11 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     known = {hit.anchor for hit in retrieval.hits}
     from .gaps import is_closed_gap
     closed = {hit.anchor for hit in retrieval.hits if is_closed_gap(hit.anchor, hit.text)}
-    relations = [(shown.get(item.anchor, item.anchor), item.relation) for item in verdict.hits
-                 if shown.get(item.anchor, item.anchor) in known]
+    # a "same" that names claims the hit lacks is an "adds": dropping it as a duplicate would
+    # lose those claims (design 2026-10-30-brain-driven §5.2: 17 of 43 "same" verdicts did)
+    relations = [(shown.get(item.anchor, item.anchor),
+                  "adds" if item.relation == "same" and item.new_only else item.relation)
+                 for item in verdict.hits if shown.get(item.anchor, item.anchor) in known]
     # the same as a closed gap ([x]) is a recurrence: written again,
     # derived from the old one, never dropped as a duplicate (gap-lifecycle §2.5)
     relations = [(anchor, "adds" if relation == "same" and anchor in closed else relation)

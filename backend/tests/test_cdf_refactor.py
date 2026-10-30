@@ -21,15 +21,17 @@ def _verdict(**over):
 
 
 class Judge:
-    def __init__(self, verdict=None, relation=None):
-        self.verdict, self.relation = verdict or _verdict(), relation
+    def __init__(self, verdict=None, relation=None, new_only=None):
+        self.verdict, self.relation, self.new_only = verdict or _verdict(), relation, new_only
         self.calls: list[dict] = []
 
     def verify(self, unit, grounding, hits):
         self.calls.append({"unit": unit, "grounding": grounding, "hits": hits})
         out = dict(self.verdict)
         if self.relation:
-            out["hits"] = [{"anchor": h["anchor"], "relation": self.relation} for h in hits]
+            out["hits"] = [{"anchor": h["anchor"], "relation": self.relation,
+                            **({"new_only": self.new_only} if self.new_only is not None else {})}
+                           for h in hits]
         return out
 
 
@@ -269,6 +271,35 @@ def test_the_same_entry_reinforces_and_writes_nothing(tmp_path, user_words, monk
                         lambda *a, **k: pipeline_v2.ReinforcementResult(True, ("root-1",)))
     decision = run_unit_v2(_row(_cog()), _ws(tmp_path), Judge(relation="same"))
     assert decision.decision == "reinforce"
+
+
+def test_a_same_verdict_that_names_new_claims_is_written_not_dropped(tmp_path, user_words, monkeypatch):
+    """Judge accuracy step 0 (design 2026-10-30-brain-driven §5.2): 17 of 43 production "same"
+    verdicts were units that added claims, and all 17 were reinforced or rejected, so their new
+    claims were lost. A "same" that lists claims the hit does not state is an "adds": written."""
+    old = ".context/MEMORY.md#Guidelines#cand:old"
+    _hits(monkeypatch, old)
+    monkeypatch.setattr(pipeline_v2, "reinforce_or_reject",
+                        lambda *a, **k: pipeline_v2.ReinforcementResult(True, ("root-1",)))
+    decision = run_unit_v2(_row(_cog()), _ws(tmp_path), Judge(relation="same",
+                                                             new_only=["why: a half-applied edit"]))
+    assert decision.action == "add" and decision.reason == "adds"
+    assert {"predicate": "derived_from", "object_anchor": old} in decision.version_vector["relation_hints"]
+
+
+def test_a_same_verdict_with_no_new_claims_still_reinforces(tmp_path, user_words, monkeypatch):
+    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+    monkeypatch.setattr(pipeline_v2, "reinforce_or_reject",
+                        lambda *a, **k: pipeline_v2.ReinforcementResult(True, ("root-1",)))
+    decision = run_unit_v2(_row(_cog()), _ws(tmp_path), Judge(relation="same", new_only=[]))
+    assert decision.decision == "reinforce"
+
+
+def test_the_verify_prompt_asks_for_the_claims_a_hit_lacks():
+    from core.ingestion.prompts import verify_prompt
+    prompt = verify_prompt({"title": "t"}, "", [{"anchor": "a#s#cand:x", "text": "old"}])
+    assert '"new_only"' in prompt                       # in the answer schema
+    assert "EVERY specific claim" in prompt             # "same" is judged claim by claim
 
 
 # 5 ── card 3 searches every cognitive store

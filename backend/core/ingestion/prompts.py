@@ -236,7 +236,7 @@ def parse_card3b(text: str) -> Card3bAnswer:
 
 # ── v2 typed prompts ─────────────────────────────────────────────────────────
 
-VERIFY_VERSION = "cdf-verify-v2"
+VERIFY_VERSION = "cdf-verify-v3"
 _VERIFY_GUIDE = """You check ONE knowledge unit before it is stored. The agent that wrote it had the full
 conversation; you do not, so you do not re-classify it. You answer only what the data lets you check.
 
@@ -252,9 +252,16 @@ Output: exactly ONE JSON object matching the schema. No code fence, no prose.
   "this", "Plan A" or other reference to something it does not define.
 - significant (events only; true for other kinds): """ + "{EVENT_RULE}" + """
 - hits: for EVERY item in EXISTING_HITS, its id (copy "h1", "h2", ... into "anchor") and how the
-  unit relates to it: "same" (the unit
-  says nothing the hit does not), "adds" (same subject, the unit adds something new), "contradicts"
-  (the unit says the hit is wrong or no longer true), "unrelated".
+  unit relates to it, judged on the SPECIFIC subject (one particular decision, mechanism, fact, bug or
+  rule), never on the broad area: two entries both "about recall" or "about the Hive" are "unrelated"
+  unless they concern the same particular thing.
+  - "same": same specific subject, and EVERY specific claim of the unit (each what / why / how, cause,
+    rejected alternative, number, date, condition) is already stated in the hit.
+  - "adds": same specific subject, and the unit states at least one specific claim the hit does not.
+  - "contradicts": same specific subject, and the unit says the hit is wrong or no longer true.
+  - "unrelated": anything else.
+  For "same" and "adds", list in "new_only" every specific claim of the unit the hit does not state
+  (empty for "same"); otherwise leave it empty.
 """
 
 

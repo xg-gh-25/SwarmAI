@@ -421,9 +421,13 @@ __all__ = [n for n in dir() if not n.startswith("_")]
 # verification call answers what a context-free checker can answer (§3.3).
 
 class HitVerdict(BaseModel):
+    """How a candidate unit relates to one retrieved hit. ``new_only``: the unit's specific
+    claims the hit does not state; a "same" that lists any is treated as "adds"
+    (pipeline_v2), so a unit that adds detail is written, never dropped as a duplicate."""
     model_config = ConfigDict(extra="forbid")
     anchor: str
     relation: Literal["same", "adds", "contradicts", "unrelated"]
+    new_only: list[str] = Field(default_factory=list)
 
 
 class VerifyAnswer(BaseModel):
