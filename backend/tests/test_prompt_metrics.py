@@ -56,3 +56,15 @@ def test_context_assembly_records_the_every_turn_sections(tmp_path):
     pm.flush()
     (day,) = pm.daily(1)
     assert day["files"]["Tools"]["last"] > 0
+
+
+def test_a_record_goes_where_the_app_data_dir_was_when_it_was_made(tmp_path, monkeypatch):
+    # the writer thread may drain after a test's SWARM_DATA_DIR is gone: the path is the
+    # one in force when the record was made, never the one at write time
+    from core import prompt_metrics
+    made, later = tmp_path / "made", tmp_path / "later"
+    monkeypatch.setenv("SWARM_DATA_DIR", str(made))
+    prompt_metrics.record_sections([("Memory", 1234)])
+    monkeypatch.setenv("SWARM_DATA_DIR", str(later))
+    prompt_metrics.flush()
+    assert list((made / "metrics").glob("*.jsonl")) and not (later / "metrics").exists()

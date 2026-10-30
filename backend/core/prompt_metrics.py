@@ -21,8 +21,10 @@ the turns' first-token median and p90 (overall, and the model part: TTFT minus t
 router's pre-send work and a cold spawn, on turns without a retry).
 ``python -m core.prompt_metrics [days]`` prints it.
 
-Storage: one JSON line per record in ``<app data dir>/metrics/prompt-metrics-YYYY-MM.jsonl``
-(resolved at write time, so a test's ``SWARM_DATA_DIR`` keeps it off the live store).
+Storage: one JSON line per record in ``<app data dir>/metrics/prompt-metrics-YYYY-MM.jsonl``,
+the app data dir resolved when the record is made (``put``), not when the writer thread
+writes it: a test's ``SWARM_DATA_DIR`` is gone by the time the thread drains, and records
+of test prompts landed in the live file (a 13-token MEMORY "last" on 2026-10-30).
 """
 from __future__ import annotations
 
@@ -59,7 +61,7 @@ class _Writer:
     caller under the same lock, so a flushed record is on disk."""
 
     def __init__(self) -> None:
-        self._q: "queue.Queue[dict]" = queue.Queue(_MAX_QUEUED)
+        self._q: "queue.Queue[tuple[Path, dict]]" = queue.Queue(_MAX_QUEUED)
         self._lock = threading.Lock()          # held while a batch is taken and written
         self._start = threading.Lock()
         self._thread: Optional[threading.Thread] = None
@@ -67,7 +69,7 @@ class _Writer:
 
     def put(self, rec: dict) -> None:
         try:
-            self._q.put_nowait(rec)
+            self._q.put_nowait((_path(rec["at"]), rec))
         except queue.Full:
             self.dropped += 1
             return
@@ -98,11 +100,11 @@ class _Writer:
             self._drain()
 
     @staticmethod
-    def _write(batch: list[dict]) -> None:
+    def _write(batch: list[tuple[Path, dict]]) -> None:
         try:
             by_path: dict[Path, list[str]] = {}
-            for r in batch:
-                by_path.setdefault(_path(r["at"]), []).append(json.dumps(r, ensure_ascii=False))
+            for path, r in batch:
+                by_path.setdefault(path, []).append(json.dumps(r, ensure_ascii=False))
             for p, lines in by_path.items():
                 p.parent.mkdir(parents=True, exist_ok=True)
                 with p.open("a", encoding="utf-8") as f:
