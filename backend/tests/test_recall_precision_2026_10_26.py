@@ -10,7 +10,7 @@ Each test pins one rule and was mutation-checked (reverting the rule turns it re
 - D3 the DDD leg runs on a later message once the project is known, and a warm
   turn's DDD block reaches the query stash next to the recall block;
 - D4 live-MEMORY recall scores only entries outside the prompt, so a relevant
-  dormant entry surfaces even when in-prompt sections outrank it.
+  entry the budget left out surfaces even when in-prompt sections outrank it.
 """
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -168,21 +168,20 @@ _MEMORY = "".join(
     f"## Active {i}\n- pipeline worktree isolation rule number {i}, kept active and "
     f"already in the prompt; pipeline worktree isolation pipeline worktree.\n"
     for i in range(4)
-) + ("## Old\n- [D1] the worktree isolation decision from March, gone dormant.\n"
-     "  <!-- ref:0 | last:2026-03-01 | decay:dormant -->\n")
+)
+_LEFT_OUT = ("## Old\n- [D1] the worktree isolation decision from March, not selected.\n"
+             "  <!-- ref:0 | last:2026-03-01 | decay:active -->\n")
 
 
 def test_live_memory_recall_scores_only_entries_outside_the_prompt(tmp_path):
-    from core.context_directory_loader import _filter_dormant_entries
     from core.recall_multi import recall_all
     ws = tmp_path / "SwarmWS"
     (ws / ".context").mkdir(parents=True)
-    (ws / ".context" / "MEMORY.md").write_text(_MEMORY, encoding="utf-8")
-    prompt = _filter_dormant_entries(_MEMORY)
-    assert "decision from March" not in prompt
+    (ws / ".context" / "MEMORY.md").write_text(_MEMORY + _LEFT_OUT, encoding="utf-8")
+    prompt = _MEMORY      # a file over its budget: the selection left the last unit out
     with patch("core.project_registry.get_swarmws", return_value=ws):
         res = recall_all(_Q, domains=("context_files",), prompt_text=prompt)
-        allin = recall_all(_Q, domains=("context_files",), prompt_text=_MEMORY)
+        allin = recall_all(_Q, domains=("context_files",), prompt_text=_MEMORY + _LEFT_OUT)
         cli = recall_all(_Q, domains=("context_files",))
     out = filter_recall(res, prompt)
     assert "decision from March" in out.buckets["context_files"][0]["content"]

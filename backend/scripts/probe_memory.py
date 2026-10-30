@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 """probe_memory — product eval probes for memory.
 
-Contract: scripts/_probe_kit.py. Subcommands:
-  inject      active MEMORY entries reach the prompt intact; dormant ones do not
-  immune      judgment entries (decision / correction / pitfall) never decay with
-              age; an operational guideline does
+Contract: scripts/_probe_kit.py. Subcommand:
+  inject      every MEMORY entry reaches the prompt intact; no entry is dropped for a
+              lifecycle state (an old ``decay:dormant`` mark included)
 
-(``reclaim`` is gone: since CDF stage B no automated path moves an entry out of a
-memory file — the file keeps every unit and the injection budget decides what reaches
-the prompt, which ``inject`` checks; design 2026-10-26-swarm-cognitive-distillation-flow
-§8, §12.)
+What is in a main cognition file is in force, and what is not in force has left the file
+(design docs/design/2026-10-30-brain-driven.md §2.3): nothing is filtered by a state at
+injection, and nothing decays with age. (``immune`` is gone with age decay; ``reclaim``
+went earlier: since CDF stage B no automated path moves an entry out of a memory file by
+age.)
 """
 from __future__ import annotations
 
-from datetime import date
 from unittest import mock
 
 from scripts._probe_kit import run, tempdir, verdict
 
 # ── inject ────────────────────────────────────────────────────────────────────
 
-_ACTIVE = "ACTIVE_MEMORY_ENTRY_7f3"
-_DORMANT = "DORMANT_MEMORY_ENTRY_7f3"
+_CURRENT = "CURRENT_MEMORY_ENTRY_7f3"
+_OLD_MARK = "OLD_MARK_MEMORY_ENTRY_7f3"
 
 
-def _inject_holds(break_filter: bool) -> tuple[bool, str]:
+def _inject_holds(drop_one: bool) -> tuple[bool, str]:
     from core.context_directory_loader import ContextDirectoryLoader
     from utils.backend_bin import bundled_path
 
@@ -34,19 +33,21 @@ def _inject_holds(break_filter: bool) -> tuple[bool, str]:
         loader.ensure_directory()
         (ctx / "MEMORY.md").write_text(
             "# Memory\n\n## Guidelines\n"
-            f"- [guideline] **{_ACTIVE}** keep using it. (2026-10-01)\n"
+            f"- [guideline] **{_CURRENT}** keep using it. (2026-10-01)\n"
             "  <!-- ref:2 | last:2026-10-20 | decay:active | source:manual -->\n"
-            f"- [guideline] **{_DORMANT}** nobody uses this. (2025-01-01)\n"
+            f"- [guideline] **{_OLD_MARK}** still in the file, so still in force. (2025-01-01)\n"
             "  <!-- ref:0 | last:none | decay:dormant | source:manual -->\n", encoding="utf-8")
-        patch = (mock.patch("core.memory_injection._filter_inactive_memory",
-                            lambda text, *a, **k: text)
-                 if break_filter else mock.patch.dict({}))
+        import core.memory_injection as mi
+        real = mi._prompt_form
+        # the teeth: a lifecycle filter put back drops the entry with the old mark
+        patch = (mock.patch.object(mi, "_prompt_form", lambda text: "\n".join(
+                     line for line in real(text).splitlines() if _OLD_MARK not in line))
+                 if drop_one else mock.patch.dict({}))
         with patch:
             text = loader.load_all(model_context_window=200_000)
-    if _ACTIVE not in text:
-        return False, "an active MEMORY entry is missing from the prompt"
-    if _DORMANT in text:
-        return False, "a dormant MEMORY entry reached the prompt"
+    for marker in (_CURRENT, _OLD_MARK):
+        if marker not in text:
+            return False, f"a MEMORY entry in the file is missing from the prompt ({marker})"
     return True, ""
 
 
@@ -55,32 +56,5 @@ def inject(negative: bool) -> int:
                    lambda: _inject_holds(True))
 
 
-# ── immune ────────────────────────────────────────────────────────────────────
-
-def _immune_holds(protect: bool) -> tuple[bool, str]:
-    from core import ddd_entry_lifecycle as lc
-
-    text = "## Lessons\n\n" + "".join(
-        f"- [{t}] **old {t} entry** body text. (2025-01-01)\n"
-        "  <!-- ref:0 | last:none | decay:active | source:manual -->\n"
-        for t in ("decision", "correction", "pitfall", "guideline"))
-    entries = lc.parse_entries(text)
-    types = lc.EVERGREEN_TYPES if protect else frozenset()
-    with mock.patch.object(lc, "EVERGREEN_TYPES", types):
-        moved = {t.entry.title for t in lc.assess_decay(entries, date(2026, 10, 26))}
-    moved_text = " ".join(moved)
-    for t in ("decision", "correction", "pitfall"):
-        if f"old {t} entry" in moved_text:
-            return False, f"a {t} entry decayed with age"
-    if "old guideline entry" not in moved_text:
-        return False, "an unused guideline did not decay (decay is not running)"
-    return True, ""
-
-
-def immune(negative: bool) -> int:
-    return verdict("MEM_JUDGMENT_IMMUNE", negative, lambda: _immune_holds(True),
-                   lambda: _immune_holds(False))
-
-
 if __name__ == "__main__":
-    raise SystemExit(run({"inject": inject, "immune": immune}))
+    raise SystemExit(run({"inject": inject}))

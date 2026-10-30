@@ -240,18 +240,6 @@ def _prompt_form(text: str) -> str:
     return cleaned
 
 
-def _filter_inactive_memory(text: str) -> str:
-    """Remove complete dormant/archived entry spans before prompt rendering."""
-    from core.ddd_entry_lifecycle import parse_entries
-
-    lines = text.splitlines()
-    removed: set[int] = set()
-    for entry in parse_entries(text, skip_h3_spans=False):
-        if entry.decay_state in {"dormant", "archived"}:
-            removed.update(range(entry.line_number, entry.end_line + 1))
-    return "\n".join(line for index, line in enumerate(lines) if index not in removed)
-
-
 def _memory_metadata(path: Path) -> dict[tuple[str, str, str], list[object]]:
     if path.name != "MEMORY.md":
         return {}
@@ -419,9 +407,7 @@ def select_context_file(
         metadata = queue.pop(0) if queue else None
         if metadata is not None:
             metadata_by_anchor[unit.anchor] = metadata
-            if getattr(metadata, "decay_state", "active") in {"dormant", "archived"}:
-                continue
-        visible.append(unit)
+        visible.append(unit)          # every unit in the file is in force (brain-driven §2.3)
     unscored = [_RankedUnit(unit, _unit_layer(path, unit), 0.0, 0,
                             datetime(1970, 1, 1, tzinfo=timezone.utc)) for unit in visible]
 
@@ -440,15 +426,14 @@ def select_context_file(
             selected = set(anchors)
             rendered = _render_selected(unscored, selected)
             full = len(selected) == len(unscored)
-            text = _prompt_form(_filter_inactive_memory(raw.decode("utf-8"))) if full else rendered
+            text = _prompt_form(raw.decode("utf-8")) if full else rendered
             if owned and conn is not None:
                 conn.close()
             return Selection(text, int(cached[4]), estimate(text), anchors, False)
 
     ranked = [_score_unit(conn, path, unit, _unit_layer(path, unit), current,
                           metadata_by_anchor.get(unit.anchor)) for unit in visible]
-    full_text = _prompt_form(_filter_inactive_memory(raw.decode("utf-8"))) \
-        if path.name == "MEMORY.md" else _prompt_form(raw.decode("utf-8"))
+    full_text = _prompt_form(raw.decode("utf-8"))
     over_budget = estimate(full_text) > budget
     # Nothing is hidden for a relation: an entry another one replaces has left the file
     # (a declared override withdraws it, brain-driven §2.1); the judge's relations only

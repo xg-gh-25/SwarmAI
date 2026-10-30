@@ -97,8 +97,8 @@ def _install(session_budget: int | None = None) -> None:
 
 
 def _system_prompt() -> str:
-    """The context files as a session prompt carries them (MEMORY filtered)."""
-    from core.context_directory_loader import CONTEXT_FILES, _filter_dormant_entries
+    """The context files as a session prompt carries them."""
+    from core.context_directory_loader import CONTEXT_FILES
     from core.memory_index import extract_body_without_index
     from core.project_registry import get_swarmws
 
@@ -110,7 +110,7 @@ def _system_prompt() -> str:
             continue
         text = p.read_text(encoding="utf-8", errors="replace")
         if spec.filename == "MEMORY.md":
-            text = extract_body_without_index(_filter_dormant_entries(text))
+            text = extract_body_without_index(text)
         parts.append(text)
     return "\n\n".join(parts)
 

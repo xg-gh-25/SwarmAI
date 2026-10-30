@@ -286,68 +286,6 @@ def filter_channel_sections(raw: str) -> str:
     return channel_sections(raw)[0]
 
 
-# ── Lifecycle Filtering ─────────────────────────────────────────────────
-
-
-def _filter_dormant_entries(content: str) -> str:
-    """Remove dormant/archived entries from MEMORY.md before injection.
-
-    Entries with <!-- ref:N | last:date | decay:dormant --> or decay:archived
-    are stripped (entire entry block: bullet + continuation lines + metadata).
-    Active entries pass through.
-
-    Handles multi-line entries: scans forward from each bullet to find its
-    metadata comment (up to 4 lines ahead). If metadata is dormant/archived,
-    the entire block from bullet to metadata (inclusive) is skipped.
-    """
-    import re
-    lines = content.splitlines()
-    result = []
-    i = 0
-    _dormant_re = re.compile(r"^\s*<!-- ref:\d+ \| last:[\w\-]+ \| decay:(dormant|archived)")
-    _entry_re = re.compile(r"^- \[")
-
-    while i < len(lines):
-        line = lines[i]
-
-        # If this is an entry bullet, look ahead for its metadata
-        if _entry_re.match(line):
-            # Scan up to 4 lines ahead for metadata comment
-            block_end = i + 1
-            found_meta = False
-            is_dormant = False
-            for j in range(i + 1, min(i + 5, len(lines))):
-                if _dormant_re.match(lines[j]):
-                    found_meta = True
-                    is_dormant = True
-                    block_end = j + 1
-                    break
-                elif lines[j].startswith("  <!-- ref:"):
-                    # Active metadata — entry is fine
-                    found_meta = True
-                    block_end = j + 1
-                    break
-                elif _entry_re.match(lines[j]) or lines[j].startswith("## "):
-                    # Next entry or section — no metadata for this entry
-                    break
-                # else: continuation line — keep scanning
-
-            if is_dormant:
-                # Skip entire block (bullet + continuations + metadata)
-                i = block_end
-                continue
-
-        # Check orphaned dormant metadata (shouldn't happen, but safety)
-        if _dormant_re.match(line):
-            i += 1
-            continue
-
-        result.append(line)
-        i += 1
-
-    return "\n".join(result)
-
-
 # ── Data Models ────────────────────────────────────────────────────────
 
 
@@ -1096,15 +1034,9 @@ class ContextDirectoryLoader:
                                 "non-owner prompt", spec.filename,
                                 CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
 
-            # ── Lifecycle filter: skip dormant/archived entries ──────────
-            # Entries with decay:dormant or decay:archived are not injected.
-            # They're still in the file (recoverable) but don't consume tokens.
-            # Same Darwinian logic as DDD docs — unused knowledge fades from active context.
-            # Runs on the RAW text: the decay metadata is an HTML comment, which
-            # _clean_content strips (filtering after it never dropped anything).
-            if spec.filename == "MEMORY.md":
-                content = _filter_dormant_entries(content)
-
+            # No lifecycle filter: what is in a main file is in force, and what is not in
+            # force has left it (design 2026-10-30-brain-driven §2.3); a file over its
+            # budget is selected by whole units below, never filtered by a state.
             if spec.selector == "cdf":
                 from core.memory_injection import select_context_file
 
