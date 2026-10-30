@@ -72,6 +72,14 @@ def _cog(**over):
     return value
 
 
+@pytest.fixture(autouse=True)
+def user_check_agrees(monkeypatch):
+    """The isolated user check (user_check) says yes here: these tests pin the facts of
+    the floor; the check itself is tested in test_cdf_user_check."""
+    from core.ingestion import user_check
+    monkeypatch.setattr(user_check, "says", lambda claim, texts: user_check.Verdict(True, "said"))
+
+
 @pytest.fixture
 def user_words(monkeypatch):
     """The cited user message says SAID."""

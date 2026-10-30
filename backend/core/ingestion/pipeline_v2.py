@@ -10,7 +10,9 @@ producing agent's declaration; this module only checks facts and routes:
 - what it rests on (§2): the user's words (a ``user_quote`` found verbatim in a cited user
   message), a cited measurement, or external content in its own evidence
   (``cited_external``). The every-turn files take only what this admits (``_admitted``);
-  anything else goes to the project's DDD, or the General Brain;
+  anything else goes to the project's DDD, or the General Brain. For the user's own files
+  (STEERING / USER / TOOLS) the quote must also say what the unit claims: the one model
+  call here, ``user_check``, shown only the user's messages and the claim;
 - its declared relations (relations_v2.resolve: id and first line name one entry) and
   overrides (overrides.check);
 - an exact restatement of a withdrawn entry, an event already recorded (by its key).
@@ -24,7 +26,7 @@ import json
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -637,6 +639,17 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         return _decision(unit_id, "reject", "reject", str(exc), vectors=vectors, card0=card0)
 
     facts = _facts(unit, row, resolved)
+    user_check = None
+    if destination.store in USER_CONTEXT_STORES and facts.user_words:
+        # the quote is in the user's message; whether it says what the unit claims is
+        # asked of a model that sees only the user's messages and the claim (decision D,
+        # user_check): injected text in the session cannot reach it. Not said: not the
+        # user's words, so the unit goes to the project's DDD like any other.
+        from . import user_check as _check
+        verdict = _check.says(_check.claim_of(unit), _user_texts(unit, row))
+        user_check = {"holds": verdict.holds, "reason": verdict.reason, "version": _check.CHECK_VERSION}
+        if not verdict.holds:
+            facts = replace(facts, user_words=False)
     if not _admitted(destination.store, facts):
         destination = _home(unit, destination, corpus_project, subject)
     if destination.store == "TIMELINE":
@@ -724,6 +737,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     if checked is not None and checked.refused:
         result.version_vector["override_refused"] = checked.refused
     _with_relations(result, declared_rel, refused)
+    if user_check is not None:
+        result.version_vector["user_check"] = user_check
     result.version_vector["relation_hints"] = hints
     # what the entry rests on: the trust the baseline registers it with, so a unit citing
     # it later is no stronger than it; only "external" is marked in the file
