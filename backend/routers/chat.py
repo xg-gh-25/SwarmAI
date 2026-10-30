@@ -452,11 +452,15 @@ async def chat_stream(request: Request):
             # a pin without the revision the host dispatched would skip the comparison
             raise ValidationException(message="Invalid Project Agent",
                                       detail="the request names no revision of the Project Agent")
+        # a pipeline task's run is made on the order's writable clones (run-spec §4.2)
+        run_repos = {r["name"]: str(get_swarmws() / r["dir"]) for r in task_repos
+                     if work_id and r.get("access") == "write"}
         try:
             project_agent_pin = await asyncio.to_thread(
                 make_pin, get_swarmws(), str(pa.get("brain") or ""),
                 pa.get("mode") if isinstance(pa.get("mode"), str) else None,
-                pa.get("revision") if isinstance(pa.get("revision"), str) else None)
+                pa.get("revision") if isinstance(pa.get("revision"), str) else None,
+                pa.get("execution"), run_repos)
         except PinError as e:
             raise ValidationException(message="Invalid Project Agent", detail=str(e))
 

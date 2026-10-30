@@ -720,6 +720,21 @@ def _segment_reserved(tokens: list[str]) -> set[str]:
     return out
 
 
+def _creates_run(command: str) -> bool:
+    """The command runs ``pipeline-v1 create`` (core/pipeline_command): a call whose
+    subcommand is ``create``, an ambiguous call that says ``create``, or a command the
+    parser cannot split that names the CLI and ``create``. Naming the CLI without
+    running it (a grep, a path argument) is not one."""
+    from core import pipeline_command
+    calls, _single = pipeline_command.calls(command)
+    if not calls:
+        return pipeline_command.mentions(command) and "create" in command and \
+            _gate_shell_segments(command, []) is None
+    return any(c.get("tool") == "pipeline_v1" and (c.get("sub") == "create"
+                                                   or (c.get("ambiguous") and "create" in c.get("argv", [])))
+               for c in calls)
+
+
 def _is_reserved_action(command: str, reserved: "list[str] | set[str]") -> Optional[str]:
     """The first action in *reserved* that *command* performs, or None. Same
     tokenisation as ``_is_irreversible_external_op`` (segments, env assignments and
@@ -1898,6 +1913,16 @@ def create_dangerous_command_gate(
         from core.project_agent_session import current_pin
         pin = await current_pin(session_context)
         if pin and not pin.get("broken"):
+            # how this session runs was decided at dispatch (run-spec §4.2): a pipeline
+            # session's run was created with it, a native one has none; never another
+            if isinstance(pin.get("execution"), dict) and _creates_run(command):
+                reason = ("Command denied: this session's way of running was decided when the task "
+                          "was dispatched; it creates no pipeline run"
+                          + (f" (its run is {pin['execution'].get('run_id')})"
+                             if pin["execution"].get("how") == "pipeline" else "") + ".")
+                return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                               "permissionDecision": "deny",
+                                               "permissionDecisionReason": reason}}
             reserved_action = _is_reserved_action(command, pin.get("reserved") or [])
             if reserved_action and hit is None:
                 hit = {"rule": "reserved_action", "match": _excerpt(command),

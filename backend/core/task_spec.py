@@ -244,6 +244,12 @@ def admit(spec: dict[str, Any]) -> list[str]:
                        "or run it another way")
         elif not caps(prof).lands_code and spec["returns"] == "commits":
             out.append(f"pipeline {prof} changes no code, so it cannot come back as commits")
+    from core.run_protocol.engine import REQUIREMENT_MAX        # a run's requirement, at most
+    if prof is not None and spec["brain"] == GENERAL_BRAIN:
+        out.append("a pipeline run belongs to a Brain's project: a task with no Brain runs native")
+    if prof is not None and lifecycle_caps_words(prof) and len(spec["task"]) > REQUIREMENT_MAX:
+        out.append(f"pipeline {prof} takes the task's own words as its requirement, at most "
+                   f"{REQUIREMENT_MAX} characters: shorten the task or choose trivial")
     if spec["returns"] == "commits" and not spec["repos"]:
         out.append(f"{spec['brain']} binds no repository, so nothing can come back as commits")
     if not spec["acceptance"]:
@@ -255,7 +261,15 @@ def admit(spec: dict[str, Any]) -> list[str]:
 
 # ── ⑥ the project section the Hive reads before the task ─────────────────────
 
-def segment(spec: dict[str, Any]) -> str:
+def lifecycle_caps_words(profile: str) -> bool:
+    """The profile's requirement is the person's own words (direct)."""
+    from core.run_protocol.lifecycle import caps
+    return caps(profile).requirements == "words"
+
+
+def segment(spec: dict[str, Any], run_id: Optional[str] = None) -> str:
+    """The project section; ``run_id``: the pipeline run the Hive creates with the
+    session (run-spec §4.2), named so the agent starts in it."""
     b, general = spec["brain"], spec["brain"] == GENERAL_BRAIN
     lines = [f"## Project Agent: {'Runner Agent (no Brain)' if general else b} — mode {spec['mode']}"]
     if spec["summary"] and not general:
@@ -271,6 +285,11 @@ def segment(spec: dict[str, Any]) -> str:
     if spec["execution"]["how"] == "native":
         lines.append("How: do the task in this session; no pipeline run. It was decided when the "
                      "task was dispatched; do not create one.")
+    elif run_id:
+        lines.append(f"How: this session's pipeline run `{run_id}` (profile `{spec['profile']}`, "
+                     "s_autonomous-pipeline) was created when the session started. Begin with "
+                     f"`pipeline-v1 status --project {b} --run-id {run_id}` and follow its next step; "
+                     "do not create another run (it is refused).")
     else:
         lines.append(f"How: run the task through the pipeline (s_autonomous-pipeline) with profile "
                      f"`{spec['profile']}`. It was decided when the task was dispatched; use no "

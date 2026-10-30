@@ -4826,9 +4826,12 @@ class SessionRouter:
                 if project_agent is not None:
                     # recorded before the slot wait: a send that is queued (and then
                     # delivered by the drain, which carries no pin) is still pinned
-                    from .project_agent_session import record_pin
+                    from .project_agent_session import create_pinned_run, record_pin
                     if not await record_pin(session_id, project_agent):
                         raise RuntimeError("the Project Agent pin could not be recorded")
+                    # a pipeline task's run exists before its first message reaches the
+                    # model: the agent starts in it and never creates one (run-spec §4.2)
+                    await asyncio.to_thread(create_pinned_run, session_id, project_agent)
                 _msg_metadata = {"client_id": client_id} if client_id else None
                 persisted_msg_id = str(uuid4())
                 # Strip raw tool-call leaks before persisting — symmetric with the
@@ -4876,7 +4879,8 @@ class SessionRouter:
                     logger.error("Project Agent session %s not started: %s", session_id, exc)
                     yield _build_error_event(
                         code="PROJECT_AGENT_NOT_RECORDED",
-                        message="This Project Agent session could not be recorded; try again.",
+                        message=("This Project Agent session could not be recorded (or its "
+                                 "pipeline run created); try again."),
                     )
                     return
                 # Non-fatal: proceed even if persist fails.  The message

@@ -353,7 +353,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
         try:
             session_id = await asyncio.wait_for(
                 _start_session(client, task_message(segment + task, order), dispatch_id,
-                               _pin_request(agent)), SESSION_ID_WAIT_S)
+                               _pin_request(agent, task)), SESSION_ID_WAIT_S)
         except (asyncio.TimeoutError, httpx.ReadTimeout):
             # The task may have been sent and taken: the Hive may be running it. Record
             # the dispatch without a session so this Hive's questions are still listed,
@@ -382,12 +382,27 @@ def _append(line: str) -> None:
         f.write(line)
 
 
-def _pin_request(agent: Optional[dict]) -> Optional[dict]:
+def pipeline_run_id(dispatch_id: str) -> str:
+    """The id of a pipeline task's run: ``run_`` + the dispatch's first eight hex."""
+    return "run_" + dispatch_id.removeprefix("so_")[:8]
+
+
+def _pin_request(agent: Optional[dict], task: str = "") -> Optional[dict]:
     """What the Hive pins the session to (routers/chat.py ``project_agent``): it
-    recomputes the revision from its own copy and refuses the task when it differs."""
+    recomputes the revision from its own copy and refuses the task when it differs.
+    ``execution``: how the task runs, decided here (run-spec §4.2); for a pipeline, the
+    run the Hive creates with the session and its requirement (*task*, the task's own
+    words, when the run takes that many; a longer one: the run writes its own)."""
     if not agent:
         return None
-    return {"brain": agent["brain"], "mode": agent["mode"], "revision": agent["revision"]}
+    req = {"brain": agent["brain"], "mode": agent["mode"], "revision": agent["revision"]}
+    if agent.get("execution") == "native":
+        req["execution"] = {"how": "native"}
+    elif agent.get("execution") == "pipeline":
+        from core.run_protocol.engine import REQUIREMENT_MAX
+        req["execution"] = {"how": "pipeline", "profile": agent.get("profile"), "run_id": agent.get("run_id"),
+                            "requirement": task if task and len(task) <= REQUIREMENT_MAX else None}
+    return req
 
 
 #: the one-line brief a dispatch card shows
@@ -473,6 +488,12 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
         raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: the Hive did not answer "
                             f"({type(e).__name__}); nothing was sent") from None
     agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "delivery", "acceptance", "gates")}
+    # the dispatch's id first: a pipeline task's run is named after it, so the project
+    # section can name the run the Hive creates with the session (run-spec §4.2)
+    dispatch_id = new_dispatch_id()
+    run_id = pipeline_run_id(dispatch_id) if spec["execution"]["how"] == "pipeline" else None
+    if run_id:
+        agent["run_id"] = run_id
     # how the task runs, decided here for this request (design 2026-10-30-run-spec §3)
     agent["execution"] = spec["execution"]["how"]
     agent["execution_why"] = spec["execution_why"]
@@ -486,7 +507,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                          [{"url": r["url"], "ref": r["ref"], **({"sha": r["sha"]} if r.get("sha") else {}),
                            "name": r["name"], "access": r["access"]}
                           for r in spec["repos"]],
-                         segment=task_spec.segment(spec), agent=agent,
+                         segment=task_spec.segment(spec, run_id), agent=agent, dispatch_id=dispatch_id,
                          extra={"brief": " ".join((brief or "").split())[:MAX_BRIEF_CHARS],
                                 "hive_reason": hive_reason, "brain_sync": synced,
                                 "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}

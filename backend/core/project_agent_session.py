@@ -73,11 +73,37 @@ def brain_dir(workspace: Path, brain: str) -> Path:
     return d
 
 
+_RUN_ID_RE = re.compile(r"run_[0-9a-f]{8}")
+
+
+def pin_execution(value: Any, repos: Optional[dict[str, str]] = None) -> Optional[dict[str, Any]]:
+    """How a dispatched session runs, as the Host decided it (design 2026-10-30-run-spec
+    §4.2): ``{"how": "native"}`` or ``{"how": "pipeline", "profile", "run_id",
+    "requirement", "repos"}`` (``repos``: the writable worktrees of its work order, the
+    run's roots). None when the request names none. Raises PinError on a bad value."""
+    if value is None:
+        return None
+    from core.run_protocol.lifecycle import PROFILE_STAGES
+    if not isinstance(value, dict) or value.get("how") not in ("native", "pipeline"):
+        raise PinError("the dispatch says no valid way to run the task")
+    if value["how"] == "native":
+        return {"how": "native"}
+    prof, run_id, req = value.get("profile"), value.get("run_id"), value.get("requirement")
+    if prof not in PROFILE_STAGES or not isinstance(run_id, str) or not _RUN_ID_RE.fullmatch(run_id) \
+            or not (req is None or isinstance(req, str)):
+        raise PinError("the dispatch names a pipeline run this Hive cannot create")
+    return {"how": "pipeline", "profile": prof, "run_id": run_id, "requirement": req,
+            "repos": dict(repos or {})}
+
+
 def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
-             seen_revision: Optional[str] = None) -> dict[str, Any]:
+             seen_revision: Optional[str] = None, execution: Any = None,
+             repos: Optional[dict[str, str]] = None) -> dict[str, Any]:
     """The values a session under *brain*'s Project Agent enforces. Raises PinError
     when there is no valid definition, the mode does not exist, or the definition
-    changed since *seen_revision*."""
+    changed since *seen_revision*. ``execution``: how the task runs, decided by the
+    Host (``pin_execution``); ``repos`` its writable worktrees."""
+    ex = pin_execution(execution, repos)
     d = brain_dir(workspace, brain)
     target = d / PROJECT_AGENT_FILE
     try:
@@ -103,8 +129,27 @@ def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
     if mid not in modes:
         raise PinError(f"{brain}'s Project Agent has no mode {mid!r}")
     view = _mode_view(modes[mid], n)
-    return {"brain": brain, "mode": mid, "revision": rev,
-            "reserved": view["reservedForHuman"], "gates": view["gates"], "gates_digest": digest}
+    pin = {"brain": brain, "mode": mid, "revision": rev,
+           "reserved": view["reservedForHuman"], "gates": view["gates"], "gates_digest": digest}
+    if ex is not None:
+        pin["execution"] = ex
+    return pin
+
+
+def create_pinned_run(session_id: str, pin: dict[str, Any]) -> Optional[str]:
+    """Create the pipeline run a pin names, owned by *session_id*, before the session's
+    first message reaches the model (run-spec §4.2: the agent never creates it). The
+    run id, or None when the pin runs native (or says nothing). Raises on failure: the
+    caller does not start the session. Blocking: call it in a thread."""
+    ex = pin.get("execution") if isinstance(pin, dict) else None
+    if not isinstance(ex, dict) or ex.get("how") != "pipeline":
+        return None
+    from core.run_protocol.cli_commands import create_run
+    engine, _binding, _knowledge, _file = create_run(
+        project=pin["brain"], profile=ex["profile"], session_id=session_id, repos=ex.get("repos") or {},
+        run_id=ex["run_id"], transcript_ids=[], requirement=ex.get("requirement"),
+        owner_source="host", review_answers="host")
+    return engine.run_id
 
 
 def set_pin(session_context: dict[str, Any], pin: Optional[dict[str, Any]]) -> None:
@@ -121,6 +166,10 @@ def _valid_pin(value: Any) -> Optional[dict[str, Any]]:
     if not all(isinstance(value.get(k), str) and value.get(k) for k in keys) or not isinstance(
             value.get("reserved"), list) or not isinstance(value.get("gates"), list):
         return {"broken": "the session's Project Agent record is incomplete"}
+    # ``execution`` is on a pin made since the run spec (a session pinned before has none)
+    ex = value.get("execution")
+    if ex is not None and not (isinstance(ex, dict) and ex.get("how") in ("native", "pipeline")):
+        return {"broken": "the session's Project Agent record names no valid way to run"}
     return value
 
 

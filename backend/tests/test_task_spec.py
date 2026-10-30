@@ -264,9 +264,9 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
         if sync_error:
             raise sync_error
 
-    async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None):
+    async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None, dispatch_id=None):
         calls["dispatch"].append({"hive": hive, "task": task, "repos": repos, "segment": segment,
-                                  "agent": agent, "extra": extra})
+                                  "agent": agent, "extra": extra, "dispatch_id": dispatch_id})
         return {"dispatch_id": "so_1"}
     monkeypatch.setattr(so, "_instance", instance)
     monkeypatch.setattr(host, "hive_brains", hive_brains)
@@ -295,7 +295,17 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     assert (d["agent"]["execution"], d["agent"]["profile"], d["agent"]["execution_why"]) == ("native", None, "")
     assert d["agent"]["acceptance"] == "tests pass" and "## Project Agent: Lib" in d["segment"]
     assert so._pin_request(d["agent"]) == {"brain": "Lib", "mode": "code-change",
-                                           "revision": d["agent"]["revision"]}
+                                           "revision": d["agent"]["revision"], "execution": {"how": "native"}}
+    assert "run_id" not in d["agent"] and d["dispatch_id"].startswith("so_")
+    # a pipeline task: its run is named after the dispatch, in the section and the pin
+    calls["dispatch"].clear()
+    asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="pipeline:bugfix",
+                                 returns="commits", seen_revision=rev))
+    p = calls["dispatch"][0]
+    run_id = so.pipeline_run_id(p["dispatch_id"])
+    assert p["agent"]["run_id"] == run_id and f"pipeline run `{run_id}`" in p["segment"]
+    assert so._pin_request(p["agent"], "fix it")["execution"] == {
+        "how": "pipeline", "profile": "bugfix", "run_id": run_id, "requirement": "fix it"}
     # up to date: no sync
     digest = host.local_brain(ws, "Lib")["digest"]
     calls = _fake_hive(monkeypatch, digest)
