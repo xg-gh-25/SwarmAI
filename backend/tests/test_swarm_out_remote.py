@@ -112,7 +112,8 @@ def test_a_local_session_id_is_refused(hive, api, monkeypatch):
             return object() if sid == SID else None
     from core import session_registry
     monkeypatch.setattr(session_registry, "session_router", Router())
-    assert api.get(f"{BASE}/chat/sessions/{SID}").status_code == 404
+    r = api.get(f"{BASE}/chat/sessions/{SID}")
+    assert r.status_code == 409 and r.json()["detail"] == swarm_out_remote.COLLIDES   # said, never addressed
     assert hive.seen == []
 
 
@@ -124,8 +125,8 @@ def test_a_stored_local_session_without_a_unit_is_refused(hive, api, monkeypatch
     async def stored(sid):
         return object() if sid == SID else None
     monkeypatch.setattr(session_manager, "get_session", stored)
-    assert api.get(f"{BASE}/chat/sessions/{SID}").status_code == 404
-    assert api.post(f"{BASE}/relay", headers=APP_HEADERS, json={"client_id": "w1"}).status_code == 404
+    assert api.get(f"{BASE}/chat/sessions/{SID}").status_code == 409
+    assert api.post(f"{BASE}/relay", headers=APP_HEADERS, json={"client_id": "w1"}).status_code == 409
     assert hive.seen == []
 
 
@@ -406,3 +407,35 @@ def test_an_uncompressed_answer_within_the_cap_is_forwarded_as_before(hive, api)
     hive.routes[f"/api/chat/sessions/{SID}"] = lambda r: httpx.Response(200, json={"id": SID, "n": 1})
     r = api.get(f"{BASE}/chat/sessions/{SID}")
     assert r.status_code == 200 and r.json() == {"id": SID, "n": 1}
+
+
+# ── a Hive session's id never becomes a session of this machine ──
+
+@pytest.mark.asyncio
+async def test_a_local_send_under_a_hive_sessions_id_is_refused(hive, async_client, monkeypatch):
+    """A tab that kept a Hive session's id must not make a local session of it: the run
+    could never be opened again (resolve_session refuses a local id)."""
+    from routers import chat as chat_router
+    seen = []
+
+    class _Router:
+        def get_unit(self, sid):
+            return None
+
+        async def run_conversation(self, **kw):
+            seen.append(kw["session_id"])
+            yield {"type": "result", "sessionId": kw["session_id"]}
+    monkeypatch.setattr(chat_router, "_get_router", lambda: _Router())
+    r = await async_client.post("/api/chat/stream", json={"agent_id": "default", "message": "hi", "session_id": SID})
+    assert r.status_code == 409 and "Hive session" in r.json()["detail"] and seen == []
+    # any other id this Host did not dispatch goes through as before
+    r = await async_client.post("/api/chat/stream", json={"agent_id": "default", "message": "hi", "session_id": "local-1"})
+    assert r.status_code == 200 and seen == ["local-1"]
+    # and a session of this machine that already holds the id is not cut off
+    from core.session_manager import session_manager
+
+    async def stored(sid):
+        return object()
+    monkeypatch.setattr(session_manager, "get_session", stored)
+    r = await async_client.post("/api/chat/stream", json={"agent_id": "default", "message": "hi", "session_id": SID})
+    assert r.status_code == 200 and seen[-1] == SID

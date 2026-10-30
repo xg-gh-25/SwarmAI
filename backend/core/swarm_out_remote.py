@@ -290,7 +290,8 @@ def filter_headers(headers: Mapping[str, str]) -> dict[str, str]:
 
 async def resolve_session(sid: str) -> dict[str, Any]:
     """The dispatch-log row of ``sid``: a session this Host dispatched to exactly one
-    Hive, and not a session of this daemon. RemoteError(404) otherwise."""
+    Hive, and not a session of this daemon. RemoteError(404) otherwise, (409) when a
+    session of this daemon holds the same id."""
     if not isinstance(sid, str) or not ID_RE.match(sid):
         raise RemoteError(404, "not found")
     import asyncio
@@ -299,8 +300,23 @@ async def resolve_session(sid: str) -> dict[str, Any]:
     if len(rows) == 0 or len(hives) != 1 or not next(iter(hives)):
         raise RemoteError(404, "not found")
     if await _is_local_session(sid):
-        raise RemoteError(404, "not found")
+        # a local session holds the Hive session's id (made before a local send was
+        # refused under it, chat.py): never addressed, but said, not "not found"
+        raise RemoteError(409, COLLIDES)
     return rows[-1]
+
+
+#: why a run whose Hive session id is also a session of this machine cannot be opened
+COLLIDES = "this run's Hive session id is also a session on this machine, so it cannot be opened here"
+
+
+async def is_dispatched_hive_session(sid: str) -> bool:
+    """``sid`` is a session this Host dispatched to a Hive (its dispatch log names it).
+    Such an id is never a session of this machine: chat.py refuses to start one."""
+    if not isinstance(sid, str) or not ID_RE.match(sid):
+        return False
+    import asyncio
+    return any(r.get("session_id") == sid for r in await asyncio.to_thread(swarm_out._read_log))
 
 
 async def _is_local_session(sid: str) -> bool:

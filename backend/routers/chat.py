@@ -407,6 +407,15 @@ async def chat_stream(request: Request):
     if chat_request.content:
         validate_content(chat_request.content)
 
+    # A Hive session this Host dispatched is reached only through the Swarm Out proxy:
+    # a send here under its id (a tab that kept it) would make a local session of that
+    # id, and the run could never be opened again (core/swarm_out_remote.resolve_session).
+    if chat_request.session_id and await session_manager.get_session(chat_request.session_id) is None:
+        from core.swarm_out_remote import is_dispatched_hive_session
+        if await is_dispatched_hive_session(chat_request.session_id):
+            raise HTTPException(status_code=409, detail=(
+                "this is a Hive session: open it from its run in Swarm Out; nothing was sent here"))
+
     # Swarm Out: the task's repositories, validated before the turn starts and
     # recorded on the session once its id is known (core/task_repos). A request for an
     # existing session does not change what that session declared.

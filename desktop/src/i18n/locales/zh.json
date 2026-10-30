@@ -1597,6 +1597,7 @@
     "hiveTab": {
       "open": "在 Hive tab 里打开 {{title}}",
       "notDispatched": "这个会话不是本机派到 Hive 的，Hive tab 已关闭。",
+      "collides": "这个 run 的 Hive session id 和本机的一个 session 撞了，打不开。以后不会再发生：本机不再接受以 Hive session 的 id 发来的消息。",
       "draft": "Hive tab 里还有草稿，发送或清空后再打开别的 run。",
       "noLocalOpen": "这个文件在 Hive 上，不在本机。",
       "noPlugin": "插件命令在本机运行，不能发给 Hive 会话。",

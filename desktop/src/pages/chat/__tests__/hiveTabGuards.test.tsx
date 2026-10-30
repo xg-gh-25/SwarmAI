@@ -109,7 +109,7 @@ describe('run titles (R1.3)', () => {
     const open = vi.fn();
     render(<OpenSessionContext.Provider value={open}><RunTitle r={run()} className="" /></OpenSessionContext.Provider>);
     fireEvent.click(screen.getByTestId('swarm-out-run-open'));
-    expect(open).toHaveBeenCalledWith('S1', 'hive-a · Fix it');
+    expect(open).toHaveBeenCalledWith('S1', 'Fix it · hive-a');
   });
 
   it.each([

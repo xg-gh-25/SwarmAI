@@ -1597,6 +1597,7 @@
     "hiveTab": {
       "open": "Open {{title}} in the Hive tab",
       "notDispatched": "This session is not one this machine sent to a Hive; the Hive tab was closed.",
+      "collides": "This run's Hive session id is also a session on this machine, so it cannot be opened. It cannot happen again: this machine no longer accepts a message under a Hive session's id.",
       "draft": "The Hive tab has a draft. Send or clear it before opening another run.",
       "noLocalOpen": "This file is on the Hive, not on this machine.",
       "noPlugin": "Plugin commands run on this machine and cannot be sent to a Hive session.",

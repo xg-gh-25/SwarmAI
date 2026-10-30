@@ -104,7 +104,7 @@ describe('ChatPage — the Hive tab', () => {
     await act(async () => { fireEvent.click(runButton('First run')); });
     await settle();
     expect(hiveTabs()).toHaveLength(1);
-    expect(screen.getByText('hive-a · First run')).toBeTruthy();
+    expect(screen.getByText('First run · hive-a')).toBeTruthy();
     expect(relayCalls('post', 'S1')).toHaveLength(1);
     expect(calls.some((c) => c.url.startsWith('/swarm-out/remote/S1/') && c.url.includes('/messages'))).toBe(true);
     expect(calls.some((c) => !c.url.startsWith('/swarm-out/') && c.url.includes('S1'))).toBe(false);
@@ -120,7 +120,7 @@ describe('ChatPage — the Hive tab', () => {
     await act(async () => { fireEvent.click(runButton('Second run')); });
     await settle();
     expect(hiveTabs()).toHaveLength(1);
-    expect(screen.getByText('hive-a · Second run')).toBeTruthy();
+    expect(screen.getByText('Second run · hive-a')).toBeTruthy();
     expect(relayCalls('delete', 'S1')).toHaveLength(1);
     expect(relayCalls('post', 'S2')).toHaveLength(1);
     expect(isRemote('S2')).toBe(true);
@@ -144,7 +144,7 @@ describe('ChatPage — the Hive tab', () => {
     await act(async () => { fireEvent.click(runButton('Second run')); });
     await settle();
     expect(toasts.length).toBeGreaterThan(0);
-    expect(screen.getByText('hive-a · First run')).toBeTruthy();
+    expect(screen.getByText('First run · hive-a')).toBeTruthy();
     expect(relayCalls('post', 'S2')).toHaveLength(0);
     expect(relayCalls('delete', 'S1')).toHaveLength(0);
     expect(isRemote('S1')).toBe(true);
@@ -171,12 +171,22 @@ describe('ChatPage — the Hive tab', () => {
     expect(isRemote('S1')).toBe(false);
   }, 30_000);
 
+  it('a relay 409 (a local session holds the id) closes the tab and says why', async () => {
+    relayStatus = 409;
+    mount();
+    await openSwarmOut();
+    await act(async () => { fireEvent.click(runButton('First run')); });
+    await settle();
+    expect(hiveTabs()).toHaveLength(0);
+    expect(toasts.some((m) => /also a session on this machine|撞了/.test(m))).toBe(true);
+  }, 30_000);
+
   it('closing the Hive tab drops the relay, releases nothing local and goes back to Swarm Out', async () => {
     mount();
     await openSwarmOut();
     await act(async () => { fireEvent.click(runButton('First run')); });
     await settle();
-    await act(async () => { fireEvent.click(screen.getByLabelText('Close hive-a · First run')); });
+    await act(async () => { fireEvent.click(screen.getByLabelText('Close First run · hive-a')); });
     await settle();
     expect(hiveTabs()).toHaveLength(0);
     expect(relayCalls('delete', 'S1')).toHaveLength(1);
@@ -185,12 +195,36 @@ describe('ChatPage — the Hive tab', () => {
     expect(isRemote('S1')).toBe(false);
   }, 30_000);
 
+  // The Hive session's id must never become a session of the tab focus goes back to:
+  // a send there would go to this machine's backend under the Hive session's id, which
+  // creates a local session of that id, and the run could never be opened again.
+  it.each([['closed by the person', 200], ['closed by a relay 404', 404]])(
+    'a Hive tab %s leaves its session id on no local tab', async (_how, status) => {
+      relayStatus = status;
+      mount();
+      await openSwarmOut();
+      await act(async () => { fireEvent.click(runButton('First run')); });
+      await settle();
+      if (status === 200) {
+        await act(async () => { fireEvent.click(screen.getByLabelText('Close First run · hive-a')); });
+      }
+      await settle();
+      expect(hiveTabs()).toHaveLength(0);
+      const mark = calls.length;
+      await waitFor(() => expect(calls.slice(mark).some((c) => c.method === 'put' && c.url === '/settings/open-tabs')).toBe(true),
+        { timeout: 5000 });
+      const saved = [...calls].reverse().find((c) => c.method === 'put' && c.url === '/settings/open-tabs')!.data as
+        { tabs: { id: string; sessionId?: string }[] };
+      expect(saved.tabs.filter((t) => t.sessionId === 'S1')).toEqual([]);
+      expect(calls.slice(mark).some((c) => !c.url.startsWith('/swarm-out/') && c.url.includes('S1'))).toBe(false);
+    }, 30_000);
+
   it('a saved Hive tab comes back with its relay and proxy reads', async () => {
     savedTabs = {
       tabs: [
         { id: 'a', title: 'mine', agentId: 'default', isNew: true },
         { id: SWARM_OUT_TAB_ID, title: 'Swarm Out', agentId: 'default', isNew: true },
-        { id: hiveTabId('S1'), title: 'hive-a · First run', agentId: 'default', isNew: false, sessionId: 'S1' },
+        { id: hiveTabId('S1'), title: 'First run · hive-a', agentId: 'default', isNew: false, sessionId: 'S1' },
       ],
       activeTabId: hiveTabId('S1'),
     };

@@ -1549,9 +1549,11 @@ export default function ChatPage() {
       // The api client answers an ApiError (statusCode); a raw axios error has response.status.
       const e = err as { statusCode?: number; response?: { status?: number } };
       const status = e?.statusCode ?? e?.response?.status;
-      if (status === 404 && tabMapRef.current.get(tabId)?.sessionId === sid) {
+      if ((status === 404 || status === 409) && tabMapRef.current.get(tabId)?.sessionId === sid) {
         doCloseTab(tabId, sid, false);
-        document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('swarmOut.hiveTab.notDispatched') } }));
+        // 409: a session of this machine holds the run's id (core/swarm_out_remote.COLLIDES)
+        const key = status === 409 ? 'swarmOut.hiveTab.collides' : 'swarmOut.hiveTab.notDispatched';
+        document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t(key) } }));
         return;
       }
       console.warn('[ChatPage] Hive relay start failed:', err);
