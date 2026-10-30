@@ -39,31 +39,46 @@ export interface SwarmOutRun {
   /** why the last check failed: session_gone, hive_silent, http_502, ... */
   result_error?: string | null;
   result_checked_at?: string | null;
-  /** The run's single next step (backend core/swarm_out_settle; dispatch-center §3-§6):
-   *  null when nothing is left for anyone; absent for a dispatch from before Project
-   *  Agents. accept = judge the answer or document (or, after a fail, do it again or
-   *  give it up); review_code = land or reject the commits it brought back. */
-  next?: SwarmOutNext | null;
+  /** Where the run stands for the person, and the commands they can give in it, in
+   *  their order (backend core/swarm_out_settle.derive; design
+   *  docs/design/2026-10-31-swarm-out-run-review.md §1.2). The panel renders these and
+   *  decides nothing itself. Absent for a dispatch from before Project Agents. */
+  stage?: SwarmOutStage;
+  actions?: SwarmOutAction[];
+  /** why a run is stopped: no_session, no_result, hive_gone, or how its result ended */
+  why?: string | null;
   settle?: SwarmOutSettle;
   /** not settled, and this Host removes its records within 3 days (bundles can no
    *  longer land after that) */
   cleanup_soon?: boolean;
 }
 
-export type SwarmOutNext = 'answer' | 'running' | 'accept' | 'review_code';
+export type SwarmOutStage = 'running' | 'needs_answer' | 'awaiting' | 'stopped' | 'accepted' | 'discarded' | 'expired';
+
+export type SwarmOutCommand = 'accept' | 'rerun' | 'discard' | 'stop' | 'open_session' | 'answer';
+
+/** One command on a run. ``variant``: accept ``land`` (land the commits that came
+ *  back), ``manual`` (they cannot be taken as they are: "I landed it by hand"),
+ *  ``verdict`` (pass on the answer or document); open_session ``read_only`` (accepted). */
+export interface SwarmOutAction {
+  key: SwarmOutCommand;
+  primary: boolean;
+  variant?: 'land' | 'manual' | 'verdict' | 'read_only';
+}
 
 export interface SwarmOutSettle {
-  /** pass / fail: the person's on an answer or document, the landing for commits;
-   *  abandoned: given up; gone: the Hive is gone and left no result; null: not yet */
-  verdict: 'pass' | 'fail' | 'abandoned' | 'gone' | null;
+  /** pass: the person's on an answer or document, or the landing for commits;
+   *  abandoned: discarded; gone: the Hive is gone and left no result; null: not yet */
+  verdict: 'pass' | 'abandoned' | 'gone' | 'expired' | null;
   /** unsealed: commits the Hive could not seal into a bundle (they exist only in its
-   *  workspace: land them by hand, or giving up removes them) */
+   *  workspace: land them by hand, or discarding removes them); rejected: an older
+   *  Host's record */
   code: 'none' | 'landed' | 'rejected' | 'waiting' | 'unsealed';
   /** what still holds it back from settling (files: a returned file not yet placed here) */
   why_not: ('verdict' | 'code' | 'files' | 'lessons')[];
   /** settled: the Hive was told to remove its workspace (released false: not yet, told
    *  again after a backoff; null: no Hive to tell) */
-  settled: { at: string; outcome: 'passed' | 'abandoned' | 'gone'; released: boolean | null } | null;
+  settled: { at: string; outcome: 'passed' | 'abandoned' | 'gone' | 'expired'; released: boolean | null } | null;
 }
 
 export type SwarmOutEnded = 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'no_terminal'
@@ -149,7 +164,11 @@ export interface SwarmOutResult {
     files: { path?: string; local?: string; not_placed?: boolean; kind: 'content' | 'knowledge' | 'external-diff' | 'external-nodiff' | 'other' }[];
     files_omitted: number;
     steps: { total: number; failed: number; agents: number; by_tool: Record<string, number> };
-    human: { approved: number; denied: number; unanswered: number; answered_questions: number };
+    /** the person in the loop: commands approved / denied, asks left unanswered,
+     *  questions answered, and ``said``: every message they wrote in the session after
+     *  the task (a re-run with a correction, or anything typed in the Hive tab; absent
+     *  on a record kept before it was counted) */
+    human: { approved: number; denied: number; unanswered: number; answered_questions: number; said?: number };
   };
   pipeline: { run_id: string | null; profile: string | null; status: string | null; landing: string | null;
     landed_sha: string | null; audit: SwarmOutAuditRow[] } | null;
@@ -280,6 +299,8 @@ export interface SwarmOutReturn {
   status: 'prepared' | 'landed' | 'rejected';
 }
 
+const runPath = (dispatchId: string, tail: string) => `/swarm-out/runs/${encodeURIComponent(dispatchId)}/${tail}`;
+
 export const swarmOutService = {
   async returnPrepare(dispatchId: string, url: string): Promise<SwarmOutReturn> {
     const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/prepare`, { url });
@@ -291,20 +312,26 @@ export const swarmOutService = {
       { key, tip, approve_protected: approveProtected });
     return data as { landed: boolean; head: string | null; into: string | null };
   },
-  /** The person's pass / fail on the result that ended at `endedAt` (the card's). */
-  async verdict(dispatchId: string, value: 'pass' | 'fail', note: string, endedAt: string): Promise<void> {
-    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/verdict`, { value, note, ended_at: endedAt });
+  /** Accept: the person's pass on the result that ended at `endedAt` (the one shown). */
+  async accept(dispatchId: string, endedAt: string): Promise<void> {
+    await api.post(runPath(dispatchId, 'verdict'), { value: 'pass', note: '', ended_at: endedAt });
   },
-  /** The person landed the commits by hand. */
+  /** Accept commits that cannot be taken as they are: the person landed them by hand. */
   async manualLanded(dispatchId: string): Promise<void> {
-    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/manual-landed`);
+    await api.post(runPath(dispatchId, 'manual-landed'));
   },
-  /** The person gives the task up. */
-  async abandon(dispatchId: string): Promise<void> {
-    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/abandon`);
+  /** Re-run with a correction: the text goes into the run's own Hive session. */
+  async rerun(dispatchId: string, text: string): Promise<void> {
+    await api.post(runPath(dispatchId, 'rerun'), { text });
   },
-  async returnReject(dispatchId: string, key: string, tip: string): Promise<void> {
-    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/reject`, { key, tip });
+  /** Stop the run's current turn; its session and workspace stay. */
+  async stop(dispatchId: string): Promise<void> {
+    await api.post(runPath(dispatchId, 'stop'));
+  },
+  /** Discard the run: stopped, closed, its Hive workspace removed. Final. */
+  async discard(dispatchId: string, note: string): Promise<{ discarded: boolean; stopped: boolean | null }> {
+    const { data } = await api.post(runPath(dispatchId, 'discard'), { note });
+    return data as { discarded: boolean; stopped: boolean | null };
   },
   /** Every Hive with its load: what the panel's fleet and free slots read. No address
    *  or credential (the rows are built from an allow-list of keys). */

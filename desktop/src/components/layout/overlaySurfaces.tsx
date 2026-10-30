@@ -61,7 +61,7 @@ function SettingsSurface() {
  *  card in a Brain's Runs tab opens its session as Swarm Out's does. */
 function BrainHubSurface({ close, dispatchPrompt, openHiveSession }: { close: () => void;
   dispatchPrompt?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
-  openHiveSession?: (sessionId: string, title: string) => void }) {
+  openHiveSession?: (sessionId: string, title: string, readOnly?: boolean) => void }) {
   const { openOverlay } = useOverlay();
   const opener = useMemo(() => overlaySessionOpener(close, openHiveSession), [close, openHiveSession]);
   return (

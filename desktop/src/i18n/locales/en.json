@@ -1406,7 +1406,6 @@
     "return": {
       "landed": "Landed on {{into}} ({{head}}). Next, build and test it the way this repository does.",
       "nothing": "No change to land",
-      "rejected": "Not landed; the change stays at {{ref}}",
       "fetching": "Fetching…",
       "prepare": "Fetch the change and review",
       "summary": "{{commits}}, {{files}}, onto {{branch}}",
@@ -1417,7 +1416,6 @@
       "commitsNote": "Commits (the Hive's own descriptions, for reference only)",
       "fullDiff": "Full diff: ",
       "land": "Approve landing",
-      "reject": "Reject",
       "retake": "Fetch again"
     },
     "resize": {
@@ -1620,7 +1618,9 @@
       "noPlugin": "Plugin commands run on this machine and cannot be sent to a Hive session.",
       "noLocalFile": "A file on this machine cannot be sent to a Hive session. Attach it as an upload instead.",
       "noTerminal": "This machine's terminal output cannot be sent to a Hive session.",
-      "denyOnly": "This command is too long or hides characters: it can only be denied here."
+      "denyOnly": "This command is too long or hides characters: it can only be denied here.",
+      "closed": "This run was discarded or expired: its session is closed.",
+      "readOnly": "This run is accepted: its session is read-only."
     },
     "type": {
       "unknown": "Not known",
@@ -1651,31 +1651,6 @@
       "other_profile": "its run used another profile",
       "other_run": "it ran another pipeline run than its own"
     },
-    "settle": {
-      "accept": "Accept: does what came back meet the bar?",
-      "acceptance": "Done looks like: {{text}}",
-      "pass": "Pass",
-      "fail": "Fail",
-      "failNote": "What is wrong (you can send this to the Hive to redo it)",
-      "failConfirm": "Confirm fail",
-      "cancel": "Cancel",
-      "failed": "Failed: redo it, or give it up",
-      "rejected": "The commits were rejected: redo it, or give it up",
-      "noCommits": "No commits came back: redo it, or give it up",
-      "noSession": "May have been sent, but the Hive never named the session: check the Hive's page, then give it up",
-      "redo": "Redo (open the Hive session)",
-      "reviewCode": "Review the code in the details: landing it is the pass, rejecting it the fail",
-      "showCode": "Show code",
-      "manualLanded": "I landed it by hand",
-      "abandon": "Give up",
-      "abandonConfirm": "Confirm give up (clears its workspace on the Hive)",
-      "cleanupSoon": "Cleared in 3 days: after that its commits can no longer land",
-      "actionFailed": "Didn't work: {{error}}",
-      "unsealed": "The commits could not be sealed into a bundle and exist only in the Hive's workspace: land them by hand, then press \"I landed it by hand\", or give up",
-      "noResult": "Stopped with no result: redo it, or give it up",
-      "abandonConfirmUnsealed": "Confirm give up (deletes the unsealed commits in the Hive's workspace too)",
-      "filesMissing": "A returned file never reached the Brain (too large, or placing it failed), so the Hive keeps the workspace: wait for it, or give up if you don't need it"
-    },
     "welcome": {
       "why": "Send tasks to your Hives to run unattended; the results come back to their Brain.",
       "dispatch": "Send a task to a Hive: ",
@@ -1702,6 +1677,187 @@
       "long": "This session is long (context {{pct}}%). Dispatch state lives in the dashboard on the left and in the dispatch log, so a new session from \"New session\" at the top right loses nothing and replies faster.",
       "gotIt": "Got it",
       "placeholder": "Describe the task to send to a Hive…"
+    },
+    "review": {
+      "ago": {
+        "now": "now",
+        "m": "{{n}}m",
+        "h": "{{n}}h",
+        "d": "{{n}}d"
+      },
+      "autonomy": {
+        "judge": "Judge {{state}}",
+        "full": "Fully autonomous",
+        "steppedIn_one": "Stepped in {{count}}×",
+        "steppedIn_other": "Stepped in {{count}}×",
+        "judgeHead": "Pipeline run · Autonomy Judge: {{state}} (any hard constraint at BLOCK blocks the run; no combined score)",
+        "dim": "Dimension",
+        "role": "Role",
+        "verdict": "Verdict",
+        "number": "Numbers"
+      },
+      "human": {
+        "approved": "Approved (commands)",
+        "denied": "Denied",
+        "answered": "Questions answered",
+        "said": "Said in the session",
+        "unanswered": "Left unanswered",
+        "steps": "Failed steps {{failed}} / {{total}} · the Judge scores pipeline runs only; a native run shows who stepped in here"
+      },
+      "tag": {
+        "answer": "Answer the question",
+        "awaiting": "Accept · {{what}}"
+      },
+      "what": {
+        "commits_one": "{{count}} commit",
+        "commits_other": "{{count}} commits",
+        "document": "document",
+        "answer": "answer"
+      },
+      "stage": {
+        "running": "Running",
+        "needs_answer": "Needs your answer",
+        "awaiting": "Awaiting acceptance",
+        "stopped": "Stopped",
+        "accepted": "Accepted",
+        "discarded": "Discarded",
+        "expired": "Expired"
+      },
+      "why": {
+        "no_session": "the Hive never named its session",
+        "no_result": "it stopped without a result",
+        "hive_gone": "its Hive is gone",
+        "error": "ended with an error",
+        "crashed": "crashed",
+        "stopped": "you stopped it",
+        "gave_up": "it gave up",
+        "turn_limit": "hit the turn limit",
+        "paused": "paused",
+        "no_terminal": "no ending recorded",
+        "restarted": "restarted",
+        "superseded": "superseded",
+        "no_record": "no record"
+      },
+      "cmd": {
+        "accept": {
+          "verdict": {
+            "name": "Accept",
+            "does": "It meets the acceptance bar: this run is settled"
+          },
+          "land": {
+            "name": "Accept",
+            "does": "Land the commits on this machine's main: this run is settled"
+          },
+          "manual": {
+            "name": "I merged it by hand, accept",
+            "does": "The commits could not be taken as they are: you merged them yourself"
+          }
+        },
+        "rerun": {
+          "name": "Re-run with correction…",
+          "does": "Say what to change: it goes back into the same session"
+        },
+        "stop": {
+          "name": "Stop",
+          "does": "Stop at this step; the session and workspace stay, so you can re-run later"
+        },
+        "open": {
+          "name": "Open session",
+          "does": "Open the whole conversation in the Hive tab and talk to it there"
+        },
+        "openReadOnly": {
+          "name": "Open session (read-only)",
+          "does": "Read the whole conversation; nothing can be sent to it"
+        },
+        "discard": {
+          "name": "Discard",
+          "does": "You don't want this run: it cannot run again and its session closes"
+        },
+        "answer": {
+          "name": "Answer",
+          "does": "The question is on the left, under what came back"
+        }
+      },
+      "check": {
+        "ended": "Finished",
+        "notEnded": "Ended: {{how}}",
+        "checksRan": "Checks ran",
+        "checksMissed": "Not run: {{list}}",
+        "files_one": "{{count}} file came back",
+        "files_other": "{{count}} files came back",
+        "bundleSealed": "Commits sealed in a bundle",
+        "bundleUnsealed": "Commits not sealed in a bundle",
+        "executionMatches": "Ran the way it was sent",
+        "executionDiffers": "Ran differently from how it was sent",
+        "noneUnanswered": "No unanswered questions",
+        "unanswered_one": "{{count}} left unanswered",
+        "unanswered_other": "{{count}} left unanswered"
+      },
+      "rerunBox": {
+        "title": "Re-run with correction",
+        "label": "Written to the agent on the Hive, sent as is",
+        "placeholder": "What is missing or wrong, and what to do instead…",
+        "note": "Sent into the same session; the workspace is still there; the earlier verdict no longer counts",
+        "submit": "Send and re-run"
+      },
+      "discardBox": {
+        "title": "Discard this run?",
+        "consequence": "After this it cannot run again or be re-run, and its Hive session will not open. Its Hive workspace is removed (files that came back and commits already landed are kept).",
+        "consequenceUnsealed": "After this it cannot run again or be re-run, and its Hive session will not open. Its Hive workspace is removed, and with it the commits that were never sealed into a bundle.",
+        "label": "Why you don't want it (optional; it counts toward the repeat-correction rate)",
+        "placeholder": "Optional",
+        "submit": "Confirm discard"
+      },
+      "tab": {
+        "now": "Doing now",
+        "deliverable": "What came back {{count}}",
+        "reply": "Last reply",
+        "autonomy": "Autonomy",
+        "process": "Process · {{count}} steps",
+        "cost": "Cost",
+        "lessons": "Lessons {{count}}"
+      },
+      "section": {
+        "you": "Waiting for you",
+        "running": "Running",
+        "done": "Recently done"
+      },
+      "now": "Now:",
+      "also": "Also",
+      "cancel": "Cancel",
+      "failed": "Did not go through: {{error}}",
+      "noResult": "No result yet",
+      "noLessons": "No lessons from this run",
+      "stepsSoFar_one": "{{count}} step so far",
+      "stepsSoFar_other": "{{count}} steps so far",
+      "landNothing": "No sealed commits to land here: re-run, or discard",
+      "landDone": "Done",
+      "nothingToDo": "Nothing to do on this run",
+      "doneAgo": "done {{ago}} ago",
+      "turns_one": "{{count}} turn",
+      "turns_other": "{{count}} turns",
+      "position": "Waiting for you {{n}} / {{total}}",
+      "previous": "Previous run waiting for you",
+      "next": "Next run waiting for you",
+      "openHive": "Open Hive session",
+      "close": "Close",
+      "acceptance": "Acceptance",
+      "stopFailed": "The Hive did not stop it; try again",
+      "all": "All",
+      "moreRunning_one": "{{count}} more running",
+      "moreRunning_other": "{{count}} more running",
+      "fold": "· Hide",
+      "unfold": "· Show",
+      "cleanupSoon": "Cleared in 3 days",
+      "openCard": "Open card",
+      "answerElsewhere": "Its question is answered in the Swarm Out tab.",
+      "openSwarmOut": "Open Swarm Out",
+      "cleanupSoonLong": "Its records are cleared within 3 days: after that its commits can no longer land.",
+      "manualWhy": "Its commits were not sealed into a bundle, so they cannot be landed from here. Merge them yourself, then confirm.",
+      "manualConfirm": "I merged it by hand: accept",
+      "retry": "Try again",
+      "landNoUrl": "No address to fetch these commits from: merge them by hand.",
+      "doneJustNow": "done just now"
     }
   },
   "usage": {
@@ -1796,7 +1952,8 @@
     "blockingHint": "Stopped — nothing moves without you",
     "review": "Review",
     "reviewHint": "Self-advancing — your input confirms or overrides",
-    "tabGuide": "How it works"
+    "tabGuide": "How it works",
+    "openSwarmOut": "Open Swarm Out"
   },
   "cdf": {
     "w24h": "24 hours",

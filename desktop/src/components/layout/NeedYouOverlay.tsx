@@ -125,6 +125,7 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
           items={blocking}
           onFill={onFill}
           onSend={onSend}
+          onOpened={close}
         />
       )}
       {review.length > 0 && (
@@ -134,6 +135,7 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
           items={review}
           onFill={onFill}
           onSend={onSend}
+          onOpened={close}
         />
       )}
     </div>
@@ -146,6 +148,7 @@ function TierSection({
   items,
   onFill,
   onSend,
+  onOpened,
   pulse = false,
 }: {
   label: string;
@@ -153,6 +156,7 @@ function TierSection({
   items: AttentionEntry[];
   onFill: (prompt: string) => void;
   onSend: (prompt: string) => void;
+  onOpened: () => void;
   pulse?: boolean;
 }) {
   const groups = groupByBrain(items);
@@ -176,7 +180,7 @@ function TierSection({
           </div>
           <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
             {brainItems.map((it, i) => (
-              <NeedsYouRow key={it.id} item={it} divider={i > 0} onFill={onFill} onSend={onSend} />
+              <NeedsYouRow key={it.id} item={it} divider={i > 0} onFill={onFill} onSend={onSend} onOpened={onOpened} />
             ))}
           </div>
         </div>

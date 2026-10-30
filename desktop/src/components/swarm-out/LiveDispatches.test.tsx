@@ -71,8 +71,10 @@ describe('LiveDispatches', () => {
     });
     // the Hive says the run waits but no question reached this Host: it is still listed
     render(<LiveDispatches now={Date.parse('2026-10-27T03:00:00Z')} />);
-    expect(await screen.findByText('Fix login')).toBeTruthy();
-    expect(screen.getByTestId('swarm-out-run').textContent).toContain('在等你');
+    const row = (await screen.findAllByTestId('swarm-out-row'))[0];
+    expect(row.textContent).toContain('Fix login');
+    expect(row.getAttribute('data-stage')).toBe('needs_answer');
+    expect(screen.getByTestId('swarm-out-waiting-unasked').textContent).toContain('Fix login');   // the Hive page's
   });
 
   it('names the tool and the dispatch, and refuses to offer approve for a cut-off command (fixing spec B)', async () => {
@@ -141,6 +143,7 @@ describe('LiveDispatches', () => {
       asks: [{ ...approval, dispatch_title: null, possible_dispatch_title: 'Timed out' }], errors: [] });
     render(<LiveDispatches now={Date.parse('2026-10-27T03:00:00Z')} />);
     expect((await screen.findByTestId('swarm-out-ask-source')).textContent).toBe('可能属于：Timed out');
-    expect(screen.getByTestId('swarm-out-run-unknown')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('swarm-out-section-done'));      // an older dispatch, never named: kept in view
+    expect(screen.getAllByTestId('swarm-out-row').map((r) => r.getAttribute('data-id'))).toEqual(['d9']);
   });
 });

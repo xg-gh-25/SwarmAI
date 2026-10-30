@@ -8,8 +8,9 @@
  *   Hive says is waiting whose question has not been mirrored here (no ask at all). An
  *   ask whose answer the Hive refused is listed as not delivered but does not count
  *   here: it is settled on the Hive's own page or expires. Plus every run that waits on
- *   the person to accept it (`toSettle`: judge its answer or document, land or reject
- *   its commits, decide after a fail) or whose records this Host removes soon.
+ *   the person (`toSettle`: its stage is awaiting acceptance, or stopped with a command
+ *   to give: re-run or discard; backend core/swarm_out_settle) or whose records this
+ *   Host removes soon.
  * - `running` = runs whose state is running on their Hive (backend run_state: streaming,
  *   preparing, starting or stopping). A run waiting on the person is not running, and a
  *   run whose state is unknown (`running` null) is not counted: the tab never claims
@@ -35,12 +36,13 @@ export function waitingUnasked(d: SwarmOutRuns) {
   return d.runs.filter((r) => (r.state ? r.state === 'waiting' : r.waiting) && !asked.has(`${r.hive_id}/${r.session_id}`));
 }
 
-/** A run that waits on the person to accept it (backend core/swarm_out_settle: its
- *  next step is accept or review_code), or whose records go within 3 days unsettled;
- *  never a run waiting on a question (that one is counted by its ask). */
+/** A run that waits on the person to decide it (backend core/swarm_out_settle: stage
+ *  awaiting, or stopped with a command to give), or whose records go within 3 days
+ *  unsettled; never a run waiting on a question (that one is counted by its ask). */
 export function toSettle(r: SwarmOutRun): boolean {
   if (r.settle?.settled || (r.state ? r.state === 'waiting' : r.waiting)) return false;
-  return r.next === 'accept' || r.next === 'review_code' || !!r.cleanup_soon;
+  const decides = (r.actions ?? []).some((a) => a.key !== 'open_session');
+  return ((r.stage === 'awaiting' || r.stage === 'stopped') && decides) || !!r.cleanup_soon;
 }
 
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {

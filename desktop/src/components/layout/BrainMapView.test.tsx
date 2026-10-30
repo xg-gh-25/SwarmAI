@@ -178,7 +178,7 @@ describe('BrainMapView', () => {
     const hive = screen.getByTestId('bm-lane-hive');
     await waitFor(() => expect(hive.querySelectorAll('[data-testid="swarm-out-run-open-button"]')).toHaveLength(1));
     fireEvent.click(hive.querySelector('[data-testid="swarm-out-run-open-button"]')!);
-    expect(open).toHaveBeenCalledWith('sess_1', 'Hive d1 · worker-1');
+    expect(open).toHaveBeenCalledWith('sess_1', 'Hive d1 · worker-1', false);
   });
 
   it('a local Run card shows the Hive card\'s cells, and — for what the Run did not record', () => {

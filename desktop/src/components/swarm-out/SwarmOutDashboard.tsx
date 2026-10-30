@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { HiveGuide } from './HiveGuide';
 import { HistoryView } from './HistoryView';
 import { LiveDispatches } from './LiveDispatches';
-import { OpenSessionContext } from './openSession';
+import { OpenSessionContext, PanelHiddenContext } from './openSession';
 import { useFleet } from './live';
 import { TONE_VAR } from './tone';
 
@@ -48,7 +48,7 @@ function usePanelWidth(ref: React.RefObject<HTMLElement | null>): number {
 export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, now }: {
   hidden?: boolean; onOpenHive?: () => void;
   /** Open a run's Hive session in the Hive tab (run titles become buttons). */
-  onOpenSession?: (sessionId: string, title: string) => void;
+  onOpenSession?: (sessionId: string, title: string, readOnly?: boolean) => void;
   now?: number;
 }) {
   const { t } = useTranslation();
@@ -69,6 +69,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, n
   );
   return (
     <OpenSessionContext.Provider value={onOpenSession ?? null}>
+    <PanelHiddenContext.Provider value={hidden}>
     <div
       ref={rootRef}
       className={`min-w-0 flex flex-col min-h-0 bg-[var(--color-bg)] ${compact ? 'text-[12.5px]' : 'text-[13px]'}`}
@@ -91,10 +92,11 @@ export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, n
         {view === 'run'
           ? (fleet !== null && fleet.running === 0
             ? <HiveGuide hives={fleet.hives} onOpenHive={onOpenHive} />
-            : <LiveDispatches hidden={hidden} fleet={fleet} fleetFailed={fleetFailed} onOpenHive={onOpenHive} now={at} />)
+            : <LiveDispatches hidden={hidden} fleet={fleet} fleetFailed={fleetFailed} onOpenHive={onOpenHive} now={at} compact={compact} />)
           : <HistoryView hidden={hidden} now={at} compact={compact} />}
       </div>
     </div>
+    </PanelHiddenContext.Provider>
     </OpenSessionContext.Provider>
   );
 }

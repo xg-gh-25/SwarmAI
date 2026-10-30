@@ -1405,7 +1405,6 @@
     "return": {
       "landed": "已落到 {{into}}（{{head}}）。接下来按这个仓库自己的规则 build、测试。",
       "nothing": "没有可落地的改动",
-      "rejected": "没有落地，改动留在 {{ref}}",
       "fetching": "正在取回…",
       "prepare": "取回改动并审阅",
       "summary": "{{commits}}，{{files}}，落到 {{branch}}",
@@ -1416,7 +1415,6 @@
       "commitsNote": "commit（Hive 写的说明，只作参考）",
       "fullDiff": "看完整 diff：",
       "land": "批准落地",
-      "reject": "不要",
       "retake": "重新取回"
     },
     "resize": {
@@ -1619,7 +1617,9 @@
       "noPlugin": "插件命令在本机运行，不能发给 Hive 会话。",
       "noLocalFile": "本机的文件不能发给 Hive 会话，请改用上传附件。",
       "noTerminal": "本机终端的输出不能发给 Hive 会话。",
-      "denyOnly": "这条命令太长或含有隐藏字符，这里只能拒绝。"
+      "denyOnly": "这条命令太长或含有隐藏字符，这里只能拒绝。",
+      "closed": "这一单已丢弃或已过期，会话打不开。",
+      "readOnly": "这一单已通过，会话只读。"
     },
     "type": {
       "unknown": "未知",
@@ -1650,31 +1650,6 @@
       "other_profile": "run 用了别的 profile",
       "other_run": "跑的不是派给它的那个 run"
     },
-    "settle": {
-      "accept": "验收：交回的东西达到要求了吗？",
-      "acceptance": "验收标准：{{text}}",
-      "pass": "通过",
-      "fail": "不通过",
-      "failNote": "哪里不行（补做时可以照这句发给 Hive）",
-      "failConfirm": "确认不通过",
-      "cancel": "取消",
-      "failed": "没通过：补做，或者放弃",
-      "rejected": "提交被拒了：补做，或者放弃",
-      "noCommits": "没交回提交：补做，或者放弃",
-      "noSession": "可能已经派出，但 Hive 没报会话：去 Hive 页面看过后再放弃",
-      "redo": "补做（打开 Hive 会话）",
-      "reviewCode": "审代码：在详情里看改动，落地就是通过，拒绝就是不通过",
-      "showCode": "看代码",
-      "manualLanded": "我已手工落地",
-      "abandon": "放弃",
-      "abandonConfirm": "确认放弃（会清掉 Hive 上的工作区）",
-      "cleanupSoon": "这单 3 天后清理，之后提交就落不了地了",
-      "actionFailed": "没成功：{{error}}",
-      "unsealed": "提交没能封进 bundle，只在 Hive 的工作区里：手工落地后点「我已手工落地」，或者放弃",
-      "noResult": "停了，没有结果交回：补做，或者放弃",
-      "abandonConfirmUnsealed": "确认放弃（Hive 工作区里没封进 bundle 的提交会一起删掉）",
-      "filesMissing": "有交回的文件没能放进 Brain（太大或放置失败），Hive 上的工作区会一直留着：等它放进来，或者确认不要了就放弃"
-    },
     "welcome": {
       "why": "把任务派到你的 Hive 上，无人值守跑完；结果回到它的 Brain。",
       "dispatch": "派一个任务到 Hive：",
@@ -1701,6 +1676,187 @@
       "long": "这个会话已经很长了（上下文 {{pct}}%）。派发的状态都在左边仪表盘和派发记录里，用右上角的「新会话」开个新的不会丢东西，回复也会更快。",
       "gotIt": "知道了",
       "placeholder": "描述要派到 Hive 的任务…"
+    },
+    "review": {
+      "ago": {
+        "now": "刚刚",
+        "m": "{{n}}m",
+        "h": "{{n}}h",
+        "d": "{{n}}d"
+      },
+      "autonomy": {
+        "judge": "Judge {{state}}",
+        "full": "全自主",
+        "steppedIn_one": "介入 {{count}} 次",
+        "steppedIn_other": "介入 {{count}} 次",
+        "judgeHead": "pipeline run · Autonomy Judge：{{state}}（任一硬约束 BLOCK 整体 BLOCK，不做综合分）",
+        "dim": "维度",
+        "role": "地位",
+        "verdict": "结论",
+        "number": "数字"
+      },
+      "human": {
+        "approved": "批准（命令）",
+        "denied": "拒绝",
+        "answered": "回答问题",
+        "said": "会话里说的话",
+        "unanswered": "没答就过期",
+        "steps": "失败步骤 {{failed}} / {{total}} · Judge 只给 pipeline run 打分；native run 看这里的介入明细"
+      },
+      "tag": {
+        "answer": "回答问题",
+        "awaiting": "验收 · {{what}}"
+      },
+      "what": {
+        "commits_one": "{{count}} 提交",
+        "commits_other": "{{count}} 提交",
+        "document": "文档",
+        "answer": "回答"
+      },
+      "stage": {
+        "running": "运行中",
+        "needs_answer": "等你回答",
+        "awaiting": "待验收",
+        "stopped": "已停止",
+        "accepted": "已通过",
+        "discarded": "已丢弃",
+        "expired": "已过期"
+      },
+      "why": {
+        "no_session": "Hive 没报会话",
+        "no_result": "停了，没交回结果",
+        "hive_gone": "Hive 已不在",
+        "error": "出错结束",
+        "crashed": "崩了",
+        "stopped": "你按了停止",
+        "gave_up": "它放弃了",
+        "turn_limit": "到了轮数上限",
+        "paused": "暂停了",
+        "no_terminal": "没记下怎么结束",
+        "restarted": "重启过",
+        "superseded": "被替换",
+        "no_record": "没有记录"
+      },
+      "cmd": {
+        "accept": {
+          "verdict": {
+            "name": "通过",
+            "does": "达到验收标准，这一单了结"
+          },
+          "land": {
+            "name": "通过",
+            "does": "把提交落地到本机 main，这一单了结"
+          },
+          "manual": {
+            "name": "我已手工合进去，通过",
+            "does": "提交没法直接合，你自己合进去了"
+          }
+        },
+        "rerun": {
+          "name": "修正重跑…",
+          "does": "写清哪里要改，发回同一个会话接着做"
+        },
+        "stop": {
+          "name": "停止",
+          "does": "停在这一步；会话和工作区都在，之后可以修正重跑"
+        },
+        "open": {
+          "name": "打开会话",
+          "does": "在 Hive tab 看完整对话，直接跟它说"
+        },
+        "openReadOnly": {
+          "name": "打开会话（只读）",
+          "does": "看完整对话，不能再发消息"
+        },
+        "discard": {
+          "name": "丢弃",
+          "does": "不要这一单了：不能再跑，会话也打不开"
+        },
+        "answer": {
+          "name": "回答",
+          "does": "问题在左边交付物里"
+        }
+      },
+      "check": {
+        "ended": "做完了",
+        "notEnded": "结束方式：{{how}}",
+        "checksRan": "检查都跑了",
+        "checksMissed": "没跑：{{list}}",
+        "files_one": "交回 {{count}} 个文件",
+        "files_other": "交回 {{count}} 个文件",
+        "bundleSealed": "提交已封进 bundle",
+        "bundleUnsealed": "提交没封进 bundle",
+        "executionMatches": "执行方式和派的一致",
+        "executionDiffers": "执行方式和派的不一致",
+        "noneUnanswered": "没有没答的问题",
+        "unanswered_one": "{{count}} 个没答",
+        "unanswered_other": "{{count}} 个没答"
+      },
+      "rerunBox": {
+        "title": "修正重跑",
+        "label": "写给 Hive 上的 agent，原样发过去",
+        "placeholder": "哪里不对、漏了什么、要它怎么改……",
+        "note": "原样发进同一个会话；工作区还在；旧的验收结论作废",
+        "submit": "发送并重跑"
+      },
+      "discardBox": {
+        "title": "丢弃这一单？",
+        "consequence": "丢弃后：不能再跑、不能修正重跑、Hive 会话打不开；Hive 上的工作区删掉（交回的文件和已落地的提交不受影响）。",
+        "consequenceUnsealed": "丢弃后：不能再跑、不能修正重跑、Hive 会话打不开；Hive 上的工作区删掉，没封进 bundle 的提交也一起删。",
+        "label": "为什么不要了（可不写；写了会算进“重复纠正率”）",
+        "placeholder": "可不写",
+        "submit": "确认丢弃"
+      },
+      "tab": {
+        "now": "现在在做",
+        "deliverable": "交付物 {{count}}",
+        "reply": "最后的回复",
+        "autonomy": "自主度",
+        "process": "过程 · {{count}} 步",
+        "cost": "花费",
+        "lessons": "教训 {{count}}"
+      },
+      "section": {
+        "you": "等你",
+        "running": "在跑",
+        "done": "最近完成"
+      },
+      "now": "现在：",
+      "also": "也可以",
+      "cancel": "取消",
+      "failed": "没成功：{{error}}",
+      "noResult": "还没有结果",
+      "noLessons": "这一单没有教训",
+      "stepsSoFar_one": "已做 {{count}} 步",
+      "stepsSoFar_other": "已做 {{count}} 步",
+      "landNothing": "这里没有封好的提交可落地：修正重跑，或丢弃",
+      "landDone": "完成",
+      "nothingToDo": "这一单没有要做的事",
+      "doneAgo": "{{ago}} 前做完",
+      "turns_one": "{{count}} 轮",
+      "turns_other": "{{count}} 轮",
+      "position": "等你的第 {{n}} / {{total}} 单",
+      "previous": "上一单等你的",
+      "next": "下一单等你的",
+      "openHive": "打开 Hive 会话",
+      "close": "关闭",
+      "acceptance": "验收标准",
+      "stopFailed": "Hive 没停下来，再试一次",
+      "all": "全部",
+      "moreRunning_one": "另 {{count}} 个在跑",
+      "moreRunning_other": "另 {{count}} 个在跑",
+      "fold": "· 收起",
+      "unfold": "· 展开",
+      "cleanupSoon": "3 天后清理",
+      "openCard": "打开大卡片",
+      "answerElsewhere": "它的问题在 Swarm Out tab 里回答。",
+      "openSwarmOut": "打开 Swarm Out",
+      "cleanupSoonLong": "3 天内清理这一单的记录，之后提交就落不了地了。",
+      "manualWhy": "提交没封进 bundle，没法从这里落地。你自己合进去后再确认。",
+      "manualConfirm": "我已手工合进去：通过",
+      "retry": "再试一次",
+      "landNoUrl": "没有可以取回这些提交的地址：请手工合并。",
+      "doneJustNow": "刚做完"
     }
   },
   "usage": {
@@ -1795,7 +1951,8 @@
     "blockingHint": "已停下，等你处理才能继续",
     "review": "待确认",
     "reviewHint": "会自己往前推进，你的意见用来确认或推翻",
-    "tabGuide": "工作原理"
+    "tabGuide": "工作原理",
+    "openSwarmOut": "打开 Swarm Out"
   },
   "cdf": {
     "w24h": "24 小时",

@@ -46,7 +46,7 @@ export interface OverlayRenderCtx {
   deleteSession?: (session: unknown) => void;
   /** Open a dispatched run's Hive session in the Hive tab (ChatPage.openHiveSession):
    *  a Hive run card outside Swarm Out (a Brain's Runs tab) opens it through this. */
-  openHiveSession?: (sessionId: string, title: string) => void;
+  openHiveSession?: (sessionId: string, title: string, readOnly?: boolean) => void;
   /** Current agent scope (ChatPage.selectedAgentId) — History's session query key.
    *  Sourced by the host from OverlayContext (REACTIVE), NOT the module bridge: an open
    *  History overlay re-renders + re-queries when the agent switches while open
@@ -66,7 +66,7 @@ export interface OverlayCtxBridge {
   openFile?: (file: unknown, autoDiff?: boolean) => void;
   resumeSession?: (session: unknown) => boolean;
   deleteSession?: (session: unknown) => void;
-  openHiveSession?: (sessionId: string, title: string) => void;
+  openHiveSession?: (sessionId: string, title: string, readOnly?: boolean) => void;
   /** Select the pinned Swarm Out tab (a dispatch card's "View in Swarm Out"). */
   showSwarmOut?: () => void;
 }

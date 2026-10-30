@@ -10,10 +10,21 @@
  * the item's context and ids; the row shows the backend's plain `title` (what is
  * needed) and `summary` (which thing it is) as-is, never rewritten here.
  *
+ * A Swarm Out item (`dispatch.context.kind` = "swarm_out": a summary of the runs and
+ * questions waiting) is not a prompt: either action opens the Swarm Out tab, where each
+ * run is handled (design 2026-10-31-swarm-out-run-review §3.7), then `onOpened`.
+ *
  * @exports NeedsYouRow, needsYouPrompt
  */
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../services/attention';
+import { getOverlayCtxBridge } from './overlayRegistry';
+
+/** True for an item that opens the Swarm Out tab instead of filling the chat. */
+export function opensSwarmOut(it: AttentionEntry): boolean {
+  return it.dispatch?.context?.kind === 'swarm_out';
+}
 
 /** The text a row fills or sends: the backend prompt, else its title. */
 export function needsYouPrompt(it: AttentionEntry): string {
@@ -28,11 +39,19 @@ export interface NeedsYouRowProps {
   lead?: ReactNode;
   /** Draw the divider above this row (every row but the first in a card). */
   divider?: boolean;
+  /** After a Swarm Out item opened the Swarm Out tab (the overlay closes itself). */
+  onOpened?: () => void;
   testid?: string;
 }
 
-export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testid = 'needs-you-row' }: NeedsYouRowProps) {
+export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testid = 'needs-you-row', onOpened }: NeedsYouRowProps) {
+  const { t } = useTranslation();
   const prompt = needsYouPrompt(item);
+  // a Swarm Out item opens the Swarm Out tab; where that tab cannot be reached (no
+  // chat page published it) it is an ordinary prompt
+  const show = opensSwarmOut(item) ? getOverlayCtxBridge().showSwarmOut : undefined;
+  const swarmOut = !!show;
+  const openSwarmOut = () => { show?.(); onOpened?.(); };
   return (
     <div
       data-testid={testid}
@@ -41,8 +60,8 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
       <button
         type="button"
         data-testid={`${testid}-fill`}
-        onClick={() => onFill(prompt)}
-        title="Add to the chat input"
+        onClick={() => (swarmOut ? openSwarmOut() : onFill(prompt))}
+        title={swarmOut ? t('needYou.openSwarmOut') : 'Add to the chat input'}
         className="flex-1 min-w-0 w-full text-left flex items-start gap-2.5 pl-4 pr-2 py-2 hover:bg-[var(--color-hover)] transition-colors cursor-pointer"
       >
         {lead && <span className="mt-[4px] shrink-0">{lead}</span>}
@@ -56,7 +75,7 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
           {ATTENTION_SOURCE_LABEL[item.source] ?? item.source}
         </span>
       </button>
-      <button
+      {!swarmOut && <button
         type="button"
         data-testid={`${testid}-send`}
         onClick={() => onSend(prompt)}
@@ -65,7 +84,7 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
         className="icon-btn-lg shrink-0 grid place-items-center text-[var(--color-text-muted)] hover:text-[var(--color-brand-strong)] hover:bg-[color-mix(in_srgb,var(--color-brand)_16%,transparent)] transition-colors"
       >
         <span className="material-symbols-outlined icon-md">arrow_upward</span>
-      </button>
+      </button>}
     </div>
   );
 }

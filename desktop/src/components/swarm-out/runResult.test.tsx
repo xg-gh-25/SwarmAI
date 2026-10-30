@@ -7,7 +7,8 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
-import { SwarmOutDashboard } from './SwarmOutDashboard';
+import { RunCard } from './LiveDispatches';
+import { OpenSessionContext } from './openSession';
 import { agentFacts, dailyByOutcome, endedLabel, modelLabel, outcomeBucket, runJudge, runStats, tokenCount, tokenStats, workLines } from './live';
 import i18n from '../../i18n';
 
@@ -226,11 +227,14 @@ beforeEach(() => {
   vi.mocked(swarmOutService.refresh).mockResolvedValue({ result: RUN.result!, result_error: null });
 });
 
-const card = async (title: string) => {
-  render(<SwarmOutDashboard now={NOW} />);
-  const all = await screen.findAllByTestId('swarm-out-run');
-  return all.find((c) => c.textContent?.includes(title))!;
+/** The cards of the runs /runs answers (RunCard: the history view's and a Brain's
+ *  Runs tab's card; the run view lists rows, RunList). */
+const cards = async (open?: (sid: string, title: string, readOnly?: boolean) => void) => {
+  const { runs } = await swarmOutService.runs();
+  render(<OpenSessionContext.Provider value={open ?? null}>{runs.map((r) => <RunCard key={r.dispatch_id} r={r} />)}</OpenSessionContext.Provider>);
+  return screen.findAllByTestId('swarm-out-run');
 };
+const card = async (title: string) => (await cards()).find((c) => c.textContent?.includes(title))!;
 
 describe('a run card', () => {
   it('shows how it ended, what it did and its numbers', async () => {
@@ -302,11 +306,10 @@ describe('a run card', () => {
     vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN, session_id: sid },
       { ...RUN, dispatch_id: 'so_dddddddddddd', title: 'no session', session_id: null }], asks: [], errors: [] });
     const onOpenSession = vi.fn();
-    render(<SwarmOutDashboard now={NOW} onOpenSession={onOpenSession} />);
-    const all = await screen.findAllByTestId('swarm-out-run');
+    const all = await cards(onOpenSession);
     const withSession = all.find((c) => c.textContent?.includes('fix the widget'))!;
     fireEvent.click(within(withSession).getByTestId('swarm-out-run-open-button'));
-    expect(onOpenSession).toHaveBeenCalledWith(sid, 'fix the widget · explorer');
+    expect(onOpenSession).toHaveBeenCalledWith(sid, 'fix the widget · explorer', false);
     const without = all.find((c) => c.textContent?.includes('no session'))!;
     expect(within(without).queryByTestId('swarm-out-run-open-button')).toBeNull();
   });

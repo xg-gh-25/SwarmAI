@@ -2,18 +2,21 @@
  * LiveDispatches — the run view of the Swarm Out panel, on real data only
  * (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
  *
- * It answers three things, in this order: where the work stands (one compact card on
+ * It answers two things, in this order: where the work stands (one compact card on
  * top: the questions waiting, the free slots and the runs running as three numbers, and
- * each Hive's slots under them), does a Hive need me (the questions waiting, each with
- * its answer controls — the one thing in the accent colour), and how are the runs I
- * sent (running, stopped in the last 24 h, state unknown). What has no data source yet
- * says TBD and which source is missing; nothing on this view is a sample. What went
+ * each Hive's memory under them), and the runs I sent, one row each, what waits on me
+ * first (RunList; a row opens the run's big card, RunOverlay, where every command is;
+ * design docs/design/2026-10-31-swarm-out-run-review.md). A question whose session is
+ * none of the listed runs is answered here, above the list; one the Hive refused, or
+ * one that never reached here, is handled on the Hive's page. What has no data source
+ * yet says TBD and which source is missing; nothing on this view is a sample. What went
  * on in the past (the runs by Brain, type, Hive) is the history view's (HistoryView).
  *
- * A run that is not running any more shows what its Hive recorded (design
- * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
- * numbers; the details (the reply, code per repository, files, steps, a pipeline's
- * five rows) open on demand, across the whole row, with a second Hide at their end.
+ * RunCard (the history view's and a Brain's Runs tab's card) shows what a run's Hive
+ * recorded (design docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what
+ * it did, its numbers; the details (the reply, code per repository, files, steps, a
+ * pipeline's five rows) open on demand, with a second Hide at their end. A run that
+ * waits on the person says so and opens its big card: commands are only there.
  * Every card names its Brain and Project Agent as two labelled fields, and its facts
  * (ended, duration, tokens, cost, human loops, failed steps) as a row of cells. A
  * pipeline run's Autonomy Judge tag sits next to how it ended: its verdicts come with
@@ -36,9 +39,12 @@ import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
-import { ReturnPanel } from './ReturnPanel';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
+import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
+import { RunList } from './RunList';
+import { RunOverlay } from './RunOverlay';
+import { actionsOf, stageOf } from './runReview';
+import { waitingUnasked } from './useSwarmOutActivity';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -59,7 +65,9 @@ export function Dot({ tone, className = '' }: { tone: Tone; className?: string }
 const cardTint = (tone: Tone): React.CSSProperties | undefined =>
   tone === 'error' || tone === 'attention' ? { borderColor: `color-mix(in srgb, ${TONE_VAR[tone]} 45%, var(--color-border))` } : undefined;
 
-function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
+/** One question a Hive waits on, with its answer controls (the run's big card shows
+ *  the questions of its session; the run view, those of no listed run). */
+export function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
   const { t } = useTranslation();
   // single-select / typed answers: the text; multi-select: the picked labels
   const [picks, setPicks] = useState<Record<string, string>>({});
@@ -305,7 +313,6 @@ function ResultDetail({ r, full, setFull, onRefreshed, onClose }: {
           {x.files.map((f, i) => <div key={`${i}:${f.path}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path} <span className={muted}>+{f.added ?? '?'} −{f.deleted ?? '?'}</span></div>)}
           {x.files_total > x.files.length && <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.moreFiles', { count: x.files_total - x.files.length })}</div>}
           {x.commits.length > 0 && <div className={`font-mono text-[11.5px] ${muted}`}>{x.commits.map((c) => c.slice(0, 9)).join(' ')}{x.commits_total > x.commits.length ? t('swarmOut.detail.commitsTotal', { count: x.commits_total }) : ''}</div>}
-          {r.project_agent?.delivery === 'bundle' && x.url && x.bundle?.sha256 && <ReturnPanel dispatchId={r.dispatch_id} url={x.url} />}
           {x.bundle?.error && <div className={`text-[11.5px] ${muted}`} data-testid="swarm-out-return-unavailable">{t('swarmOut.detail.bundleError', { error: x.bundle.error })}</div>}
         </div>
       ))}
@@ -437,95 +444,21 @@ function OpenRunButton({ r, open }: { r: SwarmOutRun; open: () => void }) {
   );
 }
 
-/** The daemon's own reason for a refused settle action (a 400's detail), else the fallback. */
-function detailOf(e: unknown, fallback: string): string {
-  const d = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-  return typeof d === 'string' && d.length < 200 ? d : errText(e, fallback);
-}
-
-/** What the person decides to settle a task (dispatch-center §4-§6; backend
- *  core/swarm_out_settle), shown only when the run's next step is theirs: pass / fail
- *  (with a sentence) on an answer or a document, next to the acceptance sentence; after a
- *  fail, do it again in the Hive session or give it up; for commits, landing them in the
- *  details is the acceptance (no second button), or "landed by hand". Giving up asks
- *  twice: it settles the task and its Hive removes the workspace. No model decides. */
-export function SettleBar({ r, onShowCode, onDone }: { r: SwarmOutRun; onShowCode: () => void; onDone?: () => void }) {
+/** A run that waits on the person (its stage asks for a command) says what, and opens
+ *  its big card: the card is the one place commands are given. */
+function ReviewLine({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
   const { t } = useTranslation();
-  const openRun = useOpenRun(r);
-  const [note, setNote] = useState<string | null>(null);     // null: the note is closed
-  const [sure, setSure] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const next = r.next;
-  if (next !== 'accept' && next !== 'review_code' && !r.cleanup_soon) return null;   // settled: the daemon gives no next step
-  const act = async (fn: () => Promise<void>) => {
-    setBusy(true); setError(null);
-    try {
-      await fn();
-      setNote(null); setSure(false);
-      onDone?.();
-    } catch (e) {
-      setError(t('swarmOut.settle.actionFailed', { error: detailOf(e, t('swarmOut.live.submitFailed')) }));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const id = r.dispatch_id;
-  const verdict = r.settle?.verdict ?? null;
-  const code = r.settle?.code ?? 'none';
-  const commits = r.project_agent?.returns === 'commits' || (!r.project_agent?.returns && code !== 'none');
-  const endedAt = r.result?.ended_at ?? null;
-  // what the person is asked, in the order of core/swarm_out_settle.derive
-  const ask = next === 'review_code' ? (code === 'unsealed' ? 'unsealed' : 'reviewCode')
-    : next !== 'accept' ? null
-      : !r.session_id ? 'noSession'
-        : !r.result ? 'noResult'
-          : (verdict === 'pass' && r.settle?.why_not.includes('files')) ? 'filesMissing'
-          : verdict === 'fail' ? (commits ? 'rejected' : 'failed')
-            : commits ? 'noCommits' : 'accept';
-  const acceptance = r.project_agent?.acceptance;
+  const [open, setOpen] = useState(false);
+  const stage = stageOf(r);
+  const asks = actionsOf(r).some((a) => a.key !== 'open_session');
+  if (!asks || !['needs_answer', 'awaiting', 'stopped', 'running'].includes(stage)) return null;
   return (
-    <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[12.5px]" data-testid="swarm-out-settle" data-ask={ask ?? undefined}>
-      {r.cleanup_soon && <div className="text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-settle-cleanup">{t('swarmOut.settle.cleanupSoon')}</div>}
-      {ask && <div className="font-medium">{t(`swarmOut.settle.${ask}`)}</div>}
-      {ask && acceptance && <div className={`mt-0.5 text-[12px] break-words ${muted}`} data-testid="swarm-out-settle-acceptance">{t('swarmOut.settle.acceptance', { text: acceptance })}</div>}
-      {(ask || r.cleanup_soon) && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-          {ask === 'accept' && endedAt && note === null && <>
-            <button type="button" className={btn} disabled={busy} data-testid="swarm-out-settle-pass"
-              onClick={() => { void act(() => swarmOutService.verdict(id, 'pass', '', endedAt)); }}>{t('swarmOut.settle.pass')}</button>
-            <button type="button" className={btn} disabled={busy} data-testid="swarm-out-settle-fail"
-              onClick={() => setNote('')}>{t('swarmOut.settle.fail')}</button>
-          </>}
-          {(ask === 'failed' || ask === 'rejected' || ask === 'noCommits' || ask === 'noResult') && openRun && (
-            <button type="button" className={btn} onClick={openRun} data-testid="swarm-out-settle-redo">{t('swarmOut.settle.redo')}</button>
-          )}
-          {(ask === 'reviewCode' || ask === 'unsealed') && <>
-            <button type="button" className={btn} onClick={onShowCode} data-testid="swarm-out-settle-show-code">{t('swarmOut.settle.showCode')}</button>
-            <button type="button" className={btn} disabled={busy} data-testid="swarm-out-settle-manual"
-              onClick={() => { void act(() => swarmOutService.manualLanded(id)); }}>{t('swarmOut.settle.manualLanded')}</button>
-          </>}
-          {note === null && (
-            <button type="button" className={`${btn} ${sure ? 'text-[var(--color-status-error)]' : ''}`} disabled={busy} data-testid="swarm-out-settle-abandon"
-              onClick={() => { if (sure) void act(() => swarmOutService.abandon(id)); else setSure(true); }}>
-              {sure ? t(code === 'unsealed' ? 'swarmOut.settle.abandonConfirmUnsealed' : 'swarmOut.settle.abandonConfirm') : t('swarmOut.settle.abandon')}
-            </button>
-          )}
-          {sure && note === null && <button type="button" className={btn} onClick={() => setSure(false)}>{t('swarmOut.settle.cancel')}</button>}
-        </div>
-      )}
-      {note !== null && endedAt && (
-        <div className="mt-1.5" data-testid="swarm-out-settle-note">
-          <textarea className="w-full min-h-[56px] px-2 py-1 rounded-md border border-[var(--color-border)] bg-transparent text-[12.5px]"
-            maxLength={2000} value={note} placeholder={t('swarmOut.settle.failNote')} onChange={(e) => setNote(e.target.value)} />
-          <div className="mt-1 flex gap-2">
-            <button type="button" className={btn} disabled={busy || !note.trim()} data-testid="swarm-out-settle-fail-confirm"
-              onClick={() => { void act(() => swarmOutService.verdict(id, 'fail', note, endedAt)); }}>{t('swarmOut.settle.failConfirm')}</button>
-            <button type="button" className={btn} onClick={() => setNote(null)}>{t('swarmOut.settle.cancel')}</button>
-          </div>
-        </div>
-      )}
-      {error && <div className="mt-1 text-[12px] text-[var(--color-status-error)]" data-testid="swarm-out-settle-error">{error}</div>}
+    <div className="mt-2 pt-2 border-t border-[var(--color-border)] flex items-center gap-2 text-[12.5px]" data-testid="swarm-out-review-line" data-stage={stage}>
+      <span className="font-medium" style={{ color: stage === 'stopped' ? TONE_VAR.error : stage === 'running' ? TONE_VAR.busy : TONE_VAR.attention }}>{t(`swarmOut.review.stage.${stage}`)}</span>
+      {r.cleanup_soon && <span className="text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-cleanup-soon">{t('swarmOut.review.cleanupSoon')}</span>}
+      <button type="button" className={`ml-auto ${btn}`} onClick={() => setOpen(true)} data-testid="swarm-out-review-open-card">{t('swarmOut.review.openCard')}</button>
+      {open && <RunOverlay runs={[r]} asks={[]} order={[]} id={r.dispatch_id} now={Date.now()}
+        onSelect={() => {}} onClose={() => setOpen(false)} onReload={onReload ?? (() => {})} />}
     </div>
   );
 }
@@ -554,7 +487,7 @@ export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void
       </div>
       <AgentFacts r={r} />
       <RunResult r={r} full={full} />
-      <SettleBar r={r} onShowCode={() => setOpen(true)} onDone={onReload} />
+      <ReviewLine r={r} onReload={onReload} />
       {(canOpen || openRun) && <div className="mt-2 flex items-center gap-3 min-w-0">
         {canOpen && (
           <button type="button" className={`inline-flex items-center gap-0.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
@@ -570,41 +503,26 @@ export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void
   );
 }
 
-const runGrid = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))' };
-
-function RunGroup({ title, rows, empty, onReload }: { title: string; rows: SwarmOutRun[]; empty: string; onReload?: () => void }) {
-  return (
-    <section className="mt-5" data-testid="swarm-out-run-group" data-group={title}>
-      <div className="flex items-baseline gap-2 mb-2">
-        <h3 className="m-0 text-[13px] font-semibold">{title}</h3>
-        {rows.length > 0 && <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums">{rows.length}</span>}
-      </div>
-      {rows.length === 0 ? <div className={`text-[12.5px] ${muted}`}>{empty}</div> : (
-        <div className="grid gap-3" style={runGrid}>
-          {rows.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={onReload} />)}
-        </div>
-      )}
-    </section>
-  );
-}
-
 function OpenHive({ onOpenHive }: { onOpenHive?: () => void }) {
   const { t } = useTranslation();
   return onOpenHive ? <button type="button" className={`ml-2 ${btn}`} onClick={onOpenHive} data-testid="swarm-out-open-hive-admin">{t('swarmOut.live.openHiveAdmin')}</button> : null;
 }
 
-export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = false, onOpenHive, now }: {
-  hidden?: boolean; fleet?: SwarmOutFleet | null; fleetFailed?: boolean; onOpenHive?: () => void; now?: number;
+export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = false, onOpenHive, now, compact = false }: {
+  hidden?: boolean; fleet?: SwarmOutFleet | null; fleetFailed?: boolean; onOpenHive?: () => void; now?: number; compact?: boolean;
 }) {
   const { t } = useTranslation();
   const { data, failed, reload } = useRuns(hidden);
   const at = now ?? Date.now();
+  const runs = data?.runs ?? [];
   const asks = data?.asks ?? [];
-  const open = asks.filter((a) => !a.refused);
+  // a question of a listed run is answered on that run's card; the rest here
+  const listed = new Set(runs.filter((r) => r.session_id).map((r) => `${r.hive_id}/${r.session_id}`));
+  const loose = asks.filter((a) => !a.refused && !listed.has(`${a.hive_id}/${a.session_id}`));
   const refused = asks.filter((a) => a.refused);
+  const unasked = data ? waitingUnasked(data) : [];
   const n = panelNumbers(data, fleet);
-  const groups = runGroups(data?.runs ?? [], at, asks);
-  const noRuns = !!data && data.runs.length === 0;
+  const noRuns = !!data && runs.length === 0;
   const dash = '—';
   return (
     <div data-testid="swarm-out-live">
@@ -617,52 +535,27 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
         <Num testId="kpi-free" label={t('swarmOut.kpi.free')} tone={n.capacity ? (n.capacity.free > 0 ? 'ok' : 'attention') : undefined}
              value={n.capacity ? <>{n.capacity.free}<span className={`text-[12.5px] font-medium ml-1 ${muted}`}>/ {n.capacity.total}</span></> : dash} />
         <Num testId="kpi-running" label={t('swarmOut.kpi.running')} tone={n.running ? 'busy' : undefined} value={n.running ?? dash} />
+        <button type="button" className={`ml-auto ${btn}`} onClick={reload} data-testid="swarm-out-refresh">{t('swarmOut.waiting.refresh')}</button>
       </>} />
 
-      <section className="mt-5" data-testid="swarm-out-waiting">
-        <div className="flex items-baseline gap-2 mb-2">
-          <h3 className="m-0 text-[13px] font-semibold">{t('swarmOut.waiting.title')}</h3>
-          <button type="button" className={`ml-auto ${btn}`} onClick={reload}>{t('swarmOut.waiting.refresh')}</button>
-        </div>
-        {data && open.length === 0 && groups.waitingUnasked.length === 0 && groups.toSettle.length === 0 && <div className={`text-[12.5px] ${muted}`}>{t('swarmOut.waiting.none')}</div>}
-        <div className="flex flex-col gap-2">
-          {open.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
-        </div>
-        {groups.waitingUnasked.length > 0 && (
-          <div className="mt-2" data-testid="swarm-out-waiting-unasked">
-            <div className={`text-[12px] mb-1.5 ${muted}`}>{t('swarmOut.waiting.unasked')}<OpenHive onOpenHive={onOpenHive} /></div>
-            <div className="grid gap-3" style={runGrid}>
-              {groups.waitingUnasked.map((r) => <RunCard key={r.dispatch_id} r={r} />)}
-            </div>
+      {loose.length > 0 && (
+        <section className="mt-4 flex flex-col gap-2" data-testid="swarm-out-waiting">
+          {loose.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
+        </section>
+      )}
+      {(unasked.length > 0 || refused.length > 0) && (
+        <section className="mt-4" data-testid="swarm-out-on-hive-page">
+          <div className={`text-[12px] mb-1.5 ${muted}`}>{t(refused.length ? 'swarmOut.waiting.refused' : 'swarmOut.waiting.unasked')}<OpenHive onOpenHive={onOpenHive} /></div>
+          <div className="flex flex-col gap-2">
+            {refused.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
+            {unasked.map((r) => <div key={r.dispatch_id} className={`text-[12.5px] ${muted}`} data-testid="swarm-out-waiting-unasked">{r.title} · {r.hive}</div>)}
           </div>
-        )}
-        {groups.toSettle.length > 0 && (
-          <div className="mt-2" data-testid="swarm-out-waiting-settle">
-            <div className={`text-[12px] mb-1.5 ${muted}`}>{t('swarmOut.waiting.settle')}</div>
-            <div className="grid gap-3" style={runGrid}>
-              {groups.toSettle.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={reload} />)}
-            </div>
-          </div>
-        )}
-        {refused.length > 0 && (
-          <div className="mt-3" data-testid="swarm-out-refused-group">
-            <div className={`text-[12px] mb-1.5 ${muted}`}>{t('swarmOut.waiting.refused')}<OpenHive onOpenHive={onOpenHive} /></div>
-            <div className="flex flex-col gap-2">
-              {refused.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
-            </div>
-          </div>
-        )}
-      </section>
+        </section>
+      )}
 
       {noRuns ? (
         <div className={`mt-5 text-[12px] ${muted}`}>{t('swarmOut.noRuns')}</div>
-      ) : (
-        <>
-          <RunGroup title={t('swarmOut.groups.running')} rows={groups.running} empty={t('swarmOut.groups.runningEmpty')} />
-          <RunGroup title={t('swarmOut.groups.stopped')} rows={groups.stopped} empty={t('swarmOut.groups.stoppedEmpty')} onReload={reload} />
-          {groups.unknown.length > 0 && <RunGroup title={t('swarmOut.groups.unknown')} rows={groups.unknown} empty="" />}
-        </>
-      )}
+      ) : <RunList runs={runs} asks={asks} now={at} onReload={reload} compact={compact} />}
       <Tbd title={t('swarmOut.tbdParts.scheduled')} missing={t('swarmOut.tbdParts.scheduledMissing')} />
     </div>
   );

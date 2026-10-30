@@ -77,6 +77,7 @@ import { prefetchNav } from '../components/layout/overlayQueries';
 import { type ResumeTabInfo } from './chat/resumeTarget';
 import { classifyWorkLanding, type LandingVerdict } from './chat/landPromptInTab';
 import { SWARM_OUT_TAB_ID, hiveTabOf, isHiveTab, isSwarmOutTab, normalChatMax, normalTabs } from './chat/swarmOut';
+import { swarmOutService } from '../services/swarmOut';
 import { isRemoteId, startRelay, stopRelay } from '../services/remoteSession';
 import { RemoteContentContext } from './chat/remoteContentContext';
 import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
@@ -245,6 +246,10 @@ export default function ChatPage() {
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
   const [showRefreshModal, setShowRefreshModal] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // The Hive session opened read-only (an accepted Swarm Out run: the Host proxy refuses
+  // anything sent to it; design 2026-10-31-swarm-out-run-review §3.4). Its tab shows a
+  // line instead of the input.
+  const [readOnlyHiveSid, setReadOnlyHiveSid] = useState<string | null>(null);
 
   // LayoutContext — attachment state removed (now in useUnifiedAttachments)
 
@@ -409,6 +414,22 @@ export default function ChatPage() {
     // Decoupled: the hook fires this opaque callback; all ToDo logic stays here.
     onTabSessionBound: (tabId: string, boundSessionId: string) => backfillDispatchForTabRef.current(tabId, boundSessionId),
   });
+
+  // Read-only is the run's, not how the tab was opened: whenever a Hive tab is shown
+  // (opened from a card, a dispatch card, or restored after a restart), ask the runs
+  // whether its run's session opens read-only.
+  const activeHiveSid = isHiveTab(activeTabId) ? sessionId ?? null : null;
+  useEffect(() => {
+    if (!activeHiveSid) return undefined;
+    let alive = true;
+    swarmOutService.runs().then((d) => {
+      if (!alive) return;
+      const row = d.runs.find((r) => r.session_id === activeHiveSid);
+      const ro = !!row?.actions?.some((a) => a.key === 'open_session' && a.variant === 'read_only');
+      setReadOnlyHiveSid((cur) => (ro ? activeHiveSid : cur === activeHiveSid ? null : cur));
+    }).catch(() => { /* keep what the opener said */ });
+    return () => { alive = false; };
+  }, [activeHiveSid]);
 
   // TSCC state management — lifecycle state and UI preferences only.
   // System prompt metadata is now delivered via SSE and managed by useChatStreamingLifecycle.
@@ -1551,10 +1572,12 @@ export default function ChatPage() {
       // The api client answers an ApiError (statusCode); a raw axios error has response.status.
       const e = err as { statusCode?: number; response?: { status?: number } };
       const status = e?.statusCode ?? e?.response?.status;
-      if ((status === 404 || status === 409) && tabMapRef.current.get(tabId)?.sessionId === sid) {
+      if ((status === 404 || status === 409 || status === 410) && tabMapRef.current.get(tabId)?.sessionId === sid) {
         doCloseTab(tabId, sid, false);
-        // 409: a session of this machine holds the run's id (core/swarm_out_remote.COLLIDES)
-        const key = status === 409 ? 'swarmOut.hiveTab.collides' : 'swarmOut.hiveTab.notDispatched';
+        // 409: a session of this machine holds the run's id (core/swarm_out_remote.COLLIDES);
+        // 410: the run was discarded or expired, its session is closed (CLOSED)
+        const key = status === 409 ? 'swarmOut.hiveTab.collides' : status === 410 ? 'swarmOut.hiveTab.closed'
+          : 'swarmOut.hiveTab.notDispatched';
         document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t(key) } }));
         return;
       }
@@ -1568,10 +1591,11 @@ export default function ChatPage() {
   /** Open a dispatched run's Hive session in the Hive tab: select it when it is already
    *  there, refuse while the Hive tab holds a draft, else close the old Hive tab and
    *  open a new one (a new tab id, so the old tab's late callbacks find no tab). */
-  const openHiveSession = useCallback((sid: string, title: string) => {
+  const openHiveSession = useCallback((sid: string, title: string, readOnly = false) => {
     // Only a session the proxy accepts can be a Hive tab (addHiveTab refuses the rest):
     // checked first, so nothing of the current tabs changes for one it would refuse.
     if (!isRemoteId(sid)) return;
+    setReadOnlyHiveSid(readOnly ? sid : null);
     const map = tabMapRef.current;
     const old = hiveTabOf(map.values());
     if (old && old.sessionId === sid) {
@@ -2944,8 +2968,11 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Input Area */}
-              <ChatInput
+              {/* Input Area — an accepted Swarm Out run's Hive session is read-only */}
+              {isHiveTab(activeTabId) && readOnlyHiveSid !== null && readOnlyHiveSid === sessionId ? (
+                <div className="chat-column py-3 text-[12.5px] text-[var(--color-text-muted)] text-center border-t border-[var(--color-border)]"
+                  data-testid="hive-tab-read-only">{t('swarmOut.hiveTab.readOnly')}</div>
+              ) : <ChatInput
                 inputValue={inputValue}
                 onInputChange={setInputValue}
                 onSend={handleSendMessage}
@@ -2986,7 +3013,7 @@ export default function ChatPage() {
                   <SwarmOutNewSession hasContent={messages.length > 0} block={swarmOutBlock}
                     long={swarmOutLong} onStart={startSwarmOutFresh} />
                 ) : undefined}
-              />
+              />}
             </>
           )}
           </ErrorBoundary>

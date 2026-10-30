@@ -16,14 +16,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import i18n from '../../i18n';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 import { judgeState } from './judge';
-import { activityOf, toSettle, waitingUnasked } from './useSwarmOutActivity';
+import { activityOf } from './useSwarmOutActivity';
 import { endedTone, type Tone } from './tone';
 
 export const LIVE_POLL_MS = 30_000;
-const DAY_MS = 24 * 3600 * 1000;
 
 interface Polled<T> {
   data: T | null;
@@ -70,28 +69,9 @@ export function capacity(fleet: SwarmOutFleet | null): { free: number; total: nu
 }
 
 const sentAt = (r: SwarmOutRun): number => Date.parse(r.sent_at);
-const recent = (r: SwarmOutRun, now: number): boolean => now - sentAt(r) < DAY_MS;
-
 /** A run's state, from `state` or, from an older daemon without it, the booleans. */
 const stateOf = (r: SwarmOutRun): NonNullable<SwarmOutRun['state']> =>
   r.state ?? (r.waiting ? 'waiting' : r.running === true ? 'running' : r.running === false ? 'stopped' : 'unknown');
-
-/** The run view's groups. Stopped runs show only when sent in the last 24 h (older
- *  ones are in the history view); unknown ones too, except a dispatch whose session
- *  was never named (it may still be running). A waiting run shows its question in the
- *  等你 section; one whose question has not reached this Host at all is listed there
- *  as a run (waitingUnasked), so it never vanishes. A run to accept (toSettle) is in
- *  等你 too, whatever its age, and in no other group; a settled one is history's. */
-export function runGroups(runs: SwarmOutRun[], now: number, asks: SwarmOutAsk[] = []) {
-  const done = (r: SwarmOutRun) => toSettle(r) || !!r.settle?.settled;
-  return {
-    waitingUnasked: waitingUnasked({ runs, asks, errors: [] }),
-    toSettle: runs.filter(toSettle),
-    running: runs.filter((r) => stateOf(r) === 'running' && !toSettle(r)),
-    stopped: runs.filter((r) => stateOf(r) === 'stopped' && recent(r, now) && !done(r)),
-    unknown: runs.filter((r) => stateOf(r) === 'unknown' && (r.session_unknown || recent(r, now)) && !done(r)),
-  };
-}
 
 /** The numbers at the top of the run view: what waits on the person (and, apart, what
  *  must be settled on the Hive's own page), the free slots, what is running. */

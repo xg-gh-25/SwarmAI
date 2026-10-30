@@ -27,10 +27,12 @@ const calls: Call[] = [];
 let savedTabs: unknown = null;
 let relayStatus = 200;
 
-const run = (id: string, sid: string, title: string) => ({
+const run = (id: string, sid: string, title: string, over: Record<string, unknown> = {}) => ({
   dispatch_id: id, hive_id: 'h1', hive: 'hive-a', session_id: sid, title, origin: 'chat',
-  sent_at: new Date().toISOString(), waiting: false, running: true, state: 'running',
+  sent_at: new Date().toISOString(), waiting: false, running: true, state: 'running', ...over,
 });
+/** the second run, accepted: its session opens read-only (run-review §3.4) */
+let secondAccepted = false;
 
 function answer(method: string, url: string): unknown {
   if (url === '/agents/default') return { id: 'default', name: 'Swarm', description: '', model: 'm', skillIds: [], mcpIds: [] };
@@ -38,7 +40,8 @@ function answer(method: string, url: string): unknown {
   if (url.startsWith('/system/max-tabs')) return { max_tabs: 6, chat_max: 4, memory_pressure: 'ok' };
   if (url === '/settings/open-tabs') return method === 'get' ? savedTabs : { status: 'ok' };
   if (url === '/swarm-out/fleet') return { hives: [{ name: 'hive-a', status: 'running', region: null, version: null, instance_type: null, reachable: true, streaming: 1, saturated: false, memory_percent: 40 }], running: 1 };
-  if (url === '/swarm-out/runs') return { runs: [run('d1', 'S1', 'First run'), run('d2', 'S2', 'Second run')], asks: [], errors: [] };
+  if (url === '/swarm-out/runs') return { runs: [run('d1', 'S1', 'First run'), run('d2', 'S2', 'Second run', secondAccepted
+    ? { running: false, state: 'stopped', stage: 'accepted', actions: [{ key: 'open_session', primary: false, variant: 'read_only' }] } : {})], asks: [], errors: [] };
   if (/^\/swarm-out\/remote\/S\d\/relay$/.test(url)) {
     if (relayStatus !== 200) throw Object.assign(new Error('relay'), { response: { status: relayStatus } });
     return { session_id: url.split('/')[3], state: null };
@@ -89,12 +92,15 @@ const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 50
 async function openSwarmOut() {
   await waitFor(() => expect(screen.getByTestId('swarm-out-icon')).toBeTruthy(), { timeout: 5000 });
   fireEvent.click(screen.getByTestId('swarm-out-icon'));
-  await waitFor(() => expect(screen.getAllByTestId('swarm-out-run-open').length).toBe(2), { timeout: 5000 });
+  if (secondAccepted) fireEvent.click(await screen.findByTestId('swarm-out-section-done', {}, { timeout: 5000 }));
+  await waitFor(() => expect(screen.getAllByTestId('swarm-out-row-open').length).toBe(2), { timeout: 5000 });
 }
-const runButton = (title: string) => screen.getAllByTestId('swarm-out-run-open').find((b) => b.textContent === title)!;
+/** a run row's "Open session" button */
+const runButton = (title: string) => screen.getAllByTestId('swarm-out-row').find((r) => r.textContent?.includes(title))!
+  .querySelector('[data-testid="swarm-out-row-open"]') as HTMLElement;
 
 beforeEach(() => {
-  calls.length = 0; toasts.length = 0; savedTabs = null; relayStatus = 200; setRemote(null);
+  calls.length = 0; toasts.length = 0; savedTabs = null; relayStatus = 200; setRemote(null); secondAccepted = false;
 });
 
 describe('ChatPage — the Hive tab', () => {
@@ -179,6 +185,30 @@ describe('ChatPage — the Hive tab', () => {
     await settle();
     expect(hiveTabs()).toHaveLength(0);
     expect(toasts.some((m) => /also a session on this machine|撞了/.test(m))).toBe(true);
+  }, 30_000);
+
+  it('a relay 410 (the run was discarded or expired) closes the tab and says the run is closed', async () => {
+    relayStatus = 410;
+    mount();
+    await openSwarmOut();
+    await act(async () => { fireEvent.click(runButton('First run')); });
+    await settle();
+    expect(hiveTabs()).toHaveLength(0);
+    expect(toasts.some((m) => /discarded or expired|已丢弃或已过期/.test(m))).toBe(true);
+  }, 30_000);
+
+  it('an accepted run opens read-only: a line instead of the input', async () => {
+    secondAccepted = true;
+    mount();
+    await openSwarmOut();
+    await act(async () => { fireEvent.click(runButton('Second run')); });
+    await settle();
+    expect(hiveTabs()).toHaveLength(1);
+    expect(screen.getByTestId('hive-tab-read-only')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('swarm-out-icon'));
+    await act(async () => { fireEvent.click(runButton('First run')); });
+    await settle();
+    expect(screen.queryByTestId('hive-tab-read-only')).toBeNull();      // an open run takes messages
   }, 30_000);
 
   it('closing the Hive tab drops the relay, releases nothing local and goes back to Swarm Out', async () => {

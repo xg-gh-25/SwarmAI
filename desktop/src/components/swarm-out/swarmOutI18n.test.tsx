@@ -79,7 +79,11 @@ const run = (id: string, over: Partial<SwarmOutRun> = {}): SwarmOutRun => ({
 
 const RUNS: SwarmOutRuns = {
   runs: [
-    run('rich', { result: RICH, project_agent: { brain: 'widget', mode: 'build', revision: 'r', profile: 'full', delivery: 'bundle', acceptance: 'tests green' } }),
+    run('rich', { result: RICH, project_agent: { brain: 'widget', mode: 'build', revision: 'r', profile: 'full', delivery: 'bundle', acceptance: 'tests green' },
+      stage: 'awaiting', why: null, actions: [{ key: 'accept', primary: true, variant: 'land' }, { key: 'rerun', primary: false },
+        { key: 'open_session', primary: false }, { key: 'discard', primary: false }] }),
+    run('halted', { result: result({ ended: 'error' }), stage: 'stopped', why: 'error',
+      actions: [{ key: 'rerun', primary: true }, { key: 'discard', primary: false }] }),
     run('done', { result: result({ project_agent: null, lessons: { ...LESSONS, error: 'not_supported' } }) }),
     run('stopped', { result: result({ ended: 'stopped', project_agent: { brain: 'General', mode: null, profile: null, delivery: null }, gate_refusals: null }) }),
     run('paused', { result: result({ ended: 'paused', provisional: true, cost_usd: null, active_s: null, ended_at: null }) }),
@@ -135,20 +139,34 @@ beforeEach(() => {
 const panel = () => screen.getByTestId('swarm-out-dashboard');
 
 describe('in English, nothing on the panel is Chinese', () => {
-  it('the run view, with a run’s details open', async () => {
+  it('the run view, and a run’s big card on every tab and box', async () => {
     render(<SwarmOutDashboard now={NOW} onOpenHive={() => {}} />);
-    await screen.findAllByTestId('swarm-out-run');
+    await screen.findAllByTestId('swarm-out-row');
     await screen.findAllByTestId('swarm-out-fleet-hive');
-    const rich = screen.getAllByTestId('swarm-out-run').find((c) => c.textContent?.includes('task rich'))!;
-    fireEvent.click(within(rich).getByTestId('swarm-out-run-toggle'));
-    await within(rich).findByTestId('swarm-out-run-report');
-    expect(rich.textContent).toContain('Last reply');   // the details really rendered
+    fireEvent.click(screen.getByTestId('swarm-out-section-done'));      // every row on screen
     expect(cjkIn(panel().outerHTML)).toEqual([]);
+    const rich = screen.getAllByTestId('swarm-out-row').find((c) => c.textContent?.includes('task rich'))!;
+    fireEvent.click(rich);
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    await within(overlay).findByTestId('swarm-out-review-report');
+    for (const tab of ['reply', 'autonomy', 'process', 'cost', 'lessons', 'deliverable']) {
+      fireEvent.click(within(overlay).getByTestId(`swarm-out-review-tab-${tab}`));
+      expect(cjkIn(overlay.outerHTML)).toEqual([]);
+    }
+    fireEvent.click(within(overlay).getByTestId('swarm-out-cmd-rerun'));
+    expect(cjkIn(overlay.outerHTML)).toEqual([]);
+    fireEvent.click(within(overlay).getByTestId('swarm-out-review-cancel'));
+    fireEvent.click(within(overlay).getByTestId('swarm-out-cmd-discard'));
+    expect(cjkIn(overlay.outerHTML)).toEqual([]);
+    fireEvent.click(within(overlay).getByTestId('swarm-out-review-cancel'));
+    fireEvent.keyDown(window, { key: 'j' });                             // the stopped run
+    expect(within(overlay).getByTestId('swarm-out-review-stage').textContent).toContain('Stopped · ended with an error');
+    expect(cjkIn(overlay.outerHTML)).toEqual([]);
   });
 
   it('the history view', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    await screen.findAllByTestId('swarm-out-run');
+    await screen.findAllByTestId('swarm-out-row');
     fireEvent.click(screen.getByRole('button', { name: 'History' }));
     await screen.findAllByTestId('history-run');
     expect(cjkIn(panel().outerHTML)).toEqual([]);
@@ -184,12 +202,13 @@ describe('in English, nothing on the panel is Chinese', () => {
 describe('a language switch reaches a panel already on screen', () => {
   it('English, then Chinese', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    await screen.findAllByTestId('swarm-out-run');
+    await screen.findAllByTestId('swarm-out-row');
     expect(screen.getByRole('button', { name: 'Runs' })).toBeTruthy();
     await act(async () => { await i18n.changeLanguage('zh'); });
     try {
       expect(screen.getByRole('button', { name: '运行' })).toBeTruthy();
       expect(screen.getByTestId('swarm-out-fleet').textContent).toContain('机群');
+      expect(screen.getByTestId('swarm-out-section-you').textContent).toContain('等你');
     } finally {
       await act(async () => { await i18n.changeLanguage('en'); });
     }
@@ -204,15 +223,14 @@ describe('status colours follow ./tone', () => {
     expect(FLEET.hives.map(hiveTone)).toEqual(['ok', 'attention', 'error', 'unknown', 'error']);
   });
 
-  it('cards, slots and the numbers are coloured by that tone', async () => {
+  it('rows, slots and the numbers are coloured by that tone', async () => {
     render(<SwarmOutDashboard now={NOW} />);
-    const cards = await screen.findAllByTestId('swarm-out-run');
-    const cardOf = (t: string) => cards.find((c) => c.textContent?.includes(t))!;
-    expect(cardOf('task rich').dataset.tone).toBe('error');
-    expect(cardOf('task rich').querySelector('[data-tone="error"]')).toBeTruthy();   // the dot
-    expect(cardOf('task done').dataset.tone).toBe('ok');
-    expect(cardOf('task stopped').dataset.tone).toBe('attention');
-    expect(cardOf('task running').dataset.tone).toBe('busy');
+    const rows = await screen.findAllByTestId('swarm-out-row');
+    const dot = (t: string) => (rows.find((c) => c.textContent?.includes(t))!.querySelector('[data-tone]') as HTMLElement).dataset.tone;
+    expect(dot('task rich')).toBe('attention');          // awaiting acceptance: it waits on you
+    expect(dot('task halted')).toBe('error');            // stopped
+    expect(dot('task waits')).toBe('attention');         // needs your answer
+    expect(dot('task running')).toBe('busy');
 
     await screen.findAllByTestId('swarm-out-fleet-hive');
     const explorer = screen.getAllByTestId('swarm-out-fleet-hive').find((h) => h.textContent?.includes('explorer'))!;

@@ -7,12 +7,14 @@
  * nothing lands). The review shows the files with their line counts, the commits (their
  * subjects are the Hive's text, shown as data), and the files under the repository's
  * protected paths, which need their own tick. "Approve landing" lands exactly the tip
- * shown; "Reject" keeps it at its refs/hive/ ref. Building and testing the change is the
+ * shown (landing them is accepting the run: the big card's command panel shows this
+ * panel for each repository, ``autoPrepare``). Not good enough is a re-run with a
+ * correction or a discard, on the card. Building and testing the change is the
  * repository's own step, after this.
  *
  * @exports ReturnPanel
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutReturn } from '../../services/swarmOut';
 
@@ -24,7 +26,12 @@ function errText(e: unknown): string {
   return typeof d === 'string' ? d : e instanceof Error ? e.message : String(e);
 }
 
-export function ReturnPanel({ dispatchId, url }: { dispatchId: string; url: string }) {
+export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded }: {
+  dispatchId: string; url: string;
+  /** fetch and check at once (the command panel: the person already chose to accept) */
+  autoPrepare?: boolean;
+  onLanded?: () => void;
+}) {
   const { t } = useTranslation();
   const [rev, setRev] = useState<SwarmOutReturn | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,10 +48,11 @@ export function ReturnPanel({ dispatchId, url }: { dispatchId: string; url: stri
   const land = () => run(async () => {
     const out = await swarmOutService.returnLand(dispatchId, rev!.key, rev!.tip, ticked);
     setDone(out.landed ? t('swarmOut.return.landed', { into: out.into ?? 'main', head: out.head ?? '' }) : t('swarmOut.return.nothing'));
+    onLanded?.();
   });
-  const reject = () => run(async () => {
-    await swarmOutService.returnReject(dispatchId, rev!.key, rev!.tip);
-    setDone(t('swarmOut.return.rejected', { ref: rev!.ref }));
+  const started = useRef(false);
+  useEffect(() => {
+    if (autoPrepare && !started.current) { started.current = true; void prepare(); }
   });
 
   if (done) return <div className="mt-1 text-[12px]" data-testid="swarm-out-return-done">{done}</div>;
@@ -96,8 +104,6 @@ export function ReturnPanel({ dispatchId, url }: { dispatchId: string; url: stri
           <div className="mt-2 flex gap-2">
             <button type="button" className={btn} disabled={busy || (protectedN > 0 && !ticked)} onClick={() => { void land(); }}
               data-testid="swarm-out-return-land">{t('swarmOut.return.land')}</button>
-            <button type="button" className={btn} disabled={busy} onClick={() => { void reject(); }}
-              data-testid="swarm-out-return-reject">{t('swarmOut.return.reject')}</button>
           </div>
         </div>
       )}

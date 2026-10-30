@@ -15,7 +15,8 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import { capacity, dailySent, panelNumbers, runGroups } from './live';
+import { capacity, dailySent, panelNumbers } from './live';
+import { sections } from './runReview';
 import { activityOf, waitingUnasked } from './useSwarmOutActivity';
 import i18n from '../../i18n';
 
@@ -78,27 +79,27 @@ describe('the panel numbers', () => {
     expect(n.waiting).toBe(1);          // b; the refused ask z is not waiting here
     expect(n.onHivePage).toBe(1);
     expect(n.running).toBe(1);
-    expect(runGroups(RUNS.runs, NOW, RUNS.asks).stopped.map((r) => r.dispatch_id)).toEqual(['c', 'f']);   // d: 30 h ago
+    expect(sections(RUNS.runs, RUNS.asks, NOW).done.map((r) => r.dispatch_id).sort()).toEqual(['c', 'e', 'f']);   // d: 30 h ago
   });
 
   it('a run waiting with no question mirrored counts as waiting and is listed; a refused one is not', () => {
     const d: SwarmOutRuns = { runs: [run('w1', 'waiting'), run('w2', 'waiting')], asks: [ask('w2', true)], errors: [] };
     expect(waitingUnasked(d).map((r) => r.dispatch_id)).toEqual(['w1']);
     expect(activityOf(d).waiting).toBe(1);
-    expect(runGroups(d.runs, NOW, d.asks).waitingUnasked.map((r) => r.dispatch_id)).toEqual(['w1']);
+    expect(sections(d.runs, d.asks, NOW).you.map((r) => r.dispatch_id).sort()).toEqual(['w1', 'w2']);   // both rows wait on you
   });
 
   it('a run in an unknown state is in no number; shown within 24 h, or when its session was never named', () => {
-    const g = runGroups([run('u1', 'unknown'), run('u2', 'unknown', { sent_at: ago(40) }),
-      run('u3', 'unknown', { sent_at: ago(40), session_id: null, session_unknown: true })], NOW);
-    expect(g.unknown.map((r) => r.dispatch_id)).toEqual(['u1', 'u3']);
+    const g = sections([run('u1', 'unknown'), run('u2', 'unknown', { sent_at: ago(40) }),
+      run('u3', 'unknown', { sent_at: ago(40), session_id: null, session_unknown: true })], [], NOW);
+    expect(g.done.map((r) => r.dispatch_id).sort()).toEqual(['u1', 'u3']);
     const n = panelNumbers({ runs: [run('u1', 'unknown')], asks: [], errors: [] }, null);
     expect([n.running, n.waiting]).toEqual([0, 0]);
   });
 
   it('a run from an older daemon (no state) is grouped by its booleans, as the badge counts it', () => {
     const old = run('o', undefined, { state: undefined, running: true, waiting: false });
-    expect(runGroups([old], NOW).running).toHaveLength(1);
+    expect(sections([old], [], NOW).running).toHaveLength(1);
     expect(activityOf({ runs: [old], asks: [], errors: [] }).running).toBe(1);
   });
 
@@ -120,31 +121,32 @@ describe('the run view', () => {
     expect(tiles[0].getAttribute('data-testid')).toBe('kpi-waiting');
     expect(screen.getByTestId('kpi-waiting').textContent).toMatch(/^1\+1 个要去 Hive 页面处理/);
     expect(screen.getByTestId('kpi-running').textContent).toContain('1');
-    const waiting = screen.getByTestId('swarm-out-waiting');
-    expect(within(waiting).getAllByTestId('swarm-out-ask')).toHaveLength(2);
-    expect(within(screen.getByTestId('swarm-out-refused-group')).getAllByTestId('swarm-out-ask')).toHaveLength(1);
+    // b's question is answered on b's card (its row waits on you); the refused one is the Hive page's
+    expect(screen.queryByTestId('swarm-out-waiting')).toBeNull();
+    expect(within(screen.getByTestId('swarm-out-on-hive-page')).getAllByTestId('swarm-out-ask')).toHaveLength(1);
+    const you = screen.getAllByTestId('swarm-out-row').filter((r) => r.getAttribute('data-stage') === 'needs_answer');
+    expect(you.map((r) => r.getAttribute('data-id'))).toEqual(['b']);
+    expect(within(you[0]).getByTestId('swarm-out-row-tag').textContent).toBe('回答问题');
   });
 
-  it('puts the fleet, with the numbers in it, on top, and the questions waiting under it', async () => {
+  it('puts the fleet, with the numbers in it, on top, and the run list under it', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     await screen.findByTestId('kpi-free');
     const fleet = screen.getByTestId('swarm-out-fleet');
     expect(fleet.contains(screen.getByTestId('kpi-grid'))).toBe(true);
     const live = screen.getByTestId('swarm-out-live');
-    const sections = [...live.querySelectorAll('[data-testid="swarm-out-fleet"], [data-testid="swarm-out-waiting"], [data-testid="swarm-out-run-group"]')]
+    const order = [...live.querySelectorAll('[data-testid="swarm-out-fleet"], [data-testid="swarm-out-run-list"]')]
       .map((e) => e.getAttribute('data-testid'));
-    expect(sections.slice(0, 3)).toEqual(['swarm-out-fleet', 'swarm-out-waiting', 'swarm-out-run-group']);
+    expect(order).toEqual(['swarm-out-fleet', 'swarm-out-run-list']);
   });
 
-  it('puts each run in the group of its state', async () => {
+  it('puts each run in its section: waiting for you, running, recently done (folded)', async () => {
     render(<SwarmOutDashboard now={NOW} />);
     await screen.findByTestId('kpi-free');
-    const group = (title: string) => screen.getAllByTestId('swarm-out-run-group').find((g) => g.getAttribute('data-group') === title)!;
-    const titles = (g: HTMLElement) => within(g).queryAllByTestId('swarm-out-run').map((c) => c.getAttribute('data-state') + ':' + c.textContent?.split(/\d/)[0].trim());
-    expect(titles(group('在跑'))).toEqual(['running:task a']);
-    expect(titles(group('结束了（24 小时内派出的）'))).toEqual(['stopped:task c', 'stopped:task f']);
-    expect(within(group('结束了（24 小时内派出的）')).getAllByTestId('swarm-out-run-state')[1].textContent).toContain('Hive 已关机');
-    expect(titles(group('状态未知'))).toEqual(['unknown:task e']);
+    const ids = () => screen.getAllByTestId('swarm-out-row').map((r) => `${r.getAttribute('data-stage')}:${r.getAttribute('data-id')}`);
+    expect(ids()).toEqual(['needs_answer:b', 'running:a']);
+    fireEvent.click(screen.getByTestId('swarm-out-section-done'));
+    expect(ids().slice(2).sort()).toEqual(['stopped:c', 'stopped:e', 'stopped:f']);   // d: sent 30 h ago
   });
 
   it('says what each Hive reports', async () => {
@@ -164,7 +166,7 @@ describe('the run view', () => {
     vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [], asks: [], errors: [] });
     render(<SwarmOutDashboard now={NOW} />);
     expect(await screen.findByText(/还没有派发过任务/)).toBeTruthy();
-    expect(screen.queryAllByTestId('swarm-out-run-group')).toHaveLength(0);
+    expect(screen.queryAllByTestId('swarm-out-run-list')).toHaveLength(0);
   });
 
   it('says in Chinese which Hive\'s questions could not be read', async () => {
