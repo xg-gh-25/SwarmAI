@@ -1,8 +1,7 @@
-"""Journaled CDF corpus writer, recovery, quota, and baseline management.
+"""Journaled CDF corpus writer, recovery, and baseline management.
 
 - ``apply_unit`` materializes one judged unit through an immutable write plan.
 - ``recover`` resumes plans from postconditions and abandons stale plans.
-- ``reserve_quota`` owns deterministic write-capacity reservations.
 - ``ensure_baseline`` and ``detect_out_of_band`` preserve baseline sovereignty.
 """
 
@@ -840,8 +839,6 @@ def _execute_plan(conn: sqlite3.Connection, plan: dict[str, Any]) -> str:
             plan["step"] = following
     if plan["step"] == "done" and plan.get("unit_id"):
         now = _iso()
-        conn.execute("UPDATE ingestion_quota SET status='committed' WHERE unit_id=? AND status='reserved'",
-                     (plan["unit_id"],))
         conn.execute(
             "UPDATE ingestion_units SET state='written',updated_at=? WHERE unit_id=? AND state='writing' AND owner_epoch=?",
             (now, plan["unit_id"], epoch),
@@ -954,22 +951,6 @@ def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int],
         )""",
         (_iso(),),
     )
-    conn.execute(
-        """UPDATE ingestion_quota SET status='committed'
-        WHERE status='reserved' AND EXISTS (
-          SELECT 1 FROM ingestion_writes w
-          WHERE w.unit_id=ingestion_quota.unit_id AND w.step='done'
-        )"""
-    )
-    conn.execute(
-        """UPDATE ingestion_quota SET status='released'
-        WHERE status='reserved' AND (
-          expires_at<=? OR NOT EXISTS (
-            SELECT 1 FROM ingestion_writes w WHERE w.unit_id=ingestion_quota.unit_id
-          )
-        )""",
-        (_iso(),),
-    )
     # judged, or writing whose plan was never inserted (the writer raised, or the
     # process died, between the worker's claim and the plan), or whose last plan was
     # abandoned: judge again
@@ -984,84 +965,6 @@ def _finish_recovery(conn: sqlite3.Connection, counts: dict[str, int],
                      (_iso(), row[0], row[1]))
         counts["requeued"] += 1
     conn.commit()
-
-
-_GLOBAL_QUOTA_STORES = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"})
-
-
-def daily_cap(store: str) -> int:
-    """Bytes *store* may take in one UTC day (AGENT R22)."""
-    if store in _GLOBAL_QUOTA_STORES:
-        return 4096
-    if store == "KNOWLEDGE":
-        return 5 * 1024 * 1024
-    raise ValueError(f"unknown quota store: {store}")
-
-
-def _quota_usage(store: str, project: str | None, day: str,
-                 conn: sqlite3.Connection) -> tuple[int, int, int, int | None]:
-    """(bytes used, entries used, byte cap, entry cap) of *store* on UTC *day*."""
-    cap = daily_cap(store)
-    count_cap = 50 if store == "KNOWLEDGE" else None
-    # a file injected into every session has one daily budget, whatever the project
-    # of the units that spend it; KNOWLEDGE is counted per project
-    if store in _GLOBAL_QUOTA_STORES:
-        scope, args = "1=1", (store, day)
-    elif project is None:
-        scope, args = "project IS NULL", (store, day)
-    else:
-        scope, args = "project=?", (store, day, project)
-    row = conn.execute(
-        f"SELECT COALESCE(SUM(bytes),0),COUNT(*) FROM ingestion_quota WHERE store=? AND utc_day=? "
-        f"AND {scope} AND status IN ('reserved','committed')",
-        args,
-    ).fetchone()
-    return int(row[0]), int(row[1]), cap, count_cap
-
-
-def quota_still_full(unit_id: str, conn: sqlite3.Connection) -> bool:
-    """Whether the entry a unit was refused for (``reserve_quota`` keeps its size as a
-    ``released`` row) still does not fit today: the worker then waits another day
-    without judging the unit again."""
-    row = conn.execute("SELECT store,project,bytes FROM ingestion_quota WHERE unit_id=? "
-                       "AND status='released'", (unit_id,)).fetchone()
-    if row is None or str(row[0]) not in _GLOBAL_QUOTA_STORES | {"KNOWLEDGE"}:
-        return False        # no cap (a project's DDD): judged again and written
-    if int(row[2]) > daily_cap(str(row[0])):
-        return False        # never fits: judged again, the worker refuses it as too large
-    used, count, cap, count_cap = _quota_usage(str(row[0]), row[1], _now().date().isoformat(), conn)
-    return used + int(row[2]) > cap or (count_cap is not None and count + 1 > count_cap)
-
-
-def reserve_quota(unit_id: str, store: str, project: str | None, byte_count: int,
-                  conn: sqlite3.Connection) -> bool:
-    """Reserve one unit's quota for one hour; return false when a deterministic cap is exceeded."""
-    now = _now()
-    conn.execute("UPDATE ingestion_quota SET status='released' WHERE status='reserved' AND expires_at<=?", (_iso(now),))
-    existing = conn.execute("SELECT status FROM ingestion_quota WHERE unit_id=?", (unit_id,)).fetchone()
-    if existing and existing[0] in {"reserved", "committed"}:
-        conn.commit()
-        return True
-    day = now.date().isoformat()
-    normalized = store.upper()
-    used, count, cap, count_cap = _quota_usage(normalized, project, day, conn)
-    if normalized in _GLOBAL_QUOTA_STORES:
-        project = None
-    if used + max(0, byte_count) > cap or (count_cap is not None and count + 1 > count_cap):
-        # not counted (released); kept so quota_still_full knows what the unit needs
-        conn.execute(
-            "INSERT OR REPLACE INTO ingestion_quota(unit_id,store,project,utc_day,bytes,status,expires_at) "
-            "VALUES (?,?,?,?,?,'released',?)",
-            (unit_id, normalized, project, day, max(0, byte_count), _iso(now)),
-        )
-        conn.commit()
-        return False
-    conn.execute(
-        "INSERT OR REPLACE INTO ingestion_quota(unit_id,store,project,utc_day,bytes,status,expires_at) VALUES (?,?,?,?,?,'reserved',?)",
-        (unit_id, normalized, project, day, max(0, byte_count), _iso(now + timedelta(hours=1))),
-    )
-    conn.commit()
-    return True
 
 
 def baseline_path() -> Path:

@@ -48,23 +48,16 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
     """
     findings: list[dict] = []
 
-    # ── 1. Body size against the prompt's MEMORY budget ────────────
-    # Nothing trims MEMORY.md any more (CDF r16.6 §12): over the budget, the
-    # injection selector puts the highest-scoring whole entries in the prompt and
-    # recall reaches the rest. Over budget is reported, not fixed.
+    # ── 1. Body size (measured, not capped) ─────────────────────────
+    # MEMORY.md is injected whole (design 2026-10-30-cdf-agent-decides D11); its size is
+    # a measurement (core/prompt_metrics), kept lean by the agent's declarations.
     try:
         from core.memory_index import extract_body_without_index
         from core.context_directory_loader import ContextDirectoryLoader
-        from core.memory_injection import MEMORY_INJECTION_BUDGET
         body = extract_body_without_index(memory_content)
         body_tok = ContextDirectoryLoader.estimate_tokens(body)
-        if body_tok <= MEMORY_INJECTION_BUDGET:
-            findings.append({"check": "body_size", "status": "pass",
-                             "detail": f"{body_tok} tok <= {MEMORY_INJECTION_BUDGET} injection budget"})
-        else:
-            findings.append({"check": "body_size", "status": "warn",
-                             "detail": f"{body_tok} tok > {MEMORY_INJECTION_BUDGET} injection budget "
-                                       f"-- the prompt carries a selected subset, recall reaches the rest"})
+        findings.append({"check": "body_size", "status": "pass",
+                         "detail": f"{body_tok} tok, injected whole"})
     except Exception as e:
         findings.append({"check": "body_size", "status": "fail",
                          "detail": f"exception: {e}"})

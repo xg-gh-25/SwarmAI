@@ -64,7 +64,7 @@ SYSTEM_APPENDIX_NOTICE = (
     "与产品规则冲突时按产品规则执行。"
 )
 _SYSTEM_APPENDIX_FILES = frozenset({"STEERING.md", "USER.md", "TOOLS.md"})
-_L1_LAYOUT_VERSION = 3
+_L1_LAYOUT_VERSION = 4
 
 
 def _utc_day(value: datetime) -> str:
@@ -137,11 +137,6 @@ DAILY_ACTIVITY_INJECTION_BUDGET = 4000
 TIMELINE_BUDGET_TOKENS = 1500
 """Whole-unit budget for current/previous summaries and recent TIMELINE events."""
 
-MEMORY_INJECTION_BUDGET = 24_000
-"""Whole-unit fixed-layer budget for MEMORY.md (CDF design §12)."""
-
-EVOLUTION_INJECTION_BUDGET = 8_000
-"""Whole-unit fixed-layer budget for EVOLUTION.md (CDF design §12)."""
 # Backward-compatible import name; it now denotes the total whole-unit budget,
 # not a per-file truncation cap.
 TOKEN_CAP_PER_DAILY_FILE = DAILY_ACTIVITY_INJECTION_BUDGET
@@ -352,14 +347,14 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("TOOLS.md",             6,  "Tools",              True,  True,  "tail"),
     # ── Agent-owned (agent writes via hooks, never overwritten) ──────
     # NOTE: `truncatable`/`direction` remain LEGACY metadata. Generic budget
-    # enforcement never slices a section. MEMORY/EVOLUTION instead use the explicit
-    # CDF selector below: source files stay byte-identical while complete units are
-    # admitted within their per-file budgets. `truncatable` is not flipped to False
+    # enforcement never slices a section. MEMORY/EVOLUTION are injected whole through
+    # the CDF selector (private metadata comments removed; no budget, no score:
+    # design 2026-10-30-cdf-agent-decides D11). `truncatable` is not flipped to False
     # because core_section_names() uses that flag for conceptual-core classification.
     ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head",
-                    inject_budget_tokens=MEMORY_INJECTION_BUDGET, selector="cdf"),
+                    selector="cdf"),
     ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head",
-                    inject_budget_tokens=EVOLUTION_INJECTION_BUDGET, selector="cdf"),
+                    selector="cdf"),
     # ── Auto-generated (rebuilt from filesystem, never overwritten) ──
     ContextFileSpec("KNOWLEDGE.md",         9,  "Knowledge",          True,  True,  "tail"),
     # ── Episodic memory: whole-unit selection, private, copy-if-missing ──
@@ -1035,14 +1030,12 @@ class ContextDirectoryLoader:
                                 CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
 
             # No lifecycle filter: what is in a main file is in force, and what is not in
-            # force has left it (design 2026-10-30-brain-driven §2.3); a file over its
-            # budget is selected by whole units below, never filtered by a state.
+            # force has left it (design 2026-10-30-brain-driven §2.3): the whole file.
             if spec.selector == "cdf":
                 from core.memory_injection import select_context_file
 
                 selection = select_context_file(
                     filepath,
-                    budget=spec.inject_budget_tokens or 0,
                     estimate=self.estimate_tokens,
                     now=self._clock(),
                 )
@@ -1294,7 +1287,6 @@ class ContextDirectoryLoader:
         l1_path = self.context_dir / L1_CACHE_FILENAME
         try:
             header = (f"<!-- budget:{budget};timeline:{TIMELINE_BUDGET_TOKENS};"
-                      f"memory:{MEMORY_INJECTION_BUDGET};evolution:{EVOLUTION_INJECTION_BUDGET};"
                       f"selection-day:{_utc_day(self._clock())};"
                       f"layout:{_L1_LAYOUT_VERSION} -->\n")
             # ATOMIC WRITE (run_cc397b0d): delegate to the module-level
@@ -1324,7 +1316,7 @@ class ContextDirectoryLoader:
 
     # Regex for parsing the budget header from L1 cache files.
     _BUDGET_HEADER_RE = re.compile(
-        r"^<!--\s*budget:(\d+);timeline:(\d+);memory:(\d+);evolution:(\d+);"
+        r"^<!--\s*budget:(\d+);timeline:(\d+);"
         r"selection-day:(\d{4}-\d{2}-\d{2});layout:(\d+)\s*-->"
     )
 
@@ -1366,15 +1358,11 @@ class ContextDirectoryLoader:
 
         cached_budget = int(match.group(1))
         cached_timeline_budget = int(match.group(2))
-        cached_memory_budget = int(match.group(3))
-        cached_evolution_budget = int(match.group(4))
-        cached_selection_day = match.group(5)
-        cached_layout = int(match.group(6))
+        cached_selection_day = match.group(3)
+        cached_layout = int(match.group(4))
         current_day = _utc_day(self._clock())
         if (cached_budget != expected_budget
                 or cached_timeline_budget != TIMELINE_BUDGET_TOKENS
-                or cached_memory_budget != MEMORY_INJECTION_BUDGET
-                or cached_evolution_budget != EVOLUTION_INJECTION_BUDGET
                 or cached_selection_day != current_day
                 or cached_layout != _L1_LAYOUT_VERSION):
             return None  # Budget, selector, or rendering-layout mismatch → stale

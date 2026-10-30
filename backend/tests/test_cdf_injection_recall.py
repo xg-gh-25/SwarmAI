@@ -21,13 +21,11 @@ def test_context_files_recall_reads_recorded_selection(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     conn = connect_rw()
-    selected = select_context_file(
-        memory, budget=140, estimate=len,
-        now=datetime(2026, 10, 28, tzinfo=timezone.utc), conn=conn,
-    )
+    select_context_file(memory, estimate=len,
+                        now=datetime(2026, 10, 28, tzinfo=timezone.utc), conn=conn)
     conn.close()
 
+    # the whole file is in the prompt (D11): nothing is outside it for recall to add
     outside = _memory_outside_prompt(memory.read_text(encoding="utf-8"),
                                      memory.read_text(encoding="utf-8"), memory)
-    assert "omitted target" in outside
-    assert "resident" not in outside
+    assert "omitted target" not in outside and "resident" not in outside

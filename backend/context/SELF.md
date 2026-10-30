@@ -31,8 +31,8 @@ proposes, OS disposes.** (What I *am* as a product → SWARMAI.md; this is how I
 Each flow is live-verified; re-trace to source before quoting a detail (drift guard).
 - **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 12
   governed files (across 11 priority slots; SOUL + SELF share slot 2) by priority, measures a
-  live token budget (never a stored size). No file is cut: over budget it WARNs; MEMORY,
-  EVOLUTION, TIMELINE and DailyActivity are injected as whole units chosen within their
+  live token budget (never a stored size). No file is cut: over budget it WARNs; MEMORY and
+  EVOLUTION are injected whole, TIMELINE and DailyActivity as whole units chosen within their
   budgets (Memory management below). Applies session-type exclusions (channels drop
   MEMORY/USER/EVOLUTION wholesale — `WHOLE_FILE_PRIVATE`).
   Desktop path = fresh assembly (L1 cache bypassed).
@@ -52,15 +52,16 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   recall is pure keyword / FTS5 / BM25 — **no vector, no graph; never call it hybrid**; the fan-out
   adds a code-graph leg. Command reference: `context_recall_cli.py --help`; domain→store map: `core/recall_multi.py`.
 - **Memory management** (`core/ingestion` + `core/memory_injection`) — CDF is the one writer of
-  MEMORY / EVOLUTION / TIMELINE / DDD: six sources submit candidates to an Inbox; cards judge
-  type and route, compare with what exists, and the writer appends whole units. MEMORY.md and
-  EVOLUTION.md are injected by **whole-unit selection** (24K / 8K tokens): superseded units
-  never shown, every layer inside the budget with the meta-cognitive layer first, each by
-  score (use outweighs age), file order kept; each such file also has a daily write budget
-  (4 KB; a unit over it waits a UTC day); query-independent,
-  recomputed on a file change or once a UTC day (prefix cache and prewarm stay stable), the
-  choice recorded in `injection_selection`. A unit not selected stays in the file and is
-  reached by the `context_files` recall leg, which reads that record. DailyActivity is
+  MEMORY / EVOLUTION / TIMELINE / DDD: its sources submit candidates to an Inbox, each
+  unit declared by the agent that produced it (type, scope, relation to what exists); code
+  checks facts only (no model second-guesses it) and the writer appends whole units. MEMORY.md and
+  EVOLUTION.md are injected **whole** (no budget, no score, no daily write budget: value
+  first); what a main file holds is the valid set, kept lean by the producing agent's
+  declarations (same / adds / overrides / repeats), never by truncation; query-independent,
+  so the prefix cache and prewarm stay stable; the carried set is recorded in
+  `injection_selection` per file version. Their size and the first-token time are measured
+  (`core/prompt_metrics`); the every-turn files take only what the user's quoted words or a
+  measurement show (anything else goes to the DDD or the General Brain). DailyActivity is
   injected as whole units too (today's and yesterday's session rows, newest first, then
   summaries of the five days before; the rest counted). Pre-cutover archive
   shards (`*-archive*`) stay reachable **through SEVERAL routes with DIFFERENT preconditions

@@ -1,14 +1,15 @@
-"""Whole-unit working and episodic memory injection selectors.
+"""Working and episodic memory injection.
 
+- ``select_context_file``: MEMORY.md / EVOLUTION.md whole, every unit (no budget, no
+  score: design 2026-10-30-cdf-agent-decides D11).
 - ``select_daily_activity`` admits complete session rows/day summaries.
 - ``select_timeline`` admits complete month summaries and event units.
-- No selector slices, shortens, or rewrites semantic content.
+- Nothing slices, shortens, or rewrites semantic content.
 """
 from __future__ import annotations
 
 import hashlib
 import logging
-import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -21,10 +22,7 @@ from core.daily_activity_writer import parse_frontmatter, read_jsonl_sidecar
 
 DAILY_ACTIVITY_BUDGET = 4000
 TIMELINE_BUDGET = 1500
-MEMORY_INJECTION_BUDGET = 24_000
-EVOLUTION_INJECTION_BUDGET = 8_000
-SCORE_SNAPSHOT_VERSION = "cdf-launch-v2"
-DECAY_HALF_LIFE_DAYS = 90
+SELECTION_VERSION = "cdf-whole-v1"     # the recorded selection: every unit of the file
 
 
 @dataclass(frozen=True)
@@ -188,45 +186,12 @@ def select_daily_activity(
 
 
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_EVOLUTION_LAYERS = {
-    "Design Philosophy — What \"Evolution\" Means": "meta-cognitive",
-    "Corrections Captured": "meta-cognitive",
-    "Competence Learned": "meta-cognitive",
-    "Optimizations Learned": "cognitive",
-    "Governance Candidates": "cognitive",
-    "Failed Evolutions": "cognitive",
-    "Capabilities Built": "operational",
-}
-
-
-@dataclass(frozen=True)
-class _RankedUnit:
-    unit: object
-    layer: str
-    score: float
-    evidence_strength: int
-    evidence_at: datetime
-
-
 def _utc_datetime(value: datetime | date | None) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
-
-
-def _parse_time(value: object) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except (TypeError, ValueError):
-        try:
-            return datetime.combine(date.fromisoformat(str(value)), datetime.min.time(), tzinfo=timezone.utc)
-        except (TypeError, ValueError):
-            return None
 
 
 def _prompt_form(text: str) -> str:
@@ -238,171 +203,44 @@ def _prompt_form(text: str) -> str:
     return cleaned
 
 
-def _memory_metadata(path: Path) -> dict[tuple[str, str, str], list[object]]:
-    if path.name != "MEMORY.md":
-        return {}
-    from core.ddd_entry_lifecycle import parse_entries
-
-    result: dict[tuple[str, str, str], list[object]] = {}
-    for entry in parse_entries(path.read_text(encoding="utf-8"), skip_h3_spans=False):
-        result.setdefault((entry.section, entry.title, entry.raw_text), []).append(entry)
-    return result
-
-
-def _unit_layer(path: Path, unit: object) -> str:
-    if path.name == "MEMORY.md":
-        from core.ddd_entry_lifecycle import MEMORY_SECTIONS
-        return str(MEMORY_SECTIONS.get(unit.section, {}).get("layer", "operational"))
-    return _EVOLUTION_LAYERS.get(unit.section, "operational")
-
-
-def _score_unit(conn: Any, path: Path, unit: object,
-                layer: str, current: datetime, metadata: object | None) -> _RankedUnit:
-    # what CDF knows about the unit, through its published interface (cdf-fixing-spec C2.2)
-    from core.ingestion.standing import unit_standing
-    st = unit_standing(conn, unit.anchor)
-    support, refute, strength = st.support, st.refute, st.strength
-    evidence_at = _parse_time(st.evidence_at)
-    usage_count = st.used
-    last_used = _parse_time(st.last_used)
-    written_at = _parse_time(st.written_at)
-    metadata_times = []
-    if metadata is not None:
-        metadata_times = [_parse_time(getattr(metadata, name, None))
-                          for name in ("last_referenced", "created_date")]
-    timestamps = [item for item in (evidence_at, last_used, written_at, *metadata_times) if item]
-    newest = max(timestamps) if timestamps else datetime(1970, 1, 1, tzinfo=timezone.utc)
-    age_days = max(0, (current.date() - newest.date()).days)
-    # Value decides, age only slowly: halves every DECAY_HALF_LIFE_DAYS (meta-cognition
-    # does not age), while each use keeps counting. 1/(1+age) let a 3-day-old entry
-    # outrank a 30-day-old one with full support and use.
-    decay = 1.0 if layer == "meta-cognitive" else 0.5 ** (age_days / DECAY_HALF_LIFE_DAYS)
-    support_factor = (1.0 + support / (1.0 + support)) / (1.0 + refute)
-    trust_factor = {3: 1.0, 2: 0.8, 1: 0.5, 0: 0.3}[strength] if timestamps else 1.0
-    usage_factor = 1.0 + math.log1p(usage_count)
-    score = decay * support_factor * trust_factor * usage_factor
-    return _RankedUnit(unit, layer, score, strength, evidence_at or newest)
-
-
-def _render_selected(ranked: list[_RankedUnit], selected: set[str]) -> str:
-    parts: list[str] = []
-    section = None
-    for item in sorted(ranked, key=lambda value: value.unit.byte_start):
-        if item.unit.anchor not in selected:
-            continue
-        if item.unit.section != section:
-            section = item.unit.section
-            if section:
-                parts.append(f"## {section}")
-        text = _prompt_form(item.unit.text)
-        if text:
-            parts.append(text)
-    return "\n\n".join(parts)
-
-
 def select_context_file(
     path: Path,
     *,
-    budget: int,
     estimate: Callable[[str], int],
     now: datetime | date | None = None,
     conn: Any = None,
 ) -> Selection:
-    """Select MEMORY/EVOLUTION whole units without any user-query input.
-
-    Results are recomputed only after a source hash change or a UTC day boundary.
-    Every unit in the file is in force. Over budget, whole units compete by score
-    layer by layer, meta-cognition first; rendering always follows file order.
-    """
+    """MEMORY.md / EVOLUTION.md as the prompt carries them: the whole file, every unit
+    (design 2026-10-30-cdf-agent-decides D11: value first; what is in a main file is the
+    valid set, kept lean by the agent's same / adds / overrides declarations, so nothing
+    is chosen by a score or cut to a budget). Only the private metadata comments are
+    removed. Which units were carried is recorded once per file version (recall's
+    "outside the prompt" leg reads it)."""
     path = Path(path)
     if path.name not in {"MEMORY.md", "EVOLUTION.md"} or not path.is_file():
         return Selection("", 0, 0)
     raw = path.read_bytes()
+    text = _prompt_form(raw.decode("utf-8"))
     file_hash = hashlib.sha256(raw).hexdigest()
-    current = _utc_datetime(now)
     file_path = str(path.resolve(strict=False))
     from core.ingestion import standing
     owned = conn is None
     if owned:
         conn = standing.connect(write=True)
-
-    from core.ingestion.units import parse_units
-    units = parse_units(path, root=path.parent.parent)
-    metadata_queues = _memory_metadata(path)
-    metadata_by_anchor: dict[str, object] = {}
-    visible = []
-    for unit in units:
-        queue = metadata_queues.get((unit.section, unit.title, unit.text), [])
-        metadata = queue.pop(0) if queue else None
-        if metadata is not None:
-            metadata_by_anchor[unit.anchor] = metadata
-        visible.append(unit)          # every unit in the file is in force (brain-driven §2.3)
-    unscored = [_RankedUnit(unit, _unit_layer(path, unit), 0.0, 0,
-                            datetime(1970, 1, 1, tzinfo=timezone.utc)) for unit in visible]
-
-    cached = standing.latest_selection(conn, file_path)
-    if cached is not None:
-        cached_at = _parse_time(cached.computed_at)
-        if (cached.file_hash == file_hash and cached_at is not None
-                and cached_at.date() == current.date()
-                and cached.version == SCORE_SNAPSHOT_VERSION):
-            anchors = cached.anchors
-            selected = set(anchors)
-            rendered = _render_selected(unscored, selected)
-            full = len(selected) == len(unscored)
-            text = _prompt_form(raw.decode("utf-8")) if full else rendered
-            if owned and conn is not None:
-                conn.close()
-            return Selection(text, cached.omitted, estimate(text), anchors, False)
-
-    ranked = [_score_unit(conn, path, unit, _unit_layer(path, unit), current,
-                          metadata_by_anchor.get(unit.anchor)) for unit in visible]
-    full_text = _prompt_form(raw.decode("utf-8"))
-    over_budget = estimate(full_text) > budget
-    # Nothing is hidden for a relation or a mark: an entry another one replaces has left
-    # the file (a declared override withdraws it, brain-driven §2.1).
-    candidates = ranked
-    if not over_budget:
-        selected = {item.unit.anchor for item in candidates}
-        text = full_text
-    else:
-        # Every layer competes inside the budget, meta-cognition first: kept whole and
-        # unbudgeted, it was already over the EVOLUTION budget and grew with every
-        # correction CDF writes (2026-10-29-cdf-launch §2 C2).
-        selected: set[str] = set()
-        admission_order: list[str] = []
-        selected_sections: set[str] = set()
-        used = 0
-        for layer in ("meta-cognitive", "cognitive", "operational"):
-            ordered = sorted(
-                (item for item in candidates if item.layer == layer),
-                key=lambda item: (-item.score, -item.evidence_strength,
-                                  -item.evidence_at.timestamp(), item.unit.anchor),
-            )
-            for item in ordered:
-                prefix = f"## {item.unit.section}\n\n" if item.unit.section not in selected_sections else ""
-                cost = estimate(prefix + _prompt_form(item.unit.text) + "\n\n")
-                if used + cost <= budget:
-                    selected.add(item.unit.anchor)
-                    selected_sections.add(item.unit.section)
-                    admission_order.append(item.unit.anchor)
-                    used += cost
-        text = _render_selected(candidates, selected)
-        # The estimator is caller-supplied and need not be additive: remove the latest
-        # admission until its estimate confirms the rendered result is within the cap.
-        while estimate(text) > budget and admission_order:
-            selected.remove(admission_order.pop())
-            text = _render_selected(candidates, selected)
-    anchors = tuple(item.unit.anchor for item in sorted(candidates, key=lambda value: value.unit.byte_start)
-                    if item.unit.anchor in selected)
-    omitted = len(ranked) - len(anchors)
-    used = estimate(text)
-    standing.record_selection(conn, file_path=file_path, file_hash=file_hash, anchors=anchors,
-                              version=SCORE_SNAPSHOT_VERSION, computed_at=current.isoformat(),
-                              omitted=omitted)
-    if owned and conn is not None:
-        conn.close()
-    return Selection(text, omitted, used, anchors, True)
+    try:
+        cached = standing.latest_selection(conn, file_path) if conn is not None else None
+        if cached is not None and cached.file_hash == file_hash and cached.version == SELECTION_VERSION:
+            return Selection(text, 0, estimate(text), cached.anchors, False)
+        from core.ingestion.units import parse_units
+        anchors = tuple(unit.anchor for unit in parse_units(path, root=path.parent.parent))
+        if conn is not None:
+            standing.record_selection(conn, file_path=file_path, file_hash=file_hash, anchors=anchors,
+                                      version=SELECTION_VERSION,
+                                      computed_at=_utc_datetime(now).isoformat(), omitted=0)
+        return Selection(text, 0, estimate(text), anchors, True)
+    finally:
+        if owned and conn is not None:
+            conn.close()
 
 
 def recorded_selection(path: Path, *, conn: Any = None) -> tuple[str, ...] | None:

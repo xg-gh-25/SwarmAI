@@ -632,7 +632,7 @@ class TestWriteL1Cache:
         loader._write_l1_cache("hello world", budget=40000)
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
-        assert raw.startswith("<!-- budget:40000;timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->\n")
+        assert raw.startswith("<!-- budget:40000;timeline:1500;selection-day:2026-10-28;layout:4 -->\n")
 
     def test_content_follows_header(self, tmp_dirs):
         """Actual content appears after the budget header line."""
@@ -641,7 +641,7 @@ class TestWriteL1Cache:
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
         lines = raw.split("\n", 1)
-        assert lines[0] == "<!-- budget:25000;timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->"
+        assert lines[0] == "<!-- budget:25000;timeline:1500;selection-day:2026-10-28;layout:4 -->"
         assert lines[1] == "my context content"
 
     def test_default_budget_is_default_token_budget(self, tmp_dirs):
@@ -650,7 +650,7 @@ class TestWriteL1Cache:
         loader._write_l1_cache("content")
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
-        assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET};timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->\n")
+        assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET};timeline:1500;selection-day:2026-10-28;layout:4 -->\n")
 
     def test_no_temp_file_left_behind(self, tmp_dirs):
         """Atomic write cleans up: only the L1 file exists, no stray temp file.
@@ -804,7 +804,7 @@ class TestLoadL1IfFresh:
         """Helper: write an L1 cache file with a budget header."""
         l1_path = context_dir / "L1_SYSTEM_PROMPTS.md"
         l1_path.write_text(
-            f"<!-- budget:{budget};timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->\n{content}", encoding="utf-8"
+            f"<!-- budget:{budget};timeline:1500;selection-day:2026-10-28;layout:4 -->\n{content}", encoding="utf-8"
         )
 
     def test_returns_content_when_budget_matches(self, tmp_dirs):

@@ -361,9 +361,8 @@ def test_no_selection_skips_an_entry_for_a_superseded_mark(tmp_path):
                     "  <!-- ref:0 | last:none | decay:active | superseded_by:Other -->\n\n"
                     "## Processes\n"
                     f"- [process] **too long** {'y' * 1500} (2026-10-01)\n", encoding="utf-8")
-    for budget in (100_000, 500):             # under budget the file goes whole; over, units compete
-        sel = select_context_file(path, budget=budget, estimate=len, conn=sqlite3.connect(":memory:"))
-        assert "MARKED_ENTRY_b7" in sel.text, budget
+    sel = select_context_file(path, estimate=len, conn=sqlite3.connect(":memory:"))
+    assert "MARKED_ENTRY_b7" in sel.text
 
 
 # review round 1 ── the fixes, each with the failure it prevents

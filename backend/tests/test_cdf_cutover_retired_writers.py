@@ -79,14 +79,12 @@ def test_effectiveness_scoring_runs_once_per_new_session(tmp_path: Path):
     assert state.effectiveness["followed"] == 3
 
 
-def test_memory_health_size_check_uses_the_injection_budget():
-    from core.memory_injection import MEMORY_INJECTION_BUDGET
+def test_memory_health_reports_the_size_and_caps_nothing():
     from jobs.handlers.memory_health import _run_integrity_checks
 
-    findings = _run_integrity_checks("## Decisions\n- [DEC01] small entry\n")
+    findings = _run_integrity_checks("## Decisions\n" + "- [DEC01] entry with words\n" * 20000)
     size = next(f for f in findings if f["check"] == "body_size")
-    assert size["status"] == "pass"
-    assert f"{MEMORY_INJECTION_BUDGET} injection budget" in size["detail"]
+    assert size["status"] == "pass" and "injected whole" in size["detail"]
 
 
 def test_write_governance_keeps_orphan_alarm_without_caps(tmp_path: Path):

@@ -37,7 +37,6 @@ from core.ingestion.writer import (
     detect_out_of_band,
     ensure_baseline,
     recover,
-    reserve_quota,
 )
 
 
@@ -342,17 +341,6 @@ def test_external_edit_after_replace_is_kept_and_user_race_recorded(
     assert target.read_text(encoding="utf-8") == "external state\n"
     event = conn.execute("SELECT kind,detail FROM ingestion_events ORDER BY id DESC").fetchone()
     assert event[0] == "user_race" and "race.1" in event[1]
-    conn.close()
-
-
-def test_quota_reservation_is_idempotent_and_expires(corpus: dict[str, Path]) -> None:
-    conn = _connect(corpus["db"])
-    assert reserve_quota("q.1", "MEMORY", None, 4096, conn)
-    assert reserve_quota("q.1", "MEMORY", None, 4096, conn)
-    assert not reserve_quota("q.2", "MEMORY", None, 1, conn)
-    conn.execute("UPDATE ingestion_quota SET expires_at='2000-01-01T00:00:00+00:00' WHERE unit_id='q.1'")
-    conn.commit()
-    assert reserve_quota("q.2", "MEMORY", None, 1, conn)
     conn.close()
 
 

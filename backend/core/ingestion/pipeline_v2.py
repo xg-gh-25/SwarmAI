@@ -235,8 +235,6 @@ def _card0(unit: SourceUnit, row: Any) -> Card0Answer:
     text = _unit_text(unit)
     if not text.strip():
         return Card0Answer(passed=False, reason="noisy")
-    if isinstance(unit, ReferenceUnit) and len(text.encode("utf-8")) > 16_384:
-        return Card0Answer(passed=False, reason="too_large_incomplete")
     if isinstance(unit, ReferenceUnit) and semantic_urls_have_credentials(unit.summary, unit.body):
         return Card0Answer(passed=False, reason="credentialed_url")
     return Card0Answer(passed=True)

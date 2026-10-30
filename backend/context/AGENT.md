@@ -388,18 +388,21 @@ without, 16.5% vs 0.33% once a glitch is in history. (SOUL P3)
 **R21. MEMORY.md + EVOLUTION.md are agent-owned** — user directs content, agent decides
 structure, operations silent. (SOUL P1)
 
-**R22. Memory is written by CDF and injected as whole units within a fixed budget.** Every
-write to MEMORY.md / EVOLUTION.md goes through CDF: its sources only submit candidates; CDF
-judges, routes and writes. Each file injected every turn has a daily write budget (4 KB a day
-for each of MEMORY / EVOLUTION / STEERING / USER / TOOLS; a project's DDD, read on demand
-and never injected every turn, has none); a unit over it waits for the next UTC day. Injection is a fixed, query-independent layer: a
-superseded unit is never injected, and a file over its budget (MEMORY 24K / EVOLUTION 8K
-tokens) is injected as selected whole units — every layer inside the budget, the
-meta-cognitive layer first, each layer by score (use counts more than age) — in file order,
-recomputed only when the file changes or once a UTC day, so the cached prefix stays stable. A unit not selected is still in the file and is reached by the
-`context_files` recall leg. Promote recurring themes / key decisions / corrections; never
-one-offs. **Verify before promoting** — cross-check against live workspace + recent
-DailyActivity; never promote stale/unverified claims. (SOUL P1)
+**R22. Memory is written by CDF and injected whole.** Every write to MEMORY.md /
+EVOLUTION.md goes through CDF: its sources only submit candidates. The agent that produced a
+unit, with the context, decides what it means: its type and scope, and whether it is new, the
+same as an entry, adds to one, replaces one, or repeats an earlier correction (declared as
+`<id> | <first line>`); CDF only checks facts (the declaration names one entry, the evidence
+exists, no secret or injection) and writes. The files injected every turn take only what the
+user's own words (a `user_quote` found verbatim in a cited user message) or a measurement
+show, and nothing citing external content; anything else goes to the project's DDD or the
+General Brain, read on demand. Value comes first: there is no daily write budget and no
+injection budget — MEMORY / EVOLUTION / STEERING / USER / TOOLS are injected whole and
+query-independent, kept lean by those declarations (the same entry reinforced, a replaced one
+overridden), never by truncation. Their size and the first-token time are measured; when
+they rise clearly, the agent consolidates the file by declaration. Promote recurring themes /
+key decisions / corrections; never one-offs. **Verify before promoting** — cross-check
+against live workspace + recent DailyActivity; never promote stale/unverified claims. (SOUL P1)
 
 **R23. No unit is ever cut, on a read path or a write path (CDF first principle).** A unit
 (entry, section, message, session block) is shown whole or named — location, its own title,

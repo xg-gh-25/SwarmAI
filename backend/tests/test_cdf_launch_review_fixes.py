@@ -7,7 +7,6 @@
 - The daily recovery leaves alone a unit that moved in the last minutes; startup
   recovery runs before the run lane starts.
 - The session-job thread survives a failing recovery.
-- A unit refused for quota is not judged again while its store's budget is spent.
 - Refine keeps the old entry's taint; an installed package's file cannot be moved
   out of its project; a rename refuses a change made after the copy.
 - Extraction: the list decides a unit's kind, an undecodable reply is called once
@@ -149,29 +148,6 @@ def test_the_session_job_thread_survives_a_failing_recovery(cdf_env, monkeypatch
     conn = api.connect_rw()
     S2JobExecutor._recover(conn)      # logged, not raised
     conn.close()
-
-
-def test_a_unit_refused_for_quota_is_not_judged_again_while_the_budget_is_spent(cdf_env):
-    from core.ingestion import api
-    from tests.test_cdf_launch_cognition import _memory_unit
-    conn = api.connect_rw()
-    today = datetime.now(timezone.utc).date().isoformat()
-    conn.execute("INSERT INTO ingestion_quota VALUES ('earlier','MEMORY',NULL,?,4096,'committed',?)",
-                 (today, (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()))
-    conn.commit(); conn.close()
-    _memory_unit(cdf_env)
-    assert _drain(cdf_env)[-1]["reason"] == "quota"
-    conn = api.connect_rw(); _past(conn); conn.close()
-    import core.ingestion.pipeline_v2 as pv2
-    judged = []
-    real = pv2.run_unit_v2
-    import core.ingestion.worker  # noqa: F401
-    pv2.run_unit_v2 = lambda *a, **k: judged.append(1) or real(*a, **k)
-    try:
-        rows = _drain(cdf_env)
-    finally:
-        pv2.run_unit_v2 = real
-    assert judged == [] and (rows[-1]["state"], rows[-1]["reason"]) == ("deferred", "quota")
 
 
 def test_an_installed_package_file_cannot_leave_its_project(cdf_env, monkeypatch):

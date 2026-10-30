@@ -30,9 +30,9 @@ def test_every_memory_entry_is_injected_whatever_its_mark(tmp_path):
     assert OLD_MARK in text
 
 
-def test_an_over_budget_selection_still_considers_an_entry_with_an_old_mark(tmp_path):
-    """Over budget, units compete by score; an old ``decay:dormant`` mark is not a reason
-    to leave a unit out of the competition."""
+def test_an_entry_with_an_old_mark_is_injected(tmp_path):
+    """An old ``decay:dormant`` mark is not a reason to leave a unit out: the whole file
+    is injected (design 2026-10-30-cdf-agent-decides D11)."""
     import sqlite3
     from core.memory_injection import select_context_file
 
@@ -43,9 +43,8 @@ def test_an_over_budget_selection_still_considers_an_entry_with_an_old_mark(tmp_
         f"- [guideline] **{OLD_MARK}** short and still in force. (2025-01-01)\n"
         "  <!-- ref:0 | last:none | decay:dormant | source:manual -->\n\n"
         "## Processes\n"
-        f"- [process] **too long to fit** {'x' * 1200} (2026-10-01)\n"
+        f"- [process] **long** {'x' * 1200} (2026-10-01)\n"
         "  <!-- ref:2 | last:2026-10-20 | decay:active | source:manual -->\n", encoding="utf-8")
-    conn = sqlite3.connect(":memory:")       # never the user's ingestion store
-    result = select_context_file(path, budget=400, estimate=len, conn=conn)
-    assert result.omitted == 1                # over budget: the long unit is left out
-    assert OLD_MARK in result.text
+    result = select_context_file(path, estimate=len, conn=sqlite3.connect(":memory:"))
+    assert result.omitted == 0 and OLD_MARK in result.text and "x" * 1200 in result.text
+

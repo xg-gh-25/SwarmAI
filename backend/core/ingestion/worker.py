@@ -296,40 +296,6 @@ def _close_declared_gaps(conn: sqlite3.Connection, unit_id: str | None = None) -
         logger.warning("CDF gap close failed for %s; retried later", unit_id or "pending", exc_info=True)
 
 
-# writer.reserve_quota's stores; the files injected into every session are counted
-# globally (one daily budget per file), not once per project. A project's DDD is read
-# on demand, never injected every turn, so it has no daily cap.
-_QUOTA_STORE = {"KNOWLEDGE": "KNOWLEDGE", "MEMORY": "MEMORY",
-                "EVOLUTION": "EVOLUTION", "STEERING": "STEERING", "USER": "USER", "TOOLS": "TOOLS"}
-_GLOBAL_QUOTA = frozenset({"MEMORY", "EVOLUTION", "STEERING", "USER", "TOOLS"})
-
-
-def _quota_reserved(conn: sqlite3.Connection, decision: Any, unit_row: Any) -> str:
-    """Reserve the rendered entry's bytes against its store's daily cap (writer.reserve_quota):
-    "ok", "full" (wait for the next day) or "too_large" (larger than a whole day's cap,
-    so it could never be written: refused instead of deferred every day forever)."""
-    from .writer import daily_cap, render_unit, reserve_quota
-    destination = decision.destination
-    store = _QUOTA_STORE.get(str(getattr(destination, "store", "") or ""))
-    if store is None:
-        return "ok"                    # TIMELINE events: no daily cap
-    group = _json_value(unit_row["claim_group"], {})
-    size = len(render_unit(decision, str(unit_row["unit_id"]), group).encode("utf-8"))
-    if size > daily_cap(store):
-        return "too_large"
-    project = None if store in _GLOBAL_QUOTA else getattr(destination, "project", None)
-    return "ok" if reserve_quota(str(unit_row["unit_id"]), store, project, size, conn) else "full"
-
-
-def _defer_until_tomorrow(conn: sqlite3.Connection, owner: Owner, unit_id: str, reason: str) -> None:
-    """Wait for the next UTC day; a full daily budget is not the unit's failure, so no
-    attempt is counted (it would be poisoned after a few busy days otherwise)."""
-    tomorrow = datetime.combine(_utcnow().date() + timedelta(days=1), datetime.min.time(),
-                                tzinfo=timezone.utc)
-    owner.claim_unit_step(conn, unit_id, "queued", "deferred", reason=reason,
-                          next_attempt_at=tomorrow.isoformat())
-
-
 def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exception) -> None:
     """Record *exc* on the unit it happened to. A malformed payload is rejected. A unit
     with a live write plan belongs to ``writer.recover``. Otherwise the unit (queued, or
@@ -435,11 +401,6 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
         # error fingerprint and poisoned after the bounded retries), never raised out of
         # the worker, whose thread would otherwise end and leave this candidate in_progress.
         try:
-            from .writer import quota_still_full
-            if unit_row["reason"] == "quota" and quota_still_full(unit_id, conn):
-                # the store's budget is still spent: judging again would only be refused
-                _defer_until_tomorrow(conn, owner, unit_id, "quota")
-                continue
             decision = run_unit_v2(unit_input, workspace_root)
             fields = _decision_fields(decision)
             if decision.decision == "defer":
@@ -453,12 +414,9 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
                 owner.claim_unit_step(conn, unit_id, "queued", "reinforced", **fields)
             elif decision.decision == "reject":
                 owner.claim_unit_step(conn, unit_id, "queued", "rejected", **fields)
-            elif (quota := _quota_reserved(conn, decision, unit_row)) == "too_large":
-                owner.claim_unit_step(conn, unit_id, "queued", "rejected",
-                                      **{**fields, "reason": "too_large_for_store"})
-            elif quota == "full":
-                _defer_until_tomorrow(conn, owner, unit_id, "quota")
             else:
+                # no daily write quota and no size refusal (design 2026-10-30-cdf-agent-
+                # decides D11): what is written is the agent's; its size is measured
                 if not owner.claim_unit_step(conn, unit_id, "queued", "judged", **fields):
                     raise RuntimeError("owner epoch fence rejected v2 judgment")
                 if not owner.claim_unit_step(conn, unit_id, "judged", "writing"):
