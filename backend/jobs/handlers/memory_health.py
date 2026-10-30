@@ -498,7 +498,7 @@ def _call_llm(prompt: str) -> dict:
     report = structured(prompt, schema=_REPORT_SCHEMA, model_id=get_model_id(), feature="job.memory_health",
                         max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2, name="report",
                         description="Record the memory maintenance report.",
-                        record_usage=True, usage=usage)
+                        usage=usage)
     logger.info("LLM response: %d input tokens, %d output tokens",
                 usage["input_tokens"], usage["output_tokens"])
     return report

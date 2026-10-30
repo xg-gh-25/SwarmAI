@@ -48,7 +48,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.turn_outcome import cost_increase
 
 logger = logging.getLogger(__name__)
 
@@ -375,23 +374,17 @@ def _backfill(missing, history, corrections, cost_rows) -> list[dict]:
 
 
 def _turn_costs(rows: list[tuple[str, str, float]], since: str, until: str | None) -> list[float]:
-    """Per-turn cost in ``[since, until)`` from ``token_usage`` rows ``(session_id,
-    timestamp, cost_usd)`` in insertion order. ``cost_usd`` is the CLI process's
-    running total, so a turn's cost is the increase over the previous row of the
-    same session; a lower value means a new process started (its value is that
-    turn's cost), and so does a session's first row ever. The rows include each
-    session's last row before the window (``token_cost_rows``) as its baseline."""
-    prev: dict[str, float] = {}
+    """The cost of each turn in ``[since, until)`` from the usage ledger's turn rows
+    ``(session_id, timestamp, cost_usd)`` (``turn_cost_rows``: each turn's own cost, its
+    local start time). A turn with no cost is left out."""
     out: list[float] = []
-    for sid, ts, cost in rows:
+    for _sid, ts, cost in rows:
         try:
             c = float(cost)
         except (TypeError, ValueError):
             continue
-        d = cost_increase((sid, prev[sid]) if sid in prev else None, sid, c)
-        if d > 0 and str(ts) >= since and (until is None or str(ts) < until):
-            out.append(d)
-        prev[sid] = c
+        if c > 0 and str(ts) >= since and (until is None or str(ts) < until):
+            out.append(c)
     return out
 
 
@@ -424,8 +417,8 @@ def run_session_quality(
 ) -> dict:
     """One weekly run. ``sampler(since)`` → ``{"sessions": {sid: {title, messages}}}``
     (or ``{"sampler_error": ...}``); ``scorer(prompt, response, tool_names)`` →
-    session_scorer output; ``cost_reader(since)`` → ``token_usage`` rows
-    ``(session_id, timestamp, cost_usd)``; ``history(since, consume)`` calls
+    session_scorer output; ``cost_reader(since)`` → the usage ledger's turn rows
+    ``(session_id, timestamp, cost_usd)`` (``turn_cost_rows``); ``history(since, consume)`` calls
     ``consume(sid, session)`` for every session with a user message since then
     (the weekly backfill). With an injected ``sampler`` and no ``history`` /
     ``cost_reader``, those parts are off (tests never reach the real database).
@@ -435,7 +428,7 @@ def run_session_quality(
     now = now or datetime.now(timezone.utc)
     start = now - timedelta(days=WINDOW_DAYS)
     # messages.created_at is local time without a zone; corrections carry epoch seconds
-    since = start.astimezone().replace(tzinfo=None).isoformat()
+    since = start.astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
     corrections_path = corrections_path or (get_app_data_dir() / "state" / "corrections.jsonl")
     state_path = state_path or (get_swarmws() / ".context" / ".session-quality-state.json")
     if sampler is None:
@@ -533,4 +526,4 @@ def _default_costs(since: str) -> list[tuple[str, str, float]]:
 
     from database import get_database
 
-    return asyncio.run(get_database().token_cost_rows(since))
+    return asyncio.run(get_database().turn_cost_rows(since))

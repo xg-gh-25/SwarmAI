@@ -213,7 +213,7 @@ function OverviewStrip({ o }: { o: JobsOverview }) {
     { label: 'healthy', value: String(o.healthy) },
     { label: 'failing', value: String(o.failing), danger: o.failing > 0 },
     { label: 'never-run', value: String(o.neverRun) },
-    { label: 'monthly spend', value: `$${o.monthlySpendUsd.toFixed(2)}` },
+    { label: 'monthly spend', value: o.monthlySpendUsd == null ? '—' : `${o.monthlySpendPartial ? '≥ ' : ''}$${o.monthlySpendUsd.toFixed(2)}` },
   ];
   return (
     <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="jobs-overview">

@@ -247,6 +247,13 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             raise SwarmOutError(f"Hive {inst['name']} did not answer (HTTP {r.status_code})")
         if r.json().get("saturated"):
             raise SwarmOutError(f"Hive {inst['name']} is busy; try again later")
+        # the task runs on the model this host runs on (core/swarm_out_model); only a
+        # Hive that can take the task has its model set
+        from core import swarm_out_model
+        try:
+            await swarm_out_model.align(client, inst["name"])
+        except swarm_out_model.ModelAlignError as e:
+            raise SwarmOutError(f"{e}; the task was not sent") from None
         try:
             session_id = await asyncio.wait_for(
                 _start_session(client, task_message(segment + task, declared), declared,
@@ -773,7 +780,11 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
     from core import swarm_out_results
     row = await asyncio.to_thread(_log_row_of, dispatch_id)
     rec = await swarm_out_results.fetch(row)
-    return {"dispatch_id": dispatch_id, "result": swarm_out_results.public(rec, row.get("repos")),
+    end = ((rec or {}).get("result") or {}).get("ended_at")
+    spend = await asyncio.to_thread(swarm_out_results.spend_of, [dispatch_id], None, {dispatch_id: end})
+    return {"dispatch_id": dispatch_id,
+            "result": swarm_out_results.public(rec, row.get("repos"), row.get("project_agent"),
+                                               spend.get(dispatch_id)),
             "result_error": rec.get("fetch_error"), "result_checked_at": rec.get("checked_at")}
 
 

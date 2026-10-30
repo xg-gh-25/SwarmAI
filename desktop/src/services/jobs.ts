@@ -85,7 +85,10 @@ export interface JobsOverview {
   healthy: number;
   failing: number;
   neverRun: number;
-  monthlySpendUsd: number;
+  /** this month's job spend from the usage ledger; null when it could not be read */
+  monthlySpendUsd: number | null;
+  /** some of the month's job spend has no price: the figure is a lower bound */
+  monthlySpendPartial: boolean;
 }
 
 /** One historical run of a job (from GET /api/jobs/{id}/runs recent[]). */
@@ -144,7 +147,8 @@ export const jobsService = {
       healthy: (sj.healthy as number) ?? 0,
       failing: (sj.failing as number) ?? 0,
       neverRun: (sj.never_run as number) ?? 0,
-      monthlySpendUsd: (sj.monthly_spend_usd as number) ?? 0,
+      monthlySpendUsd: typeof sj.monthly_spend_usd === 'number' ? sj.monthly_spend_usd : null,
+      monthlySpendPartial: sj.monthly_spend_partial === true,
     };
   },
 

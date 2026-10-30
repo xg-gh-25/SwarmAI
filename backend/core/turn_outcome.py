@@ -126,8 +126,8 @@ class OutcomeRecorder:
 def cost_increase(prev: Optional[tuple[Any, float]], pid: Any, value: float) -> float:
     """This turn's cost from the CLI's running total: the increase over the previous
     total of the same process; a new process (another pid, or a lower total) starts
-    from zero, so its first total is that turn's cost. The one rule shared with
-    online scoring (jobs/handlers/session_quality._turn_costs)."""
+    from zero, so its first total is that turn's cost. The one rule shared with the
+    import of the old ``token_usage`` rows (core/usage_import)."""
     if prev is not None and prev[0] == pid and value >= prev[1]:
         return value - prev[1]
     return value

@@ -160,15 +160,6 @@ def test_an_empty_text_reply_is_missing(client) -> None:
     assert e.value.kind == "missing"
 
 
-def test_usage_is_recorded_only_when_asked(client) -> None:
-    client(_text_reply("ok"))
-    with patch.object(b, "_record_usage_sync") as rec:
-        b.text("p", model_id="m", max_tokens=5)
-        assert rec.call_count == 0
-        b.text("p", model_id="m", max_tokens=5, record_usage=True)
-        rec.assert_called_once_with(input_tokens=10, output_tokens=5, model="m")
-
-
 def test_an_auth_error_is_retried_once_through_the_same_entry(monkeypatch) -> None:
     calls = []
 

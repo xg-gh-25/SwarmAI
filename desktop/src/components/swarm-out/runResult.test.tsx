@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { swarmOutService, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import { agentFacts, dailyByOutcome, endedLabel, outcomeBucket, runJudge, runStats, tokenCount, tokenStats, workLines } from './live';
+import { agentFacts, dailyByOutcome, endedLabel, modelLabel, outcomeBucket, runJudge, runStats, tokenCount, tokenStats, workLines } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -144,6 +144,27 @@ describe('what a run did, for every kind of run', () => {
     expect(legacy[0]).toMatchObject({ key: 'tokens', value: '—' });
     expect(legacy[0].title).toContain('刷新结果后重算');
     expect(tokenStats(result({ tokens: null }))[0].title).toBe('Token 没有记录');
+  });
+
+  it('the ledger\'s tokens and the model: "≥" while the ledger has not arrived, the model under the cost', () => {
+    // the dive-deep run of 2026-10-30, as the ledger has it: sub-agents included
+    const full = result({ tokens: { input: 2751, output: 258_432, cache_read: 26_305_869, cache_write: 2_049_112 },
+      tokens_partial: false, cost_usd: 40.12, models: ['claude-opus-4-6'] });
+    const cells = Object.fromEntries(tokenStats(full).map((x) => [x.key, x]));
+    expect([cells.tokens.value, cells.cacheRead.value, cells.output.value]).toEqual(['28.6M', '26.3M', '258K']);
+    expect(Object.fromEntries(runStats(full).map((x) => [x.key, x])).cost).toMatchObject({ value: '$40.12', sub: 'Opus 4.6' });
+    // before the ledger's rows arrive: the main conversation's counts, marked as a lower bound
+    const partial = result({ tokens: { input: 53, output: 38_593, cache_read: 5_415_316, cache_write: 183_200 },
+      tokens_partial: true, cost_usd: 40.12, models: null });
+    const p = Object.fromEntries(tokenStats(partial).map((x) => [x.key, x]));
+    expect([p.tokens.value, p.cacheRead.value, p.input.value]).toEqual(['≥ 5.6M', '≥ 5.4M', '≥ 53']);
+    expect(p.tokens.title).toContain('不含子 agent');
+    expect(Object.fromEntries(runStats(partial).map((x) => [x.key, x])).cost.sub).toBeUndefined();
+  });
+
+  it('a model reads as a person says it', () => {
+    expect(['claude-opus-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6', 'claude-opus-5', 'other'].map(modelLabel))
+      .toEqual(['Opus 5.5', 'Opus 4.6', 'Sonnet 4.6', 'Opus 5', '其他模型']);
   });
 
   it('a token count reads as K / M / B in every language', () => {

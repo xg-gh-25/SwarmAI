@@ -166,6 +166,21 @@ async def unified_status():
             return load_state(), load_jobs()
         state, jobs = await executors.run_nav(_load)
 
+        def _job_spend() -> dict:
+            # the usage ledger is the spend (core/usage_accounting): every job run,
+            # failed ones too, at the CLI's own price
+            from core import usage_report
+            conn = usage_report.connect()
+            try:
+                return usage_report.month_spend(conn, "job")
+            finally:
+                conn.close()
+        try:
+            job_spend = await executors.run_nav(_job_spend)
+        except Exception as e:  # noqa: BLE001 — the rest of the status still shows
+            logger.warning("job spend not read from the usage ledger: %s", type(e).__name__)
+            job_spend = None
+
         # Only ENABLED jobs count toward health/failing — a disabled job is
         # inert (neither healthy nor failing). brain-push (enabled=False) must
         # not inflate the failing count (same enabled-gap class as run_01d2fd9d).
@@ -179,7 +194,9 @@ async def unified_status():
             "healthy": ok,
             "failing": err,
             "never_run": len(active) - ok - err,
-            "monthly_spend_usd": state.monthly_spend_usd,
+            "monthly_spend_usd": job_spend["cost_usd"] if job_spend else None,
+            # some of the month's job rows have no price: the spend is at least that
+            "monthly_spend_partial": bool(job_spend and job_spend["unpriced"]),
             "buffered_signals": len(state.raw_signals),
             "dedup_cache_size": len(state.dedup_cache),
         }

@@ -101,7 +101,6 @@ _ROUTERS: list[SessionRouter] = []
 _EXPECTED_BACKGROUND = {
     ("go", "session_state.py"),    # session_state.publish: the state push (reads the DB)
     ("kick", "turn_changes.py"),   # TurnChanges.start: the per-send start snapshot
-    ("record_token_usage", "sqlite.py"),  # the result's usage row
 }
 
 

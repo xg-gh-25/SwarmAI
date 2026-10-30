@@ -124,11 +124,12 @@ def test_the_ledger_is_in_the_backup():
 
 
 @pytest.mark.asyncio
-async def test_the_accounting_call_writes_both_once_per_result():
+async def test_the_accounting_call_writes_the_ledger_once_per_result():
     """The orchestrator's accounting call: the ledger gets the result's rows, per model
-    and as the process's increase, the legacy token_usage row is still written for older
-    readers, and a result seen by a second path is not counted again. (That the real
-    result paths reach it: test_context_warning_bridge.TestUsageLedgerOnResultPaths.)"""
+    and as the process's increase, nothing else is written (the legacy token_usage row
+    is gone: every reader uses the ledger), and a result seen by a second path is not
+    counted again. (That the real result paths reach it:
+    test_context_warning_bridge.TestUsageLedgerOnResultPaths.)"""
     import asyncio
     from unittest.mock import AsyncMock, patch
     from core.streaming_orchestrator import StreamingOrchestrator
@@ -138,8 +139,7 @@ async def test_the_accounting_call_writes_both_once_per_result():
     import database
     r1, r2 = (result(m.model_usage, m.total_cost_usd, m.usage) for m in (R1, R2))
     rows: list = []
-    with patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)), \
-            patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)) as legacy:
+    with patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)):
         orch._record_token_usage_bg(r1, r1.usage)
         orch._record_token_usage_bg(r2, r2.usage)
         orch._record_token_usage_bg(r2, r2.usage)          # another path seeing the same result
@@ -147,7 +147,7 @@ async def test_the_accounting_call_writes_both_once_per_result():
         await asyncio.sleep(0)
     assert [(r["surface"], r["session_id"], r["cli_pid"], r["cache_write"]) for r in rows] == \
         [("channel", "sess-o", 4242, 18815), ("channel", "sess-o", 4242, 667)]
-    assert legacy.await_count == 2
+    assert not hasattr(database.db, "record_token_usage")
 
 
 def test_every_direct_model_call_names_its_feature():

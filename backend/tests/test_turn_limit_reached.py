@@ -52,7 +52,7 @@ async def _drive_to_turn_limit():
         UserMessage(content=[ToolResultBlock(tool_use_id="t1", content="ok", is_error=False)]),
         _max_turns_result(),
     ]
-    with patch.object(database.db, "record_token_usage", AsyncMock()):
+    with patch("core.usage_accounting.record_sync", lambda rows: None):
         events, raised = await _drive(orch, msgs)
     return orch, wrapper, events, raised
 

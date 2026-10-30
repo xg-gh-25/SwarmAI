@@ -341,7 +341,7 @@ YAML frontmatter: date ({today}), signals_count, sources."""
     md_usage: dict = {"input_tokens": 0, "output_tokens": 0}
     try:
         markdown_part = text(md_prompt, model_id=get_model_id(), max_tokens=MAX_OUTPUT_TOKENS_MD, feature="job.signal_digest",
-                             temperature=0.3, record_usage=True, usage=md_usage)
+                             temperature=0.3, usage=md_usage)
     except StructuredOutputError as e:
         # The tokens were spent: keep them in the total, and still run the scores call.
         logger.warning("LLM digest reply %s (%s); using the simple digest", e.kind, e.detail)
@@ -369,7 +369,7 @@ Rules:
         raw_scores = structured(json_prompt, schema=_SCORES_SCHEMA, model_id=get_model_id(), feature="job.signal_digest",
                                 max_tokens=MAX_OUTPUT_TOKENS_JSON, temperature=0.1,
                                 name="scores", description="Record the signal scores.",
-                                record_usage=True, usage=js_usage)["scores"]
+                                usage=js_usage)["scores"]
         for score_obj in raw_scores:
             idx = score_obj.get("idx", -1)
             if 0 <= idx < len(sampled):
@@ -735,7 +735,7 @@ Be concise. This is a rollup, not a repeat — synthesize patterns, don't list i
     usage: dict = {"input_tokens": 0, "output_tokens": 0}
     try:
         content = text(prompt, model_id=get_model_id(), max_tokens=MAX_OUTPUT_TOKENS_MD, feature="job.signal_digest",
-                       temperature=0.3, record_usage=True, usage=usage)
+                       temperature=0.3, usage=usage)
     except StructuredOutputError as e:
         # The tokens were spent: return them with the concatenation fallback.
         logger.warning("LLM rollup reply %s (%s); using concatenation", e.kind, e.detail)

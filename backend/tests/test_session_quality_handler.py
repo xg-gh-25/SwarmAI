@@ -281,31 +281,15 @@ def _timed(days_ago, seconds, text="端口是多少？"):
              at=(datetime.fromisoformat(_at(days_ago)) + timedelta(seconds=seconds)).isoformat())]}
 
 
-def test_turn_costs_are_increases_of_the_running_total():
-    rows = [("a", "2026-10-20T10:00:00", 1.0),   # first row of a: no baseline
-            ("a", "2026-10-20T10:05:00", 1.5),   # +0.5
-            ("b", "2026-10-20T10:06:00", 9.0),   # first row of b
-            ("a", "2026-10-20T10:07:00", 0.3),   # new process: 0.3
-            ("b", "2026-10-20T10:08:00", 9.25),  # +0.25
-            ("a", "2026-10-28T10:00:00", 0.9)]   # +0.6, outside the window
-    costs = sq._turn_costs(rows, "2026-10-19T00:00:00", "2026-10-26T00:00:00")
-    # a and b: a first row ever is that turn's cost (the CLI's total starts at 0)
-    assert sorted(costs) == [0.25, 0.3, 0.5, 1.0, 9.0]
-    baseline = [("a", "2026-10-18T10:00:00", 0.8)] + rows   # a's last row before the window
-    assert sorted(sq._turn_costs(baseline, "2026-10-19T00:00:00", "2026-10-26T00:00:00")) == \
-        pytest.approx(sorted([0.2, 0.5, 0.3, 9.0, 0.25]))
-
-
 def test_the_state_carries_turn_metrics_and_the_prompt_version(tmp_path):
     from core.session_scorer import JUDGE_PROMPT_SHA
 
     sessions = {"a": _timed(1, 60), "b": _timed(2, 120), "c": _timed(3, 7 * 3600)}  # c: tab left open
-    rows = [("a", _at(1), 1.0), ("a", _at(1, 1), 2.0), ("a", _at(1, 2), 2.5)]
+    rows = [("a", _at(1), 1.0), ("a", _at(1, 1), 1.0), ("a", _at(1, 2), 0.5)]   # each turn's own cost
     spath = tmp_path / "state.json"
     state = sq.run_session_quality(sampler=lambda since: {"sessions": sessions}, scorer=_scorer(),
                                    corrections_path=tmp_path / "c.jsonl", state_path=spath, now=NOW,
                                    cost_reader=lambda since: rows)
-    # costs: 1.0 (a's first row ever), 1.0, 0.5
     assert state["metrics"] == {"turns": 3, "turn_p50_s": 90, "cost_p50_usd": 1.0}
     assert state["judge_prompt_sha"] == JUDGE_PROMPT_SHA
     assert state["trend"][-1]["metrics"] == state["metrics"]
@@ -363,39 +347,56 @@ def test_no_backfill_when_the_sampler_failed_or_none_is_injected(tmp_path):
     assert [t["week"] for t in result["trend"]] == ["2026-W44"]
 
 
-def test_the_database_returns_cost_rows_in_order(tmp_path):
+def _ledger_db(tmp_path, rows):
+    """A database whose usage ledger holds ``rows`` (dicts over usage_accounting._row)."""
+    from core import usage_accounting as ua
     from database.sqlite import SQLiteDatabase
-
     db = SQLiteDatabase(str(tmp_path / "t.db"))
     asyncio.run(db.initialize())
-    for sid, cost in (("a", 1.0), ("b", None), ("a", 1.5)):
-        asyncio.run(db.record_token_usage(session_id=sid, cost_usd=cost))
-    rows = asyncio.run(db.token_cost_rows("2000-01-01T00:00:00"))
-    assert [(r[0], r[2]) for r in rows] == [("a", 1.0), ("a", 1.5)]
-    assert asyncio.run(db.token_cost_rows("2999-01-01T00:00:00")) == []
+    asyncio.run(db.insert_usage_rows([ua._row(
+        surface=r.get("surface", "chat"), model=r.get("model", "us.anthropic.claude-opus-5-5"),
+        tokens={"input": 1, "output": 1, "cache_read": 0, "cache_write": 0}, cost=r["cost"],
+        cost_source="cli", dedup_key=r["key"], at_utc=r["at"], machine=r.get("machine", "host"),
+        session_id=r.get("sid", "a")) for r in rows]))
+    return db
 
 
-def test_the_database_adds_each_sessions_baseline_row(tmp_path):
-    from database.sqlite import SQLiteDatabase
+def _utc(local: str) -> str:
+    return datetime.fromisoformat(local).astimezone().astimezone(timezone.utc).isoformat(timespec="seconds")
 
-    db = SQLiteDatabase(str(tmp_path / "t.db"))
-    asyncio.run(db.initialize())
 
-    import sqlite3
-    con = sqlite3.connect(str(tmp_path / "t.db"))
-    rows = [("warm", "2026-10-10T10:00:00", 1.0), ("warm", "2026-10-11T10:00:00", 2.0),
-            ("warm", "2026-10-20T10:00:00", 2.5), ("cold", "2026-10-11T10:00:00", 4.0),
-            ("new", "2026-10-21T10:00:00", 0.7)]
-    con.execute("DELETE FROM token_usage")
-    con.executemany("INSERT INTO token_usage (session_id, timestamp, cost_usd) VALUES (?, ?, ?)", rows)
-    con.commit()
-    con.close()
-    got = asyncio.run(db.token_cost_rows("2026-10-19T00:00:00"))
-    # warm: its last row before the window + the in-window row; cold has nothing in it
-    assert [(r[0], r[1]) for r in got] == [("warm", "2026-10-11T10:00:00"),
-                                           ("warm", "2026-10-20T10:00:00"),
-                                           ("new", "2026-10-21T10:00:00")]
-    assert sorted(sq._turn_costs(got, "2026-10-19T00:00:00", None)) == [0.5, 0.7]
+def test_a_turn_is_one_cli_result_with_all_its_models(tmp_path):
+    """The ledger keeps one row per model of a CLI result; a turn's cost is their sum,
+    once, at the turn's local time (a sub-agent on another model is part of the turn)."""
+    db = _ledger_db(tmp_path, [
+        {"key": "cli:n:a:1:1:us.anthropic.claude-opus-5-5", "at": _utc("2026-10-20T10:00:00"), "cost": 1.0},
+        {"key": "cli:n:a:1:1:us.anthropic.claude-haiku-4-5", "at": _utc("2026-10-20T10:00:00"), "cost": 0.25},
+        {"key": "cli:n:a:1:2:us.anthropic.claude-opus-5-5", "at": _utc("2026-10-20T11:00:00"), "cost": 2.0},
+    ])
+    got = asyncio.run(db.turn_cost_rows("2026-10-19T00:00:00"))
+    assert got == [("a", "2026-10-20T10:00:00", 1.25), ("a", "2026-10-20T11:00:00", 2.0)]
+    assert sq._turn_costs(got, "2026-10-19T00:00:00", None) == [1.25, 2.0]
+
+
+def test_the_turn_rows_are_this_hosts_chat_turns_in_the_window(tmp_path):
+    """Before the window, another machine (a Hive's sessions are not this host's), a job,
+    or a row with no cost: none is a turn the weekly scoring counts."""
+    db = _ledger_db(tmp_path, [
+        {"key": "cli:n:a:1:1:m", "at": _utc("2026-10-18T10:00:00"), "cost": 9.0},
+        {"key": "hive:h:1", "at": _utc("2026-10-20T10:00:00"), "cost": 9.0, "machine": "xg-hive"},
+        {"key": "clijson:j:m", "at": _utc("2026-10-20T10:00:00"), "cost": 9.0, "surface": "job"},
+        {"key": "cli:n:a:1:2:m", "at": _utc("2026-10-20T10:00:00"), "cost": None},
+        {"key": "cli:n:c:2:1:m", "at": _utc("2026-10-21T10:00:00"), "cost": 0.7, "surface": "channel", "sid": "c"},
+    ])
+    got = asyncio.run(db.turn_cost_rows("2026-10-19T00:00:00"))
+    assert got == [("c", "2026-10-21T10:00:00", 0.7)]
+    assert asyncio.run(db.turn_cost_rows("2999-01-01T00:00:00")) == []
+
+
+def test_turn_costs_keep_the_window_and_drop_free_turns():
+    rows = [("a", "2026-10-18T23:59:59", 5.0), ("a", "2026-10-19T00:00:00", 1.0),
+            ("b", "2026-10-20T00:00:00", 0.0), ("b", "2026-10-26T00:00:00", 3.0)]
+    assert sq._turn_costs(rows, "2026-10-19T00:00:00", "2026-10-26T00:00:00") == [1.0]
 
 
 def test_the_default_judge_is_asked_for_the_reason_in_the_users_language(tmp_path, monkeypatch):
@@ -442,23 +443,3 @@ def test_this_weeks_entry_is_labelled_in_local_time(tmp_path, monkeypatch):
     finally:
         monkeypatch.delenv("TZ")
         _time.tzset()
-
-
-def test_the_cost_query_stays_linear(tmp_path):
-    """The baseline lookup must not be a per-row correlated subquery: on a few
-    thousand rows the old form took seconds (22 s on a real install)."""
-    import sqlite3
-    import time as _time
-    from database.sqlite import SQLiteDatabase
-
-    db = SQLiteDatabase(str(tmp_path / "t.db"))
-    asyncio.run(db.initialize())
-    con = sqlite3.connect(str(tmp_path / "t.db"))
-    rows = [(f"s{i % 300}", f"2026-{9 + (i * 2 // 20000):02d}-{1 + (i % 28):02d}T10:00:00", float(i)) for i in range(20000)]
-    con.executemany("INSERT INTO token_usage (session_id, timestamp, cost_usd) VALUES (?, ?, ?)", rows)
-    con.commit()
-    con.close()
-    start = _time.monotonic()
-    got = asyncio.run(db.token_cost_rows("2026-10-20T00:00:00"))
-    assert _time.monotonic() - start < 2.0
-    assert any(r[1] >= "2026-10-20" for r in got)

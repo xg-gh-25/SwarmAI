@@ -39,8 +39,7 @@ CASES = [
 
 @pytest.fixture
 def converse(monkeypatch):
-    seen, recorded = [], []
-    monkeypatch.setattr(jb, "_record_usage_sync", lambda **kw: recorded.append(kw))
+    seen = []
     from jobs.handlers import skill_proposer
     monkeypatch.setattr(skill_proposer, "_build_prompt", lambda g, c: "prompt")
 
@@ -49,7 +48,7 @@ def converse(monkeypatch):
             seen.append(kw)
             return reply
         monkeypatch.setattr(jb, "converse_with_retry", fake)
-    return _set, seen, recorded
+    return _set, seen
 
 
 def _tool(name, answer, stop="tool_use"):
@@ -59,12 +58,13 @@ def _tool(name, answer, stop="tool_use"):
 
 @pytest.mark.parametrize("name, call, answer", CASES)
 def test_each_job_gets_its_answer_through_its_own_tool(converse, name, call, answer):
-    set_reply, seen, recorded = converse
+    set_reply, seen = converse
     set_reply(_tool(name, answer))
     assert call() == answer
     (kw,) = seen
     assert kw["tool_config"]["toolChoice"] == {"tool": {"name": name}}
-    assert recorded and recorded[0]["output_tokens"] == 3
+    # the call's spend reaches the usage ledger under the job's own feature
+    assert kw["feature"].startswith("job.")
 
 
 @pytest.mark.parametrize("name, call, answer", CASES)
@@ -73,7 +73,7 @@ def test_each_job_gets_its_answer_through_its_own_tool(converse, name, call, ans
     ("tool_use", lambda a: {k: v for k, v in a.items() if k != next(iter(a))}, "invalid"),
 ])
 def test_an_unusable_reply_raises(converse, name, call, answer, stop, mangle, kind):
-    set_reply, _seen, _rec = converse
+    set_reply, _seen = converse
     set_reply(_tool(name, mangle(answer), stop=stop))
     with pytest.raises(StructuredOutputError) as e:
         call()
@@ -83,7 +83,7 @@ def test_an_unusable_reply_raises(converse, name, call, answer, stop, mangle, ki
 def test_memory_health_refuses_an_action_missing_its_key_field(converse):
     # The report drives edits to MEMORY.md: a stale entry named without its prefix is
     # refused whole, so nothing is changed.
-    set_reply, _seen, _rec = converse
+    set_reply, _seen = converse
     set_reply(_tool("report", {**MH_EMPTY, "stale_memories": [{"section": "S", "reason": "r"}]}))
     with pytest.raises(StructuredOutputError, match="entry_prefix"):
         _mh()
@@ -98,7 +98,6 @@ def _signals(n=3):
 
 
 def _digest_converse(monkeypatch, scores_reply, md_stop="end_turn"):
-    monkeypatch.setattr(jb, "_record_usage_sync", lambda **kw: None)
     seen = []
 
     def fake(**kw):

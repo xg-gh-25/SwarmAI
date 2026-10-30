@@ -11,8 +11,9 @@ Two old records, both left exactly as they are (read only):
   an estimate). Timestamps are local; the ledger's are UTC.
 - ``ingestion_llm_usage`` (ingestion.db): the CDF's Bedrock calls per UTC day and source.
 
-Both writers keep writing those tables after the ledger exists, so only what came
-before the ledger's first live row is brought in: ``token_usage`` rows strictly older
+Both tables were still written for a while after the ledger existed (``token_usage``
+is no longer written: every reader uses the ledger), so only what came before the
+ledger's first live row is brought in: ``token_usage`` rows strictly older
 than it, ``ingestion_llm_usage`` days before its day whole, and of that day only what
 the ledger's own CDF rows of the day do not already hold. Every row has a key made from
 its source, so running this again (each start) writes nothing new.

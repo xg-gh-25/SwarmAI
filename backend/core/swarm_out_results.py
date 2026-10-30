@@ -17,7 +17,15 @@ gets in. The whole record is served to the panel (``/runs/{id}/result``).
 - ``load(dispatch_id)`` / ``save(record)`` — the kept record (atomic write).
 - ``fetch(row)``   — check the Hive once (async; never raises).
 - ``attach(rows, status_of)`` — add each row's kept result, start the checks due.
-- ``public(record)`` — the record as ``/runs`` carries it.
+- ``spend_of(dispatch_ids)`` — each run's spend in the usage ledger (sync, read-only).
+- ``public(record, declared, agent, spend)`` — the record as ``/runs`` carries it.
+
+Tokens and cost come from the usage ledger (core/usage_accounting, the platform's one
+definition of spend), whose rows for a dispatched session the host pulls from its Hive
+(core/usage_hive_sync, tied to the dispatch). The record's own figures are the
+fallback until those rows arrive: its cost is the CLI's process total (sub-agents
+included) but its tokens are the CLI result's ``usage``, the main conversation only,
+so a run that started sub-agents used more; such tokens are marked ``tokens_partial``.
 """
 from __future__ import annotations
 
@@ -241,9 +249,10 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
         ended_at = d.s(rows[-1].get("created_at"), 40)
 
     active_ms = sum(d.i(o.get("duration_ms")) or 0 for o in outcomes)
-    # every kind of token a turn used: the model's input not read from the cache, its
-    # output, and what it read from and wrote to the prompt cache. The cache is most of
-    # an agent's tokens, and the cost (the CLI's own total) counts all four.
+    # the four kinds of token in each turn's CLI ``usage``: input not read from the cache,
+    # output, cache reads and cache writes. That ``usage`` covers the main conversation
+    # only, while the cost (the CLI's process total) also counts its sub-agents, so these
+    # tokens are a lower bound; ``public`` takes the ledger's figures when it has them.
     tokens = dict.fromkeys(("input", "output", "cache_read", "cache_write"), 0)
     for o in outcomes:
         u = o.get("usage")
@@ -814,7 +823,119 @@ def _public_agent(res: dict, agent: Any) -> dict:
     }
 
 
-def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> Optional[dict]:
+#: a ledger total this far under the record's CLI total has not caught up yet
+_COST_EPS = 0.005
+#: a ledger row this long after the run's recorded end still belongs to it (the row is
+#: written when the CLI result arrives, the outcome a moment later, both on the Hive)
+_END_SLACK_S = 120
+#: how a run ended when nothing more will be added to it
+_FINAL = frozenset({"completed", "turn_limit", "error", "crashed", "stopped"})
+_KINDS = ("input", "output", "cache_read", "cache_write")
+
+
+def _utc(at: Any) -> Optional[datetime]:
+    """An ISO time as UTC; a time with no zone is taken as UTC (a Hive runs in UTC)."""
+    if not isinstance(at, str):
+        return None
+    try:
+        t = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def spend_of(dispatch_ids: Iterable[str], conn: Any = None,
+             until: Optional[dict[str, Any]] = None) -> dict[str, dict]:
+    """Each run's spend rows in the usage ledger, summed: ``{dispatch_id: {tokens, cost_usd,
+    models, rows}}`` (a run with no row is absent). ``until``: a run's recorded end
+    (``ended_at``); its rows after that (plus ``_END_SLACK_S``) are a later turn the
+    record does not show yet and are left out. ``models``: the registry's short names,
+    sorted; a model the registry does not know is ``"other"`` (a Hive's text never gets
+    in). Read-only; an unreadable ledger is an empty answer."""
+    ids = sorted({i for i in dispatch_ids if isinstance(i, str) and DISPATCH_ID_RE.fullmatch(i)})
+    if not ids:
+        return {}
+    from datetime import timedelta
+    from core import usage_report
+    from model_registry import MODEL_NAMES, normalize_short_name
+    ends = {i: e + timedelta(seconds=_END_SLACK_S) for i in ids
+            if (e := _utc((until or {}).get(i))) is not None}
+    own = conn is None
+    try:
+        conn = conn or usage_report.connect()
+    except Exception as e:  # noqa: BLE001 — the result still shows the record's figures
+        logger.debug("swarm_out_results: ledger not readable (%s)", type(e).__name__)
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        for start in range(0, len(ids), 500):            # under SQLite's variable limit
+            part = ids[start:start + 500]
+            marks = ",".join("?" * len(part))
+            for did, at, model, i, o, cr, cw, cost in conn.execute(
+                    "SELECT dispatch_id, at_utc, model, input, output, cache_read, cache_write, cost_usd "
+                    f"FROM usage_ledger WHERE kind = 'spend' AND dispatch_id IN ({marks})", part):
+                end = ends.get(did)
+                t = _utc(at)
+                if end is not None and t is not None and t > end:
+                    continue
+                s = out.setdefault(did, {"tokens": dict.fromkeys(_KINDS, 0), "cost_usd": None,
+                                         "models": set(), "rows": 0})
+                for k, v in zip(_KINDS, (i, o, cr, cw)):
+                    s["tokens"][k] += int(v or 0)
+                if isinstance(cost, (int, float)) and math.isfinite(cost) and cost >= 0:
+                    s["cost_usd"] = (s["cost_usd"] or 0.0) + float(cost)
+                name = normalize_short_name(model) if model else ""
+                if name:
+                    s["models"].add(name if name in MODEL_NAMES else "other")
+                s["rows"] += 1
+    except Exception as e:  # noqa: BLE001
+        logger.debug("swarm_out_results: ledger read failed (%s)", type(e).__name__)
+        return {}
+    finally:
+        if own:
+            conn.close()
+    for s in out.values():
+        s["models"] = sorted(s["models"])
+    return out
+
+
+def _usage(res: dict, spend: Optional[dict]) -> dict[str, Any]:
+    """The tokens, cost and models a result shows. The ledger's rows are the spend once
+    the run has ended and they hold at least what the CLI counted; until then the
+    record's figures stand in, each kind at least the larger of the two counts, and the
+    tokens are a lower bound (``tokens_partial``). A kind the record never counted (a
+    record kept before the cache was counted) stays unknown unless the ledger has it."""
+    tokens = res.get("tokens")
+    rec = ({"input": _int(tokens.get("input")), "output": _int(tokens.get("output")),
+            "cache_read": _opt_int(tokens.get("cache_read")),
+            "cache_write": _opt_int(tokens.get("cache_write"))}
+           if isinstance(tokens, dict) else None)
+    cost = res.get("cost_usd")
+    rec_cost = (cost if isinstance(cost, (int, float)) and not isinstance(cost, bool)
+                and math.isfinite(cost) and cost >= 0 else None)
+    rec_partial = res.get("cost_partial") is not False
+    if not spend or not spend.get("rows"):
+        return {"tokens": rec, "tokens_partial": rec is not None, "cost_usd": rec_cost,
+                "cost_partial": rec_partial, "models": None}
+    led, led_cost = spend["tokens"], spend.get("cost_usd")
+    models = list(spend.get("models") or [])
+    final = res.get("ended") in _FINAL and res.get("provisional") is not True
+    if final and led_cost is not None and (rec_cost is None or led_cost >= rec_cost - _COST_EPS):
+        # an ended run whose ledger holds at least what the CLI counted: it is the spend
+        return {"tokens": dict(led), "tokens_partial": False, "cost_usd": round(led_cost, 6),
+                "cost_partial": rec_partial and not (rec_cost is not None and led_cost > rec_cost + _COST_EPS),
+                "models": models}
+    both: dict[str, Optional[int]] = {}
+    for k in _KINDS:
+        r, l = (rec or {}).get(k), int(led.get(k) or 0)
+        both[k] = None if (r is None and l == 0 and rec is not None) else max(l, r or 0)
+    best = max((c for c in (rec_cost, led_cost) if c is not None), default=None)
+    return {"tokens": both, "tokens_partial": True, "cost_usd": best,
+            "cost_partial": rec_partial or best is None or not final, "models": models}
+
+
+def public(record: Optional[dict], declared: Any = None, agent: Any = None,
+           spend: Optional[dict] = None) -> Optional[dict]:
     """The result as ``/runs`` carries it, which the CLI prints and the local agent
     reads: built field by field from enums, fixed value lists, numbers and shas. No
     string the Hive chose gets in: a repository appears under the URL, ref and
@@ -835,8 +956,7 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> O
     error = None
     if isinstance(err, dict):
         error = {"code": err.get("code") if err.get("code") in ERROR_CODES else "other"}
-    tokens = res.get("tokens")
-    cost = res.get("cost_usd")
+    usage = _usage(res, spend)
     p = res.get("pipeline")
     pipeline = None
     if isinstance(p, dict):
@@ -857,15 +977,10 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None) -> O
         "error": error, "ended_at": _match(_TIME_RE, res.get("ended_at")),
         "turns": _int(res.get("turns")), "older_turns_not_read": res.get("older_turns_not_read") is True,
         "active_s": _opt_int(res.get("active_s")),
-        # a record kept before the cache was counted has no cache keys: None, so the
-        # panel says the total is not known rather than showing input + output alone
-        "tokens": {"input": _int(tokens.get("input")), "output": _int(tokens.get("output")),
-                   "cache_read": _opt_int(tokens.get("cache_read")),
-                   "cache_write": _opt_int(tokens.get("cache_write"))}
-        if isinstance(tokens, dict) else None,
-        "cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool)
-        and math.isfinite(cost) and cost >= 0 else None,
-        "cost_partial": res.get("cost_partial") is not False,
+        # the ledger's spend when it has the run's rows, else the record's (_usage); a
+        # record kept before the cache was counted has no cache keys: None, so the panel
+        # says the total is not known rather than showing input + output alone
+        **usage,
         "report_chars": _int(res.get("report_chars")),
         "kinds": [k for k in (res.get("kinds") or []) if k in _KINDS],
         "work": {
@@ -948,11 +1063,18 @@ async def attach(rows: list[dict], status_of: dict[str, Optional[str]]) -> None:
     """Add ``result`` / ``result_status`` / ``result_error`` / ``result_checked_at`` to
     each row from its kept record, and start the checks that are due (in the
     background: this poll returns what is kept, the next one sees the new result)."""
-    kept = await asyncio.to_thread(_read_kept, [r.get("dispatch_id") or "" for r in rows])
+    ids = [r.get("dispatch_id") or "" for r in rows]
+    def _read() -> tuple[dict, dict]:
+        kept = _read_kept(ids)
+        # only a run with a kept result shows tokens and cost; up to its recorded end
+        ends = {i: k["result"].get("ended_at") for i, k in kept.items()
+                if k and isinstance(k.get("result"), dict)}
+        return kept, spend_of(list(ends), until=ends)
+    kept, spend = await asyncio.to_thread(_read)
     for r in rows:
         k = kept.get(r.get("dispatch_id") or "")
         st = status_of.get(r.get("hive_id"))
-        r["result"] = public(k, r.get("repos"), r.get("project_agent"))
+        r["result"] = public(k, r.get("repos"), r.get("project_agent"), spend.get(r.get("dispatch_id") or ""))
         r["result_status"] = _status(r, st, k)
         r["result_error"] = (k or {}).get("fetch_error")
         r["result_checked_at"] = (k or {}).get("checked_at")

@@ -1,7 +1,7 @@
 """Measured token usage from Claude CLI transcripts, per API response.
 
-Why this exists: the daemon's ``token_usage`` table gets one row when a TURN ends
-(the CLI's result message), and a pipeline run usually lives inside one long
+Why this exists: the usage ledger (core/usage_accounting) gets its chat rows when a
+TURN ends (the CLI's result message), and a pipeline run usually lives inside one long
 turn. A stage or run window therefore often holds no row at all, and every figure
 built on those rows reads "unavailable" or 0. The CLI transcript
 (``<CLAUDE_CONFIG_DIR>/projects/<encoded-cwd>/<sdk-session-id>.jsonl``) carries
@@ -10,7 +10,7 @@ can be measured while the turn is still running. Sub-agents write their own file
 under ``<transcript stem>/subagents/agent-*.jsonl``.
 
 The transcript has no price, so this module measures TOKENS only. A dollar figure
-comes from ``token_usage`` rows (the CLI's own ``total_cost_usd``) or not at all.
+comes from the usage ledger (the CLI's own book cost) or not at all.
 
 Public symbols:
 - ``valid_session_id(sid)`` — the SDK session id check, before an id is stored
@@ -19,7 +19,7 @@ Public symbols:
   a session id never becomes a path)
 - ``find_subagent_transcripts(transcripts)`` — the sub-agent files of those transcripts
 - ``usage_in_window(paths, lo, hi, include_subagents=True)`` — token sums of the
-  responses inside ``[lo, hi]`` (epoch seconds) in ``token_usage``'s key names
+  responses inside ``[lo, hi]`` (epoch seconds) in the old ``token_usage`` key names
   (``input_tokens``, ``output_tokens``, ``cache_read_tokens``,
   ``cache_creation_tokens``), plus ``tokens`` (input + output + cache creation,
   cache reads excluded — the same definition ``artifact_cli._apply_token_cost`` and

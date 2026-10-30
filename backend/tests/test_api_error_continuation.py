@@ -49,7 +49,7 @@ def _no_wait():
     # (their aiosqlite threads outlive the test loop)
     import database
     with patch("core.streaming_orchestrator._api_error_wait", AsyncMock()) as s, \
-            patch.object(database.db, "record_token_usage", AsyncMock()):
+            patch("core.usage_accounting.record_sync", lambda rows: None):
         yield s
 
 

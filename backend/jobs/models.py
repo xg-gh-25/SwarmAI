@@ -221,7 +221,7 @@ class SchedulerState(BaseModel):
     pending_events: list[dict[str, Any]] = []  # event queue for on:<event> jobs
     last_scheduler_run: datetime | None = None
     monthly_tokens_used: int = 0       # legacy, kept for backwards compat
-    monthly_spend_usd: float = 0.0     # cumulative monthly spend in dollars
+    monthly_spend_usd: float = 0.0     # legacy, no longer written: spend is the usage ledger's
     monthly_reset_date: str = ""       # YYYY-MM for token/spend reset tracking
 
 

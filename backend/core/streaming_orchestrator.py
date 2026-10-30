@@ -369,9 +369,9 @@ class StreamingOrchestrator:
         one (the normal end, the turn limit, an SDK error, a leak continuation, a
         degeneration abort): its tokens were spent whether or not the result is
         forwarded. Writes the usage ledger (core/usage_accounting: per model, each
-        result the increase over the previous result of the same process) and the
-        legacy ``token_usage`` row (kept for older readers: online scoring, a rollback;
-        its ``cost_usd`` is the CLI process's running total)."""
+        result the increase over the previous result of the same process), the one
+        record of spend every reader uses. ``usage`` is unused here: the ledger reads
+        the result's ``model_usage``, which counts sub-agents too."""
         # once per result, whichever paths see it (the result branch records it first)
         if getattr(message, "_swarm_usage_recorded", False):
             return
@@ -388,25 +388,6 @@ class StreamingOrchestrator:
                 default_model=getattr(parent, "_model_name", None)))
         except Exception:
             logger.debug("_record_token_usage_bg: usage ledger not written", exc_info=True)
-        if not usage:
-            return
-        try:
-            import database
-            asyncio.get_running_loop().create_task(
-                database.db.record_token_usage(
-                    session_id=parent.session_id,
-                    source="cli",
-                    input_tokens=usage.get("input_tokens") or 0,
-                    output_tokens=usage.get("output_tokens") or 0,
-                    cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
-                    cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
-                    cost_usd=getattr(message, "total_cost_usd", None),
-                    model=parent._model_name,
-                )
-            )
-        except Exception:
-            logger.debug("_record_token_usage_bg: suppressed exception on a fail-safe path", exc_info=True)
-            pass  # fire-and-forget — never break streaming
 
     @property
     def stall_seconds(self) -> Optional[float]:

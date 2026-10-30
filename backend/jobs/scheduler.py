@@ -661,6 +661,20 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
     logger.info(summary)
 
 
+def _job_spend_text() -> str:
+    """This month's job spend from the usage ledger, or why it is not known."""
+    try:
+        from core import usage_report
+        conn = usage_report.connect()
+        try:
+            spend = usage_report.month_spend(conn, "job")
+            return f"{'≥ ' if spend['unpriced'] else ''}${spend['cost_usd']:.2f}"
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001
+        return f"not known ({type(e).__name__})"
+
+
 def show_status() -> None:
     """Print current scheduler state."""
     state = load_state()
@@ -669,7 +683,7 @@ def show_status() -> None:
     print(f"\n{'='*60}")
     print(f"Swarm Job Scheduler — Status")
     print(f"{'='*60}")
-    print(f"Monthly spend: ${state.monthly_spend_usd:.2f}")
+    print(f"Monthly job spend: {_job_spend_text()}")
     print(f"Monthly tokens used: {state.monthly_tokens_used} (legacy)")
     print(f"Buffered signals: {len(state.raw_signals)}")
     print(f"Dedup cache size: {len(state.dedup_cache)}")
@@ -771,7 +785,7 @@ def validate_config() -> None:
     # Validate state
     try:
         state = load_state()
-        print(f"state.json: {len(state.jobs)} job states, ${state.monthly_spend_usd:.2f} monthly spend")
+        print(f"state.json: {len(state.jobs)} job states")
     except Exception as e:
         errors.append(f"state.json: {e}")
 

@@ -1616,6 +1616,8 @@
       "tokensNotRecorded": "Tokens not recorded",
       "costNotRecorded": "Cost not recorded",
       "costPartial": "Cost: at least this much, some turns have no record",
+      "tokensPartial": "Tokens: at least this many. The run's usage ledger rows have not come from the Hive yet; this is the main conversation only, without sub-agents",
+      "modelOther": "another model",
       "unanswered_one": "{{count}} unanswered",
       "unanswered_other": "{{count}} unanswered",
       "humanTitle": "approved {{approved}} · denied {{denied}} · answered {{answered}} · unanswered {{unanswered}}",

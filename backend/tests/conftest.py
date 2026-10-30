@@ -1177,3 +1177,21 @@ def own_local_root():
         reg.write_text(json.dumps(data))
     return _own
 
+
+
+@pytest.fixture(autouse=True)
+def _hive_model_already_aligned(request, monkeypatch):
+    """A dispatch first makes the Hive's default model this host's
+    (core/swarm_out_model.align, tested in test_swarm_out_spend.py). The other
+    dispatch tests' Hive mocks serve no /api/settings; there the Hive is taken as
+    already on this host's model."""
+    if request.module.__name__.endswith("test_swarm_out_spend"):
+        return
+    try:
+        from core import swarm_out_model
+    except Exception:  # noqa: BLE001 — a test run without the backend on the path
+        return
+
+    async def _aligned(client, hive_name, model=None):
+        return model
+    monkeypatch.setattr(swarm_out_model, "align", _aligned)

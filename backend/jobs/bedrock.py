@@ -324,37 +324,6 @@ def get_model_id(model_key: str = "claude-sonnet-4-6") -> str:
     return model_map.get(model_key, f"us.anthropic.{model_key}")
 
 
-def _record_usage_sync(
-    *,
-    input_tokens: int,
-    output_tokens: int,
-    model: str | None = None,
-) -> None:
-    """Record token usage from sync context. Fire-and-forget."""
-    try:
-        import asyncio
-        import database
-
-        async def _do_record():
-            await database.db.record_token_usage(
-                session_id=None,
-                source="background_job",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                model=model,
-            )
-
-        # If there's a running loop (e.g. FastAPI), schedule task.
-        # Otherwise (standalone job), use asyncio.run().
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_do_record())
-        except RuntimeError:
-            asyncio.run(_do_record())
-    except Exception:
-        logger.debug("Failed to record background job token usage", exc_info=True)
-
-
 def _converse_kwargs(model_id: str, messages: list, system: list,
                      inference_config: dict, tool_config: dict | None) -> dict:
     kw: dict = {"modelId": model_id, "messages": messages, "inferenceConfig": inference_config}
@@ -636,18 +605,9 @@ def _reply_parts(resp: dict) -> tuple[str, list]:
     return (resp or {}).get("stopReason") or "", blocks
 
 
-def _record(resp: dict, model_id: str) -> None:
-    usage = (resp or {}).get("usage") or {}
-    try:
-        _record_usage_sync(input_tokens=int(usage.get("inputTokens") or 0),
-                           output_tokens=int(usage.get("outputTokens") or 0), model=model_id)
-    except Exception:  # noqa: BLE001 — accounting never breaks the call
-        logger.debug("token usage not recorded", exc_info=True)
-
-
 def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperature: float,
           region: str | None, read_timeout: int | None, max_attempts: int | None,
-          tool_config: dict | None, record_usage: bool,
+          tool_config: dict | None,
           usage: dict | None = None, feature: str | None = None) -> tuple[str, list]:
     from model_registry import supports_custom_temperature
 
@@ -661,8 +621,6 @@ def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperatu
         model_id=model_id, region=region, read_timeout=read_timeout,
         max_attempts=max_attempts, tool_config=tool_config, feature=feature,
     )
-    if record_usage:
-        _record(resp, model_id)
     if usage is not None:
         u = (resp or {}).get("usage") or {}
         usage["input_tokens"] = int(u.get("inputTokens") or 0)
@@ -683,7 +641,6 @@ def structured(
     region: str | None = None,
     read_timeout: int | None = None,
     max_attempts: int | None = None,
-    record_usage: bool = False,
     usage: dict | None = None,
     feature: str | None = None,
 ) -> dict:
@@ -697,9 +654,8 @@ def structured(
     ``reasoning`` first in a verdict schema: the model writes its analysis there
     instead of before the answer. Raises StructuredOutputError (truncated / missing /
     invalid); a Bedrock error propagates as from converse_with_retry. *feature* names
-    what the call is spent for in the usage ledger (every call is recorded there).
-    *record_usage* also writes the legacy ``token_usage`` row; a dict passed as
-    *usage* is filled with this call's input_tokens and output_tokens.
+    what the call is spent for in the usage ledger (every call is recorded there); a
+    dict passed as *usage* is filled with this call's input_tokens and output_tokens.
     """
     from model_registry import supports_forced_tool_choice
 
@@ -717,7 +673,7 @@ def structured(
         system = (system + "\n\n" if system else "") + f"Answer only by calling the {name} tool."
     stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
                          temperature=temperature, region=region, read_timeout=read_timeout,
-                         max_attempts=max_attempts, record_usage=record_usage, usage=usage,
+                         max_attempts=max_attempts, usage=usage,
                          tool_config={"tools": [tool], "toolChoice": choice}, feature=feature)
     import json as _json
     raw = _json.dumps(blocks, ensure_ascii=False, default=str)
@@ -744,17 +700,15 @@ def text(
     region: str | None = None,
     read_timeout: int | None = None,
     max_attempts: int | None = None,
-    record_usage: bool = False,
     usage: dict | None = None,
     feature: str | None = None,
 ) -> str:
     """A model's plain-text answer to *prompt*. A reply cut by max_tokens raises
     StructuredOutputError("truncated") instead of being returned as if complete; an
-    empty reply raises ("missing"). *feature*, *record_usage* and *usage* as in structured()."""
+    empty reply raises ("missing"). *feature* and *usage* as in structured()."""
     stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
                          temperature=temperature, region=region, read_timeout=read_timeout,
-                         max_attempts=max_attempts, tool_config=None, record_usage=record_usage,
-                         usage=usage, feature=feature)
+                         max_attempts=max_attempts, tool_config=None, usage=usage, feature=feature)
     out = "".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
     if stop == "max_tokens":
         raise StructuredOutputError("truncated", out, f"reply reached max_tokens={max_tokens}")

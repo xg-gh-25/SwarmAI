@@ -128,8 +128,7 @@ async def _collect_events(unit):
     # writes (the legacy token_usage row and the usage ledger rows) — token
     # accounting is not under test here.
     import database
-    with patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)), \
-            patch("core.usage_accounting.record_sync", lambda rows: None):
+    with patch("core.usage_accounting.record_sync", lambda rows: None):
         async for event in unit._read_formatted_response():
             events.append(event)
     return events
@@ -653,7 +652,6 @@ class TestUsageLedgerOnResultPaths:
         import database
         rows = []
         with _patch_sdk_modules(), \
-                patch.object(database.db, "record_token_usage", AsyncMock(return_value=None)), \
                 patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)):
             async for _ in unit._read_formatted_response():
                 pass

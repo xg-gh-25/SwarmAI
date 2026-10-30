@@ -1,19 +1,17 @@
 """Tests for Token Usage Tracking feature.
 
 Covers:
-- DB table creation and recording (record_token_usage, get_token_usage_summary)
+- the summary the top bar reads (get_token_usage_summary, from the usage ledger)
 - API endpoint (GET /api/system/tokens/usage)
-- Fire-and-forget recording doesn't break on failure
 
 Acceptance criteria:
-1. Every CLI result event persists token usage to SQLite token_usage table
-2. Background boto3 calls also record token usage
+1. Every CLI result's spend is in the usage ledger
+2. Background Bedrock calls are too
 3. GET /api/tokens/usage returns today_tokens_m and total_tokens_m in millions
 4. TopBar displays real data (frontend — not tested here)
 5. Write failure never breaks streaming
 """
 import pytest
-from unittest.mock import patch
 
 import database as database_module
 
@@ -38,7 +36,7 @@ async def _spend(db, *, session_id=None, source="cli", input_tokens=0, output_to
 # ---------------------------------------------------------------------------
 
 class TestTokenUsageDB:
-    """Tests for record_token_usage and get_token_usage_summary in SQLiteDatabase."""
+    """Tests for get_token_usage_summary in SQLiteDatabase (the usage ledger)."""
 
     @pytest.mark.asyncio
     async def test_record_token_usage_basic(self):
@@ -226,23 +224,3 @@ class TestTokenUsageEndpoint:
         data = response.json()
         assert data["total_tokens_m"] == 3.0  # 3M tokens
         assert data["today_tokens_m"] == 3.0
-
-
-# ---------------------------------------------------------------------------
-# Fire-and-forget safety tests
-# ---------------------------------------------------------------------------
-
-class TestTokenUsageFailureSafety:
-    """AC5: Write failure never breaks streaming pipeline."""
-
-    @pytest.mark.asyncio
-    async def test_record_failure_is_silent(self):
-        """If DB write fails, record_token_usage catches and logs, never raises."""
-        db = database_module.db
-        # Simulate DB error by patching aiosqlite.connect to raise
-        with patch("aiosqlite.connect", side_effect=Exception("DB locked")):
-            # Should NOT raise — fire-and-forget safety
-            await db.record_token_usage(
-                session_id="s1", source="cli",
-                input_tokens=100, output_tokens=50,
-            )

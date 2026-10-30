@@ -347,6 +347,14 @@ export function cacheHitRate(t: { input: number; cache_read: number | null; cach
   return side ? t.cache_read / side : null;
 }
 
+/** A model as a person reads it: "claude-opus-5-5" → "Opus 5.5" (registry short names;
+ *  anything else as it is). */
+export function modelLabel(name: string): string {
+  const m = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d+))?$/.exec(name);
+  if (!m) return name === 'other' ? i18n.t('swarmOut.stats.modelOther') : name;
+  return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
+}
+
 /** The card's facts: how long it ran (and when it ended), the human loops (approvals
  *  and answered questions), the total cost (the CLI's own, per-turn increases) and, when
  *  any failed, the failed steps. The tokens are a row of their own (tokenStats). A value
@@ -365,7 +373,8 @@ export function runStats(res: SwarmOutResult): RunStat[] {
       tone: h.unanswered ? 'attention' : undefined },
     { key: 'cost', label: i18n.t('swarmOut.stats.cost'), strong: true,
       value: res.cost_usd == null ? dash : `${res.cost_partial ? '≥ ' : ''}$${res.cost_usd.toFixed(2)}`,
-      title: res.cost_usd == null ? i18n.t('swarmOut.stats.costNotRecorded') : res.cost_partial ? i18n.t('swarmOut.stats.costPartial') : undefined },
+      title: res.cost_usd == null ? i18n.t('swarmOut.stats.costNotRecorded') : res.cost_partial ? i18n.t('swarmOut.stats.costPartial') : undefined,
+      sub: res.models?.length ? res.models.map(modelLabel).join(' · ') : undefined },
   ];
   if (res.work.steps.failed > 0) out.push({ key: 'failed', label: i18n.t('swarmOut.stats.failed'), value: String(res.work.steps.failed) });
   return out;
@@ -383,12 +392,15 @@ export function tokenStats(res: SwarmOutResult): RunStat[] {
   }
   const hit = cacheHitRate(t);
   const cell = (key: RunStat['key'], value: number, label: string): RunStat => ({ key, label, value: tokenCount(value), title: value.toLocaleString() });
+  // a lower bound until the ledger's rows arrive: "≥", and the reason on hover
+  const atLeast = (c: RunStat): RunStat => (res.tokens_partial
+    ? { ...c, value: `≥ ${c.value}`, title: `${c.title} · ${i18n.t('swarmOut.stats.tokensPartial')}` } : c);
   return [
-    { ...cell('tokens', total, i18n.t('swarmOut.stats.tokensBilled')), strong: true },
-    cell('input', t.input, i18n.t('swarmOut.stats.input')),
-    cell('output', t.output, i18n.t('swarmOut.stats.output')),
-    cell('cacheRead', t.cache_read!, i18n.t('swarmOut.stats.cacheRead')),
-    cell('cacheWrite', t.cache_write!, i18n.t('swarmOut.stats.cacheWrite')),
+    atLeast({ ...cell('tokens', total, i18n.t('swarmOut.stats.tokensBilled')), strong: true }),
+    atLeast(cell('input', t.input, i18n.t('swarmOut.stats.input'))),
+    atLeast(cell('output', t.output, i18n.t('swarmOut.stats.output'))),
+    atLeast(cell('cacheRead', t.cache_read!, i18n.t('swarmOut.stats.cacheRead'))),
+    atLeast(cell('cacheWrite', t.cache_write!, i18n.t('swarmOut.stats.cacheWrite'))),
     { key: 'cacheHit', label: i18n.t('swarmOut.stats.cacheHit'), value: hit == null ? '—' : `${Math.round(hit * 100)}%`,
       title: i18n.t('swarmOut.stats.cacheHitTitle') },
   ];
@@ -519,6 +531,8 @@ export interface RunTally {
   costMissing: number;
   tokens: number;
   tokensMissing: number;
+  /** runs whose tokens are in `tokens` only as a lower bound (`tokens_partial`) */
+  tokensPartial: number;
   /** pipeline runs by their Autonomy Judge state */
   judge: { PASS: number; WARN: number; BLOCK: number };
   lessonsReturned: number;
@@ -531,7 +545,7 @@ export interface RunTally {
  *  cost and tokens are counted as missing, never as zero. */
 export function tallyRuns(runs: SwarmOutRun[]): RunTally {
   const t: RunTally = { runs: runs.length, by: { completed: 0, error: 0, stopped: 0, other: 0, running: 0 }, known: 0,
-    unattended: 0, loops: 0, unanswered: 0, medianActive: null, cost: 0, costMissing: 0, tokens: 0, tokensMissing: 0,
+    unattended: 0, loops: 0, unanswered: 0, medianActive: null, cost: 0, costMissing: 0, tokens: 0, tokensMissing: 0, tokensPartial: 0,
     judge: { PASS: 0, WARN: 0, BLOCK: 0 }, lessonsReturned: 0, lessonsWritten: 0, checksNotRun: 0 };
   const active: number[] = [];
   for (const r of runs) {
@@ -548,7 +562,8 @@ export function tallyRuns(runs: SwarmOutRun[]): RunTally {
     if (res.cost_usd == null) t.costMissing += 1;
     else { t.cost += res.cost_usd; if (res.cost_partial) t.costMissing += 1; }
     const tok = tokenTotal(res);
-    if (tok == null) t.tokensMissing += 1; else t.tokens += tok;
+    if (tok == null) t.tokensMissing += 1;
+    else { t.tokens += tok; if (res.tokens_partial) t.tokensPartial += 1; }
     const j = runJudge(res);
     if (j) t.judge[judgeState(j.verdicts).state] += 1;
     t.lessonsReturned += res.lessons?.returned ?? 0;
@@ -617,18 +632,18 @@ export function matchesFilter(r: SwarmOutRun, f: RecordFilter): boolean {
 
 /** A spend as the cards write it: "4.8M token · $3.70", "≥" on what is only partly
  *  known, "—" for what is not known at all. */
-export function spendText(t: Pick<RunTally, 'runs' | 'cost' | 'costMissing' | 'tokens' | 'tokensMissing'>, short = false): string {
+export function spendText(t: Pick<RunTally, 'runs' | 'cost' | 'costMissing' | 'tokens' | 'tokensMissing'> & { tokensPartial?: number }, short = false): string {
   const all = (missing: number) => missing >= t.runs;
-  const tokens = all(t.tokensMissing) ? '—' : `${t.tokensMissing ? '≥ ' : ''}${tokenCount(t.tokens)}`;
+  const tokens = all(t.tokensMissing) ? '—' : `${t.tokensMissing || t.tokensPartial ? '≥ ' : ''}${tokenCount(t.tokens)}`;
   const cost = all(t.costMissing) ? '—' : `${t.costMissing ? '≥ ' : ''}$${t.cost.toFixed(2)}`;
   return i18n.t(short ? 'swarmOut.stats.spendShort' : 'swarmOut.stats.spendValue', { tokens, cost });
 }
 
 /** One run's spend as a tally of one, for spendText. */
-export function runSpend(res: SwarmOutResult | null | undefined): Pick<RunTally, 'runs' | 'cost' | 'costMissing' | 'tokens' | 'tokensMissing'> {
+export function runSpend(res: SwarmOutResult | null | undefined): Pick<RunTally, 'runs' | 'cost' | 'costMissing' | 'tokens' | 'tokensMissing' | 'tokensPartial'> {
   const tok = res ? tokenTotal(res) : null;
   return { runs: 1, cost: res?.cost_usd ?? 0, costMissing: !res || res.cost_usd == null || res.cost_partial ? 1 : 0,
-    tokens: tok ?? 0, tokensMissing: tok == null ? 1 : 0 };
+    tokens: tok ?? 0, tokensMissing: tok == null ? 1 : 0, tokensPartial: tok != null && res?.tokens_partial ? 1 : 0 };
 }
 
 /** A duration in the cards' words ("55 秒", "5 分钟"). */

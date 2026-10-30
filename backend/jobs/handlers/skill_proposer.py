@@ -297,14 +297,11 @@ def _generate_skill_proposal(gap: dict, context: dict) -> dict:
     proposal = structured(_build_prompt(gap, context), schema=_PROPOSAL_SCHEMA, feature="job.skill_proposer",
                           model_id=get_model_id("claude-sonnet-4-6"),
                           max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3, name="proposal",
-                          description="Record the proposed skill.", record_usage=True,
+                          description="Record the proposed skill.",
                           usage=usage)
-    # Sonnet 4.6 pricing: $3/1M input, $15/1M output
-    cost = usage["input_tokens"] * 3.0 / 1_000_000 + usage["output_tokens"] * 15.0 / 1_000_000
-    logger.info(
-        "Skill proposer LLM (Sonnet): %d input, %d output tokens (~$%.3f)",
-        usage["input_tokens"], usage["output_tokens"], cost,
-    )
+    # the call's cost is in the usage ledger (feature job.skill_proposer)
+    logger.info("Skill proposer LLM (Sonnet): %d input, %d output tokens",
+                usage["input_tokens"], usage["output_tokens"])
     return proposal
 
 

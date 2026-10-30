@@ -75,10 +75,6 @@ def _fix_path_from_login_shell() -> None:
 
 _fix_path_from_login_shell()
 
-# Sonnet 4.6 pricing (us.anthropic.claude-sonnet-4-6)
-_SONNET_INPUT_PRICE = 3.0 / 1_000_000   # $3 per 1M input tokens
-_SONNET_OUTPUT_PRICE = 15.0 / 1_000_000  # $15 per 1M output tokens
-
 # ── MCP Auth Failure Detection ──────────────────────────────────────
 # Generic patterns — catches any MCP auth failure (SSO expiry, token
 # revocation, OAuth redirect, etc.) without being provider-specific.
@@ -905,14 +901,6 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
             tokens_in = sum(m.get("inputTokens", 0) for m in model_usage.values())
             tokens_out = sum(m.get("outputTokens", 0) for m in model_usage.values())
 
-        # Use actual cost from CLI if available, otherwise estimate
-        actual_cost = output.get("total_cost_usd", 0)
-        if actual_cost:
-            state.monthly_spend_usd += actual_cost
-        else:
-            cost = _estimate_cost(tokens_in, tokens_out, model="sonnet")
-            state.monthly_spend_usd += cost
-
         # Extract result text — CLI puts agent output in "result" field
         result_text = output.get("result", "")
         if not result_text or result_text.startswith("API Error"):
@@ -1156,16 +1144,15 @@ def _handle_maintenance(
         state.raw_signals = state.raw_signals[-50:]
         actions.append("Trimmed raw signal buffer to 50")
 
-    # Reset monthly spend on 1st of month
+    # Reset the legacy monthly token counter on the 1st of the month (spend is the
+    # usage ledger's, core/usage_report.month_spend)
     current_month = start.strftime("%Y-%m")
     if state.monthly_reset_date != current_month:
-        old_spend = state.monthly_spend_usd
         old_tokens = state.monthly_tokens_used
-        state.monthly_spend_usd = 0.0
         state.monthly_tokens_used = 0
         state.monthly_reset_date = current_month
-        if old_spend > 0 or old_tokens > 0:
-            actions.append(f"Reset monthly spend (was ${old_spend:.2f}, {old_tokens} tokens)")
+        if old_tokens > 0:
+            actions.append(f"Reset monthly token counter (was {old_tokens} tokens)")
 
     # Expire stale pending todos (>30 days)
     todo_result = _expire_stale_todos(max_age_days=30)
@@ -1976,11 +1963,6 @@ def _purge_terminal_todos(
     except Exception as exc:
         logger.warning("Todo purge failed: %s", exc)
         return {"purged_count": 0}
-
-
-def _estimate_cost(input_tokens: int, output_tokens: int, model: str = "sonnet") -> float:
-    """Estimate API cost in USD from token counts (Sonnet 4.6 pricing)."""
-    return input_tokens * _SONNET_INPUT_PRICE + output_tokens * _SONNET_OUTPUT_PRICE
 
 
 def _write_job_result(

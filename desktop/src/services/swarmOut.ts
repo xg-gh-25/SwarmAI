@@ -98,6 +98,12 @@ export interface SwarmOutResult {
    *  prompt cache's reads and writes. The cache fields are null on a record kept before
    *  they were counted: its total is not known. */
   tokens: { input: number; output: number; cache_read: number | null; cache_write: number | null } | null;
+  /** the tokens are a lower bound: the usage ledger's rows for the run have not arrived
+   *  (or caught up), and the record's own counts leave out sub-agents */
+  tokens_partial?: boolean;
+  /** the models the run's spend was on (registry short names, "other" for an unknown
+   *  one), from the usage ledger; null before its rows arrive */
+  models?: string[] | null;
   cost_usd: number | null;
   /** the cost may be short (a turn without a record, or older turns not read) */
   cost_partial: boolean;

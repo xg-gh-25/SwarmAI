@@ -3136,9 +3136,9 @@ class SQLiteDatabase(BaseDatabase):
             # PER RECALL (raw samples, NOT pre-aggregated) so p50/p95 latency by
             # (context, domain) can be computed downstream (Run 3). Written only by
             # the 5-min batch flush (core/recall_metrics.drain_samples →
-            # bulk_insert_recall_metrics), never per-recall. Mirrors token_usage's
-            # column style; timestamp defaults UTC in DDL but the writer overrides
-            # with local time (see bulk_insert_recall_metrics), same as token_usage.
+            # bulk_insert_recall_metrics), never per-recall. Mirrors the old token_usage
+            # table's column style; timestamp defaults UTC in DDL but the writer overrides
+            # with local time (see bulk_insert_recall_metrics), as token_usage did.
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS recall_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4318,48 +4318,6 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             return conn.total_changes - before
 
-    async def record_token_usage(
-        self,
-        *,
-        session_id: str | None,
-        source: str = "cli",
-        input_tokens: int = 0,
-        output_tokens: int = 0,
-        cache_read_tokens: int = 0,
-        cache_create_tokens: int = 0,
-        cost_usd: float | None = None,
-        model: str | None = None,
-    ) -> None:
-        """Record a token usage event. Fire-and-forget safe — never raises.
-
-        The tokens are this turn's; ``cost_usd`` is the CLI process's running total
-        (``total_cost_usd``), not this turn's cost: readers take the increase over the
-        session's previous row (``get_token_usage_summary``, ``token_cost_rows``).
-
-        Uses local time for timestamp so "today" in the TopBar matches
-        the user's actual day boundary (not UTC).
-        """
-        try:
-            from datetime import datetime
-            now_local = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-            # Pooled write borrow (run_7e8a2030): record_token_usage runs after
-            # every chat turn — a per-call aiosqlite.connect() spawned an OS thread
-            # each turn (the executor-churn this fix removes). Route through the pool.
-            async with _get_pool(str(self.db_path)).borrow(readonly=False) as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO token_usage
-                        (timestamp, session_id, source, input_tokens, output_tokens,
-                         cache_read_tokens, cache_create_tokens, cost_usd, model)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (now_local, session_id, source, input_tokens, output_tokens,
-                     cache_read_tokens, cache_create_tokens, cost_usd, model),
-                )
-                await conn.commit()
-        except Exception:
-            logger.warning("Failed to record token usage", exc_info=True)
-
     # ── Send requests (schema v14, core/send_requests.py) ─────────────
     SEND_REQUEST_COLS = ("client_id", "session_id", "status", "owner",
                          "user_message_id", "created_at", "updated_at")
@@ -4591,7 +4549,7 @@ class SQLiteDatabase(BaseDatabase):
         purpose) and skewed window filters by up to the flush interval. Fall back to
         flush-time local now() only for a legacy sample that predates the per-sample
         stamp (an in-flight ring across the deploy). Local time, same convention as
-        record_token_usage (time-of-day aggregation matches the user's day).
+        the old token_usage rows (time-of-day aggregation matches the user's day).
         """
         if not samples:
             return 0
@@ -4709,30 +4667,40 @@ class SQLiteDatabase(BaseDatabase):
             logger.warning("Failed to prune recall metrics", exc_info=True)
             return 0
 
-    async def token_cost_rows(self, since: str) -> list[tuple[str, str, float]]:
-        """``(session_id, timestamp, cost_usd)`` for every row with a cost at or after
-        ``since`` (local time, the column's own format), plus each such session's last
-        row before ``since``, in insertion order. Online eval scoring
-        (jobs/handlers/session_quality._turn_costs) turns these into per-turn costs:
-        ``cost_usd`` is the CLI process's running total, so the row before the window
-        is the baseline of the session's first turn in it."""
+    async def turn_cost_rows(self, since: str) -> list[tuple[str, str, float]]:
+        """``(session_id, timestamp, cost_usd)`` of every chat or channel turn of this host
+        that began at or after ``since`` (local time, ``YYYY-MM-DDTHH:MM:SS``), oldest
+        first, read from the usage ledger (core/usage_accounting). A turn is one CLI
+        result, all its models' rows together (``usage_report.call_key``), and its cost is
+        its own: the ledger keeps each row's cost, never a running total.
+        ``timestamp`` is the turn's local time in the same format. Online eval scoring
+        (jobs/handlers/session_quality._turn_costs) reads these."""
+        from datetime import datetime, timezone
+        from core.usage_report import TURN_SURFACES, call_key
+        t = datetime.fromisoformat(since)
+        since_utc = (t if t.tzinfo else t.astimezone()).astimezone(timezone.utc).isoformat(timespec="seconds")
+        marks = ",".join("?" * len(TURN_SURFACES))
         async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
-            # Non-correlated on purpose: the window's sessions once (timestamp index),
-            # their baselines once (GROUP BY), then one pass. A per-row correlated
-            # subquery here was quadratic in the table (22 s on a real install).
             cursor = await conn.execute(
-                "WITH win AS (SELECT DISTINCT session_id FROM token_usage "
-                "WHERE cost_usd IS NOT NULL AND session_id IS NOT NULL AND timestamp >= ?), "
-                "base AS (SELECT MAX(id) AS id FROM token_usage "
-                "WHERE cost_usd IS NOT NULL AND timestamp < ? "
-                "AND session_id IN (SELECT session_id FROM win) GROUP BY session_id) "
-                "SELECT session_id, timestamp, cost_usd FROM token_usage "
-                "WHERE cost_usd IS NOT NULL AND session_id IS NOT NULL "
-                "AND (timestamp >= ? OR id IN (SELECT id FROM base)) "
-                "ORDER BY id",
-                (since, since, since),
-            )
-            return [(r[0], r[1], r[2]) for r in await cursor.fetchall()]
+                "SELECT session_id, at_utc, cost_usd, dedup_key, machine, job_id FROM usage_ledger "
+                "WHERE kind = 'spend' AND machine = 'host' AND session_id IS NOT NULL "
+                f"AND cost_usd IS NOT NULL AND surface IN ({marks}) AND at_utc >= ? ORDER BY at_utc, id",
+                (*sorted(TURN_SURFACES), since_utc))
+            rows = await cursor.fetchall()
+        turns: dict[str, list] = {}
+        for sid, at, cost, key, machine, job in rows:
+            k = call_key({"dedup_key": key, "session_id": sid, "machine": machine,
+                          "job_id": job, "at_utc": at})
+            cur = turns.get(k)
+            if cur is None:
+                turns[k] = [sid, at, float(cost)]
+            else:
+                cur[2] += float(cost)
+        out = []
+        for sid, at, cost in turns.values():
+            local = datetime.fromisoformat(at).astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
+            out.append((sid, local, cost))
+        return out
 
     async def get_token_usage_summary(self) -> dict:
         """Return aggregated usage for the top bar: today + total, the tokens billed and

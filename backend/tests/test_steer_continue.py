@@ -47,7 +47,7 @@ def _synthetic(text):
 @pytest.fixture(autouse=True)
 def _no_db():
     import database
-    with patch.object(database.db, "record_token_usage", AsyncMock()), \
+    with patch("core.usage_accounting.record_sync", lambda rows: None), \
             patch("core.streaming_orchestrator._api_error_wait", AsyncMock()) as wait, \
             patch("core.streaming_orchestrator.write_user_message", AsyncMock()) as write:
         yield {"wait": wait, "write": write}

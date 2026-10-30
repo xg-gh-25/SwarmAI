@@ -94,17 +94,12 @@ class _patch_sdk_modules:
                 "ThinkingBlock": _MockThinkingBlock,
             }),
         })
-        # Mock the fire-and-forget token-usage DB write. The orchestrator
-        # schedules `asyncio.get_running_loop().create_task(db.record_token_usage(...))`
-        # after a result yield; with the real coroutine it outlives the
-        # function-scoped event loop → "Task was destroyed but it is pending"
-        # unraisable warnings that pytest escalates to ERRORs on a later test
-        # whose abandoned async generator triggers the GC (the blank-result
-        # ordering tests below). An AsyncMock resolves instantly → no pending
-        # task at loop close. Test-only hygiene; does not touch prod behavior.
+        # Keep the usage ledger's writer out of these tests: a result yield records
+        # its rows (core/usage_accounting.record_sync, a background writer thread on
+        # the real database). Test-only hygiene; does not touch prod behavior.
         self._db_patch = patch(
-            "database.db.record_token_usage",
-            new=AsyncMock(return_value=None),
+            "core.usage_accounting.record_sync",
+            new=lambda rows: None,
         )
         self._dict_patch.start()
         try:

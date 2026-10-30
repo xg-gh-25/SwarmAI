@@ -1616,6 +1616,8 @@
       "tokensNotRecorded": "Token 没有记录",
       "costNotRecorded": "花费没有记录",
       "costPartial": "花费至少这么多：有的轮次没有记录",
+      "tokensPartial": "Token 至少这么多：这次 run 的用量账本还没从 Hive 同步过来，现在显示的是主对话的数字，不含子 agent",
+      "modelOther": "其他模型",
       "unanswered_one": "{{count}} 个没回答",
       "unanswered_other": "{{count}} 个没回答",
       "humanTitle": "批准 {{approved}} · 拒绝 {{denied}} · 回答 {{answered}} · 没回答 {{unanswered}}",

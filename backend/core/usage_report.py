@@ -15,6 +15,9 @@ jobs and Hive runs spent the most; what a turn costs; and what the ledger cannot
 
 - ``report(window, conn, now=None)`` — the view's figures for ``"7d"``, ``"30d"`` or ``"all"``
 - ``connect(db_path=None)`` — a read-only connection to the ledger's database
+- ``month_spend(conn, surface, now=None)`` — this host's spend on one surface since the
+  local month began, and how many of its rows have no price (the Jobs page's "monthly
+  spend")
 """
 from __future__ import annotations
 
@@ -45,6 +48,20 @@ def connect(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def month_spend(conn: sqlite3.Connection, surface: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    """What this host spent on ``surface`` (e.g. ``"job"``) since the first of this local
+    month: ``{cost_usd, unpriced}``, the sum of the ledger's priced spend rows (failed
+    runs included) and how many rows with tokens have no price (then the sum is a lower
+    bound)."""
+    since = _midnight(_today(now).replace(day=1))
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0), "
+        "COALESCE(SUM(CASE WHEN cost_usd IS NULL AND input + output + cache_read + cache_write > 0 "
+        "THEN 1 ELSE 0 END), 0) FROM usage_ledger WHERE kind = 'spend' "
+        "AND machine = 'host' AND surface = ? AND at_utc >= ?", (surface, since)).fetchone()
+    return {"cost_usd": round(float(row[0] or 0.0), 6), "unpriced": int(row[1] or 0)}
 
 
 def _midnight(day: date) -> str:
