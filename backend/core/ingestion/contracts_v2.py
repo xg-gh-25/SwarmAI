@@ -99,6 +99,9 @@ def _valid_scope(value: str | None) -> bool:
 # on it); a run sees at most GAP_LIST_TOP open gaps and may close only those
 GAP_ID_RE = re.compile(r"cand-[0-9a-f]{8,64}")
 GAP_LIST_TOP = 20
+# the entries one unit may declare it makes untrue: a change that removes a mechanism makes
+# every entry about it untrue, and each declaration is checked on its own (overrides.check)
+OVERRIDES_TOP = 10
 
 
 class _Unit(BaseModel):
@@ -143,7 +146,7 @@ class CognitionUnit(_Unit):
     # extractor, who has the context, says it (design 2026-10-29-cdf-refactor §3.1)
     topic: Literal["decision", "product", "architecture", "lesson"] | None = None
     # entries this unit replaces, declared by the context that made the new decision
-    overrides: list[OverrideRef] = Field(default_factory=list, max_length=3)
+    overrides: list[OverrideRef] = Field(default_factory=list, max_length=OVERRIDES_TOP)
     # the user's own words this unit rests on, copied verbatim from a cited user message
     # (design 2026-10-30-cdf-agent-decides §2): the only thing that counts as "the user
     # said it" for the files injected every turn; checked as a substring by code

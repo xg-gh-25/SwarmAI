@@ -48,6 +48,9 @@ def cdf_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
     monkeypatch.setattr("core.ingestion.wake.wake", lambda _lane=None: None)
     monkeypatch.setattr("core.session_unit.is_any_chat_streaming", lambda: False)
+    # the user check (decision D) asks a model; these chains test what follows its answer
+    from core.ingestion import user_check
+    monkeypatch.setattr(user_check, "says", lambda claim, texts, **_: user_check.Verdict(True, "said"))
     monkeypatch.setattr(
         "core.ingestion.worker.ingestion_admission",
         lambda lane, **kwargs: type("Admission", (), {"run": True, "llm": True})(),

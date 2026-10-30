@@ -29,7 +29,8 @@ from typing import Iterable
 logger = logging.getLogger(__name__)
 
 MIN_HEAD = 12           # normalized characters of a declared first line that must match
-TOP = 5                 # BM25 candidates shown per unit
+# BM25 candidates shown per unit: enough for a change to find every entry it makes untrue
+TOP = 10
 EVERY_TURN_FILES = (".context/MEMORY.md", ".context/EVOLUTION.md", ".context/STEERING.md",
                     ".context/USER.md", ".context/TOOLS.md")
 

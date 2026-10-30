@@ -303,7 +303,8 @@ def relation_prompt(units: list[Any], shown: list[list[Any]]) -> str:
             lines.append("(none)")
         for entry in entries:
             lines.append(f"- {entry.shown()}  ({entry.path})")
-            lines.append("  " + " ".join(entry.text.split())[:1500])
+            # whole: an entry cut short cannot be judged the same, added to or replaced
+            lines.append("  " + " ".join(entry.text.split()))
         blocks.append("\n".join(lines))
     listing = "\n\n".join(blocks)
     return f"""Now say how each unit you just recorded relates to what is already known, by
@@ -312,9 +313,14 @@ answering with the relations schema, one item per unit. For each unit:
 - "same": an entry already says everything the unit says (target = that entry).
 - "adds": an entry is about the same particular thing and the unit adds something it does
   not say (target = that entry).
-- overrides: the entries this conversation replaced (the user changed the decision, or a
-  measurement showed it wrong), never one that is merely related. An entry the user wrote
-  by hand is not replaced.
+- overrides: the entries this unit makes untrue, so they leave: the user changed the
+  decision; the mechanism, feature or behaviour the entry describes was removed or
+  reworked in this conversation (the unit recording the change names every entry about
+  the old one); or a measurement showed it wrong. Never one that is merely related. An
+  entry the user wrote by hand is not replaced.
+- When the unit completes or corrects an entry about the same particular thing, write
+  the unit as the whole current statement and declare it overrides that entry, rather
+  than "adds" beside it: one current entry per thing.
 - repeats (corrections only): the earlier correction of the same mistake, when you made
   it again.
 Copy "<id> | <first line>" exactly as shown. Leave a field empty when unsure.
@@ -344,7 +350,7 @@ def apply_relations(units: list[Any], answer: dict[str, Any] | None) -> list[Any
         if relation in {"same", "adds"} and target and relation in fields:
             update[relation] = str(target)
         if item.get("overrides") and "overrides" in fields:
-            update["overrides"] = [str(o) for o in item["overrides"]][:3]
+            update["overrides"] = [str(o) for o in item["overrides"]][:contracts_v2.OVERRIDES_TOP]
         if item.get("repeats") and "repeats" in fields:
             update["repeats"] = str(item["repeats"])
         if not update:

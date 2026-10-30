@@ -362,11 +362,9 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
 _SUPERSEDES_SOURCES: frozenset[str] = frozenset()
 
 
-def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None,
-                     supported=False):
+def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None):
     """``overrides.check`` for a cognition unit that declares overrides, else None. An
-    unreadable store refuses every declaration (logged): nothing is retired on a guess.
-    *supported*: the unit is shown by the user's words or a measurement (run_unit_v2)."""
+    unreadable store refuses every declaration (logged): nothing is retired on a guess."""
     declared = getattr(unit, "overrides", None)
     if not isinstance(unit, CognitionUnit) or not declared:
         return None
@@ -383,7 +381,7 @@ def _check_overrides(unit, row, root, destination, corpus_project, resolved, hom
         return overrides.check(conn, workspace=Path(root), project=project, source=source,
                                declared=declared, new_root_ids=getattr(resolved, "root_ids", ()),
                                cited_external=bool(getattr(resolved, "cited_external", True)),
-                               supported=supported, home=home)
+                               home=home)
     finally:
         conn.close()
 
@@ -736,8 +734,7 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     # the project the source fixed, never the unit's own scope: the run's for S3, the
     # session's for S7 (a session about one project does not retire another's entries)
     home = _resolve_project(root, declared) or session_home
-    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved, home,
-                               supported=facts.user_words or facts.measured)
+    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved, home)
     if checked is not None and checked.older:
         return _decision(unit_id, "reject", "reject", "older_than_existing", **done)
     result = _decision(unit_id, "write", "add", "adds" if "adds" in declared_rel else "new", **done)

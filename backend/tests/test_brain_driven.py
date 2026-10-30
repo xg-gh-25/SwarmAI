@@ -207,12 +207,11 @@ def _id_of(title):
     return next(u.id for u in addressing.ddd_units("P").units if title in u.text)
 
 
-def _check(conn, cdf_env, declared, *, source="S7", roots=(), cited_external=False, supported=True,
-           home="P"):
+def _check(conn, cdf_env, declared, *, source="S7", roots=(), cited_external=False, home="P"):
     from core.ingestion import overrides
     return overrides.check(conn, workspace=cdf_env["workspace"], project="P", source=source,
                            declared=declared, new_root_ids=roots, cited_external=cited_external,
-                           supported=supported, home=home)
+                           home=home)
 
 
 def test_a_declared_override_names_the_entry_it_retires(cdf_env):
@@ -367,7 +366,7 @@ def test_no_selection_skips_an_entry_for_a_superseded_mark(tmp_path):
 
 # review round 1 ── the fixes, each with the failure it prevents
 
-def test_an_external_unsupported_or_foreign_project_unit_retires_nothing(cdf_env):
+def test_an_external_or_foreign_project_unit_retires_nothing_an_inferred_one_may(cdf_env):
     from core.ingestion.api import connect_rw
     _ddd(cdf_env, _OLD)
     ref = f"{_id_of('browser')} | - [decision] **Open a Hive session in the browser**"
@@ -375,14 +374,12 @@ def test_an_external_unsupported_or_foreign_project_unit_retires_nothing(cdf_env
     try:
         ok = _check(conn, cdf_env, [ref])
         external = _check(conn, cdf_env, [ref], cited_external=True)
-        unsupported = _check(conn, cdf_env, [ref], supported=False)
         foreign = _check(conn, cdf_env, [ref], home="OtherProject")
         nohome = _check(conn, cdf_env, [ref], home=None)
     finally:
         conn.close()
     assert ok.targets
     assert (external.targets, external.refused[0]["reason"]) == ([], "cited_external")
-    assert (unsupported.targets, unsupported.refused[0]["reason"]) == ([], "not_supported")
     assert (foreign.targets, foreign.refused[0]["reason"]) == ([], "outside_home_project")
     assert nohome.targets == []
 
