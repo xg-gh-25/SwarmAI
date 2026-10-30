@@ -228,10 +228,8 @@ def _decision(unit_id: str, decision: str, action: str, reason: str, *,
 
 
 def _card0(unit: SourceUnit, row: Any) -> Card0Answer:
-    """Apply v2 card 0; noisy checks use only envelope/non-semantic data."""
-    envelope = json.dumps(_json(_get(row, "envelope"), {}), ensure_ascii=False)
-    if re.fullmatch(r"\s*(?:session|run)[-_ ]?id\s*[:=].*", envelope, re.I):
-        return Card0Answer(passed=False, reason="noisy")
+    """Apply v2 card 0: facts only (an empty unit, a URL carrying credentials); what a
+    unit says is never matched against a pattern (design 2026-10-30-cdf-agent-decides I6)."""
     text = _unit_text(unit)
     if not text.strip():
         return Card0Answer(passed=False, reason="noisy")
