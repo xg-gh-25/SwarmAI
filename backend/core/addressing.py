@@ -82,11 +82,12 @@ class UnitTable:
 
 def project_root(project: str) -> Optional[Path]:
     """The project's dir, or None for no / an unknown / an unsafe name."""
-    from core.project_registry import get_projects_dir
+    from core.project_registry import canonical_project_name, get_projects_dir
     if not project or "/" in project or "\\" in project or project.startswith("."):
         return None
     projects_dir = get_projects_dir()
-    base = projects_dir / project
+    # the folder's own spelling: "swarmai" opens SwarmAI on macOS and nothing on Linux
+    base = projects_dir / canonical_project_name(project)
     if not base.is_dir() or base.is_symlink():
         return None
     try:
@@ -196,7 +197,7 @@ def _file_units(store: str, doc: str, path: Path, root: Path, text: str) -> list
 def ddd_units(project: str) -> UnitTable:
     """Every unit of *project*'s DDD (see the module docstring). Never raises."""
     root = project_root(project)
-    table = UnitTable(project, root)
+    table = UnitTable(root.name if root is not None else project, root)   # its own spelling
     if root is None:
         return table
     for store, doc, path in _all_files(root, table.skipped):
@@ -236,13 +237,14 @@ def record_cited(project: str, ids) -> int:
         from core.ddd_usage import entry_anchor_text, record_ddd_hit
         seen: set[str] = set()
         n = 0
-        for u in _ranked([u for u in ddd_units(project).units if u.id in wanted]):
+        table = ddd_units(project)
+        for u in _ranked([u for u in table.units if u.id in wanted]):
             if u.id in seen:
                 continue                      # one hit per cited id: its best unit
             seen.add(u.id)
             anchor = entry_anchor_text(u.text)
             if anchor:
-                record_ddd_hit(project, anchor, date.today())
+                record_ddd_hit(table.project, anchor, date.today())
                 n += 1
         return n
     except Exception:  # noqa: BLE001 -- usage bookkeeping never fails a run

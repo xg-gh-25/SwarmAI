@@ -369,3 +369,27 @@ def test_a_run_created_with_a_lower_case_project_belongs_to_the_folder(ws, monke
     assert project_binding.resolve("p", {"repo": "/repo"}).project == "P"      # bound
     assert project_binding.resolve("p", {"other": "/other"}).project == "P"    # unbound
     assert project_binding.resolve("New", {"other": "/other"}).project == "New"
+
+
+def test_the_read_side_names_a_project_by_its_folders_spelling(ws, monkeypatch):
+    from core import addressing, ddd_usage
+    _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh")])
+    assert addressing.project_root("p").name == "P"
+    table = addressing.ddd_units("p")
+    assert table.project == "P" and any(A in u.text for u in table.units)
+    hits = []
+    monkeypatch.setattr(ddd_usage, "record_ddd_hit", lambda project, anchor, day: hits.append(project))
+    unit = next(u for u in table.units if A in u.text)
+    addressing.record_cited("p", [unit.id])
+    assert hits == ["P"]
+
+
+def test_two_closers_run_one_at_a_time(ws, monkeypatch):
+    _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh")])
+    held = []
+    real = gaps.close_gap
+    monkeypatch.setattr(gaps, "close_gap", lambda *a, **k: held.append(gaps._LOCK.locked()) or real(*a, **k))
+    conn = _connect(ws["db"])
+    _written_event(conn, "u1", [A])
+    gaps.close_declared(conn)
+    assert held == [True]

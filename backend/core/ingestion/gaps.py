@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -186,7 +187,18 @@ def _recorded(conn: sqlite3.Connection) -> set[tuple[str, str]]:
     return {(str(a), str(b)) for a, b in rows}
 
 
+# the run lane (right after a write) and the scheduler's maintenance both call
+# close_declared, in the one daemon process; one at a time, so a gap closed by one is
+# never recorded as "already_closed" by the other
+_LOCK = threading.Lock()
+
+
 def close_declared(conn: sqlite3.Connection, unit_id: str | None = None) -> int:
+    with _LOCK:
+        return _close_declared(conn, unit_id)
+
+
+def _close_declared(conn: sqlite3.Connection, unit_id: str | None = None) -> int:
     """Close the gaps written S3 run events declared; return how many were closed.
 
     Only a run's own report (S3, main pass) can close a gap, only an open gap of the

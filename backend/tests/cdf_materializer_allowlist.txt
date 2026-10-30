@@ -206,4 +206,6 @@ core/library_mounts.py:_reindex_if_outdated  # exempt: via code_intel.build.spaw
 core/library_mounts.py:main  # exempt: the mount re-index child: the mount's code_intel.db and the rebuild-turn lock under app data
 jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via local_roots.migrate_once and code_intel.build: local-roots registry JSON and code graph DBs
 scripts/artifact_cli.py:_bind_local  # exempt: via local_roots.declare and build.spawn_build: local-roots registry JSON; the graph is built by a child
-routers/ddd_brain.py:_confirm_agent  # exempt: via project_agent_review.confirm: the person's confirm writes project-agent.yaml (a definition file, not governed knowledge)
+routers/ddd_brain.py:_confirm  # exempt: via project_agent_review.confirm: the person's confirm writes project-agent.yaml (a definition file, not governed knowledge)
+routers/ddd_brain.py:_edit  # exempt: via project_agent_review.edit: the person's form edit writes project-agent.yaml (a definition file, not governed knowledge)
+core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2-understanding/knowledge/), not a governed file; the docs themselves go through governed_edit.apply_user_edit
