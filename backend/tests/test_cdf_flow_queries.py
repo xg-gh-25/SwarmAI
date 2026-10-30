@@ -86,8 +86,8 @@ def test_overview_stats_and_health_queries(seeded: Path, monkeypatch: pytest.Mon
     (workspace / ".context" / "EVOLUTION.md").write_text("evolution")
     monkeypatch.setattr(queries, "get_swarmws", lambda: workspace)
     overview = queries.flow_overview("24h")
-    assert overview["stages"]["write"] == 1
-    assert overview["stages"]["card_0"] == 1
+    assert overview["total_units"] == 1
+    assert "stages" not in overview   # v1 card counts; the Cognition flow view reads flow_view
     assert overview["written_rate"] == 1
     assert overview["lanes"] == {"immediate": 1}
     assert queries.daily_stats(30)["rows"][0]["units"] == 1

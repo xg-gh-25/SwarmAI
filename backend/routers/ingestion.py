@@ -13,13 +13,86 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from config import get_swarmws
 from core import executors
-from core.ingestion import queries
+from core.ingestion import flow_view, queries
 
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
 
 
 class StrictResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class LandedRow(StrictResponse):
+    store: str
+    project: str | None
+    path: str | None
+    written: int
+    reinforced: int
+
+
+class MovedRow(StrictResponse):
+    from_: str = Field(alias="from")
+    to: str
+    count: int
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class AttentionRow(StrictResponse):
+    code: str
+    count: int | None = None
+    example: str | None = None
+    bytes: int | None = None
+    since: str | None = None
+
+
+class LandedResponse(StrictResponse):
+    """What the Cognition flow view shows first (core/ingestion/flow_view.py)."""
+    window: str
+    since: str
+    total: int
+    totals: dict[str, int]
+    groups: dict[str, int]
+    reasons: dict[str, dict[str, int]]
+    sources: dict[str, int]
+    steps: dict[str, int]
+    landed: list[LandedRow]
+    moved: list[MovedRow]
+    attention: list[AttentionRow]
+    store_bytes: int
+    last_cleanup_at: str | None
+
+
+class UnitRow(StrictResponse):
+    unit_id: str
+    candidate_id: str
+    created_at: str
+    source: str
+    source_ref: str
+    kind: str
+    type: str | None
+    title: str
+    text: str
+    scope: str | None
+    state: str
+    reason: str | None
+    group: str
+    store: str | None
+    project: str | None
+    path: str | None
+    section: str | None
+    moved_from: str | None
+    relation: str | None
+    target: str | None
+    basis: str | None
+
+
+class UnitsResponse(StrictResponse):
+    items: list[UnitRow]
+    page: int
+    page_size: int
+    total: int
+    has_next: bool
 
 
 class FlowResponse(StrictResponse):
@@ -34,7 +107,6 @@ class FlowResponse(StrictResponse):
     extraction_coverage: dict[str, dict[str, int]]
     link_status: dict[str, int]
     same_origin_reroute_count: int
-    stages: dict[str, int]
     lanes: dict[str, int]
     sources: dict[str, int]
     states: dict[str, int]
@@ -109,6 +181,30 @@ class HealthResponse(StrictResponse):
 @router.get("/flow", response_model=FlowResponse)
 async def get_flow(window: str = Query("24h", pattern="^(24h|7d|30d)$")) -> FlowResponse:
     return FlowResponse.model_validate(await executors.run_nav(queries.flow_overview, window))
+
+
+@router.get("/landed", response_model=LandedResponse, response_model_by_alias=True)
+async def get_landed(window: str = Query("24h", pattern="^(24h|7d|30d)$")) -> LandedResponse:
+    return LandedResponse.model_validate(await executors.run_nav(flow_view.landed_overview, window))
+
+
+@router.get("/units", response_model=UnitsResponse)
+async def get_units(
+    window: str = Query("24h", pattern="^(24h|7d|30d)$"),
+    outcome: str = Query("all", pattern="^(all|new|adds|reinforced|not_kept|waiting)$"),
+    place: str | None = Query(None, pattern="^(every_turn|project|general)$"),
+    source: str | None = Query(None, max_length=40),
+    store: str | None = Query(None, max_length=40),
+    project: str | None = Query(None, max_length=200),
+    path: str | None = Query(None, max_length=400),
+    keyword: str | None = Query(None, max_length=200),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=50),
+) -> UnitsResponse:
+    filters = {"window": window, "outcome": outcome, "place": place, "source": source,
+               "store": store, "project": project, "path": path, "keyword": keyword,
+               "page_size": page_size}
+    return UnitsResponse.model_validate(await executors.run_nav(flow_view.list_units, filters, page))
 
 
 @router.get("/items", response_model=ItemsResponse)

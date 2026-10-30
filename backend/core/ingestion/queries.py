@@ -123,17 +123,7 @@ def flow_overview(window: str = "24h") -> dict[str, Any]:
         by_lane = conn.execute(f"SELECT i.lane AS k, COUNT(*) AS count {base} GROUP BY i.lane", (since,)).fetchall()
         by_source = conn.execute(f"SELECT i.source AS k, COUNT(*) AS count {base} GROUP BY i.source", (since,)).fetchall()
         by_reason = conn.execute(f"SELECT COALESCE(u.reason,'-') AS k, COUNT(*) AS count {base} GROUP BY COALESCE(u.reason,'-')", (since,)).fetchall()
-        stage_row = conn.execute(f"""SELECT
-            COUNT(*) AS inbox,
-            COUNT(*) AS organized,
-            SUM(CASE WHEN json_type(u.decision,'$.card0') IS NOT NULL THEN 1 ELSE 0 END) AS card_0,
-            SUM(CASE WHEN json_type(u.decision,'$.card1') IS NOT NULL THEN 1 ELSE 0 END) AS card_1,
-            SUM(CASE WHEN json_type(u.decision,'$.card2') IS NOT NULL THEN 1 ELSE 0 END) AS card_2,
-            SUM(CASE WHEN json_array_length(json_extract(u.decision,'$.rules')) > 0 THEN 1 ELSE 0 END) AS destination_rules,
-            SUM(CASE WHEN json_type(u.decision,'$.card3') IS NOT NULL THEN 1 ELSE 0 END) AS card_3,
-            SUM(CASE WHEN u.state IN ('writing','written') THEN 1 ELSE 0 END) AS write
-            {base}""", (since,)).fetchone()
-        total = int(stage_row["inbox"] or 0)
+        total = int(conn.execute(f"SELECT COUNT(*) {base}", (since,)).fetchone()[0])
         state_counts = _group(by_state, "k")
         outcomes = {
             "written": state_counts.get("written", 0),
@@ -170,9 +160,6 @@ def flow_overview(window: str = "24h") -> dict[str, Any]:
                        CASE WHEN json_extract(u.destination,'$.store')='COMMON_DDD' THEN 'common' ELSE 'injected' END)>1
                    )""", (since,)).fetchone()[0])
     denominator = outcomes["written"] + outcomes["reinforced"] + outcomes["rejected"]
-    stages = {key: int(stage_row[key] or 0) for key in (
-        "inbox", "organized", "card_0", "card_1", "card_2", "destination_rules", "card_3", "write"
-    )}
     return {
         "window": window,
         "since": since,
@@ -185,7 +172,6 @@ def flow_overview(window: str = "24h") -> dict[str, Any]:
         "extraction_coverage": coverage,
         "link_status": link_status,
         "same_origin_reroute_count": same_origin,
-        "stages": stages,
         "lanes": _group(by_lane, "k"),
         "sources": _group(by_source, "k"),
         "states": state_counts,
