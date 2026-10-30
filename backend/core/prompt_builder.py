@@ -2425,12 +2425,9 @@ class PromptBuilder:
         # stops the turn — causing "Interrupted" in the UI mid-pipeline. (The
         # CLI then waits for the next message; it does not exit.)
         #
-        # FIX: Explicit DESKTOP_MAX_TURNS (500) for desktop, CHANNEL_MAX_TURNS
-        # (100) for channels. Both sourced from session_healing so the CLI limit
-        # and the HealthSensor turn_approaching/wrap-up thresholds share ONE
-        # definition — they MUST stay equal or the heal triggers become
-        # unreachable (the original bug). See session_healing.py.
-        # Evidence: run_bbe3f167 hit exactly 101 turns at pipeline stage 7/8.
+        # FIX: Explicit DESKTOP_MAX_TURNS for desktop, CHANNEL_MAX_TURNS for
+        # channels (values + why in session_healing.py). The CLI counts model
+        # calls within ONE user message; the ceiling is a runaway guard only.
         #
         # Safety: max_turns is an INDEPENDENT runaway cap, orthogonal to the
         # autocompact trigger (75% window desktop / 400K channel — NOT a cost
@@ -2445,10 +2442,8 @@ class PromptBuilder:
             # 100 covers all skills (max observed: ~60 turns for complex research).
             max_turns = CHANNEL_MAX_TURNS
         elif not channel_context and max_turns is None:
-            # Desktop: override CLI default (100) with generous limit.
-            # Pipeline full-profile runs need 150-300 turns typically;
-            # complex goal-profile or multi-milestone work can exceed 400.
-            # Self-healing triggers at max_turns-20 for seamless refresh.
+            # Desktop: override CLI default (100). A long autonomous message can
+            # make hundreds of model calls; autocompact keeps it in the window.
             max_turns = DESKTOP_MAX_TURNS
 
         # ── Autocompact trigger (CLI setting `autoCompactWindow`) ───────────────

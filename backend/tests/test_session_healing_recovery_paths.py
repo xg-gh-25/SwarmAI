@@ -158,7 +158,7 @@ class TestT10RichCheckpointGitFailures:
 
     @pytest.mark.asyncio
     async def test_preserves_enrichment_fields(self):
-        """Enrichment fields (agent_conclusion, key_findings) survive git failure."""
+        """Enrichment fields (key_findings, steps) survive git failure."""
         async def _git_fails(cmd, working_dir, timeout=3.0):
             return ""
 
@@ -166,8 +166,7 @@ class TestT10RichCheckpointGitFailures:
             cp = await build_rich_checkpoint(
                 original_request="Build feature X",
                 working_dir="/tmp/fake",
-                agent_conclusion="I was working on the parser module",
-                key_findings="Found 3 edge cases in tokenizer",
+                key_findings="I was working on the parser module; found 3 edge cases in tokenizer",
                 completed_steps=["Wrote tests", "Fixed parser"],
                 pending_steps=["Update docs"],
                 trigger="latency_spike",

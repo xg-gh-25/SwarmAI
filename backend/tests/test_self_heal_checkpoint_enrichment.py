@@ -10,10 +10,9 @@ The residual self-heal gaps on HEAD `87a037e3` for the
   `key_findings`; `completed_steps`, `pending_steps`, `active_file_context`, and the
   pipeline fields are left at empty/None defaults because the builder has no parameter
   to thread them in and the heal call site never derives them.
-- GAP 2 (central) — the `turn_approaching` wrap-up conclusion produced by the agent is
-  streamed to the user and then discarded; there is no parameter on
-  `build_rich_checkpoint` to fold it into the checkpoint, so the agent's own
-  "where I left off" summary never reaches `to_continuation_prompt()`.
+- (GAP 2, the turn_approaching wrap-up conclusion, was removed together with the
+  turn_approaching trigger: HealthSensor counted user messages, not the CLI's
+  per-message model calls, so it never fired before a real turn limit.)
 
 METHODOLOGY (exploratory bugfix)
 --------------------------------
@@ -24,16 +23,14 @@ are re-run unchanged in task 4.5 and should flip to PASS only after the fix land
 NOT weaken these assertions and do NOT modify production code to satisfy them here.
 
 The failure mode on unfixed code is that `build_rich_checkpoint` rejects the
-enrichment parameters the fixed call site will pass (`agent_conclusion`,
-`completed_steps`, `pending_steps`, `active_file`) — there is literally no parameter
+enrichment parameters the fixed call site will pass (`completed_steps`, `pending_steps`, `active_file`) — there is literally no parameter
 to thread the conclusion / progress / active-file context in.
 
 PROPERTIES
 ----------
 - Property 1 (Bug Condition): for a heal that fires with in-flight progress, the fixed
   heal path produces a `TaskCheckpoint` whose `to_continuation_prompt()` carries the
-  available context — at minimum the agent's wrap-up conclusion when one exists, plus
-  whatever progress / findings / pipeline context can be determined at heal time.
+  available context — whatever progress / findings / pipeline context can be determined at heal time.
   Validates Requirements 2.1, 2.2, 2.5.
 """
 
@@ -43,18 +40,7 @@ from core.session_healing import build_rich_checkpoint
 
 # ─── Shared fixtures / constants ─────────────────────────────────────────────
 
-# A representative agent wrap-up conclusion produced in response to WRAP_UP_PROMPT
-# on a `turn_approaching` heal. The respawned agent's continuation prompt MUST carry
-# this forward so it knows where it left off.
-WRAPUP_CONCLUSION = "Parser done; only error-path tests remain"
-
 ORIGINAL_REQUEST = "Implement the config parser and wire it into the router"
-
-
-@pytest.fixture
-def wrapup_conclusion() -> str:
-    """The agent's concluding summary from a turn_approaching wrap-up turn."""
-    return WRAPUP_CONCLUSION
 
 
 @pytest.fixture
@@ -87,35 +73,6 @@ class TestBugConditionCheckpointEnrichment:
     enrichment, so these calls raise / the context never reaches the continuation
     prompt. The tests therefore FAIL now (correct) and PASS after the fix.
     """
-
-    @pytest.mark.asyncio
-    async def test_2a_turn_approaching_conclusion_reaches_continuation_prompt(
-        self, wrapup_conclusion
-    ):
-        """2a (GAP 2, central): the wrap-up conclusion must reach the continuation prompt.
-
-        On a `turn_approaching` heal the agent produced a concluding summary. The fixed
-        builder leads `key_findings` with it so `to_continuation_prompt()` carries it
-        forward. On UNFIXED code there is no `agent_conclusion` parameter to thread the
-        conclusion in, so this FAILS (counterexample: conclusion absent from / unable to
-        reach the continuation prompt).
-
-        Validates: Requirements 2.5
-        """
-        checkpoint = await build_rich_checkpoint(
-            original_request=ORIGINAL_REQUEST,
-            working_dir=None,
-            trigger="turn_approaching",
-            turn_count=482,
-            agent_conclusion=wrapup_conclusion,
-        )
-
-        prompt = checkpoint.to_continuation_prompt()
-        assert wrapup_conclusion in prompt, (
-            "turn_approaching wrap-up conclusion was discarded — it does not reach "
-            "to_continuation_prompt(); there is no parameter to thread it into the "
-            "checkpoint on unfixed code"
-        )
 
     @pytest.mark.asyncio
     async def test_2b_progress_fields_populated_from_history(
@@ -219,7 +176,6 @@ from core.session_healing import (  # noqa: E402
     HealingLoop,
     HealthSensor,
     TaskCheckpoint,
-    WRAP_UP_PROMPT,
     is_self_heal_enabled,
     parse_self_heal_mode,
     release_canary,
@@ -299,12 +255,12 @@ class TestPreservationSensor:
 
     def test_3_2_healthy_sensor_no_checkpoint(self):
         """A fresh sensor reports no heal needed: (False, "")."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         assert sensor.should_checkpoint() == (False, "")
 
     def test_3_2_latency_no_longer_triggers(self):
         """Latency degradation was REMOVED (run_099724ca): a >2.5x shape must NOT heal."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(10):
             sensor.record_turn(latency_ms=10.0, rss_mb=100, had_error=False)
         for _ in range(5):
@@ -313,64 +269,56 @@ class TestPreservationSensor:
 
     def test_3_2_memory_growth_trigger(self):
         """RSS growth over the window >400MB → memory_growth (signal 2)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for v in (100, 200, 300, 400, 500, 600, 700, 800, 900, 1000):
             sensor.record_turn(latency_ms=10.0, rss_mb=v, had_error=False)
         assert sensor.should_checkpoint() == (True, "memory_growth")
 
     def test_3_2_error_cascade_trigger(self):
         """Three consecutive errored turns → error_cascade (signal 3)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(3):
             sensor.record_turn(latency_ms=10.0, rss_mb=100, had_error=True)
         assert sensor.should_checkpoint() == (True, "error_cascade")
 
-    def test_3_2_turn_approaching_trigger(self):
-        """turn_count within TURN_APPROACH_BUFFER of max → turn_approaching (signal 4)."""
-        sensor = HealthSensor(max_turns=25)  # threshold = 25 - 20 = 5
-        for _ in range(5):
-            sensor.record_turn(latency_ms=10.0, rss_mb=100, had_error=False)
-        assert sensor.should_checkpoint() == (True, "turn_approaching")
-
     def test_3_2_hang_detected_trigger(self):
         """No activity for > HANG_TIMEOUT_S → hang_detected (signal 5)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor._last_activity_time = time.time() - (HANG_TIMEOUT_S + 5)
         assert sensor.should_checkpoint() == (True, "hang_detected")
 
     def test_3_2_signal_names_are_the_known_set(self):
         """The producible trigger names are exactly the documented signals.
 
-        latency_degradation was removed (run_099724ca), so the known set is now
-        four: memory_growth, error_cascade, turn_approaching, hang_detected.
-        (turn_hard_floor shares the turn-limit family and is not separately
-        producible here.)
+        latency_degradation was removed (run_099724ca) and the turn-count
+        signals (turn_approaching / turn_hard_floor) were removed, so the known
+        set is three: memory_growth, error_cascade, hang_detected. A sensor with
+        many recorded turns and nothing else wrong produces no trigger.
         """
         observed: set[str] = set()
 
-        s2 = HealthSensor(max_turns=500)
+        s2 = HealthSensor()
         for v in (100, 200, 300, 400, 500, 600, 700, 800, 900, 1000):
             s2.record_turn(latency_ms=10.0, rss_mb=v, had_error=False)
         observed.add(s2.should_checkpoint()[1])
 
-        s3 = HealthSensor(max_turns=500)
+        s3 = HealthSensor()
         for _ in range(3):
             s3.record_turn(latency_ms=10.0, rss_mb=100, had_error=True)
         observed.add(s3.should_checkpoint()[1])
 
-        s4 = HealthSensor(max_turns=25)
-        for _ in range(5):
+        s4 = HealthSensor()
+        for _ in range(20_000):
             s4.record_turn(latency_ms=10.0, rss_mb=100, had_error=False)
-        observed.add(s4.should_checkpoint()[1])
+        assert s4.should_checkpoint() == (False, "")
 
-        s5 = HealthSensor(max_turns=500)
+        s5 = HealthSensor()
         s5._last_activity_time = time.time() - (HANG_TIMEOUT_S + 5)
         observed.add(s5.should_checkpoint()[1])
 
         assert observed == {
             "memory_growth",
             "error_cascade",
-            "turn_approaching",
             "hang_detected",
         }
 
@@ -438,15 +386,6 @@ class TestPreservationKillContract:
 
 class TestPreservationWrapUpAndGate:
     """3.4 wrap-up prompt constant + 3.5 three-mode gate semantics unchanged."""
-
-    def test_3_4_wrap_up_prompt_constant_intact(self):
-        """WRAP_UP_PROMPT exists, is a non-empty string, and keeps its contract."""
-        assert isinstance(WRAP_UP_PROMPT, str)
-        assert WRAP_UP_PROMPT
-        lowered = WRAP_UP_PROMPT.lower()
-        assert "turn limit" in lowered
-        # Instructs the agent NOT to acknowledge the system note to the user
-        assert "do not" in lowered
 
     def test_3_5_parse_self_heal_mode_semantics(self):
         """parse_self_heal_mode maps env values to off/all/canary as today."""
@@ -561,8 +500,8 @@ class TestPreservationIdentityIsolation:
 # PROPERTIES
 # ----------
 # - Property 1 (C inputs): for random in-flight states the fixed builder's
-#   `to_continuation_prompt()` carries forward the available context — the agent
-#   conclusion when present, plus the Completed/Next/Active file/Pipeline lines for
+#   `to_continuation_prompt()` carries forward the available context — key findings
+#   when present, plus the Completed/Next/Active file/Pipeline lines for
 #   whatever progress/working-state was determinable. Validates 2.1, 2.2, 2.4, 2.5.
 # - Property 2 (¬C inputs): for random no-enrichment calls the prompt is byte-for-byte
 #   the minimal-checkpoint baseline (no Completed/Next/Pipeline/Working state/Key
@@ -570,8 +509,7 @@ class TestPreservationIdentityIsolation:
 #   Validates 3.x preservation of the base rendering.
 # - Property 3 (total robustness): `build_rich_checkpoint` never raises across random
 #   inputs (empty/long/unicode requests, None vs [] progress, working_dir=None and a
-#   non-git dir); the wrap-up capture buffer is length-bounded to `_WRAPUP_CAP`; and
-#   the enrichment helper returns {} (never raises) without an app_session_id.
+#   non-git dir); and the enrichment helper returns {} (never raises) without an app_session_id.
 #   Validates 2.6.
 
 import asyncio  # noqa: E402
@@ -584,7 +522,6 @@ from hypothesis import strategies as st  # noqa: E402
 _TRIGGERS = [
     "memory_growth",
     "error_cascade",
-    "turn_approaching",
     "hang_detected",
 ]
 
@@ -623,7 +560,7 @@ class TestProperty1RichContextCarriedForward:
 
     For any bug-condition input (a heal with some available context), the fixed
     `build_rich_checkpoint().to_continuation_prompt()` carries that context forward:
-    a non-empty agent conclusion leads `key_findings` (and appears in the prompt);
+    non-empty key findings appear in `key_findings` and in the prompt;
     provided completed/pending steps render the `**Completed:**` / `**Next:**` lines;
     a provided active file renders the active-file line; a pipeline id renders the
     `**Pipeline:**` line.
@@ -655,7 +592,7 @@ class TestProperty1RichContextCarriedForward:
                 working_dir=None,
                 trigger=trigger,
                 turn_count=turn_count,
-                agent_conclusion=conclusion,
+                key_findings=conclusion,
                 completed_steps=completed or None,
                 pending_steps=pending or None,
                 active_file=active or None,
@@ -669,7 +606,7 @@ class TestProperty1RichContextCarriedForward:
         assert "## Task Continuation" in prompt
         assert "Pick up exactly where you left off" in prompt
 
-        # Conclusion leads key_findings and surfaces in the prompt (GAP 2 / 2.5).
+        # Key findings surface in key_findings and in the prompt.
         if conclusion.strip():
             assert conclusion.strip() in cp.key_findings
             assert conclusion.strip() in prompt
@@ -723,7 +660,7 @@ class TestProperty2NonBugBaselineUnchanged:
                 trigger=trigger,
                 turn_count=turn_count,
                 heal_attempt=heal_attempt,
-                agent_conclusion="",
+                key_findings="",
                 completed_steps=completed,
                 pending_steps=pending,
                 active_file=None,
@@ -786,7 +723,7 @@ class TestProperty3TotalRobustness:
                 trigger=trigger,
                 turn_count=turn_count,
                 heal_attempt=heal_attempt,
-                agent_conclusion=conclusion,
+                key_findings=conclusion,
                 completed_steps=completed,
                 pending_steps=pending,
                 active_file=active,
@@ -817,7 +754,7 @@ class TestProperty3TotalRobustness:
                     original_request=original,
                     working_dir=d,
                     trigger=trigger,
-                    agent_conclusion=conclusion,
+                    key_findings=conclusion,
                     completed_steps=progress,
                     pending_steps=progress,
                 )
@@ -826,63 +763,6 @@ class TestProperty3TotalRobustness:
         # Non-git dir → git floor falls back to empty (preserves 3.3 contract).
         assert cp.files_modified == []
         assert cp.uncommitted_changes == ""
-
-
-class TestProperty3WrapupCaptureBounded:
-    """Property 3 — the wrap-up conclusion buffer is length-bounded (`_WRAPUP_CAP`).
-
-    `SessionUnit._capture_wrapup_text` accumulates assistant text emitted during the
-    graceful wrap-up turn into the instance-scoped `_wrapup_conclusion`, capped at
-    `_WRAPUP_CAP` chars, and never raises on malformed events. Exercised directly on
-    a bare instance (`__new__`) — no DB, no subprocess, no event loop.
-    """
-
-    @staticmethod
-    def _new_unit():
-        from core.session_unit import SessionUnit
-
-        u = SessionUnit.__new__(SessionUnit)
-        u._wrapup_conclusion = ""
-        return u
-
-    @settings(max_examples=60, deadline=None, suppress_health_check=_SUPPRESS)
-    @given(text=st.text(max_size=10_000))
-    def test_single_event_capture_is_bounded(self, text):
-        from core.session_unit import SessionUnit
-
-        u = self._new_unit()
-        event = {"type": "assistant", "content": [{"type": "text", "text": text}]}
-        SessionUnit._capture_wrapup_text(u, event)
-        assert len(u._wrapup_conclusion) <= SessionUnit._WRAPUP_CAP
-
-    def test_capture_caps_across_many_events(self):
-        from core.session_unit import SessionUnit
-
-        u = self._new_unit()
-        big = {"type": "assistant", "content": [{"type": "text", "text": "x" * 5000}]}
-        for _ in range(10):
-            SessionUnit._capture_wrapup_text(u, big)
-        # Never exceeds the cap no matter how much text streams in.
-        assert len(u._wrapup_conclusion) == SessionUnit._WRAPUP_CAP
-
-    def test_capture_never_raises_on_malformed_events(self):
-        from core.session_unit import SessionUnit
-
-        u = self._new_unit()
-        malformed = (
-            None,
-            "not-a-dict",
-            {},
-            {"type": "assistant"},
-            {"type": "assistant", "content": None},
-            {"type": "tool_use", "content": [{"type": "text", "text": "ignored"}]},
-            {"type": "assistant", "content": [{"type": "text"}]},
-            {"type": "assistant", "content": [{"no_type": "x"}]},
-        )
-        for ev in malformed:
-            SessionUnit._capture_wrapup_text(u, ev)  # must not raise
-        # Only the (absent) assistant-text blocks would have contributed: stays bounded.
-        assert len(u._wrapup_conclusion) <= SessionUnit._WRAPUP_CAP
 
 
 class TestProperty3EnrichmentHelperNeverRaises:

@@ -91,15 +91,10 @@ def _make_unit(
     unit._pending_question = None
     unit._last_drained_seqs = []
     unit._client_io = asyncio.Lock()
-    unit._graceful_wrap_pending = False
-    unit._channel_wrap_injected = False
-    unit._hard_floor_wrap_injected = False
-    unit._wrapup_conclusion = ""
     unit._app_session_id = "app-sess-456"
     # health sensor stub — turn_count below floor so wrap never injects
     _hs = MagicMock()
     _hs.turn_count = 0
-    _hs._max_turns = 500
     unit._health_sensor = _hs
     from core.compaction_guard import CompactionGuard
     unit._compaction_guard = CompactionGuard()
@@ -466,7 +461,6 @@ class TestPoisonGuardClassifiedZombie:
     async def test_poison_guard_trigger_sets_recycle_kill_pending(self):
         unit = _make_unit(state=SessionState.IDLE)
         unit._recycle_kill_pending = False
-        unit._wrapup_conclusion = ""
         # _arm_recovery_checkpoint sets the flag BEFORE the idempotency return;
         # a pre-armed checkpoint short-circuits the rest, isolating the flag set.
         unit._heal_checkpoint = object()  # force early return after the flag set
@@ -481,7 +475,6 @@ class TestPoisonGuardClassifiedZombie:
         """Mutation anchor: a genuine-hang trigger must NOT be classified ZOMBIE."""
         unit = _make_unit(state=SessionState.IDLE)
         unit._recycle_kill_pending = False
-        unit._wrapup_conclusion = ""
         unit._heal_checkpoint = object()
         await unit._arm_recovery_checkpoint("rss_proactive")
         assert unit._recycle_kill_pending is False, (

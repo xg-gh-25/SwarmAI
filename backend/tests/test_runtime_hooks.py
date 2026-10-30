@@ -1799,17 +1799,6 @@ class TestEnforcementInjector:
         assert "respond in English" not in ac
 
     @pytest.mark.asyncio
-    async def test_A_wrap_up_append_does_not_flip_chinese(self, session_context):
-        """Finding #6a: the wrap-up prompt is APPENDED (`{user}\\n\\n---\\n\\n{SYSTEM NOTE…}`)
-        — ~45 English words after the user text. Must be dropped, not counted."""
-        from core.session_healing import WRAP_UP_PROMPT
-        hook = self._hook(session_context)
-        prompt = f"{self._UI_BLOCK}\n\n改一下这里的 bug\n\n---\n\n{WRAP_UP_PROMPT}"
-        ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
-        assert "中文" in ac
-        assert "respond in English" not in ac
-
-    @pytest.mark.asyncio
     async def test_A_heal_continuation_prepend_does_not_flip_chinese(self, session_context):
         """Finding #6b: heal-continuation is PREPENDED (`## Task Continuation …\\n\\n---\\n\\n{user}`),
         pushing the user text into a later segment. The system block must be dropped."""

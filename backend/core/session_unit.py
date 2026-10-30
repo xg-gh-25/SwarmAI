@@ -56,11 +56,6 @@ from .turn_phase import (
     turn_phase_event,
 )
 from .session_healing import (
-    CHANNEL_WRAP_BUFFER,
-    CHANNEL_WRAP_UP_PROMPT,
-    DESKTOP_MAX_TURNS,
-    HARD_FLOOR_BUFFER,
-    WRAP_UP_PROMPT,
     HealthSensor,
     HealingLoop,
     RecoveryCoordinator,
@@ -1067,7 +1062,7 @@ class SessionUnit:
         # degradation is detected. HealingLoop orchestrates the refresh
         # cycle. Together they prevent sessions from crashing — the system
         # heals itself without user intervention.
-        self._health_sensor: HealthSensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
+        self._health_sensor: HealthSensor = HealthSensor()
         self._healing_loop: HealingLoop = HealingLoop()
         # R3: route the self-heal DECISION through the one recovery authority.
         # Delegates to _healing_loop (the breaker) — strangler-fig, HealingLoop
@@ -1100,27 +1095,6 @@ class SessionUnit:
         # when its process dies mid-continuation (2026-10-20 13:22).
         self._last_send_options: Any = None
         self._last_send_config: Any = None
-        # Graceful pre-kill: when turn_approaching fires, set this flag
-        # so next send() injects WRAP_UP_PROMPT before the actual kill.
-        # One turn of grace for the agent to finish its thought.
-        self._graceful_wrap_pending: bool = False
-
-        # Instance-scoped buffer for the agent's wrap-up conclusion captured
-        # during a turn_approaching graceful wrap-up turn. Fed into the heal
-        # checkpoint (leads key_findings) then cleared one-shot. Instance attr
-        # ONLY — never module-level (3.5 / anti-pattern #1).
-        self._wrapup_conclusion: str = ""
-
-        # ── Channel wrap-up (one-shot, Gap #13) ────────────────────
-        # Set to True after CHANNEL_WRAP_UP_PROMPT is injected. Prevents
-        # re-injection on every subsequent turn past the threshold.
-        self._channel_wrap_injected: bool = False
-
-        # ── Desktop hard-floor wrap-up (one-shot, Root 2 / AC3) ────
-        # Set after the hard-floor WRAP_UP_PROMPT is injected on a desktop
-        # session at max_turns - HARD_FLOOR_BUFFER. Independent of self-heal.
-        self._hard_floor_wrap_injected: bool = False
-
         # ── Long-turn heartbeat throttle (Root 2 / AC5) ────────────
         # Last elapsed-seconds value at which a "still_working" notice was
         # emitted for the current turn. Reset on STREAMING entry.
@@ -2890,68 +2864,6 @@ class SessionUnit:
         # so checkpoint stores the real user request, not modified text.
         _original_user_query = str(query_content)[:500] if query_content else ""
 
-        # ── Graceful pre-kill injection (AC2) ──────────────────────
-        # If turn_approaching was detected last turn, inject wrap-up prompt
-        # so agent finishes naturally before the actual kill on next check.
-        # One-shot: clear flag after injection (Fix #3: prevent stuck flag).
-        _capturing_wrapup_turn = False
-        if self._graceful_wrap_pending and isinstance(query_content, str):
-            query_content = f"{query_content}\n\n---\n\n{WRAP_UP_PROMPT}"
-            # This turn IS the wrap-up turn: capture the agent's emitted text
-            # into _wrapup_conclusion so it can lead key_findings (GAP 2 / 2.5).
-            _capturing_wrapup_turn = True
-            self._wrapup_conclusion = ""  # fresh buffer for this wrap-up turn
-            # Don't clear the flag here — cleared on actual kill or timeout.
-            # The flag stays True so the heal check knows to proceed with kill.
-            logger.info(
-                "session_unit.self_heal_wrap_injected session_id=%s turn=%d",
-                self.session_id, self._health_sensor.turn_count,
-            )
-
-        # ── Channel budget-aware wrap-up (Gap #13) ─────────────────
-        # For channel sessions approaching turn limit, inject wrap-up prompt
-        # suggesting the user continue on desktop. Independent of self-heal
-        # (which may be disabled). Fires ONCE (one-shot guard).
-        if (
-            self.is_channel_session
-            and isinstance(query_content, str)
-            and not self._channel_wrap_injected  # One-shot: never re-inject
-            and not self._graceful_wrap_pending  # Don't conflict with self-heal
-            and self._health_sensor.turn_count
-            >= (self._health_sensor._max_turns - CHANNEL_WRAP_BUFFER)
-        ):
-            query_content = f"{query_content}\n\n---\n\n{CHANNEL_WRAP_UP_PROMPT}"
-            self._channel_wrap_injected = True  # One-shot consumed
-            logger.info(
-                "session_unit.channel_wrap_injected session_id=%s turn=%d max=%d",
-                self.session_id,
-                self._health_sensor.turn_count,
-                self._health_sensor._max_turns,
-            )
-
-        # ── Desktop hard-floor graceful wrap-up (Root 2 / AC3, G2) ─
-        # Absolute last-resort stop for DESKTOP sessions at max_turns-5.
-        # Fires when self-heal can't carry the wrap-up — OFF, exhausted, or in
-        # cooldown (not "unreachable when self-heal is ON"): without this, such a
-        # session runs silently to the CLI's error_max_turns and truncates. Inject
-        # a wrap-up so the agent delivers a non-empty conclusion before the hard
-        # limit. One-shot owned HERE (the predicate is read-only); skipped when
-        # self-heal already owns the wrap-up (_graceful_wrap_pending) or the
-        # channel path handled it.
-        if self._should_inject_hard_floor_wrap() and isinstance(query_content, str):
-            query_content = f"{query_content}\n\n---\n\n{WRAP_UP_PROMPT}"
-            self._hard_floor_wrap_injected = True  # One-shot consumed
-            # Capture the agent's wrap-up text so the conclusion is non-empty
-            # (AC3: no conclusion_len=0). Mirrors the self-heal capture path.
-            _capturing_wrapup_turn = True
-            self._wrapup_conclusion = ""
-            logger.info(
-                "session_unit.hard_floor_wrap_injected session_id=%s turn=%d max=%d",
-                self.session_id,
-                self._health_sensor.turn_count,
-                self._health_sensor._max_turns,
-            )
-
         # ── Heal checkpoint injection (invisible to user) ─────────
         # If a self-heal just happened, prepend continuation context to the
         # user's query so the agent knows to continue seamlessly.
@@ -2969,8 +2881,6 @@ class SessionUnit:
             yield turn_phase_event(TURN_PHASE_WAITING)
             try:
                 async for event in self._streaming_orchestrator.stream_query(query_content):
-                    if _capturing_wrapup_turn:
-                        self._capture_wrapup_text(event)
                     yield event
             finally:
                 self._leak_restart_eligible = False
@@ -2995,14 +2905,9 @@ class SessionUnit:
             should_heal, trigger = self._health_sensor.should_checkpoint(
                 session_state=self.state.value
             )
-            # Fix #3: clear stale graceful flag if sensor no longer triggering
-            if not should_heal and self._graceful_wrap_pending:
-                self._graceful_wrap_pending = False
-                self._wrapup_conclusion = ""  # don't leak into a later heal
             # R3: the self-heal DECISION now goes through the one recovery
             # authority. The Coordinator encapsulates the guard (enabled /
-            # user-stopped / protected-state) + breaker (can_heal) + graceful
-            # policy + escalation. It DELEGATES to _healing_loop, so behavior is
+            # user-stopped / protected-state) + breaker (can_heal) + escalation. It DELEGATES to _healing_loop, so behavior is
             # identical — this is a decision-routing change, not a behavior change.
             if should_heal:
                 decision = self._recovery_coordinator.decide(
@@ -3010,19 +2915,8 @@ class SessionUnit:
                     enabled=_self_heal_enabled,
                     user_stopped=self._user_stopped_current_turn,
                     state=self.state.value,
-                    graceful_pending=self._graceful_wrap_pending,
                 )
-                if decision.verdict is RecoveryVerdict.PROCEED_GRACEFUL:
-                    # turn_approaching phase 1: set flag so next send() injects
-                    # wrap-up prompt; the actual kill happens on the phase-2 pass.
-                    self._graceful_wrap_pending = True
-                    logger.info(
-                        "session_unit.self_heal_graceful_pending "
-                        "trigger=%s session_id=%s turn=%d "
-                        "(will inject wrap-up prompt on next send)",
-                        trigger, self.session_id, self._health_sensor.turn_count,
-                    )
-                elif decision.verdict is RecoveryVerdict.PROCEED_KILL:
+                if decision.verdict is RecoveryVerdict.PROCEED_KILL:
                     # Actual heal: checkpoint → kill → respawn on next send()
                     logger.info(
                         "session_unit.self_heal trigger=%s session_id=%s turn=%d",
@@ -3035,17 +2929,12 @@ class SessionUnit:
                     # Build rich TaskCheckpoint (git floor + history enrichment).
                     # Workspace dir from standard path (same as context_injector)
                     _ws_dir = str(_get_swarmws())
-                    # ── Per-trigger wrap-up policy (intentional) ──────
-                    # turn_approaching → graceful two-phase wrap-up (handled
-                    #   above: subprocess still healthy, ~20-turn buffer exists).
-                    # memory_growth / error_cascade / hang_detected → immediate
-                    #   kill (an extra turn would be slow, risk OOM, likely also
-                    #   fail, or go unanswered). (latency_degradation removed —
-                    #   run_099724ca: it false-killed healthy slow-but-alive turns.)
-                    # For EVERY trigger the checkpoint is still enriched from
-                    # history here (2.1, 2.4) before the kill.
+                    # Every trigger (memory_growth / error_cascade /
+                    # hang_detected) kills immediately: an extra wrap-up turn
+                    # would be slow, risk OOM, likely also fail, or go
+                    # unanswered. The checkpoint is enriched from history here
+                    # (2.1, 2.4) before the kill.
                     _enrichment = await self._derive_heal_enrichment()
-                    _conclusion = self._wrapup_conclusion
                     self._heal_checkpoint = await build_rich_checkpoint(
                         original_request=_original_user_query,
                         working_dir=_ws_dir,
@@ -3053,7 +2942,6 @@ class SessionUnit:
                         turn_count=self._health_sensor.turn_count,
                         trigger=trigger,
                         heal_attempt=self._recovery_coordinator.heal_attempts,
-                        agent_conclusion=_conclusion,
                         completed_steps=_enrichment.get("completed_steps"),
                         pending_steps=_enrichment.get("pending_steps"),
                         key_findings=_enrichment.get("key_findings", ""),
@@ -3065,21 +2953,13 @@ class SessionUnit:
                     logger.info(
                         "session_unit.self_heal_checkpoint session_id=%s "
                         "trigger=%s fields=[completed=%d,pending=%d,findings=%d,"
-                        "pipeline=%s,active_file=%d] conclusion_len=%d "
-                        "approx_chars=%d",
+                        "pipeline=%s,active_file=%d] approx_chars=%d",
                         self.session_id, trigger,
                         len(_cp.completed_steps), len(_cp.pending_steps),
                         len(_cp.key_findings), bool(_cp.pipeline_run_id),
-                        len(_cp.active_file_context), len(_conclusion),
+                        len(_cp.active_file_context),
                         len(_cp.to_continuation_prompt()),
                     )
-                    logger.info(
-                        "session_unit.self_heal_wrap_outcome session_id=%s "
-                        "captured=%s len=%d",
-                        self.session_id, bool(_conclusion), len(_conclusion),
-                    )
-                    self._graceful_wrap_pending = False
-                    self._wrapup_conclusion = ""  # one-shot: consumed
                     # Kill subprocess but keep _sdk_session_id (for --resume).
                     # Fix #9: wrap in try/except to prevent inconsistent state
                     try:
@@ -3088,7 +2968,6 @@ class SessionUnit:
                         self._recovery_coordinator.record_heal_success()
                     except Exception as heal_exc:
                         self._heal_checkpoint = None  # Discard unusable
-                        self._wrapup_conclusion = ""  # don't leak into a later heal
                         self._recovery_coordinator.record_heal_failure(str(heal_exc))
                         logger.error(
                             "session_unit.self_heal_failed session_id=%s: %s",
@@ -4980,32 +4859,6 @@ class SessionUnit:
     # The RSS proactive-restart path (_check_rss_and_proactive_restart, which owns
     # its own compact() call above) is INDEPENDENT and unaffected.
 
-    def _should_inject_hard_floor_wrap(self) -> bool:
-        """AC3 (G2) predicate: should a desktop hard-floor wrap-up be injected?
-
-        TRULY pure (read-only) so it is forced-testable (STEERING #11) and safe to
-        evaluate more than once — the single caller (``send()``) owns the one-shot
-        commit + log. True when, on a DESKTOP session, turn_count has reached
-        max_turns - HARD_FLOOR_BUFFER, the wrap hasn't been injected yet, and
-        self-heal isn't already wrapping up.
-
-        Reachability: when self-heal is *succeeding*, turn_approaching (-20) heals +
-        resets turn_count before -5 is reached, so the floor stays dormant. It is a
-        last-resort net that DOES fire when self-heal is OFF, exhausted, or in
-        cooldown — not "unreachable on the self-heal-ON path."
-        """
-        if self.is_channel_session:
-            return False
-        if self._hard_floor_wrap_injected:
-            return False
-        if self._graceful_wrap_pending:
-            return False
-        if self._health_sensor.turn_count < (
-            self._health_sensor._max_turns - HARD_FLOOR_BUFFER
-        ):
-            return False
-        return True
-
     def _maybe_build_elapsed_heartbeat(self) -> Optional[dict]:
         """The once-per-LONG_TURN_HEARTBEAT_S tick of a long-running turn.
 
@@ -5470,8 +5323,6 @@ class SessionUnit:
         self._cleanup_internal()
         self._sdk_session_id = None
 
-    _WRAPUP_CAP = 4000
-
     def _maybe_recovery_exhausted_event(self, trigger: str) -> Optional[dict]:
         """Return a one-shot ``recovery_exhausted`` SSE event when the recovery
         breaker has JUST tripped, else ``None``.
@@ -5510,29 +5361,6 @@ class SessionUnit:
                            "trigger=%s — user will not be told recovery stopped: %s",
                            self.session_id, trigger, exc)
             return None
-
-    def _capture_wrapup_text(self, event: dict) -> None:
-        """Accumulate assistant text emitted during the graceful wrap-up turn.
-
-        Appends text blocks from ``assistant`` SSE events into the instance-scoped
-        ``_wrapup_conclusion`` buffer, bounded to ``_WRAPUP_CAP`` chars. Never raises
-        — capture must never break the streaming loop (Property 3).
-        """
-        try:
-            if not isinstance(event, dict) or event.get("type") != "assistant":
-                return
-            for block in event.get("content") or []:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text = block.get("text") or ""
-                    if not text:
-                        continue
-                    remaining = self._WRAPUP_CAP - len(self._wrapup_conclusion)
-                    if remaining <= 0:
-                        break
-                    self._wrapup_conclusion += text[:remaining]
-        except Exception:
-            logger.debug("_capture_wrapup_text: suppressed exception on a fail-safe path", exc_info=True)
-            pass  # capture is best-effort; never break streaming
 
     async def _derive_heal_enrichment(self) -> dict:
         """Derive completed/pending/findings for the heal checkpoint from history.
@@ -5614,9 +5442,7 @@ class SessionUnit:
                 self.session_id, exc,
             )
 
-    async def _arm_recovery_checkpoint(
-        self, trigger: str, *, allow_wrapup: bool = False
-    ) -> None:
+    async def _arm_recovery_checkpoint(self, trigger: str) -> None:
         """Arm the rich recovery checkpoint before an INVOLUNTARY keep-resume kill.
 
         Mirrors the voluntary self-heal checkpoint so that an involuntary kill
@@ -5638,8 +5464,6 @@ class SessionUnit:
           ``_app_session_id``. No new module-level state.
         - Fully guarded: enrichment failure / missing app_session_id / build
           failure all degrade to a no-op. NEVER raises into the kill path.
-        - ``allow_wrapup`` folds the agent's wrap-up conclusion into the
-          checkpoint when one exists; involuntary callers leave it False.
 
         Mirrors the self-heal logging style: field names + lengths only,
         never raw content/PII.
@@ -5659,11 +5483,6 @@ class SessionUnit:
             return  # Don't clobber a richer voluntary checkpoint
         try:
             enrich = await self._derive_heal_enrichment()
-            conclusion = (
-                self._wrapup_conclusion
-                if (allow_wrapup and getattr(self, "_wrapup_conclusion", ""))
-                else ""
-            )
             _ws_dir = str(_get_swarmws())
             _turn_count = getattr(
                 getattr(self, "_health_sensor", None), "turn_count", 0
@@ -5674,7 +5493,6 @@ class SessionUnit:
                 file_tracker_paths=list(getattr(self, "_files_touched", [])),
                 turn_count=_turn_count,
                 trigger=trigger,
-                agent_conclusion=conclusion,
                 completed_steps=enrich.get("completed_steps"),
                 pending_steps=enrich.get("pending_steps"),
                 key_findings=enrich.get("key_findings", ""),
@@ -5685,11 +5503,11 @@ class SessionUnit:
             logger.info(
                 "session_unit.recovery_checkpoint_armed session_id=%s "
                 "trigger=%s fields=[completed=%d,pending=%d,findings=%d,"
-                "pipeline=%s,active_file=%d] conclusion_len=%d approx_chars=%d",
+                "pipeline=%s,active_file=%d] approx_chars=%d",
                 self.session_id, trigger,
                 len(_cp.completed_steps), len(_cp.pending_steps),
                 len(_cp.key_findings), bool(_cp.pipeline_run_id),
-                len(_cp.active_file_context), len(conclusion),
+                len(_cp.active_file_context),
                 len(_cp.to_continuation_prompt()),
             )
         except Exception:

@@ -26,7 +26,6 @@ class TestSessionUnitHealingWiring:
         """SessionUnit should have a HealthSensor instance."""
         unit = SessionUnit(session_id="test-123", agent_id="agent-1")
         assert isinstance(unit._health_sensor, HealthSensor)
-        assert unit._health_sensor._max_turns == 500
 
     def test_healing_loop_initialized(self):
         """SessionUnit should have a HealingLoop instance."""

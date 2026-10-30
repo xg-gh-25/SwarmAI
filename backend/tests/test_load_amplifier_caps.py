@@ -8,15 +8,15 @@ Gaps & ACs:
 - G1 (context-ring): AC1 soft-compact REMOVED (run_2b1957f8 — held _client_io 300s
   at 60%, froze next send; now CLI autocompact + manual refresh). AC2 hard notice
   (already exists, verified) is retained.
-- G2 (turn count):   AC3 hard graceful floor at max_turns-5, ONLY reachable when self-heal OFF.
+- G2 (turn count):   AC3 hard graceful floor REMOVED — it counted user messages
+  against the CLI's per-message model-call limit, so it never fired before a real
+  turn limit (see HealthSensor.should_checkpoint).
 - G3 (single turn):  AC5 elapsed "still working" heartbeat; AC6 per-turn tool-loop budget.
 - AC4 observability: context_ring_debug carries turn_count.
 
 Methodology: unit tests with mocked Claude SDK + forced-execution of each new
-guard path. AC3/AC6 force the trigger condition and assert the path RUNS
-(not just that the code parses). AC3 forces SWARMAI_SELF_HEAL=0 because the hard
-floor is by-design unreachable when self-heal is ON (turn_approaching at -20
-heals + resets turn_count before -5 is hit).
+guard path. AC6 forces the trigger condition and asserts the path RUNS
+(not just that the code parses).
 """
 from __future__ import annotations
 
@@ -65,42 +65,6 @@ class TestAC2HardNoticeExists:
 
 
 # ── AC3: Turn-count hard graceful floor (self-heal OFF path) ────────
-
-
-class TestAC3TurnHardFloor:
-    """G2: at max_turns-5 the session stops gracefully with a conclusion.
-
-    The floor stays dormant while self-heal is SUCCEEDING — turn_approaching
-    (-20) heals + resets turn_count before -5 is reached. It still fires as a
-    last-resort net when self-heal is OFF, exhausted, or in cooldown.
-    """
-
-    def test_hard_floor_trigger_fires_at_max_minus_5(self):
-        from core.session_healing import HARD_FLOOR_BUFFER, HealthSensor
-
-        sensor = HealthSensor(max_turns=100)
-        # Drive turn_count to exactly max_turns - HARD_FLOOR_BUFFER.
-        sensor._turn_count = 100 - HARD_FLOOR_BUFFER
-        sensor._created_at = 0.0  # not young
-        should, trigger = sensor.should_checkpoint(session_state="idle")
-        assert should is True
-        assert trigger == "turn_hard_floor"
-
-    def test_hard_floor_not_fired_below_threshold(self):
-        from core.session_healing import HARD_FLOOR_BUFFER, HealthSensor
-
-        sensor = HealthSensor(max_turns=100)
-        sensor._turn_count = 100 - HARD_FLOOR_BUFFER - 10
-        sensor._created_at = 0.0
-        should, trigger = sensor.should_checkpoint(session_state="idle")
-        # turn_approaching may fire, but NOT turn_hard_floor
-        assert trigger != "turn_hard_floor"
-
-    def test_hard_floor_buffer_smaller_than_approach_buffer(self):
-        """Hard floor (-5) must be CLOSER to the limit than graceful (-20)."""
-        from core.session_healing import HARD_FLOOR_BUFFER, TURN_APPROACH_BUFFER
-
-        assert HARD_FLOOR_BUFFER < TURN_APPROACH_BUFFER
 
 
 # ── AC5: Single-turn elapsed heartbeat ──────────────────────────────

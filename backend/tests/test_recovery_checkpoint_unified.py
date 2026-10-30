@@ -2,7 +2,7 @@
 
 WHAT IS TESTED
 --------------
-``SessionUnit._arm_recovery_checkpoint(trigger, *, allow_wrapup=False)`` — the shared
+``SessionUnit._arm_recovery_checkpoint(trigger)`` — the shared
 helper that arms the SAME rich recovery checkpoint the voluntary gated self-heal path
 builds, so that INVOLUNTARY ``kill -> COLD (keep --resume)`` paths (RSS proactive
 restart, streaming RSS kill, stuck-STREAMING / stuck-WAITING_INPUT recovery, watchdog
@@ -63,7 +63,6 @@ def _make_unit(state: SessionState = SessionState.STREAMING) -> SessionUnit:
     unit.session_id = "sess-recovery-test"
     unit.state = state
     unit._heal_checkpoint = None
-    unit._wrapup_conclusion = ""
     unit._wrapper = None  # pid property -> None
     unit._last_event_time = None
     unit._streaming_start_time = None
@@ -160,31 +159,6 @@ class TestArmRecoveryCheckpointBuilds:
         # No stored last-user-query attr -> empty original_request (else "").
         assert captured["original_request"] == ""
         # Involuntary callers never fold in the wrap-up conclusion.
-        assert captured["agent_conclusion"] == ""
-
-    @pytest.mark.asyncio
-    async def test_allow_wrapup_gates_conclusion(self, monkeypatch, no_git):
-        """allow_wrapup=True folds the wrap-up conclusion in; default False omits it."""
-        import core.session_unit as su
-
-        seen = []
-
-        async def _spy_build(**kwargs):
-            seen.append(kwargs.get("agent_conclusion"))
-            return TaskCheckpoint(original_request="")
-
-        monkeypatch.setattr(su, "build_rich_checkpoint", _spy_build)
-
-        unit = _make_unit()
-        unit._wrapup_conclusion = "Parser done; tests remain"
-        unit._derive_heal_enrichment = _async_return({})
-
-        await unit._arm_recovery_checkpoint("rss_proactive")  # default allow_wrapup
-        unit._heal_checkpoint = None  # reset so the second arm proceeds
-        await unit._arm_recovery_checkpoint("rss_proactive", allow_wrapup=True)
-
-        assert seen == ["", "Parser done; tests remain"]
-
 
 class TestArmRecoveryCheckpointIdempotent:
     """The helper never clobbers an already-armed (richer voluntary) checkpoint."""
@@ -194,7 +168,7 @@ class TestArmRecoveryCheckpointIdempotent:
         """A pre-set _heal_checkpoint is preserved; builder + enrichment not invoked."""
         import core.session_unit as su
 
-        sentinel = TaskCheckpoint(original_request="VOLUNTARY", trigger="turn_approaching")
+        sentinel = TaskCheckpoint(original_request="VOLUNTARY", trigger="memory_growth")
         unit = _make_unit()
         unit._heal_checkpoint = sentinel
 

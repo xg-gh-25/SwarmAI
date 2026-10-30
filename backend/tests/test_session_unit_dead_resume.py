@@ -83,13 +83,8 @@ def _make_unit(state: SessionState = SessionState.DEAD,
     unit._pending_tool_use_id = None
     unit._pending_question = None
     unit._last_drained_seqs = []
-    unit._graceful_wrap_pending = False
-    unit._channel_wrap_injected = False
-    unit._hard_floor_wrap_injected = False
-    unit._wrapup_conclusion = ""
     _hs = MagicMock()
     _hs.turn_count = 0
-    _hs._max_turns = 500
     unit._health_sensor = _hs
     from core.compaction_guard import CompactionGuard
     unit._compaction_guard = CompactionGuard()

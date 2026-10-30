@@ -26,7 +26,7 @@ def _exhaust_breaker(unit: SessionUnit) -> None:
 def _decide_escalate(unit: SessionUnit):
     return unit._recovery_coordinator.decide(
         "hang_detected", enabled=True, user_stopped=False,
-        state="streaming", graceful_pending=False,
+        state="streaming",
     )
 
 

@@ -25,7 +25,7 @@ class TestHangDetectedStreamingAware:
 
     def test_hang_fires_in_idle(self):
         """hang_detected should still fire when session is IDLE (not streaming)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         # Simulate no activity for > HANG_TIMEOUT_S
         sensor._last_activity_time = time.time() - (HANG_TIMEOUT_S + 10)
         should, trigger = sensor.should_checkpoint(session_state="idle")
@@ -34,7 +34,7 @@ class TestHangDetectedStreamingAware:
 
     def test_hang_suppressed_in_streaming(self):
         """hang_detected must NOT fire when session state is STREAMING."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         # Same stale activity — but session is actively streaming
         sensor._last_activity_time = time.time() - (HANG_TIMEOUT_S + 10)
         should, trigger = sensor.should_checkpoint(session_state="streaming")
@@ -43,7 +43,7 @@ class TestHangDetectedStreamingAware:
 
     def test_hang_fires_in_cold(self):
         """hang_detected should fire in COLD state (genuine hang)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor._last_activity_time = time.time() - (HANG_TIMEOUT_S + 10)
         should, trigger = sensor.should_checkpoint(session_state="cold")
         assert should
@@ -51,7 +51,7 @@ class TestHangDetectedStreamingAware:
 
     def test_other_triggers_still_fire_during_streaming(self):
         """Non-hang triggers (latency, errors) should still fire during STREAMING."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         # Set up error cascade
         for _ in range(5):
             sensor.record_turn(100.0, 1400, True)
@@ -61,7 +61,7 @@ class TestHangDetectedStreamingAware:
 
     def test_backward_compatible_default(self):
         """Calling without session_state should behave as before (hang fires)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor._last_activity_time = time.time() - (HANG_TIMEOUT_S + 10)
         # No session_state argument — backward compatible
         should, trigger = sensor.should_checkpoint()

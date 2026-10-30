@@ -32,14 +32,14 @@ def _coord():
 def test_disabled_returns_skip():
     c = _coord()
     d = c.decide("hang_detected", enabled=False, user_stopped=False,
-                 state="streaming", graceful_pending=False)
+                 state="streaming")
     assert d.verdict is RecoveryVerdict.SKIP
 
 
 def test_user_stopped_returns_skip():
     c = _coord()
     d = c.decide("hang_detected", enabled=True, user_stopped=True,
-                 state="streaming", graceful_pending=False)
+                 state="streaming")
     assert d.verdict is RecoveryVerdict.SKIP
 
 
@@ -47,30 +47,15 @@ def test_waiting_input_returns_skip():
     """WAITING_INPUT is protected — user is mid-answer, never self-heal-kill it."""
     c = _coord()
     d = c.decide("hang_detected", enabled=True, user_stopped=False,
-                 state="waiting_input", graceful_pending=False)
+                 state="waiting_input")
     assert d.verdict is RecoveryVerdict.SKIP
-
-
-def test_turn_approaching_first_time_is_graceful():
-    c = _coord()
-    d = c.decide("turn_approaching", enabled=True, user_stopped=False,
-                 state="streaming", graceful_pending=False)
-    assert d.verdict is RecoveryVerdict.PROCEED_GRACEFUL
-
-
-def test_turn_approaching_when_pending_proceeds_to_kill():
-    """Second phase of the two-phase graceful wrap → actual kill."""
-    c = _coord()
-    d = c.decide("turn_approaching", enabled=True, user_stopped=False,
-                 state="streaming", graceful_pending=True)
-    assert d.verdict is RecoveryVerdict.PROCEED_KILL
 
 
 def test_immediate_trigger_proceeds_to_kill():
     for trigger in ("memory_growth", "error_cascade", "hang_detected"):
         c = _coord()
         d = c.decide(trigger, enabled=True, user_stopped=False,
-                     state="streaming", graceful_pending=False)
+                     state="streaming")
         assert d.verdict is RecoveryVerdict.PROCEED_KILL, trigger
 
 
@@ -79,7 +64,7 @@ def test_cooldown_returns_defer():
     # One heal start arms the cooldown.
     c.record_heal_start("hang_detected")
     d = c.decide("hang_detected", enabled=True, user_stopped=False,
-                 state="streaming", graceful_pending=False)
+                 state="streaming")
     assert d.verdict is RecoveryVerdict.DEFER
     assert "cooldown" in d.reason.lower()
 
@@ -92,7 +77,7 @@ def test_max_attempts_returns_escalate():
         c.record_heal_start("hang_detected")
     c._loop._last_heal_time = 0.0  # clear cooldown so ESCALATE (not DEFER) wins
     d = c.decide("hang_detected", enabled=True, user_stopped=False,
-                 state="streaming", graceful_pending=False)
+                 state="streaming")
     assert d.verdict is RecoveryVerdict.ESCALATE
 
 
@@ -108,12 +93,12 @@ def test_terminal_signal_fires_exactly_once_at_max():
     assert c.terminal_recovery_reached is False
     # First ESCALATE decision trips the terminal signal.
     c.decide("hang_detected", enabled=True, user_stopped=False,
-             state="streaming", graceful_pending=False)
+             state="streaming")
     assert c.terminal_recovery_reached is True
     assert c.terminal_signal_count == 1
     # A second ESCALATE decision must NOT double-fire.
     c.decide("hang_detected", enabled=True, user_stopped=False,
-             state="streaming", graceful_pending=False)
+             state="streaming")
     assert c.terminal_signal_count == 1
 
 
@@ -124,7 +109,7 @@ def test_terminal_signal_resets_on_success():
         c.record_heal_start("hang_detected")
     c._loop._last_heal_time = 0.0
     c.decide("hang_detected", enabled=True, user_stopped=False,
-             state="streaming", graceful_pending=False)
+             state="streaming")
     assert c.terminal_recovery_reached is True
 
     c.record_heal_success()
@@ -177,12 +162,12 @@ def test_session_unit_coordinator_decide_matches_breaker_state():
 
     # Healthy → an immediate trigger proceeds to kill.
     d = coord.decide("hang_detected", enabled=True, user_stopped=False,
-                     state="streaming", graceful_pending=False)
+                     state="streaming")
     assert d.verdict is RecoveryVerdict.PROCEED_KILL
 
     # Protected state always skips (the ordering subtlety: before the breaker).
     d = coord.decide("hang_detected", enabled=True, user_stopped=False,
-                     state="waiting_input", graceful_pending=False)
+                     state="waiting_input")
     assert d.verdict is RecoveryVerdict.SKIP
 
     # Exhaust the unit's breaker → escalate (parity with old should_escalate path).
@@ -190,6 +175,6 @@ def test_session_unit_coordinator_decide_matches_breaker_state():
         coord.record_heal_start("hang_detected")
     unit._healing_loop._last_heal_time = 0.0
     d = coord.decide("hang_detected", enabled=True, user_stopped=False,
-                     state="streaming", graceful_pending=False)
+                     state="streaming")
     assert d.verdict is RecoveryVerdict.ESCALATE
     assert coord.terminal_recovery_reached is True

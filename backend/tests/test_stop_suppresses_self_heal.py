@@ -66,7 +66,7 @@ class TestStopSuppressesSelfHeal:
 
         stopped = coordinator.decide(
             "turn_timeout", enabled=True, user_stopped=True,
-            state="streaming", graceful_pending=False,
+            state="streaming",
         )
         assert stopped.verdict is RecoveryVerdict.SKIP, (
             "a user-stopped turn must SKIP recovery (no proactive heal/respawn)"
@@ -75,7 +75,7 @@ class TestStopSuppressesSelfHeal:
 
         not_stopped = coordinator.decide(
             "turn_timeout", enabled=True, user_stopped=False,
-            state="streaming", graceful_pending=False,
+            state="streaming",
         )
         assert not_stopped.verdict is not RecoveryVerdict.SKIP or (
             not_stopped.reason != "user_stopped_current_turn"

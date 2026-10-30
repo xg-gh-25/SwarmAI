@@ -1,27 +1,22 @@
 """Tests for session self-healing module.
 
 Tests HealthSensor trigger detection, TaskCheckpoint serialization,
-HealingLoop state management, rich checkpoint population, graceful
-pre-kill injection, and canary mode gating. Pure unit tests — no
+HealingLoop state management, rich checkpoint population, and canary
+mode gating. Pure unit tests — no
 subprocess spawning or SessionUnit integration.
 """
 
-import inspect
 import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from core.session_healing import (
-    CHANNEL_MAX_TURNS,
-    DESKTOP_MAX_TURNS,
     ERROR_CASCADE_THRESHOLD,
     HANG_TIMEOUT_S,
     HEAL_COOLDOWN_S,
     MAX_HEAL_ATTEMPTS,
     RSS_WINDOW,
-    TURN_APPROACH_BUFFER,
-    WRAP_UP_PROMPT,
     HealingLoop,
     HealthSensor,
     TaskCheckpoint,
@@ -52,7 +47,7 @@ class TestHealthSensorLatency:
         later turns were legitimately heavier work. Before the fix this returned
         (True, "latency_degradation"); after removal it must NOT.
         """
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         # Baseline: 10 turns at 100ms
         for _ in range(10):
             sensor.record_turn(100.0, 1400, False)
@@ -71,7 +66,7 @@ class TestHealthSensorLatency:
         A genuinely slow-but-progressing turn is not a hang; hang_detected
         (300s silence) + turn floors are the real safety nets, not latency.
         """
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(10):
             sensor.record_turn(50.0, 1400, False)
         for _ in range(5):
@@ -80,21 +75,12 @@ class TestHealthSensorLatency:
         assert trigger != "latency_degradation"
         assert not should
 
-    def test_none_max_turns_uses_default(self):
-        """max_turns=None should default to 500 (not crash)."""
-        sensor = HealthSensor(max_turns=None)
-        assert sensor._max_turns == 500
-        # Should not crash on should_checkpoint
-        should, trigger = sensor.should_checkpoint()
-        assert not should
-
-
 class TestHealthSensorRSS:
     """Test memory growth detection."""
 
     def test_trigger_on_rss_growth(self):
         """RSS growth > 400MB over RSS_WINDOW should trigger."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for i in range(RSS_WINDOW):
             rss = 1400 + (i * 50)  # 1400 → 1850 (450MB growth)
             sensor.record_turn(100.0, rss, False)
@@ -104,7 +90,7 @@ class TestHealthSensorRSS:
 
     def test_no_trigger_with_stable_rss(self):
         """Stable RSS should not trigger."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(RSS_WINDOW):
             sensor.record_turn(100.0, 1500, False)
         should, trigger = sensor.should_checkpoint()
@@ -116,7 +102,7 @@ class TestHealthSensorErrors:
 
     def test_trigger_on_consecutive_errors(self):
         """N consecutive errors should trigger."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(ERROR_CASCADE_THRESHOLD):
             sensor.record_turn(100.0, 1400, True)
         should, trigger = sensor.should_checkpoint()
@@ -125,7 +111,7 @@ class TestHealthSensorErrors:
 
     def test_error_resets_on_success(self):
         """A successful turn resets the error counter."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, True)
         sensor.record_turn(100.0, 1400, True)
         sensor.record_turn(100.0, 1400, False)  # success resets
@@ -134,116 +120,12 @@ class TestHealthSensorErrors:
         assert not should  # only 1 consecutive error, not 3
 
 
-class TestHealthSensorTurnLimit:
-    """Test turn limit approach detection."""
-
-    def test_trigger_near_max_turns(self):
-        """Should trigger when within TURN_APPROACH_BUFFER of max."""
-        sensor = HealthSensor(max_turns=100)
-        # Record turns until we're at max_turns - TURN_APPROACH_BUFFER
-        for _ in range(100 - TURN_APPROACH_BUFFER):
-            sensor.record_turn(100.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert should
-        assert trigger == "turn_approaching"
-
-    def test_no_trigger_far_from_limit(self):
-        """Should not trigger when far from max_turns."""
-        sensor = HealthSensor(max_turns=500)
-        for _ in range(10):
-            sensor.record_turn(100.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert not should
-
-
-class TestHealthSensorMaxTurnsSync:
-    """Test max_turns threshold sourcing + post-construction sync.
-
-    Regression guard for the max_turns propagation bug: HealthSensor was
-    hardcoded to 500 while channel sessions actually run the CLI at 100, so
-    turn_approaching fired at 480 — beyond the 100 the CLI enforces — i.e.
-    structurally unreachable. The fix sources the default from DESKTOP_MAX_TURNS
-    and adds set_max_turns() so SessionRouter can sync channel sessions to 100.
-    """
-
-    def test_platform_constants_values(self):
-        """AC1/AC3: platform constants have the expected values."""
-        assert DESKTOP_MAX_TURNS == 500
-        assert CHANNEL_MAX_TURNS == 100
-
-    def test_prompt_builder_shares_the_same_constants(self):
-        """Drift guard: prompt_builder MUST import the SAME constants, not its
-        own literals. Otherwise the CLI limit and the heal threshold can drift
-        apart silently — re-introducing the unreachable-trigger bug class.
-        """
-        from core import prompt_builder
-
-        src = inspect.getsource(prompt_builder.PromptBuilder.build_options)
-        # The max_turns block must reference the named constants, never bare
-        # 100/500 literals for the platform defaults.
-        assert "CHANNEL_MAX_TURNS" in src, (
-            "prompt_builder must use CHANNEL_MAX_TURNS, not a literal 100"
-        )
-        assert "DESKTOP_MAX_TURNS" in src, (
-            "prompt_builder must use DESKTOP_MAX_TURNS, not a literal 500"
-        )
-
-    def test_default_uses_desktop_constant(self):
-        """AC3: a fresh desktop sensor must threshold at DESKTOP_MAX_TURNS (500)."""
-        sensor = HealthSensor()
-        assert sensor._max_turns == DESKTOP_MAX_TURNS
-
-    def test_set_max_turns_makes_channel_threshold_reachable(self):
-        """AC2: after set_max_turns(100), turn_approaching fires at 100-buffer.
-
-        This is the core bug: before the fix the threshold stayed at 500 so a
-        channel session (real limit 100) could never reach turn_approaching.
-        Force execution of the heal path at the channel boundary.
-        """
-        sensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
-        sensor.set_max_turns(CHANNEL_MAX_TURNS)
-        assert sensor._max_turns == CHANNEL_MAX_TURNS
-        # Record turns up to the channel approach boundary (100 - 20 = 80)
-        for _ in range(CHANNEL_MAX_TURNS - TURN_APPROACH_BUFFER):
-            sensor.record_turn(100.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert should
-        assert trigger == "turn_approaching"
-
-    def test_set_max_turns_no_premature_trigger_below_boundary(self):
-        """AC2: one turn before the channel boundary must NOT trigger."""
-        sensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
-        sensor.set_max_turns(CHANNEL_MAX_TURNS)
-        # 79 turns: still below 80 boundary
-        for _ in range(CHANNEL_MAX_TURNS - TURN_APPROACH_BUFFER - 1):
-            sensor.record_turn(100.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert not should
-
-    def test_reset_still_zeroes_turn_count_after_sync(self):
-        """AC4: reset() must still zero turn_count even after set_max_turns().
-
-        The heal regression guard: respawned subprocess = fresh turn counter.
-        Preserving count would re-trigger turn_approaching immediately (infinite
-        loop). Verify the setter doesn't break reset semantics.
-        """
-        sensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
-        sensor.set_max_turns(CHANNEL_MAX_TURNS)
-        for _ in range(50):
-            sensor.record_turn(100.0, 1400, False)
-        assert sensor.turn_count == 50
-        sensor.reset()
-        assert sensor.turn_count == 0
-        # Threshold persists across reset (reset only clears per-subprocess counters)
-        assert sensor._max_turns == CHANNEL_MAX_TURNS
-
-
 class TestHealthSensorHang:
     """Test hang detection."""
 
     def test_trigger_on_hang(self, monkeypatch):
         """No activity for HANG_TIMEOUT_S should trigger."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         # Simulate time passing
         monkeypatch.setattr(
@@ -255,7 +137,7 @@ class TestHealthSensorHang:
 
     def test_activity_resets_hang_timer(self):
         """record_activity should reset the hang timer."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_activity()
         should, trigger = sensor.should_checkpoint()
         assert not should
@@ -267,7 +149,7 @@ class TestHealthSensorHang:
         Killing the session during WAITING_INPUT causes the 'streaming stops
         mid-response' bug that forces users to re-send their message.
         """
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         # Simulate time passing well beyond hang threshold
         monkeypatch.setattr(
@@ -287,7 +169,7 @@ class TestHealthSensorHang:
 
         Extended thinking can take 5-10 minutes without SDK events.
         """
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
@@ -302,7 +184,7 @@ class TestHealthSensorReset:
 
     def test_reset_clears_signals(self):
         """After reset, no triggers should fire."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         # Build up to a trigger state
         for _ in range(ERROR_CASCADE_THRESHOLD):
             sensor.record_turn(100.0, 1400, True)
@@ -316,28 +198,12 @@ class TestHealthSensorReset:
 
     def test_reset_clears_turn_count(self):
         """Turn count resets because respawned subprocess has its own counter."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(50):
             sensor.record_turn(100.0, 1400, False)
         assert sensor.turn_count == 50
         sensor.reset()
         assert sensor.turn_count == 0
-
-    def test_no_infinite_loop_after_turn_approaching_heal(self):
-        """After heal from turn_approaching, should NOT immediately re-trigger."""
-        sensor = HealthSensor(max_turns=100)
-        # Drive to turn_approaching trigger
-        for _ in range(100 - TURN_APPROACH_BUFFER):
-            sensor.record_turn(100.0, 1400, False)
-        should, trigger = sensor.should_checkpoint()
-        assert should
-        assert trigger == "turn_approaching"
-        # Reset (simulating heal)
-        sensor.reset()
-        # Should NOT re-trigger (turn_count is now 0)
-        should, trigger = sensor.should_checkpoint()
-        assert not should
-
 
 # ─── TaskCheckpoint Tests ─────────────────────────────────────────────────────
 
@@ -470,7 +336,7 @@ class TestSensorHealIntegration:
         run_099724ca. error_cascade is the stable trigger vehicle for the
         healthy→degrade→heal→reset→healthy cycle.)
         """
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         loop = HealingLoop()
 
         # Phase 1: Healthy operation (100 turns)
@@ -508,7 +374,7 @@ class TestSensorHealIntegration:
 
         (Was test_negative_latency_spike_detection — latency signal removed.)
         """
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         for _ in range(ERROR_CASCADE_THRESHOLD):
             sensor.record_turn(300.0, 1900, True)
         should, trigger = sensor.should_checkpoint()
@@ -616,17 +482,6 @@ class TestBuildRichCheckpoint:
 class TestWrapUpPrompt:
     """Test the graceful pre-kill wrap-up prompt."""
 
-    def test_wrap_up_prompt_exists_and_nonempty(self):
-        """AC2: WRAP_UP_PROMPT constant is defined and meaningful."""
-        assert WRAP_UP_PROMPT
-        assert len(WRAP_UP_PROMPT) > 50
-        assert "wrap" in WRAP_UP_PROMPT.lower() or "finish" in WRAP_UP_PROMPT.lower()
-
-    def test_wrap_up_prompt_instructs_agent(self):
-        """AC2: Wrap-up prompt gives clear instruction to finish current work."""
-        assert "continue" in WRAP_UP_PROMPT.lower() or "checkpoint" in WRAP_UP_PROMPT.lower()
-
-
 # ─── Canary Mode Tests ──────────────────────────────────────────────────────
 
 
@@ -663,7 +518,7 @@ class TestHangDetectionWhitelist:
 
     def test_idle_triggers_hang(self, monkeypatch):
         """IDLE state should trigger hang_detected after timeout."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
@@ -674,7 +529,7 @@ class TestHangDetectionWhitelist:
 
     def test_cold_triggers_hang(self, monkeypatch):
         """COLD state should trigger hang_detected after timeout."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
@@ -685,7 +540,7 @@ class TestHangDetectionWhitelist:
 
     def test_none_triggers_hang_backward_compat(self, monkeypatch):
         """None state (no arg) should trigger — backward compatibility."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
@@ -696,7 +551,7 @@ class TestHangDetectionWhitelist:
 
     def test_streaming_never_triggers_hang(self, monkeypatch):
         """STREAMING state must NEVER trigger hang_detected."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
@@ -706,7 +561,7 @@ class TestHangDetectionWhitelist:
 
     def test_waiting_input_never_triggers_hang(self, monkeypatch):
         """WAITING_INPUT state must NEVER trigger hang_detected."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
@@ -716,7 +571,7 @@ class TestHangDetectionWhitelist:
 
     def test_dead_never_triggers_hang(self, monkeypatch):
         """DEAD state must NEVER trigger hang_detected (nothing to heal)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
@@ -726,7 +581,7 @@ class TestHangDetectionWhitelist:
 
     def test_unknown_future_state_never_triggers_hang(self, monkeypatch):
         """Any unknown/future state must NOT trigger hang_detected (whitelist)."""
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor.record_turn(100.0, 1400, False)
         monkeypatch.setattr(
             time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600

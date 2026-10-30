@@ -30,17 +30,17 @@ from core.session_healing import (
 )
 
 
-# ─── AC1: verdict vocabulary expanded to 7 (additive) ─────────────────────
+# ─── AC1: verdict vocabulary (PROCEED_GRACEFUL removed with turn_approaching) ──
 
 
-def test_verdict_has_seven_members_including_new_two():
+def test_verdict_has_six_members():
     names = {v.name for v in RecoveryVerdict}
-    # original 5 (R3) preserved
-    assert {"SKIP", "DEFER", "PROCEED_GRACEFUL", "PROCEED_KILL", "ESCALATE"} <= names
+    assert {"SKIP", "DEFER", "PROCEED_KILL", "ESCALATE"} <= names
+    assert "PROCEED_GRACEFUL" not in names
     # R3a additions
     assert "PROCEED_INTERRUPT" in names, "warm non-destructive verdict (tool-hang)"
     assert "PROCEED_KILL_HARD" in names, "kill + drop --resume identity (timeout/OOM)"
-    assert len(names) == 7
+    assert len(names) == 6
 
 
 # ─── AC3: CooldownThresholdPolicy (RSS-proactive shape) ───────────────────
@@ -343,18 +343,9 @@ def test_attempt_breaker_policy_proceeds_when_healthy():
     pol = AttemptBreakerPolicy(HealingLoop())
     ctx = RecoveryContext(
         trigger="hang_detected", enabled=True, user_stopped=False,
-        state="streaming", graceful_pending=False,
+        state="streaming",
     )
     assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_KILL
-
-
-def test_attempt_breaker_policy_graceful_for_turn_approaching():
-    pol = AttemptBreakerPolicy(HealingLoop())
-    ctx = RecoveryContext(
-        trigger="turn_approaching", enabled=True, user_stopped=False,
-        state="streaming", graceful_pending=False,
-    )
-    assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_GRACEFUL
 
 
 def test_attempt_breaker_policy_escalates_at_max():
@@ -365,7 +356,7 @@ def test_attempt_breaker_policy_escalates_at_max():
     loop._last_heal_time = 0.0  # clear cooldown so ESCALATE (not DEFER)
     ctx = RecoveryContext(
         trigger="hang_detected", enabled=True, user_stopped=False,
-        state="streaming", graceful_pending=False,
+        state="streaming",
     )
     assert pol.decide(ctx).verdict is RecoveryVerdict.ESCALATE
 
@@ -377,7 +368,7 @@ def test_attempt_breaker_protects_waiting_input():
     pol = AttemptBreakerPolicy(HealingLoop())
     ctx = RecoveryContext(
         trigger="hang_detected", enabled=True, user_stopped=False,
-        state="waiting_input", graceful_pending=False,
+        state="waiting_input",
     )
     assert pol.decide(ctx).verdict is RecoveryVerdict.SKIP
 
@@ -427,7 +418,7 @@ def test_coordinator_dispatches_to_registered_policy():
     # self-heal triggers dispatch to the attempt-breaker policy
     d = coord.decide(
         "hang_detected", enabled=True, user_stopped=False,
-        state="streaming", graceful_pending=False,
+        state="streaming",
     )
     assert d.verdict is RecoveryVerdict.PROCEED_KILL  # backward-compat with R3
 

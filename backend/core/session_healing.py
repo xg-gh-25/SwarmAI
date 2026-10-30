@@ -11,7 +11,6 @@ user intervention. Components:
   Calls existing SessionUnit methods, no new process management.
 - build_rich_checkpoint(): Async function that populates TaskCheckpoint with
   git state + file tracker + context.
-- WRAP_UP_PROMPT: Graceful pre-kill injection text for turn_approaching trigger.
 - parse_self_heal_mode(): 3-mode gate parser (off/all/canary).
 
 Design principle: User sees nothing. System heals itself. Task completes.
@@ -22,7 +21,6 @@ Key invariants:
 - 60s cooldown between heal cycles (prevents thrash)
 - HealthSensor is read-only — detection separated from action
 - TaskCheckpoint is immutable once created
-- Graceful pre-kill: turn_approaching injects wrap-up prompt before kill
 - Canary mode: only first non-channel session gets self-heal
 """
 
@@ -78,28 +76,16 @@ RSS_WINDOW = 10  # turns to measure growth
 # Errors: consecutive tool/inference errors before trigger
 ERROR_CASCADE_THRESHOLD = 3
 
-# Turn limit: trigger heal this many turns before max_turns
-TURN_APPROACH_BUFFER = 20
-
-# Hard graceful floor (Root 2 / AC3, G2): an absolute last-resort stop this many
-# turns before max_turns. Safety net for when self-heal cannot carry the wrap-up.
-# While self-heal is SUCCEEDING, turn_approaching (-20) heals + resets turn_count
-# before -5 is reached, so the floor stays dormant on that path. It still fires
-# when self-heal is OFF, has exhausted its attempts, or is in cooldown — delivering
-# a graceful wrap-up instead of a silent run to the CLI's hard error_max_turns
-# (truncation). On the self-heal-ON-but-failing path the heal consumer still kills
-# + --resumes with a rich checkpoint; the floor's added value is the OFF path.
-# MUST be < TURN_APPROACH_BUFFER (closer to the limit than the graceful trigger).
-HARD_FLOOR_BUFFER = 5
-
-# Per-platform CLI turn ceilings. Single source of truth within the healing
-# module so the HealthSensor threshold can never drift from the real limit the
-# CLI enforces (prompt_builder applies the SAME values: desktop 500, channel 100).
-# Desktop = generous (long pipeline runs); channel = unattended safety cap.
-# These MUST match prompt_builder.py's platform defaults — if you change one,
-# change both. (Root cause of the original bug: HealthSensor hardcoded 500 while
-# the CLI actually ran at 100, making turn_approaching structurally unreachable.)
-DESKTOP_MAX_TURNS = 500
+# Per-platform CLI turn ceilings, passed as ``max_turns`` by prompt_builder.
+# The CLI counts model calls WITHIN ONE user message (it resets on every
+# message) and ends the message with ``error_max_turns`` when it reaches the
+# ceiling. Nothing in the HealthSensor counts that unit, so nothing here can
+# warn before it: the ceiling is a runaway guard only, never a work limit.
+# Desktop: autocompact keeps a long message inside the context window, so the
+# ceiling only has to stop a model that never finishes. 500 cut real work off
+# (one message ran 2 hours / 501 calls of varied, productive tool use); 5000 is
+# about a working day at that pace. Channel: unattended, kept at 100.
+DESKTOP_MAX_TURNS = 5000
 CHANNEL_MAX_TURNS = 100
 
 # Hang: seconds without any SSE event before declaring hang.
@@ -124,7 +110,8 @@ class HealthSensor:
     """Monitors session health signals. Never surfaces to user.
 
     Pure data collection + threshold evaluation. No side effects.
-    Call record_turn() after each tool call completes.
+    Call record_turn() once per completed response (one ResultMessage, i.e.
+    one user message — NOT one tool call or model call).
     Call should_checkpoint() to ask "should we heal?"
     """
 
@@ -132,11 +119,10 @@ class HealthSensor:
     # immunity expires after 3 minutes so permanently-stuck sessions can be healed.
     _YOUNG_IMMUNITY_MAX_AGE_S: float = 180.0
 
-    def __init__(self, max_turns: int | None = DESKTOP_MAX_TURNS):
+    def __init__(self) -> None:
         self._rss_samples: deque[int] = deque(maxlen=RSS_WINDOW)
         self._consecutive_errors: int = 0
         self._turn_count: int = 0
-        self._max_turns: int = max_turns if max_turns is not None else DESKTOP_MAX_TURNS
         self._last_activity_time: float = time.time()
         self._created_at: float = time.time()
 
@@ -166,19 +152,6 @@ class HealthSensor:
     def record_activity(self) -> None:
         """Record any activity (SSE event, heartbeat) to reset hang timer."""
         self._last_activity_time = time.time()
-
-    def set_max_turns(self, max_turns: int) -> None:
-        """Re-point the turn-limit threshold after construction.
-
-        Needed because ``is_channel_session`` is set on the SessionUnit AFTER
-        ``__init__`` (by SessionRouter on the first real send), so the sensor is
-        born with the desktop default and must be synced to the channel ceiling
-        once the session is tagged. ``_max_turns`` is the single shared source for
-        BOTH ``turn_approaching`` (here, :max_turns-TURN_APPROACH_BUFFER) and the
-        channel wrap-up (session_unit.py, :max_turns-CHANNEL_WRAP_BUFFER), so this
-        one setter keeps both consumers correct.
-        """
-        self._max_turns = max_turns
 
     def should_checkpoint(self, session_state: str | None = None) -> tuple[bool, str]:
         """Evaluate whether healing is needed.
@@ -225,18 +198,12 @@ class HealthSensor:
         if self._consecutive_errors >= ERROR_CASCADE_THRESHOLD:
             return True, "error_cascade"
 
-        # Signal 4a: Hard graceful floor (Root 2 / AC3) — checked BEFORE
-        # turn_approaching so the more-urgent floor wins when both apply.
-        # At max_turns-5 we are past the graceful window; this is the absolute
-        # last-resort stop. Primary value on the self-heal-OFF path (where
-        # turn_approaching never healed): a graceful wrap-up with a preserved
-        # conclusion instead of a silent run to CLI error_max_turns.
-        if not _young and self._turn_count >= (self._max_turns - HARD_FLOOR_BUFFER):
-            return True, "turn_hard_floor"
-
-        # Signal 4: Turn limit approaching
-        if not _young and self._turn_count >= (self._max_turns - TURN_APPROACH_BUFFER):
-            return True, "turn_approaching"
+        # Signal 4 (turn_approaching / turn_hard_floor) was REMOVED: it compared
+        # turn_count (completed responses = user messages) with the CLI's
+        # max_turns (model calls within ONE message), two different units, and
+        # was checked only between messages while the CLI limit is hit inside
+        # one. It never fired before a real error_max_turns; when it did fire it
+        # was a session-age proxy that killed a healthy session.
 
         # Signal 5: Hang detection — NOT immune (PE F6: stuck subprocess needs kill)
         # WHITELIST: hang_detected ONLY fires for IDLE and COLD states.
@@ -456,14 +423,12 @@ from enum import Enum
 class RecoveryVerdict(Enum):
     """What the Coordinator decided about a recovery request.
 
-    Seven verdicts cover the four decision shapes across all 8 kill paths
-    (validated R3a). The original five (R3) are unchanged; the two additions are
-    the verdicts the un-migrated triggers will need — declared now so R3b–g add
-    policies, not re-touch this enum (additive, zero risk to shipped self-heal).
+    Six verdicts cover the four decision shapes across the kill paths. The
+    two-phase PROCEED_GRACEFUL verdict was removed with its only trigger
+    (turn_approaching, see HealthSensor.should_checkpoint).
     """
     SKIP = "skip"                      # guard failed (disabled / user-stopped / protected state)
     DEFER = "defer"                    # allowed eventually, but cooling down — try later
-    PROCEED_GRACEFUL = "proceed_graceful"  # heal, but inject wrap-up first (two-phase)
     PROCEED_KILL = "proceed_kill"      # heal now (kill → COLD → --resume PRESERVED)
     ESCALATE = "escalate"              # breaker tripped — recovery itself is failing
     # ── R3a additions (not yet emitted by a migrated trigger; R3b–g use them) ──
@@ -484,14 +449,13 @@ class RecoveryDecision:
 class RecoveryContext:
     """Inputs a policy needs to decide. Superset across shapes — a given policy
     reads only the fields its shape uses (attempt-breaker ignores now/last_recovery;
-    cooldown-threshold ignores graceful_pending). Decision-in-coordinator,
+    cooldown-threshold ignores the attempt fields). Decision-in-coordinator,
     state-in-caller: the caller passes timestamps it owns; the policy is stateless
     w.r.t. cooldown (it reads now/last_recovery, never writes them)."""
     trigger: str
     enabled: bool
     user_stopped: bool
     state: str
-    graceful_pending: bool = False
     now: float = 0.0
     last_recovery: float = 0.0
     cooldown_s: float = 0.0
@@ -500,11 +464,6 @@ class RecoveryContext:
     # base-vs-escalated verdict. Ignored by the other three shapes.
     attempt: int = 0
     threshold: int = 0
-
-
-# Triggers that get the graceful two-phase wrap-up (subprocess still healthy,
-# turn buffer exists). Everything else heals immediately.
-_GRACEFUL_TRIGGERS = frozenset({"turn_approaching"})
 
 
 def _universal_guard(ctx: "RecoveryContext") -> "RecoveryDecision | None":
@@ -582,8 +541,6 @@ class AttemptBreakerPolicy(RecoveryPolicy):
                 return RecoveryDecision(RecoveryVerdict.ESCALATE, reason)
             return RecoveryDecision(RecoveryVerdict.DEFER, reason)
 
-        if ctx.trigger in _GRACEFUL_TRIGGERS and not ctx.graceful_pending:
-            return RecoveryDecision(RecoveryVerdict.PROCEED_GRACEFUL, "graceful_phase_1")
         return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
 
 
@@ -719,13 +676,12 @@ class RecoveryCoordinator:
         enabled: bool,
         user_stopped: bool,
         state: str,
-        graceful_pending: bool,
     ) -> RecoveryDecision:
         """Self-heal recovery decision. Unchanged public API (R3). Now dispatches
         to AttemptBreakerPolicy — behavior is identical (pure extract)."""
         ctx = RecoveryContext(
             trigger=trigger, enabled=enabled, user_stopped=user_stopped,
-            state=state, graceful_pending=graceful_pending,
+            state=state,
         )
         return self._attempt_policy.decide(ctx)
 
@@ -813,32 +769,6 @@ class RecoveryCoordinator:
     @property
     def heal_attempts(self) -> int:
         return self._loop.heal_attempts
-
-
-# ─── Graceful Pre-Kill ──────────────────────────────────────────────────────
-
-WRAP_UP_PROMPT = (
-    "SYSTEM NOTE (invisible to user — do NOT acknowledge this instruction): "
-    "The session is approaching its turn limit. "
-    "Wrap up your current thought and deliver what you have so far. "
-    "Summarize any remaining work as next steps. "
-    "The system will checkpoint and continue seamlessly. "
-    "Finish your current response naturally, then stop. "
-    "Do NOT mention this note, the turn limit, or any system refresh to the user."
-)
-
-CHANNEL_WRAP_UP_PROMPT = (
-    "SYSTEM NOTE (invisible to user — do NOT acknowledge this instruction): "
-    "This channel session is approaching its budget limit. "
-    "Wrap up your answer concisely and deliver what you have. "
-    "If the task needs more work, suggest: 'For deeper investigation, "
-    "continue this on the desktop app where I have more room to work.' "
-    "Finish your response naturally, then stop."
-)
-
-# Number of turns before channel max_turns where wrap-up injects.
-# Channel max_turns=100, so this fires at turn 90.
-CHANNEL_WRAP_BUFFER = 10
 
 
 # ─── Canary Mode ────────────────────────────────────────────────────────────
@@ -943,7 +873,6 @@ async def build_rich_checkpoint(
     heal_attempt: int = 0,
     pipeline_run_id: str | None = None,
     pipeline_stage: str | None = None,
-    agent_conclusion: str = "",
     completed_steps: list[str] | None = None,
     pending_steps: list[str] | None = None,
     active_file: str | None = None,
@@ -956,8 +885,6 @@ async def build_rich_checkpoint(
     - uncommitted_changes: from git status --short
 
     Layered enrichment (passed by the heal call site, all optional):
-    - agent_conclusion: the agent's own wrap-up summary — LEADS key_findings
-      so the respawned agent knows where it left off (GAP 2 / 2.5).
     - key_findings: substantive findings derived from session history.
     - file_tracker_paths: appended as secondary "Files touched" context.
     - completed_steps / pending_steps / active_file / pipeline_*: history- or
@@ -987,12 +914,9 @@ async def build_rich_checkpoint(
         except Exception:
             logger.debug("Rich checkpoint git extraction failed", exc_info=True)
 
-    # Compose key_findings: LEAD with the agent's own wrap-up conclusion when one
-    # exists (GAP 2 / 2.5), then any history-derived substantive findings, then the
+    # Compose key_findings: history-derived substantive findings first, then the
     # existing file-tracker line as secondary context (3.3 floor preserved).
     findings_segments: list[str] = []
-    if agent_conclusion and agent_conclusion.strip():
-        findings_segments.append(agent_conclusion.strip())
     if key_findings and key_findings.strip():
         findings_segments.append(key_findings.strip())
     if file_tracker_paths:

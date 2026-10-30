@@ -4505,7 +4505,7 @@ class SessionRouter:
             return "busy"
         if (getattr(unit, "_stopping", False) or getattr(unit, "_interrupted", False)
                 or getattr(unit, "_tool_hang_interrupt_at", None) is not None
-                or getattr(unit, "_retrying", False) or getattr(unit, "_graceful_wrap_pending", False)):
+                or getattr(unit, "_retrying", False)):
             return "busy"
         return None
 
@@ -4788,19 +4788,6 @@ class SessionRouter:
         # can't clear it.
         if channel_context and not unit._has_channel_context:
             unit._has_channel_context = True
-
-        # Sync the HealthSensor turn threshold to the channel CLI ceiling for
-        # ALL channel sessions — keyed off channel_context, NOT the is_channel_session
-        # slot flag. prompt_builder clamps the CLI to CHANNEL_MAX_TURNS for any
-        # channel_context regardless of is_owner (it does not check is_owner), so
-        # owner DMs ALSO run at 100. The slot flag deliberately excludes owners (for
-        # pool routing), but the turn threshold must NOT — otherwise an owner channel
-        # session keeps _max_turns=500 while the CLI dies at 100, making the
-        # turn_approaching heal + channel wrap-up structurally unreachable (the exact
-        # decoupled-threshold bug this fix exists to close).
-        if channel_context:
-            from .session_healing import CHANNEL_MAX_TURNS
-            unit._health_sensor.set_max_turns(CHANNEL_MAX_TURNS)
 
         # ── Persist user message BEFORE slot acquisition ──
         # Critical: If slot acquisition times out (QUEUE_TIMEOUT), the

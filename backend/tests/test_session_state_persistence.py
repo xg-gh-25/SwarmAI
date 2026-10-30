@@ -333,31 +333,14 @@ class TestScopedHealImmunity:
     """AC5/AC6: turn<3 immunity only for specific triggers."""
 
     # (test_young_session_immune_to_latency removed with the latency_degradation
-    #  signal — run_099724ca. Young-immunity for the surviving signals is covered
-    #  by test_young_session_immune_to_turn_approaching + the RSS immunity test.)
-
-    def test_young_session_immune_to_turn_approaching(self):
-        """AC5: turn_count=2, turn_approaching → should NOT heal."""
-        from core.session_healing import HealthSensor
-
-        sensor = HealthSensor(max_turns=500)
-        sensor._turn_count = 2
-        sensor._last_activity_time = time.time()
-        # Artificially make turn count near max
-        sensor._max_turns = 4  # turn_count=2, buffer=20, so 2 >= (4-20) is False
-        # Need: turn_count >= (max_turns - TURN_APPROACH_BUFFER)
-        # TURN_APPROACH_BUFFER = 20, so max_turns must be ≤ 22 for turn=2 to trigger
-        sensor._max_turns = 22
-
-        should_heal, trigger = sensor.should_checkpoint(session_state="idle")
-        if trigger == "turn_approaching":
-            assert not should_heal, "Young session (turn<3) must be immune to turn_approaching"
+    #  signal — run_099724ca; the turn_approaching young-immunity test went with
+    #  the turn-count signals. Young-immunity is covered by the RSS immunity test.)
 
     def test_young_session_NOT_immune_to_hang(self):
         """AC6: turn_count=1, hang_detected → MUST still heal."""
         from core.session_healing import HealthSensor
 
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor._turn_count = 1
         # Simulate hang: last activity was 6 minutes ago
         sensor._last_activity_time = time.time() - 400  # > HANG_TIMEOUT_S (300)
@@ -370,7 +353,7 @@ class TestScopedHealImmunity:
         """AC6: turn_count=0, error_cascade → MUST still heal."""
         from core.session_healing import HealthSensor
 
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor._turn_count = 0
         sensor._consecutive_errors = 5  # > ERROR_CASCADE_THRESHOLD (3)
         sensor._last_activity_time = time.time()
@@ -383,7 +366,7 @@ class TestScopedHealImmunity:
         """Sessions with turn_count >= 3 get no immunity."""
         from core.session_healing import HealthSensor
 
-        sensor = HealthSensor(max_turns=500)
+        sensor = HealthSensor()
         sensor._turn_count = 5
         sensor._last_activity_time = time.time() - 400  # hang
 

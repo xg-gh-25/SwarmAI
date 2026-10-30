@@ -200,43 +200,10 @@ class TestProperty5HealthSensorTriggers:
         results_b = []
 
         for run_results in [results_a, results_b]:
-            sensor = HealthSensor(max_turns=500)
+            sensor = HealthSensor()
             for latency, rss, is_err in turns:
                 sensor.record_turn(latency, rss, is_err)
                 should, trigger = sensor.should_checkpoint()
                 run_results.append((should, trigger))
 
         assert results_a == results_b, "HealthSensor is non-deterministic!"
-
-    @settings(max_examples=40, deadline=None)
-    @given(
-        max_turns=st.integers(min_value=20, max_value=500),
-        offset=st.integers(min_value=0, max_value=10),
-    )
-    def test_turn_approach_fires_near_limit(self, max_turns, offset):
-        """When turn count approaches max_turns, a turn-limit trigger fires.
-
-        Root 2 / AC3 (G2) added ``turn_hard_floor`` at max_turns-HARD_FLOOR_BUFFER
-        (-5), checked BEFORE ``turn_approaching`` (-20) so the more-urgent floor
-        wins when both apply. So within 10 of the limit (offset<=5) the trigger is
-        ``turn_hard_floor``; between -10 and -5 it is ``turn_approaching``. Either
-        is a valid turn-limit checkpoint — the property is "near the limit ⇒ a
-        turn-limit trigger fires", not "it is always turn_approaching".
-        """
-        from core.session_healing import HARD_FLOOR_BUFFER
-
-        current_turn = max_turns - offset
-
-        sensor = HealthSensor(max_turns=max_turns)
-        # Simulate reaching that turn count
-        for _ in range(current_turn):
-            sensor.record_turn(100.0, 1000, False)
-
-        should, trigger = sensor.should_checkpoint()
-        # Within 10 of max_turns → should trigger a turn-limit checkpoint.
-        if offset <= 10:
-            assert should is True
-            if offset <= HARD_FLOOR_BUFFER:
-                assert trigger == "turn_hard_floor"
-            else:
-                assert trigger == "turn_approaching"

@@ -62,7 +62,6 @@ def _make_unit(
     unit.session_id = session_id
     unit.state = state
     unit._heal_checkpoint = None
-    unit._wrapup_conclusion = ""
     unit._wrapper = None
     unit._last_event_time = None
     unit._streaming_start_time = None
@@ -80,8 +79,6 @@ def _make_unit(
     unit._client = None
     unit.is_channel_session = is_channel
     unit._channel_history_injected = False
-    unit._channel_wrap_injected = False
-    unit._graceful_wrap_pending = False
     unit.last_used = time.time()
     unit._lifecycle_response_count = 0
     unit._peak_tree_rss_bytes = 0
@@ -568,76 +565,6 @@ class TestT6OomCooldownEnforcement:
 # Path: lines 1117-1132
 # Guards against: Re-injection of wrap-up prompt after proactive kill
 # ═══════════════════════════════════════════════════════════════════
-
-
-class TestT7ChannelWrapUpOneShot:
-    """Channel wrap-up prompt should only be injected ONCE per daemon lifetime.
-    The _channel_wrap_injected flag is intentionally NOT reset on kill.
-    T7 calls the REAL _cleanup_internal to verify flag persistence."""
-
-    def test_wrap_injected_flag_prevents_re_injection(self):
-        """Once _channel_wrap_injected is True, condition never fires again."""
-        unit = _make_unit(is_channel=True)
-        unit._channel_wrap_injected = True
-
-        # Replicate the condition at line 1120
-        should_inject = (
-            unit.is_channel_session
-            and not unit._channel_wrap_injected
-            and not unit._graceful_wrap_pending
-        )
-        assert not should_inject
-
-    def test_flag_not_reset_in_real_cleanup_internal(self):
-        """Call the REAL _cleanup_internal — _channel_wrap_injected persists
-        while _channel_history_injected is reset."""
-        unit = _make_unit(is_channel=True)
-        unit._channel_wrap_injected = True
-        unit._channel_history_injected = True
-        # _cleanup_internal calls release_canary — mock it
-        with patch("core.session_unit.release_canary"):
-            unit._cleanup_internal()
-
-        # _channel_history_injected IS reset (line 3883)
-        assert unit._channel_history_injected is False
-        # _channel_wrap_injected is NOT reset — design intention
-        assert unit._channel_wrap_injected is True
-
-    def test_cleanup_resets_client_and_wrapper(self):
-        """Verify _cleanup_internal actually executes (not a no-op) by
-        checking it resets _client and _wrapper."""
-        unit = _make_unit(is_channel=True)
-        unit._client = MagicMock()
-        unit._wrapper = MagicMock()
-
-        with patch("core.session_unit.release_canary"):
-            unit._cleanup_internal()
-
-        assert unit._client is None
-        assert unit._wrapper is None
-
-    def test_graceful_wrap_pending_blocks_injection(self):
-        """If self-heal is already planning wrap-up, channel wrap doesn't fire."""
-        unit = _make_unit(is_channel=True)
-        unit._graceful_wrap_pending = True
-
-        should_inject = (
-            unit.is_channel_session
-            and not unit._channel_wrap_injected
-            and not unit._graceful_wrap_pending
-        )
-        assert not should_inject
-
-    def test_non_channel_session_never_injects(self):
-        """Desktop chat sessions never get channel wrap-up."""
-        unit = _make_unit(is_channel=False)
-
-        should_inject = (
-            unit.is_channel_session
-            and not unit._channel_wrap_injected
-            and not unit._graceful_wrap_pending
-        )
-        assert not should_inject
 
 
 # ═══════════════════════════════════════════════════════════════════

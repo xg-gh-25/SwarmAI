@@ -124,6 +124,25 @@ class TestBuildOptionsAutocompact:
         assert json.loads(opts.settings)["autoCompactWindow"] == 433_000  # → 400K
 
 
+class TestBuildOptionsTurnCeiling:
+    """The CLI's per-message turn ceiling reaches the CLI as ``max_turns``.
+
+    Desktop is a runaway guard only (autocompact keeps a long message in the
+    window): one productive message ran 501 model calls in 2 hours and was cut
+    off at the old 500. Channel stays at the unattended 100.
+    """
+
+    @pytest.mark.asyncio
+    async def test_desktop_ceiling_is_5000(self):
+        opts = await _options()
+        assert opts.max_turns == 5000
+
+    @pytest.mark.asyncio
+    async def test_channel_ceiling_stays_100(self):
+        opts = await _options(channel_context={"channel_id": "c1", "channel_type": "slack"})
+        assert opts.max_turns == 100
+
+
 # ---------------------------------------------------------------------------
 # Change 2 — enriched post_compact_injection
 # ---------------------------------------------------------------------------
