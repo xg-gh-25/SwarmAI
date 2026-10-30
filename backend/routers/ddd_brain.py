@@ -1358,7 +1358,10 @@ def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
         r = subprocess.run(
             ["git", "diff", f"{base_sha}..HEAD", "--unified=3", "--",
              rel, f":(exclude){rel}/.artifacts/**"],
-            cwd=str(ws), capture_output=True, text=True, timeout=5,
+            # A file that is not UTF-8 must not fail the whole queue: its bytes show
+            # as U+FFFD (a reject of such a hunk then fails to apply, never misapplies).
+            cwd=str(ws), capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5,
             env=_GIT_READ_ENV(),
         )
     except subprocess.TimeoutExpired as e:

@@ -252,3 +252,27 @@ class TestReviewRejectHunk:
         text = src.read_text()
         # No `checkout` of a file in the review/reject implementation.
         assert '"checkout"' not in text and "'checkout'" not in text
+
+
+# ─── A Brain git does not track; a file that is not UTF-8 ────────────────────
+
+def test_a_brain_git_no_longer_tracks_has_nothing_to_review(client, ddd_repo):
+    """Untracking commits the deletion of every file, and the default watermark (parent
+    of the last commit touching the Brain) points at it: deleted files are not review
+    hunks, so the queue is empty."""
+    _git(ddd_repo["ws"], "rm", "-rq", "--cached", "Projects/Demo")
+    _git(ddd_repo["ws"], "commit", "-qm", "untrack Demo")
+    resp = client.get("/api/ddd/brains/Demo/review")
+    assert resp.status_code == 200
+    assert resp.json()["hunks"] == []
+
+
+def test_a_file_that_is_not_utf8_does_not_fail_the_queue(client, ddd_repo):
+    wm = ddd_repo["proj"] / ".artifacts" / ".last-reviewed-sha"
+    wm.write_text(ddd_repo["base_sha"] + "\n")
+    ddd_repo["doc"].write_bytes(ddd_repo["doc"].read_bytes() + b"smart \x93quote\x94\n")
+    _git(ddd_repo["ws"], "add", "-A")
+    _git(ddd_repo["ws"], "commit", "-qm", "cp1252 bytes")
+    resp = client.get("/api/ddd/brains/Demo/review")
+    assert resp.status_code == 200
+    assert any("�quote" in h["diff_text"] for h in resp.json()["hunks"])
