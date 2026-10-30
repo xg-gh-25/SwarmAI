@@ -86,6 +86,16 @@ def test_dispatch_returns_the_session_and_records_no_credentials(patched, monkey
     assert sent["message"].startswith(swarm_out.UNATTENDED_PREAMBLE) and sent["message"].endswith("do X")
 
 
+def test_the_row_keeps_what_the_card_shows_never_over_its_own_fields(patched, monkeypatch):
+    _use(monkeypatch, _fake_hive())
+    extra = {"brief": "b", "hive_reason": "idle", "brain_sync": "synced",
+             "repo_notes": [{"name": "r", "url": "u", "dirty": 2}], "session_id": "forged", "hive": "x"}
+    row = asyncio.run(swarm_out.dispatch("worker-1", "t", "x", extra=extra))
+    (logged,) = [json.loads(line) for line in (patched / "dispatches.jsonl").read_text().splitlines()]
+    assert logged == row and (row["session_id"], row["hive"]) == ("sess-42", "worker-1")
+    assert (row["brief"], row["hive_reason"], row["brain_sync"], row["repo_notes"][0]["dirty"]) == ("b", "idle", "synced", 2)
+
+
 def test_dispatch_refuses_a_busy_hive(patched, monkeypatch):
     _use(monkeypatch, _fake_hive(saturated=True))
     with pytest.raises(swarm_out.SwarmOutError, match="busy"):
@@ -216,7 +226,7 @@ def test_a_dispatch_that_timed_out_is_recorded_without_a_session(patched, monkey
     monkeypatch.setattr(swarm_out, "_start_session", never)
     monkeypatch.setattr(swarm_out, "SESSION_ID_WAIT_S", 0.05)
     _use(monkeypatch, _fake_hive())
-    with pytest.raises(swarm_out.SwarmOutError, match="may be running"):
+    with pytest.raises(swarm_out.SwarmOutMaybeSent, match="may be running"):
         asyncio.run(swarm_out.dispatch("worker-1", "Fix it", "do X"))
     rows = [json.loads(ln) for ln in (patched / "dispatches.jsonl").read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["session_id"] is None and rows[0]["title"] == "Fix it"

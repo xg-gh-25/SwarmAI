@@ -433,6 +433,84 @@ class TestGenericChannelContext:
         if sent:
             adapter._slack_client.chat_delete.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_a_dispatch_card_reaches_the_reply_as_text(self, gateway, mock_db):
+        """A channel cannot render the swarm_out_dispatch card (core/swarm_out_card):
+        its text form is appended to the reply the channel gets."""
+        from channels.base import InboundMessage
+        mock_db.channels.get.return_value = {
+            "id": "slack-1", "channel_type": "slack", "agent_id": "default",
+            "config": json.dumps({"bot_token": "xoxb-test"}), "access_mode": "open",
+            "rate_limit_per_minute": 10, "enable_skills": False, "enable_mcp": False,
+        }
+        msg = InboundMessage(channel_id="slack-1", external_chat_id="D017ZD4PUKT",
+                             external_sender_id="REDACTED_ID1", external_message_id="1729600000.0002",
+                             text="send it to a Hive", metadata={"chat_type": "im", "message_type": "text"})
+        adapter = AsyncMock()
+        adapter.supports_streaming = False
+        gateway._adapters["slack-1"] = adapter
+
+        async def run(**kwargs):
+            yield {"type": "assistant", "content": [{"type": "text", "text": "Sent it to explorer."}]}
+            yield {"type": "assistant", "model": None, "content": [{"type": "swarm_out_dispatch", "ok": True,
+                   "text": "✓ Dispatched to a Hive: weekly report\n• Hive: explorer"}]}
+            yield {"type": "result", "subtype": "success"}
+
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", False, None))):
+            with patch("channels.gateway.session_registry") as mock_sr:
+                mock_sr.session_router.run_conversation = run
+                with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="x")):
+                    await gateway.handle_inbound_message(msg)
+
+        posted = " ".join(str(c) for c in adapter.method_calls)
+        assert "Sent it to explorer." in posted and "Dispatched to a Hive: weekly report" in posted
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chat_type,after_question", [("im", False), ("im", True), ("channel", False)])
+    async def test_a_dispatch_card_in_a_dm_after_a_question_and_in_a_group(self, gateway, mock_db,
+                                                                         chat_type, after_question):
+        """The card's text also reaches the reply when the dispatch came after an
+        auto-answered question (the follow-up loop); a group gets only its first and
+        last line (no brief, acceptance or repositories for everyone there)."""
+        from channels.base import InboundMessage
+        mock_db.channels.get.return_value = {
+            "id": "slack-1", "channel_type": "slack", "agent_id": "default",
+            "config": json.dumps({"bot_token": "xoxb-test"}), "access_mode": "open",
+            "rate_limit_per_minute": 10, "enable_skills": False, "enable_mcp": False,
+        }
+        msg = InboundMessage(channel_id="slack-1", external_chat_id="C017ZD4PUKT",
+                             external_sender_id="REDACTED_ID1", external_message_id="1729600000.0003",
+                             text="send it", metadata={"chat_type": chat_type, "message_type": "text"})
+        adapter = AsyncMock()
+        adapter.supports_streaming = False
+        gateway._adapters["slack-1"] = adapter
+        card = {"type": "assistant", "model": None, "content": [{"type": "swarm_out_dispatch", "ok": True,
+                "text": "✓ Dispatched to a Hive: weekly report\nSECRET brief\n• Done when: SECRET\nProgress and results: (dispatch so_1)"}]}
+
+        async def run(**kwargs):
+            if after_question:
+                yield {"type": "ask_user_question", "toolUseId": "q1",
+                       "questions": [{"question": "Which Brain?", "options": [{"label": "SwarmAI"}]}]}
+                return
+            yield card
+            yield {"type": "result", "subtype": "success"}
+
+        async def answer(*a, **k):
+            yield card
+            yield {"type": "result", "subtype": "success"}
+
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", False, None))):
+            with patch("channels.gateway.session_registry") as mock_sr:
+                mock_sr.session_router.run_conversation = run
+                mock_sr.session_router.continue_with_answer = answer
+                with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="x")):
+                    with patch.object(gateway, "_should_reply", new=AsyncMock(return_value=True)):
+                        await gateway.handle_inbound_message(msg)
+
+        posted = " ".join(str(c) for c in adapter.method_calls)
+        assert "Dispatched to a Hive: weekly report" in posted and "dispatch so_1" in posted
+        assert ("SECRET" in posted) is (chat_type == "im")
+
     def test_inject_channel_mcp_slack(self):
         """inject_channel_mcp adds Slack-specific env vars."""
         from core.mcp_config_loader import inject_channel_mcp

@@ -40,6 +40,7 @@ import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ChatErrorMessage } from '../../../components/chat';
 import { AssumptionsDisclosure, isVerificationAttentionItem, OutputCard, ProductList, remoteProducts, RunLine } from './TurnCards';
+import { DispatchCard } from './DispatchCard';
 import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
@@ -458,6 +459,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     renderText: (text, key) => <div className="text-[14px]">{renderBlock({ type: 'text', text }, key)}</div>,
     renderNeeds,
     renderProducts: (z) => <ProductList blocks={z.blocks} />,
+    renderDispatch: (z) => <DispatchCard block={z.block} />,
   };
   // The ending (spec §8): one output card. Code changes come only from turn_changes;
   // a deliverable is not listed again as a changed file; a pipeline run's documents are

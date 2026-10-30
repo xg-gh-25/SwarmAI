@@ -1,13 +1,16 @@
 """Swarm Out command line: list Hives, dispatch a task to one, list runs.
 
 Calls the local daemon's /api/swarm-out routes on loopback; Hive credentials stay
-inside the daemon. Used by the Swarm Out chat agent after the person has agreed
-to send a task out.
+inside the daemon. Used by the agent of the person's own session (desktop, or their own
+channel DM): a non-owner channel session is refused (``knowledge_cli.RESTRICTED_ENV``,
+and the Bash permission handler denies the command there too). Without ``--hive`` the
+daemon picks the least busy running Hive. A dispatch's result is shown as a card the
+backend builds from the dispatch log (core/swarm_out_card).
 
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <f> [--brain <B>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <f> --acceptance <a> [--mode <m>] [--profile <p>]
-    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --hive <name> --title <t> --brain <B> --task-file <f> --acceptance <a> [--mode <m>] [--profile <p>]
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title <t> --brief <one or two sentences> --brain <B> --task-file <f> --acceptance <a> --revision <r> [--hive <name>] [--mode <m>] [--profile <p>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 
 Every task goes under a Brain's Project Agent (``General`` = the Runner Agent, for a
@@ -17,7 +20,8 @@ There is deliberately no answer command: a Hive's questions and approvals are an
 by the person in the Swarm Out panel. An agent that reads Hive-written text (``runs``)
 must not be one command away from approving what that text asks for.
 
-Prints the daemon's JSON reply; exits 1 when the daemon refuses.
+Prints the daemon's JSON reply; exits 1 when the daemon refuses. A dispatch that may
+have reached the Hive without an answer prints ``"maybe_sent": true``.
 """
 from __future__ import annotations
 
@@ -52,7 +56,10 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 120) 
             detail = json.load(e).get("detail")
         except Exception:
             detail = None
-        print(json.dumps({"ok": False, "status": e.code, "detail": detail}, ensure_ascii=False))
+        out = {"ok": False, "status": e.code, "detail": detail}
+        if e.code == 504 and path == "/dispatch":
+            out["maybe_sent"] = True   # the Hive may have taken it (core/swarm_out_card)
+        print(json.dumps(out, ensure_ascii=False))
         return 1
     except urllib.error.URLError as e:
         if isinstance(getattr(e, "reason", None), TimeoutError):
@@ -64,10 +71,12 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 120) 
 
 
 def _timed_out(path: str) -> int:
-    detail = ("no answer in time; the task may be running on the Hive. Check the Hive's own "
-              "page (or `runs`) before sending it again" if path == "/dispatch"
-              else "no answer from the SwarmAI daemon in time")
-    print(json.dumps({"ok": False, "detail": detail}))
+    if path == "/dispatch":
+        print(json.dumps({"ok": False, "maybe_sent": True, "detail": (
+            "no answer in time; the task may be running on the Hive. Check the Hive's own "
+            "page (or `runs`) before sending it again")}))
+    else:
+        print(json.dumps({"ok": False, "detail": "no answer from the SwarmAI daemon in time"}))
     return 1
 
 
@@ -92,8 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("spec", "dispatch"):
         d = sub.add_parser(name)
         if name == "dispatch":
-            d.add_argument("--hive", required=True)
+            d.add_argument("--hive", help="a Hive by name; left out, the daemon picks one")
             d.add_argument("--title", required=True)
+            d.add_argument("--brief", default="", help="one or two sentences of what the task is")
         _task_args(d, brain_required=True)
         d.add_argument("--acceptance", required=True)
         d.add_argument("--mode")
@@ -103,6 +113,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("runs")
     sub.add_parser("hives")
     args = p.parse_args(argv)
+    from core.knowledge_cli import RESTRICTED_ENV
+    if os.environ.get(RESTRICTED_ENV):
+        # a non-owner channel session: Swarm Out is the owner's (their Hives, their code)
+        print(json.dumps({"ok": False, "detail": "Swarm Out is only available to the owner"}))
+        return 1
 
     if args.cmd == "route":
         return _call("POST", "/route", {"text": _task(args), "brain": args.brain,
@@ -116,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         # a dispatch may sync the Brain first (up to 2 minutes) and then waits for the
         # Hive to name the session: wait longer than the daemon can take
         return _call("POST", "/dispatch", {**body, "hive": args.hive, "title": args.title,
-                                           "revision": args.revision}, timeout=DISPATCH_TIMEOUT_S)
+                                           "brief": args.brief, "revision": args.revision},
+                     timeout=DISPATCH_TIMEOUT_S)
     if args.cmd == "hives":
         return _call("GET", "/hives")
     return _call("GET", "/runs")

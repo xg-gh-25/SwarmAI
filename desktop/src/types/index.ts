@@ -495,6 +495,38 @@ export type TurnProductContent = {
   | { product: 'remote'; tool: string; action: string; target: string; url?: string }
 );
 
+/** A Swarm Out dispatch: what went to a Hive, or why nothing did (backend
+ *  core/swarm_out_card, design docs/design/2026-10-30-swarm-out-dispatch-card.md §3).
+ *  Written by the backend after the dispatch call's result, from this machine's
+ *  dispatch log row, never from model text. camelCase as sent. */
+export interface SwarmOutDispatchContent {
+  type: 'swarm_out_dispatch';
+  /** false: refused, nothing was sent (`error` says why) */
+  ok: boolean;
+  /** not ok, but the Hive may have taken it: it did not name the session in time */
+  maybeSent?: boolean;
+  dispatchId: string | null;
+  sessionId: string | null;
+  title: string;
+  brief: string | null;
+  hive: string | null;
+  /** pick_hive's code: named / only_free / idle / least_busy:<n> */
+  hiveReason: string | null;
+  brain: string | null;
+  mode: string | null;
+  profile: string | null;
+  revision: string | null;
+  /** what the Brain sync did: up to date / synced / restored … */
+  brainSync: string | null;
+  repos: { name: string; ref: string | null; sha: string | null; dirty: number }[];
+  acceptance: string | null;
+  delivery: string | null;
+  error: string | null;
+  at: string;
+  /** the same card as plain lines (a channel reply) */
+  text: string;
+}
+
 /** The turn's products — written by the BACKEND just before `result`
  *  (SessionRouter._persist_stream_event). */
 export interface TurnDeliverablesContent {
@@ -632,7 +664,7 @@ export interface BackgroundFinishedContent {
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
   | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
   | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent | TurnProductContent
-  | TurnOutcomeContent;
+  | TurnOutcomeContent | SwarmOutDispatchContent;
 
 export interface Message {
   id: string;

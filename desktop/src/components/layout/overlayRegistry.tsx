@@ -67,6 +67,8 @@ export interface OverlayCtxBridge {
   resumeSession?: (session: unknown) => boolean;
   deleteSession?: (session: unknown) => void;
   openHiveSession?: (sessionId: string, title: string) => void;
+  /** Select the pinned Swarm Out tab (a dispatch card's "View in Swarm Out"). */
+  showSwarmOut?: () => void;
 }
 const _bridge: OverlayCtxBridge = {};
 
@@ -82,6 +84,7 @@ export function setOverlayCtxBridge(b: OverlayCtxBridge): void {
   _bridge.resumeSession = b.resumeSession;
   _bridge.deleteSession = b.deleteSession;
   _bridge.openHiveSession = b.openHiveSession;
+  _bridge.showSwarmOut = b.showSwarmOut;
 }
 
 /** OverlayHost reads the current bridge handlers when assembling a render ctx. */

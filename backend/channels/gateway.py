@@ -22,7 +22,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from channels.base import (
@@ -59,6 +59,7 @@ from channels.message_queue import (
 from channels.egress_redactor import redact_text
 from channels.response_formatter import HumanResponseFormatter
 from core import session_registry
+from core import swarm_out_card as _swarm_out_card
 from core.send_requests import channel_client_id
 from core.session_manager import session_manager
 from core.initialization_manager import initialization_manager
@@ -1939,6 +1940,19 @@ class ChannelGateway:
             ctx.flush_task = asyncio.create_task(legacy_periodic(ctx))
 
         reply_text = ""
+        # Swarm Out dispatch cards of this turn (core/swarm_out_card): a channel cannot
+        # render the card, so its plain-text form is appended to the reply
+        # A Swarm Out dispatch card (core/swarm_out_card) cannot be drawn in a channel:
+        # its text goes after the reply, the whole card only in a direct message.
+        card_texts: list[str] = []
+
+        def take_card(blk: Any) -> bool:
+            if not (isinstance(blk, dict) and blk.get("type") == _swarm_out_card.BLOCK_TYPE):
+                return False
+            text = _swarm_out_card.channel_text(blk, direct=chat_type == "im")
+            if text:
+                card_texts.append(text)
+            return True
         error_occurred = False
         duplicate_delivery = False
         # ── Human Mode: mark queue as processing + drain any early supplements ──
@@ -2154,6 +2168,8 @@ class ChannelGateway:
                                         schedule_native_flush(ctx)
                             elif fe_type == "assistant":
                                 for blk in follow_event.get("content", []):
+                                    if take_card(blk):
+                                        continue
                                     if isinstance(blk, dict) and blk.get("type") == "text":
                                         t = blk.get("text", "")
                                         if t:
@@ -2176,6 +2192,8 @@ class ChannelGateway:
                 if event_type == "assistant":
                     current_text = ""
                     for block in event.get("content", []):
+                        if take_card(block):
+                            continue
                         if isinstance(block, dict) and block.get("type") == "text":
                             text = block.get("text", "")
                             if text:
@@ -2292,6 +2310,8 @@ class ChannelGateway:
 
         if ctx.stream_flushed:
             reply_text = ctx.stream_flushed
+        if card_texts:
+            reply_text = "\n\n".join([reply_text, *card_texts]) if reply_text else "\n\n".join(card_texts)
         if not reply_text:
             reply_text = "(No response generated)"
 

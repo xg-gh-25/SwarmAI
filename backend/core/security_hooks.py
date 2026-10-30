@@ -6285,6 +6285,25 @@ def knowledge_command_denial(command: str) -> "str | None":
     return None
 
 
+_SWARM_OUT_WORD_RE = re.compile(r"swarm[_-]?out", re.IGNORECASE)
+
+
+def owner_command_denial(command: str) -> "str | None":
+    """Why a Bash *command* in a restricted (non-owner channel) session is denied, or
+    None: the knowledge command (``knowledge_command_denial``), and anything that names
+    Swarm Out (the CLI ``scripts.swarm_out`` or the daemon's ``/api/swarm-out`` routes):
+    dispatching to the owner's Hives sends their code out and spends their money, and
+    ``runs`` shows their dispatches (design 2026-10-30-swarm-out-dispatch-card §4).
+    Checked with quotes and backslashes removed. A usability guard like the knowledge
+    one, not a boundary; the CLI refuses on its own as well (``RESTRICTED_ENV``)."""
+    why = knowledge_command_denial(command)
+    if why:
+        return why
+    if _SWARM_OUT_WORD_RE.search(re.sub(r"[\"'\\]", "", command or "")):
+        return "Swarm Out is only available to the owner"
+    return None
+
+
 def create_file_access_permission_handler(
     allowed_directories: list[str],
     readonly_files: list[str] | None = None,
@@ -6296,8 +6315,8 @@ def create_file_access_permission_handler(
         allowed_directories: Directory paths allowed for file access. The grant
             is RECURSIVE (any file at any depth under the dir) and READ+WRITE.
         deny_knowledge: True for a non-owner channel session: a Bash command using
-            the knowledge command is denied (knowledge_command_denial). False = the
-            owner's own session.
+            the knowledge command or Swarm Out is denied (owner_command_denial). False =
+            the owner's own session.
         readonly_files: EXACT file paths granted READ-ONLY access (Read/Glob/Grep
             allowed; Write/Edit denied). Unlike ``allowed_directories`` this is an
             EXACT-match, non-recursive grant — used for the L3 shared lane
@@ -6395,10 +6414,10 @@ def create_file_access_permission_handler(
                 return {"behavior": "allow"}
 
             if deny_knowledge:
-                why = knowledge_command_denial(command)
+                why = owner_command_denial(command)
                 if why:
-                    logger.warning(f"[KNOWLEDGE COMMAND DENIED] {why}: {command[:100]}")
-                    return {"behavior": "deny", "message": f"Knowledge command denied: {why}",
+                    logger.warning(f"[OWNER COMMAND DENIED] {why}: {command[:100]}")
+                    return {"behavior": "deny", "message": f"Command denied: {why}",
                             "interrupt": False}
 
             # Extract potential file paths from bash commands

@@ -1,0 +1,205 @@
+"""The Swarm Out dispatch card and the autonomous dispatch (design
+docs/design/2026-10-30-swarm-out-dispatch-card.md).
+
+Questions: (1) does pick_hive choose deterministically and refuse when none can take a
+task; (2) is a gone-out card built from this machine's dispatch log row only (a printed
+row the log does not hold is no card), with every field the card shows; (3) is a refused
+dispatch a failure card that says nothing was sent; (4) does a real Bash dispatch call
+through the orchestrator yield one persisted card after its tool_result, also when the
+call failed; (5) is the card non-conversational, and does its text reach a channel
+reply; (6) are non-owner channel sessions refused by the CLI and by the Bash handler.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from core import swarm_out, swarm_out_card as card
+
+ROW = {"dispatch_id": "so_b150abc3fd86", "hive_id": "h1", "hive": "explorer", "session_id": "0a7e6d08-f227",
+       "title": "SwarmAI weekly report", "origin": "swarm-out", "sent_at": "2026-10-30T05:25:50Z",
+       "repos": [{"url": "https://github.com/xg-gh-25/SwarmAI.git", "ref": "main",
+                  "dir": "Hive/repos/github.com/xg-gh-25/SwarmAI", "sha": "a680d1a0" + "0" * 32}],
+       "project_agent": {"brain": "SwarmAI", "mode": "research", "revision": "fcdbf4dc" + "0" * 56,
+                         "profile": "research", "delivery": "bundle", "acceptance": "a report exists"},
+       "brief": "Read the week's commits and write what changed.", "hive_reason": "idle",
+       "brain_sync": "synced", "repo_notes": [{"name": "swarmai", "url": "https://github.com/xg-gh-25/SwarmAI.git", "dirty": 3}]}
+CMD = ('cd ~/.swarm-ai/SwarmWS && "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch '
+       '--title "SwarmAI weekly report" --brief "x" --brain SwarmAI --task-file /tmp/t.md --acceptance a --revision r')
+
+
+def H(name, status="running", reachable=True, saturated=False, streaming=0, mem=40.0):
+    return {"name": name, "status": status, "reachable": reachable, "saturated": saturated,
+            "streaming": streaming, "memory_percent": mem}
+
+
+def test_pick_hive_is_deterministic_and_refuses_when_none_can_take_it():
+    assert swarm_out.pick_hive([H("b", streaming=1), H("a", streaming=1, mem=20), H("c", streaming=2)]) \
+        == ("a", "least_busy:1")
+    assert swarm_out.pick_hive([H("b", streaming=0, mem=10), H("a", streaming=0, mem=10)])[0] == "a"   # name breaks a tie
+    assert swarm_out.pick_hive([H("x"), H("y", saturated=True)]) == ("x", "only_free")
+    assert swarm_out.pick_hive([H("x"), H("z", streaming=3)]) == ("x", "idle")
+    for none in ([], [H("s", status="stopped")], [H("u", reachable=False)], [H("f", saturated=True)],
+                 [H("n", streaming=None)]):
+        with pytest.raises(swarm_out.SwarmOutError, match="no running Hive"):
+            swarm_out.pick_hive(none)
+
+
+def test_a_card_comes_from_the_dispatch_log_never_from_the_printed_row(monkeypatch):
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [ROW])
+    printed = json.dumps({**ROW, "hive": "somewhere-else", "title": "lies"})
+    b = card.card(CMD, printed)
+    assert b["type"] == "swarm_out_dispatch" and b["ok"] is True
+    assert (b["hive"], b["title"], b["brain"], b["mode"], b["profile"]) == (
+        "explorer", "SwarmAI weekly report", "SwarmAI", "research", "research")
+    assert b["repos"] == [{"name": "swarmai", "ref": "main", "sha": ROW["repos"][0]["sha"], "dirty": 3}]
+    assert (b["sessionId"], b["hiveReason"], b["brainSync"], b["delivery"]) == ("0a7e6d08-f227", "idle", "synced", "bundle")
+    assert "3 uncommitted files not sent" in b["text"] and "so_b150abc3fd86" in b["text"]
+    assert "• Hive: explorer (idle)" in b["text"]
+    assert [card.hive_reason_text(c) for c in ("named", None, "only_free", "least_busy:2", "odd")] == [
+        None, None, "the only one free", "the least busy (2 running)", "odd"]
+    # an id the log does not hold is no card at all
+    assert card.card(CMD, json.dumps({**ROW, "dispatch_id": "so_" + "f" * 12})) is None
+    assert card.card(CMD, json.dumps({"runs": []})) is None
+    assert card.card(CMD, "not json")["maybeSent"] is True   # no answer: it may have gone out
+
+
+def test_the_card_is_this_calls_dispatch_as_the_cli_prints_it(monkeypatch):
+    """What the CLI really prints (indent=2, maybe more lines after it); only a row sent
+    after the call was seen; an echoed older id is no card of this call."""
+    import time
+    from datetime import datetime, timezone
+    now = time.time()
+    fresh = {**ROW, "sent_at": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [ROW, {**fresh, "dispatch_id": "so_" + "a" * 12}])
+    printed = json.dumps({**fresh, "dispatch_id": "so_" + "a" * 12}, indent=2) + "\nexit=0\n"
+    assert card.card(CMD, printed, since=now - 1)["dispatchId"] == "so_" + "a" * 12
+    assert card.card(CMD, "Exit code 0\n" + printed, since=now - 1)["ok"] is True
+    # an earlier dispatch's id, printed again by this call: not this call's dispatch
+    assert card.card(CMD, json.dumps(ROW, indent=2), since=now) is None
+    # a refusal followed by an echoed older id: the refusal is what the CLI said
+    replay = 'Exit code 1\n{"ok": false, "detail": "a draft"}\n' + json.dumps({"dispatch_id": ROW["dispatch_id"]})
+    assert card.card(CMD, replay, since=now)["ok"] is False
+    # no answer at all (stopped at the Bash timeout, sent to the background): not sure
+    m = card.card(CMD, "Command timed out after 2m 0.0s", since=now)
+    assert (m["ok"], m["maybeSent"]) == (False, True)
+    # a wrong command line ran nothing
+    assert card.card(CMD, "usage: swarm_out dispatch [-h] ...\nerror: the following arguments are required", since=now) is None
+
+
+def test_channel_text_is_whole_only_in_a_dm_and_carries_no_markup(monkeypatch):
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [ROW])
+    b = card.card(CMD, json.dumps(ROW))
+    assert card.channel_text(b, direct=True) == b["text"] and "Done when" in b["text"]
+    group = card.channel_text(b, direct=False)
+    assert group.splitlines() == [b["text"].splitlines()[0], b["text"].splitlines()[-1]]
+    f = card.failure("<!channel> <https://evil|re-auth> & more", "t", "B", None)
+    assert "<" not in f["text"] and ">" not in f["text"] and "‹!channel›" in f["text"]
+    assert card.channel_text(f, direct=False).splitlines()[1].startswith("‹!channel›")
+
+
+def test_a_refused_dispatch_is_a_failure_card(monkeypatch):
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
+    b = card.card(CMD, '{"ok": false, "status": 400, "detail": "SwarmAI cannot be sent to a Hive: the definition was changed"}')
+    assert (b["ok"], b["brain"], b["title"], b["dispatchId"]) == (False, "SwarmAI", "SwarmAI weekly report", None)
+    assert "definition was changed" in b["error"] and "Nothing was sent" in b["text"]
+    assert card.watched(CMD) and not card.watched('"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain X')
+    # no answer in time: it may be running there, never "nothing was sent"
+    m = card.card(CMD, '{"ok": false, "maybe_sent": true, "detail": "the task may be running there"}')
+    assert (m["ok"], m["maybeSent"]) == (False, True)
+    assert "Nothing was sent" not in m["text"] and "may be running on the Hive" in m["text"]
+    assert b["maybeSent"] is False
+
+
+# ── through the orchestrator ──
+
+def _bash(i, c):
+    from claude_agent_sdk import AssistantMessage, ToolUseBlock
+    return AssistantMessage(content=[ToolUseBlock(id=i, name="Bash", input={"command": c})], model="m")
+
+
+def _res(i, text, is_error=False, carrier="user"):
+    """The tool_result, in a UserMessage or (the other path the SDK takes) an AssistantMessage."""
+    from claude_agent_sdk import AssistantMessage, ToolResultBlock, UserMessage
+    blk = ToolResultBlock(tool_use_id=i, content=text, is_error=is_error)
+    return UserMessage(content=[blk]) if carrier == "user" else AssistantMessage(content=[blk], model="m")
+
+
+def _cards(events):
+    return [b for e in events if e.get("type") == "assistant"
+            for b in e.get("content") or [] if isinstance(b, dict) and b.get("type") == "swarm_out_dispatch"]
+
+
+@pytest.fixture
+def _isolated_queue():
+    from core.permission_manager import permission_manager
+    permission_manager.clear_session("sess-test")
+    yield
+    permission_manager.clear_session("sess-test")
+
+
+@pytest.mark.usefixtures("_isolated_queue")
+@pytest.mark.parametrize("carrier", ["user", "assistant"])
+@pytest.mark.parametrize("is_error,output,ok", [
+    (False, json.dumps(ROW), True),
+    (True, '{"ok": false, "detail": "no running Hive can take a task now"}', False)])
+def test_a_dispatch_call_yields_one_persisted_card_after_its_result(monkeypatch, is_error, output, ok, carrier):
+    from datetime import datetime, timezone
+    from tests.test_tool_call_leak_guard import _drive, _make_orchestrator, _make_result_message
+    now = {**ROW, "sent_at": datetime.now(timezone.utc).isoformat()}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [now])
+    printed = ("Exit code 1\n" + output) if is_error else json.dumps(now, indent=2)
+    events, raised = asyncio.run(_drive(_make_orchestrator(), [
+        _bash("tu1", CMD), _res("tu1", printed, is_error, carrier), _make_result_message()]))
+    assert raised is None
+    (b,) = _cards(events)
+    assert b["ok"] is ok
+    # after the tool_result, before the turn's result
+    types = [e.get("type") for e in events]
+    at = next(i for i, e in enumerate(events) if e.get("type") == "assistant" and _cards([e]))
+    # the call's own result event (a UserMessage result is a tool_result; one inside an
+    # AssistantMessage comes out in the assistant event that carries it)
+    res = next(i for i, e in enumerate(events) if e.get("type") == "tool_result"
+               or (e.get("type") == "assistant" and any(isinstance(c, dict) and c.get("type") == "tool_result"
+                                                         for c in e.get("content") or [])))
+    assert res < at < types.index("result")
+    # an older dispatch's row printed by this call: the orchestrator passes when the call
+    # was seen, so it is no card
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [ROW])
+    events, _ = asyncio.run(_drive(_make_orchestrator(), [
+        _bash("tu3", CMD), _res("tu3", json.dumps(ROW, indent=2), False, carrier), _make_result_message()]))
+    assert _cards(events) == []
+    # another command yields none
+    events, _ = asyncio.run(_drive(_make_orchestrator(), [
+        _bash("tu2", "git status"), _res("tu2", json.dumps(ROW)), _make_result_message()]))
+    assert _cards(events) == []
+
+
+def test_the_card_is_not_conversation():
+    """The resume context leaves the card out (its channel text: test_channel_gateway)."""
+    from core import context_injector
+    assert "swarm_out_dispatch" in context_injector._TOOL_ONLY_TYPES
+
+
+# ── who may dispatch ──
+
+def test_a_non_owner_channel_session_is_refused(monkeypatch, capsys, tmp_path):
+    from core.knowledge_cli import RESTRICTED_ENV
+    from core.security_hooks import create_file_access_permission_handler, owner_command_denial
+    from scripts import swarm_out as cli
+    monkeypatch.setenv(RESTRICTED_ENV, "1")
+    for argv in (["runs"], ["hives"], ["dispatch", "--title", "t", "--brain", "B", "--task", "x",
+                                       "--acceptance", "a", "--revision", "r"]):
+        assert cli.main(argv) == 1 and "only available to the owner" in capsys.readouterr().out
+    for c in ('"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --brain B',
+              "curl -s http://127.0.0.1:18321/api/swarm-out/dispatch -d @x",
+              "python -m scripts.swa''rm_out runs"):
+        assert owner_command_denial(c) == "Swarm Out is only available to the owner"
+    assert owner_command_denial("git status") is None
+    channel = create_file_access_permission_handler([str(tmp_path)], [], deny_knowledge=True)
+    res = asyncio.run(channel("Bash", {"command": '"$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs'}, {}))
+    assert res["behavior"] == "deny" and "owner" in res["message"]
+    owner = create_file_access_permission_handler([str(tmp_path)])
+    assert asyncio.run(owner("Bash", {"command": '"$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs'}, {}))["behavior"] == "allow"

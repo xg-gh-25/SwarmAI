@@ -235,8 +235,9 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
         if sync_error:
             raise sync_error
 
-    async def dispatch(hive, title, task, origin, repos, *, segment, agent):
-        calls["dispatch"].append({"task": task, "repos": repos, "segment": segment, "agent": agent})
+    async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None):
+        calls["dispatch"].append({"hive": hive, "task": task, "repos": repos, "segment": segment,
+                                  "agent": agent, "extra": extra})
         return {"dispatch_id": "so_1"}
     monkeypatch.setattr(so, "_instance", instance)
     monkeypatch.setattr(host, "hive_brains", hive_brains)
@@ -274,6 +275,30 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     with pytest.raises(so.SwarmOutError, match="changed since it was shown"):
         asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision="0" * 64))
     assert calls["dispatch"] == []
+
+
+def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypatch):
+    import core.swarm_out as so
+    from core.project_agent import revision
+    rev = revision(_brain(ws))
+    calls = _fake_hive(monkeypatch, "0" * 64)
+
+    async def fleet():
+        return {"hives": [{"name": "busy", "status": "running", "reachable": True, "saturated": False,
+                           "streaming": 2, "memory_percent": 10.0},
+                          {"name": "calm", "status": "running", "reachable": True, "saturated": False,
+                           "streaming": 0, "memory_percent": 50.0}]}
+    monkeypatch.setattr(so, "fleet", fleet)
+    asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", seen_revision=rev,
+                                 brief="  fix   the\nthing  "))
+    d = calls["dispatch"][0]
+    assert d["hive"] == "calm"
+    assert d["extra"] == {"brief": "fix the thing", "hive_reason": "idle", "brain_sync": "synced",
+                          "repo_notes": [{"name": d["extra"]["repo_notes"][0]["name"],
+                                          "url": "https://github.com/acme/lib.git", "dirty": 0}]}
+    calls = _fake_hive(monkeypatch, "0" * 64)
+    asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision=rev))
+    assert calls["dispatch"][0]["hive"] == "hive3" and calls["dispatch"][0]["extra"]["hive_reason"] == "named"
 
 
 def test_a_refused_spec_or_an_old_hive_sends_nothing(ws, monkeypatch):
@@ -397,7 +422,7 @@ def test_the_cli_sends_brain_mode_profile_and_acceptance(monkeypatch):
                      "--acceptance", "done", "--mode", "code-change", "--revision", "abc"]) == 0
     assert seen[-1] == ("POST", "/dispatch", {"brain": "Lib", "task": "x", "acceptance": "done",
                                               "mode": "code-change", "profile": None,
-                                              "hive": "h", "title": "t", "revision": "abc"},
+                                              "hive": "h", "title": "t", "brief": "", "revision": "abc"},
                         cli.DISPATCH_TIMEOUT_S)
     assert cli.DISPATCH_TIMEOUT_S > 2 * 120
     cli.main(["route", "--task", "fix it", "--bound-project", "Lib"])
@@ -417,7 +442,39 @@ def test_a_dispatch_the_cli_stops_waiting_for_says_it_may_be_running(monkeypatch
         raise TimeoutError("timed out")
     monkeypatch.setattr(urllib.request, "urlopen", slow)
     assert cli._call("POST", "/dispatch", {}, timeout=1) == 1
-    assert "may be running" in capsys.readouterr().out
+    out = json.loads(capsys.readouterr().out)
+    assert out["maybe_sent"] is True and "may be running" in out["detail"]
+    # the daemon's own "the Hive did not name the session" (504) says the same
+    import io
+    import urllib.error
+
+    def no_session(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 504, "x", {}, io.BytesIO(b'{"detail": "may be running there"}'))
+    monkeypatch.setattr(urllib.request, "urlopen", no_session)
+    assert cli._call("POST", "/dispatch", {}) == 1
+    assert json.loads(capsys.readouterr().out)["maybe_sent"] is True
+    assert cli._call("GET", "/runs") == 1 and "maybe_sent" not in json.loads(capsys.readouterr().out)
+
+
+def test_the_dispatch_route_answers_504_when_the_task_may_be_running(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import core.swarm_out as so
+    from routers.swarm_out import router
+    monkeypatch.delenv("SWARMAI_MODE", raising=False)
+
+    async def maybe(*a, **k):
+        raise so.SwarmOutMaybeSent("the task may be running there")
+
+    async def refused(*a, **k):
+        raise so.SwarmOutError("a draft")
+    app = FastAPI()
+    app.include_router(router, prefix="/api/swarm-out")
+    body = {"title": "t", "task": "x", "brain": "Lib", "revision": "r"}
+    monkeypatch.setattr(so, "dispatch_spec", maybe)
+    assert TestClient(app).post("/api/swarm-out/dispatch", json=body).status_code == 504
+    monkeypatch.setattr(so, "dispatch_spec", refused)
+    assert TestClient(app).post("/api/swarm-out/dispatch", json=body).status_code == 400
 
 
 def test_a_linked_definition_has_no_revision_and_is_refused(ws, tmp_path):

@@ -81,6 +81,12 @@ class SwarmOutError(Exception):
     """A dispatch or answer that cannot be done; the message is safe to show."""
 
 
+class SwarmOutMaybeSent(SwarmOutError):
+    """A dispatch the Hive may have taken: it did not name the session in time. Its row
+    is recorded without a session; it is neither "sent" nor "nothing was sent"
+    (the router answers 504, the dispatch card says so)."""
+
+
 def _state_dir() -> Path:
     from config import get_app_data_dir
     d = Path(get_app_data_dir()) / "state" / "swarm-out"
@@ -215,12 +221,14 @@ def task_message(task: str, repos: list) -> str:
 
 async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-out",
                    repos: Optional[list] = None, *, segment: str = "",
-                   agent: Optional[dict] = None) -> dict[str, Any]:
+                   agent: Optional[dict] = None, extra: Optional[dict] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
     repos}. ``repos``: ``[{url, ref[, sha]}]`` the task works on (core/task_repos; ``sha``:
     this machine's commit, its bundle kept on the Hive first by ``_ship_repos``).
     ``segment`` + ``agent``: the project section put before the task and the Project
-    Agent the Hive pins the session to (``dispatch_spec``)."""
+    Agent the Hive pins the session to (``dispatch_spec``). ``extra``: what the dispatch
+    card shows besides (``brief``, ``hive_reason``, ``brain_sync``, ``repo_notes``),
+    kept on the row; never over the row's own fields (core/swarm_out_card)."""
     from core import task_repos
     title = " ".join((title or "").split())[:MAX_TITLE_CHARS]
     task = (task or "").strip()
@@ -247,15 +255,15 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             # The task may have been sent and taken: the Hive may be running it. Record
             # the dispatch without a session so this Hive's questions are still listed,
             # and say so instead of a generic failure (fixing spec J1).
-            row = _log_row(inst, None, title, origin, declared, agent)
+            row = {**(extra or {}), **_log_row(inst, None, title, origin, declared, agent)}
             await asyncio.to_thread(_append, json.dumps(row, ensure_ascii=False) + "\n")
-            raise SwarmOutError(
+            raise SwarmOutMaybeSent(
                 f"Hive {inst['name']} did not name the session within {SESSION_ID_WAIT_S}s; "
                 "the task may be running there. Check the Hive's own page before sending "
                 "it again.") from None
     if not session_id or not KEY_RE.match(session_id):
         raise SwarmOutError("the Hive did not name a session")
-    row = _log_row(inst, session_id, title, origin, declared, agent)
+    row = {**(extra or {}), **_log_row(inst, session_id, title, origin, declared, agent)}
     line = json.dumps(row, ensure_ascii=False) + "\n"
     await asyncio.to_thread(_append, line)
     logger.info("swarm_out: dispatched %s to %s (session %s)", row["dispatch_id"], inst["name"], session_id)
@@ -275,15 +283,44 @@ def _pin_request(agent: Optional[dict]) -> Optional[dict]:
     return {"brain": agent["brain"], "mode": agent["mode"], "revision": agent["revision"]}
 
 
-async def dispatch_spec(hive_ref: str, title: str, brain: str, task: str, acceptance: str,
+#: the one-line brief a dispatch card shows
+MAX_BRIEF_CHARS = 400
+
+
+def pick_hive(hives: list[dict[str, Any]]) -> tuple[str, str]:
+    """(name, reason) of the Hive a task goes to when none is named: running and
+    reachable, not saturated; the fewest streaming sessions, then the lowest memory, then
+    the name. Deterministic. Raises SwarmOutError when none can take a task. ``reason``
+    is a code the card words (core/swarm_out_card, the desktop card): ``only_free``,
+    ``idle`` or ``least_busy:<streaming>``; a named Hive's is ``named``."""
+    ok = [h for h in hives if h.get("status") == "running" and h.get("reachable") is True
+          and h.get("saturated") is False and isinstance(h.get("streaming"), int)]
+    if not ok:
+        raise SwarmOutError("no running Hive can take a task now (none is running, reachable "
+                            "and not full); start one from the Hive card")
+    ok.sort(key=lambda h: (h["streaming"], h["memory_percent"] if isinstance(h.get("memory_percent"), (int, float))
+                           else 101.0, str(h.get("name"))))
+    best = ok[0]
+    if len(ok) == 1:
+        reason = "only_free"
+    elif best["streaming"] == 0:
+        reason = "idle"
+    else:
+        reason = f"least_busy:{best['streaming']}"
+    return str(best["name"]), reason
+
+
+async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: str, acceptance: str,
                         mode: Optional[str] = None, profile: Optional[str] = None,
-                        origin: str = "swarm-out", *, seen_revision: str) -> dict[str, Any]:
+                        origin: str = "swarm-out", *, seen_revision: str, brief: str = "") -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision the person was shown (``seen_revision``,
     from ``/spec``) or admission fails (naming the rule), syncs the Brain when the
     Hive's copy differs, then dispatches with the project section and the pin. The row
-    records the spec; the result says what the sync did (``brain_sync``)."""
+    records the spec; the result says what the sync did (``brain_sync``). No
+    ``hive_ref``: ``pick_hive`` chooses (the person named none). ``brief``: one or two
+    sentences of what the task is, for the dispatch card."""
     from core import brain_sync_host, task_spec
     from core.project_registry import get_swarmws
     ws = get_swarmws()
@@ -296,6 +333,10 @@ async def dispatch_spec(hive_ref: str, title: str, brain: str, task: str, accept
     reasons = task_spec.admit(spec)
     if reasons:
         raise SwarmOutError(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons))
+    if hive_ref:
+        hive_reason = "named"
+    else:
+        hive_ref, hive_reason = pick_hive((await fleet())["hives"])
     inst = await _instance(hive_ref)
     try:
         remote = await brain_sync_host.hive_brains(inst)
@@ -328,7 +369,11 @@ async def dispatch_spec(hive_ref: str, title: str, brain: str, task: str, accept
     row = await dispatch(hive_ref, title, spec["task"], origin,
                          [{"url": r["url"], "ref": r["ref"], **({"sha": r["sha"]} if r.get("sha") else {})}
                           for r in spec["repos"]],
-                         segment=task_spec.segment(spec), agent=agent)
+                         segment=task_spec.segment(spec), agent=agent,
+                         extra={"brief": " ".join((brief or "").split())[:MAX_BRIEF_CHARS],
+                                "hive_reason": hive_reason, "brain_sync": synced,
+                                "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}
+                                               for r in spec["repos"]]})
     return {**row, "brain_sync": synced}
 
 

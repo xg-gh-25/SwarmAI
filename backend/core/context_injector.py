@@ -42,11 +42,12 @@ logger = logging.getLogger(__name__)
 # receipt, core/turn_stop — its facts reach the model through send()'s one-time note;
 # cmd_permission_request is a stored prompt, core/permission_prompt; ask_user_question
 # a stored question with its answer, core/question_prompt; turn_product is one product
-# of a call, core/turn_products; turn_outcome is how a turn ended, core/turn_outcome).
+# of a call, core/turn_products; turn_outcome is how a turn ended, core/turn_outcome;
+# swarm_out_dispatch is a dispatch card, core/swarm_out_card).
 _TOOL_ONLY_TYPES = {"tool_use", "tool_result", "pipeline_stage", "pipeline_run", "pipeline_summary",
                     "pipeline_attention", "turn_deliverables", "turn_changes", "turn_notice",
                     "turn_stop", "cmd_permission_request", "ask_user_question", "turn_product",
-                    "turn_outcome"}
+                    "turn_outcome", "swarm_out_dispatch"}
 
 # ─── Section headers & preamble ─────────────────────────────────────
 

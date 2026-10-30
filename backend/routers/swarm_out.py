@@ -26,7 +26,8 @@ def _require_desktop() -> None:
 
 
 class DispatchBody(BaseModel):
-    hive: str = Field(min_length=1, max_length=128)
+    # None: the daemon picks one (swarm_out.pick_hive)
+    hive: Optional[str] = Field(default=None, max_length=128)
     title: str = Field(min_length=1, max_length=swarm_out.MAX_TITLE_CHARS * 2)
     task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
     origin: str = Field(default="swarm-out", max_length=40)
@@ -39,6 +40,8 @@ class DispatchBody(BaseModel):
     acceptance: Optional[str] = Field(default=None, max_length=4000)
     # the revision /spec showed the person: a definition changed since is refused
     revision: Optional[str] = Field(default=None, max_length=64)
+    # one or two sentences of what the task is, for the dispatch card
+    brief: Optional[str] = Field(default=None, max_length=swarm_out.MAX_BRIEF_CHARS * 2)
 
 
 class RouteBody(BaseModel):
@@ -68,6 +71,9 @@ class AnswerBody(BaseModel):
 async def _call(coro) -> Any:
     try:
         return await coro
+    except swarm_out.SwarmOutMaybeSent as e:
+        # the task may be running on the Hive: not a plain refusal (core/swarm_out_card)
+        raise HTTPException(status_code=504, detail=str(e))
     except swarm_out.SwarmOutError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -86,9 +92,10 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
             "Runner Agent"))
     if not body.revision:
         raise HTTPException(status_code=400, detail="pass the revision the spec showed (run spec first)")
-    return await _call(swarm_out.dispatch_spec(body.hive, body.title, body.brain, body.task,
+    return await _call(swarm_out.dispatch_spec(body.hive or None, body.title, body.brain, body.task,
                                                body.acceptance or "", body.mode, body.profile,
-                                               body.origin, seen_revision=body.revision))
+                                               body.origin, seen_revision=body.revision,
+                                               brief=body.brief or ""))
 
 
 class ReturnBody(BaseModel):

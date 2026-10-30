@@ -528,7 +528,46 @@
     "swarmOut": {
       "running": "{{n}} running",
       "waiting": "{{n}} waiting for you",
-      "hiveTabFrom": "From Swarm Out · {{title}}"
+      "hiveTabFrom": "From Swarm Out · {{title}}",
+      "dispatch": {
+        "ok": "Dispatched to a Hive",
+        "failed": "Not dispatched",
+        "unsure": "Not sure it was dispatched",
+        "nothingSent": "Nothing was sent to a Hive.",
+        "maybeRunning": "It may already be running on the Hive: look in Swarm Out before sending it again.",
+        "row": {
+          "hive": "Hive",
+          "brain": "Brain",
+          "repo": "Repository",
+          "acceptance": "Done when",
+          "delivery": "Delivery"
+        },
+        "reason": {
+          "only_free": "the only one free",
+          "idle": "idle at the time",
+          "least_busy": "the least busy ({{n}} running)",
+          "named": "you named it"
+        },
+        "sync": {
+          "upToDate": "Brain up to date",
+          "synced": "Brain synced",
+          "restored": "Brain restored on the Hive"
+        },
+        "profile": "profile {{profile}}",
+        "revision": "definition",
+        "commit": "this machine's commit",
+        "dirty_one": "{{count}} uncommitted file here was not sent",
+        "dirty_other": "{{count}} uncommitted files here were not sent",
+        "delivery": {
+          "bundle": "commits come back as a bundle; you decide whether they land here",
+          "branch-pr": "a branch and a pull request"
+        },
+        "id": "Dispatch",
+        "view": "View in Swarm Out",
+        "open": "Open Hive session",
+        "openBrain": "Open {{brain}}",
+        "retryHint": "Once it is fixed, say \"send it again\""
+      }
     }
   },
   "tasks": {

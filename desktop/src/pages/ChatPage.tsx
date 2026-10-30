@@ -1641,8 +1641,9 @@ export default function ChatPage() {
       resumeSession: (s) => handleResumeSession(s as ChatSession),
       deleteSession: (s) => setDeleteConfirmSession(s as ChatSession),
       openHiveSession,
+      showSwarmOut: () => { void handleTabSelect(SWARM_OUT_TAB_ID); },
     });
-  }, [handleDispatchJobPrompt, handleDispatchTodo, handleResumeSession, openHiveSession]);
+  }, [handleDispatchJobPrompt, handleDispatchTodo, handleResumeSession, openHiveSession, handleTabSelect]);
 
   // agentId is published REACTIVELY through OverlayContext (not the non-reactive ref
   // bridge): an OPEN History overlay must re-render its ['chatSessions', agentId] query

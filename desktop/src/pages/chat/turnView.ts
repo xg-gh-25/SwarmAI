@@ -31,6 +31,8 @@
  *                 textOrdinal, so text that turns from answer into note never moves).
  * - `interrupt` — a block that needs the user (question / permission / escalation).
  *                 Never folded; also splits the process.
+ * - `dispatch`  — a `swarm_out_dispatch` block: the card of a Swarm Out dispatch the
+ *                 BACKEND wrote after the call's result. Splits the process like products.
  *
  * The first level of the turn (THOUGHTS · restatement · WORKED · note · … · pipeline ·
  * RESULT) is laid out by `turnZones` (turnZones.ts, chat turn spec v6) from these
@@ -78,6 +80,7 @@ import type {
   PipelineSummaryContent,
   TurnDeliverable,
   TurnChangesContent,
+  SwarmOutDispatchContent,
   TurnStopContent,
   TurnProductContent,
   SubAgentProgress,
@@ -157,7 +160,10 @@ export type TurnUnit =
   /** What consecutive calls produced (`turn_product` blocks of top-level calls, in
    *  order; design 2026-10-26-session-products.md §3.1): a first-level element that
    *  ends the open work, like a question. A sub-agent's products are on the card only. */
-  | { kind: 'products'; blocks: TurnProductContent[]; index: number };
+  | { kind: 'products'; blocks: TurnProductContent[]; index: number }
+  /** A Swarm Out dispatch card (`swarm_out_dispatch`, backend core/swarm_out_card): what
+   *  the dispatch call just before it sent, or why nothing went. First level, like products. */
+  | { kind: 'dispatch'; block: SwarmOutDispatchContent; index: number };
 
 export interface ThoughtUnit {
   kind: 'thought';
@@ -561,6 +567,11 @@ export function deriveTurnView(
       const prev = units[units.length - 1];
       if (prev?.kind === 'products') prev.blocks.push(block);
       else units.push({ kind: 'products', blocks: [block], index });
+      return;
+    }
+    if (block.type === 'swarm_out_dispatch') {
+      seg = null;
+      units.push({ kind: 'dispatch', block, index });
       return;
     }
     if (block.type === 'pipeline_stage') {

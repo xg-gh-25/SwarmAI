@@ -683,6 +683,8 @@ export interface ZoneContext {
   /** A products zone's rows (design 2026-10-26-session-products.md §3.1), rendered by
    *  the message, which owns the deliverable look (TurnCards). */
   renderProducts?: (zone: Extract<Zone, { kind: 'products' }>) => ReactNode;
+  /** A Swarm Out dispatch card (core/swarm_out_card), rendered by the message. */
+  renderDispatch?: (zone: Extract<Zone, { kind: 'dispatch' }>) => ReactNode;
 }
 
 type BodyItem =
@@ -939,6 +941,7 @@ function BodyZone({ zone, ctx }: { zone: Zone; ctx: ZoneContext }) {
   if (zone.kind === 'needs' || zone.kind === 'failure') return <div data-testid="card-slot" data-attn={zoneAttention(zone)} className={HANG}>{ctx.renderNeeds(zone)}</div>;
   if (zone.kind === 'stageResult') return <div data-attn={zoneAttention(zone)} className={HANG}><StageResultRow zone={zone} ctx={ctx} /></div>;
   if (zone.kind === 'products') return <div data-testid="zone-products" data-attn={zoneAttention(zone)} {...ANCHOR_PROPS}>{ctx.renderProducts?.(zone)}</div>;
+  if (zone.kind === 'dispatch') return <div data-testid="zone-dispatch" data-attn={zoneAttention(zone)} {...ANCHOR_PROPS}>{ctx.renderDispatch?.(zone)}</div>;
   return null;
 }
 
@@ -999,6 +1002,7 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
             break;
           case 'needs': case 'failure': el = ctx.renderNeeds(z); break;
           case 'products': el = <div data-testid="zone-products" className={TEXT_COL} {...ANCHOR_PROPS}>{ctx.renderProducts?.(z)}</div>; break;
+          case 'dispatch': el = <div data-testid="zone-dispatch" className={TEXT_COL} {...ANCHOR_PROPS}>{ctx.renderDispatch?.(z)}</div>; break;
           case 'pipelineStart':
             el = (
               <div data-testid="pipeline-start" className="flex items-center gap-2 text-[11.5px] text-[var(--color-text-dim)]" {...ANCHOR_PROPS}>
