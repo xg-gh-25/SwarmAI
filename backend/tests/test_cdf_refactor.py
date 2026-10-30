@@ -225,11 +225,32 @@ def _hits(monkeypatch, anchor):
         RetrievalHit(anchor=anchor, text="old", score=1.0, identity="cand:old", byte_hash="h")]))
 
 
-def test_a_contradicted_entry_in_the_target_file_is_superseded(tmp_path, user_words, monkeypatch):
+def test_a_contradicted_entry_in_the_target_file_is_only_linked(tmp_path, user_words, monkeypatch):
+    """The judge's "contradicts" never retires an entry: a supersedes edge would hide it from
+    MEMORY injection, and the judge pairs a newer observation with a same-subject entry."""
     old = ".context/MEMORY.md#Guidelines#cand:old"
     _hits(monkeypatch, old)
     decision = run_unit_v2(_row(_cog()), _ws(tmp_path), Judge(relation="contradicts"))
-    assert decision.action == "add"
+    hints = decision.version_vector["relation_hints"]
+    assert decision.action == "add" and all(h["predicate"] != "supersedes" for h in hints)
+    assert {"predicate": "derived_from", "object_anchor": old} in hints
+
+
+@pytest.mark.parametrize("source", ["S1", "S3", "S7"])
+def test_an_agent_written_unit_cannot_retire_an_entry(tmp_path, user_words, monkeypatch, source):
+    old = ".context/MEMORY.md#Guidelines#cand:old"
+    _hits(monkeypatch, old)
+    unit = _cog(relation_hint={"kind": "supersedes", "target": old})
+    decision = run_unit_v2(_row(unit, source=source), _ws(tmp_path), Judge(relation="unrelated"))
+    assert decision.version_vector["relation_hints"] == [
+        {"predicate": "derived_from", "object_anchor": old}]
+
+
+def test_the_deterministic_drift_fix_still_retires_its_entry(tmp_path, user_words, monkeypatch):
+    old = ".context/MEMORY.md#Guidelines#cand:old"
+    _hits(monkeypatch, old)
+    unit = _cog(relation_hint={"kind": "supersedes", "target": old})
+    decision = run_unit_v2(_row(unit, source="S4"), _ws(tmp_path), Judge(relation="unrelated"))
     assert {"predicate": "supersedes", "object_anchor": old} in decision.version_vector["relation_hints"]
 
 
@@ -504,7 +525,7 @@ def test_the_judge_answers_hits_by_short_id(tmp_path, user_words, monkeypatch):
         def verify(self, unit, grounding, hits):
             return dict(_verdict(), hits=[{"anchor": "h1", "relation": "contradicts"}])
     decision = run_unit_v2(_row(_cog()), _ws(tmp_path), ById())
-    assert {"predicate": "supersedes", "object_anchor": old} in decision.version_vector["relation_hints"]
+    assert {"predicate": "derived_from", "object_anchor": old} in decision.version_vector["relation_hints"]
     from core.ingestion.prompts import verify_prompt
     prompt = verify_prompt({"title": "t"}, "", [{"anchor": old, "text": "x"}])
     assert '"id": "h1"' in prompt and "cand:old" not in prompt

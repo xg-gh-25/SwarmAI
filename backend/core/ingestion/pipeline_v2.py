@@ -306,11 +306,21 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
             conn.close()
 
 
-def _relation_hints(unit: SourceUnit) -> list[dict[str, str]]:
+# A "supersedes" edge hides its object from MEMORY injection. Only S4 may declare one: its
+# replacement is computed by the deterministic drift grammar from a commit. A unit an agent
+# or a model wrote (S1, S3, S7, the extractors) may name a related entry, never retire one:
+# measured on 2026-10-30, 10 of the 16 supersedes edges from model judgement paired the wrong
+# entries, and an agent that read injected text could otherwise hide any MEMORY entry.
+_SUPERSEDES_SOURCES = frozenset({"S4"})
+
+
+def _relation_hints(unit: SourceUnit, source: str) -> list[dict[str, str]]:
     hint = unit.relation_hint or {}
     kind, target = hint.get("kind"), hint.get("target")
     if kind not in {"supersedes", "derived_from"} or not target:
         return []
+    if kind == "supersedes" and source not in _SUPERSEDES_SOURCES:
+        kind = "derived_from"
     return [{"predicate": kind, "object_anchor": str(target)}]
 
 
@@ -635,12 +645,11 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     # last before writing: a unit refused or already known never asks for a section
     if not _section_exists(root, destination):
         return _decision(unit_id, "defer", "defer", "missing_section", **done)
-    hints = _relation_hints(unit)
-    target_file = destination.relative_path
+    hints = _relation_hints(unit, str(_get(row, "source_v2", _get(row, "source", ""))))
+    # the judge's "contradicts" links the entries, it never retires one: it pairs a newer
+    # observation with an entry on the same subject, not a correction with what it corrects
     for anchor, relation in relations:
-        if relation == "contradicts" and anchor.split("#", 1)[0] == target_file:
-            hints.append({"predicate": "supersedes", "object_anchor": anchor})
-        elif relation in {"contradicts", "adds"}:
+        if relation in {"contradicts", "adds"}:
             hints.append({"predicate": "derived_from", "object_anchor": anchor})
     reason = next((r for _a, r in relations if r in {"contradicts", "adds"}), "new")
     result = _decision(unit_id, "write", "add", reason, **done)
