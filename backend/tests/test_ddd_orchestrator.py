@@ -50,14 +50,6 @@ class TestDddDocLockConvergence:
             with md_lock(doc, blocking=False) as got2:
                 assert got2 is False, "second acquire on SAME doc must be excluded"
 
-    def test_legacy_ddd_mutators_are_read_only(self, tmp_path):
-        from core.ddd_maturity import promote_section
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("# I\n\n## What Worked\n\n- prior\n")
-        original = doc.read_text()
-        assert promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature") is False
-        assert doc.read_text() == original
-
 
 class TestSkillPrefixDerivation:
     """_derive_skill_prefix (used by recall_multi): business projects only, fail-closed."""
@@ -413,44 +405,3 @@ class TestSourceAnchorDrift:
 
 
     # ── Gate-2 F1: uppercase-stored anchor must NOT false-drift (case-insensitive) ──
-
-
-class TestDecayGateAndReclaimAgree:
-    """The three readers of "may this entry leave the live doc" pick the same entries:
-    decay's ``may_leave_live_doc``, the noise gauge (``compute_reclaimable_noise``) and
-    the reclaim selector (``reclaim_noise_entries``). Since CDF stage B no pass moves an
-    entry out of the file; the selection still feeds the C&M entry-health counts.
-    """
-
-    def test_decay_move_reclaim_and_gate_select_the_same_entries(self, tmp_path):
-        # Parity on a fixture with no duplicate (title, section) pairs.
-        from datetime import date as _d
-        from core.ddd_entry_lifecycle import (
-            compute_reclaimable_noise, may_leave_live_doc, parse_entries,
-            reclaim_noise_entries,
-        )
-        today = _d.today()
-        lines = ["# Improvement", "", "## What Worked", ""]
-        specs = [("A dated idle", "guideline", " (2025-01-01)", "decay:dormant"),
-                 ("B undated idle", "guideline", "", "decay:dormant"),
-                 ("C COE09 lesson", "guideline", " (2025-01-01)", "decay:dormant"),
-                 ("D dated pitfall", "pitfall", " (2025-01-01)", "decay:archived"),
-                 ("E decision", "decision", " (2025-01-01)", "decay:dormant"),
-                 ("F fresh", "process", f" ({today.isoformat()})", "decay:dormant")]
-        for title, typ, date_s, meta in specs:
-            lines += [f"- [{typ}] **{title}** -- body text here.{date_s}",
-                      f"  <!-- ref:0 | last:none | {meta} -->", ""]
-        content = "\n".join(lines)
-        entries = parse_entries(content)
-        accepted = {e.title for e in entries if may_leave_live_doc(e, today)}
-        assert accepted == {"A dated idle", "D dated pitfall"}
-        gate = compute_reclaimable_noise(entries, today)
-        assert set(gate.noisy_titles) == accepted
-        rep = reclaim_noise_entries(content, today, tmp_path)
-        assert set(rep.candidates) == accepted
-
-
-
-
-
-

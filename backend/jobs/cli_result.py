@@ -1,8 +1,7 @@
 """Pure helpers for judging a headless Claude CLI run — no I/O, no side effects.
 
 Why a separate leaf module: ``jobs/executor`` runs a ``zsh -lic`` PATH probe at
-import time, so pure classifiers that tests (and HTTP-path handlers such as
-``handlers/ddd_self_audit``) import must not live there.
+import time, so pure classifiers that tests import must not live there.
 
 Key public symbols:
   - ``parse_cli_version`` — ``"2.1.302 (Claude Code)"`` -> ``(2, 1, 302)``, or None.

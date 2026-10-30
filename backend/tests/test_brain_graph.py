@@ -38,22 +38,18 @@ def test_node_counts_reflect_parsed_entries():
     assert by_type["decision"]["count"] == 0  # none in sample → zero node, still present
 
 
-def test_active_vs_dormant_split_per_node():
+def test_nodes_are_count_only():
+    # every entry in the file is in force: a node is {type, count}, no active/dormant split
     g = build_brain_graph(SAMPLE)
-    principle = next(n for n in g["nodes"] if n["type"] == "principle")
-    # one active + one dormant principle
-    assert principle["active"] == 1
-    assert principle["dormant"] == 1
+    assert all(set(n) == {"type", "count"} for n in g["nodes"])
 
 
 def test_drill_returns_latest_entries_of_a_type():
     g = build_brain_graph(SAMPLE)
     drill = g["drill"]["principle"]
     assert len(drill) == 2
-    # each drill row carries id/title/status/meta for the list
-    row = drill[0]
-    assert "title" in row and "status" in row
-    assert row["status"] in ("active", "dormant", "archived")
+    # each drill row carries exactly title/meta for the list
+    assert all(set(row) == {"title", "meta"} for row in drill)
 
 
 def test_drill_capped_at_ten_latest():
@@ -180,12 +176,11 @@ def test_build_evolution_graph_filters_structural_headers_no_entry_noise():
     assert g["total"] == 5
 
 
-def test_build_evolution_graph_count_only_no_fabricated_decay():
+def test_build_evolution_graph_count_only():
     from core.brain_graph import build_evolution_graph
     g = build_evolution_graph(EVO_SAMPLE)
-    for n in g["nodes"]:
-        assert n["active"] == n["count"]
-        assert n["dormant"] == 0
+    assert all(set(n) == {"type", "count"} for n in g["nodes"])
+    assert all(set(row) == {"title", "meta"} for rows in g["drill"].values() for row in rows)
 
 
 def test_evolution_nodes_in_display_priority_order():

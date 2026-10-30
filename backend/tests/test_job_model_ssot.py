@@ -30,11 +30,10 @@ _JOBS_DIR = Path(__file__).resolve().parents[1] / "jobs"
 def _model_args_in_cli_lists() -> list[tuple[str, ast.AST]]:
     """Every value passed positionally after a `"--model"` element, (file, node).
 
-    Scans the WHOLE `jobs/` tree, not just executor.py: the first version of this
-    guard was executor-scoped and therefore blind to a third, identically-shaped
-    call site in `jobs/handlers/ddd_self_audit.py` (found by adversarial review).
-    A model-passing site can live in any handler, so the guard follows the shape
-    across the package.
+    Scans the WHOLE `jobs/` tree, not just executor.py: an earlier executor-scoped
+    version was blind to an identically-shaped call site in a handler (found by
+    adversarial review). A model-passing site can live in any handler, so the guard
+    follows the shape across the package.
 
     Parsed via AST rather than regex-over-source ON PURPOSE. A source-string
     assertion is vacuous-prone in both directions: it matched the phrase
@@ -86,8 +85,8 @@ def test_every_model_arg_calls_the_one_shared_resolver():
         "expected a single resolve_job_model() helper owning model resolution"
     )
     args = _model_args_in_cli_lists()
-    assert len(args) >= 3, (
-        f"expected all 3 known CLI call sites to pass --model, found {len(args)}: "
+    assert len(args) >= 2, (
+        f"expected both known CLI call sites to pass --model, found {len(args)}: "
         f"{[f for f, _ in args]}"
     )
     for fname, a in args:
@@ -292,20 +291,6 @@ def test_resolver_module_has_no_import_side_effects():
     assert not offenders, (
         f"model_resolve makes module-level call(s) {offenders!r} — it must stay "
         "side-effect-free so any handler can import it cheaply"
-    )
-    # And the handler must not reach executor at MODULE level. A function-local
-    # `from ..executor import ...` is fine and deliberate (the handler uses one to
-    # avoid an import cycle) — only a top-level import fires at import time, which
-    # is the thing that dragged the zsh subprocess into pytest collection.
-    handler_tree = _ast.parse(
-        (_JOBS_DIR / "handlers" / "ddd_self_audit.py").read_text(encoding="utf-8"))
-    module_level_executor = [
-        n for n in handler_tree.body
-        if isinstance(n, _ast.ImportFrom) and (n.module or "").endswith("executor")
-    ]
-    assert not module_level_executor, (
-        "the handler imports executor at MODULE level — that re-drags the zsh "
-        "subprocess and the os.environ['PATH'] replacement into its import path"
     )
 
 

@@ -35,14 +35,10 @@ interface TokenFileRow {
   priority: number;
   locked: boolean;
   health?: HealthTag;
-  // Knowledge-health counts (run_2816ab1c): null for prose files; the 3
-  // lifecycle-governed brain files carry per-entry decay/dedup counts. Surfaced
-  // so the user SEES what the auto decay+dedup sweep is cleaning.
+  // Knowledge-health counts: null for prose files; the entry-structured files
+  // carry their entry count and how many entries repeat another exactly.
   health_counts?: {
-    active: number;
-    dormant: number;
-    archived: number;
-    reclaimable: number;
+    entries: number;
     duplicate: number;
   } | null;
 }
@@ -512,18 +508,14 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             <span className="truncate text-body text-[var(--color-text)]">
               {f.name}
             </span>
-            {/* AC4: knowledge-health counts for the 3 lifecycle-governed files.
-                Shows what the auto decay+dedup sweep is cleaning — only the
-                actionable counts (dormant / reclaimable / duplicate), and only
-                when non-zero (a healthy file shows nothing = no noise). */}
-            {f.health_counts && (f.health_counts.dormant > 0 || f.health_counts.reclaimable > 0 || f.health_counts.duplicate > 0) && (
+            {/* Knowledge-health: exact duplicates only, and only when non-zero
+                (a healthy file shows nothing). */}
+            {f.health_counts && f.health_counts.duplicate > 0 && (
               <span
                 data-testid={`cm-health-counts-${f.name}`}
                 className="mt-0.5 flex gap-2 text-meta tabular-nums text-[var(--color-text-faint)]"
-                title="Knowledge health — auto decay+dedup sweep targets these (dormant = no longer injected · reclaimable = archivable noise · duplicate = exact-dup a sweep removes)"
+                title="Knowledge health — entries that repeat another entry of the same section exactly"
               >
-                {f.health_counts.dormant > 0 && <span>{f.health_counts.dormant} dormant</span>}
-                {f.health_counts.reclaimable > 0 && <span>{f.health_counts.reclaimable} reclaimable</span>}
                 {f.health_counts.duplicate > 0 && <span className="text-[var(--color-warning,var(--color-status-error))]">{f.health_counts.duplicate} dup</span>}
               </span>
             )}
@@ -565,8 +557,8 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
 }
 
 // ── Memory tab: the sedimented 7-type knowledge (DoD2) ──────────────────────
-interface GraphNode { type: string; count: number; active: number; dormant: number; }
-interface DrillEntry { title: string; status: string; ref_count: number; meta: string; }
+interface GraphNode { type: string; count: number; }
+interface DrillEntry { title: string; meta: string; }
 interface BrainGraph { nodes: GraphNode[]; drill: Record<string, DrillEntry[]>; total: number; }
 interface TrendPoint { date: string; prompt_tokens: number; memory_bytes: number; }
 interface BrainTrend { points: TrendPoint[]; count: number; launch_date: string | null; }
@@ -585,11 +577,11 @@ const TYPE_TINT: Record<string, string> = {
  * KnowledgeGraph — the shared graph+bars+drill surface for BOTH the Memory tab
  * (7-type ontology) and the Evolution tab (evolution kinds). Backend returns nodes
  * ALREADY in display-priority order (Run C); this renders them IN-ORDER and NEVER
- * re-sorts by count (R30 — order is a backend decision). `showDecay` is true for
- * memory (real active/dormant split) and false for evolution (count-only, no decay
- * layer — never fabricate a split). One component, two sources = no duplication (R25).
+ * re-sorts by count (R30 — order is a backend decision). `ontology` is true for
+ * memory (the 7 types) and false for evolution (its kinds). Nodes are count-only:
+ * every entry in a main file is in force. One component, two sources (R25).
  */
-function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; showDecay: boolean }) {
+function KnowledgeGraph({ graph, ontology }: { graph: BrainGraph | undefined; ontology: boolean }) {
   const [selType, setSelType] = useState<string | null>(null);
   const nodes = graph?.nodes ?? [];
   const maxCount = Math.max(1, ...nodes.map((n) => n.count));
@@ -600,7 +592,7 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
       {/* type/kind graph — nodes sized by count, rendered in backend priority order */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          Knowledge graph · {showDecay ? '7 types' : 'kinds'} as nodes (click to drill in)
+          Knowledge graph · {ontology ? '7 types' : 'kinds'} as nodes (click to drill in)
         </div>
         <div className="flex flex-wrap gap-3">
           {nodes.map((n) => {
@@ -613,11 +605,11 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
                 data-testid={`cm-graph-node-${n.type}`}
                 data-viz
                 onClick={() => setSelType(sel ? null : n.type)}
-                title={showDecay ? `${n.type}: ${n.count} (${n.active} active · ${n.dormant} dim)` : `${n.type}: ${n.count}`}
+                title={`${n.type}: ${n.count}`}
                 className="flex flex-col items-center justify-center rounded-full border-2 transition-transform hover:scale-105 shrink-0"
                 style={{
                   width: size, height: size, borderColor: tint,
-                  background: `color-mix(in srgb, ${tint} ${showDecay && n.dormant > n.active ? 8 : 16}%, transparent)`,
+                  background: `color-mix(in srgb, ${tint} 16%, transparent)`,
                   boxShadow: sel ? `0 0 0 3px color-mix(in srgb, ${tint} 40%, transparent)` : 'none',
                 }}
               >
@@ -628,14 +620,14 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
           })}
         </div>
         <div className="mt-1.5 text-meta text-[var(--color-text-faint)]">
-          node size = entry count{showDecay ? ' · bright = active · dim = dormant/archived' : ''}
+          node size = entry count
         </div>
       </section>
 
       {/* by-type distribution bars (also drill) */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          By-{showDecay ? 'type' : 'kind'} distribution
+          By-{ontology ? 'type' : 'kind'} distribution
         </div>
         <div className="flex flex-col gap-1">
           {nodes.map((n) => {
@@ -662,7 +654,7 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
       <section>
         <div data-testid="cm-drill-list" className="rounded-lg border border-[var(--color-border)] p-3">
           {!selType ? (
-            <div className="text-meta text-[var(--color-text-faint)]">Click a graph node (or a bar) → latest entries of that {showDecay ? 'type' : 'kind'}</div>
+            <div className="text-meta text-[var(--color-text-faint)]">Click a graph node (or a bar) → latest entries of that {ontology ? 'type' : 'kind'}</div>
           ) : drill.length === 0 ? (
             <div className="text-meta text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
           ) : (
@@ -671,7 +663,7 @@ function KnowledgeGraph({ graph, showDecay }: { graph: BrainGraph | undefined; s
               <div className="flex flex-col gap-1">
                 {drill.map((e, i) => (
                   <div key={i} className="flex items-center gap-2 text-small">
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: e.status === 'active' ? 'var(--color-status-success)' : 'var(--color-text-muted)' }} />
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: 'var(--color-status-success)' }} />
                     <span className="min-w-0 flex-1 truncate text-[var(--color-text)]">{e.title}</span>
                     {e.meta && <span className="shrink-0 tabular-nums text-meta text-[var(--color-text-faint)]">{e.meta}</span>}
                   </div>
@@ -839,11 +831,11 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
     <div data-testid="cm-panel-memory" className="flex flex-col gap-5 max-w-4xl">
       <div className="text-body text-[var(--color-text-muted)]">
         The judgment I've sedimented across all conversations — a 7-type ontology.
-        Value (not age) decides survival: idle entries dim, load-bearing ones persist.
+        What is in the file is in force: an entry leaves only when a newer decision overrides it or it is withdrawn.
       </div>
 
-      {/* graph + bars + drill (shared component; memory shows the active/dormant split) */}
-      <KnowledgeGraph graph={graph} showDecay />
+      {/* graph + bars + drill (shared component) */}
+      <KnowledgeGraph graph={graph} ontology />
 
       {/* MEMORY.md size trend (from the daily snapshot series) */}
       <section>
@@ -857,7 +849,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
       <ArchivePanel source="memory" enabled={enabled} />
 
       <div className="text-meta text-[var(--color-text-faint)]">
-        How it works: live memory is injected in FULL every message; reflection sediments new ones (confident-only); when the file grows past its size cap, the lowest-value entries are ARCHIVED to recall-backed cold storage (moved, not deleted — still retrievable via FTS5/BM25 recall), so load-bearing judgment stays live.
+        How it works: live memory is injected as whole entries within a fixed budget (over it, the highest-value entries are chosen; the rest stay in the file and reach recall); reflection sediments new ones (confident-only); an entry leaves the file only when a newer decision overrides it or it is withdrawn, and what was replaced is recorded outside the file. Older archive shards stay readable here.
       </div>
     </div>
   );
@@ -866,8 +858,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
 // ── Evolution tab: MIRRORS the Memory tab (graph + bars + drill + trend + archive)
 // for EVOLUTION.md's own kinds (class/correction/data-point/directive/…). Structural
 // parity with MemoryTab via the shared KnowledgeGraph — the only differences are
-// honest: source=evolution, and showDecay=false (EVOLUTION.md has no decay layer, so
-// nodes are count-only; never fabricate an active/dormant split).
+// honest: source=evolution, and ontology=false (its kinds, not the 7 types).
 function EvolutionTab({ enabled }: { enabled: boolean }) {
   const { data: graph } = useQuery<BrainGraph>({
     queryKey: ['cm-brain-graph', 'evolution'],
@@ -888,8 +879,8 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
         which matters most to my judgment.
       </div>
 
-      {/* graph + bars + drill (shared component; evolution is count-only, no decay split) */}
-      <KnowledgeGraph graph={graph} showDecay={false} />
+      {/* graph + bars + drill (shared component; evolution kinds) */}
+      <KnowledgeGraph graph={graph} ontology={false} />
 
       {/* EVOLUTION.md size trend — real per-file bytes from the daily snapshot series */}
       <section>
@@ -948,12 +939,12 @@ const LIFECYCLE: Array<{ key: string; icon: string; title: string; desc: string 
   { key: 'recall', icon: 'search', title: 'Recall', desc: 'FTS5/BM25 searches the archived cold layer' },
   { key: 'judge', icon: 'psychology', title: 'Judge', desc: 'the model reasons on that context' },
   { key: 'sediment', icon: 'water_drop', title: 'Sediment', desc: 'reflect → new entries (confident-only)' },
-  { key: 'decay', icon: 'eco', title: 'Decay', desc: 'idle sinks, value survives' },
+  { key: 'revise', icon: 'published_with_changes', title: 'Revise', desc: 'a newer decision overrides; a withdrawn entry leaves' },
 ];
 const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
   { icon: 'search', name: 'Recall', desc: 'searches the archived cold layer (FTS5) on demand', tag: 'hook' },
   { icon: 'water_drop', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
-  { icon: 'eco', name: 'Decay & archive', desc: 'dormant then archived by idle age', tag: 'job' },
+  { icon: 'published_with_changes', name: 'Override & withdraw', desc: 'a declared newer decision replaces an entry; the record stays outside the file', tag: 'hook' },
   { icon: 'assignment', name: 'Session briefing', desc: 'start-of-session cognition inject', tag: 'hook' },
   { icon: 'genetics', name: 'Evolution capture', desc: 'corrections → pattern detection', tag: 'hook' },
 ];

@@ -139,7 +139,7 @@ export function humanPerRun(local: PipelineRunSummary[], hive: SwarmOutRun[]): {
 
 export interface BrainEval {
   runs: { total: number; landed: number; completionRate: number | null; avgCycleMin: number | null; tokens: number | null; needsYou: number };
-  brain: { entries: number; sinking: number | null; reclaimable: number | null; recentActivity: number | null; autoApplied: number };
+  brain: { entries: number; recentActivity: number | null; autoApplied: number };
 }
 
 export function brainEval(
@@ -162,8 +162,6 @@ export function brainEval(
     },
     brain: {
       entries: knowledge?.entries.length ?? 0,
-      sinking: detail?.health?.sinking ?? null,
-      reclaimable: detail?.health?.noise.reclaimable ?? null,
       recentActivity: detail?.health?.recentActivity ?? null,
       autoApplied: (review?.hunks ?? []).filter((h) => h.tag === 'cultivation·auto-applied').length,
     },
@@ -182,8 +180,6 @@ export interface HubSummary {
   /** ddd-changelog entries stamped in the last 30 days, summed; null = no brain reported it */
   learned: number | null;
   learnedBrains: number;
-  /** dormant or archived knowledge entries, summed */
-  sinking: number;
   /** last 30 days: Runs that landed, and Runs that finished (landed or not) */
   landed: number;
   finished: number;
@@ -302,7 +298,6 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
     born: brains.filter((b) => b.setupState === 'setting-up').length,
     learned: reported.length ? reported.reduce((s, b) => s + (b.recentActivity ?? 0), 0) : null,
     learnedBrains: reported.filter((b) => (b.recentActivity ?? 0) > 0).length,
-    sinking: brains.reduce((s, b) => s + (b.health.sinking ?? 0), 0),
     landed: runs.filter((r) => r.status === 'completed' && !r.notLanded).length,
     finished: runs.filter((r) => r.status !== 'running').length,
     liveRuns: runs.filter((r) => r.status === 'running').length,

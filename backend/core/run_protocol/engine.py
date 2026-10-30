@@ -1135,7 +1135,6 @@ class RunEngine:
             except DocumentError as exc:
                 raise EngineError(str(exc)) from exc
             docs.write_requirements(requirements, variant="full", profile=state["profile"])
-            self._record_citations(requirements)
         value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         readings = ((value.get("understanding") or {}).get("readings")
                     if isinstance(value, Mapping) else None)
@@ -2183,7 +2182,6 @@ class RunEngine:
                 self._check_knowledge_refs(artifact, "RQ-5")
                 docs.write_requirements(artifact, variant="full", profile=profile,
                                         blocking=roster)
-                self._record_citations(artifact)
             elif stage == "plan":
                 requirements = self._read_json(
                     self.run_dir / "artifacts" / "requirements.json", {})
@@ -2194,7 +2192,6 @@ class RunEngine:
                                   requirement_variant="full",
                                   existing_files=self.check_context().existing_files,
                                   blocking=roster)
-                self._record_citations(artifact)
         except DocumentError as exc:
             forced = exc.issues or {next(iter(sorted(roster))): str(exc)}
             result = complete_stage(self.store, profile=profile, stage=stage, variant=variant,
@@ -2471,14 +2468,6 @@ class RunEngine:
                        "project's DDD (an id changes when its entry is rewritten: find it "
                        "again with `knowledge find` / `knowledge get`)")
             raise DocumentError(f"{check_id} knowledge_refs: {message}", {check_id: message})
-
-    def _record_citations(self, document: Mapping[str, Any] | None) -> None:
-        """After *document* is written: the DDD units it cites were used (decay keeps
-        them). Best-effort, never fails the stage."""
-        refs = (document or {}).get("knowledge_refs") if isinstance(document, Mapping) else None
-        if isinstance(refs, list) and refs and self.contract.get("has_ddd"):
-            from core import addressing
-            addressing.record_cited(self.project, refs)
 
     def _render_failed(self, document: str, exc: Exception) -> None:
         """A Markdown projection failed (K4, F23): one ``render_failed`` event; the

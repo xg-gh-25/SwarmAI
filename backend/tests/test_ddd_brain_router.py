@@ -7,16 +7,17 @@ workspace is a HERMETIC one built per test in tmp (`hermetic_workspace`), not th
 developer's live ~/.swarm-ai/SwarmWS: conftest re-roots every test's app-data dir
 off production, so a test that silently depended on the live tree saw an EMPTY
 Projects/ and went red on every machine, and on CI it never had data to begin
-with. A fixture also makes the asserted facts (2 brains, 1 dormant + 1 archived
-entry, exactly one brain with a code_intel.db) deterministic instead of whatever
+with. A fixture also makes the asserted facts (2 brains, exactly one brain with a
+code_intel.db) deterministic instead of whatever
 the live workspace happened to contain.
 
 Key invariants under test:
   - AC1: brains list returns every real DDD project with live health signals
-    (sinking = dormant+archived count, pending = Need-You items, liveRun
-    = git dirty, last_change = relative time) — NO stored metric, computed live.
+    (pending = Need-You items, liveRun = git dirty, last_change = relative
+    time) — NO stored metric, computed live. There is no sinking count: nothing in
+    a main file decays (design 2026-10-30-brain-driven §2.3).
   - AC2: brain detail returns the six sections (via ddd_paths SSOT) with real
-    member files; ② canonical docs carry per-entry entry_type + decay_state that
+    member files; ② canonical docs carry per-entry entry_type + section that
     MATCH a direct parse_entries() call (no fabricated data).
   - ⑤/⑥ are enumerated as single well-known files (bindings.yaml / REFRESHER.md),
     NEVER by iterdir-ing the project root (Gate-1 revision).
@@ -191,7 +192,6 @@ class TestBrainsList:
 
         # live health signals present + correctly typed.
         h = sw["health"]
-        assert isinstance(h["sinking"], int) and h["sinking"] >= 0
         assert isinstance(h["pending"], int) and h["pending"] >= 0
         assert isinstance(h["liveRun"], bool)
         assert isinstance(h["lastChangeRelative"], str)
@@ -235,24 +235,6 @@ class TestBrainsList:
         raw = client.get("/api/ddd/brains").text.lower()
         for banned in ("ref_count", "refcount", "recall_heat", "recallheat", "crown"):
             assert banned not in raw
-
-    def test_sinking_matches_direct_parse_entries(self, client):
-        """AC1: health.sinking is NOT a stub — it equals a direct dormant+archived count."""
-        from core.ddd_entry_lifecycle import parse_entries
-        from core.ddd_paths import ddd_path
-
-        # Compute the truth directly over SwarmAI's ② canonical docs.
-        root = _swarmai_dir()
-        expected = 0
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            p = ddd_path(root, doc)
-            if p.exists():
-                for e in parse_entries(p.read_text()):
-                    if e.decay_state in ("dormant", "archived"):
-                        expected += 1
-
-        brains = {b["name"]: b for b in client.get("/api/ddd/brains").json()["brains"]}
-        assert brains["SwarmAI"]["health"]["sinking"] == expected
 
 
 @pytest.mark.usefixtures("hermetic_workspace")
@@ -341,7 +323,8 @@ class TestBrainDetail:
                 "guideline", "pitfall", "decision", "model",
                 "process", "principle", "correction",
             }
-            assert e["decayState"] in {"active", "dormant", "archived"}
+        assert all(set(e) == {"title", "entryType", "section", "source", "file"}
+                   for e in tech_entries)
 
         api_hist = Counter(e["entryType"] for e in tech_entries)
         assert api_hist == direct_hist
@@ -383,7 +366,7 @@ class TestResilience:
     def test_non_utf8_doc_does_not_crash_gallery(self, client, tmp_path, monkeypatch):
         """A canonical doc with invalid UTF-8 bytes → read_text raises
         UnicodeDecodeError (a ValueError, NOT OSError). The gallery must degrade
-        (that project's sinking count = 0), never return 500. Mutation check:
+        (that project's type counts = 0), never return 500. Mutation check:
         revert the `except (OSError, ValueError, UnicodeError)` to `except OSError`
         and this test goes RED (the request 500s)."""
         import routers.ddd_brain as mod
@@ -403,8 +386,8 @@ class TestResilience:
         assert resp.status_code == 200  # NOT 500
         brains = {b["name"]: b for b in resp.json()["brains"]}
         assert "BadUtf8" in brains
-        # the unreadable doc degrades to 0 sinking, doesn't crash.
-        assert brains["BadUtf8"]["health"]["sinking"] == 0
+        # the unreadable doc degrades to 0 entries, doesn't crash.
+        assert all(v == 0 for v in brains["BadUtf8"]["typeCounts"].values())
 
 
 class TestPathTraversal:
@@ -482,7 +465,7 @@ class TestBrainDetailSections:
 class TestHealthBlockInBrainDetail:
     """DDD Health Metrics (run 1, backend read side): _brain_detail returns a
     `health` block with admission-passing metrics. Every value recomputed on
-    read (noise) OR read from the stored scheduled score (trust) — the GET path
+    read OR read from the stored scheduled score (trust) — the GET path
     NEVER calls compute_section_health (the writer). Gate-1 CRITICAL guard."""
 
     def test_health_block_present_with_keys(self, tmp_path):
@@ -492,9 +475,10 @@ class TestHealthBlockInBrainDetail:
         detail = m._brain_detail(pd)
         assert "health" in detail
         h = detail["health"]
-        for k in ("noise", "trust", "escalationPending", "recall",
+        for k in ("trust", "escalationPending", "recall",
                   "diagnostics", "computedAt"):
             assert k in h, f"missing health key {k}: {h}"
+        assert "noise" not in h
 
     def test_no_cultivation_health_block(self, tmp_path):
         """The legacy proposal path's outcomes sink is gone; health carries no
@@ -512,39 +496,6 @@ class TestHealthBlockInBrainDetail:
         pd.mkdir()
         h = m._brain_detail(pd)["health"]
         assert h["recall"] == {"value": None, "experimental": True}
-
-    def test_noise_non_vacuous(self, tmp_path):
-        """noise.reclaimable equals a DIRECT compute_reclaimable_noise count over
-        the ② docs (not a stub). Mutation-anchor: build a doc with a known-stale
-        reclaimable guideline entry and assert the count reflects it."""
-        from datetime import date
-        from routers import ddd_brain as m
-        from core.ddd_entry_lifecycle import (
-            compute_reclaimable_noise, parse_entries, MEMORY_EVERGREEN_SECTIONS,
-        )
-        from core.ddd_paths import ddd_path
-        from core.project_registry import DDD_CANONICAL_DOCS
-        pd = tmp_path / "P"
-        pd.mkdir()
-        # Plant one reclaimable-noise guideline (ref 0, dormant, aged past grace) in
-        # the FIRST canonical doc, at its real ddd_path location.
-        doc = DDD_CANONICAL_DOCS[0]
-        p = ddd_path(pd, doc)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            "## Guidelines\n"
-            "- [guideline] **Old disposable note** — stale (2026-01-01)\n"
-            "  <!-- ref:0 | last:2026-01-01 | decay:dormant -->\n",
-            encoding="utf-8",
-        )
-        h = m._brain_detail(pd)["health"]
-        # Direct computation the helper must match:
-        entries = m._parse_all_knowledge_entries(pd)
-        direct = compute_reclaimable_noise(
-            entries, date.today(), evergreen_sections=MEMORY_EVERGREEN_SECTIONS
-        ).noisy
-        assert h["noise"]["reclaimable"] == direct
-        assert direct >= 1, "planted a reclaimable entry — must be counted"
 
     def test_trust_null_and_no_write_when_no_scheduled_score(self, tmp_path):
         """Gate-1 CRITICAL: a GET must NOT write section_health.json. When the
@@ -564,13 +515,13 @@ class TestHealthBlockInBrainDetail:
 
     def test_summary_health_unchanged(self, tmp_path):
         """_brain_summary (gallery) is NOT enriched — its health keeps exactly the
-        4 gallery keys (no per-open compute N-globs the gallery)."""
+        3 gallery keys (no per-open compute N-globs the gallery)."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         pd.mkdir()
         summ = m._brain_summary(pd)
         assert set(summ["health"].keys()) == {
-            "sinking", "pending", "liveRun", "lastChangeRelative"
+            "pending", "liveRun", "lastChangeRelative"
         }
 
 
@@ -578,9 +529,6 @@ class TestUnifiedBrainStateBuilder:
     """Cycle-1 unify: a SINGLE build_brain_state(project_dir, *, with_noise) is the
     sole state/health constructor. _brain_summary and _brain_detail both delegate to
     it — no second, independent health builder (the fork this run kills).
-
-    The perf invariant: with_noise=False (gallery) provably never calls
-    compute_reclaimable_noise (→ parse_entries), so the gallery cannot N-glob.
     """
 
     def test_single_builder_exists_and_both_routes_delegate(self):
@@ -591,39 +539,21 @@ class TestUnifiedBrainStateBuilder:
         assert "build_brain_state" in inspect.getsource(m._brain_summary)
         assert "build_brain_state" in inspect.getsource(m._brain_detail)
 
-    def test_gallery_path_never_computes_noise(self, monkeypatch, tmp_path):
-        """with_noise=False MUST NOT call compute_reclaimable_noise (the sole
-        expensive op). Counter stays 0 → the gallery is cheap by construction."""
-        from routers import ddd_brain as m
-        calls = {"n": 0}
-        real = m.compute_reclaimable_noise
-
-        def _counting(*a, **k):
-            calls["n"] += 1
-            return real(*a, **k)
-
-        monkeypatch.setattr(m, "compute_reclaimable_noise", _counting)
-        pd = tmp_path / "P"
-        (pd / ".artifacts").mkdir(parents=True)
-        state = m.build_brain_state(pd, with_noise=False)
-        assert calls["n"] == 0, "gallery path called compute_reclaimable_noise — N-glob risk"
-        # and the cheap health keys are all present
-        assert set(state["health"].keys()) == {
-            "sinking", "pending", "liveRun", "lastChangeRelative"
-        }
-
-    def test_detail_path_includes_noise(self, monkeypatch, tmp_path):
-        """with_noise=True adds the detail metrics (noise/trust/escalation/recall)
+    def test_detail_path_is_superset_of_gallery(self, monkeypatch, tmp_path):
+        """with_noise=True adds the detail metrics (trust/escalation/recall/…)
         ON TOP of the cheap base — one shape, superset."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
         state = m.build_brain_state(pd, with_noise=True)
         h = state["health"]
-        # cheap base still present (superset, not a different shape)
-        assert {"sinking", "pending", "liveRun", "lastChangeRelative"} <= set(h.keys())
-        # detail metrics added
-        assert "noise" in h and "trust" in h and "escalationPending" in h and "recall" in h
+        assert set(h.keys()) == {
+            # cheap base (superset, not a different shape)
+            "pending", "liveRun", "lastChangeRelative",
+            # detail metrics
+            "trust", "escalationPending", "recall", "recentActivity",
+            "diagnostics", "computedAt",
+        }
 
     def test_detail_includes_recent_activity(self, monkeypatch, tmp_path):
         """Q3 'is it growing?' — detail exposes recentActivity = count of
@@ -659,7 +589,7 @@ class TestUnifiedBrainStateBuilder:
 
     def test_gallery_omits_recent_activity(self, monkeypatch, tmp_path):
         """recentActivity is not a health key on the gallery (with_noise=False): the
-        cheap 4-key health base stays exact (Principle-1 / perf: gallery is minimal)."""
+        cheap 3-key health base stays exact (Principle-1 / perf: gallery is minimal)."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
@@ -725,7 +655,7 @@ class TestUnifiedBrainStateBuilder:
     def test_typecounts_is_sibling_of_health_both_densities(self, monkeypatch, tmp_path):
         """typeCounts (7-type histogram for the ontology bar) is a SIBLING of health
         (like lifecycleStage), NOT nested inside health — so the gallery's exact
-        4-key health shape is preserved. Present on BOTH densities."""
+        3-key health shape is preserved. Present on BOTH densities."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         self._mk_typed_doc(pd)
@@ -741,14 +671,14 @@ class TestUnifiedBrainStateBuilder:
             assert tc["guideline"] == 1 and tc["pitfall"] == 1
             assert tc["process"] == 0
 
-    def test_gallery_health_still_exactly_four_keys(self, monkeypatch, tmp_path):
+    def test_gallery_health_still_exactly_three_keys(self, monkeypatch, tmp_path):
         """Regression guard for the sibling decision: adding typeCounts must NOT
-        leak into health — the gallery health stays exactly the 4 cheap keys."""
+        leak into health — the gallery health stays exactly the 3 cheap keys."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         self._mk_typed_doc(pd)
         h = m.build_brain_state(pd, with_noise=False)["health"]
-        assert set(h.keys()) == {"sinking", "pending", "liveRun", "lastChangeRelative"}
+        assert set(h.keys()) == {"pending", "liveRun", "lastChangeRelative"}
 
     def test_recent_activity_excludes_undated_and_old(self, monkeypatch, tmp_path):
         """A '30d activity' number must count ONLY entries STAMPED within 30d.
@@ -844,7 +774,10 @@ class TestPerfRefactorRun43dc94f6:
         self_parsed = m._gallery_entry_stats(pd)
         shared = m._gallery_entry_stats(pd, parsed=m._parse_knowledge_docs_grouped(pd))
         assert self_parsed == shared
-        assert self_parsed["sinking"] == 1  # the dormant one
+        assert self_parsed == {"typeCounts": {
+            "guideline": 1, "pitfall": 1, "decision": 0, "model": 0,
+            "process": 0, "principle": 0, "correction": 0,
+        }}
 
     def test_batch_git_status_rename_keys_new_path(self, tmp_path, monkeypatch):
         """_batch_git_status parses a porcelain -z rename (R<sp>new\\0old\\0) → keys the

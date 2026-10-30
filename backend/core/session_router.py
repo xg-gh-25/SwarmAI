@@ -1012,7 +1012,7 @@ def _unified_recall_body(
         body = render_recall_body(result, project=project, graph_context=graph_context)
         if body:
             from .ingestion.usage import record_recalled_result
-            record_recalled_result(result, exclude_session_id or "", project=project)
+            record_recalled_result(result, exclude_session_id or "")
         # Structured hits from the SAME result object (the real recalled hits with
         # scores) — for the TSCC panel. Extracted here, before the caller discards
         # `result`. None-safe: on empty body the caller falls back and ignores this.
@@ -1963,28 +1963,6 @@ def _inject_ddd_for_active_project(
     _record_ddd_inject("injected")
     logger.info("DDD injected: project=%s signal=%s sections=%d",
                 project, signal, len(ddd_hits))
-
-    # Access-decay signal (run_644bfea6): record which ENTRY-level DDD hits we
-    # actually surfaced, so ddd_orchestrator's decay engine can keep genuinely-
-    # used lessons alive instead of decaying them on age alone. Only entry hits
-    # carry `content` (section-pointer hits don't); the content string here
-    # INCLUDES the <!-- --> metadata line — entry_anchor_text strips it so the
-    # anchor matches the read side (EntryMetadata.raw_text, metadata-free).
-    # best-effort: recall must never be blocked by usage bookkeeping.
-    try:
-        from datetime import date as _date
-        from core.ddd_usage import entry_anchor_text, record_ddd_hit
-        _today = _date.today()
-        for h in ddd_hits:
-            content = h.get("content")
-            if not content:
-                continue
-            # entry_anchor_text returns "" for non-trackable (non-bold) lines;
-            # record_ddd_hit no-ops on "". Anchor IS the key (no doc/section).
-            record_ddd_hit(project, entry_anchor_text(content), _today)
-    except Exception:  # noqa: BLE001 — best-effort, never block the recall path
-        logger.debug("_inject_ddd_for_active_project: suppressed exception on a fail-safe path", exc_info=True)
-        pass
 
 
 def _get_access_hint(ext: str, filename: str) -> str:

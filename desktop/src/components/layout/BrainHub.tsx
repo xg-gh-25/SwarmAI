@@ -486,7 +486,6 @@ function Gallery(
 // What the Brain knows, top to bottom:
 //   Add knowledge — the primary action of this tab (a card that opens in place).
 //   §① Ontology (3-layer×7-type) — the existing DddCard density=full IS the ontology.
-//   §② Knowledge upkeep — sinking and reclaimable entries.
 //   §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) + [Weekly Report].
 //   Files — the real Projects/<name> file tree + Code Graph.
 
@@ -580,20 +579,19 @@ function BrainOverview(
       {/* §① Ontology — RELOCATED, not rebuilt (Gate-0 C046): the existing
           DddCard density=full IS the 3-layer×7-type ontology + needs-you verdict.
           FIXED SLOT — always the FIRST child so the §①→②→③ order is invariant for
-          EVERY brain (Gate-2 HIGH: gating the whole §① on detail.health?.noise let
+          EVERY brain (Gate-2 HIGH: gating the whole §① on the detail metrics let
           it VANISH for a degenerate/old-daemon brain → §② became first → per-brain
           structural drift, the exact "dynamic makes users lost" failure). Three
           graceful tiers, all in the same slot position:
-            • health.noise present → the full health-strip (ontology + needs-you verdict)
+            • detail metrics present → the full health-strip (ontology + needs-you verdict)
             • no health but typeCounts present → ontology-only (DddCard FullBody renders
               the 3×7 ontology from typeCounts alone, no metrics needed)
             • neither → a muted anchor so the slot still occupies §①'s position. */}
       <div data-testid="brainhub-ontology">
-        {detail.health?.noise ? (
+        {typeof detail.health?.escalationPending === 'number' ? (
           <div data-testid="brainhub-healthstrip">
-            {/* ontologyOnly (run_115aa182): the §② NeedYouBlock below OWNS needs-you
-                (reclaimable/sinking); this §① strip is the ontology + facts
-                only, so the two don't render a duplicate "Needs you" block. */}
+            {/* ontologyOnly (run_115aa182): needs-you lives in the Needs you tab;
+                this §① strip is the ontology + facts only. */}
             <DddCard density="full" name={detail.name} kind={detail.kind} metrics={detail.health}
               typeCounts={aggregateTypeCounts(detail.sections)} ontologyOnly />
           </div>
@@ -612,13 +610,6 @@ function BrainOverview(
         )}
       </div>
 
-      {/* §② Knowledge upkeep — sinking and reclaimable entries. What waits on the
-          person (Runs, escalations) lives in the Needs you tab, not here. */}
-      <UpkeepBlock
-        reclaimable={detail.health?.noise?.reclaimable ?? 0}
-        sinking={detail.health?.sinking ?? 0}
-      />
-
       {/* §③ 4 core-doc cards + group header with [Weekly Report]. */}
       <CoreDocCards
         members={members}
@@ -629,34 +620,6 @@ function BrainOverview(
         onToggleWeekly={onToggleWeekly}
         weekly={weekly}
       />
-    </div>
-  );
-}
-
-/** §② Knowledge upkeep: entries sinking toward the archive and reclaimable noise. */
-function UpkeepBlock({ reclaimable = 0, sinking = 0 }: { reclaimable?: number; sinking?: number }) {
-  const hasWork = reclaimable > 0 || sinking > 0;
-  return (
-    <div data-testid="brainhub-upkeep" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5">
-      <div className="text-small font-semibold mb-1">Knowledge upkeep</div>
-      {!hasWork ? (
-        <div data-testid="upkeep-empty" className="text-meta text-[var(--color-text-muted)]">Nothing to tidy. Every entry is in use.</div>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {sinking > 0 && (
-            <div data-testid="upkeep-sinking" className="flex items-center gap-2 text-small">
-              <span className="font-semibold text-[var(--color-status-warning)] min-w-[28px]">{sinking}</span>
-              <span className="text-[var(--color-text-muted)]">entr{sinking === 1 ? 'y is' : 'ies are'} sinking: not used for a while, on the way to the archive</span>
-            </div>
-          )}
-          {reclaimable > 0 && (
-            <div data-testid="upkeep-reclaimable" className="flex items-center gap-2 text-small">
-              <span className="font-semibold text-[var(--color-status-warning)] min-w-[28px]">{reclaimable}</span>
-              <span className="text-[var(--color-text-muted)]">can be reclaimed as noise (ask the agent to run reclaim)</span>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -1219,8 +1182,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
   if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading review…</div>;
 
   // Every hunk is already-written sediment (CDF writes the Brain; nothing waits for
-  // approval). (F1: the former Zone B "decay·sinking" was removed — the backend never
-  // emitted that tag; the Gallery's health.sinking count surfaces dormant entries.)
+  // approval).
   const zoneA = data.hunks;
 
   // Item 6 — de-jargon: the primary header is plain language ("N changes since

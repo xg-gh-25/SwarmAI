@@ -86,6 +86,7 @@ describe('BrainMapView', () => {
     render(<BrainMapView name="P" onGoTo={onGoTo} />);
     expect(screen.getByTestId('bm-need-run_1')).toBeTruthy();
     expect(screen.getByTestId('bm-eval-summary').textContent).toContain('1 / 2');
+    expect(screen.getByTestId('bm-eval-summary').textContent).not.toContain('Sinking');   // entries no longer decay
     cleanup();
     render(<BrainNeedsView name="P" onGoTo={onGoTo} />);
     expect(screen.getByTestId('bm-need-run_1')).toBeTruthy();
@@ -221,6 +222,8 @@ describe('BrainMapView', () => {
     expect(panel.textContent?.toLowerCase()).not.toContain('mock');
     expect(panel.textContent).not.toContain('Change requests');
     expect(panel.textContent).not.toContain('Queue wait');
+    expect(panel.textContent).not.toContain('Sinking');             // entries no longer decay
+    expect(panel.textContent).not.toContain('Reclaimable noise');
   });
 
   it('the Project Agent page submits a request to chat and shows no mock intake', async () => {
@@ -440,7 +443,7 @@ describe('BrainHubHome', () => {
   const brain = (name: string, o: Record<string, unknown> = {}, h: Record<string, unknown> = {}) => ({
     name, kind: 'knowledge', lifecycleStage: 'GROW',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: true, delivery: true, refresher: false },
-    health: { sinking: 1, pending: 0, liveRun: false, lastChangeRelative: '--', ...h }, ...o,
+    health: { pending: 0, liveRun: false, lastChangeRelative: '--', ...h }, ...o,
   });
   // P: a Run needs you (analytics above, and the attention channel's paused_run).
   // Q: an escalation and two failing jobs. R: running. S: being born. T: quiet.

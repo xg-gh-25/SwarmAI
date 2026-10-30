@@ -161,13 +161,13 @@ const GALLERY: BrainSummary[] = [
     name: 'SwarmAI', kind: 'code-repo',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: true, delivery: true, refresher: true },
     lifecycleStage: 'GROW',
-    health: { sinking: 3, pending: 0, liveRun: true, lastChangeRelative: '2h ago' },
+    health: { pending: 0, liveRun: true, lastChangeRelative: '2h ago' },
   },
   {
     name: 'AIDLC', kind: 'knowledge',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: true },
     lifecycleStage: 'CREATE',
-    health: { sinking: 0, pending: 2, liveRun: false, lastChangeRelative: '5d ago' },
+    health: { pending: 2, liveRun: false, lastChangeRelative: '5d ago' },
     pendingBySource: { escalation: 2 },
   },
 ];
@@ -180,8 +180,8 @@ const DETAIL: BrainDetail = {
     { key: 'knowledge', num: '②', label: 'Knowledge', ownGovern: 'OWN', curator: 'PM',
       members: [{ path: '2-understanding/TECH.md', gitStatus: 'modified' }],
       entries: [
-        { title: 'Two repos push', entryType: 'guideline', decayState: 'active', section: 'Arch', source: '', file: '2-understanding/TECH.md' },
-        { title: 'Old dormant note', entryType: 'pitfall', decayState: 'dormant', section: 'Arch', source: 'auto', file: '2-understanding/TECH.md' },
+        { title: 'Two repos push', entryType: 'guideline', section: 'Arch', source: '', file: '2-understanding/TECH.md' },
+        { title: 'Old auto note', entryType: 'pitfall', section: 'Arch', source: 'auto', file: '2-understanding/TECH.md' },
       ], completeNotBroken: false },
     { key: 'gates', num: '③', label: 'Gates', ownGovern: 'OWN', curator: 'Tech Lead',
       members: [], entries: [], completeNotBroken: true },
@@ -195,8 +195,6 @@ const DETAIL: BrainDetail = {
   specs: ['channels.spec.md', 'pipeline.spec.md'],
   hasCodeIntel: true,
   health: {
-    noise: { reclaimable: 3, rate: 0.12 },
-    sinking: 0,
     trust: {
       'TECH.md': { Architecture: 'full', Runtime: 'moderate' },
       'PRODUCT.md': { Vision: 'high', Risks: 'low' },
@@ -299,7 +297,7 @@ describe('BrainHub — Gallery (AC3)', () => {
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     // SwarmAI is pending==0 → calm card → presence bar + boxed cheap grid are GONE
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
-    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
+    expect(screen.getByTestId('dddcard-SwarmAI').textContent).not.toContain('sinking');
     // the card keeps its one signal line (SwarmAI: a Run in progress) and stays clickable
     expect(screen.getByTestId('dddcard-SwarmAI').textContent).toContain('Run in progress');
   });
@@ -416,26 +414,27 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute').getAttribute('aria-selected')).toBe('true'));
   });
 
-  // Helper: assert the fixed §①→②→③ order via the STABLE slot testids (ontology
-  // slot / need-you / core-docs). Uses brainhub-ontology (the always-present §① slot),
-  // NOT brainhub-healthstrip (which only appears when health.noise is present).
+  // Helper: assert the fixed §①→③ order via the STABLE slot testids (ontology
+  // slot / core-docs). Uses brainhub-ontology (the always-present §① slot), NOT
+  // brainhub-healthstrip (which only appears when the detail metrics are present).
+  // The former §② Knowledge upkeep block is gone (entries no longer decay).
   function assertFixedOrder() {
     const ov = screen.getByTestId('brainhub-overview');
-    const order = ['brainhub-ontology', 'brainhub-upkeep', 'brainhub-coredocs']
+    const order = ['brainhub-ontology', 'brainhub-coredocs']
       .map((id) => Array.from(ov.querySelectorAll('[data-testid]')).findIndex((el) => el.getAttribute('data-testid') === id));
     expect(order[0]).toBeGreaterThanOrEqual(0);   // §① slot present
-    expect(order[1]).toBeGreaterThan(order[0]);    // §② after §①
-    expect(order[2]).toBeGreaterThan(order[1]);    // §③ after §②
+    expect(order[1]).toBeGreaterThan(order[0]);    // §③ after §①
+    expect(ov.querySelector('[data-testid="brainhub-upkeep"]')).toBeNull();
   }
 
-  it('AC1 fixed order in Overview: ① ontology slot → ② need-you → ③ core-docs (healthy brain)', async () => {
+  it('AC1 fixed order in Overview: ① ontology slot → ③ core-docs (healthy brain)', async () => {
     await openBrain();
     assertFixedOrder();
-    expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy();  // health.noise → strip tier
+    expect(screen.getByTestId('brainhub-healthstrip')).toBeTruthy();  // health.escalationPending → strip tier
   });
 
   // Gate-2 HIGH: the §① slot must be FIXED for EVERY brain, incl. degenerate ones.
-  // Before the fix, gating all of §① on detail.health?.noise let it VANISH (old
+  // Before the fix, gating all of §① on the detail metrics let it VANISH (old
   // daemon / partial health) → §② became first → per-brain structural drift.
   it('AC1 fixed order holds for a DEGENERATE brain (health undefined — old daemon)', async () => {
     const { health: _omit, ...noHealth } = DETAIL;
@@ -694,26 +693,6 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-overview')).toBeTruthy());
   }
-
-  // AC3 — three Need-You states, block ALWAYS present
-  it('§② Knowledge upkeep shows sinking and reclaimable entries only (what waits on you is in Needs you)', async () => {
-    // fixture: escalationPending=2, noise.reclaimable=3, sinking=0
-    await openOverview();
-    const up = screen.getByTestId('brainhub-upkeep');
-    expect(up.querySelector('[data-testid="upkeep-reclaimable"]')?.textContent).toContain('3');
-    expect(up.querySelector('[data-testid="upkeep-sinking"]')).toBeNull();
-    expect(up.textContent).not.toContain('proposal');
-    expect(screen.queryByTestId('brainhub-needyou')).toBeNull();
-  });
-
-  it('§② nothing to tidy → the upkeep block still holds its place with a muted line', async () => {
-    await openOverview(
-      { health: { ...DETAIL.health!, escalationPending: 0, sinking: 0, noise: { reclaimable: 0, rate: 0 } } },
-      [{ ...GALLERY[0], health: { ...GALLERY[0].health, pending: 0, liveRun: false } }, GALLERY[1]],
-    );
-    expect(screen.getByTestId('brainhub-upkeep')).toBeTruthy();
-    expect(screen.getByTestId('upkeep-empty')).toBeTruthy();
-  });
 
   // AC4/AC5 — 4 core-doc cards + signal marking
   it('AC4: renders one card per canonical doc; clicking opens it in Canvas', async () => {
@@ -1190,12 +1169,12 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     expect(v?.textContent?.toLowerCase()).not.toContain('healthy');
   });
 
-  it('NO needs-you block in the Brain (DDD) tab: the ontology strip has none, and §② is upkeep', async () => {
+  it('NO needs-you block in the Brain (DDD) tab: the ontology strip has none, and no upkeep block', async () => {
     await openBrain();
     await waitFor(() => expect(screen.getByTestId('brainhub-overview')).toBeTruthy());
     expect(screen.queryAllByTestId('ddd-needs-you')).toHaveLength(0);
     expect(screen.queryAllByTestId('brainhub-needyou')).toHaveLength(0);
-    expect(screen.getAllByTestId('brainhub-upkeep')).toHaveLength(1);
+    expect(screen.queryAllByTestId('brainhub-upkeep')).toHaveLength(0);
   });
 
   it('trust fact is a DISTRIBUTION (% ≥ high), NOT a collapsed rollup verdict word', async () => {
@@ -1221,8 +1200,8 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     expect(screen.queryByTestId('brainhub-healthstrip')).toBeNull();
   });
 
-  it('renders NOTHING (no crash) when health is a PARTIAL object missing noise (O023 boundary, Gate-2 MED)', async () => {
-    // A partial/old daemon could send `health` present but the required `noise`
+  it('renders NOTHING (no crash) when health is a PARTIAL object missing escalationPending (O023 boundary, Gate-2 MED)', async () => {
+    // A partial/old daemon could send `health` present but the required `escalationPending`
     // field absent — a wire-type violation the runtime must survive, not TypeError.
     mockGetBrainDetail.mockResolvedValueOnce({ ...DETAIL, health: {} as BrainDetail['health'] });
     render(<BrainHub defaultView="brain" />);

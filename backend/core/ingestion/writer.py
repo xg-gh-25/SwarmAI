@@ -464,7 +464,7 @@ def _next_evolution_id(content: str, section: str, prefix: str) -> int:
 
 def _candidate_target(decision: UnitDecision | Mapping[str, Any]) -> str | None:
     action = str(_decision_value(decision, "action", ""))
-    if action not in {"replace", "refine"}:
+    if action != "replace":
         return None
     judgments = list(_decision_value(decision, "hit_judgments", []) or [])
     if not judgments:
@@ -489,16 +489,6 @@ def _remove_unit_bytes(content: bytes, unit: Any) -> bytes:
         end += metadata.end()
     before, after = content[:start].rstrip(b"\r\n"), content[end:].lstrip(b"\r\n")
     return before + (b"\n\n" if before and after else b"") + after
-
-
-def _plain_unit_body(text: str) -> str:
-    """An entry's text without its lead, heading, labels and comments, for refine
-    composition (a bullet entry, or a block such as an EVOLUTION entry)."""
-    lines = [line for line in text.strip().splitlines() if not line.lstrip().startswith("#")]
-    value = "\n".join(lines)
-    value = re.sub(r"<!--.*?-->", "", value, flags=re.DOTALL)
-    value = re.sub(r"^\s*- (?:\[[^\]]+\]\s+)?\*\*[^*]+\*\*\s*(?:—|:)?\s*", "", value, flags=re.MULTILINE)
-    return " ".join(value.split()).strip()
 
 
 def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> dict[str, Any]:
@@ -527,23 +517,11 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     old_unit = _unit_for_anchor(target, old_anchor)
     archive_path: Path | None = None
     action = str(_decision_value(decision, "action", "add"))
-    # a TIMELINE event is an occurrence: a later one does not carry an earlier one's text
-    if (action == "refine" and old_unit is not None and store != "TIMELINE"
-            and not _decision_value(decision, "card3b")):
-        # the refined entry carries the old one's content (renderers read "what", so
-        # merging into "text" was ignored and refine wrote a plain second entry)
-        prior = _plain_unit_body(old_unit.text)
-        current = str(group.get("what") or group.get("text") or "").strip()
-        group["what"] = " ".join(part for part in (prior, current) if part)
-        # and its taint: external text merged into an untainted entry stays external
-        group["tainted"] = bool(group["tainted"] or _unit_external(old_unit))
     sequence = 1
     if store == "EVOLUTION":
         prefix = _evolution_prefix(group, _decision_value(decision, "card1"))
         sequence = _next_evolution_id(content, section, prefix)
     block = _render_block(decision, unit_id, group, sequence=sequence)
-    # refine keeps the old entry's bytes (audit, recall): it is superseded, and the
-    # injection selector never shows a superseded entry, so the new one carries its content
     if action == "replace" and old_unit is not None and old_unit.identity.startswith("cand:"):
         content_bytes = _remove_unit_bytes(original, old_unit)
         content = content_bytes.decode("utf-8")
@@ -551,7 +529,7 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     intended = _compose_intended(content, target, store, section, group, block)
     new_anchor = f"{_relative(target)}#{section}#cand:{unit_id}"
     relations = []
-    if old_anchor and action in {"replace", "refine"}:
+    if old_anchor and action == "replace":
         relations.append({"subject_anchor": new_anchor, "predicate": "supersedes", "object_anchor": old_anchor})
     for hint in vector.get("relation_hints", []):
         predicate = hint.get("predicate")

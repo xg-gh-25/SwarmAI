@@ -10,7 +10,7 @@ Six handlers (4 read, 2 mutating):
   READ:
   GET  /api/ddd/brains                     → Gallery: one summary card per DDD.
   GET  /api/ddd/brains/{name}              → Brain view: six-section breakdown +
-                                             per-entry decay/type state of ② docs.
+                                             per-entry type/section of ② docs.
   GET  /api/ddd/brains/{name}/review       → Review queue: tagged git-diff hunks
                                              since the watermark.
   GET  /api/ddd/brains/{name}/distribution → Distribute: declared reach + output state.
@@ -29,7 +29,7 @@ auth is not the codebase pattern). Do not add route auth to only this router.
 
 Data sources:
   - structure   ← core.ddd_paths (six-section layout SSOT — NEVER hardcode dirs)
-  - judgment    ← core.ddd_entry_lifecycle.parse_entries (decay_state/type/…)
+  - judgment    ← core.ddd_entry_lifecycle.parse_entries (type/section/source)
   - change      ← `git status --porcelain -z` (run here via asyncio.to_thread —
                   Gate-1 revision: we do NOT import workspace_api's private
                   `_get_git_status` across a router boundary) + `git log -1`
@@ -40,7 +40,7 @@ Design conformance:
     project ROOT via ddd_paths; they are single well-known FILES, so we
     enumerate them as such and NEVER iterdir the project root (Gate-1 revision).
   - No ref_count / recall-heat number is emitted (ref_count is dead — showing it
-    would be fabricated data). Only the decay-time proxy is surfaced.
+    would be fabricated data).
   - An empty ③Gates section is COMPLETE, not broken (R31).
 """
 
@@ -63,10 +63,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import (
-    MEMORY_EVERGREEN_SECTIONS,
     VALID_TYPES,
     EntryMetadata,
-    compute_reclaimable_noise,
     parse_entries,
 )
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
@@ -86,7 +84,7 @@ def _GIT_READ_ENV() -> dict:
 
 router = APIRouter(tags=["ddd-brain"])
 
-# The 4 canonical ② docs whose entries carry decay/type state. Single-source
+# The 4 canonical ② docs whose entries carry a type. Single-source
 # from project_registry (Run 0 rule — never hardcode the canonical-4 tuple).
 _KNOWLEDGE_DOCS = DDD_CANONICAL_DOCS
 
@@ -409,11 +407,10 @@ def _parse_knowledge_docs_grouped(project_dir: Path) -> dict[str, list[EntryMeta
     """Parse the ② canonical docs ONCE into {project-relative-path → entries}
     (run_43dc94f6 perf). Keyed by _rel(project_dir, ddd_path(doc)) — the SAME
     string _section_members yields for a knowledge member — so a detail caller can
-    reuse it for ALL parse consumers (sinking/typeCounts, noise, sections[].entries,
+    reuse it for ALL parse consumers (typeCounts, sections[].entries,
     per-file entryCount) instead of reading+parsing the same 4 docs 4+ times.
 
-    Stores ALL entries UNFILTERED (Gate-1 B): sinking (dormant/archived) is a
-    per-entry recompute the callers do over these lists, never pre-filtered here.
+    Stores ALL entries UNFILTERED: every entry in a main file is in force.
     Missing/unreadable doc degrades to no key (matches the sibling helpers' skip),
     so a caller's `.get(key, [])` yields the same [] the self-parse path would.
     """
@@ -432,25 +429,13 @@ def _parse_knowledge_docs_grouped(project_dir: Path) -> dict[str, list[EntryMeta
 def _gallery_entry_stats(
     project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None
 ) -> dict:
-    """ONE parse pass over the ② canonical docs → {sinking, typeCounts}.
+    """ONE parse pass over the ② canonical docs → {typeCounts}.
 
-    `parsed` (run_43dc94f6): a pre-parsed {rel→entries} dict from the detail path
-    to REUSE instead of re-reading the docs. None (gallery + all existing callers)
-    → self-parse, byte-identical to before. When provided, the loop reads entries
-    from the dict but runs the SAME per-entry sinking/type tally, so output is
-    identical either way.
-
-    Both signals are derived from the SAME parse_entries walk that the gallery
-    already pays for `sinking` — folding the per-entry_type tally into that loop
-    adds a dict-increment per entry, NOT a second glob (so the compact card's
-    3-layer ontology bar costs nothing beyond the sinking count that was always
-    computed). typeCounts is keyed by the 7 VALID_TYPES; parse_entries clamps any
-    unknown type to 'guideline', so an 8th key can never appear (run_9ada46ae).
-
-    Corrects the old `_sinking_count` docstring that claimed the gallery does "no
-    parse_entries" — it always parsed; this just also buckets the type.
+    `parsed`: a pre-parsed {rel→entries} dict from the detail path to REUSE instead
+    of re-reading the docs; None → self-parse, identical output. typeCounts is keyed
+    by the 7 VALID_TYPES; parse_entries clamps any unknown type to 'guideline'.
+    There is no sinking count: nothing in a main file decays (brain-driven §2.3).
     """
-    sinking = 0
     type_counts = {k: 0 for k in _TYPE_KEYS}
     for doc in _KNOWLEDGE_DOCS:
         p = ddd_path(project_dir, doc)
@@ -462,8 +447,6 @@ def _gallery_entry_stats(
             else:
                 entries = parse_entries(p.read_text(encoding="utf-8"))
             for e in entries:
-                if e.decay_state in ("dormant", "archived"):
-                    sinking += 1
                 # entry_type is guaranteed ∈ VALID_TYPES (clamped in parse_entries);
                 # .get guard is belt-and-suspenders against a future new type.
                 if e.entry_type in type_counts:
@@ -472,15 +455,7 @@ def _gallery_entry_stats(
         # gallery — a single bad file degrades to 0, never a 500 (PIT44 class).
         except (OSError, ValueError, UnicodeError):
             continue
-    return {"sinking": sinking, "typeCounts": type_counts}
-
-
-def _sinking_count(project_dir: Path) -> int:
-    """dormant + archived entries across the ② canonical docs (live).
-
-    Thin wrapper over _gallery_entry_stats for callers that only need sinking.
-    """
-    return _gallery_entry_stats(project_dir)["sinking"]
+    return {"typeCounts": type_counts}
 
 
 def _entry_count(project_dir: Path) -> int:
@@ -510,32 +485,11 @@ def _file_mtime_relative(fp: Path) -> str:
     return _relative_time(ts)
 
 
-def _parse_all_knowledge_entries(project_dir: Path) -> list[EntryMetadata]:
-    """All parsed entries across the ② canonical docs (shared by health metrics).
-
-    One parse pass per canonical doc — the same per-doc loop _sinking_count /
-    _entry_count use, factored out so _brain_health reuses it. A non-UTF-8 or
-    unreadable doc degrades to zero contribution (never a 500), matching the
-    sibling helpers' fault tolerance.
-    """
-    entries: list[EntryMetadata] = []
-    for doc in _KNOWLEDGE_DOCS:
-        p = ddd_path(project_dir, doc)
-        if not p.exists():
-            continue
-        try:
-            entries.extend(parse_entries(p.read_text(encoding="utf-8")))
-        except (OSError, ValueError, UnicodeError):
-            continue
-    return entries
-
-
-def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinking: int,
+def _brain_health_base(project_dir: Path, present: dict, pending: int, *,
                        run_facts: Optional[dict] = None) -> dict:
     """The CHEAP health fields present at EVERY density (gallery + detail).
 
-    `sinking` is passed in (computed once by build_brain_state via
-    _gallery_entry_stats). `run_facts` is this project's entry of `_run_facts`: the
+    `run_facts` is this project's entry of `_run_facts`: the
     gallery computes it once for every project; None (detail / single brain) reads
     it here (a cached run_index read, no git).
 
@@ -547,7 +501,6 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
         _run_facts(_workspace_root()).get(project_dir.name, {})
     landed = facts.get("landed_at")
     return {
-        "sinking": sinking,
         "pending": pending,
         "liveRun": bool(facts.get("live")),
         "lastChangeRelative": _relative_time(landed) if landed else "--",
@@ -564,12 +517,11 @@ def build_brain_state(
     ONE builder feeds BOTH routes; the ONLY axis is `with_noise` (a.k.a. detail):
       - with_noise=False → gallery projection: identity + sectionsPresent +
         lifecycleStage + the CHEAP health base + typeCounts. The ONE cheap parse
-        pass (_gallery_entry_stats) yields BOTH sinking and the 7-type histogram;
-        it does NOT call compute_reclaimable_noise / section_health (the truly
-        expensive detail-only block). (The gallery ALWAYS parsed for `sinking` —
-        the old "no parse_entries" claim was wrong; typeCounts rides that pass.)
+        pass (_gallery_entry_stats) yields the 7-type histogram;
+        it does NOT read section_health (the detail-only block).
       - with_noise=True  → detail superset: the same base PLUS the admission-passing
-        detail metrics (noise/trust/escalation/recall/diagnostics).
+        detail metrics (trust/escalation/recall/diagnostics). The parameter keeps
+        its old name; there is no noise metric (nothing decays, brain-driven §2.3).
 
     The health shape is a SUPERSET, not two different shapes: detail = base ∪ metrics.
     typeCounts is a top-level SIBLING of health (like lifecycleStage), NOT nested in
@@ -588,8 +540,8 @@ def build_brain_state(
     pending = sum(by_source.values())
     # `parsed` (run_43dc94f6): the detail path parses the ② docs once and passes them
     # here so stats + metrics reuse them (None → self-parse, gallery unchanged).
-    stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
-    health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"],
+    stats = _gallery_entry_stats(project_dir, parsed=parsed)  # typeCounts
+    health = _brain_health_base(project_dir, present, pending,
                                 run_facts=run_facts)
     recent = _recent_activity(project_dir)
     if with_noise:
@@ -677,11 +629,8 @@ def _brain_detail_metrics(
     Each metric earns its place by the §1 admission gate (owner action + live/read,
     never a frozen verdict). Layered on top of the cheap base ONLY when
     build_brain_state(with_noise=True) — NEVER on the gallery projection
-    (with_noise=False), because compute_reclaimable_noise parse_entries would N-glob
-    the gallery. This is the sole expensive block; the base is always cheap.
+    (with_noise=False). This is the sole detail-only block; the base is always cheap.
 
-    - noise: {reclaimable, rate} — computed LIVE via compute_reclaimable_noise over
-      the ② docs (owner action: >threshold → reclaim-strip). No side effect.
     - trust / diagnostics / computedAt: READ from the stored section_health.json in a
       SINGLE parse (written by the scheduled health path). The GET path NEVER calls
       compute_section_health — that function WRITES the file, and a disk write in a
@@ -697,23 +646,6 @@ def _brain_detail_metrics(
       benchmark with no cheap per-DDD value; the tile is shown but labeled experimental
       (design §4), never fabricated.
     """
-    # noise — live, no side effect. Narrow except (Gate-2 MED, GUI19): catch the
-    # real failure modes (bad file / bad data shape) so an accidental future write
-    # or a genuine logic bug surfaces instead of being swallowed to a silent zero.
-    try:
-        # noise is order-insensitive + across-all-docs (Gate-1 B), so a flatten of
-        # the shared `parsed` groups is identical to _parse_all_knowledge_entries.
-        if parsed is not None:
-            entries = [e for group in parsed.values() for e in group]
-        else:
-            entries = _parse_all_knowledge_entries(project_dir)
-        nr = compute_reclaimable_noise(
-            entries, date.today(), evergreen_sections=MEMORY_EVERGREEN_SECTIONS
-        )
-        noise = {"reclaimable": nr.noisy, "rate": round(nr.noise_rate, 4)}
-    except (OSError, ValueError, UnicodeError):  # noise never 500s a brain view
-        noise = {"reclaimable": 0, "rate": 0.0}
-
     # trust / diagnostics / computedAt — READ-ONLY from the stored scheduled score.
     # ONE read of section_health.json (Gate-2 HIGH: reading it twice risked a TOCTOU
     # where trust came from the old file and computedAt from a mid-write new one; and
@@ -747,7 +679,6 @@ def _brain_detail_metrics(
     recent_activity = recent_activity if recent_activity is not None else _recent_activity(project_dir)
 
     return {
-        "noise": noise,
         "trust": trust,
         "escalationPending": pending if pending is not None else _pending_count(project_dir.name),
         "recall": {"value": None, "experimental": True},
@@ -885,7 +816,7 @@ def _brain_detail(project_dir: Path) -> dict:
     # PERF (run_43dc94f6): parse the ② docs ONCE + fetch git status ONCE up front,
     # then feed EVERY downstream consumer from those two caches — instead of the old
     # path that read+parsed the same 4 docs 4+ times (_gallery_entry_stats +
-    # _parse_all_knowledge_entries + _knowledge_entries + per-member _file_entry_count)
+    # _knowledge_entries + per-member _file_entry_count)
     # and forked git once per member (the old per-member _file_entry_count parse is
     # gone — entryCount now reads len off the shared parse). Response JSON is
     # byte-identical; only faster.
@@ -954,7 +885,7 @@ def _brain_detail(project_dir: Path) -> dict:
 def _knowledge_entries(
     project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None
 ) -> list[dict]:
-    """Per-entry decay/type state for the ② canonical docs.
+    """Per-entry type/section for the ② canonical docs.
 
     `parsed` (run_43dc94f6): reuse the shared {rel→entries} dict instead of a live
     re-parse. None → self-parse (byte-identical). Doc iteration order + per-doc entry
@@ -978,7 +909,6 @@ def _knowledge_entries(
             out.append({
                 "title": e.title,
                 "entryType": e.entry_type,
-                "decayState": e.decay_state,
                 "section": e.section,
                 "source": e.source,
                 "file": rel,
@@ -1105,7 +1035,7 @@ async def list_brains() -> dict:
 
 @router.get("/brains/{name}")
 async def get_brain(name: str) -> dict:
-    """Brain view: six-section breakdown + ② per-entry decay/type state.
+    """Brain view: six-section breakdown + ② per-entry type/section.
 
     Resolves via _resolve_brain_dir for the SAME containment (parent==root +
     resolved-symlink) guard the review/distribution endpoints use — get_brain is
@@ -1126,7 +1056,7 @@ async def get_brain(name: str) -> dict:
 
 # ─── Review tab (Run 2) ──────────────────────────────────────────────────────
 #
-# The Review tab makes "how do I review DDD knowledge / how does it decay"
+# The Review tab makes "how do I review DDD knowledge / what changed"
 # operable, on a GIT substrate: DDD docs live in the SwarmWS git tree and
 # cultivation auto-commits, so a scoped `git diff <last-reviewed-sha>..HEAD --
 # Projects/<ddd>/` IS the review queue. Three concepts:
@@ -1295,9 +1225,7 @@ def _parse_hunks(diff_text: str) -> list[dict]:
 
 
 #: Provenance tag for a hunk: everything in the git diff is already COMMITTED
-#: sediment, so every hunk is `cultivation·auto-applied`. (`decay·sinking` is
-#: engine-driven and not derivable from the git diff alone — deferred, never
-#: fabricated: R30#4.)
+#: sediment, so every hunk is `cultivation·auto-applied`.
 _HUNK_TAG = "cultivation·auto-applied"
 
 

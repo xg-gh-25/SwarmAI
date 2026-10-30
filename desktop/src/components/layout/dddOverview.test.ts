@@ -75,7 +75,6 @@ describe('weeklyReportModel (AC7, F4)', () => {
         members: MEMBERS, entries: [], completeNotBroken: false },
     ],
     health: {
-      noise: { reclaimable: 3, rate: 0.12 },
       trust: {
         'TECH.md': { Architecture: 'full', Runtime: 'moderate' },
         'PRODUCT.md': { Vision: 'high', Risks: 'low' },

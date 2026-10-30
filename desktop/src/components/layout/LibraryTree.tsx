@@ -47,7 +47,7 @@ const KNOWLEDGE_ROOT = 'Knowledge';
  * but keeping the filter in the shared component means every rooted tree benefits.
  */
 function isNoiseNode(name: string): boolean {
-  if (name.startsWith('.')) return true;               // .artifacts, .git, .project.json, .ddd-usage.json, dotfiles
+  if (name.startsWith('.')) return true;               // .artifacts, .git, .project.json, dotfiles
   if (name === '__pycache__' || name === 'node_modules') return true;
   // suffix junk: *.lock (incl *.md.lock), sqlite db + WAL/SHM sidecars, big generated blobs
   if (/\.(lock|db|db-shm|db-wal)$/.test(name)) return true;

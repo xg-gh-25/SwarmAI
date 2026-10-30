@@ -33,7 +33,7 @@ const detail = {
     { key: 'gates', members: [], entries: [], completeNotBroken: true },
     { key: 'delivery', members: [{ path: 'bindings.yaml', gitStatus: 'clean' }], entries: [], completeNotBroken: false },
   ],
-  health: { noise: { reclaimable: 2, rate: 0 }, sinking: 1, trust: null, escalationPending: 0, recall: { value: null, experimental: true }, diagnostics: null, computedAt: null, recentActivity: 4 },
+  health: { trust: null, escalationPending: 0, recall: { value: null, experimental: true }, diagnostics: null, computedAt: null, recentActivity: 4 },
 } as unknown as BrainDetail;
 const review: ReviewData = {
   last_reviewed_sha: 'a', head_sha: 'b', diff_incomplete: false,
@@ -107,16 +107,16 @@ describe('brainMapModel', () => {
     expect(e.runs.completionRate).toBe(1);   // only finished Runs count
     expect(e.runs.tokens).toBeNull();        // one Run unmeasured -> no total
     expect(e.runs.avgCycleMin).toBe(20);
-    expect(e.brain).toMatchObject({ entries: 3, sinking: 1, reclaimable: 2, recentActivity: 4, autoApplied: 1 });
+    expect(e.brain).toEqual({ entries: 3, recentActivity: 4, autoApplied: 1 });
     const empty = brainEval([], null, null);
     expect(empty.runs.completionRate).toBeNull();
     expect(empty.runs.avgCycleMin).toBeNull();
-    expect(empty.brain.sinking).toBeNull();
+    expect(empty.brain).toEqual({ entries: 0, recentActivity: null, autoApplied: 0 });
   });
 
   const brain = (name: string, o: Record<string, unknown> = {}, h: Record<string, unknown> = {}) => ({
     name, kind: 'knowledge', lifecycleStage: 'GROW', sectionsPresent: {},
-    health: { pending: 0, liveRun: false, sinking: 0, lastChangeRelative: '--', ...h }, ...o,
+    health: { pending: 0, liveRun: false, lastChangeRelative: '--', ...h }, ...o,
   }) as never;
   const an = (groups: Record<string, PipelineRunSummary[]>) => ({
     window: '30d', trend: [], overall: {} as never,
@@ -126,8 +126,8 @@ describe('brainMapModel', () => {
   it('hubSummary: Need you is the attention count (a waiting Run is in it once) plus Project Agent drafts', () => {
     const brains = [
       brain('A', { recentActivity: 5, setupState: 'setting-up', pendingBySource: { paused_run: 1, escalation: 2 } },
-        { pending: 3, liveRun: true, sinking: 3 }),
-      brain('B', { recentActivity: 0 }, { sinking: 4 }),
+        { pending: 3, liveRun: true }),
+      brain('B', { recentActivity: 0 }),
       brain('C'),
     ];
     const a = an({
@@ -135,7 +135,7 @@ describe('brainMapModel', () => {
       Gone: [run({ id: 'x', needsYou: true })],  // not a known brain: not counted
     });
     expect(hubSummary(brains, a)).toEqual({
-      brains: 3, needsYou: 3, running: 1, born: 1, learned: 5, learnedBrains: 1, sinking: 7,
+      brains: 3, needsYou: 3, running: 1, born: 1, learned: 5, learnedBrains: 1,
       landed: 1, finished: 2, liveRuns: 1,
     });
     // no brain reports recentActivity (old daemon) -> UNKNOWN, never 0
@@ -220,7 +220,7 @@ describe('the built-in General Brain in Need You (F2)', () => {
   const shadow = {
     name: 'General', kind: 'knowledge', lifecycleStage: 'GROW', projectAgentStatus: 'draft',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: false },
-    health: { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '--' },
+    health: { pending: 0, liveRun: false, lastChangeRelative: '--' },
   } as unknown as BrainSummary;
 
   it('a draft or a broken Runner Agent is one row and one count; a confirmed one is none', () => {

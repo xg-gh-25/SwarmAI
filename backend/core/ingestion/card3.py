@@ -161,8 +161,6 @@ def relation_for_hit(hit: HitJudgment) -> HitRelation:
         relation = "independent"
     elif hit.overlap in {"same", "contained"} and not refutes:
         relation = "duplicate"
-    elif hit.same_topic and not refutes:
-        relation = "refine"
     else:
         relation = "independent"
     return HitRelation(relation=relation, anchor=hit.anchor, score=hit.score)
@@ -189,8 +187,4 @@ def aggregate_hits(relations: Iterable[HitRelation]) -> AggregateAction:
     if exceptions:
         target = min(item.anchor for item in exceptions)
         return AggregateAction("add_exception", "exception", target)
-    refinements = [item for item in items if item.relation == "refine"]
-    if refinements:
-        target = sorted(refinements, key=lambda item: (-item.score, item.anchor))[0]
-        return AggregateAction("refine", "refine", target.anchor)
     return AggregateAction("add", "independent")

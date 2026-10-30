@@ -3,7 +3,6 @@ DDD Weekly Report — generates a summary of all DDD cultivation activity.
 
 Scans ALL projects for:
 - ddd-changelog.jsonl entries (last 7 days)
-- drift fixes the self-audit applied
 - DDD document stats (line count, last modified)
 
 Outputs: Knowledge/Reports/YYYY-MM-DD-ddd-weekly.md
@@ -86,15 +85,12 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
 
     # Gather data per project
     all_applied = []
-    all_drift_fixes = []
     project_health = {}
 
     for project_name, project_dir in projects:
         # Read changelog
         applied = _read_changelog(project_dir, cutoff)
         all_applied.extend([(project_name, e) for e in applied])
-        # drift corrections the self-audit applied (their own log: not lessons, not counted as applied)
-        all_drift_fixes.extend([(project_name, e) for e in _read_drift_fixes(project_dir, cutoff)])
 
         # DDD health stats
         health = _compute_doc_health(project_dir)
@@ -102,7 +98,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
 
     # Generate report
     report = _generate_report(
-        all_applied, project_health, window_days, drift_fixes=all_drift_fixes
+        all_applied, project_health, window_days
     )
 
     # Write output
@@ -113,7 +109,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
     output_path.write_text(report, encoding="utf-8")
 
     summary = (
-        f"{len(all_applied)} applied, {len(all_drift_fixes)} drift fixes, "
+        f"{len(all_applied)} applied, "
         f"{len(projects)} projects scanned"
     )
     logger.info("DDD weekly report: %s → %s", summary, output_path)
@@ -159,23 +155,6 @@ def _read_changelog(project_dir: Path, cutoff: datetime) -> list[dict]:
     return entries
 
 
-def _read_drift_fixes(project_dir: Path, cutoff: datetime) -> list[dict]:
-    """Drift fixes the self-audit applied since cutoff (core.ddd_drift_fix.past_fixes:
-    failed writes dropped, undone ones marked)."""
-    from core.ddd_drift_fix import past_fixes
-    out = []
-    for row in past_fixes(project_dir):
-        try:
-            ts = datetime.fromisoformat(str(row.get("timestamp", "")))
-        except ValueError:
-            continue
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        if ts >= cutoff:
-            out.append(row)
-    return out
-
-
 def _compute_doc_health(project_dir: Path) -> dict:
     """Compute basic health stats for DDD docs in a project."""
     stats = {}
@@ -204,7 +183,6 @@ def _generate_report(
     applied: list[tuple[str, dict]],
     health: dict[str, dict],
     window_days: int,
-    drift_fixes: "list[tuple[str, dict]] | tuple" = (),
 ) -> str:
     """Generate an MBR-style weekly DDD report with narrative + judgment.
 
@@ -361,21 +339,6 @@ def _generate_report(
             lines.append(
                 f"- `{_md_cell(proj)}` — {_md_cell(doc)} § **{_md_cell(section)}**"
             )
-        lines.append("")
-
-    # ─── Drift fixed by the self-audit (ddd-drift-fixes.jsonl) ───
-    if drift_fixes:
-        in_force = sum(1 for _, e in drift_fixes if not e.get("undone"))
-        undone_n = len(drift_fixes) - in_force
-        lines.append(f"## Drift Fixed Automatically ({in_force})" + (f" · {undone_n} undone" if undone_n else ""))
-        lines.append("")
-        lines.append("| # | Project | Doc | Was | Now | Fix |")
-        lines.append("|---|---------|-----|-----|-----|----------|")
-        for i, (proj, e) in enumerate(sorted(drift_fixes, key=lambda x: x[1].get("timestamp", ""), reverse=True), 1):
-            ev = str(e.get("type") or "")
-            undone = " (undone)" if e.get("undone") else ""
-            lines.append(f"| {i} | {_md_cell(proj)} | {_md_cell(e.get('target_doc', '?'))}{undone} | "
-                         f"{_md_cell(str(e.get('old_line', '')).strip()[:80])} | {_md_cell(str(e.get('new_line', '')).strip()[:80])} | {_md_cell(ev)} |")
         lines.append("")
 
     # ─── What Changed (detailed log) ───

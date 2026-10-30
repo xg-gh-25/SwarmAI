@@ -9,10 +9,10 @@
  *
  *   • compact (gallery) — SELF-SELECTS by health.pending:
  *       NEEDS (pending>0) → amber-accented; header verdict + slim 3-layer ontology
- *         bar + NeedsActionable (the few actionable counts spelled out: N proposals
- *         / N sinking / run in progress). NOT the boxed 2×2 grid.
+ *         bar + NeedsActionable (the few actionable counts spelled out: N need you
+ *         / run in progress). NOT the boxed 2×2 grid.
  *       CALM (pending==0) → header verdict + ontology bar + ONE muted CalmMeta line
- *         (lifecycle · N sinking · last-change). No presence/lifecycle/cheap widgets.
+ *         (lifecycle · last-change). No presence/lifecycle/cheap widgets.
  *     Both from the cheap BrainSummary — NO detail fetch — and stay click-to-open.
  *   • full (Gallery primary hero + detail health-strip) — verdict dot (pending>0 =
  *     "needs decision", else "nothing queued" — NEVER "healthy/unhealthy": the trust
@@ -28,7 +28,7 @@
  * last-referenced / ref-count.
  *
  * GATE-1 invariant: density-scoped guard — compact ALWAYS renders (needs only the
- * cheap BrainSummary.health); full guards the judgment body on `metrics?.noise`
+ * cheap BrainSummary.health); full guards the judgment body on `metrics.escalationPending`
  * (O023 daemon-skew) so a partial payload degrades the body to nothing WITHOUT
  * blanking the card.
  */
@@ -128,7 +128,7 @@ function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdi
   );
 }
 
-/** Verdict dot — reads ONLY pending (a decision queue), never trust or sinking.
+/** Verdict dot — reads ONLY pending (a decision queue), never trust.
  *  So it can't reintroduce the refused trust rollup: pending>0 = needs a human
  *  decision; =0 = nothing queued. NOT "healthy/unhealthy". */
 function VerdictDot({ pending }: { pending: number }) {
@@ -144,14 +144,13 @@ function VerdictDot({ pending }: { pending: number }) {
 
 /** The actionable list for a NEEDS card — the 2×2 boxed cheap grid is REPLACED by
  *  the few things that actually need a human, spelled out. Only non-zero items
- *  render (pending is the verdict; sinking/run in progress are supporting facts).
+ *  render (pending is the verdict; a run in progress is a supporting fact).
  *  All from the cheap BrainSummary — no fetch. */
 function NeedsActionable({ health }: { health: BrainHealth }) {
   const items: { key: string; n: string; label: string }[] = [];
   // this brain's Need You items, every source (escalations, paused runs), not only
   // proposals: the same word as the left nav (fixing spec H2)
   if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: 'need you' });
-  if (health.sinking > 0) items.push({ key: 'sinking', n: String(health.sinking), label: 'entries sinking (decaying)' });
   if (health.liveRun) items.push({ key: 'liveRun', n: '•', label: 'run in progress' });
   return (
     <div data-testid="dddcard-needs-actionable" className="flex flex-col gap-1 mt-1.5">
@@ -167,9 +166,9 @@ function NeedsActionable({ health }: { health: BrainHealth }) {
 
 /** The single muted meta line for a CALM card — lifecycle stage · last change.
  *  Replaces the whole presence/lifecycle/2×2-grid stack (all no-signal on a calm
- *  brain). Sinking>0 is surfaced quietly here as a fact, never promoted to a zone. */
+ *  brain). */
 function CalmMeta({ lifecycleStage, health }: { lifecycleStage: LifecycleStage; health: BrainHealth }) {
-  const bits = [lifecycleStage, `${health.sinking} sinking`, health.lastChangeRelative];
+  const bits = [lifecycleStage, health.lastChangeRelative];
   return (
     <div data-testid="dddcard-calm-meta" className="flex items-center gap-1.5 text-meta text-[var(--color-text-faint)] mt-1.5 tabular-nums">
       {bits.map((b, i) => (
@@ -283,23 +282,23 @@ export function DddCard(props: DddCardProps) {
  * sources with different arrival times:
  *   • Ontology ← `typeCounts` (from the summary, available on FIRST PAINT). Renders
  *     immediately, does NOT wait for the metrics fetch.
- *   • needs-you + facts ← `metrics.noise` (from the 2nd getBrainDetail fetch, arrives
+ *   • needs-you + facts ← `metrics` (from the 2nd getBrainDetail fetch, arrives
  *     late). While metrics is pending BUT ontology is showing, a skeleton reserves the
  *     metrics-block height so its later arrival causes NO layout shift.
  * Density-scoped guard (O023 daemon-skew): the metrics-block still renders only on
- * `metrics.noise`. With NEITHER typeCounts NOR metrics → render nothing (card survives).
+ * `metrics.escalationPending`. With NEITHER typeCounts NOR metrics → render nothing.
  */
 function FullBody(
   { metrics, health, typeCounts, ontologyOnly = false }:
   { metrics?: DetailHealth; health?: BrainHealth; typeCounts?: Record<EntryType, number>;
     // ontologyOnly (run_115aa182): suppress the needs-you sub-block, keeping ontology +
     // Trust/Activity facts. Used by the Brain Hub OVERVIEW §①, where a dedicated §②
-    // NeedYouBlock already owns needs-you (proposals/reclaimable/sinking) — rendering
+    // NeedYouBlock already owns needs-you (proposals) — rendering
     // FullBody's own needs-you there duplicated it. DEFAULT false so the Gallery hero
     // (no separate §②) keeps its needs-you verdict — its FullBody IS the only signal. */
     ontologyOnly?: boolean },
 ) {
-  const hasMetrics = !!(metrics && metrics.noise);
+  const hasMetrics = typeof metrics?.escalationPending === 'number';
   const hasOntology = !!typeCounts;
   // Nothing to show at all (no summary ontology AND no metrics) → body renders nothing.
   if (!hasOntology && !hasMetrics) return null;
@@ -322,8 +321,6 @@ function FullBody(
   // needs-you: only non-zero actionable items
   const needs: { n: number; label: string }[] = [];
   if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: 'need you' });
-  if (metrics.noise.reclaimable > 0) needs.push({ n: metrics.noise.reclaimable, label: 'reclaimable (run reclaim)' });
-  if (health && health.sinking > 0) needs.push({ n: health.sinking, label: 'entries sinking (decaying)' });
 
   const freshText = health?.lastChangeRelative ?? _ageOf(metrics.computedAt);
 

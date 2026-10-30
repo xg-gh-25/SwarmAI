@@ -589,8 +589,6 @@ intelligence, DDD governance, and delivery:
 |---------|---------|
 | `run-cultivate` | Auto-apply additive DDD lessons (REFLECT) |
 | `ddd-health` | 5-dimensional DDD health scoring per section |
-| `ddd-retire` | Retire ONE named (title, section) knowledge entry: archive + strip |
-| `ddd-noise` | Per-doc DDD noise gate (reclaimable noise_rate + PASS/FAIL) |
 | `bind` | PULL: clone + code-intel every binding in a project's bindings.yaml |
 | `release-gate` | CI-green gate: poll CI for HEAD, write marker on green (authorizes `gh release`) |
 | `schema` | Print a stage's expected artifact schema + template |

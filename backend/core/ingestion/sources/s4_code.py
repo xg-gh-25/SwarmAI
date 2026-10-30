@@ -83,25 +83,3 @@ def extract_commits(commits: Iterable[dict[str, Any]], *,
         read_root_ids=read_roots,
         project_snapshot=snapshot, extraction_pass="main",
         allowed_kinds=_ALLOWED, llm=llm)
-
-
-def enqueue_refine_unit(unit: dict[str, Any], *, source_ref: str,
-                        project: str, read_root_ids: tuple[str, ...] = ()) -> Any:
-    """Validate and enqueue one deterministic DDD refinement as S4."""
-    from core.ingestion.contracts_v2 import SOURCE_UNIT
-    typed = SOURCE_UNIT.validate_python(unit)
-    attempt = api_v2.ExtractionAttempt(
-        source="S4", evidence_range={"ddd_refine": source_ref, "project": project},
-        extractor_version=EXTRACTOR_VERSION,
-        attempt_id=f"attempt:{uuid.uuid4().hex}")
-    try:
-        outcome = api_v2.enqueue_unit(
-            "S4", source_ref, typed, session_id=None, run_id=None,
-            read_root_ids=read_root_ids, project_snapshot={"project": project},
-            attempt_id=attempt.attempt_id, extraction_pass="main")
-        api_v2.record_extraction_attempt(attempt, status="ok", units_emitted=1)
-        return outcome
-    except Exception as exc:
-        api_v2.record_extraction_attempt(
-            attempt, status="failed", error=f"{type(exc).__name__}: {exc}")
-        raise

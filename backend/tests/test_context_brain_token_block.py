@@ -164,12 +164,12 @@ def test_total_tokens_stays_disk_conservative(fake_context_dir: Path):
 
 
 def test_health_counts_present_for_lifecycle_files_none_for_prose(tmp_path: Path):
-    """run_2816ab1c: per_file carries health_counts for the 3 lifecycle-governed
-    files (real decay entries), None for prose files."""
+    """run_2816ab1c: per_file carries health_counts for the 3 entry-structured
+    files, None for prose files."""
     ctx = tmp_path / ".context"
     ctx.mkdir()
     (ctx / "SWARMAI.md").write_text("core identity " * 50, encoding="utf-8")
-    # MEMORY.md with a REAL entry carrying decay metadata → counts populated.
+    # MEMORY.md with a REAL entry carrying metadata → counts populated.
     (ctx / "MEMORY.md").write_text(
         "## Guidelines\n"
         "- [guideline] **A real entry** — a lesson (2026-01-01)\n"
@@ -181,7 +181,8 @@ def test_health_counts_present_for_lifecycle_files_none_for_prose(tmp_path: Path
     assert "health_counts" in rows["MEMORY.md"]
     hc = rows["MEMORY.md"]["health_counts"]
     assert hc is not None
-    assert set(hc) == {"active", "dormant", "archived", "reclaimable", "duplicate"}
-    assert hc["active"] == 1
-    # Prose file → no decay entries → None (not a fake zero).
+    assert set(hc) == {"entries", "duplicate"}
+    assert hc["entries"] == 1
+    assert hc["duplicate"] == 0
+    # Prose file → no entries → None (not a fake zero).
     assert rows["SWARMAI.md"]["health_counts"] is None

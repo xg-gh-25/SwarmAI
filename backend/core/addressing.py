@@ -222,35 +222,6 @@ def unit_ids(project: str) -> set[str]:
 
 
 
-def record_cited(project: str, ids) -> int:
-    """Tell decay that the units *ids* name were used: a citation in a pipeline
-    document or an expert finding is the strongest "this entry earned its place"
-    signal there is. Recall used to be the only feed (``session_router`` records what
-    chat injects), so an entry a run relied on could still be archived as unused.
-    Records through ``ddd_usage.record_ddd_hit`` (its anchor, its file); only decay-
-    trackable entries count there. Returns how many were recorded; never raises."""
-    wanted = {str(i) for i in ids or () if i}
-    if not wanted:
-        return 0
-    try:
-        from datetime import date
-        from core.ddd_usage import entry_anchor_text, record_ddd_hit
-        seen: set[str] = set()
-        n = 0
-        table = ddd_units(project)
-        for u in _ranked([u for u in table.units if u.id in wanted]):
-            if u.id in seen:
-                continue                      # one hit per cited id: its best unit
-            seen.add(u.id)
-            anchor = entry_anchor_text(u.text)
-            if anchor:
-                record_ddd_hit(table.project, anchor, date.today())
-                n += 1
-        return n
-    except Exception:  # noqa: BLE001 -- usage bookkeeping never fails a run
-        logger.warning("addressing: usage of cited units not recorded", exc_info=True)
-        return 0
-
 # ── map ─────────────────────────────────────────────────────────────────────
 
 def _k(n: int) -> str:

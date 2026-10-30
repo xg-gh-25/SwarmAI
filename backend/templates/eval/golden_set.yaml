@@ -474,29 +474,6 @@ cases:
   gating: gate
   eval_method: programmatic
   validated_by_4gate: 5619cf391c7f04dc
-- id: DDD_NOISE
-  category: ddd
-  dimension: cognition
-  level: tool_call
-  title: The noise check tells a healthy project doc from a stale one
-  purpose:
-    en: The noise check tells a healthy project doc from one full of stale notes, and does not count dormant
-      principles as noise. If this breaks, cleanup is never suggested, or wrongly.
-    zh: 噪声检查能分清干净和满是过期条目的文档，休眠的原则不算噪声。坏了意味着该清理时不提示，或乱提示。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd noise'
-    expected_contains: DDD_NOISE_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd noise negative'
-    negative_expected_contains: DDD_NOISE_TEETH
-  evaluators:
-  - canary_pass
-  affected_by:
-  - backend/scripts/artifact_cli.py
-  - backend/core/ddd_entry_lifecycle.py
-  tier: stable
-  gating: gate
-  eval_method: programmatic
-  validated_by_4gate: 3f107fdf9f1258da
 - id: DDD_BOOTSTRAP
   category: ddd
   dimension: responsibility

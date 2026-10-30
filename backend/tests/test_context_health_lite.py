@@ -3,7 +3,7 @@
 Testing methodology: FastAPI TestClient (same pattern as test_hook_health_endpoint.py).
 The lite endpoint exists so the C&M Global Brain overlay's first paint is instant: it
 returns ONLY the calibrated token_block + a governance count, and MUST NOT run the heavy ops the full /context-health endpoint does
-(_ch_ddd_staleness / get_semantic_drift / _build_learning_dashboard). NOTE: the
+(_ch_ddd_staleness / _build_learning_dashboard). NOTE: the
 refresh_log key still exists in the full payload (default []) but its read op was
 removed with the auto_refresh module (run_781ffbd9); it remains in HEAVY_KEYS
 because the lite endpoint must still never surface it.
@@ -24,7 +24,7 @@ LITE = "/api/eval/context-health/lite"
 FULL = "/api/eval/context-health"
 
 # The 5 heavy fields the lite endpoint must NEVER include.
-HEAVY_KEYS = {"refresh_log", "staleness", "semantic_drift", "learning_dashboard", "weeks_available"}
+HEAVY_KEYS = {"refresh_log", "staleness", "learning_dashboard", "weeks_available"}
 LITE_KEYS = {"token_block", "governance_pending_count"}
 
 
@@ -116,7 +116,7 @@ class TestFullEndpointUnchanged:
         """AC7 regression: /context-health still returns the full schema."""
         body = client.get(FULL).json()
         # These keys are the full endpoint's contract for EvalDashboard.
-        for k in ("refresh_log", "staleness", "semantic_drift"):
+        for k in ("refresh_log", "staleness"):
             assert k in body, f"full endpoint lost key {k}"
 
     def test_neither_endpoint_carries_pending_proposals(self, client):

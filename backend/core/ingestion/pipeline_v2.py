@@ -306,12 +306,12 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
             conn.close()
 
 
-# A "supersedes" edge hides its object from MEMORY injection. Only S4 may declare one: its
-# replacement is computed by the deterministic drift grammar from a commit. A unit an agent
-# or a model wrote (S1, S3, S7, the extractors) may name a related entry, never retire one:
-# measured on 2026-10-30, 10 of the 16 supersedes edges from model judgement paired the wrong
-# entries, and an agent that read injected text could otherwise hide any MEMORY entry.
-_SUPERSEDES_SOURCES = frozenset({"S4"})
+# A "supersedes" edge only links two entries: nothing is hidden for it (an entry another one
+# replaces leaves the file by a declared override, overrides.py). A unit from a model may name
+# a related entry, recorded as derived_from: measured on 2026-10-30, 10 of the 16 supersedes
+# edges from model judgement paired the wrong entries. No source may declare one since the
+# drift-fix path (the only S4 producer of one) was removed.
+_SUPERSEDES_SOURCES: frozenset[str] = frozenset()
 
 
 def _check_overrides(unit, row, root, destination, corpus_project, resolved):

@@ -4,9 +4,8 @@ Covers:
   - ``jobs.cli_result`` pure helpers (version parse, per-model CLI floor, API-error
     classification into auth / transient / error)
   - ``model_registry.min_cli_version_for`` across short / Bedrock / ``[1m]`` forms
-  - the three job CLI launch sites: ``executor._handle_agent_task``,
-    ``executor._send_slack_dm`` (CLI tier) and ``handlers.ddd_self_audit``
-    (``_classify_review_result`` + preflight)
+  - the job CLI launch sites: ``executor._handle_agent_task`` and
+    ``executor._send_slack_dm`` (CLI tier)
 
 Method: drive the REAL handlers with only the leaf boundaries replaced (the CLI
 subprocess, credential/auth probes, the estimation learner's file write).
@@ -170,39 +169,3 @@ class TestSlackCliTier:
     def test_normal_send_still_true(self):
         ok, _ = self._send("Message sent.")
         assert ok is True
-
-
-# ── handlers.ddd_self_audit ─────────────────────────────────────────────
-
-class TestSelfAuditClassifier:
-    def test_exit0_api_error_is_failed(self):
-        from jobs.handlers.ddd_self_audit import _classify_review_result
-
-        v = _classify_review_result(0, {"is_error": True, "result": "API Error: 400 model not supported"}, "")
-        assert v["status"] == "failed"
-        assert "API Error: 400" in v["error_detail"]
-
-    def test_all_projects_failing_is_not_a_success(self, tmp_path, monkeypatch):
-        """If every per-project review comes back as an API error, the job failed."""
-        import jobs.handlers.ddd_self_audit as audit
-        from jobs import executor
-
-        monkeypatch.setattr(audit, "_discover_ddd_projects", lambda: [("P", tmp_path)])
-        monkeypatch.setattr(audit, "_is_code_backed", lambda _d: False)
-        monkeypatch.setattr(audit, "_build_audit_prompt", lambda *a: "audit")
-        out = json.dumps({"is_error": True, "result": "API Error: 400 model not supported"})
-        with patch.object(executor, "_resolve_claude_cli", return_value="/usr/bin/claude"), \
-             patch.object(executor, "_check_claude_auth", return_value=None), \
-             patch.object(executor, "_get_aws_credentials", return_value={}), \
-             patch.object(executor, "_cli_version", return_value=(2, 1, 302)), \
-             patch.object(executor, "_load_mcp_config", return_value={}), \
-             patch.object(executor, "_write_job_result", return_value=None), \
-             patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=out, stderr="")):
-            res = audit.run_ddd_self_audit({})
-        assert res["status"] == "failed"
-        assert "API Error: 400" in res["summary"] and res["error"].startswith("review_failed")
-
-    def test_clean_result_unchanged(self):
-        from jobs.handlers.ddd_self_audit import _classify_review_result
-
-        assert _classify_review_result(0, {"result": "no drift found"}, "")["status"] == "clean"

@@ -8,7 +8,7 @@ Runs ONLY by hand, with the owner's consent: it reads ``~/.swarm-ai/data.db``.
 Never in CI. Every guarantee below is enforced in this file:
 
 - Read-only: ``sqlite3.connect`` is wrapped so every file database opens with
-  ``mode=ro``; ``record_ddd_hit`` and ``record_recall_metric`` are no-ops.
+  ``mode=ro``; ``record_recall_metric`` is a no-op.
 - No future leak in the session leg: each data.db connection made while a
   message is replayed gets a TEMP view ``messages`` that shadows the real table
   and holds only rows created before that message. The Library index has no
@@ -75,13 +75,11 @@ def _install(session_budget: int | None = None) -> None:
     ``session_budget`` overrides the per-session recall budget, to measure it."""
     sqlite3.connect = _ro_connect
     import core.recall_metrics as rm
-    import core.ddd_usage as du
     import core.memory_index as mi
     from core import session_router as sr
     from core.session_recall import SessionRecall
 
     rm.record_recall_metric = lambda *a, **k: None
-    du.record_ddd_hit = lambda *a, **k: None
     # Cached instances would keep a connection opened before the cutoff changed.
     mi._get_session_recall = lambda path: SessionRecall(path)
     real_body = sr._unified_recall_body

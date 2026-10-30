@@ -2,9 +2,8 @@
 Swarm Job System — model resolution (the ONE SSOT for every job CLI).
 
 Every headless `claude --print` command in the job system takes its `--model`
-argument from :func:`resolve_job_model`. There are three such call sites (the
-agent_task main path, the Slack-DM path, and the ddd_self_audit handler), and
-they each used to carry their own hardcoded ``"--model", "sonnet"``.
+argument from :func:`resolve_job_model`. Its call sites (the agent_task main path
+and the Slack-DM path) each used to carry their own hardcoded ``"--model", "sonnet"``.
 
 WHY THAT BROKE: a bare family alias has neither the Bedrock inference-profile
 prefix nor the ``[1m]`` suffix, and that suffix is the CLI's signal to open the
@@ -20,10 +19,8 @@ WHY THIS IS ITS OWN LEAF MODULE, not a function in ``executor.py``: importing
 ``_fix_path_from_login_shell()`` (a ``zsh -lic`` subprocess, timeout 10s) and
 REPLACES ``os.environ["PATH"]``. Having a handler import the resolver from
 ``executor`` therefore dragged that subprocess into pytest collection (clobbering
-PATH for the whole test process) and onto an HTTP request path
-(``core/ddd_drift_signal.py`` lazy-imports the handler, reached from
-``routers/eval.py``). A leaf module keeps the resolver reachable with zero side
-effects. Found by adversarial review, not by the tests.
+PATH for the whole test process). A leaf module keeps the resolver reachable with
+zero side effects. Found by adversarial review, not by the tests.
 """
 
 from __future__ import annotations

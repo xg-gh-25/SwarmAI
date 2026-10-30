@@ -6,7 +6,7 @@ Through the real CLI rig:
 - every review handout carries a map (full for correctness, brief for the others) and
   the project name, so a finding may cite a unit the expert found itself;
 - a finding citing an on-demand unit keeps the ref; a made-up id is dropped and the
-  finding still counts; the cited unit's usage is recorded for decay;
+  finding still counts;
 - REQUIREMENTS / DESIGN_SPEC may cite a unit of the DDD (archives included) besides
   the recalled ones; a made-up id is refused; REPORT counts both kinds and the searches.
 """
@@ -15,7 +15,6 @@ import json
 import pytest
 
 from core import addressing
-from core.ddd_usage import entry_anchor_text
 from core.run_protocol import run_knowledge as rk
 from core.run_protocol.documents import DocumentError
 from core.run_protocol.schemas import validate_design_spec
@@ -43,11 +42,6 @@ def _handouts(r: Rig) -> list[dict]:
 
 def _prompt(h) -> str:
     return open(h["path"], encoding="utf-8").read()
-
-
-def _usage(r: Rig) -> dict:
-    p = r.ws / "Projects" / PROJECT / ".ddd-usage.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 
 
 def test_knowledge_md_carries_the_map_only_with_a_ddd(tmp_path, monkeypatch):
@@ -115,7 +109,6 @@ def test_a_finding_may_cite_a_unit_found_on_demand(tmp_path, monkeypatch):
     occ = {o["claim"]: o for o in (e["payload"] for e in r.events() if e["kind"] == "finding_occ")}
     assert occ["add lacks a docstring"]["knowledge_ref"] == other.id
     assert "knowledge_ref" not in occ["add lacks a type hint"]
-    assert entry_anchor_text(other.text) in _usage(r)
 
 
 def test_documents_may_cite_ddd_units_and_report_counts_both(tmp_path, monkeypatch):
@@ -131,8 +124,6 @@ def test_documents_may_cite_ddd_units_and_report_counts_both(tmp_path, monkeypat
     with pytest.raises(DocumentError) as exc:
         eng._check_knowledge_refs({"knowledge_refs": [other, "deadbeef"]}, "RQ-5")
     assert "deadbeef" in str(exc.value) and "knowledge find" in str(exc.value)
-    eng._record_citations({"knowledge_refs": [other]})
-    assert entry_anchor_text(addressing.get(PROJECT, other).text) in _usage(r)
     art = eng.run_dir / "artifacts"
     (art / "requirements.json").write_text(json.dumps({"knowledge_refs": [recalled]}))
     (art / "design_spec.json").write_text(json.dumps({
@@ -162,9 +153,9 @@ def test_design_spec_knowledge_checked_shape(variant):
     assert issues([{"query": "x", "extra": 1}])
 
 
-def test_stage_complete_records_the_cited_units_usage(tmp_path, monkeypatch):
+def test_stage_complete_accepts_a_unit_found_on_demand(tmp_path, monkeypatch):
     """Through the real EVALUATE completion: a REQUIREMENTS citing a unit found on demand
-    is accepted and the unit's usage is recorded (the stage write path, not a direct call)."""
+    is accepted, a made-up id refused (the stage write path, not a direct call)."""
     from tests.pipeline_v1_rig import documents
     r = Rig(tmp_path, monkeypatch, profile="full")
     _with_ddd(r)
@@ -172,7 +163,6 @@ def test_stage_complete_records_the_cited_units_usage(tmp_path, monkeypatch):
     other = addressing.find(PROJECT, "quokkas midnight").units[0]
     req = {**documents("full")["evaluate"], "knowledge_refs": [other.id]}
     assert r.v1("stage-complete", "--artifact", r.artifact("requirements", req)).get("ok") is True
-    assert entry_anchor_text(other.text) in _usage(r)
     bad = {**documents("full")["evaluate"], "knowledge_refs": ["deadbeef"]}
     r2 = Rig(tmp_path / "b", monkeypatch, profile="full")
     _with_ddd(r2)

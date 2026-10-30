@@ -6,7 +6,7 @@ Pipeline runs are not here: Pipeline v1 runs live in ``"$SWARM_BACKEND_BIN" pipe
 
 Usage:
     python artifact_cli.py bind --project SwarmAI
-    python artifact_cli.py ddd-health|ddd-retire|ddd-noise ...
+    python artifact_cli.py ddd-health|ddd-format ...
     python artifact_cli.py release-gate --poll|--status|--verify|--clear [--ref v1.2.3]
 
 Public symbols:
@@ -645,110 +645,6 @@ def cmd_ddd_health(args, reg) -> None:
     print(json.dumps(result, indent=2, default=str))
 
 
-def cmd_ddd_retire(args, reg) -> None:
-    """Report the one named retirement candidate without mutating the corpus.
-
-    CDF stage B retires the legacy apply path. User edits go through
-    governed_edit and automated maintenance is read-only.
-    """
-    from core.ddd_entry_lifecycle import retire_entry, RetireError, MEMORY_EVERGREEN_SECTIONS
-
-    ws = _get_workspace()
-    p = Path(args.file)
-    if not p.is_absolute():
-        p = ws / args.file
-    if not p.exists():
-        print(json.dumps({"error": f"file not found: {p}"}), file=sys.stderr)
-        sys.exit(1)
-
-    content = p.read_text(encoding="utf-8")
-    archive_name = args.archive_name or (
-        "MEMORY-archive.md" if p.name == "MEMORY.md" else "IMPROVEMENT-archive.md"
-    )
-    try:
-        report = retire_entry(
-            content, title=args.title, section=args.section,
-            project_dir=p.parent, archive_name=archive_name,
-            source_path=None, force=bool(args.force),
-            # MEMORY.md's evergreen sections (Open Threads, Standing Preferences,
-            # etc.) need --force parity with the autonomous reclaim path.
-            evergreen_sections=MEMORY_EVERGREEN_SECTIONS if p.name == "MEMORY.md" else None,
-        )
-    except RetireError as e:
-        print(json.dumps({"error": str(e), "retired": False}), file=sys.stderr)
-        sys.exit(1)
-
-    print(json.dumps({
-        "retired": False,
-        "dry_run": True,
-        "candidate": report.candidates[0] if report.candidates else None,
-        "archived": [],
-        "archive_file": archive_name,
-        "hint": "report only — edit through governed workspace APIs",
-    }))
-
-
-def cmd_ddd_noise(args, reg) -> None:
-    """Per-doc DDD noise gate (M0 ②): reclaimable noise_rate + PASS/FAIL verdict.
-
-    Measures the GATE metric (raw noise MINUS keep-class) so a doc heavy in
-    permanent-but-dormant knowledge (COE/principles) doesn't FAIL spuriously.
-    Verdict string (PASS/FAIL) is in stdout for the golden_set canary to assert.
-    Always exits 0 — the canary keys off the string, not the exit code.
-    """
-    from datetime import date
-    from core.ddd_entry_lifecycle import (
-        parse_entries, compute_reclaimable_noise, NOISE_FAIL_THRESHOLD,
-        MEMORY_EVERGREEN_SECTIONS,
-    )
-
-    ws = _get_workspace()
-    today = date.today()
-
-    # Build the doc list: --doc (one file) or default scan (MEMORY + all IMPROVEMENT).
-    docs: list[tuple[str, "Path", "frozenset[str] | None"]] = []
-    if getattr(args, "doc", None):
-        p = Path(args.doc)
-        if not p.is_absolute():
-            p = ws / args.doc
-        ever = MEMORY_EVERGREEN_SECTIONS if p.name == "MEMORY.md" else None
-        docs.append((args.doc, p, ever))
-    else:
-        mem = ws / ".context" / "MEMORY.md"
-        if mem.exists():
-            docs.append(("MEMORY.md", mem, MEMORY_EVERGREEN_SECTIONS))
-        proj_dir = ws / "Projects"
-        if proj_dir.is_dir():
-            for imp in sorted(proj_dir.glob("*/IMPROVEMENT.md")):
-                docs.append((str(imp.relative_to(ws)), imp, None))
-
-    results = []
-    worst_fail = False
-    for name, path, ever in docs:
-        if not path.exists():
-            results.append({"doc": name, "error": "not found"})
-            continue
-        report = compute_reclaimable_noise(
-            parse_entries(path.read_text(encoding="utf-8")), today,
-            evergreen_sections=ever,
-        )
-        verdict = "FAIL" if report.noise_rate > NOISE_FAIL_THRESHOLD else "PASS"
-        if verdict == "FAIL":
-            worst_fail = True
-        results.append({
-            "doc": name, "total": report.total, "noisy": report.noisy,
-            "noise_rate": round(report.noise_rate, 4), "verdict": verdict,
-        })
-
-    print(json.dumps({
-        "threshold": NOISE_FAIL_THRESHOLD,
-        "overall": "FAIL" if worst_fail else "PASS",
-        "docs": results,
-    }, indent=2))
-
-
-
-
 def _refuse_if_worktree_copy(script: str) -> None:
     """A copy of this tool inside a run worktree must never write the workspace that
     owns that worktree (it may be half-edited). Against another workspace (a test's
@@ -826,19 +722,6 @@ def main() -> None:
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
 
-    # ddd-retire (run_186a5f15: agent-directed named-entry RETIRE — knowledge 'out' side)
-    p_ddd_retire = sub.add_parser("ddd-retire", help="Report ONE named (title,section) retirement candidate; never mutates")
-    p_ddd_retire.add_argument("--file", required=True, help="Doc path (relative to workspace or absolute), e.g. .context/MEMORY.md or Projects/X/IMPROVEMENT.md")
-    p_ddd_retire.add_argument("--title", required=True, help="Exact entry title (the bold text after the [type] tag)")
-    p_ddd_retire.add_argument("--section", required=True, help="Exact '## Section' the entry lives under")
-    p_ddd_retire.add_argument("--archive-name", dest="archive_name", default=None, help="Archive filename (default MEMORY-archive.md for MEMORY.md, else IMPROVEMENT-archive.md)")
-    p_ddd_retire.add_argument("--force", action="store_true", help="Retire even a keep-class entry (decision/model/principle/correction/COE)")
-
-    # ddd-noise (M0 ②: per-doc reclaimable-noise gate)
-    p_ddd_noise = sub.add_parser("ddd-noise", help="Per-doc DDD noise gate (reclaimable noise_rate + PASS/FAIL)")
-    p_ddd_noise.add_argument("--project", default=None, help="(unused; scans MEMORY + all IMPROVEMENT by default)")
-    p_ddd_noise.add_argument("--doc", default=None, help="Single doc path (relative to workspace or absolute)")
-
     # release-gate (run_9fec1fb1: code-enforced CI-green gate for s_swarm-release 7b)
     p_rel_gate = sub.add_parser("release-gate", help="CI-green gate: poll CI for HEAD, write marker on green (authorizes gh release create)")
     p_rel_gate.add_argument("--project", default="SwarmAI", help="Project owning the marker (default SwarmAI)")
@@ -861,8 +744,6 @@ def main() -> None:
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-format": cmd_ddd_format,
         "ddd-health": cmd_ddd_health,
-        "ddd-retire": cmd_ddd_retire,
-        "ddd-noise": cmd_ddd_noise,
         "release-gate": cmd_release_gate,
     }
     try:

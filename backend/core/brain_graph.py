@@ -2,15 +2,15 @@
 
 DoD2 (goal run_d0ba3f69). The Memory tab shows the agent's sedimented judgment as
 a 7-type ontology: principle / correction / decision / guideline / pitfall /
-process / model. Each type is a NODE (size = entry count, split active/dormant);
+process / model. Each type is a NODE (size = entry count; every entry in the file is
+in force, so there is no active/dormant split);
 clicking a node drills the latest-10 entries of that type.
 
 **Data source (Gate-1 correction #3):** the 7 node types come from
 `Counter(entry_type)` over `parse_entries(MEMORY.md)` using `VALID_TYPES` — NOT
 `knowledge_graph.py`, which is an EDGE/relation store (subject-predicate-object,
 10 relation predicates) with no node-type concept. This reuses the exact pattern
-already proven in `eval._build_learning_dashboard` (parse_entries + entry_type +
-decay_state). Backend-primary: every count is served, the frontend invents none (R30).
+already proven in `eval._build_learning_dashboard` (parse_entries + entry_type). Backend-primary: every count is served, the frontend invents none (R30).
 """
 from __future__ import annotations
 
@@ -54,8 +54,8 @@ def build_brain_graph(memory_content: str) -> dict:
 
     Returns:
         {
-          "nodes": [{"type", "count", "active", "dormant"} × 7],  # ALL 7 types, stable order
-          "drill": {type: [{"title","status","meta","ref_count"} × <=10 latest]},
+          "nodes": [{"type", "count"} × 7],  # ALL 7 types, stable order
+          "drill": {type: [{"title","meta"} × <=10 latest]},
           "total": int,
         }
 
@@ -84,10 +84,7 @@ def build_brain_graph(memory_content: str) -> dict:
     # appears exactly once — only the sequence changes.
     nodes = []
     for t in MEMORY_DISPLAY_ORDER:
-        items = by_type[t]
-        active = sum(1 for e in items if e.decay_state == "active")
-        dormant = sum(1 for e in items if e.decay_state in ("dormant", "archived"))
-        nodes.append({"type": t, "count": counts[t], "active": active, "dormant": dormant})
+        nodes.append({"type": t, "count": counts[t]})
 
     # Drill: latest N per type. parse_entries returns DOCUMENT order (top→bottom),
     # and MEMORY.md's auto-writer PREPENDS entries newest-at-TOP (context_health_hook
@@ -100,8 +97,6 @@ def build_brain_graph(memory_content: str) -> dict:
         drill[t] = [
             {
                 "title": e.title,
-                "status": e.decay_state,
-                "ref_count": e.ref_count,
                 # meta: a short human hint (last-referenced date if known, else section)
                 "meta": (e.last_referenced.isoformat() if e.last_referenced else e.section or ""),
             }
@@ -123,12 +118,11 @@ def build_evolution_graph(evolution_content: str) -> dict:
     become 'entry' noise nodes).
 
     Two honest structural differences from the memory graph (do NOT paper over):
-    - EVOLUTION.md has NO decay layer (zero `decay:` markers), so nodes are
-      COUNT-ONLY: active == count, dormant == 0. No fabricated active/dormant split.
+    - Nodes are count-only, like the memory graph.
     - Node kinds are the evolution vocabulary (EVOLUTION_DISPLAY_ORDER), not the
       7-type ontology.
 
-    Returns {nodes:[{type,count,active,dormant}], drill:{kind:[...]}, total} with
+    Returns {nodes:[{type,count}], drill:{kind:[...]}, total} with
     ALL EVOLUTION_DISPLAY_ORDER kinds present (stable shape, even zero-count), nodes
     in display-priority order. Newest-first within a kind (document order = the
     registry's newest-at-top convention). Never raises on malformed content."""
@@ -159,12 +153,11 @@ def build_evolution_graph(evolution_content: str) -> dict:
     nodes = []
     for k in EVOLUTION_DISPLAY_ORDER:
         count = len(by_kind.get(k, []))
-        # Count-only: no decay layer in EVOLUTION.md, so active==count, dormant==0.
-        nodes.append({"type": k, "count": count, "active": count, "dormant": 0})
+        nodes.append({"type": k, "count": count})
 
     drill: dict[str, list[dict]] = {}
     for k in EVOLUTION_DISPLAY_ORDER:
         headers = by_kind.get(k, [])[:_DRILL_LIMIT]  # document order = newest-first
-        drill[k] = [{"title": h, "status": "archived", "ref_count": 0, "meta": ""} for h in headers]
+        drill[k] = [{"title": h, "meta": ""} for h in headers]
 
     return {"nodes": nodes, "drill": drill, "total": sum(len(v) for v in by_kind.values())}

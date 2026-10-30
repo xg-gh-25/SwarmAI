@@ -325,7 +325,7 @@ async def get_context_health_lite():
 
     Returns ONLY the two things the overlay needs on open — the calibrated
     token_block (Context tab + load rail) and a governance-pending count (Approve). It deliberately does NOT run the
-    heavy read ops the full endpoint does (_ch_ddd_staleness, get_semantic_drift,
+    heavy read ops the full endpoint does (_ch_ddd_staleness,
     _build_learning_dashboard) — those stay on GET /context-health, which has no
     UI reader since the Eval overlay dropped its Context Health tab. (The old read_refresh_log op was removed with
     the auto_refresh module, run_781ffbd9.)
@@ -364,26 +364,20 @@ async def get_context_health():
     """Read-only context freshness report for the Eval dashboard.
 
     Returns recent auto-refresh activity (Layer 1 applied fixes) +
-    DDD staleness signals + semantic drift.
+    DDD staleness signals.
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
 
-    # Default drift signal — ALWAYS present in the response so the frontend never
-    # accesses an undefined key (Gate-1: a swallowed backend error must not crash the tab).
-    _empty_drift = {"report_date": None, "findings": [], "drift_count": 0, "at_risk_cases": []}
-
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"refresh_log": [], "staleness": [],
-                "weeks_available": 0, "semantic_drift": _empty_drift}
+        return {"refresh_log": [], "staleness": [], "weeks_available": 0}
 
     root = Path(ws_path)
     result = {
         "refresh_log": [],
         "staleness": [],
         "weeks_available": 0,
-        "semantic_drift": _empty_drift,
     }
 
     # 1. auto-refresh log READ REMOVED (run_781ffbd9): the auto_refresh module was
@@ -402,27 +396,6 @@ async def get_context_health():
         ]
     except Exception as exc:
         logger.debug("context-health: staleness check failed: %s", exc)
-
-    # 3b. DDD SEMANTIC drift (ddd-self-audit findings) + at-risk golden cases.
-    # Distinct from #2 staleness (that is ddd_refresh's SYNTACTIC mtime signal); this is
-    # the LLM self-audit's semantic-contradiction findings, and it maps each finding to
-    # the golden cases whose affected_by depends on the drifted doc — drift influences
-    # eval through the EXISTING affected_by chain, no new score. Computed LIVE (R30#4).
-    try:
-        from core.ddd_drift_signal import get_semantic_drift, map_at_risk_cases
-        from core.eval_service import get_eval_service
-
-        drift = get_semantic_drift(root)
-        try:
-            cases = get_eval_service().get_golden_set()["cases"]
-            drift["at_risk_cases"] = map_at_risk_cases(drift["findings"], cases)
-        except Exception as exc:
-            logger.debug("context-health: at-risk mapping failed: %s", exc)
-            drift["at_risk_cases"] = []
-        result["semantic_drift"] = drift
-    except Exception as exc:
-        logger.debug("context-health: semantic drift read failed: %s", exc)
-        # result["semantic_drift"] keeps the _empty_drift default set above.
 
     # 4. Learning Dashboard — knowledge growth metrics (source:auto|manual)
     try:
@@ -449,7 +422,7 @@ async def get_context_health():
 
 
 def _build_learning_dashboard(root) -> dict:
-    """Build learning metrics from DDD entry metadata (source tags + decay states).
+    """Build learning metrics from DDD entry metadata (source tags).
 
     Scans IMPROVEMENT.md and TECH.md for entries with metadata comments.
     Returns counts for GET /context-health's learning block.
@@ -464,8 +437,6 @@ def _build_learning_dashboard(root) -> dict:
     manual_count = 0
     legacy_count = 0  # entries without source tag
     distribution: dict[str, int] = {}
-    dormant_count = 0
-    archived_count = 0
 
     # Scan project DDD docs
     if projects_dir.is_dir():
@@ -489,11 +460,6 @@ def _build_learning_dashboard(root) -> dict:
                             legacy_count += 1
                         # Count by doc (distribution)
                         distribution[doc_name] = distribution.get(doc_name, 0) + 1
-                        # Decay activity
-                        if entry.decay_state == "dormant":
-                            dormant_count += 1
-                        elif entry.decay_state == "archived":
-                            archived_count += 1
                 except Exception:
                     continue
 
@@ -511,10 +477,6 @@ def _build_learning_dashboard(root) -> dict:
                 else:
                     legacy_count += 1
                 distribution["MEMORY.md"] = distribution.get("MEMORY.md", 0) + 1
-                if entry.decay_state == "dormant":
-                    dormant_count += 1
-                elif entry.decay_state == "archived":
-                    archived_count += 1
         except Exception:
             pass
 
@@ -530,10 +492,6 @@ def _build_learning_dashboard(root) -> dict:
             "legacy": legacy_count,
         },
         "distribution": distribution,
-        "decay": {
-            "dormant": dormant_count,
-            "archived": archived_count,
-        },
     }
 
 
@@ -612,7 +570,7 @@ async def get_brain_graph(source: str = "memory"):
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
-        return {"nodes": [{"type": t, "count": 0, "active": 0, "dormant": 0} for t in display_order],
+        return {"nodes": [{"type": t, "count": 0} for t in display_order],
                 "drill": {t: [] for t in display_order}, "total": 0}
 
     file_path = Path(ws_path) / ".context" / fname

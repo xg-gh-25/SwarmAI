@@ -1,33 +1,21 @@
-"""DDD Entry Lifecycle — per-entry knowledge tracking, decay, and archival.
+"""DDD Entry Lifecycle — per-entry parsing, typing and metadata for knowledge docs.
 
-Per-entry reference tracking for DDD knowledge documents (primarily IMPROVEMENT.md).
-Each bullet entry can have:
-- Type classification: [guideline], [pitfall], [decision], [model], [process]
-- Reference count: how many times this entry influenced a decision
-- Last referenced date: when this entry was last used
-- Decay state: active → dormant → archived
+Each bullet entry of a DDD doc or a context file can carry:
+- a type tag: [guideline], [pitfall], [decision], [model], [process], [principle], [correction]
+- a metadata comment ``<!-- ref:N | last:<date> | decay:<state> | source:… | taint:… -->``
 
-Decay rules (see DORMANT_THRESHOLD_DAYS / ARCHIVED_THRESHOLD_DAYS below — the SoT):
-- active → dormant: 60 days without reference (tunable per-doc, e.g. 45 for MEMORY.md)
-- dormant → archived: 90 days TOTAL since last reference (NOT additional-after-dormant)
-- New entries (< 30 days old): immune to decay (grace period)
-- Evergreen sections: entries within are immune
-- Evergreen TYPES (the 5 judgment types — decision/model/principle/correction/pitfall):
-  immune regardless of age (Step 3, run_123652ae). Only guideline/process age-decay.
-  (The ref>=10 "2x grace" and the 90/180 windows were removed 2026-06; ref_count has
-   no live producer, so decay is age + evergreen-section + evergreen-type + grace — see assess_decay.)
+Nothing decays with age any more: what is in a main file is in force, and an entry
+leaves it only by an override or a withdrawal (design docs/design/2026-10-30-brain-
+driven.md §2.3). ``ref``/``last``/``decay`` stay as the fixed prefix of the metadata
+comment that many parsers key on; ``source`` and ``taint`` are the live segments.
 
 Public API:
     EntryMetadata        — dataclass for per-entry state
-    DecayTransition      — dataclass for state change records
-    NoiseReport          — dataclass for per-doc noise measurement
     parse_entries(content) → list[EntryMetadata]
     split_entries(body) → list[str]  (recall's entry splitter)
     inject_entry_metadata(content, entries) → str
-    bump_references(entries, text, today) → int
-    assess_decay(entries, today) → list[DecayTransition]
-    compute_entry_noise(entries, today) → NoiseReport
     classify_entry_type(text) → str
+    reclaim_duplicate_entries(...) → ReclaimReport  (exact duplicates, read-only)
 """
 
 import hashlib
@@ -71,20 +59,10 @@ MEMORY_ACTIVE_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v["l
 MEMORY_PREFIX_MAP = {k: v["prefix"] for k, v in MEMORY_SECTIONS.items()}
 MEMORY_PREFIX_TO_SECTION = {v["prefix"]: k for k, v in MEMORY_SECTIONS.items()}
 
-# ── KNOWLEDGE.md Evergreen Sections ───────────────────────────────────────────
+# ── KNOWLEDGE.md / EVOLUTION.md Evergreen Sections ────────────────────────────
 #
-# UNLIKE MEMORY (which accumulates disposable operational churn — GUI/PIT — that
-# SHOULD decay), KNOWLEDGE.md is almost ENTIRELY load-bearing reference: the
-# runtime Self-Identity Anchor, context-file assembly specs, hook/pipeline/schema
-# architecture. Those entries are typed `guideline`/`pitfall` (not a keep-TYPE),
-# so is_keep_class would NOT protect them — reclaim would select (before CDF:
-# archive+strip) mission-critical facts after dormancy (Gate-1 CRITICAL, run_a1ec08e7: verified
-# ~23 reference entries were strip-eligible). This frozenset protects EVERY real
-# reference section by name; only genuinely disposable non-reference sections
-# (e.g. scratch notes) and the auto-managed "Knowledge Index" fall through to
-# reclaim. Section names are matched by their FULL header text (incl. any
-# `[model]`/`[guideline]` tag suffix), as parse_entries records `section`.
-# When a new reference section is added to KNOWLEDGE.md, add it here.
+# Reference sections by full header text, as parse_entries records `section`.
+# Read by the duplicate selector's callers; nothing ages out of any section.
 KNOWLEDGE_EVERGREEN_SECTIONS = frozenset({
     "Architecture Overview [model]",
     "The 12 Context Files [model]",
@@ -98,27 +76,6 @@ KNOWLEDGE_EVERGREEN_SECTIONS = frozenset({
     "Job System [model]",
 })
 
-# ── EVOLUTION.md Evergreen Sections (run_2816ab1c) ────────────────────────────
-#
-# EVOLUTION.md had ZERO lifecycle integration before this — it accreted forever
-# (its Corrections Captured section is managed SEPARATELY by
-# evolution_maintenance_hook.fold_corrections, which folds narrative DATA-POINT
-# sub-bullets, NOT age-decays entries).
-#
-# DESIGN DECISION (user directive, run_2816ab1c): EVOLUTION is FULLY evergreen for
-# AGE-DECAY — EVERY section is listed here, so no O-entry is ever archived merely
-# for being old-and-unreferenced. The lifecycle wiring runs ONLY the exact-dup
-# DEDUP sweep on EVOLUTION (never age-reclaim). Rationale (Principle 1 — value, not
-# age, decides survival): the "Optimizations Learned" O-entries are DISTILLED
-# operational wisdom (O030 disaster-recovery doctrine, O025 "know your runtime",
-# O009 "mock≠reality"), closer to KNOWLEDGE's load-bearing reference than to
-# MEMORY's disposable GUI/PIT churn. They carry no `created_date` metadata (only
-# prose dates) and EVOLUTION has no usage→ref bridge, so age-decay would treat them
-# as infinitely-old ref:0 noise and strip ALL of them — burying hard-won judgment
-# because a counter never ticked (exactly the Principle-1 failure). Size control
-# for EVOLUTION is fold_corrections (owns the huge Corrections section) + dedup, NOT
-# age-decay. is_keep_class ALSO protects by TYPE inside any section (defence in
-# depth); this frozenset is the section-level layer and now covers all 7 sections.
 EVOLUTION_EVERGREEN_SECTIONS = frozenset({
     'Design Philosophy — What "Evolution" Means',
     "Capabilities Built",
@@ -140,54 +97,6 @@ MEMORY_TYPE_TO_SECTION: dict[str, str] = {
     "process": "Processes",
     "model": "Models",
 }
-
-# Grace period: new entries are immune to decay
-GRACE_PERIOD_DAYS = 30
-
-# Decay thresholds (days since last reference). Tightened 90/180 -> 60/150
-# (run_186a5f15) -> archived 150->90 (run_2816ab1c, user directive): let archive
-# ACTUALLY trigger on a high-recall brain (pure-time 150d was rarely reached).
-# ARCHIVED is TOTAL days-since-ref (60 idle -> dormant, then 30 more -> archived at
-# 90 total), NOT additional-after-dormant — dormant→archived keeps a 30d buffer.
-# Archived entries stay FTS5-recallable (knowledge_store indexes Archives) — this
-# only stops always-injection sooner, it does not drop anything from recall.
-DORMANT_THRESHOLD_DAYS = 60
-ARCHIVED_THRESHOLD_DAYS = 90
-
-# Types that are EVERGREEN BY TYPE for AGE-DECAY (Step 3, run_123652ae): a real
-# judgment lesson must never be buried on a timer merely for not being recalled
-# (Principle 1 — a brain that forgets its best judgment because a counter didn't
-# tick is failing). assess_decay treats these as immune to active→dormant→archived
-# age transitions, exactly like an evergreen SECTION. guideline/process (operational
-# notes) still age-decay normally. Safe because the intake gate (Step 1: dedup +
-# value floor) + the one-time cleanse (Step 2) guarantee LIVE judgment entries are
-# real, not silt. Genuine staleness is handled by evidence-based retire, NEVER by
-# silent age-death.
-#
-# The set is ALL five judgment types (cognitive + meta-cognitive): decision, model
-# (cognitive) + principle, correction (meta-cognitive) + pitfall (hard-won failure
-# lesson). Only OPERATIONAL types (guideline, process) age-decay. Rationale for
-# including principle/model too (Gate-2 axis-2, run_123652ae): the Principle-1
-# argument — "judgment must not be buried on a timer" — is STRONGEST for the
-# meta-cognitive layer, so it would be incoherent to keep `correction` evergreen but
-# let `principle` age out. This makes EVERGREEN_TYPES = _KEEP_TYPES ∪ {pitfall}.
-#
-# ⚠️ STILL DELIBERATELY DISTINCT from _KEEP_TYPES (below, ~line 946) — they govern
-# DIFFERENT actions and differ on `pitfall`:
-#   • EVERGREEN_TYPES → "never AGE-DECAY" (retention / hot-context recall-priority).
-#     INCLUDES pitfall — the dominant hard-won failure-lesson type (294 across DDDs;
-#     the MEMORY [PIT##] entries are real lessons, not churn — the old A2 "PIT is
-#     fast-churn noise" premise was wrong; guideline is the fast-churn type).
-#   • _KEEP_TYPES → "never RECLAIM-STRIP" (the harsher physical removal). EXCLUDES
-#     pitfall (a legacy pre-stamped-dormant pitfall stays reclaim-eligible — that's
-#     how Step-2-era archived noise is removable).
-# Do NOT collapse them into one set — dropping pitfall from EVERGREEN_TYPES re-breaks
-# retention; adding it to _KEEP_TYPES re-breaks reclaim of legacy archived noise.
-EVERGREEN_TYPES = frozenset({"decision", "model", "principle", "correction", "pitfall"})
-
-# High-ref entries (ref >= HIGH_REF_THRESHOLD) get extended grace (2x)
-HIGH_REF_THRESHOLD = 10
-HIGH_REF_MULTIPLIER = 2
 
 # Type classification signal words (order matters — first match wins)
 # NOTE: Signals must be distinctive. Common words like "→", "pipeline", "step"
@@ -268,8 +177,8 @@ _ID_LEAD_PAT = r"\[[A-Z]{2,4}\d{1,3}\]"
 # before matching, so recall must too — P8 same-vocabulary-both-doors).
 _TYPE_LEAD_PAT = r"(?i:\[(?:" + "|".join(VALID_TYPES) + r")\])"
 
-# Prose-inclusive matcher — OPT-IN, used ONLY by the deliberate, by-name ddd-retire
-# path (parse_entries(include_prose=True) + _strip_entries(..., include_prose=True)).
+# Prose-inclusive matcher — OPT-IN (parse_entries(include_prose=True)); no production
+# caller uses it since the by-name retire path was removed.
 # Tolerates an OPTIONAL leading run of EMOJI/STATUS glyphs (🟡🟢🔵✅⚠️… VS16/ZWJ-aware)
 # before the optional [type] + **title**, so a curator can retire a hand-curated
 # Open-Threads bullet BY NAME. This is safe precisely because it is NOT on any
@@ -296,7 +205,7 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
     include_prose=False (DEFAULT): narrow _ENTRY_RE — autonomous paths (parse/inject/
     decay/reclaim). Never matches emoji-prefixed curated prose (protects it from being
     stamped/stripped by background jobs).
-    include_prose=True: _ENTRY_RE_PROSE — ONLY the by-name ddd-retire path opts in, so
+    include_prose=True: _ENTRY_RE_PROSE — no production caller opts in (the by-name retire path is gone), so
     a curator can name a hand-curated Open-Threads bullet deliberately.
     Both return group(1)=type, group(2)=title.
     """
@@ -515,37 +424,11 @@ class EntryMetadata:
 
 
 @dataclass
-class DecayTransition:
-    """Record of a decay state change."""
-    entry: EntryMetadata
-    old_state: str
-    new_state: str
-    reason: str
-
-
-@dataclass
 class ReclaimReport:
     """What a reclaim / retire selector picked. Read-only: since CDF stage B no
     automated path archives or strips an entry (design 2026-10-26 CDF §8)."""
     candidates: list[str] = field(default_factory=list)   # titles selected
     kept_protected: int = 0                                # noisy-but-keep-class count
-
-
-@dataclass
-class NoiseReport:
-    """Per-document entry-noise measurement (read-only diagnostic).
-
-    Noise = entries that are demonstrably NOT earning their tokens:
-    zero references, past the new-entry grace period, AND already
-    decayed (dormant or archived). This is the HONEST signal — it does
-    not use the section-level `used`/`verified` field, which
-    context_health_hook auto-flips to true on any pipeline completion.
-    """
-    total: int = 0
-    noisy: int = 0
-    noise_rate: float = 0.0           # noisy / total (0.0 when total == 0)
-    noisy_titles: list[str] = field(default_factory=list)
-    by_section: dict[str, int] = field(default_factory=dict)  # section → noisy count
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -845,7 +728,7 @@ def parse_entries(content: str, *, include_prose: bool = False,
     include_prose=False (DEFAULT): narrow matcher — the shape every autonomous
     lifecycle path (inject/decay/reclaim) must use, so emoji-prefixed curated
     prose bullets are NOT treated as decay-managed entries (never stamped/stripped
-    by background jobs). include_prose=True: the by-name ddd-retire path opts in so
+    by background jobs). include_prose=True (no production caller since retire went) so
     a curator can name a hand-curated Open-Threads bullet deliberately.
 
     Returns list of EntryMetadata in document order.
@@ -1042,430 +925,11 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
     return result
 
 
-def bump_references(
-    entries: list[EntryMetadata],
-    text: str,
-    today: date,
-    context_files: list[str] | None = None,
-    graph_path: "Path | None" = None,
-) -> int:
-    """Bump reference count for entries whose titles appear in text.
-
-    Uses case-insensitive title match. Titles < 8 chars are skipped entirely
-    (e.g., "Build", "API"). Titles 8-20 chars use word-boundary matching to
-    reduce false positives. Titles > 20 chars use substring containment.
-    Mutates entries in-place.
-
-    Auto-extraction (G1 compound loop):
-        When context_files and graph_path are provided, for each bumped entry
-        whose raw_text mentions a context file, auto-creates an `applies_to`
-        relation in the knowledge graph. This grows the graph organically from
-        normal pipeline usage.
-    """
-    text_lower = text.lower()
-    bumped = 0
-    bumped_entries: list[EntryMetadata] = []
-
-    for entry in entries:
-        title_lower = entry.title.lower()
-        title_len = len(title_lower)
-
-        # Skip very short titles (too many false positives)
-        if title_len < 8:
-            continue
-
-        matched = False
-        if title_len <= 20:
-            # Medium titles: use word-boundary regex to avoid partial matches
-            try:
-                pattern = r'\b' + re.escape(title_lower) + r'\b'
-                matched = bool(re.search(pattern, text_lower))
-            except re.error:
-                matched = title_lower in text_lower
-        else:
-            # Long titles (>20 chars): substring is safe enough
-            matched = title_lower in text_lower
-
-        if matched:
-            entry.ref_count += 1
-            entry.last_referenced = today
-            if entry.decay_state == "dormant":
-                entry.decay_state = "active"  # Revive
-            bumped += 1
-            bumped_entries.append(entry)
-
-    # G1: Auto-extraction — grow knowledge graph from pipeline usage
-    if context_files and graph_path and bumped_entries:
-        try:
-            from core.knowledge_graph import add_relation
-            for entry in bumped_entries:
-                entry_text_lower = (entry.raw_text or entry.title).lower()
-                for cf in context_files:
-                    if len(cf) >= 4 and cf.lower() in entry_text_lower:
-                        add_relation(
-                            graph_path,
-                            entry.title[:60],
-                            "applies_to",
-                            cf,
-                        )
-        except Exception:
-            pass  # Auto-extraction is best-effort, never blocks bump
-
-    return bumped
-
-
-def assess_decay(
-    entries: list[EntryMetadata],
-    today: date,
-    evergreen_sections: set[str] | None = None,
-    dormant_days: int | None = None,
-) -> list[DecayTransition]:
-    """Assess decay state for all entries. Returns transitions to apply.
-
-    Decay rules:
-    - Evergreen sections: entries within are immune (never decay)
-    - Evergreen TYPES (EVERGREEN_TYPES = the 5 judgment types decision/model/
-      principle/correction/pitfall): immune regardless of section/age (Step 3,
-      run_123652ae — judgment must not be buried on a timer). Only operational
-      guideline/process age-decay.
-    - Grace period: entries < 30 days old are immune
-    - active → dormant: `dormant_days` days since last_referenced
-      (defaults to the global DORMANT_THRESHOLD_DAYS=60 when None)
-    - dormant → archived: ARCHIVED_THRESHOLD_DAYS (90 total) — NOT parameterized
-    - Entries already archived are skipped
-    - Entries with no date info are treated as infinitely old (decay immediately)
-
-    Args:
-        dormant_days: per-call active→dormant threshold (A2, run_55cb38d6).
-            None → use the global DORMANT_THRESHOLD_DAYS (backward-compatible —
-            all existing callers pass nothing and keep 60d). The MEMORY.md decay
-            path passes 45 so volatile operational memory ages faster than the
-            hard-won failure-lessons in IMPROVEMENT.md (which stay at 60d). Only
-            the dormant threshold is tunable; dormant→archived stays at the
-            global 90d so a faster-dormant entry still gets an archive buffer.
-    """
-    # dormant_days<1 would make `days_since_ref >= threshold` always true →
-    # mark everything past grace dormant. No live caller passes <1 (only 45),
-    # but guard the footgun rather than trust future callers (Gate-2 LOW).
-    if dormant_days is not None and dormant_days < 1:
-        raise ValueError(f"dormant_days must be >= 1, got {dormant_days}")
-
-    transitions: list[DecayTransition] = []
-    _evergreen = evergreen_sections or set()
-
-    for entry in entries:
-        if entry.decay_state == "archived":
-            continue
-
-        # Supersession immunity (run_24299917): a superseded entry keeps its
-        # lineage — it is NEVER age-decayed (nor deleted; see _is_reclaimable_noise).
-        # Its disposition is filter-from-recall, not timer-death (Principle 1).
-        if entry.superseded_by:
-            continue
-
-        # Evergreen section immunity
-        if entry.section in _evergreen:
-            continue
-
-        # Evergreen-by-TYPE immunity (Step 3, run_123652ae): judgment types
-        # (decision/pitfall/correction) never age-decay — real judgment must not be
-        # buried on a timer for lack of recall (Principle 1). Mirrors section
-        # immunity above; distinct from is_keep_class/_KEEP_TYPES (see EVERGREEN_TYPES
-        # definition — that guards reclaim-strip, this guards age-decay, they differ
-        # on pitfall by design). guideline/process fall through to normal age decay.
-        if entry.entry_type in EVERGREEN_TYPES:
-            continue
-
-        # Grace period for new entries
-        if entry.created_date:
-            age_days = (today - entry.created_date).days
-            if age_days < GRACE_PERIOD_DAYS:
-                continue
-
-        # Determine effective thresholds.
-        # HIGH_REF 2x-grace REMOVED (R2-prime, run_e50621b6): ref_count has NO
-        # live producer reaching body entries. Gate-2 verified: the only honest
-        # producer (memory_decay.bump_entry_references) writes a 5-field
-        # `sessions:N` comment that this engine's _META_RE cannot parse, into the
-        # index block parse_entries ignores. So ref_count is a DEAD input here —
-        # honoring it only preserves the toxic prose residue (DISCUSSION ref:1010)
-        # as undeserved 2x decay grace. Decay now on age + evergreen + grace only,
-        # all honestly observable. (If a real body-ref producer is wired later,
-        # re-introduce a multiplier THEN — not on a dead signal now.)
-        dormant_threshold = (
-            dormant_days if dormant_days is not None else DORMANT_THRESHOLD_DAYS
-        )
-        archived_threshold = ARCHIVED_THRESHOLD_DAYS
-
-        # Calculate days since last reference
-        if entry.last_referenced:
-            days_since_ref = (today - entry.last_referenced).days
-        elif entry.created_date:
-            days_since_ref = (today - entry.created_date).days
-        else:
-            # No date info — treat as infinitely old (triggers decay)
-            days_since_ref = archived_threshold + 1
-
-        # Check transitions
-        if entry.decay_state == "active":
-            if days_since_ref >= dormant_threshold:
-                transitions.append(DecayTransition(
-                    entry=entry,
-                    old_state="active",
-                    new_state="dormant",
-                    reason=f"{days_since_ref}d since last reference (threshold: {dormant_threshold}d)",
-                ))
-        elif entry.decay_state == "dormant":
-            if days_since_ref >= archived_threshold:
-                transitions.append(DecayTransition(
-                    entry=entry,
-                    old_state="dormant",
-                    new_state="archived",
-                    reason=f"{days_since_ref}d since last reference (threshold: {archived_threshold}d)",
-                ))
-
-    return transitions
-
-
-def _resolve_archive_path(
-    project_dir: Path, archive_name: str, source_path: "Path | None",
-) -> Path:
-    """Resolve where an archive file must live: NEXT TO its source doc.
-
-    The archive is cold storage for entries stripped from a specific doc, so it
-    must be a sibling of that doc — else reads (the live doc under 2-understanding/)
-    and writes (the archive) diverge into a split-brain, which is exactly the bug
-    that grew a 17MB orphan at the pre-migration project root (run_f71e5920).
-
-    - source_path given (the normal path — every live caller has it): archive is
-      source_path.parent / archive_name. Correct for BOTH a migrated six-section
-      doc (2-understanding/IMPROVEMENT.md → 2-understanding/) AND MEMORY.md
-      (.context/MEMORY.md → .context/, unchanged).
-    - source_path absent (fallback): derive the doc from archive_name
-      ("TECH-archive.md" → "TECH.md") and resolve its WRITE dir via ddd_write_path.
-      Must NOT hardcode IMPROVEMENT.md — TECH/PRODUCT/PROJECT archives exist.
-    """
-    if source_path is not None:
-        return Path(source_path).parent / archive_name
-    # Fallback: derive the owning doc name from the archive name, then resolve
-    # its canonical (new-layout) directory. ddd_write_path knows the six-section
-    # map; a non-canonical stem (e.g. MEMORY) passes through to project_dir root.
-    from core.ddd_paths import ddd_write_path
-    # Derive the owning doc stem from the archive name. Handle BOTH the fixed form
-    # ("TECH-archive.md" → "TECH.md") AND the monthly-shard form
-    # ("EVOLUTION-archive-2026-08.md" → "EVOLUTION.md") — a plain replace() would
-    # leave the shard suffix and mis-resolve the doc dir. Strip from "-archive"
-    # onward, then re-add ".md".
-    stem = re.sub(r"-archive.*$", "", archive_name)
-    doc_name = f"{stem}.md"
-    doc_dir = ddd_write_path(project_dir, doc_name).parent
-    return doc_dir / archive_name
-
-
-# (path, mtime_ns, size) → signatures of that archive. Parsing a large archive costs
-# seconds, and the decay pass and reclaim can both archive in one pass, so the set is
-# cached and refreshed only when the file changes (stat key) or after our own append.
-_ARCHIVE_SIG_CACHE: "dict[str, tuple[int, int, frozenset[str]]]" = {}
-
-
-def _archived_signatures(archive_path: Path) -> "frozenset[str]":
-    """content_signature of every entry already in ``archive_path`` (empty if absent).
-
-    Parsed with ``parse_entries`` (prose bullets included, so retired prose entries
-    dedup too), so each signature is one whole archived entry — the dedup in
-    ``archive_entries`` compares entries for equality, never a substring of the
-    file. Cached per (mtime, size).
-    """
-    try:
-        st = archive_path.stat()
-    except FileNotFoundError:
-        return frozenset()
-    key = str(archive_path)
-    hit = _ARCHIVE_SIG_CACHE.get(key)
-    if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-        return hit[2]
-    sigs = {
-        content_signature(e.raw_text)
-        for e in parse_entries(archive_path.read_text(encoding="utf-8"),
-                               include_prose=True)
-    }
-    sigs.discard("")
-    frozen = frozenset(sigs)
-    _ARCHIVE_SIG_CACHE[key] = (st.st_mtime_ns, st.st_size, frozen)
-    return frozen
-
-
-def _remember_signatures(archive_path: Path, sigs: "set[str]") -> None:
-    """Record ``sigs`` as the archive's signature set after our own append."""
-    try:
-        st = archive_path.stat()
-    except FileNotFoundError:
-        return
-    _ARCHIVE_SIG_CACHE[str(archive_path)] = (st.st_mtime_ns, st.st_size, frozenset(sigs))
-
-
-# ── Entry Noise Metric (read-only diagnostic) ─────────────────────────────────
-
-
-# An entry is "noisy" only after it has had a fair chance to prove its worth.
-# noisy ⇔ ref_count == 0  AND  age > grace  AND  decay ∈ {dormant, archived}.
-# The decay-state requirement means evergreen/permanent sections (which
-# assess_decay never transitions out of "active") are excluded automatically —
-# no special-casing needed here.
-_NOISY_DECAY_STATES = frozenset({"dormant", "archived"})
-
-# Eval threshold (design §3 ①): a document FAILS the noise gate above this.
-NOISE_FAIL_THRESHOLD = 0.30
-
-
-def compute_entry_noise(
-    entries: list[EntryMetadata],
-    today: date,
-    grace_days: int = GRACE_PERIOD_DAYS,
-) -> NoiseReport:
-    """Measure per-entry knowledge noise for a parsed DDD document.
-
-    READ-ONLY: never mutates `entries` (unlike bump_references/assess_decay).
-
-    An entry counts as noise when ALL hold:
-      1. ref_count == 0            — never influenced a decision
-      2. age >= grace_days         — past the grace window (same boundary as
-                                     assess_decay: age < grace ⇒ immune)
-      3. decay_state ∈ {dormant, archived} — the decay engine already
-         judged it stale (this also excludes evergreen sections, which
-         assess_decay leaves "active" forever)
-
-    Age is measured from created_date. Entries with no created_date are
-    treated as infinitely old (past grace) — consistent with assess_decay,
-    which treats date-less entries as decay-eligible.
-
-    Args:
-        entries: Parsed entries (from parse_entries). Not modified.
-        today: Reference date for age computation.
-        grace_days: New-entry immunity window (default GRACE_PERIOD_DAYS).
-
-    Returns:
-        NoiseReport. noise_rate is 0.0 when there are no entries.
-    """
-    total = len(entries)
-    if total == 0:
-        return NoiseReport()
-
-    noisy_titles: list[str] = []
-    by_section: dict[str, int] = {}
-
-    for entry in entries:
-        if entry.ref_count != 0:
-            continue
-        if entry.decay_state not in _NOISY_DECAY_STATES:
-            continue
-        # Age check: date-less entries are treated as past grace.
-        # Boundary MUST match assess_decay's immunity test (age < grace),
-        # so an entry the decay engine has just marked dormant at age==grace
-        # is not silently excluded here for a day.
-        if entry.created_date is not None:
-            age_days = (today - entry.created_date).days
-            if age_days < grace_days:
-                continue
-        noisy_titles.append(entry.title)
-        section_key = entry.section or "(no section)"
-        by_section[section_key] = by_section.get(section_key, 0) + 1
-
-    noisy = len(noisy_titles)
-    return NoiseReport(
-        total=total,
-        noisy=noisy,
-        noise_rate=noisy / total,
-        noisy_titles=noisy_titles,
-        by_section=by_section,
-    )
-
-
-def compute_reclaimable_noise(
-    entries: list[EntryMetadata],
-    today: date,
-    grace_days: int = GRACE_PERIOD_DAYS,
-    evergreen_sections: "frozenset[str] | set[str] | None" = None,
-) -> NoiseReport:
-    """The GATE metric: raw noise MINUS keep-class (reclaimable noise only).
-
-    compute_entry_noise is the HONEST raw gauge — it counts even
-    permanent-but-dormant knowledge (a dormant COE, an unreferenced
-    principle) as noise, which is correct for measurement but wrong for a
-    pass/fail gate: a doc that is healthy but principle-heavy would FAIL.
-
-    This gate metric excludes is_keep_class entries from the numerator, so it
-    measures only noise that reclaim_noise_entries could actually remove.
-    noise_rate denominator stays `total` (the whole doc) so the rate is
-    comparable across docs.
-
-    READ-ONLY: never mutates `entries`.
-    """
-    total = len(entries)
-    if total == 0:
-        return NoiseReport()
-
-    noisy_titles: list[str] = []
-    by_section: dict[str, int] = {}
-    for entry in entries:
-        # Gate == action: use the SAME reclaimable predicate reclaim uses
-        # (date REQUIRED), so a date-less-dominant doc isn't stuck FAILing
-        # forever on noise no reclaim run can clean (adversarial H3).
-        if not may_leave_live_doc(entry, today, grace_days, evergreen_sections):
-            continue
-        noisy_titles.append(entry.title)
-        section_key = entry.section or "(no section)"
-        by_section[section_key] = by_section.get(section_key, 0) + 1
-
-    noisy = len(noisy_titles)
-    return NoiseReport(
-        total=total,
-        noisy=noisy,
-        noise_rate=noisy / total,
-        noisy_titles=noisy_titles,
-        by_section=by_section,
-    )
-
-
-# ── Reclaim (CLEAN) — physically remove stale noise, protect permanent knowledge ─
-
-
-def _is_reclaimable_noise(
-    entry: EntryMetadata, today: date, grace_days: int
-) -> bool:
-    """Single source of truth for "reclaimable noise" (gate AND action).
-
-    Stricter than compute_entry_noise's raw-noise predicate: destructive
-    reclaim requires a REAL created_date (date-less = unknown-age, NOT
-    proven-stale — see run_94fd5597). Both compute_reclaimable_noise (the gate)
-    and reclaim_noise_entries (the action) call this, so they can never drift.
-    Does NOT apply keep-class — callers layer that on top.
-    """
-    # Supersession is never reclaimable (run_24299917, Gate-1 C4): a superseded
-    # entry is FILTERED from recall + SKIPPED by age-decay, and it must ALSO be
-    # immune to the physical strip path — otherwise a superseded operational
-    # entry (guideline/pitfall/process, ref 0, dormant, past grace) would be
-    # deleted from disk, destroying the very lineage supersession preserves.
-    if entry.superseded_by:
-        return False
-    if entry.ref_count != 0:
-        return False
-    if entry.decay_state not in _NOISY_DECAY_STATES:
-        return False
-    if entry.created_date is None:
-        return False
-    if (today - entry.created_date).days < grace_days:
-        return False
-    return True
-
-
-# Types that are NEVER reclaimed regardless of ref/age. Operational noise
-# (guideline/pitfall/process) is reclaimable; cognitive (decision/model) and
-# meta-cognitive (principle/correction) knowledge is permanent.
+# Types an automated writer never auto-writes into MEMORY (route_lesson_type): a
+# principle, correction, decision or model goes through its own review path.
 _KEEP_TYPES = frozenset({"principle", "correction", "decision", "model"})
 
 # ref_count at or above this floor is treated as load-bearing → keep.
-_KEEP_REF_FLOOR = 2
 
 
 def route_lesson_type(lesson: str) -> "tuple[str | None, str]":
@@ -1512,128 +976,6 @@ def route_lesson_type(lesson: str) -> "tuple[str | None, str]":
     return (MEMORY_TYPE_TO_SECTION.get(etype, "Guidelines"), etype)
 
 
-def is_keep_class(
-    entry: EntryMetadata,
-    evergreen_sections: "frozenset[str] | set[str] | None" = None,
-) -> bool:
-    """True if `entry` is permanent knowledge that must NEVER be reclaimed.
-
-    Errs toward KEEPING — a false-archive of a COE/principle/correction is
-    unrecoverable context loss. Three independent, layered rules (any → keep):
-
-      1. Section is evergreen (Principles/Corrections/COE Registry/...)
-      2. Type ∈ {principle, correction, decision, model} (cognitive+meta layers)
-      3. "COE" appears in the section or title (post-mortem registry entries,
-         which may live in a custom section like "Key Lessons" with a
-         misclassified type — rule 3 is the backstop for rules 1-2)
-      (ref_count keep-rule removed R2-prime — ref is a dead input, see below)
-
-    Only plain operational entries (guideline/pitfall/process) with ref 0,
-    not in an evergreen section, and not COE-tagged are reclaimable.
-    """
-    if evergreen_sections and entry.section in evergreen_sections:
-        return True
-    if entry.entry_type in _KEEP_TYPES:
-        return True
-    # ref-based keep REMOVED (R2-prime, run_e50621b6): ref_count is a dead input
-    # (no live body producer — Gate-2 verified) carrying only toxic prose residue.
-    # Keeping on it protected exactly the generic-titled noise we set out to evict.
-    # Keep-class now = evergreen-section OR keep-type OR COE-tagged (all honest).
-    if "COE" in entry.section or "COE" in entry.title:
-        return True
-    return False
-
-
-def may_leave_live_doc(
-    entry: EntryMetadata,
-    today: date,
-    grace_days: int = GRACE_PERIOD_DAYS,
-    evergreen_sections: "frozenset[str] | set[str] | None" = None,
-) -> bool:
-    """True if ``entry`` may be removed from its live doc on age/decay grounds.
-
-    The one rule shared by the decay-pass move (ddd_orchestrator), the reclaim
-    action (reclaim_noise_entries) and the reclaim gate (compute_reclaimable_noise):
-    reclaimable noise (real created_date past grace, ref 0, not superseded, decay
-    state dormant/archived) AND not keep-class. EVERGREEN_TYPES is deliberately not
-    part of it (see its definition). Exceptions with their own rules:
-    reclaim_duplicate_entries (an exact duplicate goes, the survivor keeps the
-    content) and retire_entry (curator force).
-    """
-    return _is_reclaimable_noise(entry, today, grace_days) and not is_keep_class(
-        entry, evergreen_sections=evergreen_sections
-    )
-
-
-def reclaim_noise_entries(
-    content: str,
-    today: date,
-    project_dir: Path,
-    *,
-    grace_days: int = GRACE_PERIOD_DAYS,
-    evergreen_sections: "frozenset[str] | set[str] | None" = None,
-    archive_name: str = "IMPROVEMENT-archive.md",
-    source_path: "Path | None" = None,
-    skip_h3_spans: bool = False,
-) -> ReclaimReport:
-    """Select the stale operational-noise entries (read-only).
-
-    Selection = exactly the set compute_entry_noise flags as noisy
-    (ref_count==0 AND age>=grace AND decay∈{dormant,archived}), MINUS any
-    entry protected by is_keep_class. This keeps the gauge and the action
-    consistent (measure == action).
-
-    It writes nothing: since CDF stage B automated maintenance is read-only (design
-    2026-10-26 CDF §8) — the file keeps every unit and the injection budget decides
-    what reaches a prompt. The report (candidates, kept_protected) feeds the C&M
-    entry-health counts. *project_dir*, *archive_name* and *source_path* are unused,
-    kept for the callers' signature.
-    """
-    report = ReclaimReport()
-    if not content or not content.strip():
-        return report
-
-    entries = parse_entries(content, skip_h3_spans=skip_h3_spans)
-    if not entries:
-        return report
-
-    # Selection: reclaimable-noise set (shared predicate — gate==action),
-    # minus keep-class.
-    selected: list[EntryMetadata] = []
-    for entry in entries:
-        if not may_leave_live_doc(entry, today, grace_days, evergreen_sections):
-            # Reclaimable noise refused only by the keep-class guard is counted.
-            if _is_reclaimable_noise(entry, today, grace_days):
-                report.kept_protected += 1
-            continue
-        selected.append(entry)
-
-    # Duplicate-guard (parity with retire_entry, run_3e43c7ee): _strip_entries matches
-    # by the (title, section) SET, so if two selected entries share an identical
-    # (title, section) a single strip would remove BOTH while archive_entries records
-    # each once — data loss. This became reachable when cultivated bullets gained
-    # derived titles (a rare 1/839 title collision measured). retire_entry already
-    # raises on this; the autonomous reclaim path must SKIP the ambiguous group (never
-    # silently mass-strip a collision) and fail loud so it can be retired by name.
-    import logging
-    from collections import Counter
-    _key_counts = Counter((e.title, e.section) for e in selected)
-    _ambiguous = {k for k, n in _key_counts.items() if n > 1}
-    if _ambiguous:
-        logging.getLogger(__name__).warning(
-            "reclaim: skipping %d entry(ies) in %d ambiguous (title, section) group(s) "
-            "— a SET-strip would remove all colliders while archiving one (data loss). "
-            "Disambiguate or retire by name. Titles: %s",
-            sum(_key_counts[k] for k in _ambiguous), len(_ambiguous),
-            sorted(t for t, _ in _ambiguous),
-        )
-        selected = [e for e in selected if (e.title, e.section) not in _ambiguous]
-
-    report.candidates = [e.title for e in selected]
-
-    return report
-
-
 def reclaim_duplicate_entries(
     content: str,
     today: date,
@@ -1647,8 +989,6 @@ def reclaim_duplicate_entries(
     """Select ALREADY-ACCUMULATED EXACT duplicates (read-only).
 
     Distinct from the two adjacent mechanisms — this fills a real gap:
-      • ``reclaim_noise_entries`` selects by AGE/decay (ref==0 AND dormant/archived).
-        A fresh exact-dup that is still ``active`` is invisible to it.
       • a write-side ``content_signature`` dedup only blocks a NEW write
         against existing entries — it never cleans the backlog already on disk.
     This sweeps the backlog: group all entries by ``content_signature`` (the
@@ -1659,11 +999,6 @@ def reclaim_duplicate_entries(
     Survivor selection (deterministic): highest ``ref_count``, tie → newest
     ``created_date`` (a date-less entry sorts oldest). The survivor is the entry
     most likely to be the canonical/most-referenced copy.
-
-    ``is_keep_class`` entries NEVER enter a candidate group (Principle 1: a
-    principle/correction/decision/model — or an evergreen-section / COE entry — is
-    never deleted on a duplicate signal; only plain guideline/pitfall/process are
-    dedup-eligible). This is the SAME protection ``reclaim_noise_entries`` applies.
 
     NOT near-dup / similarity: signatures must be EXACTLY equal after normalization
     (strip bullet marker, [type] tag, attribution, bold, whitespace, case). This is
@@ -1726,93 +1061,6 @@ def reclaim_duplicate_entries(
 
     report.candidates = [e.title for e in selected]
 
-    return report
-
-
-class RetireError(ValueError):
-    """retire_entry could not act safely — no match, or an ambiguous duplicate.
-    Fail-LOUD by design: a silent zero-strip or a strip-2-archive-1 would be data
-    loss (Gate-1 findings). The caller must correct the (title, section) and retry.
-    """
-
-
-def retire_entry(
-    content: str,
-    title: str,
-    section: str,
-    project_dir: Path,
-    *,
-    archive_name: str = "IMPROVEMENT-archive.md",
-    source_path: "Path | None" = None,
-    force: bool = False,
-    today: "date | None" = None,
-    evergreen_sections: "frozenset[str] | set[str] | None" = None,
-) -> ReclaimReport:
-    """Agent-directed retire of ONE named (title, section) entry — the sanctioned
-    'out' side of the knowledge layer (mirrors s_self-evolution's RETIRE for the
-    governance layer). Since CDF stage B it only reports the candidate: the
-    selection is exactly the one entry the caller names, not the autonomous noise
-    set; the edit itself goes through ``governed_edit``.
-
-    It tells a curator whether the name picks exactly one entry before they remove
-    it through ``governed_edit`` (a raw markdown Edit-to-delete can hit a same-title
-    sibling).
-
-    Safety (Gate-1, run_186a5f15):
-    - EXACTLY-ONE match required. Zero matches → RetireError (never a silent
-      zero-strip). Two+ entries sharing the exact (title, section) → RetireError
-      (a single strip would remove BOTH while archive records ONE = data loss).
-    - keep-class entries (decision/model/principle/correction, COE/evergreen
-      sections) are REFUSED unless force=True — so a curator CAN deliberately
-      retire permanent knowledge by name (the point of agent-directed removal),
-      but never by accident.
-
-    Read-only: it sets report.candidates and writes nothing (CDF stage B retired the
-    apply path; an edit goes through ``governed_edit``). *project_dir*,
-    *archive_name* and *source_path* are unused, kept for the callers' signature.
-
-    For a MOVE across files: the CALLER must add-to-target FIRST (via s_persist,
-    dedup-checked) and retire-from-source SECOND — so the entry is durable in its
-    new home before it leaves the old one (a mid-crash then leaves a recoverable
-    duplicate, never a loss).
-    """
-    report = ReclaimReport()
-    if not content or not content.strip():
-        raise RetireError("empty content — nothing to retire")
-
-    # include_prose=True: retire is the ONE by-name, human-invoked path allowed to
-    # act on emoji-prefixed curated prose (Open-Threads bullets). Autonomous paths
-    # never opt in — so background inject/decay/reclaim can't touch prose (Gate-2).
-    matches = [e for e in parse_entries(content, include_prose=True)
-               if e.title == title and e.section == section]
-    if len(matches) == 0:
-        raise RetireError(
-            f"no entry titled {title!r} in section {section!r} — nothing retired "
-            f"(check the exact title + section; retire is fail-loud, not silent)."
-        )
-    if len(matches) > 1:
-        raise RetireError(
-            f"{len(matches)} entries share (title={title!r}, section={section!r}) — "
-            f"refusing: a strip would remove all {len(matches)} but archive only one "
-            f"(data loss). Disambiguate before retiring."
-        )
-
-    entry = matches[0]
-    # Keep-class check MUST receive the doc's evergreen set — else section-based
-    # immunity (rule 1: Open Threads=process, Standing Preferences=guideline in
-    # MEMORY_EVERGREEN_SECTIONS) is silently dead and those permanent entries would
-    # be retirable WITHOUT --force, defeating the guard (Gate-2 MED). Parity with
-    # reclaim_noise_entries, which passes evergreen_sections. Default to the MEMORY
-    # set when the caller doesn't specify (the strictest, safest default).
-    _evergreen = evergreen_sections if evergreen_sections is not None else MEMORY_EVERGREEN_SECTIONS
-    if not force and is_keep_class(entry, evergreen_sections=_evergreen):
-        raise RetireError(
-            f"{title!r} is keep-class (type={entry.entry_type}, section={section!r}) — "
-            f"refusing without force=True. Pass force to deliberately retire permanent "
-            f"knowledge (decision/model/principle/correction/COE)."
-        )
-
-    report.candidates = [entry.title]
     return report
 
 

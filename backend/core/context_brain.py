@@ -102,60 +102,29 @@ def _health_tag(tokens: int, budget: int, mtime_days: float) -> str:
     return "fresh"
 
 
-# Which files carry per-entry decay metadata (the lifecycle-governed brain files).
-# Others (SOUL/AGENT/USER/…) are prose docs with no `<!-- ref | decay -->` entries,
-# so their noise counts are meaninglessly zero — we skip them (health = null).
+# Which files are made of typed entries. Others (SOUL/AGENT/USER/…) are prose docs,
+# so entry counts mean nothing for them — we skip them (health = null).
 _LIFECYCLE_FILES = frozenset({"MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md"})
 
 
 def _entry_health_counts(filename: str, content: str) -> "dict | None":
-    """Per-file knowledge-health counts for the diagnostic panel (run_2816ab1c).
+    """Per-file knowledge-health counts for the diagnostic panel.
 
-    Returns {active, dormant, archived, reclaimable, duplicate} for the three
-    lifecycle-governed files, else None (prose files have no decay entries). This
-    is the READ side of the reduce loop the UI surfaces — it uses the SAME
-    predicates the write side (assess_decay / compute_entry_noise /
-    reclaim_duplicate_entries) uses, so the numbers match what a sweep would act on.
-    Never raises (O030: telemetry, not a gate)."""
+    Returns {entries, duplicate} for the three entry-structured files, else None
+    (prose files have no entries). Every entry in a main file is in force (design
+    2026-10-30-brain-driven §2.3), so there is no active/dormant split; ``duplicate``
+    is what the exact-duplicate selector picks (read-only). Never raises (telemetry,
+    not a gate)."""
     if filename not in _LIFECYCLE_FILES:
         return None
     try:
         from datetime import date
-        from core.ddd_entry_lifecycle import (
-            parse_entries, reclaim_noise_entries, reclaim_duplicate_entries,
-            MEMORY_EVERGREEN_SECTIONS, KNOWLEDGE_EVERGREEN_SECTIONS,
-            EVOLUTION_EVERGREEN_SECTIONS,
-        )
+        from core.ddd_entry_lifecycle import parse_entries, reclaim_duplicate_entries
         entries = parse_entries(content)
         if not entries:
             return None
-        today = date.today()
-        counts = {"active": 0, "dormant": 0, "archived": 0}
-        for e in entries:
-            counts[e.decay_state] = counts.get(e.decay_state, 0) + 1
-        evergreen = {
-            "MEMORY.md": MEMORY_EVERGREEN_SECTIONS,
-            "KNOWLEDGE.md": KNOWLEDGE_EVERGREEN_SECTIONS,
-            "EVOLUTION.md": EVOLUTION_EVERGREEN_SECTIONS,
-        }.get(filename)
-        # reclaimable + duplicate: the entries the reclaim selectors pick (keep-class
-        # and evergreen filtered), NOT the wider compute_entry_noise gauge. Since CDF
-        # stage B nothing removes them from the file (automated maintenance is
-        # read-only, design 2026-10-26 CDF §8); the counts say how much of the file is
-        # stale or repeated. Both selectors are read-only; project_dir is unused.
-        noise_r = reclaim_noise_entries(
-            content, today, Path("/tmp"), evergreen_sections=evergreen,
-        )
-        dup = reclaim_duplicate_entries(
-            content, today, Path("/tmp"), evergreen_sections=evergreen,
-        )
-        return {
-            "active": counts.get("active", 0),
-            "dormant": counts.get("dormant", 0),
-            "archived": counts.get("archived", 0),
-            "reclaimable": len(noise_r.candidates),
-            "duplicate": len(dup.candidates),
-        }
+        dup = reclaim_duplicate_entries(content, date.today(), Path("/tmp"))
+        return {"entries": len(entries), "duplicate": len(dup.candidates)}
     except Exception as exc:  # never crash telemetry (O030)
         logger.debug("context_brain: entry-health calc failed for %s: %s", filename, exc)
         return None
@@ -222,9 +191,8 @@ def build_context_token_block(context_dir: Path) -> dict:
                 # (oversized>growing>idle>fresh). Backend-derived so the UI invents
                 # nothing (R30). budget is the same _WARNING_THRESHOLD used below.
                 "health": _health_tag(tokens, _WARNING_THRESHOLD, mtime_days),
-                # Knowledge-health counts (run_2816ab1c): None for prose files;
-                # {active,dormant,archived,reclaimable,duplicate} for the 3
-                # lifecycle-governed brain files (MEMORY/EVOLUTION/KNOWLEDGE).
+                # Knowledge-health counts: None for prose files; {entries, duplicate}
+                # for the entry-structured files (MEMORY/EVOLUTION/KNOWLEDGE).
                 "health_counts": _entry_health_counts(spec.filename, content),
             }
         )

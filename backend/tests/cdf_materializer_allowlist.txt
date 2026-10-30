@@ -39,7 +39,6 @@ core/ddd_packager.py:emit_target_aim  # exempt: writes the package output dir
 core/ddd_packager.py:emit_target_open_plugin  # exempt: writes the package output dir
 core/ddd_packager.py:package_ddd  # exempt: writes the package output dir
 core/ddd_skill_registry.py:_write_manifest_atomic  # exempt: DDD skill manifest
-core/ddd_usage.py:_atomic_write  # exempt: DDD usage JSON
 core/engine_metrics.py:collect_engine_metrics  # exempt: via load_learning_state: the briefing learning-state JSON, not a governed file
 core/escalation.py:save_escalation  # exempt: escalation JSON under the escalations dir
 core/eval_service.py:EvalService._clear_inflight_marker  # exempt: eval in-flight marker
@@ -113,10 +112,8 @@ hooks/context_health_hook.py:ContextHealthHook._check_cache_freshness  # exempt:
 hooks/context_health_hook.py:ContextHealthHook._check_git_health  # exempt: stale .git lock
 hooks/context_health_hook.py:ContextHealthHook._deep_check  # exempt: via check_adversarial_health: adversarial health state file; the deep check itself is read-only on governed files
 hooks/context_health_hook.py:ContextHealthHook._enforce_retention_policies  # exempt: DailyActivity archival and Archives cleanup (not governed)
-hooks/context_health_hook.py:ContextHealthHook._log_maturity_promotion  # exempt: DDD changelog JSONL
 hooks/context_health_hook.py:ContextHealthHook._persist_findings  # exempt: health_findings.json
 hooks/context_health_hook.py:ContextHealthHook._run_session_canary  # exempt: .eval-canary.json
-hooks/context_health_hook.py:ContextHealthHook._set_verified_from_pipeline_runs  # exempt: maturity state JSON
 hooks/context_health_hook.py:ContextHealthHook._track_memory_usage  # exempt: memory usage JSON lock
 hooks/context_health_hook.py:ContextHealthHook._track_memory_usage_locked  # exempt: memory usage JSON
 hooks/context_health_hook.py:ContextHealthHook._write_daily_canary_state  # exempt: daily canary state JSON
@@ -155,9 +152,6 @@ routers/workspace_api.py:create_file._create  # exempt: non-governed paths only:
 routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
 routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths only; governed files go through apply_user_edit before this
 routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only; governed trees go through move_tree
-scripts/artifact_cli.py:cmd_bind  # exempt: via doc_index.sync_project: knowledge index DB and survey.json under .artifacts/
-scripts/artifact_cli.py:cmd_release_gate  # exempt: release gate marker
-scripts/artifact_cli.py:cmd_survey  # exempt: via doc_index.sync_project: knowledge index DB and survey.json under .artifacts/
 scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
 scripts/ddd_verbatim_sync.py:sync  # exempt: dev tool; re-copies product template files inside the repo
 scripts/eval_runner.py:eval_trajectory_capture  # exempt: via fixture_workspace: a temp fixture workspace
@@ -167,7 +161,6 @@ scripts/probe_context.py:_cache_holds  # exempt: probe writes into its own temp 
 scripts/probe_context.py:_seed_private  # exempt: probe writes into its own temp workspace
 scripts/probe_context.py:order  # exempt: probe writes into its own temp workspace
 scripts/probe_context.py:order.broken  # exempt: probe writes into its own temp workspace
-scripts/probe_ddd.py:_noise_verdict  # exempt: probe writes into its own temp workspace
 scripts/probe_knowledge.py:_mount_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_memory.py:_inject_holds  # exempt: probe writes into its own temp workspace
 scripts/probe_recall.py:_archive_holds  # exempt: probe writes into its own temp workspace
@@ -205,7 +198,6 @@ routers/library_api.py:register_mount._work  # exempt: via library_mounts: mount
 core/library_mounts.py:_reindex_if_outdated  # exempt: via code_intel.build.spawn_child: starts a mount's re-index child (its code_intel.db); log under app data
 core/library_mounts.py:main  # exempt: the mount re-index child: the mount's code_intel.db and the rebuild-turn lock under app data
 jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via local_roots.migrate_once and code_intel.build: local-roots registry JSON and code graph DBs
-scripts/artifact_cli.py:_bind_local  # exempt: via local_roots.declare and build.spawn_build: local-roots registry JSON; the graph is built by a child
 routers/ddd_brain.py:_confirm  # exempt: via project_agent_review.confirm: the person's confirm writes project-agent.yaml (a definition file, not governed knowledge)
 routers/ddd_brain.py:_edit  # exempt: via project_agent_review.edit: the person's form edit writes project-agent.yaml (a definition file, not governed knowledge)
 core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2-understanding/knowledge/), not a governed file; the docs themselves go through governed_edit.apply_user_edit

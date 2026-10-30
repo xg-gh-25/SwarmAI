@@ -228,7 +228,7 @@ def run_unit(
                          card2=destination, rules=rules, card3=retrieval, destination=destination,
                          hit_judgments=judgments, reroutes=reroutes)
     card3b = None
-    if aggregate.action in {"replace", "refine"}:
+    if aggregate.action == "replace":
         target = next(hit for hit in retrieval.hits if hit.anchor == aggregate.target_anchor)
         if target.baseline:
             try:

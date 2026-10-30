@@ -20,7 +20,7 @@ VERDICTS = ("agrees", "refines", "refutes", "independent")
 SCOPES = ("equal", "narrower", "wider", "disjoint")
 EVIDENCE = ("inferred", "run_lesson", "review", "measured", "user_explicit")
 TIMES = (None, "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z")
-RELATIONS = ("blocked", "replace", "exception", "duplicate", "refine", "independent")
+RELATIONS = ("blocked", "replace", "exception", "duplicate", "independent")
 
 
 def _hit(overlap="related", same_topic=False, verdict="independent", scope="equal",
@@ -49,7 +49,8 @@ def test_relation_precedence_examples():
     assert relation_for_hit(_hit(verdict="refutes", scope="equal",
                                  candidate_evidence="review", existing_evidence="measured")).relation == "blocked"
     assert relation_for_hit(_hit(overlap="same", verdict="agrees")).relation == "duplicate"
-    assert relation_for_hit(_hit(same_topic=True, verdict="refines")).relation == "refine"
+    # no refine relation: a same-topic hit is a new entry beside it (brain-driven §2.7)
+    assert relation_for_hit(_hit(same_topic=True, verdict="refines")).relation == "independent"
 
 
 def test_equal_evidence_replace_requires_two_trusted_times_and_newer_candidate():
@@ -75,13 +76,6 @@ def test_aggregate_full_enumeration_to_length_three():
             expected = aggregate_hits(relations)
             for permutation in itertools.permutations(relations):
                 assert aggregate_hits(permutation) == expected
-
-
-def test_refine_tie_uses_lexical_anchor_and_never_edits_in_place():
-    result = aggregate_hits([HitRelation("refine", "z", 2.0), HitRelation("refine", "a", 2.0)])
-    assert result.action == "refine"
-    assert result.target_anchor == "a"
-    assert result.action != "edit"
 
 
 def test_parse_units_identity_survives_offset_shift(tmp_path: Path):
@@ -138,8 +132,6 @@ def _spec_aggregate(kinds: tuple[str, ...]) -> tuple[str, str]:
         return ("reject", "already_exists")
     if "exception" in k:
         return ("add_exception", "exception")
-    if "refine" in k:
-        return ("refine", "refine")
     return ("add", "independent")
 
 
@@ -167,8 +159,6 @@ def _spec_relation(overlap, same_topic, verdict, scope, cand_ev, exist_ev, cand_
         return "independent"
     if overlap in {"same", "contained"}:
         return "duplicate"
-    if same_topic:
-        return "refine"
     return "independent"
 
 

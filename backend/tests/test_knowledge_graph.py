@@ -274,69 +274,6 @@ class TestBackfill:
             assert count == 0
 
 
-# ── AC1+AC2: Auto-extraction in bump_references ─────────────────────────────
-
-class TestAutoExtraction:
-    def test_bump_auto_creates_relation(self):
-        """AC1: when entry is bumped AND raw_text mentions context file → add relation."""
-        from core.ddd_entry_lifecycle import EntryMetadata, bump_references
-        from core.knowledge_graph import load_graph
-        from tempfile import TemporaryDirectory
-        from datetime import date
-
-        entries = [
-            EntryMetadata(
-                title="Subprocess in async must use to_thread",
-                entry_type="guideline", ref_count=2, decay_state="active",
-                section="What Worked",
-                raw_text="- **Subprocess in async must use to_thread** — session_unit.py (2026-05-02)",
-            ),
-        ]
-
-        with TemporaryDirectory() as tmp:
-            graph_path = Path(tmp) / ".knowledge-graph.yaml"
-            text = "We applied the Subprocess in async must use to_thread pattern."
-            bumped = bump_references(
-                entries, text, date(2026, 5, 19),
-                context_files=["session_unit.py"],
-                graph_path=graph_path,
-            )
-            assert bumped == 1
-            # Verify relation was auto-created
-            rels = load_graph(graph_path)
-            assert len(rels) >= 1
-            assert rels[0].predicate == "applies_to"
-            assert rels[0].object == "session_unit.py"
-
-    def test_bump_no_duplicate_relations(self):
-        """AC2: bumping twice doesn't create duplicate relations."""
-        from core.ddd_entry_lifecycle import EntryMetadata, bump_references
-        from core.knowledge_graph import load_graph
-        from tempfile import TemporaryDirectory
-        from datetime import date
-
-        entries = [
-            EntryMetadata(
-                title="Subprocess in async must use to_thread",
-                entry_type="guideline", ref_count=2, decay_state="active",
-                section="What Worked",
-                raw_text="- **Subprocess...** — session_unit.py (2026-05-02)",
-            ),
-        ]
-
-        with TemporaryDirectory() as tmp:
-            graph_path = Path(tmp) / ".knowledge-graph.yaml"
-            text = "Applied Subprocess in async must use to_thread here."
-            # Bump twice
-            bump_references(entries, text, date(2026, 5, 19),
-                           context_files=["session_unit.py"], graph_path=graph_path)
-            bump_references(entries, text, date(2026, 5, 20),
-                           context_files=["session_unit.py"], graph_path=graph_path)
-            rels = load_graph(graph_path)
-            # Should still be 1 relation (dedup by add_relation)
-            assert len(rels) == 1
-
-
 class TestConcurrency:
     def test_concurrent_add_no_data_loss(self, tmp_path):
         """AC2: two sequential writes both persist (simulates lock serialization)."""

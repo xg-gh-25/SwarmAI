@@ -335,3 +335,38 @@ def test_a_unit_older_than_the_entry_it_overrides_is_not_written(cdf_env, monkey
                 rejected_alternatives="none", overrides=["0123abcd | - [decision] **Open a Hive session**"])
     decision = run_unit_v2(_row(unit, source="S7"), cdf_env["workspace"], Judge())
     assert (decision.decision, decision.reason) == ("reject", "older_than_existing")
+
+
+# I9 ── no age decay, no weekly self-audit, no usage bookkeeping for decay, in production code
+_GONE = ("ddd_self_audit", "ddd_drift_signal", "ddd_drift_fix", ".ddd-usage.json",
+         "record_ddd_hit", "assess_decay(", "ddd_maturity", "enqueue_refine_unit",
+         "_filter_dormant_entries", "_filter_inactive_memory")
+
+
+def test_production_code_has_no_decay_audit_or_usage_writer():
+    from pathlib import Path
+    backend = Path(__file__).resolve().parents[1]
+    hits = []
+    for top in ("core", "jobs", "routers", "hooks", "scripts", "channels", "utils"):
+        for py in sorted((backend / top).rglob("*.py")) if (backend / top).is_dir() else ():
+            if "/tests/" in str(py):
+                continue
+            text = py.read_text(encoding="utf-8", errors="replace")
+            hits += [f"{py.relative_to(backend)}: {name}" for name in _GONE if name in text]
+    assert hits == []
+
+
+# I4 ── no reader hides an entry for a mark or a relation
+def test_no_selection_skips_an_entry_for_a_superseded_mark(tmp_path):
+    import sqlite3
+    from core.memory_injection import select_context_file
+    path = tmp_path / ".context" / "MEMORY.md"
+    path.parent.mkdir()
+    path.write_text("# Memory\n\n## Guidelines\n"
+                    "- [guideline] **MARKED_ENTRY_b7** still in the file. (2026-10-01)\n"
+                    "  <!-- ref:0 | last:none | decay:active | superseded_by:Other -->\n\n"
+                    "## Processes\n"
+                    f"- [process] **too long** {'y' * 1500} (2026-10-01)\n", encoding="utf-8")
+    for budget in (100_000, 500):             # under budget the file goes whole; over, units compete
+        sel = select_context_file(path, budget=budget, estimate=len, conn=sqlite3.connect(":memory:"))
+        assert "MARKED_ENTRY_b7" in sel.text, budget

@@ -19,11 +19,9 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { DddCard } from './DddCard';
 import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 
-const CHEAP: BrainHealth = { sinking: 2, pending: 1, liveRun: true, lastChangeRelative: '3h ago' };
-const CHEAP_CLEAN: BrainHealth = { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '5d ago' };
+const CHEAP: BrainHealth = { pending: 1, liveRun: true, lastChangeRelative: '3h ago' };
+const CHEAP_CLEAN: BrainHealth = { pending: 0, liveRun: false, lastChangeRelative: '5d ago' };
 const METRICS: DetailHealth = {
-  noise: { reclaimable: 5, rate: 0.1 },
-  sinking: 0,
   trust: { 'PRODUCT.md': { identity: 'high', knowledge: 'moderate' } },
   escalationPending: 3,
   recall: { value: null, experimental: true },
@@ -54,14 +52,16 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     );
     // the redundant-ink CLASS is GONE from the calm path (not CSS-hidden — absent)
     expect(screen.queryByTestId('presence-X-knowledge')).toBeNull();
-    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('dddcard-cheap-pending')).toBeNull();
     // run_3d371424: the 3-layer proportion bar is REMOVED from the gallery card —
     // it answered no decision and collapsed into a dominant green line (operational
     // ~80%). Even WITH typeCounts passed, no bar renders.
     expect(screen.queryByTestId('ddd-compact-layerbar')).toBeNull();
-    // calm keeps: the muted meta line + click-to-open
-    expect(screen.getByTestId('dddcard-calm-meta')).toBeTruthy();
+    // calm keeps: the muted meta line (lifecycle · last change, no decay count) + click-to-open
+    const meta = screen.getByTestId('dddcard-calm-meta');
+    expect(meta.textContent).toContain('GROW');
+    expect(meta.textContent).toContain('5d ago');
+    expect(meta.textContent?.toLowerCase()).not.toContain('sinking');
     fireEvent.click(screen.getByTestId('dddcard-X'));
     expect(onOpen).toHaveBeenCalledWith('X');
     // compact NEVER shows the full per-type ontology or the full needs-you block
@@ -119,12 +119,11 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     const card = screen.getByTestId('dddcard-SwarmAI');
     // actionable list present, boxed cheap grid absent
     expect(screen.getByTestId('dddcard-needs-actionable')).toBeTruthy();
-    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
-    // CHEAP = { sinking:2, pending:1, liveRun:true } → all three surfaced
+    // CHEAP = { pending:1, liveRun:true } → both surfaced; no decay item exists
     expect(card.textContent).toContain('need you');
     expect(card.textContent).not.toContain('proposals awaiting review');
-    expect(card.textContent).toContain('sinking');
+    expect(card.textContent).not.toContain('sinking');
     expect(card.textContent).toContain('run in progress');
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     expect(onOpen).toHaveBeenCalledWith('SwarmAI');
@@ -222,15 +221,16 @@ describe('DddCard — full: FULL 3-layer × 7-type ontology (hero visual)', () =
 });
 
 describe('DddCard — full: needs-you block', () => {
-  it('lists non-zero actionable items (pending + sinking) when present', () => {
+  it('lists the non-zero pending count when present (no decay/reclaim items)', () => {
     render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} health={CHEAP} />);
     const n = screen.getByTestId('ddd-needs-you');
     expect(n.textContent).toContain('3');  // escalationPending
     expect(n.textContent?.toLowerCase()).toContain('need you');  // every source, not only proposals
+    expect(n.textContent?.toLowerCase()).not.toMatch(/sinking|reclaim/);
   });
 
-  it('clean brain → "nothing needs you" (0 pending, 0 reclaimable, 0 sinking)', () => {
-    const clean = { ...METRICS, escalationPending: 0, noise: { reclaimable: 0, rate: 0 } };
+  it('clean brain → "nothing needs you" (0 pending)', () => {
+    const clean = { ...METRICS, escalationPending: 0 };
     render(<DddCard density="full" name="S" kind="knowledge" metrics={clean} health={CHEAP_CLEAN} />);
     const n = screen.getByTestId('ddd-needs-you');
     expect(n.textContent?.toLowerCase()).toMatch(/nothing|✓|无/i);
@@ -282,7 +282,6 @@ describe('DddCard — full HERO (verdict + ontology + needs-you, no redundant-in
     // the hero is verdict-first — the redundant-ink widgets are NOT rendered even
     // if a caller passes them (the full card's body IS the signal now)
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
-    expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('dddcard-SwarmAI')?.tagName).not.toBe('BUTTON');
   });
 });

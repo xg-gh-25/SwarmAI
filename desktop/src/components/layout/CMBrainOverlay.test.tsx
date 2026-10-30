@@ -116,16 +116,16 @@ describe('CMBrainContent — tabs + content', () => {
 describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
   const GRAPH = {
     nodes: [
-      { type: 'principle', count: 10, active: 10, dormant: 0 },
-      { type: 'correction', count: 5, active: 5, dormant: 0 },
-      { type: 'decision', count: 7, active: 7, dormant: 0 },
-      { type: 'guideline', count: 101, active: 90, dormant: 11 },
-      { type: 'pitfall', count: 69, active: 69, dormant: 0 },
-      { type: 'process', count: 1, active: 1, dormant: 0 },
-      { type: 'model', count: 4, active: 4, dormant: 0 },
+      { type: 'principle', count: 10 },
+      { type: 'correction', count: 5 },
+      { type: 'decision', count: 7 },
+      { type: 'guideline', count: 101 },
+      { type: 'pitfall', count: 69 },
+      { type: 'process', count: 1 },
+      { type: 'model', count: 4 },
     ],
     drill: {
-      guideline: [{ title: 'G-latest', status: 'active', ref_count: 0, meta: '2026-08-02' }],
+      guideline: [{ title: 'G-latest', meta: '2026-08-02' }],
       principle: [], correction: [], decision: [], pitfall: [], process: [], model: [],
     },
     total: 197,
@@ -183,13 +183,13 @@ describe('CMBrainOverlay — Memory tab (7-type graph + drill, DoD2)', () => {
     (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('brain-graph')) return Promise.resolve({ data: {
         nodes: [
-          { type: 'principle', count: 0, active: 0, dormant: 0 },
-          { type: 'correction', count: 0, active: 0, dormant: 0 },
-          { type: 'decision', count: 0, active: 0, dormant: 0 },
-          { type: 'guideline', count: 0, active: 0, dormant: 0 },
-          { type: 'pitfall', count: 0, active: 0, dormant: 0 },
-          { type: 'process', count: 0, active: 0, dormant: 0 },
-          { type: 'model', count: 0, active: 0, dormant: 0 },
+          { type: 'principle', count: 0 },
+          { type: 'correction', count: 0 },
+          { type: 'decision', count: 0 },
+          { type: 'guideline', count: 0 },
+          { type: 'pitfall', count: 0 },
+          { type: 'process', count: 0 },
+          { type: 'model', count: 0 },
         ], drill: {}, total: 0 } });
       if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
       return Promise.resolve({ data: { token_block: TOKEN_BLOCK, governance_pending_count: 0 } });
@@ -213,12 +213,12 @@ describe('CMBrainOverlay — Guideline tab (static teaching content, DoD3)', () 
     return screen.findByTestId('cm-panel-guideline');
   }
 
-  it('renders the 5 lifecycle cards in order (Assemble→Recall→Judge→Sediment→Decay)', async () => {
+  it('renders the 5 lifecycle cards in order (Assemble→Recall→Judge→Sediment→Revise)', async () => {
     await openGuideline();
     const flow = screen.getByTestId('cm-guideline-lifecycle');
     const stages = within(flow).getAllByTestId(/^cm-lc-/);
     expect(stages.map((s) => s.getAttribute('data-testid'))).toEqual([
-      'cm-lc-assemble', 'cm-lc-recall', 'cm-lc-judge', 'cm-lc-sediment', 'cm-lc-decay',
+      'cm-lc-assemble', 'cm-lc-recall', 'cm-lc-judge', 'cm-lc-sediment', 'cm-lc-revise',
     ]);
   });
 
@@ -226,8 +226,10 @@ describe('CMBrainOverlay — Guideline tab (static teaching content, DoD3)', () 
     await openGuideline();
     expect(screen.getByTestId('cm-guideline-automatic')).toBeInTheDocument();
     expect(screen.getByTestId('cm-guideline-manual')).toBeInTheDocument();
-    // automatic column names real mechanisms (Recall/Cultivation/Decay) — not counts
-    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/Recall|Cultivation|Decay/);
+    // automatic column names real mechanisms (Recall/Cultivation/Override) — not counts
+    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/Recall|Cultivation|Override/);
+    // entries in a main file no longer decay: no decay/dormant mechanism is taught
+    expect(screen.getByTestId('cm-guideline-automatic').textContent).not.toMatch(/Decay|dormant/);
     // manual column names user-steered surfaces (STEERING/USER/skill)
     expect(screen.getByTestId('cm-guideline-manual').textContent).toMatch(/STEERING|USER|[Ss]kill/);
   });
@@ -320,6 +322,19 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     expect(userRow.querySelector('[data-testid="cm-health"]')!.textContent).toBe('idle');
     const swRow = screen.getByTestId('cm-file-row-SWARMAI.md');
     expect(swRow.querySelector('[data-testid="cm-health"]')!.textContent).toBe('fresh');
+  });
+
+  it('knowledge-health counts show only exact duplicates, and only when non-zero', async () => {
+    mockHealth({ token_block: { ...TOKEN_BLOCK, per_file: [
+      { ...TOKEN_BLOCK.per_file[2], health_counts: { entries: 40, duplicate: 2 } },
+      { ...TOKEN_BLOCK.per_file[3], health_counts: { entries: 12, duplicate: 0 } },
+    ] } });
+    renderOverlay();
+    openOverlay();
+    await screen.findByTestId('cm-panel-context');
+    const counts = await screen.findByTestId('cm-health-counts-MEMORY.md');
+    expect(counts.textContent).toBe('2 dup');
+    expect(screen.queryByTestId('cm-health-counts-KNOWLEDGE.md')).toBeNull();
   });
 
   it('shows the truncation legend explaining the health/lock contract', async () => {
@@ -613,16 +628,16 @@ describe('CMBrainOverlay — Evolution tab + file-list ArchivePanel (Run C)', ()
   // Evolution graph in OUR priority order (backend returns pre-ordered).
   const EVO_GRAPH = {
     nodes: [
-      { type: 'class', count: 4, active: 4, dormant: 0 },
-      { type: 'correction', count: 3, active: 3, dormant: 0 },
-      { type: 'meta-correction', count: 1, active: 1, dormant: 0 },
-      { type: 'root-cause', count: 0, active: 0, dormant: 0 },
-      { type: 'data-point', count: 2, active: 2, dormant: 0 },
-      { type: 'directive', count: 1, active: 1, dormant: 0 },
-      { type: 'failed-evolution', count: 0, active: 0, dormant: 0 },
-      { type: 'entry', count: 0, active: 0, dormant: 0 },
+      { type: 'class', count: 4 },
+      { type: 'correction', count: 3 },
+      { type: 'meta-correction', count: 1 },
+      { type: 'root-cause', count: 0 },
+      { type: 'data-point', count: 2 },
+      { type: 'directive', count: 1 },
+      { type: 'failed-evolution', count: 0 },
+      { type: 'entry', count: 0 },
     ],
-    drill: { class: [{ title: 'CLASS A: Confidence Skip', status: 'archived', ref_count: 0, meta: '' }],
+    drill: { class: [{ title: 'CLASS A: Confidence Skip', meta: '' }],
       correction: [], 'meta-correction': [], 'root-cause': [], 'data-point': [], directive: [], 'failed-evolution': [], entry: [] },
     total: 11,
   };

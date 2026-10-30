@@ -168,7 +168,8 @@ def _closed_before(gap_id: str) -> bool:
     from .withdrawn import records
     try:
         conn = connect_ro()
-    except Exception:  # noqa: BLE001 -- unreadable records: not known closed
+    except Exception:  # noqa: BLE001 -- unreadable records: not known closed, said in the log
+        logger.warning("CDF gap close: withdrawal records unreadable", exc_info=True)
         return False
     try:
         return any(r.status == "closed" and gap_id in r.text for r in records(conn))

@@ -378,7 +378,7 @@ def select_context_file(
     """Select MEMORY/EVOLUTION whole units without any user-query input.
 
     Results are recomputed only after a source hash change or a UTC day boundary.
-    Superseded units are never injected. Over budget, whole units compete by score
+    Every unit in the file is in force. Over budget, whole units compete by score
     layer by layer, meta-cognition first; rendering always follows file order.
     """
     path = Path(path)
@@ -435,18 +435,12 @@ def select_context_file(
                           metadata_by_anchor.get(unit.anchor)) for unit in visible]
     full_text = _prompt_form(raw.decode("utf-8"))
     over_budget = estimate(full_text) > budget
-    # Nothing is hidden for a relation: an entry another one replaces has left the file
-    # (a declared override withdraws it, brain-driven §2.1); the judge's relations only
-    # link entries. An entry still carrying a superseded_by mark is skipped until the
-    # one-time cleanup removes those marks.
-    candidates = [item for item in ranked
-                  if not getattr(metadata_by_anchor.get(item.unit.anchor), "superseded_by", None)]
-    if not over_budget and len(candidates) == len(ranked):
+    # Nothing is hidden for a relation or a mark: an entry another one replaces has left
+    # the file (a declared override withdraws it, brain-driven §2.1).
+    candidates = ranked
+    if not over_budget:
         selected = {item.unit.anchor for item in candidates}
         text = full_text
-    elif not over_budget:
-        selected = {item.unit.anchor for item in candidates}
-        text = _render_selected(candidates, selected)
     else:
         # Every layer competes inside the budget, meta-cognition first: kept whole and
         # unbudgeted, it was already over the EVOLUTION budget and grew with every

@@ -174,30 +174,6 @@ def test_a_unit_refused_for_quota_is_not_judged_again_while_the_budget_is_spent(
     assert judged == [] and (rows[-1]["state"], rows[-1]["reason"]) == ("deferred", "quota")
 
 
-def test_refine_keeps_the_old_entrys_taint(tmp_path, monkeypatch):
-    from tests.test_cdf_writer_core import (ClaimVerdict, HitJudgment, _connect, _decision, _unit,
-                                            corpus as _corpus)
-    from core.ingestion.units import parse_units
-    from core.ingestion.writer import _unit_external, apply_unit
-    corpus = _corpus.__wrapped__(tmp_path, monkeypatch)
-    target = corpus["workspace"] / "Projects/P/2-understanding/TECH.md"
-    target.parent.mkdir(parents=True)
-    target.write_text("# T\n\n## Conventions\n\n- [guideline] **Old** Fetched advice. "
-                      "<!-- cand:old.1 | taint: external -->\n", encoding="utf-8")
-    anchor = "Projects/P/2-understanding/TECH.md#Conventions#cand:old.1"
-    judgment = HitJudgment(anchor=anchor, overlap="related", same_topic=True,
-                           claim_verdicts=[ClaimVerdict(verdict="refines", existing_sentence="Fetched advice.")],
-                           scope_relation="equal", candidate_evidence="measured", existing_evidence="inferred")
-    conn = _connect(corpus["db"])
-    row = _unit(conn, "new.1", "Add the trigger.", title="Refined")
-    decision = _decision("new.1", "DDD", "Projects/P/2-understanding/TECH.md", "Conventions",
-                         action="refine", judgments=[judgment])
-    assert apply_unit(decision, row, conn) == "done"
-    conn.close()
-    new = next(u for u in parse_units(target, root=corpus["workspace"]) if "new.1" in u.identity)
-    assert "Fetched advice." in new.text and _unit_external(new)
-
-
 def test_an_installed_package_file_cannot_leave_its_project(cdf_env, monkeypatch):
     from fastapi import HTTPException
     from tests.test_cdf_launch_explorer import api_ws
@@ -321,14 +297,6 @@ def test_refine_of_a_timeline_event_does_not_copy_the_earlier_event(tmp_path, mo
     start = text.index("Design updated")
     new = text[start:text.index("cand:new.1", start)]
     assert "The design was updated" in new and "earlier run landed" not in new
-
-
-def test_a_refined_block_entry_carries_its_text_without_heading_or_labels():
-    from core.ingestion.writer import _plain_unit_body
-    block = ("### C067 | 2026-10-29\n- **Correction**: **Guard** The guard reads content.\n"
-             "<!-- cand:x.unit -->")
-    assert _plain_unit_body(block) == "**Guard** The guard reads content."
-    assert _plain_unit_body("- [pitfall] **T** Body. <!-- cand:y -->") == "Body."
 
 
 def test_units_are_extracted_in_one_language():

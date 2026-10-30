@@ -189,7 +189,7 @@ def _units_in_content(path: Any, content: str) -> list[str]:
     return [anchor for anchor, _f, _l, text in _spans(path) if text in content]
 
 
-def record_recalled_result(result: Any, session_id: str, *, project: str | None = None) -> None:
+def record_recalled_result(result: Any, session_id: str) -> None:
     """Record only complete, exact CDF units present in an injected recall result."""
     if not session_id or result is None:
         return
@@ -210,9 +210,6 @@ def record_recalled_result(result: Any, session_id: str, *, project: str | None 
                 elif domain == "library":
                     source = str(hit.get("source") or hit.get("source_file") or "")
                     path = root / "Knowledge" / source if source else None
-                elif domain == "ddd" and project:
-                    doc = str(hit.get("doc") or "")
-                    path = root / "Projects" / project / doc if doc else None
                 if path is not None:
                     anchors.extend(_units_in_content(path, content))
         record_many_async(anchors, "recall_injected", session_id)

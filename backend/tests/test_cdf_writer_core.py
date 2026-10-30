@@ -218,30 +218,6 @@ def test_context_units_are_written_only_to_system_appendix(
     assert f"cand:{unit_id}" not in owner_part
     conn.close()
 
-def test_refine_appends_new_unit_and_supersedes_without_changing_old_bytes(corpus: dict[str, Path]) -> None:
-    target = corpus["workspace"] / "Projects/P/2-understanding/TECH.md"
-    target.parent.mkdir(parents=True)
-    old = "- [guideline] **Old** Keep this exact body. <!-- cand:old.1 -->"
-    target.write_text(f"# T\n\n## Conventions\n\n{old}\n", encoding="utf-8")
-    anchor = "Projects/P/2-understanding/TECH.md#Conventions#cand:old.1"
-    judgment = HitJudgment(
-        anchor=anchor, overlap="related", same_topic=True,
-        claim_verdicts=[ClaimVerdict(verdict="refines", existing_sentence="Keep this exact body.")],
-        scope_relation="equal", candidate_evidence="measured", existing_evidence="inferred",
-    )
-    conn = _connect(corpus["db"])
-    row = _unit(conn, "new.1", "Add the precise trigger.", title="Refined")
-    decision = _decision("new.1", "DDD", "Projects/P/2-understanding/TECH.md", "Conventions",
-                         action="refine", judgments=[judgment])
-    assert apply_unit(decision, row, conn) == "done"
-    final = target.read_text(encoding="utf-8")
-    assert old in final
-    assert "cand:new.1" in final
-    relation = conn.execute("SELECT subject_anchor,object_anchor FROM ingestion_relations").fetchone()
-    assert relation[1] == anchor
-    conn.close()
-
-
 def test_library_frontmatter_carries_source_and_external_taint(corpus: dict[str, Path]) -> None:
     conn = _connect(corpus["db"])
     conn.execute(

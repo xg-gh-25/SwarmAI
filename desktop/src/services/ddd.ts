@@ -18,8 +18,6 @@ export type SectionKey =
   | 'capabilities' | 'delivery' | 'refresher';
 
 export interface BrainHealth {
-  /** count of entries with decay_state ∈ {dormant, archived} — live */
-  sinking: number;
   /** count of this project's Need-You items (attention_authority), all sources */
   pending: number;
   /** a pipeline run of this project is in progress (its runs, last 30 days) */
@@ -49,14 +47,6 @@ export interface SectionDiagnostic {
  *  refused to invent one) — the UI reports the per-section DISTRIBUTION, never a
  *  single collapsed verdict. */
 export interface DetailHealth {
-  /** reclaimable-noise: entries the decay engine would strip. reclaimable>0 → an
-   *  owner action (run reclaim). Computed live. */
-  noise: { reclaimable: number; rate: number };
-  /** entries in a decaying (dormant/archived) state — a maintenance signal. Emitted
-   *  on EVERY health dict (gallery + detail) by _brain_health_base, so it's present
-   *  on detail health at runtime; declared here so the Overview §② needs-you can read
-   *  it (type must match wire reality — same contract as BrainHealth.sinking). */
-  sinking: number;
   /** doc → section → trust-level string, as stored (no rollup). null = no
    *  scheduled score computed yet. */
   trust: Record<string, Record<string, string | null>> | null;
@@ -128,12 +118,9 @@ export type EntryType =
   | 'guideline' | 'pitfall' | 'decision' | 'model'
   | 'process' | 'principle' | 'correction';
 
-export type DecayState = 'active' | 'dormant' | 'archived';
-
 export interface KnowledgeEntry {
   title: string;
   entryType: EntryType;
-  decayState: DecayState;
   section: string;
   source: string;
   file: string;
@@ -293,7 +280,7 @@ export interface AgentConfirmResult {
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────
 
 /** Provenance tag for a review hunk. (decay·sinking removed — the backend
- *  _tag_hunk never emits it; the Gallery's health.sinking count carries that signal.) */
+ *  _tag_hunk never emits it.) */
 export type HunkTag = 'cultivation·auto-applied';
 
 export interface ReviewHunk {

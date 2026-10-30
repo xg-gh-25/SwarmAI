@@ -72,7 +72,9 @@ def _memory_file(tmp_path: Path, monkeypatch, body: str) -> tuple[Path, object]:
     return path, api.connect_rw()
 
 
-def test_a_superseded_entry_is_not_injected_under_budget(tmp_path, monkeypatch):
+def test_a_supersedes_relation_never_hides_an_entry(tmp_path, monkeypatch):
+    """An entry in the file is in force: a relation only links (brain-driven §2.1, I4);
+    an entry another one replaces leaves the file by a declared override."""
     from core.memory_injection import select_context_file
     path, conn = _memory_file(tmp_path, monkeypatch, (
         "# Memory\n\n## Guidelines\n"
@@ -84,7 +86,7 @@ def test_a_superseded_entry_is_not_injected_under_budget(tmp_path, monkeypatch):
     conn.commit()
     sel = select_context_file(path, budget=100_000, estimate=len, conn=conn)
     conn.close()
-    assert "New rule" in sel.text and "Old rule" not in sel.text
+    assert "New rule" in sel.text and "Old rule" in sel.text
 
 
 def test_use_outweighs_a_few_days_of_age(tmp_path, monkeypatch):

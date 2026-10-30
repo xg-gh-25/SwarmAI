@@ -99,7 +99,7 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: 
   const pa = detail?.projectAgent;
   return {
     identity: base('identity'),
-    knowledge: has('knowledge') ? ((ev.brain.sinking ?? 0) > 0 ? 'attention' : 'ok') : 'attention',
+    knowledge: base('knowledge'),
     gates: base('gates'),
     capabilities: base('capabilities'),
     delivery: base('delivery'),
@@ -245,7 +245,6 @@ function EvalSummary({ ev, onOpen }: { ev: ReturnType<typeof brainEval>; onOpen:
     ['Runs landed', `${ev.runs.landed} / ${ev.runs.total}`],
     ['Average cycle', num(ev.runs.avgCycleMin, ' min')],
     ['Knowledge, 30 days', ev.brain.recentActivity == null ? 'UNKNOWN' : `+${ev.brain.recentActivity}`],
-    ['Sinking entries', num(ev.brain.sinking), ev.brain.sinking ? 'text-[var(--color-status-warning)]' : undefined],
     ['Tokens', ev.runs.tokens == null ? 'UNKNOWN' : `${Math.round(ev.runs.tokens / 1000)}k`],
   ];
   return (
@@ -497,8 +496,6 @@ function EvalPanel({ ev, human, hiveLoaded }: {
       </div></div>
       <div><SectionLabel>Brain</SectionLabel><div className={grid}>
         <Stat label="Knowledge entries" value={ev.brain.entries} hint={`${num(ev.brain.recentActivity)} changes in 30 days`} />
-        <Stat label="Sinking" value={num(ev.brain.sinking)} hint="dormant or archived entries" tone={ev.brain.sinking ? 'warning' : undefined} />
-        <Stat label="Reclaimable noise" value={num(ev.brain.reclaimable)} />
         <Stat label="Does it help Runs?" value="UNKNOWN" hint="not measured, not guessed" />
       </div></div>
     </div>
