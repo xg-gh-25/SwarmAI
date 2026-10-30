@@ -11,7 +11,7 @@ Public symbols:
 - ``pause_kind`` / ``needs_you`` — what the run needs from a person.
 - ``progress`` — (stages done, stages in the profile).
 - ``duration_minutes`` — created → finished, only once the run is finished.
-- ``tokens`` — measured input+output tokens, or None when never measured.
+- ``tokens`` — every token the run was billed for, or None when not fully measured.
 """
 from __future__ import annotations
 
@@ -94,11 +94,25 @@ def duration_minutes(raw: Mapping[str, Any]) -> Optional[float]:
     return round((end - start).total_seconds() / 60, 1)
 
 
+def _count(value: Any) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def tokens(raw: Mapping[str, Any]) -> Optional[int]:
-    usage = raw.get("usage")
-    if not isinstance(usage, Mapping):
-        return None
-    values = [usage.get("input_tokens"), usage.get("output_tokens")]
-    if not all(isinstance(v, int) and not isinstance(v, bool) for v in values):
-        return None
-    return int(sum(values))
+    """Every token the run was billed for: input (cache writes included), output and
+    cache reads (``run_protocol.usage.measure``). The run's own ``billed_tokens``
+    measurement wins; a run measured before that metric existed falls back to its
+    audit's token cost when all three parts are there. Anything less is None, never
+    input + output alone: with a warm cache that is about a hundredth of the bill
+    (design 2026-10-29-usage-accounting)."""
+    usage = raw.get("usage") if isinstance(raw.get("usage"), Mapping) else {}
+    billed = _count(usage.get("billed_tokens"))
+    if billed is not None:
+        return int(billed)
+    summary = raw.get("audit_summary") if isinstance(raw.get("audit_summary"), Mapping) else {}
+    cost = summary.get("token_cost") if isinstance(summary.get("token_cost"), Mapping) else {}
+    billed = _count(cost.get("billed_tokens"))
+    if billed is not None:
+        return int(billed)
+    parts = [_count(cost.get(k)) for k in ("input_tokens", "output_tokens", "cache_read_tokens")]
+    return None if any(p is None for p in parts) else int(sum(parts))

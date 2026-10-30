@@ -348,11 +348,7 @@ def _card_facts(raw: dict, status: str) -> dict[str, Any]:
     None when the run never recorded it (design 2026-10-30-brain-runs-one-card)."""
     summary = raw.get("audit_summary") if isinstance(raw.get("audit_summary"), dict) else {}
     usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
-    tc = summary.get("token_cost") if isinstance(summary.get("token_cost"), dict) else {}
-    billed = _num(usage.get("billed_tokens"))
-    if billed is None and all(_num(tc.get(k)) is not None
-                              for k in ("input_tokens", "output_tokens", "cache_read_tokens")):
-        billed = sum(_num(tc.get(k)) or 0 for k in ("input_tokens", "output_tokens", "cache_read_tokens"))
+    billed = pm.tokens(raw)
     autonomy = summary.get("autonomy") if isinstance(summary.get("autonomy"), dict) else {}
     human = raw.get("human_decisions")
     if not isinstance(human, int) or isinstance(human, bool):
@@ -366,7 +362,7 @@ def _card_facts(raw: dict, status: str) -> dict[str, Any]:
     return {
         "finished_at": raw.get("finished_at") if isinstance(raw.get("finished_at"), str) else None,
         "active_s": _num(speed.get("active_seconds")),
-        "billed_tokens": int(billed) if billed is not None else None,
+        "billed_tokens": billed,
         "cost_usd": _num(usage.get("book_cost_usd")),
         "human_decisions": human,
         "landing": landing,

@@ -44,7 +44,7 @@ class PipelineRunResponse(BaseModel):
     progress: str = Field(..., description="Stages completed/total (e.g., '3/8')")
     stages_completed: int = Field(0, description="Number of completed stages")
     stages_total: int = Field(8, description="Total stages in profile")
-    tokens_consumed: Optional[int] = Field(None, description="Measured tokens; None when never measured")
+    tokens_consumed: Optional[int] = Field(None, description="Billed tokens (input incl. cache writes + output + cache reads); None when not fully measured")
     pause_kind: Optional[str] = Field(
         None, description="What the run needs from a person: 'decision' / 'stopped' / "
                           "'worktree' / 'idle' (core.pipeline_metrics.pause_kind), else None")

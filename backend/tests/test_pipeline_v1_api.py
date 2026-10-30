@@ -149,7 +149,9 @@ def test_list_analytics_and_detail_read_the_v1_projection(tmp_path, monkeypatch)
         assert listed["pipelines"][0]["tokens_consumed"] is None
         row = client.get("/api/pipelines/analytics").json()["by_project"][0]["runs"][0]
         assert row["cycle_time_min"] is None and row["owner_session_id"] == "session-real"
-        for name, value in (("input_tokens", 1200), ("output_tokens", 300)):
+        # what run_protocol.usage.measure writes: the comparable parts and the bill
+        for name, value in (("input_tokens", 1200), ("output_tokens", 300),
+                            ("cache_read_tokens", 48500), ("billed_tokens", 50000)):
             engine.store.append_new(writer=engine.authority.writer("cli"), kind="metric",
                                     at="2026-10-23T00:00:00+00:00", stage="reflect",
                                     attempt=1, ordinal=NEXT,
@@ -159,7 +161,8 @@ def test_list_analytics_and_detail_read_the_v1_projection(tmp_path, monkeypatch)
         from core import run_index
         run_index._clear_for_tests()
         data = client.get("/api/pipelines/analytics").json()
-        assert data["overall"]["tokens_actual"] == 1500
+        # every billed token, cache reads included: input + output alone was ~3% of it
+        assert data["overall"]["tokens_actual"] == 50000
         row = data["by_project"][0]["runs"][0]
         # the user cancelled it themselves: nothing for them to act on (R5 review)
         assert row["status"] == "abandoned" and row["needs_you"] is False
