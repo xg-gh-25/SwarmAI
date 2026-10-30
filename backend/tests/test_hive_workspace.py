@@ -320,3 +320,51 @@ def test_a_hives_review_reads_the_newest_worktree_of_a_repository(world, monkeyp
     assert hw.latest_worktree(world["ws"], "https://github.com/acme/other.git") is None
     hw.release(world["ws"], W2, lambda sid: False)
     assert hw.latest_worktree(world["ws"], URL) == f"Hive/work/{W1}/repos/lib"
+
+
+def test_a_tampered_mirror_is_rewritten_and_no_remote_helper_runs(world, tmp_path, monkeypatch):
+    sha = _ship(world)
+    hw.prepare(world["ws"], W1, [_repo(sha)])
+    mirror = hw._state() / "mirrors" / hw._mirror_rel(URL)
+    marker = tmp_path / "helper-ran"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    helper = bindir / "git-remote-evil"
+    helper.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+    helper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    included = tmp_path / "inc"
+    included.write_text('[url "evil::x"]\n\tinsteadOf = https://\n')
+    cfg = mirror / "config"
+    cfg.write_text(cfg.read_text().replace(URL, "evil::x") + f"[include]\n\tpath = {included}\n")
+    hw.prepare(world["ws"], W2, [_repo(sha)])
+    assert not marker.exists()
+    text = cfg.read_text()
+    assert "evil" not in text and "include" not in text and URL in text
+    # the transport allowlist holds even where a config would ask for a helper
+    assert not hw._ok(hw._git(mirror, "fetch", "evil::x"))
+    assert not marker.exists()
+
+
+def test_the_daemons_git_sees_no_secret_and_never_follows_a_link(world, tmp_path, monkeypatch):
+    monkeypatch.setenv("HIVE_SECRET_TOKEN", "s3cret")
+    env = hw.git_env()
+    assert "HIVE_SECRET_TOKEN" not in env and env["PATH"] and env["GIT_CONFIG_GLOBAL"] == hw.GLOBAL_CONFIG
+    sha = _ship(world)
+    # the Host's bundle swapped for a link: not followed, not copied
+    from core.hive_repo_inbox import bundle_rel
+    b = world["ws"] / bundle_rel(sha)
+    elsewhere = tmp_path / "elsewhere.bundle"
+    b.rename(elsewhere)
+    b.symlink_to(elsewhere)
+    assert hw._copy_bundle(world["ws"], sha) is None
+    # a task clone whose place holds a link: refused, nothing written through it
+    hw.prepare(world["ws"], W1, [])
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    (world["ws"] / hw.repo_rel(W1, "lib")).symlink_to(target_dir)
+    mirror = hw._state() / "mirrors" / hw._mirror_rel(URL)
+    with pytest.raises(hw.WorkError):
+        hw._task_clone(mirror if mirror.exists() else world["remote"], {**_repo(world["a"]), "name": "lib"},
+                       world["ws"], W1)
+    assert list(target_dir.iterdir()) == []

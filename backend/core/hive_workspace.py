@@ -24,14 +24,24 @@ back; a ``write`` one is on the branch ``hive/<work_id>`` made at the commit, an
 commits come back as ``commit..hive/<work_id>``. The agent runs no clone, fetch or
 checkout.
 
-**The daemon's git runs nothing the agent configured.** The agent works only in its
-task's clone, never in a mirror, and the orders are not in the workspace. As defence in
-depth every git command here runs with a minimal environment (no daemon secret reaches
-a command git starts), the global and system config off, hooks off, and the config keys
-that start a command fixed on the command line (credential helper, askpass, ssh
-command, proxy, upload-pack, alternate refs, fsmonitor, the ``ext`` transport); a mirror
-whose ``.git`` holds a ``commondir``, a ``gitdir`` or an ``alternates`` file, or a link,
-is refused. One file lock per mirror serializes its fetches and the clones made from it.
+**What this guarantees, and what it does not** (design run-spec r4.2, XG's choice A).
+On a Hive the agent runs as the same OS user as the daemon and can run any command, so
+no file the daemon reads is out of its reach: this module is not a boundary against an
+agent that sets out to attack it (that needs the agent under its own OS user, a
+separate design). What it does guarantee:
+- **no daemon secret reaches a command git starts**: every git command here (and the
+  turn-end ones in core/task_repos and core/hive_bundle, through ``git_env``) runs with
+  a minimal environment;
+- **content a repository carries never runs**: hooks off, the global, system and
+  attributes/ignore files off, the config keys that start a command fixed on the command
+  line (credential helper, askpass, ssh command, proxy, upload-pack, alternate refs,
+  fsmonitor), and only the https, ssh and file transports allowed (no remote helper);
+- **a tampered mirror is not trusted**: its config is rewritten from the URL before each
+  fetch, and one with a ``commondir``, ``gitdir`` or ``alternates`` file, or a link, is
+  refused; a task's clone is made and checked out in the daemon's staging directory and
+  moved into the workspace only when done; the Host's bundle is copied out of the
+  workspace before git opens it.
+One file lock per mirror serializes its fetches and the clones made from it.
 
 Every failure is one of the fixed ``ERR_*`` texts, after the repository's name when it
 is about one; a half-made workspace is removed (only ``Hive/work/<work_id>/``,
@@ -93,12 +103,29 @@ _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_ATTR_NO
             "GIT_ASKPASS": "", "SSH_ASKPASS": "", "LC_ALL": "C"}
 #: the global config the daemon's git reads: none (module doc); a test points it at its own
 GLOBAL_CONFIG = os.devnull
-_GIT_OPTS = ("-c", "core.hooksPath=" + os.devnull, "-c", "core.fsmonitor=false",
-             "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.gitProxy=",
-             "-c", "core.sshCommand=ssh -F /dev/null -o BatchMode=yes",
-             "-c", "core.alternateRefsCommand=", "-c", "remote.origin.uploadpack=git-upload-pack",
-             "-c", "protocol.ext.allow=never", "-c", "submodule.recurse=false",
-             "-c", "gc.auto=0", "-c", "maintenance.auto=false")
+#: what every git command here runs with (module doc); the ssh command is ``_ssh_opt``
+GIT_SAFE_OPTS = ("-c", "core.hooksPath=" + os.devnull, "-c", "core.fsmonitor=false",
+                 "-c", "core.attributesFile=" + os.devnull, "-c", "core.excludesFile=" + os.devnull,
+                 "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.gitProxy=",
+                 "-c", "core.alternateRefsCommand=", "-c", "remote.origin.uploadpack=git-upload-pack",
+                 "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+                 "-c", "protocol.ssh.allow=always", "-c", "protocol.file.allow=always",
+                 "-c", "submodule.recurse=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false")
+
+
+def git_env() -> dict[str, str]:
+    """The environment of a git command the daemon runs in a Hive's repositories: the
+    variables in ``_ENV_KEEP`` only, global and system config off (module doc)."""
+    env = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
+    env.update(_GIT_ENV, GIT_CONFIG_GLOBAL=GLOBAL_CONFIG)
+    return env
+
+
+def _ssh_opt() -> tuple[str, str]:
+    import shlex
+    known = _state() / "known_hosts"
+    return ("-c", "core.sshCommand=ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+            f"-o UserKnownHostsFile={shlex.quote(str(known))}")
 
 
 class WorkError(ValueError):
@@ -136,10 +163,9 @@ def _order_path(work_id: str, suffix: str = ".json") -> Path:
 
 
 def _git(cwd: Optional[Path], *args: str, timeout: int = LOCAL_TIMEOUT_S) -> Optional[subprocess.CompletedProcess]:
-    env = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
-    env.update(_GIT_ENV, GIT_CONFIG_GLOBAL=GLOBAL_CONFIG)
     try:
-        return subprocess.run(["git", *_GIT_OPTS, *args], cwd=str(cwd) if cwd else None, env=env,
+        return subprocess.run(["git", *GIT_SAFE_OPTS, *_ssh_opt(), *args], cwd=str(cwd) if cwd else None,
+                              env=git_env(),
                               capture_output=True, timeout=timeout, check=False, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -176,16 +202,70 @@ def _mirror_sound(m: Path) -> bool:
                    for x in ("commondir", "gitdir", "objects/info/alternates", "objects/info/http-alternates"))
 
 
-def _ensure_mirror(ws: Path, r: dict[str, Any]) -> Path:
-    """The mirror of *r*, cloned or fetched, with the Host's bundle fetched; the commit
-    the task starts from is set on ``r["sha"]``. Call under its lock."""
+def _write_mirror_config(m: Path, url: str) -> None:
+    """The mirror's config from the URL alone (an earlier one, whoever wrote it, is not
+    read), keeping its object format."""
+    cfg = m / "config"
+    fmt = "sha1"
+    try:
+        if cfg.is_file() and not cfg.is_symlink() and re.search(
+                r"(?im)^\s*objectformat\s*=\s*sha256\s*$", cfg.read_text(encoding="utf-8", errors="replace")):
+            fmt = "sha256"
+    except OSError:
+        pass
+    lines = ["[core]", f"\trepositoryformatversion = {1 if fmt == 'sha256' else 0}", "\tbare = true"]
+    if fmt == "sha256":
+        lines += ["[extensions]", "\tobjectformat = sha256"]
+    lines += ['[remote "origin"]', f"\turl = {url}", "\tfetch = +refs/heads/*:refs/remotes/origin/*"]
+    tmp = m / f".config.{os.getpid()}.{time.monotonic_ns()}"
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.replace(tmp, cfg)
+
+
+def _copy_bundle(ws: Path, sha: str) -> Optional[Path]:
+    """The Host's bundle copied (without following a link) to the daemon's staging
+    directory, so what git opens is the file that was checked; None when there is none."""
     from core.hive_repo_inbox import bundle_rel
+    rel = bundle_rel(sha)
+    if not _plain(ws, rel):
+        return None
+    try:
+        fd = os.open(str(ws / rel), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        import stat as _stat
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        out = _state() / "staging" / f"{sha}.{os.getpid()}.{time.monotonic_ns()}.bundle"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(fd, "rb", closefd=False) as src, open(out, "xb") as dst:
+            shutil.copyfileobj(src, dst)
+        return out
+    finally:
+        os.close(fd)
+
+
+def _ensure_mirror(ws: Path, r: dict[str, Any]) -> Path:
+    bundle = _copy_bundle(ws, r["sha"]) if r.get("sha") else None
+    try:
+        return _ensure_mirror_from(ws, r, bundle)
+    finally:
+        if bundle is not None:
+            bundle.unlink(missing_ok=True)
+
+
+def _ensure_mirror_from(ws: Path, r: dict[str, Any], bundle: Optional[Path]) -> Path:
+    """The mirror of *r*, cloned or fetched, with the Host's bundle (copied out of the
+    workspace, ``_copy_bundle``) fetched; the commit the task starts from is set on
+    ``r["sha"]``. Call under its lock."""
     rel = _mirror_rel(r["url"])
     if not _plain(_state(), "mirrors/" + rel):
         raise WorkError(ERR_MIRROR)
     m = _state() / "mirrors" / rel
-    bundle = ws / bundle_rel(r["sha"]) if r.get("sha") else None
-    has_bundle = bundle is not None and _plain(ws, bundle_rel(r["sha"])) and bundle.is_file()
+    has_bundle = bundle is not None
     if not m.exists():
         m.parent.mkdir(parents=True, exist_ok=True)
         tmp = m.parent / f".{m.name}.cloning"
@@ -197,14 +277,15 @@ def _ensure_mirror(ws: Path, r: dict[str, Any]) -> Path:
             # its checkout tracks no remote branch) is a repository of its own
             shutil.rmtree(tmp, ignore_errors=True)
             cloned = _ok(_git(None, "clone", "--bare", "--no-tags", "--", str(bundle), str(tmp),
-                              timeout=NET_TIMEOUT_S)) and _ok(_git(tmp, "remote", "set-url", "origin", r["url"]))
-        if not cloned or not _ok(_git(tmp, "config", "remote.origin.fetch",
-                                      "+refs/heads/*:refs/remotes/origin/*")):
+                              timeout=NET_TIMEOUT_S))
+        if not cloned or not _mirror_sound(tmp):
             shutil.rmtree(tmp, ignore_errors=True)
             raise WorkError(ERR_CLONE)
+        _write_mirror_config(tmp, r["url"])
         os.replace(tmp, m)
     if not _mirror_sound(m):
         raise WorkError(ERR_MIRROR)
+    _write_mirror_config(m, r["url"])
     fetched = _ok(_git(m, "fetch", "--prune", "--no-tags", "origin", timeout=NET_TIMEOUT_S))
     if r.get("sha"):
         if has_bundle and not _ok(_git(m, "fetch", "--no-tags", str(bundle),
@@ -227,10 +308,27 @@ def _ensure_mirror(ws: Path, r: dict[str, Any]) -> Path:
     return m
 
 
-def _task_clone(m: Path, r: dict[str, Any], target: Path, work_id: str) -> None:
+def _task_clone(m: Path, r: dict[str, Any], ws: Path, work_id: str) -> None:
     """The task's own clone of the mirror at ``r["sha"]``: on ``hive/<work_id>`` when
     writable, detached when read-only; its origin is the repository's URL and its
-    remote-tracking branches are the mirror's."""
+    remote-tracking branches are the mirror's. Made and checked out in the daemon's
+    staging directory, then moved to ``repo_rel`` (a path with a link on it is refused)."""
+    stage = _state() / "staging" / work_id / r["name"]
+    shutil.rmtree(stage, ignore_errors=True)
+    stage.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        _clone_into(m, r, stage, work_id)
+        rel = repo_rel(work_id, r["name"])
+        if not _plain(ws, rel) or (ws / rel).exists():
+            raise WorkError(ERR_PATH)
+        os.rename(stage, ws / rel)
+        if (ws / rel).is_symlink() or not _plain(ws, rel):
+            raise WorkError(ERR_PATH)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+def _clone_into(m: Path, r: dict[str, Any], target: Path, work_id: str) -> None:
     if not _ok(_git(None, "clone", "--no-checkout", "--no-tags", "--reference", str(m), "--",
                     str(m), str(target))):
         raise WorkError(ERR_WORKTREE)
@@ -301,7 +399,8 @@ class _MirrorLock:
     def __enter__(self):
         from utils.file_lock import flock_exclusive
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.f = open(self.path, "a+")  # noqa: SIM115
+        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        self.f = os.fdopen(fd, "a+")
         flock_exclusive(self.f)
         return self
 
@@ -330,7 +429,7 @@ def prepare(workspace: Path, work_id: str, repos: Any) -> dict[str, Any]:
             try:
                 with _MirrorLock(r["url"]):
                     m = _ensure_mirror(ws, r)
-                    _task_clone(m, r, ws / repo_rel(work_id, r["name"]), work_id)
+                    _task_clone(m, r, ws, work_id)
             except WorkError as e:
                 raise WorkError(f"{r['name']}: {e}") from None
             listed.append({**r, "dir": repo_rel(work_id, r["name"]),
@@ -343,7 +442,7 @@ def prepare(workspace: Path, work_id: str, repos: Any) -> dict[str, Any]:
     except WorkError:
         _remove(ws, work_id)
         raise
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 — any other failure: the fixed text, nothing left
         logger.warning("hive_workspace: preparing %s failed (%s)", work_id, type(exc).__name__)
         _remove(ws, work_id)
         raise WorkError(ERR_WRITE) from None

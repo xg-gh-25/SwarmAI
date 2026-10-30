@@ -52,9 +52,12 @@ def _dir(workspace: Path, session_id: str) -> Path:
 
 
 def _git(cwd: str, *args: str) -> Optional[subprocess.CompletedProcess]:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
+    # the daemon's git in the agent's repository: no daemon secret, nothing it configures
+    # runs (core/hive_workspace)
+    from core.hive_workspace import GIT_SAFE_OPTS, git_env
+    env = {**git_env(), "GIT_OPTIONAL_LOCKS": "0"}
     try:
-        return subprocess.run(["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", *args],
+        return subprocess.run(["git", *GIT_SAFE_OPTS, *args],
                               cwd=cwd, env=env, capture_output=True, timeout=GIT_TIMEOUT_S, check=False)
     except (OSError, subprocess.SubprocessError):
         return None

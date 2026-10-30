@@ -196,10 +196,14 @@ _GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"
 
 
 def _git(cwd: str, *args: str) -> Optional[str]:
-    """stdout of one read-only git command, or None when it failed."""
-    env = {**os.environ, **_GIT_ENV}
+    """stdout of one read-only git command, or None when it failed. It runs in a
+    repository the Hive's agent works in, with the environment and pins of the daemon's
+    own git there (core/hive_workspace: no daemon secret, nothing the repository
+    configures runs)."""
+    from core.hive_workspace import GIT_SAFE_OPTS, git_env
+    env = {**git_env(), **_GIT_ENV}
     try:
-        p = subprocess.run(["git", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", *args],
+        p = subprocess.run(["git", *GIT_SAFE_OPTS, "-c", "core.pager=cat", *args],
                            cwd=cwd, env=env, capture_output=True, timeout=GIT_TIMEOUT_S,
                            check=False)
     except (OSError, subprocess.SubprocessError):
@@ -347,7 +351,7 @@ def _one(workspace: Path, repo: dict[str, Optional[str]], since: Optional[float]
     if top is None or Path(top.strip()).resolve() != real:
         return fact                                    # not a repository of its own
     fact["present"] = True
-    origin = _git(str(real), "remote", "get-url", "origin")
+    origin = _git(str(real), "config", "--get", "remote.origin.url")    # as written, no insteadOf
     fact["origin_matches"] = bool(origin) and _same_repo(_origin_key(origin), repo["url"])
     if not fact["origin_matches"]:
         return fact                                    # not the declared repository
