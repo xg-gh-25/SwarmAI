@@ -50,7 +50,7 @@ def test_the_backlog_of_the_deleted_paths_is_marked_and_can_be_put_back(tmp_path
 
     conn = connect_rw()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
         units = _units(conn)
         assert units["c1.q"] == ("rejected", "discarded_backlog", "quota", None)
         assert units["c1.d"] == ("rejected", "discarded_backlog", "unknown_domain", None)
@@ -78,7 +78,7 @@ def test_the_backlog_of_the_deleted_paths_is_marked_and_can_be_put_back(tmp_path
     finally:
         conn.close()
 
-    backups = list(Path(ingestion_db_path()).parent.glob("ingestion.db.pre-v10-from-v9-*.bak"))
+    backups = list(Path(ingestion_db_path()).parent.glob("ingestion.db.pre-v11-from-v9-*.bak"))
     assert len(backups) == 1
     check = sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True)
     try:
@@ -87,11 +87,11 @@ def test_the_backlog_of_the_deleted_paths_is_marked_and_can_be_put_back(tmp_path
         check.close()
 
 
-def test_a_new_store_is_created_at_v10(tmp_path, monkeypatch):
+def test_a_new_store_is_created_at_the_current_version(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
     from core.ingestion.store import connect_rw
     conn = connect_rw()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
     finally:
         conn.close()

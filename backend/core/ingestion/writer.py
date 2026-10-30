@@ -211,10 +211,17 @@ def _ensure_link_file(content: str, target: Path) -> str:
             + f"# Links from {host}\n")
 
 
+def _timeline_section(group: Mapping[str, Any]) -> str:
+    """The TIMELINE section an event goes under: its month, or "Not injected" when it
+    cites external content (the plan's anchor names the same section)."""
+    if group.get("cited_external"):
+        return "Not injected"
+    return str(group.get("when") or _now().date().isoformat())[:7]
+
+
 def _append_timeline(content: str, group: dict[str, Any], block: str) -> str:
     value = content if content.strip() else "# Timeline\n"
-    marked = bool(group.get("cited_external"))
-    section = "Not injected" if marked else str(group.get("when") or _now().date().isoformat())[:7]
+    section = _timeline_section(group)
     pattern = re.compile(rf"^##\s+{re.escape(section)}\s*$", re.MULTILINE)
     match = pattern.search(value)
     if match is None:
@@ -515,7 +522,11 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
         sequence = _next_evolution_id(content, section, prefix)
     block = _render_block(decision, unit_id, group, sequence=sequence)
     intended = _compose_intended(content, target, store, section, group, block)
-    new_anchor = f"{_relative(target)}#{section}#cand:{unit_id}"
+    # the section the entry is written under: an event's is chosen when it is placed (its
+    # month), not declared — an anchor without it names no entry and its relations were
+    # skipped as "anchor not found"
+    placed = _timeline_section(group) if store == "TIMELINE" else section
+    new_anchor = f"{_relative(target)}#{placed}#cand:{unit_id}"
     relations = []
     for hint in vector.get("relation_hints", []):
         predicate = hint.get("predicate")
@@ -584,9 +595,16 @@ def _claim_step(conn: sqlite3.Connection, op_id: str, step: str, epoch: int) -> 
     return cursor.rowcount == 1
 
 
+# Once a plan is done or abandoned nothing reads its intended bytes again (recover takes
+# only unfinished plans; the flow views drop the column): they are released then. Kept,
+# every write held a whole copy of its target file — 419 MB in two days.
+_SETTLED = ("done", "abandoned")
+
+
 def _advance(conn: sqlite3.Connection, op_id: str, current: str, following: str, epoch: int) -> bool:
+    release = ",intended_bytes=NULL" if following in _SETTLED else ""
     cursor = conn.execute(
-        "UPDATE ingestion_writes SET step=?,updated_at=? "
+        f"UPDATE ingestion_writes SET step=?,updated_at=?{release} "
         "WHERE op_id=? AND step=? AND owner_epoch=?",
         (following, _iso(), op_id, current, epoch),
     )
@@ -607,7 +625,7 @@ def _defer(conn: sqlite3.Connection, plan: Mapping[str, Any], reason: str, *,
     """Abandon *plan*; its unit (if still writing) is deferred with a backoff and one
     more attempt counted, poisoned after DEFER_LIMIT -- without them a target the user
     keeps editing was re-judged and re-planned in a tight loop."""
-    conn.execute("UPDATE ingestion_writes SET step='abandoned',updated_at=? WHERE op_id=?",
+    conn.execute("UPDATE ingestion_writes SET step='abandoned',updated_at=?,intended_bytes=NULL WHERE op_id=?",
                  (_iso(), plan["op_id"]))
     if plan.get("unit_id"):
         row = conn.execute("SELECT attempts FROM ingestion_units WHERE unit_id=?",

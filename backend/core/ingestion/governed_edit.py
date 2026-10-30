@@ -314,7 +314,7 @@ def recover_tree_plan(conn: sqlite3.Connection, plan: dict[str, Any]) -> str:
                 return "fenced"
             if not _tree_postcondition(manifest):
                 if not _tree_precondition(manifest):
-                    conn.execute("UPDATE ingestion_writes SET step='abandoned',updated_at=? WHERE op_id=?",
+                    conn.execute("UPDATE ingestion_writes SET step='abandoned',updated_at=?,intended_bytes=NULL WHERE op_id=?",
                                  (_iso(), plan["op_id"]))
                     conn.commit()
                     return "abandoned"
@@ -550,7 +550,7 @@ def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
             # the file changed under us (a user's save): this plan can never apply, so it
             # is abandoned, not left for recovery to retry forever; the caller tries again
             # later with a plan of the file as it is then
-            conn.execute("UPDATE ingestion_writes SET step='abandoned', updated_at=? WHERE op_id=? "
+            conn.execute("UPDATE ingestion_writes SET step='abandoned', updated_at=?, intended_bytes=NULL WHERE op_id=? "
                          "AND step NOT IN ('done','abandoned')", (_iso(), plan["op_id"]))
             conn.commit()
             raise

@@ -127,13 +127,13 @@ def test_a_v8_store_is_backed_up_then_migrated_to_v9(tmp_path, monkeypatch):
     conn.close()
     migrated = connect_rw()
     try:
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 11
         assert migrated.execute("SELECT trust FROM evidence_roots WHERE root_id='r1'").fetchone()[0] == "user"
         migrated.execute("INSERT INTO evidence_roots VALUES ('r2','corpus_unit','x','h','inferred','[]','t','t')")
         migrated.execute("INSERT INTO unit_basis VALUES ('u','inferred','now')")
     finally:
         migrated.close()
-    backups = list(Path(ingestion_db_path()).parent.glob("ingestion.db.pre-v10-from-v8-*.bak"))
+    backups = list(Path(ingestion_db_path()).parent.glob("ingestion.db.pre-v11-from-v8-*.bak"))
     assert len(backups) == 1
     check = sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True)
     try:

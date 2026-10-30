@@ -630,11 +630,11 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     session_home = _resolve_project(root, session_project)
     subject = declared or scope_project
     if wants_project:
+        # the project the producing agent named, or none: a name that is no project goes
+        # to the General Brain under that name (D7). The session's project is not
+        # guessed for it — the agent was shown the projects that exist (s7_review) and
+        # names one of them when that is where the unit belongs.
         project = _resolve_project(root, subject)
-        if project is None and not declared and not _is_hive_lesson(row):
-            # a project the extractor named that does not exist (a subsystem's name, the
-            # workspace) is the session's own project when it has one
-            project = session_home
     else:
         project = _resolve_project(root, declared)
     corpus_project = project or session_home

@@ -40,10 +40,6 @@ MAX_WAIT = {
 TERMINAL_STATES = frozenset({
     "merged", "written", "reinforced", "rejected", "failed_poison", "expired_unprocessed",
 })
-INFRA_REASONS = frozenset({
-    "unavailable", "stale", "ambiguous_project", "missing_section", "user_race",
-    "stale_plan", "db_busy",
-})
 # what an outage or a busy store produces (unlike ambiguous_project, which the same
 # input reproduces)
 OUTAGE_REASONS = frozenset({"unavailable", "stale", "db_busy", "user_race", "stale_plan"})
@@ -620,7 +616,6 @@ class IngestionWorker:
         self.on_ready: Any = None        # called once startup recovery is done
         self.wake_event = asyncio.Event()
         self.scheduler = WeightedLaneScheduler()
-        self._paused_sources: dict[str, datetime] = {}
         self._maintenance_due = _utcnow()
         self._summary_due = _utcnow()
         from .summary_lane import SummaryLane
@@ -724,34 +719,10 @@ class IngestionWorker:
                ORDER BY {order} LIMIT 1""",
             (lane, now.isoformat()),
         ).fetchone()
-        if row is None or self._paused_sources.get(row["source"], now) > now:
+        if row is None:
             return False
         process_candidate(conn, self.owner, row, self.workspace_root)
-        self._update_breaker(conn, row["source"], now)
         return True
-
-    def _update_breaker(self, conn: sqlite3.Connection, source: str, now: datetime) -> None:
-        since = (now - timedelta(hours=1)).isoformat()
-        rows = conn.execute(
-            """SELECT u.state, u.reason FROM ingestion_units u JOIN ingestion_inbox i
-               ON i.id=u.candidate_id WHERE i.source=? AND u.updated_at>=?""",
-            (source, since),
-        ).fetchall()
-        if len(rows) < 20:
-            return
-        deferred = sum(row["state"] == "deferred" and (
-            row["reason"] in INFRA_REASONS or str(row["reason"]).startswith("judge_unavailable")
-        ) for row in rows)
-        if deferred / len(rows) <= 0.5:
-            return
-        until = now + timedelta(hours=1)
-        if self._paused_sources.get(source, now) >= until:
-            return
-        self._paused_sources[source] = until
-        conn.execute(
-            "INSERT INTO ingestion_events(at, kind, detail) VALUES (?, 'breaker', ?)",
-            (now.isoformat(), json.dumps({"source": source, "paused_until": until.isoformat()})),
-        )
 
     def stop(self) -> None:
         """Request a clean stop from any thread."""

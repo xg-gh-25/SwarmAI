@@ -128,10 +128,11 @@ def test_a_gap_of_an_unknown_project_goes_to_the_general_brains_open_gaps(tmp_pa
     assert (decision.destination.store, decision.destination.section) == ("COMMON_DDD", "Open Gaps")
 
 
-def test_an_unknown_project_named_in_a_session_with_a_project_goes_to_that_project(tmp_path, user_words):
+def test_an_unknown_project_named_in_a_session_with_a_project_goes_to_the_general_brain(tmp_path, user_words):
+    # a session's project is where it ran, not what a unit about another subject is about
     decision = run_unit_v2(_row(_cog(scope="project:nope", topic="lesson"), session_project="Widget"),
                            _ws(tmp_path))
-    assert decision.destination.relative_path == "Projects/Widget/2-understanding/IMPROVEMENT.md"
+    assert decision.destination.relative_path == "Knowledge/Library/nope.md"
 
 
 def test_a_project_unit_without_topic_goes_by_its_type(tmp_path, user_words):

@@ -131,6 +131,17 @@ UPDATE ingestion_units
 """
 
 
+# v11: a settled write plan (done / abandoned) no longer holds its target file's whole
+# bytes — nothing reads them after it settles (writer._advance now releases them); the
+# migration's checked backup keeps them. And the breaker events of the removed source
+# breaker are resolved: they asked a person about pauses that ended long ago.
+_V11_DDL = """
+UPDATE ingestion_writes SET intended_bytes=NULL
+ WHERE step IN ('done','abandoned') AND intended_bytes IS NOT NULL;
+UPDATE ingestion_events SET resolved=1 WHERE kind='breaker' AND resolved=0;
+"""
+
+
 class MigrationBackupFailed(OSError):
     """The copy taken before a schema migration did not open or was incomplete: the
     migration does not run."""
@@ -318,7 +329,7 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
                 _assert_one_pragma(conn, name)
             script = (
                 f"BEGIN IMMEDIATE;\n{SCHEMA_DDL}\n{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n"
-                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n"
+                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n{_V11_DDL}\n"
                 f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
             )
             try:
@@ -334,20 +345,25 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
             # the steps an existing store at *version* still needs, in order
             steps = {
                 SCHEMA_VERSION: f"{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n"
-                                f"{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
-                3: f"{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
-                6: f"{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
-                7: f"{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
-                8: f"{_V9_DDL}\n{_V10_DDL}",
-                9: _V10_DDL,
+                                f"{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n{_V11_DDL}",
+                3: f"{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n{_V11_DDL}",
+                6: f"{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n{_V11_DDL}",
+                7: f"{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n{_V11_DDL}",
+                8: f"{_V9_DDL}\n{_V10_DDL}\n{_V11_DDL}",
+                9: f"{_V10_DDL}\n{_V11_DDL}",
+                10: _V11_DDL,
             }
             steps[4] = steps[5] = steps[3]
-            if version in steps and SCHEMA_V2_VERSION == 10:
+            if version in steps and SCHEMA_V2_VERSION == 11:
                 _backup_before_migration(conn, path, int(version))
                 conn.executescript(
                     f"BEGIN IMMEDIATE;\n{steps[version]}\n"
                     f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
                 )
+                if int(version) < 11:
+                    # v11 released the settled plans' bytes: give the pages back to the
+                    # file system (auto_vacuum is INCREMENTAL; the rows run the vacuum)
+                    conn.execute("PRAGMA incremental_vacuum").fetchall()
         _assert_pragmas(conn)
         version = _pragma_value(conn, "user_version")
         if version != SCHEMA_V2_VERSION:

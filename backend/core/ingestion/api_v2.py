@@ -27,7 +27,7 @@ from .contracts_v2 import (
     EvidenceRootKind, ExtractionPass, RootTrust, SourceId, SourceUnit,
 )
 
-SCHEMA_V2_VERSION = 10
+SCHEMA_V2_VERSION = 11
 
 # Applied after api.SCHEMA_DDL in the same migration transaction (store.py owns DDL apply).
 # What each entry CDF wrote rests on (its basis), kept for as long as the entry: the

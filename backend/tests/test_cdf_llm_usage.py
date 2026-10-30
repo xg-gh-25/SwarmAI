@@ -101,7 +101,7 @@ def test_v5_database_migrates_to_v6(data_dir) -> None:
     conn.close()
     migrated = connect_rw()
     try:
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 11
         columns = {row[1] for row in migrated.execute("PRAGMA table_info(ingestion_daily_stats)")}
         assert "llm_calls" not in columns and "tokens" not in columns
         assert migrated.execute("SELECT COUNT(*) FROM ingestion_llm_usage").fetchone()[0] == 0
