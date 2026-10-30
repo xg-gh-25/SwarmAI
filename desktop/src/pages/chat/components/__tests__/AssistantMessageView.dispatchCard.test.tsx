@@ -81,7 +81,8 @@ describe('a dispatch that ran differently', () => {
       asks: [], errors: [],
     } as never);
     render(view([bash('b1'), tr('b1'), OK, tx('Sent it.')]));
-    expect((await screen.findByTestId('dispatch-execution-differs')).textContent).toContain('another profile');
+    // this file's react-i18next mock returns the key: the line is there, worded as a difference
+    expect((await screen.findByTestId('dispatch-execution-differs')).textContent).toContain('swarmOut.execution.differs');
   });
 });
 

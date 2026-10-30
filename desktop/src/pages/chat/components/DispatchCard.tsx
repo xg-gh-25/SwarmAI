@@ -26,7 +26,6 @@ import { isRemoteId } from '../../../services/remoteSession';
 import { getOverlayCtxBridge } from '../../../components/layout/overlayRegistry';
 import { openOverlayAt } from '../../../utils/overlayTarget';
 import { dotStyle, runTone, type Tone } from '../../../components/swarm-out/tone';
-import { executionLine } from '../../../components/swarm-out/live';
 import { tf } from '../tf';
 
 export const DISPATCH_POLL_MS = 30_000;
@@ -229,9 +228,11 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
               </span>
             )}
             {/* the run did not run the way it was dispatched to (backend execution_check) */}
-            {run?.result && executionLine(run.result) && (
+            {/* (worded here with this card's own t: components/swarm-out/live loads the
+                locale module itself, which every test that mocks react-i18next refuses) */}
+            {run?.result?.execution_check?.state === 'differs' && run.result.execution_check.why && (
               <span data-testid="dispatch-execution-differs" className={`block text-[12.5px] ${TONE_TEXT.attention}`}>
-                ⚠ {executionLine(run.result)}
+                ⚠ {t('swarmOut.execution.differs', { why: t(`swarmOut.execution.${run.result.execution_check.why}`) })}
               </span>
             )}
           </Row>
