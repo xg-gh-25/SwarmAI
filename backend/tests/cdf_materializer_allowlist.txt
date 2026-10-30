@@ -106,8 +106,6 @@ hooks/context_health_hook.py:ContextHealthHook._deep_check  # exempt: via check_
 hooks/context_health_hook.py:ContextHealthHook._enforce_retention_policies  # exempt: DailyActivity archival and Archives cleanup (not governed)
 hooks/context_health_hook.py:ContextHealthHook._persist_findings  # exempt: health_findings.json
 hooks/context_health_hook.py:ContextHealthHook._run_session_canary  # exempt: .eval-canary.json
-hooks/context_health_hook.py:ContextHealthHook._track_memory_usage  # exempt: memory usage JSON lock
-hooks/context_health_hook.py:ContextHealthHook._track_memory_usage_locked  # exempt: memory usage JSON
 hooks/context_health_hook.py:ContextHealthHook._write_daily_canary_state  # exempt: daily canary state JSON
 hooks/daily_activity_hook.py:DailyActivityExtractionHook._execute_locked  # exempt: crash checkpoint file
 hooks/daily_activity_hook.py:recover_crash_checkpoint  # exempt: crash checkpoint file
@@ -197,3 +195,4 @@ core/ingestion/pipeline_v2.py:_resolved  # exempt: reads the CDF store's root tr
 core/memory_injection.py:recorded_selection  # exempt: reads the latest injection selection from the CDF store (standing.connect, read-only here); writes no governed file
 scripts/brain_cleanup.py:_backup  # exempt: writes a tar.gz backup under <data dir>/backups before any cleanup; not a governed file
 scripts/cdf_rehearsal_replay.py:_enqueue  # exempt: hands a session to the after-session review, which writes only through the CDF inbox
+scripts/cdf_move_misrouted.py:run  # exempt: one-time move; files written through governed_edit, records updated in one transaction

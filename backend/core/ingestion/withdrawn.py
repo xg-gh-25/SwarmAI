@@ -13,6 +13,8 @@ history read it here, never from the main files:
   (``nearest``), and a "same" or "adds" against it refuses the unit.
 - recurrence: a closed gap or a done item (status ``closed`` / ``done``) that comes back is
   written again, as a new entry; it is never refused as a duplicate.
+- undone: a withdrawal whose entry was put back (status ``restored``) is no longer a
+  withdrawal: it is left out of ``records`` (``UNDONE``).
 
 Public: ``Record``, ``records``, ``normalize``, ``restates``, ``nearest``, ``ANCHOR_PREFIX``,
 ``REFUSING``.
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 ANCHOR_PREFIX = "withdrawn:"
 # a withdrawal that refuses a restatement; closed / done are history a recurrence may repeat
 REFUSING = frozenset({"withdrawn", "overridden"})
+# a withdrawal that was undone: its entry is back in the file
+UNDONE = "restored"
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _LEAD = re.compile(r"^\s*-\s*\[[^\]]*\]\s*")
 _MARKUP = re.compile(r"[*`_>#]+")
@@ -72,6 +76,8 @@ def records(conn: sqlite3.Connection) -> list[Record]:
         if not texts:
             continue
         item = items[0] if items else {}
+        if item.get("status") == UNDONE:
+            continue
         out.append(Record(str(op_id), str(path or ""), texts[0], str(item.get("status") or "withdrawn"),
                           str(item.get("reason") or "")))
     return out

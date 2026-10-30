@@ -62,8 +62,11 @@ def test_i1_a_quoted_correction_reaches_evolution_with_no_model_call(tmp_path, s
 def test_i2_unsupported_or_external_units_reach_only_a_ddd(tmp_path, said, scope, extra, why):
     unit = _cog(scope=scope, **extra) if why == "cited_external" else _cog(scope=scope, user_quote=None, **extra)
     d = run_unit_v2(_row(unit, cited_external=why == "cited_external", session_project="Widget"), _ws(tmp_path))
-    assert d.destination.store == "DDD" and d.destination.store not in EVERY_TURN
-    assert d.destination.rerouted_from in EVERY_TURN
+    assert d.destination.store not in EVERY_TURN and d.destination.rerouted_from in EVERY_TURN
+    # about the agent or the world and not external: the General Brain, read in every
+    # project; otherwise the project it came in through
+    general = scope in ("agent", "world") and why == "no_quote"
+    assert d.destination.store == ("COMMON_DDD" if general else "DDD")
 
 
 def test_i3_a_page_asking_for_a_rule_cannot_write_it(tmp_path, monkeypatch):

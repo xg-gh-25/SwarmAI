@@ -211,7 +211,7 @@ _WHERE = """Where a unit goes follows from what you declare and what it rests on
   (same language, same characters) from one of the user messages it cites.
 - scope "agent" or "world" is read in every future session too: kept there only with a
   user_quote, or when it cites a measured result. Citing anything else keeps it in the
-  project's knowledge, looked up when needed.
+  general knowledge, looked up when needed in every project.
 - scope "project:<name>" goes to that project's knowledge; a name that is no project goes
   to the general knowledge under that name. The projects that exist are listed below:
   a subsystem or part of one of them (a module, a feature, a tab) is that project; a

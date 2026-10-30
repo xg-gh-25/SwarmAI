@@ -10,7 +10,9 @@ producing agent's declaration; this module only checks facts and routes:
 - what it rests on (§2): the user's words (a ``user_quote`` found verbatim in a cited user
   message), a cited measurement, or external content in its own evidence
   (``cited_external``). The every-turn files take only what this admits (``_admitted``);
-  anything else goes to the project's DDD, or the General Brain. For the user's own files
+  anything else is recalled on demand (``_home``): about the agent or the world, from the
+  General Brain, read in every project; otherwise from the project's DDD, or the General
+  Brain. For the user's own files
   (STEERING / USER / TOOLS) the quote must also say what the unit claims: the one model
   call here, ``user_check``, shown only the user's messages and the claim;
 - its declared relations (relations_v2.resolve: id and first line name one entry) and
@@ -562,10 +564,25 @@ def _resolve_project(root: Path, name: str | None) -> str | None:
     return None
 
 
-def _home(unit: SourceUnit, destination: Any, project: str | None, subject: str | None) -> Any:
-    """Where a unit goes that its evidence keeps out of an every-turn file: the DDD of
-    the project it was learned in, else the General Brain (recalled on demand, never
-    injected every turn), marked with the store it was declared for."""
+# a unit about the agent itself or about the world is read in every project, not one: the
+# General Brain is recalled in every session, a project's DDD only when that project is
+# the active one (live finding 2026-10-31: 118 such units sat in SwarmAI's DDD, unseen in
+# every session about another project)
+GENERAL_SUBJECTS = {"agent": "Agent self-knowledge", "world": "General knowledge"}
+
+
+def _home(unit: SourceUnit, destination: Any, project: str | None, subject: str | None,
+          *, cited_external: bool = True) -> Any:
+    """Where a unit goes that its evidence keeps out of an every-turn file: about the agent
+    or the world, the General Brain under GENERAL_SUBJECTS, unless it cites external
+    content (that stays in the project it came in through, not read in every project);
+    otherwise the DDD of the project it was learned in, else the General Brain (recalled on
+    demand, never injected every turn). Marked with the store it was declared for."""
+    general = (None if cited_external
+               else GENERAL_SUBJECTS.get(str(getattr(unit, "scope", "") or "")))
+    if general:
+        return contracts_v2.route_general(unit, general).model_copy(
+            update={"rerouted_from": destination.store})
     scoped = unit.model_copy(update={"scope": f"project:{project}"}) if project else unit
     try:
         home = contracts_v2.route_unit(scoped, project) if project else None
@@ -658,7 +675,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         if not verdict.holds:
             facts = replace(facts, user_words=False)
     if not _admitted(destination.store, facts):
-        destination = _home(unit, destination, corpus_project, subject)
+        destination = _home(unit, destination, corpus_project, subject,
+                            cited_external=facts.cited_external)
     if destination.store == "TIMELINE":
         # an event citing external content is not read every turn (writer: "Not injected")
         destination = destination.model_copy(update={"injectable": not facts.cited_external})

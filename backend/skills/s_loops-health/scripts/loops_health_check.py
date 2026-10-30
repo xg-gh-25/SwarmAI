@@ -698,10 +698,11 @@ class SelfLoopsHealthEngine:
     def _compute_compound_score(self) -> dict | None:
         """Compute the Compound Score — is the system getting smarter over time?
 
-        Three signals (each 0-100, weighted):
-        - correction_trend (40%): fewer corrections this month vs 3-month avg
-        - memory_precision (30%): % of memory entries with non-zero usage
-        - health_trend (30%): rolling health score improvement
+        Two signals (each 0-100, weighted):
+        - correction_trend (4/7): fewer corrections this month vs 3-month avg
+        - health_trend (3/7): rolling health score improvement
+        (A third, memory_precision, read .memory-usage.json, whose producer is gone: the
+        file was frozen, so the signal reported a number that no longer moved.)
 
         Returns dict with total + per-signal breakdown, or None if insufficient data.
         """
@@ -743,28 +744,7 @@ class SelfLoopsHealthEngine:
         else:
             signals["correction_trend"] = 100 if corrections_this_month == 0 else 50
 
-        # Signal 2: Memory precision (usage tracking)
-        # Measures what % of tracked memory entries are actively referenced.
-        # If tracking is empty (just initialized), check memory_entries in
-        # MEMORY.md vs total tracked — gives credit for having the infra.
-        usage_path = CONTEXT_DIR / ".memory-usage.json"
-        if usage_path.exists():
-            try:
-                usage = json.loads(usage_path.read_text())
-                total_keys = len(usage)
-                if total_keys > 0:
-                    used_keys = sum(1 for v in usage.values() if v > 0)
-                    signals["memory_precision"] = int(used_keys / total_keys * 100)
-                else:
-                    # Empty usage file — check if infra exists (memory_vec has rows)
-                    # Give 50% credit for having the pipeline even if data hasn't accumulated
-                    signals["memory_precision"] = 50
-            except (json.JSONDecodeError, OSError):
-                signals["memory_precision"] = 0
-        else:
-            signals["memory_precision"] = 0
-
-        # Signal 3: Health score trend (improving vs degrading)
+        # Signal 2: Health score trend (improving vs degrading)
         if HISTORY_FILE.exists():
             try:
                 history = json.loads(HISTORY_FILE.read_text())
@@ -785,9 +765,8 @@ class SelfLoopsHealthEngine:
 
         # Weighted total
         total = int(
-            signals["correction_trend"] * 0.4
-            + signals["memory_precision"] * 0.3
-            + signals["health_trend"] * 0.3
+            signals["correction_trend"] * 4 / 7
+            + signals["health_trend"] * 3 / 7
         )
         return {"total": total, "signals": signals}
 
@@ -971,7 +950,6 @@ class SelfLoopsHealthEngine:
             lines.append("| Signal | Score | What It Measures |")
             lines.append("|--------|-------|-----------------|")
             lines.append(f"| Correction Trend | {s['correction_trend']} | Fewer repeat mistakes vs 3-month avg |")
-            lines.append(f"| Memory Precision | {s['memory_precision']} | % of memory entries actively referenced |")
             lines.append(f"| Health Trend | {s['health_trend']} | Health score improving over time |")
             lines.append("")
             if total >= 70:

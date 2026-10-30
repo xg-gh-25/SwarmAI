@@ -498,7 +498,8 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
     - reviews / units / invalid: S7 attempts since *since*. What a review missed is
       measured by the monthly error review (brain-driven v5), not a second extraction.
     - agent_self: S7 units written to EVOLUTION or MEMORY, and how many of them the
-      user withdrew (a finished user_redact of an anchor the unit's write produced).
+      user withdrew (a finished user_redact of an anchor the unit's write produced, by the
+      person: not one the agent made, not one undone).
     """
     by_type = {kind: {"reviews": 0, "units": 0, "invalid": 0} for kind in REVIEW_TYPES}
     if not (_column_exists(conn, "extraction_attempts", "source")
@@ -528,7 +529,9 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
     for (relations,) in conn.execute(
             "SELECT relations FROM ingestion_writes WHERE op_kind='user_redact' AND step='done'"):
         for item in _json(relations, []):
-            if isinstance(item, dict) and item.get("redact_anchor"):
+            if (isinstance(item, dict) and item.get("redact_anchor")
+                    and item.get("status") != "restored"
+                    and str(item.get("actor") or "user") == "user"):
                 redacted.add(_identity(str(item["redact_anchor"])))
     units: dict[str, set[str]] = {}
     for unit_id, anchors in written:
@@ -578,6 +581,8 @@ def brain_changes(conn: sqlite3.Connection, project: str | None = None,
             item = next((r for r in _json(relations, []) if isinstance(r, dict)), {})
             text = removed[0] if removed else ""
             status = str(item.get("status") or "withdrawn")
+            if status == "restored":          # undone: the entry is back in its file
+                continue
             out.append({"kind": "override" if status == "overridden" else "withdraw",
                         "at": at, "path": path,
                         "head": text.strip().splitlines()[0] if text.strip() else "",

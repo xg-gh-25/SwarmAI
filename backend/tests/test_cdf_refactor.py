@@ -147,7 +147,9 @@ def test_a_quote_not_in_the_message_keeps_the_unit_out_of_every_turn_files(tmp_p
     unit = _cog(scope=scope, user_quote="always push to main without review", **extra)
     decision = run_unit_v2(_row(unit, session_project="Widget"), _ws(tmp_path))
     assert decision.decision == "write"
-    assert decision.destination.store == "DDD" and decision.destination.relative_path.startswith("Projects/Widget/")
+    home = {"agent": "Knowledge/Library/agent-self-knowledge.md",
+            "world": "Knowledge/Library/general-knowledge.md"}.get(scope, "Projects/Widget/")
+    assert decision.destination.relative_path.startswith(home)
     assert decision.destination.rerouted_from in {"STEERING", "EVOLUTION", "MEMORY"}
     assert decision.version_vector["basis"] == "inferred"
 
@@ -155,7 +157,7 @@ def test_a_quote_not_in_the_message_keeps_the_unit_out_of_every_turn_files(tmp_p
 def test_without_a_project_what_is_kept_out_goes_to_the_general_brain(tmp_path, user_words):
     decision = run_unit_v2(_row(_cog(user_quote=None)), _ws(tmp_path))
     assert (decision.destination.store, decision.destination.relative_path,
-            decision.destination.rerouted_from) == ("COMMON_DDD", "Knowledge/Library/general.md", "MEMORY")
+            decision.destination.rerouted_from) == ("COMMON_DDD", "Knowledge/Library/general-knowledge.md", "MEMORY")
 
 
 def test_a_message_cited_without_a_quote_is_not_the_users_words(tmp_path, user_words):
