@@ -56,7 +56,7 @@ export const NAV: Record<OverlayId, NavEntry> = {
   // Chat zone (rows under the Chat hero + the Need You slot)
   history: { zone: 'chat', navLabel: 'History', mode: 'HISTORY', width: 'xl' },
   artifacts: { zone: 'chat', navLabel: 'Artifacts', mode: 'ARTIFACTS', width: 'xl' },
-  'needs-you': { zone: 'chat', navLabel: 'Need You', mode: 'ATTENTION', width: 'm' },
+  'needs-you': { zone: 'chat', navLabel: 'Need You', mode: 'ATTENTION', width: 'xl' },
   // Cognition zone
   context: { zone: 'cognitive', navLabel: 'C&M', subtitle: 'Global Brain', mode: 'BRAIN', width: 'xl' },
   library: { zone: 'cognitive', navLabel: 'Library', subtitle: 'Bookshelf', mode: 'LIBRARY', width: 'xl' },

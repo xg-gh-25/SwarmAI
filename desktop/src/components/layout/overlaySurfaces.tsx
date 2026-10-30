@@ -184,8 +184,9 @@ registerOverlay({
 // The AlertsPill's fullscreen view. Consumes GET /api/attention (backend
 // AttentionAuthority). Action = dispatch the item's message into chat via
 // dispatchPrompt (existing inject mechanism — no /act, no new channel).
-// width 'm' — narrow single-column list, same as swarmws (NOT xl: attention
-// cards are narrower than a file tree; xl leaves a large right-side void).
+// width 'xl' like the other overlays: it holds the Cognition flow view (where kept
+// knowledge landed on one scale, the six steps side by side, the flow diagram), which a
+// narrow column squeezes.
 registerOverlay({
   id: 'needs-you',
   render: ({ close, dispatchPrompt }) => (

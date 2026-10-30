@@ -117,7 +117,7 @@ function FlowDiagram() {
       {/* side exits: labels only, except the trust floor's move (a dashed line into the project brains) */}
       <text x={712} y={ky(0) + 33} fill={DIM} fontSize={11}>{say('→ dropped', '→ 丢掉')}</text>
       <text x={712} y={ky(1) + 25} fill={WARN} fontSize={11}>{say('no such project', '项目不存在')}</text>
-      <text x={712} y={ky(1) + 41} fill={WARN} fontSize={11}>{say('→ its session’s project, else General Brain', '→ 会话所在项目，否则公共大脑')}</text>
+      <text x={712} y={ky(1) + 41} fill={WARN} fontSize={11}>{say('→ General Brain', '→ 公共大脑')}</text>
       <text x={712} y={ky(2) + 22} fill={MOVE} fontSize={11}>{say('not your words', '不是你的原话')}</text>
       <path d={`M700,${ky(2) + 29} L${DX},${ky(2) + 29}`} fill="none" stroke={MOVE} strokeDasharray="4 4" markerEnd="url(#cdf-arrow-move)" />
       <text x={712} y={ky(3) + 25} fill={KEPT} fontSize={11}>{say('same → +1 confirmation', '相同 → +1 次确认')}</text>
@@ -211,7 +211,7 @@ export function CdfGuideline() {
         <Row left={say('About the world', '关于世界')} right={say('true anywhere → Memory, in the section of its type', '放到哪都成立 → Memory，按类型进对应小节')} />
         <Row left={say('About a project', '关于某个项目')} right={say('a decision → PROJECT · product → PRODUCT · how it is built → TECH · a lesson learned building it, or a gap → IMPROVEMENT',
           '决定 → PROJECT · 产品 → PRODUCT · 怎么构建 → TECH · 构建中学到的经验或缺口 → IMPROVEMENT')} />
-        <Row left={say('A project that does not exist', '项目不存在')} right={say('the project the session worked in keeps it; with none, the General Brain keeps it under the subject it named', '由会话所在的项目保存；会话没有项目时，公共大脑按它提到的主题保存')} />
+        <Row left={say('A project that does not exist', '项目不存在')} right={say('the General Brain keeps it under the subject it named', '由公共大脑按它提到的主题保存')} />
         <Row left={say('An event · a reference', '事件 · 参考资料')} right={say('Timeline · Knowledge Library', '时间线 · Knowledge Library')} />
       </Block>
 
