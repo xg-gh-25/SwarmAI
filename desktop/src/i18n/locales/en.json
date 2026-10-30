@@ -1360,9 +1360,10 @@
     "waiting": {
       "title": "Waiting for you",
       "refresh": "Refresh",
-      "none": "No questions waiting for you",
+      "none": "Nothing waiting for you",
       "unasked": "The Hive says these wait on someone, but the question has not reached here: handle them on the Hive's page",
-      "refused": "To handle on the Hive's page (the answer was not delivered and can't be given here again)"
+      "refused": "To handle on the Hive's page (the answer was not delivered and can't be given here again)",
+      "settle": "Tasks waiting for you to accept or decide"
     },
     "fleet": {
       "title": "Fleet",
@@ -1534,7 +1535,8 @@
     "error": {
       "questions": "Can't read Hive {{hive}}'s questions: \"Waiting for you\" may be incomplete",
       "hiveList": "Can't list the Hives: only the Hives in the dispatch log are shown",
-      "hiveRecord": "One Hive's record can't be read"
+      "hiveRecord": "One Hive's record can't be read",
+      "acceptance": "Can't read the tasks' acceptance"
     },
     "ended": {
       "completed": "Done",
@@ -1680,6 +1682,31 @@
       "no_run": "the pipeline run it was given did not run",
       "other_profile": "its run used another profile",
       "other_run": "it ran another pipeline run than its own"
+    },
+    "settle": {
+      "accept": "Accept: does what came back meet the bar?",
+      "acceptance": "Done looks like: {{text}}",
+      "pass": "Pass",
+      "fail": "Fail",
+      "failNote": "What is wrong (you can send this to the Hive to redo it)",
+      "failConfirm": "Confirm fail",
+      "cancel": "Cancel",
+      "failed": "Failed: redo it, or give it up",
+      "rejected": "The commits were rejected: redo it, or give it up",
+      "noCommits": "No commits came back: redo it, or give it up",
+      "noSession": "May have been sent, but the Hive never named the session: check the Hive's page, then give it up",
+      "redo": "Redo (open the Hive session)",
+      "reviewCode": "Review the code in the details: landing it is the pass, rejecting it the fail",
+      "showCode": "Show code",
+      "manualLanded": "I landed it by hand",
+      "abandon": "Give up",
+      "abandonConfirm": "Confirm give up (clears its workspace on the Hive)",
+      "cleanupSoon": "Cleared in 3 days: after that its commits can no longer land",
+      "actionFailed": "Didn't work: {{error}}",
+      "unsealed": "The commits could not be sealed into a bundle and exist only in the Hive's workspace: land them by hand, then press \"I landed it by hand\", or give up",
+      "noResult": "Stopped with no result: redo it, or give it up",
+      "abandonConfirmUnsealed": "Confirm give up (deletes the unsealed commits in the Hive's workspace too)",
+      "filesMissing": "A returned file never reached the Brain (too large, or placing it failed), so the Hive keeps the workspace: wait for it, or give up if you don't need it"
     }
   },
   "usage": {

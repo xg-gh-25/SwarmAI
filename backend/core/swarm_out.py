@@ -895,6 +895,17 @@ async def _statuses_or_none(errors: list[str]) -> Optional[dict[str, str]]:
         return None
 
 
+#: the release in flight (core/swarm_out_settle.release_due): one at a time, so a Hive
+#: that does not answer never piles tasks up across polls
+_RELEASE: dict[str, Any] = {"task": None}
+
+
+def _release_done(task: "asyncio.Task") -> None:
+    _RELEASE["task"] = None
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("swarm_out: releasing failed (%s)", type(task.exception()).__name__)
+
+
 async def list_runs() -> dict[str, Any]:
     """Dispatch log rows (newest first) and the open questions of every running Hive
     and of every Hive in the log.
@@ -947,6 +958,17 @@ async def list_runs() -> dict[str, Any]:
     except Exception as e:                          # results unreadable: the runs still list
         logger.warning("swarm_out: attaching results failed (%s)", type(e).__name__)
         errors.append("could not read the runs' results")
+    # each Project Agent run's next step and whether it settles (core/swarm_out_settle);
+    # a settled one's Hive is told to remove its workspace, in the background
+    from core import swarm_out_settle
+    try:
+        tell = await asyncio.to_thread(swarm_out_settle.annotate, rows, _RELEASE["task"] is None)
+        if tell and _RELEASE["task"] is None:
+            _RELEASE["task"] = asyncio.create_task(swarm_out_settle.release_due(tell))
+            _RELEASE["task"].add_done_callback(_release_done)
+    except Exception as e:                          # never breaks the list
+        logger.warning("swarm_out: settling failed (%s)", type(e).__name__)
+        errors.append("could not read the runs' acceptance")
     # intake refusals, for the history's line (dispatch-center §2.3)
     try:
         refusals = await asyncio.to_thread(refusal_counts)

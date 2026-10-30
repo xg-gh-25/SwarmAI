@@ -7,7 +7,9 @@
  * - `waiting` = what waits on the person: the open questions (asks), plus a run the
  *   Hive says is waiting whose question has not been mirrored here (no ask at all). An
  *   ask whose answer the Hive refused is listed as not delivered but does not count
- *   here: it is settled on the Hive's own page or expires.
+ *   here: it is settled on the Hive's own page or expires. Plus every run that waits on
+ *   the person to accept it (`toSettle`: judge its answer or document, land or reject
+ *   its commits, decide after a fail) or whose records this Host removes soon.
  * - `running` = runs whose state is running on their Hive (backend run_state: streaming,
  *   preparing, starting or stopping). A run waiting on the person is not running, and a
  *   run whose state is unknown (`running` null) is not counted: the tab never claims
@@ -18,7 +20,7 @@
  * answer (an unreachable daemon is not "nothing running").
  */
 import { useEffect, useState } from 'react';
-import { swarmOutService, type SwarmOutRuns } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 
 export const ACTIVITY_POLL_MS = 30_000;
 
@@ -33,9 +35,17 @@ export function waitingUnasked(d: SwarmOutRuns) {
   return d.runs.filter((r) => (r.state ? r.state === 'waiting' : r.waiting) && !asked.has(`${r.hive_id}/${r.session_id}`));
 }
 
+/** A run that waits on the person to accept it (backend core/swarm_out_settle: its
+ *  next step is accept or review_code), or whose records go within 3 days unsettled;
+ *  never a run waiting on a question (that one is counted by its ask). */
+export function toSettle(r: SwarmOutRun): boolean {
+  if (r.settle?.settled || (r.state ? r.state === 'waiting' : r.waiting)) return false;
+  return r.next === 'accept' || r.next === 'review_code' || !!r.cleanup_soon;
+}
+
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {
   return {
-    waiting: d.asks.filter((a) => !a.refused).length + waitingUnasked(d).length,
+    waiting: d.asks.filter((a) => !a.refused).length + waitingUnasked(d).length + d.runs.filter(toSettle).length,
     running: d.runs.filter((r) => r.running === true && !r.waiting).length,
   };
 }

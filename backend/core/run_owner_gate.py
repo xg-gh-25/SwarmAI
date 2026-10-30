@@ -64,6 +64,11 @@ _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 _HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
 # The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
 _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
+# Accepting a Swarm Out task (dispatch-center §4-§6; routers/swarm_out.py): the verdict,
+# "landed by hand", giving it up, and landing or rejecting the commits it brought back
+# (landing them is the pass).
+_USER_ONLY_SETTLE_RE = re.compile(
+    r"/api/swarm-out/runs/[^\s/'\"]+/(?:verdict|manual-landed|abandon|return/land|return/reject)\b")
 # Actions the person approves first: handled by the
 # phase="approved" registration, after dangerous_command_gate.
 AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot"})
@@ -346,14 +351,39 @@ def _v1_mutation_check(sid: str, call: dict) -> "str | None":
 
 
 
+_DOT_SEGMENT_RE = re.compile(r"/(?:\.(?=/)|[^/\s'\"]+/\.\.(?=/))")
+
+
+def _as_routed(command: str) -> str:
+    """``command`` URL-decoded (twice: a double-encoded path) with ``/./`` and
+    ``/<seg>/../`` collapsed, until nothing changes."""
+    from urllib.parse import unquote
+    s = unquote(unquote(command))
+    for _ in range(32):
+        t = _DOT_SEGMENT_RE.sub("", s)
+        if t == s:
+            break
+        s = t
+    return s
+
+
 def _user_only_deny(command: str) -> "dict | None":
     """The deny for a command that calls a route only the person may call (the
-    redaction route), else None.
-    Pure string work: the gate runs it on every Bash command, before any filter."""
+    redaction route, a Swarm Out task's acceptance), else None.
+    Pure string work: the gate runs it on every Bash command, before any filter. The
+    command is also matched URL-decoded with ``.``/``..`` path segments collapsed, as
+    the server would route it. This is a speed bump, not a boundary: a path assembled at
+    run time (variables, a script file) is not seen; the agent and the daemon share an
+    OS user (boundary A)."""
+    command = f"{command}\n{_as_routed(command)}"
     if _USER_ONLY_REDACT_RE.search(command):
         return _deny("withdrawing written knowledge is the person's action (the Flow view's "
                      "撤回 button), never a command. Tell the user which unit you think should "
                      "be withdrawn and why; they decide.")
+    if _USER_ONLY_SETTLE_RE.search(command):
+        return _deny("accepting a Swarm Out task (pass / fail, landing or rejecting its commits, "
+                     "landed by hand, giving it up) is the person's action "
+                     "on its card, never a command. Tell the user what you think and why; they decide.")
     return None
 
 

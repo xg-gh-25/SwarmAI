@@ -207,6 +207,47 @@ async def fleet() -> dict[str, Any]:
     return await _call(swarm_out.fleet())
 
 
+class VerdictBody(BaseModel):
+    value: str = Field(max_length=10)
+    note: str = Field(default="", max_length=4000)
+    # the result the card showed (its ended_at): a newer turn voids the verdict
+    ended_at: Optional[str] = Field(default=None, max_length=40)
+
+
+async def _settle(fn, *args) -> dict[str, Any]:
+    import asyncio
+    from core import swarm_out_settle
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except swarm_out_settle.SettleError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/runs/{dispatch_id}/verdict")
+async def run_verdict(dispatch_id: str, body: VerdictBody) -> dict[str, Any]:
+    """The person's pass / fail on an answer or a document (dispatch-center §4).
+    Person-only: core/run_owner_gate refuses it from a command, as for every settle route."""
+    _require_desktop()
+    from core import swarm_out_settle
+    return await _settle(swarm_out_settle.set_verdict, dispatch_id, body.value, body.note, body.ended_at)
+
+
+@router.post("/runs/{dispatch_id}/manual-landed")
+async def run_manual_landed(dispatch_id: str) -> dict[str, Any]:
+    """The person landed the commits by hand: the code is handled and the task passes."""
+    _require_desktop()
+    from core import swarm_out_settle
+    return await _settle(swarm_out_settle.set_manual_landed, dispatch_id)
+
+
+@router.post("/runs/{dispatch_id}/abandon")
+async def run_abandon(dispatch_id: str) -> dict[str, Any]:
+    """The person gives the task up."""
+    _require_desktop()
+    from core import swarm_out_settle
+    return await _settle(swarm_out_settle.abandon, dispatch_id)
+
+
 @router.get("/runs")
 async def runs() -> dict[str, Any]:
     _require_desktop()

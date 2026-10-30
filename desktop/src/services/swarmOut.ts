@@ -39,6 +39,31 @@ export interface SwarmOutRun {
   /** why the last check failed: session_gone, hive_silent, http_502, ... */
   result_error?: string | null;
   result_checked_at?: string | null;
+  /** The run's single next step (backend core/swarm_out_settle; dispatch-center §3-§6):
+   *  null when nothing is left for anyone; absent for a dispatch from before Project
+   *  Agents. accept = judge the answer or document (or, after a fail, do it again or
+   *  give it up); review_code = land or reject the commits it brought back. */
+  next?: SwarmOutNext | null;
+  settle?: SwarmOutSettle;
+  /** not settled, and this Host removes its records within 3 days (bundles can no
+   *  longer land after that) */
+  cleanup_soon?: boolean;
+}
+
+export type SwarmOutNext = 'answer' | 'running' | 'accept' | 'review_code';
+
+export interface SwarmOutSettle {
+  /** pass / fail: the person's on an answer or document, the landing for commits;
+   *  abandoned: given up; gone: the Hive is gone and left no result; null: not yet */
+  verdict: 'pass' | 'fail' | 'abandoned' | 'gone' | null;
+  /** unsealed: commits the Hive could not seal into a bundle (they exist only in its
+   *  workspace: land them by hand, or giving up removes them) */
+  code: 'none' | 'landed' | 'rejected' | 'waiting' | 'unsealed';
+  /** what still holds it back from settling (files: a returned file not yet placed here) */
+  why_not: ('verdict' | 'code' | 'files' | 'lessons')[];
+  /** settled: the Hive was told to remove its workspace (released false: not yet, told
+   *  again after a backoff; null: no Hive to tell) */
+  settled: { at: string; outcome: 'passed' | 'abandoned' | 'gone'; released: boolean | null } | null;
 }
 
 export type SwarmOutEnded = 'completed' | 'turn_limit' | 'error' | 'crashed' | 'paused' | 'no_terminal'
@@ -71,6 +96,8 @@ export interface SwarmOutAgent {
   profile: string;
   delivery: string;
   acceptance: string;
+  /** what comes back: an answer, a document, or commits (absent before run-spec r4) */
+  returns?: 'answer' | 'document' | 'commits';
   gates?: string[];
   validations?: { id: string; command: string }[];
 }
@@ -145,13 +172,14 @@ export interface SwarmOutResult {
 }
 
 export interface SwarmOutLessons {
-  /** kept on this machine; waiting for the person to take them (nothing reaches a Brain
-   *  before that); whether they took some */
+  /** kept on this machine; not yet queued for this machine's CDF (it was unavailable:
+   *  queued at the next check); accepted: some were queued (no one takes them, CDF
+   *  design D13) */
   returned: number; pending: number; accepted: boolean;
   /** sent to this machine's judge, and what it decided */
   sent: number; written: number; rejected: number; judging: number;
   skipped: number; refused: number; truncated: boolean; error: string | null;
-  /** the waiting units as this machine's hashes (no Hive text): what an accept takes */
+  /** the units not yet queued, as this machine's hashes (no Hive text) */
   digests?: string[];
 }
 
@@ -262,6 +290,18 @@ export const swarmOutService = {
     const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/land`,
       { key, tip, approve_protected: approveProtected });
     return data as { landed: boolean; head: string | null; into: string | null };
+  },
+  /** The person's pass / fail on the result that ended at `endedAt` (the card's). */
+  async verdict(dispatchId: string, value: 'pass' | 'fail', note: string, endedAt: string): Promise<void> {
+    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/verdict`, { value, note, ended_at: endedAt });
+  },
+  /** The person landed the commits by hand. */
+  async manualLanded(dispatchId: string): Promise<void> {
+    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/manual-landed`);
+  },
+  /** The person gives the task up. */
+  async abandon(dispatchId: string): Promise<void> {
+    await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/abandon`);
   },
   async returnReject(dispatchId: string, key: string, tip: string): Promise<void> {
     await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/reject`, { key, tip });

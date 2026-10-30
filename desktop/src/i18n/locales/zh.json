@@ -1359,9 +1359,10 @@
     "waiting": {
       "title": "等你",
       "refresh": "刷新",
-      "none": "没有在等你的问题",
+      "none": "没有在等你的事",
       "unasked": "Hive 说这些在等人，但问题还没传到这里：去 Hive 页面处理",
-      "refused": "要去 Hive 页面处理（回答没有送达，这里不能再回答）"
+      "refused": "要去 Hive 页面处理（回答没有送达，这里不能再回答）",
+      "settle": "等你验收或决定的单子"
     },
     "fleet": {
       "title": "机群",
@@ -1533,7 +1534,8 @@
     "error": {
       "questions": "读不到 Hive {{hive}} 的问题：「等你」可能不全",
       "hiveList": "读不到 Hive 列表：只显示派发记录里的 Hive",
-      "hiveRecord": "有一台 Hive 的记录读不出来"
+      "hiveRecord": "有一台 Hive 的记录读不出来",
+      "acceptance": "读不出单子的验收状态"
     },
     "ended": {
       "completed": "做完",
@@ -1679,6 +1681,31 @@
       "no_run": "派给它的 pipeline run 没有跑",
       "other_profile": "run 用了别的 profile",
       "other_run": "跑的不是派给它的那个 run"
+    },
+    "settle": {
+      "accept": "验收：交回的东西达到要求了吗？",
+      "acceptance": "验收标准：{{text}}",
+      "pass": "通过",
+      "fail": "不通过",
+      "failNote": "哪里不行（补做时可以照这句发给 Hive）",
+      "failConfirm": "确认不通过",
+      "cancel": "取消",
+      "failed": "没通过：补做，或者放弃",
+      "rejected": "提交被拒了：补做，或者放弃",
+      "noCommits": "没交回提交：补做，或者放弃",
+      "noSession": "可能已经派出，但 Hive 没报会话：去 Hive 页面看过后再放弃",
+      "redo": "补做（打开 Hive 会话）",
+      "reviewCode": "审代码：在详情里看改动，落地就是通过，拒绝就是不通过",
+      "showCode": "看代码",
+      "manualLanded": "我已手工落地",
+      "abandon": "放弃",
+      "abandonConfirm": "确认放弃（会清掉 Hive 上的工作区）",
+      "cleanupSoon": "这单 3 天后清理，之后提交就落不了地了",
+      "actionFailed": "没成功：{{error}}",
+      "unsealed": "提交没能封进 bundle，只在 Hive 的工作区里：手工落地后点「我已手工落地」，或者放弃",
+      "noResult": "停了，没有结果交回：补做，或者放弃",
+      "abandonConfirmUnsealed": "确认放弃（Hive 工作区里没封进 bundle 的提交会一起删掉）",
+      "filesMissing": "有交回的文件没能放进 Brain（太大或放置失败），Hive 上的工作区会一直留着：等它放进来，或者确认不要了就放弃"
     }
   },
   "usage": {

@@ -19,7 +19,7 @@ import i18n from '../../i18n';
 import { swarmOutService, type SwarmOutAsk, type SwarmOutCheckStatus, type SwarmOutEnded, type SwarmOutFleet, type SwarmOutRepoFact, type SwarmOutResult, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 import { judgeState } from './judge';
-import { activityOf, waitingUnasked } from './useSwarmOutActivity';
+import { activityOf, toSettle, waitingUnasked } from './useSwarmOutActivity';
 import { endedTone, type Tone } from './tone';
 
 export const LIVE_POLL_MS = 30_000;
@@ -80,13 +80,16 @@ const stateOf = (r: SwarmOutRun): NonNullable<SwarmOutRun['state']> =>
  *  ones are in the history view); unknown ones too, except a dispatch whose session
  *  was never named (it may still be running). A waiting run shows its question in the
  *  等你 section; one whose question has not reached this Host at all is listed there
- *  as a run (waitingUnasked), so it never vanishes. */
+ *  as a run (waitingUnasked), so it never vanishes. A run to accept (toSettle) is in
+ *  等你 too, whatever its age, and in no other group; a settled one is history's. */
 export function runGroups(runs: SwarmOutRun[], now: number, asks: SwarmOutAsk[] = []) {
+  const done = (r: SwarmOutRun) => toSettle(r) || !!r.settle?.settled;
   return {
     waitingUnasked: waitingUnasked({ runs, asks, errors: [] }),
-    running: runs.filter((r) => stateOf(r) === 'running'),
-    stopped: runs.filter((r) => stateOf(r) === 'stopped' && recent(r, now)),
-    unknown: runs.filter((r) => stateOf(r) === 'unknown' && (r.session_unknown || recent(r, now))),
+    toSettle: runs.filter(toSettle),
+    running: runs.filter((r) => stateOf(r) === 'running' && !toSettle(r)),
+    stopped: runs.filter((r) => stateOf(r) === 'stopped' && recent(r, now) && !done(r)),
+    unknown: runs.filter((r) => stateOf(r) === 'unknown' && (r.session_unknown || recent(r, now)) && !done(r)),
   };
 }
 
@@ -215,6 +218,7 @@ export function errorLabel(e: string): string {
   if (q) return i18n.t('swarmOut.error.questions', { hive: q[1] });
   if (e === 'could not list the running Hives') return i18n.t('swarmOut.error.hiveList');
   if (e === 'could not read a Hive record') return i18n.t('swarmOut.error.hiveRecord');
+  if (e === "could not read the runs' acceptance") return i18n.t('swarmOut.error.acceptance');
   return e;
 }
 

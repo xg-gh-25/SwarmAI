@@ -437,6 +437,99 @@ function OpenRunButton({ r, open }: { r: SwarmOutRun; open: () => void }) {
   );
 }
 
+/** The daemon's own reason for a refused settle action (a 400's detail), else the fallback. */
+function detailOf(e: unknown, fallback: string): string {
+  const d = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  return typeof d === 'string' && d.length < 200 ? d : errText(e, fallback);
+}
+
+/** What the person decides to settle a task (dispatch-center §4-§6; backend
+ *  core/swarm_out_settle), shown only when the run's next step is theirs: pass / fail
+ *  (with a sentence) on an answer or a document, next to the acceptance sentence; after a
+ *  fail, do it again in the Hive session or give it up; for commits, landing them in the
+ *  details is the acceptance (no second button), or "landed by hand". Giving up asks
+ *  twice: it settles the task and its Hive removes the workspace. No model decides. */
+export function SettleBar({ r, onShowCode, onDone }: { r: SwarmOutRun; onShowCode: () => void; onDone?: () => void }) {
+  const { t } = useTranslation();
+  const openRun = useOpenRun(r);
+  const [note, setNote] = useState<string | null>(null);     // null: the note is closed
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const next = r.next;
+  if (next !== 'accept' && next !== 'review_code' && !r.cleanup_soon) return null;   // settled: the daemon gives no next step
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true); setError(null);
+    try {
+      await fn();
+      setNote(null); setSure(false);
+      onDone?.();
+    } catch (e) {
+      setError(t('swarmOut.settle.actionFailed', { error: detailOf(e, t('swarmOut.live.submitFailed')) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const id = r.dispatch_id;
+  const verdict = r.settle?.verdict ?? null;
+  const code = r.settle?.code ?? 'none';
+  const commits = r.project_agent?.returns === 'commits' || (!r.project_agent?.returns && code !== 'none');
+  const endedAt = r.result?.ended_at ?? null;
+  // what the person is asked, in the order of core/swarm_out_settle.derive
+  const ask = next === 'review_code' ? (code === 'unsealed' ? 'unsealed' : 'reviewCode')
+    : next !== 'accept' ? null
+      : !r.session_id ? 'noSession'
+        : !r.result ? 'noResult'
+          : (verdict === 'pass' && r.settle?.why_not.includes('files')) ? 'filesMissing'
+          : verdict === 'fail' ? (commits ? 'rejected' : 'failed')
+            : commits ? 'noCommits' : 'accept';
+  const acceptance = r.project_agent?.acceptance;
+  return (
+    <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[12.5px]" data-testid="swarm-out-settle" data-ask={ask ?? undefined}>
+      {r.cleanup_soon && <div className="text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-settle-cleanup">{t('swarmOut.settle.cleanupSoon')}</div>}
+      {ask && <div className="font-medium">{t(`swarmOut.settle.${ask}`)}</div>}
+      {ask && acceptance && <div className={`mt-0.5 text-[12px] break-words ${muted}`} data-testid="swarm-out-settle-acceptance">{t('swarmOut.settle.acceptance', { text: acceptance })}</div>}
+      {(ask || r.cleanup_soon) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          {ask === 'accept' && endedAt && note === null && <>
+            <button type="button" className={btn} disabled={busy} data-testid="swarm-out-settle-pass"
+              onClick={() => { void act(() => swarmOutService.verdict(id, 'pass', '', endedAt)); }}>{t('swarmOut.settle.pass')}</button>
+            <button type="button" className={btn} disabled={busy} data-testid="swarm-out-settle-fail"
+              onClick={() => setNote('')}>{t('swarmOut.settle.fail')}</button>
+          </>}
+          {(ask === 'failed' || ask === 'rejected' || ask === 'noCommits' || ask === 'noResult') && openRun && (
+            <button type="button" className={btn} onClick={openRun} data-testid="swarm-out-settle-redo">{t('swarmOut.settle.redo')}</button>
+          )}
+          {(ask === 'reviewCode' || ask === 'unsealed') && <>
+            <button type="button" className={btn} onClick={onShowCode} data-testid="swarm-out-settle-show-code">{t('swarmOut.settle.showCode')}</button>
+            <button type="button" className={btn} disabled={busy} data-testid="swarm-out-settle-manual"
+              onClick={() => { void act(() => swarmOutService.manualLanded(id)); }}>{t('swarmOut.settle.manualLanded')}</button>
+          </>}
+          {note === null && (
+            <button type="button" className={`${btn} ${sure ? 'text-[var(--color-status-error)]' : ''}`} disabled={busy} data-testid="swarm-out-settle-abandon"
+              onClick={() => { if (sure) void act(() => swarmOutService.abandon(id)); else setSure(true); }}>
+              {sure ? t(code === 'unsealed' ? 'swarmOut.settle.abandonConfirmUnsealed' : 'swarmOut.settle.abandonConfirm') : t('swarmOut.settle.abandon')}
+            </button>
+          )}
+          {sure && note === null && <button type="button" className={btn} onClick={() => setSure(false)}>{t('swarmOut.settle.cancel')}</button>}
+        </div>
+      )}
+      {note !== null && endedAt && (
+        <div className="mt-1.5" data-testid="swarm-out-settle-note">
+          <textarea className="w-full min-h-[56px] px-2 py-1 rounded-md border border-[var(--color-border)] bg-transparent text-[12.5px]"
+            maxLength={2000} value={note} placeholder={t('swarmOut.settle.failNote')} onChange={(e) => setNote(e.target.value)} />
+          <div className="mt-1 flex gap-2">
+            <button type="button" className={btn} disabled={busy || !note.trim()} data-testid="swarm-out-settle-fail-confirm"
+              onClick={() => { void act(() => swarmOutService.verdict(id, 'fail', note, endedAt)); }}>{t('swarmOut.settle.failConfirm')}</button>
+            <button type="button" className={btn} onClick={() => setNote(null)}>{t('swarmOut.settle.cancel')}</button>
+          </div>
+        </div>
+      )}
+      {error && <div className="mt-1 text-[12px] text-[var(--color-status-error)]" data-testid="swarm-out-settle-error">{error}</div>}
+    </div>
+  );
+}
+
 export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -461,6 +554,7 @@ export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void
       </div>
       <AgentFacts r={r} />
       <RunResult r={r} full={full} />
+      <SettleBar r={r} onShowCode={() => setOpen(true)} onDone={onReload} />
       {(canOpen || openRun) && <div className="mt-2 flex items-center gap-3 min-w-0">
         {canOpen && (
           <button type="button" className={`inline-flex items-center gap-0.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
@@ -530,7 +624,7 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
           <h3 className="m-0 text-[13px] font-semibold">{t('swarmOut.waiting.title')}</h3>
           <button type="button" className={`ml-auto ${btn}`} onClick={reload}>{t('swarmOut.waiting.refresh')}</button>
         </div>
-        {data && open.length === 0 && groups.waitingUnasked.length === 0 && <div className={`text-[12.5px] ${muted}`}>{t('swarmOut.waiting.none')}</div>}
+        {data && open.length === 0 && groups.waitingUnasked.length === 0 && groups.toSettle.length === 0 && <div className={`text-[12.5px] ${muted}`}>{t('swarmOut.waiting.none')}</div>}
         <div className="flex flex-col gap-2">
           {open.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
         </div>
@@ -539,6 +633,14 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
             <div className={`text-[12px] mb-1.5 ${muted}`}>{t('swarmOut.waiting.unasked')}<OpenHive onOpenHive={onOpenHive} /></div>
             <div className="grid gap-3" style={runGrid}>
               {groups.waitingUnasked.map((r) => <RunCard key={r.dispatch_id} r={r} />)}
+            </div>
+          </div>
+        )}
+        {groups.toSettle.length > 0 && (
+          <div className="mt-2" data-testid="swarm-out-waiting-settle">
+            <div className={`text-[12px] mb-1.5 ${muted}`}>{t('swarmOut.waiting.settle')}</div>
+            <div className="grid gap-3" style={runGrid}>
+              {groups.toSettle.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={reload} />)}
             </div>
           </div>
         )}
