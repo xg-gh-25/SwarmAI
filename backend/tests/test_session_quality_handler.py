@@ -53,6 +53,17 @@ def _chatty_tools():
         _msg("assistant", [_text("Done, fixed the typo.")])]}
 
 
+def _reader(entries):
+    """A corrections reader from old-style log rows: ``user_correction`` rows are the
+    review's corrections; any row (also ``tool_failure``) marks from when the record covers."""
+    from datetime import timezone as _tz
+    rows = [{"at": datetime.fromtimestamp(e["ts"], _tz.utc), "session_id": e.get("session_id", ""),
+             "skill": None, "repeats": bool(e.get("repeats"))}
+            for e in entries if e.get("type") == "user_correction"]
+    start = min((datetime.fromtimestamp(e["ts"], _tz.utc) for e in entries), default=None)
+    return lambda: (rows, start)
+
+
 def _scorer(goal=1.0, tool=1.0, calls=None):
     def score(prompt, response, tools):
         if calls is not None:
@@ -62,8 +73,6 @@ def _scorer(goal=1.0, tool=1.0, calls=None):
 
 
 def _run(tmp_path, sessions, *, corrections=(), scorer=None, sampler_error=None, state=None):
-    cpath = tmp_path / "corrections.jsonl"
-    cpath.write_text("".join(json.dumps(c) + "\n" for c in corrections))
     spath = tmp_path / ".context" / ".session-quality-state.json"
     if state is not None:
         spath.parent.mkdir(parents=True, exist_ok=True)
@@ -76,7 +85,9 @@ def _run(tmp_path, sessions, *, corrections=(), scorer=None, sampler_error=None,
         if sampler_error:
             out = {"sessions": {}, "sampler_error": sampler_error}
         return out
-    result = sq.run_session_quality(sampler=sampler, scorer=scorer or _scorer(), corrections_path=cpath,
+    covered = {"type": "start", "ts": (NOW - timedelta(days=30)).timestamp()}   # the record covers the window
+    result = sq.run_session_quality(sampler=sampler, scorer=scorer or _scorer(),
+                                    corrections_reader=_reader([*corrections, covered]),
                                     state_path=spath, now=NOW)
     return result, spath, seen
 
@@ -123,7 +134,9 @@ def test_the_state_file_is_written_and_the_dashboard_reads_the_same_numbers(tmp_
     from core.eval_service import EvalService
     from tests._eval_golden_fixture import install_golden_fixture
 
-    result, spath, _ = _run(tmp_path, {"a": _good(), "b": _english_answer_to_chinese()})
+    result, spath, _ = _run(tmp_path, {"a": _good(), "b": _english_answer_to_chinese()},
+                            corrections=[{"type": "user_correction", "session_id": "a",
+                                          "ts": NOW.timestamp(), "repeats": True}])
     on_disk = json.loads(spath.read_text())
     assert on_disk["checks"]["O1_LANGUAGE"] == result["checks"]["O1_LANGUAGE"]
     (tmp_path / "Eval" / "EvalHistory").mkdir(parents=True)
@@ -132,6 +145,8 @@ def test_the_state_file_is_written_and_the_dashboard_reads_the_same_numbers(tmp_
     assert shown["sessions_checked"] == 2
     assert shown["checks"]["O1_LANGUAGE"]["rate"] == result["checks"]["O1_LANGUAGE"]["rate"]
     assert shown["checks"]["O1_LANGUAGE"]["examples"][0]["title"] == "Wrong language"
+    assert shown["repeat_corrections"] == {"corrections": 1, "repeats": 1, "rate": 1.0}
+    assert shown["trend"][-1]["repeat_rate"] == 1.0
 
 
 def test_a_sampler_error_and_an_empty_week_are_different(tmp_path):
@@ -288,7 +303,7 @@ def test_the_state_carries_turn_metrics_and_the_prompt_version(tmp_path):
     rows = [("a", _at(1), 1.0), ("a", _at(1, 1), 1.0), ("a", _at(1, 2), 0.5)]   # each turn's own cost
     spath = tmp_path / "state.json"
     state = sq.run_session_quality(sampler=lambda since: {"sessions": sessions}, scorer=_scorer(),
-                                   corrections_path=tmp_path / "c.jsonl", state_path=spath, now=NOW,
+                                   corrections_reader=_reader([]), state_path=spath, now=NOW,
                                    cost_reader=lambda since: rows)
     assert state["metrics"] == {"turns": 3, "turn_p50_s": 90, "cost_p50_usd": 1.0}
     assert state["judge_prompt_sha"] == JUDGE_PROMPT_SHA
@@ -310,16 +325,15 @@ def test_weeks_before_the_first_run_are_backfilled_once(tmp_path):
         m["created_at"] = _at(10)          # 2026-W42
     for m in past["w2"]["messages"]:
         m["created_at"] = _at(4)           # 2026-W43, the last whole week
-    cpath = tmp_path / "c.jsonl"
-    start_epoch = (NOW - timedelta(days=8)).timestamp()      # the log covers from W42's last day
-    cpath.write_text(json.dumps({"type": "tool_failure", "ts": start_epoch}) + "\n"
-                     + json.dumps({"type": "user_correction", "session_id": "w2",
-                                   "ts": (NOW - timedelta(days=4)).timestamp()}) + "\n")
+    start_epoch = (NOW - timedelta(days=8)).timestamp()      # the record covers from W42's last day
+    reader = _reader([{"type": "start", "ts": start_epoch},
+                      {"type": "user_correction", "session_id": "w2", "repeats": True,
+                       "ts": (NOW - timedelta(days=4)).timestamp()}])
     spath = tmp_path / "state.json"
     calls: list = []
     run = lambda: sq.run_session_quality(  # noqa: E731
         sampler=lambda since: {"sessions": {"now": _good()}}, scorer=_scorer(),
-        corrections_path=cpath, state_path=spath, now=NOW, history=_history_of(past, calls),
+        corrections_reader=reader, state_path=spath, now=NOW, history=_history_of(past, calls),
         cost_reader=lambda since: [])
     state = run()
     trend = {t["week"]: t for t in state["trend"]}
@@ -329,6 +343,7 @@ def test_weeks_before_the_first_run_are_backfilled_once(tmp_path):
     assert two_back["backfilled"] and two_back["rates"]["O1_LANGUAGE"] == 1.0
     assert "O3_CORRECTIONS" not in two_back["rates"]          # the log did not cover that week
     assert last["rates"]["O3_CORRECTIONS"] == 1.0              # covered, and w2 was corrected
+    assert last["repeat_rate"] == 1.0 and two_back["repeat_rate"] is None   # its one correction repeated
     assert not ({"O4_GOAL", "O5_TOOLS"} & set(last["rates"]))  # the judge is not backfilled
     assert trend["2026-W40"]["metrics"]["turns"] == 0          # an empty week is still recorded
     assert len(calls) == 1
@@ -340,7 +355,7 @@ def test_no_backfill_when_the_sampler_failed_or_none_is_injected(tmp_path):
     calls: list = []
     state = sq.run_session_quality(
         sampler=lambda since: {"sessions": {}, "sampler_error": "X: y"}, scorer=_scorer(),
-        corrections_path=tmp_path / "c.jsonl", state_path=tmp_path / "s.json", now=NOW,
+        corrections_reader=_reader([]), state_path=tmp_path / "s.json", now=NOW,
         history=_history_of({"a": _good()}, calls))
     assert state["trend"] == []
     result, _, _ = _run(tmp_path, {"a": _good()})                # injected sampler only
@@ -406,10 +421,9 @@ def test_the_default_judge_is_asked_for_the_reason_in_the_users_language(tmp_pat
     monkeypatch.setattr(ss, "default_judge_fn", lambda p: (prompts.append(p),
         {"goal_score": 0.2, "tool_score": 0.2, "dimension": "quality", "reason": "没交付"})[1])
     corr = [{"type": "user_correction", "session_id": "a", "ts": (NOW - timedelta(days=1)).timestamp()}]
-    cpath = tmp_path / "c.jsonl"
-    cpath.write_text(json.dumps(corr[0]) + "\n")
     result = sq.run_session_quality(sampler=lambda since: {"sessions": {"a": _good()}},
-                                    corrections_path=cpath, state_path=tmp_path / "s.json", now=NOW)
+                                    corrections_reader=_reader([*corr, {"type": "start", "ts": (NOW - timedelta(days=30)).timestamp()}]),
+                                    state_path=tmp_path / "s.json", now=NOW)
     assert "in Chinese" in prompts[0]
     assert result["low_details"][0]["reason"] == "没交付"
 
@@ -420,7 +434,7 @@ def test_backfilled_weeks_land_in_week_order_before_an_existing_run(tmp_path):
     spath.write_text(json.dumps(prior))
     state = sq.run_session_quality(
         sampler=lambda since: {"sessions": {"a": _good()}}, scorer=_scorer(),
-        corrections_path=tmp_path / "c.jsonl", state_path=spath, now=NOW,
+        corrections_reader=_reader([]), state_path=spath, now=NOW,
         history=_history_of({}, []), cost_reader=lambda since: [])
     weeks = [t["week"] for t in state["trend"]]
     assert weeks == sorted(weeks) and weeks[-2:] == ["2026-W43", "2026-W44"]
@@ -437,9 +451,34 @@ def test_this_weeks_entry_is_labelled_in_local_time(tmp_path, monkeypatch):
         sunday_evening_la = datetime(2026, 11, 2, 3, tzinfo=timezone.utc)  # Sun 1 Nov 19:00 in LA
         state = sq.run_session_quality(
             sampler=lambda since: {"sessions": {}}, scorer=_scorer(),
-            corrections_path=tmp_path / "c.jsonl", state_path=tmp_path / "s.json",
+            corrections_reader=_reader([]), state_path=tmp_path / "s.json",
             now=sunday_evening_la, history=_history_of({}, []), cost_reader=lambda s: [])
         assert state["trend"][-1]["week"] == "2026-W44"   # UTC would say W45
     finally:
         monkeypatch.delenv("TZ")
         _time.tzset()
+
+
+def test_o3_and_the_repeat_rate_come_from_the_reviews_corrections(tmp_path):
+    """D12 / I9: who corrected the agent is what the after-session review recorded; the
+    repeat rate counts only corrections whose ``repeats`` declaration resolved."""
+    corrections = [{"type": "user_correction", "session_id": "a", "ts": NOW.timestamp(), "repeats": True},
+                   {"type": "user_correction", "session_id": "a", "ts": NOW.timestamp()},
+                   {"type": "user_correction", "session_id": "b", "ts": NOW.timestamp()},
+                   {"type": "user_correction", "session_id": "b",
+                    "ts": (NOW - timedelta(days=9)).timestamp(), "repeats": True}]   # last week
+    result, _, _ = _run(tmp_path, {"a": _good(), "b": _good(), "c": _good()}, corrections=corrections)
+    o3 = result["checks"]["O3_CORRECTIONS"]
+    assert (o3["checked"], o3["failed"]) == (3, 2)
+    assert result["repeat_corrections"] == {"corrections": 3, "repeats": 1, "rate": 0.333}
+    assert result["trend"][-1]["repeat_rate"] == 0.333
+
+
+def test_a_window_the_record_does_not_cover_has_no_o3(tmp_path):
+    """No review recorded before the window: O3 is unknown, not "nobody corrected"."""
+    state = sq.run_session_quality(sampler=lambda since: {"sessions": {"a": _good()}}, scorer=_scorer(),
+                                   corrections_reader=_reader([]), state_path=tmp_path / "s.json", now=NOW)
+    assert state["checks"]["O3_CORRECTIONS"]["checked"] == 0
+    assert state["repeat_corrections"] is None
+    assert "O3_CORRECTIONS" not in state["trend"][-1]["rates"]
+

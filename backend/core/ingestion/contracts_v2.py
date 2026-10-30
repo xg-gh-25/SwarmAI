@@ -72,6 +72,9 @@ TOPIC_RULE = ('for scope=project:X only, which project document it belongs in: "
               'project decision), "product" (what the product is for, its users, non-goals), '
               '"architecture" (how it is built, conventions, runtime traps), "lesson" (what '
               'worked or failed while building it)')
+SKILL_RULE = ('the skill this unit is about, when it is about how one skill behaved: its '
+              'folder name as invoked (e.g. "s_pdf"); empty otherwise. A correction that names '
+              'a skill counts against that skill\'s success (skill health)')
 # The model validators below, in words, per kind (same contract: change both together).
 UNIT_RULES: dict[str, tuple[str, ...]] = {
     "cognition": (
@@ -152,6 +155,9 @@ class CognitionUnit(_Unit):
     same: OverrideRef | None = None
     adds: OverrideRef | None = None
     repeats: OverrideRef | None = None
+    # the skill the unit is about (SKILL_RULE), named by the agent that saw it used; a
+    # correction naming one is what skill health counts (queries.corrections)
+    skill: str | None = Field(default=None, max_length=80)
 
     @model_validator(mode="after")
     def _conditional(self):

@@ -34,7 +34,7 @@ class TestDetectSkillInvocations:
         assert len(invocations) == 1
         assert invocations[0]["skill_name"] == "pdf"
         assert invocations[0]["outcome"] == "success"
-        assert invocations[0]["user_satisfaction"] == "accepted"
+        assert invocations[0]["user_satisfaction"] == "unknown"     # not judged here
 
     def test_detects_text_pattern_using_skill(self):
         """Detect 'Using Skill: X' text pattern."""
@@ -66,8 +66,9 @@ class TestDetectSkillInvocations:
         assert len(invocations) == 1
         assert invocations[0]["skill_name"] == "frontend-design"
 
-    def test_detects_correction(self):
-        """Detect user correction following skill invocation."""
+    def test_a_correcting_next_message_is_not_judged_here(self):
+        """D12: the next message is not matched for a correction; the after-session
+        review names the skill on its correction unit (core.skill_health)."""
         messages = [
             {"role": "user", "content": "run pdf", "created_at": "2026-04-09T10:00:00"},
             {
@@ -85,8 +86,7 @@ class TestDetectSkillInvocations:
         ]
         invocations = _detect_skill_invocations(messages)
         assert len(invocations) == 1
-        assert invocations[0]["user_satisfaction"] == "correction"
-        assert invocations[0]["outcome"] == "partial"
+        assert (invocations[0]["user_satisfaction"], invocations[0]["outcome"]) == ("unknown", "success")
 
     def test_no_skill_invocations(self):
         """No invocations in a regular conversation."""
@@ -148,8 +148,8 @@ class TestDetectSkillInvocations:
         assert invocations[0]["skill_name"] == "s_pdf"
         assert invocations[0]["outcome"] == "success"
 
-    def test_db_format_summary_with_correction(self):
-        """Summary-only format correctly detects user correction."""
+    def test_db_format_summary_with_a_correcting_reply(self):
+        """Summary-only format: the skill is found; the reply is not judged."""
         messages = [
             {"role": "user", "content": "run pipeline", "created_at": "2026-04-09T10:00:00"},
             {
@@ -169,8 +169,7 @@ class TestDetectSkillInvocations:
         invocations = _detect_skill_invocations(messages)
         assert len(invocations) == 1
         assert invocations[0]["skill_name"] == "s_autonomous-pipeline"
-        assert invocations[0]["user_satisfaction"] == "correction"
-        assert invocations[0]["outcome"] == "partial"
+        assert (invocations[0]["user_satisfaction"], invocations[0]["outcome"]) == ("unknown", "success")
 
     def test_db_format_prefers_input_over_summary(self):
         """When both input and summary exist, input takes precedence."""

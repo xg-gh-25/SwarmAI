@@ -420,40 +420,6 @@ class TestDisabledThinkingDerivation:
         down-graded by prompt_builder's guard rather than sent on the wire."""
         assert reg.supports_disabled_thinking(reg.FLAGSHIP_MODEL) is False
 
-    def test_llm_optimizer_CONSUMES_the_derivation(self, monkeypatch):
-        """The teeth: llm_optimizer must actually USE the registry predicate.
-
-        Testing the pure registry function alone is vacuous for this defect —
-        verified by mutation: restoring the hardcoded
-        ``_NO_TEMPERATURE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}``
-        allowlist in llm_optimizer left the pure-function tests GREEN. This test
-        drives the real ``_resolve_bedrock_model()`` with the flagship configured
-        and asserts it reports "does not support custom temperature" — which the
-        allowlist form gets WRONG, because a newer opus is absent from the set.
-        """
-        from core import llm_optimizer
-        from core.app_config_manager import AppConfigManager
-
-        class _Cfg:
-            def get(self, key, default=None):
-                if key == "default_model":
-                    return reg.FLAGSHIP_MODEL
-                if key == "bedrock_model_map":
-                    return None  # force registry resolution
-                return default
-
-        monkeypatch.setattr(AppConfigManager, "instance", staticmethod(lambda: _Cfg()))
-        model_id, supports_temperature = llm_optimizer._resolve_bedrock_model()
-
-        assert model_id == reg.MODEL_REGISTRY[reg.FLAGSHIP_MODEL], (
-            "the flagship must resolve via the registry, not an f-string guess"
-        )
-        assert supports_temperature is False, (
-            f"{reg.FLAGSHIP_MODEL} is an opus >= 4.7 and rejects a custom "
-            f"temperature — a hardcoded allowlist that predates this model "
-            f"reports True here and would send a temperature it rejects"
-        )
-
 
 class TestHiveSeedGeneration:
     """The Hive seed is GENERATED from the registry, never hand-written.

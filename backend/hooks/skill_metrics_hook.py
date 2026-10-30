@@ -2,7 +2,11 @@
 
 Scans assistant messages for tool_use blocks and text patterns indicating
 skill invocations, then records each detected invocation to SkillMetricsStore.
-Also bridges corrections to SkillEvals JSONL so the evolution cycle can mine them.
+It records THAT a skill ran, never whether the user was satisfied: that judgment is
+the after-session review's (a correction unit naming the skill, read by
+``core.skill_health``), not a keyword match on the next message (design
+2026-10-30-cdf-agent-decides D12). ``outcome`` is stored as ``success`` (the skill ran)
+and ``user_satisfaction`` as ``unknown``.
 
 Key public symbols:
 
@@ -10,13 +14,12 @@ Key public symbols:
 """
 from __future__ import annotations
 
-import json
+
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
-from core.extraction_patterns import CORRECTION_PATTERNS as _CORRECTION_PATTERNS
 from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
@@ -37,8 +40,7 @@ class SkillMetricsHook:
     2. Scans assistant messages for tool_use blocks (Skill tool invocations)
     3. Scans assistant text content for "Using Skill:" / "Launching skill:" patterns
     4. Records each detected skill invocation to SkillMetricsStore
-    5. Determines outcome: "success" if no user correction follows, "correction" otherwise
-    6. Estimates duration from timestamps between skill invocation and next user message
+    5. Estimates duration from timestamps between skill invocation and next user message
     """
 
     def __init__(self) -> None:
@@ -94,12 +96,6 @@ class SkillMetricsHook:
                     user_satisfaction=inv["user_satisfaction"],
                 )
 
-            # Bridge corrections to SkillEvals JSONL so evolution cycle can mine them.
-            # This closes the data gap where DB recorded corrections but JSONL didn't.
-            corrections = [inv for inv in invocations if inv["user_satisfaction"] == "correction"]
-            if corrections:
-                _write_corrections_to_eval_jsonl(corrections, context.session_id)
-
             logger.info(
                 "SkillMetricsHook: recorded %d skill invocation(s) for session %s",
                 len(invocations), context.session_id,
@@ -110,10 +106,11 @@ class SkillMetricsHook:
 
 
 def _detect_skill_invocations(messages: list[dict]) -> list[dict]:
-    """Scan messages for skill invocations and determine outcomes.
+    """Scan messages for skill invocations.
 
     Returns list of dicts with keys:
-        skill_name, outcome, duration_seconds, user_satisfaction
+        skill_name, outcome ("success": it ran), duration_seconds, user_satisfaction
+        ("unknown")
     """
     invocations: list[dict] = []
 
@@ -167,130 +164,21 @@ def _detect_skill_invocations(messages: list[dict]) -> list[dict]:
         if not skill_names:
             continue
 
-        # 3. Determine outcome by checking next user message
-        user_satisfaction = "accepted"
-        outcome = "success"
+        # 3. Duration: from this message to the next user message
         duration_seconds = 0.0
-
-        # Find next user message
-        next_user_msg = None
-        for j in range(i + 1, len(messages)):
-            if messages[j].get("role") == "user":
-                next_user_msg = messages[j]
-                break
-
+        next_user_msg = next((m for m in messages[i + 1:] if m.get("role") == "user"), None)
         if next_user_msg is not None:
-            next_content = next_user_msg.get("content", "")
-            if isinstance(next_content, list):
-                text_parts = []
-                for block in next_content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                next_text = " ".join(text_parts)
-            elif isinstance(next_content, str):
-                next_text = next_content
-            else:
-                next_text = ""
+            duration_seconds = _estimate_duration(msg_timestamp, next_user_msg.get("created_at", ""))
 
-            if _CORRECTION_PATTERNS.search(next_text):
-                user_satisfaction = "correction"
-                outcome = "partial"
-
-            # Estimate duration from timestamps
-            next_timestamp = next_user_msg.get("created_at", "")
-            duration_seconds = _estimate_duration(msg_timestamp, next_timestamp)
-
-        # Capture surrounding text for eval JSONL bridge.
-        # user_prompt: last user message before this assistant message
-        user_prompt_text = ""
-        for k in range(i - 1, -1, -1):
-            if messages[k].get("role") == "user":
-                user_prompt_text = _extract_text(messages[k].get("content", ""))
-                break
-
-        # NOTE: when multiple skills appear in the same assistant message,
-        # all share the same outcome/satisfaction from the single next user
-        # message. Separating per-skill correction detection would require
-        # NLU to map correction text to specific skills — deferred.
         for skill_name in skill_names:
             invocations.append({
                 "skill_name": skill_name,
-                "outcome": outcome,
+                "outcome": "success",            # the skill ran; satisfaction is not judged here
                 "duration_seconds": duration_seconds,
-                "user_satisfaction": user_satisfaction,
-                "user_prompt": user_prompt_text[:500],
-                "agent_actions": content_text[:300] if content_text else "[tool:Skill]",
-                "user_correction": next_text[:500] if user_satisfaction == "correction" else None,
+                "user_satisfaction": "unknown",
             })
 
     return invocations
-
-
-def _extract_text(content) -> str:
-    """Extract plain text from message content (str or list of blocks)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-            elif isinstance(block, str):
-                parts.append(block)
-        return " ".join(parts)
-    return ""
-
-
-def _write_corrections_to_eval_jsonl(
-    corrections: list[dict], session_id: str
-) -> None:
-    """Append correction entries to SkillEvals JSONL files.
-
-    Bridges the gap between SkillMetricsHook (DB) and SessionMiner (JSONL)
-    so the evolution cycle can mine corrections from both sources.
-    """
-    try:
-        from config import get_workspace_path
-        evals_dir = get_workspace_path() / ".context" / "SkillEvals"
-        evals_dir.mkdir(parents=True, exist_ok=True)
-
-        for inv in corrections:
-            skill_name = inv["skill_name"]
-            # Normalize: strip s_ prefix for JSONL filename consistency
-            clean_name = skill_name.removeprefix("s_")
-            jsonl_path = evals_dir / f"{clean_name}.jsonl"
-
-            entry = {
-                "user_prompt": inv.get("user_prompt", ""),
-                "skill_invoked": skill_name,
-                "agent_actions": inv.get("agent_actions", "[tool:Skill]"),
-                "user_correction": inv.get("user_correction", ""),
-                "final_outcome": inv.get("outcome", "partial"),
-                "score": 0.5,  # Correction = partial success
-                "session_id": session_id,
-                "source": "skill_metrics_hook",  # Distinguish from SessionMiner
-            }
-
-            from utils.file_lock import flock_exclusive, flock_unlock
-            with open(jsonl_path, "a", encoding="utf-8") as f:
-                flock_exclusive(f)
-                try:
-                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                finally:
-                    flock_unlock(f)
-            # Rotate after lock release — per-skill files are small but
-            # unbounded append without cap is a structural gap.
-            from utils.jsonl_rotation import rotate_jsonl_if_oversized
-            rotate_jsonl_if_oversized(jsonl_path)
-
-            logger.debug(
-                "SkillMetricsHook: wrote correction eval for %s to %s",
-                skill_name, jsonl_path.name,
-            )
-    except Exception as exc:
-        logger.debug("Failed to write correction to eval JSONL: %s", exc)
 
 
 def _estimate_duration(start_ts: str, end_ts: str) -> float:

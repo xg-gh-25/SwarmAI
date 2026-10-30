@@ -351,26 +351,3 @@ class TestDDDEventEmission:
                 hook({"tool_name": "Edit", "tool_input": {"file_path": "/tmp/scratch.py"}, "error": None}, "t1", None)
             )
         mock_dispatcher.emit_nowait.assert_not_called()
-
-    def test_correction_event_emitted(self, session_context):
-        """When _correction_just_detected is True, puts DAILY_ACTIVITY event into queue."""
-        import core.observation_hooks as obs_mod
-        from core.observation_hooks import create_observation_completer
-        from core.observation_ring import ObservationRing
-
-        ring = ObservationRing()
-        ring.record_pre("t1", "Bash", {"command": "echo fix"})
-        session_context["_observations"] = ring
-        session_context["_correction_just_detected"] = True
-
-        mock_dispatcher = self._setup_dispatcher_mock()
-        obs_mod._ensure_cultivation_imports()
-
-        hook = create_observation_completer(session_context)
-        with patch.object(obs_mod, "get_dispatcher", return_value=mock_dispatcher):
-            asyncio.run(
-                hook({"tool_name": "Bash", "tool_input": {"command": "echo fix"}, "error": None}, "t1", None)
-            )
-        mock_dispatcher.emit_nowait.assert_called_once()
-        # Flag should be cleared
-        assert session_context["_correction_just_detected"] is False

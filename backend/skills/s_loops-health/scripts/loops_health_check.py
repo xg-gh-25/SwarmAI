@@ -400,35 +400,6 @@ class SelfLoopsHealthEngine:
     def _check_evolution(self):
         evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
 
-        # E1: Pipeline last run
-        state_file = CONTEXT_DIR / ".evolution_last_run"
-        if state_file.exists():
-            age = self._file_age_days(state_file)
-        else:
-            # Check skill_health.json as alternative proof
-            sh_path = CONTEXT_DIR / "skill_health.json"
-            age = self._file_age_days(sh_path) if sh_path.exists() else 999
-        self.report.findings.append(Finding(
-            id="E1", name="Pipeline last run", dimension="evolution",
-            status="pass" if age < 14 else ("warn" if age < 30 else "fail"),
-            detail=f"{age}d ago" if age < 999 else "Never ran (no state file or skill_health.json)",
-        ))
-
-        # E2: skill_health.json
-        sh_path = CONTEXT_DIR / "skill_health.json"
-        if sh_path.exists():
-            sh_age = self._file_age_days(sh_path)
-            self.report.findings.append(Finding(
-                id="E2", name="skill_health.json", dimension="evolution",
-                status="pass" if sh_age < 14 else "warn",
-                detail=f"Exists, {sh_age}d old",
-            ))
-        else:
-            self.report.findings.append(Finding(
-                id="E2", name="skill_health.json", dimension="evolution",
-                status="fail", detail="Missing",
-            ))
-
         # E3: Correction capture — counts distinct "C0NN" ids (e.g. C037), whether
         # they sit in "### C0NN | YYYY-MM-DD" entry headers or inline under a CLASS block.
         # Count distinct correction ids present (capture is healthy if the

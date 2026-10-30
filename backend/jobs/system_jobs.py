@@ -315,39 +315,6 @@ SYSTEM_JOBS: list[Job] = [
     # The ToDo card is now a pure user-planning surface: the user owns their todos'
     # lifecycle, the system neither writes nor auto-cancels them.)
 
-    # --- Evolution Cycle (SOLE trigger) ---
-    # This scheduled job is the ONLY trigger for the mine→score→optimize cycle.
-    # The old per-session hook trigger (evolution_maintenance_hook._maybe_run_evolution)
-    # was REMOVED (run_6ac3fc0b): a ~5-min job (mine 3629 transcripts + Bedrock)
-    # ran synchronously on the 180s-budget session-close hook, timed out before it
-    # could advance .evolution_last_run, and re-triggered every session (59x/day)
-    # while spawning uncancellable zombie threads. Resilience for a laptop that is
-    # off at the scheduled time is provided by cron_utils.is_cron_due, which catches
-    # up a missed weekly slot on the next scheduler tick after wake (7-day window).
-    # run_evolution.py writes .evolution_last_run on success; the SCHEDULER's own
-    # job_state.last_run (advanced on every run, success or fail) owns re-fire cadence.
-    #
-    # timeout_seconds=1800 (30 min) is DELIBERATE, not a copy of the 300s default:
-    # the measured cycle is ~293s and the transcript corpus only grows. The default
-    # 300s left a 7s margin — the first slow run would time out, never write state,
-    # and after 3 consecutive Thursday timeouts the circuit breaker would disable
-    # evolution entirely (Gate-1 FLAW-1, run_6ac3fc0b). A weekly deterministic
-    # script has no reason to be capped near its own runtime.
-    Job(
-        id="evolution-cycle",
-        name="Evolution Cycle",
-        type="script",
-        schedule="0 7 * * 4",          # Thursday UTC 07:00 = ICT 15:00
-        enabled=True,
-        category="system",
-        # No spend cap (no job has one); timeout_seconds is the real control
-        # (see comment above).
-        safety=JobSafety(timeout_seconds=1800),
-        config={
-            "command": _py("-m", "jobs.run_evolution"),
-        },
-    ),
-
     # --- Loops Health (7-dimension self-maintenance scan) ---
     # Scans context files, DailyActivity, Knowledge/, Projects/, Evolution state,
     # git backup, and infrastructure health (31 checks). Auto-fixes safe mechanical

@@ -52,7 +52,6 @@ GATE_CLASS = {
     "correction_capture": OBSERVE, "error_pattern_detector": OBSERVE,
     "failure_tracker_reset": OBSERVE, "file_tracker": OBSERVE, "session_checkpoint": OBSERVE,
     "subagent_capture": OBSERVE, "agent_tool_audit": OBSERVE,
-    "user_correction_detector": OBSERVE,
     "observation_recorder": OBSERVE, "observation_completer": OBSERVE,
     "cdf_usage_observer": OBSERVE,
 }

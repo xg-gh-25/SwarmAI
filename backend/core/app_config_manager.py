@@ -130,9 +130,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "same_type_cooldown_seconds": 60,
         "max_active_entries": 30,
         "deprecation_days": 30,
-        "optimizer": "auto",           # "auto" | "llm" | "heuristic"
-        # Confidence thresholds are NOT config: they live only in
-        # evolution_optimizer.HIGH_CONFIDENCE / MED_CONFIDENCE (data-calibrated).
     },
 }
 

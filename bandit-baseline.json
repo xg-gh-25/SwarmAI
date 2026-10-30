@@ -39,12 +39,6 @@
       "line": 123,
       "text": "subprocess call with shell=True identified, security issue."
     },
-    "8dbc8caa2e96cf79afcd97e6cb8bf5dcc5272e505fe50bcaf1a79b8cae56e344": {
-      "test_id": "B324",
-      "file": "backend/core/session_miner.py",
-      "line": 477,
-      "text": "Use of weak MD5 hash for security. Consider usedforsecurity=False"
-    },
     "8e5017f339b933c30ae91ddb12b695d7c35c52093be8dc6ce5f345b850570cf1": {
       "test_id": "B602",
       "file": "backend/scripts/eval_runner.py",

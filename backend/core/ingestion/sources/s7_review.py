@@ -244,6 +244,8 @@ context may hold only a summary of it).
 {types}
 5. Ask about yourself as well (scope "agent"): where was your judgment wrong this time, why
    did the user correct you, which of your ways of working are reliable and which are not.
+   Every time the user corrected you is a correction unit; when it was about how a skill
+   behaved, name that skill in skill.
 6. Record what stays true. The state of the moment (what is not done yet, what was not
    verified, a count that will change) is not knowledge: a problem still open is a gap,
    something that happened is an event.

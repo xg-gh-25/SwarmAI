@@ -9,10 +9,6 @@ Covers:
   F6  SkillGuard at discovery time
   F7  SessionRecall always-on (not fallback-only)
   F8  EntryRefs 1-hop loading
-  F9  SkillMetrics candidates wired to evolution
-  F10 CORRECTION_PATTERNS tightened
-  F11 Agent actions limit raised to 1500
-  F12 DSPy references replaced
 """
 from __future__ import annotations
 
@@ -195,85 +191,3 @@ class TestF7SessionRecallAlwaysOn:
 # were part of the deleted selective-injection / in-prompt-index system. Live MEMORY
 # is now full-injected (all referenced sections are present anyway), so there is no
 # 1-hop ref loading to test.
-
-
-# ── F9: SkillMetrics candidates wired ────────────────────────────────
-
-
-class TestF9SkillMetricsCandidates:
-    """get_evolution_candidates should be called in evolution cycle."""
-
-    def test_evolution_cycle_uses_candidates(self):
-        """run_evolution_cycle should consult SkillMetrics for priority."""
-        from core import evolution_optimizer
-        source = Path(evolution_optimizer.__file__).read_text(encoding="utf-8")
-        assert "get_evolution_candidates" in source
-
-
-# ── F10: Correction patterns tightened ───────────────────────────────
-
-
-class TestF10CorrectionPatterns:
-    """CORRECTION_PATTERNS should not match mid-sentence casual usage."""
-
-    def test_actually_mid_sentence_no_match(self):
-        """'actually, let me also add' should NOT match as correction."""
-        from core.extraction_patterns import CORRECTION_PATTERNS
-        # Mid-sentence "actually" in non-correction context
-        text = "and actually let me also add a footer"
-        # Should NOT match when preceded by "and" (not at sentence start)
-        match = CORRECTION_PATTERNS.search(text)
-        # After tightening: either no match, or match only at sentence boundaries
-        # The pattern should be more selective now
-        assert match is None or match.start() == 0
-
-    def test_real_correction_still_matches(self):
-        """'No, that's wrong' should still match as correction."""
-        from core.extraction_patterns import CORRECTION_PATTERNS
-        text = "No, that's wrong. Fix it."
-        assert CORRECTION_PATTERNS.search(text) is not None
-
-    def test_stop_as_command_matches(self):
-        """'Stop doing that' at start should match."""
-        from core.extraction_patterns import CORRECTION_PATTERNS
-        text = "Stop doing that, use the other approach"
-        assert CORRECTION_PATTERNS.search(text) is not None
-
-
-# ── F11: Agent actions limit raised ──────────────────────────────────
-
-
-class TestF11AgentActionsLimit:
-    """Session miner should use 1500 char limit instead of 500."""
-
-    def test_agent_actions_limit_is_1500(self):
-        """Verify the truncation limit is 1500, not 500."""
-        from core import session_miner
-        source = Path(session_miner.__file__).read_text(encoding="utf-8")
-        # Should NOT have [:500] for agent_actions
-        assert "agent_actions=agent_text[:500]" not in source
-        # Should have [:1500]
-        assert "[:1500]" in source
-
-
-# ── F12: DSPy references replaced ────────────────────────────────────
-
-
-class TestF12DSPyReferencesReplaced:
-    """Aspirational DSPy mentions should be replaced with accurate descriptions.
-
-    Updated v2.1: LLM optimizer (llm_optimizer.py) is the actual optimizer.
-    DSPy/GEPA is deferred to v1.6.0 — evolution_optimizer should not claim
-    DSPy integration exists. LLM optimizer references ARE expected.
-    """
-
-    def test_no_dspy_in_evolution_optimizer(self):
-        """evolution_optimizer.py should not claim DSPy integration exists."""
-        from core import evolution_optimizer
-        source = Path(evolution_optimizer.__file__).read_text(encoding="utf-8")
-        # DSPy is deferred to v1.6.0 — should not be referenced as if integrated
-        assert "DSPy/GEPA integration" not in source
-        assert "import dspy" not in source
-        assert "from dspy" not in source
-        # LLM optimizer import IS expected (v2.1 addition)
-        assert "llm_optimizer" in source

@@ -11,7 +11,13 @@ and tasks got done in real use.
     ``eval_runner.prose_language``);
   - O2_SILENT_TOOLS: no text before a tool call except the opening restatement (R20;
     ``no_pre_tool_text`` over ``scenario_runner.pre_tool_text_lengths``);
-  - O3_CORRECTIONS: the share of sessions in which the user corrected the agent.
+  - O3_CORRECTIONS: the share of sessions in which the user corrected the agent, from
+    the corrections the after-session review recorded (``queries.read_corrections``:
+    the agent that had the whole session says it was corrected; nothing matches text).
+    The repeat rate beside it — corrections that repeat an earlier correction of the
+    same mistake, of all corrections — rests only on the review's ``repeats``
+    declaration. Weeks before the review's first record have no O3 (not zero); a
+    session not reviewed yet when the job runs counts as not corrected.
 - Judge checks on a sample of at most ``_SAMPLE_CAP`` sessions (ones with a user
   correction or an unusual number of turns first), via ``session_scorer``, each on
   one exchange (the first answered question in the window, with its own answer and
@@ -22,14 +28,15 @@ and tasks got done in real use.
 The result is written to ``<workspace>/.context/.session-quality-state.json``
 (gitignored: it holds session titles, snippets and reasons for the owner):
 ``{version, last_run, window_days, sessions_checked, checks: {id: {checked, failed,
-rate, examples}}, metrics: {turns, turn_p50_s, cost_p50_usd}, low_details,
-judge_prompt_sha, sampler_error, judge_error, judge_sampled, judge_failed, trend}``.
+rate, examples}}, metrics: {turns, turn_p50_s, cost_p50_usd}, repeat_corrections:
+{corrections, repeats, rate} | None, low_details, judge_prompt_sha, sampler_error,
+judge_error, judge_sampled, judge_failed, trend}``.
 ``judge_error`` is set when every judged session failed (O4/O5 then did not run);
 ``judge_failed`` of ``judge_sampled`` counts the sampled sessions whose judge call
 failed, which O4/O5 leave out; ``judge_prompt_sha`` names the
 judge prompt that scored ``low_details`` (a calibration label counts only for it).
 ``trend`` is one entry per ISO week, sorted, last 12 kept: ``{week, at, rates,
-metrics}``; this run replaces this week's entry, so ``trend[-2]`` is the week before
+metrics, repeat_rate}``; this run replaces this week's entry, so ``trend[-2]`` is the week before
 (core.eval_followups reads it that way). Weeks before the first run are filled once
 from the session store (``backfilled: true``; O1–O3 and metrics only).
 Readers: EvalService.get_session_quality (the Online tab), eval_followups, and the
@@ -73,27 +80,25 @@ def select_sessions(*, session_turns: dict[str, int], correction_session_ids: se
     return (corrected + long)[:_SAMPLE_CAP]
 
 
-def _read_corrections(path: Path) -> tuple[list[tuple[float, str]], float | None]:
-    """``([(ts, session_id)], log_start)``: the USER corrections (type
-    user_correction; corrections.jsonl also logs tool failures, which are not a
-    correction) and the earliest timestamp of ANY entry, i.e. from when the log
-    covers. A missing or garbled file reads as none."""
-    out: list[tuple[float, str]] = []
-    start: float | None = None
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return out, None
-    for line in lines:
-        try:
-            entry = json.loads(line)
-            ts = float(entry.get("ts"))
-        except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
-            continue
-        start = ts if start is None else min(start, ts)
-        if entry.get("type") == "user_correction" and entry.get("session_id"):
-            out.append((ts, entry["session_id"]))
-    return out, start
+def _read_corrections(reader: Callable[[], tuple]) -> tuple[list[tuple[float, str, bool]], float | None]:
+    """``([(ts, session_id, repeats)], covered_from)`` from *reader* (default
+    ``core.ingestion.queries.read_corrections``): every correction the after-session
+    review recorded, and the epoch from which that record covers (None: not at all)."""
+    rows, start = reader()
+    out = [(r["at"].timestamp(), r["session_id"], bool(r.get("repeats"))) for r in rows if r.get("session_id")]
+    return out, (start.timestamp() if start is not None else None)
+
+
+def _repeats(entries: list[tuple[float, str, bool]], since: float, until: float | None,
+             covered: bool) -> dict | None:
+    """The repeat rate of the corrections in ``[since, until)``; None when the record does
+    not cover the window."""
+    if not covered:
+        return None
+    window = [r for ts, _sid, r in entries if ts >= since and (until is None or ts < until)]
+    repeats = sum(window)
+    return {"corrections": len(window), "repeats": repeats,
+            "rate": round(repeats / len(window), 3) if window else None}
 
 
 # ── turns and checks ──────────────────────────────────────────────────────────
@@ -263,10 +268,11 @@ class _Deterministic:
                 "cost_p50_usd": round(cost, 3) if cost is not None else None}
 
 
-def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str],
+def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str] | None,
                  scorer: Callable[..., dict], costs: list[float] | None = None) -> dict:
     """``sessions``: ``{sid: {title, messages}}`` for the window; ``costs`` the
-    per-turn costs in it. Returns the ``sessions_checked``, ``checks``, ``metrics``,
+    per-turn costs in it; ``correction_ids`` None when the corrections record does not
+    cover the window (O3 is then not scored). Returns the ``sessions_checked``, ``checks``, ``metrics``,
     ``low_details``, ``judge_error``, ``judge_sampled`` and ``judge_failed`` parts of the
     state. A sampled session whose judge call failed is not in O4/O5: it is counted in
     ``judge_failed`` so the judged share is never read off a silently smaller sample."""
@@ -276,7 +282,7 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
     tallies, turn_counts = det.tallies, det.turn_counts
     low: list[dict] = []
     judge_errors: list[str] = []
-    sample = select_sessions(session_turns=turn_counts, correction_session_ids=correction_ids)
+    sample = select_sessions(session_turns=turn_counts, correction_session_ids=correction_ids or set())
     for sid in sample:
         session = sessions[sid]
         turns = split_turns(session.get("messages") or [], since)
@@ -355,21 +361,23 @@ def _backfill(missing, history, corrections, cost_rows) -> list[dict]:
     weeks = []
     for label, start, end in missing:
         covered = log_start is not None and log_start <= start.timestamp()
-        ids = ({sid for ts, sid in entries if start.timestamp() <= ts < end.timestamp()}
+        ids = ({sid for ts, sid, _r in entries if start.timestamp() <= ts < end.timestamp()}
                if covered else None)
         weeks.append((label, start, end,
-                      _Deterministic(start.isoformat(), end.isoformat(), ids)))
+                      _Deterministic(start.isoformat(), end.isoformat(), ids),
+                      _repeats(entries, start.timestamp(), end.timestamp(), covered)))
 
     def consume(sid: str, session: dict) -> None:
-        for *_, det in weeks:
+        for *_, det, _rep in weeks:
             det.add(sid, session)
 
     history(missing[0][1].isoformat(), consume)
     out = []
-    for label, start, end, det in weeks:
+    for label, start, end, det, rep in weeks:
         costs = _turn_costs(cost_rows, start.isoformat(), end.isoformat())
         out.append(_trend_entry(label, None, {c: t.out() for c, t in det.tallies.items()},
-                                det.metrics(costs), backfilled=True))
+                                det.metrics(costs), backfilled=True,
+                                repeat_rate=(rep or {}).get("rate")))
     return out
 
 
@@ -409,7 +417,7 @@ def run_session_quality(
     dry_run: bool = False,
     sampler: Optional[Callable[[str], dict]] = None,
     scorer: Optional[Callable[..., dict]] = None,
-    corrections_path: Optional[Path] = None,
+    corrections_reader: Optional[Callable[[], tuple]] = None,
     state_path: Optional[Path] = None,
     now: Optional[datetime] = None,
     history: Optional[Callable[[str, Callable[[str, dict], None]], None]] = None,
@@ -423,13 +431,14 @@ def run_session_quality(
     (the weekly backfill). With an injected ``sampler`` and no ``history`` /
     ``cost_reader``, those parts are off (tests never reach the real database).
     Writes the state file unless ``dry_run``; returns it."""
-    from config import get_app_data_dir, get_swarmws
+    from config import get_swarmws
 
     now = now or datetime.now(timezone.utc)
     start = now - timedelta(days=WINDOW_DAYS)
     # messages.created_at is local time without a zone; corrections carry epoch seconds
     since = start.astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
-    corrections_path = corrections_path or (get_app_data_dir() / "state" / "corrections.jsonl")
+    if corrections_reader is None:
+        from core.ingestion.queries import read_corrections as corrections_reader
     state_path = state_path or (get_swarmws() / ".context" / ".session-quality-state.json")
     if sampler is None:
         sampler = _default_sampler
@@ -444,7 +453,9 @@ def run_session_quality(
                                  judge_fn=default_judge_fn, reason_language=_asked_in(prompt))
 
     now_local = now.astimezone().replace(tzinfo=None)
-    corrections = _read_corrections(corrections_path)
+    corrections = _read_corrections(corrections_reader)
+    covered = corrections[1] is not None and corrections[1] <= start.timestamp()
+    repeat_corrections = _repeats(corrections[0], start.timestamp(), None, covered)
     trend = [t for t in ((_read_state(state_path) or {}).get("trend") or []) if isinstance(t, dict)]
     missing = _missing_weeks(trend, now_local) if history else []
     oldest = missing[0][1].isoformat() if missing else since
@@ -458,9 +469,11 @@ def run_session_quality(
     sample = sampler(since)
     sampler_error = sample.get("sampler_error")
     scored = score_window(sample.get("sessions") or {}, since,
-                          {sid for ts, sid in corrections[0] if ts >= start.timestamp()}, scorer,
+                          {sid for ts, sid, _r in corrections[0] if ts >= start.timestamp()}
+                          if covered else None, scorer,
                           costs=_turn_costs(cost_rows, since, None))
     state = {"version": 3, "last_run": now.isoformat(), "window_days": WINDOW_DAYS, **scored,
+             "repeat_corrections": repeat_corrections,
              "judge_prompt_sha": JUDGE_PROMPT_SHA, "sampler_error": sampler_error}
     if not sampler_error:
         if missing:
@@ -470,7 +483,8 @@ def run_session_quality(
             except Exception as exc:  # noqa: BLE001 — a failed backfill only leaves weeks empty
                 logger.error("session_quality: weekly backfill failed (%s)", exc)
         trend = _with_trend(trend, _trend_entry(_week_label(now_local), now.isoformat(),
-                                                scored["checks"], scored["metrics"]))
+                                                scored["checks"], scored["metrics"],
+                                                repeat_rate=(repeat_corrections or {}).get("rate")))
     state["trend"] = trend
     if not dry_run:
         try:

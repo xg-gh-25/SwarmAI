@@ -576,7 +576,7 @@ class TestMergeCrashCheckpoint:
         assert result is not None
         assert "42 tool calls" in result
         assert "hooks.py" in result
-        assert "3 correction" in result
+        assert "correction" not in result      # an old checkpoint's count is not repeated
 
     def test_handles_corrupt_json(self, tmp_path):
         cp = tmp_path / "session_checkpoint.json"

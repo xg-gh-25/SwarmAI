@@ -488,14 +488,28 @@ class EvalService:
             "judge_sampled": data.get("judge_sampled") if isinstance(data.get("judge_sampled"), int) else None,
             "judge_failed": data.get("judge_failed") if isinstance(data.get("judge_failed"), int) else None,
             "metrics": self._project_metrics(data.get("metrics")),
+            # corrections that repeat an earlier correction of the same mistake (the
+            # after-session review's own declaration); None when the record does not
+            # cover the window
+            "repeat_corrections": self._project_repeats(data.get("repeat_corrections")),
             "trend": [{"week": str(t.get("week") or "")[:10], "at": t.get("at"),
                        "rates": {str(k)[:40]: v for k, v in (t.get("rates") or {}).items()
                                  if isinstance(v, (int, float))},
                        "metrics": self._project_metrics(t.get("metrics")),
+                       "repeat_rate": t.get("repeat_rate") if isinstance(t.get("repeat_rate"), (int, float)) else None,
                        "backfilled": bool(t.get("backfilled"))}
                       for t in (data.get("trend") or []) if isinstance(t, dict)][-12:],
             "calibration": self._calibration_view(data),
         }
+
+    @staticmethod
+    def _project_repeats(r) -> dict | None:
+        if not isinstance(r, dict):
+            return None
+        def _int(v):
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+        return {"corrections": _int(r.get("corrections")), "repeats": _int(r.get("repeats")),
+                "rate": r.get("rate") if isinstance(r.get("rate"), (int, float)) else None}
 
     @staticmethod
     def _project_metrics(m) -> dict:

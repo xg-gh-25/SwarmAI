@@ -38,7 +38,6 @@ const LABELS: Record<string, string> = {
   slack_bolt: 'Slack Bot (slack-bolt)',
   recall_engine: 'Memory Recall Engine',
   manifest_loader: 'Skill Manifest Loader',
-  llm_optimizer: 'Evolution Optimizer',
   worker: 'Cognitive Distillation Flow (CDF worker)',
   frozen: 'PyInstaller Bundle',
   mode: 'Runtime Mode',
@@ -47,7 +46,7 @@ const LABELS: Record<string, string> = {
 /** Group each key into a section. Keys not listed go to "other". */
 const GROUPS: Record<string, string[]> = {
   core: ['recall_engine', 'manifest_loader', 'worker'],
-  optional: ['sqlite_vec', 'psutil', 'slack_bolt', 'llm_optimizer'],
+  optional: ['sqlite_vec', 'psutil', 'slack_bolt'],
   runtime: ['frozen', 'mode'],
 };
 

@@ -291,6 +291,16 @@ def test_rule8_standing_online_signals():
     assert "Chat D" not in repr(on_disk)
 
 
+def test_a_repeated_correction_is_a_follow_up():
+    """D12 / I9: corrections the review declared as repeating an earlier one are named."""
+    repeated = dict(ONLINE, repeat_corrections={"corrections": 5, "repeats": 2, "rate": 0.4})
+    items = build_follow_ups(_clean_history(), CASES, repeated, NOW)
+    assert _kinds(items) == {(8, "evolution")}
+    assert "2 of this week's 5 corrections repeated" in items[0]["what"]["en"]
+    for quiet in ({"corrections": 5, "repeats": 0, "rate": 0.0}, None):
+        assert build_follow_ups(_clean_history(), CASES, dict(ONLINE, repeat_corrections=quiet), NOW) == []
+
+
 def test_health_splits_the_two_lists(tmp_path, monkeypatch):
     import asyncio
     import json

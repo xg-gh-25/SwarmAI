@@ -45,17 +45,6 @@ def test_semantic_fields_are_never_sliced_or_shortened():
     assert violations == []
 
 
-def test_correction_path_keeps_the_whole_user_prompt():
-    source = (ROOT / "core/runtime_hooks.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    detector = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                    and node.name == "create_user_correction_detector")
-    slices = [node for node in ast.walk(detector)
-              if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)
-              and _name(node.value) == "prompt"]
-    assert slices == []
-
-
 # Write-side producers whose text becomes a source's semantic content (a DailyActivity
 # line, a distillation candidate, a backflow title): no constant slice at all inside
 # them, whatever the variable is called -- the field-name scan above cannot see

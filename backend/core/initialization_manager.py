@@ -225,8 +225,8 @@ class InitializationManager:
             self._cached_workspace_path = swarm_workspace_manager.expand_path(
                 swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG["file_path"]
             )
-            # Persist to app_config so other modules (context_health_hook,
-            # evolution_optimizer) can read it without importing us.
+            # Persist to app_config so other modules (context_health_hook) can read
+            # it without importing us.
             self._persist_workspace_path(self._cached_workspace_path)
         return self._cached_workspace_path
 

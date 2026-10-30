@@ -56,46 +56,6 @@ class TestFallbackCwdHandling:
         assert "NoneType" not in (result.summary or "")
 
 
-class TestEvolutionLockStaleness:
-    """Stale evolution lock files should be force-broken."""
-
-    def test_stale_lock_is_broken_when_holder_dead(self, tmp_path):
-        """Lock older than 1 hour with dead PID should be force-broken."""
-        lock_file = tmp_path / ".evolution_cycle.lock"
-        # Write a PID that doesn't exist (99999999)
-        lock_file.write_text("99999999")
-        # Make it appear old (2 hours ago)
-        old_time = time.time() - 7200
-        os.utime(lock_file, (old_time, old_time))
-
-        from core.evolution_optimizer import _break_stale_lock
-        result = _break_stale_lock(lock_file, max_age_seconds=3600)
-        assert result is True, "Should have broken the stale lock (dead PID)"
-
-    def test_stale_lock_not_broken_when_holder_alive(self, tmp_path):
-        """Lock older than 1 hour with alive PID should NOT be broken."""
-        lock_file = tmp_path / ".evolution_cycle.lock"
-        # Write our own PID (definitely alive)
-        lock_file.write_text(str(os.getpid()))
-        # Make it appear old
-        old_time = time.time() - 7200
-        os.utime(lock_file, (old_time, old_time))
-
-        from core.evolution_optimizer import _break_stale_lock
-        result = _break_stale_lock(lock_file, max_age_seconds=3600)
-        assert result is False, "Should NOT break lock when holder is alive"
-
-    def test_fresh_lock_not_broken(self, tmp_path):
-        """Lock younger than 1 hour should NOT be broken."""
-        lock_file = tmp_path / ".evolution_cycle.lock"
-        lock_file.touch()
-        # Fresh — just created
-
-        from core.evolution_optimizer import _break_stale_lock
-        result = _break_stale_lock(lock_file, max_age_seconds=3600)
-        assert result is False, "Should NOT break a fresh lock"
-
-
 def _timeout_job(timeout_s: int = 7):
     from jobs.models import Job, JobSafety
     return Job(

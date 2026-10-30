@@ -300,7 +300,6 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
         from datetime import datetime
         crash_time = datetime.fromtimestamp(ts).strftime("%H:%M")
         git_commits = data.get("git_commits", [])
-        corrections_count = data.get("corrections_count", 0)
 
         entry = (
             f"## {crash_time} | {session_id[:8]} | ⚠️ Recovered from crash checkpoint\n"
@@ -314,8 +313,6 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
             entry += "**Git activity:**\n"
             for c in git_commits[:3]:
                 entry += f"- `{c[:72]}`\n"
-        if corrections_count:
-            entry += f"**Corrections:** {corrections_count}\n"
 
         # Upsert the session's checkpoint block in today's DailyActivity
         from core.daily_activity_writer import upsert_session_block

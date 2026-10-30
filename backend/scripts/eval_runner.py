@@ -1909,7 +1909,7 @@ def _get_judge_model() -> str:
     version returned the raw short name, so every judge call died with
     "model identifier is invalid" → silently skipped 88 LLM-judge cases →
     a 100/100 health score computed on ~39 mechanical cases only. We now
-    resolve through bedrock_model_map (the same path llm_optimizer uses).
+    resolve through bedrock_model_map.
 
     A short name that resolves through NEITHER the config's ``bedrock_model_map``
     NOR the model registry is substituted with a known-good ID — but LOUDLY.

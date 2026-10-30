@@ -28,14 +28,14 @@ The script outputs JSON with:
 - `fixes_applied`: what was auto-fixed
 - `pending`: what needs human decision
 
-## 8 Dimensions (35 Checks)
+## 8 Dimensions (33 Checks)
 
 | Dim | Name | Checks | What It Covers |
 |-----|------|--------|----------------|
 | 1 | Self-Context | 4 | Files present, agent-file freshness, DDD in KNOWLEDGE, uncommitted |
 | 2 | Self-Memory | 5 | Distillation recency, backlog, caps, OT hygiene, archive |
 | 3 | Self-Knowledge | 4 | Index completeness, architecture currency, capability coverage, nav |
-| 4 | Self-Evolution | 4 | Pipeline last run, skill_health.json, correction capture, competence |
+| 4 | Self-Evolution | 2 | Correction capture, competence |
 | 5 | Cross-Loop | 3 | Memory→Knowledge, Memory→Evolution, DA→Memory flow |
 | 6 | Brain Safety | 4 | Remote exists, push recency, push health, critical files committed |
 | 7 | Infrastructure | 5 | Hook proof, DA generation, token budget, growth rate, stale locks |

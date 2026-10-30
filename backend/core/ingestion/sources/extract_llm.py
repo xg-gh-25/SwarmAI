@@ -163,6 +163,8 @@ def unit_schema(kinds: Iterable[str], extra: Iterable[str] = ()) -> dict[str, An
             props["scope"]["description"] = contracts_v2.SCOPE_RULE
         if "topic" in props:
             props["topic"]["description"] = contracts_v2.TOPIC_RULE
+        if "skill" in props:
+            props["skill"]["description"] = contracts_v2.SKILL_RULE
         required = [n for n in definition.get("required", []) if n in props]
         lists[f"{kind}_units"] = {
             "type": "array", "description": _kind_rules((kind,), heading=f"every {kind} unit (empty when none)"),

@@ -171,9 +171,3 @@ def test_no_product_code_looks_for_a_system_python():
         assert 'which("python3")' not in s, p
     build = (BACKEND.parent / "desktop" / "scripts" / "build-backend.sh").read_text()
     assert 'cat > "$BUILD_DIR/desktop_main.py"' not in build   # one entry file, tracked
-
-
-@pytest.mark.parametrize("name", ["run_evolution"])
-def test_job_modules_import_under_their_new_names(name):
-    import importlib
-    importlib.import_module(f"jobs.{name}")

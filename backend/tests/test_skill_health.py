@@ -8,10 +8,11 @@ Covers run_a85e6641 (scannable at-a-glance health signal on the Capabilities pan
   Gate-1 BLOCK-3: internal skill names must NOT leak to a non-owner via the map keys) and
   FAIL-SAFE (metrics store raising -> 200 with empty map, never 500 — Gate-1 WARN + AC7).
 
-Naming honesty (Gate-1 WARN-1): the metric is LIFETIME success_rate with no recency, so the
-status is `low_success`, NOT `recently_failed` (R30#4 — a decision-inert/misleading label is
-banned). A floor of invocation_count>=5 (mirrors get_evolution_candidates, skill_metrics.py:173)
-prevents a 1-of-2-failed skill from showing low_success forever on no real signal.
+Success comes from the after-session review's corrections that name the skill, over the
+last WINDOW_DAYS: success = 1 - corrections / invocations in the window (design
+2026-10-30-cdf-agent-decides D12 — no keyword match on the user's next message). A floor of
+MIN_INVOCATIONS_FOR_LOW_SUCCESS invocations in the window prevents low_success on no real
+signal.
 """
 from datetime import date, timedelta
 
@@ -49,52 +50,50 @@ class TestFoldStatus:
         # A skill with zero metric rows (absent from get_all_stats) -> never_used.
         assert fold_status(None) == "never_used"
 
-    def test_recent_high_success_is_healthy(self):
-        assert fold_status(_stats(success_rate=0.95, last_used=date.today().isoformat())) == "healthy"
+    def test_a_skill_never_corrected_is_healthy(self):
+        assert fold_status(_stats(), recent_invocations=10, corrections=0) == "healthy"
 
-    def test_low_lifetime_success_over_floor_is_low_success(self):
-        # >= floor invocations AND success_rate < 0.7 -> low_success.
-        s = _stats(invocation_count=10, success_rate=0.5, last_used=date.today().isoformat())
-        assert fold_status(s) == "low_success"
+    def test_corrections_over_the_floor_are_low_success(self):
+        # >= floor invocations in the window AND 1 - 5/10 = 0.5 < 0.7 -> low_success.
+        assert fold_status(_stats(), recent_invocations=10, corrections=5) == "low_success"
+
+    def test_the_stores_lifetime_success_rate_is_not_read(self):
+        # the old keyword-derived success_rate in the store no longer decides anything
+        assert fold_status(_stats(success_rate=0.1), recent_invocations=10, corrections=0) == "healthy"
 
     def test_low_success_below_invocation_floor_is_not_low_success(self):
-        # Gate-1 WARN-1: a 1-of-2-failed skill (below the floor) must NOT show low_success
-        # on no real signal — it is recent + present, so healthy.
-        s = _stats(invocation_count=2, success_rate=0.5, last_used=date.today().isoformat())
-        assert fold_status(s) == "healthy"
+        # a rarely-run skill (below the floor) must NOT show low_success on no real signal
+        assert fold_status(_stats(), recent_invocations=2, corrections=2) == "healthy"
+
+    def test_more_corrections_than_runs_floor_at_zero(self):
+        from core.skill_health import success_in_window
+        assert success_in_window(5, 9) == 0.0
+        assert success_in_window(0, 3) is None
 
     def test_old_last_used_is_stale(self):
         old = (date.today() - timedelta(days=STALENESS_DAYS + 5)).isoformat()
-        assert fold_status(_stats(success_rate=1.0, last_used=old)) == "stale"
+        assert fold_status(_stats(last_used=old)) == "stale"
 
     def test_low_success_takes_precedence_over_stale(self):
-        # A skill both stale AND low-success: low_success wins (a broken skill is more
-        # important to surface than an idle one). Ordering: never_used>low_success>stale>healthy.
+        # Ordering: never_used>low_success>stale>healthy.
         old = (date.today() - timedelta(days=STALENESS_DAYS + 5)).isoformat()
-        s = _stats(invocation_count=10, success_rate=0.4, last_used=old)
-        assert fold_status(s) == "low_success"
+        assert fold_status(_stats(last_used=old), recent_invocations=10, corrections=6) == "low_success"
 
     def test_empty_last_used_does_not_crash(self):
-        # Gate-1 WARN-1: MAX(invocation_date) can be "" (SkillStats last_used `or ""`).
-        # date.fromisoformat("") would raise -> the fold MUST guard per-row, not rely on the
-        # router try/except (which would blank ALL dots, not just this one).
-        s = _stats(invocation_count=10, success_rate=1.0, last_used="")
-        # No crash; a present-but-dateless row is treated as healthy (has invocations, not stale-provable).
-        assert fold_status(s) == "healthy"
+        # MAX(invocation_date) can be "" (SkillStats last_used `or ""`): guarded per row.
+        assert fold_status(_stats(last_used="")) == "healthy"
 
     def test_malformed_last_used_does_not_crash(self):
-        s = _stats(invocation_count=10, success_rate=1.0, last_used="not-a-date")
-        assert fold_status(s) == "healthy"
+        assert fold_status(_stats(last_used="not-a-date")) == "healthy"
 
-    def test_boundary_success_rate_exactly_070_is_healthy(self):
+    def test_boundary_success_exactly_070_is_healthy(self):
         # <0.7 is exclusive — exactly 0.7 is NOT low_success.
-        s = _stats(invocation_count=10, success_rate=0.70, last_used=date.today().isoformat())
-        assert fold_status(s) == "healthy"
+        assert fold_status(_stats(), recent_invocations=10, corrections=3) == "healthy"
 
     def test_all_statuses_are_in_the_enum(self):
         from core.skill_health import SKILL_HEALTH_STATUSES
-        for st in (None, _stats(), _stats(success_rate=0.1, invocation_count=9)):
-            assert fold_status(st) in SKILL_HEALTH_STATUSES
+        for st, runs, fixes in ((None, 0, 0), (_stats(), 9, 0), (_stats(), 9, 9)):
+            assert fold_status(st, recent_invocations=runs, corrections=fixes) in SKILL_HEALTH_STATUSES
 
 
 class TestBuildHealthMap:
@@ -114,10 +113,15 @@ class TestBuildHealthMap:
         assert "s_cmhk_internal" not in m
 
     def test_detail_fields_present_for_drawer(self):
-        stats = [_stats(name="s_used", success_rate=0.9, last_used="2026-08-01")]
-        m = build_health_map(stats, ["s_used"])
-        assert m["s_used"]["success_rate"] == 0.9
+        stats = [_stats(name="s_used", last_used="2026-08-01")]
+        m = build_health_map(stats, ["s_used"], recent_invocations={"s_used": 10},
+                             corrections={"s_used": 1})
+        assert m["s_used"]["success_rate"] == pytest.approx(0.9)
         assert m["s_used"]["last_used"] == "2026-08-01"
+
+    def test_not_invoked_in_the_window_has_no_success_rate(self):
+        m = build_health_map([_stats(name="s_used")], ["s_used"])
+        assert m["s_used"]["success_rate"] is None and m["s_used"]["status"] == "healthy"
 
     def test_never_used_detail_is_null(self):
         m = build_health_map([], ["s_never"])
@@ -175,18 +179,15 @@ class TestBuildHealthMap:
         )
         assert m["s_deep-research"]["last_used"] == recent
 
-    def test_merge_weights_success_rate_by_invocations(self):
-        # Merged success_rate must be invocation-weighted, not a naive average, so a
-        # low-success row is not masked/amplified by a small counterpart.
+    def test_window_counts_and_corrections_join_on_the_canonical_name(self):
+        # the store records "pdf" and "s_pdf"; the review may name either: all are one skill
         recent = date.today().isoformat()
-        stats = [
-            _stats(name="x", invocation_count=90, success_rate=0.5, last_used=recent),   # 45 successes
-            _stats(name="s_x", invocation_count=10, success_rate=1.0, last_used=recent),  # 10 successes
-        ]
-        m = build_health_map(stats, ["s_x"])
-        # weighted = (45+10)/100 = 0.55 < 0.7 AND 100>=5 → low_success
-        assert m["s_x"]["status"] == "low_success"
-        assert abs(m["s_x"]["success_rate"] - 0.55) < 1e-9
+        stats = [_stats(name="pdf", last_used=recent), _stats(name="s_pdf", last_used=recent)]
+        m = build_health_map(stats, ["s_pdf"], recent_invocations={"pdf": 6, "s_pdf": 4},
+                             corrections={"s_pdf": 2, "pdf": 2})
+        # 1 - 4/10 = 0.6 < 0.7 AND 10 >= 5 → low_success
+        assert m["s_pdf"]["status"] == "low_success"
+        assert m["s_pdf"]["success_rate"] == pytest.approx(0.6)
 
 
 class TestHealthEndpointFailSafe:

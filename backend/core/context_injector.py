@@ -694,7 +694,6 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
         data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
         tool_count = data.get("tool_count", 0)
         files = data.get("files_touched", [])
-        corrections = data.get("corrections_count", 0)
 
         if not tool_count:
             return None
@@ -702,8 +701,6 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
         parts = [f"⚠️ Prior session crashed after {tool_count} tool calls."]
         if files:
             parts.append(f"Files in progress: {', '.join(files[:15])}")
-        if corrections:
-            parts.append(f"{corrections} correction(s) were captured.")
         return " ".join(parts)
     except (json.JSONDecodeError, OSError, KeyError):
         return None

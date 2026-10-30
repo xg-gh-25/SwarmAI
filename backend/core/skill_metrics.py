@@ -1,8 +1,7 @@
 """Skill Metrics Store — tracks skill invocations, outcomes, and user satisfaction.
 
-Provides aggregated statistics for skill evolution decisions: which skills
-need improvement (high correction rate, low success rate) and which are
-performing well.
+Provides aggregated usage statistics (how often, how recently) for the skill health
+dots; success comes from the after-session review's corrections (core.skill_health).
 
 Key public symbols:
 
@@ -165,13 +164,10 @@ class SkillMetricsStore:
                 ))
         return results
 
-    def get_evolution_candidates(self) -> list[str]:
-        """Skills with correction_rate > 0.3 OR success_rate < 0.7 AND invocation_count >= 5."""
-        all_stats = self.get_all_stats()
-        candidates = []
-        for s in all_stats:
-            if s.invocation_count < 5:
-                continue
-            if s.correction_rate > 0.3 or s.success_rate < 0.7:
-                candidates.append(s.skill_name)
-        return candidates
+    def invocations_since(self, day: str) -> dict[str, int]:
+        """``{skill_name: invocations}`` on or after the ISO date *day*."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT skill_name, COUNT(*) FROM skill_metrics WHERE invocation_date >= ? "
+                "GROUP BY skill_name", (day,)).fetchall()
+        return {str(name): int(count) for name, count in rows}

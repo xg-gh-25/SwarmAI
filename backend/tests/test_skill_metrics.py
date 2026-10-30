@@ -57,25 +57,16 @@ class TestSkillMetricsStore:
         assert stats is not None
         assert stats.correction_rate == pytest.approx(0.4, abs=0.01)
 
-    def test_evolution_candidates(self, tmp_path):
-        """High correction rate returns candidate."""
+    def test_invocations_since_counts_only_the_window(self, tmp_path):
+        """The health dots measure success over a window: invocations before it are
+        not counted."""
         store = self._make_store(tmp_path)
-        # 5 invocations, 3 corrections (60% correction rate > 0.3 threshold)
-        for i in range(2):
-            store.record("evo-skill", f"s{i}", "success", 1.0, "accepted")
-        for i in range(3):
-            store.record("evo-skill", f"s{i+2}", "success", 1.0, "correction")
-        candidates = store.get_evolution_candidates()
-        assert "evo-skill" in candidates
-
-    def test_evolution_candidates_min_count(self, tmp_path):
-        """Skills with <5 invocations are not returned as candidates."""
-        store = self._make_store(tmp_path)
-        # Only 3 invocations, all corrections — shouldn't qualify
-        for i in range(3):
-            store.record("low-count", f"s{i}", "failure", 1.0, "correction")
-        candidates = store.get_evolution_candidates()
-        assert "low-count" not in candidates
+        store.record("pdf", "s1", "success", 1.0)
+        store.record("pdf", "s2", "success", 1.0)
+        store._conn.execute("UPDATE skill_metrics SET invocation_date='2026-01-01' WHERE session_id='s1'")
+        store._conn.commit()
+        assert store.invocations_since("2026-06-01") == {"pdf": 1}
+        assert store.invocations_since("2025-12-31") == {"pdf": 2}
 
     def test_get_all_stats(self, tmp_path):
         """Multiple skills tracked and returned."""
@@ -131,14 +122,3 @@ class TestSkillMetricsStore:
         stats = store.get_stats("init-skill")
         assert stats is not None
         assert stats.invocation_count == 1
-
-    def test_evolution_candidates_low_success_rate(self, tmp_path):
-        """Skills with success_rate < 0.7 and >= 5 invocations are candidates."""
-        store = self._make_store(tmp_path)
-        # 2 success + 3 failure = 0.4 success rate
-        for _ in range(2):
-            store.record("bad-skill", "s1", "success", 1.0)
-        for _ in range(3):
-            store.record("bad-skill", "s2", "failure", 1.0)
-        candidates = store.get_evolution_candidates()
-        assert "bad-skill" in candidates

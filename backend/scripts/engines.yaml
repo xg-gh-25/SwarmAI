@@ -24,10 +24,6 @@ engines:
   # validates existence against REPO_ROOT). Its capability is documented in the
   # GitHub_Community DDD (PRODUCT.md/TECH.md), not the SwarmAI backend engine list.
 
-  - name: "Evolution Pipeline (MINE→ASSESS→ACT→AUDIT)"
-    path: "backend/core/evolution_optimizer.py"
-    description: "Confidence-gated self-evolution from session mining and skill fitness scoring"
-
   - name: "Code Intelligence (AST graph)"
     path: "backend/core/code_intel/__init__.py"
     description: "Deterministic graph traversal for code context retrieval"

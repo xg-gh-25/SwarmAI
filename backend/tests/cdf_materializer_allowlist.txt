@@ -47,13 +47,6 @@ core/eval_service.py:EvalService._write_inflight_marker  # exempt: eval in-fligh
 core/eval_service.py:EvalService._write_partition  # exempt: golden set partition file
 core/eval_service.py:EvalService._write_run_result  # exempt: eval run result under EvalHistory/
 core/eval_service.py:EvalService.record_calibration  # exempt: eval calibration JSONL
-core/evolution_optimizer.py:EvolutionOptimizer._validate_constraints  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
-core/evolution_optimizer.py:_break_stale_lock  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
-core/evolution_optimizer.py:_run_evolution_cycle_locked  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
-core/evolution_optimizer.py:_write_cycle_changelog  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
-core/evolution_optimizer.py:_write_skill_health  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
-core/evolution_optimizer.py:atomic_deploy  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
-core/evolution_optimizer.py:run_evolution_cycle  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
 core/ingestion/pipeline_v2.py:reinforce_or_reject  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_missing_sections  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_parked  # exempt: via store.connect_rw: ingestion.db, CDF's own store
@@ -105,7 +98,6 @@ core/swarm_workspace_manager.py:_assert_ai_instruction_sentinels  # exempt: work
 core/swarm_workspace_manager.py:_batch_remove  # exempt: legacy path removal (one-time cleanup)
 core/swarm_workspace_manager.py:ensure_project_metadata  # exempt: .project.json
 core/turn_changes.py:_tree  # exempt: temp git index copy
-core/user_observer.py:UserObserver.save_observations  # exempt: observations JSONL, not a governed file
 core/worker_reset.py:set_aside  # exempt: a worker Hive's first start moves (os.replace, never deletes or rewrites) the cognition it wrote as a full SwarmAI into Hive/pre-worker/, and writes its .context/.worker-role marker
 hooks/auto_commit_hook.py:WorkspaceAutoCommitHook._cleanup_stale_git_lock  # exempt: stale .git/index.lock
 hooks/context_health_hook.py:ContextHealthHook._check_cache_freshness  # exempt: L1 prompt cache
@@ -170,7 +162,6 @@ scripts/recall_replay.py:cmd_replay  # exempt: replay output dir
 scripts/recall_replay.py:cmd_sample  # exempt: replay output dir
 scripts/recall_replay.py:cmd_score  # exempt: replay output dir
 scripts/scenario_runner.py:run_scenario_raw  # exempt: temp scenario files
-scripts/seed_corrections.py:write_corrections  # exempt: corrections JSONL output
 scripts/swarm_select_tests.py:_write_json  # exempt: test selector cache
 scripts/update_convergence.py:append_to_convergence  # exempt: release tool; appends to docs/CONVERGENCE.md in the repo
 skills/s_loops-health/scripts/loops_health_check.py:SelfLoopsHealthEngine._record_history  # exempt: loops health history JSON
@@ -202,3 +193,7 @@ jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via local_roots.
 routers/ddd_brain.py:_confirm  # exempt: via project_agent_review.confirm: the person's confirm writes project-agent.yaml (a definition file, not governed knowledge)
 routers/ddd_brain.py:_edit  # exempt: via project_agent_review.edit: the person's form edit writes project-agent.yaml (a definition file, not governed knowledge)
 core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2-understanding/knowledge/), not a governed file; the docs themselves go through governed_edit.apply_user_edit
+core/ingestion/pipeline_v2.py:_resolved  # exempt: reads the CDF store's root trust (lineage_external opens it); writes no governed file
+core/memory_injection.py:recorded_selection  # exempt: reads the latest injection selection from the CDF store (standing.connect, read-only here); writes no governed file
+scripts/brain_cleanup.py:_backup  # exempt: writes a tar.gz backup under <data dir>/backups before any cleanup; not a governed file
+scripts/cdf_rehearsal_replay.py:_enqueue  # exempt: hands a session to the after-session review, which writes only through the CDF inbox

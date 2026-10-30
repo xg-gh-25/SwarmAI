@@ -6,6 +6,9 @@
 - ``drain_access_log`` lets the ingestion worker persist queued detail reads.
 - ``brain_changes`` / ``brain_change_summary``: what was added, overridden, withdrawn
   (and the judge's unresolved conflicts) in the main cognition files, from the records.
+- ``corrections`` / ``read_corrections``: every correction the after-session review
+  recorded, with its session, the skill it names and whether it repeats an earlier one —
+  the one source of "the user corrected the agent" (O3, skill health, the repeat rate).
 """
 from __future__ import annotations
 
@@ -393,6 +396,53 @@ def read_bootstrap_progress(project: str) -> dict[str, Any]:
     with closing(connect_ro()) as conn:
         conn.row_factory = sqlite3.Row
         return bootstrap_progress(conn, project)
+
+
+def corrections(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Every correction unit the after-session review (S7) recorded, oldest first:
+    ``{at: datetime, session_id, skill, repeats}``. The review is the agent that had the
+    whole session; nothing here judges text (design 2026-10-30-cdf-agent-decides D12).
+    ``repeats`` is true only when the review's declaration named one earlier correction
+    (pipeline_v2 records it only then), so the repeat rate rests on that alone (I9). A
+    unit counts whatever was then done with it: a correction said again (``same``) is
+    still a time the user corrected the agent."""
+    if not _table_exists(conn, "ingestion_inbox"):
+        return []
+    rows = conn.execute(
+        """SELECT i.created_at, i.source_ref, json_extract(i.payload,'$.skill'),
+                  json_extract(u.decision,'$.version_vector.repeats')
+             FROM ingestion_inbox i LEFT JOIN ingestion_units u ON u.candidate_id=i.id
+            WHERE i.source_v2='S7' AND i.unit_kind='cognition'
+              AND json_extract(i.payload,'$.type')='correction'
+            ORDER BY i.created_at""").fetchall()
+    out = []
+    for created, session_id, skill, repeats in rows:
+        try:
+            at = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        out.append({"at": at, "session_id": str(session_id or ""),
+                    "skill": str(skill) if skill else None, "repeats": bool(repeats)})
+    return out
+
+
+def read_corrections() -> tuple[list[dict[str, Any]], datetime | None]:
+    """``(corrections, covered_from)``: ``corrections(conn)`` of this instance's store and
+    the time of its earliest after-session review record, from when the list covers
+    (``None``: no store, or no review recorded yet — nothing is known, not zero)."""
+    try:
+        with closing(connect_ro()) as conn:
+            found = corrections(conn)
+            first = conn.execute("SELECT MIN(created_at) FROM ingestion_inbox WHERE source_v2='S7'"
+                                 ).fetchone()[0] if _table_exists(conn, "ingestion_inbox") else None
+    except (OSError, sqlite3.Error):
+        return [], None
+    if not first:
+        return found, None
+    start = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+    return found, start if start.tzinfo else start.replace(tzinfo=timezone.utc)
 
 
 REVIEW_TYPES = ("code", "files", "conversation")

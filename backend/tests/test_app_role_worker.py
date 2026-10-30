@@ -148,7 +148,7 @@ def test_a_worker_runs_only_the_operational_jobs(as_role, tmp_path, monkeypatch)
     assert {j.id for j in scheduler.load_jobs()} == set(scheduler.WORKER_SYSTEM_JOBS)
     as_role(None, None)
     ids = {j.id for j in scheduler.load_jobs()}
-    assert "mine" in ids and "ddd-refresh" in ids and "evolution-cycle" in ids
+    assert "mine" in ids and "ddd-refresh" in ids and "session-quality" in ids
     from jobs.system_jobs import SYSTEM_JOB_IDS
     assert scheduler.WORKER_SYSTEM_JOBS <= SYSTEM_JOB_IDS            # no stale name
 

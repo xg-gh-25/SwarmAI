@@ -30,6 +30,7 @@ export function OnlineTab() {
   const cal = on.calibration;
   const o3 = on.checks?.O3_CORRECTIONS;
   const corrected = o3?.checked ? o3.failed ?? null : null;
+  const repeated = on.repeat_corrections?.repeats ?? 0;
   const next = health.data?.lines?.online.next_run;
   const goal = on.checks?.O4_GOAL;
   const tool = on.checks?.O5_TOOLS;
@@ -47,7 +48,7 @@ export function OnlineTab() {
           </div>
           <div className="text-display font-semibold text-[var(--color-text)] mt-1 leading-tight" data-testid="online-hero">
             {corrected != null
-              ? <>{t('You corrected the agent in ', '你纠正了 agent ')}<span style={{ color: corrected ? 'var(--color-status-warning)' : 'var(--color-status-success)' }}>{t(`${corrected} of ${o3!.checked}`, `${o3!.checked} 个里的 ${corrected} 个`)}</span>{t(' sessions.', ' 会话。')}</>
+              ? <>{t('You corrected the agent in ', '你纠正了 agent ')}<span style={{ color: corrected ? 'var(--color-status-warning)' : 'var(--color-status-success)' }}>{t(`${corrected} of ${o3!.checked}`, `${o3!.checked} 个里的 ${corrected} 个`)}</span>{t(' sessions.', ' 会话。')}{repeated > 0 && <span className="text-[var(--color-status-warning)]" data-testid="online-repeats">{t(` ${repeated} repeated an earlier mistake.`, ` 其中 ${repeated} 次是同一个错误又犯了。`)}</span>}</>
               : t(`${on.sessions_checked} sessions checked.`, `查了 ${on.sessions_checked} 个会话。`)}
           </div>
         </div>

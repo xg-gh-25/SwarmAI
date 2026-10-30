@@ -25,6 +25,15 @@ describe('Live sessions', () => {
       checks: { O3_CORRECTIONS: { checked: 33, failed: 14, rate: 0.424, examples: [] } } };
     show(<OnlineTab />);
     expect((await screen.findByTestId('online-hero')).textContent).toBe('You corrected the agent in 14 of 33 sessions.');
+    expect(screen.queryByTestId('online-repeats')).toBeNull();
+  });
+
+  it('names the corrections that repeated an earlier mistake (the review\'s own declaration)', async () => {
+    routes['GET /eval/session-quality'] = { ...online(true), sessions_checked: 33,
+      checks: { O3_CORRECTIONS: { checked: 33, failed: 14, rate: 0.424, examples: [] } },
+      repeat_corrections: { corrections: 20, repeats: 3, rate: 0.15 } };
+    show(<OnlineTab />);
+    expect((await screen.findByTestId('online-repeats')).textContent).toBe(' 3 repeated an earlier mistake.');
   });
 
   it('posts a label for a low-scored session, opened in place, and opens the session', async () => {

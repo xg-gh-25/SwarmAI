@@ -2,7 +2,7 @@
 
 Registers at the END of the hook chain (after security gates). Records tool
 invocations into the session's ObservationRing. Also emits real-time DDD
-cultivation events for qualifying observations (project file edits, corrections).
+cultivation events for qualifying observations (project file edits).
 
 Public symbols:
     - create_observation_recorder   — PreToolUse hook factory
@@ -151,20 +151,6 @@ def _maybe_emit_ddd_event_sync(obs, session_context: dict) -> None:
                 except Exception:
                     pass
                 break
-
-    # Rule 2: Correction detected (from session_context flag)
-    if session_context.get("_correction_just_detected"):
-        try:
-            event = _CultivationEvent(
-                type=_EventType.DAILY_ACTIVITY,
-                source="observation_stream",
-                payload={"type": "correction", "intent": obs.intent},
-                priority=1,
-            )
-            dispatcher.emit_nowait(event)  # Dedup + non-yielding
-        except Exception:
-            pass
-        session_context["_correction_just_detected"] = False
 
 
 # Module-level ring registry — allows daily_activity_hook to access session rings

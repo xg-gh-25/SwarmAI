@@ -1,4 +1,8 @@
-"""Runtime hooks for real-time correction capture and error pattern detection.
+"""Runtime hooks for tool-failure capture and error pattern detection.
+
+Nothing here judges what the user meant: whether the user corrected the agent is the
+after-session review's call (design 2026-10-30-cdf-agent-decides D12), not a pattern
+match on the prompt.
 
 These hooks fire DURING agent execution (not post-session) via the Claude
 Agent SDK hook system.  All hooks are observe-only — they log and inject
@@ -9,7 +13,6 @@ Key public symbols:
 - ``register_runtime_hooks``         — Wire all runtime hooks into a HookRegistry
 - ``create_correction_capture_hook`` — PostToolUseFailure → corrections.jsonl
 - ``create_error_pattern_detector``  — PostToolUseFailure → hint after 2+ failures
-- ``create_user_correction_detector``— UserPromptSubmit → corrections.jsonl
 """
 
 import asyncio
@@ -56,81 +59,15 @@ _LANG_CJK_WEIGHT_THRESHOLD = 0.30
 _MAX_CORRECTIONS_ENTRIES = 500
 _MAX_CORRECTIONS_SIZE_BYTES = 512 * 1024  # 512KB trigger threshold
 
-# Correction pattern regex — conservative to minimize false positives.
-# Matches when patterns appear at word boundaries or start of string.
-_CORRECTION_PATTERNS_EN = re.compile(
-    r"""(?ix)                   # case-insensitive, verbose
-    (?:^|\b)(?:
-        (?:that(?:'s|s)?\s+)?(?:wrong|incorrect|not\s+right|not\s+correct)
-      | no[\s,]+(?:that|it|this)
-      | actually[\s,]+(?:no\b|not\b|don'?t|shouldn'?t|isn'?t|wasn'?t|can'?t|won'?t|wouldn'?t|never\b)
-      | you(?:'re|\s+are)\s+wrong
-      | that(?:'s|s)?\s+not\s+(?:what|how)
-      | I\s+(?:said|meant|asked)
-      | 不对
-      | 错了
-      | 搞错
-      | 你搞错了
-      | 不是这样
-      | 应该是
-    )
-    """
-)
-
-# Meta-cognitive / Socratic correction patterns (gap fix run_e681a61d).
-# These capture corrections phrased as a REDIRECT or REFRAME rather than an
-# explicit "you're wrong". COR02-disciplined: every pattern is a multi-word
-# phrase with correction-specific SEMANTICS — NOT a bare keyword (no lone 吗/去),
-# so genuine info-questions ("这个怎么用吗", "你能去查一下文档吗") don't trigger.
-#
-# KNOWN, DELIBERATE RECALL GAP — pure question-form challenges are NOT captured.
-# Corrections phrased as a bare interrogative — "你知道X吗", "你确定X吗",
-# "你是不是X" — are intentionally LEFT OUT. They are structurally identical to
-# benign info-questions ("你知道这个怎么用吗"), so a pure regex cannot tell a
-# challenge from a question without false positives — exactly the COR02 class.
-# This is an accepted recall gap, NOT a bug: precision is held over recall here.
-# Capturing question-form challenges requires SEMANTIC judgment (interrogative +
-# reference to the agent's own prior claim/action), which belongs on a different
-# surface (see Designs/2026-06-25-self-evolution-closed-loop-design.md, M3.5
-# APPLY-gate / Stop-hook), NOT in this hot-path regex. Do NOT "fix" this by
-# adding 你知道/你确定/吗 here — that re-opens COR02. The boundary is locked in
-# BOTH directions by test_runtime_hooks.py: test_detects_meta_cognitive_redirect
-# (imperatives MUST fire) + test_question_form_challenges_are_a_known_recall_gap
-# (interrogatives MUST NOT fire).
-_CORRECTION_PATTERNS_META = re.compile(
-    r"""(?ix)
-    (?:
-        # Investigate-redirect: imperative "go (and) look/check ..." — steering
-        # the agent to re-investigate. Requires the directive verb at a boundary.
-        (?:^|[\s,。，、]) (?:go\s+(?:and\s+)?(?:check|look|investigate|verify|dig)\b)
-      | (?:^|[\s,。，、]) (?:你\s*)?去\s*(?:查|看|核实|确认|检查|验证)
-        # "你看下/你看一下 X" — imperative "(you) take a look at" redirect. Requires
-        # the leading 你 (directive at the agent) so it doesn't match 我看下 (I'll
-        # look) or 看下面/看下文 (look below — a reference, not a correction).
-      | (?:^|[\s,。，、]) 你\s*看\s*(?:一)?下(?!面|文|方)
-        # Reframe: "rethink / reconsider / look again at ..." — discard current path.
-      | (?:^|\b) (?:re-?think|re-?consider|re-?examine|look\s+again)\b
-      | 重新\s*(?:想|看|考虑|检查|评估|分析|审视)
-        # Contrastive correction: "not X, (but) Y" / "不是 X，是 Y" — explicit
-        # redirect away from the agent's stated direction. Needs the paired marker.
-      | 不是.{0,30}(?:而是|应该|是别的|是另)
-      | (?:it'?s|that'?s)\s+not\s+.{0,40}\b(?:but|it'?s|rather)\b
-    )
-    """
-)
-
-
 # Free-text VALUE fields per correction entry type that carry attacker-influenced
-# content and are later replayed/fed-to-LLM. `user_correction.prompt` is scanned
-# with sentence-split because a correction prompt is attacker-influenced text that
-# may be replayed to a model (a 2nd-sentence payload is a real threat there). `tool_failure` fields are
-# deliberately NOT scanned — they are self-generated tool output/input, FP-prone,
-# and an attacker controlling them already controls the agent (low marginal safety).
+# content: a subagent's summary is scanned for injection before it is written.
+# `tool_failure` fields are deliberately NOT scanned — they are self-generated tool
+# output/input, FP-prone, and an attacker controlling them already controls the agent
+# (low marginal safety).
 _CORRECTION_SCAN_FIELDS: dict[str, tuple[str, ...]] = {
-    "user_correction": ("prompt",),
     "subagent_finding": ("summary",),
 }
-_CORRECTION_SENTENCE_SPLIT_FIELDS: tuple[str, ...] = ("prompt",)
+_CORRECTION_SENTENCE_SPLIT_FIELDS: tuple[str, ...] = ()
 
 
 def _append_correction(path: str, entry: dict) -> None:
@@ -219,7 +156,6 @@ def create_correction_capture_hook(
             "error": str(error)[:1000],
         }
         _append_correction(path, entry)
-        ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
         return {}
 
     return _hook
@@ -291,69 +227,6 @@ def create_failure_tracker_reset(
         tracker = ctx.get(tracker_key)
         if tracker and tool in tracker:
             tracker[tool] = 0
-        return {}
-
-    return _hook
-
-
-# ---------------------------------------------------------------------------
-# UserPromptSubmit: correction pattern detection → corrections.jsonl
-# ---------------------------------------------------------------------------
-
-def create_user_correction_detector(
-    corrections_path: Optional[str] = None,
-    session_context: Optional[dict] = None,
-):
-    """Factory: creates a UserPromptSubmit hook that detects user corrections.
-
-    Scans user prompts for correction signals (CN + EN patterns) and logs
-    to corrections.jsonl.  Observe-only — does not inject additionalContext.
-    """
-    path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-    ctx = session_context if session_context is not None else {}
-    sid = ctx.get("sdk_session_id", "unknown")
-
-    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
-        from core.injected_blocks import strip_injected_blocks
-        # Only what the user typed: a recalled or resumed block quoting an old
-        # "that's wrong" is history, not a correction made now.
-        prompt = strip_injected_blocks(_extract_field(input_data, "prompt", ""))
-        if not prompt or not isinstance(prompt, str):
-            return {}
-
-        # Two tiers of match (adversarial MED, run_e681a61d):
-        #  - explicit_error: "that's wrong / 不对 / 应该是" — a recorded MISTAKE.
-        #    Logs to corrections.jsonl; nothing is written to MEMORY from here (the
-        #    after-session review writes the correction with its context, see below).
-        #  - meta_only: a redirect/reframe ("去查 X / 重新想 / go check") — STEERING,
-        #    not a mistake. Logs to corrections.jsonl (for the post-session
-        #    classifier to judge) but does NOT write a MEMORY [pitfall] — a redirect
-        #    is not a "do not repeat" pattern, and recording one pollutes MEMORY.
-        is_explicit_error = bool(_CORRECTION_PATTERNS_EN.search(prompt))
-        is_meta = bool(_CORRECTION_PATTERNS_META.search(prompt))
-        if is_explicit_error or is_meta:
-            entry = {
-                "ts": time.time(),
-                "session_id": sid,
-                "type": "user_correction",
-                "prompt": prompt,
-            }
-            _append_correction(path, entry)
-            ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
-            ctx["_correction_just_detected"] = True  # Signal for observation DDD event
-
-            # The corrections.jsonl append above is the durable signal. Nothing
-            # classifies or counts corrections into buckets any more: a bucket
-            # count carried no text a human could act on (design
-            # 2026-10-26-evolution-loop-admission §3.1).
-
-            # Nothing is submitted from here: the raw prompt alone is not a unit a reader
-            # outside the session understands. The after-session review sees this
-            # message (it re-matches these patterns) and writes the correction with its
-            # context; the S2 user-utterance pass reads the user's words as well
-            # (2026-10-29-cdf-session-review.md §5.1).
-
-
         return {}
 
     return _hook
@@ -499,7 +372,6 @@ def create_session_checkpoint(
 
         session_id = ctx.get("sdk_session_id", "unknown")
         files = sorted(ctx.get("_files_touched", set()))
-        corrections = ctx.get("_corrections_count", 0)
 
         git_commits: list[str] = []  # see the docstring: workspace commits are not work
 
@@ -535,7 +407,6 @@ def create_session_checkpoint(
             "ts": time.time(),
             "tool_count": count,
             "files_touched": files[:20],  # Cap for JSON size
-            "corrections_count": corrections,
             "git_commits": git_commits,
             "recent_observations": recent_observations,
             "session_summary": session_summary,
@@ -575,8 +446,6 @@ def create_session_checkpoint(
             if len(files) > 10:
                 file_summary += f" (+{len(files) - 10} more)"
             lines.append(f"**Files:** {file_summary}\n")
-            if corrections:
-                lines.append(f"**Corrections:** {corrections}\n")
 
             # bounded by its parts (at most 10 whole file names, then a count), never
             # cut: a byte cap here split a file name in half (CDF first principle)
@@ -1376,7 +1245,6 @@ def create_subagent_capture_hook(
                 "summary": summary,
             }
             _append_correction(path, entry)
-            ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
 
         except Exception:
             logger.exception("Failed to capture subagent transcript from %s", transcript_path)
@@ -1451,12 +1319,6 @@ def create_post_compact_injection(
         # Test status — did this session run tests? (continuity: pick the thread back up)
         if ctx.get("_ran_tests"):
             parts.append("This session has run tests (re-check status if mid-TDD).")
-
-        # Corrections — how many user corrections landed (a signal the agent was
-        # being steered; worth re-reading the correction trail after a compaction).
-        corrections = ctx.get("_corrections_count", 0)
-        if corrections:
-            parts.append(f"User corrections this session: {corrections} (re-read the correction trail).")
 
         # Active pipeline run — a compacted pipeline MUST keep its run thread.
         run_id = ctx.get("_active_pipeline_run_id")
@@ -1609,98 +1471,6 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
             return {}
 
     return _hook
-
-
-# ---------------------------------------------------------------------------
-# UserPromptSubmit: high-signal observation capture → DailyActivity
-# ---------------------------------------------------------------------------
-
-_HIGH_SIGNAL_PATTERNS = re.compile(
-    r"""(?ix)(?:^|\b)(?:
-        I\s+decid(?:ed|e)
-      | we\s+decid(?:ed|e)
-      | decision:\s
-      | important:\s
-      | rule:\s
-      | lesson:\s
-      | never\s+again
-      | from\s+now\s+on
-      | 我(?:们)?决定
-      | 决定了
-      | 以后(?:都|要|不)
-      | 重要(?:：|:)
-      | 教训(?:：|:)
-      | 规则(?:：|:)
-    )"""
-)
-
-
-# A high-signal capture is one DailyActivity line; a longer message is named instead
-# (the whole text is in the session transcript), never cut.
-
-
-# ---------------------------------------------------------------------------
-# Reader: aggregate corrections.jsonl data for evolution optimizer
-# ---------------------------------------------------------------------------
-
-def read_correction_stats(
-    corrections_path: Optional[str] = None,
-    recency_days: int = 7,
-) -> dict[str, dict]:
-    """Read corrections.jsonl and compute per-skill stats for the optimizer.
-
-    Returns a dict keyed by skill/tool name::
-
-        {
-            "Bash": {"recent_corrections": 3, "repeat_count": 5, "total": 12},
-            "s_evaluate": {"recent_corrections": 1, "repeat_count": 2, "total": 4},
-        }
-
-    - ``recent_corrections``: entries within the last ``recency_days`` days.
-    - ``repeat_count``: total entries for this skill (proxy for how often
-      the same skill keeps failing).
-    - ``total``: same as repeat_count (explicit alias for clarity).
-
-    Returns empty dict on any error — caller should handle gracefully.
-    """
-    path = Path(corrections_path or _DEFAULT_CORRECTIONS_PATH)
-    if not path.exists():
-        return {}
-
-    cutoff = time.time() - (recency_days * 86400)
-    stats: dict[str, dict] = {}
-
-    try:
-        for line in path.read_text(encoding="utf-8").strip().split("\n"):
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            # Use "tool" for tool_failure, try to extract skill name for user_correction
-            key = entry.get("tool", "")
-            if not key and entry.get("type") == "user_correction":
-                key = "_user_correction"  # aggregate bucket
-
-            if not key:
-                continue
-
-            if key not in stats:
-                stats[key] = {"recent_corrections": 0, "repeat_count": 0, "total": 0}
-
-            stats[key]["total"] += 1
-            stats[key]["repeat_count"] += 1
-            ts = entry.get("ts", 0)
-            if ts >= cutoff:
-                stats[key]["recent_corrections"] += 1
-
-    except Exception:
-        logger.exception("Failed to read correction stats from %s", path)
-        return {}
-
-    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -1961,12 +1731,6 @@ def register_runtime_hooks(
     )
 
     # UserPromptSubmit hooks
-    registry.register(
-        "UserPromptSubmit",
-        create_user_correction_detector(path, session_context),
-        "user_correction_detector",
-    )
-
     # Phase 2: UserPromptSubmit post-compact injection
     registry.register(
         "UserPromptSubmit",
@@ -2002,6 +1766,6 @@ def register_runtime_hooks(
     logger.info(
         "Runtime hooks registered: correction_capture, error_pattern_detector, "
         "failure_tracker_reset, file_tracker, session_checkpoint, memory_edit_guard, "
-        "subagent_capture, user_correction_detector, post_compact_injection, "
+        "subagent_capture, post_compact_injection, "
         "observation_recorder, observation_completer"
     )

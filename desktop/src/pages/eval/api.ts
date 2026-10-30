@@ -187,7 +187,7 @@ export interface OnlineExample { session_id?: string; title?: string; snippet?: 
 export interface OnlineCheck { checked: number | null; failed: number | null; rate: number | null; examples: OnlineExample[] }
 export interface OnlineMetrics { turns: number | null; turn_p50_s: number | null; cost_p50_usd: number | null }
 export interface OnlineLow { session_id?: string; title?: string; goal_score?: number; tool_score?: number; dimension?: string; reason?: string }
-export interface OnlineTrendWeek { week: string; at?: string | null; rates: Record<string, number>; metrics: OnlineMetrics; backfilled?: boolean }
+export interface OnlineTrendWeek { week: string; at?: string | null; rates: Record<string, number>; metrics: OnlineMetrics; repeat_rate?: number | null; backfilled?: boolean }
 export interface OnlineScoring {
   last_run: string | null;
   window_days: number | null;
@@ -200,6 +200,9 @@ export interface OnlineScoring {
   judge_sampled?: number | null;
   judge_failed?: number | null;
   metrics?: OnlineMetrics;
+  /** corrections that repeat an earlier correction of the same mistake (the after-session
+   *  review's declaration); null when the record does not cover the window */
+  repeat_corrections?: { corrections: number | null; repeats: number | null; rate: number | null } | null;
   trend: OnlineTrendWeek[];
   calibration?: { accepting: boolean; reason: string | null; labels: Record<string, 'agree' | 'disagree'> };
 }

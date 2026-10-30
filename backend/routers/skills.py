@@ -148,6 +148,30 @@ def _load_skill_health_stats() -> list:
         store.close()
 
 
+def _load_skill_success_inputs() -> tuple[dict[str, int], dict[str, int]]:
+    """``(invocations, corrections)`` per skill in the last ``skill_health.WINDOW_DAYS``:
+    the store's invocations and the after-session review's corrections that name the
+    skill (``core.ingestion.queries.read_corrections``). An unreadable CDF store gives
+    no corrections (the dots then show usage only)."""
+    from datetime import date, datetime, timedelta, timezone
+    from config import get_app_data_dir
+    from core.skill_health import WINDOW_DAYS
+    from core.skill_metrics import SkillMetricsStore
+
+    store = SkillMetricsStore(get_app_data_dir() / "data.db")
+    try:
+        runs = store.invocations_since((date.today() - timedelta(days=WINDOW_DAYS)).isoformat())
+    finally:
+        store.close()
+    from core.ingestion.queries import read_corrections
+    since = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
+    fixes: dict[str, int] = {}
+    for row in read_corrections()[0]:
+        if row["skill"] and row["at"] >= since:
+            fixes[row["skill"]] = fixes.get(row["skill"], 0) + 1
+    return runs, fixes
+
+
 async def _trigger_projection() -> None:
     """Best-effort re-projection after CRUD."""
     try:
@@ -227,7 +251,8 @@ async def skills_health() -> dict[str, dict]:
     """Per-skill qualitative health status for the Capabilities panel (run_a85e6641).
 
     Returns ``{folder_name: {status, success_rate, last_used, invocation_count}}`` where
-    status is one of healthy / low_success / never_used / stale. The panel LAZY-fetches this
+    status is one of healthy / low_success / never_used / stale; success is measured from
+    the after-session review's corrections that name the skill (core.skill_health). The panel LAZY-fetches this
     after the fast /api/skills list and renders a status dot per row (raw counts stay off the
     row — R30#4; success_rate/last_used are for the detail drawer). ``invocation_count`` is
     the raw frequency the panel uses to ORDER cards (Most-Used strip + within-group sort),
@@ -258,7 +283,8 @@ async def skills_health() -> dict[str, dict]:
             for info in cache.values()
             if _visible_to_caller(_skill_info_to_response(info, include_content=False))
         ]
-        return build_health_map(all_stats, visible_names)
+        runs, fixes = _load_skill_success_inputs()
+        return build_health_map(all_stats, visible_names, recent_invocations=runs, corrections=fixes)
     except Exception as e:  # noqa: BLE001 — fail-safe: never 500 the panel
         logger.warning("skills_health failed (non-blocking, returning empty): %s", e)
         return {}

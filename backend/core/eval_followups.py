@@ -316,6 +316,13 @@ def _online(state: Mapping[str, Any] | None, include_session_text: bool) -> list
                          "Open the example sessions and see which rule was not kept.",
                          "打开例子里的会话，看哪条规则没守住。", kind=EVOLUTION))
     out += _standing(checks, worse, include_session_text)
+    rep = state.get("repeat_corrections") if isinstance(state.get("repeat_corrections"), Mapping) else {}
+    repeats, total = rep.get("repeats"), rep.get("corrections")
+    if isinstance(repeats, int) and isinstance(total, int) and repeats > 0:
+        out.append(_item("medium", 8, f"{repeats} of this week's {_cases_en(total, 'correction')} repeated an earlier one",
+                         f"本周 {total} 次纠正里，有 {repeats} 次是同一个错误又犯了",
+                         "", "A lesson that was recorded did not hold: decide whether it needs a rule or a gate.",
+                         "记下来的教训没守住：决定要改规则，还是加一道检查。", kind=EVOLUTION))
     low = [d for d in state.get("low_details") or [] if isinstance(d, Mapping)]
     if low:
         out.append(_item("low", 4, f"{_cases_en(len(low), 'session')} the judge scored low this week",
