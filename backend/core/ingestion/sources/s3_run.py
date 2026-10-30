@@ -3,6 +3,7 @@
 - ``enqueue_report``: the main pass. The agent's five-part report was validated at
   DELIVER (``reflect.prepare``: every item is a ``contracts_v2`` unit citing this run's
   anchors), so it is enqueued deterministically, in the landing command, with no LLM.
+  An event's ``closes`` (the gaps it fixed) stays only when the run landed code.
 - ``extract_human_answers``: the trusted pass. Only person-authored text on
   ``human_answer`` events (an optional annotation, a pipeline human-loop dependency)
   is extracted, with the LLM extractor; option ids and agent-written option labels are
@@ -11,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
@@ -19,6 +21,7 @@ from core.ingestion import api_v2
 from . import common
 from .extract_llm import EXTRACTOR_VERSION
 
+logger = logging.getLogger(__name__)
 _ALLOWED = ("cognition", "event", "gap", "reference")
 
 
@@ -53,6 +56,31 @@ def _snapshot(engine: Any) -> dict[str, Any]:
     return {"project": engine.project, "repos": dict(engine.contract.get("repo_roots") or {})}
 
 
+LANDED = ("landed", "human_override")
+
+
+def _drop_closes_unless_landed(engine: Any, units: list[Any]) -> list[Any]:
+    """An event keeps only the ``closes`` ids that are open gaps of the run's project,
+    and none when the run landed no code (it fixed nothing; design
+    2026-10-30-cdf-gap-lifecycle §3). Checked again here, not only at prepare: the
+    report file can be rewritten after it. The dropped ids are logged."""
+    from core.ingestion import gaps
+    landing = (engine.projection() or {}).get("landing")
+    allowed = gaps.open_gap_ids(engine.project) if landing in LANDED else set()
+    out = []
+    for unit in units:
+        closes = getattr(unit, "closes", None) or []
+        if not closes:
+            out.append(unit)
+            continue
+        kept = [gap for gap in closes if gap in allowed]
+        if kept != closes:
+            logger.info("S3 %s (%s): closes ignored %s", engine.run_id, landing,
+                        sorted(set(closes) - set(kept)))
+        out.append(unit.model_copy(update={"closes": kept or None}))
+    return out
+
+
 def enqueue_report(engine: Any) -> list[Any]:
     """Main pass: enqueue every unit of the validated five-part report, no LLM.
 
@@ -62,6 +90,8 @@ def enqueue_report(engine: Any) -> list[Any]:
     report = engine.read_reflect_report()
     units = [contracts_v2.SOURCE_UNIT.validate_python(raw)
              for rows in report.values() for raw in rows]
+    if any(getattr(unit, "closes", None) for unit in units):
+        units = _drop_closes_unless_landed(engine, units)
     attempt = api_v2.ExtractionAttempt(
         source="S3", evidence_range={"run_id": engine.run_id, "pass": "main"},
         extractor_version=f"{EXTRACTOR_VERSION}+report", attempt_id=f"attempt:{uuid.uuid4().hex}")

@@ -617,8 +617,14 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     from .prompts import verify_hit_ids
     shown = verify_hit_ids(hits)
     known = {hit.anchor for hit in retrieval.hits}
+    from .gaps import is_closed_gap
+    closed = {hit.anchor for hit in retrieval.hits if is_closed_gap(hit.anchor, hit.text)}
     relations = [(shown.get(item.anchor, item.anchor), item.relation) for item in verdict.hits
                  if shown.get(item.anchor, item.anchor) in known]
+    # the same as a closed gap ([x]) is a recurrence: written again,
+    # derived from the old one, never dropped as a duplicate (gap-lifecycle §2.5)
+    relations = [(anchor, "adds" if relation == "same" and anchor in closed else relation)
+                 for anchor, relation in relations]
     same = [anchor for anchor, relation in relations if relation == "same"]
     if same:
         if isinstance(unit, CognitionUnit):

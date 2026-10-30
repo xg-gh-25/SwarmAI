@@ -3170,7 +3170,12 @@ class RunEngine:
                     "degraded": True}
         sync_run_evidence(self.store, self.run_dir)
         anchors, _root_ids = _roots(self)
-        document = reflect.prepare(report, allowed_anchors=set(anchors))
+        from core.ingestion import gaps
+        declares = isinstance(report, Mapping) and any(
+            isinstance(row, Mapping) and row.get("closes")
+            for rows in report.values() if isinstance(rows, list) for row in rows)
+        document = reflect.prepare(report, allowed_anchors=set(anchors), open_gap_ids=(
+            gaps.open_gap_ids(self.project) if declares else set()))
         path = self.run_dir / "artifacts" / "reflect.json"
         DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
                                                indent=2))

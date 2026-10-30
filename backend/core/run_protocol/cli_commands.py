@@ -407,9 +407,11 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         rows = review_protocol.ReviewOrchestrator(engine.store, engine.run_dir).findings(events)
         return {"ok": True, "findings": review_protocol.closure_view(rows, events)}
     if args.command == "events":      # read-only: the ids a lesson may cite (RF-2, D1)
+        from core.ingestion import gaps    # and the open gaps a delivered event may close
         return {"ok": True, "events": [
             {"event_id": e["event_id"], "kind": e["kind"], "stage": e.get("stage"),
-             "at": e.get("at")} for e in engine.store.read_events()]}
+             "at": e.get("at")} for e in engine.store.read_events()],
+            "open_gaps": gaps.open_gaps(engine.project, gaps.run_query(engine.run_dir))}
     if args.command in {"accept-finding", "discard-snapshot"}:
         action = args.command.replace("-", "_")
         target = args.canonical_id if args.command == "accept-finding" else args.repo

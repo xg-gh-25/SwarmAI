@@ -1,6 +1,7 @@
 """Pipeline REFLECT five-part knowledge-report contract for CDF v2.
 
-- ``prepare`` validates the five named sections and every contracts_v2 unit.
+- ``prepare`` validates the five named sections and every contracts_v2 unit, and that
+  an event closes only open gaps of the run's project.
 - ``ReflectError`` reports malformed, cross-section, or foreign-evidence content.
 
 Old lesson-list artifacts are intentionally incompatible.
@@ -31,8 +32,13 @@ def _section_accepts(section: str, unit: contracts_v2.SourceUnit) -> bool:
     return unit.kind == "gap"
 
 
-def prepare(report: Mapping[str, Any], *, allowed_anchors: set[str]) -> dict[str, Any]:
-    """Validate and normalize one complete five-part report."""
+def prepare(report: Mapping[str, Any], *, allowed_anchors: set[str],
+            open_gap_ids: set[str] | None = None) -> dict[str, Any]:
+    """Validate and normalize one complete five-part report.
+
+    *open_gap_ids* is every open gap of the run's project (``gaps.open_gap_ids``): an
+    event may close only those. ``None`` skips the check (the RF re-check of a report
+    already prepared)."""
     if not isinstance(report, Mapping) or set(report) != set(SECTIONS):
         raise ReflectError(f"reflect report must contain exactly: {', '.join(SECTIONS)}")
     sections: dict[str, list[dict[str, Any]]] = {}
@@ -51,6 +57,11 @@ def prepare(report: Mapping[str, Any], *, allowed_anchors: set[str]) -> dict[str
             unknown = set(unit.evidence) - allowed_anchors
             if unknown:
                 raise ReflectError(f"{section}[{index}] cites evidence outside this run: {sorted(unknown)}")
+            closes = set(getattr(unit, "closes", None) or ())
+            if open_gap_ids is not None and closes - open_gap_ids:
+                raise ReflectError(
+                    f"{section}[{index}] closes gaps that are not open in this project "
+                    f"(pipeline-v1 events lists them): {sorted(closes - open_gap_ids)}")
             rows.append(unit.model_dump(mode="json", exclude_none=True))
         sections[section] = rows
     return {"schema": SCHEMA, "sections": sections}

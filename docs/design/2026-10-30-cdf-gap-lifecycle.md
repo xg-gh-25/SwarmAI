@@ -3,13 +3,13 @@ title: CDF：gap 的关闭
 created: 2026-10-30
 updated: 2026-10-30
 project: SwarmAI
-status: 待确认
+status: 已实现
 follows: 2026-10-29-cdf-refactor.md §8
 ---
 
 # CDF：gap 的关闭
 
-状态：设计 v2，待 XG 确认。承接 `2026-10-29-cdf-refactor.md` §8。v1 经过一次零上下文评审，
+状态：设计 v2，XG 已确认并实现（2026-10-30）。承接 `2026-10-29-cdf-refactor.md` §8。v1 经过一次零上下文评审，
 它的前提（让 DDD 读侧去认 CDF 的关系表）被推翻，见 §5。
 
 ## 0. 结论
@@ -49,28 +49,35 @@ follows: 2026-10-29-cdf-refactor.md §8
 
 1. **把 open gap 给 run 看。** `pipeline-v1 events` 的输出里加一段 `open_gaps`：
    本 run 所在项目 IMPROVEMENT 里所有未完成、带 `gap kind:` 的条目，每条给出
-   `{id: "cand:…", title, gap_kind}`。agent 本来就要调这个命令拿 evidence 锚点，不用新命令。
+   `{id: "cand-<hex>", title, gap_kind}`（id 就是该条目 cand 注释里的候选 id，去掉 `.unit`）。agent 本来就要调这个命令拿 evidence 锚点，不用新命令。
    gap 多了以后，按本 run 的需求文本用 BM25 取前 20 条，不再全部列出。
-2. **报告里声明。** `delivered` 里的事件单元新增可选字段 `closes: ["cand:…"]`。
+2. **报告里声明。** `delivered` 里的事件单元新增可选字段 `closes: ["cand-<hex>", …]`，最多 20 个。LLM 提取者（S1/S2/S7）的 schema 里没有这个字段，关闭时也只认 S3 main pass 的事件。
    `deliver.md` 加一句：本 run 修好了 `open_gaps` 里的哪条，就写进 `closes`，
    并在 `outcome` 里写明它是怎么修好的。
-3. **prepare 时确定性校验**（`reflect.prepare`）：`closes` 里的每个 id 都必须出现在本 run
-   拿到的 `open_gaps` 里，否则整份报告被拒，agent 当场就能看到原因。
+3. **确定性校验，两次。** `closes` 里的每个 id 都必须是本 run 所在项目里还开着的 gap：
+   `reflect.prepare` 时查一次（不通过整份报告被拒，agent 当场看到原因），S3 入队时再查一次
+   （`reflect.json` 在 prepare 之后还能被改写），不符的 id 丢掉并记日志。列给 run 看的清单有
+   20 条上限，能关的不受这个上限限制：上限是为了 run 的注意力，而且 prepare 时重算的前 20 条
+   未必就是它当时看到的那 20 条（中间别的 run 又写进了 gap）。只在报告里真有 `closes` 时才读
+   IMPROVEMENT；文件读不了时清单为空，不会挡住交付。
 4. **CDF 写入时关闭。** 事件写入成功后，对 `closes` 里的每个 gap，
    用 `governed_edit.apply_user_edit(actor="cdf")` 把该行的 `- [<type>]` 改成 `- [x]`，
    并在行尾加上“（已由 <run_id> 关闭：<事件标题>，<日期>）”。cand 注释保持不动，
    所以锚点和 unit id 都不变（`unit_id` 在算 id 之前会去掉注释）。
-   版本冲突（用户正在改这个文件）时，下一轮维护会重试。
+   每个 gap 的结果单独记一条（`ingestion_events` 的 `gaps_closed`）。版本冲突（用户正在改
+   这个文件）时不记，下一轮维护会重试；其它失败记成该 gap 的结果，不会卡住别的 gap。
+   关闭说明去掉 `<!--`、`-->`、换行和 `cand:`（解析器会把正文里第一个 `cand:` 当成条目 id）。
    事件本身没写入（被拒或推迟）时，不关闭任何 gap。
-5. **查重排除已完成的条目**：`same` 或 `reinforce` 命中一个 `- [x]` 条目时，降为
+5. **查重排除已关闭的 gap**：`same` 命中 IMPROVEMENT “What to Watch For” 里一个 `- [x]` 的 gap 时，降为
    `derived_from`。复发的问题会作为新 gap 写入，并链接到旧的那条。
 6. **人工关闭**：直接改成 `- [x]`。10-29 修好的 7 条，先逐条对照代码确认，再这样关闭。
 
 ## 3. 信任
 
 S3 的事件都带污染，所以关闭不能以“未污染”为条件。实际起约束作用的是：
-- 只能关掉系统自己列给这个 run 的 gap（第 3 步）：同项目、确实是 open gap，
-  外部内容没办法让它去关一个它没被列出的条目。
+- 只能关掉本 run 所在项目里还开着的 gap（第 3 步，prepare 和入队各查一次）：
+  别的项目、已关的条目、不存在的 id 都关不了。run 的 agent 本来就能直接改 IMPROVEMENT，
+  这条路径给它的不是更多权限，而是有记录、署名为 `cdf:<run_id>`、走受管编辑的关闭。
 - 只有 run 真的落地了代码才能关闭（`land` 的结果是 landed）。research run 和没落地的 run
   修不了代码，`closes` 会被忽略，同时记一条事件。
 - 关闭是可见、可撤销的：文件里能看到改成了 `- [x]`，也写明了是谁关的；TIMELINE 里的事件

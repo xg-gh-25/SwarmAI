@@ -249,11 +249,26 @@ def _hand_to_writer(conn: sqlite3.Connection, owner: Owner, unit_id: str,
     from .writer import apply_unit
     writing_row = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
     try:
-        apply_unit(decision, writing_row, conn)
+        step = apply_unit(decision, writing_row, conn)
     except Exception as exc:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         _unit_failed(conn, owner, unit_id, exc)
+        return
+    if step == "done":
+        _close_declared_gaps(conn, unit_id)
+
+
+def _close_declared_gaps(conn: sqlite3.Connection, unit_id: str | None = None) -> None:
+    """Close the gaps a written run event declared (core/ingestion/gaps). Never fails
+    the write: the daily maintenance retries what is left open."""
+    from .gaps import close_declared
+    try:
+        close_declared(conn, unit_id)
+    except Exception:  # noqa: BLE001 — retried by _maintain
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        logger.warning("CDF gap close failed for %s; retried later", unit_id or "pending", exc_info=True)
 
 
 # writer.reserve_quota's stores; the files injected into every session are counted
@@ -783,7 +798,8 @@ class IngestionWorker:
 
     def _maintain(self, conn: sqlite3.Connection, *, startup: bool = False) -> None:
         """Recovery and housekeeping: resume write plans, recompute stranded
-        candidates, clean up, requeue parked units whose domain or section now exists.
+        candidates, clean up, requeue parked units whose domain or section now exists,
+        close the gaps a written run event declared and a concurrent edit left open.
 
         At startup the run lane has not started, so every unit between its claim and
         its plan is stranded; the daily pass leaves alone a unit that moved in the last
@@ -795,6 +811,7 @@ class IngestionWorker:
         _requeue_known_domains(self.workspace_root)
         from .pipeline_v2 import requeue_missing_sections
         requeue_missing_sections(self.workspace_root)
+        _close_declared_gaps(conn)
 
     def run_once(self, conn: sqlite3.Connection) -> bool:
         """Process one eligible candidate selected by lane policy."""

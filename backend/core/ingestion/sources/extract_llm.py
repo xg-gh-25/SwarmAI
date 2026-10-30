@@ -131,7 +131,7 @@ def _flat(sub: dict[str, Any], path: str) -> dict[str, Any]:
 # Fields a source never writes: a relation hint is built by code (S4 drift), not by the
 # extractor, and a field-less object in a tool schema makes the model send the whole
 # answer as a string (measured 2026-10-29: 8/8 calls failed with it, 4/4 passed without).
-_NOT_EXTRACTED = frozenset({"kind", "relation_hint"})
+_NOT_EXTRACTED = frozenset({"kind", "relation_hint", "closes"})  # closes: a run report only
 
 
 def unit_schema(kinds: Iterable[str]) -> dict[str, Any]:

@@ -25,6 +25,7 @@ Key public symbols:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Annotated, Literal, TypeAlias
 
@@ -91,6 +92,12 @@ def _valid_scope(value: str | None) -> bool:
         value.startswith("project:") and len(value) > len("project:"))
 
 
+# a gap's id is its candidate id (the ``<!-- cand:<id>.unit -->`` marker the writer puts
+# on it); a run sees at most GAP_LIST_TOP open gaps and may close only those
+GAP_ID_RE = re.compile(r"cand-[0-9a-f]{8,64}")
+GAP_LIST_TOP = 20
+
+
 class _Unit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     evidence: list[EvidenceAnchor] = Field(min_length=1)
@@ -147,11 +154,17 @@ class EventUnit(_Unit):
     outcome: str | None = None
     follow_up: str | None = None
     event_kind: Literal["event", "month_summary", "month_supplement"] = "event"
+    # the open gaps of the run's project this event fixed, by id (a pipeline run's
+    # REFLECT report only; design 2026-10-30-cdf-gap-lifecycle §2)
+    closes: list[str] | None = Field(default=None, max_length=GAP_LIST_TOP)
 
     @model_validator(mode="after")
     def _impact_or_outcome(self):
         if not (self.impact or self.outcome):
             raise ValueError("event needs impact or outcome")
+        bad = [gap for gap in self.closes or () if not GAP_ID_RE.fullmatch(gap)]
+        if bad:
+            raise ValueError(f"closes names no gap id: {bad}")
         return self
 
 
