@@ -265,39 +265,27 @@ def test_a_concurrent_user_edit_is_kept_and_the_close_retried(ws, monkeypatch):
 # 6 ── a recurrence of a closed gap is written again
 
 def test_a_unit_the_same_as_a_closed_gap_is_written_again(tmp_path, monkeypatch):
+    """The same text as a closed gap ([x]) is a recurrence: written, derived from it; the
+    same as an open gap or a done task item is already known."""
     und = tmp_path / "Projects" / "Widget" / "2-understanding"
     und.mkdir(parents=True)
-    (und / "IMPROVEMENT.md").write_text("# IMPROVEMENT\n\n## What to Watch For\n", encoding="utf-8")
-    old = "Projects/Widget/2-understanding/IMPROVEMENT.md#What to Watch For#cand:old"
-    monkeypatch.setattr(pipeline_v2, "_grounding", lambda anchors: "")
+    improvement = und / "IMPROVEMENT.md"
     unit = {"kind": "gap", "gap_kind": "follow_up", "scope": "project:Widget", "title": "Tab refresh",
-            "what": "The tab does not refresh.", "evidence": ["event:e1"]}
+            "what": "The tab does not refresh after the user switches back to it.", "evidence": ["event:e1"]}
     row = {"id": "c", "unit_id": "c.unit", "unit_kind": "gap", "source_v2": "S3", "source_ref": "r",
            "extraction_pass": "main", "payload": json.dumps(unit),
            "evidence_root_ids": json.dumps(["root-1"]),
            "envelope": json.dumps({"root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
-                                   "strength": "inferred", "tainted": True}),
+                                   "strength": "inferred", "read_external": True, "cited_external": False}),
            "project_candidates": "[]", "project_hint": None, "project_snapshot": "{}"}
-
-    class Judge:
-        def verify(self, unit, grounding, hits):
-            return {"grounded": True, "durable": True, "self_contained": True, "significant": True,
-                    "hits": [{"anchor": h["anchor"], "relation": "same"} for h in hits]}
-
-    def hits(text):
-        monkeypatch.setattr(pipeline_v2, "retrieve", lambda *a, **k: RetrievalResult(status="OK_HITS", hits=[
-            RetrievalHit(anchor=old, text=text, score=1.0, identity="cand:old", byte_hash="h")]))
-    hits("- [x] **Tab refresh** The tab does not refresh. gap kind: follow_up")
-    decision = pipeline_v2.run_unit_v2(row, tmp_path, Judge())
+    entry = "**Tab refresh** The tab does not refresh after the user switches back to it. gap kind: follow_up <!-- cand:cand-old.unit -->"
+    improvement.write_text(f"# IMPROVEMENT\n\n## What to Watch For\n\n- [x] {entry}\n", encoding="utf-8")
+    decision = pipeline_v2.run_unit_v2(row, tmp_path)
     assert decision.action == "add"
+    old = "Projects/Widget/2-understanding/IMPROVEMENT.md#What to Watch For#cand:cand-old.unit"
     assert {"predicate": "derived_from", "object_anchor": old} in decision.version_vector["relation_hints"]
-    hits("- [guideline] **Tab refresh** The tab does not refresh. gap kind: follow_up")
-    assert pipeline_v2.run_unit_v2(row, tmp_path, Judge()).reason == "already_exists"
-    old = "Projects/Widget/2-understanding/PROJECT.md#Open Items#cand:old"     # a done task
-    hits("- [x] **Tab refresh** The tab does not refresh.")
-    assert pipeline_v2.run_unit_v2(row, tmp_path, Judge()).reason == "already_exists"
-    hits("- [x] **Tab refresh** The tab does not refresh. gap kind: follow_up")   # quoted elsewhere
-    assert pipeline_v2.run_unit_v2(row, tmp_path, Judge()).reason == "already_exists"
+    improvement.write_text(f"# IMPROVEMENT\n\n## What to Watch For\n\n- [risk] {entry}\n", encoding="utf-8")
+    assert pipeline_v2.run_unit_v2(row, tmp_path).reason == "already_exists"
 
 
 # wiring ── the real CLI shows the list, prepare checks it, the landing keeps closes

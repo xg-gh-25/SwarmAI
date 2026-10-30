@@ -244,11 +244,13 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
         def verify(self, *_args):
             return {"grounded": True, "durable": True, "self_contained": True, "hits": []}
 
-    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "user: verify first")
+    monkeypatch.setattr("core.ingestion.pipeline_v2._user_texts",
+                        lambda unit, row: ["verify current state before editing, please"])
     payload = {
         "kind": "cognition", "type": "guideline", "scope": "world",
         "title": "Verify current state", "what": "Verify current state before editing.",
         "applicability": "When editing.", "evidence": ["event:one"],
+        "user_quote": "verify current state before editing",
     }
     owner = acquire()
     assert owner is not None
@@ -263,7 +265,7 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
                     ?,'{}','[]','queued',?,'cognition','S2','["root-1"]')""",
         (__import__("json").dumps(payload), __import__("json").dumps({
             "root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
-            "strength": "user_explicit", "tainted": False,
+            "strength": "user_explicit", "read_external": False, "cited_external": False,
         }), now),
     )
     row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='missing'").fetchone()

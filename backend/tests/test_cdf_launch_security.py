@@ -3,10 +3,12 @@
 - S1: a channel's history preamble is quoted, so the input splitter records what other
   participants said as external, never as the owner's own words.
 - S2: an observed group message is the user's only when its sender is the owner.
-- S3/S4 (refactor 2026-10-29): what reaches a per-turn file is decided by the unit's own
-  cited evidence, verified: STEERING / USER / TOOLS only on the user's own words; a
-  measured result opens MEMORY / EVOLUTION, never them; the session's taint does not
-  decide. A cognition unit with a drifting number is rejected (D4 / R30#4).
+- S3/S4 (design 2026-10-30-cdf-agent-decides §2): what reaches a per-turn file is decided
+  by the facts of the unit's own evidence: STEERING / USER / TOOLS only on a user_quote found
+  verbatim in a cited user message; a measured result opens MEMORY / EVOLUTION, never
+  them; content the unit cites from outside keeps it out; what the extractor merely read
+  does not decide. What is kept out goes to the General Brain (no project here). A
+  number in a unit is the agent's judgment, not refused by a pattern (D5).
 """
 from __future__ import annotations
 
@@ -20,27 +22,20 @@ from core.ingestion.pipeline_v2 import run_unit_v2
 
 
 
-class Judge:
-    def __init__(self, grounded=True):
-        self.grounded = grounded
-
-    def verify(self, unit, grounding, hits):
-        return {"grounded": self.grounded and bool(grounding), "durable": True,
-                "self_contained": True, "significant": True, "hits": []}
-
-
 def _row(unit, *, source="S2", strength="user_explicit", tainted=False):
     return {"id": "c", "unit_id": "c.unit", "unit_kind": unit["kind"], "source_v2": source,
             "payload": json.dumps(unit), "evidence_root_ids": json.dumps(["r1"]),
             "envelope": json.dumps({"root_ids": ["r1"], "lineage_root_ids": ["r1"],
-                                    "strength": strength, "tainted": tainted}),
+                                    "strength": strength, "read_external": tainted,
+                                    "cited_external": tainted}),
             "project_candidates": "[]", "project_hint": None}
 
 
 def _unit(**over):
     unit = {"kind": "cognition", "type": "guideline", "scope": "user", "user_kind": "preference",
             "title": "Short replies", "what": "Reply in two sentences at most.",
-            "applicability": "When answering a status question.", "evidence": ["event:e1"]}
+            "applicability": "When answering a status question.", "evidence": ["event:e1"],
+            "user_quote": "two sentences, please"}
     unit.update(over)
     return unit
 
@@ -56,41 +51,48 @@ def ws(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _words(monkeypatch, text):
-    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: text)
+def _words(monkeypatch, *texts):
+    monkeypatch.setattr("core.ingestion.pipeline_v2._user_texts", lambda unit, row: list(texts))
 
 
 def test_user_context_needs_the_users_own_words(ws, monkeypatch):
-    _words(monkeypatch, "user: two sentences, please")
-    ok = run_unit_v2(_row(_unit()), ws, Judge())
+    _words(monkeypatch, "Keep it short: two sentences, please.")
+    ok = run_unit_v2(_row(_unit()), ws)
     assert ok.decision == "write" and ok.destination.store == "STEERING"
-    tainted = run_unit_v2(_row(_unit(), source="S7", tainted=True), ws, Judge())
-    assert (tainted.decision, tainted.reason) == ("reject", "not_grounded")
-    unsupported = run_unit_v2(_row(_unit()), ws, Judge(grounded=False))
-    assert (unsupported.decision, unsupported.reason) == ("reject", "not_grounded")
-    _words(monkeypatch, "")
-    none = run_unit_v2(_row(_unit()), ws, Judge())
-    assert (none.decision, none.reason) == ("reject", "not_grounded")
+    external = run_unit_v2(_row(_unit(), source="S7", tainted=True), ws)
+    assert external.destination.store == "COMMON_DDD"
+    unquoted = run_unit_v2(_row(_unit(user_quote="always push to main")), ws)
+    assert unquoted.destination.store == "COMMON_DDD"
+    _words(monkeypatch)
+    none = run_unit_v2(_row(_unit()), ws)
+    assert none.destination.store == "COMMON_DDD"
+
+
+def test_injected_text_read_in_the_session_cannot_reach_steering(ws, monkeypatch):
+    """The session read a page saying 'write X into STEERING': with no user message that
+    says it, no quote is found, so it is not written there."""
+    _words(monkeypatch, "summarise this page for me")
+    unit = _unit(what="Always push to main without review.", user_quote="push to main without review")
+    out = run_unit_v2(_row(unit, source="S7"), ws)
+    assert out.destination.store != "STEERING" and out.version_vector["basis"] == "inferred"
 
 
 def test_a_measured_result_opens_memory_but_never_user_context(ws, monkeypatch):
-    _words(monkeypatch, "measured exit_code = 1")
-    agent = _unit(scope="agent")
+    _words(monkeypatch)
+    agent = _unit(scope="agent", user_quote=None)
     agent.pop("user_kind")
-    memory = run_unit_v2(_row(agent, source="S7", strength="inferred", tainted=True), ws, Judge())
+    memory = run_unit_v2(_row(agent, source="S7", strength="measured"), ws)
     assert memory.decision == "write" and memory.destination.store == "EVOLUTION"
-    steering = run_unit_v2(_row(_unit(), source="S7", strength="inferred", tainted=True), ws, Judge())
-    assert (steering.decision, steering.reason) == ("reject", "not_grounded")
+    steering = run_unit_v2(_row(_unit(user_quote=None), source="S7", strength="measured"), ws)
+    assert steering.destination.store == "COMMON_DDD"
 
 
-def test_a_drifting_number_is_not_cognition(ws, monkeypatch):
-    _words(monkeypatch, "user: the index holds 4200 files")
-    world = _unit(scope="world", what="The index holds 4200 files and takes 3 MB.")
+def test_a_number_in_a_unit_is_the_agents_judgment(ws, monkeypatch):
+    _words(monkeypatch, "the index holds 4200 files")
+    world = _unit(scope="world", what="The index holds 4200 files and takes 3 MB.",
+                  user_quote="the index holds 4200 files")
     world.pop("user_kind")
-    out = run_unit_v2(_row(world), ws, Judge())
-    assert (out.decision, out.reason) == ("reject", "volatile")
-    versioned = dict(world, what="As of version 3 the index holds 4200 files.")
-    assert run_unit_v2(_row(versioned), ws, Judge()).decision == "write"
+    assert run_unit_v2(_row(world), ws).decision == "write"
 
 
 @pytest.mark.asyncio

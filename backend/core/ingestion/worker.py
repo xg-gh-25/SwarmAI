@@ -397,8 +397,9 @@ def _upsert_v2_unit(conn: sqlite3.Connection, row: dict[str, Any], unit_id: str,
 
 
 def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
-                          workspace_root: Path, judge: Any) -> None:
-    """Process one v2 source unit (one durable unit row)."""
+                          workspace_root: Path) -> None:
+    """Process one v2 source unit (one durable unit row): no model call, the unit's own
+    declarations and the facts of its evidence decide (pipeline_v2.run_unit_v2)."""
     from .pipeline_v2 import run_unit_v2
 
     value = _row_dict(row)
@@ -439,7 +440,7 @@ def _process_v2_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.R
                 # the store's budget is still spent: judging again would only be refused
                 _defer_until_tomorrow(conn, owner, unit_id, "quota")
                 continue
-            decision = run_unit_v2(unit_input, workspace_root, judge)
+            decision = run_unit_v2(unit_input, workspace_root)
             fields = _decision_fields(decision)
             if decision.decision == "defer":
                 _defer_or_poison(
@@ -494,7 +495,7 @@ def process_candidate(
 def _process_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
                        workspace_root: Path, judge: Any) -> None:
     if _is_v2_row(row):
-        _process_v2_candidate(conn, owner, row, workspace_root, judge)
+        _process_v2_candidate(conn, owner, row, workspace_root)
         return
     candidate = _candidate_from_row(row)
     conn.execute("BEGIN IMMEDIATE")

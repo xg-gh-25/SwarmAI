@@ -310,7 +310,7 @@ def test_installed_package_rule_stays_out_of_per_turn_stores(
     ).fetchone())
     inbox["unit_id"] = f"{result.candidate_id}.unit"
     inbox["project_candidates"] = '["Demo"]'
-    decision = run_unit_v2(inbox, workspace, PackageJudge())
+    decision = run_unit_v2(inbox, workspace)
     assert decision.destination.store not in {"STEERING", "MEMORY", "USER", "TOOLS", "EVOLUTION"}
     claim = json.loads(inbox["payload"])
     claim["cited_external"] = True

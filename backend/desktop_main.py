@@ -336,9 +336,13 @@ def run_ingest(argv: "list[str]") -> int:
                     destination = json.loads(item["destination"] or "{}")
                     item["destination"] = destination
                     item["text"] = payloads[i] if i < len(payloads) else None
-                    if item.get("reason") == "not_grounded":
-                        # the user's message does not say it: nothing was kept (refactor §3.2)
-                        item["hint"] = "你的消息里没有直接说出这条规则，所以没有记下；要记住它，请用一句话直接说出来。"
+                    if isinstance(destination, dict) and destination.get("rerouted_from"):
+                        # no user_quote found in the message: kept on demand, not every turn
+                        # (design 2026-10-30-cdf-agent-decides §2)
+                        item["hint"] = (f"没有在你的消息里找到 user_quote 的原话，所以记到了 "
+                                        f"{destination.get('relative_path')}（按需召回），而不是每轮都读的 "
+                                        f"{destination['rerouted_from']}；要进 {destination['rerouted_from']}，"
+                                        "请在 user_quote 里逐字引用你的原话。")
                     rendered_units.append(item)
                 print(json.dumps({
                     "status": "done", "candidate_id": result.candidate_id,

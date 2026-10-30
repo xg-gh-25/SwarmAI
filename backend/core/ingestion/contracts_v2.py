@@ -141,9 +141,24 @@ class CognitionUnit(_Unit):
     topic: Literal["decision", "product", "architecture", "lesson"] | None = None
     # entries this unit replaces, declared by the context that made the new decision
     overrides: list[OverrideRef] = Field(default_factory=list, max_length=3)
+    # the user's own words this unit rests on, copied verbatim from a cited user message
+    # (design 2026-10-30-cdf-agent-decides §2): the only thing that counts as "the user
+    # said it" for the files injected every turn; checked as a substring by code
+    user_quote: str | None = Field(default=None, max_length=2000)
+    # what the producing agent declared about existing entries (§3 D1), each
+    # "<8-character id> | <first line>": the same claim (``same``), the same subject
+    # with something new (``adds``), and for a correction the earlier correction of the
+    # same mistake (``repeats``). Code only checks that id and first line name one entry.
+    same: OverrideRef | None = None
+    adds: OverrideRef | None = None
+    repeats: OverrideRef | None = None
 
     @model_validator(mode="after")
     def _conditional(self):
+        if self.repeats and self.type != "correction":
+            raise ValueError("repeats only for type=correction")
+        if self.same and self.adds:
+            raise ValueError("same and adds exclude each other")
         if self.type == "decision" and not (self.why and self.rejected_alternatives):
             raise ValueError("decision needs why and rejected_alternatives (write 'none' if none)")
         if self.type == "pitfall" and not self.applicability:
@@ -193,6 +208,8 @@ class GapUnit(_Unit):
     what: str = Field(min_length=1)
     why: str | None = None
     proposed_next: str | None = None
+    same: OverrideRef | None = None      # see CognitionUnit
+    adds: OverrideRef | None = None
 
 
 class ReferenceUnit(_Unit):
@@ -260,8 +277,9 @@ REFERENCE_FOLDERS: dict[str, str] = {
     "analysis": "Knowledge/Notes", "design": "Knowledge/Notes", "note": "Knowledge/Notes",
 }
 TIMELINE_PATH = ".context/TIMELINE.md"
-# COMMON_DDD and rerouted_from are no longer produced (no reroute since the 2026-10-29
-# refactor); they stay so a decision recorded before it still validates and writes.
+# COMMON_DDD is a General Brain document (Knowledge/Library/<subject>.md, sectioned like a
+# DDD): the home of a unit whose project does not exist (route_general). rerouted_from
+# marks a unit its evidence kept out of the every-turn files (pipeline_v2._admitted).
 StoreV2 = Literal["KNOWLEDGE", "COMMON_DDD", "STEERING", "USER", "TOOLS", "EVOLUTION", "DDD", "MEMORY", "TIMELINE"]
 
 
@@ -434,31 +452,7 @@ TERMINAL_OUTCOMES = frozenset({"merged", "written", "reinforced", "rejected", "f
 __all__ = [n for n in dir() if not n.startswith("_")]
 
 
-# ── refactor 2026-10-29 (design 2026-10-29-cdf-refactor) ──────────────────────
-# The destination is a pure function of what the extractor declared (§3.1); one
-# verification call answers what a context-free checker can answer (§3.3).
-
-class HitVerdict(BaseModel):
-    """How a candidate unit relates to one retrieved hit. ``new_only``: the unit's specific
-    claims the hit does not state; a "same" that lists any is treated as "adds"
-    (pipeline_v2), so a unit that adds detail is written, never dropped as a duplicate."""
-    model_config = ConfigDict(extra="forbid")
-    anchor: str
-    relation: Literal["same", "adds", "contradicts", "unrelated"]
-    new_only: list[str] = Field(default_factory=list)
-
-
-class VerifyAnswer(BaseModel):
-    """The one judge call per unit: grounded in the cited evidence, durable, readable
-    without the session, (events) significant, and its relation to each hit."""
-    model_config = ConfigDict(extra="forbid")
-    grounded: bool
-    durable: bool
-    self_contained: bool
-    significant: bool = False          # read for events only; a reply without it fails closed
-    ungrounded: list[str] = Field(default_factory=list)
-    hits: list[HitVerdict] = Field(default_factory=list)
-
+# ── routing: a pure function of what the extractor declared (cdf-refactor §3.1) ──
 
 USER_KIND_FILE = {"preference": "STEERING", "profile": "USER", "environment": "TOOLS"}
 # a project unit that did not say which document (an S3 run report has no topic):
@@ -467,6 +461,25 @@ USER_KIND_FILE = {"preference": "STEERING", "profile": "USER", "environment": "T
 _DEFAULT_TOPIC = {"pitfall": "lesson", "correction": "lesson", "guideline": "lesson",
                   "process": "lesson", "decision": "decision", "model": "architecture",
                   "principle": "architecture"}
+
+
+GENERAL_BRAIN_DIR = "Knowledge/Library"
+
+
+def route_general(unit: "SourceUnit", subject: str | None) -> DestinationV2:
+    """The General Brain home (design 2026-10-30-cdf-agent-decides §3 D7) of a project
+    unit or gap whose project does not exist, and of a unit its evidence keeps out of the
+    every-turn files when it has no project: one Library document per named *subject*,
+    sectioned like a DDD document. Recalled with the Library, never injected."""
+    from .contracts import DDD_MATRIX
+    rel = f"{GENERAL_BRAIN_DIR}/{slugify(subject or '') or 'general'}.md"
+    if isinstance(unit, GapUnit):
+        section = "Open Gaps"
+    else:
+        topic = getattr(unit, "topic", None) or _DEFAULT_TOPIC[unit.type]
+        section = DDD_MATRIX[topic][unit.type][1]
+    return DestinationV2(store="COMMON_DDD", relative_path=rel, section=section,
+                         project=subject or None, injectable=False)
 
 
 def route_unit(unit: "SourceUnit", project: str | None) -> DestinationV2:

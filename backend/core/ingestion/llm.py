@@ -97,14 +97,6 @@ class BedrockJudge:
         prompt = card3_prompt(text, hits)
         return self._invoke(prompt, lambda raw: parse_card3(raw, hits))
 
-    def verify(self, unit: dict[str, Any], grounding: str,
-               hits: list[dict[str, Any]]) -> JudgeResult[Any]:
-        """The one verification card (design 2026-10-29-cdf-refactor §3.3)."""
-        from .prompts import VERIFY_VERSION, parse_verify, verify_prompt
-        result = self._invoke(verify_prompt(unit, grounding, hits), parse_verify)
-        result.vector["verify_version"] = VERIFY_VERSION
-        return result
-
     def card3b(self, old_unit: str, candidate: str) -> JudgeResult[Card3bAnswer]:
         """Generate and validate a baseline effective unit."""
         prompt = card3b_prompt(old_unit, candidate)

@@ -47,19 +47,28 @@ def _cognition(evidence, *, what="Keep the complete semantic claim."):
     }
 
 
-def _assert_tainted_route() -> None:
-    from types import SimpleNamespace
-
+def _assert_tainted_route(resolved=None, monkeypatch=None) -> None:
+    """A unit resting on *resolved* never reaches the user's own files on content from
+    outside: citing it keeps even a found quote out; without the user's words (no quote
+    in a cited user message) nothing gets there (design 2026-10-30-cdf-agent-decides §2)."""
+    from core.ingestion import pipeline_v2
     from core.ingestion.contracts_v2 import SOURCE_UNIT, route_unit
-    from core.ingestion.pipeline_v2 import _not_grounded
 
     unit = SOURCE_UNIT.validate_python({
         "kind": "cognition", "type": "guideline", "scope": "user", "user_kind": "preference",
-        "title": "One owner", "what": "Use one owner", "evidence": ["unit:x"]})
+        "title": "One owner", "what": "Use one owner", "evidence": ["unit:x"],
+        "user_quote": "Use one owner"})
     destination = route_unit(unit, None)
     assert destination.store == "STEERING"
-    tainted = SimpleNamespace(read_external=True, strength="user_explicit")
-    assert _not_grounded(destination.store, tainted, "[user_message] Use one owner", True)
+    if resolved is None:
+        return
+    if monkeypatch is not None:
+        monkeypatch.setattr(pipeline_v2, "_user_texts", lambda u, r: ["Use one owner"])
+    facts = pipeline_v2._facts(unit, {"source_v2": "S7"}, resolved)
+    if resolved.cited_external:
+        assert not pipeline_v2._admitted(destination.store, facts)
+    unquoted = pipeline_v2._facts(unit.model_copy(update={"user_quote": None}), {"source_v2": "S7"}, resolved)
+    assert not pipeline_v2._admitted(destination.store, unquoted)
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -421,7 +430,7 @@ def test_bound_repo_injection_stays_external_and_out_of_per_turn_store(tmp_path,
         parent_root_ids=(file_root,))
     resolved = resolve_evidence([f"doc:{document}"], session_id="s1", run_id=None)
     assert resolved.read_external and file_root in resolved.lineage_root_ids
-    _assert_tainted_route()
+    _assert_tainted_route(resolved, monkeypatch)
 
 
 def test_web_content_copied_to_workspace_cannot_be_laundered(tmp_path, monkeypatch):
@@ -434,7 +443,7 @@ def test_web_content_copied_to_workspace_cannot_be_laundered(tmp_path, monkeypat
         parent_root_ids=(web,))
     resolved = resolve_evidence([f"doc:{copied}"], session_id="s1", run_id=None)
     assert resolved.read_external and web in resolved.lineage_root_ids
-    _assert_tainted_route()
+    _assert_tainted_route(resolved, monkeypatch)
 
 
 def test_tool_output_echo_cannot_be_laundered(tmp_path, monkeypatch):
@@ -447,7 +456,7 @@ def test_tool_output_echo_cannot_be_laundered(tmp_path, monkeypatch):
         parent_root_ids=(tool,))
     resolved = resolve_evidence([f"doc:{document}"], session_id="s1", run_id=None)
     assert resolved.read_external and tool in resolved.lineage_root_ids
-    _assert_tainted_route()
+    _assert_tainted_route(resolved, monkeypatch)
 
 
 def test_selective_user_citation_routes_out_of_per_turn_store(tmp_path, monkeypatch):
@@ -458,8 +467,8 @@ def test_selective_user_citation_routes_out_of_per_turn_store(tmp_path, monkeypa
     external = register_root("tool_text", "s1:read", "external context", "external")
     resolved = resolve_evidence(
         ["event:input:e1"], session_id="s1", run_id=None, read_root_ids=(external,))
-    assert resolved.read_external
-    _assert_tainted_route()
+    assert resolved.read_external and not resolved.cited_external
+    _assert_tainted_route(resolved, monkeypatch)
 
 
 def test_same_url_from_s2_and_s6_is_one_external_root(tmp_path, monkeypatch):

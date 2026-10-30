@@ -348,10 +348,25 @@ def _render_ddd(unit_id: str, group: Mapping[str, Any], *, answer: Any = None,
     return f"{lead} <!-- {marker} -->\n{meta}"
 
 
+# the text fields of an entry (one line in a governed file); a reference is a document
+_ENTRY_TEXT_FIELDS = frozenset({"title", "what", "how", "why", "applicability", "rejected_alternatives",
+                                "impact", "outcome", "follow_up", "proposed_next", "text"})
+
+
+def _defang(text: str) -> str:
+    """An HTML comment marker inside an entry would open or close the metadata comment
+    of its line (and cut the text after it for the prompt): written as entities, it reads
+    the same and is no marker (design 2026-10-30-cdf-agent-decides D6)."""
+    return text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+
+
 def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
                   group: dict[str, Any], *, sequence: int = 1) -> str:
     destination = _decision_value(decision, "destination") or _decision_value(decision, "card2")
     store = str(_model_value(destination, "store", ""))
+    if str(group.get("kind") or ("reference" if store == "KNOWLEDGE" else "cognition")) != "reference":
+        group = {k: _defang(v) if k in _ENTRY_TEXT_FIELDS and isinstance(v, str) else v
+                 for k, v in group.items()}
     card3b = _decision_value(decision, "card3b")
     answer = _model_value(card3b, "card1") or _decision_value(decision, "card1")
     effective = _model_value(card3b, "effective_unit")

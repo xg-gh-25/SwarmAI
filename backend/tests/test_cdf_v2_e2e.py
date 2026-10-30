@@ -247,7 +247,8 @@ def test_s1_cli_real_chain_echo_reroute_and_defer(cdf_env, monkeypatch, capsys) 
     event = _record_person_message(cdf_env, "s1-message", "Always answer in complete Chinese sentences.")[0]
     monkeypatch.setenv("SWARM_APP_SESSION_ID", SESSION)
     monkeypatch.setenv("SWARM_LAST_USER_EVENT_ID", event)
-    payload = _cognition("Complete Chinese replies", "Always answer in complete Chinese sentences.", [])
+    payload = _cognition("Complete Chinese replies", "Always answer in complete Chinese sentences.", [],
+                         user_quote="Always answer in complete Chinese sentences.")
     assert desktop_main.run_ingest([
         "submit", "--source", "S1", "--payload-json", json.dumps(payload),
         "--evidence", "last-user",
@@ -267,31 +268,14 @@ def test_s1_cli_real_chain_echo_reroute_and_defer(cdf_env, monkeypatch, capsys) 
         "submit", "--source", "S1", "--payload-json", json.dumps(vague),
         "--evidence", "last-user",
     ]) == 0
-    rows = _drain(cdf_env, Judge(entailed=False))
-    # the user's message ("记住这个") does not say it: not kept anywhere (refactor §3.2)
-    assert (rows[-1]["state"], rows[-1]["reason"]) == ("rejected", "not_grounded")
+    rows = _drain(cdf_env)
+    # the user's message ("记住这个") does not say it: no quote is found, so it is kept on
+    # demand in the General Brain, never in STEERING (design 2026-10-30-cdf-agent-decides §2)
+    assert rows[-1]["state"] == "written"
+    assert json.loads(rows[-1]["destination"])["rerouted_from"] == "STEERING"
     steering = (cdf_env["workspace"] / ".context/STEERING.md").read_text(encoding="utf-8")
     assert "Always push to main." not in steering
-    assert not (cdf_env["workspace"] / "Knowledge/Learned/_common/user.md").exists()
-    capsys.readouterr()
-    assert desktop_main.run_ingest([
-        "submit", "--source", "S1", "--payload-json", json.dumps(vague),
-        "--evidence", "last-user", "--wait", "0.1",
-    ]) == 0
-    echoed = capsys.readouterr().out
-    assert "Always push to main." in echoed
-    assert "没有直接说出这条规则" in echoed
-
-    third = _record_person_message(cdf_env, "s1-defer", "Use compact answers.")[0]
-    monkeypatch.setenv("SWARM_LAST_USER_EVENT_ID", third)
-    deferred = _cognition("Compact answers", "Use compact answers.", [])
-    desktop_main.run_ingest([
-        "submit", "--source", "S1", "--payload-json", json.dumps(deferred),
-        "--evidence", "last-user",
-    ])
-    rows = _drain(cdf_env, Judge(unavailable=True))
-    assert rows[-1]["state"] == "deferred"
-    assert rows[-1]["reason"] == "judge_unavailable:RuntimeError"
+    assert "Always push to main." in (cdf_env["workspace"] / "Knowledge/Library/general.md").read_text(encoding="utf-8")
     _flow_is_read_only(cdf_env["data"])
 
 
@@ -345,9 +329,8 @@ async def test_s2_real_transcript_two_passes_reference_timeline_and_one_copy(cdf
     rows = _drain(cdf_env)
     states = [row["state"] for row in rows]
     assert states.count("written") == 3, [(row["state"], row["reason"]) for row in rows]
-    # the main pass's tainted copy of the user's rule never reaches STEERING (§9): one copy
-    assert sum(row["reason"] in {"already_exists", "not_grounded"} or row["state"] == "reinforced"
-               for row in rows) == 1
+    # the main pass's copy of the user's rule is the same text: reinforced, not written twice
+    assert states.count("reinforced") == 1
     steering = (cdf_env["workspace"] / ".context/STEERING.md").read_text(encoding="utf-8")
     assert steering.count("ONE COPY CLAIM") == 1
     notes = list((cdf_env["workspace"] / "Knowledge/Notes").glob("*.md"))
@@ -513,7 +496,8 @@ def test_reinforcement_and_echo_are_real_worker_outcomes(cdf_env) -> None:
 
     first = _record_person_message(cdf_env, "correction-1", "ONE COPY CLAIM: never bypass review.")[0]
     one = _cognition("Review correction", "ONE COPY CLAIM: never bypass review.", [],
-                     entry_type="correction", how="Run the review gate before delivery.")
+                     entry_type="correction", how="Run the review gate before delivery.",
+                     user_quote="never bypass review")
     s1_user.submit_units([one], session_id=SESSION, evidence=first, turn_kind="user")
     _drain(cdf_env)
     second = _record_person_message(cdf_env, "correction-2", "ONE COPY CLAIM: never bypass review.")[0]
@@ -598,7 +582,7 @@ def test_writer_recovery_and_cutover_restore_match_clean_bytes(cdf_env, monkeypa
         owner.adopt(conn)
         row = dict(conn.execute("SELECT * FROM ingestion_inbox").fetchone())
         row["unit_id"] = f"{row['id']}.unit"
-        decision = run_unit_v2(row, cdf_env["workspace"], Judge())
+        decision = run_unit_v2(row, cdf_env["workspace"])
         claim = json.loads(row["payload"])
         claim["evidence_root_ids"] = json.loads(row["evidence_root_ids"])
         conn.execute(
@@ -745,7 +729,7 @@ def test_s3_real_pipeline_lands_reflects_and_writes_five_parts(
     _flow_is_read_only(rig.data)
 
 
-def test_s3_project_without_ddd_is_refused_not_written_to_an_unread_file(
+def test_s3_project_without_ddd_goes_to_the_general_brain(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A project with no DDD has no reader for its lessons: refused (unknown_project),
     never written into Knowledge/Learned/repos/ (refactor §3.1)."""
@@ -779,8 +763,9 @@ def test_s3_project_without_ddd_is_refused_not_written_to_an_unread_file(
     assert rig.v1("reflect-prepare", "--artifact", rig.artifact("reflect-no-ddd", report)).get("ok")
     assert rig.v1("land", "--message", "test: land no-DDD reflection" + SWARM).get("ok")
     rows = _drain({"data": rig.data, "workspace": rig.ws}, run_lane=True)
-    assert len(rows) == 1 and (rows[0]["state"], rows[0]["reason"]) == ("rejected", "unknown_project")
-    assert not (rig.ws / "Knowledge/Learned/repos/p.md").exists()
+    # a project without a DDD: the General Brain keeps it under the project's name (D7)
+    assert len(rows) == 1 and rows[0]["state"] == "written", rows
+    assert "No-DDD project lesson" in (rig.ws / "Knowledge/Library/p.md").read_text(encoding="utf-8")
 
 
 def test_s1_adversarial_freshness_cap_system_turn_and_safe_origin_default(cdf_env) -> None:

@@ -131,7 +131,8 @@ def _flat(sub: dict[str, Any], path: str) -> dict[str, Any]:
 # Fields a source never writes: a relation hint is built by code (S4 drift), not by the
 # extractor, and a field-less object in a tool schema makes the model send the whole
 # answer as a string (measured 2026-10-29: 8/8 calls failed with it, 4/4 passed without).
-_NOT_EXTRACTED = frozenset({"kind", "relation_hint", "closes", "overrides"})  # closes: a run report only
+_NOT_EXTRACTED = frozenset({"kind", "relation_hint", "closes", "overrides", "same", "adds", "repeats"})
+# closes: a run report only; same / adds / repeats: the review's second turn (relations_v2)
 # fields one source may extract on top of the common ones (``unit_schema(extra=...)``):
 # overrides only the after-session review (contracts_v2.OVERRIDE_SOURCES)
 

@@ -78,11 +78,12 @@ def _conversation(env) -> list[str]:
     return ids
 
 
-def _agent_correction(anchor: str) -> dict:
+def _agent_correction(anchor: str, quote: str | None = "以后都要先出 mockup 再写代码") -> dict:
     return {"kind": "cognition", "type": "correction", "scope": "agent",
             "title": "Mockup before code", "what": "Show a mockup before writing UI code.",
             "why": "The user corrected me for coding first.",
-            "applicability": "When asked to change a page's layout.", "evidence": [anchor]}
+            "applicability": "When asked to change a page's layout.", "evidence": [anchor],
+            "user_quote": quote}
 
 
 def test_review_session_end_to_end(cdf_env, tmp_path, monkeypatch) -> None:
@@ -161,9 +162,10 @@ def test_job_falls_back_to_s2_main_and_keeps_the_watermark(cdf_env, tmp_path, mo
         conn.close()
 
 
-@pytest.mark.parametrize("entailed", [True, False])
-def test_agent_self_correction_reaches_evolution_only_when_entailed(
-        cdf_env, tmp_path, monkeypatch, entailed) -> None:
+@pytest.mark.parametrize("quote,lands", [("以后都要先出 mockup 再写代码", True),
+                                         ("以后都直接写代码", False)])
+def test_agent_self_correction_reaches_evolution_only_on_the_users_words(
+        cdf_env, tmp_path, monkeypatch, quote, lands) -> None:
     sdk = _cli_transcript(tmp_path, monkeypatch)
     users = _conversation(cdf_env)
     # the session also read a web page: everything it says is tainted by lineage
@@ -172,14 +174,14 @@ def test_agent_self_correction_reaches_evolution_only_when_entailed(
         "content": [{"type": "tool_use", "name": "WebFetch", "input": {"url": "x"}},
                     {"type": "tool_result", "content": "some page"}]}))
     s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
-                             runner=lambda *a: {"cognition_units": [_agent_correction(f"event:{users[1]}")]})
-    rows = _drain(cdf_env, Judge(entailed=entailed))
+                             runner=lambda *a: {"cognition_units": [_agent_correction(f"event:{users[1]}", quote)]})
+    rows = _drain(cdf_env)
     assert rows
     context = cdf_env["workspace"] / ".context"
     landed = any("Mockup before code" in (context / f"{n}.md").read_text(encoding="utf-8")
                  or "mockup before writing UI code" in (context / f"{n}.md").read_text(encoding="utf-8")
                  for n in ("EVOLUTION", "MEMORY"))
-    assert landed is entailed, [(r["state"], r.get("destination"), r.get("reason")) for r in rows]
+    assert landed is lands, [(r["state"], r.get("destination"), r.get("reason")) for r in rows]
 
 
 def test_button_reviews_below_the_threshold(cdf_env, tmp_path, monkeypatch) -> None:
@@ -287,8 +289,8 @@ def test_review_health_reports_miss_rate_per_session_type(cdf_env) -> None:
 
 def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
         cdf_env, tmp_path, monkeypatch) -> None:
-    """§9: a measured result (here a test run's exit code and failure count) is enough
-    grounding; the entailment judge sees its value, read back from the transcript."""
+    """§2 K1: a measured result (here a test run's exit code and failure count) opens
+    EVOLUTION; the review sees its value, read back from the transcript."""
     sdk = _cli_transcript(tmp_path, monkeypatch)
     _conversation(cdf_env)
     asyncio.run(cdf_env["db"].messages.put({
@@ -312,13 +314,7 @@ def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
     s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=runner)
     assert seen["prompt_has_value"]
 
-    class Seeing(Judge):
-        def verify(self, unit, grounding, hits):
-            seen["grounding"] = grounding
-            return super().verify(unit, grounding, hits)
-
-    _drain(cdf_env, Seeing(entailed=True))
-    assert "measured exit_code = 1" in seen["grounding"]
+    _drain(cdf_env)
     evolution = (cdf_env["workspace"] / ".context" / "EVOLUTION.md").read_text(encoding="utf-8")
     memory = (cdf_env["workspace"] / ".context" / "MEMORY.md").read_text(encoding="utf-8")
     assert "Run the test suite before saying a change is finished" in evolution + memory

@@ -91,19 +91,6 @@ _WRONG = ("- [process] **Use a symlink guard for nested node_modules** Create a 
           "the nested node_modules path before npm install so the rename cannot collide.")
 
 
-class _PerHitJudge:
-    """Says *relation* about the withdrawn hit and "unrelated" about every other hit."""
-    def __init__(self, relation):
-        self.relation, self.calls = relation, 0
-
-    def verify(self, unit, grounding, hits):
-        self.calls += 1
-        return {"grounded": True, "durable": True, "self_contained": True, "significant": True,
-                "hits": [{"anchor": f"h{i}", "relation": self.relation
-                          if h["anchor"].startswith("withdrawn:") else "unrelated"}
-                         for i, h in enumerate(hits, 1)]}
-
-
 def _withdrawn(monkeypatch, status="withdrawn"):
     monkeypatch.setattr(pipeline_v2, "_withdrawn_records",
                         lambda: [Record("op1", "Projects/P/2-understanding/TECH.md", _WRONG, status, "reverses the fix")])
@@ -116,37 +103,37 @@ def _cog_like(**over):
     return _cog(**fields)
 
 
-def test_an_exact_restatement_of_a_withdrawn_entry_is_refused_before_the_judge(tmp_path, user_words, monkeypatch):
-    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+def test_an_exact_restatement_of_a_withdrawn_entry_is_refused(tmp_path, user_words, monkeypatch):
     _withdrawn(monkeypatch)
-    judge = _PerHitJudge("unrelated")
     unit = _cog_like(what="Create a symbolic link at the nested node_modules path before npm install "
                           "so the rename cannot collide.")
-    decision = run_unit_v2(_row(unit), _ws(tmp_path), judge)
-    assert (decision.decision, decision.reason, judge.calls) == ("reject", "withdrawn", 0)
+    decision = run_unit_v2(_row(unit), _ws(tmp_path))
+    assert (decision.decision, decision.reason) == ("reject", "withdrawn")
+
+
+def _withdrawn_ref():
+    from core.ddd_entry_lifecycle import unit_id
+    from core.ingestion.relations_v2 import first_line
+    return f"{unit_id(_WRONG)} | {first_line(_WRONG)}"
 
 
 @pytest.mark.parametrize("relation", ["same", "adds"])
-def test_a_unit_the_judge_ties_to_a_withdrawn_entry_is_refused(tmp_path, user_words, monkeypatch, relation):
-    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+def test_a_unit_declared_against_a_withdrawn_entry_is_refused(tmp_path, user_words, monkeypatch, relation):
     _withdrawn(monkeypatch)
-    judge = _PerHitJudge(relation)
-    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path), judge)
-    assert (decision.decision, decision.reason, judge.calls) == ("reject", "withdrawn", 1)
+    decision = run_unit_v2(_row(_cog_like(**{relation: _withdrawn_ref()})), _ws(tmp_path))
+    assert (decision.decision, decision.reason) == ("reject", "withdrawn")
 
 
 @pytest.mark.parametrize("relation", ["same", "adds"])
 def test_a_closed_gap_that_recurs_is_written_again(tmp_path, user_words, monkeypatch, relation):
-    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
     _withdrawn(monkeypatch, status="closed")
-    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path), _PerHitJudge(relation))
-    assert decision.decision == "write"
+    decision = run_unit_v2(_row(_cog_like(**{relation: _withdrawn_ref()})), _ws(tmp_path))
+    assert (decision.decision, decision.reason) == ("write", "new")
 
 
 def test_a_unit_saying_the_withdrawn_entry_was_wrong_is_written(tmp_path, user_words, monkeypatch):
-    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
     _withdrawn(monkeypatch)
-    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path), _PerHitJudge("contradicts"))
+    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path))
     assert decision.decision == "write"
 
 
@@ -313,16 +300,15 @@ def test_a_written_unit_retires_what_it_overrides_once(cdf_env):
 
 @pytest.mark.parametrize("source,retires", [("S7", True), ("S2", False)])
 def test_the_pipeline_records_a_verified_override_for_the_writer(cdf_env, monkeypatch, source, retires):
-    from tests.test_cdf_refactor import Judge
     from core.ingestion.api import connect_rw
     connect_rw().close()
     _ddd(cdf_env, _OLD)
-    monkeypatch.setattr(pipeline_v2, "_grounding", lambda anchors: "user: open it in an in-app overlay, not the browser")
+    monkeypatch.setattr(pipeline_v2, "_user_texts", lambda unit, row: ["open it in an in-app overlay, not the browser"])
     ref = f"{_id_of('browser')} | - [decision] **Open a Hive session in the browser**"
     unit = _cog(type="decision", scope="project:P", topic="decision", title="Open a Hive session in an in-app overlay",
                 what="The Hive session opens in an in-app overlay.", why="The user asked for it.",
-                rejected_alternatives="a browser tab", overrides=[ref])
-    decision = run_unit_v2(_row(unit, source=source, tainted=False, session_project="P"), cdf_env["workspace"], Judge())
+                rejected_alternatives="a browser tab", overrides=[ref], user_quote="open it in an in-app overlay")
+    decision = run_unit_v2(_row(unit, source=source, tainted=False, session_project="P"), cdf_env["workspace"])
     assert decision.decision == "write"
     got = decision.version_vector.get("overrides") or []
     assert bool(got) is retires
@@ -331,17 +317,17 @@ def test_the_pipeline_records_a_verified_override_for_the_writer(cdf_env, monkey
 
 
 def test_a_unit_older_than_the_entry_it_overrides_is_not_written(cdf_env, monkeypatch):
-    from tests.test_cdf_refactor import Judge
     from core.ingestion import overrides
     from core.ingestion.api import connect_rw
     connect_rw().close()
     _ddd(cdf_env, _OLD)
-    monkeypatch.setattr(pipeline_v2, "_grounding", lambda anchors: "user: open it in an in-app overlay")
+    monkeypatch.setattr(pipeline_v2, "_user_texts", lambda unit, row: ["open it in an in-app overlay"])
     monkeypatch.setattr(overrides, "check", lambda conn, **kw: overrides.Checked(older=True))
     unit = _cog(type="decision", scope="project:P", topic="decision", title="Overlay",
                 what="The Hive session opens in an in-app overlay.", why="asked",
-                rejected_alternatives="none", overrides=["0123abcd | - [decision] **Open a Hive session**"])
-    decision = run_unit_v2(_row(unit, source="S7", tainted=False, session_project="P"), cdf_env["workspace"], Judge())
+                rejected_alternatives="none", overrides=["0123abcd | - [decision] **Open a Hive session**"],
+                user_quote="open it in an in-app overlay")
+    decision = run_unit_v2(_row(unit, source="S7", tainted=False, session_project="P"), cdf_env["workspace"])
     assert (decision.decision, decision.reason) == ("reject", "older_than_existing")
 
 

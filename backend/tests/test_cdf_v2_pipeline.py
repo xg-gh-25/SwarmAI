@@ -1,5 +1,6 @@
-"""Focused tests for CDF v2 routing and judging (refactor 2026-10-29: the destination is
-the extractor's declaration, one verification call decides)."""
+"""Focused tests for CDF v2 routing (design 2026-10-30-cdf-agent-decides: the destination
+is the extractor's declaration; no model call; the every-turn files take what the user's
+words or a measurement show)."""
 from __future__ import annotations
 
 import json
@@ -10,17 +11,6 @@ import pytest
 from core.ingestion.pipeline_v2 import run_unit_v2
 
 
-class Judge:
-    def __init__(self, *, significant=True, unavailable=False):
-        self.significant, self.unavailable = significant, unavailable
-
-    def verify(self, unit, grounding, hits):
-        if self.unavailable:
-            raise RuntimeError("offline")
-        return {"grounded": bool(grounding), "durable": True, "self_contained": True,
-                "significant": self.significant, "hits": []}
-
-
 def row(unit: dict, *, tainted: bool = False, project_hint: str | None = None,
         source: str = "S2") -> dict:
     return {
@@ -29,7 +19,8 @@ def row(unit: dict, *, tainted: bool = False, project_hint: str | None = None,
         "evidence_root_ids": json.dumps(["root-1"]),
         "envelope": json.dumps({"root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
                                 "strength": "inferred" if tainted else "user_explicit",
-                                "tainted": tainted, "user_authored_text": unit.get("what", "")}),
+                                "read_external": tainted, "cited_external": tainted,
+                                "user_authored_text": unit.get("what", "")}),
         "project_candidates": json.dumps([project_hint] if project_hint else []),
         "project_hint": project_hint,
     }
@@ -40,6 +31,7 @@ def cognition(**overrides) -> dict:
         "kind": "cognition", "type": "guideline", "scope": "world",
         "title": "Verify current state", "what": "Verify current state before editing.",
         "applicability": "When changing a repository.", "evidence": ["event:one"],
+        "user_quote": "Verify current state before editing",
     }
     value.update(overrides)
     return value
@@ -47,7 +39,8 @@ def cognition(**overrides) -> dict:
 
 @pytest.fixture
 def words(monkeypatch):
-    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "user: verify first")
+    monkeypatch.setattr("core.ingestion.pipeline_v2._user_texts",
+                        lambda unit, row: ["Verify current state before editing, always."])
 
 
 def _widget(tmp_path: Path) -> None:
@@ -56,21 +49,22 @@ def _widget(tmp_path: Path) -> None:
     (und / "IMPROVEMENT.md").write_text("# I\n\n## What to Watch For\n", encoding="utf-8")
 
 
-def test_a_trusted_unit_reaches_memory_and_a_tainted_ungrounded_one_is_refused(tmp_path, words, monkeypatch):
+def test_the_users_words_reach_memory_and_a_unit_without_them_the_general_brain(tmp_path, words):
     context = tmp_path / ".context"
     context.mkdir()
     (context / "MEMORY.md").write_text("# Memory\n\n## Guidelines\n", encoding="utf-8")
-    trusted = run_unit_v2(row(cognition()), tmp_path, Judge())
+    trusted = run_unit_v2(row(cognition()), tmp_path)
     assert trusted.decision == "write" and trusted.destination.store == "MEMORY"
-    monkeypatch.setattr("core.ingestion.pipeline_v2._grounding", lambda anchors: "")
-    tainted = run_unit_v2(row(cognition(), tainted=True), tmp_path, Judge())
-    assert (tainted.decision, tainted.reason) == ("reject", "not_grounded")
-    assert not (tmp_path / "Knowledge/Learned/_common/world.md").exists()
+    unsaid = run_unit_v2(row(cognition(user_quote=None)), tmp_path)
+    assert (unsaid.destination.store, unsaid.destination.rerouted_from) == ("COMMON_DDD", "MEMORY")
+    external = run_unit_v2(row(cognition(), tainted=True), tmp_path)
+    assert external.destination.store == "COMMON_DDD" and external.version_vector["basis"] == "external"
 
 
-def test_a_project_without_a_ddd_is_refused(tmp_path, words):
-    decision = run_unit_v2(row(cognition(scope="project:Widget"), project_hint="Widget"), tmp_path, Judge())
-    assert (decision.decision, decision.reason) == ("reject", "unknown_project")
+def test_a_project_without_a_ddd_goes_to_the_general_brain(tmp_path, words):
+    decision = run_unit_v2(row(cognition(scope="project:Widget"), project_hint="Widget"), tmp_path)
+    assert (decision.destination.store, decision.destination.relative_path) == (
+        "COMMON_DDD", "Knowledge/Library/widget.md")
 
 
 @pytest.mark.parametrize(
@@ -93,25 +87,9 @@ def test_a_project_without_a_ddd_is_refused(tmp_path, words):
 )
 def test_every_non_cognition_kind_reaches_its_store(tmp_path, words, unit, expected) -> None:
     _widget(tmp_path)
-    decision = run_unit_v2(row(unit, project_hint="Widget"), tmp_path, Judge())
+    decision = run_unit_v2(row(unit, project_hint="Widget"), tmp_path)
     assert decision.decision == "write", decision.reason
     assert (decision.destination.store, decision.destination.relative_path) == expected
-
-
-def test_an_event_that_changes_nothing_is_refused(tmp_path, words) -> None:
-    event = {"kind": "event", "when": "2026-10-27", "title": "Routine",
-             "what": "Ran a routine command.", "outcome": "It completed.",
-             "evidence": ["event:one"]}
-    decision = run_unit_v2(row(event), tmp_path, Judge(significant=False))
-    assert (decision.decision, decision.reason) == ("reject", "not_significant")
-
-
-def test_an_unavailable_judge_defers(tmp_path, words) -> None:
-    context = tmp_path / ".context"
-    context.mkdir()
-    (context / "MEMORY.md").write_text("# Memory\n\n## Guidelines\n", encoding="utf-8")
-    decision = run_unit_v2(row(cognition(), source="S1"), tmp_path, Judge(unavailable=True))
-    assert (decision.decision, decision.reason) == ("defer", "judge_unavailable:RuntimeError")
 
 
 def test_normalize_preserves_semantic_fields_except_outer_whitespace() -> None:
@@ -181,7 +159,7 @@ def test_event_key_duplicate_is_rejected_without_reinforcement(tmp_path: Path) -
         f"<!-- cand:prior | event_key:{key} | source:S3 | event_kind:event -->\n",
         encoding="utf-8",
     )
-    result = run_unit_v2(row(unit), tmp_path, Judge())
+    result = run_unit_v2(row(unit), tmp_path)
     assert (result.decision, result.reason) == ("reject", "already_exists")
 
 
@@ -193,6 +171,6 @@ def test_a_gap_takes_the_project_its_source_declared_in_the_snapshot(tmp_path: P
            "proposed_next": "Add and validate the fallback.", "evidence": ["event:one"]}
     queued = row(gap, source="S3")
     queued["project_snapshot"] = json.dumps({"project": "Widget", "repos": {}})
-    decision = run_unit_v2(queued, tmp_path, Judge())
+    decision = run_unit_v2(queued, tmp_path)
     assert decision.decision == "write", decision.reason
     assert decision.destination.relative_path == "Projects/Widget/2-understanding/IMPROVEMENT.md"
