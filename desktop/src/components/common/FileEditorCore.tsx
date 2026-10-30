@@ -136,6 +136,11 @@ export interface FileEditorCoreProps {
   /** Called on every content change so parent can track live edits.
    *  Used to preserve content across panel ↔ modal mode switches. */
   onContentChange?: (content: string) => void;
+  /** Reports whether the editor holds unsaved edits: its content differs from its
+   *  saved baseline. The editor is the one authority on this, because only it knows
+   *  that baseline — a save or a reload from disk moves it, and a reload is not an
+   *  edit (a parent comparing against its own copy from open time would call it one). */
+  onDirtyChange?: (dirty: boolean) => void;
   /** Imperative close trigger from a parent-owned header (run_f49d3ff3 R2). When this
    *  counter INCREASES, FileEditorCore runs its OWN guarded close (handleCloseAttempt),
    *  so the unsaved-changes dialog is reused (not reimplemented). Used by FileViewer's
@@ -686,6 +691,7 @@ export default function FileEditorCore({
   onToggleMode,
   onSaveWithDiff,
   onContentChange,
+  onDirtyChange,
   closeSignal,
   onViewChange,
 }: FileEditorCoreProps) {
@@ -820,6 +826,9 @@ export default function FileEditorCore({
   hasUnsavedEditsRef.current = hasUnsavedEdits;
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
+  useEffect(() => { onDirtyChangeRef.current?.(hasUnsavedEdits); }, [hasUnsavedEdits]);
 
   // ── Auto-refresh via SSE file_changed event + diff highlight ──
   // A file the agent is writing can change many times a second. Events for this
@@ -1330,14 +1339,13 @@ export default function FileEditorCore({
     const baseline = savedContent ?? initialContent;
     setContent(baseline);
     onContentChange?.(baseline);
-    // CLEAR the tab-store dirty flag BEFORE onClose (run_f49d3ff3 Gate-2 HIGH). The
-    // parent (FileViewer) tracks per-tab isDirty via onContentChange→markDirty, and
-    // useFileViewerTabs.closeTab NO-OPS on a dirty tab ("caller must confirm first").
-    // The confirmed discard IS that confirmation — but without propagating the revert
-    // to the parent, closeTab refused to remove the tab: single-tab masked it (viewer
-    // closed via the tabs.length<=1 fallback) but multi-tab left the discarded tab
-    // silently open. Feeding the baseline back through onContentChange makes the parent
-    // mark it clean (baseline === cached.content), so closeTab actually removes it.
+    // CLEAR the parent's dirty flag BEFORE onClose. The parent (FileViewer) tracks
+    // per-tab isDirty from onDirtyChange, and useFileViewerTabs.closeTab NO-OPS on a
+    // dirty tab ("caller must confirm first"). The confirmed discard IS that
+    // confirmation, but the hasUnsavedEdits effect would only report clean after this
+    // render — too late for the close below, which would leave the tab open. So report
+    // clean synchronously here.
+    onDirtyChangeRef.current?.(false);
     onClose();
   }, [savedContent, initialContent, onClose, onContentChange]);
 

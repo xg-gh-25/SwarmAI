@@ -671,15 +671,16 @@ function FileViewerImpl({
   }, [activeTab, handleCloseTab, onClose]);
 
   /* -------------------------------------------------------------- */
-  /*  Content change tracking (marks tab dirty)                      */
+  /*  Dirty tracking: the editor reports it (marks tab dirty)        */
   /* -------------------------------------------------------------- */
 
-  const handleContentChange = useCallback(
-    (content: string) => {
+  // The editor decides dirtiness against its own saved baseline, which a save or a
+  // reload from disk moves. Comparing against contentCache here instead would turn
+  // every agent rewrite of an open file into an "unsaved edit".
+  const handleEditorDirty = useCallback(
+    (dirty: boolean) => {
       if (!activeTab) return;
-      const cached = contentCache.current[activeTab.filePath];
-      const originalContent = cached?.content ?? '';
-      markDirty(activeTab.id, content !== originalContent);
+      markDirty(activeTab.id, dirty);
     },
     [activeTab, markDirty],
   );
@@ -770,7 +771,7 @@ function FileViewerImpl({
           variant={variant}
           onToggleMode={onToggleMode}
           onSaveWithDiff={onSaveWithDiff}
-          onContentChange={handleContentChange}
+          onDirtyChange={handleEditorDirty}
           // R2: the unified file-chrome header (panel) owns close. In panel variant
           // FileEditorCore suppresses its OWN filename+close (keeps its control cluster),
           // and the header's close bumps closeSignal → FileEditorCore runs its existing
