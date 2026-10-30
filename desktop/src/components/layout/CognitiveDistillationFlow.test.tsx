@@ -163,15 +163,25 @@ describe('Cognition flow — Activity', () => {
       expect.objectContaining({ path: '.context/EVOLUTION.md' }), 1, 25));
   });
 
-  it('shows the six steps with what each let through, dropped or moved', async () => {
+  it('shows the six steps with what each let through, dropped or moved, and no total twice', async () => {
     open();
     const steps = await screen.findByTestId('cdf-decide');
-    expect(steps).toHaveTextContent('Post-session review 12 · Session 8');
+    expect(steps).toHaveTextContent('Post-session review 12');
+    expect(steps).toHaveTextContent('Session 8');
     expect(steps).toHaveTextContent('2 could not be placed');
     expect(steps).toHaveTextContent('1 you had withdrawn — refused');
     expect(steps).toHaveTextContent('3 moved out of every-turn files');
     expect(steps).toHaveTextContent('5 already known — skipped');
-    expect(steps).toHaveTextContent('10 written');
+    expect(steps).toHaveTextContent('4 new · 6 add to an entry');
+    // the dashboard's totals are not repeated in the steps
+    expect(steps).not.toHaveTextContent('10 written');
+    expect(steps).not.toHaveTextContent('3 reinforced an entry');
+    expect(steps).not.toHaveTextContent('20');
+    // the rules are folded: on hover, or all at once
+    expect(steps).not.toHaveTextContent('Files read every turn take only your own words');
+    expect(within(steps).getByText('Trust floor')).toHaveAttribute('title', expect.stringContaining('Files read every turn'));
+    fireEvent.click(within(steps).getByTestId('cdf-rules-toggle'));
+    expect(steps).toHaveTextContent('Files read every turn take only your own words');
   });
 
   it('says for each item where it landed and what was decided, and opens its trace', async () => {
@@ -189,11 +199,14 @@ describe('Cognition flow — Activity', () => {
     expect(detail).toHaveBeenCalledWith('c1', 0);
   });
 
-  it('filters by outcome with the counts of the summary', async () => {
+  it('filters by outcome; the list says how many it holds, the chips repeat no total', async () => {
     open();
     const notKept = await screen.findByTestId('cdf-outcome-not_kept');
-    await waitFor(() => expect(notKept).toHaveTextContent('Not kept 7'));
+    expect(notKept).toHaveTextContent(/^Not kept$/);
+    await screen.findAllByTestId('cdf-unit');
+    expect(screen.queryByTestId('cdf-feed-count')).toBeNull();          // unfiltered: the dashboard has it
     fireEvent.click(notKept);
+    expect(await screen.findByTestId('cdf-feed-count')).toHaveTextContent('2 items');
     await waitFor(() => expect(units).toHaveBeenLastCalledWith(expect.objectContaining({ outcome: 'not_kept' }), 1, 25));
   });
 
@@ -201,6 +214,7 @@ describe('Cognition flow — Activity', () => {
     open();
     const strip = await screen.findByTestId('cdf-health');
     await waitFor(() => expect(strip).toHaveTextContent('Oldest item 2026-09-01'));
+    expect(strip).not.toHaveTextContent('Waiting');          // said once, at the top
     expect(flow).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('cdf-details-toggle'));
     const details = await screen.findByTestId('cdf-details');

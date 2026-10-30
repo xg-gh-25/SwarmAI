@@ -1871,7 +1871,6 @@
     "legendReinforced": "强化已有条目",
     "legendScale": "所有行同一个比例尺",
     "decideTitle": "怎么判断的",
-    "decideHint": "每一条都走同样的六步",
     "step": {
       "captured": "记下来",
       "capturedRule": "在场的 agent 写下值得保留的内容。",
@@ -1889,9 +1888,7 @@
     "out": {
       "dropped": "丢掉 {{n}}",
       "moved": "{{n}} 条移出每轮文件",
-      "reinforced": "{{n}} 条强化已有条目",
       "known": "{{n}} 条已经知道，跳过",
-      "written": "写入 {{n}}",
       "writtenSplit": "新增 {{new}} · 补充 {{adds}}",
       "place": "{{n}} 条放不进去",
       "withdrawn": "{{n}} 条是你撤回过的，拒收",
@@ -1990,8 +1987,6 @@
     "cmpNone": "没有比对：在前面的步骤就停下了。",
     "fromLine": "{{source}} · {{when}}",
     "health": {
-      "waiting": "等待",
-      "failed": "失败",
       "store": "存储",
       "calls": "今天模型调用",
       "tokens": "tokens",
@@ -2056,6 +2051,9 @@
       "same": "和上一个 {{window}} 持平",
       "fromZero": "上一个 {{window}} 为 0",
       "noPrevious": "还没有完整的上一个周期"
-    }
+    },
+    "showRules": "展开每一步的规则",
+    "hideRules": "收起规则",
+    "feedCount": "共 {{n}} 条"
   }
 }

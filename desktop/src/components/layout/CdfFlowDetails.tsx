@@ -1,7 +1,8 @@
 /**
  * The Cognition flow's health strip and its Details disclosure (CognitiveDistillationFlow).
  *
- * One line by default: waiting, failed, the oldest item kept and the store size, model calls and
+ * One line by default (whether anything waits or failed is said once, at the top of the
+ * view): the oldest item kept and the store size, model calls and
  * tokens today, Memory and Evolution size. Details keeps the raw audit a maintainer
  * reads: extraction by source, waiting by lane, model calls by source and day, the
  * post-session review table and the weekly history of kept units.
@@ -39,8 +40,6 @@ export function CdfFlowDetails({ overview, window }: { overview?: LandedOverview
   const oldest = overview?.oldestAt ?? null;
   const overdue = (overview?.attention ?? []).some((item) => item.code === 'cleanup_overdue');
   const storeBytes = overview?.storeBytes ?? health.data?.inboxBytes ?? 0;
-  const failed = overview?.groups.failed ?? 0;
-  const waiting = (overview?.totals.waiting ?? 0) - failed;
 
   const weeks = useMemo(() => {
     const totals = new Map<string, number>();
@@ -61,8 +60,6 @@ export function CdfFlowDetails({ overview, window }: { overview?: LandedOverview
   return (
     <section className="border-t border-[var(--color-border)] pt-4" data-testid="cdf-health">
       <div className="flex flex-wrap items-center gap-x-7 gap-y-2 text-small text-[var(--color-text-muted)]">
-        <span>{t('cdf.health.waiting')} <Num value={fmt(Math.max(0, waiting))} warn={waiting > 0} /></span>
-        <span>{t('cdf.health.failed')} <Num value={fmt(failed)} warn={failed > 0} /></span>
         <span>{t('cdf.health.oldest')} <Num value={oldest ? oldest.slice(0, 10) : '—'} warn={overdue} />
           {' · '}{t('cdf.health.store')} <Num value={bytes(storeBytes)} /></span>
         <span>{t('cdf.health.calls')} <Num value={fmt(calls)} /> · {t('cdf.health.tokens')} <Num value={tokens >= 1e6 ? `${(tokens / 1e6).toFixed(1)}M` : fmt(tokens)} /></span>

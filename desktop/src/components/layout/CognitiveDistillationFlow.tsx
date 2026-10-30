@@ -253,6 +253,7 @@ function buildTiers(t: TFunction, rows: LandedRow[]): Array<{ key: 'every_turn' 
 
 function HowItDecides({ data }: { data: LandedOverview }) {
   const { t } = useTranslation();
+  const [showRules, setShowRules] = useState(false);
   const s = data.steps;
   const sources = Object.entries(data.sources).sort((a, b) => b[1] - a[1]);
   const retired = data.groups.retired ?? 0;
@@ -266,37 +267,39 @@ function HowItDecides({ data }: { data: LandedOverview }) {
     g('expired') > 0 ? t('cdf.alsoExpired', { n: fmt(g('expired')) }) : null,
     data.totals.waiting > 0 ? t('cdf.alsoWaiting', { n: fmt(data.totals.waiting) }) : null,
   ].filter(Boolean).join('; ');
-  // one row per step, the numbers in one column so they read top to bottom
+  // one row per step, the numbers in one column so they read top to bottom. A step shows
+  // what it let through, dropped or moved; the totals (captured, learned, reinforced) are
+  // the dashboard's and are not repeated here.
   const steps: Array<{ key: string; out: ReactNode }> = [
-    { key: 'captured', out: <Out tone="text">{fmt(s.captured)}</Out> },
+    { key: 'captured', out: <>{sources.map(([source, count]) => (
+      <Out key={source} tone="dim">{`${t(`cdf.source.${source}`, { defaultValue: source })} ${fmt(count)}`}</Out>))}</> },
     { key: 'basic', out: <Out tone="dim">{t('cdf.out.dropped', { n: fmt(s.basicDropped) })}</Out> },
     { key: 'place', out: s.placeDropped > 0 ? <Out tone="warn">{t('cdf.out.place', { n: fmt(s.placeDropped) })}</Out>
       : <Out tone="dim">{t('cdf.out.dropped', { n: '0' })}</Out> },
     { key: 'trust', out: <Out tone="accent">{t('cdf.out.moved', { n: fmt(s.moved) })}</Out> },
     { key: 'compare', out: <>
-      <Out tone="kept">{t('cdf.out.reinforced', { n: fmt(s.reinforced) })}</Out>
       <Out tone="dim">{t('cdf.out.known', { n: fmt(s.known) })}</Out>
       {s.withdrawn > 0 && <Out tone="dim">{t('cdf.out.withdrawn', { n: fmt(s.withdrawn) })}</Out>}
       {s.older > 0 && <Out tone="dim">{t('cdf.out.older', { n: fmt(s.older) })}</Out>}</> },
-    { key: 'written', out: <>
-      <Out tone="kept">{t('cdf.out.written', { n: fmt(s.written) })}</Out>
-      <Out tone="dim">{t('cdf.out.writtenSplit', { new: fmt(data.totals.new), adds: fmt(data.totals.adds) })}</Out></> },
+    { key: 'written', out: <Out tone="kept">{t('cdf.out.writtenSplit', { new: fmt(data.totals.new), adds: fmt(data.totals.adds) })}</Out> },
   ];
   return (
     <section data-testid="cdf-decide" className="min-w-0">
-      <SectionLabel right={t('cdf.decideHint')}>{t('cdf.decideTitle')}</SectionLabel>
+      <SectionLabel right={(
+        <button type="button" className="text-meta text-[var(--color-primary)]" aria-expanded={showRules}
+          onClick={() => setShowRules((value) => !value)} data-testid="cdf-rules-toggle">
+          {showRules ? t('cdf.hideRules') : t('cdf.showRules')}
+        </button>
+      )}>{t('cdf.decideTitle')}</SectionLabel>
       <ol className="mt-3">
         {steps.map((step, index) => (
-          <li key={step.key} className="grid grid-cols-[22px_minmax(0,1fr)_230px] gap-x-4 py-2.5">
+          <li key={step.key} className="grid grid-cols-[22px_minmax(0,1fr)_auto] gap-x-4 py-2">
             <span className="text-small tabular-nums text-[var(--color-text-dim)]">{index + 1}</span>
             <div className="min-w-0">
-              <div className="text-body font-semibold text-[var(--color-text)]">{t(`cdf.step.${step.key}`)}</div>
-              <p className="mt-0.5 text-small text-[var(--color-text-muted)]">{t(`cdf.step.${step.key}Rule`)}</p>
-              {step.key === 'captured' && (
-                <p className="mt-1 text-small text-[var(--color-text-dim)]">
-                  {sources.map(([source, count]) => `${t(`cdf.source.${source}`, { defaultValue: source })} ${fmt(count)}`).join(' · ')}
-                </p>
-              )}
+              <div className="text-body font-semibold text-[var(--color-text)]" title={t(`cdf.step.${step.key}Rule`)}>
+                {t(`cdf.step.${step.key}`)}
+              </div>
+              {showRules && <p className="mt-0.5 text-small text-[var(--color-text-muted)]">{t(`cdf.step.${step.key}Rule`)}</p>}
             </div>
             <div className="text-right">{step.out}</div>
           </li>

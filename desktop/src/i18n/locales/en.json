@@ -1872,7 +1872,6 @@
     "legendReinforced": "reinforced an existing entry",
     "legendScale": "one scale for every row",
     "decideTitle": "How it decides",
-    "decideHint": "the same six steps for every item",
     "step": {
       "captured": "Captured",
       "capturedRule": "An agent that was there writes down what is worth keeping.",
@@ -1890,9 +1889,7 @@
     "out": {
       "dropped": "{{n}} dropped",
       "moved": "{{n}} moved out of every-turn files",
-      "reinforced": "{{n}} reinforced an entry",
       "known": "{{n}} already known — skipped",
-      "written": "{{n}} written",
       "writtenSplit": "{{new}} new · {{adds}} add to an entry",
       "place": "{{n}} could not be placed",
       "withdrawn": "{{n}} you had withdrawn — refused",
@@ -1991,8 +1988,6 @@
     "cmpNone": "Not compared — it stopped at an earlier step.",
     "fromLine": "{{source}} · {{when}}",
     "health": {
-      "waiting": "Waiting",
-      "failed": "Failed",
       "store": "store",
       "calls": "Model calls today",
       "tokens": "tokens",
@@ -2057,6 +2052,9 @@
       "same": "same as previous {{window}}",
       "fromZero": "none in previous {{window}}",
       "noPrevious": "no full earlier period yet"
-    }
+    },
+    "showRules": "Show what each step does",
+    "hideRules": "Hide the rules",
+    "feedCount": "{{n}} items"
   }
 }

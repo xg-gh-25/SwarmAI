@@ -36,13 +36,6 @@ const EVERY_TURN = new Set(['MEMORY', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 
 const PAGE = 25;
 const selectClass = 'h-7 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 text-small text-[var(--color-text-muted)]';
 
-function outcomeCount(outcome: UnitOutcome, overview?: LandedOverview): number | undefined {
-  if (!overview) return undefined;
-  const totals = overview.totals;
-  return { all: overview.total, new: totals.new, adds: totals.adds, reinforced: totals.reinforced,
-    not_kept: totals.notKept, waiting: totals.waiting }[outcome];
-}
-
 export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
   window: IngestionWindow;
   overview?: LandedOverview;
@@ -79,10 +72,7 @@ export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
       <SectionLabel>{t('cdf.feedTitle')}</SectionLabel>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Segmented
-          options={OUTCOMES.map((key) => {
-            const count = outcomeCount(key, overview);
-            return { key, label: count == null ? t(`cdf.outcome.${key}`) : `${t(`cdf.outcome.${key}`)} ${fmt(count)}`, testid: `cdf-outcome-${key}` };
-          })}
+          options={OUTCOMES.map((key) => ({ key, label: t(`cdf.outcome.${key}`), testid: `cdf-outcome-${key}` }))}
           value={outcome}
           onChange={setOutcome}
         />
@@ -97,6 +87,12 @@ export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
         <input aria-label={t('cdf.search')} placeholder={t('cdf.search')} value={typed} onChange={(event) => setTyped(event.target.value)}
           className="ml-auto h-7 w-56 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 text-small text-[var(--color-text)]" />
       </div>
+      {units.data && (outcome !== 'all' || source || place || keyword || focusLabel) && (
+        // unfiltered, the count is the dashboard's "captured": not said twice
+        <p className="mt-2 text-small text-[var(--color-text-muted)]" data-testid="cdf-feed-count">
+          {t('cdf.feedCount', { n: fmt(units.data.pages[0]?.total ?? 0) })}
+        </p>
+      )}
       {focusLabel && (
         <div className="mt-2 flex items-center gap-2 text-small text-[var(--color-text-muted)]" data-testid="cdf-focus">
           <span>{t('cdf.showing', { label: focusLabel })}</span>
