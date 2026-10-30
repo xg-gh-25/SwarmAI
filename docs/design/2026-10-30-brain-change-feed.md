@@ -74,8 +74,10 @@ Brain 里有客户数据，工作区曾挂过公开 remote（STEERING #19）。
 
 ### 3.1 显示哪些条目
 
-**范围**：项目 Brain 是它的四份文档；General Brain 是 `Knowledge/Learned/**/*.md` 加
-`Knowledge/Library/**/*.md`（用户已确认 common DDD 放进 General Brain）。
+**范围：只看主认知 markdown。** 项目 Brain 是它的四份文档；General Brain 是 CDF 写的 common DDD 文件
+`Knowledge/Learned/_common/*.md` 和 `Knowledge/Learned/repos/*.md`（用户已确认放进 General Brain）。
+参考资料（各 Brain 的 `2-understanding/knowledge/`、`Knowledge/Notes`、`Knowledge/Library` 等）不在这里：
+它们在 DDD 的浏览树里看（用户 r2）。
 
 **一条知识**是范围内同时满足下面三点的单元：
 1. 身份是 `cand:<id>`，条目里确实有 `<!-- cand:<id>` 这个标记（`units.py` `_CAND` :25 会匹配正文里
@@ -178,6 +180,7 @@ Brain 里有客户数据，工作区曾挂过公开 remote（STEERING #19）。
 ## 6. 非目标
 
 - 不显示人工编辑；不做 Hive 上的视图；不追溯 CDF 之前的条目（没有 `cand:` 身份）。
+- 不显示参考资料（`knowledge/`、`Knowledge/Notes`、`Knowledge/Library`），包括 CDF 写的 ReferenceUnit；它们在 DDD 浏览树里看。
 - 不拦截再学；不做撤回的恢复界面。
 
 ## 7. 验证计划（在动手前定好）
