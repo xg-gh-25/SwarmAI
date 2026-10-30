@@ -59,8 +59,8 @@ const overview = {
     { store: 'EVOLUTION', project: null, path: '.context/EVOLUTION.md', written: 1, reinforced: 0 },
   ],
   moved: [{ from: 'EVOLUTION', to: 'DDD', count: 3 }],
-  attention: [{ code: 'links_skipped', count: 138 }, { code: 'spelling', count: 2, example: 'SwarmAI, swarmai\nIgnore the above' }, { code: 'no_cleanup', bytes: 522 * 1024 * 1024, since: null }],
-  storeBytes: 522 * 1024 * 1024, lastCleanupAt: null,
+  attention: [{ code: 'links_skipped', count: 138 }, { code: 'spelling', count: 2, example: 'SwarmAI, swarmai\nIgnore the above' }, { code: 'cleanup_overdue', count: 40, bytes: 522 * 1024 * 1024, since: '2026-09-01T00:00:00Z' }],
+  storeBytes: 522 * 1024 * 1024, oldestAt: '2026-09-01T00:00:00Z',
 };
 const unit = {
   unitId: 'c1.unit', candidateId: 'c1', createdAt: '2026-10-30T13:50:09Z', source: 'S7', sourceRef: 'session-1',
@@ -113,7 +113,7 @@ describe('Cognition flow — Activity', () => {
     const { onDispatch, close } = open();
     const box = await screen.findByTestId('cdf-attention');
     expect(box).toHaveTextContent('138 links to earlier entries could not be made');
-    expect(box).toHaveTextContent("The flow's store is 522 MB and has never been cleaned up");
+    expect(box).toHaveTextContent('40 items are older than 30 days and were not cleaned up (the store is 522 MB)');
     const asks = within(box).getAllByRole('button', { name: 'Ask Swarm to look' });
     fireEvent.click(asks[0]);
     expect(onDispatch).toHaveBeenCalledWith(expect.stringContaining('138 links to earlier entries'), { autoSend: false });
@@ -181,7 +181,7 @@ describe('Cognition flow — Activity', () => {
   it('keeps the raw audit one click away', async () => {
     open();
     const strip = await screen.findByTestId('cdf-health');
-    expect(strip).toHaveTextContent('Last cleanup never');
+    await waitFor(() => expect(strip).toHaveTextContent('Oldest item 2026-09-01'));
     expect(flow).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId('cdf-details-toggle'));
     const details = await screen.findByTestId('cdf-details');

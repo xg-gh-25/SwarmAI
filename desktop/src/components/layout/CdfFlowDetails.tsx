@@ -1,7 +1,7 @@
 /**
  * The Cognition flow's health strip and its Details disclosure (CognitiveDistillationFlow).
  *
- * One line by default: waiting, failed, last cleanup and store size, model calls and
+ * One line by default: waiting, failed, the oldest item kept and the store size, model calls and
  * tokens today, Memory and Evolution size. Details keeps the raw audit a maintainer
  * reads: extraction by source, waiting by lane, model calls by source and day, the
  * post-session review table and the weekly history of kept units.
@@ -36,7 +36,8 @@ export function CdfFlowDetails({ overview, window }: { overview?: LandedOverview
   const todayRows = (health.data?.llmBySource ?? []).filter((row) => row.utcDay === today);
   const calls = todayRows.reduce((sum, row) => sum + row.calls, 0);
   const tokens = todayRows.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0);
-  const cleanup = overview?.lastCleanupAt ?? health.data?.lastCleanupAt ?? null;
+  const oldest = overview?.oldestAt ?? null;
+  const overdue = (overview?.attention ?? []).some((item) => item.code === 'cleanup_overdue');
   const storeBytes = overview?.storeBytes ?? health.data?.inboxBytes ?? 0;
   const failed = overview?.groups.failed ?? 0;
   const waiting = (overview?.totals.waiting ?? 0) - failed;
@@ -53,7 +54,6 @@ export function CdfFlowDetails({ overview, window }: { overview?: LandedOverview
     return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-12);
   }, [stats.data]);
   const maxWeek = Math.max(1, ...weeks.map(([, count]) => count));
-  const stale = cleanup == null;
 
   const Num = ({ value, warn }: { value: string; warn?: boolean }) => (
     <span className="font-semibold tabular-nums" style={{ color: warn ? 'var(--color-status-warning)' : 'var(--color-text)' }}>{value}</span>
@@ -63,8 +63,8 @@ export function CdfFlowDetails({ overview, window }: { overview?: LandedOverview
       <div className="flex flex-wrap items-center gap-x-7 gap-y-2 text-small text-[var(--color-text-muted)]">
         <span>{t('cdf.health.waiting')} <Num value={fmt(Math.max(0, waiting))} warn={waiting > 0} /></span>
         <span>{t('cdf.health.failed')} <Num value={fmt(failed)} warn={failed > 0} /></span>
-        <span>{t('cdf.health.lastCleanup')} <Num value={cleanup ? cleanup.slice(0, 10) : t('cdf.health.never')} warn={stale} />
-          {' · '}{t('cdf.health.store')} <Num value={bytes(storeBytes)} warn={stale} /></span>
+        <span>{t('cdf.health.oldest')} <Num value={oldest ? oldest.slice(0, 10) : '—'} warn={overdue} />
+          {' · '}{t('cdf.health.store')} <Num value={bytes(storeBytes)} /></span>
         <span>{t('cdf.health.calls')} <Num value={fmt(calls)} /> · {t('cdf.health.tokens')} <Num value={tokens >= 1e6 ? `${(tokens / 1e6).toFixed(1)}M` : fmt(tokens)} /></span>
         {health.data && <span>{t('cdf.health.memory')} <Num value={bytes(health.data.memoryBytes)} /> · {t('cdf.health.evolution')} <Num value={bytes(health.data.evolutionBytes)} /></span>}
         <button type="button" className="ml-auto text-small text-[var(--color-primary)]" aria-expanded={open}

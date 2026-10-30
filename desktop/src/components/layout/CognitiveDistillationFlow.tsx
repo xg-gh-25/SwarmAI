@@ -154,11 +154,9 @@ function Verdict({ data, window }: { data: LandedOverview; window: IngestionWind
 export function attentionText(t: TFunction, item: FlowAttention): { main: string; extra?: string; prompt: string } {
   const count = fmt(item.count ?? 0);
   switch (item.code) {
-    case 'no_cleanup':
+    case 'cleanup_overdue':
     {
-      const main = item.since
-        ? t('cdf.att.no_cleanupSince', { size: bytes(item.bytes ?? 0), since: item.since.slice(0, 10) })
-        : t('cdf.att.no_cleanup', { size: bytes(item.bytes ?? 0) });
+      const main = t('cdf.att.cleanup_overdue', { n: count, size: bytes(item.bytes ?? 0) });
       return { main, prompt: main };
     }
     case 'spelling':

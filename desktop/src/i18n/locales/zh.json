@@ -1828,13 +1828,12 @@
       "failed": "{{n}} 条处理失败",
       "waiting_long": "{{n}} 条等待超过 24 小时",
       "breaker": "有 source 因反复失败被暂停了 {{n}} 次",
-      "no_cleanup": "Flow 的存储已有 {{size}}，从来没有清理过",
-      "no_cleanupSince": "Flow 的存储已有 {{size}}，上次清理在 {{since}}",
       "links_skipped": "{{n}} 条指向已有条目的关联没连上：找不到被关联的条目",
       "spelling": "同一个项目有两种写法：{{example}}",
       "ask": "让 Swarm 看看",
       "prompt": "看下认知沉淀里的这个问题：{{text}}。找到原因并修掉。",
-      "spellingPrompt": "同一个项目有两种写法"
+      "spellingPrompt": "同一个项目有两种写法",
+      "cleanup_overdue": "{{n}} 条超过 30 天还没被清理（存储 {{size}}）"
     },
     "landedTitle": "落到了哪里",
     "landedHint": "点一行看具体条目",
@@ -1997,15 +1996,14 @@
     "health": {
       "waiting": "等待",
       "failed": "失败",
-      "lastCleanup": "上次清理",
-      "never": "从未",
       "store": "存储",
       "calls": "今天模型调用",
       "tokens": "tokens",
       "memory": "Memory",
       "evolution": "Evolution",
       "details": "详细",
-      "hide": "收起"
+      "hide": "收起",
+      "oldest": "最早一条"
     },
     "details": {
       "coverage": "各来源的提取",

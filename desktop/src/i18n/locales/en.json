@@ -1829,13 +1829,12 @@
       "failed": "{{n}} items failed to process",
       "waiting_long": "{{n}} items have waited more than 24 hours",
       "breaker": "A source was paused {{n}} times after repeated failures",
-      "no_cleanup": "The flow's store is {{size}} and has never been cleaned up",
-      "no_cleanupSince": "The flow's store is {{size}} and was last cleaned up {{since}}",
       "links_skipped": "{{n}} links to earlier entries could not be made — the linked entry was not found",
       "spelling": "One project is written with two spellings: {{example}}",
       "ask": "Ask Swarm to look",
       "prompt": "Look into this in the Cognition flow: {{text}}. Find the cause and fix it.",
-      "spellingPrompt": "One project is written with two spellings"
+      "spellingPrompt": "One project is written with two spellings",
+      "cleanup_overdue": "{{n}} items are older than 30 days and were not cleaned up (the store is {{size}})"
     },
     "landedTitle": "Where it landed",
     "landedHint": "click a row to see its items",
@@ -1998,15 +1997,14 @@
     "health": {
       "waiting": "Waiting",
       "failed": "Failed",
-      "lastCleanup": "Last cleanup",
-      "never": "never",
       "store": "store",
       "calls": "Model calls today",
       "tokens": "tokens",
       "memory": "Memory",
       "evolution": "Evolution",
       "details": "Details",
-      "hide": "Hide details"
+      "hide": "Hide details",
+      "oldest": "Oldest item"
     },
     "details": {
       "coverage": "Extraction by source",

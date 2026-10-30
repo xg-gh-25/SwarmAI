@@ -60,7 +60,7 @@ class LandedResponse(StrictResponse):
     moved: list[MovedRow]
     attention: list[AttentionRow]
     store_bytes: int
-    last_cleanup_at: str | None
+    oldest_at: str | None
 
 
 class UnitRow(StrictResponse):

@@ -147,19 +147,21 @@ def test_overview_adds_up_and_raises_only_real_anomalies(db: Path):
     memory = by_path[".context/MEMORY.md"]                      # where the reinforcement landed
     assert (memory["store"], memory["project"], memory["reinforced"]) == ("MEMORY", None, 1)
     codes = {a["code"]: a for a in view["attention"]}
-    assert set(codes) == {"links_skipped", "spelling", "no_cleanup"}   # parked is not late
+    assert set(codes) == {"links_skipped", "spelling"}   # parked is not late; nothing is overdue
     assert codes["links_skipped"]["count"] == 1
     assert codes["spelling"]["example"] == "SwarmAI, swarmai"
-    assert codes["no_cleanup"]["since"] is None                 # maintenance never completed
+    assert view["oldest_at"] < iso(-timedelta(days=2))          # c16, two days old
     assert hashlib.sha256(db.read_bytes()).hexdigest() == before
 
 
-def test_recent_cleanup_is_not_an_anomaly(db: Path):
+def test_an_item_past_the_30_day_cleanup_is_an_anomaly(db: Path):
     conn = sqlite3.connect(db)
-    conn.execute("INSERT INTO ingestion_lanes(lane,last_completed_at) VALUES('maintenance',?)", (iso(),))
+    _seed(conn, 30, "S2", "written", "new", {"kind": "cognition", "title": "Ancient", "what": "x"},
+          IMPROVEMENT, age=timedelta(days=32))
     conn.commit()
     conn.close()
-    assert "no_cleanup" not in {a["code"] for a in flow_view.landed_overview("24h")["attention"]}
+    codes = {a["code"]: a for a in flow_view.landed_overview("24h")["attention"]}
+    assert codes["cleanup_overdue"]["count"] == 1
 
 
 def test_units_filter_and_read_whole(db: Path):

@@ -211,8 +211,11 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
                     links_skipped = int(count)
                 else:
                     breakers = int(count)
-        cleanup = conn.execute(
-            "SELECT last_completed_at FROM ingestion_lanes WHERE lane='maintenance'").fetchone()
+        # the 30-day cleanup is kept when nothing older than its cutoff (plus the day it
+        # runs) is left; no timestamp of its run is recorded anywhere
+        oldest_row = conn.execute("SELECT MIN(created_at) FROM ingestion_inbox").fetchone()
+        overdue = int(conn.execute("SELECT COUNT(*) FROM ingestion_inbox WHERE created_at < ?",
+                                   (_iso(_utc_now() - timedelta(days=31)),)).fetchone()[0])
 
     groups: dict[str, int] = {}
     reasons: dict[str, dict[str, int]] = {}
@@ -255,7 +258,7 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         db_bytes = queries.ingestion_db_path().stat().st_size
     except OSError:
         pass
-    last_cleanup = cleanup[0] if cleanup else None
+    oldest = oldest_row[0] if oldest_row else None
     attention: list[dict[str, Any]] = []
     if groups.get("failed"):
         attention.append({"code": "failed", "count": groups["failed"]})
@@ -263,9 +266,8 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         attention.append({"code": "waiting_long", "count": waiting_long})
     if breakers:
         attention.append({"code": "breaker", "count": breakers})
-    stale_after = _iso(_utc_now() - timedelta(hours=48))
-    if last_cleanup is None or str(last_cleanup) < stale_after:
-        attention.append({"code": "no_cleanup", "bytes": db_bytes, "since": last_cleanup})
+    if overdue:
+        attention.append({"code": "cleanup_overdue", "count": overdue, "bytes": db_bytes, "since": oldest})
     if links_skipped:
         attention.append({"code": "links_skipped", "count": links_skipped})
     if spellings:
@@ -291,7 +293,7 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         "landed": landed,
         "moved": [{"from": src, "to": dst, "count": n} for (src, dst), n in sorted(moved.items())],
         "attention": attention,
-        "store_bytes": db_bytes, "last_cleanup_at": last_cleanup,
+        "store_bytes": db_bytes, "oldest_at": oldest,
     })
 
 

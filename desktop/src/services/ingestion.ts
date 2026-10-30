@@ -48,7 +48,8 @@ export interface LandedOverview {
   moved: MovedRow[];
   attention: FlowAttention[];
   storeBytes: number;
-  lastCleanupAt: string | null;
+  /** The oldest item still in the store (the 30-day cleanup keeps it younger than that). */
+  oldestAt: string | null;
 }
 
 export type UnitOutcome = 'all' | 'new' | 'adds' | 'reinforced' | 'not_kept' | 'waiting';
