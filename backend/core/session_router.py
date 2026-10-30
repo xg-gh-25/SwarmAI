@@ -5593,10 +5593,11 @@ class SessionRouter:
                 # here so it fires exactly once per turn.
                 if not _ttft_recorded:
                     try:
+                        _ttft_ms_now = (time.perf_counter() - _ttft_t0) * 1000.0
                         _ttft_line = _format_ttft_line(
                             event_type=_ttft_event_label(event),
                             already_recorded=_ttft_recorded,
-                            ttft_ms=(time.perf_counter() - _ttft_t0) * 1000.0,
+                            ttft_ms=_ttft_ms_now,
                             slot_ms=_ttft_slot_ms,
                             recall_ms=_ttft_recall_ms,
                             recall_ran_this_turn=_ttft_recall_ms is not None,
@@ -5607,6 +5608,11 @@ class SessionRouter:
                         if _ttft_line is not None:
                             _ttft_recorded = True
                             logger.info("%s | session_id=%s", _ttft_line, session_id)
+                            from . import prompt_metrics
+                            prompt_metrics.record_ttft(
+                                _ttft_ms_now, _ttft_presend_ms,
+                                getattr(unit, "_last_turn_spawn_ms", None),
+                                getattr(unit, "_retry_count", 0) or 0)
                     except Exception as _ttft_err:  # noqa: BLE001 — never break stream
                         logger.debug("TTFT probe skipped: %s", _ttft_err)
 

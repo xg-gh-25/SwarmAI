@@ -1143,11 +1143,15 @@ class ContextDirectoryLoader:
         separator_tokens = self.estimate_tokens("\n\n") if len(sections) > 1 else 0
 
         # Calculate total tokens
-        total = sum(
-            _section_tokens(name, content)
-            for _, name, content, _, _ in sections
-        )
+        per_section = [(name, _section_tokens(name, content)) for _, name, content, _, _ in sections]
+        total = sum(tok for _, tok in per_section)
         total += separator_tokens * max(0, len(sections) - 1)
+        # the every-turn files' size, measured on every assembly (core/prompt_metrics)
+        try:
+            from . import prompt_metrics
+            prompt_metrics.record_sections(per_section)
+        except Exception:  # noqa: BLE001 — a measurement never fails the assembly
+            logger.debug("prompt metrics not recorded", exc_info=True)
 
         if total <= effective_budget:
             return sections
