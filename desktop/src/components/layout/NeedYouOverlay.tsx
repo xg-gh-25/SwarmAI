@@ -70,7 +70,7 @@ export function NeedYouContent(props: NeedYouContentProps) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'attention'
           ? <AttentionQueueContent {...props} />
-          : <CognitiveDistillationFlow />}
+          : <CognitiveDistillationFlow onDispatch={props.onDispatch} close={props.close} />}
       </div>
     </div>
   );

@@ -1,279 +1,320 @@
 /**
- * Cognitive Distillation Flow audit view inside the Need You overlay.
+ * Cognition flow — the Cognitive Distillation Flow inside the Need You overlay, written
+ * for a person to read (design docs/design/2026-10-30-cdf-flow-view.md).
  *
- * Shows bounded overview counts, filterable candidates, full card decisions,
- * write plans, relations, health, and aggregate-only history. No approvals.
+ * Two sub-tabs:
+ * - Activity, read backward from the result: one verdict sentence and the anomalies worth
+ *   a look (each can be sent to chat), WHERE kept items landed (every-turn files, project
+ *   brains, General Brain & Library, one shared scale), HOW each item is decided (the six
+ *   steps with what each let through, dropped or moved), WHAT it learned (CdfUnitFeed),
+ *   and a one-line health strip whose Details keep the raw audit (CdfFlowDetails).
+ * - Guideline (CdfGuideline): how the flow works, with its diagram.
+ *
+ * Data: GET /ingestion/landed (the summary) and /ingestion/units (the feed), both read-only.
+ * The backend decides which step produced an outcome (flow_view.reason_group); this view
+ * only phrases it. No approvals: a wrong outcome is something to ask Swarm about.
  *
  * Key export: `CognitiveDistillationFlow`.
  */
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import { bytes, fileName, fmt, rich } from './cdfText';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   ingestionService,
-  type IngestionFilters,
+  type FlowAttention,
   type IngestionWindow,
+  type LandedOverview,
+  type LandedRow,
+  type UnitFilters,
 } from '../../services/ingestion';
-import { Hint, SectionLabel, Segmented, Stat, StatusBadge, tableHeadClass } from '../overlay';
-import { OverlayEmpty, OverlayError, OverlayLoading } from './OverlayState';
+import { SectionLabel, Segmented, Tabs } from '../overlay';
+import { OverlayError, OverlayLoading } from './OverlayState';
+import { CdfUnitFeed } from './CdfUnitFeed';
+import { CdfFlowDetails } from './CdfFlowDetails';
+import { CdfGuideline } from './CdfGuideline';
+import type { DispatchPrompt } from './overlayRegistry';
 
-const WINDOWS: Array<{ key: IngestionWindow; label: string }> = [
-  { key: '24h', label: '24h' }, { key: '7d', label: '7d' }, { key: '30d', label: '30d' },
-];
-const STORE_OPTIONS = { KNOWLEDGE: 0, COMMON_DDD: 0, TIMELINE: 0, STEERING: 0, USER: 0, TOOLS: 0, EVOLUTION: 0, DDD: 0, MEMORY: 0 };
-const STAGE_LABEL: Record<string, string> = {
-  inbox: 'Inbox', organized: '整理', card_0: '卡 0', card_1: '卡 1', card_2: '卡 2',
-  destination_rules: '目的地规则', card_3: '卡 3', write: '写入',
-};
+const EVERY_TURN = ['TIMELINE', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'MEMORY'];
+const GENERAL = ['COMMON_DDD', 'KNOWLEDGE'];
+const NOT_KEPT_GROUPS = ['known', 'backlog', 'place', 'retired', 'basic', 'other', 'expired'];
+const KEPT = 'var(--color-zone-cognitive)';
+const KEPT_SOFT = 'color-mix(in srgb, var(--color-zone-cognitive) 40%, transparent)';
+const WARN_TINT = 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)';
 
-function statusTone(value: string): 'success' | 'warning' | 'error' | 'neutral' {
-  if (value === 'written' || value === 'reinforced' || value === 'done') return 'success';
-  if (value === 'deferred' || value === 'writing' || value === 'partial_pending') return 'warning';
-  if (value === 'failed_poison') return 'error';
-  return 'neutral';
-}
+type SubTab = 'activity' | 'guide';
 
-function statusLabel(value: string): string {
-  return value === 'reinforced' ? '强化' : value;
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value ?? {}, null, 2);
-}
-
-function readString(value: Record<string, unknown>, key: string): string {
-  const found = value[key];
-  return typeof found === 'string' ? found : '';
-}
-
-function weekOf(day: string): string {
-  const date = new Date(`${day}T00:00:00Z`);
-  const weekday = (date.getUTCDay() + 6) % 7;
-  date.setUTCDate(date.getUTCDate() - weekday);
-  return date.toISOString().slice(0, 10);
-}
-
-export function CognitiveDistillationFlow() {
+export function CognitiveDistillationFlow({ onDispatch, close }: {
+  onDispatch?: DispatchPrompt; close?: () => void;
+}) {
   const { t } = useTranslation();
-  const [window, setWindow] = useState<IngestionWindow>('24h');
-  const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [detailOffset, setDetailOffset] = useState(0);
-  const [filters, setFilters] = useState<IngestionFilters>({ time: 30, pageSize: 25 });
-
-  const overview = useQuery({ queryKey: ['ingestion', 'flow', window], queryFn: () => ingestionService.flow(window) });
-  const items = useQuery({ queryKey: ['ingestion', 'items', filters, page], queryFn: () => ingestionService.items(filters, page) });
-  const detail = useQuery({ queryKey: ['ingestion', 'detail', selected, detailOffset], queryFn: () => ingestionService.detail(selected!, detailOffset), enabled: selected !== null });
-  const health = useQuery({ queryKey: ['ingestion', 'health'], queryFn: ingestionService.health });
-  const stats = useQuery({ queryKey: ['ingestion', 'stats', 365], queryFn: () => ingestionService.stats(365) });
-
-  const weeks = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const row of stats.data?.rows ?? []) {
-      const day = readString(row, 'utcDay');
-      const units = Number(row.units ?? 0);
-      if (day) totals.set(weekOf(day), (totals.get(weekOf(day)) ?? 0) + units);
-    }
-    return [...totals.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-12);
-  }, [stats.data]);
-  const maxWeek = Math.max(1, ...weeks.map(([, count]) => count));
-
-  const updateFilter = (key: keyof IngestionFilters, value: string) => {
-    setPage(1);
-    setSelected(null);
-    setDetailOffset(0);
-    setFilters((current) => ({ ...current, [key]: value || undefined }));
-  };
-
+  const [sub, setSub] = useState<SubTab>('activity');
   return (
-    <div className="space-y-5 py-4" data-testid="cdf-flow">
-      <section className="space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <SectionLabel>{t('ingestion.overview')}</SectionLabel>
-          <Segmented options={WINDOWS} value={window} onChange={setWindow} />
-        </div>
-        {overview.isPending && <OverlayLoading label={t('ingestion.loadingOverview')} testid="cdf-overview-loading" />}
-        {overview.isError && <OverlayError compact message={t('ingestion.loadFailed')} onRetry={() => { void overview.refetch(); }} testid="cdf-overview-error" />}
-        {overview.data && (
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-            {Object.entries(overview.data.stages).map(([stage, count]) => (
-              <Stat key={stage} label={STAGE_LABEL[stage] ?? stage} value={count} hint={window} />
-            ))}
-          </div>
-        )}
-        {overview.data && (
-          <>
-            <Hint>{t('ingestion.rates', { written: (overview.data.writtenRate * 100).toFixed(1), reinforced: ((overview.data.reinforcedRate ?? 0) * 100).toFixed(1), denominator: String(overview.data.denominatorUnits) })}</Hint>
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
-              {Object.entries(overview.data.outcomes ?? {}).map(([outcome, count]) => (
-                <Stat key={outcome} label={statusLabel(outcome)} value={count} />
-              ))}
-            </div>
-            <Hint>{t('ingestion.sameOrigin', { count: overview.data.sameOriginRerouteCount ?? 0 })}</Hint>
-          </>
-        )}
-      </section>
-
-      {overview.data && (
-        <section className="space-y-2">
-          <SectionLabel>{t('ingestion.extractionCoverage')}</SectionLabel>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            {Object.entries(overview.data.extractionCoverage ?? {}).map(([source, value]) => (
-              <Stat key={source} label={source} value={value.unitsEmitted}
-                hint={`${value.zeroUnitAttempts}/${value.attempts} zero · ${value.unitsInvalid} invalid`} />
-            ))}
-            {Object.entries(overview.data.linkStatus ?? {}).map(([state, count]) => (
-              <Stat key={`link-${state}`} label={`link · ${state}`} value={count} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="space-y-2">
-        <SectionLabel right={items.data ? `${items.data.total}` : undefined}>{t('ingestion.candidates')}</SectionLabel>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
-          <Filter label={t('ingestion.source')} value={filters.source} onChange={(v) => updateFilter('source', v)} options={overview.data?.sources} />
-          <Filter label={t('ingestion.destination')} value={filters.store} onChange={(v) => updateFilter('store', v)} options={STORE_OPTIONS} />
-          <Filter label={t('ingestion.state')} value={filters.state} onChange={(v) => updateFilter('state', v)} options={overview.data?.states} />
-          <Filter label={t('ingestion.reason')} value={filters.reason} onChange={(v) => updateFilter('reason', v)} options={overview.data?.reasons} />
-          <label className="flex flex-col gap-1 text-meta text-[var(--color-text-muted)]">
-            {t('ingestion.keyword')}
-            <input className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 text-body text-[var(--color-text)]" value={filters.keyword ?? ''} onChange={(event) => updateFilter('keyword', event.target.value)} />
-          </label>
-          <Filter label={t('ingestion.time')} value={String(filters.time ?? 30)} onChange={(v) => updateFilter('time', v)} options={{ '1': 0, '7': 0, '30': 0 }} />
-        </div>
-        {items.isPending && <OverlayLoading label={t('ingestion.loadingItems')} testid="cdf-items-loading" />}
-        {items.isError && <OverlayError compact message={t('ingestion.loadFailed')} onRetry={() => { void items.refetch(); }} testid="cdf-items-error" />}
-        {items.data?.items.length === 0 && <OverlayEmpty testid="cdf-items-empty">{t('ingestion.empty')}</OverlayEmpty>}
-        {items.data && items.data.items.length > 0 && (
-          <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
-            <table className="w-full border-collapse text-body">
-              <thead className="bg-[var(--color-card)]"><tr>
-                {[t('ingestion.when'), t('ingestion.source'), t('ingestion.lane'), t('ingestion.content'), t('ingestion.state'), t('ingestion.destination'), t('ingestion.reason')].map((label) => <th key={label} className={`${tableHeadClass} px-3 py-2`}>{label}</th>)}
-              </tr></thead>
-              <tbody>
-                {items.data.items.map((item) => (
-                  <tr key={item.id} className="border-t border-[var(--color-border)]">
-                    <td className="whitespace-nowrap px-3 py-2 text-meta text-[var(--color-text-muted)]">{item.createdAt.slice(0, 16).replace('T', ' ')}</td>
-                    <td className="px-3 py-2">{item.source}</td><td className="px-3 py-2">{item.lane}</td>
-                    <td className="max-w-sm px-3 py-2"><button type="button" className="w-full text-left text-[var(--color-primary)]" onClick={() => { setSelected(item.id); setDetailOffset(0); }}>{item.preview}</button></td>
-                    <td className="px-3 py-2"><StatusBadge tone={statusTone(item.unitStates[0] ?? item.state)}>{item.unitStates.length > 0 ? item.unitStates.map(statusLabel).join(', ') : statusLabel(item.state)}</StatusBadge></td>
-                    <td className="px-3 py-2">{item.stores.join(', ') || '—'}</td>
-                    <td className="px-3 py-2 text-[var(--color-text-muted)]">{item.reasons.join(', ') || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {items.data && items.data.total > items.data.pageSize && (
-          <div className="flex items-center justify-end gap-2">
-            <button className="btn-sm btn-secondary" disabled={page === 1} onClick={() => setPage((v) => Math.max(1, v - 1))}>{t('ingestion.previous')}</button>
-            <span className="text-meta text-[var(--color-text-muted)]">{page}</span>
-            <button className="btn-sm btn-secondary" disabled={!items.data.hasNext} onClick={() => setPage((v) => v + 1)}>{t('ingestion.next')}</button>
-          </div>
-        )}
-      </section>
-
-      {selected && <DetailPanel loading={detail.isPending} error={detail.isError} value={detail.data} retry={() => { void detail.refetch(); }} close={() => setSelected(null)} loadMore={() => setDetailOffset(detail.data?.nextOffset ?? 0)} />}
-
-      <section className="space-y-2">
-        <SectionLabel>{t('ingestion.health')}</SectionLabel>
-        {health.isPending && <OverlayLoading label={t('ingestion.loadingHealth')} testid="cdf-health-loading" />}
-        {health.isError && <OverlayError compact message={t('ingestion.loadFailed')} onRetry={() => { void health.refetch(); }} testid="cdf-health-error" />}
-        {health.data && <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <Stat label="Inbox" value={health.data.inboxCount} hint={`${health.data.inboxBytes} B`} />
-          <Stat label="MEMORY.md" value={health.data.memoryBytes} hint="bytes" />
-          <Stat label="EVOLUTION.md" value={health.data.evolutionBytes} hint="bytes" />
-          <Stat label={t('ingestion.lastCleanup')} value={health.data.lastCleanupAt?.slice(0, 10) ?? '—'} />
-          {Object.entries(health.data.lanes).map(([lane, value]) => <Stat key={lane} label={lane} value={value.backlog} hint={value.oldestWaitSeconds == null ? '—' : `${Math.floor(value.oldestWaitSeconds / 3600)}h`} />)}
-        </div>}
-        {health.data && health.data.llmBySource.length > 0 && <HealthTable
-          title="LLM 调用 / Token（按 source）"
-          headers={['日期', 'Source', '调用', '输入 Token', '输出 Token']}
-          rows={health.data.llmBySource.map((row) => [row.utcDay, row.source, String(row.calls), String(row.inputTokens), String(row.outputTokens)])}
-        />}
-        {health.data?.review && <HealthTable
-          title={`会后复盘（30 天，Agent 自身认知写入 EVOLUTION / MEMORY：${health.data.review.agentSelfWritten}，`
-            + `被撤回：${health.data.review.agentSelfWithdrawn}${health.data.review.agentSelfWithdrawnRate == null ? ''
-              : `（${(health.data.review.agentSelfWithdrawnRate * 100).toFixed(0)}%）`}）`}
-          headers={['会话类型', '复盘', '产出单元', '被拒']}
-          rows={(['code', 'files', 'conversation'] as const).map((kind) => {
-            const row = health.data.review!.byType[kind];
-            const label = { code: '改过代码', files: '写过非代码文件', conversation: '只有对话' }[kind];
-            return [label, String(row.reviews), String(row.units), String(row.invalid)];
-          })}
-        />}
-      </section>
-
-      <section className="space-y-2">
-        <SectionLabel>{t('ingestion.history')}</SectionLabel>
-        {stats.isPending && <OverlayLoading label={t('ingestion.loadingHistory')} testid="cdf-history-loading" />}
-        {stats.isError && <OverlayError compact message={t('ingestion.loadFailed')} onRetry={() => { void stats.refetch(); }} testid="cdf-history-error" />}
-        {stats.data && weeks.length === 0 && <OverlayEmpty testid="cdf-history-empty">{t('ingestion.noHistory')}</OverlayEmpty>}
-        {weeks.length > 0 && <div className="flex h-32 items-end gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-          {weeks.map(([week, count]) => <div key={week} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-1" title={`${week}: ${count}`}>
-            <span className="text-meta tabular-nums text-[var(--color-text-muted)]">{count}</span>
-            <div className="w-full rounded-sm bg-[var(--color-primary)]" style={{ height: `${Math.max(4, count / maxWeek * 72)}px` }} />
-            <span className="text-meta text-[var(--color-text-faint)]">{week.slice(5)}</span>
-          </div>)}
-        </div>}
-      </section>
+    <div className="py-4" data-testid="cdf-flow">
+      <Tabs
+        items={[
+          { key: 'activity', label: t('cdf.tabActivity'), testid: 'cdf-sub-activity' },
+          { key: 'guide', label: t('cdf.tabGuide'), testid: 'cdf-sub-guide' },
+        ]}
+        value={sub}
+        onChange={setSub}
+      />
+      {sub === 'activity' ? <Activity onDispatch={onDispatch} close={close} /> : <CdfGuideline />}
     </div>
   );
 }
 
-function Filter({ label, value, onChange, options }: { label: string; value?: string; onChange: (value: string) => void; options?: Record<string, number> }) {
-  return <label className="flex flex-col gap-1 text-meta text-[var(--color-text-muted)]">{label}
-    <select className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 text-body text-[var(--color-text)]" value={value ?? ''} onChange={(event) => onChange(event.target.value)}>
-      <option value="">全部</option>{Object.keys(options ?? {}).filter((v) => v !== '-').map((option) => <option key={option} value={option}>{option}</option>)}
-    </select>
-  </label>;
-}
-
-function HealthTable({ title, headers, rows }: { title: string; headers: string[]; rows: string[][] }) {
-  return <div className="space-y-2">
-    <SectionLabel>{title}</SectionLabel>
-    <div className="overflow-x-auto rounded-lg border border-[var(--color-border)]">
-      <table className="w-full border-collapse text-body">
-        <thead className="bg-[var(--color-card)]"><tr>{headers.map((header) =>
-          <th key={header} className={`${tableHeadClass} px-3 py-2`}>{header}</th>)}</tr></thead>
-        <tbody>{rows.map((row, rowIndex) => <tr key={`${row[0]}-${rowIndex}`} className="border-t border-[var(--color-border)]">
-          {row.map((cell, index) => <td key={`${index}-${cell}`} className="px-3 py-2">{cell}</td>)}
-        </tr>)}</tbody>
-      </table>
-    </div>
-  </div>;
-}
-
-function DetailPanel({ loading, error, value, retry, close, loadMore }: { loading: boolean; error: boolean; value: Awaited<ReturnType<typeof ingestionService.detail>> | undefined; retry: () => void; close: () => void; loadMore: () => void }) {
+function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: () => void }) {
   const { t } = useTranslation();
-  return <section className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4" data-testid="cdf-detail">
-    <div className="flex items-center"><SectionLabel>{t('ingestion.detail')}</SectionLabel><button type="button" className="ml-auto icon-btn" onClick={close} aria-label={t('common.button.close')}><span className="material-symbols-outlined icon-sm">close</span></button></div>
-    {loading && <OverlayLoading testid="cdf-detail-loading" />}
-    {error && <OverlayError compact message={t('ingestion.loadFailed')} onRetry={retry} testid="cdf-detail-error" />}
-    {value && <>
-      <AuditBlock title={t('ingestion.rawPayload')} value={value.candidate.payload} />
-      <AuditBlock title={t('ingestion.envelope')} value={value.envelope} />
-      {value.units.map((unit, index) => <div key={readString(unit, 'unitId') || index} className="space-y-2 border-t border-[var(--color-border)] pt-3">
-        <SectionLabel>{readString(unit, 'unitId') || `Unit ${index + 1}`}</SectionLabel>
-        <AuditBlock title={t('ingestion.claimGroup')} value={unit.claimGroup} />
-        <AuditBlock title={t('ingestion.cards')} value={unit.decision} />
-        <AuditBlock title={t('ingestion.destination')} value={unit.destination} />
-        <Hint>{readString(unit, 'action')} · {readString(unit, 'reason')}</Hint>
-        {unit.canRedact === true && <button type="button" className="btn-sm btn-secondary" onClick={() => {
-          const reason = window.prompt(t('ingestion.redactReason'));
-          const anchor = readString(unit, 'redactionAnchor');
-          if (reason?.trim() && anchor) void ingestionService.redact(anchor, reason.trim()).then(retry);
-        }}>{t('ingestion.redact')}</button>}
-      </div>)}
-      <AuditBlock title={t('ingestion.writePlans')} value={value.writes} />
-      <AuditBlock title={t('ingestion.relations')} value={value.relations} />
-      {value.hasMore && <button type="button" className="btn-sm btn-secondary" onClick={loadMore}>{t('ingestion.loadMore')}</button>}
-    </>}
-  </section>;
+  const [window, setWindow] = useState<IngestionWindow>('24h');
+  const [focus, setFocus] = useState<Partial<UnitFilters> & { label?: string }>({});
+  const landed = useQuery({ queryKey: ['ingestion', 'landed', window], queryFn: () => ingestionService.landed(window) });
+
+  const ask = (text: string) => {
+    if (onDispatch?.(t('cdf.att.prompt', { text }), { autoSend: false })) close?.();
+  };
+
+  return (
+    <div className="space-y-9 pt-6">
+      <section className="space-y-4" data-testid="cdf-verdict">
+        <div className="flex items-start gap-6">
+          <div className="min-w-0 flex-1">
+            {landed.data ? <Verdict data={landed.data} window={window} /> : null}
+          </div>
+          <Segmented
+            options={(['24h', '7d', '30d'] as const).map((key) => ({ key, label: key }))}
+            value={window}
+            onChange={(next) => { setWindow(next); setFocus({}); }}
+          />
+        </div>
+        {landed.isPending && <OverlayLoading testid="cdf-landed-loading" />}
+        {landed.isError && <OverlayError compact message={t('ingestion.loadFailed')}
+          onRetry={() => { void landed.refetch(); }} testid="cdf-landed-error" />}
+        {landed.data && landed.data.attention.length > 0 && (
+          <div className="space-y-0.5" data-testid="cdf-attention">
+            {landed.data.attention.map((item) => {
+              const line = attentionText(t, item);
+              return (
+                <div key={item.code} className="flex items-center gap-3 rounded-lg px-3 py-2" style={{ background: WARN_TINT }}>
+                  <span className="material-symbols-outlined icon-sm text-[var(--color-status-warning)]" aria-hidden>error</span>
+                  <span className="min-w-0 flex-1 text-body text-[var(--color-text)]">
+                    {line.main}
+                    {line.extra && <span className="text-[var(--color-text-muted)]"> · {line.extra}</span>}
+                  </span>
+                  {onDispatch && <button type="button" className="btn-sm btn-secondary"
+                    onClick={() => ask(line.extra ? `${line.main} (${line.extra})` : line.main)}>{t('cdf.att.ask')}</button>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {landed.data && <Landed data={landed.data} onPick={(next) => setFocus(next)} />}
+      {landed.data && <HowItDecides data={landed.data} />}
+
+      <CdfUnitFeed window={window} overview={landed.data} focus={focus} onClearFocus={() => setFocus({})} />
+
+      <CdfFlowDetails overview={landed.data} window={window} />
+    </div>
+  );
 }
 
-function AuditBlock({ title, value }: { title: string; value: unknown }) {
-  return <div><SectionLabel>{title}</SectionLabel><pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-3 text-small text-[var(--color-text)]">{json(value)}</pre></div>;
+function Verdict({ data, window }: { data: LandedOverview; window: IngestionWindow }) {
+  const { t } = useTranslation();
+  const learned = data.totals.new + data.totals.adds;
+  const windowLabel = t(`cdf.w${window}`);
+  const bold = (value: number) => <span className="font-semibold text-[var(--color-zone-cognitive)]">{fmt(value)}</span>;
+  const top = NOT_KEPT_GROUPS
+    .map((group) => [group, data.groups[group] ?? 0] as const)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2)
+    .map(([group, count]) => t('cdf.groupCount', { label: t(`cdf.group.${group}`), n: fmt(count) }))
+    .join(t('cdf.and'));
+  return (
+    <div>
+      <p className="text-title font-semibold leading-snug text-[var(--color-text)]" data-testid="cdf-verdict-line">
+        {learned + data.totals.reinforced > 0
+          ? rich(t, 'cdf.verdict', { window: windowLabel, learned: bold(learned), reinforced: bold(data.totals.reinforced) })
+          : t('cdf.verdictNone', { window: windowLabel })}
+      </p>
+      <p className="mt-1.5 text-body text-[var(--color-text-muted)]">
+        {data.totals.notKept > 0 ? t('cdf.notKeptMostly', { n: fmt(data.totals.notKept), top }) : t('cdf.notKeptNone')}
+        {' '}
+        {data.totals.waiting > 0 ? t('cdf.healthWaiting', { n: fmt(data.totals.waiting) }) : t('cdf.healthOk')}
+      </p>
+    </div>
+  );
+}
+
+export function attentionText(t: TFunction, item: FlowAttention): { main: string; extra?: string } {
+  const count = fmt(item.count ?? 0);
+  switch (item.code) {
+    case 'no_project':
+      return { main: t('cdf.att.no_project', { n: count }), extra: item.example ? t('cdf.att.no_projectExample', { example: item.example }) : undefined };
+    case 'no_cleanup':
+      return { main: item.since
+        ? t('cdf.att.no_cleanupSince', { size: bytes(item.bytes ?? 0), since: item.since.slice(0, 10) })
+        : t('cdf.att.no_cleanup', { size: bytes(item.bytes ?? 0) }) };
+    case 'spelling':
+      return { main: t('cdf.att.spelling', { example: item.example ?? '' }) };
+    case 'failed': case 'waiting_long': case 'breaker': case 'links_skipped':
+      return { main: t(`cdf.att.${item.code}`, { n: count }) };
+    default:
+      return { main: `${item.code} · ${count}` };
+  }
+}
+
+interface DestRow { key: string; label: string; hint?: string; written: number; reinforced: number; indent?: boolean; filter: Partial<UnitFilters>; flag?: string }
+
+function Landed({ data, onPick }: { data: LandedOverview; onPick: (focus: Partial<UnitFilters> & { label?: string }) => void }) {
+  const { t } = useTranslation();
+  const tiers = useMemo(() => buildTiers(t, data.landed), [t, data.landed]);
+  const max = Math.max(1, ...tiers.flatMap((tier) => tier.rows.map((row) => row.written + row.reinforced)));
+  const movedTo = data.moved.reduce((sum, row) => sum + row.count, 0);
+  const movedFrom = [...new Set(data.moved.map((row) => t(`cdf.store.${row.from}`, { defaultValue: row.from })))].join(' / ');
+  const spelling = data.attention.find((item) => item.code === 'spelling')?.example?.split(', ') ?? [];
+  return (
+    <section data-testid="cdf-landed">
+      <SectionLabel right={t('cdf.landedHint')}>{t('cdf.landedTitle')}</SectionLabel>
+      {tiers.every((tier) => tier.rows.length === 0) && <p className="mt-3 text-body text-[var(--color-text-muted)]">{t('cdf.landedEmpty')}</p>}
+      <div className="mt-3 space-y-5">
+        {tiers.filter((tier) => tier.rows.length > 0).map((tier) => (
+          <div key={tier.key}>
+            <div className="mb-1 flex items-baseline gap-2.5">
+              <span className="text-body font-semibold text-[var(--color-text)]">{t(`cdf.tier.${tier.key}`)}</span>
+              <span className="text-small text-[var(--color-text-muted)]">{t(`cdf.tier.${tier.key}Hint`)}</span>
+            </div>
+            {tier.rows.map((row) => (
+              <Fragment key={row.key}>
+                <button type="button" data-testid={`cdf-dest-${row.key}`}
+                  onClick={() => onPick({ ...row.filter, label: row.label })}
+                  className="grid w-full grid-cols-[240px_1fr_180px] items-center gap-4 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-hover)]">
+                  <span className={`truncate text-body ${row.indent ? 'pl-4 text-[var(--color-text-muted)]' : 'text-[var(--color-text)]'}`}>
+                    {row.label}{row.hint && <span className="ml-1.5 text-small text-[var(--color-text-dim)]">{row.hint}</span>}
+                  </span>
+                  <span className="flex h-2 overflow-hidden rounded-sm" style={{ background: 'color-mix(in srgb, var(--color-border) 60%, transparent)' }}>
+                    <span style={{ width: `${(row.written / max) * 100}%`, background: KEPT }} />
+                    <span style={{ width: `${(row.reinforced / max) * 100}%`, background: KEPT_SOFT }} />
+                  </span>
+                  <span className="text-right text-body tabular-nums text-[var(--color-text-muted)]">
+                    {countsText(t, row.written, row.reinforced)}
+                  </span>
+                </button>
+                {spelling.includes(row.label) && row.label === spelling[spelling.length - 1] && (
+                  <p className="pl-7 text-small text-[var(--color-status-warning)]">{t('cdf.att.spelling', { example: spelling.join(', ') })}</p>
+                )}
+              </Fragment>
+            ))}
+            {tier.key === 'every_turn' && movedTo > 0 && (
+              <p className="mt-1.5 border-l-2 border-[var(--color-border)] px-2.5 py-1 text-small text-[var(--color-text-muted)]" data-testid="cdf-moved-note">
+                {t('cdf.movedNote', { n: fmt(movedTo), stores: movedFrom })}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex gap-4 text-small text-[var(--color-text-dim)]">
+        <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2.5 rounded-sm" style={{ background: KEPT }} />{t('cdf.legendKept')}</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-2.5 rounded-sm" style={{ background: KEPT_SOFT }} />{t('cdf.legendReinforced')}</span>
+        <span>{t('cdf.legendScale')}</span>
+      </div>
+    </section>
+  );
+}
+
+function countsText(t: TFunction, written: number, reinforced: number): string {
+  if (written && reinforced) return t('cdf.counts', { written: fmt(written), reinforced: fmt(reinforced) });
+  return written ? t('cdf.countsNew', { written: fmt(written) }) : t('cdf.countsReinforced', { reinforced: fmt(reinforced) });
+}
+
+function buildTiers(t: TFunction, rows: LandedRow[]): Array<{ key: 'every_turn' | 'project' | 'general'; rows: DestRow[] }> {
+  const sum = (list: LandedRow[]) => list.reduce((acc, row) => ({
+    written: acc.written + row.written, reinforced: acc.reinforced + row.reinforced }), { written: 0, reinforced: 0 });
+  const byStore = (stores: string[]) => stores.map((store) => {
+    const list = rows.filter((row) => row.store === store);
+    return { store, list, ...sum(list) };
+  }).filter((entry) => entry.list.length > 0)
+    .sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced));
+  const storeRow = (entry: { store: string; written: number; reinforced: number }): DestRow => ({
+    key: entry.store, label: t(`cdf.store.${entry.store}`, { defaultValue: entry.store }),
+    hint: t(`cdf.storeHint.${entry.store}`, { defaultValue: '' }) || undefined,
+    written: entry.written, reinforced: entry.reinforced, filter: { store: entry.store },
+  });
+  const projects = new Map<string, LandedRow[]>();
+  for (const row of rows.filter((item) => item.store === 'DDD')) {
+    const name = row.project ?? '—';
+    projects.set(name, [...(projects.get(name) ?? []), row]);
+  }
+  const projectRows: DestRow[] = [...projects.entries()]
+    .map(([name, list]) => ({ name, list, ...sum(list) }))
+    .sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced))
+    .flatMap((entry) => [
+      { key: `p-${entry.name}`, label: entry.name, written: entry.written, reinforced: entry.reinforced,
+        filter: { store: 'DDD', project: entry.name } },
+      ...(entry.list.length > 1 ? [...entry.list].sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced))
+        .map((row) => ({ key: `f-${row.path}`, label: fileName(row.path), written: row.written, reinforced: row.reinforced,
+          indent: true, filter: { path: row.path ?? undefined } })) : []),
+    ]);
+  return [
+    { key: 'every_turn', rows: byStore(EVERY_TURN).map(storeRow) },
+    { key: 'project', rows: projectRows },
+    { key: 'general', rows: byStore(GENERAL).map(storeRow) },
+  ];
+}
+
+function HowItDecides({ data }: { data: LandedOverview }) {
+  const { t } = useTranslation();
+  const s = data.steps;
+  const sources = Object.entries(data.sources).sort((a, b) => b[1] - a[1]);
+  const retired = data.groups.retired ?? 0;
+  const backlog = data.groups.backlog ?? 0;
+  const also = [
+    retired > 0 ? t('cdf.alsoRetired', { n: fmt(retired) }) : null,
+    backlog > 0 ? t('cdf.alsoBacklog', { n: fmt(backlog) }) : null,
+  ].filter(Boolean).join('; ');
+  const steps: Array<{ key: string; out: ReactNode }> = [
+    { key: 'captured', out: (
+      <div className="mt-2 space-y-0.5 text-small">
+        {sources.map(([source, count]) => (
+          <div key={source} className="flex justify-between text-[var(--color-text-muted)]">
+            <span>{t(`cdf.source.${source}`, { defaultValue: source })}</span>
+            <span className="tabular-nums text-[var(--color-text)]">{fmt(count)}</span>
+          </div>
+        ))}
+      </div>) },
+    { key: 'basic', out: <Out tone="dim">{t('cdf.out.dropped', { n: fmt(s.basicDropped) })}</Out> },
+    { key: 'place', out: s.placeDropped > 0 ? <Out tone="warn">{t('cdf.out.noProject', { n: fmt(s.placeDropped) })}</Out>
+      : <Out tone="dim">{t('cdf.out.dropped', { n: '0' })}</Out> },
+    { key: 'trust', out: <Out tone="accent">{t('cdf.out.moved', { n: fmt(s.moved) })}</Out> },
+    { key: 'compare', out: <>
+      <Out tone="kept">{t('cdf.out.reinforced', { n: fmt(s.reinforced) })}</Out>
+      <Out tone="dim">{t('cdf.out.known', { n: fmt(s.known) })}</Out></> },
+    { key: 'written', out: <>
+      <Out tone="kept">{t('cdf.out.written', { n: fmt(s.written) })}</Out>
+      <Out tone="dim">{t('cdf.out.writtenSplit', { new: fmt(data.totals.new), adds: fmt(data.totals.adds) })}</Out></> },
+  ];
+  return (
+    <section data-testid="cdf-decide">
+      <SectionLabel right={t('cdf.decideHint')}>{t('cdf.decideTitle')}</SectionLabel>
+      <div className="mt-3 grid grid-cols-6">
+        {steps.map((step, index) => (
+          <div key={step.key} className={index === 0 ? 'pr-3.5' : 'border-l border-[var(--color-border)] px-3.5'}>
+            <div className="text-meta tabular-nums text-[var(--color-text-dim)]">{index + 1}</div>
+            <div className="mt-0.5 text-body font-semibold text-[var(--color-text)]">{t(`cdf.step.${step.key}`)}</div>
+            <p className="mt-1 min-h-[56px] text-small text-[var(--color-text-muted)]">{t(`cdf.step.${step.key}Rule`)}</p>
+            {step.out}
+          </div>
+        ))}
+      </div>
+      {also && <p className="mt-3.5 text-small text-[var(--color-text-dim)]">{t('cdf.alsoPrefix')}{also}.</p>}
+    </section>
+  );
+}
+
+function Out({ tone, children }: { tone: 'dim' | 'warn' | 'accent' | 'kept'; children: ReactNode }) {
+  const color = { dim: 'var(--color-text-dim)', warn: 'var(--color-status-warning)', accent: 'var(--color-primary)', kept: KEPT }[tone];
+  return <span className="mt-2 block text-small tabular-nums" style={{ color }}>{children}</span>;
 }

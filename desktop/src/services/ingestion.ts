@@ -22,12 +22,76 @@ export interface FlowOverview {
   extractionCoverage: Record<string, { attempts: number; zeroUnitAttempts: number; unitsEmitted: number; unitsInvalid: number }>;
   linkStatus: Record<string, number>;
   sameOriginRerouteCount: number;
-  stages: Record<string, number>;
   lanes: Record<string, number>;
   sources: Record<string, number>;
   states: Record<string, number>;
   reasons: Record<string, number>;
 }
+
+/** Where kept units landed (one store / project / file). */
+export interface LandedRow { store: string; project: string | null; path: string | null; written: number; reinforced: number }
+export interface MovedRow { from: string; to: string; count: number }
+/** An anomaly worth a person's look; the view phrases it by `code`. */
+export interface FlowAttention { code: string; count?: number | null; example?: string | null; bytes?: number | null; since?: string | null }
+
+/** GET /ingestion/landed — what the Cognition flow view shows first (backend flow_view.py). */
+export interface LandedOverview {
+  window: IngestionWindow;
+  since: string;
+  total: number;
+  totals: { new: number; adds: number; reinforced: number; notKept: number; waiting: number };
+  groups: Record<string, number>;
+  reasons: Record<string, Record<string, number>>;
+  sources: Record<string, number>;
+  steps: { captured: number; basicDropped: number; placeDropped: number; moved: number; reinforced: number; known: number; written: number };
+  landed: LandedRow[];
+  moved: MovedRow[];
+  attention: FlowAttention[];
+  storeBytes: number;
+  lastCleanupAt: string | null;
+}
+
+export type UnitOutcome = 'all' | 'new' | 'adds' | 'reinforced' | 'not_kept' | 'waiting';
+export type UnitPlace = 'every_turn' | 'project' | 'general';
+
+export interface UnitFilters {
+  window: IngestionWindow;
+  outcome: UnitOutcome;
+  place?: UnitPlace;
+  source?: string;
+  store?: string;
+  project?: string;
+  path?: string;
+  keyword?: string;
+}
+
+/** One unit as a person reads it (GET /ingestion/units). */
+export interface FlowUnit {
+  unitId: string;
+  candidateId: string;
+  createdAt: string;
+  source: string;
+  sourceRef: string;
+  kind: string;
+  type: string | null;
+  title: string;
+  text: string;
+  scope: string | null;
+  state: string;
+  reason: string | null;
+  /** The decision step behind the outcome (flow_view.reason_group). */
+  group: string;
+  store: string | null;
+  project: string | null;
+  path: string | null;
+  section: string | null;
+  movedFrom: string | null;
+  relation: 'same' | 'adds' | null;
+  target: string | null;
+  basis: string | null;
+}
+
+export interface UnitsPage { items: FlowUnit[]; page: number; pageSize: number; total: number; hasNext: boolean }
 
 export interface IngestionItem {
   id: string;
@@ -141,6 +205,12 @@ async function getMapped<T>(path: string, params?: Record<string, unknown>): Pro
 
 export const ingestionService = {
   flow: (window: IngestionWindow) => getMapped<FlowOverview>('/ingestion/flow', { window }),
+  landed: (window: IngestionWindow) => getMapped<LandedOverview>('/ingestion/landed', { window }),
+  units: (filters: UnitFilters, page: number, pageSize = 25) => getMapped<UnitsPage>('/ingestion/units', {
+    window: filters.window, outcome: filters.outcome, place: filters.place, source: filters.source,
+    store: filters.store, project: filters.project, path: filters.path,
+    keyword: filters.keyword?.trim() || undefined, page, page_size: pageSize,
+  }),
   items: (filters: IngestionFilters, page: number) =>
     getMapped<IngestionItems>('/ingestion/items', { ...filters, page }),
   detail: (id: string, offset = 0) => getMapped<IngestionDetail>(
