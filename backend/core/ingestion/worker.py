@@ -431,12 +431,22 @@ def _process_candidate(conn: sqlite3.Connection, owner: Owner, row: sqlite3.Row,
         _process_v2_candidate(conn, owner, row, workspace_root)
         return
     # a candidate of the retired v1 path (no source unit): nothing produces one any more,
-    # and nothing can judge it; it is closed, its record kept until the 30-day cleanup
+    # and nothing can judge it; it and any open unit of it are closed (rejected
+    # ``retired_v1``), the record kept until the 30-day cleanup
+    candidate_id = _row_dict(row)["id"]
     logger.warning("CDF: candidate %s has no source unit (retired v1 shape); closed unprocessed",
-                   _row_dict(row).get("id"))
-    conn.execute("UPDATE ingestion_inbox SET state='done' WHERE id=?", (_row_dict(row)["id"],))
-    if conn.in_transaction:
+                   candidate_id)
+    terminal = ",".join("?" for _ in TERMINAL_STATES)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(f"""UPDATE ingestion_units SET state='rejected', reason='retired_v1', updated_at=?
+                         WHERE candidate_id=? AND state NOT IN ({terminal})""",
+                     (_utcnow().isoformat(), candidate_id, *TERMINAL_STATES))
+        conn.execute("UPDATE ingestion_inbox SET state='done' WHERE id=?", (candidate_id,))
         conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def reaggregate_candidates(conn: sqlite3.Connection,

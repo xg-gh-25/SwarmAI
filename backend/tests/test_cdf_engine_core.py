@@ -402,11 +402,13 @@ def test_a_candidate_without_a_source_unit_is_closed_not_judged(tmp_path, monkey
         conn.execute("""INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,
             content_hash,envelope,project_snapshot,created_at) VALUES('v1','k','remember','r','immediate',
             '{"kind":"remember","text":"x"}','v','h','{}','{}','2026-10-30T00:00:00+00:00')""")
+        conn.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,owner_epoch,updated_at)
+            VALUES('v1.0','v1','{}','queued',1,'2026-10-30T00:00:00+00:00')""")
         conn.commit()
         row = conn.execute("SELECT * FROM ingestion_inbox WHERE id='v1'").fetchone()
         worker.process_candidate(conn, owner, row, tmp_path / "ws")
         assert conn.execute("SELECT state FROM ingestion_inbox WHERE id='v1'").fetchone()[0] == "done"
-        assert conn.execute("SELECT COUNT(*) FROM ingestion_units").fetchone()[0] == 0
+        assert tuple(conn.execute("SELECT state,reason FROM ingestion_units").fetchone()) == ("rejected", "retired_v1")
         conn.close()
     finally:
         owner.release()
