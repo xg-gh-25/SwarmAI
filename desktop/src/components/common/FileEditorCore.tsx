@@ -279,6 +279,25 @@ function LineGutter({ lineCount, scrollTop, activeLineNumber, viewportHeight = 0
 }
 
 /* ------------------------------------------------------------------ */
+/*  Comment selection mark                                              */
+/* ------------------------------------------------------------------ */
+
+/** A selection under comment: source-text offsets, or a DOM range in the preview. */
+type CommentMark =
+  | { kind: 'source'; start: number; end: number }
+  | { kind: 'preview'; range: Range };
+
+/** CSS Custom Highlight name; styled by `::highlight(...)` in index.css. */
+const COMMENT_HIGHLIGHT = 'swarm-comment-selection';
+
+type HighlightRegistry = { set: (name: string, h: unknown) => void; delete: (name: string) => void };
+function highlightRegistry(): { registry: HighlightRegistry; Highlight: new (...r: Range[]) => unknown } | null {
+  const reg = (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights;
+  const Ctor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+  return reg && Ctor ? { registry: reg, Highlight: Ctor } : null;
+}
+
+/* ------------------------------------------------------------------ */
 /*  SelectionCommentPopover                                             */
 /* ------------------------------------------------------------------ */
 
@@ -705,6 +724,13 @@ export default function FileEditorCore({
   // Lines of the current selection (source view only; the preview has no line map).
   const [selectionLines, setSelectionLines] = useState<[number, number] | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  // The selection being commented on stays marked while the comment popover is open:
+  // focusing the popover's input hides the textarea's own selection paint and
+  // replaces the preview's window selection. The last non-empty selection of either
+  // surface is kept here and frozen into `commentMark` when Comment is clicked.
+  const lastSelectionRef = useRef<CommentMark | null>(null);
+  const [commentMark, setCommentMark] = useState<CommentMark | null>(null);
+  const commentMarkRef = useRef<HTMLPreElement>(null);
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   // Viewport height of the scroll area — drives the virtualized gutter's window.
@@ -1013,7 +1039,9 @@ export default function FileEditorCore({
     const box = previewRef.current;
     const text = sel && !sel.isCollapsed ? sel.toString() : '';
     if (sel && text.trim() && box && sel.anchorNode && box.contains(sel.anchorNode)) {
-      const r = sel.getRangeAt(0).getBoundingClientRect();
+      const range = sel.getRangeAt(0);
+      const r = range.getBoundingClientRect();
+      lastSelectionRef.current = { kind: 'preview', range: range.cloneRange() };
       setSelectionText(text);
       setSelectionLines(null);
       setSelectionPopoverPos({ top: r.bottom + 4, left: Math.max(8, Math.min(r.left, window.innerWidth - 240)) });
@@ -1040,7 +1068,33 @@ export default function FileEditorCore({
 
   // --- Handlers ---
 
+  // The mark lives exactly as long as the selection-comment popover (send, cancel,
+  // click-outside and the Redo path all end by closing it).
+  useEffect(() => {
+    if (!showSelectionComment) setCommentMark(null);
+  }, [showSelectionComment]);
+
+  // Preview: paint the frozen range with the CSS Custom Highlight API (no DOM change,
+  // so the rendered markdown is untouched). Without the API there is no mark.
+  useEffect(() => {
+    if (commentMark?.kind !== 'preview') return;
+    const hl = highlightRegistry();
+    if (!hl) return;
+    hl.registry.set(COMMENT_HIGHLIGHT, new hl.Highlight(commentMark.range));
+    return () => hl.registry.delete(COMMENT_HIGHLIGHT);
+  }, [commentMark]);
+
+  // Source: the mark overlay must start at the textarea's current scroll position.
+  useLayoutEffect(() => {
+    if (commentMark?.kind === 'source' && commentMarkRef.current && textareaRef.current) {
+      commentMarkRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
+  }, [commentMark]);
+
   const handleScroll = useCallback(() => {
+    if (commentMarkRef.current && textareaRef.current) {
+      commentMarkRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
     if (textareaRef.current && highlightRef.current) {
       const top = textareaRef.current.scrollTop;
       highlightRef.current.scrollTop = top;
@@ -1361,6 +1415,7 @@ export default function FileEditorCore({
     // Track text selection for review comment
     const selected = content.slice(ta.selectionStart, ta.selectionEnd);
     if (selected && selected.length > 0 && ta.selectionStart !== ta.selectionEnd) {
+      lastSelectionRef.current = { kind: 'source', start: ta.selectionStart, end: ta.selectionEnd };
       setSelectionText(selected);
       setSelectionLines([
         content.slice(0, ta.selectionStart).split('\n').length,
@@ -1768,7 +1823,7 @@ export default function FileEditorCore({
             onMouseDown={(e) => e.preventDefault()}
             data-testid="selection-toolbar"
           >
-            <button className="btn-sm btn-primary" onClick={() => setShowSelectionComment(true)} data-testid="selection-comment-btn">
+            <button className="btn-sm btn-primary" onClick={() => { setCommentMark(lastSelectionRef.current); setShowSelectionComment(true); }} data-testid="selection-comment-btn">
               <span className="material-symbols-outlined icon-xs">comment</span>
               Comment
             </button>
@@ -2016,6 +2071,28 @@ export default function FileEditorCore({
                       }
                       return <div key={lineIdx}>{parts}{'\n'}</div>;
                     })}
+                  </pre>
+                )}
+                {/* Selection-under-comment overlay: same box and typography as the
+                    textarea, text invisible, only the selected span painted. Skipped
+                    on large files, like the search overlay (no full-content node). */}
+                {commentMark?.kind === 'source' && !largeContent && commentMark.end > commentMark.start && (
+                  <pre
+                    ref={commentMarkRef}
+                    className={clsx(
+                      'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
+                      'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
+                      'pointer-events-none z-[1]',
+                      '[word-break:break-all]'
+                    )}
+                    style={{ scrollBehavior: 'auto', tabSize: 4, ...floatPad }}
+                    aria-hidden="true"
+                    data-testid="comment-selection-mark"
+                  >
+                    <span className="invisible">{content.slice(0, commentMark.start)}</span>
+                    <mark className="bg-[var(--color-primary)]/25 text-transparent rounded-sm">
+                      {content.slice(commentMark.start, commentMark.end)}
+                    </mark>
                   </pre>
                 )}
                 <textarea

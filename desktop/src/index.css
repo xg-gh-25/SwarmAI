@@ -1941,3 +1941,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .welcome-rise, .welcome-comb .lit, .welcome-bee * { animation: none; }
 }
+
+/* The text a Canvas selection comment is about stays marked while its popover is
+   open (FileEditorCore, markdown preview). */
+::highlight(swarm-comment-selection) {
+  background-color: color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
