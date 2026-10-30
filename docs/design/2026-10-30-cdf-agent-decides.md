@@ -3,7 +3,7 @@ title: CDF：带着上下文的 agent 做判断，删掉在它之后二次评判
 created: 2026-10-30
 updated: 2026-10-30
 project: SwarmAI
-status: r2（过了一轮零上下文前提审查，修订见 §7），执行中（XG 2026-10-30 授权：CDF 由 agent 自主决断）
+status: r3（r2 过了一轮零上下文前提审查，见 §7；r3 按 XG 2026-10-30 的两点修订：S7 用会话本身的模型；价值优先，不设预算限制），执行中（XG 2026-10-30 授权：CDF 由 agent 自主决断）
 supersedes: 2026-10-30-cdf-fixing-spec.md 的 C3、C4；吸收它的 C1（WIP 45e308448）、C2（已在 main）
 follows: 2026-10-30-brain-driven.md（v5：主文件就是当前有效的全集）
 ---
@@ -72,19 +72,27 @@ MEMORY、EVOLUTION、STEERING、USER、TOOLS 每轮都会进 prompt，外部或�
 | D8 | **删** `unknown_domain` 挂起路径 | 见 §5 |
 | D9 | **删** 判官驱动的"信任改道" | 改由 §2 K1 的来源规则决定 |
 | D10 | **删** S7 单次 15 条上限 | — |
-| D11 | **删** 每日写入额度（包括 KNOWLEDGE 的）；改 AGENT R22 的文字 | 先给 STEERING、USER、TOOLS 加上每轮注入预算，做法和 MEMORY、EVOLUTION 一样，按整条选择，见 §4 |
+| D11 | **删** 每日写入额度（包括 KNOWLEDGE 的），以及 MEMORY、EVOLUTION 的每轮注入预算和按分数挑条目（`memory_injection` 的 selector，24K/8K）；单条 `too_large` 拒收一并删掉。同步改 AGENT R22 的文字 | **价值优先**：主文件里保留的是当前有效的全集，五个每轮注入的文件全部注入。体量靠价值来控制：agent 声明 same、adds、overrides，把重复合并、把过期的覆盖掉，主文件里没有垃圾，不靠截断。见 §4 |
 | D12 | **删** 判断用户意图的正则：抓纠正、skill 满意度、`evolution_optimizer` 按正则自动改 SKILL.md、`user_observer`、`session_miner` | O3 和 skill 满意度改为读 S7 产出的 `correction` 单元；重复纠正率 = 带 `repeats` 的纠正 ÷ 全部纠正。O3 的 12 周趋势从切换那天起重新累计，旧数据作为基线保留 |
 | D13 | **删** Hive 教训的人工"收下"，以及在 host 上的重新判定 | 随 run 记录自动进 CDF，同样走 §2 的来源规则 |
 | D14 | **改** 注入排序去掉时间衰减项（`memory_injection.py:279`） | — |
 | D15 | **改** 事件去重不再走 BM25 命中做文字比对（`pipeline_v2.py:630`），改为按 `event_key` 直接查 | — |
+| D16 | **改** S7 不再固定用 Sonnet（`s7_review.py:45-48`，2026-10-29 出于成本定的），改用**会话本身的模型**，无法 resume 的分窗口复盘也一样 | 理由有两条。一是干活的模型复盘它自己的会话，这就是"带着上下文的 agent 判断"。二是 Opus 的 1M 窗口装得下长会话的 fork，"太长"的 fallback 很少会触发。XG 2026-10-30 明确：现在不是省 token 的时候 |
 
-## 4. 性能
+## 4. 性能（价值优先，只度量，不设上限）
 
-- **聊天路径**：不新增任何调用。D12 删掉每条用户消息都要跑的正则，D14 只是改变排序。
-- **每轮 prompt 的大小**：五个每轮注入的文件都有预算，按整条选择。STEERING、USER、TOOLS 的预算是新加的，加在 D11 删除额度**之前**。单条大于文件预算的单元，写入时拒收（保留 `too_large`）。
-- **后台**：D1 每次复盘多一轮 Sonnet，但省掉了按单元逐条调用的判官；D4 省掉 S2。按当天数据，净省约 $26/天（S2 $21.42 + 判官 $4.72，减去第二轮的花费）。
-- **账本 bug 先修**：usage 账本把 fork 父会话累计的 opus 用量记到了每次 S7 复盘上（例如一次复盘记了 $121.67，而它实际的 Sonnet 花费是 $0.13）。不修这个，性能和成本都没法对比。
-- **待核实**：fork 的上下文平均只有约 14K tokens，S7 看到的可能是压缩后的会话。实现第二轮时一并核实，必要时把证据索引放大。
+- **聊天路径**：不新增任何调用。D12 删掉每条用户消息都要跑的正则，D14 只改排序。
+- **每轮 prompt 的大小**：五个文件全部注入。它们在可缓存的 base prompt 里（SELF 的两段式构建），体量变大，增加的主要是 cache read 的成本，首 token 时间受的影响很小。
+- **度量**：
+  - 每次构建 prompt 时，记录这五个文件的 token 数；
+  - 每天记录首 token 时间的中位数，以及 S7 的耗时和花费（usage 账本，第 0 步修好之后）。
+- **体量真的影响到性能时**：首 token 时间或文件体量和基线相比明显上升，就由 agent 对这个文件做一次**合并整理**：用 same 和 overrides 合并近似条目、覆盖过期条目，产出的是声明，不是截断。不设任何会丢掉有效知识的上限。
+- **后台**：
+  - S7 改用会话本身的模型，又每个会话都复盘，后台的 token 花费会上升。这部分照规矩只记账，不设上限。
+  - 删掉 S2 和判官，能抵消一部分。
+  - 复盘走串行执行器和内存门控（`worker.py:994-1024`），不和聊天抢资源。
+- **账本 bug 先修**：usage 账本把 fork 父会话累计的 opus 用量记到了每次 S7 复盘上（例如一次复盘记了 $121.67，它实际的 Sonnet 花费是 $0.13）。不修这个，成本对比做不了。
+- **待核实**：fork 的上下文平均只有约 14K tokens，S7 看到的可能是压缩后的会话。在 D1 第二轮一并核实，需要的话放大证据索引。
 
 ## 5. 一次性处理（先备份 `ingestion.db`，迁移用 45e308448 已有的、带校验的备份）
 
@@ -99,13 +107,13 @@ MEMORY、EVOLUTION、STEERING、USER、TOOLS 每轮都会进 prompt，外部或�
 | 步 | 内容 | 评审 |
 |---|---|---|
 | 0 | 修 usage 账本：fork 不再继承父会话的累计用量 | correctness |
-| 1 | 给 STEERING、USER、TOOLS 加每轮注入预算 | correctness + performance |
+| 1 | 每轮注入的体量和首 token 时间开始度量（先有基线，后面才能对比） | correctness |
 | 2 | 并入 45e308448（C1）。`supported` 和 basis 改为来自来源事实；补齐它没做完的测试和 trust 迁移（先演练） | security + correctness |
 | 3 | §2 的 K1、K2（`user_quote` 逐字核对）、K3；修正证据索引里的标签 | security |
 | 4 | D1 第二轮和关系声明，D15；删掉判官和 `card3.retrieve` 的 v2 用法；判官结果的读取方（`writer.py:509-513`、`desktop_main.py:339`、`queries.py:452`）改读来源事实或关系声明 | correctness + security |
 | 5 | D3、D4、D10：删阈值和 S2 抽取，S7 产出事件，分窗口 fallback | correctness + operational |
 | 6 | D5–D9、D13、D14 | correctness |
-| 7 | D11 删额度，改 AGENT R22（`backend/context/AGENT.md`） | 无（依赖第 1 步） |
+| 7 | D11 删写入额度、注入预算和选择器，改 AGENT R22（`backend/context/AGENT.md`）；D16 S7 改用会话本身的模型 | performance（对比第 1 步的基线） |
 | 8 | D12 删意图正则，O3、skill 满意度、重复纠正率改读 S7 | correctness |
 | 9 | §5 积压标记 | correctness |
 
@@ -118,7 +126,8 @@ MEMORY、EVOLUTION、STEERING、USER、TOOLS 每轮都会进 prompt，外部或�
 - **I5**：声明的 `same`、`overrides`、`repeats` 只要 id 和首行有一项对不上，就不生效；对得上才生效。
 - **I6**：代码里不再有正则或关键词，对单元的准入、类型、去向，或者"用户在纠正"做判定（静态检查）。
 - **I7**：每个有用户消息的会话都会排上 S7；S2 不再产出认知单元；事件由 S7 产出，并按 `event_key` 去重。
-- **I8**：五个每轮注入的文件都按预算整条选择；聊天每轮的路径不新增调用。
+- **I8**：五个每轮注入的文件全部注入，不按预算挑条目；聊天每轮的路径不新增调用；体量和首 token 时间每天有记录。
+- **I10**：S7 用的是会话本身的模型。
 - **I9**：重复纠正率只由 S7 声明的 `repeats` 计算。
 
 ## 7. r1 → r2（零上下文前提审查的结论）
@@ -128,7 +137,7 @@ MEMORY、EVOLUTION、STEERING、USER、TOOLS 每轮都会进 prompt，外部或�
 | 删掉判官后，每轮注入的文件没有来源底线，外部或注入的文字能写进去 | 只保留"不能覆盖" | §2 K1：必须引用用户原话或测量，并且没有外部引用；否则写进 DDD |
 | K3 靠代码核对不了：单元里没有引文，S1 的读取集合是空的 | "逐字核对引文" | 新增 `user_quote` 字段，按子串核对；对 S1 和 S7 同样适用 |
 | 信任洗白：agent 写的条目默认登记成 user | 未处理 | §2 K3：按来源事实登记 trust，默认 `inferred` |
-| STEERING、USER、TOOLS 没有注入预算，删额度后会无上限增长 | 认为额度和性能无关 | 先补注入预算，再删额度 |
+| STEERING、USER、TOOLS 没有注入预算，删额度后会无上限增长 | 认为额度和性能无关 | r2：先补注入预算，再删额度。**r3（XG：价值优先）**：不设预算；体量靠 agent 合并和覆盖来控制，性能只度量；明显变慢时由 agent 做合并整理 |
 | 在抽取之前做检索，找不到真正相关的条目 | 按会话取前 N 条 | 同一个 fork 里第二轮，按每个单元检索后再声明关系 |
 | `same` 只核对 id，太弱 | 只核对 id | id 加首行一起核对 |
 | 事件去重依赖 BM25 命中 | 未提及 | D15 改为按 `event_key` 直接查 |
