@@ -4,6 +4,8 @@
 - ``resolve(project, repos)`` -> ``Binding(project, has_ddd, bound_repos, notes)``.
   A repo is bound when some ``Projects/<P>/bindings.yaml`` names its main checkout
   (``repo_changes.bound_projects``; a linked worktree counts as its main checkout).
+  ``--project`` is first given the existing folder's spelling (case ignored,
+  ``project_registry.canonical_project_name``), so a run never records another one.
   All bound repos must name one project and ``--project`` must be it (run_owner_gate
   requires an explicit ``--project`` on every mutating call, create included). With no
   bound repo, ``has_ddd`` is whether the named project has a DDD document. Raises ``ValueError`` with the fix in the message.
@@ -44,7 +46,9 @@ def has_ddd_docs(project: str) -> bool:
 
 
 def resolve(project: str, repos: Mapping[str, str]) -> Binding:
+    from core.project_registry import canonical_project_name
     from core.repo_changes import bound_projects
+    project = canonical_project_name(project)   # the folder's own spelling, on every FS
     bound = bound_projects()
     by_repo = {name: bound.get(_main_checkout(root)) for name, root in repos.items()}
     projects = sorted({p for p in by_repo.values() if p})

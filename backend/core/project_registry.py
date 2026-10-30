@@ -56,6 +56,26 @@ def get_projects_dir() -> Path:
     return get_swarmws() / "Projects"
 
 
+def canonical_project_name(name: str) -> str:
+    """The spelling of the existing project folder *name* names, case ignored; *name*
+    itself when no folder (or more than one) matches: a new project keeps the name it
+    was given.
+
+    A file system that ignores case (macOS) opens ``Projects/swarmai`` as
+    ``Projects/SwarmAI``, so a name typed in lower case works there and is then written
+    into paths and records; on one that does not (Linux, a Hive) the same name creates
+    a second directory. Every name that becomes a path goes through here first, so both
+    behave the same."""
+    try:
+        names = [p.name for p in get_projects_dir().iterdir() if p.is_dir() and not p.is_symlink()]
+    except OSError:
+        return name
+    if name in names:
+        return name
+    folded = [found for found in names if found.casefold() == str(name).casefold()]
+    return folded[0] if len(folded) == 1 else name
+
+
 def get_project_dir(name: str) -> Path:
     """Resolve a specific project's root directory.
 

@@ -44,7 +44,10 @@ CLOSED_EVENT = "gaps_closed"
 def _improvement(project: str | None) -> Path | None:
     from core.addressing import project_root
     from core.ddd_paths import ddd_path
-    root = project_root(project or "")
+    from core.project_registry import canonical_project_name
+    # the folder's own spelling: the path is recorded (journal, anchors), and a name in
+    # another case opens the folder on macOS but not on Linux
+    root = project_root(canonical_project_name(project or ""))
     if root is None:
         return None
     path = ddd_path(root, "IMPROVEMENT.md")

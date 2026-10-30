@@ -346,3 +346,26 @@ def test_the_worker_closes_right_after_the_write_and_in_maintenance(monkeypatch)
     monkeypatch.setattr(pipeline_v2, "requeue_missing_sections", lambda root: None)
     worker.IngestionWorker._maintain(self, Conn())
     assert calls == ["u1", None]
+
+
+# the project's own spelling ── a name in another case never becomes a path
+
+def test_a_project_named_in_another_case_gets_the_folders_spelling(ws):
+    from core.project_registry import canonical_project_name
+    _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh")])
+    assert [canonical_project_name(n) for n in ("p", "P", "New")] == ["P", "P", "New"]
+    assert gaps.close_gap("p", A, closed_by="run_x", note="fixed") == "closed"
+    conn = _connect(ws["db"])
+    paths = [r[0] for r in conn.execute("SELECT target_path FROM ingestion_writes")]
+    assert paths == ["Projects/P/2-understanding/IMPROVEMENT.md"]
+
+
+def test_a_run_created_with_a_lower_case_project_belongs_to_the_folder(ws, monkeypatch):
+    from core import repo_changes
+    from core.run_protocol import project_binding
+    _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh")])
+    monkeypatch.setattr(repo_changes, "bound_projects", lambda: {"/repo": "P"})
+    monkeypatch.setattr(project_binding, "_main_checkout", lambda root: root)
+    assert project_binding.resolve("p", {"repo": "/repo"}).project == "P"      # bound
+    assert project_binding.resolve("p", {"other": "/other"}).project == "P"    # unbound
+    assert project_binding.resolve("New", {"other": "/other"}).project == "New"
