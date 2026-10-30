@@ -29,6 +29,7 @@ class JobType(str, Enum):
     MEMORY_HEALTH = "memory_health"
     SKILL_PROPOSER = "skill_proposer"
     DDD_WEEKLY_REPORT = "ddd_weekly_report"
+    BRAIN_MISTAKE_AUDIT = "brain_mistake_audit"
     SELF_TUNE = "self_tune"
     SESSION_HEALTH_PROBE = "session_health_probe"
     EVAL_SCHEDULED = "eval_scheduled"

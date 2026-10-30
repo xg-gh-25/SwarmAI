@@ -128,6 +128,7 @@ jobs/executor.py:_send_slack_dm  # exempt: temp MCP config file
 jobs/executor.py:_write_failure_streak_alert  # exempt: job results JSONL
 jobs/executor.py:_write_job_result  # exempt: Knowledge/JobResults (unmanaged log folder)
 jobs/executor.py:execute_job  # exempt: via run_worktree_sweep: pipeline worktrees
+jobs/handlers/brain_mistake_audit.py:run_brain_mistake_audit  # exempt: writes only its report under Knowledge/JobResults/ (not a governed store)
 jobs/handlers/ddd_weekly_report.py:run_ddd_weekly_report  # exempt: writes Knowledge/Reports/ (not a governed store)
 jobs/handlers/memory_health.py:_update_health_findings  # exempt: health_findings.json
 jobs/handlers/memory_health.py:_write_summary_to_daily  # exempt: DailyActivity summary line (working memory)

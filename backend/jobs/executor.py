@@ -287,6 +287,19 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "brain_mistake_audit":
+            from .handlers.brain_mistake_audit import run_brain_mistake_audit
+            audit = run_brain_mistake_audit(config=job.config)
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if audit.get("status") == "success" else "failed",
+                summary=audit.get("summary", "Brain mistake audit"),
+                output_path=audit.get("output_path"),
+                duration_seconds=duration,
+                error=audit.get("error"),
+            )
+
         elif job.type == "memory_health":
             from .handlers.memory_health import run_memory_health
             health_result = run_memory_health()

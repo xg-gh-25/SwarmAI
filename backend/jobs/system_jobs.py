@@ -248,6 +248,20 @@ SYSTEM_JOBS: list[Job] = [
         config={"window_days": 7},
     ),
 
+    # --- Brain Mistake Audit (monthly; design 2026-10-30-brain-driven §2.8) ---
+    # For each real mistake of the previous month: was the knowledge in the brain
+    # beforehand, was it delivered, was it stale. Read-only; writes only its report to
+    # Knowledge/JobResults/. Never re-judges or edits the brain.
+    Job(
+        id="brain-mistake-audit",
+        name="Brain Mistake Audit",
+        type="brain_mistake_audit",
+        schedule="0 2 1 * *",           # 1st of the month UTC 02:00 = ICT 10:00
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
     # (The SwarmAI Monthly Report job was removed: an MBR of SwarmAI's own subsystems
     # is not a product job. Design 2026-10-24-swarmai-usable-by-anyone P7.)
 
