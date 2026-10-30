@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 
 from core.daily_activity_writer import parse_frontmatter, read_jsonl_sidecar
 
-DAILY_ACTIVITY_BUDGET = 4000
+# Seven days of rows, one per session-day (measured 2026-10-31 on the repaired
+# history: ~100-250 tokens a row, 6-15 sessions a day). Whole rows, newest first;
+# what does not fit is named in the suffix.
+DAILY_ACTIVITY_BUDGET = 12000
 TIMELINE_BUDGET = 1500
 SELECTION_VERSION = "cdf-whole-v1"     # the recorded selection: every unit of the file
 

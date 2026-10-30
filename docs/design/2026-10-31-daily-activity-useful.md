@@ -83,7 +83,9 @@ Next and the topics-as-sentence fallback are removed.
 The date is on every row (not a day heading) so whole-row admission can never leave a
 row under the wrong day's heading.
 
-Days newest first, rows newest first, whole rows; a Next resolved by any later row is
+The budget is 12000 tokens (measured on the repaired history: ~100-250 tokens a row,
+6-15 sessions a day, so seven days fit). Days newest first, rows newest first, whole
+rows; a Next resolved by any later row is
 not shown. Day summaries are no longer injected and no longer written (`## 日汇总`
 blocks were a concatenation of the same rows). When rows are left out:
 `(N more sessions not shown; they are in Knowledge/DailyActivity/)`.
