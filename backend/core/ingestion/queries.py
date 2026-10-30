@@ -4,6 +4,8 @@
 - ``list_items`` and ``item_detail`` expose recent candidates safely.
 - ``daily_stats`` and ``health`` expose aggregate history and health.
 - ``drain_access_log`` lets the ingestion worker persist queued detail reads.
+- ``brain_changes`` / ``brain_change_summary``: what was added, overridden, withdrawn
+  (and the judge's unresolved conflicts) in the main cognition files, from the records.
 """
 from __future__ import annotations
 
@@ -526,19 +528,89 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
            WHERE i.source_v2='S7' AND u.state='written' AND i.created_at>=?
              AND (u.destination LIKE '%EVOLUTION%' OR u.destination LIKE '%MEMORY%')""",
         (since,)).fetchall()
+    # a write records the unit's identity (``cand:<id>``); a redaction records the whole
+    # anchor (``<path>#<section>#cand:<id>``): compare by the identity, the last part
     redacted: set[str] = set()
     for (relations,) in conn.execute(
             "SELECT relations FROM ingestion_writes WHERE op_kind='user_redact' AND step='done'"):
         for item in _json(relations, []):
             if isinstance(item, dict) and item.get("redact_anchor"):
-                redacted.add(str(item["redact_anchor"]))
+                redacted.add(_identity(str(item["redact_anchor"])))
     units: dict[str, set[str]] = {}
     for unit_id, anchors in written:
         units.setdefault(str(unit_id), set()).update(str(a) for a in _json(anchors, []))
-    withdrawn = sum(1 for anchors in units.values() if anchors & redacted)
+    withdrawn = sum(1 for anchors in units.values() if {_identity(a) for a in anchors} & redacted)
     return {"by_type": by_type, "agent_self_written": len(units),
             "agent_self_withdrawn": withdrawn,
             "agent_self_withdrawn_rate": round(withdrawn / len(units), 3) if units else None}
+
+
+def _identity(anchor: str) -> str:
+    """The unit identity an anchor ends with (``a#b#cand:x`` -> ``cand:x``; a bare identity
+    is returned as it is)."""
+    return anchor.rsplit("#", 1)[-1]
+
+
+# what each CDF write action did to a main file (design 2026-10-30-brain-driven §2.4)
+_CHANGE_KIND = {"add": "add", "add_exception": "add", "replace": "override", "override": "override",
+                "refine": "override"}
+
+
+def brain_changes(conn: sqlite3.Connection, project: str | None = None,
+                  since: str = "") -> list[dict[str, Any]]:
+    """Every change made to the main cognition files since *since* (ISO time), oldest first:
+    ``add`` / ``override`` / ``withdraw`` by CDF or the user, ``user_edit`` (a governed edit
+    by the user), and ``conflict`` (a unit the judge said contradicts an entry, written
+    next to it, nothing overridden). Each row: kind, at, path, head, source, reason, and
+    ``text`` -- the removed original for an override or a withdrawal. *project*: only that
+    project's DDD (``Projects/<project>/``). Read-only; records live outside the main files."""
+    prefix = f"Projects/{project}/" if project else ""
+    def mine(path: str) -> bool:
+        return not prefix or path.startswith(prefix)
+    out: list[dict[str, Any]] = []
+    rows = conn.execute(
+        """SELECT w.op_kind, w.target_path, w.anchors_absent, w.relations, w.created_at,
+                  u.action, u.reason, i.source, i.payload
+           FROM ingestion_writes w
+           LEFT JOIN ingestion_units u ON u.unit_id = w.unit_id
+           LEFT JOIN ingestion_inbox i ON i.id = u.candidate_id
+           WHERE w.step = 'done' AND w.created_at >= ? ORDER BY w.created_at""", (since,)).fetchall()
+    for op_kind, path, absent, relations, at, action, reason, source, payload in rows:
+        path = str(path or "")
+        if not mine(path):
+            continue
+        removed = [str(x) for x in _json(absent, []) if isinstance(x, str)]
+        if op_kind == "user_redact":
+            item = next((r for r in _json(relations, []) if isinstance(r, dict)), {})
+            text = removed[0] if removed else ""
+            out.append({"kind": "withdraw", "at": at, "path": path,
+                        "head": text.strip().splitlines()[0] if text.strip() else "",
+                        "source": str(item.get("actor") or "user"),
+                        "status": str(item.get("status") or "withdrawn"),
+                        "reason": str(item.get("reason") or ""), "text": text})
+            continue
+        if op_kind == "user_edit":
+            out.append({"kind": "user_edit", "at": at, "path": path, "head": "", "source": "user",
+                        "reason": "", "text": ""})
+            continue
+        if op_kind != "ingestion_unit":
+            continue
+        unit = _json(payload, {})
+        kind = _CHANGE_KIND.get(str(action or ""), "add")
+        if kind == "add" and reason == "contradicts":
+            kind = "conflict"
+        out.append({"kind": kind, "at": at, "path": path, "head": str(unit.get("title") or ""),
+                    "source": str(source or ""), "reason": str(reason or ""),
+                    "text": "\n\n".join(removed) if kind == "override" else ""})
+    return out
+
+
+def brain_change_summary(changes: list[dict[str, Any]]) -> dict[str, int]:
+    """How many of each kind (``brain_changes`` rows)."""
+    counts = {"add": 0, "override": 0, "withdraw": 0, "conflict": 0, "user_edit": 0}
+    for row in changes:
+        counts[row["kind"]] = counts.get(row["kind"], 0) + 1
+    return counts
 
 
 def health() -> dict[str, Any]:
