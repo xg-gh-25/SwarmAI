@@ -352,7 +352,7 @@ def test_an_unexpected_error_is_a_generic_500(monkeypatch):
     from fastapi import FastAPI
     from routers.swarm_out import router
 
-    async def boom():
+    async def boom(max_age_s=0):
         raise RuntimeError("internal detail /secret/path")
     monkeypatch.setattr(swarm_out, "list_runs", boom)
     monkeypatch.delenv("SWARMAI_MODE", raising=False)

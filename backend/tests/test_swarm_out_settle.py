@@ -1,11 +1,14 @@
-"""Accepting and settling a dispatched task (core/swarm_out_settle; design
-docs/design/2026-10-30-dispatch-center.md §4-§6, invariants 2, 4 and 5 of §8).
+"""Accepting and settling a dispatched task (core/swarm_out_settle; designs
+docs/design/2026-10-31-swarm-out-run-review.md §1.2, §3.2, §3.5 and
+docs/design/2026-10-30-dispatch-center.md §6).
 
 Each test answers one question:
-- the next step is one, in the fixed order (answer > running > accept > review code),
-  and a newer turn voids the verdict;
-- commits are accepted by landing them (landed = pass, rejected = fail, landed by hand
-  = pass) and there is no second accept button for them;
+- each run has one stage, and its actions are exactly that stage's row of §1.2 (at
+  most one primary, "open session" while the session can open, "discard" last); a
+  newer turn voids the verdict; not good enough is not a verdict;
+- commits are accepted by landing them (landed or landed by hand = pass) and there is
+  no second accept button for them;
+- an unsettled run nothing changed in for RETENTION_DAYS expires;
 - a task settles only when the verdict and the code are handled and the lessons are in
   (record closed, none left to queue: no one takes them, CDF design D13), a
   Hive that is gone still settles, and a settled task's Hive is told to release it;
@@ -68,22 +71,66 @@ def _code_state(returns, status):
     returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": status}
 
 
-# ── invariant 2: one next step, in order ─────────────────────────────────────
+def A(d):
+    """The actions as written in §1.2: ``*`` marks the primary, ``:variant`` follows."""
+    return [("*" if a["primary"] else "") + a["key"] + (":" + a["variant"] if a.get("variant") else "")
+            for a in d["actions"]]
 
-def test_next_step_order(env):
+
+# ── §1.2: one stage, and exactly its actions ─────────────────────────────────
+
+def test_stage_order(env):
     rows, _ = env
     rows[DID] = _row()
-    assert st.derive(_row(waiting=True, running=True), K(True))["next"] == "answer"
-    assert st.derive(_row(running=True), K(True))["next"] == "running"
+    d = st.derive(_row(waiting=True, running=True), K(True))
+    assert d["stage"] == "needs_answer" and A(d) == ["*answer", "open_session", "discard"]
+    d = st.derive(_row(running=True), K(True))
+    assert d["stage"] == "running" and A(d) == ["*stop", "open_session", "discard"]
     r = _row()
     r["result"]["provisional"] = True
-    assert st.derive(r, K(True))["next"] == "running"
-    assert st.derive(_row(), K(True))["next"] == "accept"
+    assert st.derive(r, K(True))["stage"] == "running"
+    d = st.derive(_row(), K(True))
+    assert d["stage"] == "awaiting" and A(d) == ["*accept:verdict", "rerun", "open_session", "discard"]
     st.set_verdict(DID, "pass", "", ENDED)
     r = _row()
     r["result"]["lessons"] = {"pending": 2, "accepted": False, "judging": 0}
-    assert st.derive(r, K(True))["next"] is None             # lessons need no one
-    assert st.derive(_row(), K(True))["next"] is None
+    d = st.derive(r, K(True))                                # lessons need no one
+    assert d["stage"] == "accepted" and A(d) == ["open_session:read_only"] and not d["settles"]
+    assert st.derive(_row(), K(True))["settles"]
+
+
+@pytest.mark.parametrize("ended", ["error", "stopped", "crashed", "gave_up"])
+def test_a_result_that_did_not_deliver_is_stopped(env, ended):
+    rows, _ = env
+    rows[DID] = _row()
+    r = _row()
+    r["result"]["ended"] = ended
+    d = st.derive(r, K(True))
+    assert d["stage"] == "stopped" and d["why"] == ended
+    assert A(d) == ["*rerun", "open_session", "discard"]
+
+
+@pytest.mark.parametrize("stage,alive,accept,want", [
+    ("running", True, None, ["*stop", "open_session", "discard"]),
+    ("running", False, None, ["*stop", "discard"]),
+    ("needs_answer", True, None, ["*answer", "open_session", "discard"]),
+    ("awaiting", True, "verdict", ["*accept:verdict", "rerun", "open_session", "discard"]),
+    ("awaiting", True, "land", ["*accept:land", "rerun", "open_session", "discard"]),
+    ("awaiting", True, "manual", ["*accept:manual", "rerun", "open_session", "discard"]),
+    ("awaiting", True, None, ["*rerun", "open_session", "discard"]),
+    ("awaiting", False, "verdict", ["*accept:verdict", "discard"]),
+    ("stopped", True, None, ["*rerun", "open_session", "discard"]),
+    ("stopped", False, None, ["discard"]),
+    ("accepted", True, None, ["open_session:read_only"]),
+    ("accepted", False, None, []),
+    ("discarded", True, None, []),
+    ("expired", True, None, []),
+])
+def test_every_stage_offers_exactly_its_row(stage, alive, accept, want):
+    got = st._actions(stage, alive, accept)
+    assert A({"actions": got}) == want
+    assert sum(1 for a in got if a["primary"]) <= 1
+    assert all(a["key"] != "discard" for a in got[:-1])     # discard is last when offered
 
 
 def test_newer_turn_voids_the_verdict(env):
@@ -94,28 +141,31 @@ def test_newer_turn_voids_the_verdict(env):
     r = _row()
     r["result"]["ended_at"] = "2026-10-30T11:00:00Z"
     d = st.derive(r, K(True))
-    assert d["verdict"] is None and d["next"] == "accept" and not d["settles"]
+    assert d["verdict"] is None and d["stage"] == "awaiting" and not d["settles"]
 
 
-def test_fail_asks_again_until_given_up(env):
+def test_not_good_enough_is_not_a_verdict_discard_settles(env):
     rows, _ = env
     rows[DID] = _row()
-    st.set_verdict(DID, "fail", "missing the numbers", ENDED)
+    with pytest.raises(st.SettleError, match="re-run"):
+        st.set_verdict(DID, "fail", "missing the numbers", ENDED)
+    st.discard(DID, "  wrong   numbers ")
+    assert st.load(DID)["discard_note"] == "wrong numbers"
     d = st.derive(_row(), K(True))
-    assert d["next"] == "accept" and not d["settles"] and "verdict" in d["why_not"]
-    st.abandon(DID)
-    d = st.derive(_row(), K(True))
-    assert d["verdict"] == "abandoned" and d["settles"]
+    assert d["verdict"] == "abandoned" and d["settles"] and d["stage"] == "discarded" and A(d) == []
+    with pytest.raises(st.SettleError):
+        st.discard(DID)
 
 
-def test_no_session_row_ends_only_by_giving_up(env):
+def test_no_session_row_ends_only_by_discarding(env):
     rows, _ = env
     rows[DID] = _row(session_id=None, result=None, state_reason="no_session_id", running=None)
     d = st.derive(rows[DID], K(None))
-    assert d["next"] == "accept" and not d["settles"]
+    assert d["stage"] == "stopped" and d["why"] == "no_session" and A(d) == ["discard"]
+    assert not d["settles"]
     with pytest.raises(st.SettleError):
         st.set_verdict(DID, "pass", "", ENDED)
-    st.abandon(DID)
+    st.discard(DID)
     assert st.derive(rows[DID], K(None))["settles"]
 
 
@@ -126,13 +176,23 @@ def test_commits_verdict_is_the_landing(env):
     rows[DID] = _with_bundle(_row("commits"))
     _code_state(returns, "prepared")
     d = st.derive(rows[DID], K(True))
-    assert d["next"] == "review_code" and d["verdict"] is None and not d["settles"]
+    assert d["stage"] == "awaiting" and A(d)[0] == "*accept:land" and d["verdict"] is None
+    assert not d["settles"]
     _code_state(returns, "landed")
     d = st.derive(rows[DID], K(True))
     assert d["verdict"] == "pass" and d["settles"]
+    # rejected by an older Host (nothing rejects any more): nothing to land, so no
+    # accept: re-run or discard
     _code_state(returns, "rejected")
     d = st.derive(rows[DID], K(True))
-    assert d["verdict"] == "fail" and d["next"] == "accept" and not d["settles"]
+    assert d["verdict"] is None and A(d) == ["*rerun", "open_session", "discard"] and not d["settles"]
+
+
+def test_commits_asked_for_and_never_came_cannot_be_accepted(env):
+    rows, _ = env
+    rows[DID] = _row("commits")
+    d = st.derive(rows[DID], K(True))
+    assert d["stage"] == "awaiting" and A(d) == ["*rerun", "open_session", "discard"]
 
 
 def test_landed_by_hand_is_a_pass(env):
@@ -220,10 +280,11 @@ def test_annotate_settles_once_and_release_backs_off(env, monkeypatch):
     row = _row()
     tell = st.annotate([row])
     assert [r["dispatch_id"] for r in tell] == [DID]
-    assert row["settle"]["settled"]["released"] is False and row["next"] is None
+    assert row["settle"]["settled"]["released"] is False and row["stage"] == "accepted"
+    assert A(row) == ["open_session:read_only"]
     # a settled task takes no new verdict and is not settled twice
     with pytest.raises(st.SettleError):
-        st.set_verdict(DID, "fail", "", ENDED)
+        st.set_verdict(DID, "pass", "", ENDED)
     first = st.load(DID)["settled"]["at"]
     calls, code = [], {"v": 409}
     _client(monkeypatch, calls, code)
@@ -305,26 +366,26 @@ def test_every_repo_must_be_handled(env):
         {"dir": "Hive/work/x/repos/b", "bundle": {"available": True}}]
     returns[(DID, hive_bundle.key("Hive/work/x/repos/a"))] = {"status": "landed"}
     d = st.derive(rows[DID], K(True))
-    assert d["code"] == "waiting" and d["next"] == "review_code" and not d["settles"]
+    assert d["code"] == "waiting" and A(d)[0] == "*accept:land" and not d["settles"]
     returns[(DID, hive_bundle.key("Hive/work/x/repos/b"))] = {"status": "rejected"}
     d = st.derive(rows[DID], K(True))
     assert d["code"] == "landed" and d["verdict"] == "pass" and d["settles"]
 
 
-def test_unsealed_commits_hold_until_landed_by_hand_or_given_up(env):
+def test_unsealed_commits_hold_until_landed_by_hand_or_discarded(env):
     rows, _ = env
     for returns in ("commits", None):
         rows[DID] = _row(returns)
         rows[DID]["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "commits_total": 3,
                                                  "bundle": {"available": False, "error": "too_large"}}]
         d = st.derive(rows[DID], K(True))
-        assert d["code"] == "unsealed" and d["next"] == "review_code" and not d["settles"], returns
+        assert d["code"] == "unsealed" and A(d)[0] == "*accept:manual" and not d["settles"], returns
     # an answer task's pass does not release them either
     rows[DID] = _row("answer")
     rows[DID]["result"]["work"]["repos"] = [{"dir": "Hive/work/x/repos/a", "commits_total": 3, "bundle": None}]
     st.set_verdict(DID, "pass", "", ENDED)
     assert st.derive(rows[DID], K(True))["why_not"] == ["code"]
-    st.abandon(DID)
+    st.discard(DID)
     assert st.derive(rows[DID], K(True))["settles"]
 
 
@@ -379,7 +440,7 @@ def test_manual_landed_needs_commits_on_an_old_row(env, monkeypatch):
 
 # ── nothing stays stuck ──────────────────────────────────────────────────────
 
-def test_lessons_in_after_the_backstop_or_a_give_up(env):
+def test_lessons_in_after_the_backstop_or_a_discard(env):
     rows, _ = env
     rows[DID] = _row()
     st.set_verdict(DID, "pass", "", ENDED)
@@ -387,7 +448,7 @@ def test_lessons_in_after_the_backstop_or_a_give_up(env):
     fresh = K(False)
     assert st.derive(rows[DID], fresh)["why_not"] == ["lessons"]
     assert st.derive(rows[DID], {"records": {"closed": False, "last_at": old}})["settles"]
-    st.abandon(DID)
+    st.discard(DID)
     assert st.derive(rows[DID], fresh)["settles"]
 
 
@@ -395,17 +456,17 @@ def test_a_passing_fetch_error_is_still_running(env):
     rows, _ = env
     rows[DID] = _row(result=None, state="stopped", state_reason="idle", result_status="failed",
                      result_error="hive_silent")
-    assert st.derive(rows[DID], None)["next"] == "running"
+    assert st.derive(rows[DID], None)["stage"] == "running"
 
 
-def test_a_file_that_never_came_asks_the_person(env):
+def test_a_file_that_never_came_holds_an_accepted_run(env):
     rows, _ = env
     rows[DID] = _row("document")
     st.set_verdict(DID, "pass", "", ENDED)
     kept = K(True)
     kept["result"] = {"work": {"files": [{"path": f"Outputs/{DID}/big.bin"}]}}      # skipped
     d = st.derive(rows[DID], kept)
-    assert d["next"] == "accept" and d["why_not"] == ["files"]
+    assert d["stage"] == "accepted" and d["why_not"] == ["files"] and not d["settles"]
 
 
 def test_no_row_is_handed_out_while_a_release_runs(env):
@@ -416,23 +477,65 @@ def test_no_row_is_handed_out_while_a_release_runs(env):
     assert [r["dispatch_id"] for r in st.annotate([_row()])] == [DID]
 
 
-def test_a_stopped_run_without_a_result_can_be_given_up(env):
+def test_a_stopped_run_without_a_result_can_be_discarded(env):
     rows, _ = env
     rows[DID] = _row(result=None, state="stopped", state_reason="not_held", result_status="failed",
                      result_error="session_gone")
     d = st.derive(rows[DID], None)
-    assert d["next"] == "accept" and not d["settles"]
-    st.abandon(DID)
+    assert d["stage"] == "stopped" and d["why"] == "no_result" and A(d) == ["discard"]
+    assert not d["settles"]
+    st.discard(DID)
     assert st.derive(rows[DID], None)["settles"]
 
 
-def test_the_settling_look_shows_no_next_step(env):
+def test_the_settling_look_shows_the_settled_stage(env):
     rows, _ = env
     rows[DID] = _row(session_id=None, result=None, state_reason="no_session_id", running=None)
-    st.abandon(DID)
+    st.discard(DID)
     r = dict(rows[DID])
     st.annotate([r])
-    assert r["settle"]["settled"] and r["next"] is None
+    assert r["settle"]["settled"]["outcome"] == "abandoned" and r["stage"] == "discarded" and r["actions"] == []
+
+
+# ── §3.5: expiry ─────────────────────────────────────────────────────────────
+
+def _idle_row(monkeypatch, days):
+    stamp = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    r = _row(sent_at=stamp)
+    r["result"]["ended_at"] = stamp
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"records": {"closed": True, "last_at": stamp}})
+    return r
+
+
+def test_an_unsettled_run_expires_after_the_retention(env, monkeypatch):
+    from core import hive_records
+    rows, _ = env
+    rows[DID] = _row()
+    r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 0.1)
+    tell = st.annotate([r])
+    assert st.load(DID)["settled"]["outcome"] == "expired"
+    assert r["stage"] == "expired" and r["actions"] == [] and r["cleanup_soon"] is False
+    assert [x["dispatch_id"] for x in tell] == [DID]        # its Hive is told to release
+
+
+def test_a_run_just_inside_the_retention_does_not_expire(env, monkeypatch):
+    from core import hive_records
+    rows, _ = env
+    rows[DID] = _row()
+    r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS - 0.1)
+    st.annotate([r])
+    assert not st.load(DID).get("settled") and r["stage"] == "awaiting" and r["cleanup_soon"] is True
+
+
+def test_a_running_or_asking_run_does_not_expire(env, monkeypatch):
+    from core import hive_records
+    rows, _ = env
+    for kw in ({"running": True}, {"waiting": True}):
+        rows[DID] = _row()
+        r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 1)
+        r.update(kw)
+        st.annotate([r])
+        assert not st.load(DID).get("settled"), kw
 
 
 def test_path_refuses_what_is_not_a_dispatch_id():
@@ -443,8 +546,8 @@ def test_path_refuses_what_is_not_a_dispatch_id():
 
 # ── the person's actions only ────────────────────────────────────────────────
 
-@pytest.mark.parametrize("tail", ["verdict", "manual-landed", "abandon",
-                                  "return/land", "return/reject"])
+@pytest.mark.parametrize("tail", ["verdict", "manual-landed", "return/land",
+                                  "rerun", "stop", "discard"])
 def test_settle_routes_refused_from_a_command(tail):
     from core import run_owner_gate
     base = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/"
@@ -461,6 +564,6 @@ def test_settle_routes_refused_from_a_command(tail):
 def test_the_live_hook_refuses_a_settle_route():
     from core import run_owner_gate
     gate = run_owner_gate.create_run_owner_gate({"sdk_session_id": "s1"})
-    cmd = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/abandon"
+    cmd = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/discard"
     out = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": cmd}}, "t1", None))
     assert (out.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"

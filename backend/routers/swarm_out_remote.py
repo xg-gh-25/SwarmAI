@@ -19,6 +19,7 @@ this Host's dispatch log is reachable (``resolve_session``).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -30,7 +31,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from core import swarm_out, swarm_out_relay
 from core.swarm_out_remote import (
-    ID_RE, MAX_BODY_BYTES, LineTooLong, RemoteError, build_body, build_query, clean_event,
+    ID_RE, MAX_BODY_BYTES, LineTooLong, RemoteError, build_body, build_query, clean_event, closed_for,
     filter_headers, iter_sse_lines, match_route, parse_data_line, read_capped, resolve_session,
 )
 
@@ -70,12 +71,17 @@ def _client_id(body: Any) -> str:
     return cid
 
 
-async def _target(sid: str) -> dict[str, Any]:
-    """The running Hive of a session this Host dispatched."""
+async def _target(sid: str, write: bool) -> dict[str, Any]:
+    """The running Hive of a session this Host dispatched, unless the run is closed to
+    this request (core/swarm_out_remote.closed_for: discarded runs to every request,
+    accepted runs to writes)."""
     try:
         row = await resolve_session(sid)
     except RemoteError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
+    closed = await asyncio.to_thread(closed_for, row, write)
+    if closed is not None:
+        raise HTTPException(status_code=closed.status, detail=str(closed))
     try:
         return await swarm_out._instance(row["hive_id"])
     except swarm_out.SwarmOutError:
@@ -85,7 +91,7 @@ async def _target(sid: str) -> dict[str, Any]:
 @router.post("/{sid}/relay")
 async def start_relay(sid: str, request: Request) -> dict[str, Any]:
     client_id = _client_id(await _json(request))
-    inst = await _target(sid)
+    inst = await _target(sid, write=False)
     try:
         entry = await swarm_out_relay.manager().acquire(sid, client_id, inst)
     except RemoteError as e:
@@ -119,7 +125,7 @@ async def proxy(sid: str, path: str, request: Request):
         body = build_body(route, await _json(request), sid) if route.body else None
     except RemoteError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
-    inst = await _target(sid)
+    inst = await _target(sid, write=request.method != "GET")
 
     if not route.stream:
         try:

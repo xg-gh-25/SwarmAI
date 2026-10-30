@@ -767,6 +767,51 @@ def _collect_local_roots() -> list[AttentionItem]:
     return items
 
 
+def _collect_swarm_out() -> list[AttentionItem]:
+    """What Swarm Out waits on the person for, as at most three summary items (design
+    2026-10-31-swarm-out-run-review §3.7): the Hives' open questions (BLOCKING: an
+    agent is waiting), the runs to accept or decide (REVIEW), the runs whose records go
+    within days (REVIEW). Read from the runs snapshot the refresh loop keeps
+    (core/swarm_out.snapshot); never refreshes it: this authority holds no state. A
+    click opens the Swarm Out tab (``context.kind`` swarm_out), where each run is
+    handled; it is never a chat prompt about one run. Read-only; fail-soft."""
+    items: list[AttentionItem] = []
+    try:
+        from core import swarm_out
+        snap = swarm_out.snapshot()
+        if not snap:
+            return []
+        runs = [r for r in snap.get("runs") or [] if isinstance(r, dict)]
+        asks = [a for a in snap.get("asks") or [] if isinstance(a, dict) and not a.get("refused")]
+        decide = [r for r in runs if r.get("stage") in ("awaiting", "stopped")]
+        soon = [r for r in runs if r.get("cleanup_soon")]
+
+        def item(key: str, tier: str, n: int, title: str, detail: str) -> AttentionItem:
+            return AttentionItem(
+                id=f"swarm_out:{key}", source="swarm_out", tier=tier, brain=None,
+                title=title, summary=f"{n} in Swarm Out", detail=detail,
+                dispatch={"message": _prompt("Open Swarm Out: " + title.lower() + "."),
+                          "context": {"kind": "swarm_out", "focus": key}})
+        if asks:
+            n = len(asks)
+            items.append(item("questions", TIER_BLOCKING, n,
+                              f"{n} Hive question{'s' if n != 1 else ''} waiting for you",
+                              "An agent on a Hive is waiting for your answer."))
+        if decide:
+            n = len(decide)
+            items.append(item("decide", TIER_REVIEW, n,
+                              f"{n} Swarm Out run{'s' if n != 1 else ''} to accept or decide",
+                              "Accept, re-run with a correction, or discard."))
+        if soon:
+            n = len(soon)
+            items.append(item("cleanup", TIER_REVIEW, n,
+                              f"{n} Swarm Out run{'s' if n != 1 else ''} cleared within 3 days",
+                              "After that, their commits can no longer land."))
+    except Exception as exc:
+        logger.warning("attention: swarm_out source failed: %s", exc)
+    return items
+
+
 def _collect_ingestion() -> list[AttentionItem]:
     """Unresolved CDF anomalies, one item per kind; a missing DB is silent."""
     import json
@@ -890,6 +935,7 @@ def collect(
     items += _collect_db_recovery()  # OS-level (brain=None), like governance
     items += _collect_ingestion()  # OS-level CDF anomalies; missing DB is silent
     items += _collect_local_roots()  # a repository a Brain started reading
+    items += _collect_swarm_out()    # OS-level summary of what Swarm Out waits on
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

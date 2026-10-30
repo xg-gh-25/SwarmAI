@@ -132,6 +132,8 @@ async def _return(fn, *args) -> dict[str, Any]:
     except Exception:
         logger.exception("swarm_out return failed")
         raise HTTPException(status_code=500, detail="taking the commits back failed")
+    finally:
+        swarm_out.invalidate_snapshot()        # a landing changes the run's next step
 
 
 @router.post("/runs/{dispatch_id}/return/prepare")
@@ -153,14 +155,6 @@ async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     from core import hive_return
     return await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
                          body.approve_protected)
-
-
-@router.post("/runs/{dispatch_id}/return/reject")
-async def return_reject(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
-    _require_desktop()
-    import asyncio
-    from core import hive_return
-    return await _return(asyncio.to_thread, hive_return.reject, dispatch_id, body.key or "", body.tip or "")
 
 
 @router.post("/route")
@@ -221,12 +215,14 @@ async def _settle(fn, *args) -> dict[str, Any]:
         return await asyncio.to_thread(fn, *args)
     except swarm_out_settle.SettleError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        swarm_out.invalidate_snapshot()
 
 
 @router.post("/runs/{dispatch_id}/verdict")
 async def run_verdict(dispatch_id: str, body: VerdictBody) -> dict[str, Any]:
-    """The person's pass / fail on an answer or a document (dispatch-center §4).
-    Person-only: core/run_owner_gate refuses it from a command, as for every settle route."""
+    """The person's pass on an answer or a document (run-review §1.1). Person-only:
+    core/run_owner_gate refuses it from a command, as for every command on a run."""
     _require_desktop()
     from core import swarm_out_settle
     return await _settle(swarm_out_settle.set_verdict, dispatch_id, body.value, body.note, body.ended_at)
@@ -240,18 +236,39 @@ async def run_manual_landed(dispatch_id: str) -> dict[str, Any]:
     return await _settle(swarm_out_settle.set_manual_landed, dispatch_id)
 
 
-@router.post("/runs/{dispatch_id}/abandon")
-async def run_abandon(dispatch_id: str) -> dict[str, Any]:
-    """The person gives the task up."""
+class RerunBody(BaseModel):
+    text: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
+
+
+class DiscardBody(BaseModel):
+    note: str = Field(default="", max_length=4000)
+
+
+@router.post("/runs/{dispatch_id}/rerun")
+async def run_rerun(dispatch_id: str, body: RerunBody) -> dict[str, Any]:
+    """Re-run with a correction: the text goes into the run's own Hive session."""
     _require_desktop()
-    from core import swarm_out_settle
-    return await _settle(swarm_out_settle.abandon, dispatch_id)
+    return await _call(swarm_out.rerun(dispatch_id, body.text))
+
+
+@router.post("/runs/{dispatch_id}/stop")
+async def run_stop(dispatch_id: str) -> dict[str, Any]:
+    """Stop the run's current turn; its session and workspace stay."""
+    _require_desktop()
+    return await _call(swarm_out.stop_run(dispatch_id))
+
+
+@router.post("/runs/{dispatch_id}/discard")
+async def run_discard(dispatch_id: str, body: DiscardBody) -> dict[str, Any]:
+    """Discard the run: stop it, close it, release its Hive workspace. Final."""
+    _require_desktop()
+    return await _call(swarm_out.discard_run(dispatch_id, body.note))
 
 
 @router.get("/runs")
 async def runs() -> dict[str, Any]:
     _require_desktop()
-    return await _call(swarm_out.list_runs())
+    return await _call(swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S))
 
 
 @router.get("/runs/{dispatch_id}/result")

@@ -1,26 +1,30 @@
-"""Accepting and settling a dispatched task (design
-docs/design/2026-10-30-dispatch-center.md §4–§6, Host side).
+"""Accepting and settling a dispatched task, Host side (design
+docs/design/2026-10-31-swarm-out-run-review.md §1, §3; the settle rules from
+docs/design/2026-10-30-dispatch-center.md §6).
 
 A task that went out under a Project Agent is followed to its end here, from what the
 Host already keeps (the dispatch row, the run's result, the code it brought back, its
 lessons) plus one small record per dispatch, ``state/swarm-out/settle/<dispatch>.json``,
 that holds only what the person decided:
 
-- ``verdict``: ``pass`` / ``fail`` with a note, for a task whose deliverable is an
-  answer or a document, bound to the result it judged (``ended_at``): a new turn on the
-  Hive voids it. A task that delivers commits has no verdict of its own: landing them
-  is the pass, rejecting them the fail, "landed by hand" (``manual_landed_at``) a pass.
-- ``abandoned_at``: the person gave the task up (after a fail, or at any time).
-- ``settled``: when the conditions held (``derive``) and whether the Hive's workspace
-  was released (``released``: True / False while the Hive could not be told, with
-  ``tries`` and ``next_try_at`` for the backoff / None: no Hive to tell).
+- ``verdict``: ``pass``, for a task whose deliverable is an answer or a document,
+  bound to the result it judged (``ended_at``): a new turn on the Hive voids it. A task
+  that delivers commits has no verdict of its own: landing them is the pass, "landed by
+  hand" (``manual_landed_at``) too. Not good enough is not a verdict: the person
+  re-runs with a correction (a new turn) or discards.
+- ``abandoned_at`` (+ ``discard_note``): the person discarded the task.
+- ``settled``: when the conditions held, or it expired (``annotate``), and whether the
+  Hive's workspace was released (``released``: True / False while the Hive could not be
+  told, with ``tries`` and ``next_try_at`` for the backoff / None: no Hive to tell).
 
-``derive(row, kept)`` gives the run's single next step, in a fixed order (§3 of the
-design: answer > running > accept > review code > none), and whether it settles:
+``derive(row, kept)`` gives the run's ``stage`` (running, needs_answer, awaiting,
+stopped, accepted, discarded, expired) and the ``actions`` the person can take in it
+(at most one primary; "open session" while it can open; "discard" last), and whether it
+settles:
 
-- the verdict is decided (pass, abandoned, or the Hive is gone);
-- the code is handled (landed in every repository that brought commits back, or all
-  rejected, landed by hand, or none came back);
+- the verdict is decided (pass, discarded, or the Hive is gone);
+- the code is handled (landed in every repository that brought commits back, landed by
+  hand, or none came back);
 - the files are here: every returned file the release would remove (under
   ``Outputs/<id>/``) is placed in the Brain;
 - the lessons are in: the Hive's run record is closed (or the run has none) and every
@@ -30,18 +34,19 @@ design: answer > running > accept > review code > none), and whether it settles:
 
 Settling tells the Hive to remove the task's workspace (``Hive/work/<id>/`` and
 ``Outputs/<id>/``), so code and files must have left it first: commits the Hive could
-not seal into a bundle (``unsealed``), a repository not yet landed or rejected, and a
-file not placed here hold the task back. Only the person giving it up overrides that
-(the card says what it removes). No model decides anything here (P5): the verdict is
-the person's, the rest is counted.
+not seal into a bundle (``unsealed``), a repository not yet landed, and a file not
+placed here hold the task back. Only discarding overrides that (the panel says what it
+removes). No model decides anything here (P5): the verdict is the person's, the rest is
+counted.
 
-- ``annotate(rows)``         — each row's ``next`` and ``settle``; settles what is due.
-- ``set_verdict`` / ``set_manual_landed`` / ``abandon`` — the person's actions (routes
+- ``annotate(rows)``         — each row's stage, actions and settle; settles and expires
+  what is due.
+- ``set_verdict`` / ``set_manual_landed`` / ``discard`` — the person's actions (routes
   in routers/swarm_out, person-only: core/run_owner_gate refuses them from a command).
 - ``release_due`` — tell the Hives (``annotate`` hands each row out once per try, with backoff).
 
 Every write is a read-modify-write of one record under that dispatch's lock
-(``_update``): /runs is polled by more than one view at once.
+(``_update``): the runs are refreshed by the background loop and by the panel at once.
 """
 from __future__ import annotations
 
@@ -57,10 +62,9 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-NEXT = ("answer", "running", "accept", "review_code")
 #: a result fetch that failed for good (core/swarm_out_results fetch_error)
 NO_RESULT_ERRORS = ("no session", "session_gone", "http_404")
-VERDICTS = ("pass", "fail")
+VERDICTS = ("pass",)
 MAX_NOTE_CHARS = 2000
 #: the person is reminded this many days before the Host's records of a run are swept
 #: (hive_records.RETENTION_DAYS after their last change)
@@ -137,11 +141,11 @@ def set_verdict(dispatch_id: str, value: str, note: str, ended_at: Optional[str]
     ``ended_at`` (the one the card showed)."""
     row = _row(dispatch_id)
     if value not in VERDICTS:
-        raise SettleError("the verdict is pass or fail")
+        raise SettleError("the verdict is pass (not good enough: re-run with a correction, or discard)")
     if (row.get("project_agent") or {}).get("returns") == "commits":
-        raise SettleError("a task that delivers commits is accepted by landing them (or rejecting them)")
+        raise SettleError("a task that delivers commits is accepted by landing them")
     if not row.get("session_id"):
-        raise SettleError("this task has no session, so no result to judge: give it up instead")
+        raise SettleError("this task has no session, so no result to judge: discard it instead")
     if not isinstance(ended_at, str) or not ended_at:
         raise SettleError("say which result the verdict is on (its ended_at)")
 
@@ -172,14 +176,20 @@ def set_manual_landed(dispatch_id: str) -> dict[str, Any]:
     return _update(dispatch_id, change)
 
 
-def abandon(dispatch_id: str) -> dict[str, Any]:
-    """The person gives the task up: its verdict is decided ("abandoned"), and nothing
-    else holds it back."""
+def discard(dispatch_id: str, note: str = "") -> dict[str, Any]:
+    """The person does not want the run: it is decided ("abandoned") and nothing else
+    holds it back, so the next look settles it and tells its Hive to remove the
+    workspace. ``note``: why, if they said (kept for the repeat-correction count)."""
     _row(dispatch_id)
 
     def change(rec):
         _not_settled(rec)
+        if rec.get("abandoned_at"):
+            raise SettleError("this run is already discarded")
         rec["abandoned_at"] = _now()
+        clean = " ".join((note or "").split())[:MAX_NOTE_CHARS]
+        if clean:
+            rec["discard_note"] = clean
     return _update(dispatch_id, change)
 
 
@@ -246,10 +256,52 @@ def _files_here(dispatch_id: str, kept_result: dict) -> bool:
     return True
 
 
+#: the stages a person sees (design 2026-10-31-swarm-out-run-review §1.2)
+STAGES = ("running", "needs_answer", "awaiting", "stopped", "accepted", "discarded", "expired")
+#: a settle outcome -> its stage
+_OUTCOME_STAGE = {"passed": "accepted", "abandoned": "discarded", "gone": "expired", "expired": "expired"}
+#: a result that ended this way delivered what it set out to (anything else stopped)
+_DELIVERED = ("completed", "turn_limit")
+
+
+def _act(key: str, primary: bool = False, variant: Optional[str] = None) -> dict[str, Any]:
+    a: dict[str, Any] = {"key": key, "primary": primary}
+    if variant:
+        a["variant"] = variant
+    return a
+
+
+def _actions(stage: str, alive: bool, accept: Optional[str]) -> list[dict[str, Any]]:
+    """The commands a person can give in ``stage``, in their order (§1.2): at most one
+    primary, "open session" while the session can be opened, "discard" last.
+    ``alive``: the run's Hive session can still take a message; ``accept``: how accept
+    works here (``land`` / ``manual`` / ``verdict``), None when it cannot."""
+    session = [_act("open_session")] if alive else []
+    if stage == "running":
+        return [_act("stop", True), *session, _act("discard")]
+    if stage == "needs_answer":
+        return [_act("answer", True), *session, _act("discard")]
+    if stage == "awaiting":
+        head = [_act("accept", True, accept)] if accept else []
+        rerun = [_act("rerun", not head)] if alive else []
+        return [*head, *rerun, *session, _act("discard")]
+    if stage == "stopped":
+        return [*([_act("rerun", True)] if alive else []), *session, _act("discard")]
+    if stage == "accepted":
+        return [_act("open_session", variant="read_only")] if alive else []
+    return []
+
+
 def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
-    """``{"next", "verdict", "code", "settles", "why_not", "settled"}`` for one row with
-    its public ``result`` attached; ``kept`` is the run's kept record
-    (core/swarm_out_results.load: its ``records`` and its whole ``result``), or None."""
+    """``{"stage", "actions", "why", "verdict", "code", "settles", "why_not", "settled"}``
+    for one row with its public ``result`` attached; ``kept`` is the run's kept record
+    (core/swarm_out_results.load: its ``records`` and its whole ``result``), or None.
+
+    ``stage`` and ``actions`` are what the panel shows and offers (design
+    2026-10-31-swarm-out-run-review §1.2, §3.2); ``why`` says why a run stopped
+    (``no_session`` / ``no_result`` / how its result ended). The rest decides whether it
+    settles: the verdict is decided (accepted, discarded, the Hive gone), the code is
+    handled, the files the release would remove are here, the lessons are in."""
     from core import hive_records
     rec = load(row["dispatch_id"])
     kept = kept if isinstance(kept, dict) else {}
@@ -262,18 +314,18 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     code = _code(row, res or {}, rec) if res else "none"
     # a row dispatched before ``returns`` existed: commits if any came back, else an answer
     kind = returns or ("commits" if code != "none" else "answer")
-    # the verdict: the person's on this result, the landing for commits, or given up
+    # the verdict: the person's on this result, the landing for commits, or discarded
     verdict: Optional[str] = None
     if abandoned:
         verdict = "abandoned"
     elif gone and not _final(res):
         verdict = "gone"
     elif kind == "commits" and code != "none":
-        verdict = {"landed": "pass", "rejected": "fail"}.get(code)
+        verdict = "pass" if code == "landed" else None
     else:
         v = rec.get("verdict") if isinstance(rec.get("verdict"), dict) else None
-        if v and res and v.get("ended_at") == res.get("ended_at"):
-            verdict = v.get("value")                       # a newer turn voids it
+        if v and res and v.get("ended_at") == res.get("ended_at") and v.get("value") == "pass":
+            verdict = "pass"                               # a newer turn voids it
     lessons = (res or {}).get("lessons")
     unqueued = isinstance(lessons, dict) and (lessons.get("pending") or 0) > 0
     # nothing more is pulled: the Hive is stopped or gone, or the records backstop passed
@@ -290,29 +342,49 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
     stopped_without_result = res is None and row.get("state") == "stopped" and (
         row.get("result_status") == "not_applicable"
         or (row.get("result_status") == "failed" and row.get("result_error") in NO_RESULT_ERRORS))
-    if row.get("waiting"):
-        nxt = "answer"
-    elif not row.get("session_id") or (stopped_without_result and not gone):
-        nxt = "accept"                     # no result will come: do it again, or give it up
-    elif row.get("running") or (res is not None and not _final(res)) or (res is None and not gone):
-        nxt = "running"
-    elif kind == "commits" and code in ("waiting", "unsealed") and verdict is None:
-        nxt = "review_code"                                # landing them is the acceptance
-    elif verdict in (None, "fail"):
-        # judge the answer or document; after a fail (or commits that never came, or
-        # rejected): do it again, or give it up
-        nxt = "accept"
-    elif code in ("waiting", "unsealed"):
-        nxt = "review_code"
-    elif not files_done:
-        nxt = "accept"                     # a returned file never got here: keep waiting, or give up
+    # the session can still take a message: named, its Hive here, not lost
+    alive = bool(row.get("session_id")) and not gone and not stopped_without_result
+
+    why: Optional[str] = None
+    settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else None
+    if settled:
+        stage = _OUTCOME_STAGE.get(settled.get("outcome"), "accepted")
+    elif abandoned:
+        stage = "discarded"                                # settles at the next look
+    elif gone and not _final(res):
+        stage, why = "expired", "hive_gone"
+    elif row.get("waiting"):
+        stage = "needs_answer"
+    elif not row.get("session_id"):
+        stage, why = "stopped", "no_session"
+    elif stopped_without_result:
+        stage, why = "stopped", "no_result"
+    elif row.get("running") or res is None or not _final(res):
+        stage = "running"
+    elif verdict == "pass":
+        stage = "accepted"                                 # files or lessons still coming
+    elif res.get("ended") not in _DELIVERED:
+        stage, why = "stopped", str(res.get("ended") or "")[:30] or None
     else:
-        nxt = None
+        stage = "awaiting"
+    # how accept works: land the commits that came back (by hand when they cannot be
+    # taken as they are), else the person's verdict on what came back; a task that
+    # delivers commits and has none to land (none came, or an older record rejected
+    # them all) cannot be accepted: re-run or discard
+    if code == "waiting":
+        accept: Optional[str] = "land"
+    elif code == "unsealed":
+        accept = "manual"
+    elif kind == "commits":
+        accept = None
+    else:
+        accept = "verdict"
     why_not = [w for w, ok in (("verdict", decided), ("code", code_done), ("files", files_done),
                                ("lessons", lessons_done)) if not ok]
-    return {"next": nxt if not rec.get("settled") else None, "verdict": verdict, "code": code,
+    return {"stage": stage, "actions": _actions(stage, alive, accept), "why": why,
+            "verdict": verdict, "code": code,
             "settles": not why_not and not row.get("waiting") and not row.get("running"),
-            "why_not": why_not, "settled": rec.get("settled")}
+            "why_not": why_not, "settled": settled}
 
 
 def _iso(v: Any) -> Optional[datetime]:
@@ -339,7 +411,8 @@ def _idle_days(row: dict, kept: dict) -> Optional[float]:
 def _settle_now(r: dict, d: dict) -> Optional[dict]:
     """Write ``settled`` if no one did meanwhile; the record's ``settled``, or None when it
     was already settled."""
-    outcome = {"pass": "passed", "abandoned": "abandoned", "gone": "gone"}.get(d["verdict"], "passed")
+    outcome = {"pass": "passed", "abandoned": "abandoned", "gone": "gone",
+               "expired": "expired"}.get(d["verdict"], "passed")
     gone = r.get("state_reason") == "hive_gone"
     out: dict = {}
 
@@ -355,37 +428,50 @@ def _settle_now(r: dict, d: dict) -> Optional[dict]:
     return out.get("s")
 
 
+def _show_settled(r: dict, s: dict) -> None:
+    """A settled row's stage and commands: an accepted run's session opens read-only; a
+    discarded or expired one's does not open (§3.4)."""
+    stage = _OUTCOME_STAGE.get(s.get("outcome"), "accepted")
+    alive = bool(r.get("session_id")) and r.get("state_reason") != "hive_gone"
+    r["stage"], r["actions"], r["why"] = stage, _actions(stage, alive, None), None
+    r["cleanup_soon"] = False
+    r["settle"] = {"verdict": s.get("verdict"), "code": s.get("code"), "why_not": [], "settled": s}
+
+
 def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
-    """Each Project Agent row's ``next``, ``settle`` (verdict, code, why it is not settled,
-    when it was) and ``cleanup_soon`` (unsettled, its records swept within REMIND_DAYS);
-    settles what is due and returns the rows to tell their Hive about now (newly settled,
-    and earlier ones whose retry is due; none while ``can_tell`` is False, a release still
-    running: they wait for the next look). Blocking (file reads)."""
+    """Each Project Agent row's ``stage``, ``actions`` and ``why`` (what the panel shows
+    and offers, ``derive``), ``settle`` (verdict, code, why it is not settled, when it
+    was) and ``cleanup_soon`` (unsettled, its records swept within REMIND_DAYS). Settles
+    what is due, and expires (outcome ``expired``) an unsettled run nothing changed in
+    for hive_records.RETENTION_DAYS: its records go then. Returns the rows to tell their
+    Hive about now (newly settled, and earlier ones whose retry is due; none while
+    ``can_tell`` is False, a release still running: they wait for the next look).
+    Blocking (file reads)."""
     from core import hive_records, swarm_out_results
     tell = []
     for r in rows:
         if not isinstance(r.get("project_agent"), dict) or not r.get("dispatch_id"):
             continue
         s = load(r["dispatch_id"]).get("settled")
-        if isinstance(s, dict):
-            # settled: nothing to derive again
-            r["next"], r["cleanup_soon"] = None, False
-            r["settle"] = {"verdict": s.get("verdict"), "code": s.get("code"), "why_not": [], "settled": s}
-            if can_tell and _retry_due(r, s) and _claim(r["dispatch_id"]):
-                tell.append(r)
-            continue
-        kept = swarm_out_results.load(r["dispatch_id"]) or {}
-        d = derive(r, kept)
-        idle = _idle_days(r, kept)
-        r["next"] = d["next"]
-        r["settle"] = {"verdict": d["verdict"], "code": d["code"], "why_not": d["why_not"], "settled": None}
-        r["cleanup_soon"] = idle is not None and idle >= hive_records.RETENTION_DAYS - REMIND_DAYS
-        if d["settles"]:
-            s = _settle_now(r, d) or load(r["dispatch_id"]).get("settled")
-            r["next"], r["cleanup_soon"] = None, False
-            r["settle"]["settled"] = s
-            if can_tell and isinstance(s, dict) and _retry_due(r, s) and _claim(r["dispatch_id"]):
-                tell.append(r)
+        if not isinstance(s, dict):
+            kept = swarm_out_results.load(r["dispatch_id"]) or {}
+            d = derive(r, kept)
+            idle = _idle_days(r, kept)
+            expire = (idle is not None and idle >= hive_records.RETENTION_DAYS
+                      and not r.get("running") and not r.get("waiting"))
+            if not d["settles"] and not expire:
+                r["stage"], r["actions"], r["why"] = d["stage"], d["actions"], d["why"]
+                r["settle"] = {"verdict": d["verdict"], "code": d["code"], "why_not": d["why_not"],
+                               "settled": None}
+                r["cleanup_soon"] = idle is not None and idle >= hive_records.RETENTION_DAYS - REMIND_DAYS
+                continue
+            s = _settle_now(r, d if d["settles"] else {**d, "verdict": "expired"}) \
+                or load(r["dispatch_id"]).get("settled")
+            if not isinstance(s, dict):
+                continue
+        _show_settled(r, s)
+        if can_tell and _retry_due(r, s) and _claim(r["dispatch_id"]):
+            tell.append(r)
     return tell
 
 

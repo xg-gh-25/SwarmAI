@@ -57,7 +57,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 8
+SUMMARY_VERSION = 9
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -213,6 +213,12 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
     rows = [m for m in messages if isinstance(m, dict)] if isinstance(messages, list) else []
     last_user = max((i for i, r in enumerate(rows) if _is_turn_start(r)), default=-1)
     turns = sum(1 for r in rows if _is_turn_start(r))
+    # what the person said in the session after the task itself: each later user
+    # message, a new turn or a steer read mid-turn (a re-run with a correction is one;
+    # so is anything typed in the Hive tab). With older turns not read, the first row
+    # read is not the task, so every one counts.
+    said = sum(1 for r in rows if r.get("role") == "user") - (0 if has_more else 1)
+    said = max(0, said)
     all_blocks = [b for r in rows if r.get("role") == "assistant" for b in _blocks(r)]
     after_rows = [r for r in rows[last_user + 1:] if r.get("role") == "assistant"]
     after = [b for r in after_rows for b in _blocks(r)]
@@ -443,7 +449,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
             "files": deliverables, "files_omitted": deliverables_omitted,
             "steps": {"total": steps_total, "failed": failed, "agents": agents, "by_tool": top},
             "human": {"approved": approved, "denied": denied, "unanswered": unanswered_perm + unanswered_q,
-                      "answered_questions": answered_q},
+                      "answered_questions": answered_q, "said": said},
         },
         "pipeline": pipeline,
         "pipeline_runs": runs_seen[:10],
@@ -1020,7 +1026,7 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None,
             "files_omitted": _int(work.get("files_omitted")),
             "steps": {"total": _int(steps.get("total")), "failed": _int(steps.get("failed")),
                       "agents": _int(steps.get("agents")), "by_tool": {}},
-            "human": {k: _int(human.get(k)) for k in ("approved", "denied", "unanswered", "answered_questions")},
+            "human": {k: _int(human.get(k)) for k in ("approved", "denied", "unanswered", "answered_questions", "said")},
         },
         "pipeline": pipeline,
         "dropped": _int(res.get("dropped")),

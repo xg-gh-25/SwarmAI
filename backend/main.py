@@ -1532,6 +1532,14 @@ async def lifespan(app: FastAPI):
         from core.swarm_out_bridge import run_bridge_loop
         _swarm_out_bridge_task = asyncio.create_task(run_bridge_loop(), name="swarm-out-bridge")
 
+    # ── Swarm Out runs, refreshed whether or not anyone looks (host only) ──
+    # Settling, releasing a Hive's workspace and expiry do not wait for the panel to
+    # poll (docs/design/2026-10-31-swarm-out-run-review.md §3.1).
+    _swarm_out_refresh_task: asyncio.Task | None = None
+    if backend_mode != "hive":
+        from core.swarm_out import run_refresh_loop as _swarm_out_refresh_loop
+        _swarm_out_refresh_task = asyncio.create_task(_swarm_out_refresh_loop(), name="swarm-out-refresh")
+
     # ── Hive spend into the host's usage ledger (host only) ───────────
     # Pulls each running Hive's new usage rows (core/usage_hive_sync), every 15 min.
     if backend_mode != "hive":
@@ -1672,10 +1680,12 @@ async def lifespan(app: FastAPI):
             logger.info("Workspace surface watcher stopped")
     except Exception:
         logger.debug("Workspace surface watcher shutdown skipped", exc_info=True)
-    if _scheduler_task and not _scheduler_task.done():
-        _scheduler_task.cancel()
     if _swarm_out_bridge_task and not _swarm_out_bridge_task.done():
         _swarm_out_bridge_task.cancel()
+    if _swarm_out_refresh_task and not _swarm_out_refresh_task.done():
+        _swarm_out_refresh_task.cancel()
+    if _scheduler_task and not _scheduler_task.done():
+        _scheduler_task.cancel()
         try:
             await _scheduler_task
         except asyncio.CancelledError:

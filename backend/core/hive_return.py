@@ -27,8 +27,8 @@ after the tip that landed) onto the run's branch from objects only (no working t
 hook, no filter), as one commit with a message this host writes (the Hive's commits stay at the ``refs/hive/`` ref),
 and fast-forwards the branch to it. Paths under an ignored or linked directory of the
 checkout are refused at prepare (git would write a file into a virtualenv), and paths
-that change git's own behaviour are protected in every repository (``GIT_PROTECTED``). ``reject`` records the
-person's no; the ref stays for later reading. Qualifying the change (build, tests,
+that change git's own behaviour are protected in every repository (``GIT_PROTECTED``). Not good enough is
+not recorded here: the person re-runs the task with a correction or discards it. Qualifying the change (build, tests,
 deploy) is the repository's own process and the person's, after this.
 """
 from __future__ import annotations
@@ -412,7 +412,7 @@ async def prepare(dispatch_id: str, url: str) -> dict[str, Any]:
     return await asyncio.to_thread(_work)
 
 
-# ── land / reject ────────────────────────────────────────────────────────────
+# ── land ────────────────────────────────────────────────────────────
 
 def _prepared(dispatch_id: str, key: str, tip: str) -> dict[str, Any]:
     state = load(dispatch_id, key)
@@ -491,9 +491,3 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False) 
     _save(dispatch_id, key, state)
     return {"landed": True, "head": new[:12], "into": branch.replace("refs/heads/", "")}
 
-
-def reject(dispatch_id: str, key: str, tip: str) -> dict[str, Any]:
-    state = _prepared(dispatch_id, key, tip)
-    state.update({"status": "rejected", "rejected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-    _save(dispatch_id, key, state)
-    return {"rejected": True, "ref": state["ref"]}

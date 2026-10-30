@@ -306,6 +306,30 @@ async def resolve_session(sid: str) -> dict[str, Any]:
     return rows[-1]
 
 
+#: a discarded or expired run's session: nothing of it is forwarded (run-review §3.4)
+CLOSED = "this run is closed: its session cannot be opened"
+#: an accepted run's session: it can be read, nothing can be sent to it
+READ_ONLY = "this run is accepted: its session is read-only"
+
+
+def closed_for(row: dict[str, Any], write: bool) -> Optional[RemoteError]:
+    """Why the proxy refuses a request for this dispatch's session, or None. A discarded
+    or expired run (or one being discarded): every request (410). An accepted run: every
+    request that could change it (409); reads pass. Decided from the run's settle
+    record (core/swarm_out_settle), the same one the panel shows."""
+    from core import swarm_out_settle
+    try:
+        rec = swarm_out_settle.load(str(row.get("dispatch_id") or ""))
+    except swarm_out_settle.SettleError:
+        return None                                    # a row before Project Agents
+    settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else None
+    if rec.get("abandoned_at") or (settled and settled.get("outcome") in ("abandoned", "gone", "expired")):
+        return RemoteError(410, CLOSED)
+    if settled and write:
+        return RemoteError(409, READ_ONLY)
+    return None
+
+
 #: why a run whose Hive session id is also a session of this machine cannot be opened
 COLLIDES = "this run's Hive session id is also a session on this machine, so it cannot be opened here"
 

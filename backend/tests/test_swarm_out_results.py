@@ -169,7 +169,8 @@ def test_steps_and_human_decisions_are_counted():
     r = summarize([U(), A(*blocks, out())])
     assert r["work"]["steps"] == {"total": 4, "failed": 1, "agents": 1,
                                   "by_tool": {"Bash": 2, "Agent": 1, "other": 1}}
-    assert r["work"]["human"] == {"approved": 1, "denied": 1, "unanswered": 2, "answered_questions": 1}
+    assert r["work"]["human"] == {"approved": 1, "denied": 1, "unanswered": 2, "answered_questions": 1,
+                                  "said": 0}
 
 
 def test_a_pipeline_run_carries_its_five_rows():

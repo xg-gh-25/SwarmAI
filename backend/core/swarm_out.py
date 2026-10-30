@@ -10,7 +10,10 @@ monitoring beyond what the dashboard needs to list a run.
   (``routers/chat.py`` detaches a turn whose client went away; measured 2026-10-27).
 - ``list_runs`` — the local dispatch log, each row with its Hive's open questions
   (each naming its dispatch; an answer the Hive refused stays listed as not delivered)
-  and whether its session is streaming on the Hive right now.
+  and whether its session is streaming on the Hive right now. Computed by
+  ``refresh_runs`` (one at a time) and kept as ``snapshot``; ``run_refresh_loop``
+  recomputes it every minute so runs settle and Hive workspaces are released even
+  when no one looks (docs/design/2026-10-31-swarm-out-run-review.md §3.1).
 - ``answer`` — validate an answer against the question the Hive wrote, then write it
   to ``bridge/<hive>/answer/…``. Only the Host can write there. An approval carries
   what the card showed (``shown_sha256``) and is refused when the ask changed since,
@@ -636,12 +639,16 @@ async def _put_repo(inst: dict[str, Any], r: dict[str, Any], path: Path, size: i
 
 async def _start_session(client: httpx.AsyncClient, message: str,
                          work_id: Optional[str] = None,
-                         project_agent: Optional[dict] = None) -> Optional[str]:
+                         project_agent: Optional[dict] = None,
+                         session_id: Optional[str] = None) -> Optional[str]:
     """POST the message and read SSE only until the Hive names the session, then drop
     the connection: the Hive keeps running the turn (it detaches a gone client). The
     session works on the work order ``work_id`` the Hive prepared (its repositories are
-    the order's, routers/chat.py)."""
+    the order's, routers/chat.py). With ``session_id`` the message goes into that
+    session (a re-run with a correction) instead of a new one."""
     body: dict[str, Any] = {"agent_id": "default", "message": message}
+    if session_id:
+        body["session_id"] = session_id
     if work_id:
         body["work_id"] = work_id
     if project_agent:
@@ -906,7 +913,60 @@ def _release_done(task: "asyncio.Task") -> None:
         logger.warning("swarm_out: releasing failed (%s)", type(task.exception()).__name__)
 
 
-async def list_runs() -> dict[str, Any]:
+#: the last runs answer (refresh_runs) and when it was made (monotonic clock). The
+#: refresh loop keeps it current whether or not the panel looks; GET /runs reuses it
+#: while fresh; the Needs You source only reads it (snapshot).
+_SNAPSHOT: dict[str, Any] = {"at": None, "data": None, "task": None}
+SNAPSHOT_FRESH_S = 20
+REFRESH_EVERY_S = 60
+
+
+def snapshot() -> Optional[dict[str, Any]]:
+    """The last runs answer, or None before the first refresh. Never refreshes."""
+    return _SNAPSHOT["data"]
+
+
+def invalidate_snapshot() -> None:
+    """A person's action changed a run: the next list recomputes."""
+    _SNAPSHOT["at"] = None
+
+
+async def refresh_runs() -> dict[str, Any]:
+    """Recompute the runs answer and keep it as the snapshot. One at a time: a caller
+    that arrives while one runs waits for that one."""
+    task = _SNAPSHOT["task"]
+    if task is None or task.done():
+        task = _SNAPSHOT["task"] = asyncio.ensure_future(_compute_runs())
+    data = await asyncio.shield(task)
+    if _SNAPSHOT["task"] is task:
+        _SNAPSHOT.update(at=time.monotonic(), data=data)
+    return data
+
+
+async def run_refresh_loop() -> None:
+    """Refresh the runs every REFRESH_EVERY_S while this Host has dispatched anything.
+    Never raises."""
+    while True:
+        try:
+            if await asyncio.to_thread(lambda: _log_path().exists()):
+                await refresh_runs()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — tried again next round
+            logger.warning("swarm_out: refreshing the runs failed (%s)", type(e).__name__)
+        await asyncio.sleep(REFRESH_EVERY_S)
+
+
+async def list_runs(max_age_s: float = 0) -> dict[str, Any]:
+    """The runs answer: the snapshot when it is younger than ``max_age_s`` (GET /runs
+    passes SNAPSHOT_FRESH_S), else a fresh one (refresh_runs)."""
+    at, data = _SNAPSHOT["at"], _SNAPSHOT["data"]
+    if max_age_s > 0 and at is not None and data is not None and time.monotonic() - at < max_age_s:
+        return data
+    return await refresh_runs()
+
+
+async def _compute_runs() -> dict[str, Any]:
     """Dispatch log rows (newest first) and the open questions of every running Hive
     and of every Hive in the log.
 
@@ -975,6 +1035,98 @@ async def list_runs() -> dict[str, Any]:
     except (OSError, UnicodeError):
         refusals = None
     return {"runs": rows, "asks": asks, "errors": errors, "refusals": refusals}
+
+
+# ── the person's commands on a run (design 2026-10-31-swarm-out-run-review §3.3) ──
+#
+# Person-only: routers/swarm_out serves them to the desktop, core/run_owner_gate refuses
+# them from a command.
+
+#: refreshes started by a command (a reference keeps each alive until it ends)
+_REFRESHES: set = set()
+
+
+def _refresh_soon() -> None:
+    """A command changed a run: recompute the runs now, in the background (the settle
+    and the Hive's release happen there, not in the request)."""
+    invalidate_snapshot()
+    try:
+        task = asyncio.get_running_loop().create_task(refresh_runs())
+    except RuntimeError:
+        return
+    _REFRESHES.add(task)
+    task.add_done_callback(_REFRESHES.discard)
+
+
+def _session_row(dispatch_id: str) -> dict[str, Any]:
+    row = _log_row_of(dispatch_id)
+    if not row.get("session_id"):
+        raise SwarmOutError("this run has no session on its Hive")
+    return row
+
+
+def _not_closed(dispatch_id: str) -> None:
+    from core import swarm_out_settle
+    rec = swarm_out_settle.load(dispatch_id)
+    if rec.get("settled") or rec.get("abandoned_at"):
+        raise SwarmOutError("this run is closed")
+
+
+async def stop_run(dispatch_id: str) -> dict[str, Any]:
+    """Stop the run's current turn on its Hive (the session and the workspace stay)."""
+    row = _session_row(dispatch_id)
+    _not_closed(dispatch_id)
+    inst = await _instance(row["hive_id"])
+    async with _client(inst) as client:
+        r = await client.post(f"/api/chat/stop/{row['session_id']}")
+    if r.status_code >= 300:
+        raise SwarmOutError(f"the Hive did not stop it (HTTP {r.status_code})")
+    _refresh_soon()
+    return {"stopped": True}
+
+
+async def rerun(dispatch_id: str, text: str) -> dict[str, Any]:
+    """Send the person's correction into the run's own session as a new message: the
+    Hive runs a new turn in the same workspace, and the verdict on the last result is
+    void once that turn ends (it is bound to its ``ended_at``)."""
+    text = (text or "").strip()
+    if not text:
+        raise SwarmOutError("say what to change")
+    if len(text) > MAX_TASK_CHARS:
+        raise SwarmOutError(f"the correction is longer than {MAX_TASK_CHARS} characters")
+    row = _session_row(dispatch_id)
+    _not_closed(dispatch_id)
+    inst = await _instance(row["hive_id"])
+    async with _client(inst) as client:
+        sid = await _start_session(client, text, session_id=row["session_id"])
+    if sid != row["session_id"]:
+        raise SwarmOutError("the Hive did not take the correction into the run's session")
+    _refresh_soon()
+    return {"sent": True}
+
+
+async def discard_run(dispatch_id: str, note: str = "") -> dict[str, Any]:
+    """Discard the run: stop it when it has a session (a failure to stop does not keep
+    it), record the discard, and let the refresh settle it and tell its Hive to remove
+    the workspace. From then on its session is closed (core/swarm_out_remote)."""
+    from core import swarm_out_settle
+    row = _log_row_of(dispatch_id)
+    _not_closed(dispatch_id)
+    stopped: Optional[bool] = None
+    if row.get("session_id"):
+        try:
+            inst = await _instance(row["hive_id"])
+            async with _client(inst) as client:
+                r = await client.post(f"/api/chat/stop/{row['session_id']}")
+            stopped = r.status_code < 300
+        except (SwarmOutError, httpx.HTTPError):
+            stopped = False
+    try:
+        await asyncio.to_thread(swarm_out_settle.discard, dispatch_id, note)
+    except swarm_out_settle.SettleError as e:
+        raise SwarmOutError(str(e)) from None
+    _refresh_soon()
+    return {"discarded": True, "stopped": stopped}
 
 
 def _log_row_of(dispatch_id: str) -> dict[str, Any]:

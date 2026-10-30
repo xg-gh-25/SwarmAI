@@ -299,7 +299,7 @@ def test_land_only_the_shown_tip_protected_paths_need_their_own_approval(world, 
         hive_return.land(DID, st["key"], st["tip"], approve_protected=True)  # landed once
 
 
-def test_a_conflict_or_a_rejection_lands_nothing_and_leaves_no_worktree(world, monkeypatch):
+def test_a_conflict_lands_nothing_and_leaves_no_worktree(world, monkeypatch):
     from core import hive_return
     _no_network(monkeypatch, world)
     _commit(world["hive"], "src/a.py", "a = 2\n", "hive change")
@@ -312,10 +312,8 @@ def test_a_conflict_or_a_rejection_lands_nothing_and_leaves_no_worktree(world, m
     assert git(world["host"], "rev-parse", "main") == before
     assert not list((world["tmp"] / "sw").glob("*/*"))
     assert git(world["host"], "branch", "--list", "session/*") == ""
-    out = hive_return.reject(DID, st["key"], st["tip"])
-    assert out["rejected"] and git(world["host"], "rev-parse", st["ref"]) == st["tip"]
-    with pytest.raises(hive_return.ReturnError):
-        hive_return.land(DID, st["key"], st["tip"])
+    assert git(world["host"], "rev-parse", st["ref"]) == st["tip"]          # kept to land later
+    assert not hasattr(hive_return, "reject")       # not good enough: re-run or discard
 
 
 # ── routes ───────────────────────────────────────────────────────────────────
@@ -356,8 +354,10 @@ def test_the_return_routes_are_host_only_and_say_why_they_refuse(monkeypatch):
     assert r.status_code == 409 and "2 refs" in r.json()["detail"]
     assert c.post(f"/api/swarm-out/runs/{DID}/return/prepare", json={}).status_code == 400
     monkeypatch.setenv("SWARMAI_MODE", "hive")
-    for path in ("prepare", "land", "reject"):
+    for path in ("prepare", "land"):
         assert c.post(f"/api/swarm-out/runs/{DID}/return/{path}", json={"url": URL}).status_code == 403
+    gone = "re" + "ject"                             # the route that no longer exists
+    assert c.post(f"/api/swarm-out/runs/{DID}/return/{gone}", json={}).status_code in (404, 405)
 
 
 # ── review round 1 ───────────────────────────────────────────────────────────
