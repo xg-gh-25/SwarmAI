@@ -314,6 +314,28 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
 _SUPERSEDES_SOURCES = frozenset({"S4"})
 
 
+def _check_overrides(unit, row, root, destination, corpus_project, resolved):
+    """``overrides.check`` for a cognition unit that declares overrides, else None. An
+    unreadable store refuses every declaration (logged): nothing is retired on a guess."""
+    declared = getattr(unit, "overrides", None)
+    if not isinstance(unit, CognitionUnit) or not declared:
+        return None
+    from . import overrides
+    from .api import connect_ro
+    source = str(_get(row, "source_v2", _get(row, "source", "")))
+    project = getattr(destination, "project", None) or corpus_project
+    try:
+        conn = connect_ro()
+    except Exception:  # noqa: BLE001
+        logger.warning("cdf: overrides not checked (store unreadable)", exc_info=True)
+        return overrides.Checked(refused=[{"ref": d, "reason": "store_unreadable"} for d in declared])
+    try:
+        return overrides.check(conn, workspace=Path(root), project=project, source=source,
+                               declared=declared, new_root_ids=getattr(resolved, "root_ids", ()))
+    finally:
+        conn.close()
+
+
 def _withdrawn_records() -> list:
     """The completed withdrawals (``withdrawn.records``); none when the store cannot be read,
     logged (the unit is then judged without them, as before this check existed)."""
@@ -689,7 +711,15 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
         if relation in {"contradicts", "adds"}:
             hints.append({"predicate": "derived_from", "object_anchor": anchor})
     reason = next((r for _a, r in relations if r in {"contradicts", "adds"}), "new")
+    # what the deciding context says this unit replaces (S7 / S3 only; brain-driven §2.1)
+    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved)
+    if checked is not None and checked.older:
+        return _decision(unit_id, "reject", "reject", "older_than_existing", **done)
     result = _decision(unit_id, "write", "add", reason, **done)
+    if checked is not None and checked.targets:
+        result.version_vector["overrides"] = checked.targets
+    if checked is not None and checked.refused:
+        result.version_vector["override_refused"] = checked.refused
     result.version_vector["relation_hints"] = hints
     if not supported and destination.store == "DDD":
         # an inferred project unit (§3.2): written to its project, marked as not from the

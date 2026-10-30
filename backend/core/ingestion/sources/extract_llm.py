@@ -131,10 +131,12 @@ def _flat(sub: dict[str, Any], path: str) -> dict[str, Any]:
 # Fields a source never writes: a relation hint is built by code (S4 drift), not by the
 # extractor, and a field-less object in a tool schema makes the model send the whole
 # answer as a string (measured 2026-10-29: 8/8 calls failed with it, 4/4 passed without).
-_NOT_EXTRACTED = frozenset({"kind", "relation_hint", "closes"})  # closes: a run report only
+_NOT_EXTRACTED = frozenset({"kind", "relation_hint", "closes", "overrides"})  # closes: a run report only
+# fields one source may extract on top of the common ones (``unit_schema(extra=...)``):
+# overrides only the after-session review (contracts_v2.OVERRIDE_SOURCES)
 
 
-def unit_schema(kinds: Iterable[str]) -> dict[str, Any]:
+def unit_schema(kinds: Iterable[str], extra: Iterable[str] = ()) -> dict[str, Any]:
     """The answer schema for *kinds*: one array per kind, ``{"<kind>_units": [unit]}``,
     each item carrying only that kind's own fields, derived from contracts_v2.
 
@@ -151,8 +153,9 @@ def unit_schema(kinds: Iterable[str]) -> dict[str, Any]:
     for kind in kinds:
         definition = defs[kind]
         props: dict[str, dict[str, Any]] = {}
+        extras = set(extra)
         for name, sub in definition["properties"].items():
-            if name in _NOT_EXTRACTED:
+            if name in _NOT_EXTRACTED and name not in extras:
                 continue
             props[name] = _as_words(_flat(sub, f"{kind}.{name}"))
         if "scope" in props:

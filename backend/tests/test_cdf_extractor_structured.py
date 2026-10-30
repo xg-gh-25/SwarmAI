@@ -36,10 +36,20 @@ def test_schema_has_one_list_per_kind_with_its_own_fields(kinds) -> None:
     assert set(schema["properties"]) == {f"{k}_units" for k in kinds} == set(schema["required"])
     defs = extract_llm._UNIT_DEFS()
     for kind, item in _items(kinds).items():
-        assert set(item["properties"]) == set(defs[kind]["properties"]) - {"kind", "relation_hint"}
+        # every field but the ones no source extracts by default (one list: _NOT_EXTRACTED)
+        assert set(item["properties"]) == set(defs[kind]["properties"]) - extract_llm._NOT_EXTRACTED
         assert set(item["required"]) == set(defs[kind]["required"]) - {"kind"}
         assert not [n for n, p in item["properties"].items()
                     if p["type"] == "object" and not p.get("properties")]
+
+
+def test_overrides_are_extracted_only_where_a_source_asks_for_them() -> None:
+    """Only the after-session review may declare an override (brain-driven §2.1)."""
+    plain = extract_llm.unit_schema(("cognition",))
+    review = extract_llm.unit_schema(("cognition",), extra=("overrides",))
+    _check_schema(review)
+    assert "overrides" not in plain["properties"]["cognition_units"]["items"]["properties"]
+    assert review["properties"]["cognition_units"]["items"]["properties"]["overrides"]["type"] == "array"
 
 
 def test_units_from_answer_restores_the_kind_and_drops_nulls() -> None:

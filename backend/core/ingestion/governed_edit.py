@@ -488,7 +488,7 @@ def _table_exists_for_redaction(conn: sqlite3.Connection, table: str) -> bool:
                         (table,)).fetchone() is not None
 
 
-WITHDRAW_STATUSES = frozenset({"withdrawn", "closed", "done"})
+WITHDRAW_STATUSES = frozenset({"withdrawn", "closed", "done", "overridden"})
 
 
 def redact(anchor: str, reason: str, *, actor: str) -> str:
@@ -505,7 +505,8 @@ def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
     reason and actor go into the write journal and ``redactions``, and the original into
     the vault, so the withdrawal can be read (``withdrawn.records``) and undone. ``status``:
     ``withdrawn`` (the user took it out; only the user may), ``closed`` (a gap a run
-    fixed) or ``done`` (an item ticked ``[x]``); the last two are history a recurrence may
+    fixed), ``done`` (an item ticked ``[x]``) or ``overridden`` (a decision context declared
+    a new unit replaces it, ``overrides``); closed and done are history a recurrence may
     repeat. Returns the file's new revision."""
     if status not in WITHDRAW_STATUSES:
         raise ValueError(f"unknown withdraw status {status!r}")

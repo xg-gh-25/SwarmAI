@@ -110,6 +110,19 @@ class _Unit(BaseModel):
         return self
 
 
+# An existing entry a decision context says this unit replaces (design 2026-10-30-
+# brain-driven §2.1): "<8-character id> | <its first line>", the id as ``knowledge find`` /
+# ``get`` printed it, the first line so a wrong id cannot retire another entry. A flat
+# string: the structured-output schema carries no nested objects (extract_llm._flat).
+OverrideRef = Annotated[str, Field(pattern=r"^[0-9a-f]{8} \| \S.{6,298}$")]
+OVERRIDE_RE = re.compile(r"^([0-9a-f]{8}) \| (.+)$", re.S)
+
+
+# the sources that may declare an override: the after-session review (the user's own
+# words) and a pipeline run's report (its own change). Any other source's are ignored.
+OVERRIDE_SOURCES = frozenset({"S7", "S3"})
+
+
 class CognitionUnit(_Unit):
     """A judged, reusable claim. Fields left empty are left empty: never invented."""
 
@@ -126,6 +139,8 @@ class CognitionUnit(_Unit):
     # which project document a scope=project:X unit belongs in (DDD_MATRIX); the
     # extractor, who has the context, says it (design 2026-10-29-cdf-refactor §3.1)
     topic: Literal["decision", "product", "architecture", "lesson"] | None = None
+    # entries this unit replaces, declared by the context that made the new decision
+    overrides: list[OverrideRef] = Field(default_factory=list, max_length=3)
 
     @model_validator(mode="after")
     def _conditional(self):

@@ -583,10 +583,12 @@ def brain_changes(conn: sqlite3.Connection, project: str | None = None,
         if op_kind == "user_redact":
             item = next((r for r in _json(relations, []) if isinstance(r, dict)), {})
             text = removed[0] if removed else ""
-            out.append({"kind": "withdraw", "at": at, "path": path,
+            status = str(item.get("status") or "withdrawn")
+            out.append({"kind": "override" if status == "overridden" else "withdraw",
+                        "at": at, "path": path,
                         "head": text.strip().splitlines()[0] if text.strip() else "",
                         "source": str(item.get("actor") or "user"),
-                        "status": str(item.get("status") or "withdrawn"),
+                        "status": status,
                         "reason": str(item.get("reason") or ""), "text": text})
             continue
         if op_kind == "user_edit":

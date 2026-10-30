@@ -115,7 +115,9 @@ def test_ties_use_anchor_order_and_never_cut_a_unit(tmp_path, monkeypatch):
     assert "B" * 75 not in result.text.replace("B" * 150, "")
 
 
-def test_superseded_unit_is_dropped_only_when_selection_is_needed(tmp_path, monkeypatch):
+def test_a_supersedes_relation_never_hides_an_entry(tmp_path, monkeypatch):
+    """Nothing is hidden for a relation (brain-driven §2.1, I4): an entry a declared override
+    replaces has left the file; the judge's relations only link entries."""
     conn = _isolated_store(tmp_path, monkeypatch)
     path = tmp_path / "SwarmWS/.context/MEMORY.md"
     path.parent.mkdir(parents=True)
@@ -129,10 +131,9 @@ def test_superseded_unit_is_dropped_only_when_selection_is_needed(tmp_path, monk
                  (units["new"].anchor, "supersedes", units["old"].anchor,
                   "2026-10-28T00:00:00+00:00", 0))
     conn.commit()
-    result = select_context_file(path, budget=250, estimate=len,
+    result = select_context_file(path, budget=10_000, estimate=len,
                                  now=datetime(2026, 10, 28, tzinfo=timezone.utc), conn=conn)
-    assert "old" not in result.text and units["old"].anchor not in result.anchors
-    assert "new" in result.text
+    assert "O" * 100 in result.text and "N" * 100 in result.text
 
 
 def test_evolution_meta_layer_goes_first_and_inside_the_budget(tmp_path, monkeypatch):

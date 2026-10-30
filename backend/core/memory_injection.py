@@ -355,19 +355,6 @@ def _score_unit(conn: sqlite3.Connection | None, path: Path, unit: object,
     return _RankedUnit(unit, layer, score, strength, evidence_at or newest)
 
 
-def _superseded_anchors(conn: sqlite3.Connection | None) -> set[str]:
-    if conn is None:
-        return set()
-    try:
-        return {str(row[0]) for row in conn.execute(
-            "SELECT object_anchor FROM ingestion_relations "
-            "WHERE predicate='supersedes' AND inactive=0"
-        ).fetchall()}
-    except sqlite3.Error:
-        logger.debug("CDF supersession lookup failed during injection", exc_info=True)
-        return set()
-
-
 def _render_selected(ranked: list[_RankedUnit], selected: set[str]) -> str:
     parts: list[str] = []
     section = None
@@ -462,13 +449,13 @@ def select_context_file(
                           metadata_by_anchor.get(unit.anchor)) for unit in visible]
     full_text = _prompt_form(_filter_inactive_memory(raw.decode("utf-8"))) \
         if path.name == "MEMORY.md" else _prompt_form(raw.decode("utf-8"))
-    superseded = _superseded_anchors(conn)
     over_budget = estimate(full_text) > budget
-    # A superseded unit is never injected, under budget too: its replacement says it
-    # better, and the two together say two things.
+    # Nothing is hidden for a relation: an entry another one replaces has left the file
+    # (a declared override withdraws it, brain-driven §2.1); the judge's relations only
+    # link entries. An entry still carrying a superseded_by mark is skipped until the
+    # one-time cleanup removes those marks.
     candidates = [item for item in ranked
-                  if item.unit.anchor not in superseded
-                  and not getattr(metadata_by_anchor.get(item.unit.anchor), "superseded_by", None)]
+                  if not getattr(metadata_by_anchor.get(item.unit.anchor), "superseded_by", None)]
     if not over_budget and len(candidates) == len(ranked):
         selected = {item.unit.anchor for item in candidates}
         text = full_text

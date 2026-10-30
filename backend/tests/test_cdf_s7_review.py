@@ -99,7 +99,8 @@ def test_review_session_end_to_end(cdf_env, tmp_path, monkeypatch) -> None:
     assert out["status"] == "reviewed" and out["units"] == 1 and out["invalid"] == 1
     assert seen["sdk"] == sdk and seen["cwd"] == "/w"
     from core.ingestion.sources import extract_llm
-    assert seen["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS)
+    assert seen["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS, extra=("overrides",))
+    assert "overrides" not in extract_llm.unit_schema(s7_review.ALLOWED_KINDS)["properties"]["cognition_units"]["items"]["properties"]
     prompt = seen["prompt"]
     for needle in ("After-action review", "brainstorming", "decks", f"event:{users[1]}",
                    "以后都要先出 mockup", "m2", 'scope "agent"'):

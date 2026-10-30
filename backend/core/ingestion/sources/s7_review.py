@@ -31,7 +31,7 @@ from . import extract_llm, s2_session
 logger = logging.getLogger(__name__)
 
 MAX_UNITS = 15  # units one review may enqueue (cost bound, design 2026-10-29-cdf-launch §3 P2)
-REVIEW_VERSION = "cdf-review-r16.15-v6"
+REVIEW_VERSION = "cdf-review-r16.15-v7"
 ALLOWED_KINDS = ("cognition", "gap", "reference")   # events come from S3/S4 (§4)
 MIN_USER_MESSAGES = 3
 MIN_TOOL_CALLS = 10
@@ -257,6 +257,12 @@ record what is worth keeping, by calling {extract_llm.TOOL_NAME}. Write nothing 
 {types}
 5. Ask about yourself as well (scope "agent"): where was your judgment wrong this time, why
    did the user correct you, which of your ways of working are reliable and which are not.
+5b. When this conversation changed a decision or a fact that already stood in a project's
+   knowledge (the user replaced it, or a measurement showed it wrong) and the entry was looked
+   up here (``knowledge find`` / ``get`` printed its 8-character id), put it in the new
+   unit's overrides as "<id> | <the entry's first line, copied>". The old entry then leaves
+   the knowledge base. Only an entry this conversation replaced, never one that is merely
+   related; leave overrides empty when unsure.
 6. Per kind of work:
 {_EXAMPLES}
 {flagged}
@@ -388,7 +394,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
         return {"status": "unresumable", "reviewed_to": watermark, "units": 0, "reason": str(exc)}
     index, anchors, read = evidence(session_id, rows, s2_session._input_rows(session_id))
     prompt = build_prompt(ALLOWED_KINDS, sig, index)
-    schema = extract_llm.unit_schema(ALLOWED_KINDS)
+    schema = extract_llm.unit_schema(ALLOWED_KINDS, extra=("overrides",))
     attempt = api_v2.ExtractionAttempt(
         source="S7", attempt_id=f"attempt:{uuid.uuid4().hex}", extractor_version=REVIEW_VERSION,
         evidence_range={"session_id": session_id, "pass": "review", "from": watermark,

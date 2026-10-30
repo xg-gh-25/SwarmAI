@@ -194,3 +194,144 @@ def test_cdf_cannot_withdraw_an_entry_only_close_or_finish_one(cdf_env):
     with pytest.raises(ValueError):
         withdraw("Projects/P/2-understanding/TECH.md#Conventions#cand:x", "r",
                  actor="user", status="superseded")
+
+
+# I2 / I3 / I10 ── a declared override, and only a verified one, retires the old entry
+
+_OLD = ("- [decision] **Open a Hive session in the browser** The Hive session opens in a browser "
+        "tab. **Why:** simplest. <!-- cand:cand-0123456789abcdef01234567.unit -->\n")
+_HUMAN = "- [decision] **Keep exports under 1 MB** Written by a person.\n"
+
+
+def _ddd(cdf_env, *entries):
+    path = cdf_env["workspace"] / "Projects/P/2-understanding/PROJECT.md"
+    path.write_text("# Project\n\n## Recent Decisions\n\n" + "\n".join(entries), encoding="utf-8")
+    return path
+
+
+def _id_of(title):
+    from core import addressing
+    return next(u.id for u in addressing.ddd_units("P").units if title in u.text)
+
+
+def _check(conn, cdf_env, declared, *, source="S7", roots=()):
+    from core.ingestion import overrides
+    return overrides.check(conn, workspace=cdf_env["workspace"], project="P", source=source,
+                           declared=declared, new_root_ids=roots)
+
+
+def test_a_declared_override_names_the_entry_it_retires(cdf_env):
+    from core.ingestion.api import connect_rw
+    _ddd(cdf_env, _OLD)
+    ref = f"{_id_of('browser')} | - [decision] **Open a Hive session in the browser**"
+    conn = connect_rw()   # creates the store
+    try:
+        ok = _check(conn, cdf_env, [ref])
+        wrong_source = _check(conn, cdf_env, [ref], source="S2")
+        wrong_head = _check(conn, cdf_env, [f"{_id_of('browser')} | - [decision] **Something else entirely**"])
+    finally:
+        conn.close()
+    assert ok.targets == ["Projects/P/2-understanding/PROJECT.md#Recent Decisions#cand:cand-0123456789abcdef01234567.unit"]
+    assert (wrong_source.targets, wrong_source.refused[0]["reason"]) == ([], "source")
+    assert (wrong_head.targets, wrong_head.refused[0]["reason"]) == ([], "not_found")
+
+
+def test_a_person_written_entry_is_never_overridden(cdf_env):
+    from core.ingestion.api import connect_rw
+    _ddd(cdf_env, _HUMAN)
+    conn = connect_rw()   # creates the store
+    try:
+        out = _check(conn, cdf_env, [f"{_id_of('1 MB')} | - [decision] **Keep exports under 1 MB**"])
+    finally:
+        conn.close()
+    assert (out.targets, out.refused[0]["reason"]) == ([], "human_written")
+
+
+@pytest.mark.parametrize("new_at,expect", [("2026-10-29T00:00:00", "older"),
+                                            ("2026-10-30T09:00:00", "not_later"),
+                                            ("2026-10-31T00:00:00", "retire")])
+def test_an_override_goes_by_when_it_was_said(cdf_env, new_at, expect):
+    from core.ingestion.api import connect_rw
+    _ddd(cdf_env, _OLD)
+    conn = connect_rw()
+    try:
+        for root, at in (("r-old", "2026-10-30T09:00:00"), ("r-new", new_at)):
+            conn.execute("INSERT INTO evidence_roots(root_id,root_kind,locator,content_hash,trust,"
+                         "parent_root_ids,observed_at,created_at) VALUES(?,'user_message',?,'h','user','[]',?,?)",
+                         (root, root, at, at))
+        conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,"
+                     "content_hash,envelope,project_snapshot,created_at,evidence_root_ids) VALUES "
+                     "('cand-0123456789abcdef01234567','k','S7','s','session','{}','v','h','{}','{}','t',?)",
+                     (json.dumps(["r-old"]),))
+        conn.commit()
+        out = _check(conn, cdf_env, [f"{_id_of('browser')} | - [decision] **Open a Hive session in the browser**"],
+                     roots=["r-new"])
+    finally:
+        conn.close()
+    got = "older" if out.older else ("retire" if out.targets else out.refused[0]["reason"])
+    assert got == expect
+
+
+def test_a_written_unit_retires_what_it_overrides_once(cdf_env):
+    from core.ingestion import overrides, queries, withdrawn
+    from core.ingestion.api import connect_rw
+    path = _ddd(cdf_env, _OLD, "- [decision] **Open a Hive session in an in-app overlay** body\n")
+    anchor = "Projects/P/2-understanding/PROJECT.md#Recent Decisions#cand:cand-0123456789abcdef01234567.unit"
+    conn = connect_rw()
+    try:
+        _unit(conn, "n", title="Open a Hive session in an in-app overlay")
+        conn.execute("UPDATE ingestion_units SET decision=? WHERE unit_id='n.u'",
+                     (json.dumps({"version_vector": {"overrides": [anchor]}}),))
+        conn.commit()
+        assert overrides.apply(conn, "n.u") == 1
+        from core.ingestion import governed_edit
+        tried = []
+        real = governed_edit.withdraw
+        governed_edit.withdraw = lambda *a, **k: tried.append(a) or real(*a, **k)
+        try:
+            assert overrides.apply(conn) == 0                              # recorded once
+        finally:
+            governed_edit.withdraw = real
+        assert tried == []                                                 # not even tried again
+        recs = withdrawn.records(conn)
+        kinds = [c["kind"] for c in queries.brain_changes(conn, "P", "2000-01-01")]
+    finally:
+        conn.close()
+    text = path.read_text(encoding="utf-8")
+    assert "in the browser" not in text and "in-app overlay" in text
+    assert [(r.status, r.reason) for r in recs] == [("overridden", "overridden by: Open a Hive session in an in-app overlay")]
+    assert kinds == ["override"]
+
+
+@pytest.mark.parametrize("source,retires", [("S7", True), ("S2", False)])
+def test_the_pipeline_records_a_verified_override_for_the_writer(cdf_env, monkeypatch, source, retires):
+    from tests.test_cdf_refactor import Judge
+    from core.ingestion.api import connect_rw
+    connect_rw().close()
+    _ddd(cdf_env, _OLD)
+    monkeypatch.setattr(pipeline_v2, "_grounding", lambda anchors: "user: open it in an in-app overlay, not the browser")
+    ref = f"{_id_of('browser')} | - [decision] **Open a Hive session in the browser**"
+    unit = _cog(type="decision", scope="project:P", topic="decision", title="Open a Hive session in an in-app overlay",
+                what="The Hive session opens in an in-app overlay.", why="The user asked for it.",
+                rejected_alternatives="a browser tab", overrides=[ref])
+    decision = run_unit_v2(_row(unit, source=source), cdf_env["workspace"], Judge())
+    assert decision.decision == "write"
+    got = decision.version_vector.get("overrides") or []
+    assert bool(got) is retires
+    if not retires:
+        assert decision.version_vector["override_refused"][0]["reason"] == "source"
+
+
+def test_a_unit_older_than_the_entry_it_overrides_is_not_written(cdf_env, monkeypatch):
+    from tests.test_cdf_refactor import Judge
+    from core.ingestion import overrides
+    from core.ingestion.api import connect_rw
+    connect_rw().close()
+    _ddd(cdf_env, _OLD)
+    monkeypatch.setattr(pipeline_v2, "_grounding", lambda anchors: "user: open it in an in-app overlay")
+    monkeypatch.setattr(overrides, "check", lambda conn, **kw: overrides.Checked(older=True))
+    unit = _cog(type="decision", scope="project:P", topic="decision", title="Overlay",
+                what="The Hive session opens in an in-app overlay.", why="asked",
+                rejected_alternatives="none", overrides=["0123abcd | - [decision] **Open a Hive session**"])
+    decision = run_unit_v2(_row(unit, source="S7"), cdf_env["workspace"], Judge())
+    assert (decision.decision, decision.reason) == ("reject", "older_than_existing")

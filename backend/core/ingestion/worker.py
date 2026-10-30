@@ -257,6 +257,19 @@ def _hand_to_writer(conn: sqlite3.Connection, owner: Owner, unit_id: str,
         return
     if step == "done":
         _close_declared_gaps(conn, unit_id)
+        _apply_overrides(conn, unit_id)
+
+
+def _apply_overrides(conn: sqlite3.Connection, unit_id: str | None = None) -> None:
+    """Retire what written units declared they override (core/ingestion/overrides). Never
+    fails the write: the daily maintenance retries what is left."""
+    from .overrides import apply
+    try:
+        apply(conn, unit_id)
+    except Exception:  # noqa: BLE001 -- retried by _maintain
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        logger.warning("CDF override failed for %s; retried later", unit_id or "pending", exc_info=True)
 
 
 def _withdraw_ticked(workspace_root) -> None:
@@ -824,6 +837,7 @@ class IngestionWorker:
         from .pipeline_v2 import requeue_missing_sections
         requeue_missing_sections(self.workspace_root)
         _close_declared_gaps(conn)
+        _apply_overrides(conn)
         _withdraw_ticked(self.workspace_root)
 
     def run_once(self, conn: sqlite3.Connection) -> bool:

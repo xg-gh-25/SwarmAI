@@ -6,8 +6,8 @@ in the write journal (``ingestion_writes`` op ``user_redact``: ``anchors_absent`
 original, ``relations`` the redaction anchor, reason and status). Readers that need that
 history read it here, never from the main files:
 
-- re-ingestion: a unit that restates a withdrawn entry (status ``withdrawn``) is refused, so
-  what the user took out does not come back (it did once: a withdrawn lesson was written
+- re-ingestion: a unit that restates a withdrawn entry (status ``withdrawn``, or
+  ``overridden`` by a newer declared decision) is refused, so what was taken out does not come back (it did once: a withdrawn lesson was written
   again into another file the next day). An exact restatement is refused before the judge
   (``restates``); a near one is shown to the judge with the unit's other hits
   (``nearest``), and a "same" or "adds" against it refuses the unit.
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 ANCHOR_PREFIX = "withdrawn:"
 # a withdrawal that refuses a restatement; closed / done are history a recurrence may repeat
-REFUSING = frozenset({"withdrawn"})
+REFUSING = frozenset({"withdrawn", "overridden"})
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _LEAD = re.compile(r"^\s*-\s*\[[^\]]*\]\s*")
 _MARKUP = re.compile(r"[*`_>#]+")
