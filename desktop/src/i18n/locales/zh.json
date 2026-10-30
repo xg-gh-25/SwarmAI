@@ -1706,6 +1706,33 @@
       "noResult": "停了，没有结果交回：补做，或者放弃",
       "abandonConfirmUnsealed": "确认放弃（Hive 工作区里没封进 bundle 的提交会一起删掉）",
       "filesMissing": "有交回的文件没能放进 Brain（太大或放置失败），Hive 上的工作区会一直留着：等它放进来，或者确认不要了就放弃"
+    },
+    "welcome": {
+      "why": "把任务派到你的 Hive 上，无人值守跑完；结果回到它的 Brain。",
+      "dispatch": "派一个任务到 Hive：",
+      "dispatchHint": "写清目标和完成标准",
+      "results": "最近的 run 结果怎么样，有没有要我处理的",
+      "breakDown": "帮我把这个想法拆成可以派的任务：",
+      "step1": "找到它的 Brain 和 Project Agent",
+      "step2": "发出前你确认",
+      "step3": "Hive 上跑完",
+      "step4": "报告和提交回到本机",
+      "noHive": "现在没有在运行的 Hive，任务派不出去",
+      "noHiveStopped": "你有 {{count}} 台已停止的 Hive，启动一台就能派。",
+      "noHiveNone": "还没有 Hive：建一台就能派。",
+      "openHive": "打开 Hive"
+    },
+    "fresh": {
+      "button": "新会话",
+      "hint": "开一个新的 Swarm Out 会话；这个会话留在历史里",
+      "busyReplying": "正在回复。等这一轮结束再开新会话，不然这次派发会断在一半。",
+      "busyWaiting": "有问题或确认卡片在等你回答。回答或取消之后才能开新会话，不然这次派发会断在一半。",
+      "done": "已开新会话。上一个会话在历史里",
+      "openOld": "打开它",
+      "openOldFailed": "打不开上一个会话，可以在历史里找到它",
+      "long": "这个会话已经很长了（上下文 {{pct}}%）。派发的状态都在左边仪表盘和派发记录里，用右上角的「新会话」开个新的不会丢东西，回复也会更快。",
+      "gotIt": "知道了",
+      "placeholder": "描述要派到 Hive 的任务…"
     }
   },
   "usage": {

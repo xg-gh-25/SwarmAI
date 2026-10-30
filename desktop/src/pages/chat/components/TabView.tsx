@@ -50,6 +50,8 @@ import { MessageBubble } from './MessageBubble';
 import { ReadingContext } from '../readingContext';
 import { useBackgroundAgents } from '../../../stores/backgroundAgentsStore';
 import { WelcomeScreen } from './WelcomeScreen';
+import { SwarmOutWelcome } from '../../../components/swarm-out/SwarmOutWelcome';
+import { isSwarmOutTab } from '../swarmOut';
 import { CompactNotice } from './CompactNotice';
 import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
@@ -237,6 +239,8 @@ export interface TabViewProps {
   /** Stop this tab's background agents while no turn runs (POST /chat/stop). */
   onStopBackground?: (tabId: string) => void;
   onRetryQueueTimeout: () => void;
+  /** Opens the Hive card (the Swarm Out tab's welcome offers it when no Hive runs). */
+  onOpenHive?: () => void;
 }
 
 /** Each bubble's React key (and its view-memory scope): the client id when the row
@@ -288,6 +292,7 @@ function TabViewImpl({
   onContinue,
   onStopBackground,
   onRetryQueueTimeout,
+  onOpenHive,
 }: TabViewProps) {
   const { t } = useTranslation();
 
@@ -712,7 +717,9 @@ function TabViewImpl({
           <Spinner size="lg" />
         </div>
       ) : messages.length === 0 ? (
-        <WelcomeScreen />
+        // The Swarm Out tab has its own empty state (what can be done here); every
+        // other tab the app's.
+        isSwarmOutTab(tabId) ? <SwarmOutWelcome hidden={!isActive} onOpenHive={onOpenHive} /> : <WelcomeScreen />
       ) : (
         (() => {
         // Root 3 / 3A: derive the answerable question id from React state

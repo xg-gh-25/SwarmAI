@@ -32,6 +32,9 @@ vi.mock('../MessageBubble', () => ({
   },
 }));
 vi.mock('../WelcomeScreen', () => ({ WelcomeScreen: () => <div data-testid="welcome" /> }));
+vi.mock('../../../../components/swarm-out/SwarmOutWelcome', () => ({
+  SwarmOutWelcome: () => <div data-testid="swarm-out-welcome" />,
+}));
 vi.mock('../../../../components/chat', () => ({
   ChatErrorMessage: () => <div />,
 }));
@@ -121,5 +124,15 @@ describe('TabView — keep-mounted + cross-tab isolation', () => {
 
     // Same DOM node instance → React did not unmount/remount it (no re-parse).
     expect(getByTestId('bubble-a1')).toBe(bubble1);
+  });
+
+  it('an empty Swarm Out tab shows its own welcome; every other tab the app one', () => {
+    const { getByTestId, queryByTestId, unmount } = render(<TabView {...props('swarm-out', true)} />);
+    expect(getByTestId('swarm-out-welcome')).toBeTruthy();
+    expect(queryByTestId('welcome')).toBeNull();
+    unmount();
+    const other = render(<TabView {...props('A', true)} />);
+    expect(other.getByTestId('welcome')).toBeTruthy();
+    expect(other.queryByTestId('swarm-out-welcome')).toBeNull();
   });
 });

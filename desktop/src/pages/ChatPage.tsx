@@ -81,6 +81,8 @@ import { isRemoteId, startRelay, stopRelay } from '../services/remoteSession';
 import { RemoteContentContext } from './chat/remoteContentContext';
 import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
 import { useSwarmOutChatWidth, chatColumnStyle } from '../components/swarm-out/SwarmOutChatResize';
+import { SwarmOutNewSession, newSessionBlock } from '../components/swarm-out/SwarmOutNewSession';
+import { noticeLongSession, startSwarmOutFresh as startSwarmOutFreshImpl } from './chat/swarmOutFresh';
 import { dispatchInjectChatInput, injectDispatchedPrompt } from './chat/injectChatInput';
 import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { planDispatchBackfill } from './chat/dispatchBackfill';
@@ -1901,6 +1903,43 @@ export default function ChatPage() {
   // so the intermediate null is never painted.
   const activeTabTitle = openTabs.find(t => t.id === activeTabId)?.title;
   const agentName = selectedAgent?.name;
+  // ── Swarm Out: a new session only when the person asks (its welcome / new-session
+  // design ③④). Nothing else changes this tab's session: not a tab switch, not a timer.
+  const openHiveCard = useCallback(() => openOverlay('hive'), [openOverlay]);
+  const handleResumeSessionRef = useRef(handleResumeSession);
+  handleResumeSessionRef.current = handleResumeSession;
+  const swarmOutActive = activeTabId === SWARM_OUT_TAB_ID;
+  const swarmOutBlock = swarmOutActive
+    ? newSessionBlock({ isStreaming: isStreaming || isSending, pendingQuestion, pendingPermissionRequestId })
+    : null;
+  const swarmOutLong = swarmOutActive && (contextWarning?.level === 'warn' || contextWarning?.level === 'critical');
+  const startSwarmOutFresh = useCallback(() => {
+    startSwarmOutFreshImpl({
+      getTab: () => tabMapRef.current.get(SWARM_OUT_TAB_ID),
+      liveBlock: swarmOutBlock,
+      reset: resetTabToNewSession,
+      clearContext: () => {
+        updateTabState(SWARM_OUT_TAB_ID, { contextWarning: null });
+        if (activeTabIdRef.current === SWARM_OUT_TAB_ID) setContextWarning(null);
+      },
+      // through the ref: the notice's action runs up to 15 s later, against the state
+      // of then (a question may have arrived in the new session meanwhile)
+      openOld: (sid) => {
+        void chatService.getSession(sid).then((s) => { if (s) handleResumeSessionRef.current(s); }).catch(() => {
+          document.dispatchEvent(new CustomEvent('swarm:toast', { detail: { message: t('swarmOut.fresh.openOldFailed') } }));
+        });
+      },
+      t: (k) => t(k),
+    });
+  }, [tabMapRef, swarmOutBlock, resetTabToNewSession, updateTabState, activeTabIdRef, setContextWarning, t]);
+  // A long session: one notice per session, saying why a new one loses nothing.
+  const swarmOutLongNoticed = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!swarmOutLong) return;
+    noticeLongSession(tabMapRef.current.get(SWARM_OUT_TAB_ID), contextWarning?.level, contextWarning?.pct,
+      swarmOutLongNoticed.current, (k, o) => t(k, o));
+  }, [swarmOutLong, contextWarning?.level, contextWarning?.pct, tabMapRef, t]);
+
   const contextPct = contextWarning?.pct ?? null;
   const fileCount = attachments.length;
   useEffect(() => {
@@ -2884,6 +2923,7 @@ export default function ChatPage() {
                     onContinue={handleContinue}
                     onStopBackground={stableStopBackground}
                     onRetryQueueTimeout={handleRetryQueueTimeout}
+                    onOpenHive={openHiveCard}
                   />
                   </RemoteContentContext.Provider>
                 );
@@ -2941,6 +2981,11 @@ export default function ChatPage() {
                 voiceConversationState={voiceConversation.state}
                 onVoiceConversationToggle={voiceConversation.toggle}
                 onVoiceConversationInterrupt={voiceConversation.interrupt}
+                placeholder={swarmOutActive ? t('swarmOut.fresh.placeholder') : undefined}
+                topRight={swarmOutActive ? (
+                  <SwarmOutNewSession hasContent={messages.length > 0} block={swarmOutBlock}
+                    long={swarmOutLong} onStart={startSwarmOutFresh} />
+                ) : undefined}
               />
             </>
           )}

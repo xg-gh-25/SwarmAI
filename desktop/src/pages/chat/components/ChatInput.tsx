@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
@@ -148,6 +148,10 @@ interface ChatInputProps {
   onVoiceConversationInterrupt?: () => void;
   /** Called when one-tap screenshot capture fails (e.g. permission not granted) — surfaces a toast. */
   onCaptureError?: (message: string) => void;
+  /** The idle placeholder (default "Ask Swarm anything..."). */
+  placeholder?: string;
+  /** Shown above the box's top right corner (the Swarm Out tab's "new session"). */
+  topRight?: ReactNode;
 }
 
 const MAX_ROWS = 20;
@@ -195,6 +199,8 @@ export function ChatInput({
   onVoiceConversationToggle,
   onVoiceConversationInterrupt,
   onCaptureError,
+  placeholder,
+  topRight,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -760,6 +766,7 @@ export function ChatInput({
     // `chat-gutter` + `chat-column` (index.css) give the composer the same width and
     // edges as the transcript column above it.
     <div className="chat-gutter pb-4 pt-3 flex-shrink-0">
+        {topRight && <div className="chat-column flex justify-end mb-1.5" data-testid="chat-input-top-right">{topRight}</div>}
         {/* Input Container with drag-and-drop. The transition is limited to the
             focus/drag colours: the column width is a computed length now, so
             `transition-all` would animate the card's width on every Canvas
@@ -923,7 +930,7 @@ export function ChatInput({
                   ? t('chat.disconnectedPlaceholder', 'Backend offline...')
                   : isStreaming
                     ? 'Type to add to the running turn...'
-                    : 'Ask Swarm anything...'
+                    : (placeholder ?? 'Ask Swarm anything...')
               }
               rows={DEFAULT_ROWS}
               disabled={disabled}

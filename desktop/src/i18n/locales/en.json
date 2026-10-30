@@ -1707,6 +1707,33 @@
       "noResult": "Stopped with no result: redo it, or give it up",
       "abandonConfirmUnsealed": "Confirm give up (deletes the unsealed commits in the Hive's workspace too)",
       "filesMissing": "A returned file never reached the Brain (too large, or placing it failed), so the Hive keeps the workspace: wait for it, or give up if you don't need it"
+    },
+    "welcome": {
+      "why": "Send tasks to your Hives to run unattended; the results come back to their Brain.",
+      "dispatch": "Send a task to a Hive: ",
+      "dispatchHint": "say the goal and what done looks like",
+      "results": "How did the recent runs go, and is there anything for me to handle?",
+      "breakDown": "Help me break this idea into tasks I can send: ",
+      "step1": "Find its Brain and Project Agent",
+      "step2": "You confirm before it goes",
+      "step3": "It runs on the Hive",
+      "step4": "The report and commits come back here",
+      "noHive": "No Hive is running, so nothing can be sent",
+      "noHiveStopped": "You have {{count}} stopped Hive(s): start one to send tasks.",
+      "noHiveNone": "No Hive yet: create one to send tasks.",
+      "openHive": "Open Hive"
+    },
+    "fresh": {
+      "button": "New session",
+      "hint": "Start a new Swarm Out session; this one stays in history",
+      "busyReplying": "Replying now. Wait for this turn to end, or a dispatch would be cut off halfway.",
+      "busyWaiting": "A question or confirmation card is waiting for you. Answer or cancel it first, or a dispatch would be cut off halfway.",
+      "done": "New session started. The previous one is in history",
+      "openOld": "Open it",
+      "openOldFailed": "Couldn't open the previous session; you can find it in history",
+      "long": "This session is long (context {{pct}}%). Dispatch state lives in the dashboard on the left and in the dispatch log, so a new session from \"New session\" at the top right loses nothing and replies faster.",
+      "gotIt": "Got it",
+      "placeholder": "Describe the task to send to a Hive…"
     }
   },
   "usage": {
