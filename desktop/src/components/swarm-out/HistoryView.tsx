@@ -393,6 +393,12 @@ export function HistoryView({ hidden, now, compact = false }: { hidden: boolean;
             onClearGroup={() => setGroup(null)} compact={compact} onReload={reload} />
         </>
       )}
+      {data?.refusals && data.refusals.total > 0 && (
+        // when a Hive that reaches a private network is worth adding: read this count
+        <div className={`mt-3 text-[12px] ${muted}`} data-testid="history-refusals">
+          {t('swarmOut.history.refusals', { count: data.refusals.total, private: data.refusals.private })}
+        </div>
+      )}
       <Tbd title={t('swarmOut.tbdParts.occupancy')} missing={t('swarmOut.tbdParts.occupancyMissing')} testId="swarm-out-tbd-occupancy" />
     </div>
   );

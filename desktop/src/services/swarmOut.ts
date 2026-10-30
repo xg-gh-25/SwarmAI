@@ -198,6 +198,9 @@ export interface SwarmOutRuns {
   runs: SwarmOutRun[];
   asks: SwarmOutAsk[];
   errors: string[];
+  /** tasks refused at intake, all time (dispatch-center §2.3); ``private``: of them,
+   *  because they need a private network. null: unreadable; absent: older backend */
+  refusals?: { total: number; private: number } | null;
 }
 
 export interface SwarmOutHive {

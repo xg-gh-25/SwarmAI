@@ -118,6 +118,12 @@ describe('the view', () => {
     expect(screen.getByTestId('history-sum-unattended').textContent).toBe('2/5无人值守做完（已知结局 5 个，40%）');
   });
 
+  it('counts the tasks refused at intake, and how many needed a private network', async () => {
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: RUNS, asks: [], errors: [], refusals: { total: 4, private: 3 } });
+    render(<HistoryView hidden={false} now={NOW} />);
+    expect((await screen.findByTestId('history-refusals')).textContent).toBe('拒收 4 次 · 其中需要私有网络的 3 次');
+  });
+
   it('(5) a table row filters the records, the chips on top; its ✕ undoes it', async () => {
     render(<HistoryView hidden={false} now={NOW} />);
     await screen.findByTestId('history-verdict');

@@ -518,6 +518,12 @@ export interface SwarmOutDispatchContent {
   /** how the task runs, chosen at dispatch (design 2026-10-30-run-spec §3); null on an
    *  older row */
   execution?: 'native' | 'pipeline' | null;
+  /** refused at intake: nothing was asked of a Hive (dispatch-center §2.3);
+   *  ``needsPrivate``: because it needs a private network; ``task``: the task, to do it
+   *  on this machine instead */
+  refused?: boolean;
+  needsPrivate?: boolean;
+  task?: string | null;
   executionWhy?: string | null;
   revision: string | null;
   /** what the Brain sync did: up to date / synced / restored … */

@@ -21,8 +21,8 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 ```bash
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <file> [--brain <B>] [--file <path>] [--bound-project <P>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits [--mode <m>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits --revision <revision from spec> [--hive <name>] [--mode <m>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits [--mode <m>] [--needs-private <why>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --returns answer|document|commits --revision <revision from spec> [--needs-private <why>] [--hive <name>] [--mode <m>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 ```
 
@@ -35,6 +35,8 @@ a session with someone else the commands refuse. Do not try another way.
 
 Ask only when the request cannot be turned into one run spec. Everything else you decide
 and carry out (the autonomy principle): the person sees the result on the dispatch card.
+**Check whether the task can be taken before you ask anything** (step 4): a task a Hive
+cannot do is refused at once, not after three questions.
 
 | Situation | What you do |
 |---|---|
@@ -44,7 +46,8 @@ and carry out (the autonomy principle): the person sees the result on the dispat
 | which Hive | do not ask: leave out `--hive` (the daemon picks the least busy running one) unless the person named one |
 | how it runs (`--execution`), what comes back (`--returns`), title, brief | do not ask: step 3's tables; you write title and brief. Unsure between two: take the lighter and say why in `--why` |
 | uncommitted files (`dirty` > 0) | do not ask: the card says they were not sent |
-| `spec` refuses | do not ask and do not dispatch: the dispatch card says why when you run `dispatch`; or tell the person the rule (for example: confirm the Project Agent in the Brain Hub) |
+| `spec` refuses | do not ask: run `dispatch` once with the same arguments. It refuses with the same reasons, records the refusal and shows a refusal card (what to do instead is on it); then stop |
+| the task needs something a Hive cannot reach that the checks do not see (an internal service or site, a corporate-only tool) | do not ask: pass `--needs-private "<what, in one sentence>"`; it refuses the task (it can add a refusal, never remove one) |
 
 On the desktop ask with AskUserQuestion; in a channel session ask the same question as
 numbered text options ("reply with a number"). One question at a time, and only these.
@@ -94,9 +97,15 @@ numbered text options ("reply with a number"). One question at a time, and only 
    For a change, look at what it touches before you judge the risk: on a Brain with a
    code graph, `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol> --project
    <B>` lists the callers. The Hive does not change this choice.
-4. **Check, then dispatch.** Run `spec`. `refusals` not empty: stop and tell the person
-   each one (it names the rule). Otherwise run `dispatch` with the same arguments plus
-   `--revision` = the spec's `revision` and `--brief`; no confirmation is asked. Run it
+4. **Check, then dispatch.** Run `spec` as soon as the Brain is known, with the mode
+   and acceptance you would choose (before asking any question of the table). `refusals`
+   not empty (for example: it uses an internal repository, names a private host, or a
+   skill that needs a private network): run `dispatch` once with the same arguments plus
+   `--revision` and `--brief`, which records the refusal and shows the refusal card, and
+   stop; tell the person it can be done on this machine in a chat tab. Otherwise ask
+   what the table says to ask, run `spec` again if an answer changed it, then run
+   `dispatch` with the same arguments plus `--revision` = the spec's `revision` and
+   `--brief`; no confirmation is asked. Run it
    in the foreground with a Bash `timeout` of 590000 ms, alone in its command (no
    `echo` or other command after it): it can take up to nine minutes (a Brain sync,
    the Hive preparing the workspace, then naming the session), and a call stopped early leaves it unknown

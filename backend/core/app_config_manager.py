@@ -113,6 +113,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # streams is written into the running turn instead of queued. On by default
     # (XG 2026-10-26: no way back, problems are fixed forward).
     "steer_busy_send": True,
+    # Swarm Out intake (design 2026-10-30-dispatch-center §2.2): host patterns (fnmatch,
+    # e.g. "*.corp.example.com") a Hive cannot reach. A task that needs one is refused
+    # before anything is sent. The user's own list; the product ships none.
+    "swarm_out_private_hosts": [],
     "evolution": {
         "enabled": True,
         "max_retries": 3,

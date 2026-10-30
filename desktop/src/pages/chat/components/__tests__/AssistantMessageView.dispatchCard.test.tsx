@@ -133,6 +133,25 @@ describe('a dispatch that went out', () => {
   });
 });
 
+describe('a task refused at intake', () => {
+  it('says refused, that nothing was asked of a Hive, and offers to do it here', () => {
+    const dispatchPrompt = vi.fn(() => true);
+    setOverlayCtxBridge({ openHiveSession, showSwarmOut, dispatchPrompt });
+    const PRIVATE: SwarmOutDispatchContent = { ...REFUSED, refused: true, needsPrivate: true,
+      error: 'IVT cannot be sent to a Hive: it needs a private network no Hive can reach: svc is an internal repository',
+      task: 'add the field to the service' };
+    render(view([bash('b1'), tr('b1'), PRIVATE]));
+    expect(screen.getByTestId('dispatch-card').textContent).toContain('Refused');
+    expect(screen.getByTestId('dispatch-error').textContent).toContain('no Hive was contacted');
+    expect(screen.queryByTestId('dispatch-open-brain')).toBeNull();
+    fireEvent.click(screen.getByTestId('dispatch-do-here'));
+    const sent = (dispatchPrompt.mock.calls[0] as unknown as [string])[0];
+    expect(sent).toContain('internal repository');
+    expect(sent).toContain('add the field to the service');
+    expect(runs).not.toHaveBeenCalled();
+  });
+});
+
 describe('a dispatch that did not go out', () => {
   it('says why and that nothing was sent; opens the Brain', () => {
     const shown: unknown[] = [];

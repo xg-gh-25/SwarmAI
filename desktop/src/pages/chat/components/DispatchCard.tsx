@@ -153,12 +153,19 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
   const run = useDispatchedRun(block.ok ? block.dispatchId : null);
   const bridge = getOverlayCtxBridge();
   const unsure = !block.ok && block.maybeSent === true;
+  // refused at intake (dispatch-center §2.3): nothing was asked of a Hive
+  const refused = !block.ok && !unsure && block.refused === true;
+  const doHere = () => bridge.dispatchPrompt?.(k('doHerePrompt',
+    'Do this on this machine (Swarm Out refused it: {{why}}). {{title}}\n\n{{task}}',
+    { why: block.error ?? '', title: block.title, task: block.task ?? '' }));
 
   const status = block.ok
     ? <span className={TONE_TEXT.ok}>✓ {k('ok', 'Dispatched to a Hive')}</span>
     : unsure
       ? <span className={TONE_TEXT.attention}>? {k('unsure', 'Not sure it was dispatched')}</span>
-      : <span className={TONE_TEXT.error}>✕ {k('failed', 'Not dispatched')}</span>;
+      : refused
+        ? <span className={TONE_TEXT.error}>✕ {k('refused', 'Refused')}</span>
+        : <span className={TONE_TEXT.error}>✕ {k('failed', 'Not dispatched')}</span>;
   let live: ReactNode = null;
   if (run) {
     const tone = runTone(run);
@@ -189,7 +196,8 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
           <div className="text-[13px] text-[var(--color-text)] break-words">{block.error}</div>
           <div className="mt-0.5 text-[12.5px] text-[var(--color-text-secondary)]">
             {unsure ? k('maybeRunning', 'It may already be running on the Hive: look in Swarm Out before sending it again.')
-              : k('nothingSent', 'Nothing was sent to a Hive.')}
+              : refused ? k('refusedNothing', 'Nothing was sent: no Hive was contacted and the Brain was not synced.')
+                : k('nothingSent', 'Nothing was sent to a Hive.')}
           </div>
         </div>
       )}
@@ -253,7 +261,8 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
       <div className="flex items-center gap-3 border-t border-[var(--color-border)] px-3.5 py-[9px]">
         <span className="text-[12.5px] text-[var(--color-text-muted)]">
           {block.dispatchId ? <>{k('id', 'Dispatch')} <Mono>{block.dispatchId}</Mono></>
-            : !block.ok && !unsure ? k('retryHint', 'Once it is fixed, say "send it again"') : null}
+            : refused && block.needsPrivate ? k('doHereHint', 'It can be done on this machine')
+              : !block.ok && !unsure ? k('retryHint', 'Once it is fixed, say "send it again"') : null}
         </span>
         <span className="flex-1" />
         {(block.ok || unsure) && bridge.showSwarmOut && (
@@ -266,7 +275,12 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
             ↗ {k('open', 'Open Hive session')}
           </button>
         )}
-        {!block.ok && !unsure && block.brain && (
+        {refused && block.needsPrivate && bridge.dispatchPrompt && (
+          <button type="button" data-testid="dispatch-do-here" className="btn-sm btn-primary" onClick={doHere}>
+            {k('doHere', 'Do it here, in a chat tab')}
+          </button>
+        )}
+        {!block.ok && !unsure && !(refused && block.needsPrivate) && block.brain && (
           <button type="button" data-testid="dispatch-open-brain" className="btn-sm btn-primary"
             onClick={() => openOverlayAt('brain-hub', block.brain as string)}>
             {k('openBrain', 'Open {{brain}}', { brain: brainName(t, block.brain) })}

@@ -60,6 +60,9 @@ def _call(method: str, path: str, body: dict | None = None, timeout: int = 120) 
         except Exception:
             detail = None
         out = {"ok": False, "status": e.code, "detail": detail}
+        if isinstance(detail, dict) and detail.get("refused") is True:
+            # refused at intake (core/swarm_out.SwarmOutRefused): nothing was sent
+            out.update(detail=str(detail.get("message") or ""), refused=True, private=detail.get("private") is True)
         if e.code == 504 and path == "/dispatch":
             out["maybe_sent"] = True   # the Hive may have taken it (core/swarm_out_card)
         print(json.dumps(out, ensure_ascii=False))
@@ -114,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
         d.add_argument("--why", default="", help="one sentence: why this execution")
         d.add_argument("--returns", required=True, choices=("answer", "document", "commits"),
                        help="what comes back; only commits makes the repositories writable")
+        d.add_argument("--needs-private", default="",
+                       help="why the task needs a private network the checks cannot see (refuses it)")
         if name == "dispatch":
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
@@ -132,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd in ("spec", "dispatch"):
         body = {"brain": args.brain, "task": _task(args), "acceptance": args.acceptance,
                 "mode": args.mode, "execution": args.execution, "why": args.why,
-                "returns": args.returns}
+                "returns": args.returns, "needs_private": args.needs_private}
         if args.cmd == "spec":
             return _call("POST", "/spec", body)
         # a dispatch may sync the Brain, send this machine's commits, wait for the Hive

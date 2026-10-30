@@ -54,7 +54,43 @@ def _args(command: str) -> dict[str, str]:
         key = w[2:] if w.startswith("--") else None
         if key in ("brain", "title", "hive") and i + 1 < len(words):
             out[key] = words[i + 1][:_FIELD_MAX]
+        elif key in ("task", "task-file") and i + 1 < len(words):
+            out[key] = words[i + 1]
     return out
+
+
+#: the task a refusal card carries, for doing it on this machine instead (a refused task
+#: is at most what a dispatch takes)
+_TASK_MAX = 20000
+
+
+def _task_of(a: dict[str, str], cwd: Optional[str]) -> Optional[str]:
+    """The task the refused call named: ``--task``, or the ``--task-file`` it read
+    (opened without following a link, a regular file, at most ``_TASK_MAX`` bytes)."""
+    if a.get("task"):
+        return a["task"][:_TASK_MAX]
+    f = a.get("task-file")
+    if not f:
+        return None
+    import os
+    import stat
+    if not os.path.isabs(f) and not cwd:
+        from core.project_registry import get_swarmws      # where a session's Bash runs
+        cwd = str(get_swarmws())
+    path = f if os.path.isabs(f) else os.path.join(cwd, f)
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, _TASK_MAX + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return data[:_TASK_MAX].decode("utf-8", "replace").strip() or None
 
 
 def _json_head(output: str) -> Optional[dict]:
@@ -86,7 +122,7 @@ def _sent_at(row: dict) -> Optional[float]:
         return None
 
 
-def card(command: str, output: str, since: Optional[float] = None) -> Optional[dict]:
+def card(command: str, output: str, since: Optional[float] = None, cwd: Optional[str] = None) -> Optional[dict]:
     """The card for a dispatch call's result, or None when nothing is to be shown.
 
     A row is shown only when this machine's log holds its ``dispatch_id`` and, with
@@ -114,8 +150,13 @@ def card(command: str, output: str, since: Optional[float] = None) -> Optional[d
         return from_row(row)
     if got.get("ok") is False:
         a = _args(command)
-        return failure(str(got.get("detail") or "the dispatch was refused"), a.get("title"),
-                       a.get("brain"), a.get("hive"), maybe_sent=got.get("maybe_sent") is True)
+        refused = got.get("refused") is True
+        block = failure(str(got.get("detail") or "the dispatch was refused"), a.get("title"),
+                        a.get("brain"), a.get("hive"), maybe_sent=got.get("maybe_sent") is True,
+                        refused=refused, private=got.get("private") is True)
+        if block.get("refused"):
+            block["task"] = _task_of(a, cwd)          # "do it here instead" (desktop card)
+        return block
     return None
 
 
@@ -138,7 +179,7 @@ def from_row(row: dict) -> dict:
                       # how the Hive prepared it (core/hive_workspace); None on an older row
                       "access": r.get("access") if r.get("access") in ("read", "write") else None})
     block = {
-        "type": BLOCK_TYPE, "ok": True, "maybeSent": False,
+        "type": BLOCK_TYPE, "ok": True, "maybeSent": False, "refused": False, "needsPrivate": False,
         "dispatchId": row.get("dispatch_id"), "sessionId": row.get("session_id"),
         "title": _s(row.get("title")) or "", "brief": _s(row.get("brief"), 400),
         "hive": _s(row.get("hive")), "hiveReason": _s(row.get("hive_reason"), 80),
@@ -155,9 +196,13 @@ def from_row(row: dict) -> dict:
 
 
 def failure(detail: str, title: Optional[str], brain: Optional[str], hive: Optional[str],
-            maybe_sent: bool = False) -> dict:
-    """A dispatch that did not go out, or (``maybe_sent``: no answer in time) may have."""
-    block = {"type": BLOCK_TYPE, "ok": False, "maybeSent": maybe_sent, "dispatchId": None, "sessionId": None,
+            maybe_sent: bool = False, refused: bool = False, private: bool = False) -> dict:
+    """A dispatch that did not go out, or (``maybe_sent``: no answer in time) may have.
+    ``refused``: refused at intake (its spec did not pass, nothing was asked of a Hive;
+    ``private``: because it needs a private network, design dispatch-center §2.3)."""
+    refused = refused and not maybe_sent
+    block = {"type": BLOCK_TYPE, "ok": False, "maybeSent": maybe_sent, "refused": refused,
+             "needsPrivate": refused and private, "dispatchId": None, "sessionId": None,
              "title": _s(title) or "", "brief": None, "hive": _s(hive), "hiveReason": None,
              "brain": _s(brain, 80), "mode": None, "profile": None, "revision": None,
              "execution": None, "executionWhy": None,
@@ -211,6 +256,11 @@ def _text_of(b: dict) -> str:
     if not b.get("ok") and b.get("maybeSent"):
         lines = [f"? Not sure it was dispatched{title}", b.get("error") or "",
                  "It may be running on the Hive: look in Swarm Out before sending it again."]
+        return "\n".join(x for x in lines if x)
+    if not b.get("ok") and b.get("refused"):
+        lines = [f"✕ Refused{title}", b.get("error") or "",
+                 "Nothing was sent: no Hive was contacted and the Brain was not synced.",
+                 "Do it on this machine instead, in a chat tab." if b.get("needsPrivate") else ""]
         return "\n".join(x for x in lines if x)
     if not b.get("ok"):
         lines = [f"✕ Not dispatched{title}", b.get("error") or "", "Nothing was sent to a Hive."]

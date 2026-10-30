@@ -569,7 +569,12 @@
         "retryHint": "处理好之后说「继续派」",
         "native": "native：在会话里直接做，不建 pipeline run",
         "pipeline": "pipeline · {{profile}}",
-        "readOnly": "只读"
+        "readOnly": "只读",
+        "refused": "拒收",
+        "refusedNothing": "什么都没发：没有联系任何 Hive，Brain 也没有同步。",
+        "doHere": "在本机 chat tab 里做",
+        "doHereHint": "可以在本机做",
+        "doHerePrompt": "在本机做这个任务（Swarm Out 拒收了：{{why}}）。{{title}}\n\n{{task}}"
       }
     }
   },
@@ -1315,7 +1320,8 @@
       "unanswered_one": "{{count}} 没答",
       "unanswered_other": "{{count}} 没答",
       "more_one": "显示更早的 {{count}} 条",
-      "more_other": "显示更早的 {{count}} 条"
+      "more_other": "显示更早的 {{count}} 条",
+      "refusals": "拒收 {{count}} 次 · 其中需要私有网络的 {{private}} 次"
     },
     "tbdParts": {
       "occupancy": "工蜂占用",

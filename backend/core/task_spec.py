@@ -25,6 +25,7 @@ nothing an agent wrote into a spec is trusted beyond those choices.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -41,6 +42,8 @@ MAX_WHY_CHARS = 300
 #: what comes back (design 2026-10-30-run-spec §2.1 ``returns``): only ``commits`` makes
 #: the repositories writable on the Hive; the others get read-only worktrees
 RETURNS = ("answer", "document", "commits")
+#: the start of the refusal of a task that needs a private network (the card, the record)
+PRIVATE_REFUSAL = "it needs a private network no Hive can reach: "
 _DESKTOP_PLATFORMS = frozenset({"desktop", "macos"})
 
 
@@ -111,9 +114,80 @@ def parse_execution(text: Any) -> dict[str, Any]:
                     f"{', '.join(PROFILE_STAGES)} (got {t[:40]!r})")
 
 
+_HOST_RE = re.compile(r"(?<![\w.@-])(?:[a-z][a-z0-9+.-]*://)?(?:[^\s/@]+@)?"
+                      r"((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})(?![\w-])", re.I)
+
+
+def private_hosts() -> list[str]:
+    """The user's private host patterns (``swarm_out_private_hosts``); [] when unset or
+    unreadable."""
+    try:
+        from core.app_config_manager import AppConfigManager
+        v = AppConfigManager.instance().get("swarm_out_private_hosts", [])
+    except Exception:  # noqa: BLE001 — no settings: no pattern
+        return []
+    return [p.strip().lower() for p in v if isinstance(p, str) and p.strip()] if isinstance(v, list) else []
+
+
+def _private_host(host: str, patterns: list[str]) -> Optional[str]:
+    import fnmatch
+    h = host.lower().rstrip(".")
+    return next((p for p in patterns if fnmatch.fnmatchcase(h, p) or h == p.lstrip("*.")), None)
+
+
+def _clone_host(url: str) -> Optional[str]:
+    m = re.match(r"(?:[a-z][a-z0-9+.-]*://)?(?:[^@/\s]+@)?([^/:\s]+)", url or "", re.I)
+    return m.group(1) if m else None
+
+
+def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance: str,
+                  agent_reason: str = "") -> list[str]:
+    """Why this task needs a private network a Hive cannot reach (design
+    2026-10-30-dispatch-center §2.2), from what it uses: its repositories (the mode's,
+    else every one the Brain binds) bound ``kind: internal`` or cloned from a private
+    host; a private host named in the task or the acceptance; a skill of the mode with
+    ``network: private``; and the reason the agent gave (it adds a reason, it never
+    removes one). Deterministic but for that last one."""
+    from core.project_agent import skill_network
+    patterns = private_hosts()
+    out: list[str] = []
+    bindings = _bindings(d)
+    names = view["repos"] or list(bindings)
+    for name in names:
+        b = bindings.get(name)
+        if b is None:
+            continue
+        if b.kind == "internal":
+            out.append(f"{name} is an internal repository")
+            continue
+        host = _clone_host(b.clone)
+        hit = _private_host(host, patterns) if host else None
+        if hit:
+            out.append(f"{name} is cloned from {host} (a private host: {hit})")
+    seen: set[str] = set()
+    for m in _HOST_RE.finditer(f"{task}\n{acceptance}"):
+        host = m.group(1).lower()
+        hit = _private_host(host, patterns)
+        if hit and host not in seen:
+            seen.add(host)
+            out.append(f"the task names {host} (a private host: {hit})")
+    from core.ddd_skill_registry import scan_domain_skill_dirs
+    try:
+        dirs = {p.name: p for p in scan_domain_skill_dirs(d)}
+    except OSError:
+        dirs = {}
+    for s in view["skills"]:
+        if s in dirs and skill_network(dirs[s] / "SKILL.md") == "private":
+            out.append(f"skill {s} needs a private network")
+    reason = " ".join((agent_reason or "").split())[:300]
+    if reason:
+        out.append(f"the agent says: {reason}")
+    return out
+
+
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
           execution: Optional[str] = None, why: str = "", placement: str = "hive", *,
-          returns: Optional[str] = None) -> dict[str, Any]:
+          returns: Optional[str] = None, needs_private: str = "") -> dict[str, Any]:
     """The Task Spec; raises SpecError when a choice does not fit (the mode against the
     definition, the execution against the product's profiles)."""
     try:
@@ -152,6 +226,9 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         # how the task runs, chosen for this request (``profile`` is the pipeline's, None
         # when native), and the one sentence the dispatch card shows for why
         "execution": ex, "profile": ex["profile"], "returns": returns,
+        # what makes this task need a private network (refused on a Hive, §2.2 of the
+        # dispatch-center design); [] when nothing does
+        "private": private_needs(d, mid, view, task or "", acceptance or "", needs_private),
         "execution_why": " ".join((why or "").split())[:MAX_WHY_CHARS],
         "task": (task or "").strip(), "acceptance": " ".join((acceptance or "").split()),
         "placement": placement, "repos": repos, "delivery": view["delivery"],
@@ -218,6 +295,10 @@ def admit(spec: dict[str, Any]) -> list[str]:
         out.append(f"mode {spec['mode']} does not run on {spec['placement']} (its placements: "
                    f"{', '.join(spec['mode_placements']) or 'none'})")
     if spec["placement"] == "hive":
+        if spec.get("private"):
+            # no Hive reaches a private network (dispatch-center §2.2): refused before a
+            # question is asked or anything is sent
+            out.append(PRIVATE_REFUSAL + "; ".join(spec["private"][:4]))
         if spec["schema"] != 2:
             out.append("the definition is schema 1: rewrite it with modes (schema 2) first")
         state = confirmation(spec["status"], spec["source_check"])     # the Brain Hub's rule too

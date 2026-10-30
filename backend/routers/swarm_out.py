@@ -39,6 +39,8 @@ class DispatchBody(BaseModel):
     mode: Optional[str] = Field(default=None, max_length=80)
     execution: Optional[str] = Field(default=None, max_length=40)
     why: Optional[str] = Field(default=None, max_length=600)
+    # the agent's reason the task needs a private network (it adds a refusal, §2.2)
+    needs_private: Optional[str] = Field(default=None, max_length=600)
     # what comes back: answer / document / commits (core/task_spec.RETURNS)
     returns: Optional[str] = Field(default=None, max_length=20)
     acceptance: Optional[str] = Field(default=None, max_length=4000)
@@ -65,6 +67,7 @@ class SpecBody(BaseModel):
     execution: Optional[str] = Field(default=None, max_length=40)
     why: Optional[str] = Field(default=None, max_length=600)
     returns: Optional[str] = Field(default=None, max_length=20)
+    needs_private: Optional[str] = Field(default=None, max_length=600)
 
 
 class AnswerBody(BaseModel):
@@ -77,6 +80,9 @@ class AnswerBody(BaseModel):
 async def _call(coro) -> Any:
     try:
         return await coro
+    except swarm_out.SwarmOutRefused as e:
+        # refused at intake: nothing was sent (dispatch-center §2.3)
+        raise HTTPException(status_code=422, detail={"message": str(e), "refused": True, "private": e.private})
     except swarm_out.SwarmOutMaybeSent as e:
         # the task may be running on the Hive: not a plain refusal (core/swarm_out_card)
         raise HTTPException(status_code=504, detail=str(e))
@@ -102,7 +108,7 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
                                                body.acceptance or "", body.mode, body.execution,
                                                body.origin, seen_revision=body.revision,
                                                brief=body.brief or "", why=body.why or "",
-                                               returns=body.returns))
+                                               returns=body.returns, needs_private=body.needs_private or ""))
 
 
 class ReturnBody(BaseModel):
@@ -208,7 +214,7 @@ async def spec(body: SpecBody) -> dict[str, Any]:
     try:
         s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
                                     body.acceptance, body.mode, body.execution, body.why or "", "hive",
-                                    returns=body.returns)
+                                    returns=body.returns, needs_private=body.needs_private or "")
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"spec": {k: v for k, v in s.items() if k != "task"},

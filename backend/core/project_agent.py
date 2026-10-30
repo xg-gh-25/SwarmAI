@@ -181,6 +181,17 @@ def _skills(project_dir: Path) -> tuple[Optional[dict[str, str]], Optional[str]]
     return out, None
 
 
+def skill_network(skill_md: Path) -> str:
+    """A skill's ``network:`` frontmatter (``private``: it needs a private network a
+    Hive cannot reach, design 2026-10-30-dispatch-center §2.2); ``any`` without one."""
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return "any"
+    m = re.search(r"^network:\s*([A-Za-z]+)\s*$", text, re.MULTILINE)
+    return m.group(1).lower() if m else "any"
+
+
 def _skill_platform(skill_md: Path) -> str:
     try:
         text = skill_md.read_text(encoding="utf-8")

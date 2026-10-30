@@ -470,7 +470,7 @@ def test_the_cli_sends_brain_mode_execution_and_acceptance(monkeypatch):
                      "--why", "a defect with a repro", "--returns", "commits", "--revision", "abc"]) == 0
     assert seen[-1] == ("POST", "/dispatch", {"brain": "Lib", "task": "x", "acceptance": "done",
                                               "mode": "code-change", "execution": "pipeline:bugfix",
-                                              "why": "a defect with a repro", "returns": "commits",
+                                              "why": "a defect with a repro", "returns": "commits", "needs_private": "",
                                               "hive": "h", "title": "t", "brief": "", "revision": "abc"},
                         cli.DISPATCH_TIMEOUT_S)
     assert cli.DISPATCH_TIMEOUT_S > 2 * 120

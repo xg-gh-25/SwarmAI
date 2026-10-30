@@ -81,6 +81,42 @@ class SwarmOutError(Exception):
     """A dispatch or answer that cannot be done; the message is safe to show."""
 
 
+class SwarmOutRefused(SwarmOutError):
+    """The task is refused at intake (its spec does not pass admission): nothing was
+    asked of a Hive and nothing was sent. Recorded in ``refusals.jsonl``, never in the
+    dispatch log (design 2026-10-30-dispatch-center §2.3); the router answers 422."""
+
+    def __init__(self, message: str, private: bool = False):
+        super().__init__(message)
+        self.private = private
+
+
+def _record_refusal(brain: str, title: str, reasons: list[str], private: bool) -> None:
+    """One intake refusal (its own file: a dispatch-log row without a session means "may
+    have been sent", and the dispatch log's readers expect a Hive)."""
+    row = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "brain": brain,
+           "title": " ".join((title or "").split())[:MAX_TITLE_CHARS], "private": private,
+           "reasons": [str(r)[:300] for r in reasons[:6]]}
+    with open(_state_dir() / "refusals.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def refusal_counts() -> dict[str, int]:
+    """``{"total", "private"}`` of the intake refusals recorded (the history's line)."""
+    p = _state_dir() / "refusals.jsonl"
+    total = private = 0
+    if p.is_file():
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                total += 1
+                private += row.get("private") is True
+    return {"total": total, "private": private}
+
+
 class SwarmOutMaybeSent(SwarmOutError):
     """A dispatch the Hive may have taken: it did not name the session in time. Its row
     is recorded without a session; it is neither "sent" nor "nothing was sent"
@@ -435,7 +471,8 @@ def pick_hive(hives: list[dict[str, Any]]) -> tuple[str, str]:
 async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: str, acceptance: str,
                         mode: Optional[str] = None, execution: Optional[str] = None,
                         origin: str = "swarm-out", *, seen_revision: str, brief: str = "",
-                        why: str = "", returns: Optional[str] = None) -> dict[str, Any]:
+                        why: str = "", returns: Optional[str] = None,
+                        needs_private: str = "") -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision the person was shown (``seen_revision``,
@@ -449,14 +486,17 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     ws = get_swarmws()
     try:
         spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, execution, why,
-                                       "hive", returns=returns)
+                                       "hive", returns=returns, needs_private=needs_private)
     except task_spec.SpecError as e:
         raise SwarmOutError(str(e)) from None
     if not seen_revision or spec["revision"] != seen_revision:
         raise SwarmOutError(f"{brain}'s Project Agent changed since it was shown; show the spec again")
     reasons = task_spec.admit(spec)
     if reasons:
-        raise SwarmOutError(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons))
+        # refused at intake: before a Hive is chosen or the Brain synced (dispatch-center §2)
+        private = bool(spec.get("private"))
+        await asyncio.to_thread(_record_refusal, brain, title, reasons, private)
+        raise SwarmOutRefused(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons), private)
     if hive_ref:
         hive_reason = "named"
     else:
@@ -902,7 +942,12 @@ async def list_runs() -> dict[str, Any]:
     except Exception as e:                          # results unreadable: the runs still list
         logger.warning("swarm_out: attaching results failed (%s)", type(e).__name__)
         errors.append("could not read the runs' results")
-    return {"runs": rows, "asks": asks, "errors": errors}
+    # intake refusals, for the history's line (dispatch-center §2.3)
+    try:
+        refusals = await asyncio.to_thread(refusal_counts)
+    except (OSError, UnicodeError):
+        refusals = None
+    return {"runs": rows, "asks": asks, "errors": errors, "refusals": refusals}
 
 
 def _log_row_of(dispatch_id: str) -> dict[str, Any]:
