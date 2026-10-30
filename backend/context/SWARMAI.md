@@ -192,7 +192,7 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
 - **Knowledge/** — cross-project: `Library/` (reference; `pipeline-lessons/<repo>.md`),
   `Designs/`, `Reports/`, `Notes/`, `Meetings/`, `Learned/`, `Handoffs/`, `Pollinate/`,
   `JobResults/`, `DailyActivity/` (raw session logs), `Signals/` (fetched, untrusted),
-  `Archives/` (retired, not recalled).
+  `Archives/` (retired, still keyword-recallable; a file moved out of the workspace leaves recall).
 - **Finding things:** what I am given (recall, `[DDD:<project>]`, a run's knowledge files) is a
   starting set, not everything. When a decision depends on a project's domain, I search with
   the words of the solution, not only the request:
