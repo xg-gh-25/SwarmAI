@@ -516,32 +516,6 @@ def _lock_for(did: str) -> asyncio.Lock:
     return lock      # kept for the process (one small lock per dispatched run)
 
 
-_ACCEPTS: set = set()
-
-
-async def accept_lessons(dispatch_id: str, digests: list[str]) -> dict:
-    """The person takes the run's lessons they were shown (core/hive_lessons.accept,
-    ``digests``); returns the run's lessons as ``/runs`` shows them. Runs under the run's
-    check lock, so a check and an accept never overwrite each other's record, and as one
-    shielded step: a dropped request never leaves units queued but not recorded."""
-    from core import hive_lessons, swarm_out
-    if not DISPATCH_ID_RE.fullmatch(dispatch_id or ""):
-        raise ValueError("not a dispatch id")
-    row = await asyncio.to_thread(swarm_out._log_row_of, dispatch_id)
-
-    async def step() -> None:
-        async with _lock_for(dispatch_id):
-            rec = await asyncio.to_thread(load, dispatch_id)
-            if not isinstance(rec, dict):
-                raise ValueError("this run's result has not been taken back yet")
-            rec["lessons"] = await asyncio.to_thread(hive_lessons.accept, row, rec.get("lessons"), digests)
-            await _keep(rec)
-    task = asyncio.ensure_future(step())
-    _ACCEPTS.add(task)                 # referenced until done, also when the request is gone
-    task.add_done_callback(_ACCEPTS.discard)
-    await asyncio.shield(task)
-    kept = (await asyncio.to_thread(_read_kept, [dispatch_id]))[dispatch_id]
-    return _public_lessons(kept) or {}
 
 
 async def fetch(row: dict) -> dict:
@@ -607,7 +581,7 @@ async def _fetch(row: dict) -> dict:
                 rec["transcript_rev"] = int(rev) if isinstance(rev, str) and rev.isdigit() else None
                 rec["fetched_at"] = rec["checked_at"]
         if rec["fetch_error"] is None and not records:
-            # the run's lessons, kept here until the person takes them (core/hive_lessons)
+            # the run's lessons, kept here and queued for this machine's CDF (core/hive_lessons)
             from core import hive_lessons
             got = await hive_lessons.take(row, inst, prev.get("lessons"))
             if got is not None:
@@ -634,8 +608,7 @@ async def _keep(rec: dict) -> dict:
 _RECORD_TRANSIENT = ("hive_silent", "hive_unusable")
 
 
-#: one record pull's wall clock: a Hive streaming slowly never holds the run's lock (and
-#: the person's accept) longer
+#: one record pull's wall clock: a Hive streaming slowly never holds the run's lock longer
 PULL_TIMEOUT_S = 120
 
 
@@ -667,7 +640,7 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
                       "last_at": pulled.get("last_at"), "error": err}
     got = hive_lessons._agent_of(row)
     if got is not None:
-        rec["lessons"] = await asyncio.to_thread(hive_lessons.pending_state, got[0], got[1],
+        rec["lessons"] = await asyncio.to_thread(hive_lessons.settle, got[0], got[1],
                                                  prev.get("lessons"))
     rows, complete, partial = await asyncio.to_thread(hive_records.turn_rows, did)
     if rows and not complete:

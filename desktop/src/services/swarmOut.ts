@@ -263,14 +263,6 @@ export const swarmOutService = {
       { key, tip, approve_protected: approveProtected });
     return data as { landed: boolean; head: string | null; into: string | null };
   },
-  /** Take a run's lessons: they go to this machine's judge (backend core/hive_lessons.accept). */
-  /** Take the lessons the person was shown (``digests`` of the state rendered): one
-   *  that arrived after it waits for the next accept. */
-  async acceptLessons(dispatchId: string, digests: string[]): Promise<SwarmOutLessons> {
-    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/lessons/accept`,
-      { digests });
-    return data as SwarmOutLessons;
-  },
   async returnReject(dispatchId: string, key: string, tip: string): Promise<void> {
     await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/reject`, { key, tip });
   },

@@ -1499,20 +1499,16 @@
     "lessons": {
       "notSupported": "教训：这台 Hive 还不能交回教训（需要更新 Hive）",
       "notFetched": "教训：这次没取回来，下次检查再试",
-      "written": "本机判官写进 Brain {{count}} 条",
-      "rejected": "没通过 {{count}} 条",
+      "written": "写进 Brain {{count}} 条",
+      "rejected": "没写入 {{count}} 条",
       "skipped": "{{count}} 条不是这个 Brain 的，没收",
       "refused": "{{count}} 条没过本机的检查",
       "line": "教训：交回 {{count}} 条，{{parts}}",
       "withExtra": "{{line}}（{{extra}}）",
-      "judging": "待判 {{count}} 条",
-      "waiting": "教训：{{count}} 条待你收下（收下才交给本机判官）",
-      "morePending": "另有 {{count}} 条待你收下",
-      "noneForBrain": "教训：交回 {{count}} 条，都不是这个 Brain 的",
-      "accept": "收下教训",
-      "accepting": "正在交给判官…",
-      "accepted": "已交给本机判官",
-      "notQueued": "没交给判官（本机的知识库暂时不可用），稍后再收一次"
+      "judging": "处理中 {{count}} 条",
+      "waiting": "教训：{{count}} 条还没交给本机 CDF（本机知识库暂时不可用，下次检查再交）",
+      "morePending": "另有 {{count}} 条还没交给本机 CDF",
+      "noneForBrain": "教训：交回 {{count}} 条，都不是这个 Brain 的"
     },
     "state": {
       "waiting": "在等你",

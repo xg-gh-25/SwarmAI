@@ -1500,20 +1500,16 @@
     "lessons": {
       "notSupported": "Lessons: this Hive can't return lessons yet (update the Hive)",
       "notFetched": "Lessons: not fetched this time, retried at the next check",
-      "written": "{{count}} written into the Brain by the local judge",
-      "rejected": "{{count}} rejected",
+      "written": "{{count}} written into the Brain",
+      "rejected": "{{count}} not written",
       "skipped": "{{count}} not for this Brain, not taken",
       "refused": "{{count}} failed this machine's checks",
       "line": "Lessons: {{count}} returned, {{parts}}",
       "withExtra": "{{line}} ({{extra}})",
-      "judging": "{{count}} being judged",
-      "waiting": "Lessons: {{count}} waiting for you (the local judge sees them once you take them)",
-      "morePending": "{{count}} more waiting for you",
-      "noneForBrain": "Lessons: {{count}} returned, none for this Brain",
-      "accept": "Take the lessons",
-      "accepting": "Sending to the judge…",
-      "accepted": "Sent to the local judge",
-      "notQueued": "Not sent to the judge (this machine's knowledge store is unavailable); take them again later"
+      "judging": "{{count}} in progress",
+      "waiting": "Lessons: {{count}} not yet given to this machine's CDF (its store was unavailable; the next check retries)",
+      "morePending": "{{count}} more not yet given to this machine's CDF",
+      "noneForBrain": "Lessons: {{count}} returned, none for this Brain"
     },
     "state": {
       "waiting": "Waiting for you",

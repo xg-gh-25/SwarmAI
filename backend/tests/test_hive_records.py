@@ -749,7 +749,9 @@ def test_a_record_not_starting_at_the_first_turn_reads_its_result_the_old_way(ho
     assert not any(c.startswith("/api/hive/lessons/") for c in host.calls)   # lessons: the record's
 
 
-def test_the_records_path_never_queues_lessons(host, hive_ws, monkeypatch, tmp_path):
+def test_the_records_path_queues_its_lessons(host, hive_ws, monkeypatch, tmp_path):
+    """A run's record brings its lessons, and they go to this machine's CDF at once
+    (design 2026-10-30-cdf-agent-decides D13), source S6."""
     from core import hive_records as hr
     from core import swarm_out, swarm_out_results as sor
     monkeypatch.setattr(sor, "_dir", lambda: tmp_path / "results")
@@ -761,22 +763,13 @@ def test_the_records_path_never_queues_lessons(host, hive_ws, monkeypatch, tmp_p
     hr.seal_turn(hive_ws, SID, _turn_rows("x"))
     hr.append(hive_ws, SID, "lessons", data=json.dumps({"lessons": [{"unit": _pitfall("rec")}]}).encode())
     rec = asyncio.run(sor.fetch(ROW))
-    assert rec["lessons"]["pending"] == 1 and rec["lessons"]["candidates"] == []
+    assert rec["lessons"]["pending"] == 0 and len(rec["lessons"]["candidates"]) == 1
     from core.ingestion.store import connect_rw
     conn = connect_rw()
     try:
-        assert conn.execute("SELECT COUNT(*) FROM ingestion_inbox WHERE source_v2='S6'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM ingestion_inbox WHERE source_v2='S6'").fetchone()[0] == 1
     finally:
         conn.close()
-
-
-def test_the_accept_route_is_the_desktops(monkeypatch):
-    from fastapi import HTTPException
-    from routers import swarm_out as so_router
-    monkeypatch.setenv("SWARMAI_MODE", "hive")
-    with pytest.raises(HTTPException) as e:
-        asyncio.run(so_router.lessons_accept(DID, so_router.LessonsAcceptBody(digests=[])))
-    assert e.value.status_code == 403
 
 
 def test_a_job_a_restart_failed_closes_its_record(hive_ws, monkeypatch):
@@ -1049,42 +1042,6 @@ async def test_a_turn_whose_outcome_write_failed_after_marking_it_is_still_its_o
     assert [sum(1 for r in b["rows"] if r["role"] == "user") for b in bodies] == [1, 1]
 
 
-def test_the_accept_route_takes_only_digests(monkeypatch):
-    from pydantic import ValidationError
-    from routers import swarm_out as so_router
-    with pytest.raises(ValidationError):
-        so_router.LessonsAcceptBody(digests=["not a digest"])
-    with pytest.raises(ValidationError):
-        so_router.LessonsAcceptBody()
-    assert so_router.LessonsAcceptBody(digests=["a" * 64]).digests == ["a" * 64]
-
-
-def test_a_dropped_accept_request_still_records_what_it_queued(monkeypatch):
-    from core import hive_lessons, swarm_out, swarm_out_results as sor
-    kept = []
-    monkeypatch.setattr(swarm_out, "_log_row_of", lambda did: ROW)
-    monkeypatch.setattr(sor, "load", lambda did: {"dispatch_id": did, "lessons": {}})
-
-    async def keep(rec):
-        kept.append(rec["lessons"])
-    monkeypatch.setattr(sor, "_keep", keep)
-
-    def slow_accept(row, prev, shown):
-        time.sleep(0.3)
-        return {"candidates": ["c"], "accepted_at": "now"}
-    monkeypatch.setattr(hive_lessons, "accept", slow_accept)
-
-    async def go():
-        t = asyncio.ensure_future(sor.accept_lessons(DID, ["a" * 64]))
-        await asyncio.sleep(0.05)
-        t.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await t
-        await asyncio.gather(*list(sor._ACCEPTS))
-    asyncio.run(go())
-    assert kept == [{"candidates": ["c"], "accepted_at": "now"}]
-
-
 def test_a_turn_whose_marker_row_is_gone_is_not_the_sessions_first(hive_ws):
     """The row an earlier entry ended at was removed (a row never delivered is deleted):
     what is read is not the session's beginning, however few rows there are."""
@@ -1094,3 +1051,10 @@ def test_a_turn_whose_marker_row_is_gone_is_not_the_sessions_first(hive_ws):
     es = hr.entries(hive_ws, SID)["entries"]
     bodies = [json.loads((hr.session_dir(hive_ws, SID) / e["file"]).read_text()) for e in es]
     assert [b["first_turn"] for b in bodies] == [True, False]
+
+
+def test_lessons_need_no_one_to_take_them():
+    from core import hive_lessons, swarm_out_results as sor
+    from routers import swarm_out as so_router
+    assert not hasattr(hive_lessons, "accept") and not hasattr(sor, "accept_lessons")
+    assert not hasattr(so_router, "lessons_accept")

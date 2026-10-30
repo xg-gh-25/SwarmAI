@@ -45,16 +45,16 @@ describe('the Brain of a run', () => {
       { id: 'x', status: 'unknown' }] }))).toBe('校验：lint 没看到 · x 跑了但没有结果（只读了最近的轮次）');
   });
 
-  it('says what came back as lessons, what waits for the person, and what the judge did', () => {
+  it('says what came back as lessons, what is not queued yet, and what CDF did', () => {
     const l = (o = {}) => ({ returned: 0, pending: 0, accepted: false, sent: 0, written: 0, rejected: 0, judging: 0,
       skipped: 0, refused: 0, truncated: false, error: null, ...o });
     expect(lessonsLine(res())).toBeNull();
     expect(lessonsLine(res({ lessons: l() }))).toBeNull();
     expect(lessonsLine(res({ lessons: l({ returned: 3, pending: 2, skipped: 1 }) })))
-      .toBe('教训：2 条待你收下（收下才交给本机判官）');
+      .toBe('教训：2 条还没交给本机 CDF（本机知识库暂时不可用，下次检查再交）');
     expect(lessonsLine(res({ lessons: l({ returned: 1, skipped: 1 }) }))).toBe('教训：交回 1 条，都不是这个 Brain 的');
     expect(lessonsLine(res({ lessons: l({ returned: 5, sent: 3, written: 1, rejected: 1, judging: 1, pending: 1, skipped: 1 }) })))
-      .toBe('教训：交回 3 条，本机判官写进 Brain 1 条、没通过 1 条、待判 1 条、另有 1 条待你收下（1 条不是这个 Brain 的，没收）');
+      .toBe('教训：交回 3 条，写进 Brain 1 条、没写入 1 条、处理中 1 条、另有 1 条还没交给本机 CDF（1 条不是这个 Brain 的，没收）');
     expect(lessonsLine(res({ lessons: l({ error: 'not_supported' }) }))).toBe('教训：这台 Hive 还不能交回教训（需要更新 Hive）');
     expect(lessonsLine(res({ lessons: l({ error: 'hive_silent' }) }))).toBe('教训：这次没取回来，下次检查再试');
   });

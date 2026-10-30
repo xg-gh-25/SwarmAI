@@ -15,13 +15,11 @@ the inbox; nothing on the Hive changes. ``exclude`` leaves out units already sea
 
 **Host side.** The units come back in the run's record (core/hive_records), or, from a
 Hive that keeps none, through ``take`` (``GET /api/hive/lessons/{session}``), and are kept
-on this machine. Nothing is queued until the person takes them (design
-2026-10-29-hive-run-record-and-worker-role §7 D3: untrusted text into lasting cognition
-is a question only a person answers): ``pending_state`` counts what is waiting, ``accept``
-(``POST /api/swarm-out/runs/{id}/lessons/accept``, the panel's "收下教训") queues it
+on this machine. ``settle`` queues every one this Brain takes as soon as it is here
+(design 2026-10-30-cdf-agent-decides D13: no person is asked to classify knowledge),
 through the same CDF path as a local unit (``ingest`` → ``api_v2.enqueue_unit``), so the
-same judge, the same routing and the same archive of rejected units apply, and the host
-stays the only writer of a Brain:
+same provenance rule, routing and archive of rejected units apply, and the host stays the
+only writer of a Brain; a store that is busy or failing leaves them for the next check:
 
 - only kinds ``cognition`` and ``gap``, and only scope ``project:<the run's Brain>`` or
   ``world`` (for the General Brain, ``world`` only). Everything else is skipped.
@@ -32,10 +30,9 @@ stays the only writer of a Brain:
 - the Hive's evidence anchors name Hive-local records, so they are replaced by one
   evidence root this machine registers for the unit itself: kind ``agent_document``
   (with no parents its trust is always ``external``), locator ``hive:<dispatch>:<digest>``.
-  External trust taints the unit. It cites no user message or measured result of this
-  machine, so the trust rule (pipeline_v2._not_grounded) keeps it out of every per-turn
-  injected store; it can reach its Brain's DDD. ``relation_hint`` is dropped (its target is a
-  Hive anchor).
+  It cites external content and no user message of this machine, so the provenance
+  rule (pipeline_v2._admitted) keeps it out of every per-turn injected store; it reaches its
+  Brain's DDD, marked external. ``relation_hint`` is dropped (its target is a Hive anchor).
 - at most ``MAX_LESSONS`` units per run (queued or refused), and ``INGEST_BUDGET_S`` of
   queueing per call; a unit is validated before any row is written for it. A unit
   settled for the run (taken, or refused by this machine's contract) is not sent again;
@@ -289,8 +286,8 @@ def available(dispatch_id: str) -> list[dict]:
 def pending_state(dispatch_id: str, brain: str, prev: Optional[dict], *,
                   error: Optional[str] = None, truncated: Optional[bool] = None) -> dict:
     """The ``lessons`` part of a run's record: what is kept here (``returned``), what this
-    Brain would take that is not settled yet (``pending``, waiting for the person, design
-    §7 D3), what it would not take (``skipped``), and what was sent to the judge."""
+    Brain takes that is not queued yet (``pending``: a store that could not queue them),
+    what it would not take (``skipped``), and what was queued (``candidates``)."""
     old = prev if isinstance(prev, dict) else {}
     rec = {"candidates": _strs(old.get("candidates"))[:MAX_LESSONS],
            "taken": _strs(old.get("taken"))[:MAX_LESSONS],
@@ -301,7 +298,7 @@ def pending_state(dispatch_id: str, brain: str, prev: Optional[dict], *,
     waiting, skipped, seen = _waiting(dispatch_id, brain, set(rec["taken"]) | set(rec["refused"]))
     room = max(0, MAX_LESSONS - len(rec["candidates"]) - len(rec["refused"]))
     rec.update(returned=seen, pending=min(len(waiting), room), skipped=skipped,
-               # what the person is shown and takes (``accept``): host-made hashes, no Hive text
+               # the waiting units by host-made hashes, no Hive text
                digests=[_digest(w["unit"]) for w in waiting[:room]])
     return rec
 
@@ -333,33 +330,28 @@ def _waiting(dispatch_id: str, brain: str, settled: set) -> tuple[list[dict], in
     return waiting, skipped, len(seen) + unreadable
 
 
-def accept(row: dict, prev: Optional[dict], shown: list[str]) -> dict:
-    """The person took this run's lessons (design §7 D3): queue for this machine's judge
-    (``ingest``) the pending ones they were shown (``shown``: the ``digests`` of the state
-    they saw; one that arrived after it waits for the next accept); returns the new
-    ``lessons`` part."""
-    got = _agent_of(row)
-    if got is None:
-        raise ValueError("this run did not go out under a Project Agent")
-    did, brain = got
+def settle(dispatch_id: str, brain: str, prev: Optional[dict], *,
+           truncated: Optional[bool] = None) -> dict:
+    """Queue for this machine's CDF (``ingest``) every lesson kept here that this Brain
+    takes and that is not settled yet; returns the new ``lessons`` part. A store that
+    cannot queue now leaves them waiting (``error``: not_queued), and the next check
+    queues them."""
     old = prev if isinstance(prev, dict) else {}
-    rec = pending_state(did, brain, old, error=old.get("error"))
+    rec = pending_state(dispatch_id, brain, old, error=None, truncated=truncated)
     room = MAX_LESSONS - len(rec["candidates"]) - len(rec["refused"])
     if room > 0 and rec["pending"]:
         settled = set(rec["taken"]) | set(rec["refused"])
-        waiting, _skipped, _seen = _waiting(did, brain, settled)
-        took = set(shown)
-        waiting = [w for w in waiting if _digest(w["unit"]) in took]
+        waiting, _skipped, _seen = _waiting(dispatch_id, brain, settled)
         try:
-            out = ingest(did, brain, waiting, settled, room)
+            out = ingest(dispatch_id, brain, waiting, settled, room)
         except Exception as exc:  # noqa: BLE001 — the CDF store unavailable: they stay waiting
-            logger.error("hive_lessons: queueing %s failed: %s", did, type(exc).__name__)
-            return pending_state(did, brain, rec, error="not_queued")
+            logger.error("hive_lessons: queueing %s failed: %s", dispatch_id, type(exc).__name__)
+            return pending_state(dispatch_id, brain, rec, error="not_queued")
         rec["candidates"] = list(dict.fromkeys(rec["candidates"] + out["candidates"]))[:MAX_LESSONS]
         rec["taken"] = (rec["taken"] + out["taken"])[:MAX_LESSONS]
         rec["refused"] = (rec["refused"] + out["refused"])[:MAX_LESSONS]
-    rec["accepted_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return pending_state(did, brain, rec, error=None)
+        rec["accepted_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return pending_state(dispatch_id, brain, rec, error=None)
 
 
 def _keep_legacy(did: str, lessons: list[dict]) -> None:
@@ -372,9 +364,9 @@ def _keep_legacy(did: str, lessons: list[dict]) -> None:
 
 
 async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
-    """From a Hive that keeps no run records: fetch the run's lessons and keep them here
-    (nothing is queued: the person takes them, ``accept``). The new ``lessons`` part, or
-    None for a run not dispatched under a Project Agent."""
+    """From a Hive that keeps no run records: fetch the run's lessons, keep them here and
+    queue them (``settle``). The new ``lessons`` part, or None for a run not dispatched
+    under a Project Agent."""
     from core import swarm_out
     got = _agent_of(row)
     sid = row.get("session_id")
@@ -402,7 +394,7 @@ async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
     lessons = [{"source": x.get("source"), "unit": x.get("unit")} for x in body["lessons"][:MAX_LESSONS]
                if isinstance(x, dict)]
     await asyncio.to_thread(_keep_legacy, did, lessons)
-    return await asyncio.to_thread(pending_state, did, brain, old, truncated=body.get("truncated") is True)
+    return await asyncio.to_thread(settle, did, brain, old, truncated=body.get("truncated") is True)
 
 
 _DONE = ("written", "reinforced", "merged")
