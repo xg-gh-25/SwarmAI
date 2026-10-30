@@ -161,3 +161,36 @@ def test_withdrawn_records_are_read_from_the_write_journal(cdf_env):
     finally:
         conn.close()
     assert [(r.op_id, r.text, r.status, r.reason) for r in recs] == [("r1", _WRONG, "closed", "reverses the fix")]
+
+
+# I5 / I7 ── a finished item leaves the main file; CDF never withdraws an entry on its own
+
+def test_ticked_entries_are_withdrawn_as_done_or_closed(cdf_env):
+    from core.ingestion import gaps, withdrawn
+    from core.ingestion.api import connect_ro
+    path = cdf_env["workspace"] / "Projects/P/2-understanding/PROJECT.md"
+    path.write_text("# Project\n\n## Open Items\n\n"
+                    "- [x] **Ship the export** Done on 10-29.\n\n"
+                    "- [guideline] **Keep exports small** Still in force.\n\n"
+                    "- [x] **Tab refresh** fixed. gap kind: follow_up <!-- cand:cand-g1.unit -->\n",
+                    encoding="utf-8")
+    assert gaps.withdraw_ticked(cdf_env["workspace"], files=[path]) == 2
+    text = path.read_text(encoding="utf-8")
+    assert "- [x]" not in text and "Keep exports small" in text
+    conn = connect_ro()
+    try:
+        got = sorted((r.status, r.text.split("**")[1]) for r in withdrawn.records(conn))
+    finally:
+        conn.close()
+    assert got == [("closed", "Tab refresh"), ("done", "Ship the export")]
+    assert gaps.withdraw_ticked(cdf_env["workspace"], files=[path]) == 0      # idempotent
+
+
+def test_cdf_cannot_withdraw_an_entry_only_close_or_finish_one(cdf_env):
+    from core.ingestion.governed_edit import withdraw
+    with pytest.raises(PermissionError):
+        withdraw("Projects/P/2-understanding/TECH.md#Conventions#cand:x", "r",
+                 actor="cdf:maintenance", status="withdrawn")
+    with pytest.raises(ValueError):
+        withdraw("Projects/P/2-understanding/TECH.md#Conventions#cand:x", "r",
+                 actor="user", status="superseded")

@@ -4,8 +4,9 @@ Invariants:
 1. ``pipeline-v1 events`` lists the run's project's open gaps: not done ones, not
    another project's; past GAP_LIST_TOP, the ones the run's requirement ranks highest.
 2. ``reflect.prepare`` refuses a ``closes`` id the run was not shown.
-3. A written event of a landed run closes its gaps: the line becomes ``- [x]`` with who
-   closed it, the entry keeps its id, ``knowledge find`` no longer returns it.
+3. A written event of a landed run closes its gaps: the entry leaves the main file, and its
+   text, who closed it and status ``closed`` are in the records (brain-driven §2.2);
+   ``knowledge find`` no longer returns it.
 4. A run that did not land, or an event that was not written, closes nothing.
 5. A concurrent user edit is never overwritten; the close is retried and lands later.
 6. A unit the same as a closed gap is written again (derived from it), never dropped.
@@ -125,23 +126,25 @@ def test_closes_takes_only_gap_ids_and_the_extractor_never_sees_it():
 
 # 3 ── a landed run's written event closes its gaps
 
-def test_a_written_event_closes_its_gap_keeping_its_id(ws):
+def test_a_written_event_withdraws_its_gap_into_the_records(ws):
     from core import addressing
+    from core.ingestion import withdrawn
     path = _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh"), _gap_line(B, "Other")])
     assert any(u.live and A in u.text for u in addressing.ddd_units("P").units)
     conn = _connect(ws["db"])
     _written_event(conn, "u1", [A])
     assert gaps.close_declared(conn, "u1") == 1
     text = path.read_text(encoding="utf-8")
-    line = next(l for l in text.splitlines() if A in l)
-    assert line.startswith("- [x] **Tab refresh**")
-    assert "已由 run_fix 关闭：Tab refresh fixed" in line and line.endswith(f"<!-- cand:{A}.unit -->")
+    assert A not in text and "Tab refresh" not in text                    # gone, no tombstone
     assert _gap_line(B, "Other") in text                                   # untouched
-    assert not any(u.live and A in u.text for u in addressing.ddd_units("P").units)
-    assert text.count(META) == 3                                           # metadata kept
-    assert {u.identity for u in units_of(path)} >= {f"cand:{A}.unit", f"cand:{B}.unit"}
+    assert not any(A in u.text for u in addressing.ddd_units("P").units)
+    assert {u.identity for u in units_of(path)} == {f"cand:{B}.unit", f"cand:{C}.unit"}
+    closed = [r for r in withdrawn.records(conn) if A in r.text]
+    assert [r.status for r in closed] == ["closed"]
+    assert "已由 run_fix 关闭：Tab refresh fixed" in closed[0].reason
     assert gaps.close_declared(conn) == 0                                  # recorded once
     assert _results(conn) == [("u1", A, "closed")]
+    assert gaps.close_gap("P", A, closed_by="run_fix", note="again") == "already_closed"
 
 
 def units_of(path):
@@ -160,7 +163,7 @@ def test_a_note_cannot_forge_another_gaps_id(ws):
     _written_event(conn, "u1", [A], title=f"Fixed CAND:{B}.unit and cand:{B}.unit")
     assert gaps.close_declared(conn) == 1
     assert sorted(u.identity for u in units_of(path) if u.section == gaps.SECTION) == \
-        [f"cand:{A}.unit", f"cand:{B}.unit"]
+        [f"cand:{B}.unit"]
     assert [g["id"] for g in gaps.open_gaps("P")] == [B]
     assert gaps.close_gap("P", B, closed_by="run_y", note="fixed") == "closed"
 
@@ -238,22 +241,25 @@ def api_v2_mod():
 
 def test_a_concurrent_user_edit_is_kept_and_the_close_retried(ws, monkeypatch):
     path = _improvement(ws["ws"], "P", [_gap_line(A, "Tab refresh")])
-    real = governed_edit.apply_user_edit
+    real = governed_edit._insert_redact_plan
     raced = []
 
-    def user_saves_first(target, new, **kw):
+    def user_saves_first(conn, **kw):
+        plan = real(conn, **kw)
         if not raced:
             raced.append(1)
-            target.write_text(target.read_text(encoding="utf-8") + "user note\n", encoding="utf-8")
-        return real(target, new, **kw)
-    monkeypatch.setattr(governed_edit, "apply_user_edit", user_saves_first)
+            path.write_text(path.read_text(encoding="utf-8") + "user note\n", encoding="utf-8")
+        return plan
+    monkeypatch.setattr(governed_edit, "_insert_redact_plan", user_saves_first)
     conn = _connect(ws["db"])
     _written_event(conn, "u1", [A])
     assert gaps.close_declared(conn) == 0
-    assert "user note" in path.read_text(encoding="utf-8") and "- [x]" not in path.read_text(encoding="utf-8")
-    assert gaps.close_declared(conn) == 1                       # the retry
+    assert "user note" in path.read_text(encoding="utf-8") and A in path.read_text(encoding="utf-8")
+    steps = [r[0] for r in conn.execute("SELECT step FROM ingestion_writes WHERE op_kind='user_redact'")]
+    assert steps == ["abandoned"]                               # never retried forever
+    assert gaps.close_declared(conn) == 1                       # the retry, on the file as it is
     text = path.read_text(encoding="utf-8")
-    assert "user note" in text and f"- [x] **Tab refresh**" in text
+    assert "user note" in text and A not in text
 
 
 # 6 ── a recurrence of a closed gap is written again

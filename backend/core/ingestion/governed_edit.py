@@ -408,16 +408,16 @@ def _redaction_span(target: Path, anchor: str) -> tuple[int, int, str]:
 
 def _insert_redact_plan(conn: sqlite3.Connection, *, anchor: str, reason: str,
                         target: Path, vault: Path, original: bytes,
-                        intended: bytes, identity: str) -> dict[str, Any]:
+                        intended: bytes, identity: str, actor: str = "user",
+                        status: str = "withdrawn") -> dict[str, Any]:
     op_id = f"user-redact:{uuid.uuid4().hex}"
     now = _iso()
     owner = conn.execute("SELECT epoch FROM ingestion_owner WHERE id=1").fetchone()
     epoch = int(owner[0]) if owner else 0
-    marker = f"redacted:{hashlib.sha256(anchor.encode()).hexdigest()}"
     patch = {"target_path": _relative(target), "delete": False,
-             "invalidate_anchors": [anchor], "actor": "user"}
+             "invalidate_anchors": [anchor], "actor": actor}
     relation_payload = {"redact_anchor": anchor, "reason": reason,
-                        "vault_path": str(vault)}
+                        "vault_path": str(vault), "status": status, "actor": actor}
     conn.execute(
         """INSERT INTO ingestion_writes
         (op_id,op_kind,unit_id,target_path,before_hash,intended_bytes,after_hash,
@@ -425,7 +425,7 @@ def _insert_redact_plan(conn: sqlite3.Connection, *, anchor: str, reason: str,
          baseline_patch,step,step_owner,owner_epoch,created_at,updated_at)
         VALUES (?,'user_redact',NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (op_id, _relative(target), revision_of(target), intended, _hash(intended),
-         str(vault), _hash(original), json.dumps([marker]),
+         str(vault), _hash(original), json.dumps([]),
          json.dumps([original.decode("utf-8")]), json.dumps([relation_payload]),
          json.dumps(patch), "planned", "user:redact", epoch, now, now),
     )
@@ -488,10 +488,29 @@ def _table_exists_for_redaction(conn: sqlite3.Connection, table: str) -> bool:
                         (table,)).fetchone() is not None
 
 
+WITHDRAW_STATUSES = frozenset({"withdrawn", "closed", "done"})
+
+
 def redact(anchor: str, reason: str, *, actor: str) -> str:
-    """Replace one resolved unit with a tombstone; callable only as actor ``user``."""
+    """Withdraw one resolved unit at the user's request; callable only as actor ``user``."""
     if actor != "user":
         raise PermissionError("redaction is user-only")
+    return withdraw(anchor, reason, actor="user", status="withdrawn")
+
+
+def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
+    """Remove one resolved unit from its main file (design 2026-10-30-brain-driven §2.2).
+
+    The main file keeps no trace of it: no tombstone, no mark. The original text, status,
+    reason and actor go into the write journal and ``redactions``, and the original into
+    the vault, so the withdrawal can be read (``withdrawn.records``) and undone. ``status``:
+    ``withdrawn`` (the user took it out; only the user may), ``closed`` (a gap a run
+    fixed) or ``done`` (an item ticked ``[x]``); the last two are history a recurrence may
+    repeat. Returns the file's new revision."""
+    if status not in WITHDRAW_STATUSES:
+        raise ValueError(f"unknown withdraw status {status!r}")
+    if status == "withdrawn" and actor != "user":
+        raise PermissionError("only the user withdraws an entry; CDF closes gaps and done items")
     reason = reason.strip()
     if not reason or len(reason) > 500 or any(ord(char) < 32 and char not in "\t" for char in reason):
         raise ValueError("redaction reason must be 1-500 printable characters")
@@ -506,22 +525,38 @@ def redact(anchor: str, reason: str, *, actor: str) -> str:
     start, end, parsed_identity = _redaction_span(target, anchor)
     data = target.read_bytes()
     original = data[start:end]
-    date = datetime.now(timezone.utc).date().isoformat()
-    marker = f"redacted:{hashlib.sha256(anchor.encode()).hexdigest()}"
-    tombstone = (f"- [redacted] **Withdrawn** [已撤回 {date}，原因：{reason}，原锚点：{anchor}] "
-                 f"<!-- {parsed_identity} | {marker} -->").encode("utf-8")
-    intended = data[:start].rstrip(b"\r\n") + b"\n\n" + tombstone + b"\n" + data[end:].lstrip(b"\r\n")
+    intended = _without(data, start, end)
     conn = _connection()
     try:
         plan = _insert_redact_plan(conn, anchor=anchor, reason=reason, target=target,
                                    vault=_redacted_path(anchor), original=original,
-                                   intended=intended, identity=identity)
-        result = recover_redact_plan(conn, plan)
+                                   intended=intended, identity=identity, actor=actor, status=status)
+        try:
+            result = recover_redact_plan(conn, plan)
+        except StaleRevision:
+            # the file changed under us (a user's save): this plan can never apply, so it
+            # is abandoned, not left for recovery to retry forever; the caller tries again
+            # later with a plan of the file as it is then
+            conn.execute("UPDATE ingestion_writes SET step='abandoned', updated_at=? WHERE op_id=? "
+                         "AND step NOT IN ('done','abandoned')", (_iso(), plan["op_id"]))
+            conn.commit()
+            raise
         if result != "done":
             raise RuntimeError(f"redaction did not complete: {result}")
         return revision_of(target)
     finally:
         conn.close()
+
+
+def _without(data: bytes, start: int, end: int) -> bytes:
+    """*data* with the unit at [start, end) removed and nothing left in its place: the
+    separator that preceded it now precedes what followed it."""
+    before, after = data[:start], data[end:].lstrip(b"\r\n")
+    if not before.strip():
+        return after
+    if not after:
+        return before.rstrip(b"\r\n") + b"\n"
+    return (before if before.endswith(b"\n") else before + b"\n") + after
 
 
 def _sync_hash(mapping: Mapping[str, str], path: Path) -> str | None:

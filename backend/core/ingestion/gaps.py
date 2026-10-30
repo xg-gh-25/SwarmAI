@@ -135,39 +135,86 @@ def open_gaps(project: str | None, query: str = "") -> list[dict[str, str]]:
 
 def close_gap(project: str | None, gap_id: str, *, closed_by: str, note: str,
               on: str | None = None) -> str:
-    """Mark one open gap ``[x]``; return closed | already_closed | not_found |
-    unparseable | stale (only ``stale`` is worth trying again)."""
-    from .governed_edit import StaleRevision, apply_user_edit
-    from .units import _CAND
+    """Withdraw one open gap a run fixed (design 2026-10-30-brain-driven §2.2): it leaves the
+    main file, and its text, the closing note and status ``closed`` go into the records,
+    where recurrence detection reads them (``withdrawn``). Return closed | already_closed |
+    not_found | unparseable | stale (only ``stale`` is worth trying again)."""
+    from .governed_edit import StaleRevision, withdraw
     path = _improvement(project)
     if path is None:
         return "not_found"
     data = path.read_bytes()
     if b"\r" in data:
         return "unparseable"                  # the parser's offsets are of \n text
-    revision = hashlib.sha256(data).hexdigest()   # governed_edit.revision_of of these bytes
     unit = next((u for u in _gap_units(path) if _gap_id(u) == gap_id), None)
     if unit is None:
-        return "not_found"
+        return "already_closed" if _closed_before(gap_id) else "not_found"
     if not _is_open(unit):
         return "already_closed"
     if data[unit.byte_start:unit.byte_end] != unit.text.encode("utf-8"):
         return "stale"                        # the parse is of another version
     day = on or datetime.now(timezone.utc).date().isoformat()
-    # one line, no comment delimiters, and no "cand:" that the parser would take for the
-    # entry's id (it reads the first cand: in the entry, wherever it is)
     reason = _NOTE_UNSAFE.sub(" ", f"已由 {closed_by} 关闭：{note}，{day}").strip()
-    text = _PREFIX.sub("- [x] ", unit.text, count=1)
-    marker = _CAND.search(text)               # the one the entry's id comes from
-    at = text.rfind("<!--", 0, marker.start()) if marker else -1
-    at = at if at >= 0 else (marker.start() if marker else len(text.rstrip()))
-    text = f"{text[:at].rstrip()}（{reason}） {text[at:]}"
-    new = data[:unit.byte_start] + text.encode("utf-8") + data[unit.byte_end:]
     try:
-        apply_user_edit(path, new, expected_revision=revision, actor=f"cdf:{closed_by}")
-    except StaleRevision:
+        withdraw(unit.anchor, reason[:500], actor=f"cdf:{closed_by}", status="closed")
+    except (StaleRevision, ValueError):
         return "stale"
     return "closed"
+
+
+def _closed_before(gap_id: str) -> bool:
+    """Whether a gap with this id was already withdrawn as closed (the records)."""
+    from .api import connect_ro
+    from .withdrawn import records
+    try:
+        conn = connect_ro()
+    except Exception:  # noqa: BLE001 -- unreadable records: not known closed
+        return False
+    try:
+        return any(r.status == "closed" and gap_id in r.text for r in records(conn))
+    finally:
+        conn.close()
+
+
+def withdraw_ticked(workspace: Path, *, files: "list[Path] | None" = None) -> int:
+    """Withdraw every entry ticked ``- [x]`` from the main cognition files: a gap as
+    ``closed``, anything else as ``done`` (design 2026-10-30-brain-driven §2.2: a finished
+    item is mechanically not in force). Returns how many were withdrawn; one that a
+    concurrent edit made stale is left for the next pass."""
+    from .governed_edit import StaleRevision, withdraw
+    from .units import parse_units
+    targets = files if files is not None else main_cognition_files(workspace)
+    count = 0
+    for path in targets:
+        try:
+            units = parse_units(path, root=workspace)
+        except (OSError, ValueError):
+            logger.warning("withdraw_ticked: %s unreadable", path, exc_info=True)
+            continue
+        for unit in units:
+            if not unit.text.lstrip().startswith("- [x]"):
+                continue
+            status = "closed" if "gap kind:" in unit.text else "done"
+            try:
+                withdraw(unit.anchor, "ticked done", actor="cdf:maintenance", status=status)
+                count += 1
+            except (StaleRevision, ValueError, PermissionError):
+                logger.info("withdraw_ticked: %s left for the next pass", unit.anchor, exc_info=True)
+    return count
+
+
+def main_cognition_files(workspace: Path) -> list[Path]:
+    """The four DDD documents of every project, plus MEMORY and EVOLUTION."""
+    from core.project_registry import DDD_CANONICAL_DOCS
+    from core.ddd_paths import ddd_path
+    out: list[Path] = []
+    projects = workspace / "Projects"
+    if projects.is_dir():
+        for project in sorted(p for p in projects.iterdir() if p.is_dir() and not p.name.startswith(".")):
+            out += [p for doc in DDD_CANONICAL_DOCS
+                    if (p := ddd_path(project, "understanding") / doc).is_file()]
+    out += [p for n in ("MEMORY.md", "EVOLUTION.md") if (p := workspace / ".context" / n).is_file()]
+    return out
 
 
 _DECLARED = """SELECT u.unit_id, i.payload, i.project_snapshot, i.source_ref

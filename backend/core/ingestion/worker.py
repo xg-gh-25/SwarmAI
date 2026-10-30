@@ -259,6 +259,18 @@ def _hand_to_writer(conn: sqlite3.Connection, owner: Owner, unit_id: str,
         _close_declared_gaps(conn, unit_id)
 
 
+def _withdraw_ticked(workspace_root) -> None:
+    """A ticked ``- [x]`` entry is finished, so it leaves the main files (brain-driven §2.2)."""
+    from pathlib import Path
+    from .gaps import withdraw_ticked
+    try:
+        n = withdraw_ticked(Path(workspace_root))
+        if n:
+            logger.info("CDF maintenance: %d ticked entries withdrawn", n)
+    except Exception:  # noqa: BLE001 -- the next daily pass tries again
+        logger.warning("CDF maintenance: withdrawing ticked entries failed", exc_info=True)
+
+
 def _close_declared_gaps(conn: sqlite3.Connection, unit_id: str | None = None) -> None:
     """Close the gaps a written run event declared (core/ingestion/gaps). Never fails
     the write: the daily maintenance retries what is left open."""
@@ -812,6 +824,7 @@ class IngestionWorker:
         from .pipeline_v2 import requeue_missing_sections
         requeue_missing_sections(self.workspace_root)
         _close_declared_gaps(conn)
+        _withdraw_ticked(self.workspace_root)
 
     def run_once(self, conn: sqlite3.Connection) -> bool:
         """Process one eligible candidate selected by lane policy."""

@@ -616,7 +616,7 @@ def test_move_tree_journals_governed_project_and_plain_moves_empty_one(corpus: d
     assert (corpus["workspace"] / "Projects" / "Empty2").is_dir()
 
 
-def test_user_redaction_tombstones_and_inactivates_evidence(corpus: dict[str, Path]) -> None:
+def test_user_redaction_removes_the_entry_and_inactivates_evidence(corpus: dict[str, Path]) -> None:
     from core.ingestion.api_v2 import SCHEMA_V2_DDL
     from core.ingestion.governed_edit import redact
 
@@ -645,8 +645,9 @@ def test_user_redaction_tombstones_and_inactivates_evidence(corpus: dict[str, Pa
     revision = redact(anchor, "The fact contains sensitive data.", actor="user")
     assert revision == revision_of(target)
     text = target.read_text(encoding="utf-8")
-    assert "Remove this fact." not in text
-    assert "[已撤回" in text and anchor in text
+    # the main file keeps no trace of a withdrawal (brain-driven §2.2): no tombstone, no mark
+    assert "Remove this fact." not in text and "[已撤回" not in text and anchor not in text
+    assert "ref:0" not in text and text == "# T\n\n## Conventions\n"
     conn = _connect(corpus["db"])
     support = conn.execute("SELECT inactive FROM claim_support WHERE claim_anchor=?", (anchor,)).fetchone()
     relation = conn.execute("SELECT inactive FROM ingestion_relations WHERE subject_anchor=?", (anchor,)).fetchone()
