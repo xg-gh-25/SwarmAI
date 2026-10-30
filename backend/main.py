@@ -864,6 +864,19 @@ _job_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="job-execut
 _workspace_surface_watcher = None
 
 
+async def _set_aside_inherited_cognition() -> None:
+    """A Hive that becomes a worker moves aside the cognition it wrote as a full SwarmAI
+    (core/worker_reset: moved, never deleted; once, by its marker). Never raises."""
+    try:
+        from core.initialization_manager import initialization_manager
+        from core.worker_reset import set_aside
+        ws = initialization_manager.get_cached_workspace_path()
+        if ws:
+            await asyncio.to_thread(set_aside, Path(ws))
+    except Exception:
+        logger.exception("Worker Hive: setting aside inherited cognition failed")
+
+
 async def _start_workspace_surface_watcher() -> None:
     """Start the Canvas Layer-2 workspace surface watcher (daemon/hive only).
 
@@ -1104,19 +1117,14 @@ async def lifespan(app: FastAPI):
         phase_timings["workspace_ms"] = round((t_workspace - t_db) * 1000)
         logger.info("Phase: workspace/init pipeline — %dms", phase_timings["workspace_ms"])
 
-        # A Hive that becomes a worker sets aside what it wrote as a full SwarmAI, once
-        # (core/worker_reset: moved, never deleted)
-        try:
-            from core.worker_reset import set_aside as _set_aside_inherited
-            _ws = initialization_manager.get_cached_workspace_path()
-            if _ws:
-                await asyncio.to_thread(_set_aside_inherited, Path(_ws))
-        except Exception:
-            logger.exception("Worker Hive: setting aside inherited cognition failed")
-
         # refresh_defaults_ms: set to 0 if not already set (full init runs it synchronously)
         if "refresh_defaults_ms" not in phase_timings:
             phase_timings["refresh_defaults_ms"] = 0
+
+    # Both startup paths (the fast one is how every installed Hive starts): a Hive
+    # that becomes a worker sets aside what it wrote as a full SwarmAI, once, before
+    # any session can read it.
+    await _set_aside_inherited_cognition()
 
     # Start channel gateway (deferred to background if channels exist)
     # Validates: Requirements 1.1, 1.2, 1.3, 1.4

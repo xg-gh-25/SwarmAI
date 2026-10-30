@@ -273,3 +273,88 @@ def test_a_worker_handle_that_failed_to_start_stops_cleanly(as_role, tmp_path, m
     again = acquire()
     assert again is not None
     again.release()
+
+
+# ── no other dispatch's work reaches a worker's prompt (C1/C2 of the 2026-10-30
+#    Hive-vs-Host review) ──────────────────────────────────────────────────────
+
+def test_a_worker_injects_no_session_briefing(as_role, tmp_path, monkeypatch):
+    """The briefing is built from MEMORY and DailyActivity, which on a worker hold
+    other dispatches' work."""
+    from tests.test_prompt_builder_properties import _make_builder
+    from core import proactive_intelligence
+    ws = tmp_path / "ws"
+    (ws / ".context").mkdir(parents=True)
+    monkeypatch.setattr(proactive_intelligence, "build_session_briefing",
+                        lambda wd: "## Session Briefing\nEARLIER BRIEFING MARKER")
+
+    def full_text() -> str:
+        cfg: dict = {}
+        asyncio.run(_make_builder().build_system_prompt(agent_config=cfg, working_directory=str(ws)))
+        return cfg.get("_system_prompt_metadata", {}).get("full_text", "")
+    as_role(None, None)
+    assert "EARLIER BRIEFING MARKER" in full_text()
+    as_role("hive", "reference")
+    assert "EARLIER BRIEFING MARKER" in full_text()
+    as_role("hive", None)
+    assert "EARLIER BRIEFING MARKER" not in full_text()
+
+
+def test_a_worker_recalls_only_its_brain(as_role, monkeypatch):
+    """Sessions, Knowledge and memory on a worker belong to other dispatches: only the
+    task's own Brain (the DDD leg) is recalled, on the first message and later ones."""
+    from unittest.mock import MagicMock, patch
+    from core import session_router as sr
+    ddd_calls: list[str] = []
+
+    async def fake_ddd(user_message, options, unit, editor_context, mutate):
+        ddd_calls.append(user_message)
+    monkeypatch.setattr(sr, "_maybe_inject_ddd", fake_ddd)
+
+    def run(msg: str, unit=None):
+        unit = unit or MagicMock(_recall_injected=False, is_channel_session=False, _recall_keyword_misses=0,
+                                 _ddd_injected=False, _active_project=None)
+        opts = MagicMock(system_prompt="## Base")
+        with patch.object(sr, "_unified_recall_body", return_value=("OTHER DISPATCH RECALL", [])):
+            asyncio.run(sr._maybe_inject_recall(user_message=msg, options=opts, unit=unit))
+        return opts.system_prompt, unit
+    as_role(None, None)
+    sp, _ = run("How does the evolution pipeline work?")
+    assert "OTHER DISPATCH RECALL" in sp
+    as_role("hive", None)
+    sp, unit = run("How does the evolution pipeline work?")
+    assert "OTHER DISPATCH RECALL" not in sp and ddd_calls[-1].startswith("How does")
+    sp, _ = run("Now explain the recall filter and its budget", unit)       # a later topic
+    assert "OTHER DISPATCH RECALL" not in sp
+
+
+def test_both_startup_paths_set_aside_inherited_cognition():
+    """The set-aside ran only on the full-init (dev) path, so no installed Hive, which
+    starts on the fast path, ever set its inherited cognition aside. It must be a
+    statement of lifespan itself, after the fast/full split, not inside one branch."""
+    import ast
+    import inspect
+    import main
+    fn = next(n for n in ast.walk(ast.parse(inspect.getsource(main)))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "lifespan")
+
+    def calls_it(node) -> bool:
+        return any(isinstance(c, ast.Call) and getattr(c.func, "id", None) == "_set_aside_inherited_cognition"
+                   for c in ast.walk(node))
+    split = next(i for i, st in enumerate(fn.body)
+                 if isinstance(st, ast.If) and getattr(st.test, "id", None) == "skip_init_pipeline")
+    assert not calls_it(fn.body[split])
+    assert any(calls_it(st) for st in fn.body[split + 1:])
+
+
+def test_the_set_aside_helper_moves_a_workers_memory(as_role, tmp_path, monkeypatch):
+    import main
+    from core import worker_reset
+    ws = tmp_path / "ws"
+    (ws / ".context").mkdir(parents=True)
+    (ws / ".context" / "MEMORY.md").write_text("EARLIER DISPATCH COE")
+    from core.initialization_manager import initialization_manager
+    monkeypatch.setattr(initialization_manager, "get_cached_workspace_path", lambda: str(ws))
+    as_role("hive", None)
+    asyncio.run(main._set_aside_inherited_cognition())
+    assert not (ws / ".context" / "MEMORY.md").exists() and (ws / worker_reset.MARKER).exists()

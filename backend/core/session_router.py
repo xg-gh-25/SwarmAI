@@ -1432,6 +1432,15 @@ async def _maybe_inject_recall_inner(
                                 should_mutate_system_prompt)
     _active_project = getattr(unit, "_active_project", None) or (None, "no_signal")
 
+    # A worker Hive runs tasks for other dispatches and Brains: its sessions,
+    # Knowledge and memory are theirs, not this task's. Only the task's own Brain
+    # (the DDD leg above) is recalled; the other legs never run, first or follow-up
+    # (design 2026-10-29-hive-run-record-and-worker-role §3.2).
+    from core.app_role import is_worker
+    if is_worker():
+        unit._recall_injected = True
+        return None
+
     if unit._recall_injected:
         # The first recall already ran; a later message on a NEW topic gets a
         # bounded follow-up recall (see _maybe_followup_recall).

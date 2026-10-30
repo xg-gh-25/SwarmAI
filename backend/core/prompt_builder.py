@@ -1393,9 +1393,13 @@ class PromptBuilder:
 
             # ── Proactive Intelligence briefing (ephemeral) ──
             # Skipped for channel sessions: briefing is for session planning,
-            # not quick chat exchanges (~2K tokens saved).
+            # not quick chat exchanges (~2K tokens saved). Skipped on a worker
+            # Hive: it is built from MEMORY and DailyActivity, which there hold
+            # other dispatches' work (design 2026-10-29-hive-run-record-and-
+            # worker-role §3.2, as DailyActivity above).
             _t_briefing_start = time.perf_counter()
-            if include_ephemeral and not is_channel:
+            from core.app_role import is_worker as _is_worker
+            if include_ephemeral and not is_channel and not _is_worker():
                 try:
                     from .proactive_intelligence import build_session_briefing
                     # build_session_briefing is now filesystem-ONLY (run_05b42b8b,
