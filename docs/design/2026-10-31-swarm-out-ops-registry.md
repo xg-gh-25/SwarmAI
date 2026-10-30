@@ -3,7 +3,7 @@ created: 2026-10-31
 updated: 2026-10-31
 title: "Swarm Out 能力登记表：一张操作表、从表生成的门、写清楚它挡不住什么"
 status: r3 — 第一阶段范围和 ⑤ 已定（XG 2026-10-31）；第二阶段排期、devtools 待定（§9）
-related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.5 Conductor、§5.8 代答、P0-c）
+related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.6 Conductor、§5.8 代答、P0-c）
 ---
 
 # Swarm Out 能力登记表
@@ -30,7 +30,7 @@ related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swa
 | 人（桌面 App） | HTTP `/api/swarm-out/*`、`/api/swarm-out/remote/*`、`/api/hive/*` | `desktop/src/services/swarmOut.ts`、`services/remoteSession.ts` 等 |
 | owner 的 agent | Bash 跑 `scripts.swarm_out`（`backend/scripts/swarm_out.py:102-128`），经本机 HTTP 打同一组路由 | route / spec / dispatch / runs / hives |
 | 非 owner 的 channel agent | 不允许：`security_hooks.owner_command_denial`（:6333）对命令里出现 `swarm[_-]?out` 一律拒绝，CLI 也按 `RESTRICTED_ENV` 自拒（:127） | |
-| 后端内部改状态的调用方 | 将来 Swarm Run 的 Conductor 调 `dispatch_spec`（swarm-run §5.5）、代答提问（§5.8 B） | 今天没有；其余内部 import（`attention_authority`、`routers/usage.py:55`、`routers/chat.py:412,977`、`channels/gateway.py:1950`）都是读 |
+| 后端内部改状态的调用方 | 将来 Swarm Run 的 Conductor 调 `dispatch_spec`（swarm-run §5.6）、代答提问（§5.8 B） | 今天没有；其余内部 import（`attention_authority`、`routers/usage.py:55`、`routers/chat.py:412,977`、`channels/gateway.py:1950`）都是读 |
 
 ### 2.2 操作
 
