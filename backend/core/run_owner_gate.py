@@ -64,6 +64,9 @@ _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 _HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
 # The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
 _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
+# The class of a correction is the person's choice (core/ingestion/correction_ledger):
+# an agent filing its own corrections would set the repeat-correction rate it is judged by.
+_USER_ONLY_CORRECTION_RE = re.compile(r"/api/ingestion/corrections/[^\s/'\"]+/confirm\b")
 # Actions the person approves first: handled by the
 # phase="approved" registration, after dangerous_command_gate.
 AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot"})
@@ -359,6 +362,10 @@ def _decide(sid: str, command: str, tool_input: dict,
         return _deny("withdrawing written knowledge is the person's action (the Flow view's "
                      "撤回 button), never a command. Tell the user which unit you think should "
                      "be withdrawn and why; they decide.")
+    if _USER_ONLY_CORRECTION_RE.search(command or ""):
+        return _deny("which kind a correction is, is the person's choice (the line under their "
+                     "message, or the Flow view's list), never a command. Tell the user which "
+                     "kind you think it is and why; they choose.")
     calls, _single = parse_cli_calls(command)
     for c in calls:
         c["cwd"] = cwd

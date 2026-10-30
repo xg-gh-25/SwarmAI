@@ -177,6 +177,17 @@ def test_agent_bash_call_to_the_cdf_redact_endpoint_is_denied():
     assert "person's action" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_agent_bash_call_to_the_correction_confirm_endpoint_is_denied():
+    """A correction's class is the person's choice: an agent's Bash call is denied."""
+    command = ("curl -s -X POST http://127.0.0.1:18321/api/ingestion/corrections/cor-1/confirm "
+               "-H 'X-Swarm-User-Action: correction' -d '{\"choice\":\"not_correction\"}'")
+    result = gate._decide(OWNER, command, {"command": command})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "person's choice" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    reading = "curl -s http://127.0.0.1:18321/api/ingestion/corrections/rate"
+    assert gate._decide(OWNER, reading, {"command": reading}) is None   # reading stays open
+
+
 # ── stop and resume ─────────────────────────────────────────────────────────
 
 def test_stop_pauses_active_and_resume_reactivates(run):

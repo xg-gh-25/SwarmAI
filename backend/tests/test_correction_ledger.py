@@ -85,6 +85,25 @@ def test_the_class_can_only_be_one_the_person_was_shown(ws):
     got = cl.confirm(row, offered[0]["key"], now=NOW)
     assert got["status"] == "confirmed" and got["class_kind"] == "entry" and got["repeat"] is True
     assert cl.pending("s1") == []
+    # a choice is never overwritten (not by a second click, not by anyone else)
+    with pytest.raises(cl.AlreadyAnswered):
+        cl.confirm(row, "not_correction", now=NOW)
+    assert cl.rate(28, now=NOW)["repeat"] == 1
+
+
+def test_the_row_keeps_what_the_person_typed_not_injected_blocks(ws, monkeypatch):
+    monkeypatch.setattr(cl, "session_brain", lambda sid, text: None)
+    monkeypatch.setattr("core.injected_blocks.strip_injected_blocks",
+                        lambda text: text.replace("[RECALLED] old notes say that's wrong", ""))
+    cl.record_chat_message("s1", "c9", "[RECALLED] old notes say that's wrong 不对，按到账日")
+    assert cl.pending("s1")[0]["text"] == "不对，按到账日"
+
+
+def test_pending_returns_the_newest_when_many_wait(ws, monkeypatch):
+    monkeypatch.setattr(cl, "PENDING_LIMIT", 2)
+    for i in range(3):
+        _open(f"错了 {i}", f"c{i}", now=NOW + timedelta(minutes=i))
+    assert [r["client_id"] for r in cl.pending("s1", now=NOW + timedelta(minutes=5))] == ["c1", "c2"]
 
 
 def test_rate_counts_repeats_over_confirmed_rows_only(ws):

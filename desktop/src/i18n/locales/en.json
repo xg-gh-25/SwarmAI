@@ -574,7 +574,12 @@
       "question": "Correcting me? File it under:",
       "new": "a new kind",
       "notCorrection": "not a correction",
-      "failed": "Not saved"
+      "failed": "Not saved, click again",
+      "kind": {
+        "entry": "Knowledge entry",
+        "golden": "Golden task",
+        "ledger": "Earlier correction"
+      }
     }
   },
   "tasks": {
@@ -1200,10 +1205,17 @@
     "sameOrigin": "Injected and rerouted copies with one origin: {{count}}",
     "rates": "Written {{written}}% · reinforced {{reinforced}}% · denominator {{denominator}} (written + reinforced + rejected)",
     "corrections": {
+      "title": "Corrections",
       "none": "No classified corrections in {{days}} days",
-      "rate": "Repeat corrections {{pct}} ({{repeat}}/{{confirmed}}, {{days}} days)",
-      "bar": "bar {{bar}}",
-      "small": "fewer than 10: judged by count"
+      "rate": "Repeat corrections {{pct}} ({{repeat}}/{{confirmed}}, {{days}} days) · bar {{bar}}",
+      "smallCount": "{{repeat}} repeats in {{confirmed}} classified corrections ({{days}} days; under 10, more than 2 repeats is over the bar)",
+      "waiting": "{{n}} waiting for you to say which kind",
+      "failed": "Corrections could not be read",
+      "surface": {
+        "chat": "Chat",
+        "swarm_out_reject": "Hive delivery sent back",
+        "escalation": "Escalation"
+      }
     }
   },
   "swarmWorkspace": {

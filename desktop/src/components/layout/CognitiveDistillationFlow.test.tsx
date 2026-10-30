@@ -73,7 +73,7 @@ function defaults() {
   health.mockResolvedValue(healthData); stats.mockResolvedValue({ days: 365, rows: [] });
   corrRate.mockResolvedValue({ windowDays: 28, confirmed: 20, unconfirmed: 1, repeat: 5, rate: 0.25,
     smallSample: false, bar: 0.2 });
-  corrPending.mockResolvedValue([{ id: 'cor-9', clientId: 'so_1', text: 'Delivery sent back: fix the refund report',
+  corrPending.mockResolvedValue([{ id: 'cor-9', at: '2026-10-30T06:00:00Z', surface: 'swarm_out_reject', clientId: 'so_1', text: 'Delivery sent back: fix the refund report',
     candidates: [{ key: 'k1', kind: 'entry', title: 'Refunds counted by order date' }] }]);
   corrConfirm.mockResolvedValue(undefined);
 }
@@ -95,8 +95,11 @@ describe('Need You Flow tabs', () => {
     // the correction ledger: the rate against its bar, and what waits for the person's choice
     expect(await screen.findByText(/ingestion\.corrections\.rate:25%\/5\/20\/28/)).toBeInTheDocument();
     expect(screen.getByText('Delivery sent back: fix the refund report')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Refunds counted by order date' }));
+    expect(screen.getByText(/ingestion\.corrections\.waiting:1/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /chat\.correction\.kind\.entry.*Refunds counted by order date/ }));
     await waitFor(() => expect(corrConfirm).toHaveBeenCalledWith('cor-9', 'k1'));
+    // answered: gone from the list at once, before any refetch
+    await waitFor(() => expect(screen.queryByText('Delivery sent back: fix the refund report')).toBeNull());
     expect(screen.getByText('2400')).toBeInTheDocument();
     // after-session review metrics, per session type (session review §12)
     expect(screen.getByText('写过非代码文件')).toBeInTheDocument();

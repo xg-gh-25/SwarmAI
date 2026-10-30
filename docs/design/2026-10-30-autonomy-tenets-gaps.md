@@ -184,6 +184,19 @@ rate   = repeat 行数 / confirmed 行数     （滚动 4 周，可按 brain 分
   - Brain 详情页：每个 Brain 一行；
   - 后续可以让 GC 表的计数改读台账。本文不做。
 
+### 2.2a 落地记录（2026-10-30，步骤 1）
+
+和上文设计相比，落地时改了下面几处，以代码为准：
+
+- **入口**：
+  - 已接入：对话、Swarm Out 交付被打回、escalation 选了 Swarm 推荐之外的选项。
+  - `human_override` 不是纠正，是人工救场，归记分卡统计（§1.2）。
+  - Brain 撤回等 v5 的撤回逻辑合并后再接。
+- **一次归类**：已经归过类的行不能再改，接口返回 409。这样人的选择不会被覆盖，被别的纠正引用的类别也不会变。
+- **只有人能归类**：除了 loopback 和 `X-Swarm-User-Action` 标记，`core.run_owner_gate` 还会拒绝 agent 通过 Bash 调用确认接口，做法和撤回接口一样。
+- **对话里的那一行**：只挂在 10 分钟内的消息下面，只占一行。更早还在等归类的纠正，放在 CDF 面板的列表里。
+- **"是否已沉淀"和漏记**：§2.2 写的"按 `session_inputs` 映射到 event"和漏记数还没做。现在的比例只区分两种重复：指向已有条目或 golden task，或者指向以往的纠正。
+
 ### 2.3 删除与不做
 
 - **删除**：`queries.recurrence()`，以及它在 router、`ingestion.ts`、`CognitiveDistillationFlow.tsx` 里的读取方和测试，四处一起删。"同一类"不该有两种说法。

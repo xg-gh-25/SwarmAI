@@ -32,12 +32,15 @@ def test_pending_then_confirm_by_the_person(client):
     key = pend["corrections"][0]["candidates"][0]["key"]
     # without the user-action mark the class is not recorded
     assert client.post(f"/api/ingestion/corrections/{rid}/confirm", json={"choice": key}).status_code == 403
-    r = client.post(f"/api/ingestion/corrections/{rid}/confirm", json={"choice": key},
-                    headers={"X-Swarm-User-Action": "correction"})
-    assert r.status_code == 200 and r.json()["repeat"] is True
     bad = client.post(f"/api/ingestion/corrections/{rid}/confirm", json={"choice": "made-up"},
                       headers={"X-Swarm-User-Action": "correction"})
     assert bad.status_code == 400
+    r = client.post(f"/api/ingestion/corrections/{rid}/confirm", json={"choice": key},
+                    headers={"X-Swarm-User-Action": "correction"})
+    assert r.status_code == 200 and r.json()["repeat"] is True
+    again = client.post(f"/api/ingestion/corrections/{rid}/confirm", json={"choice": "new"},
+                        headers={"X-Swarm-User-Action": "correction"})
+    assert again.status_code == 409
     rate = client.get("/api/ingestion/corrections/rate").json()
     assert rate["confirmed"] == 1 and rate["rate"] == 1.0
     # neither named: every row still waiting (the CDF panel)
@@ -80,3 +83,28 @@ def test_the_send_path_records_only_a_stated_mistake_in_an_existing_session(monk
 
     asyncio.run(go())
     assert seen == [("s1", "c2", "不对，按到账日", "refund by order date")]
+
+
+
+def test_the_reject_and_resolve_routes_open_a_row(tmp_path, monkeypatch):
+    """The two explicit actions reach the ledger through their real routes."""
+    from routers import escalations, swarm_out
+    seen = []
+    monkeypatch.setattr(cl, "record_swarm_out_reject", lambda d: seen.append(("reject", d)))
+    monkeypatch.setattr(cl, "record_escalation", lambda e: seen.append(("escalation", e.id)))
+    monkeypatch.setattr(swarm_out, "_require_desktop", lambda: None)
+    monkeypatch.setattr("core.hive_return.reject", lambda d, k, t: {"rejected": True, "ref": "r"})
+    from core.escalation import block, save_escalation
+    ws = tmp_path / "ws"
+    (ws / "Projects" / "P").mkdir(parents=True)
+    monkeypatch.setattr(escalations, "_get_workspace_root", lambda: ws)
+    monkeypatch.setattr(escalations, "_validate_project", lambda p: p)
+    esc = block("Q", "S", [], project="P")
+    save_escalation(ws, esc)
+    app = FastAPI()
+    app.include_router(swarm_out.router, prefix="/api/swarm-out")
+    app.include_router(escalations.router)
+    c = TestClient(app, client=("127.0.0.1", 5000))
+    assert c.post("/api/swarm-out/runs/so_1/return/reject", json={}).status_code == 200
+    assert c.post(f"/api/escalations/P/{esc.id}/resolve", json={"resolution": "B"}).status_code == 200
+    assert seen == [("reject", "so_1"), ("escalation", esc.id)]

@@ -21,7 +21,8 @@ This module is the only writer of the ``correction_ledger`` table (the CDF store
   not add a second one.
 - ``confirm(row_id, choice)`` — the person's choice: a key among that row's candidates,
   ``"new"`` or ``"not_correction"``. Any other key is refused, so a class can only be
-  one the person was shown.
+  one the person was shown; a row already classified is refused too (``AlreadyAnswered``):
+  a choice is never overwritten, and a class others point at never changes under them.
 - ``pending(session_id=None, brain=None)`` — rows still waiting: a session's (the
   picker under its messages), a Brain's, or all of them (the CDF panel).
 - ``rate(window_days, brain=None, now=None)`` — the rate with its coverage figures.
@@ -86,6 +87,10 @@ class LedgerError(ValueError):
     """A request the ledger refuses (unknown row, a choice the row did not offer)."""
 
 
+class AlreadyAnswered(LedgerError):
+    """The row was classified already."""
+
+
 def _now(now: Optional[datetime] = None) -> datetime:
     return now or datetime.now(timezone.utc)
 
@@ -114,13 +119,20 @@ def _ro() -> Optional[sqlite3.Connection]:
 
 # ── detection ────────────────────────────────────────────────────────────────
 
-def detect(text: str) -> bool:
-    """True when *text* (what the person typed) states a mistake."""
-    if not isinstance(text, str) or not text.strip():
-        return False
+def typed(text: str) -> str:
+    """What the person typed: *text* without the blocks the app injects (recalled or
+    resumed context quoting an old "that's wrong" is history, not a correction now)."""
+    if not isinstance(text, str):
+        return ""
     from core.injected_blocks import strip_injected_blocks
+    return strip_injected_blocks(text).strip()
+
+
+def detect(text: str) -> bool:
+    """True when what the person typed in *text* states a mistake."""
     from core.runtime_hooks import _CORRECTION_PATTERNS_EN
-    return bool(_CORRECTION_PATTERNS_EN.search(strip_injected_blocks(text)))
+    words = typed(text)
+    return bool(words) and bool(_CORRECTION_PATTERNS_EN.search(words))
 
 
 # ── candidates ───────────────────────────────────────────────────────────────
@@ -238,7 +250,7 @@ def open_row(*, surface: str, text: str, client_id: str, session_id: Optional[st
 
 def confirm(row_id: str, choice: str, *, now: Optional[datetime] = None) -> dict[str, Any]:
     """Record the person's choice for a row: a candidate key, ``"new"`` or
-    ``"not_correction"``. Choosing again replaces the earlier choice."""
+    ``"not_correction"``. Only once: a classified row raises ``AlreadyAnswered``."""
     conn = _rw()
     try:
         row = conn.execute("SELECT * FROM correction_ledger WHERE id=?", (row_id,)).fetchone()
@@ -254,9 +266,11 @@ def confirm(row_id: str, choice: str, *, now: Optional[datetime] = None) -> dict
             if choice not in offered:
                 raise LedgerError("the choice is not one this correction offered")
             status, kind, key = "confirmed", offered[choice], choice
-        conn.execute(
-            "UPDATE correction_ledger SET status=?, class_kind=?, class_key=?, confirmed_at=? WHERE id=?",
-            (status, kind, key, at, row_id))
+        cur = conn.execute(
+            "UPDATE correction_ledger SET status=?, class_kind=?, class_key=?, confirmed_at=? "
+            "WHERE id=? AND status='unconfirmed'", (status, kind, key, at, row_id))
+        if cur.rowcount != 1:            # classified already (earlier, or between the read and the write)
+            raise AlreadyAnswered(f"correction {row_id!r} was classified already")
         return {"id": row_id, "status": status, "class_kind": kind, "class_key": key,
                 "repeat": kind in REPEAT_KINDS}
     finally:
@@ -278,7 +292,7 @@ PENDING_LIMIT = 50
 def pending(session_id: Optional[str] = None, *, brain: Optional[str] = None,
             window_days: int = 28, now: Optional[datetime] = None) -> list[dict[str, Any]]:
     """Rows still waiting for the person within the window, oldest first: a session's,
-    a Brain's, or (neither named) all of them, at most ``PENDING_LIMIT``."""
+    a Brain's, or (neither named) all of them; the newest ``PENDING_LIMIT`` when more wait."""
     conn = _ro()
     if conn is None:
         return []
@@ -291,7 +305,8 @@ def pending(session_id: Optional[str] = None, *, brain: Optional[str] = None,
         if brain is not None:
             sql += " AND brain=?"
             args.append(brain)
-        return [_row(r) for r in conn.execute(sql + f" ORDER BY at LIMIT {PENDING_LIMIT}", args).fetchall()]
+        newest = conn.execute(sql + f" ORDER BY at DESC LIMIT {PENDING_LIMIT}", args).fetchall()
+        return [_row(r) for r in reversed(newest)]
     finally:
         conn.close()
 
@@ -365,11 +380,14 @@ def session_brain(session_id: str, text: str) -> Optional[str]:
 def record_chat_message(session_id: Optional[str], client_id: Optional[str], text: str,
                         reply: str = "") -> Optional[str]:
     """Open a row when a chat message states a mistake. Only an existing session can
-    correct a reply; a message without a client id cannot be shown a picker."""
+    correct a reply; a message without a client id cannot be shown a picker. The row
+    keeps what the person typed, without injected blocks. ``reply`` is the newest saved
+    assistant reply: correcting a reply still streaming scores against the one before."""
     if not session_id or not client_id or not detect(text):
         return None
-    return open_row(surface="chat", text=text, session_id=session_id, client_id=client_id,
-                    brain=session_brain(session_id, text), reply=reply)
+    words = typed(text)
+    return open_row(surface="chat", text=words, session_id=session_id, client_id=client_id,
+                    brain=session_brain(session_id, words), reply=reply)
 
 
 # ── explicit actions ─────────────────────────────────────────────────────────

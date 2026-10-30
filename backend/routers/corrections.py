@@ -3,11 +3,13 @@ docs/design/2026-10-30-autonomy-tenets-gaps.md §2).
 
 - ``GET  /api/ingestion/corrections/pending`` — corrections still waiting for the
   person's choice (a session's, a Brain's, or all of them), each with its classes.
-- ``POST /api/ingestion/corrections/{id}/confirm`` — the person's choice. Like the
-  redaction route it takes only a loopback request marked as a user action
-  (``X-Swarm-User-Action: correction``): the class of a correction is the person's to
-  give. This is not an authentication boundary (any local process of the same user can
-  send the header; the local API has no per-request credential, known product-wide).
+- ``POST /api/ingestion/corrections/{id}/confirm`` — the person's choice, once (409 when
+  the row was classified already). Like the redaction route it takes only a loopback
+  request marked as a user action (``X-Swarm-User-Action: correction``), and the agent's
+  own Bash calls to it are denied by ``core.run_owner_gate``: the class of a correction is
+  the person's to give. Neither is an authentication boundary (any other local process of
+  the same user can send the header; the local API has no per-request credential, known
+  product-wide).
 - ``GET  /api/ingestion/corrections/rate`` — the repeat-correction rate and its coverage.
 """
 from __future__ import annotations
@@ -104,6 +106,8 @@ async def confirm_correction(
         raise HTTPException(status_code=403, detail="A correction's class is the person's choice")
     try:
         got: dict[str, Any] = await executors.run_in("io", lambda: ledger.confirm(row_id, body.choice))
+    except ledger.AlreadyAnswered as exc:
+        raise HTTPException(status_code=409, detail="This correction was classified already") from exc
     except ledger.LedgerError as exc:
         logger.info("correction confirm refused for %s: %s", row_id, exc)
         raise HTTPException(status_code=400, detail="This choice cannot be recorded") from exc
