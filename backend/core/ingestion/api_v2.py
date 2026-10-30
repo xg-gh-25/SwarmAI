@@ -27,7 +27,7 @@ from .contracts_v2 import (
     EvidenceRootKind, ExtractionPass, RootTrust, SourceId, SourceUnit,
 )
 
-SCHEMA_V2_VERSION = 9
+SCHEMA_V2_VERSION = 10
 
 # Applied after api.SCHEMA_DDL in the same migration transaction (store.py owns DDL apply).
 # What each entry CDF wrote rests on (its basis), kept for as long as the entry: the
@@ -222,8 +222,8 @@ def ingest_link_status(url_root_id: str, status: str, *, http_status: int | None
 def requeue_parked(reason: str, key: str) -> int:
     """Re-queue units parked on ``reason`` once the awaited thing exists.
 
-    ``unknown_domain`` uses the domain slug. ``missing_section`` uses a canonical
-    JSON object with ``relative_path`` and ``section``. Parked units consume no retry.
+    ``missing_section`` uses a canonical JSON object with ``relative_path`` and
+    ``section``. Parked units consume no retry.
     """
     from .pipeline_v2 import requeue_parked as _impl
     return _impl(reason, key)

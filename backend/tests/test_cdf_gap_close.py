@@ -336,7 +336,6 @@ def test_the_worker_closes_right_after_the_write_and_in_maintenance(monkeypatch)
         monkeypatch.setattr(writer, name, lambda *a, **k: None)
     monkeypatch.setattr(worker, "reaggregate_candidates", lambda conn: None)
     monkeypatch.setattr(worker, "cleanup_expired", lambda conn, **k: None)
-    monkeypatch.setattr(worker, "_requeue_known_domains", lambda root: None)
     monkeypatch.setattr(pipeline_v2, "requeue_missing_sections", lambda root: None)
     worker.IngestionWorker._maintain(self, Conn())
     assert calls == ["u1", None]

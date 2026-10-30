@@ -1476,10 +1476,9 @@ class ContextDirectoryLoader:
             # L1 cache: skip ONLY when files are excluded (group/non-owner channels
             # produce session-specific content that would poison a shared cache).
             #
-            # CDF selection is a pure function of file bytes, the persisted score
-            # snapshot, and UTC day. It has no session/user-query input, so the desktop
-            # fixed layer remains cache-safe. The selector day and both per-file caps
-            # are part of the cache header; exclusions remain the only session-specific
+            # MEMORY / EVOLUTION are injected whole (no score, no cap), so the fixed
+            # layer is a pure function of file bytes with no session/user-query input
+            # and stays cache-safe; exclusions remain the only session-specific
             # cache-poison boundary.
             if not exclude_filenames:
                 cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)

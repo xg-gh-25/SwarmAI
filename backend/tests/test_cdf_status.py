@@ -171,9 +171,9 @@ def test_requeue_gives_the_units_of_one_reason_a_fresh_start(store):
     assert open_events == ["c2.unit"]
     assert requeue_units("error:OSError") == 0
     store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,defer_reason,
-        owner_epoch,updated_at) VALUES('c2.gap','c2','{}','deferred','unknown_domain','unknown_domain',1,?)""", (at,))
+        owner_epoch,updated_at) VALUES('c2.gap','c2','{}','deferred','writer_busy','writer_busy',1,?)""", (at,))
     store.commit()
-    assert requeue_units("unknown_domain") == 1
+    assert requeue_units("writer_busy") == 1
     store.rollback()
     assert store.execute("SELECT state FROM ingestion_units WHERE unit_id='c2.gap'").fetchone()[0] == "queued"
 
@@ -211,11 +211,13 @@ def test_requeue_parked_stamps_iso_time(store):
     store.execute("""INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,
         content_hash,envelope,project_snapshot,state,created_at)
         VALUES('c4','kc4','S7','s','session','{}','v','h','{}','{}','partial_pending',?)""", (at,))
-    store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,defer_reason,
-        owner_epoch,updated_at) VALUES('c4.unit','c4','{"domain":"rust"}','deferred','unknown_domain',
-        'unknown_domain',1,?)""", (at,))
+    store.execute("""INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,destination,state,reason,
+        defer_reason,owner_epoch,updated_at) VALUES('c4.unit','c4','{}',
+        '{"relative_path":"Projects/P/2-understanding/TECH.md","section":"Runtime Traps"}','deferred',
+        'missing_section','missing_section',1,?)""", (at,))
     store.commit()
-    assert requeue_parked("unknown_domain", "rust") == 1
+    assert requeue_parked("missing_section", json.dumps(
+        {"relative_path": "Projects/P/2-understanding/TECH.md", "section": "Runtime Traps"})) == 1
     store.rollback()
     state, stamp = store.execute("SELECT state,updated_at FROM ingestion_units WHERE unit_id='c4.unit'").fetchone()
     assert state == "queued" and "T" in stamp, stamp

@@ -1198,7 +1198,6 @@
     "redact": "Withdraw",
     "redactReason": "Enter the reason for withdrawing this unit",
     "extractionCoverage": "Extraction coverage",
-    "parkedDomains": "Domains waiting to be added: {{values}}",
     "sameOrigin": "Injected and rerouted copies with one origin: {{count}}",
     "rates": "Written {{written}}% · reinforced {{reinforced}}% · denominator {{denominator}} (written + reinforced + rejected)"
   },

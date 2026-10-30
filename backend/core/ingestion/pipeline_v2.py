@@ -410,19 +410,15 @@ def requeue_parked(reason: str, key: str) -> int:
     from .store import connect_rw
     conn = connect_rw()
     try:
-        if reason == "unknown_domain":
-            where = "json_extract(claim_group,'$.domain')=?"
-            params: tuple[Any, ...] = (key,)
-        else:
-            try:
-                awaited = json.loads(key)
-                relative_path = str(awaited["relative_path"])
-                section = str(awaited["section"])
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                return 0
-            where = ("json_extract(destination,'$.relative_path')=? AND "
-                     "json_extract(destination,'$.section')=?")
-            params = (relative_path, section)
+        try:
+            awaited = json.loads(key)
+            relative_path = str(awaited["relative_path"])
+            section = str(awaited["section"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return 0
+        where = ("json_extract(destination,'$.relative_path')=? AND "
+                 "json_extract(destination,'$.section')=?")
+        params: tuple[Any, ...] = (relative_path, section)
         ids = [str(row[0]) for row in conn.execute(
             f"SELECT unit_id FROM ingestion_units WHERE state='deferred' "
             f"AND defer_reason=? AND {where}",
@@ -450,7 +446,7 @@ def requeue_parked(reason: str, key: str) -> int:
 
 
 def requeue_units(reason: str) -> int:
-    """Give units poisoned or deferred with *reason* (``error:OSError``, ``unknown_domain``)
+    """Give units poisoned or deferred with *reason* (``error:OSError``)
     a fresh start once its cause is fixed: queued with no attempts, the candidate pending
     again, their poison events resolved. Only exact-reason matches; returns how many
     units were requeued. A unit whose cause is still there fails or parks again."""

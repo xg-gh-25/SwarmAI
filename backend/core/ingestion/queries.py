@@ -157,13 +157,6 @@ def flow_overview(window: str = "24h") -> dict[str, Any]:
         if _table_exists(conn, "link_status"):
             link_status = {str(row[0]): int(row[1]) for row in conn.execute(
                 "SELECT status,COUNT(*) FROM link_status GROUP BY status")}
-        parked_domains: dict[str, int] = {}
-        if _column_exists(conn, "ingestion_units", "defer_reason"):
-            for parked in conn.execute(
-                """SELECT COALESCE(json_extract(claim_group,'$.domain'),'unknown'),COUNT(*)
-                   FROM ingestion_units WHERE state='deferred' AND defer_reason='unknown_domain'
-                   GROUP BY COALESCE(json_extract(claim_group,'$.domain'),'unknown')"""):
-                parked_domains[str(parked[0])] = int(parked[1])
         same_origin = 0
         if _column_exists(conn, "ingestion_inbox", "dedup_key"):
             same_origin = int(conn.execute(
@@ -188,7 +181,6 @@ def flow_overview(window: str = "24h") -> dict[str, Any]:
         "outcomes": outcomes,
         "extraction_coverage": coverage,
         "link_status": link_status,
-        "parked_unknown_domains": parked_domains,
         "same_origin_reroute_count": same_origin,
         "stages": stages,
         "lanes": _group(by_lane, "k"),

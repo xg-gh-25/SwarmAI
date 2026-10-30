@@ -426,10 +426,10 @@ S1_MAX_UNITS_PER_MESSAGE = 3
 
 
 # ── deferrals (§5.10, §9.2, §7) ───────────────────────────────────────────────
-DeferReason = Literal["ambiguous_project", "unknown_domain", "missing_section", "entailment_unavailable", "writer_busy", "lane_backoff"]
+DeferReason = Literal["ambiguous_project", "missing_section", "entailment_unavailable", "writer_busy", "lane_backoff"]
 # Parked: consumes no retry, never becomes failed_poison, excluded from the 24h deferred
 # age gate; re-queued when the awaited thing appears; purged at 30 days (§4.4).
-PARKED_DEFER_REASONS: frozenset[str] = frozenset({"unknown_domain", "missing_section"})
+PARKED_DEFER_REASONS: frozenset[str] = frozenset({"missing_section"})
 
 
 def expand_projects(unit_id: str, projects: list[str]) -> list[tuple[str, str]]:

@@ -112,6 +112,24 @@ def _roots_rebuild() -> str:
 # to 'inferred'
 _V9_DDL = UNIT_BASIS_DDL + _roots_rebuild()
 
+# v10 (design 2026-10-30-cdf-agent-decides §5): the backlog left by the two deleted
+# paths — units held for the daily write quota and units parked on an unknown domain —
+# is not run again. It was extracted with no relation declarations, so every unit would
+# now be written as new (duplicates, stale gaps). Each such unit becomes rejected with
+# reason ``discarded_backlog``; what held it stays in ``defer_reason`` (``quota`` /
+# ``unknown_domain``) and the candidate keeps its payload, so it can be put back:
+#   UPDATE ingestion_units SET state='queued', reason=NULL, defer_reason=NULL
+#    WHERE reason='discarded_backlog';
+# Other deferred units (writer busy, lane backoff, a missing section) are left alone;
+# the candidates' own state follows at start (worker.reconcile_candidate_states).
+_V10_DDL = """
+UPDATE ingestion_units
+   SET state='rejected', defer_reason=COALESCE(defer_reason, reason),
+       reason='discarded_backlog', next_attempt_at=NULL,
+       updated_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now')
+ WHERE state='deferred' AND (reason='quota' OR defer_reason='unknown_domain');
+"""
+
 
 class MigrationBackupFailed(OSError):
     """The copy taken before a schema migration did not open or was incomplete: the
@@ -300,7 +318,7 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
                 _assert_one_pragma(conn, name)
             script = (
                 f"BEGIN IMMEDIATE;\n{SCHEMA_DDL}\n{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n"
-                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n"
+                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}\n"
                 f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
             )
             try:
@@ -316,14 +334,15 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
             # the steps an existing store at *version* still needs, in order
             steps = {
                 SCHEMA_VERSION: f"{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n"
-                                f"{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}",
-                3: f"{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}",
-                6: f"{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}",
-                7: f"{_V8_DDL}\n{_V9_DDL}",
-                8: _V9_DDL,
+                                f"{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
+                3: f"{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
+                6: f"{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
+                7: f"{_V8_DDL}\n{_V9_DDL}\n{_V10_DDL}",
+                8: f"{_V9_DDL}\n{_V10_DDL}",
+                9: _V10_DDL,
             }
             steps[4] = steps[5] = steps[3]
-            if version in steps and SCHEMA_V2_VERSION == 9:
+            if version in steps and SCHEMA_V2_VERSION == 10:
                 _backup_before_migration(conn, path, int(version))
                 conn.executescript(
                     f"BEGIN IMMEDIATE;\n{steps[version]}\n"

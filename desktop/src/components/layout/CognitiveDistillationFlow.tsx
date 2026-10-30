@@ -109,9 +109,6 @@ export function CognitiveDistillationFlow() {
                 <Stat key={outcome} label={statusLabel(outcome)} value={count} />
               ))}
             </div>
-            {Object.keys(overview.data.parkedUnknownDomains ?? {}).length > 0 && (
-              <Hint>{t('ingestion.parkedDomains', { values: Object.entries(overview.data.parkedUnknownDomains ?? {}).map(([name, count]) => `${name}: ${count}`).join(' · ') })}</Hint>
-            )}
             <Hint>{t('ingestion.sameOrigin', { count: overview.data.sameOriginRerouteCount ?? 0 })}</Hint>
           </>
         )}

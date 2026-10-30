@@ -21,7 +21,6 @@ export interface FlowOverview {
   outcomes: Record<string, number>;
   extractionCoverage: Record<string, { attempts: number; zeroUnitAttempts: number; unitsEmitted: number; unitsInvalid: number }>;
   linkStatus: Record<string, number>;
-  parkedUnknownDomains: Record<string, number>;
   sameOriginRerouteCount: number;
   stages: Record<string, number>;
   lanes: Record<string, number>;

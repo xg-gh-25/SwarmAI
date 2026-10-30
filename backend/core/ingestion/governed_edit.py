@@ -197,10 +197,6 @@ def apply_user_edit(path: Path, new_bytes: bytes | None, *, expected_revision: s
         # turn a successful save into an error (the maintenance scan retries it).
         if new_bytes is not None:
             try:
-                if "Knowledge/Learned/domains" in target.as_posix():
-                    from .api_v2 import requeue_parked
-                    from .contracts_v2 import slugify
-                    requeue_parked("unknown_domain", slugify(target.stem))
                 from .pipeline_v2 import requeue_missing_sections
                 requeue_missing_sections(get_swarmws(), target)
             except Exception as exc:

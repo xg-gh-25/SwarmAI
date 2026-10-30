@@ -33,7 +33,6 @@ class FlowResponse(StrictResponse):
     outcomes: dict[str, int]
     extraction_coverage: dict[str, dict[str, int]]
     link_status: dict[str, int]
-    parked_unknown_domains: dict[str, int]
     same_origin_reroute_count: int
     stages: dict[str, int]
     lanes: dict[str, int]

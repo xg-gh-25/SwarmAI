@@ -1198,7 +1198,6 @@
     "redact": "撤回",
     "redactReason": "请填写撤回原因",
     "extractionCoverage": "提取覆盖率",
-    "parkedDomains": "待加入领域：{{values}}",
     "sameOrigin": "注入文件与改投副本同源：{{count}}",
     "rates": "写入 {{written}}% · 强化 {{reinforced}}% · 分母 {{denominator}}（written + reinforced + rejected）"
   },

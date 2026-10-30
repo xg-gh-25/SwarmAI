@@ -682,7 +682,7 @@ def cleanup_expired(
 
 
 # A candidate is ready only when it has a unit that can run now (no head-of-line blocking
-# behind a unit still backing off). A parked unit (unknown_domain, missing_section) has
+# behind a unit still backing off). A parked unit (missing_section) has
 # no next_attempt_at: it waits for requeue_parked, so it is never ready -- counting it
 # made the worker spin on a pass that does nothing and starved every lane.
 _READY = """(state='queued' OR (state='partial_pending' AND EXISTS (
@@ -698,21 +698,6 @@ def _candidate_order(conn: sqlite3.Connection) -> str:
         return "created_at, id"
     return ("CASE extraction_pass WHEN 'user_utterance' THEN 0 "
             "WHEN 'human_answer' THEN 0 WHEN 's1' THEN 1 ELSE 2 END, created_at, id")
-
-
-def _requeue_known_domains(workspace_root: Path) -> int:
-    folder = workspace_root / "Knowledge" / "Learned" / "domains"
-    if not folder.is_dir():
-        return 0
-    from .api_v2 import requeue_parked
-    from .contracts_v2 import slugify
-    total = 0
-    for path in folder.glob("*.md"):
-        try:
-            total += requeue_parked("unknown_domain", slugify(path.stem))
-        except sqlite3.OperationalError:
-            return total
-    return total
 
 
 class IngestionWorker:
@@ -794,7 +779,6 @@ class IngestionWorker:
         recover(conn, requeue_grace=None if startup else REQUEUE_GRACE)
         reaggregate_candidates(conn)
         cleanup_expired(conn, truncate_wal=startup)
-        _requeue_known_domains(self.workspace_root)
         from .pipeline_v2 import requeue_missing_sections
         requeue_missing_sections(self.workspace_root)
         _close_declared_gaps(conn)

@@ -38,7 +38,7 @@ class TestStore:
         assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
         conn.close()
         ro = connect_ro()
         assert ro.execute("PRAGMA query_only").fetchone()[0] == 1
@@ -438,7 +438,7 @@ def test_cleanup_skips_candidate_with_partially_applied_write(tmp_path, monkeypa
     conn.close()
 
 
-def test_unknown_domain_parking_does_not_consume_retry(tmp_path, monkeypatch):
+def test_parking_does_not_consume_retry(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
     from core.ingestion.owner import acquire
     from core.ingestion.store import connect_rw
@@ -459,7 +459,7 @@ def test_unknown_domain_parking_does_not_consume_retry(tmp_path, monkeypatch):
         "VALUES('park.u','park','{}',?,?)", (owner.epoch, now),
     )
     unit = conn.execute("SELECT * FROM ingestion_units WHERE unit_id='park.u'").fetchone()
-    _defer_or_poison(conn, owner, unit, "unknown_domain")
+    _defer_or_poison(conn, owner, unit, "missing_section")
     state = conn.execute("SELECT state,attempts,next_attempt_at FROM ingestion_units").fetchone()
     assert tuple(state) == ("deferred", 0, None)
     conn.close(); owner.release()

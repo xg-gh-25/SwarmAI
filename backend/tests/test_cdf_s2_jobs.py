@@ -155,7 +155,7 @@ def test_a_v6_database_gains_the_job_table(tmp_path, monkeypatch) -> None:
     raw.close()
     conn = connect_rw()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
         assert conn.execute("SELECT COUNT(*) FROM ingestion_s2_jobs WHERE project IS NULL").fetchone()[0] == 0
     finally:
         conn.close()
