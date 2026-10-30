@@ -913,6 +913,11 @@ def sync_knowledge_index(
                 for p in parts
             ):
                 continue
+            # files a Hive run brought back (core/hive_files): deliverables on disk,
+            # not knowledge -- what a Hive wrote reaches recall only through CDF
+            from core.hive_files import is_returned
+            if is_returned(parts):
+                continue
             rel_path = f"{subdir.name}/{rel_to_sub}"
             current_files[rel_path] = md_file
 

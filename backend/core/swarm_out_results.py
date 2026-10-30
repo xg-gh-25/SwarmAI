@@ -49,7 +49,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 6
+SUMMARY_VERSION = 7
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -286,7 +286,10 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
                 continue
             kind = f.get("kind") if f.get("kind") in ("content", "knowledge", "external-diff",
                                                        "external-nodiff") else "other"
-            deliverables.append({"path": f["path"][:300], "kind": kind})
+            ap = f.get("absolutePath")
+            deliverables.append({"path": f["path"][:300], "kind": kind,
+                                 # the file's identity, for its copy here (attach_local)
+                                 **({"abs": ap} if isinstance(ap, str) and len(ap) <= 1000 else {})})
 
     bound: dict[str, dict] = {}            # turn_changes, by git root
     for b in all_blocks:
@@ -612,6 +615,23 @@ _RECORD_TRANSIENT = ("hive_silent", "hive_unusable")
 PULL_TIMEOUT_S = 120
 
 
+def attach_local(result: dict, placed: list[dict]) -> None:
+    """Give each listed file that came back from the Hive (core/hive_files.placed) its
+    ``local`` path here, or ``not_placed`` when it came back and could not be put in
+    the run's Brain. Matched by identity: the path its turn's block listed it under,
+    exactly (never by a suffix: two files can end the same way)."""
+    by_listed = {p["listed"]: p for p in placed if isinstance(p, dict) and isinstance(p.get("listed"), str)}
+    files = ((result or {}).get("work") or {}).get("files")
+    for f in files if isinstance(files, list) else []:
+        got = by_listed.get(f.get("abs")) if isinstance(f, dict) else None
+        if not got:
+            continue
+        if isinstance(got.get("local"), str):
+            f["local"] = got["local"]
+        elif got.get("error"):
+            f["not_placed"] = True
+
+
 async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
     """Fill ``rec`` from the run's record kept here (core/hive_records): the record's
     state, the lessons, and the result when the record starts at the session's first turn.
@@ -631,6 +651,8 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
     if rows:
         rec["result"] = summarize(rows, partial, agent)
+        from core import hive_files
+        attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did))
         rec["summary_version"] = SUMMARY_VERSION
         rec["fetched_at"] = rec["checked_at"]
     rec["etag"] = rec["transcript_rev"] = None

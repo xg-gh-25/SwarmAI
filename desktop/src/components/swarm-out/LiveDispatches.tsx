@@ -314,7 +314,15 @@ function ResultDetail({ r, full, setFull, onRefreshed, onClose }: {
       {(res?.work.files ?? []).length > 0 && (
         <div className="mt-2" data-testid="swarm-out-run-files">
           <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.filesWritten')}</div>
-          {res!.work.files.map((f, i) => <div key={`${i}:${f.path ?? ''}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path}</div>)}
+          {res!.work.files.map((f, i) => f.local ? (
+            // came back into the run's Brain (core/hive_files): opens the copy here
+            <button key={`${i}:${f.path ?? ''}`} type="button" title={f.local} data-testid="swarm-out-run-file-local"
+              className="block max-w-full text-left font-mono text-[11.5px] truncate text-[var(--color-primary)] hover:underline"
+              onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: f.local } }))}>
+              {f.local} <span className={muted}>{t('swarmOut.detail.fileHere')}</span>
+            </button>
+          ) : <div key={`${i}:${f.path ?? ''}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path}
+            {f.not_placed && <span className={muted} data-testid="swarm-out-run-file-not-placed"> {t('swarmOut.detail.fileNotPlaced')}</span>}</div>)}
         </div>
       )}
       {tools.length > 0 && (

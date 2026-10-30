@@ -110,7 +110,8 @@ export interface SwarmOutResult {
     /** /runs: root null, repo null unless a plain name */
     changes: { root: string | null; repo: string | null; files: number; added: number; deleted: number; landed: string[] }[];
     /** /runs: kind only; /result: with the Hive path */
-    files: { path?: string; kind: 'content' | 'knowledge' | 'external-diff' | 'external-nodiff' | 'other' }[];
+    /** ``local``: where the file is on this machine when it came back (core/hive_files) */
+    files: { path?: string; local?: string; not_placed?: boolean; kind: 'content' | 'knowledge' | 'external-diff' | 'external-nodiff' | 'other' }[];
     files_omitted: number;
     steps: { total: number; failed: number; agents: number; by_tool: Record<string, number> };
     human: { approved: number; denied: number; unanswered: number; answered_questions: number };

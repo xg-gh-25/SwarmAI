@@ -290,6 +290,25 @@ describe('a run card', () => {
     expect(within(without).queryByTestId('swarm-out-run-open-button')).toBeNull();
   });
 
+  it('a file that came back opens its copy here; one that did not shows the Hive path', async () => {
+    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
+      result: { ...RUN.result!, report: 'Done.', report_chars: 5, work: { ...RUN.result!.work, files: [
+        { path: '/hive/ws/Knowledge/Reports/r.md', kind: 'content', local: 'Projects/P/deliverables/hive/x/Knowledge/Reports/r.md' },
+        { path: '/hive/ws/left.md', kind: 'content' }, { path: '/hive/ws/refused.md', kind: 'content', not_placed: true }] } } } } as never);
+    const opened: string[] = [];
+    const on = (e: Event) => opened.push((e as CustomEvent).detail.path);
+    document.addEventListener('swarm:open-file', on);
+    const c = await card('fix the widget');
+    fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
+    const btn = await within(c).findByTestId('swarm-out-run-file-local');
+    fireEvent.click(btn);
+    document.removeEventListener('swarm:open-file', on);
+    expect(opened).toEqual(['Projects/P/deliverables/hive/x/Knowledge/Reports/r.md']);
+    expect(within(c).getAllByTestId('swarm-out-run-file-local')).toHaveLength(1);
+    expect(within(c).getByText('/hive/ws/left.md')).toBeTruthy();
+    expect(within(c).getAllByTestId('swarm-out-run-file-not-placed')).toHaveLength(1);   // said, only for that one
+  });
+
   it('the details wait for the whole record: /runs counts are never shown as file lists', async () => {
     vi.mocked(swarmOutService.result).mockReturnValue(new Promise(() => {}));
     vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN,

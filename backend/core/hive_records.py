@@ -25,6 +25,11 @@ and a session's directory may not be links.
 - ``lessons``: the session's lesson units not sealed before (core/hive_lessons.collect),
   sealed when its session job ends (done or failed, also failed by a restart), when a
   pipeline it created lands, and when the session is deleted.
+- ``file``: one file the turn wrote (its ``turn_deliverables``), sealed after the turn,
+  with ``path`` (relative to the workspace) in its manifest line (core/hive_files). The
+  host checks it like any entry plus ``hive_files.safe_rel(path)``, then places it in the
+  run's Brain and drops its own copy (``hive_files.place_pending``); one over the kept
+  budget is listed as ``skipped`` without its bytes instead of stopping the pull.
 - ``closed``: right after the lessons of a session job's end or a deletion: what the
   session produced so far is all here. A later turn appends after it.
 
@@ -65,9 +70,11 @@ logger = logging.getLogger(__name__)
 
 ROOT = ("Hive", "records")
 MANIFEST = "manifest.jsonl"
-KINDS = ("bundle", "turn", "lessons", "closed")
-MAX_BYTES = {"bundle": 100 * 1024 * 1024, "turn": 1024 * 1024, "lessons": 512 * 1024, "closed": 4096}
+KINDS = ("bundle", "turn", "lessons", "closed", "file")
+MAX_BYTES = {"bundle": 100 * 1024 * 1024, "turn": 1024 * 1024, "lessons": 512 * 1024, "closed": 4096,
+             "file": 20 * 1024 * 1024}
 PAGE = 100
+LISTED_MAX = 1000                 # a file entry's listed path (core/hive_files)
 RETENTION_DAYS = 30
 TMP_STALE_S = 24 * 3600
 TURN_ROWS = 400                   # rows read back to find a turn's start
@@ -89,7 +96,7 @@ def _now() -> str:
 
 
 def _name(seq: int, kind: str, key: Optional[str] = None) -> str:
-    return f"{seq:06d}-{kind}" + (f"-{key}.bundle" if kind == "bundle" else ".json")
+    return f"{seq:06d}-{kind}" + (f"-{key}.bundle" if kind == "bundle" else ".bin" if kind == "file" else ".json")
 
 
 def _entry_name(e: dict) -> Optional[str]:
@@ -195,10 +202,18 @@ def tmp_path(workspace: Path, session_id: str, key: str) -> Path:
 
 
 def append(workspace: Path, session_id: str, kind: str, *, data: Optional[bytes] = None,
-           src: Optional[Path] = None, key: Optional[str] = None) -> dict:
-    """Seal one entry: ``data`` bytes, or the temporary file ``src`` (moved, not copied)."""
+           src: Optional[Path] = None, key: Optional[str] = None, path: Optional[str] = None,
+           listed: Optional[str] = None) -> dict:
+    """Seal one entry: ``data`` bytes, or the temporary file ``src`` (moved, not copied).
+    ``path``: a ``file`` entry's path relative to the workspace; ``listed``: the path its
+    turn's ``turn_deliverables`` block lists it under (core/hive_files)."""
+    from core.hive_files import safe_rel
     if kind not in KINDS or (kind == "bundle") != (key is not None):
         raise ValueError("not an entry kind")
+    if (kind == "file") != (path is not None) or (path is not None and not safe_rel(path)):
+        raise ValueError("a file entry needs its path, and only a file entry has one")
+    if listed is not None and (kind != "file" or not isinstance(listed, str) or len(listed) > LISTED_MAX):
+        raise ValueError("only a file entry names its listed path")
     if key is not None and not KEY_RE.fullmatch(key):
         raise ValueError("not a bundle key")
     d = session_dir(workspace, session_id)
@@ -234,7 +249,8 @@ def append(workspace: Path, session_id: str, kind: str, *, data: Optional[bytes]
             raise ValueError(f"the {kind} entry is larger than a record holds")
         _fsync_dir(d)
         entry = {"seq": seq, "kind": kind, "file": name, "sha256": h.hexdigest(), "size": size,
-                 "at": _now(), **({"key": key} if key else {})}
+                 "at": _now(), **({"key": key} if key else {}), **({"path": path} if path else {}),
+                 **({"listed": listed} if listed else {})}
         _append_line(d, entry)
         return entry
 
@@ -422,6 +438,10 @@ def seal_turn(workspace: Path, session_id: str, rows: Optional[list[dict]],
                 tmp = d / f".tmp-sealed-{secrets.token_hex(4)}"
                 tmp.write_text(json.dumps({"last_id": last}), encoding="utf-8")
                 os.replace(tmp, d / SEALED_TURNS)
+            # what the turn wrote, after the turn and its marker (a kill while reading
+            # them never makes the next turn seal these rows again)
+            from core.hive_files import seal_files
+            seal_files(workspace, session_id, sliced)
             return entry
     except Exception as exc:  # noqa: BLE001 — the record never breaks the turn
         logger.error("hive_records: turn of %s not sealed (%s)", session_id, type(exc).__name__)
@@ -653,6 +673,11 @@ def _valid_entry(e: Any, expect_seq: int) -> Optional[str]:
         return "bad_entry"
     if kind == "bundle" and not (isinstance(e.get("key"), str) and KEY_RE.fullmatch(e["key"])):
         return "bad_entry"
+    from core.hive_files import safe_rel
+    if (kind == "file") != ("path" in e) or (kind == "file" and not safe_rel(e["path"])):
+        return "bad_entry"
+    if "listed" in e and (kind != "file" or not isinstance(e["listed"], str) or len(e["listed"]) > LISTED_MAX):
+        return "bad_entry"
     return None
 
 
@@ -724,7 +749,7 @@ def _kept_bytes(d: Path, kept: list[dict]) -> int:
     n = 0
     for e in kept:
         p = _entry_path(d, e)
-        if p is not None and isinstance(e.get("size"), int) and (e.get("kind") != "bundle" or p.is_file()):
+        if p is not None and isinstance(e.get("size"), int) and (e.get("kind") not in ("bundle", "file") or p.is_file()):
             n += e["size"]
     return n
 
@@ -813,6 +838,16 @@ async def pull(row: dict, inst: dict) -> dict:
                     why = _valid_entry(e, cur + 1)
                     if not why and (len(kept) >= MAX_KEPT_ENTRIES or used + e["size"] > MAX_KEPT_BYTES):
                         why = "record_too_large"
+                    if why == "record_too_large" and e["kind"] == "file" and len(kept) < MAX_KEPT_ENTRIES:
+                        # a deliverable never blocks the turns, lessons and close after it:
+                        # its line is kept, marked, without the bytes (core/hive_files)
+                        entry = {**{k: e[k] for k in ("seq", "kind", "sha256", "size", "path") if k in e},
+                                 "file": _name(e["seq"], "file"), "at": _now(), "skipped": why,
+                                 **({"listed": e["listed"]} if "listed" in e else {})}
+                        await asyncio.to_thread(_append_line, d, entry)
+                        kept.append(entry)
+                        cur = e["seq"]
+                        continue
                     if why:
                         out["error"] = why
                         break
@@ -833,7 +868,9 @@ async def pull(row: dict, inst: dict) -> dict:
                         await asyncio.shield(asyncio.to_thread(tmp.unlink, missing_ok=True))
                         raise
                     entry = {"seq": e["seq"], "kind": e["kind"], "file": name, "sha256": sha,
-                             "size": size, "at": _now(), **({"key": e["key"]} if e["kind"] == "bundle" else {})}
+                             "size": size, "at": _now(), **({"key": e["key"]} if e["kind"] == "bundle" else {}),
+                             **({"path": e["path"]} if e["kind"] == "file" else {}),
+                             **({"listed": e["listed"]} if e["kind"] == "file" and "listed" in e else {})}
                     await asyncio.to_thread(_append_line, d, entry)
                     kept.append(entry)
                     used += size
@@ -842,6 +879,8 @@ async def pull(row: dict, inst: dict) -> dict:
                     break
             if d.is_dir():
                 await asyncio.to_thread(_prune_bundles, d)
+                from core.hive_files import place_pending   # into the run's Brain, then dropped here
+                await asyncio.to_thread(place_pending, row, d)
     except swarm_out.SwarmOutError:
         if not (d.is_dir() and local_entries(did)):
             return dict(_UNSUPPORTED)

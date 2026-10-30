@@ -58,7 +58,9 @@ def corpus_paths(root: Path, destination: Destination, *, project: str | None = 
     if target.is_file():
         paths.add(target)
     elif target.is_dir():
-        paths.update(p for p in target.rglob("*.md") if p.is_file())
+        from core.hive_files import is_returned   # files a Hive run brought back are not knowledge
+        paths.update(p for p in target.rglob("*.md")
+                     if p.is_file() and not is_returned(p.relative_to(target).parts))
     if destination.store in _COGNITIVE_STORES:
         project = project or getattr(destination, "project", None)
         if project:

@@ -86,7 +86,9 @@ def whitelisted(rel: str, general: bool) -> bool:
     if any(p in ("", ".", "..") for p in parts) or _skipped(parts) or is_secret_path(rel):
         return False
     if general:
-        return rel in GENERAL_FILES or rel.endswith(".md") and "-archive" not in parts[-1]
+        # deliverables/: files Hive runs brought back (core/hive_files), never sent out again
+        return rel in GENERAL_FILES or (rel.endswith(".md") and "-archive" not in parts[-1]
+                                        and parts[0] != "deliverables")
     if len(parts) == 1:
         return rel in TOP_FILES
     head = parts[0]
