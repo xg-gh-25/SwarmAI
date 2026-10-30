@@ -45,6 +45,116 @@ class ScanResult:
 
 # ── Pattern definitions ─────────────────────────────────────────────
 
+# A few checks are code, not one regex: as a regex each was super-linear on text that
+# repeats what it looks for (a nested quantifier, or a lazy ".*" run from every start to
+# the end of the text), and the guard scans whole documents in the daemon. Each matcher
+# has the two methods scan() uses, finditer() and sub(), and reads the text once.
+
+class _Span:
+    """What a match object gives scan(): its text and where it is."""
+    __slots__ = ("_text", "_start", "_end")
+
+    def __init__(self, text: str, start: int, end: int) -> None:
+        self._text, self._start, self._end = text, start, end
+
+    def group(self, *_args) -> str:
+        return self._text[self._start:self._end]
+
+    def start(self) -> int:
+        return self._start
+
+    def end(self) -> int:
+        return self._end
+
+    def span(self) -> tuple[int, int]:
+        return self._start, self._end
+
+
+class _CodeMatcher:
+    def finditer(self, text: str):  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    def sub(self, replacement: str, text: str) -> str:
+        out, last = [], 0
+        for m in self.finditer(text):
+            out += [text[last:m.start()], replacement]
+            last = m.end()
+        return "".join(out) + text[last:] if out else text
+
+
+# the characters a role directive's prefix is made of: list / quote / table markers,
+# numbered-list markers, emphasis, brackets, spaces
+_PREFIX_CHARS = frozenset("-*+>#|_`[(<.)0123456789 \t\u00a0\u3000")
+LONG_PREFIX = 24     # system_directive's regex reads a prefix up to this many markers
+
+
+class _LongPrefixDirective(_CodeMatcher):
+    """"system:" after a prefix longer than system_directive reads: from each
+    "system…:" walk back over the prefix characters; LONG_PREFIX or more of them is
+    padding that would otherwise hide the directive. Runs before two "system" never
+    overlap (its letters are not prefix characters), so the text is read once."""
+
+    _TAIL = re.compile(r"system[ \t]*+[*_`\])>]*+[ \t]*+[:\uff1a][ \t]*[*_`]*\s+", re.IGNORECASE)
+
+    def finditer(self, text: str):
+        floor = 0
+        for m in self._TAIL.finditer(text):
+            i = m.start()
+            while i > floor and (text[i - 1] in _PREFIX_CHARS or text[i - 1].isdecimal()):
+                i -= 1
+            if m.start() - i >= LONG_PREFIX:
+                yield _Span(text, i, m.end())
+            # not m.end(): the tail's "\\s+" may take the next line's leading spaces,
+            # which are part of the next prefix
+            floor = m.start() + len("system")
+
+
+class _CommandSecret(_CodeMatcher):
+    """*command*, whitespace (a line break too), then a secret word later on that
+    line: the regex "curl\\s+.*(word)" ran from every "curl" to the line's end. A
+    line is read once: a later command whose whitespace ends on a line already read is
+    inside its match or has no secret word after it; only a line's last command can
+    reach the next line, and that one is read."""
+
+    def __init__(self, command: str, words: str) -> None:
+        self._command = re.compile(rf"{command}\s+", re.IGNORECASE)
+        self._words = re.compile(words, re.IGNORECASE)
+
+    def finditer(self, text: str):
+        floor = 0
+        for m in self._command.finditer(text):
+            if m.end() <= floor:
+                continue   # its whitespace ends on a line already read
+            line_end = text.find("\n", m.end())
+            line_end = len(text) if line_end < 0 else line_end
+            last = None
+            for word in self._words.finditer(text, m.end(), line_end):
+                last = word
+            if last is not None:
+                yield _Span(text, m.start(), last.end())
+            floor = line_end
+
+
+class _PemKey(_CodeMatcher):
+    """A PEM private key block, header to footer: a lazy "[\\s\\S]*?" from every header
+    to the end of the text was quadratic when no footer follows."""
+
+    _HEAD = re.compile(r"-----BEGIN[A-Z\s]*PRIVATE\s+KEY-----")
+    _FOOT = re.compile(r"-----END[A-Z\s]*PRIVATE\s+KEY-----")
+
+    def finditer(self, text: str):
+        pos = 0
+        while True:
+            head = self._HEAD.search(text, pos)
+            if head is None:
+                return
+            foot = self._FOOT.search(text, head.end())
+            if foot is None:
+                return              # no footer after this header: none after a later one
+            yield _Span(text, head.start(), foot.end())
+            pos = foot.end()
+
+
 _SECRET_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("aws_access_key", "[REDACTED:aws_key]",
      re.compile(r"AKIA[0-9A-Z]{16}")),
@@ -52,8 +162,7 @@ _SECRET_PATTERNS: list[tuple[str, str, re.Pattern]] = [
      re.compile(r"sk-[a-zA-Z0-9]{20,}")),
     ("bearer_token", "[REDACTED:bearer_token]",
      re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]{20,}")),
-    ("pem_key", "[REDACTED:pem_key]",
-     re.compile(r"-----BEGIN[A-Z\s]*PRIVATE\s+KEY-----[\s\S]*?-----END[A-Z\s]*PRIVATE\s+KEY-----")),
+    ("pem_key", "[REDACTED:pem_key]", _PemKey()),
     ("password", "[REDACTED:password]",
      re.compile(
          r"""(?:^|[^a-zA-Z_-])password\s*[:=]\s*["'][^\s"']{8,}["']""",
@@ -67,17 +176,27 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("ignore_above", re.compile(r"ignore\s+(everything|all|anything)\s+(above|before)", re.IGNORECASE)),
     ("disregard_instructions", re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+instructions", re.IGNORECASE)),
     ("you_are_now", re.compile(r"you\s+are\s+now\s+", re.IGNORECASE)),
-    ("special_tokens", re.compile(r"<\|.*?\|>")),
+    ("special_tokens", re.compile(r"<\|[^\n]{0,64}?\|>")),   # <|im_start|>: short; bounded, so linear
     # A role directive "system:" where a reader takes it as a turn: opening a line or a
     # heading, a list item, a quote, a table cell, after an HTML tag or a fence marker,
     # after a sentence ends; with bold / brackets / a fullwidth colon. "the hook system:
     # …" mid-sentence is prose (matching it refused real lessons); "config.system:" is
     # not a sentence end (a space must follow the period).
     ("system_directive", re.compile(
-        r"(?:^|[\r\n\u2028\u2029]|(?<=[.!?;])(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!vs\.)[ \t\u00a0]+|(?<=[|>\"'\])])[ \t\u00a0]*|```\w*)"
-        r"[ \t\u00a0\u3000]*(?:(?:[-*+>#|]+|\d+[.)])[ \t\u00a0]*)*"
-        r"[*_`\[(<]*[ \t]*system[ \t]*[*_`\])>]*[ \t]*[:\uff1a][ \t]*[*_`]*\s+",
+        r"(?:^|[\r\n\u2028\u2029]|(?<=[.!?;])(?<!e\.g\.)(?<!i\.e\.)(?<!etc\.)(?<!vs\.)[ \t\u00a0]++|(?<=[|>\"'\])])[ \t\u00a0]*+|(?<!`)`{3,}+\w*)"
+        # the markers before it, bounded: a nested "(markers+ spaces*)*" backtracked
+        # exponentially on a table separator line (a 4 KB README did not finish in 90 s),
+        # and an unbounded run is quadratic (every "|" of a long line is a start). A
+        # longer prefix is system_directive_long's. Emphasis, spaces and a numbered
+        # marker share no character with what follows them: taken possessively, unbounded
+        # (a fence opens only at a backtick run's start, the whole run, so a long run is
+        # read from one start). After "system" the spaces / closing emphasis / spaces
+        # are possessive too, as are the anchors' own spaces: two adjacent "[ \\t]*"
+        # tried every split of a long run.
+        r"(?:[-*+>#| \t\u00a0\u3000]|\d++[.)]){0,24}"
+        r"[*_`\[(<]*+[ \t]*+system[ \t]*+[*_`\])>]*+[ \t]*+[:\uff1a][ \t]*[*_`]*\s+",
         re.IGNORECASE)),
+    ("system_directive_long", _LongPrefixDirective()),
     # LLM-specific instruction markers
     ("inst_marker", re.compile(r"\[/?INST\]", re.IGNORECASE)),
     ("sys_marker", re.compile(r"<</?SYS>>", re.IGNORECASE)),
@@ -103,10 +222,8 @@ _ROLE_HIJACK_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 _EXFILTRATION_PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("curl_secrets", re.compile(
-        r"curl\s+.*(?:api[_-]?key|token|secret|password)", re.IGNORECASE)),
-    ("wget_secrets", re.compile(
-        r"wget\s+.*(?:credential|auth)", re.IGNORECASE)),
+    ("curl_secrets", _CommandSecret("curl", r"api[_-]?key|token|secret|password")),
+    ("wget_secrets", _CommandSecret("wget", r"credential|auth")),
 ]
 
 _INVISIBLE_CHARS = re.compile(r"[\u200b-\u200f\u2028-\u202f\u2060-\u2064\ufeff]")

@@ -45,7 +45,13 @@ from typing import Optional
 # defeated by "- ignore all previous instructions" / "> from now on ..." / "1. ..."
 # — and "- {lesson}" is exactly how DailyActivity renders every lesson, so the
 # markers are the store's NATIVE shape, not an edge case (Gate-2 HIGH-1).
-_LEADIN = r"^[ \t>*+\-#.)\]\[(0-9​‌‍﻿]*\s*"
+# Both parts are possessive (*+): the marker class and the spaces share spaces and tabs, and
+# a greedy pair backtracked quadratically on a long run of them (one 80 KB line of
+# spaces ran past 30 s). What follows starts with a letter, so giving characters back
+# could never make a match: possessive matches exactly the same texts. The spaces stop
+# at a line break (each line is its own start; crossing it made every line of a run of
+# blank lines read the whole run).
+_LEADIN = r"^[ \t>*+\-#.)\]\[(0-9​‌‍﻿]*+[^\S\n]*+"
 
 # Instruction-shaped patterns. Each starts with _LEADIN (line-anchored + marker-
 # tolerant; re.MULTILINE below makes ^ match every embedded line-start). The
