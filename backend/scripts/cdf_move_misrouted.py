@@ -69,9 +69,11 @@ def _scope_name(group: dict) -> str | None:
     return scope.split(":", 1)[1].strip() if scope.startswith("project:") else None
 
 
-def find(conn: sqlite3.Connection, workspace: Path, match: str) -> list[dict]:
-    """The written units to move: scope names no project, its slug starts with *match*,
-    and the entry was written to a project DDD file."""
+def find(conn: sqlite3.Connection, workspace: Path, match: str, scope: str | None = None) -> list[dict]:
+    """The written units to move, all written to a project DDD file: with *scope*
+    (``agent`` / ``world``), the units of that scope that cite no external content (they
+    are read in every project: pipeline_v2.GENERAL_SUBJECTS); otherwise those whose scope
+    names no project and whose slug starts with *match*."""
     from core.ingestion.contracts_v2 import slugify
     from core.ingestion.pipeline_v2 import _resolve_project
     out = []
@@ -80,6 +82,11 @@ def find(conn: sqlite3.Connection, workspace: Path, match: str) -> list[dict]:
             "JOIN ingestion_units u ON u.unit_id=w.unit_id WHERE w.step='done' "
             "AND w.op_kind='ingestion_unit' AND w.target_path LIKE 'Projects/%' ORDER BY w.created_at"):
         value = json.loads(group or "{}")
+        if scope:
+            basis = conn.execute("SELECT basis FROM unit_basis WHERE unit_id=?", (unit_id,)).fetchone()
+            if value.get("scope") == scope and (basis is None or basis[0] != "external"):
+                out.append({"unit_id": unit_id, "source": target, "scope": scope})
+            continue
         name = _scope_name(value)
         if not name or not slugify(name).startswith(match) or _resolve_project(workspace, name):
             continue
@@ -87,7 +94,7 @@ def find(conn: sqlite3.Connection, workspace: Path, match: str) -> list[dict]:
     return out
 
 
-def run(workspace: Path, *, match: str, subject: str, apply: bool) -> dict:
+def run(workspace: Path, *, match: str, subject: str, apply: bool, scope: str | None = None) -> dict:
     from core.ingestion import governed_edit, writer
     from core.ingestion.contracts_v2 import GENERAL_BRAIN_DIR, slugify
     from core.ingestion.api_v2 import SCHEMA_V2_VERSION
@@ -107,7 +114,7 @@ def run(workspace: Path, *, match: str, subject: str, apply: bool) -> dict:
     backup = _backup(ingestion_db_path()) if apply else None
     conn = connect_rw() if apply else connect_ro()
     try:
-        units = find(conn, workspace, match)
+        units = find(conn, workspace, match, scope)
         dest_rel = f"{GENERAL_BRAIN_DIR}/{slugify(subject)}.md"
         dest = workspace / dest_rel
         held = {u.identity for u in parse_units(dest, root=workspace)} if dest.is_file() else set()
@@ -184,8 +191,9 @@ def run(workspace: Path, *, match: str, subject: str, apply: bool) -> dict:
             conn.execute("INSERT INTO ingestion_events(at,kind,detail) VALUES(?,'moved',?)",
                          (now, json.dumps({"unit_id": item["unit_id"], "from": item["old_anchor"],
                                            "to": anchor, "scope": item["scope"],
-                                           "why": "its subject is no project; the session's "
-                                                  "project had been taken for it"},
+                                           "why": ("about the agent or the world: read in every project"
+                                                   if scope else "its subject is no project; the session's "
+                                                   "project had been taken for it")},
                                           ensure_ascii=False, sort_keys=True)))
         for subject_anchor, predicate, object_anchor in active:
             if subject_anchor not in moved and object_anchor not in moved:
@@ -205,13 +213,16 @@ def run(workspace: Path, *, match: str, subject: str, apply: bool) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--match", required=True, help="slug prefix of the scope's project name")
+    parser.add_argument("--match", default="", help="slug prefix of the scope's project name")
+    parser.add_argument("--scope", choices=("agent", "world"), help="move this scope's units instead")
     parser.add_argument("--subject", required=True, help="the General Brain subject they move to")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     from config import get_swarmws
+    if not args.match and not args.scope:
+        parser.error("--match or --scope")
     print(json.dumps(run(Path(get_swarmws()), match=args.match, subject=args.subject,
-                         apply=args.apply), ensure_ascii=False, indent=2))
+                         apply=args.apply, scope=args.scope), ensure_ascii=False, indent=2))
     return 0
 
 

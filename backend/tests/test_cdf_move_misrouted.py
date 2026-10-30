@@ -141,3 +141,22 @@ def test_it_never_migrates_the_store(env):
         assert check.execute("PRAGMA user_version").fetchone()[0] == 10
     finally:
         check.close()
+
+
+def test_an_unbacked_agent_unit_moves_to_its_general_brain_document(env):
+    ws, doc = env
+    from core.ingestion.store import connect_rw
+    conn = connect_rw()
+    conn.execute("UPDATE ingestion_units SET claim_group=? WHERE unit_id='cand-s1.unit'",
+                 (json.dumps({"scope": "agent"}),))
+    conn.execute("INSERT OR REPLACE INTO unit_basis(unit_id,basis,recorded_at) VALUES('cand-s1.unit','inferred','t')")
+    conn.execute("UPDATE ingestion_units SET claim_group=? WHERE unit_id='cand-p1.unit'",
+                 (json.dumps({"scope": "agent"}),))
+    conn.execute("INSERT OR REPLACE INTO unit_basis(unit_id,basis,recorded_at) VALUES('cand-p1.unit','external','t')")
+    conn.commit(); conn.close()
+    from scripts.cdf_move_misrouted import run
+    report = run(ws, match="", subject="Agent self-knowledge", apply=True, scope="agent")
+    assert report["moved"] == 1                          # the external one stays
+    text = (ws / "Knowledge/Library/agent-self-knowledge.md").read_text(encoding="utf-8")
+    assert OWN.strip() in text and OWN.strip() not in doc.read_text(encoding="utf-8")
+    assert OTHER.strip() in doc.read_text(encoding="utf-8")
