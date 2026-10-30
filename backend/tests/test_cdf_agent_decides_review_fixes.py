@@ -300,3 +300,61 @@ def test_a_failed_turn_from_the_record_drops_its_fresh_conversation(monkeypatch)
     with pytest.raises(Exception):      # turn two resumes the review's own fork: kept for the caller
         s7_review.sdk_runner("fresh-1", "/w", "p", {"type": "object"}, fork=False, model="m")
     assert dropped == [("fresh-1", None)]
+
+
+# live (2026-10-30): a long session's fork answered without structured output, then its
+# relations turn failed with "review failed: success" and nothing to diagnose it by
+
+def _sdk(monkeypatch, result):
+    import claude_agent_sdk
+    monkeypatch.setattr("jobs.executor._get_aws_credentials", lambda: {})
+    monkeypatch.setattr("jobs.executor._resolve_claude_cli", lambda: "/bin/claude")
+    monkeypatch.setattr("core.ingestion.llm_usage.record", lambda usage: None)
+    monkeypatch.setattr(s7_review, "_drop_fork", lambda fork, original: None)
+
+    def fake_query(prompt, options):
+        async def gen():
+            yield claude_agent_sdk.ResultMessage(**{
+                "subtype": "success", "duration_ms": 1, "duration_api_ms": 1, "num_turns": 1,
+                "session_id": "fork-3", "usage": {}, "is_error": False, "structured_output": None,
+                **result})
+        return gen()
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+
+
+def test_a_fork_that_gives_no_structured_answer_is_reviewed_from_the_record(monkeypatch):
+    _sdk(monkeypatch, {"result": "I compacted the conversation."})
+    with pytest.raises(s7_review.Unresumable, match="I compacted the conversation"):
+        s7_review.sdk_runner("orig", "/w", "p", {"type": "object"}, fork=True, model="m")
+
+
+def test_a_failure_says_what_the_cli_said(monkeypatch):
+    _sdk(monkeypatch, {"is_error": True, "result": "Prompt is too long"})
+    with pytest.raises(RuntimeError, match="Prompt is too long"):
+        s7_review.sdk_runner("fork-1", "/w", "p", {"type": "object"}, fork=False, model="m")
+
+
+def test_a_relations_turn_that_fails_in_the_review_is_asked_again_fresh(cdf_env, tmp_path, monkeypatch, model):
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    users = _conversation(cdf_env)
+    dropped, calls = [], []
+    monkeypatch.setattr(s7_review, "_drop_fork", lambda fork, original: dropped.append((fork, original)))
+
+    def runner(resume, cwd, prompt, schema, *, fork, model):
+        calls.append((schema is s7_review.RELATION_SCHEMA, resume))
+        if schema is s7_review.RELATION_SCHEMA:
+            if resume == "fork-1":
+                raise RuntimeError("review failed: success: Prompt is too long")
+            return {"relations": [{"unit": 1, "relation": "new"}]}, "fresh-9"
+        return {"cognition_units": [_agent_correction(f"event:{users[1]}")]}, "fork-1"
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=runner)
+    assert out["units"] == 1
+    assert calls == [(False, sdk), (True, "fork-1"), (True, None)]
+    assert ("fresh-9", None) in dropped and ("fork-1", sdk) in dropped
+    from core.ingestion.api import connect_ro
+    conn = connect_ro()
+    try:
+        rng = json.loads(conn.execute("SELECT evidence_range FROM extraction_attempts WHERE source='S7'").fetchone()[0])
+    finally:
+        conn.close()
+    assert "relations_failed" not in rng and "Prompt is too long" in rng["relations_retried"][0]

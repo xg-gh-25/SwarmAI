@@ -476,13 +476,18 @@ def sdk_runner(resume: str | None, cwd: str, prompt: str, schema: dict, *, fork:
                                   + int(usage.get("cache_creation_input_tokens") or 0),
                                   "output_tokens": int(usage.get("output_tokens") or 0)})
                 errors = " ".join(message.errors or [])
+                # what the CLI said, for the attempt's record: a failure named only by its
+                # subtype ("review failed: success") cannot be diagnosed
+                said = " ".join(f"{errors} {message.result or ''}".split())[:300]
+                failed = message.is_error or not isinstance(message.structured_output, dict)
+                if failed and resume and fork:
+                    # the fork could not answer (gone, too long, no structured output from
+                    # a long conversation): the same review runs from the record alone
+                    raise Unresumable(f"fork: {message.subtype}: {said}"[:300])
                 if message.is_error:
-                    detail = f"{errors} {message.result or ''}"
-                    if resume and fork and ("No conversation found" in detail or "too long" in detail.lower()):
-                        raise Unresumable(detail.strip()[:300])
-                    raise RuntimeError(f"review failed: {message.subtype} {errors}"[:300])
+                    raise RuntimeError(f"review failed: {message.subtype}: {said}"[:300])
                 if not isinstance(message.structured_output, dict):
-                    raise extract_llm.UntypedOutput("reply missing: no structured output")
+                    raise extract_llm.UntypedOutput(f"reply missing: no structured output ({said})"[:300])
                 return message.structured_output, message.session_id
         raise RuntimeError("review ended without a result")
 
@@ -503,6 +508,29 @@ def _turn(runner: Runner, resume: str | None, cwd: str, prompt: str, schema: dic
     if isinstance(out, tuple):
         return out[0] or {}, out[1]
     return out or {}, None
+
+
+def _relations(run: Runner, fork_id: str | None, cwd: str, prompt: str, model: str | None,
+               attempt: Any, session_id: str) -> dict | None:
+    """Turn two, in the review's own conversation; if that fails (the conversation too
+    long to take one more turn, a missing reply), once more in a fresh one — the prompt
+    carries the units and their candidates, so it stands alone. If that fails too the
+    units stand as new (D1). Each failure is noted on the attempt."""
+    failures = []
+    for resume in dict.fromkeys([fork_id, None]):
+        try:
+            answer, conversation = _turn(run, resume, cwd, prompt, RELATION_SCHEMA, fork=False, model=model)
+        except Exception as exc:  # noqa: BLE001 — the next try, or the units as new
+            failures.append(f"{'review' if resume else 'fresh'}: {type(exc).__name__}: {exc}"[:300])
+            continue
+        if resume is None:
+            _drop_fork(conversation, None)          # the fresh conversation is the review's own
+        if failures:
+            attempt.evidence_range["relations_retried"] = failures
+        return answer
+    logger.warning("CDF review: relations turn failed for %s; units stand as new", session_id)
+    attempt.evidence_range["relations_failed"] = failures
+    return None
 
 
 def current_sdk_session_id(session_id: str) -> str | None:
@@ -654,14 +682,8 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
                 if units:
                     earlier = _earlier_units(session_id, workspace, project) + recorded
                     shown = _candidates(units, workspace, project, earlier)
-                    try:
-                        relations, _ = _turn(run, fork_id, cwd, relation_prompt(units, shown), RELATION_SCHEMA,
-                                             fork=False, model=model)
-                    except Exception as exc:  # noqa: BLE001 — the units stand as new (D1)
-                        logger.warning("CDF review: relations turn failed for %s (%s); units stand as new",
-                                       session_id, type(exc).__name__)
-                        attempt.evidence_range["relations_failed"] = f"{type(exc).__name__}: {exc}"[:300]
-                        relations = None
+                    relations = _relations(run, fork_id, cwd, relation_prompt(units, shown), model,
+                                           attempt, session_id)
                     units = _without_repeats_of_this_review(apply_relations(units, relations), recorded)
         except Exception as exc:
             api_v2.record_extraction_attempt(attempt, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
