@@ -1789,5 +1789,17 @@
       "liveSince": "The ledger records live since {{date}}",
       "noHive": "No Hive has reported yet (they join once updated to the new version)"
     }
+  },
+  "needYou": {
+    "tabAttention": "Needs you",
+    "tabFlow": "Cognition flow",
+    "title": "Need You",
+    "description": "Everything SwarmAI can't finish without you. Click an item to put it in the chat input, or ↑ to send it now.",
+    "loadFailed": "Couldn't load the attention queue.",
+    "empty": "Nothing needs you right now",
+    "blocking": "Blocking",
+    "blockingHint": "Stopped — nothing moves without you",
+    "review": "Review",
+    "reviewHint": "Self-advancing — your input confirms or overrides"
   }
 }

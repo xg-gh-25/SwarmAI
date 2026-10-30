@@ -1788,5 +1788,17 @@
       "liveSince": "账本从 {{date}} 起实时记录",
       "noHive": "Hive 还没有上报（更新到新版本后自动并入）"
     }
+  },
+  "needYou": {
+    "tabAttention": "需要你",
+    "tabFlow": "认知沉淀",
+    "title": "需要你",
+    "description": "SwarmAI 离开你就完成不了的事都在这里。点一条放进聊天输入框，或点 ↑ 直接发送。",
+    "loadFailed": "加载待处理队列失败。",
+    "empty": "现在没有需要你处理的事",
+    "blocking": "阻塞",
+    "blockingHint": "已停下，等你处理才能继续",
+    "review": "待确认",
+    "reviewHint": "会自己往前推进，你的意见用来确认或推翻"
   }
 }

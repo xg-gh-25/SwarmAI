@@ -12,6 +12,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import en from '../../i18n/locales/en.json';
+
+// The real English strings, so the test reads what an English-locale user sees.
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => key.split('.').reduce<unknown>(
+      (node, part) => (node as Record<string, unknown> | undefined)?.[part], en) as string ?? key,
+  }),
+}));
 
 const fetchAttention = vi.fn();
 vi.mock('../../services/attention', async (orig) => ({
@@ -32,6 +41,15 @@ function wrap(qc: QueryClient) {
   return ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 const freshQc = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+describe('NeedYouOverlay — labels', () => {
+  it('in the English locale both tabs are English', () => {
+    fetchAttention.mockResolvedValue(ok);
+    render(<NeedYouContent onDispatch={() => true} close={() => {}} />, { wrapper: wrap(freshQc()) });
+    expect(screen.getByTestId('need-you-tab')).toHaveTextContent('Needs you');
+    expect(screen.getByTestId('cdf-tab')).toHaveTextContent('Cognition flow');
+  });
+});
 
 describe('NeedYouOverlay — data', () => {
   beforeEach(() => fetchAttention.mockReset());

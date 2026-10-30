@@ -21,6 +21,7 @@
  * (docs/design/left-nav-overlay-finish.md §1.3).
  */
 import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import type { AttentionEntry } from '../../services/attention';
 import { Tabs } from '../overlay';
@@ -54,13 +55,14 @@ function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]
 type NeedYouTab = 'attention' | 'flow';
 
 export function NeedYouContent(props: NeedYouContentProps) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<NeedYouTab>('attention');
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="needs-you-overlay">
       <Tabs
         items={[
-          { key: 'attention', label: '需要你', testid: 'need-you-tab' },
-          { key: 'flow', label: 'Cognitive Distillation Flow', testid: 'cdf-tab' },
+          { key: 'attention', label: t('needYou.tabAttention'), testid: 'need-you-tab' },
+          { key: 'flow', label: t('needYou.tabFlow'), testid: 'cdf-tab' },
         ]}
         value={tab}
         onChange={setTab}
@@ -75,6 +77,7 @@ export function NeedYouContent(props: NeedYouContentProps) {
 }
 
 function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
+  const { t } = useTranslation();
   const q = useQuery(overlayQuery.needsYou());
   const items: AttentionEntry[] = q.data?.items ?? [];
   const loading = q.isPending;
@@ -91,10 +94,9 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
   return (
     <div className="py-4" data-testid="needs-you-attention">
       <div className="mb-4">
-        <h2 className="text-heading font-semibold text-[var(--color-text)]">Need You</h2>
+        <h2 className="text-heading font-semibold text-[var(--color-text)]">{t('needYou.title')}</h2>
         <p className="mt-0.5 text-meta text-[var(--color-text-dim)]">
-          Everything SwarmAI can't finish without you. Click an item to put it in the chat
-          input, or ↑ to send it now.
+          {t('needYou.description')}
         </p>
       </div>
 
@@ -104,19 +106,19 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
         <OverlayError
           testid="needyou-load-error"
           retryTestid="needyou-load-retry"
-          message="Couldn't load the attention queue."
+          message={t('needYou.loadFailed')}
           onRetry={() => { void q.refetch(); }}
         />
       )}
 
       {!loading && !error && items.length === 0 && (
-        <OverlayEmpty icon="check_circle">Nothing needs you right now</OverlayEmpty>
+        <OverlayEmpty icon="check_circle">{t('needYou.empty')}</OverlayEmpty>
       )}
 
       {blocking.length > 0 && (
         <TierSection
-          label="Blocking"
-          hint="Stopped — nothing moves without you"
+          label={t('needYou.blocking')}
+          hint={t('needYou.blockingHint')}
           pulse
           items={blocking}
           onFill={onFill}
@@ -125,8 +127,8 @@ function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
       )}
       {review.length > 0 && (
         <TierSection
-          label="Review"
-          hint="Self-advancing — your input confirms or overrides"
+          label={t('needYou.review')}
+          hint={t('needYou.reviewHint')}
           items={review}
           onFill={onFill}
           onSend={onSend}
