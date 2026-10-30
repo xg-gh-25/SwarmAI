@@ -1,23 +1,26 @@
 /**
  * Cognition flow — the Cognitive Distillation Flow inside the Need You overlay, written
- * for a person to read (design docs/design/2026-10-30-cdf-flow-view.md).
+ * for a person to read (design docs/design/2026-10-30-cdf-flow-view.md). One level of
+ * tabs: the overlay holds Needs you · Cognition flow · How it works (CdfGuideline).
  *
- * Two sub-tabs:
- * - Activity, read backward from the result: one verdict sentence and the anomalies worth
- *   a look (each can be sent to chat), WHERE kept items landed (every-turn files, project
- *   brains, General Brain & Library, one shared scale), HOW each item is decided (the six
- *   steps with what each let through, dropped or moved), WHAT it learned (CdfUnitFeed),
- *   and a one-line health strip whose Details keep the raw audit (CdfFlowDetails).
- * - Guideline (CdfGuideline): how the flow works, with its diagram.
+ * Read from the result backward:
+ * - the dashboard (CdfDashboard): captured, learned, reinforced, not kept, each with its
+ *   change against the window before and its trend; the anomalies worth a look (each can
+ *   be sent to chat);
+ * - side by side, WHERE kept items landed (every-turn files, project brains, General Brain
+ *   & Library, one shared scale; a click filters the list) and HOW each item is decided
+ *   (the six steps top to bottom, their numbers in one column);
+ * - WHAT it learned (CdfUnitFeed), and a one-line health strip whose Details keep the raw
+ *   audit (CdfFlowDetails).
  *
- * Data: GET /ingestion/landed (the summary) and /ingestion/units (the feed), both read-only.
- * The backend decides which step produced an outcome (flow_view.reason_group); this view
- * only phrases it. No approvals: a wrong outcome is something to ask Swarm about.
+ * Data: GET /ingestion/landed (summary + trend) and /ingestion/units (the list), both
+ * read-only. The backend decides which step produced an outcome (flow_view.reason_group);
+ * this view only phrases it. No approvals: a wrong outcome is something to ask Swarm about.
  *
  * Key export: `CognitiveDistillationFlow`.
  */
 import { Fragment, useMemo, useState, type ReactNode } from 'react';
-import { bytes, fileName, fmt, rich } from './cdfText';
+import { bytes, fileName, fmt } from './cdfText';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -29,11 +32,11 @@ import {
   type LandedRow,
   type UnitFilters,
 } from '../../services/ingestion';
-import { SectionLabel, Segmented, Tabs } from '../overlay';
+import { SectionLabel, Segmented } from '../overlay';
 import { OverlayError, OverlayLoading } from './OverlayState';
 import { CdfUnitFeed } from './CdfUnitFeed';
 import { CdfFlowDetails } from './CdfFlowDetails';
-import { CdfGuideline } from './CdfGuideline';
+import { CdfDashboard } from './CdfDashboard';
 import type { DispatchPrompt } from './overlayRegistry';
 
 const EVERY_TURN = ['TIMELINE', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'MEMORY'];
@@ -43,29 +46,9 @@ const KEPT = 'var(--color-zone-cognitive)';
 const KEPT_SOFT = 'color-mix(in srgb, var(--color-zone-cognitive) 40%, transparent)';
 const WARN_TINT = 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)';
 
-type SubTab = 'activity' | 'guide';
-
 export function CognitiveDistillationFlow({ onDispatch, close }: {
   onDispatch?: DispatchPrompt; close?: () => void;
 }) {
-  const { t } = useTranslation();
-  const [sub, setSub] = useState<SubTab>('activity');
-  return (
-    <div className="py-4" data-testid="cdf-flow">
-      <Tabs
-        items={[
-          { key: 'activity', label: t('cdf.tabActivity'), testid: 'cdf-sub-activity' },
-          { key: 'guide', label: t('cdf.tabGuide'), testid: 'cdf-sub-guide' },
-        ]}
-        value={sub}
-        onChange={setSub}
-      />
-      {sub === 'activity' ? <Activity onDispatch={onDispatch} close={close} /> : <CdfGuideline />}
-    </div>
-  );
-}
-
-function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: () => void }) {
   const { t } = useTranslation();
   const [window, setWindow] = useState<IngestionWindow>('24h');
   const [focus, setFocus] = useState<Partial<UnitFilters> & { label?: string }>({});
@@ -76,12 +59,10 @@ function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: 
   };
 
   return (
-    <div className="space-y-9 pt-6">
-      <section className="space-y-4" data-testid="cdf-verdict">
-        <div className="flex items-start gap-6">
-          <div className="min-w-0 flex-1">
-            {landed.data ? <Verdict data={landed.data} window={window} /> : null}
-          </div>
+    <div className="space-y-8 py-5" data-testid="cdf-flow">
+      <section className="space-y-3" data-testid="cdf-verdict">
+        <div className="flex items-center gap-4">
+          {landed.data ? <Status data={landed.data} /> : <span className="flex-1" />}
           <Segmented
             options={(['24h', '7d', '30d'] as const).map((key) => ({ key, label: key }))}
             value={window}
@@ -91,6 +72,7 @@ function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: 
         {landed.isPending && <OverlayLoading testid="cdf-landed-loading" />}
         {landed.isError && <OverlayError compact message={t('ingestion.loadFailed')}
           onRetry={() => { void landed.refetch(); }} testid="cdf-landed-error" />}
+        {landed.data && <CdfDashboard data={landed.data} window={window} notKeptHint={notKeptHint(t, landed.data)} />}
         {landed.data && landed.data.attention.length > 0 && (
           <div className="space-y-0.5" data-testid="cdf-attention">
             {landed.data.attention.map((item) => {
@@ -111,8 +93,12 @@ function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: 
         )}
       </section>
 
-      {landed.data && <Landed data={landed.data} onPick={(next) => setFocus(next)} />}
-      {landed.data && <HowItDecides data={landed.data} />}
+      {landed.data && (
+        <div className="grid grid-cols-2 gap-10">
+          <Landed data={landed.data} onPick={(next) => setFocus(next)} />
+          <HowItDecides data={landed.data} />
+        </div>
+      )}
 
       <CdfUnitFeed window={window} overview={landed.data} focus={focus} onClearFocus={() => setFocus({})} />
 
@@ -121,36 +107,30 @@ function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: 
   );
 }
 
-function Verdict({ data, window }: { data: LandedOverview; window: IngestionWindow }) {
+/** One line of state: whether anything waits or failed (the numbers are in the dashboard). */
+function Status({ data }: { data: LandedOverview }) {
   const { t } = useTranslation();
-  const learned = data.totals.new + data.totals.adds;
-  const windowLabel = t(`cdf.w${window}`);
-  const bold = (value: number) => <span className="font-semibold text-[var(--color-zone-cognitive)]">{fmt(value)}</span>;
+  const waiting = data.totals.waiting;
+  return (
+    <p className="flex-1 text-body text-[var(--color-text-muted)]" data-testid="cdf-status">
+      <span className="mr-2 inline-block h-2 w-2 rounded-full align-middle"
+        style={{ background: waiting > 0 ? 'var(--color-status-warning)' : 'var(--color-zone-cognitive)' }} />
+      {waiting > 0 ? t('cdf.healthWaiting', { n: fmt(waiting) }) : t('cdf.healthOk')}
+    </p>
+  );
+}
+
+/** Why most items were not kept: the largest reason. */
+function notKeptHint(t: TFunction, data: LandedOverview): string {
   const top = NOT_KEPT_GROUPS
     .map((group) => [group, data.groups[group] ?? 0] as const)
     .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 2)
-    .map(([group, count]) => t('cdf.groupCount', { label: t(`cdf.group.${group}`), n: fmt(count) }))
-    .join(t('cdf.and'));
-  return (
-    <div>
-      <p className="text-title font-semibold leading-snug text-[var(--color-text)]" data-testid="cdf-verdict-line">
-        {learned + data.totals.reinforced > 0
-          ? rich(t, 'cdf.verdict', { window: windowLabel, learned: bold(learned), reinforced: bold(data.totals.reinforced) })
-          : t('cdf.verdictNone', { window: windowLabel })}
-      </p>
-      <p className="mt-1.5 text-body text-[var(--color-text-muted)]">
-        {data.totals.notKept > 0 ? t('cdf.notKeptMostly', { n: fmt(data.totals.notKept), top }) : t('cdf.notKeptNone')}
-        {' '}
-        {data.totals.waiting > 0 ? t('cdf.healthWaiting', { n: fmt(data.totals.waiting) }) : t('cdf.healthOk')}
-      </p>
-    </div>
-  );
+    .slice(0, 1)          // the largest reason; the rest is in the steps and the list
+    .map(([group, count]) => t('cdf.groupCount', { label: t(`cdf.group.${group}`), n: fmt(count) }));
+  return top.length ? t('cdf.dash.notKeptMostly', { top: top.join(t('cdf.and')) }) : t('cdf.notKeptNone');
 }
 
-/** The line shown for an anomaly; `prompt` is what goes to chat: built from counts and our own
- *  words only, never from stored text (a project name came from a model reading the session). */
 export function attentionText(t: TFunction, item: FlowAttention): { main: string; extra?: string; prompt: string } {
   const count = fmt(item.count ?? 0);
   switch (item.code) {
@@ -181,7 +161,7 @@ function Landed({ data, onPick }: { data: LandedOverview; onPick: (focus: Partia
   const movedFrom = [...new Set(data.moved.map((row) => t(`cdf.store.${row.from}`, { defaultValue: row.from })))].join(' / ');
   const spelling = data.attention.find((item) => item.code === 'spelling')?.example?.split(', ') ?? [];
   return (
-    <section data-testid="cdf-landed">
+    <section data-testid="cdf-landed" className="min-w-0">
       <SectionLabel right={t('cdf.landedHint')}>{t('cdf.landedTitle')}</SectionLabel>
       {tiers.every((tier) => tier.rows.length === 0) && <p className="mt-3 text-body text-[var(--color-text-muted)]">{t('cdf.landedEmpty')}</p>}
       <div className="mt-3 space-y-5">
@@ -195,7 +175,7 @@ function Landed({ data, onPick }: { data: LandedOverview; onPick: (focus: Partia
               <Fragment key={row.key}>
                 <button type="button" data-testid={`cdf-dest-${row.key}`}
                   onClick={() => onPick({ ...row.filter, label: row.label })}
-                  className="grid w-full grid-cols-[240px_1fr_180px] items-center gap-4 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-hover)]">
+                  className="grid w-full grid-cols-[minmax(0,170px)_minmax(0,1fr)_170px] items-center gap-4 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-hover)]">
                   <span className={`truncate text-body ${row.indent ? 'pl-4 text-[var(--color-text-muted)]' : 'text-[var(--color-text)]'}`}>
                     {row.label}{row.hint && <span className="ml-1.5 text-small text-[var(--color-text-dim)]">{row.hint}</span>}
                   </span>
@@ -203,7 +183,7 @@ function Landed({ data, onPick }: { data: LandedOverview; onPick: (focus: Partia
                     <span style={{ width: `${(row.written / max) * 100}%`, background: KEPT }} />
                     <span style={{ width: `${(row.reinforced / max) * 100}%`, background: KEPT_SOFT }} />
                   </span>
-                  <span className="text-right text-body tabular-nums text-[var(--color-text-muted)]">
+                  <span className="whitespace-nowrap text-right text-body tabular-nums text-[var(--color-text-muted)]">
                     {countsText(t, row.written, row.reinforced)}
                   </span>
                 </button>
@@ -286,16 +266,9 @@ function HowItDecides({ data }: { data: LandedOverview }) {
     g('expired') > 0 ? t('cdf.alsoExpired', { n: fmt(g('expired')) }) : null,
     data.totals.waiting > 0 ? t('cdf.alsoWaiting', { n: fmt(data.totals.waiting) }) : null,
   ].filter(Boolean).join('; ');
+  // one row per step, the numbers in one column so they read top to bottom
   const steps: Array<{ key: string; out: ReactNode }> = [
-    { key: 'captured', out: (
-      <div className="mt-2 space-y-0.5 text-small">
-        {sources.map(([source, count]) => (
-          <div key={source} className="flex justify-between text-[var(--color-text-muted)]">
-            <span>{t(`cdf.source.${source}`, { defaultValue: source })}</span>
-            <span className="tabular-nums text-[var(--color-text)]">{fmt(count)}</span>
-          </div>
-        ))}
-      </div>) },
+    { key: 'captured', out: <Out tone="text">{fmt(s.captured)}</Out> },
     { key: 'basic', out: <Out tone="dim">{t('cdf.out.dropped', { n: fmt(s.basicDropped) })}</Out> },
     { key: 'place', out: s.placeDropped > 0 ? <Out tone="warn">{t('cdf.out.place', { n: fmt(s.placeDropped) })}</Out>
       : <Out tone="dim">{t('cdf.out.dropped', { n: '0' })}</Out> },
@@ -310,24 +283,32 @@ function HowItDecides({ data }: { data: LandedOverview }) {
       <Out tone="dim">{t('cdf.out.writtenSplit', { new: fmt(data.totals.new), adds: fmt(data.totals.adds) })}</Out></> },
   ];
   return (
-    <section data-testid="cdf-decide">
+    <section data-testid="cdf-decide" className="min-w-0">
       <SectionLabel right={t('cdf.decideHint')}>{t('cdf.decideTitle')}</SectionLabel>
-      <div className="mt-3 grid grid-cols-6">
+      <ol className="mt-3">
         {steps.map((step, index) => (
-          <div key={step.key} className={index === 0 ? 'pr-3.5' : 'border-l border-[var(--color-border)] px-3.5'}>
-            <div className="text-meta tabular-nums text-[var(--color-text-dim)]">{index + 1}</div>
-            <div className="mt-0.5 text-body font-semibold text-[var(--color-text)]">{t(`cdf.step.${step.key}`)}</div>
-            <p className="mt-1 min-h-[56px] text-small text-[var(--color-text-muted)]">{t(`cdf.step.${step.key}Rule`)}</p>
-            {step.out}
-          </div>
+          <li key={step.key} className="grid grid-cols-[22px_minmax(0,1fr)_230px] gap-x-4 py-2.5">
+            <span className="text-small tabular-nums text-[var(--color-text-dim)]">{index + 1}</span>
+            <div className="min-w-0">
+              <div className="text-body font-semibold text-[var(--color-text)]">{t(`cdf.step.${step.key}`)}</div>
+              <p className="mt-0.5 text-small text-[var(--color-text-muted)]">{t(`cdf.step.${step.key}Rule`)}</p>
+              {step.key === 'captured' && (
+                <p className="mt-1 text-small text-[var(--color-text-dim)]">
+                  {sources.map(([source, count]) => `${t(`cdf.source.${source}`, { defaultValue: source })} ${fmt(count)}`).join(' · ')}
+                </p>
+              )}
+            </div>
+            <div className="text-right">{step.out}</div>
+          </li>
         ))}
-      </div>
-      {also && <p className="mt-3.5 text-small text-[var(--color-text-dim)]">{t('cdf.alsoPrefix')}{also}.</p>}
+      </ol>
+      {also && <p className="mt-2 text-small text-[var(--color-text-dim)]">{t('cdf.alsoPrefix')}{also}.</p>}
     </section>
   );
 }
 
-function Out({ tone, children }: { tone: 'dim' | 'warn' | 'accent' | 'kept'; children: ReactNode }) {
-  const color = { dim: 'var(--color-text-dim)', warn: 'var(--color-status-warning)', accent: 'var(--color-primary)', kept: KEPT }[tone];
-  return <span className="mt-2 block text-small tabular-nums" style={{ color }}>{children}</span>;
+function Out({ tone, children }: { tone: 'dim' | 'warn' | 'accent' | 'kept' | 'text'; children: ReactNode }) {
+  const color = { dim: 'var(--color-text-dim)', warn: 'var(--color-status-warning)', accent: 'var(--color-primary)',
+    kept: KEPT, text: 'var(--color-text)' }[tone];
+  return <span className="block whitespace-nowrap text-small tabular-nums" style={{ color }}>{children}</span>;
 }

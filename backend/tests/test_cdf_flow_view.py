@@ -228,3 +228,18 @@ def test_routes_validate(db: Path):
     assert client.get("/api/ingestion/units?outcome=bogus").status_code == 422
     assert client.get("/api/ingestion/units?page_size=51").status_code == 422
     assert client.get("/api/ingestion/units?page=100001").status_code == 422
+
+
+def test_the_trend_has_one_bucket_per_hour_or_day_and_a_previous_period(db: Path):
+    day = flow_view.landed_overview("24h")
+    assert len(day["series"]) == 24
+    assert sum(p["learned"] for p in day["series"]) == day["totals"]["new"] + day["totals"]["adds"]
+    assert sum(p["captured"] for p in day["series"]) == day["total"]
+    # the store reaches back past the window before: compare with it (here, nothing)
+    assert day["previous"] == {"captured": 0, "learned": 0, "reinforced": 0, "not_kept": 0}
+    week = flow_view.landed_overview("7d")
+    assert len(week["series"]) == 7
+    assert sum(p["captured"] for p in week["series"]) == 17          # c9 and c16 included
+    month = flow_view.landed_overview("30d")
+    assert len(month["series"]) == 30
+    assert month["previous"] is None              # no item reaches 60 days back: no full period

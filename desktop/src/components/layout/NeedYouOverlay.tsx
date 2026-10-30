@@ -26,6 +26,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { AttentionEntry } from '../../services/attention';
 import { Tabs } from '../overlay';
 import { CognitiveDistillationFlow } from './CognitiveDistillationFlow';
+import { CdfGuideline } from './CdfGuideline';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 import { NeedsYouRow } from './NeedsYouRow';
@@ -52,7 +53,7 @@ function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]
   return [...groups.entries()];
 }
 
-type NeedYouTab = 'attention' | 'flow';
+type NeedYouTab = 'attention' | 'flow' | 'guide';
 
 export function NeedYouContent(props: NeedYouContentProps) {
   const { t } = useTranslation();
@@ -63,14 +64,15 @@ export function NeedYouContent(props: NeedYouContentProps) {
         items={[
           { key: 'attention', label: t('needYou.tabAttention'), testid: 'need-you-tab' },
           { key: 'flow', label: t('needYou.tabFlow'), testid: 'cdf-tab' },
+          { key: 'guide', label: t('needYou.tabGuide'), testid: 'cdf-guide-tab' },
         ]}
         value={tab}
         onChange={setTab}
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'attention'
-          ? <AttentionQueueContent {...props} />
-          : <CognitiveDistillationFlow onDispatch={props.onDispatch} close={props.close} />}
+        {tab === 'attention' && <AttentionQueueContent {...props} />}
+        {tab === 'flow' && <CognitiveDistillationFlow onDispatch={props.onDispatch} close={props.close} />}
+        {tab === 'guide' && <CdfGuideline />}
       </div>
     </div>
   );

@@ -114,6 +114,31 @@ def declared_target(ref: Any) -> str | None:
     return _clip_utf8(text, 240) or None
 
 
+_KEPT_GROUPS = ("new", "adds")
+_NOT_KEPT_GROUPS = ("basic", "place", "known", "withdrawn", "older", "no_project", "backlog",
+                    "retired", "other", "expired")
+
+
+def _bucket_keys(window: str) -> tuple[int, list[str]]:
+    """The trend buckets of *window*, oldest first, as UTC ISO prefixes: hours for 24h,
+    days for 7d and 30d (``created_at`` is UTC ISO, so a prefix is its bucket)."""
+    now = _utc_now()
+    if window == "24h":
+        start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=23)
+        return 13, [(start + timedelta(hours=h)).strftime("%Y-%m-%dT%H") for h in range(24)]
+    days = 7 if window == "7d" else 30
+    start = now.date() - timedelta(days=days - 1)
+    return 10, [(start + timedelta(days=d)).isoformat() for d in range(days)]
+
+
+def _fold(counts: dict[str, int]) -> dict[str, int]:
+    """Captured / learned / reinforced / not kept from per-group counts."""
+    return {"captured": sum(counts.values()),
+            "learned": sum(counts.get(g, 0) for g in _KEPT_GROUPS),
+            "reinforced": counts.get("reinforced", 0),
+            "not_kept": sum(counts.get(g, 0) for g in _NOT_KEPT_GROUPS)}
+
+
 def _since(window: str) -> str:
     if window not in _WINDOWS:
         raise ValueError("window must be one of 24h, 7d, 30d")
@@ -180,6 +205,20 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         outcome_rows = conn.execute(
             f"SELECT u.state AS state, u.reason AS reason, COUNT(*) AS n {base} GROUP BY 1,2",
             (since,)).fetchall()
+        # the trend: per bucket of the window; and the window before, to compare with
+        width, keys = _bucket_keys(window)
+        bucket_rows = conn.execute(
+            f"""SELECT substr(i.created_at, 1, {width}) AS b, u.state AS state, u.reason AS reason,
+                       COUNT(*) AS n
+                FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id
+                WHERE i.created_at >= ? GROUP BY 1,2,3""", (keys[0],)).fetchall()
+        previous_since = _iso(_utc_now() - 2 * _WINDOWS[window])
+        previous_rows = conn.execute(
+            """SELECT u.state AS state, u.reason AS reason, COUNT(*) AS n
+               FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id
+               WHERE i.created_at >= ? AND i.created_at < ? GROUP BY 1,2""",
+            (previous_since, since)).fetchall()
+        earliest = conn.execute("SELECT MIN(created_at) FROM ingestion_inbox").fetchone()[0]
         source_rows = conn.execute(
             f"SELECT COALESCE(i.source_v2, i.source) AS source, COUNT(*) AS n {base} GROUP BY 1",
             (since,)).fetchall()
@@ -273,8 +312,22 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
     if spellings:
         attention.append({"code": "spelling", "count": len(spellings), "example": ", ".join(spellings)})
 
+    per_bucket: dict[str, dict[str, int]] = {key: {} for key in keys}
+    for row in bucket_rows:
+        if row["b"] in per_bucket:
+            group = reason_group(row["state"], row["reason"])
+            per_bucket[row["b"]][group] = per_bucket[row["b"]].get(group, 0) + int(row["n"])
+    series = [{"bucket": key, **_fold(per_bucket[key])} for key in keys]
+    previous_counts: dict[str, int] = {}
+    for row in previous_rows:
+        group = reason_group(row["state"], row["reason"])
+        previous_counts[group] = previous_counts.get(group, 0) + int(row["n"])
+    # a window that reaches before the first item has no full period to compare with
+    previous = _fold(previous_counts) if earliest and str(earliest) <= previous_since else None
+
     return _scrub({
         "window": window, "since": since, "total": total,
+        "series": series, "previous": previous,
         "totals": {"new": kept_new, "adds": kept_adds, "reinforced": groups.get("reinforced", 0),
                    "not_kept": not_kept, "waiting": waiting},
         "groups": groups, "reasons": reasons,

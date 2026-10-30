@@ -46,11 +46,21 @@ class AttentionRow(StrictResponse):
     since: str | None = None
 
 
+class TrendPoint(StrictResponse):
+    bucket: str
+    captured: int
+    learned: int
+    reinforced: int
+    not_kept: int
+
+
 class LandedResponse(StrictResponse):
     """What the Cognition flow view shows first (core/ingestion/flow_view.py)."""
     window: str
     since: str
     total: int
+    series: list[TrendPoint]
+    previous: dict[str, int] | None
     totals: dict[str, int]
     groups: dict[str, int]
     reasons: dict[str, dict[str, int]]

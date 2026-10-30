@@ -34,11 +34,17 @@ export interface MovedRow { from: string; to: string; count: number }
 /** An anomaly worth a person's look; the view phrases it by `code`. */
 export interface FlowAttention { code: string; count?: number | null; example?: string | null; bytes?: number | null; since?: string | null }
 
+/** One bucket of the window's trend (an hour for 24h, a day for 7d / 30d; UTC prefix). */
+export interface TrendPoint { bucket: string; captured: number; learned: number; reinforced: number; notKept: number }
+
 /** GET /ingestion/landed — what the Cognition flow view shows first (backend flow_view.py). */
 export interface LandedOverview {
   window: IngestionWindow;
   since: string;
   total: number;
+  series: TrendPoint[];
+  /** The window before, for the change; null when the store does not reach that far. */
+  previous: Omit<TrendPoint, 'bucket'> | null;
   totals: { new: number; adds: number; reinforced: number; notKept: number; waiting: number };
   groups: Record<string, number>;
   reasons: Record<string, Record<string, number>>;

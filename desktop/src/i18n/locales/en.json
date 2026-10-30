@@ -1795,17 +1795,13 @@
     "blocking": "Blocking",
     "blockingHint": "Stopped — nothing moves without you",
     "review": "Review",
-    "reviewHint": "Self-advancing — your input confirms or overrides"
+    "reviewHint": "Self-advancing — your input confirms or overrides",
+    "tabGuide": "How it works"
   },
   "cdf": {
-    "tabActivity": "Activity",
-    "tabGuide": "Guideline",
     "w24h": "24 hours",
     "w7d": "7 days",
     "w30d": "30 days",
-    "verdict": "In the last {{window}} SwarmAI learned {{learned}} new things and reinforced {{reinforced}} it already knew.",
-    "verdictNone": "Nothing new reached SwarmAI's knowledge in the last {{window}}.",
-    "notKeptMostly": "{{n}} were not kept — mostly {{top}}.",
     "notKeptNone": "Everything that came in was kept.",
     "healthOk": "Nothing is waiting or failing.",
     "healthWaiting": "{{n}} are waiting or failed.",
@@ -2046,6 +2042,21 @@
     "alsoWaiting": "{{n}} waiting or failed",
     "cmpWithdrawn": "The same as something you withdrew → refused; it stays out.",
     "cmpOlder": "An existing entry is newer → this older one is skipped.",
-    "searchCapped": "Searched the first {{n}} matches; narrow the search to see the rest."
+    "searchCapped": "Searched the first {{n}} matches; narrow the search to see the rest.",
+    "dash": {
+      "captured": "Captured",
+      "capturedHint": "items the agents wrote down",
+      "learned": "Learned",
+      "learnedHint": "new, or added to an existing entry",
+      "reinforced": "Reinforced",
+      "reinforcedHint": "an existing entry confirmed again",
+      "notKept": "Not kept",
+      "notKeptMostly": "mostly {{top}}",
+      "up": "↑ {{pct}}% vs previous {{window}}",
+      "down": "↓ {{pct}}% vs previous {{window}}",
+      "same": "same as previous {{window}}",
+      "fromZero": "none in previous {{window}}",
+      "noPrevious": "no full earlier period yet"
+    }
   }
 }

@@ -1,12 +1,12 @@
 /**
  * Guideline — how the Cognitive Distillation Flow turns work into judgment, with its flow
- * diagram (Cognition flow → Guideline). Written from the running code, not the first
+ * diagram (Need You → How it works). Written from the running code, not the first
  * design: sources only enqueue; one worker decides each unit in five steps (basic checks,
  * pick the place, trust floor, compare, write — core/ingestion/pipeline_v2.run_unit_v2);
  * the producing agent decides meaning, code checks facts (docs/design/2026-10-30-cdf-
  * agent-decides.md); routing by kind and scope (core/ingestion/contracts_v2.route_unit).
  *
- * Mechanisms only — no counts or dates (the Activity tab shows the live ones).
+ * Mechanisms only — no counts or dates (the Cognition flow tab shows the live ones).
  * Bilingual inline like the Eval guide: the prose is long and belongs next to the figure.
  *
  * Key export: `CdfGuideline`.
@@ -187,8 +187,8 @@ export function CdfGuideline() {
       <div className="max-w-[900px]">
         <h2 className="text-title font-semibold text-[var(--color-text)]">{say('How SwarmAI turns work into judgment', 'SwarmAI 怎样把工作沉淀成判断力')}</h2>
         <p className="mt-2 text-body text-[var(--color-text-muted)]">
-          {say('The Cognitive Distillation Flow (CDF) is the engine behind SwarmAI’s memory. Whatever is worth keeping from a session, a run, your corrections or an outside source is written down by the agent that was there, then decided item by item and filed in the one place it belongs. Everything below happens on its own, and every step is recorded — the Activity tab shows each item’s path.',
-            '认知蒸馏流（CDF）是 SwarmAI 记忆背后的引擎。会话、run、你的纠正和外部资料里值得保留的内容，由在场的 agent 写下来，再逐条判断、放进唯一该放的位置。下面这些都自动进行，每一步都有记录；在“动态”里能看到每一条走过的路径。')}
+          {say('The Cognitive Distillation Flow (CDF) is the engine behind SwarmAI’s memory. Whatever is worth keeping from a session, a run, your corrections or an outside source is written down by the agent that was there, then decided item by item and filed in the one place it belongs. Everything below happens on its own, and every step is recorded — the Cognition flow tab shows each item’s path.',
+            '认知蒸馏流（CDF）是 SwarmAI 记忆背后的引擎。会话、run、你的纠正和外部资料里值得保留的内容，由在场的 agent 写下来，再逐条判断、放进唯一该放的位置。下面这些都自动进行，每一步都有记录；在“认知沉淀”里能看到每一条走过的路径。')}
         </p>
       </div>
 
@@ -252,7 +252,7 @@ export function CdfGuideline() {
         </Block>
         <Block title={say('What you can do', '你可以做什么')}>
           <ul className="space-y-1.5 text-small text-[var(--color-text-muted)]">
-            <li>{say('Read any item’s path in Activity — where it landed, why there, what it was compared with.', '在“动态”里看任何一条的路径：落在哪、为什么在那、和什么比对过。')}</li>
+            <li>{say('Read any item’s path in Cognition flow — where it landed, why there, what it was compared with.', '在“认知沉淀”里看任何一条的路径：落在哪、为什么在那、和什么比对过。')}</li>
             <li>{say('Tell Swarm in chat when something is wrong (“forget that”, “that is not what I said”). There are no approval buttons here: the fix goes into the rules, not into one item.', '发现不对就在 chat 里告诉 Swarm（“忘掉这条”、“我不是这个意思”）。这里没有审批按钮：问题要修在规则上，不是改某一条。')}</li>
             <li>{say('Something you said in the last 24 hours can be redacted from its row.', '最近 24 小时内你说过的话，可以在对应条目里删除。')}</li>
           </ul>

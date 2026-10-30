@@ -18,6 +18,14 @@ NOT NULL` counts a stored JSON `null`, so every card read as "ran" for every uni
 
 ## 1. What a person asks, in order
 
+Layout (revised 2026-10-31, XG: no tabs inside a tab, a dashboard with trends on top): the
+Need You overlay has one level of tabs — Needs you · Cognition flow · How it works — and
+is `xl` like the other overlays. Cognition flow reads top to bottom: status and window →
+dashboard (captured, learned, reinforced, not kept: each its change against the window
+before and its trend, an hour per bar for 24h, a day for 7d / 30d; "learned" stands out) →
+anomalies → where it landed | how it decides, side by side → the item list → health.
+
+
 1. **What did it learn, and is anything wrong?** One sentence (learned, reinforced, not
    kept and the two main reasons, waiting or failed) and the anomalies worth a look. Each
    anomaly sends a prompt to chat; there are no approval buttons (§10 of the CDF design).
@@ -37,7 +45,8 @@ NOT NULL` counts a stored JSON `null`, so every card read as "ran" for every uni
 ## 2. Data
 
 - `GET /api/ingestion/landed?window=` (`core/ingestion/flow_view.landed_overview`):
-  totals, groups, sources, steps, landed rows (store / project / path), moved
+  `series` (one bucket per hour / day of the window), `previous` (the window before;
+  null when the store does not reach that far back, and no change is claimed), totals, groups, sources, steps, landed rows (store / project / path), moved
   (from → to, written ones), attention (`failed`, `waiting_long` — a parked deferral is not
   late —, `breaker`, `no_cleanup`, `links_skipped`, `spelling`).
 - A reinforcement lands where the entry it is the same as is: `pipeline_v2` records
