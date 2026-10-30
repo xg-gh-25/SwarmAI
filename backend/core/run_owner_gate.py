@@ -349,6 +349,20 @@ def _v1_mutation_check(sid: str, call: dict) -> "str | None":
 
 
 
+def _user_only_deny(command: str) -> "dict | None":
+    """The deny for a command that calls a route only the person may call, else None.
+    Pure string work: the gate runs it on every Bash command, before any filter."""
+    if _USER_ONLY_REDACT_RE.search(command):
+        return _deny("withdrawing written knowledge is the person's action (the Flow view's "
+                     "撤回 button), never a command. Tell the user which unit you think should "
+                     "be withdrawn and why; they decide.")
+    if _USER_ONLY_CORRECTION_RE.search(command):
+        return _deny("which kind a correction is, is the person's choice (the line under their "
+                     "message, or the Flow view's list), never a command. Tell the user which "
+                     "kind you think it is and why; they choose.")
+    return None
+
+
 def _decide(sid: str, command: str, tool_input: dict,
             phase: str = "check", cwd: "str | None" = None) -> "dict | None":
     """The decision for one Bash command (module docstring). S6-3: pipeline commands
@@ -358,14 +372,9 @@ def _decide(sid: str, command: str, tool_input: dict,
         return _deny("a pipeline decision is answered by a person (the chat question card "
                      "or the dashboard), never by a command. Ask with AskUserQuestion using "
                      "the run's ask_user_question payload, then wait for the answer.")
-    if _USER_ONLY_REDACT_RE.search(command or ""):
-        return _deny("withdrawing written knowledge is the person's action (the Flow view's "
-                     "撤回 button), never a command. Tell the user which unit you think should "
-                     "be withdrawn and why; they decide.")
-    if _USER_ONLY_CORRECTION_RE.search(command or ""):
-        return _deny("which kind a correction is, is the person's choice (the line under their "
-                     "message, or the Flow view's list), never a command. Tell the user which "
-                     "kind you think it is and why; they choose.")
+    user_only = _user_only_deny(command or "")
+    if user_only is not None:
+        return user_only
     calls, _single = parse_cli_calls(command)
     for c in calls:
         c["cwd"] = cwd
@@ -548,6 +557,12 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
                     return {"hookSpecificOutput": {
                         "hookEventName": "PreToolUse", "permissionDecision": "allow",
                         "updatedInput": {**tool_input, "command": export + base}}}
+        # The person-only routes are denied before the pipeline pre-filter below: a plain
+        # curl to them names no pipeline command, so a check made only in _decide never ran
+        # (the redaction deny was dead on the live path until this check moved here).
+        user_only = _user_only_deny(command) if isinstance(command, str) else None
+        if user_only is not None:
+            return user_only
         if not isinstance(command, str) or not (pipeline_command.mentions(command)
                                                 or "/api/pipelines/" in command):
             return sw_allow(command) if sw_allow else {"decision": "approve"}  # no IO
