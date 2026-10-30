@@ -257,6 +257,28 @@ def _closure(conn: sqlite3.Connection, roots: tuple[EvidenceRoot, ...]) -> tuple
     return lineage, complete
 
 
+def lineage_external(root_ids) -> bool:
+    """Whether any of *root_ids* is external trust (for an envelope written before
+    ``cited_external`` was recorded; the lineage is already closed). An unreadable store
+    or an unknown root answers True: the mark errs toward external."""
+    ids = [str(r) for r in root_ids or ()]
+    if not ids:
+        return False
+    try:
+        conn = connect_rw(busy_timeout_ms=500)
+    except (OSError, sqlite3.Error):
+        return True
+    try:
+        marks = ",".join("?" for _ in ids)
+        rows = conn.execute(f"SELECT trust FROM evidence_roots WHERE root_id IN ({marks})",
+                            ids).fetchall()
+        return len(rows) != len(set(ids)) or any(str(r[0]) == "external" for r in rows)
+    except sqlite3.Error:
+        return True
+    finally:
+        conn.close()
+
+
 def resolve_evidence(anchors: list[str], *, session_id: str | None, run_id: str | None,
                      read_root_ids: tuple[str, ...] = ()) -> ResolvedEvidence:
     """Resolve owned anchors, close their lineage, and derive strength and taint."""
@@ -282,25 +304,26 @@ def resolve_evidence(anchors: list[str], *, session_id: str | None, run_id: str 
                 read_rows.append(root)
         read_lineage, read_parents_complete = _closure(conn, tuple(read_rows))
         read_complete = read_parents_complete and len(read_rows) == len(set(read_root_ids))
-        all_trusts = {
-            str(row[0]) for root_id in lineage
+        trust_of = {
+            root_id: str(row[0]) for root_id in lineage | read_lineage
             if (row := conn.execute("SELECT trust FROM evidence_roots WHERE root_id=?",
                                     (root_id,)).fetchone()) is not None
         }
+        all_trusts = {trust_of[root_id] for root_id in lineage if root_id in trust_of}
         if lineage and all_trusts == {"user"}:
             strength = "user_explicit"
         elif lineage and all_trusts <= {"user", "measured"}:
             strength = "measured"
         else:
             strength = "run_lesson" if run_id else "inferred"
-        tainted_ids = lineage | read_lineage
-        tainted = not read_complete or any(
-            conn.execute("SELECT trust FROM evidence_roots WHERE root_id=?", (root_id,)).fetchone()[0]
-            == "external" for root_id in tainted_ids
-        )
+        # what the unit itself rests on, and (fail-closed) everything the extractor read
+        cited_external = "external" in all_trusts
+        read_external = not read_complete or cited_external or any(
+            trust_of.get(root_id) == "external" for root_id in read_lineage)
         return ResolvedEvidence(
             root_ids=direct, lineage_root_ids=tuple(sorted(lineage)), strength=strength,
-            tainted=tainted, unresolved=tuple(dict.fromkeys(unresolved)),
+            read_external=read_external, cited_external=cited_external,
+            unresolved=tuple(dict.fromkeys(unresolved)),
         )
     finally:
         conn.close()
@@ -499,7 +522,8 @@ def enqueue_unit(source: contracts_v2.SourceId, source_ref: str, unit: contracts
                 "ON CONFLICT(idem_key) DO NOTHING RETURNING id",
                 (candidate_id, idem_key, source, source_ref, lane, payload_json,
                  f"{typed.kind}:v2", _digest(payload_json),
-                 _canonical({"strength": resolved.strength, "tainted": resolved.tainted,
+                 _canonical({"strength": resolved.strength, "read_external": resolved.read_external,
+                             "cited_external": resolved.cited_external,
                              "lineage_root_ids": list(resolved.lineage_root_ids)}),
                  _canonical(snapshot), _canonical(candidates), now, typed.kind, source,
                  extraction_pass, evidence_json, hint, dedup_key),

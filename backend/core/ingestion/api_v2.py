@@ -27,16 +27,28 @@ from .contracts_v2 import (
     EvidenceRootKind, ExtractionPass, RootTrust, SourceId, SourceUnit,
 )
 
-SCHEMA_V2_VERSION = 8
+SCHEMA_V2_VERSION = 9
 
 # Applied after api.SCHEMA_DDL in the same migration transaction (store.py owns DDL apply).
+# What each entry CDF wrote rests on (its basis), kept for as long as the entry: the
+# baseline registers the entry with that trust (writer._manifest_entry), so an entry not
+# shown by the user's words is never cited as the user's. Not pruned with the 30-day
+# records. (store._V9_DDL adds it to an existing store.)
+UNIT_BASIS_DDL = """
+CREATE TABLE IF NOT EXISTS unit_basis (
+  unit_id TEXT PRIMARY KEY,
+  basis TEXT NOT NULL CHECK (basis IN ('user','measured','inferred','external')),
+  recorded_at TEXT NOT NULL
+);
+"""
+
 SCHEMA_V2_DDL = """
 CREATE TABLE IF NOT EXISTS evidence_roots (
   root_id TEXT PRIMARY KEY,                 -- sha256(root_kind|canonical locator|content_hash)
   root_kind TEXT NOT NULL,
   locator TEXT NOT NULL,                    -- canonical: session/event id, run:finding, commit sha, normalized URL, unit anchor
   content_hash TEXT NOT NULL,
-  trust TEXT NOT NULL CHECK (trust IN ('user','measured','external')),
+  trust TEXT NOT NULL CHECK (trust IN ('user','measured','inferred','external')),
   parent_root_ids TEXT NOT NULL DEFAULT '[]',
   observed_at TEXT NOT NULL,
   created_at TEXT NOT NULL
@@ -96,7 +108,7 @@ CREATE TABLE IF NOT EXISTS injection_selection (
 );
 CREATE INDEX IF NOT EXISTS ix_injection_selection_file
   ON injection_selection(file_path, id DESC);
-"""
+""" + UNIT_BASIS_DDL
 # v2 also widens: ingestion_units.state adds 'reinforced'; ingestion_units gains
 # defer_reason TEXT (parked reasons consume no retry), rerouted_from TEXT, project TEXT
 # (one row per project after D6 fan-out); ingestion_relations.predicate becomes
@@ -117,12 +129,20 @@ class EvidenceRoot:
 
 @dataclass(frozen=True)
 class ResolvedEvidence:
-    """Server-derived provenance for one unit (§9). Callers never supply trust."""
+    """Server-derived provenance for one unit (§9). Callers never supply trust.
+
+    Two separate questions (cdf-fixing-spec C1), each read where it is the right one:
+    *read_external*: the extractor read external content, or a root of what it read is
+    unknown (fail-closed). It guards the user's own files and the measured entrance,
+    where which input shaped a unit is not knowable (anti selective-citation).
+    *cited_external*: the unit's own evidence, through its parents, includes external
+    content. It decides the ``taint: external`` mark, TIMELINE placement and overrides."""
 
     root_ids: tuple[str, ...]
     lineage_root_ids: tuple[str, ...]          # transitive closure through parent_root_ids
     strength: Literal["user_explicit", "measured", "run_lesson", "inferred"]
-    tainted: bool
+    read_external: bool
+    cited_external: bool = False
     unresolved: tuple[str, ...] = field(default=())  # anchors that failed to resolve
 
 
@@ -147,7 +167,8 @@ def resolve_evidence(anchors: list[str], *, session_id: str | None, run_id: str 
                      read_root_ids: tuple[str, ...] = ()) -> ResolvedEvidence:
     """Resolve anchors to roots, verify ownership (session/run) and hashes, close over
     parents, compute strength/taint. ``read_root_ids`` = everything the extractor read
-    in this attempt; taint is computed over anchors ∪ read set (anti selective-citation)."""
+    in this attempt: ``read_external`` covers anchors ∪ read set (anti selective-citation),
+    ``cited_external`` the anchors' own lineage."""
     from .provenance import resolve_evidence as _impl
     return _impl(anchors, session_id=session_id, run_id=run_id, read_root_ids=read_root_ids)
 

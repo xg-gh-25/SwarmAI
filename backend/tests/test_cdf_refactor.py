@@ -58,7 +58,7 @@ def _row(unit, *, source="S7", tainted=True, project_hint=None, source_ref="s", 
             "evidence_root_ids": json.dumps(["root-1"]),
             "envelope": json.dumps({"root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
                                     "strength": "inferred" if tainted else "user_explicit",
-                                    "tainted": tainted}),
+                                    "read_external": tainted, "cited_external": tainted}),
             "project_candidates": "[]", "project_hint": project_hint,
             "project_snapshot": json.dumps({"session_project": session_project} if session_project else {})}
 
@@ -248,12 +248,14 @@ def test_an_agent_written_unit_cannot_retire_an_entry(tmp_path, user_words, monk
         {"predicate": "derived_from", "object_anchor": old}]
 
 
-def test_the_deterministic_drift_fix_still_retires_its_entry(tmp_path, user_words, monkeypatch):
+def test_a_drift_fix_supersedes_hint_is_recorded_as_a_link(tmp_path, user_words, monkeypatch):
+    """A supersedes edge only links two entries (no source retires by it): the hint of the
+    deterministic drift fix is kept as derived_from."""
     old = ".context/MEMORY.md#Guidelines#cand:old"
     _hits(monkeypatch, old)
     unit = _cog(relation_hint={"kind": "supersedes", "target": old})
     decision = run_unit_v2(_row(unit, source="S4"), _ws(tmp_path), Judge(relation="unrelated"))
-    assert {"predicate": "supersedes", "object_anchor": old} in decision.version_vector["relation_hints"]
+    assert {"predicate": "derived_from", "object_anchor": old} in decision.version_vector["relation_hints"]
 
 
 def test_a_contradicted_entry_in_another_file_is_only_linked(tmp_path, user_words, monkeypatch):
@@ -420,11 +422,11 @@ def test_a_general_brain_hive_lesson_cannot_name_a_project(tmp_path, user_words)
 def test_an_unsupported_project_unit_is_written_marked_inferred(tmp_path, user_words):
     decision = run_unit_v2(_row(_cog(scope="project:Widget", topic="lesson"), tainted=False),
                            _ws(tmp_path), Judge(_verdict(grounded=False)))
-    assert decision.decision == "write" and decision.version_vector.get("inferred") is True
+    assert decision.decision == "write" and decision.version_vector["basis"] == "inferred"
     (tmp_path / "b").mkdir()
     supported = run_unit_v2(_row(_cog(scope="project:Widget", topic="lesson"), tainted=False),
                             _ws(tmp_path / "b"), Judge())
-    assert "inferred" not in supported.version_vector
+    assert supported.version_vector["basis"] == "user"
 
 
 def test_a_unit_the_verification_refuses_never_waits_for_a_section(tmp_path, user_words):

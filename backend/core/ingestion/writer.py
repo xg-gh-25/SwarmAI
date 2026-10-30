@@ -24,7 +24,7 @@ from core.ddd_entry_lifecycle import format_memory_entry
 from utils.file_lock import md_lock
 
 from .contracts import UnitDecision
-from .contracts_v2 import SYSTEM_APPENDIX_HEADING
+from .contracts_v2 import ROOT_TRUST_ORDER, SYSTEM_APPENDIX_HEADING
 from .materializer import get_materializer, iter_governed_files
 from .units import parse_units
 
@@ -214,8 +214,8 @@ def _ensure_link_file(content: str, target: Path) -> str:
 
 def _append_timeline(content: str, group: dict[str, Any], block: str) -> str:
     value = content if content.strip() else "# Timeline\n"
-    tainted = bool(group.get("tainted"))
-    section = "Not injected" if tainted else str(group.get("when") or _now().date().isoformat())[:7]
+    marked = bool(group.get("cited_external"))
+    section = "Not injected" if marked else str(group.get("when") or _now().date().isoformat())[:7]
     pattern = re.compile(rf"^##\s+{re.escape(section)}\s*$", re.MULTILINE)
     match = pattern.search(value)
     if match is None:
@@ -340,7 +340,7 @@ def _render_ddd(unit_id: str, group: Mapping[str, Any], *, answer: Any = None,
     rendered = render_ddd_unit(
         _ddd_entry(group, title, fallback_body, answer, effective),
         date_str=_now().date().isoformat(), source=source,
-        taint="external" if bool(group.get("tainted")) else None)
+        taint="external" if bool(group.get("cited_external")) else None)
     lead, _, meta = rendered.partition("\n")
     marker = f"cand:{unit_id}"
     if project_hint:
@@ -359,7 +359,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     kind = str(group.get("kind") or ("reference" if store == "KNOWLEDGE" else "cognition"))
     source = str(group.get("source") or "ingestion")
     project_hint = group.get("project_hint") or _model_value(destination, "project")
-    tainted = bool(group.get("tainted"))
+    marked = bool(group.get("cited_external"))
     today = _now().date().isoformat()
 
     if kind == "event" or store == "TIMELINE":
@@ -374,7 +374,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
                 f"event_kind:{group.get('event_kind', 'event')}"]
         if project_hint:
             meta.append(f"project_hint:{_meta_value(project_hint)}")
-        if tainted:
+        if marked:
             meta.append("taint:external")
         lines.append("<!-- " + " | ".join(meta) + " -->")
         return "\n".join(lines)
@@ -400,7 +400,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
                        f"source: {source}", f"ingestion_candidate: {unit_id}"]
         if project_hint:
             frontmatter.append(f"project_hint: {_meta_value(project_hint)}")
-        if tainted:
+        if marked:
             frontmatter.append("taint: external")
         frontmatter.append(f"created: {today}")
         for name in ("source_url", "retrieved_at", "content_hash"):
@@ -437,7 +437,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     # source, taint); anything else made the whole comment unreadable, so the entry's
     # own marker carries project_hint / rerouted_from, as in a common-DDD file.
     meta = ["ref:0", f"last:{today}", "decay:active", f"source:{source}"]
-    if tainted:
+    if marked:
         meta.append("taint:external")
     cand = [f"cand:{unit_id}"]
     if project_hint:
@@ -495,7 +495,6 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     unit_id = str(_row_value(unit_row, "unit_id") or _decision_value(decision, "unit_id"))
     group = dict(_json_value(_row_value(unit_row, "claim_group"), {}))
     envelope = dict(_json_value(_row_value(unit_row, "envelope"), {}))
-    group.setdefault("tainted", envelope.get("tainted", False))
     group.setdefault("source", _row_value(unit_row, "source", "ingestion"))
     group.setdefault("project_hint", _row_value(unit_row, "project"))
     vector = _decision_value(decision, "version_vector", {}) or {}
@@ -509,8 +508,15 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     rerouted = bool(_model_value(destination, "rerouted_from"))
     non_injected_timeline = store == "TIMELINE" and not bool(
         _model_value(destination, "injectable", True))
-    inferred = bool(vector.get("inferred"))          # pipeline_v2: no verified evidence
-    group["tainted"] = bool(group.get("tainted") or rerouted or non_injected_timeline or inferred)
+    # what the entry rests on (pipeline_v2.unit_basis): only "external" is marked in the
+    # file; the baseline registers the entry with this trust (cdf-fixing-spec C1). A
+    # decision judged before the basis was recorded keeps the old reading of its marks.
+    basis = str(vector.get("basis") or "")
+    if basis not in ROOT_TRUST_ORDER:
+        legacy = bool(envelope.get("cited_external", envelope.get("tainted")) or rerouted
+                      or non_injected_timeline or vector.get("inferred"))
+        basis = "external" if legacy else "user"
+    group["cited_external"] = basis == "external"
     section = str(_model_value(destination, "section", "") or "")
     content = original.decode("utf-8") if original else ""
     old_anchor = _candidate_target(decision)
@@ -538,7 +544,7 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
             relations.append({"subject_anchor": new_anchor, "predicate": predicate,
                               "object_anchor": object_anchor})
     return {
-        "op_id": f"ingestion:{unit_id}", "unit_id": unit_id, "target": target,
+        "op_id": f"ingestion:{unit_id}", "unit_id": unit_id, "target": target, "basis": basis,
         "target_path": _relative(target), "before_hash": _hash(original) if original else "",
         "intended_bytes": intended, "after_hash": _hash(intended),
         "archive_path": _relative(archive_path) if archive_path else None,
@@ -574,6 +580,11 @@ def _insert_plan(conn: sqlite3.Connection, plan: dict[str, Any], epoch: int) -> 
          json.dumps(plan["anchors_absent"]), json.dumps(plan["relations"]),
          "planned", None, epoch, now, now),
     )
+    if plan.get("basis") in ROOT_TRUST_ORDER:
+        conn.execute(
+            "INSERT INTO unit_basis(unit_id,basis,recorded_at) VALUES(?,?,?) "
+            "ON CONFLICT(unit_id) DO UPDATE SET basis=excluded.basis,recorded_at=excluded.recorded_at",
+            (plan["unit_id"], plan["basis"], now))
     conn.execute(
         "UPDATE ingestion_units SET state='writing',owner_epoch=?,updated_at=? "
         "WHERE unit_id=? AND state='judged'",
@@ -1112,17 +1123,55 @@ def _unit_declares_external(text: str) -> bool:
     )
 
 
-def _manifest_entry(path: Path, *, trust: str | None = None) -> dict[str, Any]:
+def _recorded_bases(units, conn: sqlite3.Connection | None) -> dict[str, str] | None:
+    """The recorded basis (``unit_basis``) of each CDF entry among *units*, by unit id;
+    None when the store cannot be read."""
+    ids = [unit.identity[5:] for unit in units if str(unit.identity).startswith("cand:")]
+    if not ids:
+        return {}
+    owned = conn is None
+    try:
+        if owned:
+            from .store import connect_ro
+            conn = connect_ro()
+        marks = ",".join("?" for _ in ids)
+        return {str(r[0]): str(r[1]) for r in conn.execute(
+            f"SELECT unit_id,basis FROM unit_basis WHERE unit_id IN ({marks})", ids)}
+    except (OSError, sqlite3.Error):
+        return None
+    finally:
+        if owned and conn is not None:
+            conn.close()
+
+
+def _unit_trust(unit: Any, bases: dict[str, str] | None) -> str:
+    """The trust a baseline unit is registered with (cdf-fixing-spec C1). A declared
+    ``taint: external`` is external. An entry CDF wrote has the trust of what it rests on
+    (its recorded basis); one written before the basis was recorded is as its mark says
+    (unmarked was shown by the user's words or a measurement), and with the store
+    unreadable it is inferred: never registered as the user's on a guess. Everything a
+    person wrote is the user's."""
+    if _unit_external(unit):
+        return "external"
+    identity = str(unit.identity)
+    if not identity.startswith("cand:"):
+        return "user"
+    if bases is None:
+        return "inferred"
+    return bases.get(identity[5:], "user")
+
+
+def _manifest_entry(path: Path, *, trust: str | None = None,
+                    conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     data = path.read_bytes()
     installed_trust = "external" if _installed_project(path) else None
     units = parse_units(path, root=_workspace())
+    bases = {} if trust or installed_trust else _recorded_bases(units, conn)
     return {
         "file_hash": _hash(data),
         "units": [{"section": unit.section, "identity": unit.identity,
                    "byte_hash": unit.byte_hash,
-                   "trust": trust or installed_trust or (
-                       "external" if _unit_external(unit) else "user"
-                   )}
+                   "trust": trust or installed_trust or _unit_trust(unit, bases)}
                   for unit in units],
     }
 
@@ -1206,7 +1255,7 @@ def _apply_baseline_patch_unlocked(patch: Mapping[str, Any], *, conn: sqlite3.Co
     if patch.get("delete") or not target.exists():
         files.pop(path_value, None)
     else:
-        entry = _manifest_entry(target, trust=patch.get("trust"))
+        entry = _manifest_entry(target, trust=patch.get("trust"), conn=conn)
         surviving_anchors = {
             f"{path_value}#{unit.get('section', '')}#{unit.get('identity', unit.get('byte_hash', ''))}"
             for unit in entry.get("units", [])

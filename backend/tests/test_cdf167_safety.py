@@ -226,7 +226,7 @@ def test_installed_project_baseline_units_are_external(tmp_path: Path,
         f"{unit['section']}#{unit['identity']}"
     )
     resolved = resolve_evidence([f"unit:{anchor}"], session_id=None, run_id=None)
-    assert not resolved.unresolved and resolved.tainted
+    assert not resolved.unresolved and resolved.cited_external and resolved.read_external
 
 
 def test_installed_package_rule_stays_out_of_per_turn_stores(
@@ -313,7 +313,7 @@ def test_installed_package_rule_stays_out_of_per_turn_stores(
     decision = run_unit_v2(inbox, workspace, PackageJudge())
     assert decision.destination.store not in {"STEERING", "MEMORY", "USER", "TOOLS", "EVOLUTION"}
     claim = json.loads(inbox["payload"])
-    claim["tainted"] = True
+    claim["cited_external"] = True
     connection.execute(
         "INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,owner_epoch,updated_at) "
         "VALUES(?,?,?,?,1,'2026-10-27T00:00:00+00:00')",
@@ -333,7 +333,7 @@ def test_installed_package_rule_stays_out_of_per_turn_stores(
     assert memory.read_text() == "# Memory\n"
 
 
-def test_tainted_entry_meta_propagates_through_unit_evidence(
+def test_external_entry_meta_propagates_through_unit_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
@@ -354,7 +354,7 @@ def test_tainted_entry_meta_propagates_through_unit_evidence(
     from core.ingestion.api_v2 import resolve_evidence
     resolved = resolve_evidence([f"unit:{anchor}"], session_id=None, run_id=None)
     assert resolved.unresolved == ()
-    assert resolved.tainted is True
+    assert resolved.cited_external is True and resolved.read_external is True
 
 
 def test_non_run_commit_anchor_resolves_by_repository_locator(
@@ -370,7 +370,7 @@ def test_non_run_commit_anchor_resolves_by_repository_locator(
     resolved = resolve_evidence([f"commit:{sha}"], session_id=None, run_id=None)
     assert resolved.unresolved == ()
     assert resolved.root_ids == (root_id,)
-    assert resolved.tainted is True
+    assert resolved.cited_external is True and resolved.read_external is True
 
 
 def test_apply_sync_records_completed_directory_move(

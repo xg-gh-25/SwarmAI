@@ -14,7 +14,7 @@ from pathlib import Path
 from config import get_app_data_dir
 
 from .api import DB_FILENAME, PRAGMAS, SCHEMA_DDL, SCHEMA_VERSION
-from .api_v2 import SCHEMA_V2_DDL, SCHEMA_V2_VERSION
+from .api_v2 import SCHEMA_V2_DDL, SCHEMA_V2_VERSION, UNIT_BASIS_DDL
 
 
 _USAGE_SCHEMA_DDL = """
@@ -94,6 +94,58 @@ CREATE INDEX IF NOT EXISTS ix_s2_jobs_state ON ingestion_s2_jobs(state, requeste
 _V8_DDL = """
 ALTER TABLE ingestion_s2_jobs ADD COLUMN project TEXT;
 """
+
+def _roots_rebuild() -> str:
+    """v9 widens evidence_roots.trust to 'inferred' (cdf-fixing-spec C1), rebuilt from the
+    one definition in api_v2 like extraction_attempts in v7 (same columns, same order)."""
+    import re as _re
+    create = _re.search(r"CREATE TABLE IF NOT EXISTS evidence_roots \(.*?\n\);",
+                        SCHEMA_V2_DDL, _re.S).group(0)
+    return (create.replace("IF NOT EXISTS evidence_roots (", "evidence_roots_v9 (") + "\n"
+            "INSERT INTO evidence_roots_v9 SELECT * FROM evidence_roots;\n"
+            "DROP TABLE evidence_roots;\n"
+            "ALTER TABLE evidence_roots_v9 RENAME TO evidence_roots;\n"
+            "CREATE INDEX IF NOT EXISTS ix_roots_locator ON evidence_roots(root_kind, locator);\n")
+
+
+# v9: each CDF entry's basis (api_v2.UNIT_BASIS_DDL), and evidence_roots.trust widened
+# to 'inferred'
+_V9_DDL = UNIT_BASIS_DDL + _roots_rebuild()
+
+
+class MigrationBackupFailed(OSError):
+    """The copy taken before a schema migration did not open or was incomplete: the
+    migration does not run."""
+
+
+def _backup_before_migration(conn: sqlite3.Connection, path: Path, version: int) -> Path:
+    """Copy the store before a migration that rebuilds a table (AGENT § Safety: a
+    destructive step in shipped code first takes a backup and checks it opens and is
+    complete). Returns the backup path; raises ``MigrationBackupFailed`` otherwise."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    dest = path.with_name(f"{path.name}.pre-v{SCHEMA_V2_VERSION}-from-v{version}-{stamp}.bak")
+    try:
+        copy = sqlite3.connect(dest)
+        try:
+            conn.backup(copy)
+        finally:
+            copy.close()
+        check = sqlite3.connect(f"file:{dest.resolve().as_posix()}?mode=ro", uri=True)
+        try:
+            ok = check.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            tables = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            for table in tables:
+                ok = ok and (check.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                             == conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+        finally:
+            check.close()
+    except sqlite3.Error as exc:
+        raise MigrationBackupFailed(f"backup before migration failed: {exc}") from exc
+    if not ok:
+        raise MigrationBackupFailed(f"backup before migration incomplete: {dest}")
+    return dest
+
 
 _V2_MIGRATION_DDL = """
 ALTER TABLE ingestion_units RENAME TO ingestion_units_v1;
@@ -248,7 +300,7 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
                 _assert_one_pragma(conn, name)
             script = (
                 f"BEGIN IMMEDIATE;\n{SCHEMA_DDL}\n{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n"
-                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n"
+                f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}\n"
                 f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
             )
             try:
@@ -261,26 +313,20 @@ def _create(path: Path, busy_timeout_ms: int) -> sqlite3.Connection:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             version = _pragma_value(conn, "user_version")
-            if version == SCHEMA_VERSION:
-                script = (
-                    f"BEGIN IMMEDIATE;\n{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n"
-                    f"{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n"
-                    f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
-                )
-                conn.executescript(script)
-            elif version in {3, 4, 5} and SCHEMA_V2_VERSION == 8:
+            # the steps an existing store at *version* still needs, in order
+            steps = {
+                SCHEMA_VERSION: f"{_V2_MIGRATION_DDL}\n{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n"
+                                f"{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}",
+                3: f"{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}",
+                6: f"{_V7_DDL}\n{_V8_DDL}\n{_V9_DDL}",
+                7: f"{_V8_DDL}\n{_V9_DDL}",
+                8: _V9_DDL,
+            }
+            steps[4] = steps[5] = steps[3]
+            if version in steps and SCHEMA_V2_VERSION == 9:
+                _backup_before_migration(conn, path, int(version))
                 conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{SCHEMA_V2_DDL}\n{_USAGE_SCHEMA_DDL}\n{_V6_DDL}\n{_V7_DDL}\n{_V8_DDL}\n"
-                    f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
-                )
-            elif version == 6 and SCHEMA_V2_VERSION == 8:
-                conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{_V7_DDL}\n{_V8_DDL}\n"
-                    f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
-                )
-            elif version == 7 and SCHEMA_V2_VERSION == 8:
-                conn.executescript(
-                    f"BEGIN IMMEDIATE;\n{_V8_DDL}\n"
+                    f"BEGIN IMMEDIATE;\n{steps[version]}\n"
                     f"PRAGMA user_version={SCHEMA_V2_VERSION};\nCOMMIT;"
                 )
         _assert_pragmas(conn)

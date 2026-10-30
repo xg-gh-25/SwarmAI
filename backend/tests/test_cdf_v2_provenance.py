@@ -58,7 +58,7 @@ def _assert_tainted_route() -> None:
         "title": "One owner", "what": "Use one owner", "evidence": ["unit:x"]})
     destination = route_unit(unit, None)
     assert destination.store == "STEERING"
-    tainted = SimpleNamespace(tainted=True, strength="user_explicit")
+    tainted = SimpleNamespace(read_external=True, strength="user_explicit")
     assert _not_grounded(destination.store, tainted, "[user_message] Use one owner", True)
 
 
@@ -114,7 +114,7 @@ def test_v1_ingestion_database_migrates_without_losing_rows(tmp_path, monkeypatc
     conn.close()
 
     migrated = connect_rw()
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 9
     assert migrated.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='unit_usage'"
     ).fetchone()[0] == "unit_usage"
@@ -170,9 +170,9 @@ def test_resolve_evidence_checks_session_and_read_set_taint(tmp_path, monkeypatc
     selective = resolve_evidence(
         ["event:input:e1"], session_id="s1", run_id=None, read_root_ids=(external,))
     wrong = resolve_evidence(["event:input:e1"], session_id="s2", run_id=None)
-    assert clean.strength == "user_explicit" and not clean.tainted
+    assert clean.strength == "user_explicit" and not clean.read_external
     assert user_root in clean.lineage_root_ids
-    assert selective.tainted
+    assert selective.read_external
     assert wrong.unresolved == ("event:input:e1",)
 
 
@@ -187,7 +187,7 @@ def test_run_anchor_ownership_and_parent_closure(tmp_path, monkeypatch):
     good = resolve_evidence([f"doc:{document}", "finding:run-a:CF-1"],
                             session_id=None, run_id="run-a")
     wrong = resolve_evidence(["finding:run-a:CF-1"], session_id=None, run_id="run-b")
-    assert finding in good.lineage_root_ids and good.tainted
+    assert finding in good.lineage_root_ids and good.read_external
     assert wrong.unresolved == ("finding:run-a:CF-1",)
 
 
@@ -420,7 +420,7 @@ def test_bound_repo_injection_stays_external_and_out_of_per_turn_store(tmp_path,
         "agent_document", "s1:summary", "A safe extracted claim.", "user",
         parent_root_ids=(file_root,))
     resolved = resolve_evidence([f"doc:{document}"], session_id="s1", run_id=None)
-    assert resolved.tainted and file_root in resolved.lineage_root_ids
+    assert resolved.read_external and file_root in resolved.lineage_root_ids
     _assert_tainted_route()
 
 
@@ -433,7 +433,7 @@ def test_web_content_copied_to_workspace_cannot_be_laundered(tmp_path, monkeypat
         "agent_document", "workspace:note.md", "Copied summary", "user",
         parent_root_ids=(web,))
     resolved = resolve_evidence([f"doc:{copied}"], session_id="s1", run_id=None)
-    assert resolved.tainted and web in resolved.lineage_root_ids
+    assert resolved.read_external and web in resolved.lineage_root_ids
     _assert_tainted_route()
 
 
@@ -446,7 +446,7 @@ def test_tool_output_echo_cannot_be_laundered(tmp_path, monkeypatch):
         "agent_document", "s1:tool-summary", "A safe summary", "user",
         parent_root_ids=(tool,))
     resolved = resolve_evidence([f"doc:{document}"], session_id="s1", run_id=None)
-    assert resolved.tainted and tool in resolved.lineage_root_ids
+    assert resolved.read_external and tool in resolved.lineage_root_ids
     _assert_tainted_route()
 
 
@@ -458,7 +458,7 @@ def test_selective_user_citation_routes_out_of_per_turn_store(tmp_path, monkeypa
     external = register_root("tool_text", "s1:read", "external context", "external")
     resolved = resolve_evidence(
         ["event:input:e1"], session_id="s1", run_id=None, read_root_ids=(external,))
-    assert resolved.tainted
+    assert resolved.read_external
     _assert_tainted_route()
 
 
@@ -470,7 +470,7 @@ def test_same_url_from_s2_and_s6_is_one_external_root(tmp_path, monkeypatch):
         "web_document", "https://EXAMPLE.com/a/?utm_campaign=x#fragment", "page", "external")
     s6 = register_root("web_document", "https://example.com/a", "page", "external")
     assert s2 == s6
-    assert resolve_evidence([f"web:{s2}"], session_id="s1", run_id=None).tainted
+    assert resolve_evidence([f"web:{s2}"], session_id="s1", run_id=None).read_external
     _assert_tainted_route()
 
 

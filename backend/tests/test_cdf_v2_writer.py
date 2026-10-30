@@ -22,7 +22,7 @@ def event(title: str, kind: str = "event", *, tainted: bool = False):
         "kind": "event", "event_kind": kind, "when": "2026-10-27",
         "title": title, "what": f"{title} happened.", "impact": "It changed the product.",
         "outcome": "The change landed.", "follow_up": "Observe the result.",
-        "source": "S3", "project_hint": "Widget", "tainted": tainted,
+        "source": "S3", "project_hint": "Widget", "cited_external": tainted,
     }
 
 
@@ -69,7 +69,7 @@ def test_common_ddd_initializes_section_and_gap_round_trips(tmp_path: Path) -> N
     cognition = {"kind": "cognition", "type": "guideline", "title": "One source",
                  "what": "One fact has one owner.", "how": "All readers use that owner.",
                  "why": "Competing definitions drift.", "source": "S3",
-                 "project_hint": "Widget", "tainted": True}
+                 "project_hint": "Widget", "cited_external": True}
     rendered = render_unit(
         decision("COMMON_DDD", "Knowledge/Learned/repos/widget.md", "Conventions",
                  project="Widget"), "cog.1", cognition)
@@ -115,7 +115,7 @@ def test_render_ddd_unit_preserves_title_and_round_trips_external_taint() -> Non
         "how": "The writer uses one renderer.",
         "why": "Parallel render paths drift.",
         "source": "S7",
-        "tainted": True,
+        "cited_external": True,
     }
     direct = _render_ddd("ddd.1", group)
     routed = render_unit(
@@ -156,7 +156,7 @@ def test_reference_frontmatter_is_complete_and_title_is_not_clipped() -> None:
     reference = {"kind": "reference", "reference_kind": "analysis", "title": title,
                  "summary": "This analysis explains the complete behavior.",
                  "body": "Full body.", "ontology_types": ["model"], "source": "S2",
-                 "project_hint": "Widget", "tainted": True,
+                 "project_hint": "Widget", "cited_external": True,
                  "source_url": "https://example.com/analysis",
                  "retrieved_at": "2026-10-27T00:00:00Z", "content_hash": "sha"}
     text = render_unit(decision("KNOWLEDGE", "Knowledge/Notes/"), "ref.1", reference)

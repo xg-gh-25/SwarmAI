@@ -366,8 +366,11 @@ def semantic_urls_have_credentials(*texts: str | None) -> bool:
 
 
 # ── provenance tiers (§9) ─────────────────────────────────────────────────────
-RootTrust = Literal["user", "measured", "external"]
-ROOT_TRUST_ORDER: dict[str, int] = {"external": 0, "measured": 1, "user": 2}
+# inferred: not external content, and not shown by the user's words or a measurement (an
+# entry CDF wrote from the agent's own reading); a unit citing it is at most inferred
+# and is not external because of it (cdf-fixing-spec C1)
+RootTrust = Literal["user", "measured", "inferred", "external"]
+ROOT_TRUST_ORDER: dict[str, int] = {"external": 0, "inferred": 1, "measured": 2, "user": 3}
 EvidenceRootKind = Literal[
     "user_message", "human_answer", "measured_field", "corpus_unit", "agent_document",
     "run_finding", "run_validation", "commit", "file_revision", "tool_text", "web_document",

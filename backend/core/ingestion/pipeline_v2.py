@@ -157,11 +157,20 @@ def _resolved(row: Any) -> api_v2.ResolvedEvidence:
     envelope = _json(_get(row, "envelope"), {})
     roots = tuple(_json(_get(row, "evidence_root_ids"), envelope.get("root_ids", [])))
     lineage = tuple(envelope.get("lineage_root_ids", roots))
+    # an envelope from before cdf-fixing-spec C1 holds one "tainted" (the read set's);
+    # what the unit itself cites is then read from its lineage's current trust
+    read_external = bool(envelope.get("read_external", envelope.get("tainted", False)))
+    if "cited_external" in envelope:
+        cited_external = bool(envelope["cited_external"])
+    else:
+        from .provenance import lineage_external
+        cited_external = lineage_external(lineage)
     return api_v2.ResolvedEvidence(
         root_ids=roots,
         lineage_root_ids=lineage,
         strength=envelope.get("strength", envelope.get("evidence", "inferred")),
-        tainted=bool(envelope.get("tainted", False)),
+        read_external=read_external,
+        cited_external=cited_external,
         unresolved=tuple(envelope.get("unresolved", ())),
     )
 
@@ -291,7 +300,7 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
                              if root_id not in existing
                              and not _descends_from_target(root_id, target_anchor, roots)))
         now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-        weight = {"user": 1.0, "measured": 0.8, "external": 0.3}
+        weight = {"user": 1.0, "measured": 0.8, "inferred": 0.5, "external": 0.3}
         for root_id in novel:
             trust = roots.get(root_id, ("", (), "external"))[2]
             conn.execute(
@@ -314,9 +323,11 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
 _SUPERSEDES_SOURCES: frozenset[str] = frozenset()
 
 
-def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None):
+def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None,
+                     supported=False):
     """``overrides.check`` for a cognition unit that declares overrides, else None. An
-    unreadable store refuses every declaration (logged): nothing is retired on a guess."""
+    unreadable store refuses every declaration (logged): nothing is retired on a guess.
+    *supported*: the unit is shown by the user's words or a measurement (run_unit_v2)."""
     declared = getattr(unit, "overrides", None)
     if not isinstance(unit, CognitionUnit) or not declared:
         return None
@@ -332,7 +343,8 @@ def _check_overrides(unit, row, root, destination, corpus_project, resolved, hom
     try:
         return overrides.check(conn, workspace=Path(root), project=project, source=source,
                                declared=declared, new_root_ids=getattr(resolved, "root_ids", ()),
-                               tainted=bool(getattr(resolved, "tainted", False)), home=home)
+                               cited_external=bool(getattr(resolved, "cited_external", True)),
+                               supported=supported, home=home)
     finally:
         conn.close()
 
@@ -531,26 +543,39 @@ def _not_grounded(store: str, resolved: Any, grounding: str, grounded: bool | No
     verification decides (*grounded*; ``None`` before it ran: only the deterministic
     part is checked, so a unit that can never pass costs no model call). A unit citing
     none keeps a measured strength derived from its own roots (an S5 metric) when no
-    external content reached it. The user's own files take only an untainted unit
-    (S1, the user's-words pass) with words the verification read: which input shaped a
-    reviewed unit is not knowable, so a tainted one never gets there, whatever a model
-    says (§9)."""
+    external content reached it. The user's own files take only a unit whose extractor
+    read no external content (S1, the user's-words pass) with words the verification read:
+    which input shaped a reviewed unit is not knowable, so one that read external content
+    never gets there, whatever a model says (§9). Both read ``read_external``, the
+    extractor's whole read set (cdf-fixing-spec C1)."""
     if grounding:
         words, measured = _grounding_kinds(grounding) if grounded is not False else (False, False)
     else:
-        words, measured = False, not resolved.tainted and resolved.strength == "measured"
+        words, measured = False, not resolved.read_external and resolved.strength == "measured"
     if store in USER_CONTEXT_STORES:
-        return resolved.tainted or resolved.strength != "user_explicit" or not words
+        return resolved.read_external or resolved.strength != "user_explicit" or not words
     if store in AGENT_SELF_STORES:
         return not (words or measured)
     return False
 
 
+def unit_basis(resolved: Any, supported: bool, grounding: str, grounded: bool | None) -> str:
+    """The trust an entry written from this unit carries as evidence (a ``RootTrust``):
+    external when it cites external content; user when the verification read the user's
+    words; measured when shown by a measurement; otherwise inferred."""
+    if getattr(resolved, "cited_external", True):
+        return "external"
+    if not supported:
+        return "inferred"
+    words = bool(grounding) and grounded is not False and _grounding_kinds(grounding)[0]
+    return "user" if words else "measured"
+
+
 def _project_home(unit: SourceUnit, destination: Any, project: str | None) -> Any:
     """Where an agent or world lesson goes when nothing it cites shows it to be true (the
     agent's own reading of tool output, cdf-refactor §3.2): the DDD of the project it was
-    learned in, marked as rerouted (the writer files it tainted; it is recalled there on
-    demand, never injected every turn). None when there is no such project, and for the
+    learned in, marked as rerouted (its basis is inferred: the baseline registers it so,
+    and it is recalled there on demand, never injected every turn). None when there is no such project, and for the
     user's own files, which take only the user's words."""
     if not (isinstance(unit, CognitionUnit) and destination.store in AGENT_SELF_STORES and project):
         return None
@@ -669,10 +694,10 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
         done["destination"] = destination
     # verified against the cited words or measurement, or (citing none) measured by
     # provenance with no external content reaching it, as _not_grounded allows
-    supported = grounded if grounding else not resolved.tainted and resolved.strength == "measured"
+    supported = grounded if grounding else not resolved.read_external and resolved.strength == "measured"
     if destination.store == "TIMELINE":
-        # an event's taint decides where it is filed (writer: tainted → "Not injected")
-        destination = destination.model_copy(update={"injectable": not resolved.tainted})
+        # an event citing external content is not read every turn (writer: "Not injected")
+        destination = destination.model_copy(update={"injectable": not resolved.cited_external})
         done["destination"] = destination
 
     from .prompts import verify_hit_ids
@@ -716,7 +741,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     # the project the source fixed, never the unit's own scope: the run's for S3, the
     # session's for S7 (a session about one project does not retire another's entries)
     home = _resolve_project(root, declared) or session_home
-    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved, home)
+    checked = _check_overrides(unit, row, root, destination, corpus_project, resolved, home,
+                               supported=supported)
     if checked is not None and checked.older:
         return _decision(unit_id, "reject", "reject", "older_than_existing", **done)
     result = _decision(unit_id, "write", "add", reason, **done)
@@ -725,10 +751,9 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     if checked is not None and checked.refused:
         result.version_vector["override_refused"] = checked.refused
     result.version_vector["relation_hints"] = hints
-    if not supported and destination.store == "DDD":
-        # an inferred project unit (§3.2): written to its project, marked as not from the
-        # user's words or a measurement (the writer files it tainted)
-        result.version_vector["inferred"] = True
+    # what the entry rests on: the trust the baseline registers it with, so a unit citing
+    # it later is no stronger than it (cdf-fixing-spec C1); only "external" is marked
+    result.version_vector["basis"] = unit_basis(resolved, supported, grounding, grounded)
     if event_key:
         result.version_vector["event_key"] = event_key
     return result

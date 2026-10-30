@@ -38,7 +38,7 @@ def add_root(conn: sqlite3.Connection, root: str, *, locator: str = "source",
 
 def resolved(*roots: str) -> ResolvedEvidence:
     return ResolvedEvidence(root_ids=tuple(roots), lineage_root_ids=tuple(roots),
-                            strength="inferred", tainted=True)
+                            strength="inferred", read_external=True, cited_external=True)
 
 
 def test_echo_descended_from_target_is_not_novel() -> None:

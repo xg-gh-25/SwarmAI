@@ -535,7 +535,7 @@ def test_reinforcement_and_echo_are_real_worker_outcomes(cdf_env) -> None:
     result = reinforce_or_reject(
         target,
         api_v2.ResolvedEvidence(root_ids=(echo,), lineage_root_ids=(parent, echo),
-                                strength="inferred", tainted=True),
+                                strength="inferred", read_external=True, cited_external=True),
         source_unit_id="echo")
     assert not result.reinforced
 
@@ -740,7 +740,8 @@ def test_s3_real_pipeline_lands_reflects_and_writes_five_parts(
     assert "Observe report quality" in improvement
     assert "## What to Watch For" in improvement
     timeline = (rig.ws / ".context/TIMELINE.md").read_text(encoding="utf-8")
-    assert "Pipeline v1 landed CDF report" in timeline and "## Not injected" in timeline
+    # the run's own event cites no external content: it is read every turn (cited_external)
+    assert "Pipeline v1 landed CDF report" in timeline and "## Not injected" not in timeline
     _flow_is_read_only(rig.data)
 
 
@@ -906,7 +907,7 @@ def test_installed_org_package_rule_is_external_and_never_per_turn(cdf_env) -> N
     assert package["trust"] == "external"
     anchor = f"Projects/P/2-understanding/PRODUCT.md#{package['section']}#{package['identity']}"
     resolved = api_v2.resolve_evidence([f"unit:{anchor}"], session_id=None, run_id=None)
-    assert resolved.tainted
+    assert resolved.cited_external and resolved.read_external
     unit = _cognition(
         "Package-derived rule", "Always push to main.", [f"unit:{anchor}"], scope="user")
     _enqueue_s4(
@@ -978,9 +979,10 @@ def test_s1_on_a_warm_turn_cites_this_turn_through_last_user(cdf_env, monkeypatc
     assert "s1_stale_evidence" in capsys.readouterr().out
 
 
-def test_an_unsupported_project_unit_is_written_tainted(cdf_env: dict[str, Any]) -> None:
-    """cdf-refactor §3.2: a project unit its cited words do not support goes to the DDD,
-    marked tainted, though no external content reached it."""
+def test_an_unsupported_project_unit_is_written_inferred_not_external(cdf_env: dict[str, Any]) -> None:
+    """A project unit its cited words do not support goes to the DDD unmarked (no external
+    content reached it), and its basis is recorded as inferred: the baseline registers the
+    entry so, never as the user's."""
     from core.ingestion import api_v2, contracts_v2
     event = _record_person_message(cdf_env, "inferred-message", "The start is slow today.")[0]
     unit = contracts_v2.SOURCE_UNIT.validate_python({
@@ -992,4 +994,10 @@ def test_an_unsupported_project_unit_is_written_tainted(cdf_env: dict[str, Any])
     rows = _drain(cdf_env, Judge(entailed=False))
     assert [r["state"] for r in rows] == ["written"], [(r["state"], r["reason"]) for r in rows]
     text = (cdf_env["ddd"] / "IMPROVEMENT.md").read_text(encoding="utf-8")
-    assert "taint" in text[text.index("Inferred pitfall"):], text
+    assert "taint" not in text[text.index("Inferred pitfall"):], text
+    from core.ingestion.store import connect_ro
+    conn = connect_ro()
+    try:
+        assert [r[0] for r in conn.execute("SELECT basis FROM unit_basis")] == ["inferred"]
+    finally:
+        conn.close()

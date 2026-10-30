@@ -59,6 +59,8 @@ def corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     db = data / "ingestion.db"
     conn = _connect(db)
     conn.executescript(api.SCHEMA_DDL)
+    from core.ingestion.api_v2 import UNIT_BASIS_DDL
+    conn.executescript(UNIT_BASIS_DDL)
     conn.execute(
         "INSERT INTO ingestion_owner(id,epoch,pid,started_at) VALUES (1,1,?,?)",
         (os.getpid(), "2026-10-27T00:00:00+00:00"),
