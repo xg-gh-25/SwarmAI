@@ -165,7 +165,7 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
     session_id = context.session_id or "unknown"
     title = _validate_title(summary.session_title, context.session_title, summary.topics)
     ts = summary.timestamp or datetime.now().strftime("%H:%M")
-    sentence = summary.summary_sentence or "Session completed without a substantive update."
+    sentence = summary.summary_sentence or title
 
     lines.extend([
         f"## {ts} | {session_id} | {title}",

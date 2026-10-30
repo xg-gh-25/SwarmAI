@@ -94,12 +94,30 @@ async def test_resolves_accepts_only_ids_presented_to_generator(monkeypatch):
     assert result.resolves == ["open-1"]
 
 
-def test_summary_sentence_is_direct_complete_and_target_length():
+def test_the_summary_sentence_is_the_sessions_own_never_a_stock_filler():
     pipeline = SummarizationPipeline()
-    chinese = pipeline._derive_summary_sentence(StructuredSummary(topics=["完成中文会话工作"]))
-    english = pipeline._derive_summary_sentence(StructuredSummary(topics=["complete the work"] ))
-    assert 30 <= len(chinese) <= 50
-    assert pipeline._summary_sentence_is_valid(chinese)
-    assert pipeline._summary_sentence_is_valid(english)
-    assert not chinese.endswith(("...", "…"))
-    assert not english.endswith(("...", "…"))
+    chinese = pipeline._derive_summary_sentence(StructuredSummary(deliverables=["修复库膨胀", "清理 DDD"]))
+    english = pipeline._derive_summary_sentence(StructuredSummary(topics=["complete the work"]))
+    assert chinese == "修复库膨胀；清理 DDD" and english == "complete the work"
+    assert pipeline._derive_summary_sentence(StructuredSummary()) == ""
+    a = pipeline._derive_summary_sentence(StructuredSummary(topics=["一"]))
+    b = pipeline._derive_summary_sentence(StructuredSummary(topics=["二"]))
+    assert a != b                                   # the old filler was the same for both
+
+
+def test_no_title_restated_as_a_next_step():
+    pipeline = SummarizationPipeline()
+    assert pipeline._derive_continue_from(StructuredSummary(session_title="看看库为什么膨胀")) == ""
+
+
+@pytest.mark.asyncio
+async def test_a_model_sentence_outside_the_old_length_window_is_kept(monkeypatch):
+    pipeline = SummarizationPipeline()
+    long = "本次把库膨胀的两个根因修掉了，一个是旧 S2 每次空闲都从头重读整个会话，另一个是每次写入都保留整份文件副本。"
+
+    async def fake_enrich(summary, messages, **_kwargs):
+        summary.summary_sentence = long + "\n"
+        return summary
+    monkeypatch.setattr(pipeline, "_enrich_with_llm", fake_enrich)
+    result = await pipeline.summarize([{"role": "user", "content": "修库"}] * 9, session_id="s")
+    assert result.summary_sentence == long

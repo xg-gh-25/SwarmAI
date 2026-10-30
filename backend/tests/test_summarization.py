@@ -278,12 +278,12 @@ class TestDeriveContinueFrom:
         result = SummarizationPipeline._derive_continue_from(summary)
         assert result.startswith("Investigate:")
 
-    def test_fallback_to_title(self):
+    def test_a_title_alone_is_no_next_step(self):
         summary = StructuredSummary(
             session_title="Refactor agent manager",
         )
         result = SummarizationPipeline._derive_continue_from(summary)
-        assert result.startswith("Ongoing:")
+        assert result == ""
 
     def test_empty_when_nothing(self):
         summary = StructuredSummary(session_title="Untitled session")
@@ -489,7 +489,7 @@ class TestFullPipeline:
         assert len(summary.files_modified) >= 1
         assert summary.session_title
         assert summary.timestamp
-        assert summary.continue_from  # should have a continue_from (rule-based fallback)
+        assert summary.summary_sentence  # the session's own content, never a stock filler
 
     @pytest.mark.asyncio
     async def test_minimal_conversation(self, pipeline: SummarizationPipeline):

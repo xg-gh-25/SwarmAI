@@ -316,8 +316,10 @@ class SummarizationPipeline:
                     "LLM enrichment failed, using rule-based summary: %s", exc
                 )
 
-        if not self._summary_sentence_is_valid(summary.summary_sentence):
-            summary.summary_sentence = self._derive_summary_sentence(summary)
+        # the model's sentence stands as written (on one line); a length rule replaced
+        # every sentence outside 30-50 characters with a stock filler
+        summary.summary_sentence = (self._one_line(summary.summary_sentence)
+                                    or self._derive_summary_sentence(summary))
         if not summary.continue_from:
             summary.continue_from = self._derive_continue_from(summary)
         if not summary.next_items and summary.continue_from:
@@ -611,7 +613,7 @@ class SummarizationPipeline:
         1. If there are open questions → "Resolve: <first question>"
         2. If validation_status mentions untested → "Verify: <validation>"
         3. If COE candidate → "Investigate: <coe_topic>"
-        4. Fallback → "Ongoing: <session_title>"
+        Otherwise none: "Ongoing: <title>" restated the title as a next step.
         """
         if summary.open_questions:
             return f"Resolve: {summary.open_questions[0]}"
@@ -619,28 +621,26 @@ class SummarizationPipeline:
             return f"Verify: {summary.validation_status}"
         if summary.coe_signal == "candidate" and summary.coe_topic:
             return f"Investigate: {summary.coe_topic}"
-        if summary.session_title and summary.session_title != "Untitled session":
-            return f"Ongoing: {summary.session_title}"
         return ""
 
     @staticmethod
-    def _summary_sentence_is_valid(text: str) -> bool:
-        """Validate a complete one-sentence summary without modifying it."""
-        if not text or "\n" in text or text.rstrip().endswith(("...", "…")):
-            return False
-        cjk = len(re.findall(r"[\u3400-\u9fff]", text))
-        if cjk:
-            return 30 <= len(text) <= 50
-        words = text.split()
-        return 8 <= len(words) <= 18
+    def _one_line(text: str) -> str:
+        """*text* on one line, whitespace collapsed; nothing cut."""
+        return " ".join((text or "").split())
 
     @staticmethod
     def _derive_summary_sentence(summary: StructuredSummary) -> str:
-        """Generate one complete language-matched fallback at the target length."""
-        source = " ".join([*summary.deliverables, *summary.topics, summary.session_title])
-        if re.search(r"[\u3400-\u9fff]", source):
-            return "本次会话已记录主要工作，并完整保留交付结果、输出位置、验证状态与后续事项。"
-        return "This session recorded its work, outputs, validation status, and remaining next steps."
+        """The session's own content when the model gave no sentence: its deliverables,
+        else its topics, else its title. Never a stock sentence: a filler that is the
+        same for every session told the next session nothing (14 of 28 entries on
+        2026-10-30 carried one), and an empty one is better than a false one."""
+        parts = [p for p in summary.deliverables if isinstance(p, str) and p.strip()]
+        if not parts:
+            parts = [p for p in summary.topics if isinstance(p, str) and p.strip()]
+        if not parts and summary.session_title and summary.session_title != "Untitled session":
+            parts = [summary.session_title]
+        joiner = "；" if any(re.search(r"[\u3400-\u9fff]", p) for p in parts) else "; "
+        return SummarizationPipeline._one_line(joiner.join(parts))
 
     @staticmethod
     def _assign_next_ids(summary: StructuredSummary, session_id: str) -> None:
