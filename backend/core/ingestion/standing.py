@@ -53,14 +53,38 @@ def unit_standing(conn: Optional[sqlite3.Connection], anchor: str) -> Standing:
     it cannot be read."""
     if conn is None:
         return Standing()
-    try:
-        return _standing(conn, anchor)
-    except sqlite3.Error:
-        logger.debug("CDF standing lookup failed for %s", anchor, exc_info=True)
-        return Standing()
+    return _standing(conn, anchor)
 
 
 def _standing(conn: sqlite3.Connection, anchor: str) -> Standing:
+    """Three lookups, each on its own: one that fails keeps what the others read."""
+    support = refute = 0.0
+    strength, evidence_at, used, last_used, written_at = 0, None, 0, None, None
+    try:
+        support, refute, strength, evidence_at = _evidence(conn, anchor)
+    except sqlite3.Error:
+        logger.debug("CDF evidence lookup failed for %s", anchor, exc_info=True)
+    try:
+        usage = conn.execute("SELECT COUNT(*),MAX(at) FROM unit_usage WHERE anchor=?", (anchor,)).fetchone()
+        if usage:
+            used, last_used = int(usage[0] or 0), (str(usage[1]) if usage[1] else None)
+    except sqlite3.Error:
+        logger.debug("CDF usage lookup failed for %s", anchor, exc_info=True)
+    identity = anchor.rsplit("#", 1)[-1]
+    if identity.startswith("cand:"):
+        try:
+            row = conn.execute(
+                "SELECT updated_at FROM ingestion_writes WHERE unit_id=? AND step='done' "
+                "ORDER BY updated_at DESC LIMIT 1", (identity[5:],),
+            ).fetchone()
+            written_at = str(row[0]) if row and row[0] else None
+        except sqlite3.Error:
+            logger.debug("CDF write lookup failed for %s", anchor, exc_info=True)
+    return Standing(support=support, refute=refute, strength=strength, evidence_at=evidence_at,
+                    used=used, last_used=last_used, written_at=written_at)
+
+
+def _evidence(conn: sqlite3.Connection, anchor: str):
     rows = conn.execute(
         """SELECT cs.weight,cs.polarity,r.trust,r.root_kind,r.observed_at
            FROM claim_support cs JOIN evidence_roots r ON r.root_id=cs.root_id
@@ -68,7 +92,6 @@ def _standing(conn: sqlite3.Connection, anchor: str) -> Standing:
         (anchor,),
     ).fetchall()
     identity = anchor.rsplit("#", 1)[-1]
-    written_at = None
     if identity.startswith("cand:"):
         unit_id = identity[5:]
         initial = conn.execute(
@@ -87,11 +110,6 @@ def _standing(conn: sqlite3.Connection, anchor: str) -> Standing:
                     f"SELECT 0.0,'origin',trust,root_kind,observed_at FROM evidence_roots "
                     f"WHERE root_id IN ({marks})", root_ids,
                 ).fetchall()]
-        row = conn.execute(
-            "SELECT updated_at FROM ingestion_writes WHERE unit_id=? AND step='done' "
-            "ORDER BY updated_at DESC LIMIT 1", (unit_id,),
-        ).fetchone()
-        written_at = str(row[0]) if row and row[0] else None
     support = sum(float(row[0]) for row in rows if str(row[1]) in {"support", "origin"})
     refute = sum(float(row[0]) for row in rows if str(row[1]) == "refute")
     strength = 0
@@ -100,12 +118,7 @@ def _standing(conn: sqlite3.Connection, anchor: str) -> Standing:
         trust, kind = str(row[2]), str(row[3])
         strength = max(strength, 3 if trust == "user" else 2 if trust == "measured" else
                        1 if kind.startswith("run_") else 0)
-    usage = conn.execute("SELECT COUNT(*),MAX(at) FROM unit_usage WHERE anchor=?", (anchor,)).fetchone()
-    return Standing(support=support, refute=refute, strength=strength,
-                    evidence_at=max(observed) if observed else None,
-                    used=int(usage[0] or 0) if usage else 0,
-                    last_used=str(usage[1]) if usage and usage[1] else None,
-                    written_at=written_at)
+    return support, refute, strength, max(observed) if observed else None
 
 
 @dataclass(frozen=True)
