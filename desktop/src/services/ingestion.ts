@@ -89,10 +89,6 @@ export interface ReviewTypeStats {
   reviews: number;
   units: number;
   invalid: number;
-  sampled: number;
-  missed: number;
-  covered: number;
-  missRate: number | null;
 }
 
 /** After-session review metrics (docs/design/2026-10-29-cdf-session-review.md §12). */

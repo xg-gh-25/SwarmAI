@@ -1016,37 +1016,22 @@ def _can_fork_review() -> bool:
 
 def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
                     runner: Any = None) -> dict[str, Any]:
-    """One session job (2026-10-29-cdf-session-review.md §16): the S2 user-utterance pass,
-    then the review in a fork of the session; the S2 main pass when the session cannot
-    be resumed, and for the measuring sample."""
+    """One session job: the after-session review by the session's own agent (S7; design
+    2026-10-30-cdf-agent-decides D3/D4). A session that cannot be resumed is reviewed from
+    its record; there is no second extraction pass."""
     from . import s2_jobs
-    from .sources import s2_session, s7_review
+    from .sources import s7_review
     session_id = job["session_id"]
-    if runner is None and job.get("sdk_session_id") and not _can_fork_review():
-        # checked before the user pass: a postponed job runs that pass once, not twice
-        raise ReviewPostponed("not enough memory for the review's CLI fork")
+    if runner is None and not _can_fork_review():
+        raise ReviewPostponed("not enough memory for the review's CLI")
     # the project of the repo the session worked in (s2_jobs.request): the DDD searched
-    # for duplicates and the fallback project, never a declaration (pipeline_v2.run_unit_v2)
+    # for related entries and the fallback project, never a declaration
     snapshot = {"session_project": job["project"]} if job.get("project") else None
-    # first and whole: the one channel to the user's own files (cdf-refactor §3.6); a
-    # review failure afterwards cannot cost it
-    s2_session.extract_session_sync(session_id, passes=("user_utterance",), project_snapshot=snapshot)
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),
         force=job.get("reason") == "save_button", project_snapshot=snapshot, runner=runner)
     if outcome["status"] == "reviewed":
-        # recorded before the optional main pass: if that pass fails, the retry must not
-        # review the same messages again (a fresh model call, new duplicate units)
         s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
-    # A failed main pass of a sampled session is not run again: its retry finds the
-    # messages reviewed ("nothing_new"). It is the measuring sample, not the session's
-    # extraction (the review is); an unresumable session's main pass is retried, as
-    # its watermark never moves.
-    main = outcome["status"] == "unresumable" or (
-        outcome["status"] == "reviewed" and s7_review.sampled(session_id))
-    if main:
-        s2_session.extract_session_sync(session_id, passes=("main",), project_snapshot=snapshot)
-    outcome["s2_main"] = main
     logger.info("CDF session job %s: %s", session_id, outcome)
     return outcome
 

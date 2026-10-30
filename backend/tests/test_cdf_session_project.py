@@ -54,26 +54,23 @@ def test_request_records_the_sessions_bound_project(store, monkeypatch):
     assert {"app-1": "SwarmAI", "app-2": None}[job["session_id"]] == job["project"]
 
 
-def test_the_session_job_gives_its_passes_the_project(monkeypatch):
+def test_the_session_job_gives_the_review_the_project(monkeypatch):
     from core.ingestion import worker
-    from core.ingestion.sources import s2_session, s7_review
-    seen: list[tuple[str, object]] = []
-    monkeypatch.setattr(s2_session, "extract_session_sync",
-                        lambda sid, **kw: seen.append(("s2", kw.get("project_snapshot"))) or {})
+    from core.ingestion.sources import s7_review
+    seen: list[object] = []
     monkeypatch.setattr(s7_review, "review_session",
-                        lambda sid, **kw: seen.append(("s7", kw.get("project_snapshot")))
-                        or {"status": "unresumable"})
+                        lambda sid, **kw: seen.append(kw.get("project_snapshot")) or {"status": "nothing_new"})
     worker.run_session_job(None, {"session_id": "app-1", "reason": "session_end",
                                   "sdk_session_id": None, "reviewed_to": None,
                                   "project": "SwarmAI"}, runner=object())
-    # the session project is offered to the judge, never declared: a declared project
-    # is a fallback for a unit the judge gives none (contracts_v2.project_candidates)
-    assert seen and all(snap == {"session_project": "SwarmAI"} for _, snap in seen), seen
+    # the session project is where related entries are looked up and the fallback
+    # project, never a declaration
+    assert seen == [{"session_project": "SwarmAI"}]
     seen.clear()
     worker.run_session_job(None, {"session_id": "app-2", "reason": "session_end",
                                   "sdk_session_id": None, "reviewed_to": None,
                                   "project": None}, runner=object())
-    assert all(snap is None for _, snap in seen), seen
+    assert seen == [None]
 
 
 def test_a_v7_store_gains_the_project_column(tmp_path, monkeypatch):

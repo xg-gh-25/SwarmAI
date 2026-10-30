@@ -200,12 +200,11 @@ export function CognitiveDistillationFlow() {
           title={`会后复盘（30 天，Agent 自身认知写入 EVOLUTION / MEMORY：${health.data.review.agentSelfWritten}，`
             + `被撤回：${health.data.review.agentSelfWithdrawn}${health.data.review.agentSelfWithdrawnRate == null ? ''
               : `（${(health.data.review.agentSelfWithdrawnRate * 100).toFixed(0)}%）`}）`}
-          headers={['会话类型', '复盘', '产出单元', '被拒', '抽样会话', '抽样漏记率']}
+          headers={['会话类型', '复盘', '产出单元', '被拒']}
           rows={(['code', 'files', 'conversation'] as const).map((kind) => {
             const row = health.data.review!.byType[kind];
             const label = { code: '改过代码', files: '写过非代码文件', conversation: '只有对话' }[kind];
-            return [label, String(row.reviews), String(row.units), String(row.invalid), String(row.sampled),
-              row.missRate == null ? '—' : `${(row.missRate * 100).toFixed(0)}%（${row.missed}/${row.missed + row.covered}）`];
+            return [label, String(row.reviews), String(row.units), String(row.invalid)];
           })}
         />}
       </section>

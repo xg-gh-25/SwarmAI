@@ -1,18 +1,18 @@
-"""CDF S7 after-session review (core/ingestion/sources/s7_review.py; worker.run_session_job;
-the §9 agent-self rule in pipeline_v2). Design: docs/design/2026-10-29-cdf-session-review.md.
+"""CDF S7 after-session review (core/ingestion/sources/s7_review.py; worker.run_session_job).
+Design: docs/design/2026-10-30-cdf-agent-decides.md (D1, D3, D4, D10, D16).
 
 What is tested:
-- signals and the threshold are code-neutral: 3 user messages (brainstorm), 10 tool calls
-  (research), any written file (a deck), or a rule/correction; 2 chat lines do not
-  qualify; session type code / files / conversation.
-- review_session on real databases: the fork is asked through the injectable runner with
-  the flat schema; the prompt carries the review method, examples per task type, the
-  flagged messages and the evidence index; units citing the index are enqueued as S7,
-  others rejected; the attempt records type and sample; the watermark advances; nothing
-  new means no call; no sdk id or no CLI transcript means unresumable.
-- run_session_job runs the user pass always, the S2 main pass when unresumable.
-- an S7 scope=agent correction entailed by the user's words reaches EVOLUTION/MEMORY; not
-  entailed, it stays out of them.
+- no threshold: every session with a user message since the last review is reviewed,
+  one without none is passed over with no model call; the session type is a fact.
+- turn one forks the session with its own model and carries the evidence index (user
+  messages in full, labelled by kind) and the record since the last review; units citing
+  the index are enqueued as S7, others recorded invalid; no unit cap; nothing new, no call.
+- turn two, in the review's own conversation: each unit with the entries it may relate
+  to; the declarations it returns are set on the units (a malformed one stands for nothing).
+- a session that cannot be resumed is reviewed from its record alone; a long record is
+  reviewed in windows; the review's conversation file is removed.
+- the job runs the review only, and moves the watermark.
+- the user's words reach EVOLUTION only through a verbatim quote; a measurement opens it.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_cdf_v2_e2e import (  # noqa: F401  (cdf_env is a fixture)
-    SESSION, Judge, _drain, _record_person_message, cdf_env,
+    SESSION, _drain, _record_person_message, cdf_env,
 )
 from core.ingestion.sources import s7_review
 
@@ -38,24 +38,15 @@ def _tool(i, name="Read", **inp):
             "content": [{"type": "tool_use", "name": name, "input": inp}]}
 
 
-@pytest.mark.parametrize("rows,ok,kind", [
-    ([_user(1), _user(2)], False, "conversation"),                       # two chat lines
-    ([_user(1), _user(2), _user(3)], True, "conversation"),               # a brainstorm
-    ([_user(1)] + [_tool(i) for i in range(10)], True, "conversation"),   # research
-    ([_user(1), _tool(1, "Write", file_path="/w/deck.md")], True, "files"),
-    ([_user(1), _tool(1, "Edit", file_path="/w/app.py")], True, "code"),
-    ([_user(1, "不对，以后都要先出 mockup")], True, "conversation"),       # a correction
+@pytest.mark.parametrize("rows,kind", [
+    ([_user(1)], "conversation"),
+    ([_user(1), _tool(1, "Write", file_path="/w/deck.md")], "files"),
+    ([_user(1), _tool(1, "Edit", file_path="/w/app.py")], "code"),
 ])
-def test_signals_are_code_neutral(rows, ok, kind) -> None:
+def test_the_session_type_is_a_fact(rows, kind) -> None:
     sig = s7_review.signals(rows)
-    assert s7_review.qualifies(sig) is ok and s7_review.session_type(sig) == kind
-
-
-def test_sample_is_deterministic_and_about_ten_percent() -> None:
-    ids = [f"s{i}" for i in range(2000)]
-    picked = [i for i in ids if s7_review.sampled(i)]
-    assert picked == [i for i in ids if s7_review.sampled(i)]
-    assert 140 <= len(picked) <= 260
+    assert s7_review.session_type(sig) == kind and sig["user_messages"] == 1
+    assert not hasattr(s7_review, "qualifies") and not hasattr(s7_review, "MAX_UNITS")
 
 
 def _cli_transcript(tmp_path: Path, monkeypatch) -> str:
@@ -86,80 +77,215 @@ def _agent_correction(anchor: str, quote: str | None = "以后都要先出 mocku
             "user_quote": quote}
 
 
-def test_review_session_end_to_end(cdf_env, tmp_path, monkeypatch) -> None:
+class Runner:
+    """The two review turns, recorded; turn one answers *units*, turn two *relations*."""
+
+    def __init__(self, units, relations=None, fork="fork-1"):
+        self.units, self.relations, self.fork = units, relations, fork
+        self.calls: list[dict] = []
+
+    def __call__(self, resume, cwd, prompt, schema, *, fork, model):
+        self.calls.append(dict(resume=resume, cwd=cwd, prompt=prompt, schema=schema, fork=fork, model=model))
+        if schema is s7_review.RELATION_SCHEMA:
+            return (self.relations or {"relations": []}), resume
+        return {"cognition_units": self.units}, self.fork
+
+
+@pytest.fixture
+def model(monkeypatch):
+    monkeypatch.setattr(s7_review, "session_model", lambda sid, sdk: "session-model[1m]")
+
+
+def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None:
     sdk = _cli_transcript(tmp_path, monkeypatch)
     users = _conversation(cdf_env)
-    seen = {}
-
-    def runner(sdk_id, cwd, prompt, schema):
-        seen.update(sdk=sdk_id, cwd=cwd, prompt=prompt, schema=schema)
-        return {"cognition_units": [_agent_correction(f"event:{users[1]}"),
-                          _agent_correction("event:not-in-index")]}
-
-    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=runner)
+    memory = cdf_env["workspace"] / ".context" / "MEMORY.md"
+    memory.write_text(memory.read_text(encoding="utf-8").replace(
+        "## Guidelines\n", "## Guidelines\n\n- [guideline] **Mockup first** Show a mockup before writing UI code. <!-- cand:cand-m.unit -->\n", 1),
+        encoding="utf-8")
+    from core.ingestion import relations_v2
+    entry = next(e for e in relations_v2.pool(cdf_env["workspace"], None) if "Mockup first" in e.text)
+    dropped = []
+    monkeypatch.setattr(s7_review, "_drop_fork", lambda fork, original: dropped.append((fork, original)))
+    run = Runner([_agent_correction(f"event:{users[1]}"), _agent_correction("event:not-in-index")],
+                 {"relations": [{"unit": 1, "relation": "same", "target": entry.shown()}]})
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
     assert out["status"] == "reviewed" and out["units"] == 1 and out["invalid"] == 1
-    assert seen["sdk"] == sdk and seen["cwd"] == "/w"
+    first, second = run.calls
+    assert (first["resume"], first["fork"], first["cwd"], first["model"]) == (sdk, True, "/w", "session-model[1m]")
     from core.ingestion.sources import extract_llm
-    assert seen["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS, extra=("overrides",))
-    assert "overrides" not in extract_llm.unit_schema(s7_review.ALLOWED_KINDS)["properties"]["cognition_units"]["items"]["properties"]
-    prompt = seen["prompt"]
-    for needle in ("After-action review", "brainstorming", "decks", f"event:{users[1]}",
-                   "以后都要先出 mockup", "m2", 'scope "agent"'):
-        assert needle in prompt, needle
+    assert first["schema"] == extract_llm.unit_schema(s7_review.ALLOWED_KINDS)
+    assert "event_units" in first["schema"]["properties"]
+    prompt = first["prompt"]
+    index, record = prompt.split("<session-record>")
+    for needle in ("After-action review", "brainstorming", "user_quote",
+                   f'event:{users[1]} (user message): "不对，以后都要先出 mockup 再写代码"'):
+        assert needle in index, needle               # the index quotes each message in full
+    assert "好的。" in record and f"event:{users[1]}" in record      # the record, with its anchors
+    assert (second["resume"], second["fork"], second["schema"]) == ("fork-1", False, s7_review.RELATION_SCHEMA)
+    assert entry.shown() in second["prompt"] and "Unit 1:" in second["prompt"]
+    assert dropped == [("fork-1", sdk)]
 
     from core.ingestion.api import connect_rw
     conn = connect_rw()
     try:
-        inbox = conn.execute("SELECT source_v2 FROM ingestion_inbox").fetchall()
-        attempt = conn.execute("SELECT evidence_range, status FROM extraction_attempts "
-                               "WHERE source='S7'").fetchone()
+        payloads = [json.loads(r[0]) for r in conn.execute("SELECT payload FROM ingestion_inbox WHERE source_v2='S7'")]
+        attempt = conn.execute("SELECT evidence_range, status FROM extraction_attempts WHERE source='S7'").fetchone()
     finally:
         conn.close()
-    assert [r[0] for r in inbox] == ["S7"]
+    assert [p.get("same") for p in payloads] == [entry.shown()]
     rng = json.loads(attempt[0])
-    assert attempt[1] == "ok" and rng["session_type"] == "conversation" and "sampled" in rng
+    assert attempt[1] == "ok" and rng["forked"] is True and rng["model"] == "session-model[1m]"
 
     again = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=out["reviewed_to"],
-                                     runner=lambda *a: pytest.fail("nothing new to review"))
+                                     runner=lambda *a, **k: pytest.fail("nothing new to review"))
     assert again["status"] == "nothing_new"
 
 
-def test_review_needs_a_resumable_session(cdf_env, tmp_path, monkeypatch) -> None:
-    _conversation(cdf_env)
-    fail = lambda *a: pytest.fail("must not resume")  # noqa: E731
-    assert s7_review.review_session(SESSION, sdk_session_id=None, watermark=None,
-                                    runner=fail)["status"] == "unresumable"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty"))
-    assert s7_review.review_session(SESSION, sdk_session_id=str(uuid.uuid4()), watermark=None,
-                                    runner=fail)["status"] == "unresumable"
+def test_one_user_message_is_enough_and_none_needs_no_call(cdf_env, tmp_path, monkeypatch, model) -> None:
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    asyncio.run(cdf_env["db"].messages.put({"id": "r0", "session_id": SESSION, "role": "assistant",
+                                            "content": "好"}))
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
+                                   runner=lambda *a, **k: pytest.fail("no user message"))
+    assert (out["status"], out["units"]) == ("reviewed", 0)
+    _record_person_message(cdf_env, "only", "这个周报的结构以后都这样写")
+    run = Runner([])
+    assert s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=out["reviewed_to"],
+                                    runner=run)["status"] == "reviewed"
+    assert len(run.calls) == 1                     # no unit: no second turn
 
 
-def test_job_falls_back_to_s2_main_and_keeps_the_watermark(cdf_env, tmp_path, monkeypatch) -> None:
+def test_every_unit_is_enqueued(cdf_env, tmp_path, monkeypatch, model) -> None:
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    users = _conversation(cdf_env)
+    many = [{**_agent_correction(f"event:{users[1]}"), "title": f"Lesson {i}"} for i in range(19)]
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=Runner(many))
+    assert out["units"] == 19 and out["invalid"] == 0
+
+
+def test_an_unresumable_session_is_reviewed_from_its_record(cdf_env, tmp_path, monkeypatch, model) -> None:
+    users = _conversation(cdf_env)
+    run = Runner([_agent_correction(f"event:{users[1]}")], fork="record-1")
+    out = s7_review.review_session(SESSION, sdk_session_id=None, watermark=None, runner=run)
+    assert out["status"] == "reviewed" and out["units"] == 1
+    assert (run.calls[0]["resume"], run.calls[0]["fork"]) == (None, True)
+    assert run.calls[1]["resume"] == "record-1"
+    # a fork the CLI refuses (gone, too long): the same review from the record
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    tries = []
+
+    def refusing(resume, cwd, prompt, schema, *, fork, model):
+        tries.append((resume, fork))
+        if resume == sdk:
+            raise s7_review.Unresumable("No conversation found")
+        return {"cognition_units": []}, "record-2"
+    s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=refusing)
+    assert tries == [(sdk, True), (None, False)]
+
+
+def test_a_long_record_is_reviewed_in_windows(cdf_env, tmp_path, monkeypatch, model) -> None:
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    for i in range(6):
+        _record_person_message(cdf_env, f"w{i}", f"message {i} " + "x" * 300)
+    monkeypatch.setattr(s7_review, "WINDOW_CHARS", 900)
+    run = Runner([])
+    s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
+    parts = [c["prompt"] for c in run.calls]
+    assert len(parts) >= 2 and "part 1 of" in parts[0] and f"part {len(parts)} of {len(parts)}" in parts[-1]
+    assert all('"message 5 ' in "".join(parts) for _ in [0])
+
+
+def test_declarations_the_contract_refuses_stand_for_nothing() -> None:
+    from core.ingestion.contracts_v2 import SOURCE_UNIT
+    guideline = SOURCE_UNIT.validate_python({**_agent_correction("event:e"), "type": "guideline"})
+    correction = SOURCE_UNIT.validate_python(_agent_correction("event:e"))
+    ref = "0123abcd | - [guideline] **Mockup first** Show a mockup"
+    out = s7_review.apply_relations([guideline, correction], {"relations": [
+        {"unit": 1, "relation": "new", "repeats": ref},            # repeats: corrections only
+        {"unit": 2, "relation": "adds", "target": ref, "repeats": ref, "overrides": [ref]},
+        {"unit": 9, "relation": "same", "target": ref},           # names no unit
+        {"unit": 1, "relation": "same", "target": "not a ref"},   # malformed
+    ]})
+    assert out[0].repeats is None and out[0].same is None
+    assert (out[1].adds, out[1].repeats, out[1].overrides) == (ref, ref, [ref])
+
+
+def test_the_job_runs_the_review_only_and_moves_the_watermark(cdf_env, tmp_path, monkeypatch, model) -> None:
     from core.ingestion import s2_jobs, worker
     from core.ingestion.api import connect_rw
-    from core.ingestion.sources import s2_session
     _conversation(cdf_env)
-    ran = []
-    monkeypatch.setattr(s2_session, "extract_session_sync",
-                        lambda sid, passes=(), **_: ran.append(passes) or {})
     monkeypatch.setattr(s2_jobs, "_WAKER", None)
     s2_jobs.request(SESSION, "save_button")
     conn = connect_rw()
     try:
         job = s2_jobs.claim(conn)
-        out = worker.run_session_job(conn, job, runner=lambda *a: pytest.fail("no sdk id"))
-        assert out["status"] == "unresumable" and ran == [("user_utterance",), ("main",)]
-
-        sdk = _cli_transcript(tmp_path, monkeypatch)
-        ran.clear()
-        monkeypatch.setattr(s7_review, "sampled", lambda sid: False)
-        out = worker.run_session_job(conn, {**job, "sdk_session_id": sdk},
-                                     runner=lambda *a: {"cognition_units": []})
-        assert out["status"] == "reviewed" and ran == [("user_utterance",)]
+        out = worker.run_session_job(conn, job, runner=Runner([]))
+        assert out["status"] == "reviewed"
         assert conn.execute("SELECT reviewed_to FROM ingestion_s2_jobs WHERE session_id=?",
                             (SESSION,)).fetchone()[0] == out["reviewed_to"]
     finally:
         conn.close()
+    from core.ingestion.sources import s2_session
+    assert not hasattr(s2_session, "extract_session_sync")
+
+
+def test_sdk_runner_options_per_turn(tmp_path, monkeypatch) -> None:
+    """Turn one forks the session, turn two resumes the review's own conversation, a
+    record review resumes nothing; never any tool; the session's model; structured output;
+    a fork the CLI refuses is Unresumable, any other error is not."""
+    import claude_agent_sdk
+    seen = {}
+    monkeypatch.setattr("jobs.executor._get_aws_credentials", lambda: {})
+    monkeypatch.setattr("jobs.executor._resolve_claude_cli", lambda: "/bin/claude")
+    monkeypatch.setattr("core.ingestion.llm_usage.record", lambda usage: seen.setdefault("usage", usage))
+
+    def result(**over):
+        base = dict(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                    num_turns=1, session_id="fork-9", usage={"input_tokens": 5, "output_tokens": 2},
+                    structured_output={"units": []})
+        return claude_agent_sdk.ResultMessage(**{**base, **over})
+
+    def fake_query(prompt, options):
+        seen["options"] = options
+
+        async def gen():
+            yield seen.pop("reply", result())
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    assert s7_review.sdk_runner("orig", "/w", "p", {"type": "object"}, fork=True, model="m[1m]") == ({"units": []}, "fork-9")
+    opts = seen["options"]
+    assert (opts.resume, opts.fork_session, opts.tools, opts.model, opts.cwd) == ("orig", True, [], "m[1m]", "/w")
+    assert opts.output_format == {"type": "json_schema", "schema": {"type": "object"}}
+    s7_review.sdk_runner("fork-9", "/w", "p", {"type": "object"}, fork=False, model="m[1m]")
+    assert (seen["options"].resume, seen["options"].fork_session) == ("fork-9", False)
+    s7_review.sdk_runner(None, "/w", "p", {"type": "object"}, fork=True, model="m[1m]")
+    assert (seen["options"].resume, seen["options"].fork_session) == (None, False)
+    assert seen["usage"] == {"input_tokens": 5, "output_tokens": 2}
+    seen["reply"] = result(is_error=True, errors=["Prompt is too long"], session_id="orig")
+    with pytest.raises(s7_review.Unresumable):
+        s7_review.sdk_runner("orig", "/w", "p", {"type": "object"}, fork=True, model="m")
+    seen["reply"] = result(is_error=True, errors=["Prompt is too long"], session_id="fork-9")
+    with pytest.raises(RuntimeError):
+        s7_review.sdk_runner("fork-9", "/w", "p", {"type": "object"}, fork=False, model="m")
+
+
+def test_the_review_runs_on_the_sessions_own_model(tmp_path, monkeypatch) -> None:
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    path = tmp_path / "claude" / "projects" / "-w" / f"{sdk}.jsonl"
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-8"}}) + "\n")
+    from core.prompt_builder import PromptBuilder
+    seen = []
+    monkeypatch.setattr(PromptBuilder, "resolve_model", lambda self, cfg: seen.append(cfg) or f"resolved:{cfg.get('model')}")
+    from types import SimpleNamespace
+    from core import session_registry
+    monkeypatch.setattr(session_registry, "session_router",
+                        SimpleNamespace(get_unit=lambda sid: SimpleNamespace(_model_name="live-model[1m]") if sid == "live" else None))
+    assert s7_review.session_model("live", sdk) == "live-model[1m]"
+    assert s7_review.session_model("gone", sdk) == "resolved:claude-opus-4-8"
+    assert s7_review.session_model("gone", None) == "resolved:None"
 
 
 @pytest.mark.parametrize("quote,lands", [("以后都要先出 mockup 再写代码", True),
@@ -174,7 +300,7 @@ def test_agent_self_correction_reaches_evolution_only_on_the_users_words(
         "content": [{"type": "tool_use", "name": "WebFetch", "input": {"url": "x"}},
                     {"type": "tool_result", "content": "some page"}]}))
     s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
-                             runner=lambda *a: {"cognition_units": [_agent_correction(f"event:{users[1]}", quote)]})
+                             runner=lambda *a, **k: {"cognition_units": [_agent_correction(f"event:{users[1]}", quote)]})
     rows = _drain(cdf_env)
     assert rows
     context = cdf_env["workspace"] / ".context"
@@ -182,109 +308,6 @@ def test_agent_self_correction_reaches_evolution_only_on_the_users_words(
                  or "mockup before writing UI code" in (context / f"{n}.md").read_text(encoding="utf-8")
                  for n in ("EVOLUTION", "MEMORY"))
     assert landed is lands, [(r["state"], r.get("destination"), r.get("reason")) for r in rows]
-
-
-def test_button_reviews_below_the_threshold(cdf_env, tmp_path, monkeypatch) -> None:
-    sdk = _cli_transcript(tmp_path, monkeypatch)
-    _record_person_message(cdf_env, "only", "这个周报的结构以后都这样写")
-    asyncio.run(cdf_env["db"].messages.put({"id": "r0", "session_id": SESSION, "role": "assistant",
-                                            "content": "好"}))
-    monkeypatch.setattr(s7_review, "_rule_patterns", lambda: ())   # no rule signal either
-    asked = []
-    run = lambda *a: asked.append(1) or {"cognition_units": []}  # noqa: E731
-    assert s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
-                                    runner=run)["status"] == "below_threshold"
-    assert s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, force=True,
-                                    runner=run)["status"] == "reviewed"
-    assert asked == [1]
-
-
-def test_sdk_runner_forks_without_tools_and_drops_the_fork(tmp_path, monkeypatch) -> None:
-    """The options the design depends on (§16): resume a fork, no tools at all
-    (``tools=[]``; ``allowed_tools=[]`` would allow every tool), structured output; the
-    fork's own transcript is removed; a missing conversation is Unresumable."""
-    import claude_agent_sdk
-    original = _cli_transcript(tmp_path, monkeypatch)
-    fork = str(uuid.uuid4())
-    fork_file = tmp_path / "claude" / "projects" / "-w" / f"{fork}.jsonl"
-    fork_file.write_text("{}\n")
-    seen = {}
-    monkeypatch.setattr("jobs.executor._get_aws_credentials", lambda: {})
-    monkeypatch.setattr("jobs.executor._resolve_claude_cli", lambda: "/bin/claude")
-    monkeypatch.setattr("core.ingestion.llm_usage.record", lambda usage: seen.setdefault("usage", usage))
-
-    def result(**over):
-        base = dict(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
-                    num_turns=1, session_id=fork, usage={"input_tokens": 5, "output_tokens": 2},
-                    structured_output={"units": []})
-        return claude_agent_sdk.ResultMessage(**{**base, **over})
-
-    def fake_query(prompt, options):
-        seen["options"] = options
-
-        async def gen():
-            yield seen.pop("reply", result())
-        return gen()
-
-    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
-    assert s7_review.sdk_runner(original, "/w", "p", {"type": "object"}) == {"units": []}
-    opts = seen["options"]
-    assert opts.resume == original and opts.fork_session is True and opts.tools == []
-    assert opts.output_format == {"type": "json_schema", "schema": {"type": "object"}}
-    assert opts.cwd == "/w" and not fork_file.exists()
-    from jobs.bedrock import get_model_id
-    assert opts.model == get_model_id("claude-sonnet-4-6")      # Sonnet, whatever the session used
-    assert (tmp_path / "claude" / "projects" / "-w" / f"{original}.jsonl").exists()
-    assert seen["usage"] == {"input_tokens": 5, "output_tokens": 2}
-
-    seen["reply"] = result(is_error=True, errors=["No conversation found with session ID"],
-                           session_id=original)
-    with pytest.raises(s7_review.Unresumable):
-        s7_review.sdk_runner(original, "/w", "p", {"type": "object"})
-    seen["reply"] = result(is_error=True, errors=["Prompt is too long"], session_id=original)
-    with pytest.raises(s7_review.Unresumable):                   # falls back to S2
-        s7_review.sdk_runner(original, "/w", "p", {"type": "object"})
-
-
-def test_review_health_reports_miss_rate_per_session_type(cdf_env) -> None:
-    """A sampled review's S2 main units: written = missed, reinforced / already_exists
-    = covered (§12). Unsampled sessions do not count."""
-    from core.ingestion import queries
-    from core.ingestion.api import connect_rw
-    conn = connect_rw()
-    try:
-        def attempt(aid, sid, kind, sampled_flag, units):
-            conn.execute("INSERT INTO extraction_attempts(attempt_id,source,evidence_range,"
-                         "extractor_version,started_at,status,units_emitted) VALUES (?,?,?,?,?,?,?)",
-                         (aid, "S7", json.dumps({"session_id": sid, "session_type": kind,
-                                                 "sampled": sampled_flag}),
-                          "v", "2099-01-01T00:00:00", "ok", units))
-
-        def unit(uid, sid, state, reason=None, source="S2", passname="main", dest=None):
-            conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,"
-                         "payload_schema,content_hash,envelope,project_snapshot,created_at,source_v2,"
-                         "extraction_pass) VALUES (?,?,?,?,'session','{}','v','h','{}','{}',"
-                         "'2099-01-01T00:00:00',?,?)", (uid, uid, source, sid, source, passname))
-            conn.execute("INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,reason,"
-                         "destination,updated_at) VALUES (?,?,'{}',?,?,?,'2099-01-01T00:00:00')",
-                         (uid + ".u", uid, state, reason, dest))
-
-        attempt("a1", "s-code", "code", True, 3)
-        attempt("a2", "s-chat", "conversation", False, 2)
-        unit("c1", "s-code", "written")
-        unit("c2", "s-code", "reinforced")
-        unit("c3", "s-code", "rejected", "already_exists")
-        unit("c4", "s-code", "rejected", "quality")       # not final evidence either way
-        unit("x1", "s-chat", "written")                     # not sampled: ignored
-        unit("e1", "s-chat", "written", source="S7", dest='{"store": "EVOLUTION"}')
-        out = queries.review_health(conn, "2000-01-01")
-    finally:
-        conn.close()
-    code = out["by_type"]["code"]
-    assert (code["reviews"], code["units"], code["sampled"]) == (1, 3, 1)
-    assert (code["missed"], code["covered"], code["miss_rate"]) == (1, 2, 0.333)
-    assert out["by_type"]["conversation"]["miss_rate"] is None
-    assert out["agent_self_written"] == 1
 
 
 def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
@@ -299,7 +322,9 @@ def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
                     {"type": "tool_result", "content": json.dumps({"exit_code": 1, "failed": 3})}]}))
     seen = {}
 
-    def runner(sdk_id, cwd, prompt, schema):
+    def runner(sdk_id, cwd, prompt, schema, **_):
+        if schema is s7_review.RELATION_SCHEMA:
+            return {"relations": []}, sdk_id
         anchor = next(line.split()[1] for line in prompt.splitlines()
                       if "(measured exit_code)" in line)
         seen["prompt_has_value"] = "(measured exit_code): 1" in prompt
@@ -348,13 +373,3 @@ def test_review_health_counts_what_the_user_withdrew(cdf_env) -> None:
 
 
 
-def test_one_review_enqueues_at_most_max_units(cdf_env, tmp_path, monkeypatch) -> None:
-    """Every unit costs 2-5 judge calls; a review's extra units are recorded, not enqueued
-    (2026-10-29-cdf-launch §3 P2)."""
-    sdk = _cli_transcript(tmp_path, monkeypatch)
-    users = _conversation(cdf_env)
-    many = [{**_agent_correction(f"event:{users[1]}"), "title": f"Lesson {i}"}
-            for i in range(s7_review.MAX_UNITS + 4)]
-    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None,
-                                   runner=lambda *a: {"cognition_units": many})
-    assert out["units"] == s7_review.MAX_UNITS and out["invalid"] == 4

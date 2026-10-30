@@ -1,30 +1,28 @@
-"""S2 whole-session source with trusted user-utterance and tainted main passes.
+"""The session record the after-session review reads (S7), and the post-session hook
+that queues the review.
 
-The source reads every transcript page, excludes user events already claimed by S1,
-enqueues the trusted pass before the main pass, and records zero-output attempts.
+S2's own extraction (a user-words pass and a main pass) is gone (design
+2026-10-30-cdf-agent-decides D4): the session's own agent reviews it (s7_review), reading
+this record. What stays here:
 
-- ``windows`` splits a pass's input into consecutive windows of at most
-  ``WINDOW_CHARS`` serialized characters along item boundaries; one item larger than a
-  window is cut into numbered ``part`` fragments. Nothing is dropped. Each window is one
-  extraction call with its own attempt record (found in the 2026-10-28 rehearsal: 15 of
-  37 real sessions in a week were over 200K tokens, 3 over 1M, so one call per session
-  failed). A unit repeated across windows is deduplicated by the writer as usual.
+- ``windows`` splits the record into consecutive windows of at most ``limit``
+  serialized characters along item boundaries; one item larger than a window is cut into
+  numbered ``part`` fragments. Nothing is dropped.
+- ``window_roots`` registers what a window shows that the send path did not (agent and
+  tool content), so the review's read set is exactly what it saw.
+- ``_transcript_sync``, ``_input_rows``, ``_user_events_by_message``, ``_with_anchors``,
+  ``_root_ids``: the record and its citable anchors.
+- ``SessionExtractionHook``: queues the session's review (s2_jobs) when it goes idle.
 """
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 import sqlite3
-import uuid
 from typing import Any
 
-from core.ingestion import api_v2
-from core.ingestion.store import connect_ro
 
-from . import common
-from .extract_llm import EXTRACTOR_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -32,24 +30,6 @@ PAGE_SIZE = 200
 # 150,000 characters stays under a 200K-token window even if every character is CJK
 # (about one token each), with room for the prompt, schema and reply.
 WINDOW_CHARS = 150_000
-# Each main-pass window repeats up to this share of the previous one (design §12 r16.13).
-WINDOW_OVERLAP = 0.1
-# Main-pass windows extracted per session: one session cut into 273 windows (~$100).
-# The main pass reads agent and tool content (tainted by construction); the user's own
-# words go through the uncapped user-utterance pass.
-MAX_MAIN_WINDOWS = 8
-
-
-def spread(chunks: list[Any], limit: int) -> list[tuple[int, Any]]:
-    """At most *limit* of *chunks* as ``(1-based index, chunk)``, evenly spaced, the
-    first and the last always included."""
-    if len(chunks) <= limit:
-        return list(enumerate(chunks, 1))
-    if limit <= 1:
-        return [(len(chunks), chunks[-1])]
-    step = (len(chunks) - 1) / (limit - 1)
-    picks = sorted({round(i * step) for i in range(limit)})
-    return [(i + 1, chunks[i]) for i in picks]
 
 
 def windows(items: list[dict[str, Any]], key: str, *, limit: int = WINDOW_CHARS,
@@ -106,7 +86,6 @@ def windows(items: list[dict[str, Any]], key: str, *, limit: int = WINDOW_CHARS,
     return out
 
 
-_ALLOWED = ("cognition", "event", "reference")
 
 
 _S2_REF = "s2:"  # ref prefix of the inputs S2 registers itself
@@ -246,54 +225,6 @@ def _input_rows(session_id: str) -> list[dict[str, Any]]:
         return []
 
 
-def _extracted_by_user_pass(session_id: str) -> set[str]:
-    """User messages an earlier user pass of this session already covered (an ok or
-    no_unit attempt). A session job runs after every idle, and each ran the pass over
-    all the session's messages again: 18 messages extracted 9 times gave 83 units of
-    mostly the same lessons (2026-10-29). A failed attempt's messages are tried again."""
-    try:
-        conn = connect_ro()
-        try:
-            rows = conn.execute(
-                "SELECT evidence_range FROM extraction_attempts WHERE source='S2' "
-                "AND status IN ('ok','no_unit')").fetchall()
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error):
-        return set()
-    done: set[str] = set()
-    for row in rows:
-        try:
-            value = json.loads(row[0])
-        except (TypeError, ValueError):
-            continue
-        if (isinstance(value, dict) and value.get("session_id") == session_id
-                and value.get("pass") == "user_utterance"):
-            done.update(str(event) for event in value.get("events") or ())
-    return done
-
-
-def _claimed_by_s1(session_id: str) -> set[str]:
-    try:
-        conn = connect_ro()
-        try:
-            rows = conn.execute(
-                "SELECT evidence_range FROM extraction_attempts WHERE source='S1'").fetchall()
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error):
-        return set()
-    claimed: set[str] = set()
-    for row in rows:
-        try:
-            value = json.loads(row[0])
-            if value.get("session_id") == session_id and value.get("event_id"):
-                claimed.add(str(value["event_id"]).removeprefix("event:"))
-        except (TypeError, ValueError, AttributeError):
-            continue
-    return claimed
-
-
 def _root_ids(event_ids: tuple[str, ...]) -> tuple[str, ...]:
     """Resolve transcript event ids through data.db's authoritative root bindings.
 
@@ -319,148 +250,6 @@ def _root_ids(event_ids: tuple[str, ...]) -> tuple[str, ...]:
     except (OSError, sqlite3.Error) as exc:
         logger.warning("S2 read-root lookup failed; read set kept as unresolved: %s", exc)
         return tuple(event_ids)
-
-
-def _record_empty(session_id: str, extraction_pass: str,
-                  evidence_range: dict[str, Any]) -> None:
-    attempt = api_v2.ExtractionAttempt(
-        source="S2", evidence_range=evidence_range,
-        extractor_version=EXTRACTOR_VERSION,
-        attempt_id=f"attempt:{uuid.uuid4().hex}")
-    api_v2.record_extraction_attempt(attempt, status="no_unit")
-
-
-def _drop_not_self_contained(outcomes: list[Any]) -> list[Any]:
-    """Reserved for pipeline outcomes; source filtering happens before enqueue."""
-    return outcomes
-
-
-def _obviously_deictic(unit: Any) -> bool:
-    text = " ".join(str(getattr(unit, field) or "")
-                    for field in ("title", "what", "how", "why")
-                    if hasattr(unit, field)).strip().lower()
-    markers = ("按 a", "按 b", "上面", "刚才", "这个方案", "那个方案",
-               "as above", "do that", "this one", "the previous one")
-    return any(marker in text for marker in markers)
-
-
-def _windows_extracted(calls: list[Any], session_id: str) -> list[Any]:
-    """Run each window's extraction. A reply that still does not decode loses that
-    window only (its attempt is recorded as failed) and the other windows run: raising
-    failed the whole job and its retry paid for every window again. When every window
-    fails that way the cause is not one reply, so the job fails and is retried. Any
-    other error (Bedrock, the database) fails the job at once."""
-    from core.ingestion.prompts import UntypedOutput
-    outcomes: list[Any] = []
-    failed: list[UntypedOutput] = []
-    for index, extract in enumerate(calls, 1):
-        try:
-            outcomes += extract()
-        except UntypedOutput as exc:
-            logger.warning("CDF S2 %s window %s: no usable reply (%s)", session_id, index, exc)
-            failed.append(exc)
-    if calls and len(failed) == len(calls):
-        raise failed[-1]
-    return outcomes
-
-
-def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str],
-                  project_snapshot: dict[str, Any] | None, llm: Any | None) -> list[Any]:
-    from core import session_inputs
-    authored = getattr(session_inputs, "user_authored_text", None)
-    selected = [row for row in rows if row["kind"] == "user_message"
-                and row["event_id"] not in claimed]
-    anchors, parts = [], []
-    if authored is not None:
-        for row in selected:
-            text = authored(str(row["event_id"]))
-            if text:
-                anchors.append(f"event:{row['event_id']}")
-                parts.append({"event_id": row["event_id"], "text": text})
-    evidence_range = {"session_id": session_id, "pass": "user_utterance",
-                      "events": [row["event_id"] for row in selected]}
-    if not parts:
-        _record_empty(session_id, "user_utterance", evidence_range)
-        return []
-    chunks = windows(parts, "event_id")
-    calls: list[Any] = []
-    for index, chunk in enumerate(chunks, 1):
-        events = sorted({str(p.get("event_id") or p.get("part_of")) for p in chunk})
-        calls.append(functools.partial(
-            common.extract_and_enqueue,
-            "S2", session_id, json.dumps(chunk, ensure_ascii=False),
-            tuple(f"event:{event}" for event in events),
-            evidence_range={**evidence_range, "events": events,
-                            "window": index, "windows": len(chunks)},
-            session_id=session_id, read_root_ids=_root_ids(tuple(events)),
-            project_snapshot=project_snapshot, extraction_pass="user_utterance",
-            allowed_kinds=_ALLOWED, llm=llm,
-            unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None))
-    return _windows_extracted(calls, session_id)
-
-
-def _main_pass(session_id: str, transcript: list[dict[str, Any]],
-               rows: list[dict[str, Any]], claimed: set[str],
-               project_snapshot: dict[str, Any] | None, llm: Any | None) -> list[Any]:
-    owned = [row for row in rows if row["event_id"] not in claimed
-             and not str(row.get("ref") or "").startswith(_S2_REF)]
-    user_events = _user_events_by_message(owned)
-    evidence_range = {"session_id": session_id, "pass": "main",
-                      "message_count": len(transcript)}
-    if not transcript:
-        _record_empty(session_id, "main", evidence_range)
-        return []
-    # A window's read set is exactly what it shows the extractor: the session's user
-    # inputs plus this window's own agent and tool content (window_roots).
-    user_roots = _root_ids(tuple(row["event_id"] for row in owned))
-    chunks = windows(transcript, "id", overlap=WINDOW_OVERLAP)
-    picked = spread(chunks, MAX_MAIN_WINDOWS)
-    skipped = len(chunks) - len(picked)
-    calls: list[Any] = []
-    for index, chunk in picked:
-        # Each item shows the anchors it can be cited by; the allow-list is exactly the
-        # window's anchors (2026-10-29: a session-wide list of bare user event ids, with
-        # no way to tell which message each was, left 262 of 273 windows empty).
-        own = window_roots(session_id, chunk)
-        shown, evidence = _with_anchors(chunk, own, user_events)
-        roots = tuple(dict.fromkeys(user_roots + _root_ids(tuple(e for ids in own for e in ids))))
-        calls.append(functools.partial(
-            common.extract_and_enqueue,
-            "S2", session_id, json.dumps(shown, ensure_ascii=False, default=str), evidence,
-            evidence_range={**evidence_range, "window": index, "windows": len(chunks),
-                            "windows_skipped": skipped},
-            session_id=session_id, read_root_ids=roots,
-            project_snapshot=project_snapshot, extraction_pass="main",
-            allowed_kinds=_ALLOWED, llm=llm))
-    return _windows_extracted(calls, session_id)
-
-
-def extract_session_sync(session_id: str, *, project_snapshot: dict[str, Any] | None = None,
-                         llm: Any | None = None,
-                         passes: tuple[str, ...] = ("user_utterance", "main")) -> dict[str, list[Any]]:
-    """S2 passes, trusted first, in the calling thread (the session job executor).
-
-    The job runs the user-utterance pass for every session and the main pass only when
-    the session cannot be reviewed, or for the measuring sample (session review §10)."""
-    transcript = _transcript_sync(session_id)
-    rows = _input_rows(session_id)
-    claimed = _claimed_by_s1(session_id)
-    trusted = (_trusted_pass(session_id, rows, claimed | _extracted_by_user_pass(session_id),
-                             project_snapshot, llm)
-               if "user_utterance" in passes else [])
-    main = (_main_pass(session_id, transcript, rows, claimed, project_snapshot, llm)
-            if "main" in passes else [])
-    return {"user_utterance": trusted, "main": main}
-
-
-async def extract_session(session_id: str, *, project_snapshot: dict[str, Any] | None = None,
-                          llm: Any | None = None) -> dict[str, list[Any]]:
-    """Run both S2 passes in one ordered batch; the trusted pass always goes first.
-
-    The same work as extract_session_sync, awaited off the event loop. Production asks
-    through s2_jobs.request and the job executor calls extract_session_sync."""
-    return await asyncio.to_thread(extract_session_sync, session_id,
-                                   project_snapshot=project_snapshot, llm=llm)
 
 
 class SessionExtractionHook:

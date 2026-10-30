@@ -409,22 +409,15 @@ REVIEW_TYPES = ("code", "files", "conversation")
 def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
     """After-session review metrics (2026-10-29-cdf-session-review.md §12), per session type.
 
-    - reviews / units / invalid: S7 attempts since *since*.
-    - miss rate: in the sampled sessions the job also ran the S2 main pass; of its units
-      that reached a final state, the share written as new is what the review missed
-      (``written``); ``reinforced`` / ``merged`` / rejected ``already_exists`` were
-      already covered. None when nothing is final yet.
+    - reviews / units / invalid: S7 attempts since *since*. What a review missed is
+      measured by the monthly error review (brain-driven v5), not a second extraction.
     - agent_self: S7 units written to EVOLUTION or MEMORY, and how many of them the
       user withdrew (a finished user_redact of an anchor the unit's write produced).
     """
-    by_type = {kind: {"reviews": 0, "units": 0, "invalid": 0, "sampled": 0,
-                      "missed": 0, "covered": 0} for kind in REVIEW_TYPES}
-    sampled: dict[str, str] = {}
+    by_type = {kind: {"reviews": 0, "units": 0, "invalid": 0} for kind in REVIEW_TYPES}
     if not (_column_exists(conn, "extraction_attempts", "source")
             and _column_exists(conn, "ingestion_inbox", "source_v2")):
         # a pre-v2 database (only old fixtures): nothing to report
-        for entry in by_type.values():
-            entry["miss_rate"] = None
         return {"by_type": by_type, "agent_self_written": 0, "agent_self_withdrawn": 0,
                 "agent_self_withdrawn_rate": None}
     for row in conn.execute("""SELECT evidence_range, units_emitted, units_invalid
@@ -436,25 +429,6 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
         entry["reviews"] += 1
         entry["units"] += int(row[1] or 0)
         entry["invalid"] += int(row[2] or 0)
-        if rng.get("sampled") and rng.get("session_id"):
-            sampled[str(rng["session_id"])] = kind
-    for kind in set(sampled.values()):
-        by_type[kind]["sampled"] = sum(1 for k in sampled.values() if k == kind)
-    if sampled:
-        marks = ",".join("?" * len(sampled))
-        for session_id, state, reason in conn.execute(
-                f"""SELECT i.source_ref, u.state, u.reason FROM ingestion_units u
-                    JOIN ingestion_inbox i ON i.id=u.candidate_id
-                    WHERE i.source_v2='S2' AND i.extraction_pass='main'
-                      AND i.source_ref IN ({marks})""", tuple(sampled)):
-            entry = by_type[sampled[str(session_id)]]
-            if state == "written":
-                entry["missed"] += 1
-            elif state in ("reinforced", "merged") or (state == "rejected" and reason == "already_exists"):
-                entry["covered"] += 1
-    for entry in by_type.values():
-        final = entry["missed"] + entry["covered"]
-        entry["miss_rate"] = round(entry["missed"] / final, 3) if final else None
     written = conn.execute(
         """SELECT u.unit_id, w.anchors_present FROM ingestion_units u
            JOIN ingestion_inbox i ON i.id=u.candidate_id

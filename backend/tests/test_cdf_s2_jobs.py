@@ -98,9 +98,9 @@ def test_executor_waits_while_the_host_is_loaded(conn, monkeypatch) -> None:
 
 
 def test_hook_only_queues(conn, monkeypatch) -> None:
-    from core.ingestion.sources import s2_session
-    monkeypatch.setattr(s2_session, "extract_session_sync",
-                        lambda *a, **k: pytest.fail("the hook must not extract inline"))
+    from core.ingestion.sources import s2_session, s7_review
+    monkeypatch.setattr(s7_review, "review_session",
+                        lambda *a, **k: pytest.fail("the hook must not review inline"))
     asyncio.run(s2_session.SessionExtractionHook().execute(
         SimpleNamespace(deleting=False, session_id="s9")))
     assert _state(conn, "s9")[0] == "queued"

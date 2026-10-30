@@ -223,21 +223,15 @@ def test_a_request_during_a_failed_last_attempt_is_kept(cdf_env):
     conn.close()
 
 
-def test_the_watermark_is_recorded_before_the_main_pass(cdf_env, monkeypatch):
+def test_a_review_moves_the_watermark(cdf_env, monkeypatch):
     from core.ingestion import api, s2_jobs, worker
-    from core.ingestion.sources import s2_session, s7_review
+    from core.ingestion.sources import s7_review
     s2_jobs.request("s-3", "session_end")
-    calls = []
-    monkeypatch.setattr(s2_session, "extract_session_sync",
-                        lambda sid, passes, **_: calls.append(passes) or (_ for _ in ()).throw(RuntimeError("x"))
-                        if passes == ("main",) else {})
     monkeypatch.setattr(s7_review, "review_session",
                         lambda *a, **k: {"status": "reviewed", "reviewed_to": "m9", "units": 1})
-    monkeypatch.setattr(s7_review, "sampled", lambda sid: True)
     conn = api.connect_rw()
     job = s2_jobs.claim(conn)
-    with pytest.raises(RuntimeError):
-        worker.run_session_job(conn, job)
+    worker.run_session_job(conn, job, runner=object())
     assert conn.execute("SELECT reviewed_to FROM ingestion_s2_jobs").fetchone()[0] == "m9"
     conn.close()
 

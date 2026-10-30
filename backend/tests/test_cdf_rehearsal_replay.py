@@ -54,11 +54,13 @@ def test_replay_runs_one_session_end_to_end(cdf_env) -> None:
     event_ids = _record_person_message(cdf_env, "u1", "Prefer one writer for every governed file.")
     unit = _cognition("One writer", "Prefer one writer for every governed file.",
                       [f"event:{event_ids[0]}"])
+    unit["user_quote"] = "Prefer one writer for every governed file."
     report = replay_mod.replay(cdf_env["data"], cdf_env["workspace"], sources=("s2",),
-                               max_usd=1.0, llm=Extractor([unit], []), judge_factory=Judge)
+                               max_usd=1.0, llm=lambda *a, **k: {"cognition_units": [unit]},
+                               judge_factory=Judge)
     s2 = report["sources"]["s2"]
     assert s2["items"] == 1 and s2["receipts"] >= 1 and s2["errors"] == 0, s2
-    assert report["outcomes"]["S2"].get("written", 0) >= 1, report["outcomes"]
+    assert report["outcomes"]["S7"].get("written", 0) >= 1, report["outcomes"]
     assert report["stopped"] is None and report["cost_usd_estimate"] == 0.0
 
 

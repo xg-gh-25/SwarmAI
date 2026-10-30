@@ -44,9 +44,9 @@ const healthData = { lanes: { immediate: { backlog: 0, oldestWaitSeconds: null }
   lastCleanupAt: null, inboxCount: 1, inboxBytes: 100, memoryBytes: 20, evolutionBytes: 30,
   llmBySource: [{ utcDay: '2026-10-27', source: 'S2', calls: 3, inputTokens: 2400, outputTokens: 310 }],
   review: { agentSelfWritten: 2, agentSelfWithdrawn: 1, agentSelfWithdrawnRate: 0.5, byType: {
-    code: { reviews: 4, units: 9, invalid: 1, sampled: 1, missed: 1, covered: 3, missRate: 0.25 },
-    files: { reviews: 2, units: 3, invalid: 0, sampled: 0, missed: 0, covered: 0, missRate: null },
-    conversation: { reviews: 5, units: 7, invalid: 2, sampled: 1, missed: 0, covered: 2, missRate: 0 } } } };
+    code: { reviews: 4, units: 9, invalid: 1 },
+    files: { reviews: 2, units: 3, invalid: 0 },
+    conversation: { reviews: 5, units: 7, invalid: 2 } } } };
 const detailData = { candidate: { payload: { text: 'raw lesson' } }, envelope: { tainted: false },
   units: [{ unitId: 'c1.lesson', claimGroup: { text: 'lesson' }, decision: { card0: { passed: true } },
     destination: { store: 'MEMORY' }, action: 'append', reason: 'pass' }],
@@ -80,7 +80,7 @@ describe('Need You Flow tabs', () => {
     expect(await screen.findByText('2400')).toBeInTheDocument();
     // after-session review metrics, per session type (session review §12)
     expect(screen.getByText('写过非代码文件')).toBeInTheDocument();
-    expect(screen.getByText('25%（1/4）')).toBeInTheDocument();
+    expect(screen.queryByText('抽样漏记率')).not.toBeInTheDocument();   // no second extraction to sample
     expect(screen.getByText(/Agent 自身认知写入 EVOLUTION \/ MEMORY：2，被撤回：1（50%）/)).toBeInTheDocument();
   });
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""CDF rehearsal replay: run the real S2/S4/S5/S6 sources over a COPY of a workspace.
+"""CDF rehearsal replay: run the real session-review/S4/S5/S6 sources over a COPY of a workspace.
 
 Design 2026-10-26 §14 stage B, step 2 of the full rehearsal. It points the backend at
 a data dir and workspace given on the command line (a copy, never the live
 ``~/.swarm-ai``), replays the last N days through the production entry points, drains
 the worker and writer, and prints one JSON report.
 
-- S2: ``s2_session.extract_session_sync`` (what the S2 job executor runs) for every session updated in the window.
+- s2 (the session source): ``s7_review.review_session`` from the session record, no fork (the
+  copy has no CLI transcripts of its own), for every session updated in the window.
 - S4: ``ddd_refresh._recent_commits`` + ``s4_code.extract_commits`` per governed repo.
 - S5: ``governance_miner.enqueue_governance_proposals`` (the evolution optimizer cycle
   is NOT replayed: it rewrites SKILL.md files).
@@ -160,9 +161,11 @@ def _items(source: str, data_dir: Path, workspace: Path, since: datetime,
 def _enqueue(source: str, item: Any, workspace: Path, llm: Any | None) -> int:
     """Hand one item to the production entry point; return the receipts it produced."""
     if source == "s2":
-        from core.ingestion.sources.s2_session import extract_session_sync
-        result = extract_session_sync(item, llm=llm)  # what the S2 job executor runs
-        return sum(len(v) for v in result.values())
+        # the session's review from its record (the job's path for an unresumable
+        # session); *llm* is the review runner here (s7_review.Runner), the SDK if None
+        from core.ingestion.sources import s7_review
+        outcome = s7_review.review_session(item, sdk_session_id=None, watermark=None, runner=llm)
+        return int(outcome.get("units", 0))
     if source == "s4":
         from core.ingestion.sources.s4_code import extract_commits
         project, repo, rows = item

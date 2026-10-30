@@ -107,7 +107,8 @@ def test_the_review_waits_for_the_spawn_budget(monkeypatch, tmp_path):
     budget = type("Budget", (), {"can_spawn": False, "reason": "memory 91%"})()
     monkeypatch.setattr(resource_monitor, "spawn_budget", lambda alive_count=0: budget)
     passes = []
-    monkeypatch.setattr(s2_session, "extract_session_sync", lambda sid, passes=(), **_: passes.append(passes))
+    from core.ingestion.sources import s7_review
+    monkeypatch.setattr(s7_review, "review_session", lambda *a, **k: passes.append(a))
     s2_jobs.request("s-1", "session_end", sdk_session_id="sdk-1")
     conn = connect_rw()
     executor = worker.S2JobExecutor()
@@ -116,7 +117,7 @@ def test_the_review_waits_for_the_spawn_budget(monkeypatch, tmp_path):
     row = conn.execute("SELECT state,attempts,next_attempt_at,error FROM ingestion_s2_jobs").fetchone()
     conn.close()
     assert (row[0], row[1], row[3]) == ("queued", 0, None) and row[2]
-    assert passes == []                                    # the user pass did not run either
+    assert passes == []                                    # the review did not run
 
 
 def test_a_rewrite_that_keeps_size_and_mtime_is_not_served_from_the_cache(tmp_path):

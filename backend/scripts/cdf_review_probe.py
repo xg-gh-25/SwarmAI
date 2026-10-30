@@ -90,7 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     result: dict = {}
 
     async def run() -> None:
-        async for message in query(prompt=prompt, options=s7_review.review_options(sdk, cwd, schema)):
+        options = s7_review.review_options(sdk, cwd, schema, fork=True,
+                                           model=s7_review.session_model("", sdk))
+        async for message in query(prompt=prompt, options=options):
             if isinstance(message, ResultMessage):
                 result.update(fork=message.session_id, error=message.is_error,
                               errors=message.errors, usage=message.usage,

@@ -243,20 +243,6 @@ def test_an_undecodable_reply_is_called_once_more(monkeypatch):
         extract_llm.BedrockExtractor(["cognition"]).extract("p")
 
 
-def test_one_undecodable_window_does_not_fail_the_session():
-    from core.ingestion.prompts import UntypedOutput
-    from core.ingestion.sources import s2_session
-
-    def bad():
-        raise UntypedOutput("bad")
-    assert s2_session._windows_extracted([bad, lambda: ["u"]], "s") == ["u"]
-    with pytest.raises(UntypedOutput):                       # every window: not one reply
-        s2_session._windows_extracted([bad, bad], "s")
-    with pytest.raises(RuntimeError):
-        s2_session._windows_extracted([lambda: (_ for _ in ()).throw(RuntimeError("down")),
-                                       lambda: ["u"]], "s")
-
-
 # ── found in the rehearsal on a copy of real data ──────────────────────────────
 
 def test_memory_and_evolution_entries_read_as_text_not_field_names():
@@ -314,7 +300,7 @@ def test_both_extraction_prompts_state_the_length_rule_and_card0_drops_nothing_f
     prompt = extract_llm.build_prompt("S2", "text", ("event:e",), ("cognition",))
     assert f"{limit} characters" in prompt
     assert f"{limit} characters" in extract_llm.UNIT_SIZE_RULE
-    review = s7_review.build_prompt(("cognition",), s7_review.signals([]), "(index)")
+    review = s7_review.build_prompt(("cognition",), s7_review.signals([]), "(index)", "(record)")
     assert f"{limit} characters" in review
     unit = contracts_v2.SOURCE_UNIT.validate_python({
         "kind": "cognition", "type": "guideline", "scope": "world", "title": "T",
@@ -325,17 +311,13 @@ def test_both_extraction_prompts_state_the_length_rule_and_card0_drops_nothing_f
 def test_routine_operations_are_not_events_in_extraction_or_judgment():
     """TIMELINE is injected every turn: a build, a restart, an install or a dispatched step
     (rehearsal and live 2026-10-29: 6 of 10 written events) is noise there. The one
-    rule is stated by both extraction prompts and the verification card."""
-    from core.ingestion import prompts
+    rule is stated by both extraction prompts (no card judges it afterwards)."""
     from core.ingestion.sources import extract_llm, s7_review
     rule = extract_llm.EVENT_RULE
     for word in ("build", "restart", "install", "test run"):
         assert word in rule
     assert rule in extract_llm.build_prompt("S2", "text", ("event:e",), ("event",))
-    assert rule in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)")
-    event = {"kind": "event", "when": "2026-10-29", "title": "T", "what": "W", "outcome": "O",
-             "evidence": ["event:e"]}
-    assert rule.strip() in prompts.verify_prompt(event, "", [])
+    assert rule in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)", "(record)")
 
 
 def test_both_extraction_prompts_give_the_date_an_event_falls_back_to():
@@ -345,4 +327,4 @@ def test_both_extraction_prompts_give_the_date_an_event_falls_back_to():
     from core.ingestion.sources import extract_llm, s7_review
     today = datetime.now(timezone.utc).date().isoformat()
     assert today in extract_llm.build_prompt("S2", "text", ("event:e",), ("event",))
-    assert today in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)")
+    assert today in s7_review.build_prompt(("event",), s7_review.signals([]), "(index)", "(record)")

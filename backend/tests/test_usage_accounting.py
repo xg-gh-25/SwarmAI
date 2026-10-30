@@ -406,10 +406,10 @@ def test_the_orchestrator_and_the_review_tell_the_ledger_a_process_was_resumed()
     rows.clear()
     with patch("core.usage_accounting.record_sync", lambda r: rows.extend(r)), \
             patch.object(claude_agent_sdk, "query", fake_query), \
-            patch.object(s7_review, "review_options", lambda *a: SimpleNamespace(model="opus")), \
+            patch.object(s7_review, "review_options", lambda *a, **k: SimpleNamespace(model="opus")), \
             patch.object(s7_review, "_drop_fork", lambda *a: None), \
             patch("core.ingestion.llm_usage.record", lambda *a: None):
-        assert s7_review.sdk_runner("sdk-1", "/tmp", "p", {}) == {"units": []}
+        assert s7_review.sdk_runner("sdk-1", "/tmp", "p", {}, fork=True, model="opus") == ({"units": []}, "fork-1")
     assert [(r["model"], r["output"], r["cache_read"], r["cost_usd"], r["feature"]) for r in rows] == \
         [("opus", 1902, 1157, None, "cdf.s7")]
 
