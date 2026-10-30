@@ -92,7 +92,7 @@ export interface BrainSummary {
   setupProgress?: { done: number; total: number; next?: string | null } | null;
   /** project-agent.yaml: 'draft' waits for the person to confirm; 'invalid' has
    *  problems; null/absent = no file (or an old daemon). */
-  projectAgentStatus?: 'draft' | 'reviewed' | 'invalid' | null;
+  projectAgentStatus?: 'draft' | 'changed' | 'reviewed' | 'invalid' | null;
   /** health.pending split by source: escalation | paused_run | job | …. */
   pendingBySource?: Record<string, number>;
   health: BrainHealth;
@@ -204,6 +204,9 @@ export interface ProjectAgent {
   path: string;
   schema?: number;
   status?: 'draft' | 'reviewed';
+  /** whether the confirmation holds (core/project_agent.confirmation): ``changed`` =
+   *  confirmed, then the definition, a skill of its modes or its gates changed */
+  confirmation?: 'draft' | 'reviewed' | 'changed';
   reviewedAt?: string | null;
   reviewedBy?: string | null;
   summary?: string;
@@ -345,7 +348,7 @@ export interface GeneralBrain {
   name: string;
   description: string | null;
   library: { files: number; bytes: number };
-  projectAgentStatus: 'draft' | 'reviewed' | 'invalid' | null;
+  projectAgentStatus: 'draft' | 'changed' | 'reviewed' | 'invalid' | null;
   shadowed: boolean;
 }
 

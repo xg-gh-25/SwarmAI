@@ -368,6 +368,13 @@ describe('BrainMapView · Project Agent form', () => {
     expect(calls[0][0]).toContain('use full for API changes');
   });
 
+  it('a definition changed after it was confirmed says so and can be confirmed again', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed', confirmation: 'changed' };
+    openAgent();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('changed since you confirmed it');
+    expect(screen.getByTestId('bm-agent-confirm')).toBeTruthy();
+  });
+
   it('no definition yet offers to generate it from the DDD', () => {
     (DETAIL as Record<string, unknown>).projectAgent = null;
     const onDispatch = openAgent();

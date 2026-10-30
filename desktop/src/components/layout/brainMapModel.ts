@@ -216,20 +216,27 @@ export interface HubNeed {
 
 /** The General Brain's Runner Agent waits on the person (draft or problems). */
 const generalWaits = (g?: GeneralBrain | null) =>
-  !!g && (g.projectAgentStatus === 'draft' || g.projectAgentStatus === 'invalid');
+  !!g && (g.projectAgentStatus === 'draft' || g.projectAgentStatus === 'changed' || g.projectAgentStatus === 'invalid');
 
 /** The Need You row of the built-in General Brain's Runner Agent, or none. Its id never
  *  collides with a Projects/ Brain that carries the same name (`<name>-agent`). */
 export function generalNeed(g?: GeneralBrain | null): HubNeed | null {
   if (!g || !generalWaits(g)) return null;
-  const draft = g.projectAgentStatus === 'draft';
+  const s = g.projectAgentStatus;
   return { brain: g.name, kind: 'agent', id: 'builtin-general-agent', since: null, builtin: true, count: 1,
-    severity: draft ? 'setup' : 'review',
-    text: draft ? 'Runner Agent draft to confirm' : 'Runner Agent file has problems to fix' };
+    severity: s === 'invalid' ? 'review' : 'setup',
+    text: s === 'draft' ? 'Runner Agent draft to confirm' : s === 'changed' ? CHANGED_TEXT('Runner Agent')
+      : 'Runner Agent file has problems to fix' };
 }
 
-/** A Project Agent waits on the person while it is a draft (confirm) or has problems (fix). */
-const agentWaits = (b: BrainSummary) => b.projectAgentStatus === 'draft' || b.projectAgentStatus === 'invalid';
+/** A Project Agent waits on the person while it is a draft or changed since it was
+ *  confirmed (confirm), or has problems (fix). */
+const agentWaits = (b: BrainSummary) =>
+  b.projectAgentStatus === 'draft' || b.projectAgentStatus === 'changed' || b.projectAgentStatus === 'invalid';
+
+/** Confirmed, then changed (in chat, by an agent or by hand): dispatch refuses it until
+ *  the person confirms it again (core/project_agent.confirmation). */
+const CHANGED_TEXT = (who: string) => `${who} changed since you confirmed it: confirm again`;
 
 /** health.pending split by source (the attention channel's own split). An old daemon
  *  without the split counts everything as one unnamed bucket. */
@@ -271,8 +278,9 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
   runs.sort((x, y) => (x.since || '').localeCompare(y.since || ''));
   const agents: HubNeed[] = brains.filter(agentWaits).map((b) => ({
     brain: b.name, kind: 'agent', id: `${b.name}-agent`, since: null, count: 1,
-    severity: b.projectAgentStatus === 'draft' ? 'setup' : 'review',
-    text: b.projectAgentStatus === 'draft' ? 'Project Agent draft to confirm' : 'Project Agent file has problems to fix',
+    severity: b.projectAgentStatus === 'invalid' ? 'review' : 'setup',
+    text: b.projectAgentStatus === 'draft' ? 'Project Agent draft to confirm'
+      : b.projectAgentStatus === 'changed' ? CHANGED_TEXT('Project Agent') : 'Project Agent file has problems to fix',
   }));
   const order: HubNeed['kind'][] = ['runs', 'escalations', 'jobs', 'repos'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
@@ -319,6 +327,7 @@ export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): Brai
   if (b.health.liveRun) return { tone: 'live', rank: 2, text: 'Run in progress' };
   if (b.setupState === 'setting-up') return { tone: 'setup', rank: 3, text: bornText(b.setupProgress) };
   if (b.projectAgentStatus === 'draft') return { tone: 'setup', rank: 3, text: 'Project Agent to confirm' };
+  if (b.projectAgentStatus === 'changed') return { tone: 'setup', rank: 3, text: 'Project Agent to confirm again' };
   if (split.repos) return { tone: 'notice', rank: 4, text: `Reads ${plural(split.repos, 'new repository', 'new repositories')}` };
   return { tone: 'calm', rank: 5, text: '' };
 }

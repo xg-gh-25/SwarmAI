@@ -441,3 +441,29 @@ def test_the_route_endpoint_passes_the_deterministic_signals(ws, monkeypatch):
     r = TestClient(app).post("/api/swarm-out/route", json={"text": "fix the failing test",
                                                           "session_bound_project": "Other"})
     assert r.json()["brain"] == "Other" and r.json()["signal"] == "signal2_bound_repo"
+
+
+def test_every_reader_agrees_whether_a_confirmation_holds(ws):
+    """The Brain Hub (status word, definition view) and the dispatch use one rule: a
+    definition changed outside the form after it was confirmed reads "changed" in the
+    Hub, which offers to confirm again, and the dispatch refuses it until then."""
+    from core.project_agent import load_project_agent, project_agent_status
+    from core.project_agent_review import confirm
+    b = _brain(ws)
+    assert project_agent_status(b) == "reviewed" and load_project_agent(b)["confirmation"] == "reviewed"
+    assert not ts.admit(ts.build(ws, "Lib", "x", "y", placement="hive"))
+    # rewritten by hand / an agent (fields reordered): still "status: reviewed" in the file
+    doc = yaml.safe_load((b / "project-agent.yaml").read_text())
+    (b / "project-agent.yaml").write_text(yaml.safe_dump(dict(reversed(list(doc.items()))), sort_keys=False))
+    assert project_agent_status(b) == "changed" and load_project_agent(b)["confirmation"] == "changed"
+    refusals = ts.admit(ts.build(ws, "Lib", "x", "y", placement="hive"))
+    assert any("changed after it was confirmed" in r for r in refusals) and not any("draft" in r for r in refusals)
+    # a skill one of its modes uses changing counts too
+    pa = load_project_agent(b)
+    confirm(b, seen_revision=pa["revision"], reviewer="t")
+    after = ts.admit(ts.build(ws, "Lib", "x", "y", placement="hive"))      # (this fixture has no ci.yml checkout)
+    assert project_agent_status(b) == "reviewed" and not any("confirm" in r for r in after)
+    (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\n---\nchanged\n")
+    assert project_agent_status(b) == "changed"
+    _brain(ws, "Draft", doc={**DEF, "status": "draft"})
+    assert project_agent_status(ws / "Projects" / "Draft") == "draft"

@@ -112,6 +112,7 @@ function chipsOf(needs: HubNeed[]) {
 /** The General Brain card's one status: can a task that belongs to no Brain go out? */
 function generalSignal(g: GeneralBrain): { tone: BrainSignalTone; text: string } {
   if (g.projectAgentStatus === 'draft') return { tone: 'setup', text: 'Runner Agent to confirm' };
+  if (g.projectAgentStatus === 'changed') return { tone: 'setup', text: 'Runner Agent to confirm again' };
   if (g.projectAgentStatus === 'invalid') return { tone: 'review', text: 'Runner Agent has problems' };
   if (g.projectAgentStatus === 'reviewed') return { tone: 'calm', text: '' };
   // no definition: a task that belongs to no Brain cannot go out

@@ -26,7 +26,7 @@ from typing import Any, Optional
 import yaml
 
 from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, _bindings, _list_of_dicts,
-                                _mode_view, _skills, normalize, revision, source_check_current,
+                                _mode_view, _skills, confirmation, normalize, revision, source_check_current,
                                 validate)
 from core.project_agent_session import PinError, brain_dir
 
@@ -200,10 +200,11 @@ def admit(spec: dict[str, Any]) -> list[str]:
     if spec["placement"] == "hive":
         if spec["schema"] != 2:
             out.append("the definition is schema 1: rewrite it with modes (schema 2) first")
-        if spec["status"] != "reviewed":
-            out.append("the Project Agent is a draft: confirm it in the Brain Hub first")
+        state = confirmation(spec["status"], spec["source_check"])     # the Brain Hub's rule too
         check = spec["source_check"]
-        if check is None:
+        if state == "draft":
+            out.append("the Project Agent is a draft: confirm it in the Brain Hub first")
+        elif state == "changed":
             out.append("the definition was changed after it was confirmed: confirm it again in the Brain Hub")
         elif not check["ok"]:
             out.append("the source check found commands with no source in the repository: "

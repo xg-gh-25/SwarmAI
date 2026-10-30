@@ -108,6 +108,11 @@ def test_status_for_the_hub_home(tmp_path):
     assert project_agent_status(tmp_path) == "draft"
     assert m._brain_summary(tmp_path)["projectAgentStatus"] == "draft"
     f.write_text(GOOD.replace("status: draft", "status: reviewed"))
+    # marked reviewed but never checked for this revision (an edit outside the form):
+    # the dispatch refuses it, so the Hub says it waits for the person again
+    assert project_agent_status(tmp_path) == "changed"
+    from core.project_agent import check_sources
+    check_sources(tmp_path)
     assert project_agent_status(tmp_path) == "reviewed"
     f.write_text(GOOD.replace("default_profile: bugfix", "default_profile: yolo"))
     assert project_agent_status(tmp_path) == "invalid"

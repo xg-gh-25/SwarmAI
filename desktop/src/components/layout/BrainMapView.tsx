@@ -116,7 +116,8 @@ function agentLine(pa: ProjectAgent | null | undefined): string | undefined {
   if (pa === undefined) return undefined;
   if (pa === null) return 'not generated yet';
   if (pa.problems.length) return 'file has problems';
-  return `${pa.status === 'reviewed' ? 'reviewed' : 'draft'} · ${pa.defaultProfile ?? '--'}`;
+  const state = pa.confirmation ?? (pa.status === 'reviewed' ? 'reviewed' : 'draft');   // an older daemon: no confirmation
+  return `${state === 'changed' ? 'changed since confirmed' : state} · ${pa.defaultProfile ?? '--'}`;
 }
 
 /** Overview tab: the Brain map, Needs you and an Eval summary. Map parts open tabs. */

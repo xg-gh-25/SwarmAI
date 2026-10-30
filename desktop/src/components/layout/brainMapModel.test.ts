@@ -165,6 +165,16 @@ describe('brainMapModel', () => {
     expect(hubSummary([brain('B', { projectAgentStatus: 'draft' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
   });
 
+  it('a Project Agent changed after it was confirmed waits on the person, like a draft', () => {
+    const items = hubNeeds([brain('C', { projectAgentStatus: 'changed' })], null);
+    expect(items).toEqual([expect.objectContaining({ kind: 'agent', severity: 'setup',
+      text: 'Project Agent changed since you confirmed it: confirm again' })]);
+    expect(hubSummary([brain('C', { projectAgentStatus: 'changed' })], null).needsYou).toBe(1);
+    expect(brainSignal(brain('C', { projectAgentStatus: 'changed' }), null)).toMatchObject({ tone: 'setup', text: 'Project Agent to confirm again' });
+    expect(generalNeed({ name: 'General', projectAgentStatus: 'changed' } as unknown as GeneralBrain))
+      .toMatchObject({ severity: 'setup', text: 'Runner Agent changed since you confirmed it: confirm again' });
+  });
+
   it('hubNeeds: a repository a Brain started reading is a notice, not "other items"', () => {
     const items = hubNeeds([brain('R', { pendingBySource: { local_root: 3 } }, { pending: 3 })], null);
     expect(items).toEqual([expect.objectContaining({ kind: 'repos', count: 3, severity: 'notice',

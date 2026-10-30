@@ -284,7 +284,11 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
   const [notice, setNotice] = useState<string | null>(null);
   const [seenRevision, setSeenRevision] = useState(agent.revision);
   const problems = agent.problems ?? [];
-  const reviewed = agent.status === 'reviewed';
+  // the confirmation holds (core/project_agent.confirmation); an older daemon sends no
+  // confirmation: its status alone
+  const confirmation = agent.confirmation ?? (agent.status === 'reviewed' ? 'reviewed' : 'draft');
+  const reviewed = confirmation === 'reviewed';
+  const changed = confirmation === 'changed';
   const readOnly = form?.readOnly === true;
   const canEdit = !busy && !readOnly;
   const count = pending.set.size + [...pending.drop.values()].reduce((n, s) => n + s.size, 0);
@@ -450,7 +454,9 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
             ? <StatusBadge tone="warning" testid="bm-agent-status">not drafted yet</StatusBadge>
             : reviewed
               ? <StatusBadge tone="success" testid="bm-agent-status">confirmed{agent.reviewedAt ? ` · ${agent.reviewedAt.slice(0, 10)}` : ''}{agent.reviewedBy ? ` by ${agent.reviewedBy}` : ''}</StatusBadge>
-              : <StatusBadge tone="warning" testid="bm-agent-status">draft · needs your review</StatusBadge>}
+              : changed
+                ? <StatusBadge tone="warning" testid="bm-agent-status">changed since you confirmed it · confirm again</StatusBadge>
+                : <StatusBadge tone="warning" testid="bm-agent-status">draft · needs your review</StatusBadge>}
         {agent.revision && <span className="text-meta text-[var(--color-text-muted)]" data-testid="pa-revision">version {agent.revision.slice(0, 7)}</span>}
         <span className="flex-1" />
         <button className="btn-sm btn-ghost" data-testid="pa-open-file"

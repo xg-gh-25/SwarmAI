@@ -29,7 +29,8 @@ Key public symbols:
 - ``check_sources`` / ``source_check_current`` the host-only check that each command's
                            source file exists in the bound repo, stored per revision
 - ``load_project_agent``   parse + validate -> dict for the Brain Hub, or None if absent
-- ``project_agent_status`` draft / reviewed / invalid / None, for the Hub home
+- ``confirmation`` draft / reviewed / changed: whether the person's confirmation holds (every reader)
+- ``project_agent_status`` draft / changed / reviewed / invalid / None, for the Hub home
 """
 from __future__ import annotations
 
@@ -586,7 +587,8 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "revision": revision(project_dir),
         "problems": validate(doc, project_dir),
         "notes": notes(doc, project_dir),
-        "sourceCheck": source_check_current(project_dir),
+        "sourceCheck": (check := source_check_current(project_dir)),
+        "confirmation": confirmation(d.get("status", "draft"), check),
         "sourcePaths": _source_paths(d, project_dir),
         "form": _form(d, project_dir),
     }
@@ -647,12 +649,25 @@ def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:
     return out
 
 
+def confirmation(status: Any, source_check: Any) -> str:
+    """Whether the person's confirmation holds, the one rule every reader uses (the
+    dispatch admission, the Brain Hub home, the Brain map, the form): ``draft`` not
+    confirmed; ``reviewed`` confirmed and the revision then checked is the current one;
+    ``changed`` confirmed, then the definition, a skill one of its modes uses or its
+    gates changed (an edit in chat, by an agent or by hand; a save on the form makes
+    it a draft itself). A ``changed`` one waits for the person like a draft."""
+    if status != "reviewed":
+        return "draft"
+    return "reviewed" if source_check is not None else "changed"
+
+
 def project_agent_status(project_dir: Path) -> str | None:
     """The one word the Brain Hub home needs: ``draft`` (waits for the person to
-    confirm), ``reviewed``, ``invalid`` (the file has problems), or None (no file)."""
+    confirm), ``changed`` (confirmed, then changed: confirm again), ``reviewed``,
+    ``invalid`` (the file has problems), or None (no file)."""
     pa = load_project_agent(project_dir)
     if pa is None:
         return None
     if pa.get("problems"):
         return "invalid"
-    return "reviewed" if pa.get("status") == "reviewed" else "draft"
+    return pa.get("confirmation") or confirmation(pa.get("status"), pa.get("sourceCheck"))
