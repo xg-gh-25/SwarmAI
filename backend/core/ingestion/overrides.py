@@ -8,6 +8,8 @@ on the same subject, and about one in four such pairs is not a contradiction at 
 
 A declaration is ``"<8-character id> | <first line>"`` (contracts_v2.OverrideRef). It stands
 only if, deterministically:
+- the unit rests on no external evidence, and its project is the one its source fixed
+  (the session's own project for S7, the run's for S3; an S3 run must have landed);
 - the id names exactly one live entry of the unit's project DDD whose first line matches
   the declared one (so a wrong id cannot retire another entry);
 - that entry was written by CDF (it carries a ``cand:`` marker): CDF never retires what a
@@ -88,8 +90,11 @@ def _cdf_anchor(workspace: Path, path: str, cand: str) -> str | None:
 
 
 def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, source: str,
-          declared, new_root_ids) -> Checked:
-    """The anchors a unit's declared overrides may retire (see module doc)."""
+          declared, new_root_ids, tainted: bool = False, home: str | None = None) -> Checked:
+    """The anchors a unit's declared overrides may retire (see module doc). *tainted*:
+    the unit rests on external evidence (a web page, a repo file, a peer message) — it
+    never retires anything. *home*: the project the source fixed (the session's own
+    project for S7, the run's for S3); a declaration about any other project is refused."""
     from core import addressing
     from .contracts_v2 import OVERRIDE_RE, OVERRIDE_SOURCES
     from .withdrawn import normalize
@@ -102,6 +107,12 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
         return out
     if not project:
         out.refused = [{"ref": d, "reason": "no_project"} for d in declared]
+        return out
+    if tainted:
+        out.refused = [{"ref": d, "reason": "tainted"} for d in declared]
+        return out
+    if not home or home != project:
+        out.refused = [{"ref": d, "reason": "outside_home_project"} for d in declared]
         return out
     new_said = _said(conn, new_root_ids)
     for ref in declared:

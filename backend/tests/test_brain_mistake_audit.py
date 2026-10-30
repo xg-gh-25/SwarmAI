@@ -131,3 +131,9 @@ def test_the_job_is_registered_monthly():
     from jobs.system_jobs import SYSTEM_JOBS
     job = next(j for j in SYSTEM_JOBS if j.id == "brain-mistake-audit")
     assert job.type == "brain_mistake_audit" and job.schedule.split()[2:] == ["1", "*", "*"]
+
+
+def test_an_entry_written_the_day_of_the_mistake_was_not_there_before():
+    from jobs.handlers.brain_mistake_audit import _outcome
+    assert _outcome("2026-11-20", "2026-11-20", True, False) == "事先没有"
+    assert _outcome("2026-11-19", "2026-11-20", True, False) == "送到仍犯"

@@ -1012,7 +1012,7 @@ def _unified_recall_body(
         body = render_recall_body(result, project=project, graph_context=graph_context)
         if body:
             from .ingestion.usage import record_recalled_result
-            record_recalled_result(result, exclude_session_id or "")
+            record_recalled_result(result, exclude_session_id or "", project=project)
         # Structured hits from the SAME result object (the real recalled hits with
         # scores) — for the TSCC panel. Extracted here, before the caller discards
         # `result`. None-safe: on empty body the caller falls back and ignores this.

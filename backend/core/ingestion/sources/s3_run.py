@@ -81,6 +81,22 @@ def _drop_closes_unless_landed(engine: Any, units: list[Any]) -> list[Any]:
     return out
 
 
+def _drop_overrides_unless_landed(engine: Any, units: list[Any]) -> list[Any]:
+    """A run declares an override only from its own change: none when it landed no code
+    (brain-driven §2.1). The project is checked when the unit is judged. Dropped
+    declarations are logged."""
+    landing = (engine.projection() or {}).get("landing")
+    if landing in LANDED:
+        return units
+    out = []
+    for unit in units:
+        if getattr(unit, "overrides", None):
+            logger.info("S3 %s (%s): overrides ignored %s", engine.run_id, landing, unit.overrides)
+            unit = unit.model_copy(update={"overrides": None})
+        out.append(unit)
+    return out
+
+
 def enqueue_report(engine: Any) -> list[Any]:
     """Main pass: enqueue every unit of the validated five-part report, no LLM.
 
@@ -92,6 +108,8 @@ def enqueue_report(engine: Any) -> list[Any]:
              for rows in report.values() for raw in rows]
     if any(getattr(unit, "closes", None) for unit in units):
         units = _drop_closes_unless_landed(engine, units)
+    if any(getattr(unit, "overrides", None) for unit in units):
+        units = _drop_overrides_unless_landed(engine, units)
     attempt = api_v2.ExtractionAttempt(
         source="S3", evidence_range={"run_id": engine.run_id, "pass": "main"},
         extractor_version=f"{EXTRACTOR_VERSION}+report", attempt_id=f"attempt:{uuid.uuid4().hex}")

@@ -100,6 +100,13 @@ def run(workspace: Path, overrides: list[str], apply: bool) -> dict:
         report["dry_run"] = True
         return report
     from config import get_app_data_dir
+    from config import get_swarmws
+    if Path(workspace).resolve() != Path(get_swarmws()).resolve():
+        raise SystemExit("--apply works on the live workspace only (withdraw resolves anchors there)")
+    mains = {str(f.relative_to(workspace)) for f in files}
+    bad = [a for a in overrides if a.split("#", 1)[0] not in mains or "#cand:" not in a]
+    if bad:
+        raise SystemExit(f"--override takes CDF-written entries of the main files only: {bad}")
     report["backup"] = str(_backup(files, Path(get_app_data_dir())))
     withdrawn = 0
     for anchor in overrides:

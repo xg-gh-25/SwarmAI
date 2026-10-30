@@ -170,13 +170,19 @@ def test_ticked_entries_are_withdrawn_as_done_or_closed(cdf_env):
     from core.ingestion.api import connect_ro
     path = cdf_env["workspace"] / "Projects/P/2-understanding/PROJECT.md"
     path.write_text("# Project\n\n## Open Items\n\n"
-                    "- [x] **Ship the export** Done on 10-29.\n\n"
+                    "- [X] **Ship the export** Done on 10-29.\n\n"
                     "- [guideline] **Keep exports small** Still in force.\n\n"
-                    "- [x] **Tab refresh** fixed. gap kind: follow_up <!-- cand:cand-g1.unit -->\n",
+                    "- [x] **Parent item** Done.\n  - [ ] child still open\n",
                     encoding="utf-8")
-    assert gaps.withdraw_ticked(cdf_env["workspace"], files=[path]) == 2
+    imp = cdf_env["workspace"] / "Projects/P/2-understanding/IMPROVEMENT.md"
+    imp.write_text("# Improvement\n\n## What to Watch For\n\n"
+                   "- [x] **Tab refresh** fixed. gap kind: follow_up <!-- cand:cand-g1.unit -->\n",
+                   encoding="utf-8")
+    assert gaps.withdraw_ticked(cdf_env["workspace"], files=[path, imp]) == 2
     text = path.read_text(encoding="utf-8")
-    assert "- [x]" not in text and "Keep exports small" in text
+    assert "Ship the export" not in text and "Keep exports small" in text
+    assert "Parent item" in text and "child still open" in text     # an open sub-item keeps it
+    assert "Tab refresh" not in imp.read_text(encoding="utf-8")
     conn = connect_ro()
     try:
         got = sorted((r.status, r.text.split("**")[1]) for r in withdrawn.records(conn))
@@ -214,10 +220,10 @@ def _id_of(title):
     return next(u.id for u in addressing.ddd_units("P").units if title in u.text)
 
 
-def _check(conn, cdf_env, declared, *, source="S7", roots=()):
+def _check(conn, cdf_env, declared, *, source="S7", roots=(), tainted=False, home="P"):
     from core.ingestion import overrides
     return overrides.check(conn, workspace=cdf_env["workspace"], project="P", source=source,
-                           declared=declared, new_root_ids=roots)
+                           declared=declared, new_root_ids=roots, tainted=tainted, home=home)
 
 
 def test_a_declared_override_names_the_entry_it_retires(cdf_env):
@@ -314,7 +320,7 @@ def test_the_pipeline_records_a_verified_override_for_the_writer(cdf_env, monkey
     unit = _cog(type="decision", scope="project:P", topic="decision", title="Open a Hive session in an in-app overlay",
                 what="The Hive session opens in an in-app overlay.", why="The user asked for it.",
                 rejected_alternatives="a browser tab", overrides=[ref])
-    decision = run_unit_v2(_row(unit, source=source), cdf_env["workspace"], Judge())
+    decision = run_unit_v2(_row(unit, source=source, tainted=False, session_project="P"), cdf_env["workspace"], Judge())
     assert decision.decision == "write"
     got = decision.version_vector.get("overrides") or []
     assert bool(got) is retires
@@ -333,7 +339,7 @@ def test_a_unit_older_than_the_entry_it_overrides_is_not_written(cdf_env, monkey
     unit = _cog(type="decision", scope="project:P", topic="decision", title="Overlay",
                 what="The Hive session opens in an in-app overlay.", why="asked",
                 rejected_alternatives="none", overrides=["0123abcd | - [decision] **Open a Hive session**"])
-    decision = run_unit_v2(_row(unit, source="S7"), cdf_env["workspace"], Judge())
+    decision = run_unit_v2(_row(unit, source="S7", tainted=False, session_project="P"), cdf_env["workspace"], Judge())
     assert (decision.decision, decision.reason) == ("reject", "older_than_existing")
 
 
@@ -370,3 +376,95 @@ def test_no_selection_skips_an_entry_for_a_superseded_mark(tmp_path):
     for budget in (100_000, 500):             # under budget the file goes whole; over, units compete
         sel = select_context_file(path, budget=budget, estimate=len, conn=sqlite3.connect(":memory:"))
         assert "MARKED_ENTRY_b7" in sel.text, budget
+
+
+# review round 1 ── the fixes, each with the failure it prevents
+
+def test_a_tainted_or_foreign_project_unit_retires_nothing(cdf_env):
+    from core.ingestion.api import connect_rw
+    _ddd(cdf_env, _OLD)
+    ref = f"{_id_of('browser')} | - [decision] **Open a Hive session in the browser**"
+    conn = connect_rw()
+    try:
+        ok = _check(conn, cdf_env, [ref])
+        tainted = _check(conn, cdf_env, [ref], tainted=True)
+        foreign = _check(conn, cdf_env, [ref], home="OtherProject")
+        nohome = _check(conn, cdf_env, [ref], home=None)
+    finally:
+        conn.close()
+    assert ok.targets
+    assert (tainted.targets, tainted.refused[0]["reason"]) == ([], "tainted")
+    assert (foreign.targets, foreign.refused[0]["reason"]) == ([], "outside_home_project")
+    assert nohome.targets == []
+
+
+def test_a_run_that_landed_nothing_declares_no_override():
+    from types import SimpleNamespace
+    from core.ingestion.sources import s3_run
+    unit = SimpleNamespace(overrides=["0123abcd | - [decision] **X**"],
+                           model_copy=lambda update: SimpleNamespace(**{"overrides": update["overrides"]}))
+    landed = SimpleNamespace(run_id="r", projection=lambda: {"landing": "landed"})
+    unlanded = SimpleNamespace(run_id="r", projection=lambda: {"landing": "not_landed"})
+    assert s3_run._drop_overrides_unless_landed(landed, [unit])[0].overrides
+    assert s3_run._drop_overrides_unless_landed(unlanded, [unit])[0].overrides is None
+
+
+def test_an_automated_withdrawal_reaches_only_cdf_entries_of_main_files(cdf_env):
+    from core.ingestion import governed_edit
+    from core.ingestion.api import connect_rw
+    connect_rw().close()
+    ws = cdf_env["workspace"]
+    (ws / ".context/STEERING.md").write_text(
+        "# Steering\n\n## Standing Rules\n\n- [guideline] **Rule** text. <!-- cand:cand-s1.unit -->\n",
+        encoding="utf-8")
+    (cdf_env["ddd"] / "TECH.md").write_text(
+        "# Tech\n\n## Conventions\n\n- [guideline] **Human rule** written by a person.\n", encoding="utf-8")
+    from core.ingestion.units import parse_units
+    steering = parse_units(ws / ".context/STEERING.md", root=ws)[0].anchor
+    human = parse_units(cdf_env["ddd"] / "TECH.md", root=ws)[0].anchor
+    with pytest.raises(PermissionError):
+        governed_edit.withdraw(steering, "x", actor="cdf:override", status="overridden")
+    with pytest.raises(PermissionError):
+        governed_edit.withdraw(human, "x", actor="cdf:override", status="overridden")
+    assert "Human rule" in (cdf_env["ddd"] / "TECH.md").read_text(encoding="utf-8")
+
+
+def test_a_withdrawal_takes_the_entrys_detail_tail_with_it(cdf_env):
+    from core.ingestion import governed_edit
+    from core.ingestion.api import connect_rw
+    from core.ingestion.units import parse_units
+    connect_rw().close()
+    mem = cdf_env["workspace"] / ".context/MEMORY.md"
+    mem.write_text("# Memory\n\n## Guidelines\n\n"
+                   "- [guideline] **Gone** old. <!-- cand:cand-m1.unit -->\n"
+                   "  <!-- ref:0 | last:none | decay:active | source:auto -->\n"
+                   "  Detail: DailyActivity/2026-10-25.md.\n"
+                   "  <!-- valid_from: 2026-10-25 | superseded_by: null | confidence: high -->\n\n"
+                   "- [guideline] **Stays** kept.\n", encoding="utf-8")
+    anchor = next(u.anchor for u in parse_units(mem, root=cdf_env["workspace"]) if "Gone" in u.text)
+    governed_edit.withdraw(anchor, "x", actor="cdf:maintenance", status="done")
+    text = mem.read_text(encoding="utf-8")
+    assert "Gone" not in text and "Detail:" not in text and "valid_from" not in text
+    assert "**Stays** kept." in text
+
+
+def test_a_withdrawal_planned_on_a_file_that_changed_is_stale(cdf_env, monkeypatch):
+    from core.ingestion import governed_edit
+    from core.ingestion.api import connect_rw
+    from core.ingestion.units import parse_units
+    connect_rw().close()
+    mem = cdf_env["workspace"] / ".context/MEMORY.md"
+    mem.write_text("# Memory\n\n## Guidelines\n\n- [guideline] **Gone** old. <!-- cand:cand-m2.unit -->\n",
+                   encoding="utf-8")
+    anchor = parse_units(mem, root=cdf_env["workspace"])[0].anchor
+    real = governed_edit._redaction_span
+
+    def span_then_user_saves(target, a):
+        out = real(target, a)
+        target.write_text(target.read_text(encoding="utf-8") + "\n- [guideline] **User save** new.\n",
+                          encoding="utf-8")
+        return out
+    monkeypatch.setattr(governed_edit, "_redaction_span", span_then_user_saves)
+    with pytest.raises(governed_edit.StaleRevision):
+        governed_edit.withdraw(anchor, "x", actor="cdf:maintenance", status="done")
+    assert "User save" in mem.read_text(encoding="utf-8")

@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 SECTION = "What to Watch For"
 _PREFIX = re.compile(r"^- \[([^\]\s]+)\] ")
 _KIND = re.compile(r"gap kind:\s*([a-z_]+)")
+_TICKED = re.compile(r"^- \[[xX]\]")
+_OPEN_CHILD = re.compile(r"\n[ \t]+- \[ \]")
 _TITLE = re.compile(r"\*\*(.+?)\*\*")
 _NOTE_UNSAFE = re.compile(r"<!--|-->|[\r\n]+|(?i:cand):")
 CLOSED_EVENT = "gaps_closed"
@@ -193,9 +195,13 @@ def withdraw_ticked(workspace: Path, *, files: "list[Path] | None" = None) -> in
             logger.warning("withdraw_ticked: %s unreadable", path, exc_info=True)
             continue
         for unit in units:
-            if not unit.text.lstrip().startswith("- [x]"):
+            if not _TICKED.match(unit.text.lstrip()):
                 continue
-            status = "closed" if "gap kind:" in unit.text else "done"
+            if _OPEN_CHILD.search(unit.text):
+                # an open sub-item under a ticked parent is not done: left for the person
+                logger.info("withdraw_ticked: %s has an open sub-item; kept", unit.anchor)
+                continue
+            status = "closed" if (unit.section == SECTION and _gap_id(unit)) else "done"
             try:
                 withdraw(unit.anchor, "ticked done", actor="cdf:maintenance", status=status)
                 count += 1

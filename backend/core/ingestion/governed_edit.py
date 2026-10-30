@@ -398,18 +398,23 @@ def _redaction_span(target: Path, anchor: str) -> tuple[int, int, str]:
                      if item.anchor == anchor), None)
     if unit is None:
         raise ValueError("redaction anchor does not resolve")
+    import re as _re
     data = target.read_bytes()
     end = unit.byte_end
-    metadata = __import__("re").match(rb"\r?\n[ \t]*<!-- ref:[^\r\n]*-->[ \t]*(?:\r?\n)?", data[end:])
+    metadata = _re.match(rb"\r?\n[ \t]*<!-- ref:[^\r\n]*-->[ \t]*(?:\r?\n)?", data[end:])
     if metadata:
         end += metadata.end()
+        # the indented tail after the metadata line (Detail: / valid_from) is part of the
+        # entry (ddd_entry_lifecycle._scan_entry): it leaves with it
+        tail = _re.match(rb"(?:[ \t]+(?!<!-- ref:)[^\s#][^\r\n]*(?:\r?\n|$))*", data[end:])
+        end += tail.end() if tail else 0
     return unit.byte_start, end, unit.identity
 
 
 def _insert_redact_plan(conn: sqlite3.Connection, *, anchor: str, reason: str,
                         target: Path, vault: Path, original: bytes,
                         intended: bytes, identity: str, actor: str = "user",
-                        status: str = "withdrawn") -> dict[str, Any]:
+                        status: str = "withdrawn", before_hash: str | None = None) -> dict[str, Any]:
     op_id = f"user-redact:{uuid.uuid4().hex}"
     now = _iso()
     owner = conn.execute("SELECT epoch FROM ingestion_owner WHERE id=1").fetchone()
@@ -424,7 +429,7 @@ def _insert_redact_plan(conn: sqlite3.Connection, *, anchor: str, reason: str,
          archive_path,archive_hash,anchors_present,anchors_absent,relations,
          baseline_patch,step,step_owner,owner_epoch,created_at,updated_at)
         VALUES (?,'user_redact',NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (op_id, _relative(target), revision_of(target), intended, _hash(intended),
+        (op_id, _relative(target), before_hash or revision_of(target), intended, _hash(intended),
          str(vault), _hash(original), json.dumps([]),
          json.dumps([original.decode("utf-8")]), json.dumps([relation_payload]),
          json.dumps(patch), "planned", "user:redact", epoch, now, now),
@@ -523,15 +528,26 @@ def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
     workspace = Path(get_swarmws()).resolve(strict=False)
     if not target.is_relative_to(workspace) or not is_governed(target):
         raise PermissionError("redaction target is outside governed corpus")
-    start, end, parsed_identity = _redaction_span(target, anchor)
+    if actor != "user":
+        # an automated withdrawal reaches only the main cognition files, and retires as
+        # overridden only what CDF wrote (it never removes a person's entry)
+        from .gaps import main_cognition_files
+        if target not in {p.resolve(strict=False) for p in main_cognition_files(workspace)}:
+            raise PermissionError("an automated withdrawal reaches only the main cognition files")
+        if status == "overridden" and not identity.startswith("cand:"):
+            raise PermissionError("only a CDF-written entry is overridden automatically")
     data = target.read_bytes()
+    before = hashlib.sha256(data).hexdigest()
+    # the plan checks the revision of THIS read: a save after it makes the plan stale
+    start, end, parsed_identity = _redaction_span(target, anchor)
     original = data[start:end]
     intended = _without(data, start, end)
     conn = _connection()
     try:
         plan = _insert_redact_plan(conn, anchor=anchor, reason=reason, target=target,
                                    vault=_redacted_path(anchor), original=original,
-                                   intended=intended, identity=identity, actor=actor, status=status)
+                                   intended=intended, identity=identity, actor=actor, status=status,
+                                   before_hash=before)
         try:
             result = recover_redact_plan(conn, plan)
         except StaleRevision:

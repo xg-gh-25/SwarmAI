@@ -418,3 +418,22 @@ def test_provenance_refuses_a_role_marker_inside_a_units_text(tmp_path: Path, mo
         }, session_id="session-3", run_id=None,
     )
     assert (result.status, result.detail) == ("rejected", "unsafe")
+
+
+def test_a_ddd_recall_hit_is_recorded_under_its_doc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DDD hit names its doc (TECH.md); the unit lives in 2-understanding/ (ddd_paths).
+    The monthly mistake audit reads this record to say whether an entry was delivered."""
+    from core.ingestion import usage
+    from core.recall_multi import BucketedRecall
+    workspace = tmp_path / "ws"
+    tech = workspace / "Projects" / "P" / "2-understanding" / "TECH.md"
+    tech.parent.mkdir(parents=True)
+    unit = "- [pitfall] **Lock** Take the spawn lock first. <!-- cand:lock -->"
+    tech.write_text(f"# Tech\n\n## Runtime Traps\n{unit}\n", encoding="utf-8")
+    monkeypatch.setattr("config.get_swarmws", lambda: workspace)
+    monkeypatch.setattr("core.ingestion.materializer.get_swarmws", lambda: workspace)
+    recorded: list = []
+    monkeypatch.setattr(usage, "record_many_async", lambda anchors, kind, session: recorded.append(list(anchors)))
+    usage.record_recalled_result(BucketedRecall("lock", buckets={"ddd": [{"doc": "TECH.md", "content": unit}]}),
+                                 "s", project="P")
+    assert recorded == [["Projects/P/2-understanding/TECH.md#Runtime Traps#cand:lock"]]

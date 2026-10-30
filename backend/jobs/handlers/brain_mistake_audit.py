@@ -212,7 +212,7 @@ def _root_of(path: Path) -> Path:
 def _outcome(prior: Optional[str], mistake_day: str, delivered: Optional[bool], stale: bool) -> str:
     if prior is None:
         return "无法判断"
-    if prior > mistake_day:
+    if prior >= mistake_day:            # written that day is not "before" it
         return "事先没有"
     if stale:
         return "DDD 内容过时"
@@ -355,7 +355,10 @@ def run_brain_mistake_audit(config: dict | None = None, *, ask: Callable[[str, d
             if not j.get("real"):
                 continue
             item = {**m, "class": j["class"], "knowledge": j["knowledge"]}
-            cands = _candidates(ws, item, str(j.get("query") or j["knowledge"]))
+            # the correction's own entry is what the brain learned from it, not prior knowledge
+            own = f"cand:{m['id']}" if m["mode"] == "chat" else None
+            cands = [c for c in _candidates(ws, item, str(j.get("query") or j["knowledge"]))
+                     if not own or own not in c["text"]]
             verdict = _match(item, cands, ask)
             idx = int(verdict.get("match", -1))
             if idx == -2:
