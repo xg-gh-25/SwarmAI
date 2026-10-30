@@ -182,7 +182,7 @@ def _units_overlapping_lines(path: Any, start_line: int, end_line: int | None) -
     return [anchor for anchor, first, last, _text in spans if first <= high and last >= start_line]
 
 
-def _units_in_content(path: Any, content: str) -> list[str]:
+def units_in_content(path: Any, content: str) -> list[str]:
     """Return units whose complete bytes occur in recalled content."""
     if not content:
         return []
@@ -216,7 +216,7 @@ def record_recalled_result(result: Any, session_id: str, *, project: str | None 
                     doc = str(hit.get("doc") or "")
                     path = ddd_path(root / "Projects" / project, doc) if doc else None
                 if path is not None:
-                    anchors.extend(_units_in_content(path, content))
+                    anchors.extend(units_in_content(path, content))
         record_many_async(anchors, "recall_injected", session_id)
     except Exception:
         logger.debug("CDF recall usage mapping failed", exc_info=True)

@@ -118,10 +118,10 @@ def _record_use(units, kind: str) -> None:
     try:
         import os
         from pathlib import Path
-        from core.ingestion.usage import _units_in_content, record_usage
+        from core.ingestion.usage import record_usage, units_in_content
         session = os.environ.get("SWARM_APP_SESSION_ID", "")
         for u in units:
-            for anchor in _units_in_content(Path(u.path), u.text):
+            for anchor in units_in_content(Path(u.path), u.text):
                 record_usage(anchor, kind, session)
     except Exception as exc:  # noqa: BLE001 - usage bookkeeping never fails a lookup
         import logging

@@ -76,17 +76,9 @@ def _token_usage_rows(conn: sqlite3.Connection, cutover: str) -> list[dict[str, 
 
 
 def _cdf_rows(conn: sqlite3.Connection, ingestion_db: Path, cutover: str) -> list[dict[str, Any]]:
-    if not Path(ingestion_db).is_file():
-        return []
+    from core.ingestion.standing import llm_usage_rows
     cut_day = cutover[:10]
-    src = sqlite3.connect(f"file:{ingestion_db}?mode=ro", uri=True, timeout=5.0)
-    try:
-        days = src.execute("SELECT utc_day, source, input_tokens, output_tokens FROM ingestion_llm_usage "
-                           "WHERE utc_day <= ?", (cut_day,)).fetchall()
-    except sqlite3.Error:
-        return []
-    finally:
-        src.close()
+    days = llm_usage_rows(ingestion_db, cut_day)
     out: list[dict[str, Any]] = []
     for day, source, i, o in days:
         feature = f"cdf.{str(source).lower()}" if source and source != "-" else "cdf"

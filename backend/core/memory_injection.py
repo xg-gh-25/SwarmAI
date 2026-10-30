@@ -7,15 +7,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
 import re
-import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -258,73 +256,16 @@ def _unit_layer(path: Path, unit: object) -> str:
     return _EVOLUTION_LAYERS.get(unit.section, "operational")
 
 
-def _root_facts(conn: sqlite3.Connection, anchor: str) -> tuple[float, float, int, datetime | None]:
-    """Return support, refute, evidence strength, and newest evidence time."""
-    rows = conn.execute(
-        """SELECT cs.weight,cs.polarity,r.trust,r.root_kind,r.observed_at
-           FROM claim_support cs JOIN evidence_roots r ON r.root_id=cs.root_id
-           WHERE cs.claim_anchor=? AND cs.inactive=0""",
-        (anchor,),
-    ).fetchall()
-    identity = anchor.rsplit("#", 1)[-1]
-    if identity.startswith("cand:"):
-        unit_id = identity[5:]
-        initial = conn.execute(
-            """SELECT i.evidence_root_ids FROM ingestion_units u
-               JOIN ingestion_inbox i ON i.id=u.candidate_id WHERE u.unit_id=?""",
-            (unit_id,),
-        ).fetchone()
-        if initial:
-            try:
-                root_ids = [str(item) for item in json.loads(str(initial[0]) or "[]")]
-            except (TypeError, ValueError, json.JSONDecodeError):
-                root_ids = []
-            if root_ids:
-                marks = ",".join("?" for _ in root_ids)
-                rows = [*rows, *conn.execute(
-                    f"SELECT 0.0,'origin',trust,root_kind,observed_at FROM evidence_roots "
-                    f"WHERE root_id IN ({marks})", root_ids,
-                ).fetchall()]
-    support = sum(float(row[0]) for row in rows if str(row[1]) in {"support", "origin"})
-    refute = sum(float(row[0]) for row in rows if str(row[1]) == "refute")
-    strength = 0
-    observed: list[datetime] = []
-    for row in rows:
-        trust, kind = str(row[2]), str(row[3])
-        strength = max(strength, 3 if trust == "user" else 2 if trust == "measured" else
-                       1 if kind.startswith("run_") else 0)
-        parsed = _parse_time(row[4])
-        if parsed:
-            observed.append(parsed)
-    return support, refute, strength, max(observed) if observed else None
-
-
-def _score_unit(conn: sqlite3.Connection | None, path: Path, unit: object,
+def _score_unit(conn: Any, path: Path, unit: object,
                 layer: str, current: datetime, metadata: object | None) -> _RankedUnit:
-    support = refute = 0.0
-    strength = 0
-    evidence_at: datetime | None = None
-    usage_count = 0
-    last_used: datetime | None = None
-    written_at: datetime | None = None
-    if conn is not None:
-        try:
-            support, refute, strength, evidence_at = _root_facts(conn, unit.anchor)
-            usage = conn.execute(
-                "SELECT COUNT(*),MAX(at) FROM unit_usage WHERE anchor=?", (unit.anchor,),
-            ).fetchone()
-            if usage:
-                usage_count = int(usage[0] or 0)
-                last_used = _parse_time(usage[1])
-            identity = unit.anchor.rsplit("#", 1)[-1]
-            if identity.startswith("cand:"):
-                row = conn.execute(
-                    "SELECT updated_at FROM ingestion_writes WHERE unit_id=? AND step='done' "
-                    "ORDER BY updated_at DESC LIMIT 1", (identity[5:],),
-                ).fetchone()
-                written_at = _parse_time(row[0]) if row else None
-        except sqlite3.Error:
-            logger.debug("CDF injection score lookup failed for %s", unit.anchor, exc_info=True)
+    # what CDF knows about the unit, through its published interface (cdf-fixing-spec C2.2)
+    from core.ingestion.standing import unit_standing
+    st = unit_standing(conn, unit.anchor)
+    support, refute, strength = st.support, st.refute, st.strength
+    evidence_at = _parse_time(st.evidence_at)
+    usage_count = st.used
+    last_used = _parse_time(st.last_used)
+    written_at = _parse_time(st.written_at)
     metadata_times = []
     if metadata is not None:
         metadata_times = [_parse_time(getattr(metadata, name, None))
@@ -359,21 +300,13 @@ def _render_selected(ranked: list[_RankedUnit], selected: set[str]) -> str:
     return "\n\n".join(parts)
 
 
-def _latest_selection(conn: sqlite3.Connection, file_path: str):
-    return conn.execute(
-        "SELECT file_hash,selected_anchors,score_snapshot_version,computed_at,omitted_count "
-        "FROM injection_selection WHERE file_path=? ORDER BY id DESC LIMIT 1",
-        (file_path,),
-    ).fetchone()
-
-
 def select_context_file(
     path: Path,
     *,
     budget: int,
     estimate: Callable[[str], int],
     now: datetime | date | None = None,
-    conn: sqlite3.Connection | None = None,
+    conn: Any = None,
 ) -> Selection:
     """Select MEMORY/EVOLUTION whole units without any user-query input.
 
@@ -388,14 +321,10 @@ def select_context_file(
     file_hash = hashlib.sha256(raw).hexdigest()
     current = _utc_datetime(now)
     file_path = str(path.resolve(strict=False))
+    from core.ingestion import standing
     owned = conn is None
     if owned:
-        try:
-            from core.ingestion.store import connect_rw
-            conn = connect_rw(busy_timeout_ms=500)
-        except (OSError, sqlite3.Error):
-            conn = None
-            logger.debug("CDF injection selection store unavailable", exc_info=True)
+        conn = standing.connect(write=True)
 
     from core.ingestion.units import parse_units
     units = parse_units(path, root=path.parent.parent)
@@ -411,25 +340,20 @@ def select_context_file(
     unscored = [_RankedUnit(unit, _unit_layer(path, unit), 0.0, 0,
                             datetime(1970, 1, 1, tzinfo=timezone.utc)) for unit in visible]
 
-    cached = None
-    if conn is not None:
-        try:
-            cached = _latest_selection(conn, file_path)
-        except sqlite3.Error:
-            logger.debug("CDF injection selection cache lookup failed", exc_info=True)
+    cached = standing.latest_selection(conn, file_path)
     if cached is not None:
-        cached_at = _parse_time(cached[3])
-        if (str(cached[0]) == file_hash and cached_at is not None
+        cached_at = _parse_time(cached.computed_at)
+        if (cached.file_hash == file_hash and cached_at is not None
                 and cached_at.date() == current.date()
-                and str(cached[2]) == SCORE_SNAPSHOT_VERSION):
-            anchors = tuple(str(item) for item in json.loads(str(cached[1])))
+                and cached.version == SCORE_SNAPSHOT_VERSION):
+            anchors = cached.anchors
             selected = set(anchors)
             rendered = _render_selected(unscored, selected)
             full = len(selected) == len(unscored)
             text = _prompt_form(raw.decode("utf-8")) if full else rendered
             if owned and conn is not None:
                 conn.close()
-            return Selection(text, int(cached[4]), estimate(text), anchors, False)
+            return Selection(text, cached.omitted, estimate(text), anchors, False)
 
     ranked = [_score_unit(conn, path, unit, _unit_layer(path, unit), current,
                           metadata_by_anchor.get(unit.anchor)) for unit in visible]
@@ -473,41 +397,31 @@ def select_context_file(
                     if item.unit.anchor in selected)
     omitted = len(ranked) - len(anchors)
     used = estimate(text)
-    if conn is not None:
-        try:
-            conn.execute(
-                """INSERT INTO injection_selection(
-                     file_path,file_hash,selected_anchors,score_snapshot_version,computed_at,omitted_count
-                   ) VALUES(?,?,?,?,?,?)""",
-                (file_path, file_hash, json.dumps(anchors, ensure_ascii=False),
-                 SCORE_SNAPSHOT_VERSION, current.isoformat(), omitted),
-            )
-            conn.commit()
-        except sqlite3.Error:
-            logger.debug("CDF injection selection record failed", exc_info=True)
+    standing.record_selection(conn, file_path=file_path, file_hash=file_hash, anchors=anchors,
+                              version=SCORE_SNAPSHOT_VERSION, computed_at=current.isoformat(),
+                              omitted=omitted)
     if owned and conn is not None:
         conn.close()
     return Selection(text, omitted, used, anchors, True)
 
 
-def recorded_selection(path: Path, *, conn: sqlite3.Connection | None = None) -> tuple[str, ...] | None:
+def recorded_selection(path: Path, *, conn: Any = None) -> tuple[str, ...] | None:
     """Return the latest anchors for the current file hash, without creating a DB."""
+    from core.ingestion import standing
     path = Path(path)
     if not path.is_file():
         return None
     owned = conn is None
     if owned:
-        try:
-            from core.ingestion.store import connect_ro
-            conn = connect_ro()
-        except (OSError, sqlite3.Error):
+        conn = standing.connect()
+        if conn is None:
             return None
     try:
-        row = _latest_selection(conn, str(path.resolve(strict=False)))
-        if row is None or str(row[0]) != hashlib.sha256(path.read_bytes()).hexdigest():
+        row = standing.latest_selection(conn, str(path.resolve(strict=False)))
+        if row is None or row.file_hash != hashlib.sha256(path.read_bytes()).hexdigest():
             return None
-        return tuple(str(item) for item in json.loads(str(row[1])))
-    except (OSError, sqlite3.Error, TypeError, ValueError, json.JSONDecodeError):
+        return row.anchors
+    except OSError:
         return None
     finally:
         if owned and conn is not None:

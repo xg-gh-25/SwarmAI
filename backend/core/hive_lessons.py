@@ -98,25 +98,15 @@ def collect(session_id: str, exclude: Optional[set] = None) -> dict[str, Any]:
     (the same first ``MAX_LESSONS`` on every request), each with its inbox ``id``;
     ``exclude``: inbox ids to leave out (already sealed into the run's record)."""
     from core.hive_bundle import SESSION_RE
-    from core.ingestion.store import connect_ro
+    from core.ingestion import standing
     if not SESSION_RE.fullmatch(session_id or ""):
         raise ValueError("bad session")
-    try:
-        conn = connect_ro()
-    except (FileNotFoundError, OSError):
+    conn = standing.connect()
+    if conn is None:
         return {"lessons": [], "truncated": False}
     try:
-        runs = [r[0] for r in conn.execute(
-            "SELECT source_ref FROM ingestion_inbox WHERE source_v2='S3' GROUP BY source_ref "
-            "ORDER BY MAX(created_at) DESC LIMIT ?", (MAX_RUNS,))]
-        owned = [r for r in runs if _created_by(r, session_id)]
-        kinds = ",".join("?" for _ in KINDS)
-        in_runs = ",".join("?" for _ in owned) or "NULL"
-        rows = conn.execute(
-            f"SELECT id, source_v2, payload FROM ingestion_inbox "
-            f"WHERE unit_kind IN ({kinds}) AND extraction_pass='main' AND ("
-            f"(source_v2 IN ('S2','S7') AND source_ref=?) OR (source_v2='S3' AND source_ref IN ({in_runs}))) "
-            f"ORDER BY created_at, id", (*KINDS, session_id, *owned)).fetchall()
+        owned = [r for r in standing.recent_run_refs(conn, MAX_RUNS) if _created_by(r, session_id)]
+        rows = standing.lesson_rows(conn, KINDS, session_id, owned)
     except Exception as exc:  # noqa: BLE001 — an older Hive schema: nothing to give
         logger.warning("hive_lessons: inbox unreadable (%s)", type(exc).__name__)
         rows = []
@@ -427,16 +417,13 @@ def states(candidates: list[str]) -> dict[str, int]:
     ids = list(dict.fromkeys(_strs(candidates)))[:MAX_LESSONS]
     if not ids:
         return out
-    from core.ingestion.store import connect_ro
-    try:
-        conn = connect_ro()
-    except (FileNotFoundError, OSError):
+    from core.ingestion import standing
+    conn = standing.connect()
+    if conn is None:
         out["pending"] = len(ids)
         return out
     try:
-        marks = ",".join("?" for _ in ids)
-        rows = conn.execute(f"SELECT candidate_id, state FROM ingestion_units WHERE candidate_id IN ({marks})",
-                            ids).fetchall()
+        rows = standing.unit_states(conn, ids)
     except Exception as exc:  # noqa: BLE001 — unreadable: shown as not judged
         logger.warning("hive_lessons: lesson states unreadable (%s)", type(exc).__name__)
         rows = []
