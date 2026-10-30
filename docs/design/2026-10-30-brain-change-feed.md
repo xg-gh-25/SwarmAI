@@ -3,7 +3,7 @@ title: Brain 学到了什么 —— 按三层七类显示 CDF 写入的知识，
 created: 2026-10-30
 updated: 2026-10-30
 project: SwarmAI
-status: 待确认（r2：只保留撤回；撤回即删除；按三层七类分组；不设已看状态）
+status: 待确认（r3：撤回存档，作为 CDF 误写的案例；撤回失败的处理）
 follows: 2026-10-26-swarm-cognitive-distillation-flow.md（知识只由 CDF 写入，全自动）；2026-10-29-cdf-post-launch.md
 ---
 
@@ -135,6 +135,46 @@ Brain 里有客户数据，工作区曾挂过公开 remote（STEERING #19）。
 
 **不做恢复界面。** 原文备份在 `state/redacted/`，需要时手工找回；确认框里如实说明。
 
+**落盘前在锁内重新定位。** 现在 `redact` 在拿文件锁之前就算好了"删掉后的文件"（:506–:513），锁内只比对
+哈希；如果这期间 CDF 往同一个文件写了一条，落盘时抛 `StaleRevision`。它不是 `ValueError`，路由
+（`routers/ingestion_redact.py` :52）接不住，用户看到 500，备份已写、条目还在、日志停在 `archive_applied`。
+改为：在 `md_lock` 内重新读文件、按身份重新定位这一条、重新算出要写的内容再落盘；条目在锁内已经找不到
+（被别的操作删了或改了身份），返回 409"这条已经变了，请刷新"，不写备份、不留半截日志。
+
+### 3.5b 撤回存档（r3）
+
+被用户撤回的条目，就是 CDF 判断错、不该写进来的知识：误写（false positive）的现成案例。每一次撤回存一份
+**不过期**的完整记录，给两个读者用：Brain 页上的撤回统计，和 CDF 的批量评测。
+
+**存在哪：扩展现有的 `redactions` 表，不新建表。** 它现在只有 anchor、时间、原因、备份路径
+（`api_v2.py` :81；`governed_edit.py` :467 写入），**没有任何读者**。加这些列，在撤回的同一个事务里写入：
+
+| 列 | 内容 | 来自 |
+|---|---|---|
+| `unit_id` | CDF 单元 id（anchor 里的 `cand:<id>`；不是 CDF 写的条目为空） | anchor |
+| `brain` | 所属 Brain：项目名、`General`，或 `.context`（AI 自己的记忆） | anchor 的路径 |
+| `target_path`、`section` | 写在哪 | anchor |
+| `entry_type`、`layer` | 七类之一和它的层 | 解析条目 |
+| `title`、`text` | 条目原文（完整，不截断） | 撤回前的条目 |
+| `written_at` | 写入时间 | 写入记录 / eval 记录（§3.4） |
+| `judge_record` | CDF 当初为什么写它：来源、证据、各卡答案、去向 | 撤回时从 live 表取；已过 30 天的从 `ingestion_eval_log` 取；都没有为空 |
+| `reason` | 用户填的原因（已有） | 撤回时 |
+
+判官记录要在撤回时就复制下来：live 表 30 天、eval 记录 180 天后都会被清理（`worker.py` :608，
+`eval_log.py` :23），不复制，半年后就不知道它为什么被写进来。`redactions` 不参与任何清理；撤回是少数
+用户动作，量很小。`ingestion.db` 已纳入备份（CDF 设计 §17.10）。
+
+**读者 1：Brain 页的撤回统计。** "学到了什么"页底部一行灰字："撤回过 N 条（共写入 M 条）· 查看"。
+点开是只读列表：标题、类型、写入时间、撤回时间、原因、来自哪次对话。没有恢复按钮。
+
+**读者 2：CDF 评测。** `eval_log.export` 增加一类记录 `{"stage": "judge", "origin": "withdrawn",
+"label": "user_withdrawn", ...}`，带判官记录和用户原因；`scripts/cdf_batch_eval.py` 把它当作一个独立层
+抽样，用来看判官的误写率和误写的模式。**不自动生成 golden case**（`s_golden-case`："Nothing creates
+cases automatically"）：要固化成回归用例时由人挑选，经 `s_golden-case` 加入。
+
+**同一个"撤回"只有一个来源。** Flow 健康里的"被用户撤回的比例"（`queries.py` `review_health` :531）现在
+读写入记录里 `user_redact` 的 `relations`；改为读 `redactions`，与 Brain 页、评测导出用同一份数据（P8）。
+
 ### 3.6 接口
 
 - `GET /api/ddd/brains/{name}/knowledge?since=week|month|all` →
@@ -164,6 +204,8 @@ Brain 里有客户数据，工作区曾挂过公开 remote（STEERING #19）。
 | 保留"知道了"和已看集合（r1） | 知识自动进来、已经生效，"知道了"不改变任何东西，只是在维护一个状态（用户 r2） |
 | 撤回后拦截再学（读 `redactions`） | 干预自主流程；同一知识有新证据时本该被学到（用户 r2） |
 | 撤回保留墓碑 | 墓碑没有读者，还留在文件里被注入、被召回；用户要的是删除 |
+| 撤回存档另建一张表 | `redactions` 已经是撤回的记录且没有读者，扩展它即可，避免两份撤回事实 |
+| 撤回自动变成 golden case | 产品规则：不自动生成用例；由人从导出里挑 |
 
 ## 5. 删除
 
@@ -199,6 +241,10 @@ Brain 里有客户数据，工作区曾挂过公开 remote（STEERING #19）。
 8. 一个文件不是 UTF-8 的 Brain，`knowledge` 不失败（`parse_units` 严格按 UTF-8 读，`units.py` :224；逐个
    文件捕获解码错误，跳过并记日志）。
 9. 前端：视图、文档计数、Brain Map 计数都从 `knowledge` 来；条目文字被转义；`tsc` 通过。
+10. 撤回时 CDF 恰好写了同一个文件：撤回仍然成功（锁内重新定位），或返回 409；不会 500，不留半截日志。
+11. 撤回存档：`redactions` 一行带齐 §3.5b 的列；判官记录在 live 表和 eval 记录都过期后仍在；Brain 页
+    统计和 Flow 的撤回比例数字一致。
+12. `eval-export` 输出里有这条 `origin=withdrawn` 的记录，带用户原因；golden set 没有新增用例。
 
 每条修复用 `scripts.mutation_check` 验证：去掉修复测试变红。
 
