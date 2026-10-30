@@ -817,6 +817,8 @@ class IngestionWorker:
 
     async def _sleep(self, seconds: float) -> None:
         self.wake_event.clear()
+        if self.stop_event.is_set():
+            return          # a stop asked during the pass: its wake was just cleared
         try:
             await asyncio.wait_for(self.wake_event.wait(), timeout=seconds)
         except asyncio.TimeoutError:
