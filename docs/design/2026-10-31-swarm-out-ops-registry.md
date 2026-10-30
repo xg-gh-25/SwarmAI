@@ -2,8 +2,8 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "Swarm Out 能力登记表：一张操作表、从表生成的门、写清楚它挡不住什么"
-status: draft r2（r1 经一次零上下文审查后按原因重写；待 XG 决定 §9）
-related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.6 Conductor、§5.8 代答、P0-c）
+status: r3 — 第一阶段范围和 ⑤ 已定（XG 2026-10-31）；第二阶段排期、devtools 待定（§9）
+related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.5 Conductor、§5.8 代答、P0-c）
 ---
 
 # Swarm Out 能力登记表
@@ -30,7 +30,7 @@ related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swa
 | 人（桌面 App） | HTTP `/api/swarm-out/*`、`/api/swarm-out/remote/*`、`/api/hive/*` | `desktop/src/services/swarmOut.ts`、`services/remoteSession.ts` 等 |
 | owner 的 agent | Bash 跑 `scripts.swarm_out`（`backend/scripts/swarm_out.py:102-128`），经本机 HTTP 打同一组路由 | route / spec / dispatch / runs / hives |
 | 非 owner 的 channel agent | 不允许：`security_hooks.owner_command_denial`（:6333）对命令里出现 `swarm[_-]?out` 一律拒绝，CLI 也按 `RESTRICTED_ENV` 自拒（:127） | |
-| 后端内部改状态的调用方 | 将来 Swarm Run 的 Conductor 调 `dispatch_spec`（swarm-run §5.6）、代答提问（§5.8 B） | 今天没有；其余内部 import（`attention_authority`、`routers/usage.py:55`、`routers/chat.py:412,977`、`channels/gateway.py:1950`）都是读 |
+| 后端内部改状态的调用方 | 将来 Swarm Run 的 Conductor 调 `dispatch_spec`（swarm-run §5.5）、代答提问（§5.8 B） | 今天没有；其余内部 import（`attention_authority`、`routers/usage.py:55`、`routers/chat.py:412,977`、`channels/gateway.py:1950`）都是读 |
 
 ### 2.2 操作
 
@@ -152,15 +152,36 @@ class Op:
 ### 5.4 两个便宜的补洞（独立于登记表，先做）
 
 - **①** answer 路由进门（第 1 步，今天手写也行，第 3 步被生成的门替换）。
-- **⑤ 不是免费的：** "在浏览器打开"这个入口存在的理由，正是给需要同源 fetch 的报告用
-  （`HtmlRenderer.tsx:8-11` 注释）。三种做法：
-  - a. raw 路由对 `text/html` 加 `Content-Security-Policy: sandbox allow-scripts`（不给 allow-same-origin）：
-    堵住，但这类报告在浏览器里也取不到数据了；
-  - b. HTML 换一个专门的 origin（另一个端口，只读、无 API）：堵住且报告能 fetch 那个 origin 上的文件，改动大一些；
-  - c. 不改，在安全说明里写明。
-  推荐 b；要最快就 a。由 XG 定（§9）。
+- **⑤ 定为 b：HTML 在浏览器里走一个只放文件的 origin**（XG 2026-10-31；a 和 c 不做）。见 §5.5。
 
-### 5.5 暂不做（r1 有，r2 去掉）
+### 5.5 ⑤ 的做法：只读内容 origin
+
+**现在（读过）：** 应用内预览用 `<iframe sandbox="allow-scripts allow-popups" src={rawUrl}>`
+（`HtmlRenderer.tsx:246-256`），页面是不透明 origin，碰不到 daemon，这一路已经安全。露出的只有"在浏览器打开"
+（`HtmlRenderer.tsx:155-157` 的 `openExternal(rawUrl)`）：`rawFileUrl` 指向 daemon 的 `/api/workspace/file/raw?path=…`
+（`file-viewer/utils/rawFileUrl.ts`），浏览器里这个页面和整个 API 同源。这个入口最初是为了替代渲染不稳定的
+内嵌方式（DDD `95facf86`），不是为了让报告调 API。另外，因为路径放在查询串里，报告里的相对路径（`./data.json`、
+`./img/a.png`）在今天的浏览器打开里本来就解析错。
+
+**做法：**
+- daemon 多监听一个只读端口（桌面模式；dev 和 Hive 不开）：同一进程里第二个 `uvicorn.Server`，挂一个只有一条
+  路由的小 ASGI 应用：`GET /f/<编码后的绝对路径>`，复用 `_resolve_file_path` 和 50 MB 上限
+  （`routers/workspace_api.py:1562-1586`），只读，不挂任何 API、不发 CORS 头。端口默认 daemon 端口 + 1，
+  被占用就换一个空闲端口。
+- 路径放在 URL 路径里而不是查询串里，所以报告里的相对链接和 fetch 解析到同目录的文件，能用了。
+- 前端问一次地址：`GET /api/workspace/content-origin` → `{base}`；`HtmlRenderer` 的"在浏览器打开"改用
+  `contentFileUrl(path)`。应用内 iframe 不变（已经是不透明 origin），图片、PDF、音视频不变。
+- 兜底：daemon 的 `/api/workspace/file/raw` 返回 `text/html` 时加 `Content-Security-Policy: sandbox allow-scripts
+  allow-popups`（不给 allow-same-origin）。应用内 iframe 本来就有这个 sandbox，不受影响；以后任何地方再在顶层打开
+  这个 URL，也拿不到 API 的同源。
+- 内容 origin 上的页面仍可以向 daemon 发跨源的"简单请求"（和今天用 `file://` 打开 HTML 一样，
+  `FileEditorCore.tsx:1549`）。命令路由要带 `so_` 加 12 位十六进制的单号，猜不到；其余路由的跨站请求问题
+  是平台级的，不在本文。
+
+**要验证（实现第一步就做）：** WKWebView / 系统浏览器打开 `http://localhost:<内容端口>/f/…` 能正常渲染；
+daemon 和内容端口一起起停（launchd 重启、`backend.json`）；Internal 实例（18421）不撞端口。
+
+### 5.6 暂不做（r1 有，r2 去掉）
 
 - **HTTP 上的 `authorize` 和 `@op` 装饰器：** 第一阶段分不出人和 agent，它什么都不拦，只增加机制。等第二阶段
   有了身份再加。
@@ -200,7 +221,7 @@ Swarm Run 的新操作直接进表：`internal:conductor` 能调 `task.route / t
 ## 8. 分步和验证计划
 
 **分步**
-1. 补洞：answer 路由进门（①）；⑤ 按 §9 的选择。
+1. 补洞：answer 路由进门（①）；⑤ 内容 origin 加 raw 路由的 HTML 兜底 CSP（§5.5）。
 2. `core/swarm_out_ops.py` 登记 §2.2 全部操作（`/api/hive/*` 逐条定调用方）；§5.3 完整性测试。
 3. 门从表生成；删掉手写的 Swarm Out 正则；`hive.credentials` 等进门。
 4. 第二阶段验证（§6），通过后单独设计。
@@ -212,17 +233,20 @@ Swarm Run 的新操作直接进表：`internal:conductor` 能调 `task.route / t
 2. 每个人专用 op 的 curl 变体被门拒绝；owner_agent 的读操作不被拒。
 3. 非 owner 的 channel 会话里任何含 swarm-out 字样的命令被拒（现有行为，加测试）。
 4. CLI 子命令 ⊆ owner_agent 的 op。
-5. ⑤ 按选定的做法：HTML 预览在浏览器里拿不到 daemon API 的同源（a / b），其他类型不变。
+5. ⑤：内容端口只响应 `GET /f/…`（任何 `/api/*` 返回 404）；"在浏览器打开"的 URL 指向内容 origin；
+   报告里的相对路径解析到同目录文件；daemon 的 raw 路由对 `text/html` 带 sandbox CSP，其他类型不带。
 6. 现有 Swarm Out、hive、run_owner_gate 测试不变绿。
 
 **审查：** 本文已过一次零上下文审查（r1）；第二轮只在前提再变时做。实现后 security（门的生成和规范化）+
 correctness，每类最多两轮。
 
-## 9. 待 XG 决定
+## 9. 决定
 
-1. 第一阶段范围：Swarm Out + `/api/hive/*`（推荐），还是连同 ddd_brain / ingestion_redact / pipelines decision
-   的人专用操作一起登记。
-2. 第二阶段（人签名）要不要现在排期做验证：它是平台级的，影响所有"只有人能做"的操作，也是 Swarm Run
-   P0-c 的前提。
-3. 发布版的 devtools 是否关掉（和第二阶段相关，也独立于它）。
-4. ⑤ 选 a / b / c（§5.4）。
+**已定（XG 2026-10-31）**
+1. 第一阶段范围：Swarm Out + `/api/hive/*`。ddd_brain / ingestion_redact / pipelines decision 的人专用操作不在
+   本阶段，等第二阶段的身份方案一起考虑。
+2. ⑤：方案 b，只读内容 origin（§5.5）。
+
+**待定**
+3. 第二阶段（人签名）要不要现在排期做验证：平台级，影响所有"只有人能做"的操作，也是 Swarm Run P0-c 的前提。
+4. 发布版的 devtools 是否关掉（和第二阶段相关，也独立于它）。
