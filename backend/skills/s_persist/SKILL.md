@@ -169,7 +169,9 @@ printf %s '{"kind":"cognition","type":"guideline","scope":"world","title":"<comp
 ```
 
 The CLI validates that the evidence is the latest user event of this turn and
-allows at most three units for it. A cron, auto-nudge, or injected turn has no
+allows at most three units for it. A unit that does not fit the contract comes back as
+its own `{"status": "rejected", "unit": N, "detail": "<field>: <why>"}` line and the CLI
+exits 2: fix the field it names and submit that unit again. A cron, auto-nudge, or injected turn has no
 eligible user event and must not call S1. Relay the CLI echo to the user
 **unchanged**, including its complete text, actual destination, and hint. A timeout
 means the candidate is visible in Cognitive Distillation Flow, not that it failed.
@@ -181,7 +183,9 @@ means the candidate is visible in Cognitive Distillation Flow, not that it faile
 - **Current evidence** — pass `--evidence last-user`; never cite an older turn.
 - **No pre-routing** — scope and project context are hints; CDF owns the final destination.
 - **Governance detection** — behavioral governance still follows its explicit promotion path.
-- **Project context** — include the relevant project hint when known; do not invent one.
+- **Project context** — a unit about one project says so in its scope: `"scope":"project:<name>"`
+  plus `"topic"` (`decision` / `product` / `architecture` / `lesson`); there is no separate
+  project field (an unknown field refuses the unit). Do not invent a project.
 
 ## Verification
 

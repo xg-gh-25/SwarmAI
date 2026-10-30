@@ -17,7 +17,8 @@ system Python:
   the host.
 - ``ingest submit --source S1 --evidence <event-id|last-user> --payload-json JSON`` —
   enqueue one or more ``contracts_v2`` units tied to the current user turn; optional
-  ``--wait N`` polls the stored outcome. It never processes work.
+  ``--wait N`` polls the stored outcome. Prints one line per unit (a refused one with
+  the reason) and exits 2 when any unit was refused. It never processes work.
 - ``ingest wake [--wait N]`` — nudge the daemon's CDF worker and print the 24h Flow
   overview (s_memory-distill's manual trigger). It never processes work either.
 - ``py <script.py> [args]`` / ``py -m <module> [args]`` / ``py -c <code> [args]`` — run
@@ -290,20 +291,32 @@ def run_ingest(argv: "list[str]") -> int:
     except (TypeError, ValueError) as exc:
         print(json.dumps({"status": "rejected", "detail": str(exc)}, ensure_ascii=False))
         return 2
-    for result in results:
-        if result.detail:
+    # one line per given unit, in order: what happened to it, and why when refused
+    for i, result in enumerate(results):
+        if result.status == "rejected":
+            raw = payloads[i] if i < len(payloads) and isinstance(payloads[i], dict) else {}
+            title = raw.get("title")
+            print(json.dumps({"status": "rejected", "unit": i + 1,
+                              "title": title if isinstance(title, str) else None,
+                              "detail": result.detail or "refused"}, ensure_ascii=False))
+        elif result.detail:
             print(result.detail)
         else:
             print(json.dumps(result.__dict__, ensure_ascii=False))
-    if not results or not args.wait:
-        return 0 if results else 1
-    result = results[0]
-    if result.status not in {"queued", "duplicate"} or not result.candidate_id:
-        return 1
+    if not results:
+        print(json.dumps({"status": "rejected", "detail": "no unit in the payload"}, ensure_ascii=False))
+        return 2
+    refused = any(r.status == "rejected" for r in results)
+    queued = [(i, r) for i, r in enumerate(results)
+              if r.status in {"queued", "duplicate"} and r.candidate_id]
+    if not args.wait or not queued:
+        return 2 if refused else (0 if queued else 1)
 
     deadline = time.monotonic() + max(0.0, args.wait)
     from core.ingestion.store import connect_ro
-    while time.monotonic() < deadline:
+    pending = list(queued)
+    while pending and time.monotonic() < deadline:
+        i, result = pending[0]
         try:
             conn = connect_ro()
             try:
@@ -322,7 +335,7 @@ def run_ingest(argv: "list[str]") -> int:
                     item = dict(unit_row)
                     destination = json.loads(item["destination"] or "{}")
                     item["destination"] = destination
-                    item["text"] = payloads[0] if len(payloads) == 1 else payloads
+                    item["text"] = payloads[i] if i < len(payloads) else None
                     if item.get("reason") == "not_grounded":
                         # the user's message does not say it: nothing was kept (refactor §3.2)
                         item["hint"] = "你的消息里没有直接说出这条规则，所以没有记下；要记住它，请用一句话直接说出来。"
@@ -331,12 +344,14 @@ def run_ingest(argv: "list[str]") -> int:
                     "status": "done", "candidate_id": result.candidate_id,
                     "units": rendered_units,
                 }, ensure_ascii=False))
-                return 0
+                pending.pop(0)
+                continue
         except (FileNotFoundError, OSError):
             pass
         time.sleep(0.3)
-    print("已收到，结果见 Cognitive Distillation Flow")
-    return 0
+    if pending:
+        print("已收到，结果见 Cognitive Distillation Flow")
+    return 2 if refused else 0
 
 
 def write_startup_log(message: str):

@@ -97,3 +97,62 @@ def test_session_env_exports_latest_user_event(monkeypatch):
     monkeypatch.setattr("core.session_inputs.latest_user_event_id", lambda sid: "input:new")
     assert with_app_session_id({}, {"sdk_session_id": "session-1"}) == {
         "SWARM_APP_SESSION_ID": "session-1", "SWARM_LAST_USER_EVENT_ID": "input:new"}
+
+
+# ── a refused unit says why (the CLI used to exit 1 and print nothing) ────────
+
+def _quiet_api(monkeypatch):
+    enqueued = []
+    monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k:
+                        enqueued.append(a[2]) or SimpleNamespace(status="queued", candidate_id="cand-1", detail=""))
+    monkeypatch.setattr(api_v2, "record_extraction_attempt", lambda *a, **k: "a")
+    return enqueued
+
+
+def test_every_given_unit_gets_an_answer_in_order_with_the_reason(monkeypatch):
+    enqueued = _quiet_api(monkeypatch)
+    extra = {**_unit(), "project": "SwarmAI"}                      # no such field
+    bad_scope = {**_unit(), "scope": "project"}                    # needs project:<name>
+    out = s1_user.submit_units([extra, _unit(), bad_scope], session_id="session-1",
+                               evidence="event:e1", turn_kind="user")
+    assert [r.status for r in out] == ["rejected", "queued", "rejected"]
+    assert len(enqueued) == 1
+    assert "project: not a field" in out[0].detail
+    assert "scope" in out[2].detail and "project:<project name>" in out[2].detail
+
+
+def test_a_unit_over_the_cap_is_answered_not_dropped(monkeypatch):
+    _quiet_api(monkeypatch)
+    out = s1_user.submit_units([_unit(str(i)) for i in range(4)], session_id="session-1",
+                               evidence="event:e1", turn_kind="user")
+    assert [r.status for r in out] == ["queued"] * 3 + ["rejected"]
+    assert out[3].detail.startswith("s1_unit_cap")
+
+
+def test_the_cli_prints_the_reason_and_exits_2(monkeypatch, capsys):
+    import json
+    import desktop_main
+    _quiet_api(monkeypatch)
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", "session-1")
+    monkeypatch.setenv("SWARM_LAST_USER_EVENT_ID", "input:e1")
+    payload = [{**_unit(), "project": "SwarmAI"}, _unit()]
+    rc = desktop_main.run_ingest(["submit", "--source", "S1", "--evidence", "input:e1",
+                                  "--payload-json", json.dumps(payload)])
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+    assert rc == 2
+    assert lines[0] == {"status": "rejected", "unit": 1, "title": "One authoritative writer",
+                        "detail": lines[0]["detail"]} and "project" in lines[0]["detail"]
+    assert lines[1]["status"] == "queued"
+
+
+def test_with_wait_a_refused_unit_still_exits_2(monkeypatch, capsys, tmp_path):
+    import json
+    import desktop_main
+    _quiet_api(monkeypatch)
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))            # no store: the wait runs out
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", "session-1")
+    monkeypatch.setenv("SWARM_LAST_USER_EVENT_ID", "input:e1")
+    payload = [{**_unit(), "scope": "nowhere"}, _unit()]
+    rc = desktop_main.run_ingest(["submit", "--source", "S1", "--evidence", "input:e1", "--wait", "0.4",
+                                  "--payload-json", json.dumps(payload)])
+    assert rc == 2 and '"status": "rejected"' in capsys.readouterr().out
