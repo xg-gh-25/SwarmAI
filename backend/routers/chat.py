@@ -371,6 +371,40 @@ async def transcribe_voice(request: Request):
         await form.close()  # Release SpooledTemporaryFile backing the upload
 
 
+_CORRECTION_TASKS: set = set()
+
+
+def _request_text(chat_request: ChatRequest) -> str:
+    if isinstance(chat_request.message, str) and chat_request.message:
+        return chat_request.message
+    blocks = chat_request.content or []
+    return "\n".join(b.get("text", "") for b in blocks
+                     if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+
+
+def _maybe_record_correction(chat_request: ChatRequest) -> None:
+    """Open a correction-ledger row for a person's message that states a mistake."""
+    from core.ingestion import correction_ledger as ledger
+    session_id, client_id = chat_request.session_id, chat_request.client_id
+    text = _request_text(chat_request)
+    if not session_id or not client_id or not ledger.detect(text):
+        return
+
+    async def _record() -> None:
+        from core import executors
+        try:
+            # the newest rows, read before this turn writes its own reply
+            rows = await db.messages.list_by_session_paginated(session_id, limit=6)
+            reply = ledger.last_reply(rows)
+            await executors.run_in("io", ledger.record_chat_message, session_id, client_id, text, reply)
+        except Exception:  # noqa: BLE001 — the ledger never breaks a turn
+            logger.warning("correction ledger: recording failed for session %s", session_id, exc_info=True)
+
+    task = asyncio.create_task(_record())
+    _CORRECTION_TASKS.add(task)
+    task.add_done_callback(_CORRECTION_TASKS.discard)
+
+
 async def _record_task_repos(session_id: str, repos: list) -> None:
     """Write a dispatched task's repositories into its new session's metadata
     (``task_repos``), read at every turn end (SessionRouter._task_repo_facts). A
@@ -455,6 +489,12 @@ async def chat_stream(request: Request):
             detail=f"Agent with ID '{chat_request.agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"
         )
+
+    # Correction ledger (core/ingestion/correction_ledger): a message that states a
+    # mistake in an existing session opens a row for the person to classify. Only the
+    # regex runs here; reading the corrected reply and finding candidates happen in a
+    # task that never delays or breaks the turn.
+    _maybe_record_correction(chat_request)
 
     async def message_generator():
         """Generate messages from the agent conversation."""

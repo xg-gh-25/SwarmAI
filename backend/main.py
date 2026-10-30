@@ -22,6 +22,7 @@ from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router, apps_router
 from routers.ingestion import router as ingestion_router
 from routers.ingestion_redact import router as ingestion_redact_router
+from routers.corrections import router as corrections_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
 from routers.pipelines import router as pipelines_router
 from routers.pollinate import router as pollinate_router
@@ -1808,6 +1809,7 @@ app.include_router(escalations_router, tags=["escalations"])
 app.include_router(attention_router, tags=["attention"])  # prefix /api/attention set in router
 app.include_router(ingestion_router, tags=["ingestion"])  # prefix /api/ingestion set in router
 app.include_router(ingestion_redact_router, tags=["ingestion"])
+app.include_router(corrections_router, tags=["ingestion"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
 # A Hive's own Brains (install endpoint + list; 404 off a Hive), design 2026-10-28 §6
