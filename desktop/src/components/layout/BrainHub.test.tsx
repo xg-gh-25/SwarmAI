@@ -17,10 +17,9 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BrainSummary, BrainDetail } from '../../services/ddd';
 
-// BrainHub uses the real useQueryClient (react-query) to invalidate sibling caches
-// after a review mutation. The test doesn't mount a QueryClientProvider (the ddd
-// hooks are mocked), so mock useQueryClient to a spy — lets us ALSO assert the
-// cross-query invalidation fix (run_cfb460ac Gate-2 finding).
+// The knowledge view uses the real useQueryClient (react-query) to invalidate sibling
+// caches after a withdrawal. The test doesn't mount a QueryClientProvider (the ddd
+// hooks are mocked), so mock useQueryClient to a spy.
 const mockInvalidate = vi.fn();
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
@@ -33,9 +32,7 @@ const mockGetPinned = vi.fn<[], string[]>(() => []);  // default: no pins → fl
 const mockGetGeneral = vi.fn<[], unknown>(() => null);  // the built-in General Brain (null: an old daemon)
 const mockRunner = vi.fn<[], unknown>(() => ({ data: null }));  // useRunnerAgent's query result
 const mockGetBrainDetail = vi.fn();
-const mockGetReview = vi.fn();
-const mockApproveReview = vi.fn();
-const mockRejectHunk = vi.fn();
+const mockGetKnowledge = vi.fn();
 const mockGetDistribution = vi.fn();
 const mockBrainRecall = vi.fn();
 const mockGetSpecs = vi.fn();
@@ -73,12 +70,10 @@ vi.mock('../../services/ddd', async () => {
       useAsync(async () => ({ brains: await mockGetBrains(), pinned: mockGetPinned(), general: mockGetGeneral() }), 'brains'),
     useBrainDetail: (name: string | null) =>
       useAsync(() => (name ? mockGetBrainDetail(name) : Promise.resolve(undefined)), name),
-    useReview: (name: string | null) =>
-      useAsync(() => (name ? mockGetReview(name) : Promise.resolve(undefined)), name),
+    useBrainKnowledge: (name: string | null, since = 'week') =>
+      useAsync(() => (name ? mockGetKnowledge(name, since) : Promise.resolve(undefined)), `${name}:${since}`),
     useDistribution: (name: string | null) =>
       useAsync(() => (name ? mockGetDistribution(name) : Promise.resolve(undefined)), name),
-    approveReview: (...a: unknown[]) => mockApproveReview(...a),
-    rejectReviewHunk: (...a: unknown[]) => mockRejectHunk(...a),
     brainRecall: (...a: unknown[]) => mockBrainRecall(...a),
     getLocalRoots: (...a: unknown[]) => mockGetLocalRoots(...a),
     removeLocalRoot: (...a: unknown[]) => mockRemoveLocalRoot(...a),
@@ -154,7 +149,7 @@ vi.mock('./LibraryTree', () => ({
   },
 }));
 
-import { BrainHub, hunkSummary } from './BrainHub';
+import { BrainHub } from './BrainHub';
 
 const GALLERY: BrainSummary[] = [
   {
@@ -208,14 +203,18 @@ const DETAIL: BrainDetail = {
   },
 };
 
-const REVIEW = {
-  last_reviewed_sha: 'a00ae4600000000000000000000000000000000',
-  head_sha: 'ddbcfcd800000000000000000000000000000000',
-  hunks: [
-    { file: 'Projects/SwarmAI/2-understanding/TECH.md', signature: 'sigA1', tag: 'cultivation·auto-applied' as const,
-      diff_text: 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new' },
-  ],
-  diff_incomplete: false,
+// what SwarmAI learned this week: one decision written into TECH.md
+const ITEM = {
+  anchor: 'Projects/SwarmAI/2-understanding/TECH.md#Architecture#cand:c1.unit', unit_id: 'c1.unit',
+  doc: 'TECH.md', path: 'Projects/SwarmAI/2-understanding/TECH.md', section: 'Architecture',
+  type: 'decision', gap_kind: null, layer: 'cognitive' as const, title: 'Ship repos as a thin bundle',
+  text: '- [decision] **Ship repos as a thin bundle** Pack only base..HEAD.',
+  written_at: new Date().toISOString(), collected: false, source: 'S7', source_ref: 'sess-1', adds_to: null,
+};
+const KNOWLEDGE = {
+  brain: 'SwarmAI', since: 'week',
+  layers: [{ layer: 'meta', items: [] }, { layer: 'cognitive', items: [ITEM] }, { layer: 'operational', items: [] }],
+  gaps: [], counts: { week: 1, all: 1 }, withdrawn: { count: 0, items: [] },
 };
 
 beforeEach(() => {
@@ -227,9 +226,7 @@ beforeEach(() => {
   mockGetBrainDetail.mockResolvedValue(DETAIL);
   mockGetLocalRoots.mockResolvedValue([]);
   (getCodeIntelSummary as ReturnType<typeof vi.fn>).mockResolvedValue(null);  // no graph status
-  mockGetReview.mockResolvedValue(REVIEW);
-  mockApproveReview.mockResolvedValue({ last_reviewed_sha: REVIEW.head_sha });
-  mockRejectHunk.mockResolvedValue({ reverted: true });
+  mockGetKnowledge.mockResolvedValue(KNOWLEDGE);
   mockBrainRecall.mockResolvedValue([]);  // default: no hits (search idle)
   mockGetDistribution.mockResolvedValue({
     declared_targets: ['open-plugin'], visibility: 'internal',
@@ -380,7 +377,7 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
   it('the tabs are the parts of the Brain map plus Distribute; Brain (DDD) shows the docs, then the files', async () => {
     await openBrain();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent?.replace(/\d+$/, ''));
-    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'Reflect · Evolution', 'Eval', 'Distribute']);
+    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'What it learned', 'Eval', 'Distribute']);
     expect(screen.getByTestId('brainhub-overview')).toBeTruthy();
     expect(screen.getByTestId('brainhub-browse')).toBeTruthy();
     // search sits in this tab, next to what it searches; the tab bar is navigation only
@@ -718,9 +715,10 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
     document.removeEventListener('swarm:open-file', openFile as EventListener);
   });
 
-  it('AC5: a doc with a review signal is visually marked (TECH.md has an auto-applied hunk)', async () => {
-    // REVIEW has a TECH.md hunk → TECH.md card marked; PROJECT.md has no signal → not marked
+  it('AC5: a doc CDF wrote into this week is visually marked (TECH.md has a new entry)', async () => {
+    // KNOWLEDGE has a TECH.md entry this week → TECH.md card marked
     await openOverview();
+    expect(mockGetKnowledge).toHaveBeenCalledWith('SwarmAI', 'week');
     // DETAIL default knowledge members = only TECH.md
     expect(screen.getByTestId('coredoc-mark-TECH.md')).toBeTruthy();
   });
@@ -761,174 +759,18 @@ describe('BrainHub — a wall card opens its brain (run_d0cd4414, was AC6 hero)'
 // BrainHub, not an iframe" guarantee is covered by the Gallery/Brain-view blocks
 // above (they render <BrainHub/> directly) + OverlayHost.test (mount/geometry).
 
-describe('BrainHub — Review tab (Run 2, AC5)', () => {
-  async function openReview() {
+describe('BrainHub — What it learned tab (design 2026-10-30-brain-change-feed)', () => {
+  it('the tab shows what the Brain learned from its knowledge records, with no count badge', async () => {
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));         // selects + opens Brain
+    fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-tab-reflect')).toBeTruthy());
+    // what it learned asks nothing of the person: no count on its tab
+    expect(screen.queryByTestId('brainhub-tab-count-reflect')).toBeNull();
     fireEvent.click(screen.getByTestId('brainhub-tab-reflect'));
-    await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
-  }
-
-  it('renders Zone A + diff header with both SHAs — Zone B (F1) and Zone C removed', async () => {
-    await openReview();
-    expect(screen.getByTestId('review-zone-a')).toBeTruthy();
-    // the proposal gate (Zone C) is gone: every hunk is already written
-    expect(screen.queryByTestId('review-zone-c')).toBeNull();
-    // F1: the dead "decay·sinking" Zone B (backend never emitted the tag) is gone.
-    expect(screen.queryByTestId('review-zone-b')).toBeNull();
-    const hdr = screen.getByTestId('review-diff-header').textContent ?? '';
-    expect(hdr).toContain('a00ae46');   // last-reviewed short sha
-    expect(hdr).toContain('ddbcfcd8');  // HEAD short sha
-    expect(hdr).toContain('Projects/SwarmAI/');
-    expect(hdr).toContain('1 change since your last review');
-    expect(hdr).not.toContain('awaiting');
-  });
-
-  it('reject-hunk calls rejectReviewHunk with the content SIGNATURE (not an index)', async () => {
-    await openReview();
-    fireEvent.click(screen.getByTestId('review-reject-hunk'));
-    await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
-    expect(mockRejectHunk).toHaveBeenCalledWith('SwarmAI', 'Projects/SwarmAI/2-understanding/TECH.md', 'sigA1');
-  });
-
-  it('Gate-2: a review mutation invalidates the sibling pending caches (gallery + detail), not just the review query', async () => {
-    // run_cfb460ac Gate-2 (multi-specialist confirmed): approving/rejecting changes
-    // the pending count that ALSO lives in ['brains-with-pinned'] (gallery badge) and
-    // ['brain-detail', name] (Overview §② Need-You). Without invalidation those show a
-    // stale count for up to staleTime. load() (every action's chokepoint) must invalidate both.
-    mockInvalidate.mockClear();
-    await openReview();
-    fireEvent.click(screen.getByTestId('review-reject-hunk'));
-    await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
-    await waitFor(() => {
-      const keys = mockInvalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
-      expect(keys).toContain(JSON.stringify(['brain-detail', 'SwarmAI']));
-      expect(keys).toContain(JSON.stringify(['brains-with-pinned']));
-    });
-  });
-
-  it('mark-all-seen (H2) ARMS on first click — does NOT advance the watermark', async () => {
-    await openReview();
-    const btn = screen.getByTestId('review-approve-all');
-    fireEvent.click(btn);
-    // first click must NOT call approveReview — it only arms the confirm.
-    await waitFor(() => expect(btn.textContent).toContain('Click again to confirm'));
-    expect(mockApproveReview).not.toHaveBeenCalled();
-  });
-
-  it('mark-all-seen (H2) advances the watermark on the SECOND (confirm) click', async () => {
-    await openReview();
-    const btn = screen.getByTestId('review-approve-all');
-    fireEvent.click(btn);                                  // arm
-    await waitFor(() => expect(btn.textContent).toContain('Click again to confirm'));
-    fireEvent.click(btn);                                  // confirm
-    await waitFor(() => expect(mockApproveReview).toHaveBeenCalledWith('SwarmAI'));
-  });
-
-  it('mark-all-seen (H2) armed state DISARMS after rejecting a hunk (load() reset)', async () => {
-    // REVIEW-flagged coverage gap: arming approve-all then taking another action
-    // (which calls load()) must reset the armed state so a later stray click on
-    // approve-all does NOT immediately confirm.
-    await openReview();
-    const btn = screen.getByTestId('review-approve-all');
-    fireEvent.click(btn);                                  // arm approve-all
-    await waitFor(() => expect(btn.textContent).toContain('Click again to confirm'));
-    fireEvent.click(screen.getByTestId('review-reject-hunk')); // different action → load() → disarm
-    await waitFor(() => expect(mockRejectHunk).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByTestId('review-approve-all').textContent).toContain('Mark all seen'));
-    expect(mockApproveReview).not.toHaveBeenCalled();      // never confirmed
-  });
-
-  it('F3: reject-hunk API error is SURFACED inline (transient) — does NOT blank the queue', async () => {
-    mockRejectHunk.mockRejectedValueOnce(new Error('409 hunk no longer applies'));
-    await openReview();
-    fireEvent.click(screen.getByTestId('review-reject-hunk'));
-    // transient inline action-error, NOT the full-view "Failed to load review"
-    await waitFor(() => expect(screen.getByTestId('review-action-error')).toBeTruthy());
-    expect(screen.getByTestId('review-action-error').textContent).toContain('409');
-    // Gate-2: the queue is STILL rendered (not blanked by a full-view error)
-    expect(screen.getByTestId('brainhub-review')).toBeTruthy();
-    expect(screen.getByTestId('review-zone-a')).toBeTruthy();
-    expect(screen.queryByTestId('review-error')).toBeNull();
-  });
-
-  it('F8: diff_incomplete DISABLES "Mark all seen" + shows a warning with a Retry', async () => {
-    mockGetReview.mockResolvedValue({ ...REVIEW, diff_incomplete: true });
-    await openReview();
-    expect(screen.getByTestId('review-diff-incomplete')).toBeTruthy();
-    expect((screen.getByTestId('review-approve-all') as HTMLButtonElement).disabled).toBe(true);
-    // Gate-2: an explicit Retry affordance exists (not a dead-end lockout) and re-fetches.
-    const retry = screen.getByTestId('review-diff-retry');
-    mockGetReview.mockResolvedValue({ ...REVIEW, diff_incomplete: false });  // next load succeeds
-    fireEvent.click(retry);
-    await waitFor(() => expect(screen.queryByTestId('review-diff-incomplete')).toBeNull());
-    expect((screen.getByTestId('review-approve-all') as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  // ── Run 2 enrichment (run_32cd6a60) ──────────────────────────────────────────
-  it('AC1: a hunk shows a plain-language summary line (file + add/del counts)', async () => {
-    // fixture diff_text = 'diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new' → 1 add, 1 del.
-    await openReview();
-    const summary = screen.getByTestId('hunk-summary-sigA1');
-    // the DDD-doc filename (not the raw a/x b/x header) + the counted change
-    expect(summary.textContent).toContain('TECH.md');
-    expect(summary.textContent).toContain('+1');
-    expect(summary.textContent).toContain('1');   // -1 deletion (the +++/--- headers excluded)
-  });
-
-  it('AC2: the raw @@ diff is COLLAPSED by default, revealed by [View diff]', async () => {
-    await openReview();
-    // collapsed by default → the raw diff <pre> is not shown
-    expect(screen.queryByTestId('hunk-diff-sigA1')).toBeNull();
-    fireEvent.click(screen.getByTestId('hunk-toggle-diff-sigA1'));
-    await waitFor(() => expect(screen.getByTestId('hunk-diff-sigA1')).toBeTruthy());
-    // the diff body content is now visible
-    expect(screen.getByTestId('hunk-diff-sigA1').textContent).toContain('+new');
-  });
-
-  it('AC3/AC4: [Open file] on a hunk closes the overlay THEN opens hunk.file DIRECTLY in Canvas (no double-prefix)', async () => {
-    const seq: string[] = [];
-    const onRequestClose = vi.fn(() => seq.push('close'));
-    const openEvents: CustomEvent[] = [];
-    const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
-    document.addEventListener('swarm:open-file', onOpen);
-    try {
-      render(<BrainHub defaultView="brain" onRequestClose={onRequestClose} />);
-      await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-tab-reflect')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('brainhub-tab-reflect'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('hunk-open-file-sigA1'));
-      await waitFor(() => expect(openEvents.length).toBe(1));
-      // hunk.file is ALREADY workspace-relative → dispatched DIRECTLY, never re-wrapped.
-      expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/2-understanding/TECH.md');
-      // close BEFORE open (z-index precedent, Gate-1)
-      expect(seq).toEqual(['close', 'open']);
-    } finally {
-      document.removeEventListener('swarm:open-file', onOpen);
-    }
-  });
-});
-
-describe('hunkSummary — pure helper (run_32cd6a60)', () => {
-  it('counts +/- body lines, EXCLUDES +++/--- file headers, parses the @@ line-range', () => {
-    const diff = 'diff --git a/x b/x\n--- a/2-understanding/TECH.md\n+++ b/2-understanding/TECH.md\n@@ -10,3 +10,4 @@ Some heading\n context\n-removed\n+added one\n+added two';
-    const s = hunkSummary(diff);
-    expect(s.adds).toBe(2);      // "+added one", "+added two" — NOT the "+++ b/..." header
-    expect(s.dels).toBe(1);      // "-removed" — NOT the "--- a/..." header
-    expect(s.startLine).toBe(10);
-    expect(s.section).toBe('Some heading');
-  });
-
-  it('handles the no-comma single-line header form (@@ -1 +1 @@) without NaN/crash', () => {
-    const s = hunkSummary('diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new');
-    expect(s.adds).toBe(1);
-    expect(s.dels).toBe(1);
-    expect(s.startLine).toBe(1);
-    expect(s.section).toBeUndefined();  // empty trailing heading → undefined, never '' or garbage
+    await waitFor(() => expect(screen.getByTestId('brainhub-learned')).toBeTruthy());
+    expect(screen.getAllByTestId('learned-entry-title').map((e) => e.textContent)).toEqual(['Ship repos as a thin bundle']);
+    expect(screen.queryByTestId('brainhub-review')).toBeNull();
   });
 });
 
@@ -1059,7 +901,7 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
       await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
       fireEvent.click(screen.getByTestId('distribute-open-aim'));
       await waitFor(() => expect(openEvents.length).toBe(1));
-      // aim.json is PROJECT-relative → needs the Projects/<name>/ prefix (BrainView shape, NOT hunk.file)
+      // aim.json is PROJECT-relative → needs the Projects/<name>/ prefix (BrainView shape)
       expect(openEvents[0].detail.path).toBe('Projects/SwarmAI/aim.json');
       expect(seq).toEqual(['close', 'open']);
     } finally {

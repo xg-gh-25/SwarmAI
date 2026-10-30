@@ -15,6 +15,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from core import executors
+from core.ingestion.api import StaleRevision
 from core.ingestion.governed_edit import redact
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ async def redact_ingestion_unit(
     request: Request,
     user_action: str | None = Header(default=None, alias="X-Swarm-User-Action"),
 ) -> RedactResponse:
-    """Apply a tombstone only for an explicit local dashboard action."""
+    """Withdraw (delete) one entry, only for an explicit local user action."""
     peer = request.client.host if request.client else ""
     try:
         loopback = ipaddress.ip_address(peer).is_loopback
@@ -45,11 +46,20 @@ async def redact_ingestion_unit(
         loopback = False
     if not loopback or user_action != "redact":
         raise HTTPException(status_code=403, detail="Redaction requires a local user action")
-    try:
-        revision = await executors.run_in(
-            "io", lambda: redact(body.anchor, body.reason, actor="user"),
-        )
-    except (ValueError, PermissionError) as exc:
-        logger.warning("CDF redact refused for %s: %s", body.anchor, exc)
-        raise HTTPException(status_code=400, detail="This entry cannot be redacted") from exc
+    # CDF may write the same file between the read and the write: the plan is then
+    # stale and abandoned (governed_edit.withdraw). One fresh attempt locates the entry
+    # by its identity in the file as it is now; still changing → 409, never a 500.
+    for attempt in (1, 2):
+        try:
+            revision = await executors.run_in(
+                "io", lambda: redact(body.anchor, body.reason, actor="user"),
+            )
+            break
+        except StaleRevision as exc:
+            if attempt == 2:
+                logger.warning("CDF redact stale twice for %s: %s", body.anchor, exc)
+                raise HTTPException(status_code=409, detail="This entry changed; refresh and try again") from exc
+        except (ValueError, PermissionError) as exc:
+            logger.warning("CDF redact refused for %s: %s", body.anchor, exc)
+            raise HTTPException(status_code=400, detail="This entry cannot be withdrawn") from exc
     return RedactResponse(revision=revision)

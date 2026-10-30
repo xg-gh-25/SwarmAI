@@ -7,7 +7,7 @@
  * was measured).
  */
 import { describe, it, expect } from 'vitest';
-import type { BrainDetail, ReviewData } from '../../services/ddd';
+import type { BrainDetail, BrainKnowledge } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
 import { sectionCounts, projectRuns, runTone, needsYouItems, needsCount, brainHiveRuns, humanPerRun, brainEval, hubSummary, hubNeeds, brainSignal, generalNeed } from './brainMapModel';
 import type { BrainSummary, GeneralBrain } from '../../services/ddd';
@@ -35,10 +35,8 @@ const detail = {
   ],
   health: { trust: null, escalationPending: 0, recall: { value: null, experimental: true }, diagnostics: null, computedAt: null, recentActivity: 4 },
 } as unknown as BrainDetail;
-const review: ReviewData = {
-  last_reviewed_sha: 'a', head_sha: 'b', diff_incomplete: false,
-  hunks: [{ file: 'K.md', signature: 's1', tag: 'cultivation·auto-applied', diff_text: '' }],
-};
+const learned = { brain: 'P', since: 'week', layers: [], gaps: [], counts: { week: 1, all: 6 },
+  withdrawn: { count: 0, items: [] } } as BrainKnowledge;
 
 describe('brainMapModel', () => {
   it('sectionCounts reads the detail: entries for Knowledge, files elsewhere, empty-but-complete Gates', () => {
@@ -101,17 +99,17 @@ describe('brainMapModel', () => {
   });
 
   it('brainEval never invents a number', () => {
-    const e = brainEval([run({}), run({ id: 'b', tokensActual: null, status: 'running', cycleTimeMin: null })], detail, review);
+    const e = brainEval([run({}), run({ id: 'b', tokensActual: null, status: 'running', cycleTimeMin: null })], detail, learned);
     expect(e.runs.total).toBe(2);
     expect(e.runs.landed).toBe(1);
     expect(e.runs.completionRate).toBe(1);   // only finished Runs count
     expect(e.runs.tokens).toBeNull();        // one Run unmeasured -> no total
     expect(e.runs.avgCycleMin).toBe(20);
-    expect(e.brain).toEqual({ entries: 3, recentActivity: 4, autoApplied: 1 });
+    expect(e.brain).toEqual({ entries: 3, recentActivity: 4, learnedWeek: 1 });
     const empty = brainEval([], null, null);
     expect(empty.runs.completionRate).toBeNull();
     expect(empty.runs.avgCycleMin).toBeNull();
-    expect(empty.brain).toEqual({ entries: 0, recentActivity: null, autoApplied: 0 });
+    expect(empty.brain).toEqual({ entries: 0, recentActivity: null, learnedWeek: null });   // not loaded: unknown, never 0
   });
 
   const brain = (name: string, o: Record<string, unknown> = {}, h: Record<string, unknown> = {}) => ({
@@ -125,9 +123,9 @@ describe('brainMapModel', () => {
 
   it('hubSummary: Need you is the attention count (a waiting Run is in it once) plus Project Agent drafts', () => {
     const brains = [
-      brain('A', { recentActivity: 5, setupState: 'setting-up', pendingBySource: { paused_run: 1, escalation: 2 } },
+      brain('A', { learnedWeek: 5, setupState: 'setting-up', pendingBySource: { paused_run: 1, escalation: 2 } },
         { pending: 3, liveRun: true }),
-      brain('B', { recentActivity: 0 }),
+      brain('B', { learnedWeek: 0 }),
       brain('C'),
     ];
     const a = an({
@@ -138,8 +136,12 @@ describe('brainMapModel', () => {
       brains: 3, needsYou: 3, running: 1, born: 1, learned: 5, learnedBrains: 1,
       landed: 1, finished: 2, liveRuns: 1,
     });
-    // no brain reports recentActivity (old daemon) -> UNKNOWN, never 0
+    // no brain reports learnedWeek (old daemon) -> UNKNOWN, never 0
     expect(hubSummary([brain('C')], null).learned).toBeNull();
+    // the General Brain's week is in the total
+    const general = { name: 'General', description: null, library: { files: 1, bytes: 1 }, projectAgentStatus: 'reviewed' as const,
+      shadowed: false, learnedWeek: 2 };
+    expect(hubSummary(brains, a, general).learned).toBe(7);
   });
 
   it('hubNeeds: Runs waiting on you oldest first, then each brain\'s escalations and jobs, then Project Agents', () => {

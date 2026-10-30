@@ -175,3 +175,28 @@ def test_recall_is_weighted_by_stratum_population(tmp_path: Path) -> None:
     recall = {m["metric"]: m for m in be.score(out)["metrics"]}["write recall (weighted)"]
     assert (recall["k"], recall["n"]) == (1, 2)
     assert recall["point"] == 0.75
+
+
+def test_a_withdrawal_is_its_own_stratum_and_never_a_judge_outcome(tmp_path: Path) -> None:
+    """eval_log.export yields what a person withdrew (stage/origin "withdrawn") next to the
+    same unit's write: its own id, a readable text, no source, out of precision and recall."""
+    export = tmp_path / "export.jsonl"
+    withdrawn = {"unit_id": "w1", "stage": "withdrawn", "origin": "withdrawn", "label": "user_withdrawn",
+                 "at": "2026-10-29T00:00:00", "source": None, "state": "withdrawn", "reason": "wrong",
+                 "record": {"path": "P/TECH.md", "text": "- [decision] **A** rule A", "claim": {"what": "rule A"},
+                            "claim_group": {"what": "rule A"}, "written_at": None, "source_ref": None}}
+    rows = [_rec("w1", "judge", "S2", "written", "new", "rule A"), withdrawn]
+    export.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    out = tmp_path / "eval"
+    be.sample(export, out, per_stratum=5)
+    ids = [json.loads(line)["id"] for line in (out / "items.jsonl").read_text().splitlines()]
+    assert sorted(ids) == ["w1", "withdrawn:w1"]
+    for name in "ABC":
+        be.label(out, name, _caller("A"), max_usd=1)
+    be.aggregate(out)                                   # a missing source must not break the review page
+    metrics = {m["metric"]: m for m in be.score(out)["metrics"]}
+    assert (metrics["write precision"]["k"], metrics["write precision"]["n"]) == (1, 1)
+    assert (metrics["write recall (weighted)"]["k"], metrics["write recall (weighted)"]["n"]) == (1, 1)
+    assert (metrics["labels agree with withdrawals"]["k"], metrics["labels agree with withdrawals"]["n"]) == (0, 1)
+    failures = (out / "failures.md").read_text()
+    assert "`withdrawn:w1` · 人撤回了，标注却认为该写" in failures and "该写没写" not in failures

@@ -11,8 +11,8 @@
  *   BrainAddKnowledge Brain (DDD): add files / folders / links / repos, distilled in chat
  * The tab bar, header and the Brain (DDD) / Reflect bodies live in BrainHub.
  *
- * Reads only records that already exist: the brain detail + review queue (cached
- * ddd hooks), the 30-day pipeline analytics (one cached query, the same payload the
+ * Reads only records that already exist: the brain detail + what it learned this week
+ * (cached ddd hooks), the 30-day pipeline analytics (one cached query, the same payload the
  * Pipelines overlay reads) and, on the tabs that show them, the Hive runs Swarm Out
  * reads (GET /api/swarm-out/runs, polled while shown). Nothing here is a sample: what
  * nobody records is UNKNOWN or "—" (design docs/design/2026-10-30-brain-runs-one-card.md).
@@ -26,7 +26,7 @@
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useBrainDetail, useReview, type BrainDetail, type ProjectAgent, type SectionKey } from '../../services/ddd';
+import { useBrainDetail, useBrainKnowledge, type BrainDetail, type ProjectAgent, type SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } from '../../services/pipelines';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import { RunCard } from '../swarm-out/LiveDispatches';
@@ -68,14 +68,14 @@ function useSend(onDispatch?: Dispatch, onRequestClose?: () => void) {
 /** The one data read every Brain-map tab shares (all cached queries). */
 function useBrainData(name: string) {
   const { data: detail = null } = useBrainDetail(name);
-  const { data: review = null } = useReview(name);
+  const { data: knowledge = null } = useBrainKnowledge(name, 'week');
   const { data: analytics = null } = useQuery<PipelineAnalytics>({
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
   const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
   const needs = useMemo(() => needsYouItems(runs, detail?.projectAgent, detail?.pendingBySource), [runs, detail]);
-  const ev = useMemo(() => brainEval(runs, detail, review), [runs, detail, review]);
-  return { detail, review, runs, needs, ev };
+  const ev = useMemo(() => brainEval(runs, detail, knowledge), [runs, detail, knowledge]);
+  return { detail, runs, needs, ev };
 }
 
 /** This Brain's Hive runs (Swarm Out), polled while the tab is shown. */
@@ -108,7 +108,7 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: 
       : (pa.problems.length || pa.status !== 'reviewed') ? 'needs' : 'ok',
     conductor: runs.some((r) => r.needsYou) || hive.some((r) => r.state === 'waiting') ? 'needs'
       : runs.some((r) => r.status === 'running') || hive.some(hiveLive) ? 'busy' : runs.length || hive.length ? 'ok' : undefined,
-    reflect: ev.brain.autoApplied ? 'ok' : undefined,
+    reflect: ev.brain.learnedWeek ? 'ok' : undefined,
   };
 }
 
@@ -128,7 +128,7 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
   /** Close the Brain Hub so the chat tab that received a dispatch is visible. */
   onRequestClose?: () => void;
 }) {
-  const { detail, review, runs, needs, ev } = useBrainData(name);
+  const { detail, runs, needs, ev } = useBrainData(name);
   const { hive } = useBrainHiveRuns(name);
   const needN = needsCount(needs);
   // both lanes' Runs, newest first (the map draws the first twelve)
@@ -137,7 +137,6 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
     ...hive.map((r) => ({ at: Date.parse(r.sent_at), id: r.dispatch_id, title: `${r.title} (Hive ${r.hive})`, tone: hiveDot(r) })),
   ].sort((x, y) => (y.at || 0) - (x.at || 0)).map(({ id, title, tone }) => ({ id, title, tone })), [runs, hive]);
   const send = useSend(onDispatch, onRequestClose);
-  const version = review?.head_sha ? `@ ${review.head_sha.slice(0, 7)}` : 'DDD';
 
   const open = (t: BrainMapTarget) => {
     onGoTo(t === 'need' ? 'needs' : t === 'browse' ? 'brain' : t);
@@ -165,13 +164,13 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
           <span className="text-meta text-[var(--color-text-muted)]">click a part to open its tab</span>
         </div>
         <BrainMap
-          version={version}
+          version="DDD"
           counts={sectionCounts(detail)}
           runs={dots}
           lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, hive: hive.filter(hiveLive).length }}
           sources={{ chat: runs.length, hive: hive.length }}
           needs={needN}
-          reflect={{ auto: ev.brain.autoApplied }}
+          reflect={{ week: ev.brain.learnedWeek }}
           agentLine={agentLine(detail?.projectAgent)}
           evalLine={`${ev.runs.landed} of ${ev.runs.total} Runs landed`}
           tones={mapTones(detail, runs, hive, ev)}

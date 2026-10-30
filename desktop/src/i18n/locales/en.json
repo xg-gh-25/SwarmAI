@@ -2213,5 +2213,100 @@
     "showRules": "Show what each step does",
     "hideRules": "Hide the rules",
     "feedCount": "{{n}} items"
+  },
+  "brainLearned": {
+    "loading": "Loading what this Brain learned…",
+    "loadFailed": "Could not load what this Brain learned: {{error}}",
+    "retry": "Retry",
+    "verdict": {
+      "week_one": "{{name}} learned {{count}} entry this week",
+      "week_other": "{{name}} learned {{count}} entries this week",
+      "month_one": "{{name}} learned {{count}} entry this month",
+      "month_other": "{{name}} learned {{count}} entries this month",
+      "all_one": "{{name}} has learned {{count}} entry",
+      "all_other": "{{name}} has learned {{count}} entries"
+    },
+    "none": {
+      "week": "{{name}} learned nothing new this week",
+      "month": "{{name}} learned nothing new this month",
+      "all": "{{name}} has not learned anything yet"
+    },
+    "sub": "Written by the AI as it worked. Withdraw anything that is wrong.",
+    "range": {
+      "week": "This week",
+      "month": "This month",
+      "all": "All"
+    },
+    "empty": "What the AI learns while it works shows up here. Try This month or All for earlier entries.",
+    "emptyAll": "What the AI learns while it works shows up here.",
+    "layerEmpty": "Nothing new in this range",
+    "layer": {
+      "meta": {
+        "name": "Meta-cognition",
+        "desc": "How to think · principles and corrections"
+      },
+      "cognitive": {
+        "name": "Cognition",
+        "desc": "How to judge · decisions and models"
+      },
+      "operational": {
+        "name": "Operations",
+        "desc": "How to do · lessons, pitfalls and steps"
+      }
+    },
+    "gaps": {
+      "name": "Open items",
+      "desc": "Things the AI noted as not done yet"
+    },
+    "type": {
+      "principle": "Principle",
+      "correction": "Correction",
+      "decision": "Decision",
+      "model": "Model",
+      "guideline": "Lesson",
+      "pitfall": "Pitfall",
+      "process": "Process",
+      "gap": "Open"
+    },
+    "source": {
+      "S0": "from a summary",
+      "S1": "you asked to keep it",
+      "S2": "from a conversation",
+      "S3": "from a Run",
+      "S4": "from a code change",
+      "S5": "from measurements",
+      "S6": "from an outside source",
+      "S7": "from a conversation",
+      "expired": "source record expired"
+    },
+    "when": {
+      "today": "today {{time}}",
+      "yesterday": "yesterday {{time}}"
+    },
+    "collected": "collected {{when}}",
+    "unknownTime": "time unknown",
+    "writtenInto": "In {{doc}} · {{section}}",
+    "addsTo": "Adds to an earlier entry: {{title}}",
+    "more": "More",
+    "less": "Less",
+    "withdraw": "Withdraw",
+    "done": "Withdrew “{{title}}” from {{doc}}. The original is kept in a backup.",
+    "confirm": {
+      "text": "This entry is deleted from {{doc}} in {{name}} and the AI stops using it. The original is kept in a backup. If later work shows the same thing again, the AI may learn it again.",
+      "reason": "Why is it wrong? (optional — it helps the AI learn better)",
+      "defaultReason": "Withdrawn on the Brain page",
+      "cancel": "Cancel",
+      "shortcut": "⌘↵ to withdraw",
+      "stale": "This entry just changed. Refresh and try again.",
+      "failed": "Could not withdraw: {{error}}"
+    },
+    "withdrawn": {
+      "line_one": "Withdrew {{count}} entry (of {{written}} written)",
+      "line_other": "Withdrew {{count}} entries (of {{written}} written)",
+      "none": "Nothing withdrawn yet (of {{written}} written)",
+      "show": "Show",
+      "hide": "Hide",
+      "meta": "Written {{written}} · withdrawn {{at}} · reason: {{reason}}"
+    }
   }
 }

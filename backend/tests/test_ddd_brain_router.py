@@ -78,36 +78,6 @@ class TestLifecycleStageOrdering:
         assert m._lifecycle_stage(tmp_path, present={}, pending=0) == "CREATE"
 
 
-class TestDiffIncompleteFlag:
-    """F8: a review-diff git timeout must surface diff_incomplete (loud, not silent-empty)."""
-
-    def test_scoped_diff_raises_on_timeout(self, monkeypatch, tmp_path):
-        import subprocess as _sp
-        import routers.ddd_brain as m
-        ws = tmp_path
-        (ws / ".git").mkdir()
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-
-        def _boom(*a, **k):
-            raise _sp.TimeoutExpired(cmd="git diff", timeout=5)
-        monkeypatch.setattr(m.subprocess, "run", _boom)
-        with pytest.raises(m.DiffIncompleteError):
-            m._scoped_diff_hunks(ws / "Projects" / "X", "abc123")
-
-    def test_clean_empty_diff_does_not_raise(self, monkeypatch, tmp_path):
-        """A genuinely clean diff returns [] — only a TIMEOUT raises (F8 distinguishes them)."""
-        import routers.ddd_brain as m
-
-        class _R:
-            returncode = 0
-            stdout = ""
-        ws = tmp_path
-        (ws / ".git").mkdir()
-        monkeypatch.setattr(m, "_workspace_root", lambda: ws)
-        monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: _R())
-        assert m._scoped_diff_hunks(ws / "Projects" / "X", "abc123") == []
-
-
 class TestSourceChangedSinceTristate:
     """F2: source_changed_since is None (freshness-unknown) when the output is uncommitted."""
 
@@ -153,12 +123,12 @@ class TestSourceChangedSinceTristate:
 class TestDocstringHonesty:
     """H1: the module docstring must not falsely claim pure-read / two endpoints."""
 
-    def test_docstring_does_not_claim_pure_read(self):
+    def test_docstring_names_the_knowledge_view_and_no_git_review(self):
         import routers.ddd_brain as m
         doc = m.__doc__ or ""
-        assert "PURE READ" not in doc, "docstring still claims PURE READ — Run2 added mutating POSTs"
-        # names the mutating reality
-        assert "apply -R" in doc and "watermark" in doc.lower()
+        assert "/knowledge" in doc and "/review " not in doc
+        assert not any(r.path.endswith(("/review", "/review/approve", "/review/reject"))
+                       for r in m.router.routes)
 
 
 @pytest.mark.usefixtures("hermetic_workspace")
@@ -392,7 +362,7 @@ class TestResilience:
 
 class TestPathTraversal:
     """Security: {name} → filesystem path is the only external→FS surface, and one
-    review endpoint runs a destructive `git apply -R`. Force the escape (R28/GUI15:
+    endpoint reads the files of the Brain it names. Force the escape (R28/GUI15:
     a security guard needs a test that FORCES the traversal, not just the happy 404).
 
     Mutation check: delete the `if pd.parent != root: return None` containment line

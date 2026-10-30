@@ -407,6 +407,35 @@ def _redaction_span(target: Path, anchor: str) -> tuple[int, int, str]:
     return unit.byte_start, end, unit.identity
 
 
+def _archive_fields(conn: sqlite3.Connection, identity: str) -> dict[str, Any]:
+    """What CDF knew about a withdrawn entry, copied into its withdrawal record (design
+    2026-10-30-brain-change-feed §3.5b): the write record and the candidate are purged
+    after 30 days, the withdrawal record is not, so a withdrawn entry stays a readable
+    case of knowledge CDF should not have written (unit, when, from where, the claim)."""
+    if not identity.startswith("cand:"):
+        return {}
+    unit_id = identity[len("cand:"):]
+    try:
+        row = conn.execute(
+            """SELECT u.claim_group, u.reason,
+                      (SELECT MAX(w.updated_at) FROM ingestion_writes w WHERE w.unit_id=u.unit_id
+                         AND w.op_kind='ingestion_unit' AND w.step='done'),
+                      COALESCE(i.source_v2, i.source), i.source_ref
+               FROM ingestion_units u
+               LEFT JOIN ingestion_inbox i ON i.id=u.candidate_id
+               WHERE u.unit_id=?""", (unit_id,)).fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is None:
+        return {"unit_id": unit_id}
+    try:
+        claim = json.loads(row[0] or "{}")
+    except (TypeError, ValueError):
+        claim = {}
+    return {"unit_id": unit_id, "written_at": row[2], "source": row[3], "source_ref": row[4],
+            "written_as": row[1], "claim": claim}
+
+
 def _insert_redact_plan(conn: sqlite3.Connection, *, anchor: str, reason: str,
                         target: Path, vault: Path, original: bytes,
                         intended: bytes, identity: str, actor: str = "user",
@@ -418,7 +447,8 @@ def _insert_redact_plan(conn: sqlite3.Connection, *, anchor: str, reason: str,
     patch = {"target_path": _relative(target), "delete": False,
              "invalidate_anchors": [anchor], "actor": actor}
     relation_payload = {"redact_anchor": anchor, "reason": reason,
-                        "vault_path": str(vault), "status": status, "actor": actor}
+                        "vault_path": str(vault), "status": status, "actor": actor,
+                        **_archive_fields(conn, identity)}
     conn.execute(
         """INSERT INTO ingestion_writes
         (op_id,op_kind,unit_id,target_path,before_hash,intended_bytes,after_hash,
@@ -538,6 +568,10 @@ def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
     start, end, parsed_identity = _redaction_span(target, anchor)
     original = data[start:end]
     intended = _without(data, start, end)
+    if not intended.strip() or original.strip() == data.strip():
+        # a file with no parseable entry is one unit: withdrawing it would leave an
+        # empty document (design 2026-10-30-brain-change-feed §3.5)
+        raise WholeDocument("the whole document is one unit: edit it in the file tree")
     conn = _connection()
     try:
         plan = _insert_redact_plan(conn, anchor=anchor, reason=reason, target=target,
@@ -559,6 +593,11 @@ def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
         return revision_of(target)
     finally:
         conn.close()
+
+
+class WholeDocument(ValueError):
+    """The unit is the whole document (no parseable entry): it is never withdrawn, so
+    trying again cannot succeed (a ValueError, so every caller already refuses it)."""
 
 
 def _without(data: bytes, start: int, end: int) -> bytes:

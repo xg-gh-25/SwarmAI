@@ -240,3 +240,51 @@ def test_baseline_trust_reads_the_entry_metadata_taint(tmp_path: Path, monkeypat
     units = {u.title: u.identity for u in parse_units(doc, root=tmp_path)}
     assert trust[units["Repo claim"]] == "external"
     assert trust[units["User claim"]] == "user"
+
+
+def test_a_general_brain_library_file_is_indexed_and_recalled_one_entry_at_a_time(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The General Brain writes Knowledge/Library/<subject>.md (route_general). Both index
+    writers and the recall hit shape must treat it as a multi-entry file: chunked by
+    heading, one hit is a whole section of many entries."""
+    workspace = tmp_path / "workspace"
+    data = tmp_path / "data"
+    target = workspace / "Knowledge/Library/general-knowledge.md"
+    target.parent.mkdir(parents=True)
+    data.mkdir()
+    monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
+    target.write_text(
+        "# General knowledge\n\n## Pitfalls\n\n"
+        "- [pitfall] **One** First trap. <!-- cand:c-one.unit -->\n\n"
+        "- [pitfall] **Two** Second trap. <!-- cand:c-two.unit -->\n", encoding="utf-8")
+    import sqlite3
+    from core.knowledge_store import sync_knowledge_file, sync_knowledge_index
+
+    def rows():
+        conn = sqlite3.connect(data / "data.db")
+        try:
+            return [r[0] for r in conn.execute(
+                "SELECT content FROM knowledge_chunks WHERE source_file='Library/general-knowledge.md' "
+                "ORDER BY chunk_index")]
+        finally:
+            conn.close()
+
+    sync_knowledge_file(target)
+    one_file = rows()
+    assert [r for r in one_file if "cand:" in r] == [r for r in one_file if r.count("cand:") == 1]
+    assert sum("cand:c-one.unit" in r for r in one_file) == 1 and sum("cand:c-two.unit" in r for r in one_file) == 1
+    target.write_text(target.read_text(encoding="utf-8") + "\n- [pitfall] **Three** Third. <!-- cand:c-three.unit -->\n",
+                      encoding="utf-8")
+    from core.knowledge_store import KnowledgeStore
+    from core.vec_db import open_vec_db
+    with open_vec_db(data / "data.db") as conn:
+        sync_knowledge_index(KnowledgeStore(conn), workspace / "Knowledge")
+    whole = rows()
+    assert all(r.count("cand:") <= 1 for r in whole)          # the bulk sync agrees with the file sync
+    assert sum("cand:c-three.unit" in r for r in whole) == 1
+    from core.recall_multi import _knowledge_hit_shape
+    hit = next(r for r in whole if "cand:c-two.unit" in r)
+    shaped = _knowledge_hit_shape("Library/general-knowledge.md", "Pitfalls", hit)
+    assert shaped["content"] == hit                            # the entry, not the whole section

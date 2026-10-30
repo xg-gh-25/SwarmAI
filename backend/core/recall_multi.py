@@ -1524,10 +1524,7 @@ def _project_name_forms(project_name: str) -> set[str]:
 
 def _knowledge_hit_shape(source_file: str, heading: str, fallback: str) -> dict[str, str]:
     """Return a whole Knowledge section plus its parent and document metadata."""
-    multi = (source_file.startswith("Library/Links/")
-             or source_file.startswith("Learned/domains/")
-             or source_file.startswith("Learned/repos/")
-             or source_file.startswith("Learned/_common/"))
+    from core.knowledge_store import is_cdf_multi_unit
     try:
         from config import get_swarmws
         knowledge = (Path(get_swarmws()) / "Knowledge").resolve(strict=False)
@@ -1539,6 +1536,7 @@ def _knowledge_hit_shape(source_file: str, heading: str, fallback: str) -> dict[
     except (OSError, UnicodeError, ValueError):
         return {"content": fallback, "summary": "", "parent_heading": "",
                 "reference_kind": ""}
+    multi = is_cdf_multi_unit(source_file, text)        # the hit is one entry, whole
     frontmatter = text.split("---", 2)[1] if text.startswith("---") and text.count("---") >= 2 else ""
     def field(name: str) -> str:
         match = re.search(rf"^{re.escape(name)}:\s*(.+?)\s*$", frontmatter, re.MULTILINE)

@@ -7,7 +7,9 @@
 - ``prune(conn, now)`` drops archive rows and ``extraction_attempts`` older than
   ``RETENTION_DAYS``.
 - ``export(since, until)`` yields one dict per record from the live judge tables, the
-  archive and the extractor's rejected units, each tagged with ``stage`` and ``origin``.
+  archive, the extractor's rejected units and what a person withdrew (stage and
+  ``origin`` ``withdrawn``: a written unit the person took out), each tagged with
+  ``stage`` and ``origin``.
   Read-only; ``ingest eval-export`` writes it to JSONL.
 
 Nothing here runs on the write path: archive and prune run in maintenance, export on
@@ -127,3 +129,25 @@ def export(conn: sqlite3.Connection, since: str, until: str | None = None) -> It
                    "record": {"raw": (item or {}).get("raw"),
                               "evidence_range": _json(row["evidence_range"]),
                               "extractor_version": row["extractor_version"]}}
+    # what a person withdrew: a written unit CDF should not have written (design
+    # 2026-10-30-brain-change-feed §3.5b). The withdrawal record keeps the claim, its
+    # source and when it was written; a cleanup by the agent and an undone one are
+    # not the person's verdict and are left out. No golden case is made from these.
+    withdrawals = _rows(conn, """SELECT target_path, created_at, anchors_absent, relations
+                                 FROM ingestion_writes WHERE op_kind='user_redact' AND step='done'
+                                 AND created_at >= ? AND created_at < ? ORDER BY created_at""",
+                        (since, upper)) if _has(conn, "ingestion_writes") else []
+    for row in withdrawals:
+        item = (_json(row["relations"]) or [{}])[0] or {}
+        if item.get("status") != "withdrawn" or str(item.get("actor") or "user") != "user":
+            continue
+        # its own stage: a person's verdict on a written unit, never sampled as a judge
+        # outcome (scripts/cdf_batch_eval keeps it out of precision and recall)
+        yield {"stage": "withdrawn", "origin": "withdrawn", "label": "user_withdrawn",
+               "unit_id": item.get("unit_id") or item.get("redact_anchor"), "at": row["created_at"],
+               "source": item.get("source") or "-", "state": "withdrawn",
+               "reason": item.get("reason") or "-",
+               "record": {"path": row["target_path"], "text": (_json(row["anchors_absent"]) or [""])[0],
+                          "claim": item.get("claim"), "claim_group": item.get("claim"),
+                          "written_at": item.get("written_at"),
+                          "source_ref": item.get("source_ref")}}

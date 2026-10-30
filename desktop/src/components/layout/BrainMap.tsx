@@ -31,7 +31,8 @@ export interface BrainMapProps {
   /** Runs in the last 30 days, per lane: the source pills' counts */
   sources: { chat: number; hive: number };
   needs: number;
-  reflect: { auto: number };
+  /** entries learned in the last 7 days (null: not loaded yet) */
+  reflect: { week: number | null };
   /** one line under the Project Agent and Eval titles (status / headline number) */
   agentLine?: string;
   evalLine?: string;
@@ -235,7 +236,7 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
         <text x={P.evo.x} y={P.evo.y - 14} textAnchor="middle" className={TITLE}>Reflect</text>
         <text x={P.evo.x} y={P.evo.y + 4} textAnchor="middle" className={SUB}>learns from Runs</text>
         <text x={P.evo.x} y={P.evo.y + 22} textAnchor="middle"
-          className={SUB}>{reflect.auto} written since review</text>
+          className={SUB}>{reflect.week == null ? '…' : `${reflect.week} learned this week`}</text>
       </Part>
 
       {/* You, Eval */}

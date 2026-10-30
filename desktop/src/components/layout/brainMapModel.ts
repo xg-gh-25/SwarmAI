@@ -1,8 +1,8 @@
 /**
  * brainMapModel — pure builders for the Brain map (Brain Hub detail "Map" view and
  * the Hub map above the card wall). No React, no fetch: every number comes from a
- * record the backend already produced (GET /ddd/brains[/{name}], the brain's review
- * queue, GET /pipelines/analytics, GET /swarm-out/runs). A
+ * record the backend already produced (GET /ddd/brains[/{name}], GET /ddd/brains/{name}/
+ * knowledge, GET /pipelines/analytics, GET /swarm-out/runs). A
  * value nobody measures is `null` (shown as UNKNOWN), never a guess.
  *
  * Exports:
@@ -19,7 +19,7 @@
  *   pendingSplit         health.pending split by source (Runs / escalations / jobs)
  *   brainSignal          the one signal a Hub card shows, and its sort rank
  */
-import type { BrainDetail, BrainSummary, GeneralBrain, ReviewData, SectionKey } from '../../services/ddd';
+import type { BrainDetail, BrainKnowledge, BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
 
@@ -139,11 +139,12 @@ export function humanPerRun(local: PipelineRunSummary[], hive: SwarmOutRun[]): {
 
 export interface BrainEval {
   runs: { total: number; landed: number; completionRate: number | null; avgCycleMin: number | null; tokens: number | null; needsYou: number };
-  brain: { entries: number; recentActivity: number | null; autoApplied: number };
+  /** learnedWeek: entries CDF wrote into the Brain in the last 7 days (null: not loaded) */
+  brain: { entries: number; recentActivity: number | null; learnedWeek: number | null };
 }
 
 export function brainEval(
-  runs: PipelineRunSummary[], detail: BrainDetail | null, review: ReviewData | null,
+  runs: PipelineRunSummary[], detail: BrainDetail | null, learned: BrainKnowledge | null,
 ): BrainEval {
   const landed = runs.filter((r) => r.status === 'completed' && !r.notLanded);
   const done = runs.filter((r) => r.status !== 'running');
@@ -163,7 +164,7 @@ export function brainEval(
     brain: {
       entries: knowledge?.entries.length ?? 0,
       recentActivity: detail?.health?.recentActivity ?? null,
-      autoApplied: (review?.hunks ?? []).filter((h) => h.tag === 'cultivation·auto-applied').length,
+      learnedWeek: learned ? learned.counts.week : null,
     },
   };
 }
@@ -177,7 +178,8 @@ export interface HubSummary {
   running: number;
   /** brains whose setup is recorded as setting-up */
   born: number;
-  /** ddd-changelog entries stamped in the last 30 days, summed; null = no brain reported it */
+  /** entries CDF wrote in the last 7 days (each Brain's learnedWeek, the General Brain's
+   *  included), summed; null = no Brain reported it (an older daemon) */
   learned: number | null;
   learnedBrains: number;
   /** last 30 days: Runs that landed, and Runs that finished (landed or not) */
@@ -288,7 +290,7 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
   general?: GeneralBrain | null): HubSummary {
   const known = new Set(brains.map((b) => b.name));
   const runs = (a?.byProject ?? []).filter((g) => known.has(g.project)).flatMap((g) => g.runs);
-  const reported = brains.filter((b) => typeof b.recentActivity === 'number');
+  const reported = [...brains, ...(general ? [general] : [])].filter((b) => typeof b.learnedWeek === 'number');
   return {
     brains: brains.length,
     // the attention channel already counts waiting Runs (paused_run): never add them twice
@@ -296,8 +298,8 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
       + (generalWaits(general) ? 1 : 0),
     running: brains.filter((b) => b.health.liveRun).length,
     born: brains.filter((b) => b.setupState === 'setting-up').length,
-    learned: reported.length ? reported.reduce((s, b) => s + (b.recentActivity ?? 0), 0) : null,
-    learnedBrains: reported.filter((b) => (b.recentActivity ?? 0) > 0).length,
+    learned: reported.length ? reported.reduce((s, b) => s + (b.learnedWeek ?? 0), 0) : null,
+    learnedBrains: reported.filter((b) => (b.learnedWeek ?? 0) > 0).length,
     landed: runs.filter((r) => r.status === 'completed' && !r.notLanded).length,
     finished: runs.filter((r) => r.status !== 'running').length,
     liveRuns: runs.filter((r) => r.status === 'running').length,

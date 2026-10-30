@@ -981,7 +981,10 @@ def sync_knowledge_index(
         except (OSError, UnicodeDecodeError):
             continue
 
-        chunks = chunk_markdown(content, rel_path)
+        try:
+            chunks = _cdf_chunks_for_file(full_path, rel_path, content)
+        except ValueError:          # parse_units refused the file: index it by heading
+            chunks = chunk_markdown(content, rel_path)
         existing_hashes = store.get_existing_hashes(rel_path)
 
         new_indexes: set[int] = set()
@@ -1010,13 +1013,22 @@ def sync_knowledge_index(
     return stats
 
 
+_CDF_MULTI_PREFIXES = ("Library/Links/", "Learned/domains/", "Learned/repos/", "Learned/_common/")
+
+
+def is_cdf_multi_unit(source_file: str, content: str) -> bool:
+    """Is this Knowledge file a CDF multi-entry file, recalled one entry at a time?
+
+    The CDF-owned folders, and any file CDF wrote entries into (a ``<!-- cand:`` marker):
+    the General Brain's ``Library/<subject>.md`` documents. Chunked by heading, one hit
+    would be a whole section of many entries. The one predicate both index writers
+    (``sync_knowledge_index``, ``sync_knowledge_file``) and the recall hit shape use."""
+    return source_file.startswith(_CDF_MULTI_PREFIXES) or "<!-- cand:" in content
+
+
 def _cdf_chunks_for_file(path: Path, source_file: str, content: str) -> list[dict]:
     """Chunk CDF multi-unit files by parse_units boundaries; other files by heading."""
-    multi = (source_file.startswith("Library/Links/")
-             or source_file.startswith("Learned/domains/")
-             or source_file.startswith("Learned/repos/")
-             or source_file.startswith("Learned/_common/"))
-    if not multi:
+    if not is_cdf_multi_unit(source_file, content):
         return chunk_markdown(content, source_file)
     from core.ingestion.units import parse_units
 

@@ -5,6 +5,9 @@ Five steps, all inside one eval directory:
   draw up to N per stratum with a fixed seed. ``items.jsonl`` is the blind view (text,
   source, project candidates); ``key.jsonl`` holds the system outcome; ``sample.json``
   records the input hash, seed and per-stratum population/sample counts.
+  What a person withdrew (stage ``withdrawn``) is its own stratum, id ``withdrawn:<unit>``:
+  it is the person's verdict, so it never counts in write precision or recall; ``score``
+  reports how often the labels agree with it.
 - ``label``: one labeler (a Bedrock model, through jobs.bedrock.structured) labels every item:
   should_write, scope, missing_why. Resumable; stops at ``--max-usd``.
 - ``aggregate``: majority per field; ``review.html`` for the user carries every item with
@@ -57,6 +60,8 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
 
 def group_of(record: dict[str, Any]) -> str:
     """Outcome group of one exported record (stratification and scoring key)."""
+    if record.get("origin") == "withdrawn":
+        return "withdrawn"                    # written, then taken out by the person
     state = record["state"]
     if state in _GROUPS:
         return _GROUPS[state]
@@ -86,7 +91,7 @@ def sample(export_path: Path, out_dir: Path, *, per_stratum: int = 15, seed: int
     rows = _read_jsonl(export_path)
     strata: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        strata[f"{row['stage']}|{row['source']}|{group_of(row)}"].append(row)
+        strata[f"{row['stage']}|{row.get('source') or '-'}|{group_of(row)}"].append(row)
     rng = random.Random(seed)
     items, keys, counts = [], [], {}
     for name in sorted(strata):
@@ -95,10 +100,12 @@ def sample(export_path: Path, out_dir: Path, *, per_stratum: int = 15, seed: int
         counts[name] = {"population": len(population), "sampled": len(chosen)}
         for row in sorted(chosen, key=lambda r: r["unit_id"]):
             body = row.get("record") or {}
-            items.append({"id": row["unit_id"], "source": row["source"], "text": _text(row),
+            # a withdrawn unit is also in the export as its write: its own id, no collision
+            rid = f"withdrawn:{row['unit_id']}" if group_of(row) == "withdrawn" else row["unit_id"]
+            items.append({"id": rid, "source": row.get("source") or "-", "text": _text(row),
                           "project_candidates": body.get("project_candidates") or []})
             destination = body.get("destination") or {}
-            keys.append({"id": row["unit_id"], "stratum": name, "stage": row["stage"],
+            keys.append({"id": rid, "stratum": name, "stage": row["stage"],
                          "group": group_of(row), "state": row["state"], "reason": row["reason"],
                          "project": destination.get("project") if isinstance(destination, dict) else None,
                          "store": destination.get("store") if isinstance(destination, dict) else None})
@@ -391,7 +398,8 @@ def score(eval_dir: Path, human_path: Path | None = None) -> dict[str, Any]:
     lost = _metric("extraction loss", sum(final[i]["should_write"] is True for i in extraction),
                    len(extraction), None)
     lost["note"] = "lower is better; share of extractor rejects the labels say should be written"
-    should = [i for i in keys if resolved(i, "should_write") and final[i]["should_write"] is True]
+    should = [i for i in keys if keys[i]["group"] != "withdrawn"
+              and resolved(i, "should_write") and final[i]["should_write"] is True]
     covered = [i for i in should if keys[i]["group"] in _COVERED]
     num = sum(weight[keys[i]["stratum"]] for i in covered)
     den = sum(weight[keys[i]["stratum"]] for i in should)
@@ -401,7 +409,12 @@ def score(eval_dir: Path, human_path: Path | None = None) -> dict[str, Any]:
               "note": "weighted by stratum population; no exact lower bound"}
     label_error = {f: {**v, "rate": round(v["majority_wrong"] / v["checked"], 4) if v["checked"] else None}
                    for f, v in errors.items()}
-    report = {"metrics": [precision, recall, routing, d1, lost], "label_error": label_error,
+    # what a person withdrew is their verdict "should not have been written": the share
+    # the labels agree with is a check on the labels, never on CDF
+    taken_out = [i for i, k in keys.items() if k["group"] == "withdrawn" and resolved(i, "should_write")]
+    agreed = _metric("labels agree with withdrawals", sum(final[i]["should_write"] is False for i in taken_out),
+                     len(taken_out), None)
+    report = {"metrics": [precision, recall, routing, d1, lost, agreed], "label_error": label_error,
               "unresolved": dict(unresolved), "adjudicator": (human or {}).get("adjudicator")}
     (eval_dir / "score.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     (eval_dir / "failures.md").write_text(_failures(final, keys, items, load_labels(eval_dir)), encoding="utf-8")
@@ -417,7 +430,10 @@ def _failures(final: dict[str, Any], keys: dict[str, Any], items: dict[str, Any]
         problems = []
         if key["group"] == "write" and should is False:
             problems.append("写了不该写的")
-        if key["group"] not in _COVERED and should is True:
+        if key["group"] == "withdrawn":
+            if should is True:
+                problems.append("人撤回了，标注却认为该写")
+        elif key["group"] not in _COVERED and should is True:
             problems.append("该写没写" + ("（尚未定案）" if key["group"] == "hold" else ""))
         if key["group"] == "write" and isinstance(scope, str) and scope.startswith("project:") \
                 and key["project"] != scope[8:]:

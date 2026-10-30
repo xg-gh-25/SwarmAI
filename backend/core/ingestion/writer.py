@@ -479,11 +479,42 @@ def render_unit(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     return _render_block(decision, unit_id, dict(group))
 
 
-def _next_evolution_id(content: str, section: str, prefix: str) -> int:
+def _next_evolution_id(content: str, section: str, prefix: str,
+                       withdrawn: list[str] | None = None) -> int:
+    """One past the highest number of *prefix* in the section, counting the entries
+    withdrawn from it too: a withdrawal deletes the entry, and its number must not be
+    given to the next one (other files cite a correction by its number, e.g. "(C052)")."""
     _, end = _section_bounds(content, section)
     start, _ = _section_bounds(content, section)
     values = [int(item) for item in re.findall(rf"^###\s+{prefix}(\d+)\b", content[start:end], re.MULTILINE)]
+    for text in withdrawn or ():
+        m = re.match(rf"\s*###\s+{prefix}(\d+)\b", text)
+        if m:
+            values.append(int(m.group(1)))
     return max(values, default=0) + 1
+
+
+def _withdrawn_evolution_texts() -> list[str]:
+    """The original texts of the entries withdrawn from EVOLUTION.md (write journal)."""
+    from .store import connect_ro
+    try:
+        conn = connect_ro()
+    except (OSError, sqlite3.Error):
+        return []
+    try:
+        rows = conn.execute("SELECT anchors_absent FROM ingestion_writes WHERE op_kind='user_redact' "
+                            "AND step='done' AND target_path='.context/EVOLUTION.md'").fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    out: list[str] = []
+    for (absent,) in rows:
+        try:
+            out += [t for t in json.loads(absent or "[]") if isinstance(t, str)]
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> dict[str, Any]:
@@ -519,7 +550,7 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
     sequence = 1
     if store == "EVOLUTION":
         prefix = _evolution_prefix(group, _decision_value(decision, "card1"))
-        sequence = _next_evolution_id(content, section, prefix)
+        sequence = _next_evolution_id(content, section, prefix, _withdrawn_evolution_texts())
     block = _render_block(decision, unit_id, group, sequence=sequence)
     intended = _compose_intended(content, target, store, section, group, block)
     # the section the entry is written under: an event's is chosen when it is placed (its

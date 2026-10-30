@@ -5,7 +5,8 @@
  * General is not a Projects/ DDD: its knowledge is the Markdown in Knowledge/Library and
  * its Project Agent is the Runner Agent, for tasks that belong to no Brain. The page
  * answers one decision: can such a task go out (is the Runner Agent confirmed)? So it
- * has three blocks — what it is, its knowledge, the Runner Agent's form — and
+ * has four blocks — what it is, its knowledge, the Runner Agent's form, then what it
+ * learned (the CDF entries in Knowledge/Library, with Withdraw) — and
  * none of a DDD's tabs, and no delete or rename: it is built in.
  *
  * Opened by its own view (BrainHub `openGeneral`), never by the name, so a Projects/
@@ -16,6 +17,7 @@
 import { useRunnerAgent, type GeneralBrain, type ProjectAgent } from '../../services/ddd';
 import { ProjectAgentForm } from './ProjectAgentForm';
 import { BackToHubButton } from './BackToHubButton';
+import { BrainLearnedView } from './BrainLearnedView';
 
 export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }: {
   general: GeneralBrain | null;
@@ -85,6 +87,11 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
                   No Runner Agent definition here yet: it is written when the workspace starts.
                 </div>}
           </div>
+        </section>
+
+        {/* what the AI wrote into Knowledge/Library while it worked (CDF's records) */}
+        <section data-testid="general-learned" className="-mx-6">
+          <BrainLearnedView name="General" />
         </section>
       </div>
     </div>

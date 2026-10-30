@@ -24,22 +24,22 @@
  * Brain switcher, status; description; More menu) and seven tabs that mirror the
  * parts of the Brain map: Overview (the map, Needs you, Eval summary) · Needs you ·
  * Brain (DDD) (Add knowledge, docs, files) · Project Agent (definition, Start a Run) ·
- * Conductor · Runs · Reflect · Evolution (the review queue) · Eval. Clicking a map
+ * Conductor · Runs · What it learned (BrainLearnedView: CDF's entries, Withdraw) · Eval. Clicking a map
  * part opens its tab. The last tab, Distribute, ships the Brain out (an internal git
  * package or an external GitHub repo). `defaultView` picks the first
  * detail view (default 'overview').
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
-  useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
-  approveReview, rejectReviewHunk, aggregateTypeCounts,
+  useBrainsWithPinned, useBrainDetail, useBrainKnowledge, useDistribution,
+  aggregateTypeCounts,
   brainRecall, useBrainSpecs, useBrainSpecDoc,
   getLocalRoots, removeLocalRoot, type LocalRoot,
 } from '../../services/ddd';
 import type {
-  BrainSummary, BrainDetail, GeneralBrain,
-  ReviewData, ReviewHunk, RecallHit, SpecDoc, SpecRepo,
+  BrainSummary, BrainDetail, BrainKnowledge, GeneralBrain,
+  RecallHit, SpecDoc, SpecRepo,
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
@@ -48,54 +48,19 @@ import { relativeTime } from './ArtifactsOverlay';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
-import { Hint } from '../overlay';
 import {
   BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge,
   type BrainTab, type MapPanel,
 } from './BrainMapView';
 import { BrainHubHome, Flower } from './BrainHubHome';
 import { GeneralBrainView } from './GeneralBrainView';
+import { BrainLearnedView } from './BrainLearnedView';
 import { bornText, hubSummary } from './brainMapModel';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { takeOverlayTarget } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
 import { BackToHubButton } from './BackToHubButton';
-
-/** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
- *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
- *  (GUI30 extract-intent-to-pure-helper). Frontend-only: the backend `ReviewHunk`
- *  carries only {file,signature,tag,diff_text}, so we parse the diff text.
- *
- *  - adds/dels: body lines starting with `+`/`-`, EXCLUDING the `+++`/`---` file
- *    headers (mirrors backend `_hunk_signature`, ddd_brain.py:924) — a naive count
- *    would miscount the two file-header lines.
- *  - startLine: the NEW-side start `C` from `@@ -A(,B)? +C(,D)? @@`. The count part
- *    is OPTIONAL — git emits `@@ -1 +1 @@` (no comma) for single-line changes; a
- *    regex assuming `+C,D` would NaN on that (Gate-1 caught this against the fixture).
- *  - section: the trailing @@ heading, ONLY when non-empty. For markdown DDD docs git
- *    has no funcname driver, so this is usually empty → undefined (never '' / garbage). */
-export function hunkSummary(diffText: string): {
-  adds: number; dels: number; startLine: number | null; section?: string;
-} {
-  let adds = 0, dels = 0, startLine: number | null = null, section: string | undefined;
-  for (const ln of diffText.split('\n')) {
-    if (ln.startsWith('@@')) {
-      // @@ -A(,B)? +C(,D)? @@ optional-heading
-      const m = ln.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
-      if (m) {
-        startLine = parseInt(m[1], 10);
-        const heading = m[2].trim();
-        if (heading) section = heading;
-      }
-      continue;
-    }
-    if (ln.startsWith('+++') || ln.startsWith('---')) continue;  // file headers, not changes
-    if (ln.startsWith('+')) adds += 1;
-    else if (ln.startsWith('-')) dels += 1;
-  }
-  return { adds, dels, startLine, section };
-}
 
 // ── Root — MASTER→DETAIL nav model ──────────────────────────────────────────────
 //
@@ -118,7 +83,7 @@ const TABS: { key: DetailView; label: string }[] = [
   { key: 'brain', label: 'Brain (DDD)' },
   { key: 'agent', label: 'Project Agent' },
   { key: 'runs', label: 'Conductor · Runs' },
-  { key: 'reflect', label: 'Reflect · Evolution' },
+  { key: 'reflect', label: 'What it learned' },
   { key: 'eval', label: 'Eval' },
   { key: 'distribute', label: 'Distribute' },
 ];
@@ -222,7 +187,7 @@ export function BrainHub(
   }
 
   // DETAIL — key={selected} remounts the shell on a brain switch so no view-local
-  // state (tree root, graph, review armed-state) leaks across brains.
+  // state (tree root, graph, a withdrawal half-confirmed) leaks across brains.
   return (
     <BrainDetailShell
       key={selected}
@@ -260,7 +225,6 @@ function BrainDetailShell(
   });
   // same count as the map's You: each Run waiting, each Need-You item, a Project Agent draft
   const needs = summary ? hubSummary([summary], analytics).needsYou : 0;
-  const pending = summary?.health.pending ?? 0;
 
   // close THIS overlay BEFORE dispatching swarm:open-file so the Canvas isn't
   // rendered under the host (the swarmws z-index precedent)
@@ -284,7 +248,8 @@ function BrainDetailShell(
       <div className="flex items-center gap-5 px-4 border-b border-[var(--color-border)] flex-shrink-0" role="tablist" data-testid="brainhub-detail-nav">
         {TABS.map((t) => {
           const on = detailView === t.key;
-          const count = t.key === 'needs' ? needs : t.key === 'reflect' ? pending : 0;
+          // only Needs you carries a count: what the Brain learned asks nothing of the person
+          const count = t.key === 'needs' ? needs : 0;
           return (
             <button key={t.key} role="tab" aria-selected={on} data-testid={`brainhub-tab-${t.key}`}
               onClick={() => onSelectView(t.key)}
@@ -293,7 +258,7 @@ function BrainDetailShell(
                 : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
               {t.label}
               {count > 0 && <span className="ml-1.5 text-meta font-semibold text-[var(--color-status-error)]"
-                data-testid={t.key === 'reflect' ? 'review-tab-badge' : `brainhub-tab-count-${t.key}`}>{count}</span>}
+                data-testid={`brainhub-tab-count-${t.key}`}>{count}</span>}
             </button>
           );
         })}
@@ -309,7 +274,7 @@ function BrainDetailShell(
         )}
         {detailView === 'agent' && <BrainAgentView name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />}
         {detailView === 'runs' && <BrainRunsView name={name} />}
-        {detailView === 'reflect' && <ReviewView name={name} onRequestClose={onRequestClose} />}
+        {detailView === 'reflect' && <BrainLearnedView name={name} />}
         {detailView === 'eval' && <BrainEvalView name={name} />}
         {detailView === 'distribute' && <DistributeView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} />}
       </div>
@@ -497,10 +462,10 @@ function BrainView(
   const [showWeekly, setShowWeekly] = useState(false);
   const [adding, setAdding] = useState(addOpen);
 
-  // Cached fetches (run_cfb460ac): detail drives the view; review is best-effort (§③
-  // signals + Weekly): a review error must NOT blank the tab.
+  // Cached fetches (run_cfb460ac): detail drives the view; what it learned this week is
+  // best-effort (§③ signals + Weekly): its error must NOT blank the tab.
   const { data: detail = null, error: detailErr } = useBrainDetail(name);
-  const { data: review = null } = useReview(name);
+  const { data: learned = null } = useBrainKnowledge(name, 'week');
   const error = detailErr ? String((detailErr as { message?: string })?.message ?? detailErr) : null;
 
   useEffect(() => { setShowWeekly(false); }, [name]);
@@ -543,7 +508,7 @@ function BrainView(
       </div>
       <BrainOverview
         detail={detail}
-        review={review}
+        learned={learned}
         onOpenFile={openFile}
         showWeekly={showWeekly}
         onToggleWeekly={() => setShowWeekly((v) => !v)}
@@ -557,19 +522,19 @@ function BrainView(
 // ── §Overview — fixed order: ① Ontology → ② Need-You → ③ 4 core-doc cards ───────
 
 function BrainOverview(
-  { detail, review, onOpenFile, showWeekly, onToggleWeekly }:
+  { detail, learned, onOpenFile, showWeekly, onToggleWeekly }:
   {
-    detail: BrainDetail; review: ReviewData | null; onOpenFile: (p: string) => void;
+    detail: BrainDetail; learned: BrainKnowledge | null; onOpenFile: (p: string) => void;
     showWeekly: boolean; onToggleWeekly: () => void;
   },
 ) {
   const knowledge = detail.sections.find((s) => s.key === 'knowledge');
   const members = knowledge?.members ?? [];
-  // Memoize the O(hunks) signal map + weekly model so an unrelated re-render (weekly
-  // toggle, hover) doesn't re-scan the whole review (meta-review LOW; matches the
-  // useMemo discipline the Gallery already uses for aggregateTypeCounts).
-  const signals = useMemo(() => docSignalMap(members, review), [members, review]);
-  const weekly = useMemo(() => weeklyReportModel(detail, review), [detail, review]);
+  // Memoize the signal map + weekly model so an unrelated re-render (weekly toggle,
+  // hover) doesn't re-scan the week's entries (matches the useMemo discipline the
+  // Gallery already uses for aggregateTypeCounts).
+  const signals = useMemo(() => docSignalMap(members, learned), [members, learned]);
+  const weekly = useMemo(() => weeklyReportModel(detail, learned), [detail, learned]);
   // §① ontology counts — used for the no-health fallback tier (renders the 3×7
   // ontology from typeCounts alone). undefined when there are no entries at all.
   const ontologyCounts = useMemo(() => aggregateTypeCounts(detail.sections), [detail.sections]);
@@ -634,7 +599,7 @@ function CoreDocCards(
     showWeekly: boolean; onToggleWeekly: () => void; weekly: WeeklyReportModel;
   },
 ) {
-  const totalNew = weekly.autoApplied;
+  const totalNew = weekly.learnedWeek;
   const totalPending = weekly.pending;
   const hasSignal = totalNew > 0 || totalPending > 0;
   return (
@@ -645,7 +610,7 @@ function CoreDocCards(
           Judgment core · review periodically
         </span>
         <span className="text-meta text-[var(--color-text-muted)]" data-testid="coredocs-agg">
-          {hasSignal ? `since last review · ${totalNew} new · ${totalPending} pending` : 'up to date since last review'}
+          {hasSignal ? `this week · ${totalNew} new · ${totalPending} pending` : 'nothing new this week'}
         </span>
         <button
           data-testid="coredocs-weekly"
@@ -680,8 +645,8 @@ function CoreDocCards(
               </div>
               <div className="text-meta text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
               <div className="flex items-center gap-2 text-meta text-[var(--color-text-faint)]">
-                {sig.newCount > 0 && <span className="text-[var(--color-status-success)]">{sig.newCount} new</span>}
-                {!marked && <span>up to date</span>}
+                {sig.newCount > 0 && <span className="text-[var(--color-status-success)]">+{sig.newCount} this week</span>}
+                {!marked && <span>nothing new this week</span>}
                 {m.mtime && <span className="ml-auto">{m.mtime}</span>}
               </div>
             </button>
@@ -710,10 +675,10 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
     <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)] p-3 mb-2 text-meta">
       <div className="flex items-center gap-1.5 mb-2 font-semibold text-[var(--color-primary)]">
         <span className="material-symbols-outlined icon-sm">summarize</span>
-        {projectName} · weekly review {weekly.sinceSha && <span className="text-meta font-mono text-[var(--color-text-faint)]">since {weekly.sinceSha}</span>}
+        {projectName} · this week
       </div>
       <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
-        <div><span className="text-[var(--color-status-success)] font-semibold">{weekly.autoApplied}</span> auto-cultivated change{weekly.autoApplied === 1 ? '' : 's'} since last review</div>
+        <div><span className="text-[var(--color-status-success)] font-semibold">{weekly.learnedWeek}</span> entr{weekly.learnedWeek === 1 ? 'y' : 'ies'} learned</div>
         <div><span className="text-[var(--color-status-warning)] font-semibold">{weekly.pending}</span> item{weekly.pending === 1 ? '' : 's'} waiting in Need You</div>
         <div>
           docs touched: {weekly.changedDocs.length > 0
@@ -1089,278 +1054,6 @@ function SpecDocView({ name, repo, path, onClose }: { name: string; repo: string
 }
 
 
-// ── Review view (Run 2) ──────────────────────────────────────────────────────
-
-function shortSha(sha: string): string {
-  return sha ? sha.slice(0, 8) : '—';
-}
-
-function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: () => void }) {
-  // Cached query (run_cfb460ac) — re-opening Review inside the 30s window is served
-  // from cache. A mutating action (approve/reject) calls `reload()` = refetch, which
-  // re-hits the network to reflect the write (the write invalidated the queue).
-  const { data = null, error: qErr, refetch } = useReview(name);
-  const error = qErr ? String((qErr as { message?: string })?.message ?? qErr) : null;
-  // Per-ACTION errors (reject/proposal 409s etc.) are TRANSIENT + inline — they must
-  // NOT blank the whole queue via the top-level `if (error)` return (Gate-2: a routine
-  // retryable 409 shouldn't wipe the review view). Separate channel from the load error.
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // H2: "Mark all seen" advances the watermark IRREVERSIBLY (wipes the review
-  // queue from the diff). Require a two-click armed confirm so a single stray
-  // click can't wipe it. `armed` MUST reset on any context change (reload after
-  // any action, brain switch) so it never persists stale — reset in load() below.
-  const [armed, setArmed] = useState(false);
-
-  // reload = refetch the cached query + reset the transient per-action UI state.
-  // Replaces the old raw-fetch load(); every post-action call site is unchanged.
-  // Gate-2 (run_cfb460ac, multi-specialist confirmed): a mutation (approve/reject)
-  // ALSO changes the pending count that lives in TWO OTHER cached queries — the
-  // gallery badge (['brains-with-pinned']) and the Overview §② Need-You count
-  // (['brain-detail', name].health.escalationPending). Before caching, every mount
-  // refetched fresh; with useQuery those siblings would show a stale non-zero pending
-  // for up to staleTime (30s) after the user clears the queue. Invalidate them here
-  // (the single post-action chokepoint) so the cross-query count stays truthful.
-  const qc = useQueryClient();
-  const load = useCallback(() => {
-    setActionError(null);   // clear any transient action error on (re)load
-    setArmed(false);        // disarm on every (re)load: brain switch, or after any action
-    void refetch();
-    void qc.invalidateQueries({ queryKey: ['brain-detail', name] });
-    void qc.invalidateQueries({ queryKey: ['brains-with-pinned'] });
-  }, [refetch, qc, name]);
-
-  // Disarm + clear the transient action error when switching brains (the query
-  // itself re-keys on name via useReview). The cached data does NOT blank on switch.
-  useEffect(() => { setActionError(null); setArmed(false); }, [name]);
-
-  const onApproveAll = useCallback(async () => {
-    if (!armed) { setArmed(true); return; }   // first click arms; no API call yet
-    setBusy(true);
-    // ALWAYS disarm (finally) — Gate-2: if approveReview throws, armed must NOT stay
-    // stuck true (a stale-armed button would let the next single click re-fire the
-    // POST, bypassing the two-click guard). Surface the error instead of swallowing.
-    try {
-      await approveReview(name);
-      load();
-    } catch (e) {
-      setActionError(String((e as { message?: string })?.message ?? e));
-    } finally {
-      setArmed(false);
-      setBusy(false);
-    }
-  }, [name, load, armed]);
-
-  const onRejectHunk = useCallback(async (h: ReviewHunk) => {
-    setBusy(true);
-    // F3: surface API errors (parity with onApproveAll) via the TRANSIENT actionError
-    // channel — a rejected git apply -R (409/404/500) must not fail silently, but it
-    // also must NOT blank the whole queue (Gate-2: a routine retryable 409 is inline).
-    try {
-      await rejectReviewHunk(name, h.file, h.signature);
-      load();
-    } catch (e) {
-      setActionError(String((e as { message?: string })?.message ?? e));
-    } finally { setBusy(false); }
-  }, [name, load]);
-
-  // Open a hunk's file in the Canvas (Run 2). WARNING Gate-1: hunk.file is ALREADY
-  // WORKSPACE-relative (backend runs `git diff` at the workspace root with a
-  // `Projects/<name>` pathspec → cur_file = "Projects/<name>/…", ddd_brain.py:162/964;
-  // verified test fixture:150 + reject call:564). So dispatch it DIRECTLY — do NOT
-  // re-wrap in `Projects/${name}/` (that would double-prefix → 404). Same as
-  // BrainView.openFile now (the Projects tree also yields workspace-relative paths).
-  // Same close→Canvas z-index precedent (close BEFORE dispatch).
-  const openHunkFile = useCallback((workspaceRelFile: string, gitStatus?: string) => {
-    onRequestClose?.();
-    document.dispatchEvent(new CustomEvent('swarm:open-file', {
-      detail: { path: workspaceRelFile, gitStatus },
-    }));
-  }, [onRequestClose]);
-
-  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="review-error">Failed to load review: {error}</div>;
-  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading review…</div>;
-
-  // Every hunk is already-written sediment (CDF writes the Brain; nothing waits for
-  // approval).
-  const zoneA = data.hunks;
-
-  // Item 6 — de-jargon: the primary header is plain language ("N changes since
-  // your last review · M awaiting approval"). The engineer-facing git details
-  // (watermark SHA → HEAD, scoped path) are FOLDED into a muted <details> below,
-  // still present in the DOM (kept for the power user + the header contract test).
-  const changeCount = data.hunks.length;
-
-  return (
-    <div className="p-4" data-testid="brainhub-review">
-      <div className="mb-3"><Hint>What the Brain learned since your last review. It is already written; Reject undoes one.</Hint></div>
-      {/* diff header — plain language first, git internals folded */}
-      <div className="mb-3" data-testid="review-diff-header">
-        <div className="flex items-center gap-2 text-body text-[var(--color-text)]">
-          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">rate_review</span>
-          <span>
-            {changeCount === 0
-              ? 'No changes since your last review'
-              : <>{changeCount} change{changeCount === 1 ? '' : 's'} since your last review
-                  </>}
-          </span>
-          <button
-            onClick={onApproveAll}
-            // F8: NEVER advance the watermark when the diff is incomplete (timed out) —
-            // the empty/partial hunk list would silently mark unreviewed work as seen.
-            disabled={busy || data.hunks.length === 0 || data.diff_incomplete}
-            data-testid="review-approve-all"
-            className={`ml-auto btn-sm disabled:opacity-40 ${armed ? 'btn-warning' : 'btn-success'}`}
-            title={armed ? 'This clears the review queue and records everything as seen — click again to confirm' : 'Records all changes below as reviewed'}
-          >
-            <span className="material-symbols-outlined icon-xs">{armed ? 'warning' : 'visibility'}</span>
-            {armed ? 'Click again to confirm' : 'Mark all seen'}
-          </button>
-        </div>
-        {/* engineer detail — folded, muted; kept for power users */}
-        <details className="mt-1">
-          <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer select-none opacity-70 hover:opacity-100">
-            git detail
-          </summary>
-          <div className="mt-1 text-meta font-mono text-[var(--color-text-muted)]">
-            diff <span className="text-[var(--color-text)]">Projects/{name}/</span>
-            · last-reviewed <span className="text-[var(--color-text)]">{shortSha(data.last_reviewed_sha)}</span>
-            → HEAD <span className="text-[var(--color-text)]">{shortSha(data.head_sha)}</span>
-          </div>
-        </details>
-      </div>
-
-      {/* F8: loud degraded state — the diff timed out, so the queue below is INCOMPLETE.
-          Gate-2: give an explicit Retry affordance (not just "retry shortly" text) so a
-          large-repo timeout isn't a dead-end lockout of the review. */}
-      {data.diff_incomplete && (
-        <div className="flex items-center gap-1.5 mb-3 text-meta text-[var(--color-status-warning)] bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warning)_32%,transparent)] rounded-md px-2 py-1" data-testid="review-diff-incomplete">
-          <span className="material-symbols-outlined icon-xs">warning</span>
-          The review diff timed out — this queue may be incomplete. "Mark all seen" is disabled to avoid skipping unreviewed changes.
-          <button onClick={() => load()} disabled={busy} data-testid="review-diff-retry"
-            className="btn-sm btn-warning ml-auto disabled:opacity-40">
-            <span className="material-symbols-outlined icon-xs">refresh</span>Retry
-          </button>
-        </div>
-      )}
-
-      {/* F3: transient per-action error (reject/proposal 409 etc.) — inline, does NOT
-          blank the whole queue (Gate-2). Dismissible; also cleared on next load(). */}
-      {actionError && (
-        <div className="flex items-center gap-1.5 mb-3 text-meta text-[var(--color-status-error)] bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] rounded-md px-2 py-1" data-testid="review-action-error">
-          <span className="material-symbols-outlined icon-xs">error</span>
-          Action failed: {actionError}
-          <button onClick={() => setActionError(null)} data-testid="review-action-error-dismiss"
-            className="ml-auto text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline">dismiss</button>
-        </div>
-      )}
-
-      {/* Zone A — auto-cultivated (already committed) */}
-      <ReviewZone
-        testid="review-zone-a" title="Written automatically"
-        desc="Facts Reflect added from Runs. They are already in the Brain; Reject undoes one."
-        color="var(--color-primary)"
-      >
-        {zoneA.length === 0 ? <ZoneEmpty text="Nothing written automatically since your last review." />
-          : zoneA.map((h) => (
-            <HunkCard key={h.signature} hunk={h} busy={busy}
-              onReject={() => onRejectHunk(h)}
-              onOpenFile={() => openHunkFile(h.file)} />
-          ))}
-      </ReviewZone>
-    </div>
-  );
-}
-
-function ReviewZone({ testid, title, desc, color, children }: {
-  testid: string; title: string; desc: string; color: string; children: React.ReactNode;
-}) {
-  return (
-    <div className="mb-4" data-testid={testid}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-small font-semibold" style={{ color }}>{title}</span>
-        <span className="text-meta text-[var(--color-text-faint)]">{desc}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function ZoneEmpty({ text }: { text: string }) {
-  return <div className="text-meta text-[var(--color-text-faint)] italic px-1 py-1">{text}</div>;
-}
-
-function HunkCard({ hunk, busy, onReject, onOpenFile }: {
-  hunk: ReviewHunk; busy: boolean; onReject: () => void; onOpenFile: () => void;
-}) {
-  // Run 2: raw @@ diff COLLAPSED by default — the plain-language summary is the
-  // primary read; the diff is opt-in behind [View diff]. Keyed by signature so each
-  // card toggles independently.
-  const [showDiff, setShowDiff] = useState(false);
-  const s = hunkSummary(hunk.diff_text);
-  const fileName = hunk.file.split('/').pop() ?? hunk.file;
-  const sig = hunk.signature;
-  return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-code-bg)] mb-1.5 overflow-hidden" data-testid="review-hunk">
-      {/* Plain-language summary line (AC1) — always visible. Primary derivation is
-          file + counted +/- + line-range (always reliable); section is best-effort
-          (empty for .md — Gate-1), shown only when git gave a non-empty heading. */}
-      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-[var(--color-border)]" data-testid={`hunk-summary-${sig}`}>
-        <span className="font-mono text-meta text-[var(--color-text)]">{fileName}</span>
-        <span className="text-meta tabular-nums">
-          <span className="text-[var(--color-status-success)]">+{s.adds}</span>
-          <span className="text-[var(--color-text-faint)]"> / </span>
-          <span className="text-[var(--color-status-error)]">-{s.dels}</span>
-        </span>
-        {s.startLine != null && (
-          <span className="text-meta text-[var(--color-text-faint)]">around line {s.startLine}</span>
-        )}
-        {s.section && (
-          <span className="text-meta text-[var(--color-text-faint)] truncate italic">· {s.section}</span>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            onClick={() => setShowDiff((v) => !v)}
-            data-testid={`hunk-toggle-diff-${sig}`}
-            className="btn-sm btn-secondary"
-          >
-            <span className="material-symbols-outlined icon-xs">{showDiff ? 'expand_less' : 'code'}</span>
-            {showDiff ? 'Hide diff' : 'View diff'}
-          </button>
-          <button
-            onClick={onOpenFile}
-            data-testid={`hunk-open-file-${sig}`}
-            className="btn-sm btn-soft"
-            title="Open this file in the Canvas"
-          >
-            <span className="material-symbols-outlined icon-xs">open_in_new</span>
-            Open file
-          </button>
-          <button
-            onClick={onReject}
-            disabled={busy}
-            data-testid="review-reject-hunk"
-            className="btn-sm btn-danger disabled:opacity-40"
-          >
-            <span className="material-symbols-outlined icon-xs">undo</span>
-            Revert hunk
-          </button>
-        </div>
-      </div>
-      {showDiff && (
-        <pre className="text-meta font-mono leading-relaxed px-2 py-1 overflow-x-auto max-h-40" data-testid={`hunk-diff-${sig}`}>
-          {hunk.diff_text.split('\n').slice(0, 20).map((ln, i) => {
-            const c = ln.startsWith('+') && !ln.startsWith('+++') ? 'var(--color-status-success)'
-              : ln.startsWith('-') && !ln.startsWith('---') ? 'var(--color-status-error)'
-              : 'var(--color-text-faint)';
-            return <div key={i} style={{ color: c }}>{ln || ' '}</div>;
-          })}
-        </pre>
-      )}
-    </div>
-  );
-}
-
 // ── Distribute view (Run 3) ──────────────────────────────────────────────────
 
 // run_8d2ec26c: the target→repo mapping is a READ-ONLY derivation, NOT a stored
@@ -1391,8 +1084,8 @@ function DistributeView(
 
   // Open aim.json in the Canvas so the owner can edit the distribution block (Run 3,
   // Step 1). aim.json is PROJECT-relative (lives at Projects/<name>/aim.json) → needs
-  // the Projects/<name>/ prefix (BrainView.openFile shape), NOT the already-workspace-
-  // relative hunk.file shape from ReviewView. Close-before-dispatch z-index precedent.
+  // the Projects/<name>/ prefix (BrainView.openFile shape). Close-before-dispatch
+  // z-index precedent.
   const openAimJson = useCallback(() => {
     onRequestClose?.();
     document.dispatchEvent(new CustomEvent('swarm:open-file', {

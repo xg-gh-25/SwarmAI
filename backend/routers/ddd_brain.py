@@ -1,31 +1,28 @@
-"""DDD Brain Hub — projection + review router (/api/ddd/brains…).
+"""DDD Brain Hub — projection router (/api/ddd/brains…).
 
 The backend half of the Brain Hub "lens" (design 2026-07-28), grown across four
-Runs. Most endpoints are READ projections over existing state that introduce NO
-stored metric (R30#4: every count is computed live per request) — but the Review
-tab (Run 2) added two **mutating** POSTs, so this router is NO LONGER pure-read.
+Runs. Every endpoint is a READ projection over existing state that introduces NO
+stored metric (R30#4: every count is computed live per request).
 
-Six handlers (4 read, 2 mutating):
+Four read handlers:
 
-  READ:
-  GET  /api/ddd/brains                     → Gallery: one summary card per DDD.
+  GET  /api/ddd/brains                     → Gallery: one summary card per DDD (with
+                                             learnedWeek, what each Brain learned in
+                                             the last 7 days).
   GET  /api/ddd/brains/{name}              → Brain view: six-section breakdown +
                                              per-entry type/section of ② docs.
-  GET  /api/ddd/brains/{name}/review       → Review queue: tagged git-diff hunks
-                                             since the watermark.
+  GET  /api/ddd/brains/{name}/knowledge    → What the Brain learned: CDF-written
+                                             entries by layer and type (core/brain_knowledge).
   GET  /api/ddd/brains/{name}/distribution → Distribute: declared reach + output state.
 
-  MUTATING (write the working tree / a stored artifact — NOT read-only):
-  POST /api/ddd/brains/{name}/review/approve → advances the last-reviewed watermark
-                                             to HEAD by WRITING .artifacts/.last-reviewed-sha
-                                             (a per-DDD stored file — the one persisted artifact).
-  POST /api/ddd/brains/{name}/review/reject  → reverse-applies ONE hunk via
-                                             `git apply -R` (MODIFIES the working tree,
-                                             subtree-scoped, --check-guarded).
+The only change a person makes to what a Brain learned is the withdrawal route of the
+ingestion router (it deletes the entry); the git-diff review queue, its watermark and
+its hunk reject were removed (design 2026-10-30-brain-change-feed: a user's own Brains
+are not in git, so it showed nothing for them).
 
-⚠️ No app-layer auth on these POSTs — consistent with every other SwarmAI router
-(the daemon binds 127.0.0.1 and Hive fronts /api/* with Caddy basic_auth; app-layer
-auth is not the codebase pattern). Do not add route auth to only this router.
+No app-layer auth on these reads — consistent with every other SwarmAI router (the
+daemon binds 127.0.0.1 and Hive fronts /api/* with Caddy basic_auth). The one write a
+Brain page makes, withdrawing an entry, goes through POST /api/ingestion/redact.
 
 Data sources:
   - structure   ← core.ddd_paths (six-section layout SSOT — NEVER hardcode dirs)
@@ -57,7 +54,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -129,9 +126,9 @@ def _resolve_brain_dir(name: str) -> Optional[Path]:
     """Resolve a brain NAME to its project dir, CONTAINED within Projects/.
 
     Defense-in-depth (Gate-2 security): Starlette already normalizes `../` in the
-    URL path (a traversal name 404s at routing), but this is the ONLY place the
-    review endpoints — one of which runs a destructive `git apply -R` — turn an
-    external name into a filesystem path. So we containment-check here too: the
+    URL path (a traversal name 404s at routing), but this is where an endpoint
+    (the Brain knowledge view) turns an external name into a filesystem path. So we
+    containment-check here too: the
     resolved dir MUST be a direct child of the resolved Projects/ root AND carry a
     .project.json. Anything else → None (→ 404), never a path outside Projects/."""
     root = _projects_root().resolve()
@@ -1029,6 +1026,19 @@ async def list_brains() -> dict:
     # this response, NOT a separate endpoint (Gate-1: one fewer round-trip). The
     # frontend renders these as the top-row bento (SwarmAI big + 2 small stacked)
     # and the Welcome Top-N; the rest fall into the 3-per-row grid.
+    # learnedWeek: what each Brain learned in the last 7 days (core/brain_knowledge), one
+    # pass for every Brain, from the same source as the Brain page; fail-soft to absent
+    try:
+        from core.brain_knowledge import week_counts
+        from core.project_agent import GENERAL_BRAIN
+        names = [b.get("name") for b in brains if b.get("name")] + ([GENERAL_BRAIN] if general else [])
+        weeks = await executors.run_nav(week_counts, _workspace_root(), names)
+        for b in brains:
+            b["learnedWeek"] = weeks.get(b.get("name"), 0)
+        if general:
+            general["learnedWeek"] = weeks.get(GENERAL_BRAIN, 0)
+    except Exception as e:  # never 500 the gallery on the count
+        logger.warning("brains gallery: learned-this-week count failed: %s", e)
     # general: the built-in General Brain, second on the card wall (null if unreadable)
     return {"brains": brains, "pinned": get_pinned_projects(), "general": general}
 
@@ -1054,408 +1064,30 @@ async def get_brain(name: str) -> dict:
     return detail
 
 
-# ─── Review tab (Run 2) ──────────────────────────────────────────────────────
+# ─── What the Brain learned (design 2026-10-30-brain-change-feed) ─────────────
 #
-# The Review tab makes "how do I review DDD knowledge / what changed"
-# operable, on a GIT substrate: DDD docs live in the SwarmWS git tree and
-# cultivation auto-commits, so a scoped `git diff <last-reviewed-sha>..HEAD --
-# Projects/<ddd>/` IS the review queue. Three concepts:
-#   - watermark   — a per-DDD last-reviewed commit SHA, stored as ONE plain file
-#                   under Projects/<ddd>/.artifacts/.last-reviewed-sha (atomic
-#                   write; auto_commit_hook's `git add -A` sweeps it — race-safe
-#                   because every read sees a COMPLETE sha). Default when absent =
-#                   the PARENT of the last commit touching the subtree (design
-#                   §4.3 "prior auto-commit").
-#   - hunks       — the scoped diff parsed at git's own hunk boundaries; each is
-#                   identified by a CONTENT SIGNATURE (file + old-side line-span +
-#                   +/- lines) — NOT a position index, so a stale index from a
-#                   concurrent auto-commit can NEVER silently revert the wrong
-#                   hunk (Gate-1 point #2), AND two identical text changes at
-#                   different locations get DISTINCT signatures (REVIEW CRITICAL).
-#   - reject      — reverse-apply ONLY that hunk via `git apply -R`, subtree-
-#                   scoped with --include (REVIEW HIGH hardening). NEVER
-#                   `git checkout <file>` — that nukes unshipped edits (GUI83/
-#                   GUI127). No stored metric (R30#4).
-
-_WATERMARK_REL = ".artifacts/.last-reviewed-sha"
+# The CDF-written entries of the Brain's main files, by layer and type, newest first,
+# read from the files and the records (core/brain_knowledge) — never from git: a
+# user's own Brains are not in git, so the git-diff review it replaces always showed
+# nothing for them. The one action is the existing withdrawal route of the ingestion
+# router, which deletes the entry.
 
 
-def _rev_parse_head(ws: Path) -> Optional[str]:
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(ws), capture_output=True, text=True, timeout=5,
-            env=_GIT_READ_ENV(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return r.stdout.strip() if r.returncode == 0 else None
-
-
-def _default_watermark(ws: Path, rel: str) -> Optional[str]:
-    """First-run watermark (no stored file yet): the PARENT of the most recent
-    commit touching the subtree — so the Review tab opens showing the latest
-    unreviewed change (design §4.3 "prior auto-commit"), never floods with full
-    history, and never shows an empty diff when there IS a recent change. If the
-    last subtree commit has no parent (the DDD's birth commit), fall back to that
-    commit itself → an empty diff (nothing before birth to review)."""
-    try:
-        r = subprocess.run(
-            ["git", "log", "-1", "--format=%H", "--", rel],
-            cwd=str(ws), capture_output=True, text=True, timeout=5,
-            env=_GIT_READ_ENV(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    last = r.stdout.strip()
-    if not last:
-        return None
-    try:
-        pr = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"{last}^"],
-            cwd=str(ws), capture_output=True, text=True, timeout=5,
-            env=_GIT_READ_ENV(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return last
-    parent = pr.stdout.strip()
-    return parent or last
-
-
-def _read_watermark(project_dir: Path) -> Optional[str]:
-    """Read the stored last-reviewed SHA, or None if never reviewed."""
-    wm = project_dir / _WATERMARK_REL
-    try:
-        txt = wm.read_text().strip()
-    except (OSError, FileNotFoundError):
-        return None
-    return txt or None
-
-
-def _write_watermark(project_dir: Path, sha: str) -> None:
-    """Atomically write the watermark (tmp + os.replace) — always a complete SHA
-    even if auto_commit_hook's `git add -A` races the write (R3/R29). The tmp is
-    created IN .artifacts/ (same dir as the target) so os.replace is a same-fs
-    atomic rename; on success tmp is renamed away, so the finally-unlink is a
-    no-op guarded by exists()."""
-    art = project_dir / ".artifacts"
-    art.mkdir(parents=True, exist_ok=True)
-    wm = project_dir / _WATERMARK_REL
-    fd, tmp = tempfile.mkstemp(dir=str(art), prefix=".wm-")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(sha + "\n")
-        os.replace(tmp, wm)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
-def _hunk_signature(file_rel: str, hunk_header: str, hunk_body: str) -> str:
-    """Stable signature for a hunk — file + the @@ header's OLD-side span +
-    the added/removed lines. Rationale (REVIEW CRITICAL fix): the old-side
-    line-span (`-A,B`) disambiguates two hunks that make the SAME textual change
-    at DIFFERENT locations in one file (e.g. `line5→X` and `line35→X`) — without
-    it both collide on identical +/- lines and reject would revert the first
-    match, not the one the user chose (AC3 violation). The old-side span is
-    stable at reject-time because the diff is recomputed against the SAME
-    watermark base (Gate-1 point #2: content-identity, not a client position
-    index). We use ONLY the old-side (`-A,B`) — the new-side (`+C,D`) shifts as
-    earlier hunks are reverted within a session, the old-side does not."""
-    old_span = ""
-    # hunk_header looks like: @@ -A,B +C,D @@ optional-section-heading
-    for p in hunk_header.split():
-        if p.startswith("-"):
-            old_span = p  # the -A,B token
-            break
-    payload_lines = [
-        ln for ln in hunk_body.splitlines()
-        if ln[:1] in ("+", "-") and not ln.startswith(("+++", "---"))
-    ]
-    payload = file_rel + "\n" + old_span + "\n" + "\n".join(payload_lines)
-    # Non-cryptographic content-signature (hunk identity/dedup watermark), NOT a
-    # security digest — usedforsecurity=False (bandit B324, no collision-attack surface).
-    return hashlib.sha1(
-        payload.encode("utf-8", "replace"), usedforsecurity=False
-    ).hexdigest()[:16]
-
-
-def _parse_hunks(diff_text: str) -> list[dict]:
-    """Parse `git diff` output into per-file hunks (git's own @@ boundaries).
-
-    Returns [{file, header, diff_text, signature}] — diff_text is a
-    self-contained single-file, single-hunk patch (file header + one @@ block)
-    that `git apply -R` can consume standalone.
-    """
-    hunks: list[dict] = []
-    cur_file: Optional[str] = None
-    file_header: list[str] = []
-    cur_hunk: Optional[list[str]] = None
-
-    def _flush():
-        if cur_file and cur_hunk:
-            header_line = cur_hunk[0]  # the @@ … @@ line
-            body = "\n".join(cur_hunk)
-            patch = "\n".join(file_header + cur_hunk) + "\n"
-            hunks.append({
-                "file": cur_file,
-                "diff_text": patch,
-                "signature": _hunk_signature(cur_file, header_line, body),
-            })
-
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git"):
-            _flush()
-            cur_hunk = None
-            file_header = [line]
-            cur_file = None
-        elif line.startswith("+++ b/"):
-            cur_file = line[len("+++ b/"):]
-            file_header.append(line)
-        elif line.startswith(("--- ", "index ", "new file", "deleted file",
-                              "old mode", "new mode", "similarity", "rename")):
-            file_header.append(line)
-        elif line.startswith("@@"):
-            _flush()
-            cur_hunk = [line]
-        elif cur_hunk is not None:
-            cur_hunk.append(line)
-    _flush()
-    return hunks
-
-
-#: Provenance tag for a hunk: everything in the git diff is already COMMITTED
-#: sediment, so every hunk is `cultivation·auto-applied`.
-_HUNK_TAG = "cultivation·auto-applied"
-
-
-def _sha_exists(ws: Path, sha: str) -> bool:
-    """True if <sha> is a resolvable commit object in this repo."""
-    if not sha:
-        return False
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"],
-            cwd=str(ws), capture_output=True, text=True, timeout=5,
-            env=_GIT_READ_ENV(),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return r.returncode == 0 and bool(r.stdout.strip())
-
-
-def _resolve_watermark(project_dir: Path, ws: Path, rel: str, fallback: str) -> str:
-    """The base SHA to diff against, with STALE-watermark protection (Gate-2
-    correctness): a stored watermark whose commit was rebased/gc'd away would make
-    `git diff <stale>..HEAD` fail → `_scoped_diff_hunks` return [] → the user sees
-    'nothing to review' when there IS unreviewed work (a silent review-bypass).
-    So a stored watermark is used ONLY if its commit still exists; otherwise we
-    fall back to the default (parent-of-last-commit), never to a dead sha."""
-    stored = _read_watermark(project_dir)
-    if stored and _sha_exists(ws, stored):
-        return stored
-    return _default_watermark(ws, rel) or fallback
-
-
-class DiffIncompleteError(Exception):
-    """The scoped git-diff could not complete (timeout) — the hunk list would be
-    silently EMPTY, indistinguishable from a genuinely clean subtree. Raised so
-    callers can distinguish 'nothing to review' from 'diff timed out' and refuse
-    to advance the review watermark over an unknown queue (F8). Never swallowed
-    into an empty list on the review path."""
-
-
-def _scoped_diff_hunks(project_dir: Path, base_sha: str) -> list[dict]:
-    """Live scoped diff base..HEAD for this DDD subtree, parsed into tagged hunks.
-
-    Raises DiffIncompleteError on a git timeout (the ONE case where an empty
-    result would be a false 'nothing to review' — F8). A genuinely clean diff
-    still returns []. Both callers (get_review / reject_review) catch it.
-    """
-    ws = _workspace_root()
-    if not (ws / ".git").exists():
-        return []
-    try:
-        rel = project_dir.relative_to(ws).as_posix()
-    except ValueError:
-        rel = project_dir.as_posix()
-    try:
-        # Exclude .artifacts/ — pipeline bookkeeping (the watermark file, run
-        # state) is NOT reviewable DDD knowledge; including it would
-        # surface the watermark's own commits as review hunks (self-reference).
-        r = subprocess.run(
-            ["git", "diff", f"{base_sha}..HEAD", "--unified=3", "--",
-             rel, f":(exclude){rel}/.artifacts/**"],
-            # A file that is not UTF-8 must not fail the whole queue: its bytes show
-            # as U+FFFD (a reject of such a hunk then fails to apply, never misapplies).
-            cwd=str(ws), capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=5,
-            env=_GIT_READ_ENV(),
-        )
-    except subprocess.TimeoutExpired as e:
-        # LOUD on degradation (F8): a silent [] here reads as "nothing to review"
-        # and would let the reviewer advance the watermark over unseen work.
-        logger.warning(
-            "review diff timed out for %s (base=%s) — surfacing diff_incomplete",
-            project_dir.name, base_sha[:8] if base_sha else "?",
-        )
-        raise DiffIncompleteError from e
-    except OSError:
-        return []
-    if r.returncode != 0:
-        return []
-    hunks = _parse_hunks(r.stdout)
-    for h in hunks:
-        h["tag"] = _HUNK_TAG
-    return hunks
-
-
-class RejectHunkBody(BaseModel):
-    file: str
-    hunk_signature: str
-
-
-@router.get("/brains/{name}/review")
-async def get_review(name: str) -> dict:
-    """Review queue: tagged git-diff hunks since the watermark."""
+@router.get("/brains/{name}/knowledge")
+async def get_brain_knowledge(name: str, since: Literal["week", "month", "all"] = "week") -> dict:
+    """What Brain *name* learned in the range (``week`` / ``month`` / ``all``)."""
+    from core.brain_knowledge import knowledge
+    from core.project_agent import is_general_name
 
     def _work() -> Optional[dict]:
-        project_dir = _resolve_brain_dir(name)   # containment-checked (Gate-2)
-        if project_dir is None:
+        if not is_general_name(name) and _resolve_brain_dir(name) is None:   # contained (Gate-2)
             return None
-        ws = _workspace_root()
-        head = _rev_parse_head(ws) or ""
-        try:
-            rel = project_dir.relative_to(ws).as_posix()
-        except ValueError:
-            rel = project_dir.as_posix()
-        wm = _resolve_watermark(project_dir, ws, rel, head)   # stale-safe (Gate-2)
-        diff_incomplete = False
-        try:
-            hunks = _scoped_diff_hunks(project_dir, wm) if wm else []
-        except DiffIncompleteError:
-            # F8: the diff timed out — return an EMPTY hunk list but FLAG it, so the
-            # frontend disables "Mark all seen" instead of advancing the watermark
-            # over an empty-because-timed-out queue (silent review-bypass).
-            hunks = []
-            diff_incomplete = True
-        return {
-            "last_reviewed_sha": wm,
-            "head_sha": head,
-            "hunks": hunks,
-            "diff_incomplete": diff_incomplete,
-        }
+        return knowledge(_workspace_root(), name, since)
 
     result = await executors.run_nav(_work)
     if result is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
     return result
-
-
-@router.post("/brains/{name}/review/approve")
-async def approve_review(name: str) -> dict:
-    """Advance the last-reviewed watermark to HEAD (mark-all-seen)."""
-
-    def _work() -> Optional[str]:
-        project_dir = _resolve_brain_dir(name)   # containment-checked (Gate-2)
-        if project_dir is None:
-            return None
-        head = _rev_parse_head(_workspace_root())
-        if not head:
-            raise HTTPException(status_code=500, detail="Cannot resolve HEAD")
-        _write_watermark(project_dir, head)
-        return head
-
-    head = await executors.run_nav(_work)
-    if head is None:
-        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
-    return {"last_reviewed_sha": head}
-
-
-@router.post("/brains/{name}/review/reject")
-async def reject_review(name: str, body: RejectHunkBody) -> dict:
-    """Reverse-apply ONE hunk (identified by content signature) via git apply -R.
-
-    NEVER `git checkout <file>` (GUI83/GUI127 — that would clobber unshipped
-    edits). The hunk is re-located in the CURRENT diff by its content signature,
-    so a stale client index can't revert the wrong hunk; if no current hunk
-    matches → 404 (fail-loud, revert nothing).
-    """
-
-    def _work() -> dict:
-        project_dir = _resolve_brain_dir(name)   # containment-checked (Gate-2)
-        if project_dir is None:
-            raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
-        ws = _workspace_root()
-        try:
-            rel = project_dir.relative_to(ws).as_posix()
-        except ValueError:
-            rel = project_dir.as_posix()
-        wm = _resolve_watermark(project_dir, ws, rel, _rev_parse_head(ws) or "")   # stale-safe
-        try:
-            hunks = _scoped_diff_hunks(project_dir, wm) if wm else []
-        except DiffIncompleteError:
-            # F8: diff timed out — we CANNOT locate the target hunk, so reverting
-            # would be blind. Fail loud (409, retry) rather than 404 "no match"
-            # (which would falsely imply the hunk is gone) or a blind revert.
-            raise HTTPException(
-                status_code=409,
-                detail="Review diff timed out — cannot locate the hunk to revert; retry.",
-            )
-        target = next(
-            (h for h in hunks if h["signature"] == body.hunk_signature), None
-        )
-        if target is None:
-            # Fail-loud: signature matches no current hunk → revert NOTHING.
-            raise HTTPException(
-                status_code=404,
-                detail=f"No current hunk matches signature {body.hunk_signature}",
-            )
-        # Reverse-apply ONLY this hunk against the working tree.
-        # Hardening (REVIEW HIGH): --include=<rel>/* constrains git apply to this
-        # DDD's subtree — even a crafted patch header naming a path outside
-        # Projects/<ddd>/ can't touch it. Combined with git's own path
-        # normalization (diff output can't carry `..`), reject can only ever
-        # modify files inside the project it's scoped to.
-        #
-        # META-REVIEW HIGH (half-applied-under-race): git apply modifies the working
-        # tree DURING the attempt, so a hunk that fails partway (offset drift from a
-        # concurrent auto_commit_hook edit) would leave the file half-reverted. Guard
-        # with `--check` FIRST: it validates the patch applies cleanly WITHOUT
-        # touching the tree. Only if the check passes do we run the live apply. This
-        # closes the "409 but tree already half-modified" window — a failed reject now
-        # leaves the tree UNTOUCHED, never half-reverted.
-        _apply_base = ["git", "apply", "-R", "--recount", f"--include={rel}/*"]
-        try:
-            check = subprocess.run(
-                _apply_base + ["--check", "-"],
-                input=target["diff_text"], cwd=str(ws),
-                capture_output=True, text=True, timeout=5,
-                env=_GIT_READ_ENV(),
-            )
-            if check.returncode != 0:
-                # Does NOT apply cleanly (likely a concurrent edit shifted context).
-                # Tree is UNTOUCHED. Fail loud, revert nothing.
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Hunk no longer applies cleanly: {check.stderr.strip()}",
-                )
-            proc = subprocess.run(
-                _apply_base + ["-"],
-                input=target["diff_text"], cwd=str(ws),
-                capture_output=True, text=True, timeout=5,
-                env=_GIT_READ_ENV(),
-            )
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise HTTPException(status_code=500, detail=f"git apply failed: {e}")
-        if proc.returncode != 0:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Hunk no longer applies cleanly: {proc.stderr.strip()}",
-            )
-        return {"reverted": True, "file": target["file"], "signature": body.hunk_signature}
-
-    return await executors.run_nav(_work)
 
 
 # ─── Distribute tab (Run 3) ──────────────────────────────────────────────────

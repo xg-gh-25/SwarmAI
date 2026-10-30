@@ -141,7 +141,7 @@ def close_gap(project: str | None, gap_id: str, *, closed_by: str, note: str,
     main file, and its text, the closing note and status ``closed`` go into the records,
     where recurrence detection reads them (``withdrawn``). Return closed | already_closed |
     not_found | unparseable | stale (only ``stale`` is worth trying again)."""
-    from .governed_edit import StaleRevision, withdraw
+    from .governed_edit import StaleRevision, WholeDocument, withdraw
     path = _improvement(project)
     if path is None:
         return "not_found"
@@ -159,6 +159,8 @@ def close_gap(project: str | None, gap_id: str, *, closed_by: str, note: str,
     reason = _NOTE_UNSAFE.sub(" ", f"已由 {closed_by} 关闭：{note}，{day}").strip()
     try:
         withdraw(unit.anchor, reason[:500], actor=f"cdf:{closed_by}", status="closed")
+    except WholeDocument:
+        return "unparseable"                  # trying again cannot succeed
     except (StaleRevision, ValueError):
         return "stale"
     return "closed"

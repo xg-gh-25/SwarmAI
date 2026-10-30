@@ -1,7 +1,7 @@
 /**
  * BrainHubHome — the Brain Hub's front page. It answers three questions, in order:
  *   1. how big is the brain? — one line: the number of Brains, the knowledge they hold,
- *      what they learned in 30 days; the one page action, New Brain, beside it;
+ *      what they learned this week; the one page action, New Brain, beside it;
  *   2. does anything wait on me? — ONE attention band, only when something is open: the
  *      total and its breakdown by severity (brainMapModel.Severity), the queue one click
  *      away (each item opens where it is handled);
@@ -126,7 +126,7 @@ const entriesOf = (b: BrainSummary) => Object.values(b.typeCounts ?? {}).reduce(
 function brainFacts(b: BrainSummary): string {
   const parts: string[] = [];
   if (b.typeCounts) parts.push(`${entriesOf(b).toLocaleString()} entries`);
-  if (b.recentActivity) parts.push(`+${b.recentActivity} in 30 days`);
+  if (b.learnedWeek) parts.push(`+${b.learnedWeek} this week`);
   const last = b.health.lastChangeRelative;
   if (last && last !== '--') parts.push(`landed ${last}`);
   return parts.join(' · ');
@@ -242,7 +242,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
         aria-hidden="true">local_library</span>}
       name="General" tag="Built-in" tagId="dddcard-builtin-tag"
       description={general.description || 'For tasks that belong to no Brain, with the Markdown in Knowledge/Library.'}
-      facts={`${general.library.files.toLocaleString()} Library file${general.library.files === 1 ? '' : 's'}`}
+      facts={`${general.library.files.toLocaleString()} Library file${general.library.files === 1 ? '' : 's'}${general.learnedWeek ? ` · +${general.learnedWeek} this week` : ''}`}
       signal={generalSignal(general)} />
   );
   const builtIn = [self && card(self), generalCard].filter(Boolean);
@@ -257,7 +257,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
         <span className="pb-0.5 text-body text-[var(--color-text-muted)]" data-testid="hub-ambient">
           {hasCounts && <><b className="font-semibold text-[var(--color-text-secondary)]">{entries.toLocaleString()}</b> knowledge entries</>}
           {hasCounts && sum.learned !== null && ' · '}
-          {sum.learned !== null && <><b className="font-semibold text-[var(--color-text-secondary)]">+{sum.learned}</b> learned in 30 days</>}
+          {sum.learned !== null && <><b className="font-semibold text-[var(--color-text-secondary)]">+{sum.learned}</b> learned this week</>}
         </span>
         <button className="ml-auto btn-sm btn-primary" onClick={openNewBrain} data-testid="hub-new-brain">New Brain</button>
       </div>

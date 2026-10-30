@@ -23,15 +23,13 @@ const DETAIL = {
     { key: 'delivery', members: [{ path: 'bindings.yaml', gitStatus: 'clean' }], entries: [], completeNotBroken: false },
   ],
 };
-const REVIEW = {
-  last_reviewed_sha: 'a', head_sha: 'abcdef1234', diff_incomplete: false,
-  hunks: [{ file: 'Projects/P/K.md', signature: 's1', tag: 'cultivation·auto-applied', diff_text: '' }],
-};
+const KNOWLEDGE = { brain: 'P', since: 'week', layers: [], gaps: [], counts: { week: 1, all: 4 },
+  withdrawn: { count: 0, items: [] } };
 const confirmProjectAgent = vi.fn();
 const editProjectAgent = vi.fn();
 vi.mock('../../services/ddd', () => ({
   useBrainDetail: () => ({ data: DETAIL }),
-  useReview: () => ({ data: REVIEW }),
+  useBrainKnowledge: () => ({ data: KNOWLEDGE }),
   useRunnerAgent: () => ({ data: null }),
   confirmProjectAgent: (...a: unknown[]) => confirmProjectAgent(...a),
   editProjectAgent: (...a: unknown[]) => editProjectAgent(...a),
@@ -74,7 +72,7 @@ describe('BrainMapView', () => {
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
     expect(screen.getByTestId('brain-map')).toBeTruthy();
     expect(screen.getByTestId('bm-sec-knowledge').textContent).toContain('2 entries');
-    expect(screen.getByTestId('bm-brain').textContent).toContain('abcdef1');
+    expect(screen.getByTestId('bm-brain').textContent).toContain('DDD');   // no git version: a Brain need not be in git
     expect(screen.getByTestId('bm-run-run_1')).toBeTruthy();
     expect(screen.queryByTestId('bm-run-run_9')).toBeNull();
     expect(screen.getByTestId('bm-you').textContent).toContain('1');   // the 1 Run waiting on you
@@ -151,11 +149,11 @@ describe('BrainMapView', () => {
       expect(map.textContent).toContain(label);
     }
     // a Run waits on you -> the Conductor dot says so; Gates has no files -> attention;
-    // Reflect wrote a hunk since the last review -> ok, and says how many
+    // the Brain learned one entry this week -> ok, and says how many
     expect(screen.getByTestId('bm-conductor').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('needs');
     expect(screen.getByTestId('bm-sec-gates').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('attention');
     expect(screen.getByTestId('bm-reflect').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('ok');
-    expect(screen.getByTestId('bm-reflect').textContent).toContain('1 written since review');
+    expect(screen.getByTestId('bm-reflect').textContent).toContain('1 learned this week');
   });
 
   it('Conductor · Runs: a Chat tab lane and a Hive lane of this Brain only, no mock lane', async () => {
@@ -448,18 +446,18 @@ describe('BrainHubHome', () => {
   // P: a Run needs you (analytics above, and the attention channel's paused_run).
   // Q: an escalation and two failing jobs. R: running. S: being born. T: quiet.
   const brains = [
-    brain('T', { description: 'Quiet one', recentActivity: 0 }),
-    brain('S', { setupState: 'setting-up', recentActivity: 2 }),
-    brain('R', { recentActivity: 3 }, { liveRun: true }),
-    brain('Q', { recentActivity: 0, pendingBySource: { escalation: 1, job: 2 } }, { pending: 3 }),
-    brain('P', { description: 'The SELF brain', recentActivity: 4, pendingBySource: { paused_run: 1 } }, { pending: 1 }),
+    brain('T', { description: 'Quiet one', learnedWeek: 0 }),
+    brain('S', { setupState: 'setting-up', learnedWeek: 2 }),
+    brain('R', { learnedWeek: 3 }, { liveRun: true }),
+    brain('Q', { learnedWeek: 0, pendingBySource: { escalation: 1, job: 2 } }, { pending: 3 }),
+    brain('P', { description: 'The SELF brain', learnedWeek: 4, pendingBySource: { paused_run: 1 } }, { pending: 1 }),
   ];
   const order = () => screen.getAllByTestId(/^hub-card-[^a]/).map((e) => e.getAttribute('data-testid'));
 
   it('one lead line, one attention band; the built-in Brain leads, the rest are alphabetical', () => {
     render(<BrainHubHome brains={brains as never} selfName="P" onOpen={vi.fn()} />);
     expect(screen.getByTestId('hub-count').textContent).toBe('5 Brains');
-    expect(screen.getByTestId('hub-ambient').textContent).toContain('+9 learned in 30 days');
+    expect(screen.getByTestId('hub-ambient').textContent).toContain('+9 learned this week');
     // each item once: P's Run (counted by the attention channel, not again from the
     // analytics) + Q's escalation + Q's 2 failing jobs; the worst one sets the band's tone
     expect(screen.getByTestId('hub-open-count').textContent).toBe('4 open items');
@@ -543,13 +541,13 @@ describe('BrainHubHome', () => {
   });
 
   it('a card footer: entries, what it learned, when it last landed', () => {
-    render(<BrainHubHome brains={[brain('T', { recentActivity: 3, typeCounts: { guideline: 10, pitfall: 2 } },
+    render(<BrainHubHome brains={[brain('T', { learnedWeek: 3, typeCounts: { guideline: 10, pitfall: 2 } },
       { lastChangeRelative: '5h ago' })] as never} onOpen={vi.fn()} />);
-    expect(screen.getByTestId('hub-facts-T').textContent).toBe('12 entries · +3 in 30 days · landed 5h ago');
+    expect(screen.getByTestId('hub-facts-T').textContent).toBe('12 entries · +3 this week · landed 5h ago');
     expect(screen.getByTestId('hub-ambient').textContent).toContain('12 knowledge entries');
   });
 
-  it('an old daemon without recentActivity shows no learned count, never +0', () => {
+  it('an old daemon without learnedWeek shows no learned count, never +0', () => {
     render(<BrainHubHome brains={[brain('T')] as never} onOpen={vi.fn()} />);
     expect(screen.getByTestId('hub-ambient').textContent).not.toContain('learned');
   });

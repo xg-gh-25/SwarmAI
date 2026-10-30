@@ -2212,5 +2212,100 @@
     "showRules": "展开每一步的规则",
     "hideRules": "收起规则",
     "feedCount": "共 {{n}} 条"
+  },
+  "brainLearned": {
+    "loading": "正在读取这个 Brain 学到的内容…",
+    "loadFailed": "读取失败：{{error}}",
+    "retry": "重试",
+    "verdict": {
+      "week_one": "{{name}} 本周学到 {{count}} 条",
+      "week_other": "{{name}} 本周学到 {{count}} 条",
+      "month_one": "{{name}} 本月学到 {{count}} 条",
+      "month_other": "{{name}} 本月学到 {{count}} 条",
+      "all_one": "{{name}} 一共学到 {{count}} 条",
+      "all_other": "{{name}} 一共学到 {{count}} 条"
+    },
+    "none": {
+      "week": "{{name}} 本周没有学到新的",
+      "month": "{{name}} 本月没有学到新的",
+      "all": "{{name}} 还没有学到东西"
+    },
+    "sub": "都是 AI 在工作中自动学到的。不对的可以撤回。",
+    "range": {
+      "week": "本周",
+      "month": "本月",
+      "all": "全部"
+    },
+    "empty": "AI 在工作中学到东西时会出现在这里。可以切到「本月」或「全部」看看之前的。",
+    "emptyAll": "AI 在工作中学到东西时会出现在这里。",
+    "layerEmpty": "这段时间没有新的",
+    "layer": {
+      "meta": {
+        "name": "元认知",
+        "desc": "怎么想 · 原则与纠错"
+      },
+      "cognitive": {
+        "name": "认知",
+        "desc": "怎么判断 · 决定与心智模型"
+      },
+      "operational": {
+        "name": "操作",
+        "desc": "怎么做 · 经验、坑与流程"
+      }
+    },
+    "gaps": {
+      "name": "待跟进",
+      "desc": "AI 记下的还没做完的事"
+    },
+    "type": {
+      "principle": "原则",
+      "correction": "纠错",
+      "decision": "决定",
+      "model": "心智模型",
+      "guideline": "经验",
+      "pitfall": "坑",
+      "process": "流程",
+      "gap": "待跟进"
+    },
+    "source": {
+      "S0": "来自摘要",
+      "S1": "你让它记下的",
+      "S2": "来自对话",
+      "S3": "来自 Run",
+      "S4": "来自代码改动",
+      "S5": "来自度量",
+      "S6": "来自外部资料",
+      "S7": "来自对话",
+      "expired": "来源记录已过期"
+    },
+    "when": {
+      "today": "今天 {{time}}",
+      "yesterday": "昨天 {{time}}"
+    },
+    "collected": "收集于 {{when}}",
+    "unknownTime": "时间不详",
+    "writtenInto": "写进 {{doc}} · {{section}}",
+    "addsTo": "补充了之前的一条：{{title}}",
+    "more": "展开",
+    "less": "收起",
+    "withdraw": "撤回",
+    "done": "已撤回「{{title}}」，已从 {{doc}} 中删除。原文另存了一份备份。",
+    "confirm": {
+      "text": "这条会从 {{name}} 的 {{doc}} 里删除，AI 不再使用它。原文另存一份备份。以后的工作里如果再出现同样的知识，AI 可能会重新学到。",
+      "reason": "哪里不对？（可不填，写了能帮 AI 学得更准）",
+      "defaultReason": "在 Brain 页撤回",
+      "cancel": "取消",
+      "shortcut": "⌘↵ 撤回",
+      "stale": "这条刚被改过，请刷新后再试。",
+      "failed": "撤回失败：{{error}}"
+    },
+    "withdrawn": {
+      "line_one": "撤回过 {{count}} 条（共写入 {{written}} 条）",
+      "line_other": "撤回过 {{count}} 条（共写入 {{written}} 条）",
+      "none": "还没有撤回过（共写入 {{written}} 条）",
+      "show": "查看",
+      "hide": "收起",
+      "meta": "写入 {{written}} · 撤回 {{at}} · 原因：{{reason}}"
+    }
   }
 }

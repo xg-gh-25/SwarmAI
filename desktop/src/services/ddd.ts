@@ -98,6 +98,9 @@ export interface BrainSummary {
   /** ddd-changelog entries stamped in the last 30 days (the Hub's LEARNED total).
    *  OPTIONAL for daemon skew: an old daemon omits it and the Hub shows UNKNOWN. */
   recentActivity?: number;
+  /** entries CDF wrote into this Brain in the last 7 days (core/brain_knowledge).
+   *  OPTIONAL for daemon skew: absent on an old daemon or when the count failed. */
+  learnedWeek?: number;
 }
 
 export interface SectionMember {
@@ -273,28 +276,54 @@ export interface AgentConfirmResult {
   sourceCheck: { ok: boolean; missing: string[] };
 }
 
-// ── Review tab (Run 2) ────────────────────────────────────────────────────────
+// ── What the Brain learned (design 2026-10-30-brain-change-feed) ─────────────
 
-/** Provenance tag for a review hunk. (decay·sinking removed — the backend
- *  _tag_hunk never emits it.) */
-export type HunkTag = 'cultivation·auto-applied';
+/** The three layers of the seven knowledge types, most important first. */
+export type KnowledgeLayer = 'meta' | 'cognitive' | 'operational';
 
-export interface ReviewHunk {
-  file: string;         // project-relative path the hunk touches
-  /** content signature — stable id used by reject (NOT a position index) */
-  signature: string;
-  tag: HunkTag;
-  diff_text: string;    // self-contained single-hunk patch (@@ … block)
+/** One entry CDF wrote into a Brain's files. All text is plain (render as text). */
+export interface KnowledgeItem {
+  /** governed-edit anchor; what a withdrawal names */
+  anchor: string;
+  unit_id: string;
+  /** file name ('TECH.md', 'general-knowledge.md') and its workspace-relative path */
+  doc: string;
+  path: string;
+  section: string;
+  /** one of the seven types, or 'gap' for an open item */
+  type: string;
+  gap_kind: string | null;
+  layer?: KnowledgeLayer;
+  title: string;
+  /** the entry without its marker comments, whole */
+  text: string;
+  /** when CDF wrote it; null = unknown (shown only under "all", last) */
+  written_at: string | null;
+  /** true: the write record is gone, `written_at` is when it was collected */
+  collected: boolean;
+  /** S1..S7 lane and its reference (a session, a run); null = record expired */
+  source: string | null;
+  source_ref: string | null;
+  /** title of the entry this one adds to, when that entry is still in a file */
+  adds_to: string | null;
 }
 
-export interface ReviewData {
-  last_reviewed_sha: string;
-  head_sha: string;
-  hunks: ReviewHunk[];
-  /** true if the scoped git-diff timed out — the hunk list is INCOMPLETE, so
-   *  "Mark all seen" must be disabled (advancing the watermark over an
-   *  empty-because-timed-out queue would silently mark unreviewed work as seen). */
-  diff_incomplete: boolean;
+export interface WithdrawnItem {
+  path: string; doc: string; at: string; reason: string; title: string; type: string;
+  written_at: string | null; source: string | null;
+}
+
+export type KnowledgeRange = 'week' | 'month' | 'all';
+
+export interface BrainKnowledge {
+  brain: string;
+  since: KnowledgeRange;
+  layers: { layer: KnowledgeLayer; items: KnowledgeItem[] }[];
+  gaps: KnowledgeItem[];
+  /** entries written in the last 7 days / in all, of the entries in the files now */
+  counts: { week: number; all: number };
+  /** what the person withdrew from this Brain */
+  withdrawn: { count: number; items: WithdrawnItem[] };
 }
 
 // ── Distribute tab (Run 3) ────────────────────────────────────────────────────
@@ -333,6 +362,8 @@ export interface GeneralBrain {
   library: { files: number; bytes: number };
   projectAgentStatus: 'draft' | 'changed' | 'reviewed' | 'invalid' | null;
   shadowed: boolean;
+  /** entries CDF wrote into Knowledge/Library in the last 7 days (absent: old daemon) */
+  learnedWeek?: number;
 }
 
 export interface BrainsList { brains: BrainSummary[]; pinned: string[]; general: GeneralBrain | null }
@@ -502,28 +533,9 @@ export function aggregateTypeCounts(sections: BrainSection[]): Record<EntryType,
   return total > 0 ? counts : undefined;
 }
 
-// ── Review API (Run 2) ────────────────────────────────────────────────────────
-
-/** GET /api/ddd/brains/{name}/review — tagged git-diff hunks since watermark. */
-export async function getReview(name: string): Promise<ReviewData> {
-  const resp = await api.get<ReviewData>(`/ddd/brains/${encodeURIComponent(name)}/review`);
-  return resp.data;
-}
-
-/** POST …/review/approve — advance the last-reviewed watermark to HEAD. */
-export async function approveReview(name: string): Promise<{ last_reviewed_sha: string }> {
-  const resp = await api.post(`/ddd/brains/${encodeURIComponent(name)}/review/approve`);
-  return resp.data;
-}
-
-/** POST …/review/reject — reverse-apply ONE hunk (by content signature). */
-export async function rejectReviewHunk(
-  name: string, file: string, hunkSignature: string,
-): Promise<{ reverted: boolean }> {
-  const resp = await api.post(
-    `/ddd/brains/${encodeURIComponent(name)}/review/reject`,
-    { file, hunk_signature: hunkSignature },
-  );
+/** GET /api/ddd/brains/{name}/knowledge — what the Brain learned in the range. */
+export async function getBrainKnowledge(name: string, since: KnowledgeRange): Promise<BrainKnowledge> {
+  const resp = await api.get<BrainKnowledge>(`/ddd/brains/${encodeURIComponent(name)}/knowledge`, { params: { since } });
   return resp.data;
 }
 
@@ -596,11 +608,11 @@ export function useBrainSpecDoc(name: string, repo: string, path: string) {
   });
 }
 
-/** Cached GET /ddd/brains/{name}/review — the tagged review queue. */
-export function useReview(name: string | null) {
-  return useQuery<ReviewData>({
-    queryKey: ['brain-review', name],
-    queryFn: () => getReview(name as string),
+/** Cached GET /ddd/brains/{name}/knowledge — one query per Brain and range. */
+export function useBrainKnowledge(name: string | null, since: KnowledgeRange = 'week') {
+  return useQuery<BrainKnowledge>({
+    queryKey: ['brain-knowledge', name, since],
+    queryFn: () => getBrainKnowledge(name as string, since),
     enabled: !!name,
     staleTime: BRAIN_STALE_MS,
   });

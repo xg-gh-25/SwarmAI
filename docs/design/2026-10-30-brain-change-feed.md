@@ -1,9 +1,9 @@
 ---
 title: Brain 学到了什么 —— 按三层七类显示 CDF 写入的知识，用户只能撤回
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-10-31
 project: SwarmAI
-status: 待确认（r4：对现有系统的影响逐条核实，§9；EVOLUTION 编号、库版本兼容、计算缓存）
+status: 已落地（r5：用户 2026-10-31 确认；落地时按当时的系统改了几处前提，见 §0.1）
 follows: 2026-10-26-swarm-cognitive-distillation-flow.md（知识只由 CDF 写入，全自动）；2026-10-29-cdf-post-launch.md
 ---
 
@@ -20,6 +20,25 @@ Brain 页上的 review 改成一张"**它学到了什么**"：列出 CDF 写进�
 
 **r2 相对 r1 的变化**（用户 2026-10-30）：去掉"知道了"和已看集合；撤回从"留墓碑"改为删除；按三层七类
 显示；不拦截再学。
+
+### 0.1 r5：落地时改了的前提（2026-10-31，以这一节为准）
+
+写设计之后、落地之前，系统本身变了几处；下面各节里与这里冲突的，以这里为准。
+- **General Brain 是 `Knowledge/Library/*.md` 里带 `<!-- cand:` 标记的文件**（不再是 `Learned/_common`、
+  `Learned/repos`，它们已并入 Library）。`core/brain_knowledge.brain_files`。
+- **撤回已经是删除**（`governed_edit.withdraw`，无墓碑）；EVOLUTION K001 块里的旧墓碑已清掉。§3.5 的删除部分
+  不用再做。
+- **撤回存档不扩展 `redactions` 表**，写进撤回那一行写入记录的 `relations`（`unit_id`、`written_at`、
+  `source`、`source_ref`、`written_as`、`claim`，`governed_edit._archive_fields`）。写入记录的 `user_redact`
+  行不参与 30 天清理；Flow 的撤回比例（`review_health`）、Brain 页的撤回列表（`brain_knowledge._withdrawn`）、
+  评测导出（`eval_log.export`，`origin=withdrawn`）读同一行。只算人的撤回：`actor=user`、`status=withdrawn`，
+  不含已恢复的（`restored`）和 agent 的整理。所以 §9.3 的加列和库版本问题不存在；库版本现在是 11。
+- **撤回与 CDF 同时写同一个文件**：不在锁内重定位，路由遇到 `StaleRevision` 用当时的文件重试一次，仍冲突
+  返回 409（`routers/ingestion_redact.py`）；过期的计划在 `withdraw` 里标为 abandoned，不留给恢复流程反复重试。
+- **EVOLUTION 编号**：下一个编号同时数文件里的和撤回记录里该节的编号（`writer._next_evolution_id`）。
+- **没有判官**：CDF 已改为 agent 自己判定，"判官记录"指写入时的 claim 和来源。
+- 界面：Brain 详情的 "What it learned" 页（原 Reflect · Evolution，不再显示待办计数）、General Brain 页底部
+  同一个视图（`BrainLearnedView`）；文档卡片、Brain Map、首页卡片的计数都是"本周新增"，取自同一个接口。
 
 ## 1. 问题
 

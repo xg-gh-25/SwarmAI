@@ -682,3 +682,23 @@ def test_the_guard_compares_against_the_version_the_edit_was_made_on(tmp_path: P
     with pytest.raises(StaleRevision):
         _sanitize(target, b"# T\nx\n", "0" * 64)
     assert _sanitize(target, b"# T\nx\n", revision_of(target)) == b"# T\nx\n"
+
+
+def test_a_withdrawn_evolution_number_is_not_given_to_the_next_entry(corpus: dict[str, Path]) -> None:
+    """A withdrawal deletes the entry; its number stays used (other files cite a
+    correction by number). Only EVOLUTION's own withdrawals count."""
+    ws = corpus["workspace"]
+    target = ws / ".context/EVOLUTION.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("# E\n\n## Competence Learned\n\n### K001 | 2026-10-29\n- kept\n", encoding="utf-8")
+    conn = _connect(corpus["db"])
+    for op, path, text in (("w1", ".context/EVOLUTION.md", "### K004 | 2026-10-30\n- withdrawn"),
+                           ("w2", ".context/MEMORY.md", "### K009 | 2026-10-30\n- another file")):
+        conn.execute("INSERT INTO ingestion_writes(op_id,op_kind,target_path,step,anchors_absent,created_at,updated_at)"
+                     " VALUES(?, 'user_redact', ?, 'done', ?, 't', 't')", (op, path, json.dumps([text])))
+    conn.commit()
+    row = _unit(conn, "u.evo", "Always verify the current state.")
+    assert apply_unit(_decision("u.evo", "EVOLUTION", ".context/EVOLUTION.md", "Competence Learned"), row, conn) == "done"
+    text = target.read_text(encoding="utf-8")
+    assert "### K005 |" in text and "### K010" not in text
+    conn.close()
