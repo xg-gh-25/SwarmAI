@@ -5,14 +5,27 @@ Split out of ``config.py`` so that importing ``config`` for its path helpers
 (~100 ms). ``config`` re-exports every name here lazily — always import them from
 ``config``, never from this module, so there is exactly one ``settings`` instance.
 
-Key symbols: ``Settings``, ``get_settings``, ``settings``.
+Key symbols: ``Settings``, ``get_settings``, ``settings``, ``ENV_FILE``.
+
+The only env file read is ``ENV_FILE``, the ``.env`` next to this module (the dev
+checkout's ``backend/.env``; a built backend has none and reads its environment
+only). Never the working directory's ``.env``: the backend's commands run from any
+directory, including a person's own repositories, whose ``.env`` belongs to another
+program. Its keys are not settings of ours (one unknown key made every command fail)
+and must never configure this backend. Validation errors never carry the value they
+refused (``hide_input_in_errors``): a key or token in a bad line stays out of the
+message, the terminal and the logs.
 """
 import secrets
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config import _read_version
+
+#: the one env file Settings reads: beside this module, never the working directory's
+ENV_FILE = Path(__file__).resolve().parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -71,7 +84,8 @@ class Settings(BaseSettings):
     #   - sandbox_enabled_default, sandbox_auto_allow_bash, sandbox_excluded_commands
     #   - sandbox_allow_unsandboxed, sandbox_additional_write_paths, sandbox_allowed_hosts
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8",
+                                      hide_input_in_errors=True)
 
 
 @lru_cache()
