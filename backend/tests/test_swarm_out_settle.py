@@ -99,7 +99,7 @@ def test_stage_order(env):
     assert st.derive(_row(), K(True))["settles"]
 
 
-@pytest.mark.parametrize("ended", ["error", "stopped", "crashed", "gave_up"])
+@pytest.mark.parametrize("ended", ["error", "stopped", "crashed", "gave_up", "turn_limit"])
 def test_a_result_that_did_not_deliver_is_stopped(env, ended):
     rows, _ = env
     rows[DID] = _row()
@@ -527,15 +527,30 @@ def test_a_run_just_inside_the_retention_does_not_expire(env, monkeypatch):
     assert not st.load(DID).get("settled") and r["stage"] == "awaiting" and r["cleanup_soon"] is True
 
 
-def test_a_running_or_asking_run_does_not_expire(env, monkeypatch):
+def test_a_running_run_does_not_expire_one_asking_nobody_answered_does(env, monkeypatch):
     from core import hive_records
     rows, _ = env
-    for kw in ({"running": True}, {"waiting": True}):
-        rows[DID] = _row()
-        r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 1)
-        r.update(kw)
-        st.annotate([r])
-        assert not st.load(DID).get("settled"), kw
+    rows[DID] = _row()
+    r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 1)
+    r["running"] = True
+    st.annotate([r])
+    assert not st.load(DID).get("settled")
+    r = _idle_row(monkeypatch, hive_records.RETENTION_DAYS + 1)
+    r["waiting"] = True
+    st.annotate([r])
+    assert st.load(DID)["settled"]["outcome"] == "expired"
+
+
+def test_closed_state_is_one_rule_for_every_refusal(env):
+    rows, _ = env
+    rows[DID] = _row()
+    assert st.closed_state(st.load(DID)) is None
+    st.set_verdict(DID, "pass", "", ENDED)                 # not settled yet: lessons may be coming
+    assert st.closed_state(st.load(DID)) == "accepted"
+    assert st.closed_state({"manual_landed_at": "x"}) == "accepted"
+    assert st.closed_state({"settled": {"outcome": "passed"}}) == "accepted"
+    for closed in ({"abandoned_at": "x"}, {"settled": {"outcome": "expired"}}, {"settled": {"outcome": "gone"}}):
+        assert st.closed_state(closed) == "closed", closed
 
 
 def test_path_refuses_what_is_not_a_dispatch_id():
@@ -559,6 +574,32 @@ def test_settle_routes_refused_from_a_command(tail):
     enc = f"%{ord(tail[0]):02x}{tail[1:]}"
     for form in (f"{base}{enc}", f"{base}%25{ord(tail[0]):02x}{tail[1:]}", f"{base}x/../{tail}", f"{base}./{tail}"):
         assert run_owner_gate._user_only_deny(form) is not None, form
+
+
+@pytest.mark.parametrize("cmd", [
+    # the same actions through the Host proxy to the run's Hive session
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/stream -d '{}'",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/stop/sess-1",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/answer-question",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/cmd-permission-continue",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/compact/sess-1",
+    # quotes the shell removes
+    'curl -s -X POST "http://127.0.0.1:18321/api/swarm-out/runs/"$D"/discard"',
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/'\"$D\"'/stop",
+    'curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/$D/disc""ard',
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/$D/re\\run",
+])
+def test_aliases_and_quoted_forms_are_refused(cmd):
+    from core import run_owner_gate
+    assert run_owner_gate._user_only_deny(cmd) is not None, cmd
+
+
+def test_reading_a_runs_session_through_the_proxy_is_not_refused():
+    from core import run_owner_gate
+    for cmd in ("curl -s http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/sessions/sess-1",
+                "curl -s http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/sessions/sess-1/messages",
+                "curl -s http://127.0.0.1:18321/api/swarm-out/runs"):
+        assert run_owner_gate._user_only_deny(cmd) is None, cmd
 
 
 def test_the_live_hook_refuses_a_settle_route():

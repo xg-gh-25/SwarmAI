@@ -314,18 +314,15 @@ READ_ONLY = "this run is accepted: its session is read-only"
 
 def closed_for(row: dict[str, Any], write: bool) -> Optional[RemoteError]:
     """Why the proxy refuses a request for this dispatch's session, or None. A discarded
-    or expired run (or one being discarded): every request (410). An accepted run: every
-    request that could change it (409); reads pass. Decided from the run's settle
-    record (core/swarm_out_settle), the same one the panel shows."""
+    or expired run (or one being discarded): every request (410). An accepted run (a pass
+    verdict is enough: files or lessons may still be coming): every request that could
+    change it (409); reads pass. Decided by core/swarm_out_settle.closed_state, the rule
+    the person's commands use too."""
     from core import swarm_out_settle
-    try:
-        rec = swarm_out_settle.load(str(row.get("dispatch_id") or ""))
-    except swarm_out_settle.SettleError:
-        return None                                    # a row before Project Agents
-    settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else None
-    if rec.get("abandoned_at") or (settled and settled.get("outcome") in ("abandoned", "gone", "expired")):
+    state = swarm_out_settle.closed_state(swarm_out_settle.load(str(row.get("dispatch_id") or "")))
+    if state == "closed":
         return RemoteError(410, CLOSED)
-    if settled and write:
+    if state == "accepted" and write:
         return RemoteError(409, READ_ONLY)
     return None
 

@@ -256,12 +256,27 @@ def _files_here(dispatch_id: str, kept_result: dict) -> bool:
     return True
 
 
+def closed_state(rec: dict) -> Optional[str]:
+    """``closed`` (discarded, expired, its Hive gone), ``accepted`` (settled as passed,
+    a pass verdict, or landed by hand: files or lessons may still be coming), or None.
+    One rule for everything that refuses a command or a write on a run: the Host proxy
+    (core/swarm_out_remote.closed_for) and the person's commands (core/swarm_out)."""
+    settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else None
+    if rec.get("abandoned_at") or (settled and settled.get("outcome") in ("abandoned", "gone", "expired")):
+        return "closed"
+    verdict = rec.get("verdict") if isinstance(rec.get("verdict"), dict) else None
+    if settled or rec.get("manual_landed_at") or (verdict and verdict.get("value") == "pass"):
+        return "accepted"
+    return None
+
+
 #: the stages a person sees (design 2026-10-31-swarm-out-run-review §1.2)
 STAGES = ("running", "needs_answer", "awaiting", "stopped", "accepted", "discarded", "expired")
 #: a settle outcome -> its stage
 _OUTCOME_STAGE = {"passed": "accepted", "abandoned": "discarded", "gone": "expired", "expired": "expired"}
-#: a result that ended this way delivered what it set out to (anything else stopped)
-_DELIVERED = ("completed", "turn_limit")
+#: a result that ended this way delivered what it set out to (anything else, the turn
+#: limit included, stopped: design §3.2)
+_DELIVERED = ("completed",)
 
 
 def _act(key: str, primary: bool = False, variant: Optional[str] = None) -> dict[str, Any]:
@@ -457,8 +472,9 @@ def annotate(rows: list[dict], can_tell: bool = True) -> list[dict]:
             kept = swarm_out_results.load(r["dispatch_id"]) or {}
             d = derive(r, kept)
             idle = _idle_days(r, kept)
-            expire = (idle is not None and idle >= hive_records.RETENTION_DAYS
-                      and not r.get("running") and not r.get("waiting"))
+            # a run asking a question nobody answered expires too (the Hive sweeps it
+            # then); one still running does not
+            expire = idle is not None and idle >= hive_records.RETENTION_DAYS and not r.get("running")
             if not d["settles"] and not expire:
                 r["stage"], r["actions"], r["why"] = d["stage"], d["actions"], d["why"]
                 r["settle"] = {"verdict": d["verdict"], "code": d["code"], "why_not": d["why_not"],

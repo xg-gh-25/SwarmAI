@@ -111,6 +111,58 @@ def test_concurrent_refreshes_share_one_computation(world, monkeypatch):
     asyncio.run(go())
 
 
+def test_a_command_during_a_computation_is_never_hidden_by_it(world, monkeypatch):
+    """A computation that read the records before a command is not kept as the snapshot:
+    the next one (started after it) is."""
+    gates: list = []
+
+    async def slow():
+        n = world["computed"]["n"] = world["computed"]["n"] + 1
+        gate = asyncio.Event()
+        gates.append(gate)
+        await gate.wait()
+        return {"runs": [{"seen": n}], "asks": []}
+    monkeypatch.setattr(swarm_out, "_compute_runs", slow)
+
+    async def go():
+        first = asyncio.ensure_future(swarm_out.refresh_runs())   # the loop's, before the command
+        await _drain()
+        swarm_out.invalidate_snapshot()                            # the person discards
+        after = asyncio.ensure_future(swarm_out.refresh_runs())   # the command's refresh
+        await _drain()
+        gates[0].set()
+        assert (await first)["runs"] == [{"seen": 1}]
+        await _drain()
+        assert swarm_out.snapshot() is None                        # the old answer is not kept
+        assert world["computed"]["n"] == 2                         # a new one started after it
+        gates[1].set()
+        assert (await after)["runs"] == [{"seen": 2}]
+        await _drain()
+        assert swarm_out.snapshot()["runs"] == [{"seen": 2}]
+        assert await swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S) is swarm_out.snapshot()
+    asyncio.run(go())
+
+
+def test_a_computation_whose_caller_went_away_is_still_kept(world, monkeypatch):
+    gate = {"e": None}
+
+    async def slow():
+        await gate["e"].wait()
+        return {"runs": [{"kept": True}], "asks": []}
+    monkeypatch.setattr(swarm_out, "_compute_runs", slow)
+
+    async def go():
+        gate["e"] = asyncio.Event()
+        caller = asyncio.ensure_future(swarm_out.refresh_runs())
+        await _drain()
+        caller.cancel()                                            # GET /runs's client went away
+        await _drain()
+        gate["e"].set()
+        await _drain()
+        assert swarm_out.snapshot() == {"runs": [{"kept": True}], "asks": []}
+    asyncio.run(go())
+
+
 def test_the_loop_refreshes_without_anyone_looking(world, monkeypatch, tmp_path):
     rounds = {"n": 0}
 
@@ -191,6 +243,41 @@ def test_an_accepted_run_is_read_only(world):
     assert closed_for(row, write=True).status == 409
 
 
+def test_a_pass_verdict_is_read_only_before_the_run_settles(world, monkeypatch):
+    """The panel shows "accepted" as soon as the verdict is in (files or lessons may still
+    be coming): the proxy and the commands follow the same rule."""
+    from core.swarm_out_remote import closed_for
+
+    async def start(*a, **k):
+        raise AssertionError("nothing is sent")
+    monkeypatch.setattr(swarm_out, "_start_session", start)
+    st._update(DID, lambda rec: rec.update(verdict={"value": "pass", "ended_at": "x", "at": "y"}))
+    assert closed_for({"dispatch_id": DID}, write=True).status == 409
+    assert closed_for({"dispatch_id": DID}, write=False) is None
+    for call in (swarm_out.rerun(DID, "x"), swarm_out.stop_run(DID), swarm_out.discard_run(DID)):
+        with pytest.raises(swarm_out.SwarmOutError, match="accepted"):
+            asyncio.run(call)
+    assert world["calls"] == []
+
+
+def test_rerun_refuses_a_session_gone_from_its_hive(world, monkeypatch):
+    from core import swarm_out_results
+
+    async def start(*a, **k):
+        raise AssertionError("nothing is sent")
+    monkeypatch.setattr(swarm_out, "_start_session", start)
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"fetch_error": "session_gone"})
+    with pytest.raises(swarm_out.SwarmOutError, match="gone"):
+        asyncio.run(swarm_out.rerun(DID, "x"))
+
+
+def test_discard_refuses_a_run_sent_before_project_agents(world):
+    world["row"].pop("project_agent")
+    with pytest.raises(swarm_out.SwarmOutError, match="before Project Agents"):
+        asyncio.run(swarm_out.discard_run(DID))
+    assert world["calls"] == [] and not st.load(DID)
+
+
 # ── the proxy itself refuses (no request reaches the Hive) ───────────────────
 
 @pytest.fixture
@@ -266,6 +353,10 @@ def test_rerun_and_stop_refuse_a_closed_run_or_one_without_a_session(world, monk
     with pytest.raises(swarm_out.SwarmOutError, match="say what"):
         asyncio.run(swarm_out.rerun(DID, "   "))
     st._update(DID, lambda rec: rec.update(settled={"outcome": "passed"}))
+    for call in (swarm_out.rerun(DID, "x"), swarm_out.stop_run(DID)):
+        with pytest.raises(swarm_out.SwarmOutError, match="accepted"):
+            asyncio.run(call)
+    st._update(DID, lambda rec: rec.update(settled={"outcome": "abandoned"}))
     for call in (swarm_out.rerun(DID, "x"), swarm_out.stop_run(DID)):
         with pytest.raises(swarm_out.SwarmOutError, match="closed"):
             asyncio.run(call)
@@ -362,3 +453,17 @@ def test_needs_you_includes_the_swarm_out_source(monkeypatch, tmp_path):
     res = aa.collect(tmp_path)
     assert [i.id for i in res.items] == ["swarm_out:decide"]
     assert aa.collect(tmp_path, brain="SwarmAI").items == []        # OS-level, not a Brain's
+
+
+def test_accepting_settles_now_not_at_the_next_look(world, monkeypatch):
+    """verdict / manual-landed / landing: the run is recomputed (settled, its Hive told)
+    right after, not when the panel or the loop next looks."""
+    from routers.swarm_out import router
+    monkeypatch.delenv("SWARMAI_MODE", raising=False)
+    soon = []
+    monkeypatch.setattr(swarm_out, "_refresh_soon", lambda: soon.append(1))
+    monkeypatch.setattr(st, "set_verdict", lambda *a: {"ok": True})
+    app = FastAPI()
+    app.include_router(router, prefix="/api/swarm-out")
+    r = TestClient(app).post(f"/api/swarm-out/runs/{DID}/verdict", json={"value": "pass", "note": "", "ended_at": "x"})
+    assert r.status_code == 200 and soon == [1]

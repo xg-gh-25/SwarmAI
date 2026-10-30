@@ -915,8 +915,12 @@ def _release_done(task: "asyncio.Task") -> None:
 
 #: the last runs answer (refresh_runs) and when it was made (monotonic clock). The
 #: refresh loop keeps it current whether or not the panel looks; GET /runs reuses it
-#: while fresh; the Needs You source only reads it (snapshot).
-_SNAPSHOT: dict[str, Any] = {"at": None, "data": None, "task": None}
+#: while fresh; the Needs You source only reads it (snapshot). ``gen`` counts the
+#: person's commands (invalidate_snapshot): a computation stores its answer only when no
+#: command came while it ran, so a refresh that read the records before a command never
+#: passes for one made after it. ``task`` is the computation running, ``task_gen`` the
+#: generation it started at.
+_SNAPSHOT: dict[str, Any] = {"at": None, "data": None, "task": None, "task_gen": 0, "gen": 0}
 SNAPSHOT_FRESH_S = 20
 REFRESH_EVERY_S = 60
 
@@ -927,20 +931,51 @@ def snapshot() -> Optional[dict[str, Any]]:
 
 
 def invalidate_snapshot() -> None:
-    """A person's action changed a run: the next list recomputes."""
+    """A person's action changed a run: the next list recomputes, and a computation
+    already running (it read the records before the action) is not kept as current."""
+    _SNAPSHOT["gen"] += 1
     _SNAPSHOT["at"] = None
+
+
+def _computed(task: "asyncio.Task", gen: int) -> None:
+    """A computation ended: keep its answer when no command came while it ran. Runs
+    whether or not anyone still waits on it (a caller that went away)."""
+    if task.cancelled():
+        return
+    if task.exception() is not None:
+        logger.warning("swarm_out: computing the runs failed (%s)", type(task.exception()).__name__)
+        return
+    if gen == _SNAPSHOT["gen"]:
+        _SNAPSHOT.update(at=time.monotonic(), data=task.result())
 
 
 async def refresh_runs() -> dict[str, Any]:
     """Recompute the runs answer and keep it as the snapshot. One at a time: a caller
-    that arrives while one runs waits for that one."""
+    that arrives while a current one runs waits for it; one that arrives after a command
+    waits for the computation from before the command to end, then starts a new one."""
+    while True:
+        task = _SNAPSHOT["task"]
+        if task is not None and not task.done():
+            if _SNAPSHOT["task_gen"] == _SNAPSHOT["gen"]:
+                return await asyncio.shield(task)
+            try:
+                await asyncio.shield(task)        # from before a command: let it end
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — it is done; the next one is computed below
+                pass
+            continue
+        gen = _SNAPSHOT["gen"]
+        task = asyncio.ensure_future(_compute_runs())
+        _SNAPSHOT.update(task=task, task_gen=gen)
+        task.add_done_callback(lambda t, g=gen: _computed(t, g))
+
+
+def cancel_refresh() -> None:
+    """Shutdown: stop a computation still running."""
     task = _SNAPSHOT["task"]
-    if task is None or task.done():
-        task = _SNAPSHOT["task"] = asyncio.ensure_future(_compute_runs())
-    data = await asyncio.shield(task)
-    if _SNAPSHOT["task"] is task:
-        _SNAPSHOT.update(at=time.monotonic(), data=data)
-    return data
+    if task is not None and not task.done():
+        task.cancel()
 
 
 async def run_refresh_loop() -> None:
@@ -1058,24 +1093,29 @@ def _refresh_soon() -> None:
     task.add_done_callback(_REFRESHES.discard)
 
 
-def _session_row(dispatch_id: str) -> dict[str, Any]:
-    row = _log_row_of(dispatch_id)
+async def _session_row(dispatch_id: str) -> dict[str, Any]:
+    row = await asyncio.to_thread(_log_row_of, dispatch_id)
     if not row.get("session_id"):
         raise SwarmOutError("this run has no session on its Hive")
     return row
 
 
-def _not_closed(dispatch_id: str) -> None:
+async def _not_closed(dispatch_id: str) -> None:
+    """Refuse a command on a run that is closed (discarded, expired) or accepted: the
+    same rule the Host proxy applies to its session (swarm_out_settle.closed_state)."""
     from core import swarm_out_settle
-    rec = swarm_out_settle.load(dispatch_id)
-    if rec.get("settled") or rec.get("abandoned_at"):
+    rec = await asyncio.to_thread(swarm_out_settle.load, dispatch_id)
+    state = swarm_out_settle.closed_state(rec)
+    if state == "closed":
         raise SwarmOutError("this run is closed")
+    if state == "accepted":
+        raise SwarmOutError("this run is accepted")
 
 
 async def stop_run(dispatch_id: str) -> dict[str, Any]:
     """Stop the run's current turn on its Hive (the session and the workspace stay)."""
-    row = _session_row(dispatch_id)
-    _not_closed(dispatch_id)
+    row = await _session_row(dispatch_id)
+    await _not_closed(dispatch_id)
     inst = await _instance(row["hive_id"])
     async with _client(inst) as client:
         r = await client.post(f"/api/chat/stop/{row['session_id']}")
@@ -1094,8 +1134,13 @@ async def rerun(dispatch_id: str, text: str) -> dict[str, Any]:
         raise SwarmOutError("say what to change")
     if len(text) > MAX_TASK_CHARS:
         raise SwarmOutError(f"the correction is longer than {MAX_TASK_CHARS} characters")
-    row = _session_row(dispatch_id)
-    _not_closed(dispatch_id)
+    from core import swarm_out_settle
+    row = await _session_row(dispatch_id)
+    await _not_closed(dispatch_id)
+    from core import swarm_out_results
+    kept = await asyncio.to_thread(swarm_out_results.load, dispatch_id) or {}
+    if kept.get("fetch_error") in swarm_out_settle.NO_RESULT_ERRORS:
+        raise SwarmOutError("this run's session is gone from its Hive: discard it and send it again")
     inst = await _instance(row["hive_id"])
     async with _client(inst) as client:
         sid = await _start_session(client, text, session_id=row["session_id"])
@@ -1110,8 +1155,10 @@ async def discard_run(dispatch_id: str, note: str = "") -> dict[str, Any]:
     it), record the discard, and let the refresh settle it and tell its Hive to remove
     the workspace. From then on its session is closed (core/swarm_out_remote)."""
     from core import swarm_out_settle
-    row = _log_row_of(dispatch_id)
-    _not_closed(dispatch_id)
+    row = await asyncio.to_thread(_log_row_of, dispatch_id)
+    if not isinstance(row.get("project_agent"), dict):
+        raise SwarmOutError("a run sent before Project Agents cannot be discarded here")
+    await _not_closed(dispatch_id)
     stopped: Optional[bool] = None
     if row.get("session_id"):
         try:

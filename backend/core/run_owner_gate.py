@@ -68,7 +68,11 @@ _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
 # accept (the verdict, landing the commits or "landed by hand"), re-run with a
 # correction, stop, discard.
 _USER_ONLY_SETTLE_RE = re.compile(
-    r"/api/swarm-out/runs/[^\s/'\"]+/(?:verdict|manual-landed|return/land|rerun|stop|discard)\b")
+    r"/api/swarm-out/runs/[^\s/'\"]+/(?:verdict|manual-landed|return/land|rerun|stop|discard)\b"
+    # the same actions on a run's Hive session through the Host proxy (routers/
+    # swarm_out_remote): sending into it, answering for it, stopping, compacting it
+    r"|/api/swarm-out/remote/[^\s/'\"]+/chat/(?:stream|answer-question|cmd-permission-continue"
+    r"|stop|compact|refresh)\b")
 # Actions the person approves first: handled by the
 # phase="approved" registration, after dangerous_command_gate.
 AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot"})
@@ -375,7 +379,10 @@ def _user_only_deny(command: str) -> "dict | None":
     the server would route it. This is a speed bump, not a boundary: a path assembled at
     run time (variables, a script file) is not seen; the agent and the daemon share an
     OS user (boundary A)."""
-    command = f"{command}\n{_as_routed(command)}"
+    # also with shell quotes and backslashes removed: the shell joins "…/runs/"$D"/stop"
+    # into the path the server routes
+    bare = re.sub(r"[\"'\\]", "", command)
+    command = f"{command}\n{_as_routed(command)}\n{bare}\n{_as_routed(bare)}"
     if _USER_ONLY_REDACT_RE.search(command):
         return _deny("withdrawing written knowledge is the person's action (the Flow view's "
                      "撤回 button), never a command. Tell the user which unit you think should "

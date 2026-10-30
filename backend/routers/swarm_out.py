@@ -133,7 +133,7 @@ async def _return(fn, *args) -> dict[str, Any]:
         logger.exception("swarm_out return failed")
         raise HTTPException(status_code=500, detail="taking the commits back failed")
     finally:
-        swarm_out.invalidate_snapshot()        # a landing changes the run's next step
+        swarm_out._refresh_soon()              # a landing changes the run: settle it now
 
 
 @router.post("/runs/{dispatch_id}/return/prepare")
@@ -216,7 +216,7 @@ async def _settle(fn, *args) -> dict[str, Any]:
     except swarm_out_settle.SettleError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
-        swarm_out.invalidate_snapshot()
+        swarm_out._refresh_soon()              # settle it now, not at the next look
 
 
 @router.post("/runs/{dispatch_id}/verdict")
