@@ -42,8 +42,8 @@ Each prints JSON; a refusal is `{"ok": false, "detail": "..."}`: tell the person
    its own workspace: not this conversation, not files on this machine. Include the
    goal, every input it needs (links, pasted content) and where to leave results. The
    repositories are every one the Brain binds, whatever the mode, at this machine's own
-   commit (the Hive gets that commit before the task starts): do not add them, and do not
-   tell the Hive to clone or pull.
+   commit (the Hive is sent that commit and told how to check it out): do not add them,
+   and do not write your own clone or pull instructions.
    **Acceptance** is required: one checkable sentence of what done looks like.
 4. **Choose the mode and profile.** Read the `modes` of the Brain's `project-agent.yaml`
    (its directory: `Projects/<B>/`, or `Knowledge/Library/` for General). Pick the mode

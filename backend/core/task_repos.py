@@ -3,9 +3,9 @@
 Design: docs/design/2026-10-28-swarm-out-run-results.md §4.4. A Swarm Out dispatch
 carries a list of repositories (``[{url, ref}]``). The Host writes them into the task
 text with the directory each one goes to; the Hive records them on the session
-(``sessions.metadata.task_repos``). A repository with a ``sha`` (the host's own commit)
-is prepared there by the Hive's daemon before the task starts (core/hive_repo_prepare);
-one without is cloned or fetched by the Hive's agent.
+(``sessions.metadata.task_repos``). The Hive's agent clones or fetches each one there;
+for a repository with a ``sha`` (the host's own commit) it also fetches the bundle the
+host left in ``Hive/incoming/`` (core/hive_repo_inbox) and checks that commit out.
 At every turn end the Hive reads, for each declared repository, what the task changed
 against the version it pulled (``repo_facts``), for the ``turn_outcome`` block.
 
@@ -54,11 +54,12 @@ ERR_OUTSIDE = "the directory leads outside Hive/repos"
 ERR_NO_HEAD = "the repository has no commit checked out"
 ERR_NO_REF = "the declared ref is not among the repository's remote refs"
 ERR_NO_HISTORY = "HEAD and the declared ref share no history"
+ERR_NO_COMMIT = "the person's commit is not in the repository"
 ERR_DIFF = "git diff failed"
 ERR_TIMEOUT = "reading the repository timed out"
 ERROR_UNREADABLE = "could not read the repository"
-ERRORS = (ERR_OUTSIDE, ERR_NO_HEAD, ERR_NO_REF, ERR_NO_HISTORY, ERR_DIFF, ERR_TIMEOUT,
-          ERROR_UNREADABLE)
+ERRORS = (ERR_OUTSIDE, ERR_NO_HEAD, ERR_NO_REF, ERR_NO_HISTORY, ERR_NO_COMMIT, ERR_DIFF,
+          ERR_TIMEOUT, ERROR_UNREADABLE)
 
 REPOS_ROOT = ("Hive", "repos")
 
@@ -105,7 +106,7 @@ def _same_repo(a: str, b: str) -> bool:
 
 def parse(items: Any) -> list[dict[str, Optional[str]]]:
     """Validated ``[{url, ref, dir[, sha]}]`` (``ref`` None = the remote's default branch;
-    ``sha``: the host's commit, prepared on the Hive before the task, core/hive_repo_prepare),
+    ``sha``: the host's commit, its bundle kept on the Hive, core/hive_repo_inbox),
     one entry per directory. Raises TaskRepoError on anything not accepted."""
     if items is None:
         return []
@@ -143,18 +144,32 @@ def parse(items: Any) -> list[dict[str, Optional[str]]]:
 
 
 def task_text(repos: list[dict[str, Optional[str]]]) -> str:
-    """The paragraph that tells the Hive's agent where each repository goes."""
+    """The paragraph that tells the Hive's agent where each repository goes and, for one
+    with the person's own commit, how to put it there (the commands run from the
+    workspace; the bundle path inside ``git -C`` is relative to the repository)."""
     if not repos:
         return ""
+    from core.hive_repo_inbox import bundle_rel
     lines = ["Repositories for this task (relative to your workspace; change code only "
              "inside these directories):"]
     for r in repos:
+        d = r["dir"]
         if r.get("sha"):
-            lines.append(f"- {r['dir']}: ready, on branch {r['ref']} at {r['sha'][:12]} (the person's "
-                         f"own commit of {r['url']}). Do not clone, pull or reset it.")
+            bundle = bundle_rel(r["sha"])
+            from_repo = "/".join([".."] * len(d.split("/")) + [bundle])
+            lines += [
+                f"- {d}: the person's own commit {r['sha'][:12]} of {r['url']}, branch {r['ref']} "
+                "(newer than the remote). Before working, run from your workspace:",
+                f"  1. if {d} does not exist: git clone {r['url']} {d}; otherwise: git -C {d} fetch origin",
+                f"     (if the clone is refused and {bundle} exists: git clone {bundle} {d} && "
+                f"git -C {d} remote set-url origin {r['url']})",
+                f"  2. if {bundle} exists: git -C {d} fetch {from_repo} HEAD",
+                f"  3. git -C {d} checkout -B {r['ref']} {r['sha']}",
+                "  Then do not pull or reset it; what you change is counted from this commit.",
+            ]
         else:
             ref = r.get("ref") or "the default branch"
-            lines.append(f"- {r['url']} @ {ref} -> {r['dir']} (clone it if the directory does not "
+            lines.append(f"- {r['url']} @ {ref} -> {d} (clone it if the directory does not "
                          "exist, otherwise fetch and check out the ref)")
     return "\n".join(lines) + "\n\n"
 
@@ -330,8 +345,13 @@ def _one(workspace: Path, repo: dict[str, Optional[str]], since: Optional[float]
         fact["error"] = ERR_NO_HEAD
         return fact
     declared = repo.get("sha")
-    if declared and _git(str(real), "cat-file", "-e", f"{declared}^{{commit}}") is not None:
-        start = declared                     # the host's commit the task was prepared at
+    if declared:
+        # the host's commit the task was told to start from; not fetched = said, never
+        # replaced by a guess from the remote
+        if _git(str(real), "cat-file", "-e", f"{declared}^{{commit}}") is None:
+            fact["error"] = ERR_NO_COMMIT
+            return fact
+        start = declared
     elif upstream is None:
         fact["error"] = ERR_NO_REF
         return fact

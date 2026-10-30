@@ -244,6 +244,7 @@ const REPO_ERROR: Record<string, string> = {
   'the repository has no commit checked out': 'noCommit',
   "the declared ref is not among the repository's remote refs": 'noRef',
   'HEAD and the declared ref share no history': 'noHistory',
+  "the person's commit is not in the repository": 'noPersonCommit',
   'git diff failed': 'diffFailed',
   'reading the repository timed out': 'timeout',
   'could not read the repository': 'unreadable',

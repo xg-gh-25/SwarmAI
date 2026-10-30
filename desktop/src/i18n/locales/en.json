@@ -1544,6 +1544,7 @@
       "noCommit": "no commit checked out",
       "noRef": "the remote has no branch or tag the task gave",
       "noHistory": "the current code shares no history with the task's branch",
+      "noPersonCommit": "the task never fetched your commit",
       "diffFailed": "git diff failed",
       "timeout": "reading the repository timed out",
       "unreadable": "can't read this repository"

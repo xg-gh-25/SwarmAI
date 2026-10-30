@@ -6,7 +6,8 @@ its remote has (a Brain whose commits land on local main is often far ahead of i
 host reads the checkout's branch and HEAD (``state``) and writes a git bundle of that
 commit (``pack``): only what the remote does not have when the checkout tracks a branch
 of the repository's URL (``<base>..HEAD``, base = their merge-base), else the whole
-branch. The Hive fetches the rest of the history from the URL (core/hive_repo_prepare).
+branch. The Hive keeps the bundle (core/hive_repo_inbox); its agent clones the URL for
+the rest of the history and fetches the bundle (core/task_repos.task_text).
 
 Only read-only git commands run in the checkout (``rev-parse``, ``status``, ``remote``,
 ``merge-base``; ``bundle create`` writes only the output file), with fixed arguments, no

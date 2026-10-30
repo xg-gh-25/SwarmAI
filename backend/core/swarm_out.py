@@ -218,7 +218,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
                    agent: Optional[dict] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
     repos}. ``repos``: ``[{url, ref[, sha]}]`` the task works on (core/task_repos; ``sha``:
-    this machine's commit, put on the Hive first by ``_ship_repos``).
+    this machine's commit, its bundle kept on the Hive first by ``_ship_repos``).
     ``segment`` + ``agent``: the project section put before the task and the Project
     Agent the Hive pins the session to (``dispatch_spec``)."""
     from core import task_repos
@@ -332,46 +332,44 @@ async def dispatch_spec(hive_ref: str, title: str, brain: str, task: str, accept
     return {**row, "brain_sync": synced}
 
 
-#: hang guard for preparing one repository on a Hive (a first clone of a large remote)
-SHIP_TIMEOUT_S = 1200
+#: hang guard for sending one repository's bundle to a Hive
+SHIP_TIMEOUT_S = 600
 
 
 async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]]) -> None:
     """Each repository with a commit of this machine (``sha``): a git bundle of it
-    (core/repo_ship) to the Hive's ``PUT /api/hive/repos``, which checks the commit out
-    there (core/hive_repo_prepare). A Hive that cannot get the history a thin bundle
-    builds on (409) gets the whole branch once. Raises SwarmOutError; nothing is sent
-    to the session then. (design 2026-10-30-hive-task-repos-from-host §2)"""
+    (core/repo_ship) to the Hive's ``PUT /api/hive/repos``, which only keeps it
+    (core/hive_repo_inbox); the Hive's agent fetches it (core/task_repos.task_text). A
+    remote that has the commit already needs no bundle. Raises SwarmOutError; nothing is
+    sent to the session then. (design 2026-10-30-hive-task-repos-from-host §2)"""
     from core import repo_ship
     for r in repos:
         if not r.get("sha"):
             continue
-        full = False
-        while True:
-            try:
-                path, _base, size = await asyncio.to_thread(
-                    repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"], full)
-            except repo_ship.ShipError as e:
-                raise SwarmOutError(f"{r['name']} could not be packed: {e}; nothing was sent") from None
-            try:
-                status, detail = await _put_repo(inst, r, path, size)
-            finally:
-                if path:
-                    path.unlink(missing_ok=True)
-            if status == 200:
-                break
-            if status == 409 and not full:
-                full = True
-                continue
-            if status == 404:
-                raise SwarmOutError(f"Hive {inst['name']}'s version cannot receive repositories; update it once")
-            raise SwarmOutError(f"Hive {inst['name']} could not prepare {r['name']} ({status}: {detail}); "
-                                "nothing was sent")
+        try:
+            path, _base, size = await asyncio.to_thread(
+                repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"])
+        except repo_ship.ShipError as e:
+            raise SwarmOutError(f"{r['name']} could not be packed: {e}; nothing was sent") from None
+        if path is None:
+            continue                         # the remote has the commit: the agent clones it
+        try:
+            status, detail = await _put_repo(inst, r, path, size)
+        finally:
+            path.unlink(missing_ok=True)
+        if status == 200:
+            continue
+        if status == 404:
+            raise SwarmOutError(f"Hive {inst['name']}'s version cannot receive repositories; update it once")
+        raise SwarmOutError(f"Hive {inst['name']} did not keep {r['name']} ({status}: {detail}); "
+                            "nothing was sent")
 
 
-async def _put_repo(inst: dict[str, Any], r: dict[str, Any], path: Optional[Path], size: int) -> tuple[int, str]:
-    """(status, detail) of one ``PUT /api/hive/repos``; 200 only when the Hive names the commit."""
-    data = await asyncio.to_thread(path.read_bytes) if path else b""     # at most repo_ship.MAX_BUNDLE_BYTES
+async def _put_repo(inst: dict[str, Any], r: dict[str, Any], path: Path, size: int) -> tuple[int, str]:
+    """(status, detail) of one ``PUT /api/hive/repos``; 200 only when the Hive kept the
+    bundle where the task text says it is."""
+    from core import hive_repo_inbox
+    data = await asyncio.to_thread(path.read_bytes)       # at most repo_ship.MAX_BUNDLE_BYTES
     params = {"url": r["url"], "branch": r["ref"], "sha": r["sha"]}
     try:
         async with _client(inst, SHIP_TIMEOUT_S) as client:
@@ -386,8 +384,10 @@ async def _put_repo(inst: dict[str, Any], r: dict[str, Any], path: Optional[Path
         detail = str(body.get("detail") or "")[:200] if isinstance(body, dict) else ""
     except ValueError:
         pass
-    if resp.status_code == 200 and isinstance(body, dict) and body.get("head") != r["sha"]:
-        return 500, "the Hive did not confirm the commit"
+    if resp.status_code == 200 and not (isinstance(body, dict)
+                                        and body.get("bundle") == hive_repo_inbox.bundle_rel(r["sha"])
+                                        and body.get("bytes") == size):
+        return 500, "the Hive did not confirm the bundle"
     return resp.status_code, detail
 
 

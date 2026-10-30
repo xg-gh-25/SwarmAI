@@ -1,7 +1,7 @@
 ---
 created: 2026-10-30
 title: "A dispatched task works on this machine's commit, with every repository of its Brain"
-status: implemented 2026-10-30 (native, security ×2 + correctness reviewed)
+status: implemented 2026-10-30, simplified the same day (r2: the daemon only keeps the bundle)
 updated: 2026-10-30
 ---
 
@@ -30,38 +30,23 @@ Project Agent, and the repositories come from the Brain, not from the mode.
    does not have (`base..HEAD`, base = the merge-base with the checkout's tracking branch of
    that remote; 16 MB for the 1421 commits above), or the whole branch when there is no such
    branch. A bundle over 100 MB is refused, never cut.
-4. **The Hive's daemon prepares the repository before the task starts**
-   (`PUT /api/hive/repos`, `core/hive_repo_prepare`). **Git never runs in a directory the
-   Hive's agent could have written**: the agent can write a repository's `.git` (config,
-   `config.worktree`, alternates, a second `remote.origin.url`, `core.worktree`), and git
-   runs configured commands and follows configured paths, so a list of risky keys always
-   misses one (the first version had one; review found four ways around it).
-   - History lives in a bare cache only the daemon writes, outside the workspace
-     (`<data dir>/hive-repo-cache/<host>__<owner>__<name>.git`): cloned from the URL the
-     first time (started empty when the bundle is the whole branch, no network), fetched
-     from the URL when a thin bundle's prerequisites are missing; still missing → 409, and
-     the host sends the whole branch once. The bundle's tip must be the declared commit.
-   - A new directory next to the cache gets a clone of it with `--no-local` (a local
-     clone hardlinks the object files, and the agent could then rewrite the cache's
-     history through its own repository), the commit checked out on the branch and
-     `origin` set to the URL; it is then moved into `Hive/repos/`.
-   - Nothing in the workspace is reached by path after it is checked: the directories
-     from the workspace down to `<owner>` are opened one by one without following a
-     symlink (one in their place is refused) before anything is made, and both renames and
-     the removal of an older `.previous` are relative to that open directory. A directory
-     the agent swaps for a symlink while the history is fetched changes nothing outside.
-     The cache is `<host>/<owner>/<name>.git` (never shared by two repositories) and
-     must not be inside the workspace. What was
-     there (the previous task's checkout, whose commits already went back with its turns)
-     is kept as `<name>.previous`, replacing an older one.
-   - Every call: fixed arguments, no shell, hooks off, no global or system config,
-     submodules not followed, only https/ssh/file protocols, one deadline for the whole
-     preparation (1000 s, shorter than the host's 1200 s wait). Uploads wait outside the
-     workspace; git's own error text is logged on the Hive, never returned.
-5. **The run starts from that commit and is measured from it**: the task text says the
-   repository is ready (no clone, no pull); `repo_facts` takes the declared commit as the
-   base. The commits the run makes come back as today (`hive_bundle` → `hive_return`, which
-   merges against this machine's own merge-base).
+4. **The Hive's daemon only keeps the bundle** (`PUT /api/hive/repos`,
+   `core/hive_repo_inbox`): written as `Hive/incoming/<sha>.bundle` in the workspace the way
+   a Brain's files are (`core/brain_sync`: directories opened without following a link, a
+   fresh random name created exclusively, renamed into place), refused unless it starts
+   with a git bundle header; regular bundle files older than two days are removed by name
+   when the next one arrives. The daemon runs no git and reads nothing the agent wrote.
+   The host takes the 200 only when it names that path and the byte count it sent. When
+   the remote already has the commit, nothing is sent.
+5. **The agent puts the repository on the commit itself**, from the commands the task text
+   gives (`task_repos.task_text`, run from the workspace): clone the URL if the directory is
+   missing, otherwise fetch origin (a whole-branch bundle can be cloned instead when the
+   clone is refused); fetch the bundle; `checkout -B <branch> <sha>`. Its git runs as the
+   agent, under its own gates, so anything planted in a `.git` reaches only the agent.
+   `repo_facts` takes the declared commit as the base, and a declared commit that is not in
+   the repository is reported as such (`ERR_NO_COMMIT`), never replaced by a guess from the
+   remote. The commits the run makes come back as today (`hive_bundle` → `hive_return`,
+   which merges against this machine's own merge-base).
 6. **An older Hive** (no `/api/hive/repos`) is refused with "update the Hive".
 
 ## 3. Not changed
@@ -69,33 +54,41 @@ Project Agent, and the repositories come from the Brain, not from the mode.
 - What the Hive may do with the repository (commit on the declared branch, never push).
 - How commits come back and land (`hive_return`).
 - Concurrency: two tasks on one Hive with the same repository share its directory, as
-  before (a second dispatch replaces the directory a running task works in). Known issue,
-  not introduced here; a per-session directory would fix it.
+  before. Known issue, not introduced here; a per-session directory would fix it.
 - The commit is read again at dispatch: a commit made after the confirm card is the one
   that goes. The dispatch reply lists the `sha` of each repository sent.
-- Same OS user: the Hive's agent and daemon run as one user, so this is not OS isolation.
-  It guarantees that nothing the daemon runs reads, follows or deletes by path what the
-  agent wrote. Left: the agent can move a directory of its own choosing into the
-  `<name>.previous` slot, and the next preparation removes it. That is a removal the
-  agent could make itself; it is listed so it is a decision, not a surprise.
+- Which commit the run starts from depends on the agent following the commands; when it
+  does not, the run's facts say so (`ERR_NO_COMMIT`, or a base other than the declared
+  commit) instead of measuring from a guess.
 - One binding whose checkout is not on a branch, or has no URL a Hive can clone, refuses
   every dispatch of that Brain (every repository goes, whatever the mode).
 
-## 4. Verification
+## 4. Why r1 was replaced
+
+r1 had the Hive's daemon prepare the repository: a bare cache it owned, a `--no-local`
+clone into a new directory, a move into `Hive/repos/` relative to directories opened
+without following links, one deadline, a 409 asking for the whole branch. Two security
+review rounds found five HIGHs, every one in that step: a daemon that runs git in, or
+renames and deletes in, a tree the agent writes has to defend against what the agent
+plants there. Before r1 the agent cloned on its own and none of that existed. r2 keeps the
+bundle (the Hive still gets this machine's commit) and removes the step: about 270 lines
+and the `.previous` slot gone. GitHub PRs were not taken as the default: 9 of the 12
+bindings are internal (code.amazon) and SwarmAI's repository is public, so every dispatch
+would push unreleased code and need the person's push approval; `delivery: branch-pr`
+stays for the GitHub-hosted bindings.
+
+## 5. Verification
 
 - Spec: mode `research` of a Brain with one binding lists that repository with its branch
   and commit.
-- Real git, temporary repositories: a host with unpushed commits ships a thin bundle; the
-  Hive side (a clone of the "remote" through `url.insteadOf`) ends on the declared branch
-  at exactly the host commit; a remote without the base answers "need full", the full
-  bundle then succeeds; a bundle whose tip is not the declared commit is refused.
-- `repo_facts` with a declared commit measures from it.
-- The agent's own `.git` is never run: a smudge filter in `config` and in `config.worktree`,
-  `core.worktree` pointing elsewhere, a second origin URL with an `uploadpack` command:
-  nothing runs, nothing outside is written. A symlink in place of the directory is
-  replaced, never followed. A bundle header that never ends asks for the whole branch.
-- The checkout shares no object file with the cache; a symlinked `Hive/repos` is refused
-  with nothing made at its destination; a directory swapped for a symlink after the check
-  leaves the outside untouched; a cache inside the workspace is refused.
-- A research mode's section tells the Hive the repositories are there to read.
-- Each fix reverted turns its test red (`scripts.mutation_check`).
+- Real git, temporary repositories, and the task text's own commands run as the agent
+  would: a host with unpushed commits ships a thin bundle and the Hive repository ends on
+  the declared branch at exactly the host commit, twice in the same directory; with no
+  tracking branch the whole branch goes and the commands get there with the clone
+  refused; with the commit already on the remote nothing is sent and they still get there.
+- The Hive keeps exactly `Hive/incoming/<sha>.bundle`; a body that is not a bundle leaves
+  no file; a linked `incoming/` is refused with nothing written where it points; old
+  bundles are removed and a planted link is neither followed nor removed.
+- `repo_facts` measures from the declared commit and reports one never fetched.
+- The host refuses a 200 that does not name the kept bundle and its size.
+- Each guard reverted turns its test red (`scripts.mutation_check`).

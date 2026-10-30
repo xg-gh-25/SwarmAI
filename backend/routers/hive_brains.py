@@ -14,11 +14,10 @@ every other refusal keeps its own status and says why. ``GET /api/hive/brains``:
 way, its recorded digest, revision and time, how many of its files changed on the
 Hive since, and how many turns hold it now. Nothing else.
 
-``PUT /api/hive/repos?url=&branch=&sha=``: put a dispatched task's repository at the
-host's commit before the task starts (core/hive_repo_prepare; body = a git bundle from
-core/repo_ship, or empty). 409 = send the whole branch. Git runs only in a cache this
-daemon owns and in a new directory moved into the workspace afterwards; the upload waits
-outside the workspace.
+``PUT /api/hive/repos?url=&branch=&sha=``: keep the host's commit of a dispatched
+task's repository (body = a git bundle from core/repo_ship) as
+``Hive/incoming/<sha>.bundle`` for the Hive's agent to fetch (core/hive_repo_inbox). No
+git runs in this daemon; the agent puts its repository on the commit itself.
 
 ``GET /api/hive/usage?after_id=``: this Hive's usage ledger rows after an id, the
 accounting columns only (core/usage_accounting.rows_after), for the host's ledger.
@@ -118,55 +117,42 @@ async def put_brain(brain: str, request: Request) -> dict:
             "installed_at": record["installed_at"], "files": len(files)}
 
 
-_repo_locks: dict[str, asyncio.Lock] = {}
-
-
 @router.put("/repos")
 async def put_repo(request: Request, url: str, branch: str, sha: str) -> dict:
-    """Put a dispatched task's repository at the host's commit (core/hive_repo_prepare):
-    body = a git bundle (core/repo_ship) or empty when the remote has the commit. 409:
-    the Hive cannot get the history the bundle builds on (send the whole branch). Hive only."""
+    """Keep a dispatched task's repository at the host's commit: body = a git bundle
+    (core/repo_ship), stored as ``Hive/incoming/<sha>.bundle`` (core/hive_repo_inbox) for
+    the Hive's agent to fetch. No git runs here. Hive only."""
     _hive_only()
-    import tempfile
-    from core import hive_repo_prepare, repo_ship, task_repos
+    from core import hive_repo_inbox, repo_ship, task_repos
     length = request.headers.get("content-length")
-    if length is None or not length.isdigit():
+    if length is None or not length.isdigit() or not int(length):
         raise HTTPException(status_code=411, detail="Content-Length is required")
     if int(length) > repo_ship.MAX_BUNDLE_BYTES:
         raise HTTPException(status_code=413, detail="the bundle is larger than a Hive takes")
-    ws = _workspace()
     try:
-        key = task_repos.parse([{"url": url, "ref": branch}])[0]["dir"]
+        task_repos.parse([{"url": url, "ref": branch, "sha": sha}])
     except task_repos.TaskRepoError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    incoming = hive_repo_prepare.cache_dir() / ".incoming"      # outside the agent's workspace
-    incoming.mkdir(parents=True, exist_ok=True)
-    bundle = None
-    if int(length):
-        fd, name = tempfile.mkstemp(dir=incoming, suffix=".bundle")
-        bundle = Path(name)
-        size = 0
-        try:
-            with os.fdopen(fd, "wb") as f:
-                async for chunk in request.stream():
-                    size += len(chunk)
-                    if size > repo_ship.MAX_BUNDLE_BYTES:
-                        raise HTTPException(status_code=413, detail="the bundle is larger than a Hive takes")
-                    f.write(chunk)
-        except BaseException:
-            bundle.unlink(missing_ok=True)
-            raise
-    lock = _repo_locks.setdefault(key, asyncio.Lock())
+    ws = _workspace()
     try:
-        async with lock:              # one preparation of a directory at a time
-            result = await asyncio.to_thread(hive_repo_prepare.prepare, ws, url, branch, sha, bundle)
-    except hive_repo_prepare.PrepareError as exc:
+        inbox = await asyncio.to_thread(hive_repo_inbox.Inbox, ws, sha)
+    except hive_repo_inbox.InboxError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from None
-    finally:
-        if bundle:
-            bundle.unlink(missing_ok=True)
-    logger.info("hive repos: %s at %s on %s", result["dir"], sha[:12], branch)
-    return result
+    size = 0
+    try:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > repo_ship.MAX_BUNDLE_BYTES:
+                raise HTTPException(status_code=413, detail="the bundle is larger than a Hive takes")
+            inbox.write(chunk)
+        rel = await asyncio.to_thread(inbox.commit)
+    except hive_repo_inbox.InboxError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    except BaseException:
+        inbox.abort()
+        raise
+    logger.info("hive repos: kept %s for %s (%d bytes)", rel, branch, size)
+    return {"bundle": rel, "sha": sha, "bytes": size}
 
 
 @router.get("/bundles/{session_id}/{key}")

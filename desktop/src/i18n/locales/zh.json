@@ -1544,6 +1544,7 @@
       "noCommit": "没有检出任何 commit",
       "noRef": "远端没有任务给的分支或 tag",
       "noHistory": "当前代码和任务给的分支没有共同历史",
+      "noPersonCommit": "任务没有拉到你本机发过去的那个提交",
       "diffFailed": "git diff 失败",
       "timeout": "读仓库超时",
       "unreadable": "读不了这个仓库"
