@@ -261,7 +261,8 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
       <div className="flex items-center gap-3 border-t border-[var(--color-border)] px-3.5 py-[9px]">
         <span className="text-[12.5px] text-[var(--color-text-muted)]">
           {block.dispatchId ? <>{k('id', 'Dispatch')} <Mono>{block.dispatchId}</Mono></>
-            : refused && block.needsPrivate ? k('doHereHint', 'It can be done on this machine')
+            : refused && block.needsPrivate ? (block.task ? k('doHereHint', 'It can be done on this machine')
+              : k('doHereAsk', 'It can be done on this machine: say "do it here"'))
               : !block.ok && !unsure ? k('retryHint', 'Once it is fixed, say "send it again"') : null}
         </span>
         <span className="flex-1" />
@@ -275,7 +276,7 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
             ↗ {k('open', 'Open Hive session')}
           </button>
         )}
-        {refused && block.needsPrivate && bridge.dispatchPrompt && (
+        {refused && block.needsPrivate && block.task && bridge.dispatchPrompt && (
           <button type="button" data-testid="dispatch-do-here" className="btn-sm btn-primary" onClick={doHere}>
             {k('doHere', 'Do it here, in a chat tab')}
           </button>

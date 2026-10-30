@@ -574,7 +574,8 @@
         "refusedNothing": "什么都没发：没有联系任何 Hive，Brain 也没有同步。",
         "doHere": "在本机 chat tab 里做",
         "doHereHint": "可以在本机做",
-        "doHerePrompt": "在本机做这个任务（Swarm Out 拒收了：{{why}}）。{{title}}\n\n{{task}}"
+        "doHerePrompt": "在本机做这个任务（Swarm Out 拒收了：{{why}}）。{{title}}\n\n{{task}}",
+        "doHereAsk": "可以在本机做：说一句「在本机做」"
       }
     }
   },

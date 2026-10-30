@@ -129,10 +129,19 @@ def private_hosts() -> list[str]:
     return [p.strip().lower() for p in v if isinstance(p, str) and p.strip()] if isinstance(v, list) else []
 
 
+_IP_RE = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
+
+
 def _private_host(host: str, patterns: list[str]) -> Optional[str]:
+    """The first pattern that covers *host*: an fnmatch pattern (``*.corp.example``, an
+    IP range like ``10.*``), or a bare name, which covers itself and its subdomains."""
     import fnmatch
     h = host.lower().rstrip(".")
-    return next((p for p in patterns if fnmatch.fnmatchcase(h, p) or h == p.lstrip("*.")), None)
+    for p in patterns:
+        bare = p.lstrip("*.")
+        if fnmatch.fnmatchcase(h, p) or h == bare or ("*" not in p and h.endswith("." + bare)):
+            return p
+    return None
 
 
 def _clone_host(url: str) -> Optional[str]:
@@ -143,17 +152,16 @@ def _clone_host(url: str) -> Optional[str]:
 def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance: str,
                   agent_reason: str = "") -> list[str]:
     """Why this task needs a private network a Hive cannot reach (design
-    2026-10-30-dispatch-center §2.2), from what it uses: its repositories (the mode's,
-    else every one the Brain binds) bound ``kind: internal`` or cloned from a private
-    host; a private host named in the task or the acceptance; a skill of the mode with
+    2026-10-30-dispatch-center §2.2), from what it uses: its repositories (every one the
+    Brain binds, whatever the mode: the Hive is sent all of them, ``_brain_repos``) bound
+    ``kind: internal`` or cloned from a private host; a private host named in the task or the acceptance; a skill of the mode with
     ``network: private``; and the reason the agent gave (it adds a reason, it never
     removes one). Deterministic but for that last one."""
     from core.project_agent import skill_network
     patterns = private_hosts()
     out: list[str] = []
     bindings = _bindings(d)
-    names = view["repos"] or list(bindings)
-    for name in names:
+    for name in list(bindings):
         b = bindings.get(name)
         if b is None:
             continue
@@ -165,7 +173,7 @@ def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance
         if hit:
             out.append(f"{name} is cloned from {host} (a private host: {hit})")
     seen: set[str] = set()
-    for m in _HOST_RE.finditer(f"{task}\n{acceptance}"):
+    for m in [*_HOST_RE.finditer(f"{task}\n{acceptance}"), *_IP_RE.finditer(f"{task}\n{acceptance}")]:
         host = m.group(1).lower()
         hit = _private_host(host, patterns)
         if hit and host not in seen:

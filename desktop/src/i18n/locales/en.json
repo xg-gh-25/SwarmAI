@@ -574,7 +574,8 @@
         "refusedNothing": "Nothing was sent: no Hive was contacted and the Brain was not synced.",
         "doHere": "Do it here, in a chat tab",
         "doHereHint": "It can be done on this machine",
-        "doHerePrompt": "Do this on this machine (Swarm Out refused it: {{why}}). {{title}}\n\n{{task}}"
+        "doHerePrompt": "Do this on this machine (Swarm Out refused it: {{why}}). {{title}}\n\n{{task}}",
+        "doHereAsk": "It can be done on this machine: say \"do it here\""
       }
     }
   },
@@ -1321,7 +1322,8 @@
       "unanswered_other": "{{count}} unanswered",
       "more_one": "Show {{count}} earlier",
       "more_other": "Show {{count}} earlier",
-      "refusals": "Refused at intake {{count}} times · {{private}} of them needed a private network"
+      "refusals_one": "Refused at intake once · {{private}} of them needed a private network",
+      "refusals_other": "Refused at intake {{count}} times · {{private}} of them needed a private network"
     },
     "tbdParts": {
       "occupancy": "Worker occupancy",

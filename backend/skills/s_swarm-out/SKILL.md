@@ -35,8 +35,8 @@ a session with someone else the commands refuse. Do not try another way.
 
 Ask only when the request cannot be turned into one run spec. Everything else you decide
 and carry out (the autonomy principle): the person sees the result on the dispatch card.
-**Check whether the task can be taken before you ask anything** (step 4): a task a Hive
-cannot do is refused at once, not after three questions.
+**Once the Brain is known, check whether the task can be taken before the other
+questions** (step 4): a task a Hive cannot do is refused at once, not after three questions.
 
 | Situation | What you do |
 |---|---|
@@ -97,12 +97,16 @@ numbered text options ("reply with a number"). One question at a time, and only 
    For a change, look at what it touches before you judge the risk: on a Brain with a
    code graph, `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol> --project
    <B>` lists the callers. The Hive does not change this choice.
-4. **Check, then dispatch.** Run `spec` as soon as the Brain is known, with the mode
-   and acceptance you would choose (before asking any question of the table). `refusals`
-   not empty (for example: it uses an internal repository, names a private host, or a
-   skill that needs a private network): run `dispatch` once with the same arguments plus
-   `--revision` and `--brief`, which records the refusal and shows the refusal card, and
-   stop; tell the person it can be done on this machine in a chat tab. Otherwise ask
+4. **Check, then dispatch.** Run `spec` as soon as the Brain is known, before the mode
+   and acceptance questions: with the mode you would pick and an acceptance that says
+   only what was asked (a placeholder like "the person's request is answered" is fine
+   for this check; never invent a criterion). When two modes fit, run it for each.
+   `refusals` not empty for every mode that fits (for example: the Brain binds an
+   internal repository, the task names a private host, a skill needs a private
+   network): run `dispatch` once with the same arguments plus `--title`, `--revision`
+   and `--brief`, which records the refusal and shows the refusal card, and stop; tell
+   the person it can be done on this machine in a chat tab. Refused for one mode only:
+   ask the mode question, naming that one as not possible on a Hive. Otherwise ask
    what the table says to ask, run `spec` again if an answer changed it, then run
    `dispatch` with the same arguments plus `--revision` = the spec's `revision` and
    `--brief`; no confirmation is asked. Run it

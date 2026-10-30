@@ -27,6 +27,7 @@ import base64
 import calendar
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -97,24 +98,25 @@ def _record_refusal(brain: str, title: str, reasons: list[str], private: bool) -
     row = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "brain": brain,
            "title": " ".join((title or "").split())[:MAX_TITLE_CHARS], "private": private,
            "reasons": [str(r)[:300] for r in reasons[:6]]}
-    with open(_state_dir() / "refusals.jsonl", "a", encoding="utf-8") as f:
+    d = _state_dir()
+    with open(d / "refusals.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    # the running counts the history reads (the log itself is never read back whole)
+    n = refusal_counts()
+    n = {"total": n["total"] + 1, "private": n["private"] + int(private)}
+    tmp = d / f".refusal-counts.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(n), encoding="utf-8")
+    os.replace(tmp, d / "refusal-counts.json")
 
 
 def refusal_counts() -> dict[str, int]:
     """``{"total", "private"}`` of the intake refusals recorded (the history's line)."""
-    p = _state_dir() / "refusals.jsonl"
-    total = private = 0
-    if p.is_file():
-        for ln in p.read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(ln)
-            except ValueError:
-                continue
-            if isinstance(row, dict):
-                total += 1
-                private += row.get("private") is True
-    return {"total": total, "private": private}
+    try:
+        n = json.loads((_state_dir() / "refusal-counts.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"total": 0, "private": 0}
+    ok = isinstance(n, dict) and all(isinstance(n.get(k), int) for k in ("total", "private"))
+    return {"total": n["total"], "private": n["private"]} if ok else {"total": 0, "private": 0}
 
 
 class SwarmOutMaybeSent(SwarmOutError):
@@ -495,7 +497,10 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     if reasons:
         # refused at intake: before a Hive is chosen or the Brain synced (dispatch-center §2)
         private = bool(spec.get("private"))
-        await asyncio.to_thread(_record_refusal, brain, title, reasons, private)
+        try:
+            await asyncio.to_thread(_record_refusal, brain, title, reasons, private)
+        except OSError as exc:                     # the record is not the refusal
+            logger.warning("swarm_out: refusal not recorded (%s)", type(exc).__name__)
         raise SwarmOutRefused(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons), private)
     if hive_ref:
         hive_reason = "named"

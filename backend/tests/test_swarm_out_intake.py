@@ -46,6 +46,21 @@ def test_each_source_of_a_private_need_refuses_and_a_public_task_passes(ws, monk
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\nnetwork: private\n---\nx\n")
     assert "skill s_lib-release" in _private(_build(ws, "Lib", "release it", "released"))[0]
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\n---\nx\n")
+    # a bare pattern covers its subdomains; an IP in the task; a body line is not frontmatter
+    monkeypatch.setattr(ts, "private_hosts", lambda: ["corp.example", "10.*"])
+    assert _private(_build(ws, "Lib", "see https://git.corp.example/x", "ok"))
+    assert "10.1.2.3" in _private(_build(ws, "Lib", "call http://10.1.2.3/api", "ok"))[0]
+    (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text(
+        "---\nname: s_lib-release\n---\nx\n```\nnetwork: private\n```\n")
+    assert _private(_build(ws, "Lib", "release it", "released")) == []
+    monkeypatch.setattr(ts, "private_hosts", lambda: ["*.corp.example"])
+    # an internal repository the mode does not list still goes to the Hive: refused
+    doc = __import__("yaml").safe_load((b / "project-agent.yaml").read_text())
+    doc["modes"][0]["repos"] = ["lib"]
+    (b / "project-agent.yaml").write_text(__import__("yaml").safe_dump(doc))
+    (b / "bindings.yaml").write_text((b / "bindings.yaml").read_text() + INTERNAL.split("bindings:\n", 1)[1])
+    assert "svc is an internal repository" in _private(_build(ws, "Lib", "fix", "ok"))[0]
+    (b / "bindings.yaml").write_text((b / "bindings.yaml").read_text().split("  - repo: svc")[0])
     # a repository cloned from a private host, and an internal one
     (b / "bindings.yaml").write_text((b / "bindings.yaml").read_text().replace("github.com", "git.corp.example"))
     assert "cloned from git.corp.example" in _private(_build(ws, "Lib", "fix", "ok"))[0]
@@ -74,6 +89,11 @@ def test_a_refusal_is_recorded_on_its_own_before_anything_is_sent(ws, monkeypatc
     assert rows[0]["brain"] == "Lib" and rows[0]["private"] is True and rows[0]["title"] == "T"
     assert not (tmp_path / "dispatches.jsonl").exists()
     assert so.refusal_counts() == {"total": 1, "private": 1}
+    # a refusal whose record cannot be written is still the refusal
+    monkeypatch.setattr(so, "_record_refusal", lambda *a: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(so.SwarmOutRefused):
+        asyncio.run(so.dispatch_spec(None, "T", "Lib", "fix", "ok", execution="native", returns="commits",
+                                     seen_revision=revision(b), needs_private="vpn"))
     from fastapi import HTTPException
     from routers import swarm_out as route
 
@@ -109,6 +129,13 @@ def test_the_cli_and_the_card_carry_the_refusal_and_the_task(tmp_path, monkeypat
     link.symlink_to(task)
     b = card.card(f'"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title T --task-file {link}', out)
     assert b["task"] is None                                         # a link is not followed
+    b = card.card('"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title T --task-file "$TMP/t.md"', out)
+    assert b["refused"] and b["task"] is None                        # not a path this side can read
+    odd = tmp_path / "$X" / "t.md"                                     # a file whose name looks expanded
+    odd.parent.mkdir()
+    odd.write_text("not what the shell sent")
+    b = card.card(f"\"$SWARM_BACKEND_BIN\" py -m scripts.swarm_out dispatch --title T --task-file '{odd}'", out)
+    assert b["task"] is None
     plain = card.card('"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title T',
                       json.dumps({"ok": False, "detail": "no Hive"}))
     assert plain["refused"] is False and "task" not in plain

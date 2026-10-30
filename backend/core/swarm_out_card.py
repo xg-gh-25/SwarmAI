@@ -68,9 +68,10 @@ def _task_of(a: dict[str, str], cwd: Optional[str]) -> Optional[str]:
     """The task the refused call named: ``--task``, or the ``--task-file`` it read
     (opened without following a link, a regular file, at most ``_TASK_MAX`` bytes)."""
     if a.get("task"):
-        return a["task"][:_TASK_MAX]
+        # a value the shell would have expanded is not the task the call sent
+        return None if any(c in a["task"] for c in "$`") else a["task"][:_TASK_MAX]
     f = a.get("task-file")
-    if not f:
+    if not f or any(c in f for c in "$`") or f.startswith("~"):
         return None
     import os
     import stat

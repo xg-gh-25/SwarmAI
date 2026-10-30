@@ -188,7 +188,8 @@ def skill_network(skill_md: Path) -> str:
         text = skill_md.read_text(encoding="utf-8")
     except OSError:
         return "any"
-    m = re.search(r"^network:\s*([A-Za-z]+)\s*$", text, re.MULTILINE)
+    fm = re.match(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", text, re.DOTALL)     # the frontmatter only
+    m = re.search(r"^network:\s*([A-Za-z]+)\s*$", fm.group(1), re.MULTILINE) if fm else None
     return m.group(1).lower() if m else "any"
 
 

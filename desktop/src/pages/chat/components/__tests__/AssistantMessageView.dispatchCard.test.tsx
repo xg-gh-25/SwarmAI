@@ -150,6 +150,13 @@ describe('a task refused at intake', () => {
     expect(sent).toContain('add the field to the service');
     expect(runs).not.toHaveBeenCalled();
   });
+
+  it('offers no "do it here" button when the task could not be read', () => {
+    setOverlayCtxBridge({ openHiveSession, showSwarmOut, dispatchPrompt: vi.fn(() => true) });
+    render(view([bash('b1'), tr('b1'), { ...REFUSED, refused: true, needsPrivate: true, task: null }]));
+    expect(screen.queryByTestId('dispatch-do-here')).toBeNull();
+    expect(screen.getByTestId('dispatch-card').textContent).toContain('do it here');
+  });
 });
 
 describe('a dispatch that did not go out', () => {
