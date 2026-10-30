@@ -52,7 +52,7 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 | 撤回墓碑 | 2 | `governed_edit.redact` 原地写墓碑 |
 | `- [x]`（已关闭的 gap、完成的事项） | 26 | 留在主文件 |
 | `decay:dormant` | 主文件约 190 条 | 只按时间判定，旧不等于过期；而且读取方行为不一致：MEMORY 注入会过滤掉（`memory_injection.py:250/435`），DDD 的 recall 和 find 不过滤 |
-| 判官认定的 supersedes | DDD 5 条 | MEMORY 注入会因此隐藏旧条目（`memory_injection.py:465-471`），DDD 不隐藏；判官的判断约一半是错的 |
+| 判官认定的 supersedes | DDD 5 条 | MEMORY 注入会因此隐藏旧条目（`memory_injection.py:465-471`），DDD 不隐藏。错得多的是已删除的 `refine` 路径（14 条错 8 条）；现在的判官判 `contradicts`，18 对里有 4 对其实不矛盾（`Knowledge/Reports/2026-10-30-cdf-override-experiment/`，单人标注） |
 
 **死字段（没有生产读取方，或者会误导）：**
 
@@ -72,6 +72,9 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
   今天的做法是新写一条，保留旧的。
 - **纠正**：只由 S7 或 S3 的 `overrides: [{id, head}]` 声明触发（来源白名单），或由用户操作触发。
   - 代码复核：`id` 和首行（去掉注释、空白归一化后比较）恰好对上一条现存条目；新单元已写入；判官给出的不是 `same`。
+  - **先后按说出的时间，不按到达 CDF 的时间**：新单元的说出时间（它引用的证据在 `evidence_roots.observed_at` 里的最大值）必须晚于目标条目的说出时间（目标条目当初那个单元的同一个值），否则不覆盖、新单元也不写入，原因记 `older_than_existing`。
+    依据：能确定先后的 14 对矛盾里有 4 对，新单元其实说得更早，只是在队列里排得久，到达时目标条目已经是更新的说法。按到达顺序会让旧话覆盖新话。
+    目标条目查不到说出时间时（没有对应的单元），按条目自己的日期、以天为单位比较；同一天视为不晚于，不覆盖。
   - S7 的提示词加一句：会话里改变了一条已有决定时，用会话里 `knowledge find/get` 给出的 id 声明它替换了哪条。
 - **边界**：CDF 永远不改人写的条目；STEERING、USER、TOOLS 里只动"系统追加"部分。
 - **判官单独给出的 "contradicts"**：不改动任何条目，也不再隐藏 MEMORY 里的旧条目，删掉 `memory_injection.py:465-471` 的这段逻辑。
@@ -169,6 +172,7 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 - I7 `brain_changes` 和写入日志逐条对得上；撤回计数不再永远为 0。
 - I8 清理幂等；清理之后，SwarmAI 主文件里 `decay:dormant`、`maturity:`、`ref:0`、`[redacted]`、`- [x]` 的数量都是 0。
 - I9 生产代码里没有 `ddd_self_audit`、`ddd_drift_signal`、`.ddd-usage.json` 的写入，也没有 `assess_decay` 的调用。
+- I10 声明的覆盖，新单元说出得不晚于目标条目时，目标条目一字不变，新单元不写入，原因记 `older_than_existing`；撤掉这条检查，测试变红。
 
 ## 4. 步骤和验证计划
 
@@ -180,18 +184,19 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 | 2 | 需要历史的读取方改读撤回记录；防写回指纹 | correctness、security |
 | 3 | 撤回不留墓碑；gap 关闭、事项完成改为撤回 | correctness、state-machine |
 | 0 | 判官准确度（§5.1）：抽样、盲标、混淆矩阵、错误归因、回归集。只读，不改代码 | 零利害标注 + XG 裁定 |
-| 4 | 覆盖：S7/S3 的 `overrides`；白名单；删掉判官 supersedes 隐藏 MEMORY 条目的逻辑；边界。**`adds` 改为合并，只在第 0 步达标后开启** | correctness、security、concurrency |
+| 4 | 覆盖：S7/S3 的 `overrides`；白名单；按说出时间排先后（I10）；删掉判官 supersedes 隐藏 MEMORY 条目的逻辑；边界。**`adds` 改为合并，只在第 0 步达标后开启** | correctness、security、concurrency |
 | 5 | 去掉"挂起"和衰减；删死字段（先迁移读取方） | correctness |
 | 6 | 一次性清理（先出清单） | correctness |
 | 7 | 删除每周自审、`.ddd-usage.json`、`refine` | 不需要，测试证明 |
 | 8 | 月度倒查 job；治理文字 | correctness |
 
-每步只跑它触及的测试，加 mutation check；最后整体跑一次 I1–I9，逐行报告。
+每步只跑它触及的测试，加 mutation check；最后整体跑一次 I0–I10，逐行报告。
 
 ## 5. 未决冲突（已知的取舍）
 
 判官给出 `contradicts`、而做决定的上下文没有声明时，新旧两条都留在主文件里，在统计中列为"未决冲突"。
-这和"主文件只放有效全集"有一点张力。之所以这样定，是因为判官的这类判断约一半是错的，按它删条目会违反"有用的不能丢"。
+这和"主文件只放有效全集"有一点张力。之所以这样定，是因为判官的这类判断不可靠：18 对里有 4 对其实不矛盾；更关键的是，"更新的观察"不等于"纠正"，两两比较的判官分不清这两者。按它删条目会违反"有用的不能丢"。
+按句删除错句、或让模型在只许用原句的约束下改写，都在同一批数据上试过：前者留下错误的标题，后者全部通过逐句核对，但约一半改错（`Knowledge/Reports/2026-10-30-cdf-override-experiment/`）。所以覆盖只由声明触发。
 
 缓解办法：让 S7 更容易声明（它能看到会话里查过的 id），同时在月度报告里统计未决冲突的数量。
 如果这个数量不小，再讨论是否要给判官更大的权限。
@@ -210,7 +215,7 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 
 所以**判官准确度达标，是 §2.1 合并能上线的前提**。达标之前，`adds` 保持今天的行为：新增一条，挂 `derived_from` 关系。
 
-**数据**：现成的，不需要新埋点。
+**数据**：现成的，不需要新埋点。起始样本：`Knowledge/Reports/2026-10-30-cdf-override-experiment/labels.json` 里 18 对 `contradicts` 已有单人标签，盲标时作为其中一部分重新标注。
 - 每次裁决都存在 `ingestion_units.decision.version_vector.verify.hits`（h1…hN 各自的 relation），以及 `relation_hints`（被判 adds 或 contradicts 的那条现存条目的锚点）；
 - 新单元的原文在 `ingestion_inbox.payload` 里；
 - 现存条目的原文在文件或归档里。
