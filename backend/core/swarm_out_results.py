@@ -57,7 +57,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 7
+SUMMARY_VERSION = 8
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -367,6 +367,20 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
 
     pipeline = None
     summaries = [b for b in all_blocks if b.get("type") == "pipeline_summary"]
+    # every run the session worked in, in order, from the blocks written while a run is
+    # in progress (pipeline_run, pipeline_stage) as well as at its end: a run that
+    # stopped short of an end status has no summary but still ran (execution_check)
+    runs_seen: list[dict[str, Any]] = []
+    for b in all_blocks:
+        if b.get("type") in ("pipeline_run", "pipeline_stage", "pipeline_summary") and isinstance(b.get("runId"), str):
+            rid = d.s(b["runId"], 64)
+            if rid and all(x["run_id"] != rid for x in runs_seen):
+                runs_seen.append({"run_id": rid, "profile": d.s(b.get("profile"), 20)})
+    own = agent.get("run_id") if isinstance(agent, dict) else None
+    if own:
+        # the run this dispatch named, when the session ended it (another one's summary
+        # may be here too: it abandoned a stale run, say)
+        summaries = [b for b in summaries if b.get("runId") == own] or summaries
     if summaries:
         s = summaries[-1]
         audit = []
@@ -432,6 +446,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
                       "answered_questions": answered_q},
         },
         "pipeline": pipeline,
+        "pipeline_runs": runs_seen[:10],
         "dropped": d.n,
     }
 
@@ -814,16 +829,20 @@ def execution_check(res: dict, agent: Any) -> Optional[dict]:
     ``not_yet``: a pipeline task whose record shows no run yet, before the run ended."""
     if not isinstance(agent, dict) or agent.get("execution") not in ("native", "pipeline"):
         return None
-    run = res.get("pipeline") if isinstance(res.get("pipeline"), dict) else None
+    seen = [r for r in res.get("pipeline_runs") or [] if isinstance(r, dict) and r.get("run_id")]
+    summary = res.get("pipeline") if isinstance(res.get("pipeline"), dict) else None
+    if summary and summary.get("run_id") and all(r["run_id"] != summary["run_id"] for r in seen):
+        seen.append({"run_id": summary["run_id"], "profile": summary.get("profile")})   # an older record
     if agent["execution"] == "native":
-        return {"state": "differs", "why": "made_a_run"} if run else {"state": "matches", "why": None}
-    if run is None:
+        return {"state": "differs", "why": "made_a_run"} if seen else {"state": "matches", "why": None}
+    if not seen:
         ended = res.get("ended") in ENDED and res.get("provisional") is not True
         return {"state": "differs", "why": "no_run"} if ended else {"state": "not_yet", "why": None}
-    if agent.get("profile") and run.get("profile") and run["profile"] != agent["profile"]:
-        return {"state": "differs", "why": "other_profile"}
-    if agent.get("run_id") and run.get("run_id") and run["run_id"] != agent["run_id"]:
+    own = [r for r in seen if r["run_id"] == agent.get("run_id")] if agent.get("run_id") else seen[-1:]
+    if not own:
         return {"state": "differs", "why": "other_run"}
+    if agent.get("profile") and own[0].get("profile") and own[0]["profile"] != agent["profile"]:
+        return {"state": "differs", "why": "other_profile"}
     return {"state": "matches", "why": None}
 
 

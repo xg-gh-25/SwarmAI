@@ -167,3 +167,51 @@ async def test_the_hives_chat_pins_the_execution_on_the_orders_writable_clones(a
                           "execution": ex}})
     assert r.status_code == 200
     assert seen["project_agent"]["execution"] == {**ex, "repos": {"lib": str(ws / hw.repo_rel(wid, "lib"))}}
+
+
+@pytest.mark.parametrize("command", [
+    "sh -c '\"$SWARM_BACKEND_BIN\" pipeline-v1 create --project P'",
+    'bash -c "$SWARM_BACKEND_BIN pipeline-v1 create x"',
+    'eval "$SWARM_BACKEND_BIN pipeline-v1 create x"',
+    'X="$SWARM_BACKEND_BIN"; "$X" pipeline-v1 create',
+    '"$SWARM_BACKEND_BIN" py -m core.run_protocol.cli_main create',
+    'S=create; "$SWARM_BACKEND_BIN" pipeline-v1 $S',
+    '"$SWARM_BACKEND_BIN" pipeline-v1 $(echo create)',
+])
+def test_create_is_refused_in_its_ordinary_shell_forms(command):
+    from core.security_hooks import _creates_run
+    assert _creates_run(command)
+
+
+@pytest.mark.parametrize("command", [
+    '"$SWARM_BACKEND_BIN" pipeline-v1 advance --run-id r --note create',
+    'git log --grep create', 'echo pipeline-v1 create', 'grep -rn "pipeline-v1 create" docs',
+])
+def test_work_that_only_mentions_create_is_not_refused(command):
+    from core.security_hooks import _creates_run
+    assert not _creates_run(command)
+
+
+def test_a_stored_pin_is_read_back_by_the_rules_it_was_made_by():
+    good = {"how": "pipeline", "profile": "bugfix", "run_id": RUN, "requirement": None, "repos": {"lib": "/w"}}
+    assert pas._valid_pin({**PIN, "execution": good}) == {**PIN, "execution": good}
+    for bad in ({"how": "pipeline"}, {**good, "run_id": "x"}, {**good, "repos": ["/w"]}, {**good, "profile": "nope"}):
+        assert pas._valid_pin({**PIN, "execution": bad}).get("broken")
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_run_could_not_be_made_is_left_broken_not_pinned(monkeypatch):
+    from database import db
+
+    def fail(sid, pin):
+        raise RuntimeError("no")
+    monkeypatch.setattr(pas, "create_pinned_run", fail)
+
+    def send(**kw):
+        async def gen():
+            yield {"type": "result"}
+        return gen()
+    pin = {**PIN, "execution": {"how": "pipeline", "profile": "bugfix", "run_id": RUN, "requirement": None, "repos": {}}}
+    await _run(_router(), "s-broken", pin, send)
+    stored = (await db.sessions.get("s-broken"))["metadata"]["project_agent"]
+    assert pas._valid_pin(stored).get("broken")

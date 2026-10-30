@@ -720,19 +720,36 @@ def _segment_reserved(tokens: list[str]) -> set[str]:
     return out
 
 
-def _creates_run(command: str) -> bool:
-    """The command runs ``pipeline-v1 create`` (core/pipeline_command): a call whose
-    subcommand is ``create``, an ambiguous call that says ``create``, or a command the
-    parser cannot split that names the CLI and ``create``. Naming the CLI without
-    running it (a grep, a path argument) is not one."""
+def _creates_run(command: str, depth: int = 0) -> bool:
+    """The command may run ``pipeline-v1 create`` (core/pipeline_command): a call whose
+    subcommand is ``create``, or is not a literal word (``$S``, ``$(…)``) in a command
+    that says create; a call through a program word held in a variable in a command that
+    says create; the run CLI's module entry (``core.run_protocol.cli_main``) with
+    create; the same inside ``sh -c`` / ``bash -c`` / ``eval`` / a heredoc a shell
+    reads; or a command the parser cannot split that names the CLI and create. Naming
+    the CLI without running it (a grep, an echo, a path argument) is not one. Calling
+    the engine directly is out of reach here (run-spec §4.2: the result check sees it)."""
     from core import pipeline_command
+    says_create = "create" in command
+    if not says_create:
+        return False
+    if re.search(r"\brun_protocol[./]cli_(?:main|commands)\b", command):
+        return True
+    segments = _gate_shell_segments(command, [])
+    if segments is None:
+        return pipeline_command.mentions(command)
     calls, _single = pipeline_command.calls(command)
-    if not calls:
-        return pipeline_command.mentions(command) and "create" in command and \
-            _gate_shell_segments(command, []) is None
-    return any(c.get("tool") == "pipeline_v1" and (c.get("sub") == "create"
-                                                   or (c.get("ambiguous") and "create" in c.get("argv", [])))
-               for c in calls)
+    for c in calls:
+        sub = str(c.get("sub") or "")
+        if c.get("tool") == "pipeline_v1" and (sub == "create" or "$" in sub or "`" in sub
+                                               or (c.get("ambiguous") and sub == "")):
+            return True
+    for seg in segments:
+        prog = _unwrap_program(seg)
+        if prog and prog[0].startswith("$") and not pipeline_command._is_program_word(prog[0]) \
+                and pipeline_command.SUBCOMMAND in prog:
+            return True                              # "$X" pipeline-v1 …: X may be the backend
+    return depth < 3 and any(_creates_run(inner, depth + 1) for inner in _nested_command_lines(command, segments))
 
 
 def _is_reserved_action(command: str, reserved: "list[str] | set[str]") -> Optional[str]:

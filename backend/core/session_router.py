@@ -4831,7 +4831,13 @@ class SessionRouter:
                         raise RuntimeError("the Project Agent pin could not be recorded")
                     # a pipeline task's run exists before its first message reaches the
                     # model: the agent starts in it and never creates one (run-spec §4.2)
-                    await asyncio.to_thread(create_pinned_run, session_id, project_agent)
+                    try:
+                        await asyncio.to_thread(create_pinned_run, session_id, project_agent)
+                    except Exception:
+                        # the session does not start; its record must not read as a
+                        # pipeline session whose run exists (a resume would be stuck)
+                        await record_pin(session_id, {"broken": "its pipeline run could not be created"})
+                        raise
                 _msg_metadata = {"client_id": client_id} if client_id else None
                 persisted_msg_id = str(uuid4())
                 # Strip raw tool-call leaks before persisting — symmetric with the

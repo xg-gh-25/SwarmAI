@@ -250,6 +250,17 @@ def test_the_run_is_checked_against_how_it_was_dispatched():
     assert ex({"pipeline": {**run, "profile": "direct"}}, piped)["why"] == "other_profile"
     assert ex({"pipeline": {**run, "run_id": "run_ffffffff"}}, piped)["why"] == "other_run"
     assert ex({}, AGENT) is None                                               # a row from before
+    # from real session blocks: a run that never reached an end status still ran
+    stage = {"role": "assistant", "content": [{"type": "pipeline_stage", "runId": "run_0123abcd", "stage": "evaluate",
+                                               "status": "in_progress", "profile": "bugfix"}]}
+    res = sor.summarize([{"role": "user", "content": "go"}, stage], agent=piped)
+    assert res["pipeline"] is None and ex({**res, "ended": "completed"}, piped) == {"state": "matches", "why": None}
+    assert ex({**res, "ended": "completed"}, native)["why"] == "made_a_run"
+    other = {"role": "assistant", "content": [{"type": "pipeline_summary", "runId": "run_ffffffff", "profile": "trivial",
+                                               "status": "abandoned"}]}
+    res = sor.summarize([{"role": "user", "content": "go"}, stage, other], agent=piped)
+    assert ex({**res, "ended": "completed"}, piped)["state"] == "matches"      # its own run, not the other
+    assert sor.summarize([{"role": "user", "content": "go"}, other], agent=piped)["pipeline"]["run_id"] == "run_ffffffff"
     pub = sor.public({"result": {"pipeline": {**run, "profile": "direct"}}}, [], piped)
     assert pub["execution_check"] == {"state": "differs", "why": "other_profile"}
     assert sor.public({"result": {}}, [], None)["execution_check"] is None

@@ -166,10 +166,16 @@ def _valid_pin(value: Any) -> Optional[dict[str, Any]]:
     if not all(isinstance(value.get(k), str) and value.get(k) for k in keys) or not isinstance(
             value.get("reserved"), list) or not isinstance(value.get("gates"), list):
         return {"broken": "the session's Project Agent record is incomplete"}
-    # ``execution`` is on a pin made since the run spec (a session pinned before has none)
+    # ``execution`` is on a pin made since the run spec (a session pinned before has none);
+    # read back with the rules it was made by
     ex = value.get("execution")
-    if ex is not None and not (isinstance(ex, dict) and ex.get("how") in ("native", "pipeline")):
-        return {"broken": "the session's Project Agent record names no valid way to run"}
+    if ex is not None:
+        try:
+            ok = pin_execution(ex, ex.get("repos") if isinstance(ex, dict) else None) is not None
+        except PinError:
+            ok = False
+        if not ok or (isinstance(ex, dict) and ex.get("repos") is not None and not isinstance(ex.get("repos"), dict)):
+            return {"broken": "the session's Project Agent record names no valid way to run"}
     return value
 
 
