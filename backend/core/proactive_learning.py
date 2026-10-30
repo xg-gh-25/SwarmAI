@@ -322,6 +322,9 @@ def classify_work_type(text: str) -> str:
 # Deliverable extraction
 # ---------------------------------------------------------------------------
 
+_NONE_RECORDED = "None recorded"
+
+
 def parse_delivered(text: str) -> list[str]:
     """The deliverable lines of a DailyActivity file: the ``- `` items under every
     session's ``**Delivered:**`` header (older files: ``**Deliverables:**`` or
@@ -340,7 +343,9 @@ def parse_delivered(text: str) -> list[str]:
         if not inside:
             continue
         if stripped.startswith("- "):
-            out.append(stripped.removeprefix("- ").strip())
+            item = stripped.removeprefix("- ").strip()
+            if item != _NONE_RECORDED:  # the writer's placeholder for an empty section
+                out.append(item)
         elif stripped.startswith(("**", "#")):
             inside = False
     return out

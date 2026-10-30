@@ -110,6 +110,14 @@ class SessionLifecycleHookManager:
         self._hooks: list[SessionLifecycleHook] = []
         self._timeout = timeout_seconds
 
+    def timeout_for(self, hook: SessionLifecycleHook) -> float:
+        """The hook's own ``timeout_seconds`` when it declares one, else the default.
+
+        A hang guard: a hook whose normal work takes longer (several model calls)
+        says so on the class instead of being cut by the shared default."""
+        own = getattr(hook, "timeout_seconds", None)
+        return float(own) if isinstance(own, (int, float)) and own > 0 else self._timeout
+
     def register(self, hook: SessionLifecycleHook) -> None:
         """Register a hook.  Hooks execute in registration order."""
         self._hooks.append(hook)
@@ -125,7 +133,7 @@ class SessionLifecycleHookManager:
             try:
                 await asyncio.wait_for(
                     hook.execute(context),
-                    timeout=self._timeout,
+                    timeout=self.timeout_for(hook),
                 )
                 logger.info(
                     "Hook '%s' completed for session %s",
@@ -525,7 +533,7 @@ class BackgroundHookExecutor:
                 try:
                     await asyncio.wait_for(
                         hook.execute(context),
-                        timeout=self._hook_manager._timeout,
+                        timeout=self._hook_manager.timeout_for(hook),
                     )
                     completed += 1
                     self._record_hook_result(hook.name, True)

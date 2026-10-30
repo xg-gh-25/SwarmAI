@@ -196,77 +196,32 @@ def _merge_coe_threads(threads: list[dict], states: dict) -> list[dict]:
     ]
     p0_end = next((i for i, t in enumerate(out) if t.get("priority") != "P0"), len(out))
     return out[:p0_end] + added + out[p0_end:]# ---------------------------------------------------------------------------
-# DailyActivity "Next" / continue_from parser (L0)
+# DailyActivity open follow-ups (L0)
 # ---------------------------------------------------------------------------
 
 def _parse_continue_hints(daily_dir: Path, max_files: int = 1) -> list[str]:
-    """Extract **Next:** lines from the most recent session blocks.
+    """The newest open follow-ups (Next items) of the last ``max_files`` days.
 
-    Only reads the last ``MAX_BLOCKS`` session blocks (``## HH:MM | ...``
-    headings) from today's DailyActivity — older blocks are stale context
-    from parallel tabs and shouldn't drive today's focus.
-
-    Uses fuzzy word-overlap dedup to catch near-duplicate hints from
-    parallel sessions (e.g. "Add users:read scopes to Slack app config"
-    vs "Add users:read scopes in Slack App dashboard").
+    Read from the JSONL sidecars through ``open_next_items_in``, so a follow-up a
+    later session resolved is not offered. Near-duplicates from parallel sessions
+    (>60% word overlap) are kept once.
     """
-    MAX_HINTS = 5   # scoring engine takes top 5 anyway
-    MAX_BLOCKS = 5  # only look at the 5 most recent session blocks
+    from core.daily_activity_writer import open_next_items_in
 
+    MAX_HINTS = 5   # scoring engine takes top 5 anyway
     if not daily_dir.is_dir():
         return []
+    candidates = [item["text"] for item in reversed(
+        open_next_items_in(daily_dir, days=max_files))]
 
-    da_files = sorted(
-        [f for f in daily_dir.glob("*.md") if f.stem[:4].isdigit()],
-        key=lambda f: f.stem,
-        reverse=True,
-    )[:max_files]
-
-    # Collect hints from the last MAX_BLOCKS session blocks only
-    candidates: list[str] = []
-    for da_file in da_files:
-        try:
-            lines = da_file.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
-            continue
-
-        # Find session block boundaries (## HH:MM | session_id | ...)
-        block_starts: list[int] = [
-            i for i, line in enumerate(lines)
-            if line.startswith("## ") and "|" in line[:30]
-        ]
-
-        # Take only lines from the last MAX_BLOCKS blocks
-        if block_starts:
-            start_line = block_starts[-MAX_BLOCKS] if len(block_starts) > MAX_BLOCKS else 0
-            recent_lines = lines[start_line:]
-        else:
-            recent_lines = lines
-
-        file_hints: list[str] = []
-        for line in recent_lines:
-            stripped = line.strip()
-            if not stripped.startswith("**Next:**"):
-                continue
-            hint = stripped.removeprefix("**Next:**").strip()
-            if not hint or hint.startswith("Ongoing:"):
-                continue
-            file_hints.append(hint)
-
-        # Reverse so newest entries (bottom of file) come first
-        candidates.extend(reversed(file_hints))
-
-    # Fuzzy dedup: two hints are "same" if >60% word overlap
     hints: list[str] = []
     seen_word_sets: list[set[str]] = []
     for hint in candidates:
         if len(hints) >= MAX_HINTS:
             break
-
         words = set(hint[:100].lower().split())
-        if len(words) < 2:
-            continue  # skip single-word or empty hints
-
+        if not hint.strip():
+            continue
         is_dup = False
         for existing_words in seen_word_sets:
             overlap = len(words & existing_words)
@@ -274,11 +229,9 @@ def _parse_continue_hints(daily_dir: Path, max_files: int = 1) -> list[str]:
             if smaller > 0 and overlap / smaller > 0.6:
                 is_dup = True
                 break
-
         if not is_dup:
             seen_word_sets.append(words)
             hints.append(hint)
-
     return hints
 
 

@@ -51,7 +51,6 @@ core/ingestion/pipeline_v2.py:reinforce_or_reject  # exempt: via store.connect_r
 core/ingestion/pipeline_v2.py:requeue_missing_sections  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_parked  # exempt: via store.connect_rw: ingestion.db, CDF's own store
 core/ingestion/pipeline_v2.py:requeue_units  # exempt: via store.connect_rw: ingestion.db, CDF's own store
-core/ingestion/summary_lane.py:append_daily_summary  # exempt: DailyActivity (working memory, not governed); the summary lane is its writer
 core/ingestion/usage.py:record_usage  # exempt: via store.connect_rw: ingestion.db unit_usage
 core/knowledge_graph.py:_locked_read_modify_write  # exempt: .knowledge-graph.yaml (derived relation graph) lock
 core/knowledge_graph.py:save_graph  # exempt: .knowledge-graph.yaml (derived relation graph)
@@ -92,7 +91,6 @@ core/swarm_workspace_manager.py:SwarmWorkspaceManager.create_project  # exempt: 
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_section._migrate_layout_to_numbered._relocate  # exempt: governed docs move through governed_edit.apply_user_edit; shutil.move only for non-governed dirs
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_section._prune_legacy_scaffold  # exempt: removes shipped legacy README stubs and empty scaffold dirs, none governed
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.provision_project_ddd._create_ddd  # exempt: provisioning; creates DDD files only when absent
-core/swarm_workspace_manager.py:SwarmWorkspaceManager.prune_archives  # exempt: archived DailyActivity (working memory)
 core/swarm_workspace_manager.py:SwarmWorkspaceManager.verify_integrity._append_gitignore  # exempt: workspace .gitignore
 core/swarm_workspace_manager.py:_assert_ai_instruction_sentinels  # exempt: workspace CLAUDE.md / AGENTS.md sentinels
 core/swarm_workspace_manager.py:_batch_remove  # exempt: legacy path removal (one-time cleanup)
@@ -143,7 +141,12 @@ routers/workspace_api.py:create_file._create  # exempt: non-governed paths only:
 routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
 routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths only; governed files go through apply_user_edit before this
 routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only; governed trees go through move_tree
+scripts/cdf_move_misrouted.py:run  # exempt: one-time CDF repair; backs up and moves governed entries through the CDF writer
+scripts/cdf_relink_skipped.py:run  # exempt: one-time CDF repair; records relations through the CDF writer
 scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
+scripts/da_resummarize.py:backup  # exempt: copies DailyActivity (working memory) into ~/.swarm-ai/backups
+scripts/da_resummarize.py:rebuild_day  # exempt: one-time DailyActivity history repair (working memory)
+scripts/da_resummarize.py:restore_archives  # exempt: restores archived DailyActivity day files from git history
 scripts/ddd_verbatim_sync.py:sync  # exempt: dev tool; re-copies product template files inside the repo
 scripts/eval_runner.py:eval_trajectory_capture  # exempt: via fixture_workspace: a temp fixture workspace
 scripts/eval_runner.py:generate_html_report  # exempt: eval HTML report

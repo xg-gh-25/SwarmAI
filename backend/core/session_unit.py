@@ -5385,7 +5385,7 @@ class SessionUnit:
                 )
                 if not raw_messages:
                     return {}
-                summary = await SummarizationPipeline().summarize(raw_messages)
+                summary = await SummarizationPipeline().summarize(raw_messages, enrich=False)
                 completed = [s for s in summary.decisions if s][:8]
                 pending = [
                     s for s in (summary.open_questions or summary.topics) if s

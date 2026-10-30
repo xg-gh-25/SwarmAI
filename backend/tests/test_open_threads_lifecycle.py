@@ -203,7 +203,7 @@ def test_the_summariser_is_asked_to_reuse_an_open_problem_title(monkeypatch):
     asyncio.run(pipe._enrich_with_llm(summary, msgs,
                                       open_next_items=[], open_problems=["streaming freeze + overall slowness"]))
     assert '"streaming freeze + overall slowness"' in seen["prompt"]
-    assert "copy that title exactly" in seen["prompt"]
+    assert "copy its title" in seen["prompt"] and "exactly" in seen["prompt"]
 
 
 def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
@@ -211,7 +211,8 @@ def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
     import core.summarization as sm
     seen = {}
 
-    async def _enrich(self, summary, messages, *, open_next_items=None, open_problems=None):
+    async def _enrich(self, summary, messages, *, open_next_items=None, open_problems=None,
+                      **_kwargs):
         seen["open_problems"] = open_problems
         return summary
     monkeypatch.setattr(sm.SummarizationPipeline, "_enrich_with_llm", _enrich)
@@ -219,3 +220,9 @@ def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
             for i in range(sm.LLM_ENRICHMENT_THRESHOLD + 2)]
     asyncio.run(sm.SummarizationPipeline().summarize(msgs, open_problems=["a problem"]))
     assert seen["open_problems"] == ["a problem"]
+
+
+def test_parse_delivered_skips_the_empty_section_placeholder():
+    from core.proactive_learning import parse_delivered
+    text = "## 10:00 | s | t\n\n**Delivered:**\n- None recorded\n\n**Outputs:**\n- None recorded\n"
+    assert parse_delivered(text) == []

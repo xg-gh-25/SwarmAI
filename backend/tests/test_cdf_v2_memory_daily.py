@@ -56,7 +56,7 @@ def test_render_has_only_required_sections_and_full_identity():
         key_outputs=["file: /work/result.md"],
         validation_status="targeted tests passed",
         next_items=[{"next_id": "next-1", "text": "继续完整验证"}],
-        lessons=["must not render"],
+        topics=["the user's own words must not render"],
         session_title="活动记录",
         timestamp="13:00",
     )
@@ -66,7 +66,7 @@ def test_render_has_only_required_sections_and_full_identity():
     assert all(section in rendered for section in (
         "**Delivered:**", "**Outputs:**", "**Validation:**", "**Next:**"
     ))
-    assert "Lessons" not in rendered and "must not render" not in rendered
+    assert "must not render" not in rendered
     assert "[next-1] 继续完整验证" in rendered
 
 
@@ -79,7 +79,7 @@ async def test_resolves_accepts_only_ids_presented_to_generator(monkeypatch):
         "next_items": [],
     }
 
-    async def fake_enrich(summary, messages, *, open_next_items, open_problems=None):
+    async def fake_enrich(summary, messages, *, open_next_items, **_kwargs):
         summary.summary_sentence = enriched["summary_sentence"]
         summary.resolves = enriched["resolves"]
         return summary
@@ -94,20 +94,13 @@ async def test_resolves_accepts_only_ids_presented_to_generator(monkeypatch):
     assert result.resolves == ["open-1"]
 
 
-def test_the_summary_sentence_is_the_sessions_own_never_a_stock_filler():
-    pipeline = SummarizationPipeline()
-    chinese = pipeline._derive_summary_sentence(StructuredSummary(deliverables=["修复库膨胀", "清理 DDD"]))
-    english = pipeline._derive_summary_sentence(StructuredSummary(topics=["complete the work"]))
-    assert chinese == "修复库膨胀；清理 DDD" and english == "complete the work"
-    assert pipeline._derive_summary_sentence(StructuredSummary()) == ""
-    a = pipeline._derive_summary_sentence(StructuredSummary(topics=["一"]))
-    b = pipeline._derive_summary_sentence(StructuredSummary(topics=["二"]))
-    assert a != b                                   # the old filler was the same for both
-
-
-def test_no_title_restated_as_a_next_step():
-    pipeline = SummarizationPipeline()
-    assert pipeline._derive_continue_from(StructuredSummary(session_title="看看库为什么膨胀")) == ""
+def test_delivered_lists_only_deliverables_never_topics_or_decisions():
+    summary = StructuredSummary(topics=["看看库为什么膨胀"], decisions=["decided to look"],
+                                session_title="库膨胀排查", timestamp="10:00")
+    rendered = _format_session_entry(summary, _context())
+    delivered = rendered.split("**Delivered:**", 1)[1].split("**Outputs:**", 1)[0]
+    assert delivered.strip() == "- None recorded"
+    assert "Summary:" not in rendered          # no sentence: no line, never the user's words
 
 
 @pytest.mark.asyncio

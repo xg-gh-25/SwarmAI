@@ -48,7 +48,7 @@ class TestCultivationEvent:
 
     def test_all_event_types_exist(self):
         expected = {
-            "git_commit", "daily_activity", "signal_digest",
+            "git_commit", "signal_digest",
             "code_intel_indexed", "session_close", "proposal_decided", "timer_30min",
         }
         actual = {e.value for e in EventType}
@@ -112,7 +112,7 @@ class TestEventDispatcher:
         # Fill queue to capacity (5)
         for i in range(5):
             event = CultivationEvent(
-                type=EventType(["git_commit", "daily_activity", "signal_digest",
+                type=EventType(["git_commit", "proposal_decided", "signal_digest",
                                 "code_intel_indexed", "session_close"][i]),
                 source="test", payload={}, priority=2,
             )
@@ -360,7 +360,7 @@ class TestSingletonDispatcher:
     async def test_emit_different_types_not_deduped(self):
         self._ensure_dispatcher_in_loop()
         await emit_cultivation_event(EventType.GIT_COMMIT, source="a")
-        result = await emit_cultivation_event(EventType.DAILY_ACTIVITY, source="b")
+        result = await emit_cultivation_event(EventType.SIGNAL_DIGEST, source="b")
         assert result is True
 
     @pytest.mark.asyncio

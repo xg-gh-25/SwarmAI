@@ -1,35 +1,30 @@
 """DailyActivity file writer with YAML frontmatter, JSONL sidecar, and atomic writes.
 
-Handles two output formats per day:
+Two files per local day:
 
-1. **Markdown** (``YYYY-MM-DD.md``) — Human-readable session log with
-   YAML frontmatter.  This is the "for humans" view.
-2. **JSONL sidecar** (``YYYY-MM-DD.jsonl``) — One JSON line per session
-   with all structured fields from ``StructuredSummary``.  This is the
-   "for pipeline" view — consumed directly by ``DistillationTriggerHook``
-   without regex re-parsing.
+1. **Markdown** (``YYYY-MM-DD.md``) — the human-readable record, indexed for recall:
+   one block per session (title, summary, Delivered, Outputs, Validation, Next).
+2. **JSONL sidecar** (``YYYY-MM-DD.jsonl``) — one JSON line per session with the
+   structured fields; read by the prompt injection, the open-follow-up list, the COE
+   threads and the session statistics.
 
-Identity rule (run_1ec5ea9d): a session has ONE current block per kind
-(``summary``, ``checkpoint``) in a day file. Every producer writes through
-``upsert_session_block``, which removes that session's old marked block
-(``<!-- da:<kind>:<session_id> -->`` … ``<!-- /da -->``) and appends the new one
-at the END of the file, so the newest write is always last (the prompt injects
-the file's tail). Other text is never changed apart from the blank lines around
-a removed block and the frontmatter's ``sessions_count`` / ``has_coe``. The
-JSONL sidecar keeps one record per session (latest wins). Every writer of a day
-file — this module, the capture hooks, crash recovery, distillation's
-"distilled" mark, the weekly memory-health note — takes the ONE hidden
-``.DailyActivity.lock`` of the directory (``_day_lock``) and writes through a
-temp file + rename, so a crash mid-write cannot truncate the day.
-The sidecar is best-effort — if it fails, the markdown is still written.
+Identity rule (run_1ec5ea9d): a session has ONE block per kind in a day file. Every
+producer writes through ``upsert_session_block``, which removes that session's old
+marked block (``<!-- da:<kind>:<session_id> -->`` … ``<!-- /da -->``) and appends the
+new one at the END of the file. Other text is never changed apart from the blank lines
+around a removed block and the frontmatter's ``sessions_count`` / ``has_coe``. The
+sidecar keeps one record per session (latest wins). Every writer of a day file takes
+the ONE hidden ``.DailyActivity.lock`` of the directory (``_day_lock``) and writes
+through a temp file + rename, so a crash mid-write cannot truncate the day. The
+sidecar is best-effort — if it fails, the markdown is still written.
 
 Key public symbols:
 
-- ``write_daily_activity``  — Upsert a session's summary in today's file + sidecar.
+- ``write_daily_activity``  — Upsert a session's summary in a day file + sidecar.
 - ``upsert_session_block``  — The one way to write a session's block (any kind).
 - ``append_daily_text``     — Append session-less text (captures, job notes) under the lock.
-- ``set_daily_frontmatter`` — Update frontmatter keys of a day file under the lock.
-- ``read_jsonl_sidecar``    — Read structured session data from JSONL sidecar.
+- ``read_jsonl_sidecar``    — Read structured session data from a JSONL sidecar.
+- ``read_open_next_items``  — Follow-ups of recent days not resolved since.
 - ``parse_frontmatter``     — Parse YAML frontmatter from file content.
 - ``write_frontmatter``     — Serialize frontmatter dict + body to string.
 """
@@ -121,7 +116,7 @@ def write_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
     return "\n".join(lines) + body
 
 
-_TITLE_MIN_LEN = 8  # Titles shorter than this are treated as garbage
+_TITLE_MIN_LEN = 8  # a tab title shorter than this ("1", "ok") is treated as garbage
 
 
 def _validate_title(
@@ -129,56 +124,52 @@ def _validate_title(
     context_title: str,
     topics: list[str],
 ) -> str:
-    """Pick the best available title, filtering out garbage.
+    """Pick the title shown for a session.
 
-    Cascade:
-    1. summary_title (from _derive_title — highest quality)
-    2. context_title (from DB/frontend — may be garbage like "1" or "ok")
-    3. First topic (from extracted user messages)
-    4. "Untitled"
-
-    Each candidate must be >= _TITLE_MIN_LEN chars and not "Untitled session"
-    to be accepted. Skips noise-like titles (pure digits, single words < 5 chars).
+    1. ``summary_title``: the model's title, or the one derived from the messages
+       (already at least 10 characters). Any non-empty, non-numeric text is kept: a
+       model title in CJK is often 4-6 characters.
+    2. ``context_title``: the tab title, kept only at ``_TITLE_MIN_LEN`` or longer.
+    3. The first topic of that length, then "Untitled".
     """
-    for candidate in [summary_title, context_title]:
-        if not candidate or candidate == "Untitled session":
-            continue
-        cleaned = candidate.strip()
-        if len(cleaned) < _TITLE_MIN_LEN:
-            continue
-        # Skip pure numbers or very short single-word titles
-        if cleaned.isdigit():
-            continue
+    cleaned = (summary_title or "").strip()
+    if cleaned and cleaned != "Untitled session" and not cleaned.isdigit():
         return cleaned
-
-    # Fallback: use first substantive topic
+    cleaned = (context_title or "").strip()
+    if len(cleaned) >= _TITLE_MIN_LEN and not cleaned.isdigit():
+        return cleaned
     for topic in (topics or []):
         if len(topic) >= _TITLE_MIN_LEN and not topic.isdigit():
             return topic
-
     return "Untitled"
 
 
+def _shown_title(summary: StructuredSummary, context: HookContext) -> str:
+    """The title written to both files: ``_validate_title`` on one line, checked by the
+    injection scanner like the other fields (the tab-title fallback included)."""
+    title = " ".join(_validate_title(summary.session_title, context.session_title, []).split())
+    try:
+        from core.injection_patterns import scan_text
+    except Exception:  # pragma: no cover - the sanitizer logs this once
+        return title or "Untitled"
+    return "Untitled" if not title or scan_text(title) else title
+
+
 def _format_session_entry(summary: StructuredSummary, context: HookContext) -> str:
-    """Render one complete, human-readable DailyActivity v2 session block."""
+    """Render one complete, human-readable session block."""
     lines: list[str] = []
     session_id = context.session_id or "unknown"
-    title = _validate_title(summary.session_title, context.session_title, summary.topics)
+    title = _shown_title(summary, context)
     ts = summary.timestamp or datetime.now().strftime("%H:%M")
-    sentence = summary.summary_sentence or title
 
-    lines.extend([
-        f"## {ts} | {session_id} | {title}",
-        f"Summary: {sentence}",
-    ])
+    lines.append(f"## {ts} | {session_id} | {title}")
+    if summary.summary_sentence:
+        lines.append(f"Summary: {summary.summary_sentence}")
     if summary.resolves:
         lines.append("resolves: [" + ", ".join(summary.resolves) + "]")
     lines.extend(["", "**Delivered:**"])
-    delivered = [*summary.deliverables, *summary.decisions]
-    if not delivered:
-        delivered = list(summary.topics)
-    lines.extend(f"- {item}" for item in delivered)
-    if not delivered:
+    lines.extend(f"- {item}" for item in summary.deliverables)
+    if not summary.deliverables:
         lines.append("- None recorded")
 
     lines.extend(["", "**Outputs:**"])
@@ -209,6 +200,14 @@ def _day_lock(path: Path):
     per directory (dot-file: library_health skips it, nothing accumulates per day).
     Never nested — a holder only reads and rewrites one file."""
     return md_lock(Path(path).parent / ".DailyActivity")
+
+
+def _file_day(file_path: Path) -> str:
+    """The day a day file is for: its ISO-date stem, else today."""
+    try:
+        return date.fromisoformat(Path(file_path).stem).isoformat()
+    except ValueError:
+        return date.today().isoformat()
 
 
 def _start_marker(kind: str, session_id: str) -> str:
@@ -325,7 +324,7 @@ def upsert_session_block(
         content = (content.rstrip("\n") + "\n\n" + block + "\n") if content.strip() else block + "\n"
         fm_text, body = _split_frontmatter(content)
         if not fm_text:
-            fm = {"date": date.today().isoformat(),
+            fm = {"date": _file_day(file_path),
                   "sessions_count": 1 if (count_session and appended) else 0,
                   "distilled": False}
             if has_coe:
@@ -351,20 +350,9 @@ def append_daily_text(file_path: Path, text: str) -> None:
         content = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
         if not content.strip():
             content = write_frontmatter(
-                {"date": date.today().isoformat(), "sessions_count": 0, "distilled": False}, "")
+                {"date": _file_day(file_path), "sessions_count": 0, "distilled": False}, "")
         sep = "" if content.endswith("\n") or not content else "\n"
         _atomic_write(file_path, content + sep + text)
-
-
-def set_daily_frontmatter(file_path: Path, updates: dict[str, Any]) -> None:
-    """Set frontmatter keys of a day file, keeping its CURRENT body (under the lock)."""
-    file_path = Path(file_path)
-    with _day_lock(file_path):
-        if not file_path.exists():
-            return
-        fm, body = parse_frontmatter(file_path.read_text(encoding="utf-8"))
-        fm.update(updates)
-        _atomic_write(file_path, write_frontmatter(fm, body))
 
 
 def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, context: HookContext) -> None:
@@ -377,55 +365,31 @@ def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, conte
 
 
 def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -> dict[str, Any]:
-    """Convert a StructuredSummary + HookContext into a flat JSON-serializable dict.
+    """The sidecar row: every field something reads, flat and JSON-serializable.
 
-    This is the structured sidecar format consumed by DistillationTriggerHook.
-    Every field from StructuredSummary is preserved as-is — no markdown rendering,
-    no information loss.  The distillation hook reads these directly instead of
-    regex-parsing the markdown.
+    ``message_count`` is the number of messages this row summarizes (that day's), and
+    ``enriched`` whether the model wrote it; together they let the hook skip a session
+    whose row is already complete.
     """
     return {
         "session_id": context.session_id,
         "timestamp": summary.timestamp or datetime.now().strftime("%H:%M"),
         "session_start": context.session_start_time,
         "message_count": context.message_count,
-        "title": summary.session_title,
+        "enriched": summary.enriched,
+        "title": _shown_title(summary, context),
         "summary_sentence": summary.summary_sentence,
         "next_items": summary.next_items,
         "resolves": summary.resolves,
-        # Core fields (rule-based)
         "topics": summary.topics,
         "decisions": summary.decisions,
         "files_modified": summary.files_modified,
         "open_questions": summary.open_questions,
-        # Enriched fields (LLM-powered)
         "deliverables": summary.deliverables,
         "key_outputs": summary.key_outputs,
-        "lessons": summary.lessons,
-        # Bound text+type pairs (single-point binding, Gate-1: parallel arrays are
-        # fragile). Distillation reads THIS to honor the author-time [type] instead
-        # of keyword-guessing. lesson_types is normalized to len(lessons) upstream,
-        # so the zip is exact. Legacy readers ignore this key; `lessons` (plain) is
-        # retained for backward compat + the markdown body (which stays prefix-free).
-        "lessons_typed": [
-            {"text": t, "type": ty}
-            for t, ty in zip(
-                summary.lessons,
-                (summary.lesson_types + ["guideline"] * len(summary.lessons))[
-                    : len(summary.lessons)
-                ],
-            )
-        ],
-        "rejected_approaches": summary.rejected_approaches,
-        "corrections": summary.corrections,
-        "process_reflection": summary.process_reflection,
-        "signal_driven_actions": summary.signal_driven_actions,
-        "continue_from": summary.continue_from,
         "validation_status": summary.validation_status,
-        # COE fields
         "coe_signal": summary.coe_signal,
         "coe_topic": summary.coe_topic,
-        # Git ground truth
         "git_commits": summary.git_commits,
     }
 
@@ -471,8 +435,6 @@ def read_jsonl_sidecar(jsonl_path: Path) -> list[dict[str, Any]]:
     gracefully (logs warning, continues).  Returns empty list if the
     file doesn't exist.
 
-    Used by DistillationTriggerHook to consume structured data directly
-    instead of regex-parsing the markdown DailyActivity file.
     """
     if not jsonl_path.is_file():
         return []
@@ -493,13 +455,12 @@ def read_jsonl_sidecar(jsonl_path: Path) -> list[dict[str, Any]]:
     return records
 
 
-# Free-text StructuredSummary fields that carry attacker-influenceable prose and
-# get distilled into MEMORY/EVOLUTION. Structural fields (files_modified, git_commits,
-# topics, timestamps, coe_signal) are excluded — they are not free-text prose sinks.
+# Free-text StructuredSummary fields that carry text drawn from the conversation and
+# are stored, recalled and injected into later prompts. Structural fields
+# (files_modified, git_commits, timestamps, coe_signal) are not prose sinks.
 _SUMMARY_INJECTION_FIELDS: tuple[str, ...] = (
-    "decisions", "open_questions", "deliverables", "key_outputs", "lessons",
-    "rejected_approaches", "corrections", "process_reflection",
-    "signal_driven_actions", "actions_taken", "reasoning", "continue_from",
+    "session_title", "summary_sentence", "validation_status", "coe_topic",
+    "topics", "decisions", "open_questions", "deliverables", "key_outputs",
 )
 
 
@@ -507,10 +468,9 @@ def _sanitize_summary_injection(summary: StructuredSummary) -> None:
     """Redact injection-pattern-matching free-text fields IN PLACE to "".
 
     A str field that matches is blanked; a list[str] field has matching items
-    dropped. Blanking (not a marker token) means distillation's length gates
-    (>20 for reflection, >15 for actions) naturally exclude the redacted content
-    and no marker leaks into a recalled store (Gate-1 F7). Best-effort — a scan
-    failure must never block the activity write.
+    dropped, and a Next item whose text matches is dropped. Blanking (not a marker
+    token) means no marker leaks into a recalled store (Gate-1 F7). Best-effort — a
+    scan failure must never block the activity write.
     """
     try:
         from core.injection_patterns import scan_text
@@ -540,12 +500,31 @@ def _sanitize_summary_injection(summary: StructuredSummary) -> None:
                     len(val) - len(kept), fname,
                 )
                 setattr(summary, fname, kept)
+    kept_next = [item for item in summary.next_items
+                 if not (isinstance(item, dict) and scan_text(str(item.get("text", ""))))]
+    if len(kept_next) != len(summary.next_items):
+        logger.warning("Dropped %d injected Next item(s) from DailyActivity",
+                       len(summary.next_items) - len(kept_next))
+        summary.next_items = kept_next
 
 
-def read_open_next_items(workspace_path: Path, *, days: int = 7) -> list[dict[str, str]]:
-    """Return unresolved Next items from recent JSONL sidecars, oldest first."""
-    directory = Path(workspace_path) / "Knowledge" / "DailyActivity"
-    files = sorted(directory.glob("*.jsonl"), reverse=True)[:days]
+def read_open_next_items(workspace_path: Path, *, days: int = 7,
+                         until: date | None = None) -> list[dict[str, str]]:
+    """Unresolved Next items of the *days* newest sidecars, oldest first.
+
+    ``until``: only days up to and including it (the open list as it was then; the
+    history repair rebuilds days in order with it)."""
+    return open_next_items_in(Path(workspace_path) / "Knowledge" / "DailyActivity",
+                              days=days, until=until)
+
+
+def open_next_items_in(directory: Path, *, days: int = 7,
+                       until: date | None = None) -> list[dict[str, str]]:
+    """``read_open_next_items`` for a DailyActivity directory."""
+    files = sorted(Path(directory).glob("*.jsonl"), reverse=True)
+    if until is not None:
+        files = [f for f in files if f.stem[:10] <= until.isoformat()]
+    files = files[:days]
     records = [record for path in reversed(files) for record in read_jsonl_sidecar(path)]
     resolved = {
         next_id
@@ -570,15 +549,28 @@ def read_open_next_items(workspace_path: Path, *, days: int = 7) -> list[dict[st
     return open_items
 
 
+def render_session(summary: StructuredSummary, context: HookContext) -> "tuple[str, dict[str, Any]]":
+    """The marked day-file block and the sidecar row of *summary*, through the same
+    injection gate and credential redaction as ``write_daily_activity`` — for a
+    writer that rebuilds a whole day file at once (scripts/da_resummarize.py)."""
+    _sanitize_summary_injection(summary)
+    text = _neutralize_markers(redact_credentials(_format_session_entry(summary, context)))
+    block = (f"{_start_marker('summary', context.session_id)}\n"
+             f"{text.strip(chr(10))}\n{_END_MARKER}")
+    return block, _redact_value(_summary_to_jsonl_record(summary, context))
+
+
 async def write_daily_activity(
     summary: StructuredSummary,
     context: HookContext,
     workspace_path: Path | None = None,
+    *,
+    day: date | None = None,
 ) -> Path:
-    """Upsert this session's summary in today's DailyActivity file + JSONL sidecar.
+    """Upsert this session's summary in the day file (default today) + JSONL sidecar.
 
     The markdown is the human-readable primary record. The JSONL sidecar keeps
-    the complete structured fields used by summary and injection readers.
+    the structured fields read by the injection and the other readers.
     """
     if workspace_path is None:
         from .initialization_manager import initialization_manager
@@ -586,17 +578,16 @@ async def write_daily_activity(
 
     # ── Write-time injection gate (run_6af300b3): sanitize BEFORE either write ──
     # Both the .md (written first, below) and the JSONL sidecar are serialized from
-    # this same `summary`, and BOTH flow into MEMORY/EVOLUTION via distillation. So
-    # the gate must sit at the SOURCE (this summary), not the sidecar serializer —
-    # else poison would survive in the .md. Redact the offending free-text field
-    # to "" (empty, not a marker) so distillation's length gates naturally exclude
-    # it and no redaction token leaks into a recalled store. See injection_patterns.
+    # this same `summary`, and both are read back into later prompts. So the gate
+    # sits at the SOURCE (this summary), not one serializer. A matching field is
+    # blanked to "" (empty, not a marker) so no redaction token leaks into a
+    # recalled store. See injection_patterns.
     _sanitize_summary_injection(summary)
 
-    today = date.today().isoformat()
+    day_name = (day or date.today()).isoformat()
     da_dir = workspace_path / "Knowledge" / "DailyActivity"
-    file_path = da_dir / f"{today}.md"
-    jsonl_path = da_dir / f"{today}.jsonl"
+    file_path = da_dir / f"{day_name}.md"
+    jsonl_path = da_dir / f"{day_name}.jsonl"
 
     # Write markdown (primary — must succeed)
     await asyncio.to_thread(_atomic_read_modify_write, file_path, summary, context)

@@ -33,7 +33,6 @@ from hooks.daily_activity_hook import DailyActivityExtractionHook
 @pytest.fixture
 def mock_pipeline():
     pipeline = MagicMock()
-    pipeline.minimal_summary = MagicMock(return_value="short summary")
     pipeline.summarize = AsyncMock(return_value="full summary")
     return pipeline
 

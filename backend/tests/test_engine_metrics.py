@@ -173,22 +173,19 @@ class TestSessionStats:
         result = _collect_session_stats(ws_dir)
         assert result["available"] is False
 
-    def test_counts_sessions(self, ws_dir):
+    def test_counts_sessions_from_sidecar_rows(self, ws_dir):
+        import json
         da_dir = ws_dir / "Knowledge" / "DailyActivity"
         today = date.today().isoformat()
-        content = f"""---
-sessions_count: 3
----
-## 10:00 | Session 1
-Stuff
-## 11:00 | Session 2
-Stuff
-## 12:00 | Session 3
-Stuff
-"""
-        (da_dir / f"{today}.md").write_text(content)
+        # the day file's headings (a heading per section, day summaries) are not sessions
+        (da_dir / f"{today}.md").write_text("## 10:00 | a | x\n## Day summary\n## 11:00 | b | y\n")
+        rows = [{"session_id": "a", "title": "Parser fix"},
+                {"session_id": "b", "title": "[Channel: slack] ping"},
+                {"session_id": "c", "title": "Docs"}]
+        (da_dir / f"{today}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
         result = _collect_session_stats(ws_dir)
         assert result["last_7d_sessions"] == 3
+        assert result["last_7d_channel"] == 1 and result["last_7d_interactive"] == 2
         assert result["last_7d_active_days"] == 1
 
 

@@ -604,43 +604,26 @@ class TestPersistSkillRoutingGuard:
 # ---------------------------------------------------------------------------
 
 class TestCrashCheckpointRecovery:
+    """At startup a crashed session's checkpoint JSON is removed; nothing is written
+    to DailyActivity (the session's messages are summarized from the database)."""
 
-    def test_recovery_appends_to_daily_activity(self, tmp_path):
-        """Orphaned checkpoint is recovered into today's DailyActivity."""
+    def test_recovery_removes_the_json_and_writes_no_daily_activity(self, tmp_path):
         from hooks.daily_activity_hook import recover_crash_checkpoint
         import unittest.mock as mock
 
-        # Create fake state dir: tmp_path/state/session_checkpoint.json
         state_dir = tmp_path / "state"
         state_dir.mkdir(parents=True)
         checkpoint = state_dir / "session_checkpoint.json"
         checkpoint.write_text(json.dumps({
-            "session_id": "crash-session-42",
-            "ts": time.time() - 300,
-            "tool_count": 15,
-            "files_touched": ["/a.py", "/b.py"],
+            "session_id": "crash-session-42", "ts": time.time() - 300,
+            "tool_count": 15, "files_touched": ["/a.py", "/b.py"],
         }))
-
-        # Create workspace dir
         ws = tmp_path / ".swarm-ai" / "SwarmWS"
         ws.mkdir(parents=True)
-
-        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir), \
-             mock.patch("hooks.daily_activity_hook.SWARMWS", ws):
-            result = recover_crash_checkpoint(workspace_dir=ws)
-
-        assert result is True
-        assert not checkpoint.exists()  # deleted after recovery
-
-        # Check DailyActivity has the recovery entry
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{today}.md"
-        assert da_file.exists()
-        content = da_file.read_text()
-        assert "Recovered from crash checkpoint" in content
-        assert "crash-se" in content
-        assert "`a.py`" in content
+        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir):
+            assert recover_crash_checkpoint(workspace_dir=ws) is True
+        assert not checkpoint.exists()
+        assert not (ws / "Knowledge" / "DailyActivity").exists()
 
     def test_no_checkpoint_returns_false(self, tmp_path):
         """No checkpoint file → returns False, no crash."""
@@ -652,7 +635,6 @@ class TestCrashCheckpointRecovery:
             assert recover_crash_checkpoint() is False
 
     def test_corrupt_checkpoint_deleted(self, tmp_path):
-        """Corrupt checkpoint is deleted, returns False."""
         from hooks.daily_activity_hook import recover_crash_checkpoint
         import unittest.mock as mock
 
@@ -660,72 +642,30 @@ class TestCrashCheckpointRecovery:
         state_dir.mkdir(parents=True)
         checkpoint = state_dir / "session_checkpoint.json"
         checkpoint.write_text("not valid json at all")
-
         with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir):
-            result = recover_crash_checkpoint()
-
-        assert result is False
+            recover_crash_checkpoint()
         assert not checkpoint.exists()
-
-    def test_recovery_renders_git_commits(self, tmp_path):
-        """Enriched checkpoint with git_commits renders in recovery."""
-        from hooks.daily_activity_hook import recover_crash_checkpoint
-        import unittest.mock as mock
-
-        state_dir = tmp_path / "state"
-        state_dir.mkdir(parents=True)
-        checkpoint = state_dir / "session_checkpoint.json"
-        checkpoint.write_text(json.dumps({
-            "session_id": "git-session-12345",
-            "ts": 180.0,
-            "tool_count": 20,
-            "files_touched": ["/src/main.py"],
-            "corrections_count": 2,
-            "git_commits": ["abc1234 feat: add new feature", "def5678 fix: bug fix"],
-        }))
-
-        ws = tmp_path / ".swarm-ai" / "SwarmWS"
-        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir), \
-             mock.patch("hooks.daily_activity_hook.SWARMWS", ws):
-            result = recover_crash_checkpoint(workspace_dir=ws)
-
-        assert result is True
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        content = da_file.read_text()
-        assert "abc1234" in content
-        assert "Corrections" not in content   # an old checkpoint's count is not repeated
 
 
 class TestMidSessionContentCheckpoint:
 
     @pytest.mark.asyncio
-    async def test_checkpoint_writes_to_daily_activity(self, tmp_path, session_context):
-        """After 10 tool calls with files, DailyActivity gets a content entry."""
+    async def test_checkpoint_writes_the_json_and_no_daily_activity(self, tmp_path, session_context):
+        """The checkpoint is the JSON only; DailyActivity gets no mid-session block."""
         from core.runtime_hooks import create_session_checkpoint
 
         ws = tmp_path / "SwarmWS"
         checkpoint_path = str(tmp_path / "checkpoint.json")
         session_context["_files_touched"] = {"/src/foo.py", "/src/bar.py"}
         session_context["sdk_session_id"] = "content-test-1234"
-
         hook = create_session_checkpoint(
             session_context, checkpoint_path=checkpoint_path,
             interval=10, workspace_dir=str(ws),
         )
-
-        # Fire 10 tool calls
         for _ in range(10):
             await hook({}, None, MagicMock())
-
-        # Check DailyActivity
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        assert da_file.exists()
-        content = da_file.read_text()
-        assert "Mid-session checkpoint" in content
-        assert "content-" in content  # session_id[:8]
-        assert "foo.py" in content or "bar.py" in content
+        assert json.loads(Path(checkpoint_path).read_text())["tool_count"] == 10
+        assert not (ws / "Knowledge" / "DailyActivity").exists()
 
     @pytest.mark.asyncio
     async def test_checkpoint_json_includes_git_commits(self, tmp_path, session_context):
@@ -746,30 +686,6 @@ class TestMidSessionContentCheckpoint:
         data = json.loads(Path(checkpoint_path).read_text())
         assert "git_commits" in data
         assert isinstance(data["git_commits"], list)
-
-    @pytest.mark.asyncio
-    async def test_checkpoint_content_capped(self, tmp_path, session_context):
-        """DailyActivity entry never exceeds 1KB."""
-        from core.runtime_hooks import create_session_checkpoint
-
-        ws = tmp_path / "SwarmWS"
-        checkpoint_path = str(tmp_path / "checkpoint.json")
-        # Create lots of files to test truncation
-        session_context["_files_touched"] = {f"/src/file_{i:03d}.py" for i in range(50)}
-        session_context["sdk_session_id"] = "cap-test-1234"
-
-        hook = create_session_checkpoint(
-            session_context, checkpoint_path=checkpoint_path,
-            interval=5, workspace_dir=str(ws),
-        )
-
-        for _ in range(5):
-            await hook({}, None, MagicMock())
-
-        from datetime import datetime
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-        content = da_file.read_text()
-        assert len(content.encode("utf-8")) <= 1200  # 1KB target + some slack for header
 
     @pytest.mark.asyncio
     async def test_no_write_when_no_new_content(self, tmp_path, session_context):
@@ -1761,29 +1677,10 @@ def test_finding_row_keeps_structured_evidence_as_json():
 
 
 # ---------------------------------------------------------------------------
-# run_1ec5ea9d: one checkpoint block per session, no workspace git, user text only
+# run_1ec5ea9d: the checkpoint JSON lists no workspace commits
 # ---------------------------------------------------------------------------
 
-def _today_file(ws):
-    from datetime import datetime
-    return ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-
-
-class TestCheckpointIsOneBlockPerSession:
-
-    @pytest.mark.asyncio
-    async def test_repeated_checkpoints_replace_one_block(self, tmp_path, session_context):
-        from core.runtime_hooks import create_session_checkpoint
-        ws = tmp_path / "SwarmWS"
-        session_context["sdk_session_id"] = "upsert-sess-0001"
-        hook = create_session_checkpoint(session_context, checkpoint_path=str(tmp_path / "c.json"),
-                                         interval=2, workspace_dir=str(ws))
-        for i in range(6):
-            session_context.setdefault("_files_touched", set()).add(f"/src/f{i}.py")
-            await hook({}, None, MagicMock())
-        text = _today_file(ws).read_text()
-        assert text.count("Mid-session checkpoint") == 1
-        assert "`f5.py`" in text
+class TestCheckpointJson:
 
     @pytest.mark.asyncio
     async def test_workspace_commits_are_not_listed(self, tmp_path, session_context):
@@ -1800,31 +1697,7 @@ class TestCheckpointIsOneBlockPerSession:
         hook = create_session_checkpoint(session_context, checkpoint_path=str(tmp_path / "c.json"),
                                          interval=1, workspace_dir=str(ws))
         await hook({}, None, MagicMock())
-        text = _today_file(ws).read_text()
-        assert "Git activity" not in text and "chore: chore" not in text
         assert json.loads((tmp_path / "c.json").read_text())["git_commits"] == []
-
-    @pytest.mark.asyncio
-    async def test_crash_recovery_replaces_the_sessions_checkpoint_block(self, tmp_path):
-        import unittest.mock as mock
-        from core.runtime_hooks import create_session_checkpoint
-        from hooks.daily_activity_hook import recover_crash_checkpoint
-        ws = tmp_path / "SwarmWS"
-        ctx = {"sdk_session_id": "crash-same-0001", "_files_touched": {"/src/a.py"}}
-        hook = create_session_checkpoint(ctx, checkpoint_path=str(tmp_path / "c.json"),
-                                         interval=1, workspace_dir=str(ws))
-        await hook({}, None, MagicMock())
-        state = tmp_path / "state"
-        state.mkdir()
-        (state / "session_checkpoint.json").write_text(json.dumps({
-            "session_id": "crash-same-0001", "ts": time.time(), "tool_count": 9,
-            "files_touched": ["/src/a.py"]}))
-        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state):
-            assert recover_crash_checkpoint(workspace_dir=ws) is True
-        text = _today_file(ws).read_text()
-        assert text.count("| crash-sa |") == 1
-        assert "Recovered from crash checkpoint" in text
-        assert "Mid-session checkpoint" not in text
 
 
 class TestV1StableCompletion:

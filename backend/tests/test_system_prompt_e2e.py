@@ -813,9 +813,9 @@ class TestE2EDailyActivityWholeUnitBudget:
         )
         prompt, _ = _simulate_build(workspace)
         assert "## Daily Activity (last 7 days)" in prompt
-        assert "session 未注入" in prompt
+        assert "more sessions not shown" in prompt
         for i in range(100):
-            assert (f"complete-session-{i} " in prompt) == (f"Title {i} |" in prompt)
+            assert (f"complete-session-{i} " in prompt) == (f"Title {i}: " in prompt)
 
 
 class TestE2EBudgetHeadroom:

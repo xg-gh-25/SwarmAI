@@ -437,14 +437,15 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
         return {"projects": projects, "scoring": "staleness-only"}
 
 
-_CHANNEL_PATTERN = re.compile(r"^\#\#\s+\d{2}:\d{2}\s+\|.*\[Channel:")
-
 def _collect_session_stats(ws_path: Path) -> dict[str, Any]:
-    """Session volume from DailyActivity files (last 7 days).
+    """Session volume from the DailyActivity sidecars (last 7 days).
 
-    Separates interactive sessions (user-initiated chat) from channel
-    sessions (Slack bot pings) to avoid inflating the count.
+    One sidecar row is one session's activity on one day, so a session active on two
+    days counts once per day. Channel sessions (Slack bot pings, title carrying
+    ``[Channel:``) are counted apart so they do not inflate the interactive count.
     """
+    from core.daily_activity_writer import read_jsonl_sidecar
+
     da_dir = ws_path / "Knowledge" / "DailyActivity"
     if not da_dir.is_dir():
         return {"available": False}
@@ -455,28 +456,23 @@ def _collect_session_stats(ws_path: Path) -> dict[str, Any]:
     channel_sessions = 0
     days_active = 0
 
-    for f in sorted(da_dir.glob("*.md")):
-        if not f.stem[:4].isdigit():
-            continue
+    for f in sorted(da_dir.glob("*.jsonl")):
         try:
             file_date = date.fromisoformat(f.stem[:10])
         except ValueError:
             continue
         if file_date < cutoff:
             continue
-
-        days_active += 1
-        try:
-            content = f.read_text(encoding="utf-8")
-            for line in content.splitlines():
-                if line.startswith("## ") and not line.startswith("## _"):
-                    total_sessions += 1
-                    if _CHANNEL_PATTERN.match(line):
-                        channel_sessions += 1
-                    else:
-                        interactive_sessions += 1
-        except (OSError, UnicodeDecodeError):
+        rows = {str(r.get("session_id")): r for r in read_jsonl_sidecar(f) if r.get("session_id")}
+        if not rows:
             continue
+        days_active += 1
+        for row in rows.values():
+            total_sessions += 1
+            if "[Channel:" in str(row.get("title") or ""):
+                channel_sessions += 1
+            else:
+                interactive_sessions += 1
 
     return {
         "last_7d_sessions": total_sessions,

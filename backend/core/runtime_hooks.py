@@ -336,14 +336,11 @@ def create_session_checkpoint(
 ):
     """Factory: creates a PostToolUse hook that writes a session checkpoint.
 
-    Every ``interval`` tool calls:
-    1. Overwrites checkpoint JSON with current session state (crash recovery).
-    2. Upserts this session's ONE checkpoint block in today's DailyActivity
-       (mid-session memory) when the touched-file list grew.
-
-    On crash, ``recover_crash_checkpoint()`` reads the JSON and replaces the same
-    block on next startup.  For normal sessions, the block ensures content is
-    captured even if post-session hooks don't fire.
+    Every ``interval`` tool calls it overwrites the checkpoint JSON with the current
+    session state; the resume context reads it (context_injector). Nothing is written
+    to DailyActivity: the session's messages are persisted and the post-session hook
+    summarizes them (design 2026-10-31-daily-activity-useful D11). ``workspace_dir``
+    is accepted for callers' compatibility and unused.
 
     No git activity: the workspace's own commits are the auto-commit hook's
     snapshots, not work, and the post-session summary records the real commits
@@ -352,11 +349,8 @@ def create_session_checkpoint(
     """
     path = checkpoint_path or _DEFAULT_CHECKPOINT_PATH
     ctx = session_context or {}
-    from jobs.paths import SWARMWS as _SWARMWS
-    ws = workspace_dir or str(_SWARMWS)
     counter_key = "_tool_count"
     start_ts_key = "_session_start_ts"
-    last_da_count_key = "_last_da_checkpoint_count"
 
     if counter_key not in ctx:
         ctx[counter_key] = 0
@@ -425,40 +419,6 @@ def create_session_checkpoint(
             await asyncio.to_thread(_write_checkpoint)
         except Exception:
             logger.exception("Failed to write session checkpoint to %s", path)
-
-        # 2. Upsert this session's checkpoint block in DailyActivity (mid-session
-        # memory) — only when the touched-file list grew since the last one.
-        last_file_count = ctx.get(last_da_count_key, 0)
-        if len(files) <= last_file_count:
-            return {}
-
-        try:
-            from datetime import datetime as dt
-            from core.daily_activity_writer import upsert_session_block
-            now = dt.now()
-            da_file = Path(ws) / "Knowledge" / "DailyActivity" / f"{now.strftime('%Y-%m-%d')}.md"
-
-            # Build content-capped entry (target < 1KB)
-            lines = [
-                f"## {now.strftime('%H:%M')} | {session_id[:8]} | 📸 Mid-session checkpoint\n",
-            ]
-            file_summary = ", ".join(f"`{Path(f).name}`" for f in files[:10])
-            if len(files) > 10:
-                file_summary += f" (+{len(files) - 10} more)"
-            lines.append(f"**Files:** {file_summary}\n")
-
-            # bounded by its parts (at most 10 whole file names, then a count), never
-            # cut: a byte cap here split a file name in half (CDF first principle)
-            entry = "".join(lines)
-
-            # OFF-LOOP (run_a1f4c2d8): the locked read-modify-write goes to a thread.
-            await asyncio.to_thread(upsert_session_block, da_file, session_id,
-                                    "checkpoint", entry)
-
-            ctx[last_da_count_key] = len(files)
-            logger.debug("Mid-session checkpoint upserted in DailyActivity: %d files", len(files))
-        except Exception:
-            logger.debug("Failed to write mid-session checkpoint to DailyActivity", exc_info=True)
 
         # (A "you edited >1 source file but never ran pytest" nudge used to sit here: it
         # named one language's test tool and is gone -- design

@@ -1,8 +1,10 @@
-"""CDF v2 summary lane for DailyActivity and TIMELINE.
+"""CDF v2 summary lane for TIMELINE.
 
-- ``SummaryLane.run_due`` performs daily and monthly summary work.
-- ``append_daily_summary`` appends idempotent day summaries and late addenda.
+- ``SummaryLane.run_due`` performs the monthly summary work.
 - ``enqueue_month_summary`` submits S0 EventUnits through the frozen v2 API.
+
+DailyActivity has no day summary: its rows are already one line per session, and the
+injection shows them for all seven days (design 2026-10-31-daily-activity-useful D7).
 """
 from __future__ import annotations
 
@@ -11,77 +13,9 @@ import json
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
 
-from core.daily_activity_writer import append_daily_text, read_jsonl_sidecar
+
 from .contracts_v2 import EventUnit
-
-_DAILY = "<!-- daily-summary:{day} -->"
-_SUPPLEMENT = "<!-- daily-summary-supplement:{day}:{digest} -->"
-
-
-def _session_ids_after(text: str, marker: str) -> set[str]:
-    tail = text.split(marker, 1)[1] if marker in text else text
-    ids: set[str] = set()
-    for line in tail.splitlines():
-        if line.startswith("<!-- da:summary:") and line.endswith(" -->"):
-            ids.add(line.removeprefix("<!-- da:summary:").removesuffix(" -->"))
-    return ids
-
-
-def _open_next(records: list[dict]) -> list[str]:
-    resolved = {item for row in records for item in row.get("resolves", []) if isinstance(item, str)}
-    return [
-        item["next_id"]
-        for row in records
-        for item in row.get("next_items", [])
-        if isinstance(item, dict) and isinstance(item.get("next_id"), str)
-        and item["next_id"] not in resolved
-    ]
-
-
-def _daily_block(day: str, records: list[dict], *, supplement: bool = False) -> str:
-    heading = "## 日汇总（补充）" if supplement else "## 日汇总"
-    main = "; ".join(row.get("summary_sentence", "") for row in records if row.get("summary_sentence"))
-    deliverables = [item for row in records for item in row.get("deliverables", []) if isinstance(item, str)]
-    lines = [heading, f"主线：{main or '当日没有可汇总的会话。'}", "交付："]
-    lines.extend(f"- {item}" for item in deliverables)
-    if not deliverables:
-        lines.append("- 无")
-    ids = _open_next(records)
-    lines.append("未完成 Next：" + (", ".join(ids) if ids else "无"))
-    return "\n".join(lines)
-
-
-def append_daily_summary(day_file: Path, synthesizer: Callable | None = None) -> str:
-    """Append the first day summary or one content-addressed late addendum."""
-    day_file = Path(day_file)
-    day = day_file.stem
-    sidecar = day_file.with_suffix(".jsonl")
-    records = read_jsonl_sidecar(sidecar)
-    text = day_file.read_text(encoding="utf-8") if day_file.exists() else ""
-    marker = _DAILY.format(day=day)
-    if marker not in text:
-        block = synthesizer(day, records, False) if synthesizer else _daily_block(day, records)
-        append_daily_text(day_file, f"\n{marker}\n{block}\n")
-        return "daily"
-
-    late_ids = _session_ids_after(text, marker)
-    late = [row for row in records if row.get("session_id") in late_ids]
-    if not late:
-        return "unchanged"
-    material = json.dumps(late, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    digest = hashlib.sha256(material).hexdigest()[:12]
-    supplement_marker = _SUPPLEMENT.format(day=day, digest=digest)
-    if supplement_marker in text:
-        return "unchanged"
-    block = synthesizer(day, late, True) if synthesizer else _daily_block(day, late, supplement=True)
-    append_daily_text(
-        day_file,
-        f"\n{supplement_marker}\n{block}\n",
-    )
-    return "supplement"
-
 
 def _month_anchors(timeline: Path, month: str) -> list[str]:
     if not timeline.is_file():
@@ -151,20 +85,15 @@ def enqueue_month_summary(conn: sqlite3.Connection, workspace: Path, month: str)
 class SummaryLane:
     """Daily scheduler target with bounded failure escalation."""
 
-    def __init__(self, workspace: Path, synthesizer: Callable | None = None) -> None:
+    def __init__(self, workspace: Path) -> None:
         self.workspace = Path(workspace)
-        self.synthesizer = synthesizer
         self.consecutive_failures = 0
 
     def run_due(self, conn: sqlite3.Connection, *, now: datetime | None = None) -> bool:
-        """Summarize yesterday and the previous month; return whether work changed."""
+        """Summarize the previous month; return whether work changed."""
         moment = now or datetime.now(timezone.utc)
         changed = False
         try:
-            yesterday = moment.date() - timedelta(days=1)
-            day_file = self.workspace / "Knowledge" / "DailyActivity" / f"{yesterday}.md"
-            if day_file.is_file():
-                changed |= append_daily_summary(day_file, self.synthesizer) != "unchanged"
             changed |= enqueue_month_summary(
                 conn, self.workspace, _previous_month(moment.date())
             ) != "unchanged"

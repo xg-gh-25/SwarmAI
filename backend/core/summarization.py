@@ -1,22 +1,17 @@
-"""Hybrid rule-based + LLM conversation summarization pipeline.
+"""The activity record of one chat session for one day (DailyActivity).
 
-Converts conversation logs into structured summaries for DailyActivity
-files.  Short sessions use rule-based extraction (fast, deterministic).
-Substantial sessions (>8 messages) use LLM enrichment to capture
-handoff-level detail: reasoning, rejected approaches, next steps,
-and validation status.
+Every session with an exchange is summarized by the model: a title naming the work, a
+sentence saying what was done and where it ended, its deliverables, follow-ups and the
+follow-ups it resolved (design docs/design/2026-10-31-daily-activity-useful.md). The
+rule-based fields (topics, decisions, files, open questions) are the user's words and
+tool calls: they feed the noise filter and the self-heal checkpoint, never the row.
 
 Key public symbols:
 
-- ``StructuredSummary``       — Dataclass holding extracted topics,
-                                decisions, files modified, open questions,
-                                and enriched fields (actions, reasoning,
-                                rejected approaches, continue-from).
-- ``SummarizationPipeline``   — Stateless pipeline that accepts a list
-                                of message dicts and returns a
-                                ``StructuredSummary``.
+- ``StructuredSummary``     — one session's record for one day.
+- ``SummarizationPipeline`` — messages in, ``StructuredSummary`` out.
 
-Used by the automatic ``DailyActivityExtractionHook``.
+Used by ``DailyActivityExtractionHook`` and ``scripts/da_resummarize.py``.
 """
 
 from __future__ import annotations
@@ -28,43 +23,37 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-# Single source of truth for the 7-type schema (P8: never hardcode a second copy).
-from core.ddd_entry_lifecycle import VALID_TYPES as _VALID_TYPES
 from core.tool_summarizer import MAX_SUMMARY_LENGTH
-VALID_TYPE_SET = frozenset(_VALID_TYPES)
 
 logger = logging.getLogger(__name__)
 
-# Threshold: sessions with more messages than this get LLM enrichment
-LLM_ENRICHMENT_THRESHOLD = 8
+# Every session with an exchange (a message and a reply) is summarized by the model;
+# below this the record is the derived title and nothing else.
+LLM_ENRICHMENT_THRESHOLD = 1
 
-# Output budget for the enrichment answer. At 512 the 12-field answer (Chinese
-# entries cost ~1 token/char) was routinely cut; 2048 leaves headroom. A reply that
-# still reaches it is reported as truncated (jobs.bedrock.structured) and the
-# rule-based summary stands. The hook's budget is 180 s (main.py
-# SessionLifecycleHookManager), so the read timeout covers a full-length generation.
-_ENRICHMENT_MAX_TOKENS = 2048
-_ENRICHMENT_READ_TIMEOUT_S = 90
+# Output budget for the answer. At 2048 a long session's answer (mostly CJK, ~1 token
+# per character) was cut and the rule-based fallback stood, so the row repeated the
+# user's words. Nine fields fit far below 16000; a reply that still reaches it is
+# reported as truncated (jobs.bedrock.structured) and the fallback stands. One call
+# reads at most 150 s; the hook writes after each part and declares its own 900 s
+# hang guard (DailyActivityExtractionHook.timeout_seconds).
+_ENRICHMENT_MAX_TOKENS = 16000
+_ENRICHMENT_READ_TIMEOUT_S = 150
 
-# The enrichment answer, shaped by the API (jobs.bedrock.structured(); design
-# docs/design/2026-10-28-structured-model-output.md). lesson_types and coe_signal stay
-# plain strings: an unknown label is normalized below, not a reason to lose the answer.
+# The answer, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md). Only fields something reads.
 _STR_LIST = {"type": "array", "items": {"type": "string"}}
 _ENRICHMENT_SCHEMA = {
     "type": "object",
     "properties": {
+        "title": {"type": "string"},
         "summary_sentence": {"type": "string"},
         "deliverables": _STR_LIST, "key_outputs": _STR_LIST,
         "validation_status": {"type": "string"}, "next_items": _STR_LIST, "resolves": _STR_LIST,
-        "rejected_approaches": _STR_LIST, "corrections": _STR_LIST,
-        "process_reflection": {"type": "string"}, "signal_driven_actions": _STR_LIST,
         "coe_signal": {"type": "string"}, "coe_topic": {"type": "string"},
-        # Not asked for by the CDF working-memory prompt; still read when present.
-        "lessons": _STR_LIST, "lesson_types": _STR_LIST, "continue_from": {"type": "string"},
     },
-    "required": ["summary_sentence", "deliverables", "key_outputs", "validation_status",
-                 "next_items", "resolves", "rejected_approaches", "corrections",
-                 "coe_signal", "coe_topic"],
+    "required": ["title", "summary_sentence", "deliverables", "key_outputs",
+                 "validation_status", "next_items", "resolves", "coe_signal", "coe_topic"],
 }
 
 # Centralized patterns — shared with distillation_hook.py to prevent drift.
@@ -89,141 +78,105 @@ _WRITE_TOOL_NAMES = {"Write", "Edit"}
 
 @dataclass
 class StructuredSummary:
-    """Output of the summarization pipeline.
+    """One session's record for one day.
 
-    Designed around three questions:
-    1. **What did we accomplish?** (deliverables — outcomes, not activities)
-    2. **Where are the outputs?** (key_outputs — file paths, recipients)
-    3. **What did we learn?** (lessons — highlights, lowlights, insights)
-
-    Plus COE signaling for complex debugging sessions, and continuation
-    context for the next session.
-
-    Core fields (always populated by rule-based extraction):
-    - topics, decisions, files_modified, open_questions
-
-    Enriched fields (populated by LLM when session is substantial):
-    - deliverables: concrete outcomes (not "what happened" but "what was delivered")
-    - key_outputs: file paths + what they contain, or "sent to <person>"
-    - lessons: insights, highlights, lowlights — things worth remembering
-    - rejected_approaches: what was proposed and turned down, with reason
-    - continue_from: specific next step for the next session
-    - validation_status: what was tested vs untested
-    - coe_signal: "" | "candidate" | "resolution" — for COE detection
-    - coe_topic: the problem being investigated (for cross-session clustering)
+    Rule-based, from the messages: ``topics`` (user messages), ``decisions``,
+    ``files_modified`` (write tool calls), ``open_questions`` and a derived
+    ``session_title``. Written by the model (``enriched`` says it answered):
+    ``session_title``, ``summary_sentence``, ``deliverables``, ``key_outputs``,
+    ``validation_status``, ``next_items`` (``[{"next_id", "text"}]`` once the session id
+    is known), ``resolves`` (ids from the open list), ``coe_signal``
+    ("" | "candidate" | "resolution") and ``coe_topic``. ``git_commits`` is the
+    session's commits that day, set by the hook.
     """
 
     topics: list[str] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
     files_modified: list[str] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
-    # Enriched fields (LLM-powered, empty for short/rule-based sessions)
     deliverables: list[str] = field(default_factory=list)
     key_outputs: list[str] = field(default_factory=list)
-    lessons: list[str] = field(default_factory=list)
-    # Parallel type-label array for lessons (7-type schema: guideline/pitfall/
-    # decision/model/process/principle/correction). LLM-emitted so the
-    # DailyActivity distillation path can HONOR the author-time type instead of
-    # keyword-guessing it (classify_entry_type is ~82% and pitfall-greedy).
-    # INVARIANT: normalized to len(lessons) at parse time (short→pad "guideline",
-    # long→truncate) so index i of lessons and lesson_types always correspond.
-    # Metadata, NOT prose — deliberately excluded from word_count().
-    lesson_types: list[str] = field(default_factory=list)
-    rejected_approaches: list[str] = field(default_factory=list)
-    continue_from: str = ""
     validation_status: str = ""
-    # COE signal fields (LLM-detected)
-    coe_signal: str = ""      # "" | "candidate" | "resolution"
-    coe_topic: str = ""       # Problem topic for cross-session clustering
-    # Corrections: user corrected agent behavior (auto-captured for EVOLUTION.md)
-    corrections: list[str] = field(default_factory=list)
-    # Git ground truth: actual commits made during the session timeframe.
-    # Populated by DailyActivityExtractionHook from `git log --since=<session_start>`.
-    # Gives distillation a verifiable signal for implementation claims.
+    coe_signal: str = ""
+    coe_topic: str = ""
     git_commits: list[str] = field(default_factory=list)
-    # Process reflection: LLM-generated meta-analysis of HOW the session went,
-    # not just WHAT was discussed. Captures iteration patterns, blind spots,
-    # perspective gaps, and work-process lessons that the agent might not
-    # explicitly acknowledge. Fed into DailyActivity for downstream evolution.
-    process_reflection: str = ""
-    # Signal-driven actions: when an external signal (news, release, announcement)
-    # directly influenced a session decision. Tracks the causal link from
-    # signal input → action output. Format: ["Signal: X → Action: Y", ...]
-    signal_driven_actions: list[str] = field(default_factory=list)
-    # Legacy fields (kept for backward compat, will be empty for new sessions)
-    actions_taken: list[str] = field(default_factory=list)
-    reasoning: list[str] = field(default_factory=list)
     session_title: str = ""
-    timestamp: str = ""  # HH:MM format
-    # DailyActivity v2 fields. ``summary_sentence`` is generated as a complete
-    # sentence, never sliced from another field. ``next_items`` is populated as
-    # ``[{"next_id": ..., "text": ...}]`` once the session id is known.
+    timestamp: str = ""  # HH:MM of the last message summarized
     summary_sentence: str = ""
     next_items: list[dict[str, str]] = field(default_factory=list)
     resolves: list[str] = field(default_factory=list)
-
-    def word_count(self) -> int:
-        """Total word count across all text fields."""
-        text = " ".join(
-            self.topics + self.decisions + self.files_modified
-            + self.open_questions + self.deliverables + self.key_outputs
-            + self.lessons + self.rejected_approaches + self.corrections
-            + self.actions_taken + self.reasoning  # legacy
-        )
-        if self.continue_from:
-            text += " " + self.continue_from
-        if self.validation_status:
-            text += " " + self.validation_status
-        return len(text.split())
+    enriched: bool = False
 
 
 _ENRICHMENT_PROMPT = """\
-You are extracting a high-signal activity summary from a complete chat session. This is a
-working-memory handoff, not a transcript and not a source of durable lessons.
-
-## Conversation:
+You are writing the activity record of one chat session for one day. The next session
+reads it to learn what was done and what is still open, so describe the work and its
+result, not the conversation.
+{earlier}{so_far}
+## Conversation on {day}{part}:
 {conversation}
 
-## Already extracted:
-- Topics: {topics}
-- Decisions: {decisions}
-- Files modified: {files}
+## Files written by tool calls: {files}
 
-## Open Next items from the previous 7 days
+## Open follow-ups from the previous 7 days
 {open_next_items}
 
-Record the summary with the summary tool. Preserve every complete semantic item; never
-truncate a sentence or add an ellipsis. Include empty arrays when a section has no content.
-- summary_sentence: one complete sentence describing the session, 30–50 Chinese characters,
-  or equivalent length in the session language. Write it directly at that length.
-- deliverables: concrete outcomes.
-- key_outputs: output locations and descriptions.
-- validation_status: what was validated and what remains unvalidated.
-- next_items: complete follow-up actions. Do not assign ids; the server assigns stable ids.
-- resolves: only ids from the open list whose completion is explicit in this transcript.
-  Do not infer completion from similarity or plans.
-- coe_signal: "", "candidate", or "resolution".
-- coe_topic: the investigated problem, or "". If it is the same problem as one of these
-  open problems, copy that title exactly, character for character, so the earlier
-  report and this one are recognised as one problem: {open_problems}
-- corrections, rejected_approaches, process_reflection, and signal_driven_actions may be
-  included for their existing downstream consumers. Do not emit a lessons section.
+Record it with the summary tool, in the language the session is held in. Never truncate
+a sentence or add an ellipsis. Use an empty string or array when there is nothing.
+- title: a few words naming the work, as a noun phrase. Not the user's request quoted.
+- summary_sentence: what was done and where it ended, in one or two short sentences
+  (about 40 words, or 80 characters in Chinese). Name the result (built, fixed,
+  decided, answered, dropped, still in progress), not that a discussion took place.
+  The details go in deliverables.
+- deliverables: results that exist at the end of this transcript, each understandable
+  alone: a commit or file and what it does, a decision and its reason, the answer to a
+  question. Not plans and not the user's requests.
+- key_outputs: where the results are: file paths, commits, documents, recipients.
+- validation_status: what was verified and how; what is still unverified.
+- next_items: follow-ups agreed or clearly left open and not done in this transcript,
+  each a complete action someone can pick up without the conversation. Empty when the
+  work is finished. Do not assign ids.
+- resolves: ids from the open list whose completion is explicit in this transcript.
+  Not by similarity, and not plans.
+- coe_signal: "candidate" when the session reports a production problem that is still
+  being investigated, "resolution" when it fixes one, otherwise "".
+- coe_topic: that problem, or "". If it is one of these open problems, copy its title
+  exactly, character for character: {open_problems}
+"""
 
-An example answer (the contents show the expected style):
-{{
-  "summary_sentence": "本次完成了会话工作记忆改造，并验证完整语义不会在生成和注入时被截断。",
-  "deliverables": [],
-  "key_outputs": [],
-  "validation_status": "",
-  "next_items": [],
-  "resolves": [],
-  "rejected_approaches": [],
-  "corrections": [],
-  "process_reflection": "",
-  "signal_driven_actions": [],
-  "coe_signal": "",
-  "coe_topic": ""
-}}"""
+_SO_FAR_BLOCK = """
+## The record so far for this day (from the earlier part of the conversation)
+{record}
+The conversation below continues the same day. Answer with the record for the whole
+day: keep what still holds, add what is new, and leave out follow-ups that got done.
+"""
+
+# Conversation per model call (estimated tokens). The model's window is 200K; a long
+# day is summarized part by part, each part carrying the record so far, so every
+# message reaches the model whole (no message is ever cut).
+_CHUNK_TOKENS = 100_000
+
+def record_of(row: dict[str, Any]) -> dict[str, Any]:
+    """The record so far, from a sidecar row: the answer's fields, follow-ups as text."""
+    return {
+        "title": str(row.get("title") or ""),
+        "summary_sentence": str(row.get("summary_sentence") or ""),
+        "deliverables": list(row.get("deliverables") or []),
+        "key_outputs": list(row.get("key_outputs") or []),
+        "validation_status": str(row.get("validation_status") or ""),
+        "next_items": [str(i.get("text")) for i in row.get("next_items") or []
+                       if isinstance(i, dict) and i.get("text")],
+        "resolves": list(row.get("resolves") or []),
+        "coe_signal": str(row.get("coe_signal") or ""),
+        "coe_topic": str(row.get("coe_topic") or ""),
+    }
+
+
+_EARLIER_BLOCK = """
+## Earlier in this session
+Already recorded on {day}: {title}: {sentence}
+Record only what happened on the day of the conversation below.
+"""
 
 
 def _bash_written_files(cmd: str, *, truncated: bool) -> list[str]:
@@ -253,17 +206,11 @@ def _bash_written_files(cmd: str, *, truncated: bool) -> list[str]:
 
 
 class SummarizationPipeline:
-    """Converts conversation logs into structured summaries.
+    """Messages of one session-day in, its ``StructuredSummary`` out.
 
-    Two-tier extraction:
-    - Rule-based (all sessions): topics, decisions, files, open questions.
-      Fast and deterministic.
-    - LLM-enriched (sessions > LLM_ENRICHMENT_THRESHOLD messages): adds
-      actions taken, reasoning, rejected approaches, continue-from, and
-      validation status. Falls back to rule-based on LLM failure.
-
-    Deduplication: topics and files are deduplicated by exact string match.
-    Ordering: all lists preserve chronological order.
+    The rule-based fields are always extracted. With an exchange, the model writes the
+    record (``_enrich_with_llm``); without its answer the record keeps the derived
+    title and nothing the user said is presented as done or open.
     """
 
     async def summarize(
@@ -273,81 +220,63 @@ class SummarizationPipeline:
         session_id: str = "",
         open_next_items: list[dict[str, str]] | None = None,
         open_problems: list[str] | None = None,
+        earlier: dict[str, str] | None = None,
+        day: str = "",
+        enrich: bool = True,
+        so_far: dict[str, Any] | None = None,
     ) -> StructuredSummary:
-        """Full summarization for conversations with 3+ messages.
+        """Summarize *messages* (one session, one day).
 
-        If the session has more than LLM_ENRICHMENT_THRESHOLD messages,
-        attempts LLM enrichment for handoff-level detail. Falls back to
-        rule-based summary on LLM failure.
-
-        ``open_problems``: titles of the COEs still open (core.coe_threads).
-        The enrichment is asked to copy one exactly when this session reports or
-        resolves the same problem, so the COE topic matches its thread by key.
+        ``so_far``: the record already written for the earlier messages of this day
+        (``record_of``); *messages* then continue it and the answer is the record for
+        the whole day so far.
+        ``open_next_items``: open follow-ups of the previous 7 days; the model may
+        resolve only these ids. ``open_problems``: titles of the open COEs
+        (core.coe_threads), copied when the session reports the same problem.
+        ``earlier``: ``{"day", "title", "sentence"}`` of this session's last row on an
+        earlier day, so the model records only what is new. ``enrich=False`` keeps
+        the rule-based fields only (the self-heal checkpoint cannot wait for a model).
+        Only Exception is caught around the model call: CancelledError must propagate.
         """
-        topics = self._extract_topics(messages)
-        decisions = self._extract_decisions(messages)
-        files = self._extract_files_modified(messages)
-        questions = self._extract_open_questions(messages)
-
         summary = StructuredSummary(
-            topics=topics,
-            decisions=decisions,
-            files_modified=files,
-            open_questions=questions,
+            topics=self._extract_topics(messages),
+            decisions=self._extract_decisions(messages),
+            files_modified=self._extract_files_modified(messages),
+            open_questions=self._extract_open_questions(messages),
             session_title=self._derive_title(messages),
-            timestamp=datetime.now().strftime("%H:%M"),
+            timestamp=self._last_time(messages),
         )
-
-        # LLM enrichment for substantial sessions.
-        # Only catches Exception — CancelledError (BaseException) must propagate
-        # for proper asyncio task cancellation (Python 3.12+ re-cancels if
-        # swallowed).  The tight LLM timeouts (5s connect + 15s read = 20s max)
-        # ensure this fits within the 30s hook budget in normal operation.
-        # On shutdown cancellation, the entry is lost — same as before this
-        # change, just with a slightly larger window.
-        if len(messages) > LLM_ENRICHMENT_THRESHOLD:
+        if enrich and (so_far or len(messages) > LLM_ENRICHMENT_THRESHOLD):
             try:
                 summary = await self._enrich_with_llm(
                     summary, messages, open_next_items=open_next_items or [],
-                    open_problems=open_problems or [],
+                    open_problems=open_problems or [], earlier=earlier, day=day,
+                    so_far=so_far,
                 )
             except Exception as exc:
-                logger.warning(
-                    "LLM enrichment failed, using rule-based summary: %s", exc
-                )
+                logger.warning("Activity summary model call failed: %s", exc)
 
-        # the model's sentence stands as written (on one line); a length rule replaced
-        # every sentence outside 30-50 characters with a stock filler
-        summary.summary_sentence = (self._one_line(summary.summary_sentence)
-                                    or self._derive_summary_sentence(summary))
-        if not summary.continue_from:
-            summary.continue_from = self._derive_continue_from(summary)
-        if not summary.next_items and summary.continue_from:
-            summary.next_items = [{"text": summary.continue_from}]
+        summary.summary_sentence = self._one_line(summary.summary_sentence)
         self._assign_next_ids(summary, session_id)
+        # the record so far keeps the ids it resolved: they are no longer open
         allowed_resolutions = {
             item.get("next_id", "") for item in (open_next_items or [])
-        }
+        } | set((so_far or {}).get("resolves") or [])
         summary.resolves = [item for item in summary.resolves if item in allowed_resolutions]
         return summary
 
-    def minimal_summary(self, messages: list[dict], *, session_id: str = "") -> StructuredSummary:
-        """Minimal summary for a short conversation without dropping semantic content."""
-        topics = self._extract_topics(messages)
-        summary = StructuredSummary(
-            topics=topics,
-            decisions=[],
-            files_modified=[],
-            open_questions=[],
-            session_title=self._derive_title(messages),
-            timestamp=datetime.now().strftime("%H:%M"),
-        )
-        summary.summary_sentence = self._derive_summary_sentence(summary)
-        summary.continue_from = self._derive_continue_from(summary)
-        if summary.continue_from:
-            summary.next_items = [{"text": summary.continue_from}]
-        self._assign_next_ids(summary, session_id)
-        return summary
+    @staticmethod
+    def _last_time(messages: list[dict]) -> str:
+        """HH:MM of the last message (naive local ``created_at``), else now."""
+        for msg in reversed(messages):
+            raw = msg.get("created_at")
+            if not raw:
+                continue
+            try:
+                return datetime.fromisoformat(str(raw)).strftime("%H:%M")
+            except ValueError:
+                continue
+        return datetime.now().strftime("%H:%M")
 
     def _extract_topics(self, messages: list[dict]) -> list[str]:
         """Extract meaningful topics from user messages.
@@ -606,41 +535,9 @@ class SummarizationPipeline:
         return title.rstrip(".")
 
     @staticmethod
-    def _derive_continue_from(summary: StructuredSummary) -> str:
-        """Rule-based fallback for continue_from when LLM doesn't generate one.
-
-        Priority chain:
-        1. If there are open questions → "Resolve: <first question>"
-        2. If validation_status mentions untested → "Verify: <validation>"
-        3. If COE candidate → "Investigate: <coe_topic>"
-        Otherwise none: "Ongoing: <title>" restated the title as a next step.
-        """
-        if summary.open_questions:
-            return f"Resolve: {summary.open_questions[0]}"
-        if summary.validation_status and "untest" in summary.validation_status.lower():
-            return f"Verify: {summary.validation_status}"
-        if summary.coe_signal == "candidate" and summary.coe_topic:
-            return f"Investigate: {summary.coe_topic}"
-        return ""
-
-    @staticmethod
     def _one_line(text: str) -> str:
         """*text* on one line, whitespace collapsed; nothing cut."""
         return " ".join((text or "").split())
-
-    @staticmethod
-    def _derive_summary_sentence(summary: StructuredSummary) -> str:
-        """The session's own content when the model gave no sentence: its deliverables,
-        else its topics, else its title. Never a stock sentence: a filler that is the
-        same for every session told the next session nothing (14 of 28 entries on
-        2026-10-30 carried one), and an empty one is better than a false one."""
-        parts = [p for p in summary.deliverables if isinstance(p, str) and p.strip()]
-        if not parts:
-            parts = [p for p in summary.topics if isinstance(p, str) and p.strip()]
-        if not parts and summary.session_title and summary.session_title != "Untitled session":
-            parts = [summary.session_title]
-        joiner = "；" if any(re.search(r"[\u3400-\u9fff]", p) for p in parts) else "; "
-        return SummarizationPipeline._one_line(joiner.join(parts))
 
     @staticmethod
     def _assign_next_ids(summary: StructuredSummary, session_id: str) -> None:
@@ -660,10 +557,6 @@ class SummarizationPipeline:
             })
         summary.next_items = assigned
 
-    def _enforce_word_limit(self, summary: StructuredSummary) -> StructuredSummary:
-        """Compatibility no-op: DailyActivity v2 never drops semantic entries."""
-        return summary
-
     async def _enrich_with_llm(
         self,
         summary: StructuredSummary,
@@ -671,69 +564,88 @@ class SummarizationPipeline:
         *,
         open_next_items: list[dict[str, str]] | None = None,
         open_problems: list[str] | None = None,
+        earlier: dict[str, str] | None = None,
+        day: str = "",
+        so_far: dict[str, Any] | None = None,
     ) -> StructuredSummary:
-        """Enrich a rule-based summary with LLM-extracted context.
-
-        Calls Bedrock (jobs.bedrock.structured) to extract
-        reasoning, rejected approaches, continue-from, and validation
-        status. On failure, returns the original summary unchanged.
-        """
-        conversation = self._format_conversation_for_llm(messages)
-        if not conversation.strip():
+        """Fill the model-written fields of *summary*; unchanged when no answer."""
+        chunks = [self._format_conversation_for_llm(part) for part in self.parts(messages)]
+        chunks = [chunk for chunk in chunks if chunk.strip()]
+        if not chunks:
             return summary
 
-        prompt = _ENRICHMENT_PROMPT.format(
-            conversation=conversation,
-            topics="; ".join(summary.topics) or "(none)",
-            decisions="; ".join(summary.decisions) or "(none)",
-            files="; ".join(summary.files_modified) or "(none)",
-            open_next_items=json.dumps(open_next_items or [], ensure_ascii=False),
-            open_problems="; ".join(f'"{x}"' for x in (open_problems or [])) or "(none)",
-        )
-
+        earlier_text = ""
+        if earlier and (earlier.get("title") or earlier.get("sentence")):
+            earlier_text = _EARLIER_BLOCK.format(
+                day=earlier.get("day", ""), title=earlier.get("title", ""),
+                sentence=earlier.get("sentence", ""),
+            )
         # Dedicated 'llm' pool (run_c8ad52f8), not the default ThreadPoolExecutor:
-        # this enrichment fires in the post-session hook window — if the user sends
-        # a message during it, a default-pool LLM call would compete with the
-        # readiness sampler. The dedicated pool insulates it.
+        # this runs in the post-session hook window — if the user sends a message
+        # during it, a default-pool model call would compete with the readiness
+        # sampler. The dedicated pool insulates it.
         from core import executors
-        answer = await executors.run_in("llm", self._call_enrichment_llm, prompt)
-        if not answer:
-            return summary  # the call failed; _call_enrichment_llm logged why
+        answer: dict = dict(so_far or {})
+        for index, conversation in enumerate(chunks, 1):
+            prompt = _ENRICHMENT_PROMPT.format(
+                earlier=earlier_text,
+                so_far=(_SO_FAR_BLOCK.format(record=json.dumps(answer, ensure_ascii=False))
+                        if answer else ""),
+                day=day or datetime.now().date().isoformat(),
+                part=f" (part {index} of {len(chunks)})" if len(chunks) > 1 else "",
+                conversation=conversation,
+                files="; ".join(summary.files_modified) or "(none)",
+                open_next_items=json.dumps(open_next_items or [], ensure_ascii=False),
+                open_problems="; ".join(f'"{x}"' for x in (open_problems or [])) or "(none)",
+            )
+            answer = await executors.run_in("llm", self._call_enrichment_llm, prompt)
+            if not answer:
+                return summary  # the call failed; _call_enrichment_llm logged why
         enriched = self._normalize_enrichment(answer)
 
-        # Merge enriched fields into summary
-        summary.deliverables = enriched.get("deliverables", [])
-        summary.key_outputs = enriched.get("key_outputs", [])
-        summary.lessons = enriched.get("lessons", [])
-        # lesson_types is normalized to len(lessons) in _normalize_enrichment (bound
-        # as pairs), so index alignment holds. Fallback: if absent (shouldn't be),
-        # pad to guideline so downstream zip never misaligns.
-        _lt = enriched.get("lesson_types", [])
-        if len(_lt) != len(summary.lessons):
-            _lt = (_lt + ["guideline"] * len(summary.lessons))[: len(summary.lessons)]
-        summary.lesson_types = _lt
-        summary.rejected_approaches = enriched.get("rejected_approaches", [])
-        summary.corrections = enriched.get("corrections", [])
-        summary.process_reflection = enriched.get("process_reflection", "")
-        summary.signal_driven_actions = enriched.get("signal_driven_actions", [])
-        summary.continue_from = enriched.get("continue_from", "")
-        summary.validation_status = enriched.get("validation_status", "")
-        summary.coe_signal = enriched.get("coe_signal", "")
-        summary.coe_topic = enriched.get("coe_topic", "")
-        summary.summary_sentence = enriched.get("summary_sentence", "")
-        summary.next_items = [
-            {"text": item} for item in enriched.get("next_items", [])
-        ]
-        summary.resolves = enriched.get("resolves", [])
-
+        if enriched["title"]:
+            summary.session_title = enriched["title"]
+        summary.summary_sentence = enriched["summary_sentence"]
+        summary.deliverables = enriched["deliverables"]
+        summary.key_outputs = enriched["key_outputs"]
+        summary.validation_status = enriched["validation_status"]
+        summary.next_items = [{"text": item} for item in enriched["next_items"]]
+        summary.resolves = enriched["resolves"]
+        summary.coe_signal = enriched["coe_signal"]
+        summary.coe_topic = enriched["coe_topic"]
+        summary.enriched = True
         return summary
 
     @staticmethod
-    def _format_conversation_for_llm(messages: list[dict]) -> str:
-        """Format messages into a readable conversation for the LLM prompt.
+    def _estimate_tokens(text: str) -> int:
+        """A conservative token estimate: ~1.1 per CJK character, ~1 per 3 others."""
+        cjk = sum(1 for ch in text if "\u3400" <= ch <= "\u9fff")
+        return int(cjk * 1.1 + (len(text) - cjk) / 3) + 1
 
-        Truncates from the beginning if over _ENRICHMENT_MAX_CHARS
-        (keeps recent messages which are most relevant for continue-from).
+    @classmethod
+    def parts(cls, messages: list[dict]) -> list[list[dict]]:
+        """*messages* in parts of about ``_CHUNK_TOKENS``, split between messages; a
+        message longer than that is a part of its own, whole."""
+        parts: list[list[dict]] = []
+        current: list[dict] = []
+        used = 0
+        for msg in messages:
+            cost = cls._estimate_tokens(cls._format_conversation_for_llm([msg]))
+            if current and used + cost > _CHUNK_TOKENS:
+                parts.append(current)
+                current, used = [], 0
+            current.append(msg)
+            used += cost
+        if current:
+            parts.append(current)
+        return parts
+
+    @staticmethod
+    def _format_conversation_for_llm(messages: list[dict]) -> str:
+        """The messages as ``User:`` / ``Assistant:`` text, every message whole.
+
+        Text blocks are kept; a tool call is shown by its name only; tool results are
+        not included. Nothing is cut.
         """
         lines: list[str] = []
         for msg in messages:
@@ -764,8 +676,8 @@ class SummarizationPipeline:
     def _call_enrichment_llm(prompt: str) -> dict:
         """The model's enrichment answer for *prompt*, or {} when there is none.
 
-        Budget: runs inside DailyActivityExtractionHook, whose per-hook timeout is
-        180 s (main.py), in the background after the session ends. Asked through
+        Budget: runs inside DailyActivityExtractionHook (its own 900 s hang guard,
+        one call per part), in the background after the session ends. Asked through
         jobs.bedrock.structured() with a fail-fast client (read timeout
         _ENRICHMENT_READ_TIMEOUT_S, no boto retry); best-effort: on any failure the
         rule-based summary is the safety net. Model and region come from the user's
@@ -811,55 +723,19 @@ class SummarizationPipeline:
 
     @staticmethod
     def _normalize_enrichment(data: dict) -> dict[str, Any]:
-        """The fields of an enrichment answer the summary takes, normalized: empty
-        entries dropped, lessons and lesson_types bound as pairs, an unknown type or
-        coe_signal reset. (process_reflection and signal_driven_actions are asked for
-        but not taken here; see the known issue in the design's implementation notes.)"""
+        """The answer's fields, normalized: every string on one line (a line break in a
+        title or follow-up would add a line of its own to the day file and the prompt),
+        non-string and empty entries dropped, an unknown coe_signal reset to ""."""
         result: dict[str, Any] = {}
-        for key in ("deliverables", "key_outputs",
-                     "rejected_approaches", "corrections",
-                     "actions_taken", "reasoning", "next_items", "resolves"):  # legacy
+        for key in ("deliverables", "key_outputs", "next_items", "resolves"):
             entries = data.get(key, [])
-            if isinstance(entries, list):
-                result[key] = [e for e in entries if isinstance(e, str) and e.strip()]
-            else:
-                result[key] = []
-
-        # lessons + lesson_types are BOUND: normalize lesson_types to len(lessons)
-        # and filter empty-lesson entries as PAIRS, so index i always corresponds.
-        # (Filtering lessons alone would shift indices vs a parallel type array —
-        # the exact fragility Gate-1 flagged. Bind here, at the single parse point.)
-        raw_lessons = data.get("lessons", [])
-        raw_lessons = raw_lessons if isinstance(raw_lessons, list) else []
-        raw_types = data.get("lesson_types", [])
-        raw_types = raw_types if isinstance(raw_types, list) else []
-        if len(raw_types) != len(raw_lessons) and raw_types:
-            logger.warning(
-                "enrichment lesson_types/lessons length mismatch: %d types vs %d lessons "
-                "— normalizing (short→pad 'guideline', long→truncate)",
-                len(raw_types), len(raw_lessons),
-            )
-        lessons_out: list[str] = []
-        types_out: list[str] = []
-        for i, les in enumerate(raw_lessons):
-            if not (isinstance(les, str) and les.strip()):
-                continue  # drop empty lesson AND its paired type together
-            t = raw_types[i] if i < len(raw_types) else "guideline"
-            t = t.lower() if isinstance(t, str) else "guideline"
-            if t not in VALID_TYPE_SET:
-                t = "guideline"
-            lessons_out.append(les)
-            types_out.append(t)
-        result["lessons"] = lessons_out
-        result["lesson_types"] = types_out
-
-        for key in ("continue_from", "validation_status", "coe_signal", "coe_topic",
-                    "summary_sentence"):
+            entries = entries if isinstance(entries, list) else []
+            result[key] = [SummarizationPipeline._one_line(e) for e in entries
+                           if isinstance(e, str) and e.strip()]
+        for key in ("title", "summary_sentence", "validation_status", "coe_signal",
+                    "coe_topic"):
             val = data.get(key, "")
-            result[key] = val if isinstance(val, str) else ""
-
-        # Validate coe_signal
-        if result.get("coe_signal") not in ("", "candidate", "resolution"):
+            result[key] = SummarizationPipeline._one_line(val) if isinstance(val, str) else ""
+        if result["coe_signal"] not in ("", "candidate", "resolution"):
             result["coe_signal"] = ""
-
         return result

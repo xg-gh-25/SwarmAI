@@ -21,21 +21,40 @@ def test_daily_admits_whole_rows_counts_overflow_and_hides_resolved(tmp_path):
          "next_items": [], "resolves": ["n1"]},
     ]
     _write_jsonl(directory / "2026-10-27.jsonl", rows)
-    result = select_daily_activity(tmp_path, today=date(2026, 10, 27), estimate=len, budget=62)
-    assert "[n1]" not in result.text
-    assert "完整摘要乙。" in result.text
-    assert "完整摘要甲。" not in result.text
-    assert "另有 1 个 session 未注入" in result.text
-    assert "完整摘要甲" not in result.text
+    newest = "- 2026-10-27 11:00 二: 完整摘要乙。"
+    result = select_daily_activity(tmp_path, today=date(2026, 10, 27), estimate=len,
+                                   budget=len(newest))
+    assert result.text.startswith(newest)           # newest row first, whole
+    assert "完整摘要甲" not in result.text and "[n1]" not in result.text
+    assert "(1 more sessions not shown; they are in Knowledge/DailyActivity/)" in result.text
 
 
-def test_days_three_to_seven_use_whole_day_summary(tmp_path):
+def test_rows_cover_all_seven_days_compactly_and_no_day_summary(tmp_path):
     directory = tmp_path / "Knowledge" / "DailyActivity"
-    directory.mkdir(parents=True)
-    block = "## 日汇总\n主线：完整主线。\n交付：\n- 完整交付\n未完成 Next：n3"
-    (directory / "2026-10-25.md").write_text(block + "\n")
+    _write_jsonl(directory / "2026-10-27.jsonl", [
+        {"session_id": "a", "timestamp": "09:00", "title": "Parser fix",
+         "summary_sentence": "Fixed the blank-line crash.",
+         "next_items": [{"next_id": "x1", "text": "Release 2.4"}], "resolves": [],
+         "deliverables": ["a very long deliverable that must not be injected"]}])
+    _write_jsonl(directory / "2026-10-21.jsonl", [
+        {"session_id": "b", "timestamp": "18:00", "title": "Docs", "summary_sentence": "Wrote the guide.",
+         "next_items": [], "resolves": []}])
+    (directory / "2026-10-21.md").write_text("## 日汇总\n主线：旧的日汇总。\n")
     result = select_daily_activity(tmp_path, today=date(2026, 10, 27), estimate=len, budget=10_000)
-    assert block in result.text
+    assert result.text == (
+        "- 2026-10-27 09:00 Parser fix: Fixed the blank-line crash.\n"
+        "  - Next [x1]: Release 2.4\n"
+        "- 2026-10-21 18:00 Docs: Wrote the guide."
+    )
+
+
+def test_a_row_without_a_summary_shows_its_title_and_never_its_topics(tmp_path):
+    directory = tmp_path / "Knowledge" / "DailyActivity"
+    _write_jsonl(directory / "2026-10-27.jsonl", [
+        {"session_id": "a", "timestamp": "09:00", "title": "Old row",
+         "topics": ["what the user typed"], "next_items": [], "resolves": []}])
+    result = select_daily_activity(tmp_path, today=date(2026, 10, 27), estimate=len, budget=10_000)
+    assert result.text == "- 2026-10-27 09:00 Old row"
 
 
 def test_resolved_next_is_never_injected_even_with_room(tmp_path):
@@ -77,11 +96,12 @@ def test_timeline_summary_first_excludes_not_injected_and_keeps_units_whole(tmp_
 
     from core.ingestion.units import parse_units
     parsed_summary = next(unit for unit in parse_units(timeline) if "九月汇总" in unit.text)
-    small = select_timeline(
-        timeline, today=date(2026, 10, 27), estimate=len, budget=len(parsed_summary.text)
-    )
+    shown = "### 2026-09-30 九月汇总\n- what: 月度内容\n- outcome: 汇总"
+    assert len(shown) < len(parsed_summary.text)    # the unit carries a metadata comment
+    small = select_timeline(timeline, today=date(2026, 10, 27), estimate=len, budget=len(shown))
+    assert small.text.startswith(shown)             # counted on what the prompt shows
     assert "完整事件正文" not in small.text
-    assert "另有 1 个事件未注入" in small.text
+    assert "(1 more events not shown; read .context/TIMELINE.md)" in small.text
 
 
 def test_timeline_private_for_group_and_nonowner_prompts(tmp_path):
@@ -127,9 +147,9 @@ def test_owned_memory_paths_have_no_fixed_semantic_truncation():
     ]
     offenders = []
     semantic_functions = {
-        "_extract_topics", "_extract_decisions", "_derive_continue_from",
+        "_extract_topics", "_extract_decisions", "_row", "_shown",
         "_format_conversation_for_llm", "select_daily_activity", "select_timeline",
-        "_daily_block", "append_daily_summary", "enqueue_month_summary",
+        "enqueue_month_summary",
     }
     for path in files:
         tree = ast.parse(path.read_text(encoding="utf-8"))

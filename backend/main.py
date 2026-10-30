@@ -1279,15 +1279,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Failed to generate permissions.json (non-critical): %s", exc)
 
-    # ── Recover crash checkpoint (if any) before session infra starts ─
-    # (not on a worker Hive: it writes no DailyActivity of its own, core/app_role)
+    # ── Remove a crashed session's checkpoint JSON before session infra starts ─
+    # (not on a worker Hive: it keeps no DailyActivity of its own, core/app_role)
     from core.app_role import is_worker as _is_worker
     try:
         if not _is_worker():
             from hooks.daily_activity_hook import recover_crash_checkpoint as _recover_checkpoint
             _recovered = _recover_checkpoint()
             if _recovered:
-                logger.info("Crash checkpoint recovered into DailyActivity")
+                logger.info("Crash checkpoint of an earlier session removed")
     except Exception:
         logger.debug("Crash checkpoint recovery skipped (non-fatal)", exc_info=True)
 

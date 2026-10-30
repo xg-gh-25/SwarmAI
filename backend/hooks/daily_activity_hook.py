@@ -1,12 +1,16 @@
 """Post-session DailyActivity extraction hook.
 
-Retrieves the conversation log from the database, passes it through
-the ``SummarizationPipeline``, and appends the result to the
-DailyActivity file.  Records success/failure in ``ComplianceTracker``.
+Reads the session's persisted messages, summarizes the ones from the current local
+day (``summarize_session_day``) and upserts that day's row in DailyActivity. Records
+success/failure in ``ComplianceTracker``. Design:
+docs/design/2026-10-31-daily-activity-useful.md.
 
 Key public symbols:
 
-- ``DailyActivityExtractionHook``  — Implements ``SessionLifecycleHook``.
+- ``DailyActivityExtractionHook`` — Implements ``SessionLifecycleHook``.
+- ``summarize_session_day``       — One session-day's summary (also used by
+                                    ``scripts/da_resummarize.py``).
+- ``messages_on_day``             — The messages of one local day.
 """
 
 from __future__ import annotations
@@ -15,12 +19,13 @@ import asyncio
 import logging
 import re
 import subprocess
-from datetime import datetime, timedelta
+import dataclasses
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from core import executors
 from core.session_hooks import HookContext
-from core.summarization import SummarizationPipeline
+from core.summarization import SummarizationPipeline, record_of
 from core.daily_activity_writer import write_daily_activity
 from core.compliance import ComplianceTracker
 from core.ddd_paths import ddd_path
@@ -132,8 +137,9 @@ def _get_session_git_commits(
     session_shas: "set[str] | None" = None,
     call_windows: "list[tuple[float, float, bool]] | None" = None,
     session_run_ids: "set[str] | None" = None,
+    until: "datetime | None" = None,
 ) -> list[str]:
-    """Get git commits from a repo since a given time.
+    """Get git commits from a repo since a given time (and up to *until*).
 
     Returns a list of ``"<short_hash> <subject>"`` strings, newest first.
     Gracefully returns an empty list if the path is not a git repo or
@@ -143,6 +149,8 @@ def _get_session_git_commits(
         repo_path: Path to a git repository (or any directory — non-repos
             return empty).
         since: Only include commits after this timestamp.
+        until: In attribution mode, drop commits made after this time (a row
+            covers one day; a run landed later belongs to that later day).
         max_commits: Maximum number of commits to return.
         session_files / session_shas / session_run_ids / call_windows: when
             any is given, attribution mode. A commit is this session's when
@@ -204,6 +212,8 @@ def _get_session_git_commits(
             if len(head) < 3 or not head[2].isdigit():
                 continue
             full, short, ct = head[0], head[1], int(head[2])
+            if until is not None and ct > until.timestamp() + _SLACK_S:
+                continue
             subject = head[3] if len(head) > 3 else ""
             names_run = bool(run_ids) and bool(set(_RUN_ID_RE.findall(parts[0] + parts[1])) & run_ids)
             mine = full in shas or names_run
@@ -270,70 +280,18 @@ def _open_problem_titles(workspace: "Path | None" = None) -> list[str]:
 
 
 def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
-    """Recover session data from an orphaned checkpoint file.
+    """Remove the checkpoint JSON a crashed session left behind.
 
-    Called at startup (before any session hook runs).  If a checkpoint
-    file exists from a prior crashed session, writes its data as that
-    session's checkpoint block in today's DailyActivity — replacing the
-    block the live checkpoint hook already wrote, never adding a second one —
-    and deletes the checkpoint.
-
-    Returns True if a checkpoint was recovered, False otherwise.
+    Called at startup. The day's activity row needs nothing from it: the session's
+    messages are persisted, and the startup scan (lifecycle_manager) and the idle hook
+    summarize it from them. Returns True when one was removed.
     """
     checkpoint_path = STATE_DIR / "session_checkpoint.json"
     if not checkpoint_path.exists():
         return False
-
-    try:
-        import json
-        data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-        session_id = data.get("session_id", "unknown")
-        ts = data.get("ts", 0)
-        tool_count = data.get("tool_count", 0)
-        files_touched = data.get("files_touched", [])
-
-        if not ts or not session_id:
-            checkpoint_path.unlink(missing_ok=True)
-            return False
-
-        # Build recovery entry with enriched content (git_commits if available)
-        from datetime import datetime
-        crash_time = datetime.fromtimestamp(ts).strftime("%H:%M")
-        git_commits = data.get("git_commits", [])
-
-        entry = (
-            f"## {crash_time} | {session_id[:8]} | ⚠️ Recovered from crash checkpoint\n"
-            f"**What happened:** Session crashed or was evicted after {tool_count} tool calls.\n"
-        )
-        if files_touched:
-            from pathlib import PurePosixPath
-            file_names = [PurePosixPath(f).name for f in files_touched[:10]]
-            entry += f"**Files:** {', '.join(f'`{f}`' for f in file_names)}\n"
-        if git_commits:
-            entry += "**Git activity:**\n"
-            for c in git_commits[:3]:
-                entry += f"- `{c[:72]}`\n"
-
-        # Upsert the session's checkpoint block in today's DailyActivity
-        from core.daily_activity_writer import upsert_session_block
-        ws = workspace_dir or SWARMWS
-        today = datetime.now().strftime("%Y-%m-%d")
-        da_file = ws / "Knowledge" / "DailyActivity" / f"{today}.md"
-        upsert_session_block(da_file, session_id, "checkpoint", entry)
-
-        checkpoint_path.unlink(missing_ok=True)
-        logger.info(
-            "Recovered crash checkpoint for session %s (%d tool calls)",
-            session_id[:8], tool_count,
-        )
-        return True
-
-    except Exception:
-        logger.exception("Failed to recover crash checkpoint")
-        # Delete corrupt checkpoint to prevent repeated failures
-        checkpoint_path.unlink(missing_ok=True)
-        return False
-
+    checkpoint_path.unlink(missing_ok=True)
+    logger.info("Removed the crash checkpoint of an earlier session")
+    return True
 
 
 async def _read_complete_transcript(session_id: str, page_size: int = 200,
@@ -358,6 +316,111 @@ async def _read_complete_transcript(session_id: str, page_size: int = 200,
         before_id = oldest_id
     return [message for page in reversed(pages) for message in page]
 
+def messages_on_day(messages: list[dict], day: date) -> list[dict]:
+    """The messages whose ``created_at`` (naive local time) falls on *day*."""
+    prefix = day.isoformat()
+    return [m for m in messages if str(m.get("created_at") or "").startswith(prefix)]
+
+
+def _day_rows(workspace: Path, day: date) -> list[dict]:
+    from core.daily_activity_writer import read_jsonl_sidecar
+    return read_jsonl_sidecar(workspace / "Knowledge" / "DailyActivity" / f"{day.isoformat()}.jsonl")
+
+
+def current_row(workspace: Path, session_id: str, day: date) -> "dict | None":
+    """This session's row on *day*, if any."""
+    for row in _day_rows(workspace, day):
+        if row.get("session_id") == session_id:
+            return row
+    return None
+
+
+def earlier_row(workspace: Path, session_id: str, day: date, *, days: int = 7,
+                ) -> "dict[str, str] | None":
+    """``{"day", "title", "sentence"}`` of this session's latest row in the *days*
+    before *day*, so the summary of *day* records only what is new."""
+    for back in range(1, days + 1):
+        earlier = day - timedelta(days=back)
+        row = current_row(workspace, session_id, earlier)
+        if row is not None:
+            return {"day": earlier.isoformat(), "title": str(row.get("title") or ""),
+                    "sentence": str(row.get("summary_sentence") or "")}
+    return None
+
+
+def _merged(previous: "list | None", new: list) -> list:
+    """Previous items, then new ones not already there (order kept)."""
+    out = list(previous or [])
+    out.extend(item for item in new if item not in out)
+    return out
+
+
+async def summarize_session_day(
+    pipeline: SummarizationPipeline,
+    context: HookContext,
+    day_messages: list[dict],
+    *,
+    day: date,
+    workspace: Path,
+    open_next_items: list[dict[str, str]],
+    open_problems: "list[str] | None" = None,
+    previous: "dict | None" = None,
+    start: int = 0,
+    end: "int | None" = None,
+):
+    """The summary of one session's messages ``day_messages[start:end]`` on one day.
+
+    ``previous``: the day's row (sidecar shape) covering ``day_messages[:start]``; the
+    model continues it, so the answer is the record of ``day_messages[:end]``.
+    Returns ``(summary, day_context)``: *context* with ``message_count`` set to *end*.
+    Without a model answer the sentence is the day's commit subjects (ground truth),
+    or empty — never the user's words.
+    """
+    end = len(day_messages) if end is None else end
+    summary = await pipeline.summarize(
+        day_messages[start:end],
+        session_id=context.session_id,
+        open_next_items=open_next_items,
+        open_problems=open_problems if open_problems is not None else _open_problem_titles(workspace),
+        earlier=earlier_row(workspace, context.session_id, day),
+        day=day.isoformat(),
+        so_far=record_of(previous) if previous else None,
+    )
+    if previous:
+        for name in ("topics", "decisions", "files_modified", "open_questions"):
+            setattr(summary, name, _merged(previous.get(name), getattr(summary, name)))
+    # Git ground truth (COE C005): the session's own commits, inside this day.
+    covered = day_messages[:end]
+    stamps = [m.get("created_at") for m in covered if m.get("created_at")]
+    window_start = min(stamps) if stamps else context.session_start_time
+    until = None
+    if stamps:
+        try:
+            until = datetime.fromisoformat(str(max(stamps)))
+        except ValueError:
+            until = None
+    summary.git_commits = await executors.run_in(
+        "subprocess", DailyActivityExtractionHook._capture_git_activity, window_start,
+        list(summary.files_modified or []), context.session_id,
+        _bash_call_windows(covered), until, workspace,
+    )
+    if not summary.enriched and not summary.summary_sentence and summary.git_commits:
+        summary.summary_sentence = "Commits: " + "; ".join(summary.git_commits)
+    return summary, dataclasses.replace(context, message_count=end)
+
+
+def resume_point(row: "dict | None", day_messages: list[dict]) -> int:
+    """How many of the day's messages *row* already covers, when the model wrote it
+    (0: summarize the whole day). A count larger than the day means messages went
+    away: start again."""
+    if not row or not row.get("enriched"):
+        return 0
+    count = row.get("message_count")
+    if isinstance(count, int) and 0 < count <= len(day_messages):
+        return count
+    return 0
+
+
 class DailyActivityExtractionHook:
     """Extracts conversation summaries into DailyActivity files.
 
@@ -366,6 +429,11 @@ class DailyActivityExtractionHook:
     """
 
     name = "daily_activity_extraction"
+    # Hang guard, not a budget: a long day is summarized in several model calls of up
+    # to _ENRICHMENT_READ_TIMEOUT_S each (SummarizationPipeline.parts), longer than the
+    # 180 s every other hook gets. The row is written after each part, so a cut run
+    # keeps its progress and the next idle continues.
+    timeout_seconds = 900.0
 
     def __init__(
         self,
@@ -402,63 +470,26 @@ class DailyActivityExtractionHook:
         _checkpoint_path = STATE_DIR / "session_checkpoint.json"
         _checkpoint_path.unlink(missing_ok=True)
 
-        # 1. Retrieve the complete conversation log in bounded pages.
+        # 1. Each local day of the last 7 with messages gets its own row, about that
+        # day. Looking at every such day, not only today, keeps the tail of a day whose
+        # last idle fired after midnight.
         messages = await _read_complete_transcript(context.session_id)
-
-        if not messages:
+        today = date.today()
+        days = [today - timedelta(days=back) for back in range(6, -1, -1)]
+        work = [(day, messages_on_day(messages, day)) for day in days]
+        work = [(day, msgs) for day, msgs in work if msgs]
+        if not work:
             logger.info(
-                "No messages for session %s, skipping extraction",
+                "No messages in the last 7 days for session %s, skipping extraction",
                 context.session_id,
             )
             return
 
-        from core.daily_activity_writer import read_open_next_items
         from core.initialization_manager import initialization_manager
         activity_workspace = Path(initialization_manager.get_cached_workspace_path())
-        open_next_items = read_open_next_items(activity_workspace, days=7)
-        if len(messages) < 3:
-            summary = self._pipeline.minimal_summary(
-                messages, session_id=context.session_id
-            )
-        else:
-            summary = await self._pipeline.summarize(
-                messages,
-                session_id=context.session_id,
-                open_next_items=open_next_items,
-                open_problems=_open_problem_titles(),
-            )
-
-        # 2b. Capture git ground truth — actual commits during session
-        # This prevents COE C005: DailyActivity text claims vs git reality diverging.
-        # Window = the conversation being summarized (a resumed session's
-        # created_at can be days old; other sessions' commits fill that span).
-        _stamps = [m.get("created_at") for m in messages if m.get("created_at")]
-        _window_start = min(_stamps) if _stamps else context.session_start_time
-        summary.git_commits = await executors.run_in(
-            "subprocess", self._capture_git_activity, _window_start,
-            list(summary.files_modified or []), context.session_id,
-            _bash_call_windows(messages),
-        )
-
-        # 2c. Quality filter — skip noise entries that add no insight
-        # Prevents: pure "read file X" logs, empty summaries, trivial sessions
-        if self._is_noise_summary(summary):
-            logger.info(
-                "DailyActivity skipped for session %s — noise (no insight content)",
-                context.session_id,
-            )
-            # PE-2: record gate trigger for noise_filter
-            try:
-                from core.gate_promotion import GateManager
-                from core.initialization_manager import initialization_manager
-                ws = initialization_manager.get_cached_workspace_path()
-                if ws:
-                    artifacts = Path(ws) / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts"
-                    if artifacts.is_dir():
-                        GateManager(artifacts).record_trigger("noise_filter")
-            except Exception:
-                pass
-            return
+        written = False
+        for day, day_messages in work:
+            written |= await self._summarize_day(context, day, day_messages, activity_workspace)
 
         # 2d. Mine observation patterns (if ring available for this session)
         try:
@@ -479,33 +510,74 @@ class DailyActivityExtractionHook:
         except Exception:
             pass  # Pattern mining is best-effort, never blocks DA extraction
 
-        # 3. Write to DailyActivity file
-        try:
-            path = await write_daily_activity(summary, context)
+        if written:
             self._tracker.record_success(context.session_id)
-            logger.info(
-                "DailyActivity extracted for session %s → %s",
-                context.session_id,
-                path,
+
+    async def _summarize_day(self, context: HookContext, day: date,
+                             day_messages: list[dict], workspace: Path) -> bool:
+        """Bring the session's row of *day* up to date; True when a row was written.
+
+        A complete row is left alone (no model call). Otherwise the messages it does
+        not cover are summarized part by part, the row written after each part, so a
+        cut run keeps what it did and the next idle continues from there. A part
+        without a model answer never replaces a row the model wrote.
+        """
+        from core.daily_activity_writer import read_open_next_items
+
+        row = current_row(workspace, context.session_id, day)
+        start = resume_point(row, day_messages)
+        if start == len(day_messages):
+            logger.debug("DailyActivity of %s unchanged for session %s", day, context.session_id)
+            return False
+        previous = row if start else None
+        # this session's own follow-ups of the day are not offered for resolving: the
+        # new row replaces them
+        own = {item.get("next_id") for item in (row or {}).get("next_items", [])
+               if isinstance(item, dict)}
+        open_items = [item for item in read_open_next_items(workspace, days=7, until=day)
+                      if item["next_id"] not in own]
+        written = False
+        for part in self._pipeline.parts(day_messages[start:]):
+            end = start + len(part)
+            summary, day_context = await summarize_session_day(
+                self._pipeline, context, day_messages, day=day, workspace=workspace,
+                open_next_items=open_items, previous=previous, start=start, end=end,
             )
-
-            # 3b. Emit DAILY_ACTIVITY event for DDD cultivation v2
+            if previous is None and self._is_noise_summary(summary):
+                self._record_noise(context)
+                return written
+            if previous is not None and not summary.enriched:
+                return written      # keep the model's row; the next idle tries again
             try:
-                from core.cultivation_dispatcher import (
-                    EventType, emit_cultivation_event,
-                )
-                await emit_cultivation_event(
-                    EventType.DAILY_ACTIVITY,
-                    source="daily_activity_hook",
-                    payload={"path": str(path), "session_id": context.session_id},
-                    priority=2,
-                )
-            except Exception:
-                pass  # Non-blocking: cultivation emit never breaks extraction
+                path = await write_daily_activity(summary, day_context, day=day)
+            except Exception as exc:
+                self._tracker.record_failure(context.session_id, str(exc))
+                raise  # Re-raise so hook manager logs it
+            logger.info("DailyActivity extracted for session %s → %s", context.session_id, path)
+            written = True
+            if not summary.enriched:
+                return written      # model unavailable: the next idle starts again
+            previous = current_row(workspace, context.session_id, day)
+            start = end
+        return written
 
-        except Exception as exc:
-            self._tracker.record_failure(context.session_id, str(exc))
-            raise  # Re-raise so hook manager logs it
+    @staticmethod
+    def _record_noise(context: HookContext) -> None:
+        logger.info(
+            "DailyActivity skipped for session %s — noise (no insight content)",
+            context.session_id,
+        )
+        # PE-2: record gate trigger for noise_filter
+        try:
+            from core.gate_promotion import GateManager
+            from core.initialization_manager import initialization_manager
+            ws = initialization_manager.get_cached_workspace_path()
+            if ws:
+                artifacts = Path(ws) / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts"
+                if artifacts.is_dir():
+                    GateManager(artifacts).record_trigger("noise_filter")
+        except Exception:
+            pass
 
     @staticmethod
     def _is_noise_summary(summary) -> bool:
@@ -514,22 +586,25 @@ class DailyActivityExtractionHook:
         Handles StructuredSummary dataclass (has .decisions, .topics, etc).
 
         Returns True (skip) if:
-        - No decisions, lessons, or deliverables recorded
+        - No decisions or deliverables recorded
         - Topics are empty or single-item trivial
         - Files modified is empty (no actual work)
 
         Returns False (keep) if ANY substantive content exists.
         """
+        # A model-written record with a sentence or a follow-up is kept
+        if getattr(summary, "enriched", False) and (
+                getattr(summary, "summary_sentence", "") or getattr(summary, "next_items", None)):
+            return False
         # PE-2 fix: access actual StructuredSummary fields safely
         decisions = getattr(summary, "decisions", None) or []
-        lessons = getattr(summary, "lessons", None) or []
         deliverables = getattr(summary, "deliverables", None) or []
         topics = getattr(summary, "topics", None) or []
         files_modified = getattr(summary, "files_modified", None) or []
         open_questions = getattr(summary, "open_questions", None) or []
 
-        # If there are decisions, lessons, or deliverables — always keep
-        if decisions or lessons or deliverables:
+        # If there are decisions or deliverables — always keep
+        if decisions or deliverables:
             return False
 
         # If there are open questions — keep (continuity value)
@@ -556,6 +631,8 @@ class DailyActivityExtractionHook:
                               session_files: list[str] | None = None,
                               session_id: str = "",
                               call_windows: "list[tuple[float, float, bool]] | None" = None,
+                              until: "datetime | None" = None,
+                              workspace: "Path | None" = None,
                               ) -> list[str]:
         """Capture this session's own git commits from source repos.
 
@@ -564,7 +641,7 @@ class DailyActivityExtractionHook:
         ``_get_session_git_commits``. Commits from every distinct repo, at
         most 15. Empty list on any failure.
         """
-        run_shas, run_ids = _session_run_evidence(session_id)
+        run_shas, run_ids = _session_run_evidence(session_id, workspace)
         session_files = list(session_files or [])
         try:
             since = datetime.fromisoformat(session_start_iso.replace("Z", "+00:00"))
@@ -574,8 +651,11 @@ class DailyActivityExtractionHook:
         # Discover repos from all projects' TECH.md files
         candidates: list[Path] = []
         try:
-            from core.initialization_manager import initialization_manager
-            ws = Path(initialization_manager.get_cached_workspace_path())
+            if workspace is not None:
+                ws = Path(workspace)
+            else:
+                from core.initialization_manager import initialization_manager
+                ws = Path(initialization_manager.get_cached_workspace_path())
             projects_dir = ws / "Projects"
             if projects_dir.is_dir():
                 for project_dir in sorted(projects_dir.iterdir()):
@@ -617,7 +697,7 @@ class DailyActivityExtractionHook:
                 commits += _get_session_git_commits(
                     repo_path, since, session_files=session_files,
                     session_shas=run_shas, call_windows=call_windows,
-                    session_run_ids=run_ids)
+                    session_run_ids=run_ids, until=until)
                 if len(commits) >= 15:
                     break
         return commits[:15]

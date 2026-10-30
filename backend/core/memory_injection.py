@@ -2,8 +2,10 @@
 
 - ``select_context_file``: MEMORY.md / EVOLUTION.md whole, every unit (no budget, no
   score: design 2026-10-30-cdf-agent-decides D11).
-- ``select_daily_activity`` admits complete session rows/day summaries.
-- ``select_timeline`` admits complete month summaries and event units.
+- ``select_daily_activity`` admits complete session rows of the last 7 days, newest
+  first (design docs/design/2026-10-31-daily-activity-useful.md D7).
+- ``select_timeline`` admits complete month summaries and event units, counted on the
+  text the prompt shows.
 - Nothing slices, shortens, or rewrites semantic content.
 """
 from __future__ import annotations
@@ -52,21 +54,6 @@ def _recent_days(today: date, count: int = 7) -> list[date]:
     return [today - timedelta(days=offset) for offset in range(count)]
 
 
-def _summary_blocks(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    _, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-    starts = list(re.finditer(r"^## 日汇总(?:（补充）)?\s*$", body, re.MULTILINE))
-    blocks: list[str] = []
-    for index, match in enumerate(starts):
-        end = starts[index + 1].start() if index + 1 < len(starts) else len(body)
-        block = body[match.start():end].strip()
-        if block:
-            blocks.append(block)
-    return "\n\n".join(blocks)
-
-
-
 def _legacy_records(path: Path) -> list[dict]:
     """Convert existing markdown session blocks to row data without slicing prose."""
     if not path.is_file():
@@ -78,12 +65,10 @@ def _legacy_records(path: Path) -> list[dict]:
         end = headers[index + 1].start() if index + 1 < len(headers) else len(body)
         block = body[match.end():end]
         summary_match = re.search(r"^Summary:\s*(.+)$", block, re.MULTILINE)
-        bullets = [item.strip() for item in re.findall(r"^-\s+(.+)$", block, re.MULTILINE)]
-        sentence = summary_match.group(1).strip() if summary_match else (bullets[0] if bullets else match.group(3).strip())
+        sentence = summary_match.group(1).strip() if summary_match else ""
         next_items: list[dict[str, str]] = []
         for next_text in re.findall(r"^\*\*Next:\*\*\s*(.+)$", block, re.MULTILINE):
             material = f"{match.group(2).strip()}\0{next_text}".encode("utf-8")
-            import hashlib
             next_items.append({"next_id": hashlib.sha256(material).hexdigest()[:12], "text": next_text})
         records.append({
             "session_id": match.group(2).strip(), "timestamp": match.group(1),
@@ -94,39 +79,29 @@ def _legacy_records(path: Path) -> list[dict]:
 
 
 def _upgrade_record(record: dict) -> dict:
-    """Return an old sidecar record with deterministic v2 row fields added."""
+    """An old sidecar row with the fields a row needs. Its sentence is its
+    deliverables when it has no summary; never its topics (the user's words)."""
     upgraded = dict(record)
     if not upgraded.get("summary_sentence"):
         delivered = [item for item in upgraded.get("deliverables", []) if isinstance(item, str)]
-        topics = [item for item in upgraded.get("topics", []) if isinstance(item, str)]
-        source = delivered or topics
-        upgraded["summary_sentence"] = "; ".join(source) if source else str(upgraded.get("title") or "Session activity recorded.")
-    if not upgraded.get("next_items") and isinstance(upgraded.get("continue_from"), str) and upgraded["continue_from"].strip():
-        import hashlib
-        text = upgraded["continue_from"].strip()
-        material = f"{upgraded.get('session_id', '')}\0{text}".encode("utf-8")
-        upgraded["next_items"] = [{
-            "next_id": hashlib.sha256(material).hexdigest()[:12], "text": text,
-        }]
+        upgraded["summary_sentence"] = "; ".join(delivered)
     upgraded.setdefault("next_items", [])
     upgraded.setdefault("resolves", [])
     return upgraded
 
-def _synthesized_day_summary(records: list[dict]) -> str:
-    """Build one complete legacy day-summary block without an LLM or slicing."""
-    if not records:
-        return ""
-    main = "; ".join(record.get("summary_sentence", "") for record in records if record.get("summary_sentence"))
-    delivered = [item for record in records for item in record.get("deliverables", []) if isinstance(item, str)]
-    next_ids = [
-        item["next_id"] for record in records for item in record.get("next_items", [])
-        if isinstance(item, dict) and isinstance(item.get("next_id"), str)
-    ]
-    lines = ["## 日汇总", f"主线：{main}", "交付："]
-    lines.extend(f"- {item}" for item in delivered)
-    if not delivered:
-        lines.append("- 无")
-    lines.append("未完成 Next：" + (", ".join(next_ids) if next_ids else "无"))
+
+def _row(day: date, record: dict, resolved: set[str]) -> str:
+    """One session row: date, time, title, what was done, its open follow-ups."""
+    title = str(record.get("title") or "Untitled").strip()
+    sentence = str(record.get("summary_sentence") or "").strip()
+    head = f"- {day.isoformat()} {record.get('timestamp', '')} {title}".rstrip()
+    lines = [head + (f": {sentence}" if sentence else "")]
+    for item in record.get("next_items", []):
+        if not isinstance(item, dict):
+            continue
+        next_id, text = item.get("next_id"), item.get("text")
+        if isinstance(next_id, str) and isinstance(text, str) and next_id not in resolved:
+            lines.append(f"  - Next [{next_id}]: {text}")
     return "\n".join(lines)
 
 
@@ -137,7 +112,8 @@ def select_daily_activity(
     estimate: Callable[[str], int],
     budget: int = DAILY_ACTIVITY_BUDGET,
 ) -> Selection:
-    """Select today/yesterday session rows and day 3–7 summaries as whole units."""
+    """Session rows of the last 7 days as whole units: days newest first, rows newest
+    first within a day; a follow-up resolved by any row of the window is not shown."""
     directory = Path(workspace) / "Knowledge" / "DailyActivity"
     days = _recent_days(today)
     records_by_day = {}
@@ -152,31 +128,16 @@ def select_daily_activity(
         for next_id in record.get("resolves", [])
         if isinstance(next_id, str)
     }
-    units: list[str] = []
-    for day in days[:2]:
-        for record in reversed(records_by_day[day]):
-            open_items = [
-                item for item in record.get("next_items", [])
-                if isinstance(item, dict) and item.get("next_id") not in resolved
-            ]
-            next_text = "; ".join(
-                f"[{item['next_id']}] {item['text']}" for item in open_items
-                if isinstance(item.get("next_id"), str) and isinstance(item.get("text"), str)
-            )
-            units.append(
-                f"- {day.isoformat()} {record.get('timestamp', '')} | "
-                f"{record.get('title', 'Untitled')} | {record.get('summary_sentence', '')} | "
-                f"Next: {next_text or 'None'}"
-            )
-    for day in days[2:]:
-        block = _summary_blocks(directory / f"{day.isoformat()}.md")
-        if not block:
-            block = _synthesized_day_summary(records_by_day[day])
-        if block:
-            units.append(f"### {day.isoformat()}\n{block}")
+    units = [
+        _row(day, record, resolved)
+        for day in days
+        for record in sorted(records_by_day[day], key=lambda r: str(r.get("timestamp") or ""),
+                             reverse=True)
+    ]
     selected = _admit(units, budget, estimate)
     if selected.omitted:
-        suffix = f"（另有 {selected.omitted} 个 session 未注入，可用 recall 查看）"
+        suffix = (f"({selected.omitted} more sessions not shown; "
+                  "they are in Knowledge/DailyActivity/)")
         return Selection(
             selected.text + ("\n" if selected.text else "") + suffix,
             selected.omitted,
@@ -186,6 +147,15 @@ def select_daily_activity(
 
 
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _shown(text: str) -> str:
+    """*text* as the prompt shows it: metadata comments and the blank lines they
+    leave removed."""
+    cleaned = _HTML_COMMENT_RE.sub("", text)
+    return "\n".join(line for line in cleaned.splitlines() if line.strip()).strip()
+
+
 def _utc_datetime(value: datetime | date | None) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
@@ -298,10 +268,12 @@ def select_timeline(
     ]
     summary_identities = {unit.identity for unit in summaries}
     events = [unit for unit in reversed(units) if unit.identity not in summary_identities]
-    ordered = [unit.text for unit in [*summaries, *events]]
-    selected = _admit(ordered, budget, estimate)
+    # counted on what the prompt shows: the loader strips the metadata comments
+    ordered = [_shown(unit.text) for unit in [*summaries, *events]]
+    selected = _admit([text for text in ordered if text], budget, estimate)
     if selected.omitted:
-        suffix = f"（另有 {selected.omitted} 个事件未注入，可用 recall 查看）"
+        suffix = (f"({selected.omitted} more events not shown; "
+                  "read .context/TIMELINE.md)")
         return Selection(
             selected.text + ("\n" if selected.text else "") + suffix,
             selected.omitted,

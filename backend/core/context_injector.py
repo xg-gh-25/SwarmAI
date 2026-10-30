@@ -675,9 +675,9 @@ async def _extract_uncommitted_state(working_dir: str | None) -> str:
 def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
     """Read session_checkpoint.json and format for resume injection.
 
-    Unlike ``recover_crash_checkpoint()`` which writes to DailyActivity,
-    this reads the checkpoint data and includes it in the resume context.
-    Does NOT delete the file — that's ``recover_crash_checkpoint()``'s job.
+    Reads the checkpoint data and includes it in the resume context. Does NOT
+    delete the file — the session-end hook and, at startup,
+    ``recover_crash_checkpoint()`` do.
 
     Returns formatted string or None if no checkpoint exists.
     """

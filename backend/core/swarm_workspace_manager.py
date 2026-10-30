@@ -2141,10 +2141,6 @@ class SwarmWorkspaceManager:
         # Symlink AGENTS.md from codebase to SwarmWS root (shared AI context)
         await anyio.to_thread.run_sync(lambda: self._sync_agents_md(root))
 
-        # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
-        expanded = str(root)
-        await anyio.to_thread.run_sync(lambda: self.prune_archives(expanded))
-
         return recreated
 
     def _sync_agents_md(self, root: Path) -> None:
@@ -2314,53 +2310,6 @@ class SwarmWorkspaceManager:
         except Exception as e:
             # Never block startup
             logger.warning("Failed to remove legacy scheduler plist: %s", e)
-
-    def prune_archives(self, workspace_path: str, max_age_days: int = 90) -> int:
-        """Delete archived DailyActivity files older than *max_age_days*.
-
-        Scans ``Knowledge/Archives/`` for markdown files whose stem is a
-        valid ISO-8601 date (``YYYY-MM-DD``).  Files with a date older than
-        the cutoff are removed.  Non-date filenames and IO errors are
-        silently skipped so that manually-placed files are never touched.
-
-        This is a synchronous helper designed to be called from
-        ``verify_integrity()`` (via ``anyio.to_thread.run_sync``) or
-        directly during workspace maintenance.
-
-        Args:
-            workspace_path: Expanded absolute path to the workspace root.
-            max_age_days: Number of days to retain archived files.
-                Defaults to 90.
-
-        Returns:
-            Number of files successfully deleted.
-        """
-        archives_dir = Path(workspace_path) / "Knowledge" / "Archives"
-        if not archives_dir.is_dir():
-            return 0
-
-        cutoff = date.today() - timedelta(days=max_age_days)
-        deleted = 0
-
-        for f in archives_dir.iterdir():
-            if not f.is_file() or f.suffix != ".md":
-                continue
-            try:
-                file_date = date.fromisoformat(f.stem)
-            except ValueError:
-                continue  # Not a date-formatted filename — skip
-            if file_date < cutoff:
-                try:
-                    f.unlink()
-                    deleted += 1
-                    logger.debug("Pruned archived file: %s", f.name)
-                except OSError as exc:
-                    logger.warning("Failed to prune %s: %s", f.name, exc)
-
-        if deleted:
-            logger.info("Pruned %d archived file(s) older than %d days", deleted, max_age_days)
-        return deleted
-
 
     def get_workspace_path(self) -> str:
         """Return the expanded absolute default workspace root path.

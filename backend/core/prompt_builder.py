@@ -177,7 +177,8 @@ def strip_sensitive_mcps(mcp_servers: dict) -> dict:
 
 
 # DailyActivity injection uses ``core.memory_injection.select_daily_activity``.
-# It admits complete rows/day summaries into one 4K budget and never slices text.
+# It admits complete session rows of the last 7 days into one 4K budget and never
+# slices text.
 
 # ── Autocompact trigger threshold (NOT a cost cap — STEERING #2) ──────────────
 # The CLI fires autocompact (summarize earlier context + CONTINUE the turn; it

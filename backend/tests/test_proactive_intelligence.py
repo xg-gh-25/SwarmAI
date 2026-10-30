@@ -111,28 +111,35 @@ class TestParseOpenThreads:
         assert "Swarm Radar" in p2[0]["title"]
 
 
+def _rows(path, rows):
+    import json as _json
+    path.write_text("".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+
+
 class TestContinueHints:
-    def test_extracts_next_lines(self, tmp_path):
+    """Open follow-ups come from the sidecars; a later row's ``resolves`` hides one."""
+
+    def test_open_items_newest_first_and_resolved_hidden(self, tmp_path):
         da_dir = tmp_path / "DailyActivity"
         da_dir.mkdir()
-        (da_dir / "2026-03-14.md").write_text(
-            "## 10:00 | abc123 | Session\n"
-            "**Next:** Implement feature X.\n"
-            "**Next:** Ongoing: some stale thing\n"
-        )
+        _rows(da_dir / "2026-03-14.jsonl", [
+            {"session_id": "a", "next_items": [{"next_id": "n1", "text": "Implement feature X."},
+                                               {"next_id": "n2", "text": "Ship the parser fix."}]},
+            {"session_id": "b", "next_items": [{"next_id": "n3", "text": "Write the release notes."}],
+             "resolves": ["n2"]},
+        ])
         hints = _parse_continue_hints(da_dir)
-        assert "Implement feature X." in hints
-        # Ongoing hints should be filtered
-        assert not any("Ongoing:" in h for h in hints)
+        assert hints == ["Write the release notes.", "Implement feature X."]
 
     def test_deduplicates(self, tmp_path):
         da_dir = tmp_path / "DailyActivity"
         da_dir.mkdir()
-        (da_dir / "2026-03-14.md").write_text(
-            "**Next:** Do thing A.\n**Next:** Do thing A.\n"
-        )
+        _rows(da_dir / "2026-03-14.jsonl", [
+            {"session_id": "a", "next_items": [{"next_id": "n1", "text": "Do thing A now."}]},
+            {"session_id": "b", "next_items": [{"next_id": "n2", "text": "Do thing A now."}]},
+        ])
         hints = _parse_continue_hints(da_dir)
-        assert hints.count("Do thing A.") == 1
+        assert hints.count("Do thing A now.") == 1
 
     def test_empty_dir(self, tmp_path):
         assert _parse_continue_hints(tmp_path / "nonexistent") == []
@@ -140,11 +147,13 @@ class TestContinueHints:
     def test_max_files(self, tmp_path):
         da_dir = tmp_path / "DailyActivity"
         da_dir.mkdir()
-        for i in range(5):
-            (da_dir / f"2026-03-{10+i:02d}.md").write_text(f"**Next:** Task {i}.\n")
+        texts = ["Ship the parser", "Write release notes", "Rotate the keys",
+                 "Benchmark recall latency", "Migrate old sidecars"]
+        for i, text in enumerate(texts):
+            _rows(da_dir / f"2026-03-{10+i:02d}.jsonl",
+                  [{"session_id": f"s{i}", "next_items": [{"next_id": f"n{i}", "text": text}]}])
         hints = _parse_continue_hints(da_dir, max_files=2)
-        # Should only read 2 most recent files (03-14, 03-13)
-        assert len(hints) <= 2
+        assert hints == ["Migrate old sidecars", "Benchmark recall latency"]
 
 
 class TestPatternDetection:

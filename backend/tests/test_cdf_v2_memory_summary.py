@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from core.ingestion import summary_lane
-from core.ingestion.summary_lane import append_daily_summary, enqueue_month_summary
+from core.ingestion.summary_lane import enqueue_month_summary
 from core.ingestion.worker import LANE_WEIGHTS, MAX_WAIT
 
 
@@ -14,29 +14,16 @@ def _records(path, rows):
     path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n")
 
 
-def test_daily_summary_once_and_late_addendum(tmp_path):
-    day = tmp_path / "2026-10-26.md"
-    sidecar = day.with_suffix(".jsonl")
+def test_the_lane_writes_no_day_summary_into_dailyactivity(tmp_path, monkeypatch):
+    # its rows are already one line per session; a day summary concatenated them
+    day = tmp_path / "Knowledge" / "DailyActivity" / "2026-10-26.md"
+    day.parent.mkdir(parents=True)
     day.write_text("<!-- da:summary:s1 -->\nblock\n<!-- /da -->\n")
-    _records(sidecar, [{
-        "session_id": "s1", "summary_sentence": "完成第一项工作。",
-        "deliverables": ["交付一"],
-        "next_items": [{"next_id": "n1", "text": "继续"}], "resolves": [],
-    }])
-    assert append_daily_summary(day) == "daily"
-    assert append_daily_summary(day) == "unchanged"
-    day.write_text(day.read_text() + "<!-- da:summary:s2 -->\nlate\n<!-- /da -->\n")
-    _records(sidecar, [
-        {"session_id": "s1", "summary_sentence": "完成第一项工作。", "deliverables": [],
-         "next_items": [{"next_id": "n1", "text": "继续"}], "resolves": []},
-        {"session_id": "s2", "summary_sentence": "完成迟到工作。", "deliverables": ["交付二"],
-         "next_items": [], "resolves": ["n1"]},
-    ])
-    assert append_daily_summary(day) == "supplement"
-    assert append_daily_summary(day) == "unchanged"
-    text = day.read_text()
-    assert text.count("## 日汇总\n") == 1
-    assert text.count("## 日汇总（补充）") == 1
+    _records(day.with_suffix(".jsonl"), [{"session_id": "s1", "summary_sentence": "x"}])
+    before = day.read_text()
+    monkeypatch.setattr(summary_lane, "enqueue_month_summary", lambda *_: "unchanged")
+    summary_lane.SummaryLane(tmp_path).run_due(_conn(), now=datetime(2026, 10, 27, tzinfo=timezone.utc))
+    assert day.read_text() == before
 
 
 def _conn():
@@ -103,18 +90,3 @@ def test_late_month_event_enqueues_supplement(tmp_path, monkeypatch):
     assert source_ref.startswith("summary:2026-09:supplement:")
     assert unit.event_kind == "month_supplement"
     assert unit.evidence == ["unit:.context/TIMELINE.md#2026-09#cand:e2"]
-
-
-def test_daily_summary_accepts_llm_capable_synthesizer(tmp_path):
-    day = tmp_path / "2026-10-26.md"
-    day.write_text("<!-- da:summary:s1 -->\nblock\n<!-- /da -->\n")
-    _records(day.with_suffix(".jsonl"), [{"session_id": "s1"}])
-    calls = []
-
-    def synth(day_key, records, supplement):
-        calls.append((day_key, len(records), supplement))
-        return "## 日汇总\n主线：LLM 生成了完整日汇总。\n交付：\n- 无\n未完成 Next：无"
-
-    assert append_daily_summary(day, synth) == "daily"
-    assert calls == [("2026-10-26", 1, False)]
-    assert "LLM 生成了完整日汇总" in day.read_text()

@@ -31,9 +31,9 @@ def _ctx(sid="sess-aaaa-1111"):
                        session_start_time="2026-10-21T08:00:00", session_title="T")
 
 
-def _summary(title="Summary title one", lesson="lesson body"):
+def _summary(title="Summary title one", sentence="sentence body"):
     return StructuredSummary(topics=["t"], deliverables=["did a thing"],
-                             lessons=[lesson], session_title=title)
+                             summary_sentence=sentence, session_title=title)
 
 
 def test_same_session_and_kind_is_replaced_not_appended(tmp_path):
@@ -95,13 +95,13 @@ def test_sessions_count_grows_once_per_new_summary(tmp_path):
 
 def test_jsonl_sidecar_keeps_one_record_per_session_latest_wins(tmp_path):
     ws = tmp_path
-    asyncio.run(write_daily_activity(_summary(lesson="first"), _ctx("s-one-0001"), workspace_path=ws))
-    asyncio.run(write_daily_activity(_summary(lesson="second"), _ctx("s-one-0001"), workspace_path=ws))
-    asyncio.run(write_daily_activity(_summary(lesson="other"), _ctx("s-two-0002"), workspace_path=ws))
+    asyncio.run(write_daily_activity(_summary(sentence="first"), _ctx("s-one-0001"), workspace_path=ws))
+    asyncio.run(write_daily_activity(_summary(sentence="second"), _ctx("s-one-0001"), workspace_path=ws))
+    asyncio.run(write_daily_activity(_summary(sentence="other"), _ctx("s-two-0002"), workspace_path=ws))
     j = next((ws / "Knowledge" / "DailyActivity").glob("*.jsonl"))
     recs = read_jsonl_sidecar(j)
     assert [r["session_id"] for r in recs] == ["s-one-0001", "s-two-0002"]
-    assert recs[0]["lessons"] == ["second"]
+    assert recs[0]["summary_sentence"] == "second"
 
 
 def test_concurrent_writers_all_land(tmp_path):
@@ -193,3 +193,37 @@ def test_backlog_skip_sees_only_a_summary_not_a_checkpoint(tmp_path):
     assert not has_session_summary(f.read_text(encoding="utf-8"), "sess-full-id-1")
     upsert_session_block(f, "sess-full-id-1", "summary", "## 10:30 | sess-ful | Summary\n")
     assert has_session_summary(f.read_text(encoding="utf-8"), "sess-full-id-1")
+
+
+def test_a_past_day_is_written_to_its_own_file_with_its_own_date(tmp_path):
+    # the history repair writes days other than today (design 2026-10-31 §4)
+    from datetime import date
+    ws = tmp_path
+    asyncio.run(write_daily_activity(_summary(), _ctx("s-old-0001"), workspace_path=ws,
+                                     day=date(2026, 9, 3)))
+    da = ws / "Knowledge" / "DailyActivity" / "2026-09-03.md"
+    fm, _ = parse_frontmatter(da.read_text(encoding="utf-8"))
+    assert fm["date"] == "2026-09-03"
+    assert read_jsonl_sidecar(da.with_suffix(".jsonl"))[0]["session_id"] == "s-old-0001"
+
+
+def test_the_sidecar_row_records_what_it_covers(tmp_path):
+    ws = tmp_path
+    summary = _summary()
+    summary.enriched = True
+    asyncio.run(write_daily_activity(summary, _ctx("s-cov-0001"), workspace_path=ws))
+    rec = read_jsonl_sidecar(next((ws / "Knowledge" / "DailyActivity").glob("*.jsonl")))[0]
+    assert rec["message_count"] == 5 and rec["enriched"] is True
+    for gone in ("lessons", "lessons_typed", "rejected_approaches", "corrections",
+                 "process_reflection", "signal_driven_actions", "continue_from"):
+        assert gone not in rec
+
+
+def test_a_short_model_title_is_kept_and_a_garbage_tab_title_is_not(tmp_path):
+    ws = tmp_path
+    asyncio.run(write_daily_activity(_summary(title="库膨胀修复"), _ctx("s-ttl-0001"), workspace_path=ws))
+    ctx = HookContext(session_id="s-ttl-0002", agent_id="a", message_count=5,
+                      session_start_time="2026-10-21T08:00:00", session_title="ok")
+    asyncio.run(write_daily_activity(_summary(title=""), ctx, workspace_path=ws))
+    recs = read_jsonl_sidecar(next((ws / "Knowledge" / "DailyActivity").glob("*.jsonl")))
+    assert [r["title"] for r in recs] == ["库膨胀修复", "Untitled"]
