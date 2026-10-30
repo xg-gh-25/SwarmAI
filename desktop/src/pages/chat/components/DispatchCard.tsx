@@ -26,6 +26,7 @@ import { isRemoteId } from '../../../services/remoteSession';
 import { getOverlayCtxBridge } from '../../../components/layout/overlayRegistry';
 import { openOverlayAt } from '../../../utils/overlayTarget';
 import { dotStyle, runTone, type Tone } from '../../../components/swarm-out/tone';
+import { executionLine } from '../../../components/swarm-out/live';
 import { tf } from '../tf';
 
 export const DISPATCH_POLL_MS = 30_000;
@@ -217,6 +218,12 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
             {block.executionWhy && (
               <span data-testid="dispatch-execution-why" className="block text-[12px] text-[var(--color-text-dim)]">
                 {block.executionWhy}
+              </span>
+            )}
+            {/* the run did not run the way it was dispatched to (backend execution_check) */}
+            {run?.result && executionLine(run.result) && (
+              <span data-testid="dispatch-execution-differs" className={`block text-[12.5px] ${TONE_TEXT.attention}`}>
+                ⚠ {executionLine(run.result)}
               </span>
             )}
           </Row>

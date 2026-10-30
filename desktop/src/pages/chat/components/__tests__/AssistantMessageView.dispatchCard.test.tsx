@@ -72,6 +72,19 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); openHiveSession.mockReset(); showSwarmOut.mockReset(); setOverlayCtxBridge({}); });
 
+describe('a dispatch that ran differently', () => {
+  it('says so on the card, from the run result', async () => {
+    runs.mockResolvedValue({
+      runs: [{ dispatch_id: 'so_b150abc3fd86', hive_id: 'h1', hive: 'explorer', session_id: SID, title: 't', origin: 'swarm-out',
+        sent_at: '2026-10-30T05:25:50Z', waiting: false, running: false, state: 'stopped',
+        result: { execution_check: { state: 'differs', why: 'other_profile' } } }],
+      asks: [], errors: [],
+    } as never);
+    render(view([bash('b1'), tr('b1'), OK, tx('Sent it.')]));
+    expect((await screen.findByTestId('dispatch-execution-differs')).textContent).toContain('another profile');
+  });
+});
+
 describe('a dispatch that went out', () => {
   it('is a first-level card after the call, ending its work', () => {
     const { container } = render(view([bash('b1'), tr('b1'), OK, bash('b2')], true));

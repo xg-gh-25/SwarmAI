@@ -233,3 +233,23 @@ def test_counts_an_outcome_could_not_write_go_to_the_next_one():
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(SessionRouter._write_turn_outcome(_Self(), _Raises(), "s1", _Outcome()))
     assert ctx[pas.REFUSALS_KEY] == {"g": 2}
+
+
+def test_the_run_is_checked_against_how_it_was_dispatched():
+    """run-spec §4.2 invariant 6: declared native but a run was made, declared pipeline
+    but none ran (only once the run ended), another profile or another run: differs."""
+    ex = sor.execution_check
+    native, piped = {**AGENT, "execution": "native"}, {**AGENT, "execution": "pipeline", "run_id": "run_0123abcd"}
+    run = {"run_id": "run_0123abcd", "profile": "bugfix"}
+    assert ex({}, native) == {"state": "matches", "why": None}
+    assert ex({"pipeline": run}, native) == {"state": "differs", "why": "made_a_run"}
+    assert ex({"ended": "completed"}, piped) == {"state": "differs", "why": "no_run"}
+    assert ex({}, piped) == {"state": "not_yet", "why": None}                  # still running
+    assert ex({"ended": "completed", "provisional": True}, piped)["state"] == "not_yet"
+    assert ex({"pipeline": run}, piped) == {"state": "matches", "why": None}
+    assert ex({"pipeline": {**run, "profile": "direct"}}, piped)["why"] == "other_profile"
+    assert ex({"pipeline": {**run, "run_id": "run_ffffffff"}}, piped)["why"] == "other_run"
+    assert ex({}, AGENT) is None                                               # a row from before
+    pub = sor.public({"result": {"pipeline": {**run, "profile": "direct"}}}, [], piped)
+    assert pub["execution_check"] == {"state": "differs", "why": "other_profile"}
+    assert sor.public({"result": {}}, [], None)["execution_check"] is None

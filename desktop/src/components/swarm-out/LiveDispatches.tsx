@@ -39,7 +39,7 @@ import { JudgeTag } from './JudgeTag';
 import { ReturnPanel } from './ReturnPanel';
 import { LessonsAccept } from './LessonsAccept';
 import MarkdownRenderer from '../common/MarkdownRenderer';
-import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
+import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runGroups, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
 import { dotStyle, hiveTone, runTone, TONE_VAR, type Tone } from './tone';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -398,6 +398,10 @@ function RunResult({ r, full }: { r: SwarmOutRun; full: SwarmOutResult | null })
         {judge && <JudgeTag judge={judge} title={r.title} />}
       </div>
       {work.map((w) => <div key={w} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-work">{w}</div>)}
+      {executionLine(res) && (
+        <div className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-execution"
+          style={{ color: TONE_VAR.attention }}>{executionLine(res)}</div>
+      )}
       {[checks, gateLine(res), lessonsLine(res)].filter(Boolean).map((l) => (
         <div key={l!} className="text-[12px] mt-0.5 break-words" data-testid="swarm-out-run-checks"
           style={l === checks && checksIncomplete(res) ? { color: TONE_VAR.attention } : undefined}>{l}</div>

@@ -1670,6 +1670,13 @@
         "failed": "未落地",
         "stopped": "已停止"
       }
+    },
+    "execution": {
+      "differs": "执行方式和派发时定的不同：{{why}}",
+      "made_a_run": "native 任务建了 pipeline run",
+      "no_run": "派给它的 pipeline run 没有跑",
+      "other_profile": "run 用了别的 profile",
+      "other_run": "跑的不是派给它的那个 run"
     }
   },
   "usage": {

@@ -146,6 +146,14 @@ export function checksLine(res: SwarmOutResult): string | null {
     { list: c.map((x) => `${x.id} ${word(x.status)}`).join(' · ') });
 }
 
+/** "执行方式和派发时定的不同：建了 pipeline run" when the run did not run the way the
+ *  Host pinned it (backend execution_check), else null. */
+export function executionLine(res: SwarmOutResult): string | null {
+  const c = res.execution_check;
+  if (!c || c.state !== 'differs' || !c.why) return null;
+  return i18n.t('swarmOut.execution.differs', { why: i18n.t(`swarmOut.execution.${c.why}`) });
+}
+
 const gateName = (k: string): string =>
   k === 'integrity' ? i18n.t('swarmOut.gate.integrity') : k.startsWith('error:') ? i18n.t('swarmOut.gate.errored', { name: k.slice(6) }) : k;
 

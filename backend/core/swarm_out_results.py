@@ -802,12 +802,38 @@ def _public_repo(r: dict, host: dict) -> dict:
             ({"available": True} if r["bundle"].get("sha256") else {"available": False, "error": r["bundle"].get("error")})}
 
 
+#: why the run did not run the way it was dispatched to (``execution_check``)
+EXECUTION_DIFFS = ("made_a_run", "no_run", "other_profile", "other_run")
+
+
+def execution_check(res: dict, agent: Any) -> Optional[dict]:
+    """Did the run run the way the Host pinned it (design 2026-10-30-run-spec §4.2, the
+    evidence layer)? ``{"state": "matches" | "differs" | "not_yet", "why": code}`` from
+    the row's ``execution`` / ``profile`` / ``run_id`` and the run's own pipeline record
+    (``res["pipeline"]``); None for a row from before the choice was made per dispatch.
+    ``not_yet``: a pipeline task whose record shows no run yet, before the run ended."""
+    if not isinstance(agent, dict) or agent.get("execution") not in ("native", "pipeline"):
+        return None
+    run = res.get("pipeline") if isinstance(res.get("pipeline"), dict) else None
+    if agent["execution"] == "native":
+        return {"state": "differs", "why": "made_a_run"} if run else {"state": "matches", "why": None}
+    if run is None:
+        ended = res.get("ended") in ENDED and res.get("provisional") is not True
+        return {"state": "differs", "why": "no_run"} if ended else {"state": "not_yet", "why": None}
+    if agent.get("profile") and run.get("profile") and run["profile"] != agent["profile"]:
+        return {"state": "differs", "why": "other_profile"}
+    if agent.get("run_id") and run.get("run_id") and run["run_id"] != agent["run_id"]:
+        return {"state": "differs", "why": "other_run"}
+    return {"state": "matches", "why": None}
+
+
 def _public_agent(res: dict, agent: Any) -> dict:
     """The Project Agent part of ``/runs``: the brain, mode, profile and delivery from
     the host's own row; check statuses only for the row's check ids; gate refusals only
     under the row's gate names (or ``integrity``)."""
     if not isinstance(agent, dict) or not isinstance(agent.get("brain"), str):
-        return {"project_agent": None, "checks": None, "gate_refusals": None, "checks_partial": False}
+        return {"project_agent": None, "checks": None, "gate_refusals": None, "checks_partial": False,
+                "execution_check": None}
     ids = [v.get("id") for v in agent.get("validations") or [] if isinstance(v, dict)]
     got = {c.get("id"): c.get("status") for c in res.get("checks") or [] if isinstance(c, dict)}
     names = {g for g in agent.get("gates") or [] if isinstance(g, str)}
@@ -824,6 +850,7 @@ def _public_agent(res: dict, agent: Any) -> dict:
                    for i in ids if isinstance(i, str)] if ids else None,
         "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},
         "checks_partial": res.get("checks_partial") is True,
+        "execution_check": execution_check(res, agent),
     }
 
 

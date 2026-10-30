@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { SwarmOutResult, SwarmOutRun } from '../../services/swarmOut';
-import { breakdown, brainLabel, checksLine, gateLine, inWindow, lessonsLine } from './live';
+import { breakdown, brainLabel, checksLine, executionLine, gateLine, inWindow, lessonsLine } from './live';
 import i18n from '../../i18n';
 
 // These cases check the Chinese copy (zh.json); swarmOutI18n.test.tsx checks English.
@@ -57,6 +57,16 @@ describe('the Brain of a run', () => {
       .toBe('教训：交回 3 条，本机判官写进 Brain 1 条、没通过 1 条、待判 1 条、另有 1 条待你收下（1 条不是这个 Brain 的，没收）');
     expect(lessonsLine(res({ lessons: l({ error: 'not_supported' }) }))).toBe('教训：这台 Hive 还不能交回教训（需要更新 Hive）');
     expect(lessonsLine(res({ lessons: l({ error: 'hive_silent' }) }))).toBe('教训：这次没取回来，下次检查再试');
+  });
+
+  it('says when a run did not run the way it was dispatched', () => {
+    expect(executionLine(res())).toBeNull();
+    expect(executionLine(res({ execution_check: { state: 'matches', why: null } }))).toBeNull();
+    expect(executionLine(res({ execution_check: { state: 'not_yet', why: null } }))).toBeNull();
+    expect(executionLine(res({ execution_check: { state: 'differs', why: 'made_a_run' } })))
+      .toBe('执行方式和派发时定的不同：native 任务建了 pipeline run');
+    expect(executionLine(res({ execution_check: { state: 'differs', why: 'other_profile' } })))
+      .toBe('执行方式和派发时定的不同：run 用了别的 profile');
   });
 
   it('counts Brain gate refusals by gate', () => {

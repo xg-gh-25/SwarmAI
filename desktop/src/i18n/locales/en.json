@@ -1670,6 +1670,13 @@
         "failed": "not landed",
         "stopped": "stopped"
       }
+    },
+    "execution": {
+      "differs": "Ran differently from how it was dispatched: {{why}}",
+      "made_a_run": "a pipeline run was made for a native task",
+      "no_run": "the pipeline run it was given did not run",
+      "other_profile": "its run used another profile",
+      "other_run": "it ran another pipeline run than its own"
     }
   },
   "usage": {

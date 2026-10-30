@@ -80,6 +80,8 @@ export interface SwarmOutAgent {
  *  not_run: no call ran it. Never "passed". */
 export type SwarmOutCheckStatus = 'ran' | 'errored' | 'unknown' | 'not_run';
 
+export type SwarmOutExecutionDiff = 'made_a_run' | 'no_run' | 'other_profile' | 'other_run';
+
 export interface SwarmOutResult {
   ended: SwarmOutEnded;
   /** may still change (no ending recorded after the last message, or paused) */
@@ -133,6 +135,10 @@ export interface SwarmOutResult {
   gate_refusals?: Record<string, number> | null;
   /** older turns were not read: a check or refusal there is not seen */
   checks_partial?: boolean;
+  /** did the run run the way it was dispatched to (backend execution_check; run-spec
+   *  §4.2): ``not_yet`` while a pipeline task's run has not shown up; null for a row
+   *  from before the choice was made per dispatch */
+  execution_check?: { state: 'matches' | 'differs' | 'not_yet'; why: SwarmOutExecutionDiff | null } | null;
   /** the run's lessons (backend core/hive_lessons): how many the Hive holds, how many went
    *  to this machine's judge and what it decided; null: not a Project Agent run */
   lessons?: SwarmOutLessons | null;
