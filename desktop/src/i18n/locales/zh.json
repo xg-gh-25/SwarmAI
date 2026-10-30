@@ -568,6 +568,13 @@
         "openBrain": "打开 {{brain}}",
         "retryHint": "处理好之后说「继续派」"
       }
+    },
+    "correction": {
+      "label": "这是在纠正吗？",
+      "question": "在纠正我吗？归到：",
+      "new": "新的一类",
+      "notCorrection": "不是纠正",
+      "failed": "没保存成功"
     }
   },
   "tasks": {

@@ -568,6 +568,13 @@
         "openBrain": "Open {{brain}}",
         "retryHint": "Once it is fixed, say \"send it again\""
       }
+    },
+    "correction": {
+      "label": "Is this a correction?",
+      "question": "Correcting me? File it under:",
+      "new": "a new kind",
+      "notCorrection": "not a correction",
+      "failed": "Not saved"
     }
   },
   "tasks": {
