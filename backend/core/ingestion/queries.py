@@ -6,6 +6,8 @@
 - ``drain_access_log`` lets the ingestion worker persist queued detail reads.
 - ``brain_changes`` / ``brain_change_summary``: what was added, overridden, withdrawn
   (and the judge's unresolved conflicts) in the main cognition files, from the records.
+- ``general_subjects`` / ``read_general_subjects``: the subjects the General Brain
+  holds, shown to the after-session review so a subject keeps one name.
 - ``corrections`` / ``read_corrections``: every correction the after-session review
   recorded, with its session, the skill it names and whether it repeats an earlier one —
   the one source of "the user corrected the agent" (O3, skill health, the repeat rate).
@@ -456,6 +458,35 @@ def read_corrections(since: datetime | None = None) -> tuple[list[dict[str, Any]
         return found, None
     start = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
     return found, start if start.tzinfo else start.replace(tzinfo=timezone.utc)
+
+
+def general_subjects(conn: sqlite3.Connection) -> list[str]:
+    """The subjects the General Brain holds (contracts_v2.route_general: one Library
+    document per subject), most recently written first, one name per document: the
+    review is shown them so the same subject keeps one name and one document."""
+    from .contracts_v2 import slugify
+    rows = conn.execute(
+        "SELECT json_extract(destination,'$.project') AS subject, MAX(updated_at) AS last "
+        "FROM ingestion_units WHERE state IN ('written','reinforced','merged') "
+        "AND json_extract(destination,'$.store')='COMMON_DDD' AND subject IS NOT NULL "
+        "GROUP BY subject ORDER BY last DESC").fetchall()
+    seen: set[str] = set()
+    names: list[str] = []
+    for subject, _last in rows:
+        key = slugify(str(subject))
+        if key and key not in seen:
+            seen.add(key)
+            names.append(str(subject))
+    return names
+
+
+def read_general_subjects() -> list[str]:
+    """``general_subjects`` of this instance's store; none without a store."""
+    try:
+        with closing(connect_ro()) as conn:
+            return general_subjects(conn)
+    except (OSError, sqlite3.Error):
+        return []
 
 
 REVIEW_TYPES = ("code", "files", "conversation")

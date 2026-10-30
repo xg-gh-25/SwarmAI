@@ -219,7 +219,8 @@ _WHERE = """Where a unit goes follows from what you declare and what it rests on
 
 
 def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, record: str,
-                 part: tuple[int, int] = (1, 1), projects: list[str] | None = None) -> str:
+                 part: tuple[int, int] = (1, 1), projects: list[str] | None = None,
+                 general: list[str] | None = None) -> str:
     """Turn one: the after-action review of the session since the last review."""
     types = "\n".join(f"- {name}: {_TYPE_QUESTIONS[name]}" for name in contracts_v2.TYPES)
     rules = "\n".join(f"- {kind}: " + "; ".join(contracts_v2.UNIT_RULES[kind])
@@ -256,6 +257,7 @@ context may hold only a summary of it).
 
 {_WHERE}
 Projects that exist: {", ".join(projects) if projects else "(none)"}.
+Subjects the general knowledge already holds: {"; ".join(general) if general else "(none)"}. A unit about one of them names it exactly as written here.
 
 Allowed kinds: {", ".join(allowed)}. Rules the validator enforces:
 {rules}
@@ -652,6 +654,8 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     schema = extract_llm.unit_schema(ALLOWED_KINDS, extra=())
     from core.project_registry import list_project_names
     projects = list_project_names()
+    from core.ingestion.queries import read_general_subjects
+    general = read_general_subjects()
     # every window is reviewed before anything is enqueued: a window that fails leaves
     # the watermark where it was, and the retry reviews them all again without duplicates
     reviewed: list[tuple[Any, list[Any], Any]] = []
@@ -661,7 +665,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
         window_rows = [r for r in window if "part_of" not in r] or window
         index, anchors, read = evidence(session_id, window_rows, input_rows)
         record = _record(session_id, window, user_events)
-        prompt = build_prompt(ALLOWED_KINDS, sig, index, record, (number, len(chunks)), projects)
+        prompt = build_prompt(ALLOWED_KINDS, sig, index, record, (number, len(chunks)), projects, general)
         attempt = api_v2.ExtractionAttempt(
             source="S7", attempt_id=f"attempt:{uuid.uuid4().hex}", extractor_version=REVIEW_VERSION,
             evidence_range={"session_id": session_id, "pass": "review", "from": watermark,

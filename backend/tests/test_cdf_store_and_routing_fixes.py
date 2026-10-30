@@ -122,3 +122,24 @@ def test_an_event_plan_anchors_it_under_its_month(corpus):
 def test_there_is_no_source_breaker():
     from core.ingestion.worker import IngestionWorker
     assert not hasattr(IngestionWorker, "_update_breaker")
+
+
+def test_the_review_is_shown_the_general_subjects_one_name_each():
+    from core.ingestion.queries import general_subjects
+    from core.ingestion.sources import s7_review
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE ingestion_units(unit_id TEXT, state TEXT, destination TEXT, updated_at TEXT)")
+    rows = [("a", "written", "CNTech IVT Autonomous Tenets", "2026-10-30T01"),
+            ("b", "written", "cntech-ivt-autonomous-tenets", "2026-10-30T02"),   # same document
+            ("c", "reinforced", "Data Agent", "2026-10-29T00"),
+            ("d", "deferred", "Not Written", "2026-10-30T05"),
+            ("e", "written", None, "2026-10-30T06")]
+    for unit, state, subject, at in rows:
+        dest = {"store": "COMMON_DDD", "project": subject}
+        conn.execute("INSERT INTO ingestion_units VALUES(?,?,?,?)", (unit, state, __import__("json").dumps(dest), at))
+    conn.execute("INSERT INTO ingestion_units VALUES('f','written',?,'2026-10-30T07')",
+                 (__import__("json").dumps({"store": "DDD", "project": "SwarmAI"}),))
+    assert general_subjects(conn) == ["cntech-ivt-autonomous-tenets", "Data Agent"]
+    prompt = s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "", projects=["SwarmAI"],
+                                    general=["Data Agent"])
+    assert "Subjects the general knowledge already holds: Data Agent." in prompt
