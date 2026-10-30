@@ -209,6 +209,33 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
+def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, str],
+               run_id: str | None, transcript_ids: list[str], requirement: str | None,
+               owner_source: str, review_answers: str):
+    """Create a run as ``pipeline-v1 create`` does once its owner is known: resolve the
+    project's binding (run-knowledge §3.2), build the run's knowledge (§3.3), create it
+    and write the knowledge file. ``(engine, binding, knowledge, knowledge_file)``."""
+    from core.run_protocol import project_binding
+    binding = project_binding.resolve(project, repos)          # run-knowledge §3.2
+    from core.run_protocol import run_knowledge                # run-knowledge §3.3
+    from core.run_protocol.lifecycle import PROFILE_STAGES
+    # a profile without EVALUATE goes straight to code: give it the design recall
+    purpose = "requirement" if "evaluate" in PROFILE_STAGES[profile] else "design"
+    knowledge = run_knowledge.build(
+        requirement, project=binding.project, has_ddd=binding.has_ddd,
+        workspace=_workspace(), repo_roots=repos, purpose=purpose)
+    engine = RunEngine.create(
+        data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
+        profile=profile, session_id=session_id, repos=repos,
+        run_id=run_id, transcript_ids=transcript_ids,
+        requirement=requirement, has_ddd=binding.has_ddd,
+        bound_repos=binding.bound_repos,
+        knowledge=run_knowledge.contract_record(knowledge),
+        owner_source=owner_source, review_answers=review_answers)
+    knowledge_file = engine.write_knowledge(knowledge.markdown, purpose)
+    return engine, binding, knowledge, knowledge_file
+
+
 def execute(args) -> dict[str, Any]:
     if args.command == "create":
         # the owner is the calling session: a different --session-id is refused
@@ -224,25 +251,11 @@ def execute(args) -> dict[str, Any]:
         # SWARM_APP_SESSION_ID comes only from a host hook, and that hook reads the
         # experts; without it the agent relays their replies (standalone §4.3)
         review_answers = "host" if owner_source == "host" else "relayed"
-        from core.run_protocol import project_binding
-        repos = _repos(args.repo)
-        binding = project_binding.resolve(args.project, repos)   # run-knowledge §3.2
-        from core.run_protocol import run_knowledge                # run-knowledge §3.3
-        from core.run_protocol.lifecycle import PROFILE_STAGES
-        # a profile without EVALUATE goes straight to code: give it the design recall
-        purpose = "requirement" if "evaluate" in PROFILE_STAGES[args.profile] else "design"
-        knowledge = run_knowledge.build(
-            args.requirement, project=binding.project, has_ddd=binding.has_ddd,
-            workspace=_workspace(), repo_roots=repos, purpose=purpose)
-        engine = RunEngine.create(
-            data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
-            profile=args.profile, session_id=args.session_id, repos=repos,
-            run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
-            requirement=args.requirement, has_ddd=binding.has_ddd,
-            bound_repos=binding.bound_repos,
-            knowledge=run_knowledge.contract_record(knowledge),
-            owner_source=owner_source, review_answers=review_answers)
-        knowledge_file = engine.write_knowledge(knowledge.markdown, purpose)
+        engine, binding, knowledge, knowledge_file = create_run(
+            project=args.project, profile=args.profile, session_id=args.session_id,
+            repos=_repos(args.repo), run_id=args.run_id,
+            transcript_ids=[*args.transcript_id, *_this_transcript()],
+            requirement=args.requirement, owner_source=owner_source, review_answers=review_answers)
         result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
                   "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json"),
                   "knowledge": {"file": str(knowledge_file), "status": knowledge.status,
