@@ -730,11 +730,35 @@ class TestFormatTtftLine:
         assert self._call(event_type="text_delta", already_recorded=True) is None
 
     def test_non_content_event_returns_none(self):
-        """A non-content event (assistant/result/tool_use/text_start) is never the
-        first-token trigger → None (must not fire on session_start/text_start)."""
-        for et in ("assistant", "result", "tool_use", "text_start", "thinking_start",
-                   "session_start", "content_block_stop"):
+        """An event that is not the model's answer (session_start, result, text_start,
+        content_block_stop, an assistant event without a main-agent tool call) is
+        never the first-token trigger → None."""
+        for et in ("assistant", "result", "text_start", "session_start",
+                   "content_block_stop"):
             assert self._call(event_type=et) is None, f"{et} must not trigger TTFT"
+
+    def test_tool_call_and_thinking_start_count_as_first_output(self):
+        """A turn whose first answer is a tool call, or a thinking block that streams
+        no thinking text (a session without the thinking-display gateway), ends the
+        wait for the model there: the tool run after it is not first-token time."""
+        for et in ("tool_use", "thinking_start"):
+            line = self._call(event_type=et, ttft_ms=7000.0)
+            assert line is not None and f"first-token={et}" in line, et
+
+    def test_event_label_names_a_main_agent_tool_call(self):
+        from core.session_router import _ttft_event_label
+
+        tool = {"type": "tool_use", "id": "t1", "name": "Agent"}
+        assert _ttft_event_label({"type": "assistant", "content": [tool]}) == "tool_use"
+        assert _ttft_event_label({"type": "assistant", "content": [
+            {"type": "text", "text": "x"}, tool]}) == "tool_use"
+        sub = dict(tool, parent_tool_use_id="parent")
+        assert _ttft_event_label({"type": "assistant", "content": [sub]}) == "assistant"
+        assert _ttft_event_label({"type": "assistant", "content": [
+            {"type": "text", "text": "x"}]}) == "assistant"
+        assert _ttft_event_label({"type": "assistant", "content": None}) == "assistant"
+        assert _ttft_event_label({"type": "thinking_start"}) == "thinking_start"
+        assert _ttft_event_label({}) == ""
 
     def test_segments_present(self):
         """AC2: the line carries the segment attribution — slot + recall + the

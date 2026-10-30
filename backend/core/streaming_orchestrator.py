@@ -32,6 +32,7 @@ from . import turn_products as _turn_products
 from .compaction_guard import EscalationLevel
 from .cli_stream_reader import SteerRead, TurnAbandoned
 from .session_healing import get_process_rss_mb
+from .stream_rate import StreamRateMeter
 from .ui_actions import (
     build_ui_command_event,
     UI_ACTION_FULL_TOOL_NAME,
@@ -1488,6 +1489,9 @@ class StreamingOrchestrator:
         # bubble and restarts the count at 1.
         _stream_msg = 0
         _stream_run = uuid.uuid4().hex[:8]
+        # Output tokens / writing time of the main agent's calls (stream_rate.py);
+        # logged once per result, observability only.
+        _rate = StreamRateMeter()
         _delta_leak_hidden: set[int] = set()
         # True while the most recent text/tool output of this response is a
         # leaked tool call (cleared by any real tool_use or later real prose).
@@ -2002,6 +2006,17 @@ class StreamingOrchestrator:
                 event_data = message.event
                 event_type = event_data.get("type", "")
                 _dkey = (getattr(message, "parent_tool_use_id", None), event_data.get("index", 0))
+                if _dkey[0] is None:  # main agent only: sub-agent calls overlap in time
+                    if event_type == "message_start":
+                        _rate.message_start()
+                    elif event_type == "content_block_start":
+                        _rate.block_start(awake_time())
+                    elif event_type == "message_delta":
+                        _usage = event_data.get("usage")
+                        _rate.output_so_far(
+                            _usage.get("output_tokens") if isinstance(_usage, dict) else None)
+                    elif event_type == "message_stop":
+                        _rate.message_stop(awake_time())
                 if event_type == "content_block_delta":
                     delta = event_data.get("delta", {})
                     if delta.get("type") == "text_delta" and delta.get("text"):
@@ -2671,6 +2686,10 @@ class StreamingOrchestrator:
                 # What the result spent is recorded first, before any branch below can
                 # yield (a consumer may stop there), kill the process or raise.
                 self._record_token_usage_bg(message, getattr(message, "usage", None) or {})
+                _rate_line = _rate.log_line()
+                if _rate_line:
+                    logger.info("%s session_id=%s", _rate_line, self._parent.session_id)
+                _rate.reset()
                 # ── D6: a steer still to read → read its round, same turn ──
                 # First, before the carry reset and every other branch (turn
                 # limit, API-error continuation, empty-response retry, leak

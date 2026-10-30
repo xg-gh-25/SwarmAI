@@ -1676,12 +1676,32 @@ async def _maybe_inject_recall_inner(
     return _recall_ms
 
 
-# Event types that are the first USER-VISIBLE content token of a turn. thinking_delta
-# is included deliberately: under Opus adaptive thinking a turn's first streamed token
-# is usually a thinking_delta (streaming_orchestrator.py:804), so a text-only TTFT
-# would be systematically LATE (Gate-0 skeptic). NOT included: *_start / session_start
-# / assistant / result / tool_use / content_block_stop — none carry a visible token.
-_TTFT_FIRST_CONTENT_TYPES = ("text_delta", "thinking_delta")
+# Event labels that mark the model's FIRST output of a turn — the end of the wait for
+# the model, whatever it answers with. A text/thinking-only definition was LATE in
+# two common shapes, and the late part was tool time, not model time: (1) a turn
+# whose first answer is a tool call never streams text before that tool runs, so a
+# sub-agent run (minutes) was read as first-token wait; (2) a session without the
+# thinking-display gateway (channels) gets thinking blocks with no thinking_delta,
+# so every thinking-first turn waited for the first text after all its tool calls.
+# ``thinking_start`` is the thinking block's content_block_start (main agent only);
+# ``tool_use`` is the label :func:`_ttft_event_label` gives a main-agent assistant
+# event carrying a tool call. NOT included: session_start / result / text_start /
+# content_block_stop / sub-agent output — none is the main model's first answer.
+_TTFT_FIRST_CONTENT_TYPES = ("text_delta", "thinking_delta", "thinking_start", "tool_use")
+
+
+def _ttft_event_label(event: dict) -> str:
+    """The label the TTFT probe judges ``event`` by: its ``type``, except that an
+    ``assistant`` event carrying a main-agent tool call is ``tool_use`` (the model's
+    answer was that call). A sub-agent's tool call (``parent_tool_use_id`` set) or an
+    assistant event with no tool call keeps the label ``assistant``."""
+    etype = event.get("type", "") if isinstance(event, dict) else ""
+    if etype == "assistant":
+        for block in event.get("content") or ():
+            if (isinstance(block, dict) and block.get("type") == "tool_use"
+                    and not block.get("parent_tool_use_id")):
+                return "tool_use"
+    return etype
 
 
 def _format_ttft_line(
@@ -1697,8 +1717,9 @@ def _format_ttft_line(
 ) -> Optional[str]:
     """Pure decision + formatter for the end-to-end TTFT probe (observability-only).
 
-    Returns the one-line ``TTFT=`` log string when ``event_type`` is the FIRST
-    user-visible content token of the turn (and it has not already been recorded),
+    Returns the one-line ``TTFT=`` log string when ``event_type`` is the model's
+    FIRST output of the turn (:data:`_TTFT_FIRST_CONTENT_TYPES`; the caller passes
+    :func:`_ttft_event_label`) and it has not already been recorded,
     else ``None``. This function ONLY formats a string — it never mutates state, so
     the caller owns the once-per-turn latch (``already_recorded``).
 
@@ -5587,17 +5608,17 @@ class SessionRouter:
                 if client_id and getattr(unit, "_turn_row_key", None) is None:
                     unit._turn_row_key = client_id
 
-                # ── TTFT probe: record the first user-visible content token ──
+                # ── TTFT probe: record the model's first output of the turn ──
                 # Observability-only. Wrapped in a broad try/except so a formatting
                 # or attribute error can NEVER raise inside the stream loop and abort
                 # the turn (Gate-1 point 3 — the one way "pure observability" could
                 # become false). _format_ttft_line is a pure decision (returns a line
-                # only on the FIRST text/thinking delta, else None); the latch lives
+                # only on the model's FIRST output of the turn, else None); the latch lives
                 # here so it fires exactly once per turn.
                 if not _ttft_recorded:
                     try:
                         _ttft_line = _format_ttft_line(
-                            event_type=event.get("type", ""),
+                            event_type=_ttft_event_label(event),
                             already_recorded=_ttft_recorded,
                             ttft_ms=(time.perf_counter() - _ttft_t0) * 1000.0,
                             slot_ms=_ttft_slot_ms,
