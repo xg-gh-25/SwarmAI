@@ -3,7 +3,7 @@ title: Recall：质量自己量，查询由推理者写
 created: 2026-10-30
 updated: 2026-10-30
 project: SwarmAI
-status: 待确认
+status: 已被 2026-10-30-brain-driven.md 取代
 follows: 2026-10-26-run-knowledge.md §3.6, 2026-10-28-knowledge-addressing.md, 2026-10-26-recall-precision-and-coverage.md
 ---
 
