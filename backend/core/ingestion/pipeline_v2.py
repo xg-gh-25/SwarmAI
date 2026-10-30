@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from . import api_v2, contracts_v2
+from . import api_v2, contracts_v2, withdrawn
 from .card3 import retrieve
 from .contracts import Card0Answer, UnitDecision
 from .contracts_v2 import (
@@ -314,6 +314,24 @@ def reinforce_or_reject(target_anchor: str, resolved: api_v2.ResolvedEvidence, *
 _SUPERSEDES_SOURCES = frozenset({"S4"})
 
 
+def _withdrawn_records() -> list:
+    """The completed withdrawals (``withdrawn.records``); none when the store cannot be read,
+    logged (the unit is then judged without them, as before this check existed)."""
+    from .api import connect_ro
+    try:
+        conn = connect_ro()
+    except Exception:  # noqa: BLE001 -- judged without them, said in the log
+        logger.warning("cdf: withdrawn records unreadable; judging without them", exc_info=True)
+        return []
+    try:
+        return withdrawn.records(conn)
+    except Exception:  # noqa: BLE001
+        logger.warning("cdf: withdrawn records unreadable; judging without them", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
 def _relation_hints(unit: SourceUnit, source: str) -> list[dict[str, str]]:
     hint = unit.relation_hint or {}
     kind, target = hint.get("kind"), hint.get("target")
@@ -590,10 +608,20 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
         return _decision(unit_id, "reject", "reject", "already_exists", vectors=vectors,
                          card0=card0, destination=destination, card3=retrieval)
 
+    # what the user withdrew stays out: an exact restatement is refused here, a near one is
+    # shown to the judge next to the unit's hits (design 2026-10-30-brain-driven §2.2)
+    unit_json = unit.model_dump(mode="json")
+    withdrawn_all = _withdrawn_records()
+    restated = withdrawn.restates(unit_json, withdrawn_all)
+    if restated is not None:
+        return _decision(unit_id, "reject", "reject", "withdrawn", vectors=vectors,
+                         card0=card0, destination=destination, card3=retrieval)
+    near = {r.anchor: r for r in withdrawn.nearest(unit_json, withdrawn_all)}
     hits = [{"anchor": hit.anchor, "text": hit.text} for hit in retrieval.hits]
+    hits += [{"anchor": anchor, "text": r.text} for anchor, r in near.items()]
     try:
         verdict = contracts_v2.VerifyAnswer.model_validate(
-            _unwrap(judge.verify(unit.model_dump(mode="json"), grounding, hits), vectors))
+            _unwrap(judge.verify(unit_json, grounding, hits), vectors))
     except UntypedOutput:
         return _decision(unit_id, "reject", "reject", "untyped", vectors=vectors,
                          card0=card0, destination=destination, card3=retrieval)
@@ -631,9 +659,15 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     closed = {hit.anchor for hit in retrieval.hits if is_closed_gap(hit.anchor, hit.text)}
     # a "same" that names claims the hit lacks is an "adds": dropping it as a duplicate would
     # lose those claims (design 2026-10-30-brain-driven §5.2: 17 of 43 "same" verdicts did)
-    relations = [(shown.get(item.anchor, item.anchor),
-                  "adds" if item.relation == "same" and item.new_only else item.relation)
-                 for item in verdict.hits if shown.get(item.anchor, item.anchor) in known]
+    verdicts = [(shown.get(item.anchor, item.anchor),
+                 "adds" if item.relation == "same" and item.new_only else item.relation)
+                for item in verdict.hits]
+    # a "same" or "adds" against a withdrawn entry restates what the user took out: refused.
+    # Against a closed gap or a done item it is a recurrence, written again as new.
+    if any(near[a].status in withdrawn.REFUSING and r in {"same", "adds"}
+           for a, r in verdicts if a in near):
+        return _decision(unit_id, "reject", "reject", "withdrawn", **done)
+    relations = [(a, r) for a, r in verdicts if a in known]
     # the same as a closed gap ([x]) is a recurrence: written again,
     # derived from the old one, never dropped as a duplicate (gap-lifecycle §2.5)
     relations = [(anchor, "adds" if relation == "same" and anchor in closed else relation)

@@ -78,3 +78,86 @@ def test_review_health_counts_a_withdrawal_recorded_in_production_shape(cdf_env)
     finally:
         conn.close()
     assert (out["agent_self_written"], out["agent_self_withdrawn"]) == (2, 1)
+
+
+# I6 ── what the user withdrew does not come back; a closed gap that recurs is written again
+
+from tests.test_cdf_refactor import _cog, _hits, _row, _ws, user_words  # noqa: E402,F401
+from core.ingestion import pipeline_v2  # noqa: E402
+from core.ingestion.pipeline_v2 import run_unit_v2  # noqa: E402
+from core.ingestion.withdrawn import Record  # noqa: E402
+
+_WRONG = ("- [process] **Use a symlink guard for nested node_modules** Create a symbolic link at "
+          "the nested node_modules path before npm install so the rename cannot collide.")
+
+
+class _PerHitJudge:
+    """Says *relation* about the withdrawn hit and "unrelated" about every other hit."""
+    def __init__(self, relation):
+        self.relation, self.calls = relation, 0
+
+    def verify(self, unit, grounding, hits):
+        self.calls += 1
+        return {"grounded": True, "durable": True, "self_contained": True, "significant": True,
+                "hits": [{"anchor": f"h{i}", "relation": self.relation
+                          if h["anchor"].startswith("withdrawn:") else "unrelated"}
+                         for i, h in enumerate(hits, 1)]}
+
+
+def _withdrawn(monkeypatch, status="withdrawn"):
+    monkeypatch.setattr(pipeline_v2, "_withdrawn_records",
+                        lambda: [Record("op1", "Projects/P/2-understanding/TECH.md", _WRONG, status, "reverses the fix")])
+
+
+def _cog_like(**over):
+    fields = {"title": "Symlink guard for nested node_modules",
+              "what": "Create a symlink at the nested node_modules path before npm install."}
+    fields.update(over)
+    return _cog(**fields)
+
+
+def test_an_exact_restatement_of_a_withdrawn_entry_is_refused_before_the_judge(tmp_path, user_words, monkeypatch):
+    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+    _withdrawn(monkeypatch)
+    judge = _PerHitJudge("unrelated")
+    unit = _cog_like(what="Create a symbolic link at the nested node_modules path before npm install "
+                          "so the rename cannot collide.")
+    decision = run_unit_v2(_row(unit), _ws(tmp_path), judge)
+    assert (decision.decision, decision.reason, judge.calls) == ("reject", "withdrawn", 0)
+
+
+@pytest.mark.parametrize("relation", ["same", "adds"])
+def test_a_unit_the_judge_ties_to_a_withdrawn_entry_is_refused(tmp_path, user_words, monkeypatch, relation):
+    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+    _withdrawn(monkeypatch)
+    judge = _PerHitJudge(relation)
+    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path), judge)
+    assert (decision.decision, decision.reason, judge.calls) == ("reject", "withdrawn", 1)
+
+
+@pytest.mark.parametrize("relation", ["same", "adds"])
+def test_a_closed_gap_that_recurs_is_written_again(tmp_path, user_words, monkeypatch, relation):
+    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+    _withdrawn(monkeypatch, status="closed")
+    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path), _PerHitJudge(relation))
+    assert decision.decision == "write"
+
+
+def test_a_unit_saying_the_withdrawn_entry_was_wrong_is_written(tmp_path, user_words, monkeypatch):
+    _hits(monkeypatch, ".context/MEMORY.md#Guidelines#cand:old")
+    _withdrawn(monkeypatch)
+    decision = run_unit_v2(_row(_cog_like()), _ws(tmp_path), _PerHitJudge("contradicts"))
+    assert decision.decision == "write"
+
+
+def test_withdrawn_records_are_read_from_the_write_journal(cdf_env):
+    from core.ingestion import withdrawn
+    from core.ingestion.api import connect_rw
+    conn = connect_rw()
+    try:
+        _write(conn, "r1", "user_redact", "Projects/P/2-understanding/TECH.md", absent=[_WRONG],
+               relations=[{"redact_anchor": "x#y#cand:z", "reason": "reverses the fix", "status": "closed"}])
+        recs = withdrawn.records(conn)
+    finally:
+        conn.close()
+    assert [(r.op_id, r.text, r.status, r.reason) for r in recs] == [("r1", _WRONG, "closed", "reverses the fix")]
