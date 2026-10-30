@@ -200,6 +200,17 @@ def _resolved(row: Any) -> api_v2.ResolvedEvidence:
     )
 
 
+def _with_relations(decision: UnitDecision, declared: dict[str, Any],
+                    refused: list[dict[str, str]]) -> UnitDecision:
+    """*decision* carrying the relations the agent declared: ``repeats`` (the anchor of the
+    earlier correction it names) and the declarations that named no entry."""
+    if refused:
+        decision.version_vector["relation_refused"] = refused
+    if "repeats" in declared:
+        decision.version_vector["repeats"] = declared["repeats"].anchor
+    return decision
+
+
 def _decision(unit_id: str, decision: str, action: str, reason: str, *,
               vectors: list[dict[str, Any]], **values: Any) -> UnitDecision:
     hashes = [str(vector.get("prompt_hash", "")) for vector in vectors]
@@ -646,7 +657,12 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
 
     # the relations the producing agent declared (D1): code checks only that the id and
     # the first line name one entry; a declaration that does not stands for nothing
-    entries = relations_v2.pool(root, corpus_project) + relations_v2.withdrawn_entries(withdrawn_all)
+    # the entries the review was shown come from the session's project; a unit scoped to
+    # another project declares against that one's too: both are in force
+    entries = relations_v2.pool(root, corpus_project)
+    if session_home and session_home != corpus_project:
+        entries += relations_v2.pool(root, session_home)
+    entries += relations_v2.withdrawn_entries(withdrawn_all)
     refused: list[dict[str, str]] = []
     declared_rel: dict[str, Any] = {}
     for name in ("same", "adds", "repeats"):
@@ -678,11 +694,15 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         # old one, never dropped as a duplicate (gap-lifecycle §2.5)
         declared_rel["adds"] = declared_rel.pop("same")
     if "same" in declared_rel:
+        # what was declared is kept on every outcome: a correction said again (same as the
+        # earlier one) is exactly the repeat the repeat rate counts (queries.corrections)
         if isinstance(unit, CognitionUnit):
             support = reinforce_or_reject(declared_rel["same"].anchor, resolved, source_unit_id=unit_id)
             if support.reinforced:
-                return _decision(unit_id, "reinforce", "reinforce", "reinforced", **done)
-        return _decision(unit_id, "reject", "reject", "already_exists", **done)
+                return _with_relations(_decision(unit_id, "reinforce", "reinforce", "reinforced", **done),
+                                       declared_rel, refused)
+        return _with_relations(_decision(unit_id, "reject", "reject", "already_exists", **done),
+                               declared_rel, refused)
     # last before writing: a unit refused or already known never asks for a section
     if not _section_exists(root, destination):
         return _decision(unit_id, "defer", "defer", "missing_section", **done)
@@ -702,10 +722,7 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         result.version_vector["overrides"] = checked.targets
     if checked is not None and checked.refused:
         result.version_vector["override_refused"] = checked.refused
-    if refused:
-        result.version_vector["relation_refused"] = refused
-    if "repeats" in declared_rel:
-        result.version_vector["repeats"] = declared_rel["repeats"].anchor
+    _with_relations(result, declared_rel, refused)
     result.version_vector["relation_hints"] = hints
     # what the entry rests on: the trust the baseline registers it with, so a unit citing
     # it later is no stronger than it; only "external" is marked in the file

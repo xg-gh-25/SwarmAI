@@ -398,7 +398,20 @@ def read_bootstrap_progress(project: str) -> dict[str, Any]:
         return bootstrap_progress(conn, project)
 
 
-def corrections(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+# the first review release that runs for every session with a user message and records
+# every correction (design 2026-10-30-cdf-agent-decides D3/D12); earlier reviews ran above
+# a threshold and corrections came from a keyword detector, so they cover nothing
+EVERY_SESSION_REVIEW_RELEASE = 17
+
+
+def _review_release(version: str) -> int | None:
+    """``cdf-review-r17-v1`` → 17, ``cdf-review-r16.15-v7`` → 16; None if not a review."""
+    import re
+    m = re.match(r"cdf-review-r(\d+)", version or "")
+    return int(m.group(1)) if m else None
+
+
+def corrections(conn: sqlite3.Connection, since: datetime | None = None) -> list[dict[str, Any]]:
     """Every correction unit the after-session review (S7) recorded, oldest first:
     ``{at: datetime, session_id, skill, repeats}``. The review is the agent that had the
     whole session; nothing here judges text (design 2026-10-30-cdf-agent-decides D12).
@@ -408,13 +421,16 @@ def corrections(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     still a time the user corrected the agent."""
     if not _table_exists(conn, "ingestion_inbox"):
         return []
+    # created_at is an ISO UTC time; a day earlier than *since* bounds the scan in SQL
+    # whatever the stored offset notation, the exact cut is made below
+    floor = (since - timedelta(days=1)).date().isoformat() if since else ""
     rows = conn.execute(
         """SELECT i.created_at, i.source_ref, json_extract(i.payload,'$.skill'),
                   json_extract(u.decision,'$.version_vector.repeats')
              FROM ingestion_inbox i LEFT JOIN ingestion_units u ON u.candidate_id=i.id
-            WHERE i.source_v2='S7' AND i.unit_kind='cognition'
+            WHERE i.source_v2='S7' AND i.unit_kind='cognition' AND i.created_at >= ?
               AND json_extract(i.payload,'$.type')='correction'
-            ORDER BY i.created_at""").fetchall()
+            ORDER BY i.created_at""", (floor,)).fetchall()
     out = []
     for created, session_id, skill, repeats in rows:
         try:
@@ -423,20 +439,29 @@ def corrections(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             continue
         if at.tzinfo is None:
             at = at.replace(tzinfo=timezone.utc)
+        if since is not None and at < since:
+            continue
         out.append({"at": at, "session_id": str(session_id or ""),
                     "skill": str(skill) if skill else None, "repeats": bool(repeats)})
     return out
 
 
-def read_corrections() -> tuple[list[dict[str, Any]], datetime | None]:
-    """``(corrections, covered_from)``: ``corrections(conn)`` of this instance's store and
-    the time of its earliest after-session review record, from when the list covers
-    (``None``: no store, or no review recorded yet — nothing is known, not zero)."""
+def read_corrections(since: datetime | None = None) -> tuple[list[dict[str, Any]], datetime | None]:
+    """``(corrections, covered_from)``: ``corrections(conn, since)`` of this instance's
+    store and the start of the first review of the every-session release
+    (``EVERY_SESSION_REVIEW_RELEASE``), from when the list covers (``None``: no store, or
+    no such review yet — nothing is known, not zero)."""
     try:
         with closing(connect_ro()) as conn:
-            found = corrections(conn)
-            first = conn.execute("SELECT MIN(created_at) FROM ingestion_inbox WHERE source_v2='S7'"
-                                 ).fetchone()[0] if _table_exists(conn, "ingestion_inbox") else None
+            found = corrections(conn, since)
+            first = None
+            if _table_exists(conn, "extraction_attempts"):
+                for version, started in conn.execute(
+                        "SELECT extractor_version, MIN(started_at) FROM extraction_attempts "
+                        "WHERE source='S7' GROUP BY extractor_version"):
+                    release = _review_release(str(version))
+                    if release is not None and release >= EVERY_SESSION_REVIEW_RELEASE and started:
+                        first = min(first, str(started)) if first else str(started)
     except (OSError, sqlite3.Error):
         return [], None
     if not first:

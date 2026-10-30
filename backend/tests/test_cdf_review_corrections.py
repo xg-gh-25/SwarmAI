@@ -62,12 +62,14 @@ def test_only_the_reviews_corrections_are_counted(store):
 
 def test_read_corrections_knows_from_when_it_covers(store):
     from core.ingestion.queries import read_corrections
+    from core.ingestion.sources.s7_review import REVIEW_VERSION
     assert read_corrections() == ([], None)            # a store, but no review yet
     first = NOW - timedelta(days=3)
-    _unit(store, "g1", type_="guideline", at=first)     # any review record starts the coverage
     _unit(store, "c1", at=NOW)
+    store.execute("""INSERT INTO extraction_attempts(attempt_id,source,evidence_range,extractor_version,
+        started_at,status) VALUES('a1','S7','{}',?,?,'ok')""", (REVIEW_VERSION, first.isoformat()))
     store.commit()
-    rows, start = read_corrections()
+    rows, start = read_corrections()                    # the first every-session review starts it
     assert len(rows) == 1 and abs((start - first).total_seconds()) < 1
 
 

@@ -166,8 +166,8 @@ def _load_skill_success_inputs() -> tuple[dict[str, int], dict[str, int]]:
     from core.ingestion.queries import read_corrections
     since = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)
     fixes: dict[str, int] = {}
-    for row in read_corrections()[0]:
-        if row["skill"] and row["at"] >= since:
+    for row in read_corrections(since)[0]:
+        if row["skill"]:
             fixes[row["skill"]] = fixes.get(row["skill"], 0) + 1
     return runs, fixes
 
@@ -283,7 +283,7 @@ async def skills_health() -> dict[str, dict]:
             for info in cache.values()
             if _visible_to_caller(_skill_info_to_response(info, include_content=False))
         ]
-        runs, fixes = _load_skill_success_inputs()
+        runs, fixes = await asyncio.to_thread(_load_skill_success_inputs)
         return build_health_map(all_stats, visible_names, recent_invocations=runs, corrections=fixes)
     except Exception as e:  # noqa: BLE001 — fail-safe: never 500 the panel
         logger.warning("skills_health failed (non-blocking, returning empty): %s", e)

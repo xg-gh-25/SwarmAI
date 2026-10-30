@@ -379,11 +379,13 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     if kind == "event" or store == "TIMELINE":
         event_key = str(group.get("event_key") or
                         _decision_value(decision, "version_vector", {}).get("event_key", ""))
-        lines = [f"### {group.get('when', today)} {title}",
-                 f"- what: {group.get('what', fallback_body)}"]
+        # each field on its own line: a line break inside one would start a heading,
+        # i.e. a forged event, in a file read every turn
+        lines = [f"### {_one_line(group.get('when', today))} {_one_line(title)}",
+                 f"- what: {_one_line(group.get('what', fallback_body))}"]
         for name in ("impact", "outcome", "follow_up"):
             if group.get(name) is not None:
-                lines.append(f"- {name}: {group[name]}")
+                lines.append(f"- {name}: {_one_line(group[name])}")
         meta = [f"cand:{unit_id}", f"event_key:{event_key}", f"source:{source}",
                 f"event_kind:{group.get('event_kind', 'event')}"]
         if project_hint:
@@ -524,12 +526,13 @@ def _build_plan(decision: UnitDecision | Mapping[str, Any], unit_row: Any) -> di
         _model_value(destination, "injectable", True))
     # what the entry rests on (pipeline_v2.unit_basis): only "external" is marked in the
     # file; the baseline registers the entry with this trust (cdf-fixing-spec C1). A
-    # decision judged before the basis was recorded keeps the old reading of its marks.
+    # decision judged before the basis was recorded is external by its marks, else
+    # inferred: without a recorded basis it is never the user's (I4).
     basis = str(vector.get("basis") or "")
     if basis not in ROOT_TRUST_ORDER:
         legacy = bool(envelope.get("cited_external", envelope.get("tainted")) or rerouted
                       or non_injected_timeline or vector.get("inferred"))
-        basis = "external" if legacy else "user"
+        basis = "external" if legacy else "inferred"
     group["cited_external"] = basis == "external"
     section = str(_model_value(destination, "section", "") or "")
     content = original.decode("utf-8") if original else ""
@@ -1065,10 +1068,10 @@ def _recorded_bases(units, conn: sqlite3.Connection | None) -> dict[str, str] | 
 def _unit_trust(unit: Any, bases: dict[str, str] | None) -> str:
     """The trust a baseline unit is registered with (cdf-fixing-spec C1). A declared
     ``taint: external`` is external. An entry CDF wrote has the trust of what it rests on
-    (its recorded basis); one written before the basis was recorded is as its mark says
-    (unmarked was shown by the user's words or a measurement), and with the store
-    unreadable it is inferred: never registered as the user's on a guess. Everything a
-    person wrote is the user's."""
+    (its recorded basis); one with no recorded basis (written before bases were recorded,
+    or the store unreadable) is inferred: an entry is the user's only when its basis says
+    so (design 2026-10-30-cdf-agent-decides §2 K3, I4). Everything a person wrote is the
+    user's."""
     if _unit_external(unit):
         return "external"
     identity = str(unit.identity)
@@ -1076,7 +1079,7 @@ def _unit_trust(unit: Any, bases: dict[str, str] | None) -> str:
         return "user"
     if bases is None:
         return "inferred"
-    return bases.get(identity[5:], "user")
+    return bases.get(identity[5:], "inferred")
 
 
 def _manifest_entry(path: Path, *, trust: str | None = None,

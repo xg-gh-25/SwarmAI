@@ -104,8 +104,10 @@ def fold_status(stats: Optional[SkillStats], staleness_days: int = STALENESS_DAY
 
 
 def canon(name: str) -> str:
-    """The skill's name without the ``s_`` prefix (the store records both forms)."""
-    return name[2:] if name.startswith("s_") else name
+    """One spelling of a skill's name: the store records ``pdf`` and ``s_pdf``, and the
+    review names a skill as it saw it invoked (``/pdf``, ``s_pdf``, ``Pdf``)."""
+    n = "-".join(str(name or "").strip().lstrip("/").lower().split())
+    return n[2:] if n.startswith("s_") else n
 
 
 def build_health_map(

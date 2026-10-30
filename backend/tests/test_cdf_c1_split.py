@@ -85,7 +85,7 @@ def test_f1b_the_baseline_registers_each_entry_with_what_it_rests_on(cdf_env):
     manifest = ensure_baseline()
     units = {u["identity"]: u for u in manifest["files"]["Projects/P/2-understanding/TECH.md"]["units"]}
     assert units["cand:cand-aaaa.unit"]["trust"] == "inferred"
-    assert units["cand:cand-bbbb.unit"]["trust"] == "user"        # written before bases: unmarked = shown
+    assert units["cand:cand-bbbb.unit"]["trust"] == "inferred"    # no recorded basis: never the user's (I4)
     assert units["cand:cand-cccc.unit"]["trust"] == "external"
     person = next(u for k, u in units.items() if not k.startswith("cand:"))
     assert person["trust"] == "user"

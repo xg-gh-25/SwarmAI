@@ -438,15 +438,28 @@ def review_options(resume: str | None, cwd: str, schema: dict, *, fork: bool, mo
         cli_path=_resolve_claude_cli())
 
 
+def _message_session_id(message: Any) -> str | None:
+    """The session id a streamed message names (a result's own, an init message's data)."""
+    sid = getattr(message, "session_id", None)
+    data = getattr(message, "data", None)
+    if not sid and isinstance(data, dict):
+        sid = data.get("session_id")
+    return str(sid) if sid else None
+
+
 def sdk_runner(resume: str | None, cwd: str, prompt: str, schema: dict, *, fork: bool = True,
                model: str | None = None) -> tuple[dict, str | None]:
     """One review turn through the SDK: (structured answer, the turn's session id)."""
     from claude_agent_sdk import ResultMessage, query
     from core.ingestion import llm_usage
     options = review_options(resume, cwd, schema, fork=fork, model=model)
+    seen: dict[str, str] = {}
 
     async def run() -> tuple[dict, str | None]:
         async for message in query(prompt=prompt, options=options):
+            sid = _message_session_id(message)
+            if sid:
+                seen["id"] = str(sid)
             if isinstance(message, ResultMessage):
                 # a resumed process starts from the restored totals: only this turn's own
                 # use is its cost (core/usage_accounting.CliResults); queued for the
@@ -473,7 +486,14 @@ def sdk_runner(resume: str | None, cwd: str, prompt: str, schema: dict, *, fork:
                 return message.structured_output, message.session_id
         raise RuntimeError("review ended without a result")
 
-    return asyncio.run(asyncio.wait_for(run(), REVIEW_TIMEOUT_S))
+    try:
+        return asyncio.run(asyncio.wait_for(run(), REVIEW_TIMEOUT_S))
+    except BaseException:
+        # a forking turn that fails after the CLI wrote the fork (no structured output, an
+        # error result, the timeout) leaves no id for the caller to drop: drop it here
+        if resume and fork and seen.get("id") and seen["id"] != resume:
+            _drop_fork(seen["id"], resume)
+        raise
 
 
 def _turn(runner: Runner, resume: str | None, cwd: str, prompt: str, schema: dict, *,
@@ -516,9 +536,43 @@ def _earlier_units(session_id: str, workspace: Path, project: str | None) -> lis
     return [e for e in relations_v2.pool(workspace, project) if e.anchor.rsplit("#", 1)[-1] in ids]
 
 
+def _this_review(units: list[Any], window: int) -> list[Any]:
+    """The units of an earlier window of this review as entries the agent can declare
+    against (windows overlap, so the same lesson can come back): ``same`` as one of them
+    drops the unit (review_session); they are not in any file yet."""
+    from core.ddd_entry_lifecycle import unit_id
+    from core.ingestion import relations_v2
+    out = []
+    for n, unit in enumerate(units, 1):
+        what = getattr(unit, "what", None) or getattr(unit, "summary", "") or ""
+        label = f"{unit.kind}/{unit.type}" if getattr(unit, "type", None) else unit.kind
+        text = f"- [{label}] **{unit.title}** {what}"
+        out.append(relations_v2.Entry(unit_id(text), f"(this review)#window {window}#{n}",
+                                      "(recorded earlier in this review)", "this review", text))
+    return out
+
+
+def _without_repeats_of_this_review(units: list[Any], recorded: list[Any]) -> list[Any]:
+    """*units* less those the agent declared ``same`` as a unit an earlier window of this
+    review recorded; an ``adds`` to one is cleared (there is no entry to link yet)."""
+    from core.ingestion import relations_v2
+    if not recorded:
+        return units
+    out = []
+    for unit in units:
+        if relations_v2.resolve(getattr(unit, "same", None), recorded)[0] is not None:
+            continue
+        if relations_v2.resolve(getattr(unit, "adds", None), recorded)[0] is not None:
+            unit = unit.model_copy(update={"adds": None})
+        out.append(unit)
+    return out
+
+
 def _candidates(units: list[Any], workspace: Path, project: str | None,
                 earlier: list[Any]) -> list[list[Any]]:
     from core.ingestion import pipeline_v2, relations_v2
+    # the project as the pipeline resolves it, so what is shown is what resolves
+    project = pipeline_v2._resolve_project(workspace, project) or project
     pool = relations_v2.pool(workspace, project)
     withdrawn_pool = relations_v2.withdrawn_entries(pipeline_v2._withdrawn_records())
     corrections = relations_v2.corrections(pool)
@@ -564,7 +618,11 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     user_events = s2_session._user_events_by_message(owned)
     chunks = s2_session.windows(rows, "id", limit=WINDOW_CHARS, overlap=WINDOW_OVERLAP)
     schema = extract_llm.unit_schema(ALLOWED_KINDS, extra=())
-    written = invalid = 0
+    # every window is reviewed before anything is enqueued: a window that fails leaves
+    # the watermark where it was, and the retry reviews them all again without duplicates
+    reviewed: list[tuple[Any, list[Any], Any]] = []
+    read_by_attempt: dict[str, Any] = {}
+    recorded: list[Any] = []          # this review's units so far, as entries
     for number, window in enumerate(chunks, 1):
         window_rows = [r for r in window if "part_of" not in r] or window
         index, anchors, read = evidence(session_id, window_rows, input_rows)
@@ -576,6 +634,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
                             "to": reviewed_to, "window": number, "windows": len(chunks),
                             "forked": bool(resume), "model": model, "session_type": session_type(sig),
                             "signals": {k: (len(v) if isinstance(v, list) else v) for k, v in sig.items()}})
+        read_by_attempt[attempt.attempt_id] = read
         fork_id = None
         try:
             with attribute("S7"):
@@ -592,18 +651,29 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
                                                  "reason": "evidence_not_in_index"})
                 units = [u for u in result.units if u not in bad]
                 if units:
-                    shown = _candidates(units, workspace, project, _earlier_units(session_id, workspace, project))
-                    relations, _ = _turn(run, fork_id, cwd, relation_prompt(units, shown), RELATION_SCHEMA,
-                                         fork=False, model=model)
-                    units = apply_relations(units, relations)
+                    earlier = _earlier_units(session_id, workspace, project) + recorded
+                    shown = _candidates(units, workspace, project, earlier)
+                    try:
+                        relations, _ = _turn(run, fork_id, cwd, relation_prompt(units, shown), RELATION_SCHEMA,
+                                             fork=False, model=model)
+                    except Exception as exc:  # noqa: BLE001 — the units stand as new (D1)
+                        logger.warning("CDF review: relations turn failed for %s (%s); units stand as new",
+                                       session_id, type(exc).__name__)
+                        attempt.evidence_range["relations_failed"] = f"{type(exc).__name__}: {exc}"[:300]
+                        relations = None
+                    units = _without_repeats_of_this_review(apply_relations(units, relations), recorded)
         except Exception as exc:
             api_v2.record_extraction_attempt(attempt, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])
             raise
         finally:
             _drop_fork(fork_id, sdk_session_id)
+        recorded += _this_review(units, number)
+        reviewed.append((attempt, units, result))
+    written = invalid = 0
+    for attempt, units, result in reviewed:
         for unit in units:
             api_v2.enqueue_unit("S7", session_id, unit, session_id=session_id, run_id=None,
-                                read_root_ids=read, project_snapshot=project_snapshot,
+                                read_root_ids=read_by_attempt[attempt.attempt_id], project_snapshot=project_snapshot,
                                 attempt_id=attempt.attempt_id, extraction_pass="main")
         api_v2.record_extraction_attempt(attempt, status="ok" if units else "no_unit",
                                          units_emitted=len(units), invalid_units=result.invalid_units)
