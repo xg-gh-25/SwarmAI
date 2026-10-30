@@ -4,14 +4,19 @@ Design: docs/design/2026-10-28-project-agent-flow.md §4.
 
 The Project Agent is the delivery face of one Brain: how its work is taken in, done
 and delivered. A Brain has ONE definition; the kinds of work inside it are **modes**
-(when, profile, placements, repos, setup, validations, skills, delivery). A mode can
+(when, placements, repos, setup, validations, skills, delivery). A mode can
 only NARROW the shared part (placements a subset; reserved actions and gates only
 added), so the safety baseline is reviewed once.
 
 It lives next to bindings.yaml as ``project-agent.yaml``. A draft is generated at Brain
 creation (core/project_agent_draft) from the Brain's own knowledge; the person reviews
-it in Brain Hub. A v1 file (``default_profile`` / ``profile_rules`` / ``validations``
-at the top) reads as a v2 definition with one mode.
+it in Brain Hub. A v1 file (``validations`` at the top) reads as a v2 definition with
+one mode.
+
+How a task runs (native, or a pipeline profile) is not part of the definition: each
+dispatch picks it from the request (design 2026-10-30-run-spec §3). ``profile`` /
+``profile_rules`` a file still carries (in a mode, or v1's ``default_profile``) are not
+read; ``notes`` says they can be removed.
 
 Key public symbols:
 - ``PROJECT_AGENT_FILE``   the file name (project-root relative)
@@ -89,15 +94,13 @@ def _rows(v: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
 
 def normalize(doc: dict[str, Any]) -> dict[str, Any]:
     """The definition in the v2 shape. A v1 document (``schema`` absent or 1) becomes
-    one mode, ``default``, carrying its profile, rules and validations; its top-level
+    one mode, ``default``, carrying its validations; its top-level
     ``summary`` / ``review_focus`` become ``identity.summary`` / ``watches``."""
     if doc.get("schema") == 2:
         return doc
     mode = {
         "id": "default",
         "when": "any change",
-        "profile": doc.get("default_profile"),
-        "profile_rules": doc.get("profile_rules") or [],
         "placements": doc.get("placements") or [],
         "validations": doc.get("validations") or [],
         "delivery": "bundle",
@@ -265,16 +268,6 @@ def gates_digest(project_dir: Path) -> str:
 
 # ── validate ─────────────────────────────────────────────────────────────────
 
-def _check_profile(where: str, mode: dict[str, Any], out: list[str]) -> None:
-    if mode.get("profile") not in PROFILES:
-        out.append(f"{where}.profile {mode.get('profile')!r} is not a pipeline profile")
-    for i, rule in enumerate(_list_of_dicts(mode.get("profile_rules"))):
-        if rule.get("profile") not in PROFILES:
-            out.append(f"{where}.profile_rules[{i}].profile {rule.get('profile')!r} is not a pipeline profile")
-        if not str(rule.get("when") or "").strip():
-            out.append(f"{where}.profile_rules[{i}].when is empty")
-
-
 def _check_names(where: str, values: Any, allowed: Iterable[str], label: str, out: list[str]) -> None:
     allowed = set(allowed)
     bad = [v for v in _str_list(values) if v not in allowed]
@@ -319,7 +312,6 @@ def validate(doc: Any, project_dir: Optional[Path] = None) -> list[str]:
         ids.add(mid)
         if not str(m.get("when") or "").strip():
             out.append(f"{where}.when is empty")
-        _check_profile(where, m, out)
         places = _mode_value(m, d, "placements") or []
         if not isinstance(places, list) or not places:
             out.append(f"{where}.placements is empty")
@@ -361,9 +353,7 @@ def _in_v1_terms(problems: list[str]) -> list[str]:
     """A v1 file's problems named by its own keys (its one mode is internal)."""
     seen: list[str] = []
     for msg in problems:
-        msg = (msg.replace("modes[default].profile_rules", "profile_rules")
-               .replace("modes[default].profile", "default_profile")
-               .replace("modes[default].placements", "placements")
+        msg = (msg.replace("modes[default].placements", "placements")
                .replace("modes[default].", ""))
         if msg not in seen:
             seen.append(msg)
@@ -517,9 +507,6 @@ def _mode_view(m: dict[str, Any], d: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(m.get("id") or ""),
         "when": str(m.get("when") or ""),
-        "profile": m.get("profile"),
-        "profileRules": [{"when": str(r.get("when") or ""), "profile": r.get("profile")}
-                         for r in _list_of_dicts(m.get("profile_rules"))],
         "placements": _str_list(_mode_value(m, d, "placements")),
         "repos": _str_list(m.get("repos")),
         "setup": _rows(m.get("setup"), ("command", "source", "repo", "cwd")),
@@ -539,8 +526,8 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
 
     Never raises: an unreadable or malformed file comes back with ``problems`` so the
     UI can say so instead of hiding it. The v1 keys the Hub already reads
-    (``defaultProfile``, ``profileRules``, ``reviewFocus``, ``validations``,
-    ``summary``) are filled from the default mode for either schema.
+    (``reviewFocus``, ``validations``, ``summary``) are filled from the default mode for
+    either schema.
     """
     project_dir = Path(project_dir)
     p = project_dir / PROJECT_AGENT_FILE
@@ -580,8 +567,6 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "placements": _str_list(d.get("placements")),
         "modes": modes,
         "defaultMode": d.get("default_mode"),
-        "defaultProfile": default["profile"] if default else None,
-        "profileRules": default["profileRules"] if default else [],
         "validations": default["validations"] if default else [],
         "sources": _str_list(d.get("sources")),
         "revision": revision(project_dir),

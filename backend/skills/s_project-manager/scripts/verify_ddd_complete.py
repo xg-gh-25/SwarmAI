@@ -460,14 +460,14 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph {ci.name}: {nodes} files indexed")
 
 
-# The pipeline profiles a Project Agent may name. Guarded single-source import, the
-# same pattern as CANONICAL_DOCS: the literal fallback only fires when this gate runs
-# portable, off a SwarmAI host.
+# Where a Project Agent may run. Guarded single-source import, the same pattern as
+# CANONICAL_DOCS: the literal fallback only fires when this gate runs portable, off a
+# SwarmAI host. (A Project Agent no longer names a pipeline profile: each dispatch picks
+# how its work runs, design 2026-10-30-run-spec §3.)
 try:
-    from core.project_agent import PLACEMENTS as _PLACEMENTS, PROFILES as _PROFILES
+    from core.project_agent import PLACEMENTS as _PLACEMENTS
     from core.project_agent import validate as _validate_project_agent
 except ImportError:
-    _PROFILES = frozenset({"full", "bugfix", "trivial", "direct", "research"})  # profile-fallback
     _PLACEMENTS = frozenset({"chat-tab", "hive"})
     _validate_project_agent = None
 
@@ -481,8 +481,7 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
     reports for this Brain (either schema; names checked against the Brain on disk) →
     FAIL. Valid and a draft → PENDING (it waits for the person on the Brain Hub review
     card, which does not fail the gate). Valid and reviewed → PASS. Off a SwarmAI host
-    the validator is not importable and the v1 profile/placement checks below run
-    instead.
+    the validator is not importable and the placement check below runs instead.
     """
     name = "⑤ Project Agent"
     p = d / "project-agent.yaml"
@@ -518,33 +517,19 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
             return (name, STATUS_FAIL, "; ".join(problems[:5]))
         modes = doc.get("modes") if doc.get("schema") == 2 else None
         detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
-                  else f"default profile {doc.get('default_profile')}")
+                  else "one mode (schema 1)")
         if doc.get("status") != "reviewed":
             return (name, STATUS_PENDING, f"draft · {detail} — confirm it on the Brain Hub review card")
         return (name, STATUS_PASS, f"reviewed · {detail}")
     bad: list[str] = []
-    if doc.get("schema") == 2:      # profiles live in the modes
-        modes = doc.get("modes") if isinstance(doc.get("modes"), list) else []
-        if not modes:
-            bad.append("modes []")
-        rules = [r for m in modes if isinstance(m, dict) for r in (m.get("profile_rules") or [])]
-        for m in modes:
-            if not isinstance(m, dict) or m.get("profile") not in _PROFILES:
-                bad.append(f"mode profile {m.get('profile') if isinstance(m, dict) else m!r}")
-    else:
-        if doc.get("default_profile") not in _PROFILES:
-            bad.append(f"default_profile {doc.get('default_profile')!r}")
-        rules = doc.get("profile_rules") or []
-    for r in rules:
-        if isinstance(r, dict) and r.get("profile") not in _PROFILES:
-            bad.append(f"rule profile {r.get('profile')!r}")
+    if doc.get("schema") == 2 and not (isinstance(doc.get("modes"), list) and doc["modes"]):
+        bad.append("modes []")
     places = doc.get("placements") or []
     if not places or any(x not in _PLACEMENTS for x in places):
         bad.append(f"placements {places!r}")
     if bad:
         return (name, STATUS_FAIL, "not a supported value: " + ", ".join(bad))
-    detail = (f"{len(doc['modes'])} modes" if doc.get("schema") == 2
-              else f"default profile {doc['default_profile']}")
+    detail = (f"{len(doc['modes'])} modes" if doc.get("schema") == 2 else "one mode (schema 1)")
     if doc.get("status") != "reviewed":
         return (name, STATUS_PENDING, f"draft · {detail}")
     return (name, STATUS_PASS, f"reviewed · {detail}")

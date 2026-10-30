@@ -14,7 +14,7 @@ The model judges, a deterministic tool writes — the same split as
   without one — skills, gates, reserved actions, placements) and writes the keys
   in the standard order. The model's proposal adds the
   judged fields (identity, handles, confidence, watches, extra modes, each mode's
-  ``when`` and profile rules, aliases); every judged row names a source, and a row
+  ``when``, aliases); every judged row names a source, and a row
   whose source does not exist is not written. Every ``setup`` / ``validations``
   command must be one the cited file declares, copied verbatim (a CI ``run:`` block
   may be cited line by line). The draft is checked with ``project_agent.validate``
@@ -40,7 +40,7 @@ import yaml
 from core.brain_bootstrap import repo_read as rr
 from core.brain_bootstrap.commands import parse_commands
 from core import project_agent_standard as std
-from core.project_agent import (PROFILES, PROJECT_AGENT_FILE, _MODE_ID_RE,
+from core.project_agent import (PROJECT_AGENT_FILE, _MODE_ID_RE,
                                 _bindings, _skills, gate_files, repo_roots, validate)
 
 logger = logging.getLogger(__name__)
@@ -76,9 +76,9 @@ PROPOSAL_CONTRACT: dict[str, Any] = {
         }],
     },
     "defaults": ("the standard modes (templates/project-agents/STANDARD.md): research always; "
-                 "code-change when the Brain has a bound repo, delivery bundle, profile bugfix, "
+                 "code-change when the Brain has a bound repo, delivery bundle, "
                  "its setup / validations default to the install steps / the validations.json "
-                 "entries (else the check commands) the repos declare; write (profile direct) "
+                 "entries (else the check commands) the repos declare; write "
                  "when it has none; placements [chat-tab]; all four reserved actions; "
                  "status draft"),
 }
@@ -485,10 +485,7 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
                 if not _text(pm.get("when")):
                     b.drop(where, "a new mode needs a when")
                 continue
-            if not isinstance(pm.get("profile"), str) or pm["profile"] not in PROFILES:
-                b.drop(where, f"profile {pm.get('profile')!r} is not a pipeline profile")
-                continue
-            modes[mid] = {"id": mid, "when": _text(pm["when"]), "profile": pm["profile"]}
+            modes[mid] = {"id": mid, "when": _text(pm["when"])}
             repos = [r for r in pm["repos"] if isinstance(r, str) and r in repo_names] if isinstance(pm.get("repos"), list) else []
             if repos:
                 modes[mid]["repos"] = repos
@@ -499,23 +496,11 @@ def build(project_dir: Path, proposal: Any, now: Optional[str] = None) -> tuple[
                     m["when"] = _text(pm["when"])
                 elif not _text(pm.get("when")):
                     b.drop(f"{where}.when", "empty")
-            if "profile" in pm and pm["profile"] != m["profile"]:
-                if mid == "research":
-                    b.drop(f"{where}.profile", "the research mode keeps profile research")
-                elif isinstance(pm["profile"], str) and pm["profile"] in PROFILES:
-                    m["profile"] = pm["profile"]
-                else:
-                    b.drop(f"{where}.profile", f"{pm['profile']!r} is not a pipeline profile")
+            for k in ("profile", "profile_rules"):
+                if k in pm:
+                    # how a task runs is picked per dispatch (design 2026-10-30-run-spec §3)
+                    b.drop(f"{where}.{k}", "a Project Agent no longer names a pipeline profile")
         m = modes[mid]
-        rules = []
-        for j, r in enumerate(pm.get("profile_rules") or [] if isinstance(pm.get("profile_rules"), list) else []):
-            if not isinstance(r, dict) or not isinstance(r.get("profile"), str) \
-                    or r["profile"] not in PROFILES or not _text(r.get("when")):
-                b.drop(f"{where}.profile_rules[{j}]", "needs a when and a pipeline profile")
-            elif b.sourced(f"{where}.profile_rules[{j}]", r):
-                rules.append({"when": _text(r["when"]), "profile": r["profile"]})
-        if rules:
-            m["profile_rules"] = rules
         if "placements" in pm:
             places = pm["placements"]
             if not isinstance(places, list) or not places or not all(
@@ -603,7 +588,8 @@ def _merge(doc: dict[str, Any], old: dict[str, Any], proposal: dict[str, Any],
                 doc["modes"].append(om)
             continue
         standard_whens = {std.standard_when(nm["id"], r) for r in (True, False)} if nm["id"] in std.MODES else set()
-        for k in ("when", "profile", "profile_rules", "skills", "placements", "delivery", "pr_remote",
+        # an earlier draft's profile / profile_rules are not carried: no longer read
+        for k in ("when", "skills", "placements", "delivery", "pr_remote",
                   "source", "gates", "reserved_for_human"):
             if k in om and not (k == "when" and om[k] in standard_whens):
                 nm[k] = om[k]

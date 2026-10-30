@@ -103,7 +103,7 @@ def make_pin(workspace: Path, brain: str, mode: Optional[str] = None,
     if mid not in modes:
         raise PinError(f"{brain}'s Project Agent has no mode {mid!r}")
     view = _mode_view(modes[mid], n)
-    return {"brain": brain, "mode": mid, "revision": rev, "profile": view["profile"],
+    return {"brain": brain, "mode": mid, "revision": rev,
             "reserved": view["reservedForHuman"], "gates": view["gates"], "gates_digest": digest}
 
 

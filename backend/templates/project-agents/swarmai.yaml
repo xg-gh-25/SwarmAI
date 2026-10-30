@@ -19,10 +19,8 @@ identity:
 modes:
 - id: research
   when: a question or an investigation, answered in the conversation
-  profile: research
 - id: write
   when: a document or a report as the deliverable
-  profile: direct
 default_mode: research
 reserved_for_human:
 - open_pr

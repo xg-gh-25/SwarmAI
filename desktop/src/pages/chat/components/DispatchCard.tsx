@@ -171,8 +171,8 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
 
   const canOpen = block.ok && isRemoteId(block.sessionId) && !!bridge.openHiveSession;
   const open = () => bridge.openHiveSession?.(block.sessionId as string, `${block.title} · ${block.hive ?? ''}`);
-  const agent = [block.mode, block.profile ? k('profile', 'profile {{profile}}', { profile: block.profile }) : null]
-    .filter((x): x is string => !!x);
+  // the mode of the Project Agent; how this task runs (and its profile) is its own row
+  const agent = [block.mode].filter((x): x is string => !!x);
 
   return (
     <div data-testid="dispatch-card" data-ok={String(block.ok)} data-unsure={String(unsure)} className={BOX}>
@@ -207,6 +207,12 @@ export function DispatchCard({ block }: { block: SwarmOutDispatchContent }) {
           <Row testId="dispatch-row-agent" k={tf(t, 'swarmOut.card.agentDefault', 'Project Agent')} why={syncLabel(t, block.brainSync)}>
             {agent.map((a) => <Chip key={a}>{a}</Chip>)}
             {block.revision && <span className="text-[var(--color-text-muted)]">{k('revision', 'definition')} <Mono>{block.revision.slice(0, 8)}</Mono></span>}
+          </Row>
+        )}
+        {block.ok && block.execution && (
+          <Row testId="dispatch-row-execution" k={k('row.execution', 'Runs')} why={block.executionWhy}>
+            {block.execution === 'native' ? k('native', 'native: in the session, no pipeline run')
+              : k('pipeline', 'pipeline · {{profile}}', { profile: block.profile ?? '?' })}
           </Row>
         )}
         {block.ok && block.repos.map((r) => (

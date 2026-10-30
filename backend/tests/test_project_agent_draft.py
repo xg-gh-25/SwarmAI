@@ -133,7 +133,8 @@ def test_defaults_are_decided_by_code_and_validate(brain):
     assert doc["gates"] == {"enforce": ["no_git_push", "scan"]}
     assert doc["reserved_for_human"] == ["open_pr", "publish_release", "push", "send_external_message"]
     assert doc["placements"] == ["chat-tab"] and doc["status"] == "draft"
-    assert modes["research"]["profile"] == "research"
+    # a Project Agent names no pipeline profile (a dispatch picks how work runs)
+    assert all("profile" not in m and "profile_rules" not in m for m in doc["modes"])
 
 
 def test_ci_checks_are_the_default_without_validations_json(tmp_path):
@@ -333,9 +334,11 @@ def test_judged_rows_without_an_existing_source_are_not_written(brain):
     assert set(modes) == {"code-change", "research", "release"}
     assert modes["release"]["skills"] == ["s_lib-release"]
     assert modes["code-change"]["skills"] == ["s_lib-check"]          # the one release did not take
-    assert modes["code-change"]["profile_rules"] == [{"when": "public API", "profile": "full"}]
+    # a proposed profile or profile rule is not written: the mode's `when` and the rest are
+    assert all("profile" not in m and "profile_rules" not in m for m in doc["modes"])
     for needle in ("NOPE.md", "handles[2]: no source", "lib:missing.md", "../outside.md", "GHOST.md", "modes[orphan]",
-                   "modes[Bad Id]", "s_missing", "nowhere", "not_a_gate", "surprise: unknown key"):
+                   "modes[Bad Id]", "s_missing", "modes[code-change].profile_rules: a Project Agent no longer",
+                   "not_a_gate", "surprise: unknown key"):
         assert any(needle in d for d in dropped), needle
     assert "PRODUCT.md" in doc["sources"] and "NOPE.md" not in doc["sources"]
 
@@ -348,7 +351,7 @@ def test_a_brain_without_a_repo_gets_research_and_write(tmp_path):
     assert [m["id"] for m in doc["modes"]] == ["research", "write"] and doc["default_mode"] == "research"
     assert "intake" not in doc and validate(doc, b) == []
     assert any("no bound repo" in d for d in dropped)
-    assert any("keeps profile research" in d for d in dropped)
+    assert any("modes[research].profile: a Project Agent no longer names a pipeline profile" in d for d in dropped)
     assert any("changes no code" in d for d in dropped)
 
 

@@ -28,13 +28,12 @@ V2 = {
     "reserved_for_human": ["push", "open_pr", "publish_release", "send_external_message"],
     "placements": ["chat-tab", "hive"],
     "modes": [
-        {"id": "code-change", "when": "change the library code", "profile": "bugfix",
-         "profile_rules": [{"when": "a public API change", "profile": "full"}],
+        {"id": "code-change", "when": "change the library code",
          "placements": ["chat-tab", "hive"], "repos": ["lib"],
          "setup": [{"command": "uv sync", "source": "ci.yml"}],
          "validations": [{"id": "tests", "command": "pytest -q", "source": "ci.yml"}],
          "skills": ["s_lib-release"], "delivery": "bundle"},
-        {"id": "research", "when": "a question with no code change", "profile": "research"},
+        {"id": "research", "when": "a question with no code change"},
     ],
     "default_mode": "code-change",
 }
@@ -75,8 +74,7 @@ def test_v2_parses_with_v1_keys_from_the_default_mode(tmp_path):
     pa = load_project_agent(_brain(tmp_path))
     assert pa["problems"] == [] and pa["schema"] == 2
     assert [m["id"] for m in pa["modes"]] == ["code-change", "research"]
-    assert pa["defaultProfile"] == "bugfix"
-    assert pa["profileRules"] == [{"when": "a public API change", "profile": "full"}]
+    assert "defaultProfile" not in pa and all("profile" not in m for m in pa["modes"])
     assert pa["validations"][0]["command"] == "pytest -q"
     assert pa["reviewFocus"][0]["area"] == "security"
     research = pa["modes"][1]
@@ -145,10 +143,9 @@ def test_v1_reads_as_one_mode_and_keeps_its_own_key_names():
           "placements": ["chat-tab"], "validations": [{"id": "u", "command": "pytest"}]}
     n = normalize(v1)
     assert n["schema"] == 2 and n["default_mode"] == "default"
-    assert n["modes"][0]["profile"] == "bugfix" and n["modes"][0]["validations"][0]["command"] == "pytest"
+    assert "profile" not in n["modes"][0] and n["modes"][0]["validations"][0]["command"] == "pytest"
     assert validate(v1) == []
-    probs = validate({**v1, "default_profile": "turbo"})
-    assert probs == ["default_profile 'turbo' is not a pipeline profile"]
+    assert validate({**v1, "default_profile": "turbo"}) == []      # not read any more
 
 
 def test_revision_follows_definition_skill_and_gate_not_caches(tmp_path):

@@ -29,7 +29,7 @@ from typing import Any, Optional
 import yaml
 
 from core import project_agent_standard as std
-from core.project_agent import (PLACEMENTS, PROFILES, PROJECT_AGENT_FILE, RESERVED_ACTIONS,
+from core.project_agent import (PLACEMENTS, PROJECT_AGENT_FILE, RESERVED_ACTIONS,
                                 _list_of_dicts, _skills, check_sources, gate_files, normalize,
                                 revision, validate)
 
@@ -102,8 +102,6 @@ def _rows_value(f: std.Field, path: str, v: Any) -> list[dict[str, str]]:
         row = {k: _text_value(path, r.get(k) or "") for k in f.columns if k != "source"}
         if any(not row[k] for k in row):
             raise ReviewError(400, f"{path}: every row needs {', '.join(row)}")
-        if f.key == "profile_rules" and row["profile"] not in PROFILES:
-            raise ReviewError(400, f"{path}: {row['profile']!r} is not a pipeline profile")
         if isinstance(r.get("source"), str) and r["source"].strip():
             row["source"] = _text_value(path, r["source"])
         out.append(row)
@@ -147,7 +145,7 @@ def _apply_change(doc: dict[str, Any], project_dir: Path, change: Any) -> None:
     elif f.shape == "rows":
         new = _rows_value(f, path, v)
     elif f.shape == "choice":
-        allowed = {"profile": PROFILES, "delivery": {"bundle", "branch-pr"},
+        allowed = {"delivery": {"bundle", "branch-pr"},
                    "default_mode": {str(m.get("id")) for m in _list_of_dicts(doc.get("modes"))}}[f.key]
         if v not in allowed:
             raise ReviewError(400, f"{path}: {v!r} is not one of {sorted(allowed)}")

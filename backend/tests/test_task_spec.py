@@ -3,8 +3,9 @@ docs/design/2026-10-28-project-agent-flow.md §7 ①–④, ⑥; core/task_spec,
 dispatch in core/swarm_out, routes and CLI).
 
 Questions: does routing use the deterministic signals first and ask (with "not part
-of any Brain") otherwise; does the spec take mode, profile, repositories and rules from
-the definition and refuse a choice that does not fit; does admission name each rule
+of any Brain") otherwise; does the spec take the mode, repositories and rules from the
+definition, and how the task runs (native or pipeline:<profile>) from the dispatch, never
+from the Project Agent, refusing a choice that does not fit; does admission name each rule
 it refuses on; does the project section tell the Hive how to reach the Brain's
 knowledge and what done is; does a dispatch sync a Hive's out-of-date copy, pin the
 session and record the spec; do the route and the CLI require a Brain.
@@ -117,19 +118,27 @@ def test_no_signal_or_several_asks_with_every_brain_and_the_runner(ws):
 
 # ── ② spec ───────────────────────────────────────────────────────────────────
 
+def _build(*a, **k):
+    """``task_spec.build`` with how the task runs given (native unless the test says)."""
+    return ts.build(*a, **{"execution": "native", **k})
+
+
 def test_the_spec_comes_from_the_definition(ws):
     _brain(ws)
-    s = ts.build(ws, "Lib", "fix it", "the signer test passes")
-    assert (s["mode"], s["mode_chosen"], s["profile"], s["profile_reason"]) == (
-        "code-change", "the default mode", "bugfix", "the mode's profile")
+    s = _build(ws, "Lib", "fix it", "the signer test passes")
+    # the definition names a profile (bugfix, a rule for full): it is not read
+    assert (s["mode"], s["mode_chosen"], s["execution"], s["profile"]) == (
+        "code-change", "the default mode", {"how": "native", "profile": None}, None)
     assert s["repos"] == [{"name": "lib", "url": "https://github.com/acme/lib.git", "ref": "main",
                            "sha": None, "dirty": None, "checkout": None, "error": None}]
     # every repository of the Brain goes, whatever the mode (research declares none)
-    assert [r["name"] for r in ts.build(ws, "Lib", "why", "an answer", mode="research", profile="research")["repos"]] == ["lib"]
+    assert [r["name"] for r in _build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research")["repos"]] == ["lib"]
     assert s["delivery"] == "bundle" and s["revision"] and not s["problems"]
     assert s["skills"] == ["s_lib-release"] and s["skills_not_here"] == ["s_lib-desk"]
-    s = ts.build(ws, "Lib", "x", "y", mode="code-change", profile="full")
-    assert s["mode_chosen"] == "named" and s["profile_reason"] == "profile rule: a public API change"
+    s = _build(ws, "Lib", "x", "y", mode="code-change", execution="pipeline:trivial",
+               why="  touches the   signer API ")
+    assert s["mode_chosen"] == "named" and s["execution"] == {"how": "pipeline", "profile": "trivial"}
+    assert s["profile"] == "trivial" and s["execution_why"] == "touches the signer API"
 
 
 def test_a_checkout_on_this_machine_gives_its_branch_and_commit(ws, tmp_path):
@@ -143,40 +152,43 @@ def test_a_checkout_on_this_machine_gives_its_branch_and_commit(ws, tmp_path):
     sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     b = _brain(ws)
     (b / "bindings.yaml").write_text(BINDINGS.replace("    kind: external\n", f"    kind: external\n    worktree: {repo}\n"))
-    r = ts.build(ws, "Lib", "why", "an answer", mode="research", profile="research")["repos"][0]
+    r = _build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research")["repos"][0]
     assert (r["ref"], r["sha"], r["dirty"], r["checkout"]) == ("work", sha, 1, str(repo.resolve()))
 
 
 @pytest.mark.parametrize("kw,match", [
     ({"mode": "nope"}, "no mode 'nope'"),
-    ({"profile": "trivial"}, "neither"),
+    ({"execution": None}, "say how the task runs"),
+    ({"execution": "pipeline:turbo"}, "say how the task runs"),
+    ({"execution": "pipeline"}, "say how the task runs"),
+    ({"execution": "background"}, "say how the task runs"),
 ])
 def test_a_choice_the_definition_does_not_allow_is_refused(ws, kw, match):
     _brain(ws)
     with pytest.raises(ts.SpecError, match=match):
-        ts.build(ws, "Lib", "x", "y", **kw)
+        _build(ws, "Lib", "x", "y", **kw)
 
 
 # ── ③ admission ──────────────────────────────────────────────────────────────
 
 def test_admission_names_each_rule(ws):
     _brain(ws)
-    assert ts.admit(ts.build(ws, "Lib", "x", "done")) == []
-    assert any("no acceptance" in r for r in ts.admit(ts.build(ws, "Lib", "x", "  ")))
+    assert ts.admit(_build(ws, "Lib", "x", "done")) == []
+    assert any("no acceptance" in r for r in ts.admit(_build(ws, "Lib", "x", "  ")))
     _brain(ws, "Draft", doc={**DEF, "status": "draft"})
-    assert any("draft" in r for r in ts.admit(ts.build(ws, "Draft", "x", "y")))
+    assert any("draft" in r for r in ts.admit(_build(ws, "Draft", "x", "y")))
     _brain(ws, "Unchecked", check=False)
-    assert any("changed after it was confirmed" in r for r in ts.admit(ts.build(ws, "Unchecked", "x", "y")))
+    assert any("changed after it was confirmed" in r for r in ts.admit(_build(ws, "Unchecked", "x", "y")))
     local = yaml.safe_load(yaml.safe_dump(DEF))
     b = _brain(ws, "Local", doc=local)
     (b / "bindings.yaml").write_text(BINDINGS.replace("https://github.com/acme/lib.git", "/Users/me/lib"))
-    assert any("no remote a Hive can clone" in r for r in ts.admit(ts.build(ws, "Local", "x", "y")))
+    assert any("no remote a Hive can clone" in r for r in ts.admit(_build(ws, "Local", "x", "y")))
     pr = yaml.safe_load(yaml.safe_dump(DEF))
     pr["modes"][0]["delivery"] = "branch-pr"
     _brain(ws, "PR", doc=pr)
-    assert any("branch-pr" in r for r in ts.admit(ts.build(ws, "PR", "x", "y")))
+    assert any("branch-pr" in r for r in ts.admit(_build(ws, "PR", "x", "y")))
     # a mode that does not run on a Hive, reported with the other rules
-    refusals = ts.admit(ts.build(ws, "Draft", "x", "", mode="release"))
+    refusals = ts.admit(_build(ws, "Draft", "x", "", mode="release"))
     assert any("does not run on hive" in r for r in refusals) and any("draft" in r for r in refusals)
     assert refusals[-1].startswith("the task has no acceptance")       # the design's order
     # a source check that found commands with no source
@@ -184,34 +196,37 @@ def test_admission_names_each_rule(ws):
     rec = json.loads((bad / ".project-agent-check.json").read_text())
     (bad / ".project-agent-check.json").write_text(json.dumps({**rec, "ok": False,
                                                               "missing": ["modes[code-change].setup: x"]}))
-    assert any("no source in the repository" in r for r in ts.admit(ts.build(ws, "NoSource", "x", "y")))
+    assert any("no source in the repository" in r for r in ts.admit(_build(ws, "NoSource", "x", "y")))
     # the Runner Agent too: changed after it was confirmed
     lib = ws / "Knowledge" / "Library"
     (lib / "project-agent.yaml").write_text((lib / "project-agent.yaml").read_text() + "# edited\n")
-    assert any("changed after it was confirmed" in r for r in ts.admit(ts.build(ws, "General", "x", "y")))
+    assert any("changed after it was confirmed" in r for r in ts.admit(_build(ws, "General", "x", "y")))
     # schema 1 never goes to a Hive (its repositories are not in a mode)
     v1 = {"status": "reviewed", "default_profile": "bugfix", "placements": ["chat-tab", "hive"],
           "landing": {"approval": "human"}}
     _brain(ws, "Old", doc=v1)
-    assert any("schema 1" in r for r in ts.admit(ts.build(ws, "Old", "x", "y")))
+    assert any("schema 1" in r for r in ts.admit(_build(ws, "Old", "x", "y")))
     # a Brain named in another case is not the Brain on disk
     with pytest.raises(ts.SpecError):
-        ts.build(ws, "lib", "x", "y")
+        _build(ws, "lib", "x", "y")
 
 
 # ── ⑥ the project section ────────────────────────────────────────────────────
 
 def test_the_project_section_tells_the_hive_how_to_work(ws):
     _brain(ws)
-    text = ts.segment(ts.build(ws, "Lib", "x", "the signer test passes"))
-    for part in ('knowledge find --project Lib', "profile `bugfix`", "`uv sync`", "tests: `pytest -q`",
+    text = ts.segment(_build(ws, "Lib", "x", "the signer test passes"))
+    assert "do the task in this session; no pipeline run" in text and "s_autonomous-pipeline" not in text
+    piped = ts.segment(_build(ws, "Lib", "x", "the signer test passes", execution="pipeline:bugfix"))
+    assert "profile `bugfix`" in piped and "use no other profile" in piped
+    for part in ('knowledge find --project Lib', "`uv sync`", "tests: `pytest -q`",
                  "constant-time compare", "s_lib-release", "do not push", "push, open_pr",
                  "no_git_push", "Done when: the signer test passes"):
         assert part in text, part
     assert "s_lib-desk" not in text and text.endswith("## Task\n")
-    runner = ts.segment(ts.build(ws, "General", "x", "y"))
+    runner = ts.segment(_build(ws, "General", "x", "y"))
     assert "knowledge find --in library" in runner and "do not push" not in runner
-    research = ts.segment(ts.build(ws, "Lib", "why", "an answer", mode="research", profile="research"))
+    research = ts.segment(_build(ws, "Lib", "why", "an answer", mode="research", execution="pipeline:research"))
     assert "there to read" in research and "commit on the declared branch" not in research
 
 
@@ -253,27 +268,29 @@ def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypa
     b = _brain(ws)
     rev = revision(b)
     calls = _fake_hive(monkeypatch, "0" * 64)
-    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision=rev))
+    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
     assert calls["sync"] == ["Lib"] and out["brain_sync"] == "synced"
     d = calls["dispatch"][0]
     assert d["repos"] == [{"url": "https://github.com/acme/lib.git", "ref": "main"}]
     assert d["agent"]["brain"] == "Lib" and d["agent"]["mode"] == "code-change" and d["agent"]["revision"]
+    # how it runs is the dispatch's choice, recorded on the row (not the mode's profile: bugfix)
+    assert (d["agent"]["execution"], d["agent"]["profile"], d["agent"]["execution_why"]) == ("native", None, "")
     assert d["agent"]["acceptance"] == "tests pass" and "## Project Agent: Lib" in d["segment"]
     assert so._pin_request(d["agent"]) == {"brain": "Lib", "mode": "code-change",
                                            "revision": d["agent"]["revision"]}
     # up to date: no sync
     digest = host.local_brain(ws, "Lib")["digest"]
     calls = _fake_hive(monkeypatch, digest)
-    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision=rev))
+    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
     assert calls["sync"] == [] and len(calls["dispatch"]) == 1 and out["brain_sync"] == "up to date"
     # the same version, but the Hive changed files of it: restored
     calls = _fake_hive(monkeypatch, digest, current="1" * 64)
-    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision=rev))
+    out = asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
     assert calls["sync"] == ["Lib"] and out["brain_sync"].startswith("restored 2")
     # a definition changed since the person was shown it
     calls = _fake_hive(monkeypatch, digest)
     with pytest.raises(so.SwarmOutError, match="changed since it was shown"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision="0" * 64))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision="0" * 64))
     assert calls["dispatch"] == []
 
 
@@ -289,7 +306,7 @@ def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypat
                           {"name": "calm", "status": "running", "reachable": True, "saturated": False,
                            "streaming": 0, "memory_percent": 50.0}]}
     monkeypatch.setattr(so, "fleet", fleet)
-    asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", seen_revision=rev,
+    asyncio.run(so.dispatch_spec(None, "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev,
                                  brief="  fix   the\nthing  "))
     d = calls["dispatch"][0]
     assert d["hive"] == "calm"
@@ -297,7 +314,7 @@ def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypat
                           "repo_notes": [{"name": d["extra"]["repo_notes"][0]["name"],
                                           "url": "https://github.com/acme/lib.git", "dirty": 0}]}
     calls = _fake_hive(monkeypatch, "0" * 64)
-    asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", seen_revision=rev))
+    asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native", seen_revision=rev))
     assert calls["dispatch"][0]["hive"] == "hive3" and calls["dispatch"][0]["extra"]["hive_reason"] == "named"
 
 
@@ -308,15 +325,15 @@ def test_a_refused_spec_or_an_old_hive_sends_nothing(ws, monkeypatch):
     d = _brain(ws, doc={**DEF, "status": "draft"})
     calls = _fake_hive(monkeypatch, None)
     with pytest.raises(so.SwarmOutError, match="draft"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "x", "y", seen_revision=revision(d)))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "x", "y", execution="native", seen_revision=revision(d)))
     ok = _brain(ws, "Ok")
     calls = _fake_hive(monkeypatch, None, supported=False)
     with pytest.raises(so.SwarmOutError, match="update it once"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", seen_revision=revision(ok)))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", execution="native", seen_revision=revision(ok)))
     assert calls["dispatch"] == [] and calls["sync"] == []
     calls = _fake_hive(monkeypatch, None, sync_error=httpx.ReadTimeout("slow"))
     with pytest.raises(so.SwarmOutError, match="nothing was sent"):
-        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", seen_revision=revision(ok)))
+        asyncio.run(so.dispatch_spec("hive3", "t", "Ok", "x", "y", execution="native", seen_revision=revision(ok)))
     assert calls["dispatch"] == []
 
 
@@ -414,14 +431,16 @@ def test_the_dispatch_route_needs_a_brain(monkeypatch):
         assert c.post("/api/swarm-out" + path, json={}).status_code in (403, 422)
 
 
-def test_the_cli_sends_brain_mode_profile_and_acceptance(monkeypatch):
+def test_the_cli_sends_brain_mode_execution_and_acceptance(monkeypatch):
     import scripts.swarm_out as cli
     seen = []
     monkeypatch.setattr(cli, "_call", lambda m, p, b=None, timeout=120: seen.append((m, p, b, timeout)) or 0)
     assert cli.main(["dispatch", "--hive", "h", "--title", "t", "--brain", "Lib", "--task", "x",
-                     "--acceptance", "done", "--mode", "code-change", "--revision", "abc"]) == 0
+                     "--acceptance", "done", "--mode", "code-change", "--execution", "pipeline:bugfix",
+                     "--why", "a defect with a repro", "--revision", "abc"]) == 0
     assert seen[-1] == ("POST", "/dispatch", {"brain": "Lib", "task": "x", "acceptance": "done",
-                                              "mode": "code-change", "profile": None,
+                                              "mode": "code-change", "execution": "pipeline:bugfix",
+                                              "why": "a defect with a repro",
                                               "hive": "h", "title": "t", "brief": "", "revision": "abc"},
                         cli.DISPATCH_TIMEOUT_S)
     assert cli.DISPATCH_TIMEOUT_S > 2 * 120
@@ -483,7 +502,7 @@ def test_a_linked_definition_has_no_revision_and_is_refused(ws, tmp_path):
     real.write_text((b / "project-agent.yaml").read_text())
     (b / "project-agent.yaml").unlink()
     (b / "project-agent.yaml").symlink_to(real)
-    assert any("no revision" in r for r in ts.admit(ts.build(ws, "Lib", "x", "y")))
+    assert any("no revision" in r for r in ts.admit(_build(ws, "Lib", "x", "y")))
 
 
 def test_the_route_endpoint_passes_the_deterministic_signals(ws, monkeypatch):
@@ -508,17 +527,17 @@ def test_every_reader_agrees_whether_a_confirmation_holds(ws):
     from core.project_agent_review import confirm
     b = _brain(ws)
     assert project_agent_status(b) == "reviewed" and load_project_agent(b)["confirmation"] == "reviewed"
-    assert not ts.admit(ts.build(ws, "Lib", "x", "y", placement="hive"))
+    assert not ts.admit(_build(ws, "Lib", "x", "y", placement="hive"))
     # rewritten by hand / an agent (fields reordered): still "status: reviewed" in the file
     doc = yaml.safe_load((b / "project-agent.yaml").read_text())
     (b / "project-agent.yaml").write_text(yaml.safe_dump(dict(reversed(list(doc.items()))), sort_keys=False))
     assert project_agent_status(b) == "changed" and load_project_agent(b)["confirmation"] == "changed"
-    refusals = ts.admit(ts.build(ws, "Lib", "x", "y", placement="hive"))
+    refusals = ts.admit(_build(ws, "Lib", "x", "y", placement="hive"))
     assert any("changed after it was confirmed" in r for r in refusals) and not any("draft" in r for r in refusals)
     # a skill one of its modes uses changing counts too
     pa = load_project_agent(b)
     confirm(b, seen_revision=pa["revision"], reviewer="t")
-    after = ts.admit(ts.build(ws, "Lib", "x", "y", placement="hive"))      # (this fixture has no ci.yml checkout)
+    after = ts.admit(_build(ws, "Lib", "x", "y", placement="hive"))      # (this fixture has no ci.yml checkout)
     assert project_agent_status(b) == "reviewed" and not any("confirm" in r for r in after)
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\n---\nchanged\n")
     assert project_agent_status(b) == "changed"

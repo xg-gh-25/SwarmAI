@@ -32,11 +32,13 @@ class DispatchBody(BaseModel):
     task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
     origin: str = Field(default="swarm-out", max_length=40)
     # the Brain whose Project Agent the task goes under ("General" = the Runner Agent),
-    # the mode and profile chosen from its definition, and what done looks like. The
-    # repositories come from the definition (core/task_spec), not from the caller.
+    # the mode chosen from its definition, how this task runs (native or
+    # pipeline:<profile>, core/task_spec.parse_execution) and why, and what done looks
+    # like. The repositories come from the definition (core/task_spec), not the caller.
     brain: Optional[str] = Field(default=None, max_length=80)
     mode: Optional[str] = Field(default=None, max_length=80)
-    profile: Optional[str] = Field(default=None, max_length=20)
+    execution: Optional[str] = Field(default=None, max_length=40)
+    why: Optional[str] = Field(default=None, max_length=600)
     acceptance: Optional[str] = Field(default=None, max_length=4000)
     # the revision /spec showed the person: a definition changed since is refused
     revision: Optional[str] = Field(default=None, max_length=64)
@@ -58,7 +60,8 @@ class SpecBody(BaseModel):
     task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
     acceptance: str = Field(default="", max_length=4000)
     mode: Optional[str] = Field(default=None, max_length=80)
-    profile: Optional[str] = Field(default=None, max_length=20)
+    execution: Optional[str] = Field(default=None, max_length=40)
+    why: Optional[str] = Field(default=None, max_length=600)
 
 
 class AnswerBody(BaseModel):
@@ -93,9 +96,9 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
     if not body.revision:
         raise HTTPException(status_code=400, detail="pass the revision the spec showed (run spec first)")
     return await _call(swarm_out.dispatch_spec(body.hive or None, body.title, body.brain, body.task,
-                                               body.acceptance or "", body.mode, body.profile,
+                                               body.acceptance or "", body.mode, body.execution,
                                                body.origin, seen_revision=body.revision,
-                                               brief=body.brief or ""))
+                                               brief=body.brief or "", why=body.why or ""))
 
 
 class ReturnBody(BaseModel):
@@ -200,7 +203,7 @@ async def spec(body: SpecBody) -> dict[str, Any]:
     from core.project_registry import get_swarmws
     try:
         s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
-                                    body.acceptance, body.mode, body.profile, "hive")
+                                    body.acceptance, body.mode, body.execution, body.why or "", "hive")
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"spec": {k: v for k, v in s.items() if k != "task"},

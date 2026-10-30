@@ -47,8 +47,9 @@ def test_a_shipped_definition_is_written_to_the_standard(tmp_path, name):
     assert list(doc) == list(std.ordered(doc)), name                 # keys in the standard order
     for m in doc["modes"]:
         assert list(m) == list(std.ordered({"modes": [m]})["modes"][0]), (name, m["id"])
-    assert [{k: m[k] for k in ("id", "when", "profile")} for m in doc["modes"]] == \
-        [{k: m[k] for k in ("id", "when", "profile")} for m in std.standard_modes(False)]
+    assert [{k: m[k] for k in ("id", "when")} for m in doc["modes"]] == \
+        [{k: m[k] for k in ("id", "when")} for m in std.standard_modes(False)]
+    assert all("profile" not in m and "profile_rules" not in m for m in doc["modes"]), name
     assert doc["default_mode"] == std.default_mode(False) and doc["status"] == "draft"
     assert 3 <= len(doc["intake"]["handles"]) <= 5 and doc["identity"]["out_of_scope"]
     assert doc["reserved_for_human"] == list(std.DEFAULT_RESERVED)
@@ -71,7 +72,7 @@ def test_the_standard_modes_of_one_shape_never_share_a_when():
 # ── S2: the generator starts from the same skeleton ──────────────────────────
 
 def _skeleton(doc):
-    return [{k: m[k] for k in ("id", "when", "profile")} for m in doc["modes"]]
+    return [{k: m[k] for k in ("id", "when")} for m in doc["modes"]]
 
 
 def test_a_draft_without_a_repo_has_the_runner_agents_modes(tmp_path):
@@ -96,9 +97,20 @@ def test_a_draft_with_a_repo_has_code_change_and_research(tmp_path):
     assert doc["default_mode"] == "code-change"
     for m in doc["modes"]:                                         # each mode's keys in the standard order
         assert list(m) == [k for k in std.MODE_ORDER if k in m], m["id"]
-    # a sourced profile change the generator allows is never a remark
-    assert next(m for m in doc["modes"] if m["id"] == "code-change")["profile"] == "full"
+    # a proposed profile is not written (a dispatch picks how work runs), so no remark
+    assert all("profile" not in m for m in doc["modes"])
     assert notes(doc, b) == [n for n in notes(doc, b) if not n.startswith("standard:")]
+
+
+def test_a_mode_that_still_names_a_profile_gets_a_remark_not_a_problem(tmp_path):
+    b = _brain(tmp_path, None)
+    doc, _ = pad.build(b, {"identity": {"summary": "x", "source": "PRODUCT.md"},
+                           "handles": [{"text": "a task", "source": "PRODUCT.md"}]})
+    doc["modes"][0]["profile"] = "research"
+    doc["modes"][1]["profile_rules"] = [{"when": "w", "profile": "full"}]
+    assert validate(doc, b) == []
+    remark = [n for n in notes(doc, b) if "pipeline profile" in n]
+    assert len(remark) == 1 and "research, write" in remark[0] and "can be removed" in remark[0]
 
 
 def test_the_written_draft_starts_with_the_standard_header(tmp_path):

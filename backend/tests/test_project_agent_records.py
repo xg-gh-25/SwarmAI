@@ -60,7 +60,10 @@ def test_runs_carries_the_hosts_agent_and_only_the_hosts_check_ids():
     res["checks"][1]["status"] = "passed"                          # not a status /runs knows
     pub = sor.public({"result": res}, [], AGENT)
     assert pub["project_agent"] == {"brain": "Lib", "mode": "code-change", "profile": "bugfix",
-                                    "delivery": "bundle"}
+                                    "delivery": "bundle", "execution": None}   # a row from before execution
+    run = sor.public({"result": res}, [], {**AGENT, "execution": "pipeline"})
+    assert run["project_agent"]["execution"] == "pipeline"
+    assert sor.public({"result": res}, [], {**AGENT, "execution": "made-up"})["project_agent"]["execution"] is None
     assert pub["checks"] == [{"id": "tests", "status": "ran"}, {"id": "lint", "status": "not_run"},
                              {"id": "build", "status": "not_run"}]
     old = sor.public({"result": res}, [], None)

@@ -174,8 +174,6 @@ export interface AgentCommand { id?: string; command: string; source: string; re
 export interface AgentMode {
   id: string;
   when: string;
-  profile: string;
-  profileRules: { when: string; profile: string }[];
   placements: string[];
   repos: string[];
   setup: AgentCommand[];
@@ -200,8 +198,6 @@ export interface ProjectAgent {
   identity?: { summary: string; inScope: string[]; outOfScope: string[]; source: string };
   intake?: { handles: string[]; repos: string[]; proposedAliases?: { name: string; source: string }[] };
   confidence?: string;
-  defaultProfile?: string;
-  profileRules?: { when: string; profile: string }[];
   reviewFocus?: { area: string; why: string; source: string }[];
   validations?: AgentCommand[];
   reservedForHuman?: string[];

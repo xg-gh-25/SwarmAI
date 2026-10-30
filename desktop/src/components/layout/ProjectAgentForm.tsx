@@ -241,7 +241,7 @@ function Editor({ f, value, path, canEdit, pending, onSet, onDrop }: {
                 aria-label={dropped.has(i) ? 'Keep this row' : 'Remove this row'}
                 onClick={() => removeOnly ? onDrop(path, i) : onSet(path, rows.filter((_, j) => j !== i))}>{dropped.has(i) ? 'undo' : '×'}</button>)}
           </div>))}
-        {writable && !removeOnly && cols.length > 0 && <RowAdder cols={cols} choices={(f.choices ?? []).map((c) => choiceOf(c).value)}
+        {writable && !removeOnly && cols.length > 0 && <RowAdder cols={cols}
           onAdd={(row) => onSet(path, [...rows, row])} />}
       </div>
     );
@@ -249,18 +249,12 @@ function Editor({ f, value, path, canEdit, pending, onSet, onDrop }: {
   return null;
 }
 
-function RowAdder({ cols, choices, onAdd }: { cols: string[]; choices: string[]; onAdd: (row: Record<string, string>) => void }) {
+function RowAdder({ cols, onAdd }: { cols: string[]; onAdd: (row: Record<string, string>) => void }) {
   const [row, setRow] = useState<Record<string, string>>({});
   const full = cols.every((c) => (row[c] ?? '').trim());
   return (
     <div className="flex gap-2 px-2.5 py-1.5">
-      {cols.map((c) => c === 'profile' && choices.length > 0
-        // a profile is one of the pipeline's, never free text
-        ? <select key={c} className="bg-transparent text-small" aria-label="profile" value={row[c] ?? ''}
-            onChange={(e) => setRow({ ...row, [c]: e.target.value })}>
-            <option value="">profile…</option>{choices.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        : <input key={c} className="flex-1 min-w-0 bg-transparent text-small outline-none" placeholder={`+ ${c}`} aria-label={c}
+      {cols.map((c) => <input key={c} className="flex-1 min-w-0 bg-transparent text-small outline-none" placeholder={`+ ${c}`} aria-label={c}
             value={row[c] ?? ''} onChange={(e) => setRow({ ...row, [c]: e.target.value })} />)}
       <button className="text-meta text-[var(--color-text-muted)] disabled:opacity-40" disabled={!full}
         onClick={() => { onAdd(Object.fromEntries(cols.map((c) => [c, row[c].trim()]))); setRow({}); }}>Add</button>
@@ -391,13 +385,12 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
     const modeFields = s.fields.filter((f) => f.scope === 'mode');
     const shared = s.fields.filter((f) => f.scope !== 'mode');
     const when = modeFields.find((f) => f.key === 'when');
-    const prof = modeFields.find((f) => f.key === 'profile');
     const checks = modeFields.find((f) => f.key === 'validations');
     const repos = modeFields.find((f) => f.key === 'mode_repos');
     return (
       <>
         <table className="w-full text-small mt-1" data-testid="pa-modes">
-          <thead><tr>{['Mode', 'Used when', 'Starts as', 'Checks'].map((h) => <th key={h} className="text-left font-normal text-meta text-[var(--color-text-muted)] pb-1.5 pr-3 border-b border-[var(--color-border)]">{h}</th>)}</tr></thead>
+          <thead><tr>{['Mode', 'Used when', 'Checks'].map((h) => <th key={h} className="text-left font-normal text-meta text-[var(--color-text-muted)] pb-1.5 pr-3 border-b border-[var(--color-border)]">{h}</th>)}</tr></thead>
           <tbody>{form.modes.map((m) => {
             // what the table shows is what Save would write: unsaved values included
             const live = (f: AgentFormField | undefined) => {
@@ -419,7 +412,6 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
                 {m.isDefault && <span className="ml-1.5 text-[10.5px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1">default</span>}
                 {m.standard && <span className="ml-1.5 text-[10.5px] text-[var(--color-text-muted)] border border-[var(--color-border)] rounded px-1">standard</span>}</td>
               <td className="py-2 pr-3 align-top border-b border-[var(--color-border)] text-[var(--color-text-muted)]">{String(live(when) ?? '')}</td>
-              <td className="py-2 pr-3 align-top border-b border-[var(--color-border)]">{String(live(prof) ?? '')}</td>
               <td className="py-2 pr-3 align-top border-b border-[var(--color-border)] text-[var(--color-text-muted)]">{((checks?.values?.[m.id] as Rows) ?? []).length - dropped}</td>
             </tr>);
           })}</tbody>

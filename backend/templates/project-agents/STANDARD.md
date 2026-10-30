@@ -35,7 +35,7 @@ Brain Hub shows it; each field says what it is for and who changes it.
 5. **Runs in**: Where its work may run. A mode that needs this machine stays here even when the cloud is allowed.
 6. **Intake**: How a request reaches it: a new request is compared with these.
 7. **Judgment**: When it decides on its own and when it brings you in.
-8. **Pipeline profiles**: For reference: what each profile runs. A run is created with its mode's profile, raised by Judgment; it does not change afterwards.
+8. **Pipeline profiles**: For reference: what each profile runs. How a task runs (native, or one of these profiles) is picked for each request when it is dispatched, not set here.
 
 Who changes a field:
 
@@ -57,7 +57,6 @@ Who changes a field:
 | Capabilities | Tools and MCP | Scripts and MCP servers the Brain declares (aim.json). | From the Brain | read from the Brain |
 | Capabilities | Jobs | Scheduled work this Brain owns. | From the Brain | read from the Brain |
 | Modes | Used when (required) | The kind of request this mode handles. Modes must not overlap. | Editable | `modes[].when` |
-| Modes | Starts as | The pipeline profile a run of this mode is created with. Judgment can raise it. | Editable | `modes[].profile` |
 | Modes | Repositories | The repos this mode works in. | From the Brain | `modes[].repos` |
 | Modes | Setup | Installs run before the checks, copied from the file the repo declares them in. | From the Brain (rows may be dropped) | `modes[].setup` |
 | Modes | Checks a run must pass | Commands from the repo's validations.json or CI, copied verbatim. | From the Brain (rows may be dropped) | `modes[].validations` |
@@ -72,9 +71,8 @@ Who changes a field:
 | Intake | Typical requests (required) | 3-5 requests it handles, one sentence each. | Editable | `intake.handles` |
 | Intake | Other names | Names people use for this Brain. Each routes a request here; the ones you keep move into aim.json when you confirm. | Your choice | `intake.proposed_aliases` |
 | Judgment | When unsure | What it does before acting on a guess. | Editable | `confidence` |
-| Judgment | When to use more process | Requests that need a heavier profile than the mode starts with. | Editable | `modes[].profile_rules` |
 | Judgment | Review focus | What every review of work here checks, each with the document it comes from. | Editable | `watches` |
-| Pipeline profiles | Profiles | The profiles a pipeline run can use. | Fixed | the product |
+| Pipeline profiles | Profiles | The profiles a pipeline run can use. A dispatch picks native or one of them per request. | Fixed | the product |
 <!-- TEMPLATE:END -->
 
 A draft also records `schema` (`2`), `status` (`draft` until a person confirms; only
@@ -87,19 +85,21 @@ the Brain is not ready until the drafting step fills them in.
 
 ## Modes
 
-A mode is one kind of work: when it is used, its pipeline profile, where it runs, its
-repos, setup, checks, skills and delivery. A mode can only **narrow** the shared part
+A mode is one kind of work: when it is used, where it runs, its repos, setup, checks,
+skills and delivery. How one task of it runs (native, or a pipeline profile) is not part
+of the mode: it is picked for each request when the task is dispatched, by the same rules
+for every Brain. A mode can only **narrow** the shared part
 (placements a subset, reserved actions and gates only added), so the safety baseline is
 reviewed once.
 
 The agent picks the mode by matching the task with each mode's `when`. The standard
 modes of one shape of Brain therefore never overlap:
 
-| Mode | For | `when` | Profile |
-|---|---|---|---|
-| `code-change` | a Brain with a repo | a change to the code of a bound repo | `bugfix` (delivery `bundle`) |
-| `research` | every Brain | with a repo: a question, an investigation or a design, with no change to code. Without: a question or an investigation, answered in the conversation | `research` |
-| `write` | a Brain without a repo | a document or a report as the deliverable | `direct` |
+| Mode | For | `when` |
+|---|---|---|
+| `code-change` | a Brain with a repo | a change to the code of a bound repo (delivery `bundle`) |
+| `research` | every Brain | with a repo: a question, an investigation or a design, with no change to code. Without: a question or an investigation, answered in the conversation |
+| `write` | a Brain without a repo | a document or a report as the deliverable |
 
 The model may propose more modes (a release mode, a reporting mode), each with a `when`
 and the source it comes from. A mode whose checks need a tool only one place has (a Rust
@@ -112,3 +112,5 @@ from a file the repo declares them in, never written by hand.
 - `identity.summary` or `intake.handles` is missing.
 - An action is no longer reserved for a person.
 - The Brain has a bound repo but no `code-change` mode.
+- A mode still names a pipeline profile (`profile`, `profile_rules`): it no longer has an
+  effect and can be removed.

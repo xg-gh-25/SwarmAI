@@ -540,7 +540,8 @@
           "brain": "Brain",
           "repo": "仓库",
           "acceptance": "验收",
-          "delivery": "交付"
+          "delivery": "交付",
+          "execution": "执行"
         },
         "reason": {
           "only_free": "唯一能接的",
@@ -553,7 +554,6 @@
           "synced": "Brain 已同步",
           "restored": "Brain 已还原 Hive 上的改动"
         },
-        "profile": "profile {{profile}}",
         "revision": "定义",
         "commit": "本机的提交",
         "dirty_one": "本机有 {{count}} 个文件没提交，没有带过去",
@@ -566,7 +566,9 @@
         "view": "在 Swarm Out 里看",
         "open": "打开 Hive session",
         "openBrain": "打开 {{brain}}",
-        "retryHint": "处理好之后说「继续派」"
+        "retryHint": "处理好之后说「继续派」",
+        "native": "native：在会话里直接做，不建 pipeline run",
+        "pipeline": "pipeline · {{profile}}"
       }
     }
   },

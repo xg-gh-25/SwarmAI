@@ -515,6 +515,10 @@ export interface SwarmOutDispatchContent {
   brain: string | null;
   mode: string | null;
   profile: string | null;
+  /** how the task runs, chosen at dispatch (design 2026-10-30-run-spec §3); null on an
+   *  older row */
+  execution?: 'native' | 'pipeline' | null;
+  executionWhy?: string | null;
   revision: string | null;
   /** what the Brain sync did: up to date / synced / restored … */
   brainSync: string | null;

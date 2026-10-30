@@ -540,7 +540,8 @@
           "brain": "Brain",
           "repo": "Repository",
           "acceptance": "Done when",
-          "delivery": "Delivery"
+          "delivery": "Delivery",
+          "execution": "Runs"
         },
         "reason": {
           "only_free": "the only one free",
@@ -553,7 +554,6 @@
           "synced": "Brain synced",
           "restored": "Brain restored on the Hive"
         },
-        "profile": "profile {{profile}}",
         "revision": "definition",
         "commit": "this machine's commit",
         "dirty_one": "{{count}} uncommitted file here was not sent",
@@ -566,7 +566,9 @@
         "view": "View in Swarm Out",
         "open": "Open Hive session",
         "openBrain": "Open {{brain}}",
-        "retryHint": "Once it is fixed, say \"send it again\""
+        "retryHint": "Once it is fixed, say \"send it again\"",
+        "native": "native: in the session, no pipeline run",
+        "pipeline": "pipeline · {{profile}}"
       }
     }
   },

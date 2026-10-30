@@ -31,7 +31,7 @@ from urllib.parse import urlsplit, urlunsplit
 import yaml
 
 from core import project_agent_standard as std
-from core.project_agent import (PROFILES, RESERVED_ACTIONS, _bindings, _list_of_dicts, _mode_value,
+from core.project_agent import (RESERVED_ACTIONS, _bindings, _list_of_dicts, _mode_value,
                                 _modes, _rows, _skills, _str_list, gate_files, is_general_name,
                                 repo_roots)
 
@@ -177,13 +177,11 @@ def _value(f: std.Field, v: Any) -> Any:
         return _str_list(v)
     if f.shape == "rows":
         return _rows(v, f.columns + (("repo",) if f.key in ("setup", "validations") else ())
-                     + (("source",) if f.key in ("profile_rules", "aliases") and "source" not in f.columns else ()))
+                     + (("source",) if f.key == "aliases" and "source" not in f.columns else ()))
     return v
 
 
 def _choices(f: std.Field, d: dict[str, Any], project_dir: Path, mode: Optional[dict[str, Any]]) -> Optional[list]:
-    if f.key in ("profile", "profile_rules"):
-        return sorted(PROFILES)
     if f.key == "delivery":
         return ["bundle", "branch-pr"]
     if f.key == "default_mode":
@@ -223,11 +221,8 @@ def _view(f: std.Field, d: dict[str, Any], project_dir: Path, name: str, general
                 + (", or as a branch you open a pull request from." if pr else "."))
     if f.key == "profiles":
         from core.run_protocol.lifecycle import PROFILE_STAGES
-        starts = {}
-        for m in _modes(d):
-            starts.setdefault(str(m.get("profile")), []).append(str(m.get("id")))
-        return [{"name": p, "for": PROFILE_FOR.get(p, ""), "stages": list(PROFILE_STAGES[p]),
-                 "modes": starts.get(p, [])} for p in PROFILE_STAGES]
+        return [{"name": p, "for": PROFILE_FOR.get(p, ""), "stages": list(PROFILE_STAGES[p])}
+                for p in PROFILE_STAGES]
     return None
 
 

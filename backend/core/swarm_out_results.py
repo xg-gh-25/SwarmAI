@@ -814,8 +814,12 @@ def _public_agent(res: dict, agent: Any) -> dict:
     gates = names | {f"error:{g}" for g in names} | {"integrity"}
     ref = res.get("gate_refusals") if isinstance(res.get("gate_refusals"), dict) else None
     return {
-        "project_agent": {k: agent.get(k) if isinstance(agent.get(k), str) else None
-                          for k in ("brain", "mode", "profile", "delivery")},
+        "project_agent": {**{k: agent.get(k) if isinstance(agent.get(k), str) else None
+                             for k in ("brain", "mode", "profile", "delivery")},
+                          # how the run was dispatched to run (native / pipeline); a row from
+                          # before the choice was made per dispatch has none
+                          "execution": agent.get("execution") if agent.get("execution") in ("native", "pipeline")
+                          else None},
         "checks": [{"id": i, "status": got.get(i) if got.get(i) in _CHECK_STATUSES else "not_run"}
                    for i in ids if isinstance(i, str)] if ids else None,
         "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},

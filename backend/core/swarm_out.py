@@ -318,8 +318,9 @@ def pick_hive(hives: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: str, acceptance: str,
-                        mode: Optional[str] = None, profile: Optional[str] = None,
-                        origin: str = "swarm-out", *, seen_revision: str, brief: str = "") -> dict[str, Any]:
+                        mode: Optional[str] = None, execution: Optional[str] = None,
+                        origin: str = "swarm-out", *, seen_revision: str, brief: str = "",
+                        why: str = "") -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision the person was shown (``seen_revision``,
@@ -332,7 +333,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     from core.project_registry import get_swarmws
     ws = get_swarmws()
     try:
-        spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, profile, "hive")
+        spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, execution, why, "hive")
     except task_spec.SpecError as e:
         raise SwarmOutError(str(e)) from None
     if not seen_revision or spec["revision"] != seen_revision:
@@ -368,6 +369,9 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
         raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: the Hive did not answer "
                             f"({type(e).__name__}); nothing was sent") from None
     agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "delivery", "acceptance", "gates")}
+    # how the task runs, decided here for this request (design 2026-10-30-run-spec §3)
+    agent["execution"] = spec["execution"]["how"]
+    agent["execution_why"] = spec["execution_why"]
     # the checks the run is expected to run: compared with its Bash calls when its
     # result is read (core/swarm_out_results)
     agent["validations"] = [{"id": v["id"], "command": v["command"]} for v in spec["validations"]]

@@ -10,8 +10,9 @@ there to the end, with nobody watching, while this machine can sleep. Its questi
 approvals come back to the Swarm Out panel, where the person answers them.
 
 Every task goes out under a Brain's **Project Agent**: the Brain's definition says how
-the work is done there (mode, pipeline profile, setup and checks, what is asked of the
-person, gates, delivery), and the Hive gets the Brain synced and a project section
+the work is done there (mode, setup and checks, what is asked of the person, gates,
+delivery). How this one task runs (native, or a pipeline profile) you choose here, for
+this request (step 3). The Hive gets the Brain synced and a project section
 before the task. A task that belongs to no Brain goes under the General Brain's
 **Runner Agent** (`--brain General`).
 
@@ -20,8 +21,8 @@ Commands (they call the local daemon; Hive addresses and credentials stay inside
 ```bash
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out route --task-file <file> [--brain <B>] [--file <path>] [--bound-project <P>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" [--mode <m>] [--profile <p>]
-"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --revision <revision from spec> [--hive <name>] [--mode <m>] [--profile <p>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" [--mode <m>]
+"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title "<short title>" --brief "<one or two sentences>" --brain <B> --task-file <file> --acceptance "<done when>" --execution native|pipeline:<profile> --why "<one sentence>" --revision <revision from spec> [--hive <name>] [--mode <m>]
 "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 ```
 
@@ -41,7 +42,7 @@ and carry out (the autonomy principle): the person sees the result on the dispat
 | the task fits two modes whose results differ (a report vs commits) | ask: each mode with what it will produce, the one you recommend first |
 | you cannot write a checkable acceptance from what was said | ask what done looks like |
 | which Hive | do not ask: leave out `--hive` (the daemon picks the least busy running one) unless the person named one |
-| profile, title, brief | do not ask: the mode's profile rule; you write title and brief |
+| how it runs (`--execution`), title, brief | do not ask: step 3's table; you write title and brief. Unsure between two: take the lighter and say why in `--why` |
 | uncommitted files (`dirty` > 0) | do not ask: the card says they were not sent |
 | `spec` refuses | do not ask and do not dispatch: the dispatch card says why when you run `dispatch`; or tell the person the rule (for example: confirm the Project Agent in the Brain Hub) |
 
@@ -63,12 +64,28 @@ numbered text options ("reply with a number"). One question at a time, and only 
    and do not write your own clone or pull instructions.
    **Acceptance** is required: one checkable sentence of what done looks like.
    **Brief**: one or two sentences of what the task is, for the card.
-3. **Choose the mode and profile.** Read the `modes` of the Brain's `project-agent.yaml`
-   (its directory: `Projects/<B>/`, or `Knowledge/Library/` for General). Pick the mode
-   whose `when` fits, and a profile from that mode (its `profile` or one of its
-   `profile_rules`); none fits → leave them out (the default mode). A task whose cause
-   or scope is unclear goes to the research mode first, not to an implementation mode.
-   Two modes that fit with different results: ask (above).
+3. **Choose the mode and how it runs.** Read the `modes` of the Brain's
+   `project-agent.yaml` (its directory: `Projects/<B>/`, or `Knowledge/Library/` for
+   General). Pick the mode whose `when` fits; none fits → leave `--mode` out (the default
+   mode). A task whose cause or scope is unclear goes to the research mode first, not to
+   an implementation mode. Two modes that fit with different results: ask (above).
+   Then choose how it runs, the same way for every Brain (a Project Agent does not set
+   it), and pass it as `--execution` with one sentence in `--why`:
+
+   | The task | `--execution` |
+   |---|---|
+   | the person named it ("走 pipeline full", "直接改") | as named |
+   | a question, an investigation, a report or design that is not a file in a repo | `native` |
+   | building, releasing, operating, reading CI | `native` |
+   | a change to a repo (code, or a document in the repo) with no risk | `native` |
+   | a change with risk (several modules, a public interface or data shape, a migration, security): a defect with a reproduction | `pipeline:bugfix` |
+   | the same, a bounded feature | `pipeline:full` |
+   | the same, a known pattern | `pipeline:trivial` |
+   | the same, the person's words are the whole spec and read only one way | `pipeline:direct` |
+
+   For a change, look at what it touches before you judge the risk: on a Brain with a
+   code graph, `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol> --project
+   <B>` lists the callers. The Hive does not change this choice.
 4. **Check, then dispatch.** Run `spec`. `refusals` not empty: stop and tell the person
    each one (it names the rule). Otherwise run `dispatch` with the same arguments plus
    `--revision` = the spec's `revision` and `--brief`; no confirmation is asked. Run it

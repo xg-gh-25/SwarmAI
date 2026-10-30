@@ -1,10 +1,12 @@
 """Tests for core.project_agent and its two readers (Brain Hub detail, P6 gate).
 
 What is tested: a valid definition parses into the camelCase shape the Brain Hub
-shows; a profile or placement the pipeline does not support is reported, never
-silently accepted; a missing file is None / PENDING (old Brains are not broken);
-a malformed file never raises; ⑤ Delivery lists project-agent.yaml next to
-bindings.yaml; the P6 gate FAILs an unsupported profile.
+shows; a placement or status the product does not support is reported, never silently
+accepted; a pipeline profile in the file is no longer read (a dispatch picks how work
+runs, design 2026-10-30-run-spec §3), so even a nonsense one is no problem; a missing
+file is None / PENDING (old Brains are not broken); a malformed file never raises;
+⑤ Delivery lists project-agent.yaml next to bindings.yaml; the P6 gate FAILs an
+unsupported placement.
 """
 from __future__ import annotations
 
@@ -54,8 +56,9 @@ def test_valid_definition_parses(tmp_path):
     (tmp_path / "project-agent.yaml").write_text(GOOD)
     pa = load_project_agent(tmp_path)
     assert pa is not None and pa["problems"] == []
-    assert pa["defaultProfile"] == "bugfix"
-    assert pa["profileRules"][1] == {"when": "a new public API endpoint", "profile": "full"}
+    # the v1 profile keys are not read any more
+    assert "defaultProfile" not in pa and "profileRules" not in pa
+    assert all("profile" not in m for m in pa["modes"])
     assert pa["reviewFocus"][0]["source"] == "TECH.md"
     assert pa["validations"][0]["command"] == "pytest -q"
     assert pa["placements"] == ["chat-tab"]
@@ -65,8 +68,9 @@ def test_unsupported_values_are_reported():
     probs = validate({"default_profile": "turbo", "profile_rules": [{"when": "", "profile": "x"}],
                       "placements": ["cloud"], "status": "done"})
     joined = " | ".join(probs)
-    for needle in ("default_profile", "profile_rules[0].profile", "profile_rules[0].when", "placements", "status"):
+    for needle in ("placements", "status"):
         assert needle in joined
+    assert "profile" not in joined           # not read: no longer a problem either
 
 
 def test_missing_is_none_and_malformed_never_raises(tmp_path):
@@ -92,8 +96,12 @@ def test_p6_gate(tmp_path):
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PENDING   # a draft waits for the person
     (tmp_path / "project-agent.yaml").write_text(GOOD.replace("status: draft", "status: reviewed"))
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PASS
-    (tmp_path / "project-agent.yaml").write_text(GOOD.replace("default_profile: bugfix", "default_profile: turbo"))
+    (tmp_path / "project-agent.yaml").write_text(GOOD.replace("placements: [chat-tab]", "placements: [cloud]"))
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_FAIL
+    # a profile in the file is not checked by either path (the validator, or the
+    # off-host fallback)
+    (tmp_path / "project-agent.yaml").write_text(GOOD.replace("default_profile: bugfix", "default_profile: turbo"))
+    assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PENDING
 
 
 def test_status_for_the_hub_home(tmp_path):
@@ -114,7 +122,7 @@ def test_status_for_the_hub_home(tmp_path):
     from core.project_agent import check_sources
     check_sources(tmp_path)
     assert project_agent_status(tmp_path) == "reviewed"
-    f.write_text(GOOD.replace("default_profile: bugfix", "default_profile: yolo"))
+    f.write_text(GOOD.replace("placements: [chat-tab]", "placements: [cloud]"))
     assert project_agent_status(tmp_path) == "invalid"
     f.write_text("- not\n- a mapping\n")
     assert project_agent_status(tmp_path) == "invalid"

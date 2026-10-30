@@ -23,7 +23,8 @@ ROW = {"dispatch_id": "so_b150abc3fd86", "hive_id": "h1", "hive": "explorer", "s
        "repos": [{"url": "https://github.com/xg-gh-25/SwarmAI.git", "ref": "main",
                   "dir": "Hive/repos/github.com/xg-gh-25/SwarmAI", "sha": "a680d1a0" + "0" * 32}],
        "project_agent": {"brain": "SwarmAI", "mode": "research", "revision": "fcdbf4dc" + "0" * 56,
-                         "profile": "research", "delivery": "bundle", "acceptance": "a report exists"},
+                         "profile": "research", "delivery": "bundle", "acceptance": "a report exists",
+                         "execution": "pipeline", "execution_why": "a report from the week's commits"},
        "brief": "Read the week's commits and write what changed.", "hive_reason": "idle",
        "brain_sync": "synced", "repo_notes": [{"name": "swarmai", "url": "https://github.com/xg-gh-25/SwarmAI.git", "dirty": 3}]}
 CMD = ('cd ~/.swarm-ai/SwarmWS && "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch '
@@ -58,6 +59,12 @@ def test_a_card_comes_from_the_dispatch_log_never_from_the_printed_row(monkeypat
     assert (b["sessionId"], b["hiveReason"], b["brainSync"], b["delivery"]) == ("0a7e6d08-f227", "idle", "synced", "bundle")
     assert "3 uncommitted files not sent" in b["text"] and "so_b150abc3fd86" in b["text"]
     assert "• Hive: explorer (idle)" in b["text"]
+    assert (b["execution"], b["executionWhy"]) == ("pipeline", "a report from the week's commits")
+    assert "• Runs: pipeline research (a report from the week's commits)" in b["text"]
+    native = card.from_row({**ROW, "project_agent": {**ROW["project_agent"], "execution": "native", "profile": None}})
+    assert "• Runs: native" in native["text"]
+    older = card.from_row({**ROW, "project_agent": {**ROW["project_agent"], "execution": "x"}})
+    assert older["execution"] is None and "• Runs:" not in older["text"]   # a row from before the choice
     assert [card.hive_reason_text(c) for c in ("named", None, "only_free", "least_busy:2", "odd")] == [
         None, None, "the only one free", "the least busy (2 running)", "odd"]
     # an id the log does not hold is no card at all
@@ -190,7 +197,7 @@ def test_a_non_owner_channel_session_is_refused(monkeypatch, capsys, tmp_path):
     from core.security_hooks import create_file_access_permission_handler, owner_command_denial
     from scripts import swarm_out as cli
     monkeypatch.setenv(RESTRICTED_ENV, "1")
-    for argv in (["runs"], ["hives"], ["dispatch", "--title", "t", "--brain", "B", "--task", "x",
+    for argv in (["runs"], ["hives"], ["dispatch", "--title", "t", "--brain", "B", "--task", "x", "--execution", "native",
                                        "--acceptance", "a", "--revision", "r"]):
         assert cli.main(argv) == 1 and "only available to the owner" in capsys.readouterr().out
     for c in ('"$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --brain B',

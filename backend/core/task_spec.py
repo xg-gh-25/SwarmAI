@@ -7,15 +7,18 @@ docs/design/2026-10-28-project-agent-flow.md §7 ①–④, ⑥).
   several: ``certain`` is False and ``choices`` lists every Brain with a definition
   (its summary and what it handles, for the model to propose one and the person to
   pick) plus "not part of any Brain" = the General Brain's Runner Agent.
-- ``build(workspace, brain, task, acceptance, mode=, profile=, placement=)``: the Task
-  Spec. The mode and profile are the agent's choice (they match prose ``when`` rules);
-  this checks the choice against the definition and records which rule it rests on.
+- ``build(workspace, brain, task, acceptance, mode=, execution=, why=, placement=)``: the
+  Task Spec. The mode is the agent's choice (it matches the mode's prose ``when``); how
+  the task runs (``execution``: ``native`` or ``pipeline:<profile>``) is the agent's
+  choice for this request, by the rules every Brain shares (design 2026-10-30-run-spec
+  §3, the s_swarm-out skill), with ``why`` recorded. The Project Agent does not set it.
   Everything else (delivery, revision, rules) comes from the definition; the repositories
   are every one the Brain binds, at this machine's commit when it has a checkout.
+- ``parse_execution(text)``: ``{"how", "profile"}`` of an execution choice.
 - ``admit(spec)``: the deterministic admission checks; each refusal names its rule.
 - ``segment(spec)``: the project section put before the task text on the Hive.
 
-The host recomputes the spec at dispatch from (brain, mode, profile, acceptance, task):
+The host recomputes the spec at dispatch from (brain, mode, execution, acceptance, task):
 nothing an agent wrote into a spec is trusted beyond those choices.
 """
 from __future__ import annotations
@@ -31,6 +34,8 @@ from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, _bindings, _l
 from core.project_agent_session import PinError, brain_dir
 
 MAX_ACCEPTANCE_CHARS = 2000
+#: why this execution was chosen, one sentence for the dispatch card
+MAX_WHY_CHARS = 300
 _DESKTOP_PLATFORMS = frozenset({"desktop", "macos"})
 
 
@@ -87,18 +92,24 @@ def route(workspace: Path, text: str, brain: Optional[str] = None,
 
 # ── ② Task Spec ──────────────────────────────────────────────────────────────
 
-def _profile_reason(mode: dict[str, Any], profile: str) -> Optional[str]:
-    if profile == mode.get("profile"):
-        return "the mode's profile"
-    for r in _list_of_dicts(mode.get("profile_rules")):
-        if r.get("profile") == profile:
-            return f"profile rule: {r.get('when')}"
-    return None
+def parse_execution(text: Any) -> dict[str, Any]:
+    """``native`` -> ``{"how": "native", "profile": None}``; ``pipeline:<profile>`` ->
+    ``{"how": "pipeline", "profile": <profile>}``. SpecError for anything else."""
+    from core.run_protocol.lifecycle import PROFILE_STAGES
+    t = text.strip() if isinstance(text, str) else ""
+    if t == "native":
+        return {"how": "native", "profile": None}
+    how, _, prof = t.partition(":")
+    if how == "pipeline" and prof in PROFILE_STAGES:
+        return {"how": "pipeline", "profile": prof}
+    raise SpecError("say how the task runs: native, or pipeline:<profile> with a profile of "
+                    f"{', '.join(PROFILE_STAGES)} (got {t[:40]!r})")
 
 
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
-          profile: Optional[str] = None, placement: str = "hive") -> dict[str, Any]:
-    """The Task Spec; raises SpecError when the choice does not fit the definition."""
+          execution: Optional[str] = None, why: str = "", placement: str = "hive") -> dict[str, Any]:
+    """The Task Spec; raises SpecError when a choice does not fit (the mode against the
+    definition, the execution against the product's profiles)."""
     try:
         d = brain_dir(workspace, brain)
     except PinError as e:
@@ -116,12 +127,7 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         raise SpecError(f"{brain}'s Project Agent has no mode {mid!r} (modes: {', '.join(modes)})")
     m = modes[mid]
     view = _mode_view(m, n)
-    prof = profile or view["profile"]
-    if not prof:
-        raise SpecError(f"mode {mid} has no profile")
-    why_profile = _profile_reason(m, prof)
-    if why_profile is None:
-        raise SpecError(f"profile {prof!r} is neither mode {mid}'s profile nor one of its profile rules")
+    ex = parse_execution(execution)
     repos = _brain_repos(d, mid, view["repos"])
     skills, _err = _skills(d)
     platform = skills or {}
@@ -132,7 +138,10 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     return {
         "brain": brain, "mode": mid, "mode_when": view["when"],
         "mode_chosen": "named" if mode else "the default mode",
-        "profile": prof, "profile_reason": why_profile,
+        # how the task runs, chosen for this request (``profile`` is the pipeline's, None
+        # when native), and the one sentence the dispatch card shows for why
+        "execution": ex, "profile": ex["profile"],
+        "execution_why": " ".join((why or "").split())[:MAX_WHY_CHARS],
         "task": (task or "").strip(), "acceptance": " ".join((acceptance or "").split()),
         "placement": placement, "repos": repos, "delivery": view["delivery"],
         "revision": revision(d), "status": n.get("status", "draft"),
@@ -238,8 +247,13 @@ def segment(spec: dict[str, Any]) -> str:
                      "§ My Workspace). Before you settle on an approach, search it with the words of "
                      f'your solution: "$SWARM_BACKEND_BIN" knowledge find --project {b} --query "<words>". '
                      "Never read TECH.md or IMPROVEMENT.md whole.")
-    lines.append(f"How: run the task through the pipeline (s_autonomous-pipeline) with profile "
-                 f"`{spec['profile']}`.")
+    if spec["execution"]["how"] == "native":
+        lines.append("How: do the task in this session; no pipeline run. It was decided when the "
+                     "task was dispatched; do not create one.")
+    else:
+        lines.append(f"How: run the task through the pipeline (s_autonomous-pipeline) with profile "
+                     f"`{spec['profile']}`. It was decided when the task was dispatched; use no "
+                     "other profile.")
     if spec["setup"]:
         lines.append("Setup (from the repository's own CI):")
         lines += [f"- `{s['command']}`" + (f" (in {s['repo']}/{s['cwd']})" if s.get("repo") else "")
@@ -253,7 +267,7 @@ def segment(spec: dict[str, Any]) -> str:
         lines += [f"- {w['area']}: {w['why']}" for w in spec["watches"]]
     if spec["skills"]:
         lines.append(f"Skills for this task: {', '.join(spec['skills'])}.")
-    if spec["repos"] and spec["profile"] == "research":
+    if spec["repos"] and (spec["profile"] == "research" or spec["mode"] == "research"):
         lines.append("Repositories: they are there to read; this mode changes no code, so do not "
                      "commit in them.")
     elif spec["repos"]:

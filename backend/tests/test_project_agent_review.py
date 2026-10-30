@@ -99,8 +99,6 @@ def test_edit_changes_exactly_what_was_sent_and_writes_a_draft(tmp_path):
               {"path": "intake.handles", "value": ["fix a signer bug", " ", "add a key"]},
               {"path": "watches", "value": [{"area": "timing", "why": "constant time", "source": "PRODUCT.md"}]},
               {"path": "modes[research].when", "value": "a question about signing"},
-              {"path": "modes[research].profile_rules", "value": [{"when": "a design", "profile": "full"}]},
-              {"path": "modes[release].profile", "value": "trivial"},
               {"path": "confidence", "value": ""})
     doc = _doc(b)
     assert r["status"] == "draft" and doc["status"] == "draft" and doc["reviewed_by"] is None
@@ -109,8 +107,7 @@ def test_edit_changes_exactly_what_was_sent_and_writes_a_draft(tmp_path):
     assert doc["watches"] == [{"area": "timing", "why": "constant time", "source": "PRODUCT.md"}]
     modes = {m["id"]: m for m in doc["modes"]}
     assert modes["research"]["when"] == "a question about signing"
-    assert modes["research"]["profile_rules"] == [{"when": "a design", "profile": "full"}]
-    assert modes["release"]["profile"] == "trivial" and "confidence" not in doc
+    assert "confidence" not in doc
     assert (b / "project-agent.yaml").read_text().startswith("# Project Agent definition")
 
 
@@ -123,8 +120,9 @@ def test_edit_changes_exactly_what_was_sent_and_writes_a_draft(tmp_path):
     {"path": "modes[research].setup", "value": []},               # rows from the Brain: drop only
     {"path": "identity.summary", "value": "two\nlines"},
     {"path": "identity.summary", "value": 7},
-    {"path": "modes[research].profile", "value": "turbo"},
-    {"path": "modes[research].profile_rules", "value": [{"when": "x", "profile": "turbo"}]},
+    # a Project Agent names no profile any more: not a form field
+    {"path": "modes[research].profile", "value": "full"},
+    {"path": "modes[research].profile_rules", "value": [{"when": "x", "profile": "full"}]},
     {"path": "gates.enforce", "value": ["no_git_push", "another"]},   # a gate is only dropped here
     {"path": "placements", "value": ["hive"]},                    # a chat tab is always allowed
     {"path": "placements", "value": ["chat-tab", "slack"]},       # not a placement yet
@@ -320,9 +318,13 @@ def test_p6_without_the_validator_reads_a_v2_definition(tmp_path, monkeypatch):
     assert mod._check_project_agent(b)[1] == mod.STATUS_FAIL              # nobody drafted it yet
     (b / "project-agent.yaml").write_text(yaml.safe_dump({**DOC, "status": "reviewed"}))
     assert mod._check_project_agent(b)[1] == mod.STATUS_PASS
-    bad = {**DOC, "modes": [{**DOC["modes"][0], "profile": "turbo"}]}
+    bad = {**DOC, "placements": ["cloud"]}
     (b / "project-agent.yaml").write_text(yaml.safe_dump(bad))
     assert mod._check_project_agent(b)[1] == mod.STATUS_FAIL
+    # a profile left in a mode is not read, by either path
+    legacy = {**DOC, "modes": [{**DOC["modes"][0], "profile": "turbo"}, *DOC["modes"][1:]]}
+    (b / "project-agent.yaml").write_text(yaml.safe_dump({**legacy, "status": "reviewed"}))
+    assert mod._check_project_agent(b)[1] == mod.STATUS_PASS
 
 
 # ── review round 1 (form) ────────────────────────────────────────────────────

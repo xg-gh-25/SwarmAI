@@ -142,6 +142,8 @@ def from_row(row: dict) -> dict:
         "hive": _s(row.get("hive")), "hiveReason": _s(row.get("hive_reason"), 80),
         "brain": _s(pa.get("brain"), 80), "mode": _s(pa.get("mode"), 80),
         "profile": _s(pa.get("profile"), 20), "revision": _s(pa.get("revision"), 64),
+        "execution": pa.get("execution") if pa.get("execution") in ("native", "pipeline") else None,
+        "executionWhy": _s(pa.get("execution_why"), 300),
         "brainSync": _s(row.get("brain_sync"), 120), "repos": repos,
         "acceptance": _s(pa.get("acceptance"), 600), "delivery": _s(pa.get("delivery"), 40),
         "error": None, "at": row.get("sent_at") or datetime.now().astimezone().isoformat(),
@@ -156,6 +158,7 @@ def failure(detail: str, title: Optional[str], brain: Optional[str], hive: Optio
     block = {"type": BLOCK_TYPE, "ok": False, "maybeSent": maybe_sent, "dispatchId": None, "sessionId": None,
              "title": _s(title) or "", "brief": None, "hive": _s(hive), "hiveReason": None,
              "brain": _s(brain, 80), "mode": None, "profile": None, "revision": None,
+             "execution": None, "executionWhy": None,
              "brainSync": None, "repos": [], "acceptance": None, "delivery": None,
              "error": " ".join(detail.split())[:_DETAIL_MAX],
              "at": datetime.now().astimezone().isoformat()}
@@ -216,8 +219,11 @@ def _text_of(b: dict) -> str:
     hive = b.get("hive") or "?"
     why = hive_reason_text(b.get("hiveReason"))
     lines.append(f"• Hive: {hive}" + (f" ({why})" if why else ""))
-    agent = " / ".join(x for x in (b.get("mode"), b.get("profile") and f"profile {b['profile']}") if x)
-    lines.append(f"• Brain: {b.get('brain') or '?'}" + (f" · Project Agent: {agent}" if agent else ""))
+    lines.append(f"• Brain: {b.get('brain') or '?'}" + (f" · Project Agent: {b['mode']}" if b.get("mode") else ""))
+    how = (f"pipeline {b['profile']}" if b.get("execution") == "pipeline" and b.get("profile")
+           else "native" if b.get("execution") == "native" else None)
+    if how:
+        lines.append(f"• Runs: {how}" + (f" ({b['executionWhy']})" if b.get("executionWhy") else ""))
     for r in b.get("repos") or []:
         sha = (r.get("sha") or "")[:8]
         line = f"• Repository: {r.get('name')} @ {r.get('ref') or '?'}" + (f" {sha}" if sha else "")

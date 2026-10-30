@@ -19,7 +19,9 @@ What a standard is NOT: a validation rule. ``project_agent.validate`` decides wh
 wrong; ``required`` says what a finished draft has (P6 reports a skeleton), and
 ``deviations`` lists where a definition leaves the standard as advisory remarks.
 
-- ``MODES``: the standard modes, for which shape of Brain, their ``when`` and profile.
+- ``MODES``: the standard modes, for which shape of Brain and their ``when``. How a mode's
+  work runs (native or a pipeline profile) is not the Project Agent's: each dispatch picks
+  it from the request (design 2026-10-30-run-spec §3).
   A Brain "has a repo" when its ``bindings.yaml`` binds one (``project_agent._bindings``).
 - ``standard_modes(has_repo)`` / ``default_mode(has_repo)``: a draft's mode skeleton.
 - ``HEADER``: the comment every definition file starts with.
@@ -31,7 +33,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.project_agent import PROFILES, RESERVED_ACTIONS
+from core.project_agent import RESERVED_ACTIONS
 
 #: how a field may change. edit: drafted from the Brain's documents, changed on the form;
 #: brain: read from the Brain's files, changed there (``removable``: rows may be dropped
@@ -75,8 +77,8 @@ SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("intake", "Intake", "How a request reaches it: a new request is compared with these."),
     ("judgment", "Judgment", "When it decides on its own and when it brings you in."),
     ("profiles", "Pipeline profiles",
-     "For reference: what each profile runs. A run is created with its mode's profile, raised by "
-     "Judgment; it does not change afterwards."),
+     "For reference: what each profile runs. How a task runs (native, or one of these) is picked "
+     "for each request when it is dispatched, not set here."),
 )
 
 TEMPLATE: tuple[Field, ...] = (
@@ -108,10 +110,6 @@ TEMPLATE: tuple[Field, ...] = (
     Field("when", "modes", "Used when", "The kind of request this mode handles. Modes must not overlap.",
           "edit", "text", "modes[].when", required=True,
           propose=("when", "the kind of intent this mode handles (a new `when` needs a source)")),
-    Field("profile", "modes", "Starts as",
-          "The pipeline profile a run of this mode is created with. Judgment can raise it.",
-          "edit", "choice", "modes[].profile",
-          propose=("profile", f"one of {sorted(PROFILES)} (research stays research)")),
     Field("mode_repos", "modes", "Repositories", "The repos this mode works in.", "brain", "names",
           "modes[].repos", propose=("repos", ["names from facts.repos (new modes only; code-change has them all)"])),
     Field("setup", "modes", "Setup",
@@ -156,16 +154,14 @@ TEMPLATE: tuple[Field, ...] = (
     Field("confidence", "judgment", "When unsure", "What it does before acting on a guess.", "edit", "text",
           "confidence", example="Research first; ask before changing a public API",
           propose=("confidence", {"text": "str", "source": "str"})),
-    Field("profile_rules", "judgment", "When to use more process",
-          "Requests that need a heavier profile than the mode starts with.", "edit", "rows",
-          "modes[].profile_rules", columns=("when", "profile"),
-          propose=("profile_rules", [{"when": "str", "profile": "str", "source": "str"}])),
     Field("watches", "judgment", "Review focus",
           "What every review of work here checks, each with the document it comes from.", "edit", "rows",
           "watches", columns=("area", "why", "source"),
           propose=("watches", [{"area": "str", "why": "str", "source": "str"}])),
     # 8 Pipeline profiles
-    Field("profiles", "profiles", "Profiles", "The profiles a pipeline run can use.", "fixed", "view",
+    Field("profiles", "profiles", "Profiles",
+          "The profiles a pipeline run can use. A dispatch picks native or one of them per request.",
+          "fixed", "view",
           columns=("name", "for", "stages")),
 )
 
@@ -253,12 +249,12 @@ DEFAULT_RESERVED: tuple[str, ...] = tuple(sorted(RESERVED_ACTIONS))
 #: modes of one shape never overlap: without a repo, research answers in the conversation
 #: and write delivers a document; with a repo there is no write and a design is research.
 MODES: dict[str, dict[str, Any]] = {
-    "code-change": {"for": "repo", "profile": "bugfix", "delivery": "bundle",
+    "code-change": {"for": "repo", "delivery": "bundle",
                     "when": "a change to the code of a bound repo"},
-    "research": {"for": "every", "profile": "research",
+    "research": {"for": "every",
                  "when": {"repo": "a question, an investigation or a design, with no change to code",
                           "no-repo": "a question or an investigation, answered in the conversation"}},
-    "write": {"for": "no-repo", "profile": "direct",
+    "write": {"for": "no-repo",
               "when": "a document or a report as the deliverable"},
 }
 
@@ -282,7 +278,7 @@ def standard_modes(has_repo: bool) -> list[dict[str, Any]]:
     out = []
     for mid, spec in MODES.items():
         if _applies(spec, has_repo):
-            m = {"id": mid, "when": standard_when(mid, has_repo), "profile": spec["profile"]}
+            m = {"id": mid, "when": standard_when(mid, has_repo)}
             if "delivery" in spec:
                 m["delivery"] = spec["delivery"]
             out.append(m)
@@ -322,8 +318,8 @@ def ordered(doc: dict[str, Any]) -> dict[str, Any]:
 def deviations(doc: dict[str, Any], has_repo: bool) -> list[str]:
     """Where a (normalized, schema 2) definition leaves the standard: a missing summary or
     handles (the model proposed none, or a person removed them), fewer reserved actions
-    than the default, a repo without a code-change mode. Not reported: a changed profile
-    of a standard mode, which the generator itself allows from a sourced proposal.
+    than the default, a repo without a code-change mode, a mode that still carries
+    ``profile`` / ``profile_rules`` (no longer read: a dispatch picks how work runs).
     Advisory, never a problem."""
     out: list[str] = []
     ident = doc.get("identity") if isinstance(doc.get("identity"), dict) else {}
@@ -341,4 +337,8 @@ def deviations(doc: dict[str, Any], has_repo: bool) -> list[str]:
     modes = doc.get("modes") if isinstance(doc.get("modes"), list) else []
     if has_repo and not any(isinstance(m, dict) and m.get("id") == "code-change" for m in modes):
         out.append("standard: this Brain has a bound repo but no code-change mode")
+    legacy = [str(m.get("id")) for m in modes if isinstance(m, dict) and ("profile" in m or "profile_rules" in m)]
+    if legacy:
+        out.append("standard: modes " + ", ".join(legacy) + " still name a pipeline profile; it no longer "
+                   "has an effect (each dispatch picks how its work runs) and can be removed")
     return out
