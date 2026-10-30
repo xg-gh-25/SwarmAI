@@ -643,3 +643,47 @@ async def test_a_workspace_the_hive_did_not_prepare_as_ordered_sends_nothing(mon
     with pytest.raises(swarm_out.SwarmOutError) as e:
         await swarm_out.dispatch("worker-1", "t", "task")
     assert "curl" not in str(e.value) and "HTTP 422" in str(e.value)       # only the fixed reasons are shown
+
+
+
+@pytest.mark.asyncio
+async def test_the_order_is_what_this_machine_sent(monkeypatch, tmp_path):
+    seen = _hive_with(monkeypatch, tmp_path, _work.ADMISSION)
+    row = await swarm_out.dispatch("worker-1", "t", "task", repos=[
+        {"url": "https://github.com/acme/widget", "ref": "main", "name": "widget", "access": "read"}])
+    sent = json.loads([r for r in seen if r.url.path == "/api/hive/work"][0].content)
+    assert sent["repos"][0]["access"] == "read" and row["repos"][0]["access"] == "read"
+    assert "read-only" in json.loads(seen[-1].content)["message"]
+
+    def upgraded(body):                       # the Hive says write for a repository sent read
+        order = _work.order_for(body)
+        order["repos"][0]["access"] = "write"
+        return httpx.Response(200, json=order)
+    seen = _hive_with(monkeypatch, tmp_path, _work.ADMISSION, upgraded)
+    with pytest.raises(swarm_out.SwarmOutError, match="unexpected workspace"):
+        await swarm_out.dispatch("worker-1", "t", "task", repos=[
+            {"url": "https://github.com/acme/widget", "ref": "main", "name": "widget", "access": "read"}])
+    assert any(r.url.path.endswith("/release") for r in seen)            # nothing left behind
+
+    def renamed(body):                        # the Hive answers with another URL
+        order = _work.order_for(body)
+        order["repos"][0]["url"] = "https://github.com/evil/other"
+        return httpx.Response(200, json=order)
+    _hive_with(monkeypatch, tmp_path, _work.ADMISSION, renamed)
+    row = await swarm_out.dispatch("worker-1", "t", "task", repos=[{"url": "https://github.com/acme/widget", "ref": "main"}])
+    assert row["repos"][0]["url"] == "https://github.com/acme/widget"
+
+
+@pytest.mark.asyncio
+async def test_a_workspace_is_released_whenever_its_session_did_not_start(monkeypatch, tmp_path):
+    def slow(body):
+        raise httpx.ReadTimeout("slow")
+    seen = _hive_with(monkeypatch, tmp_path, _work.ADMISSION, slow)
+    with pytest.raises(swarm_out.SwarmOutError, match="did not prepare the workspace"):
+        await swarm_out.dispatch("worker-1", "t", "task")
+    assert any(r.url.path.endswith("/release") for r in seen)
+    other = lambda body: httpx.Response(422, json={"detail": "nope: the commit is not in the repository"})
+    _hive_with(monkeypatch, tmp_path, _work.ADMISSION, other)
+    with pytest.raises(swarm_out.SwarmOutError) as e:
+        await swarm_out.dispatch("worker-1", "t", "task")
+    assert "nope" not in str(e.value)                                     # not a repository this order named

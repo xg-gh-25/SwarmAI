@@ -4349,7 +4349,8 @@ class SessionRouter:
             return await asyncio.to_thread(hive_bundle.seal_bundles, get_swarmws(), session_id, bundled)
         except asyncio.TimeoutError:
             for f in facts if hive_bundle.on_hive() else []:
-                if isinstance(f, dict) and f.get("commits_total") and f.get("dir"):
+                if isinstance(f, dict) and f.get("commits_total") and f.get("dir") \
+                        and f.get("access") != "read":            # a read-only one is never bundled
                     f["bundle"] = {"key": hive_bundle.key(str(f["dir"])), "error": hive_bundle.ERR_FAILED}
             return facts
 

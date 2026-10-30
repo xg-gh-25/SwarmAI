@@ -427,7 +427,8 @@ async def chat_stream(request: Request):
         from core import hive_workspace
         from core.project_registry import get_swarmws
         order = await asyncio.to_thread(hive_workspace.load, get_swarmws(), chat_request.work_id)
-        if order is None or order.get("session_id") is not None:
+        # one session per order: the claim is atomic, a second start is refused
+        if order is None or not await asyncio.to_thread(hive_workspace.claim, chat_request.work_id):
             raise ValidationException(message="Invalid work order",
                                       detail="no unstarted work order of that id was prepared here")
         work_id = chat_request.work_id

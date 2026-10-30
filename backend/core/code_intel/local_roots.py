@@ -442,10 +442,10 @@ def migrate_once(projects_dir: str | Path) -> dict:
 
 # ── a Hive's task clones (design 2026-10-29-code-intel-e2e F8) ─────────────────
 #
-# On a Hive the backend clones a task's repos under ``<SwarmWS>/Hive/repos/<host>/<path>``
-# (``core.task_repos.repo_dir``) and works each task in its own worktree of it
-# (``core.hive_workspace``); the newest such worktree, else the clone, is the repo every
-# Hive review reads, and no local root can exist there. A clone
+# On a Hive each task works in its own clone of a repo, under ``<SwarmWS>/Hive/work/``
+# (``core.hive_workspace``); an older Hive left one clone under
+# ``<SwarmWS>/Hive/repos/<host>/<path>`` (``core.task_repos.repo_dir``). The newest task
+# clone, else that one, is the repo every Hive review reads, and no local root can exist there. A clone
 # at the path a Brain's binding names, whose ``origin`` is that binding's ``clone`` URL,
 # is that Brain's: the Brain's own delivery contract declares the repo, as a bind-managed
 # clone's does on the desktop. Nothing else under ``Hive/repos`` counts, and a desktop
@@ -488,8 +488,8 @@ def hive_task_clones(project_dir: str | Path) -> list[tuple[str, Path]]:
                 rel = task_repos.repo_dir(url)
             except task_repos.TaskRepoError:
                 continue
-            # the newest work order's worktree of it when there is one (the shared
-            # clone under Hive/repos is only fetched into, core/hive_workspace)
+            # the newest work order's clone of it when there is one (core/hive_workspace),
+            # else the clone an older Hive left under Hive/repos
             from core import hive_workspace
             wt = hive_workspace.latest_worktree(Path(get_swarmws()), url)
             root = (Path(get_swarmws()) / Path(*hive_workspace.WORK_ROOT)).resolve() if wt else repos_root

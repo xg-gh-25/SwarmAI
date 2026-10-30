@@ -97,8 +97,8 @@ numbered text options ("reply with a number"). One question at a time, and only 
 4. **Check, then dispatch.** Run `spec`. `refusals` not empty: stop and tell the person
    each one (it names the rule). Otherwise run `dispatch` with the same arguments plus
    `--revision` = the spec's `revision` and `--brief`; no confirmation is asked. Run it
-   in the foreground with a Bash `timeout` of 330000 ms, alone in its command (no
-   `echo` or other command after it): it can take up to five minutes (a Brain sync,
+   in the foreground with a Bash `timeout` of 590000 ms, alone in its command (no
+   `echo` or other command after it): it can take up to nine minutes (a Brain sync,
    the Hive preparing the workspace, then naming the session), and a call stopped early leaves it unknown
    whether the task went out. The
    backend shows the result as a dispatch card in this conversation (from the dispatch

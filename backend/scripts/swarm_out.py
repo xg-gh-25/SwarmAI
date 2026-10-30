@@ -34,7 +34,9 @@ import urllib.error
 import urllib.request
 
 
-DISPATCH_TIMEOUT_S = 300
+#: under the agent's Bash ceiling (10 minutes); past it the CLI says the task may have
+#: been sent (``maybe_sent``), never that nothing was
+DISPATCH_TIMEOUT_S = 540
 
 
 def _base() -> str:
@@ -133,8 +135,9 @@ def main(argv: list[str] | None = None) -> int:
                 "returns": args.returns}
         if args.cmd == "spec":
             return _call("POST", "/spec", body)
-        # a dispatch may sync the Brain first (up to 2 minutes) and then waits for the
-        # Hive to name the session: wait longer than the daemon can take
+        # a dispatch may sync the Brain, send this machine's commits, wait for the Hive
+        # to prepare the workspace (a first clone of a large repository takes minutes)
+        # and to name the session; past DISPATCH_TIMEOUT_S the answer is maybe_sent
         return _call("POST", "/dispatch", {**body, "hive": args.hive, "title": args.title,
                                            "brief": args.brief, "revision": args.revision},
                      timeout=DISPATCH_TIMEOUT_S)

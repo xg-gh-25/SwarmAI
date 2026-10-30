@@ -158,6 +158,12 @@ def parse(items: Any) -> list[dict[str, Optional[str]]]:
             entry["sha"] = sha
         if work is not None:
             entry["name"], entry["access"] = item["name"], item["access"]
+        else:
+            # a work order's request carries them before the Hive made the worktree
+            if isinstance(item.get("name"), str) and re.fullmatch(_SEG, item["name"]):
+                entry["name"] = item["name"]
+            if item.get("access") in ("read", "write"):
+                entry["access"] = item["access"]
         out.append(entry)
     return out
 

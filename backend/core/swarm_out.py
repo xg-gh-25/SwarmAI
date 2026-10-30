@@ -226,6 +226,7 @@ def task_message(task: str, order: Optional[dict]) -> str:
     return UNATTENDED_PREAMBLE.replace("Task:\n", task_text(order) + "Task:\n", 1) + task
 
 
+_SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 #: hang guard for a Hive preparing a task's workspace (clones a repository it has not
 #: cloned before, so minutes are normal)
 PREPARE_TIMEOUT_S = 1200
@@ -264,22 +265,29 @@ async def _prepare_work(client: httpx.AsyncClient, inst: dict[str, Any], work_id
     except ValueError:
         pass
     if r.status_code != 200:
+        # only a fixed reason, about a repository this order named, is shown
         detail = str(body.get("detail") or "") if isinstance(body, dict) else ""
-        known = any(detail == e or detail.endswith(": " + e) for e in hive_workspace.ERRORS)
+        known = {*hive_workspace.ERRORS, *(f"{x['name']}: {e}" for x in repos for e in hive_workspace.ERRORS)}
         raise SwarmOutError(f"Hive {inst['name']} could not prepare the workspace"
-                            + (f" ({detail[:200]})" if known else f" (HTTP {r.status_code})")
+                            + (f" ({detail})" if detail in known else f" (HTTP {r.status_code})")
                             + "; nothing was sent")
-    names = {x["name"] for x in repos}
-    if not (isinstance(body, dict) and body.get("work_id") == work_id
-            and isinstance(body.get("repos"), list)
-            and {x.get("name") for x in body["repos"] if isinstance(x, dict)} == names
+    got = {x.get("name"): x for x in body.get("repos") or [] if isinstance(x, dict)} \
+        if isinstance(body, dict) and isinstance(body.get("repos"), list) else None
+    if not (got is not None and body.get("work_id") == work_id and set(got) == {x["name"] for x in repos}
             and body.get("outputs") == hive_workspace.outputs_rel(work_id)):
         raise SwarmOutError(f"Hive {inst['name']} did not confirm the workspace; nothing was sent")
-    for x in body["repos"]:
-        want = hive_workspace.repo_rel(work_id, x["name"])
-        if x.get("dir") != want or x.get("access") not in hive_workspace.ACCESS:
+    # the order is what this machine sent: the Hive adds only where each repository is,
+    # and the commit of one sent without (its branch's head there)
+    order = {"work_id": work_id, "outputs": body["outputs"], "repos": []}
+    for x in repos:
+        h = got[x["name"]]
+        sha = x.get("sha") or h.get("sha")
+        if h.get("dir") != hive_workspace.repo_rel(work_id, x["name"]) or h.get("access") != x["access"] \
+                or (x.get("sha") and h.get("sha") != x["sha"]) or not (isinstance(sha, str) and _SHA_RE.fullmatch(sha)):
             raise SwarmOutError(f"Hive {inst['name']} prepared an unexpected workspace; nothing was sent")
-    return body
+        order["repos"].append({**x, "sha": sha, "dir": h["dir"],
+                               "branch": hive_workspace.branch(work_id) if x["access"] == "write" else None})
+    return order
 
 
 async def _release_work(client: httpx.AsyncClient, work_id: str) -> None:
@@ -292,14 +300,19 @@ async def _release_work(client: httpx.AsyncClient, work_id: str) -> None:
 
 async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-out",
                    repos: Optional[list] = None, *, segment: str = "",
-                   agent: Optional[dict] = None, extra: Optional[dict] = None) -> dict[str, Any]:
+                   agent: Optional[dict] = None, extra: Optional[dict] = None,
+                   dispatch_id: Optional[str] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
     repos}. ``repos``: ``[{url, ref[, sha]}]`` the task works on (core/task_repos; ``sha``:
     this machine's commit, its bundle kept on the Hive first by ``_ship_repos``).
     ``segment`` + ``agent``: the project section put before the task and the Project
     Agent the Hive pins the session to (``dispatch_spec``). ``extra``: what the dispatch
     card shows besides (``brief``, ``hive_reason``, ``brain_sync``, ``repo_notes``),
-    kept on the row; never over the row's own fields (core/swarm_out_card)."""
+    kept on the row; never over the row's own fields (core/swarm_out_card).
+    ``dispatch_id``: the id ``dispatch_spec`` chose (its pipeline run is named after it);
+    a new one otherwise. The Hive prepares the task's workspace under it first (a work
+    order, core/hive_workspace); every failure after that releases it, except a session
+    that may have started."""
     from core import task_repos
     title = " ".join((title or "").split())[:MAX_TITLE_CHARS]
     task = (task or "").strip()
@@ -329,17 +342,18 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             raise SwarmOutError(f"{e}; the task was not sent") from None
         # the Hive's backend makes the work order real before the session starts
         # (design 2026-10-30-run-spec §4.3): a failure there sends nothing
-        dispatch_id = new_dispatch_id()
-        order = await _prepare_work(client, inst, dispatch_id, _work_repos(declared))
+        dispatch_id = dispatch_id or new_dispatch_id()
+        try:
+            order = await _prepare_work(client, inst, dispatch_id, _work_repos(declared))
+        except BaseException:
+            await _release_work(client, dispatch_id)     # a prepare this side gave up on
+            raise
         from core import hive_workspace
         declared = hive_workspace.task_repos_of(order)
         try:
             session_id = await asyncio.wait_for(
                 _start_session(client, task_message(segment + task, order), dispatch_id,
                                _pin_request(agent)), SESSION_ID_WAIT_S)
-        except SwarmOutError:
-            await _release_work(client, dispatch_id)
-            raise
         except (asyncio.TimeoutError, httpx.ReadTimeout):
             # The task may have been sent and taken: the Hive may be running it. Record
             # the dispatch without a session so this Hive's questions are still listed,
@@ -350,8 +364,12 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
                 f"Hive {inst['name']} did not name the session within {SESSION_ID_WAIT_S}s; "
                 "the task may be running there. Check the Hive's own page before sending "
                 "it again.") from None
-    if not session_id or not KEY_RE.match(session_id):
-        raise SwarmOutError("the Hive did not name a session")
+        except BaseException:
+            await _release_work(client, dispatch_id)     # the session never started
+            raise
+        if not session_id or not KEY_RE.match(session_id):
+            await _release_work(client, dispatch_id)
+            raise SwarmOutError("the Hive did not name a session")
     row = {**(extra or {}), **_log_row(inst, session_id, title, origin, declared, agent, dispatch_id)}
     line = json.dumps(row, ensure_ascii=False) + "\n"
     await asyncio.to_thread(_append, line)
@@ -511,7 +529,7 @@ async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]]) -> None
         except repo_ship.ShipError as e:
             raise SwarmOutError(f"{r['name']} could not be packed: {e}; nothing was sent") from None
         if path is None:
-            continue                         # the remote has the commit: the agent clones it
+            continue                         # the remote has the commit: the Hive fetches it
         try:
             status, detail = await _put_repo(inst, r, path, size)
         finally:

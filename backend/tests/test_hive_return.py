@@ -507,6 +507,13 @@ def test_a_slow_bundle_keeps_the_facts(world, monkeypatch):
     assert facts[0]["bundle"] == {"key": hive_bundle.key(DIR), "error": hive_bundle.ERR_FAILED}
     assert task_repos.ERR_TIMEOUT not in str(facts)
 
+    class _ReadOnly:
+        async def get(self, sid):
+            return {"metadata": {"task_repos": [{"url": URL, "ref": "main", "access": "read"}]}, "created_at": None}
+    monkeypatch.setattr(database, "db", types.SimpleNamespace(sessions=_ReadOnly()))
+    facts = asyncio.run(SessionRouter._task_repo_facts(_Self(), SID))
+    assert facts[0]["commits_total"] == 1 and "bundle" not in facts[0]     # a read-only one is never bundled
+
 
 # ── security review ──────────────────────────────────────────────────────────
 

@@ -3,16 +3,17 @@ design docs/design/2026-10-30-run-spec.md §4.3, invariant 5).
 
 Real git, temporary repositories: a bare "remote" stands for the repository's URL
 (``url.insteadOf`` in the config the module's git reads). Questions: (1) do two tasks on
-one repository get their own worktree on their own branch at the host's commit, with the
-shared clone untouched and each task's commits its own; (2) is a read-only repository a
-detached worktree that is never bundled; (3) does a task with no repository get only its
+one repository get their own clone on their own branch at the host's commit, with the
+mirror untouched and each task's commits its own; (2) is a read-only repository a
+detached clone that is never bundled; (3) does a task with no repository get only its
 outputs directory; (4) does a commit the Hive cannot find fail the order and leave
-nothing; (5) does a filter driver or hook the agent wrote into the shared clone's config
-run in the daemon at the next prepare (it must not); (6) is release refused while the
-session runs, and does it remove only the order's directories, keeping the branch; does
-the sweep release an old order; (7) does a whole-branch bundle stand in for an
-unreachable remote; (8) does the task text name the worktrees and no git command;
-(9) do the Hive routes answer only on a Hive, with the fixed reason.
+nothing; (5) does what the agent configures (its clone's config, its global config, a
+``commondir`` planted in a mirror) run in or steer the daemon's git (it must not);
+(6) is release refused while the session runs, and does it remove only the order's
+files; does the sweep release an order idle for 30 days and keep one in use; (7) does a
+whole-branch bundle stand in for an unreachable remote; (8) does the task text name the
+clones and no git command; (9) do the Hive routes answer only on a Hive, with the fixed
+reason; (10) does an order start one session only.
 """
 from __future__ import annotations
 
@@ -87,9 +88,10 @@ def test_two_tasks_on_one_repository_each_work_on_their_own_branch(world, monkey
     sha = _ship(world)
     o1 = hw.prepare(world["ws"], W1, [_repo(sha)])
     o2 = hw.prepare(world["ws"], W2, [_repo(sha)])
-    clone = world["ws"] / task_repos.repo_dir(URL)
-    shared_head, shared_branches = _g(clone, "rev-parse", "HEAD"), _g(clone, "branch", "--list", "main")
+    mirror = hw._state() / "mirrors" / hw._mirror_rel(URL)
+    refs = _g(mirror, "for-each-ref", "--format=%(refname) %(objectname)")
     t1, t2 = world["ws"] / o1["repos"][0]["dir"], world["ws"] / o2["repos"][0]["dir"]
+    assert (t1 / ".git").is_dir() and not (t1 / ".git" / "commondir").exists()   # its own .git
     assert o1["repos"][0]["dir"] == f"Hive/work/{W1}/repos/lib"
     for t, w in ((t1, W1), (t2, W2)):
         assert _g(t, "rev-parse", "HEAD") == sha
@@ -97,7 +99,9 @@ def test_two_tasks_on_one_repository_each_work_on_their_own_branch(world, monkey
         assert (t / "c").read_text() == "c"
     x = _commit(t1, "only-one")
     _commit(t2, "only-two")
-    assert _g(clone, "rev-parse", "HEAD") == shared_head and _g(clone, "branch", "--list", "main") == shared_branches
+    assert _g(mirror, "for-each-ref", "--format=%(refname) %(objectname)") == refs
+    assert subprocess.run(["git", "cat-file", "-e", x], cwd=t2).returncode != 0   # not in the other task's
+    assert _g(t1, "config", "--get", "remote.origin.url") == URL
     facts = _facts(world, monkeypatch, o1)
     assert (facts[0]["error"], facts[0]["base"], facts[0]["commits"]) == (None, sha, [x])
     assert facts[0]["access"] == "write"
@@ -126,7 +130,7 @@ def test_a_task_with_no_repository_gets_only_its_outputs_directory(world):
     order = hw.prepare(world["ws"], W1, [])
     assert order["repos"] == [] and order["outputs"] == f"Outputs/{W1}"
     assert (world["ws"] / "Outputs" / W1).is_dir()
-    assert sorted(p.name for p in (world["ws"] / "Hive" / "work" / W1).iterdir()) == ["order.json", "repos"]
+    assert sorted(p.name for p in (world["ws"] / "Hive" / "work" / W1).iterdir()) == ["repos"]
     assert hw.load(world["ws"], W1)["work_id"] == W1
 
 
@@ -137,22 +141,20 @@ def test_a_commit_the_hive_cannot_find_fails_and_leaves_nothing(world):
         hw.prepare(world["ws"], W1, [_repo(good), _repo(missing, name="other", url=URL2)])
     assert not (world["ws"] / "Hive" / "work" / W1).exists()
     assert not (world["ws"] / "Outputs" / W1).exists()
-    clone = world["ws"] / task_repos.repo_dir(URL)
-    assert _g(clone, "branch", "--list", f"hive/{W1}") == ""          # the branch made for it is gone
-    assert _g(clone, "worktree", "list").count("\n") == 0              # only the clone itself
+    assert hw.load(world["ws"], W1) is None and not hw._order_path(W1).exists()
     with pytest.raises(hw.WorkError):
         hw.prepare(world["ws"], W1, [_repo(good), _repo(good)])         # a repeated entry
     with pytest.raises(hw.WorkError):
         hw.prepare(world["ws"], "../x", [])
 
 
-def test_what_the_agent_wrote_into_the_shared_config_never_runs_in_the_daemon(world, tmp_path):
+def test_what_the_agent_configures_never_runs_in_or_steers_the_daemons_git(world, tmp_path):
     sha = _ship(world)
     order = hw.prepare(world["ws"], W1, [_repo(sha)])
     t = world["ws"] / order["repos"][0]["dir"]
     marker = tmp_path / "ran"
-    # the agent, in its worktree: a filter driver and a hook in the shared config, a
-    # committed attribute that names the filter, and the same in its global config
+    # the agent, in its clone: a filter driver and a hook in its config, a committed
+    # attribute that names the filter, and the same filter in its global config
     _g(t, "config", "filter.evil.smudge", f"touch {marker}; cat")
     _g(t, "config", "core.hooksPath", str(tmp_path))
     (tmp_path / "post-checkout").write_text(f"#!/bin/sh\ntouch {marker}\n")
@@ -161,20 +163,25 @@ def test_what_the_agent_wrote_into_the_shared_config_never_runs_in_the_daemon(wo
     _g(t, "add", ".gitattributes")
     _g(t, "commit", "-qm", "attrs")
     evil_sha = _g(t, "rev-parse", "HEAD")
-    # the agent's own ~/.gitconfig (the environment's global config; the module reads
-    # hw.GLOBAL_CONFIG, which in production is /dev/null and here only maps the URL)
     agent_global = tmp_path / "agent-gitconfig"
     agent_global.write_text(world["gitconfig"].read_text() + f'[filter "evil"]\n\tsmudge = touch {marker}; cat\n')
-    os.environ["GIT_CONFIG_GLOBAL"] = str(agent_global)
-    assert not marker.exists()                         # nothing so far ran it
-    o2 = hw.prepare(world["ws"], W2, [{**_repo(evil_sha, "read")}])
+    os.environ["GIT_CONFIG_GLOBAL"] = str(agent_global)    # the module reads hw.GLOBAL_CONFIG only
+    _g(t, "push", "-q", str(hw._state() / "mirrors" / hw._mirror_rel(URL)), f"HEAD:refs/heads/x")
+    assert not marker.exists()                              # nothing so far ran it
+    o2 = hw.prepare(world["ws"], W2, [_repo(evil_sha, "read")])
     assert not marker.exists()
     assert (world["ws"] / o2["repos"][0]["dir"] / ".gitattributes").read_text() == "* filter=evil\n"
-    cfg = (world["ws"] / task_repos.repo_dir(URL) / ".git" / "config").read_text()
-    assert "evil" not in cfg and "hooksPath" not in cfg and URL in cfg
+    # a mirror pointed at another repository's config or objects is refused, not used
+    mirror = hw._state() / "mirrors" / hw._mirror_rel(URL)
+    for planted in ("commondir", "objects/info/alternates"):
+        (mirror / planted).write_text(str(t / ".git") + "\n")
+        with pytest.raises(hw.WorkError, match="mirror is not one this Hive made"):
+            hw.prepare(world["ws"], "so_" + "c" * 12, [_repo(sha)])
+        (mirror / planted).unlink()
+    assert not marker.exists()
 
 
-def test_release_waits_for_the_session_and_removes_only_the_order(world):
+def test_release_waits_for_the_session_and_removes_only_the_order(world, tmp_path):
     sha = _ship(world)
     order = hw.prepare(world["ws"], W1, [_repo(sha)])
     assert hw.bind(world["ws"], W1, "sess-1") and not hw.bind(world["ws"], W1, "sess-2")
@@ -184,18 +191,35 @@ def test_release_waits_for_the_session_and_removes_only_the_order(world):
     with pytest.raises(hw.WorkError, match="still running"):
         hw.release(world["ws"], W1, lambda sid: sid == "sess-1")
     assert (world["ws"] / order["repos"][0]["dir"]).is_dir()
+    other = hw.prepare(world["ws"], W2, [_repo(sha)])
     assert hw.release(world["ws"], W1, lambda sid: False) is True
-    clone = world["ws"] / task_repos.repo_dir(URL)
     assert not (world["ws"] / "Hive" / "work" / W1).exists() and not (world["ws"] / "Outputs" / W1).exists()
+    assert hw.load(world["ws"], W1) is None
     assert keep.read_text() == "person's"
-    assert _g(clone, "rev-parse", f"hive/{W1}") == sha                  # the branch stays
-    assert f"Hive/work/{W1}" not in _g(clone, "worktree", "list")       # forgotten by the clone
+    assert (world["ws"] / other["repos"][0]["dir"]).is_dir() and hw.load(world["ws"], W2)   # untouched
+    assert (hw._state() / "mirrors" / hw._mirror_rel(URL)).is_dir()
     assert hw.release(world["ws"], W1, lambda sid: False) is False
-    hw.prepare(world["ws"], W2, [])
-    old = time.time() + (hw.RETENTION_DAYS + 1) * 86400
+    # a link on the way (here: Outputs itself) is never followed by the removal
+    outside = tmp_path / "outside"
+    import shutil
+    shutil.move(str(world["ws"] / "Outputs"), str(outside))
+    (world["ws"] / "Outputs").symlink_to(outside)
+    assert (world["ws"] / "Outputs" / W2).is_dir()
+    hw.release(world["ws"], W2, lambda sid: False)
+    assert (outside / W2).is_dir()
+
+
+def test_the_sweep_releases_an_idle_order_and_keeps_one_in_use(world):
+    sha = _ship(world)
+    hw.prepare(world["ws"], W1, [])
+    used = hw.prepare(world["ws"], W2, [_repo(sha)])
+    later = time.time() + (hw.RETENTION_DAYS + 1) * 86400
     assert hw.sweep(world["ws"], lambda sid: False, now=time.time()) == 0
-    assert hw.sweep(world["ws"], lambda sid: False, now=old) == 1
-    assert not (world["ws"] / "Hive" / "work" / W2).exists()
+    t = world["ws"] / used["repos"][0]["dir"]
+    _commit(t, "still-working")
+    os.utime(t / ".git" / "logs" / "HEAD", (later - 60, later - 60))   # worked on just now, then
+    assert hw.sweep(world["ws"], lambda sid: False, now=later) == 1
+    assert not (world["ws"] / "Hive" / "work" / W1).exists() and t.is_dir()
 
 
 def test_a_whole_branch_bundle_stands_in_for_an_unreachable_remote(world):
@@ -204,7 +228,8 @@ def test_a_whole_branch_bundle_stands_in_for_an_unreachable_remote(world):
     order = hw.prepare(world["ws"], W1, [_repo(sha)])
     t = world["ws"] / order["repos"][0]["dir"]
     assert _g(t, "rev-parse", "HEAD") == sha
-    assert _g(world["ws"] / task_repos.repo_dir(URL), "config", "--get", "remote.origin.url") == URL
+    assert _g(hw._state() / "mirrors" / hw._mirror_rel(URL), "config", "--get", "remote.origin.url") == URL
+    assert _g(t, "config", "--get", "remote.origin.url") == URL
 
 
 def test_the_task_text_names_the_worktrees_and_no_git_command(world):
@@ -288,9 +313,9 @@ def test_a_hives_review_reads_the_newest_worktree_of_a_repository(world, monkeyp
     assert hw.latest_worktree(world["ws"], URL) is None
     hw.prepare(world["ws"], W1, [_repo(sha)])
     o2 = hw.prepare(world["ws"], W2, [_repo(sha, "read")])
-    order = hw.load(world["ws"], W2)
-    order["created_at"] = "2099-01-01T00:00:00Z"                     # the newer one
-    (world["ws"] / "Hive" / "work" / W2 / "order.json").write_text(__import__("json").dumps(order))
+    order = hw.load(world["ws"], W1)
+    order["prepared_at"] = 1.0                                       # the older one
+    hw._write_order(order)
     assert hw.latest_worktree(world["ws"], URL) == o2["repos"][0]["dir"]
     assert hw.latest_worktree(world["ws"], "https://github.com/acme/other.git") is None
     hw.release(world["ws"], W2, lambda sid: False)
