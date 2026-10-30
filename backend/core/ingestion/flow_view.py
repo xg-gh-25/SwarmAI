@@ -17,6 +17,7 @@ secret-redacted and capped, pages of at most 50.
 from __future__ import annotations
 
 from contextlib import closing
+from pathlib import Path
 from datetime import timedelta
 import json
 import re
@@ -26,6 +27,7 @@ from typing import Any
 from . import queries
 from core.memory_guard import MemoryGuard
 
+from .contracts_v2 import PARKED_DEFER_REASONS
 from .queries import _MAX_FIELD_BYTES, _WINDOWS, _clip_utf8, _iso, _json, _table_exists, _utc_now
 
 # the files read in every turn; a project's DDD and the General Brain / Library are recalled
@@ -36,9 +38,13 @@ PLACES = {"every_turn": EVERY_TURN_STORES, "project": PROJECT_STORES, "general":
 
 # which decision step produced an outcome (pipeline_v2.run_unit_v2, worker, store migrations)
 _BASIC = frozenset({"noisy", "credentialed_url", "malformed_payload"})
-_PLACE = frozenset({"unknown_project", "project_outside_brain", "gap_without_project",
-                    "invalid scope", "link needs source_url"})
-_KNOWN = frozenset({"already_exists", "withdrawn", "older_than_existing"})
+# a Hive lesson about a project other than its run's Brain (pipeline_v2: project_outside_brain)
+_PLACE = frozenset({"project_outside_brain"})
+# a project that did not exist was dropped before the General Brain took these (D7)
+_NO_PROJECT = frozenset({"unknown_project", "gap_without_project"})
+_KNOWN = frozenset({"already_exists"})
+_WITHDRAWN = frozenset({"withdrawn"})          # the same as what the user withdrew
+_OLDER = frozenset({"older_than_existing"})    # an existing entry is newer
 _BACKLOG = frozenset({"discarded_backlog"})
 # reasons only the retired v1 quality reviewer and card 3 produced (deleted 2026-10-30)
 _RETIRED = frozenset({"retired_v1", "speculative", "not_atomic", "volatile", "not_grounded",
@@ -51,22 +57,31 @@ OUTCOMES = ("all", "new", "adds", "reinforced", "not_kept", "waiting")
 
 _OUTCOME_SQL = {
     "all": "1=1",
-    "new": "u.state='written' AND COALESCE(u.reason,'')='new'",
-    "adds": "u.state='written' AND COALESCE(u.reason,'')<>'new'",
+    "new": "u.state='written' AND COALESCE(u.reason,'')<>'adds'",
+    "adds": "u.state='written' AND u.reason='adds'",
     "reinforced": "u.state='reinforced'",
     "not_kept": f"u.state IN ({','.join(repr(s) for s in _NOT_KEPT_STATES)})",
     "waiting": f"u.state IN ({','.join(repr(s) for s in (*_WAITING_STATES, 'failed_poison'))})",
 }
 _STORE = "json_extract(u.destination,'$.store')"
+# where a unit really landed: a reinforcement strengthens the entry it is the same as,
+# which may sit in another file than the unit's destination (pipeline_v2._same_entry)
+_LANDED_PATH = ("COALESCE(CASE WHEN u.state='reinforced' THEN "
+                "json_extract(u.decision,'$.version_vector.same_path') END, "
+                "json_extract(u.destination,'$.relative_path'))")
+_PROJECT_NAME = re.compile(r"^[\w .\-/]{1,80}$")
+_KEYWORD_CANDIDATES = 5000
 
 
 def reason_group(state: str | None, reason: str | None) -> str:
     """The step behind one stored outcome: ``new`` / ``adds`` / ``reinforced`` (kept),
-    ``basic`` / ``place`` / ``known`` / ``backlog`` / ``retired`` / ``other`` (not kept),
-    ``waiting`` / ``failed`` / ``expired``."""
+    ``basic`` / ``place`` / ``known`` / ``withdrawn`` / ``older`` (not kept, live steps),
+    ``no_project`` / ``backlog`` / ``retired`` (not kept, earlier versions), ``other``,
+    ``waiting`` / ``failed`` / ``expired``. A written unit adds to an entry only when it
+    says so (reason ``adds``); every other write, a v1 one too, is new."""
     reason = reason or ""
     if state == "written":
-        return "new" if reason == "new" else "adds"
+        return "adds" if reason == "adds" else "new"
     if state == "reinforced":
         return "reinforced"
     if state in _WAITING_STATES:
@@ -78,6 +93,7 @@ def reason_group(state: str | None, reason: str | None) -> str:
     if state == "merged":
         return "known"
     for group, codes in (("basic", _BASIC), ("place", _PLACE), ("known", _KNOWN),
+                         ("withdrawn", _WITHDRAWN), ("older", _OLDER), ("no_project", _NO_PROJECT),
                          ("backlog", _BACKLOG), ("retired", _RETIRED)):
         if reason in codes:
             return group
@@ -111,6 +127,30 @@ def _clean(value: Any, maximum: int = _MAX_FIELD_BYTES) -> str:
     return _clip_utf8(MemoryGuard().scan(value).sanitized_content, maximum)
 
 
+def _scrub(value: Any) -> Any:
+    """Every string leaf of a response secret-redacted (an allowlist by construction: a
+    field added later is scanned too)."""
+    if isinstance(value, dict):
+        return {key: _scrub(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub(item) for item in value]
+    return _clean(value) if isinstance(value, str) else value
+
+
+def _landing(path: str | None, store: str | None, project: str | None) -> tuple[str | None, str | None]:
+    """The store and project of the file a unit landed in (*path*), when it is not the
+    unit's own destination (a reinforcement of an entry elsewhere)."""
+    if not path:
+        return store, project
+    if path.startswith(".context/"):
+        stem = Path(path).stem.upper()
+        return (stem if stem in EVERY_TURN_STORES else store), None
+    if path.startswith("Projects/"):
+        parts = path.split("/")
+        return "DDD", parts[1] if len(parts) > 1 else project
+    return store, project
+
+
 def _unit_fields(claim: Any) -> dict[str, Any]:
     """Title, text, kind, type and scope of one stored unit (v2 claim groups; a v1 one
     carries only ``text``). Title and text are whole (the list clamps them visually);
@@ -134,6 +174,7 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
     """Outcome totals, where kept units landed, step counts and anomalies for *window*."""
     since = _since(window)
     base = "FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id WHERE i.created_at >= ?"
+    parked = sorted(PARKED_DEFER_REASONS)
     with closing(queries.connect_ro()) as conn:
         conn.row_factory = sqlite3.Row
         outcome_rows = conn.execute(
@@ -144,25 +185,22 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
             (since,)).fetchall()
         landed_rows = conn.execute(
             f"""SELECT {_STORE} AS store, json_extract(u.destination,'$.project') AS project,
-                       json_extract(u.destination,'$.relative_path') AS path,
-                       SUM(u.state='written') AS written, SUM(u.state='reinforced') AS reinforced
-                {base} AND u.state IN ('written','reinforced') GROUP BY 1,2,3""",
+                       json_extract(u.destination,'$.relative_path') AS dest_path,
+                       {_LANDED_PATH} AS path, u.state AS state, COUNT(*) AS n
+                {base} AND u.state IN ('written','reinforced') GROUP BY 1,2,3,4,5""",
             (since,)).fetchall()
         moved_rows = conn.execute(
             f"""SELECT json_extract(u.destination,'$.rerouted_from') AS src, {_STORE} AS dst,
-                       COUNT(*) AS n
+                       u.state AS state, COUNT(*) AS n
                 {base} AND json_extract(u.destination,'$.rerouted_from') IS NOT NULL
-                GROUP BY 1,2""", (since,)).fetchall()
-        place_example = conn.execute(
-            f"""SELECT json_extract(u.claim_group,'$.scope') AS scope {base}
-                AND u.state='rejected' AND u.reason IN ({','.join('?' * len(_PLACE))})
-                AND json_extract(u.claim_group,'$.scope') LIKE 'project:%'
-                GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1""",
-            (since, *sorted(_PLACE))).fetchone()
+                GROUP BY 1,2,3""", (since,)).fetchall()
+        # waiting on purpose (a parked deferral waits for its section, no retry) is not late
         waiting_long = int(conn.execute(
-            """SELECT COUNT(*) FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id
-               WHERE u.state IN ('queued','judged','writing','deferred') AND i.created_at < ?""",
-            (_iso(_utc_now() - timedelta(hours=24)),)).fetchone()[0])
+            f"""SELECT COUNT(*) FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id
+               WHERE u.state IN ('queued','judged','writing','deferred') AND i.created_at < ?
+               AND NOT (u.state='deferred' AND COALESCE(u.defer_reason, u.reason, '')
+                        IN ({','.join('?' * len(parked))}))""",
+            (_iso(_utc_now() - timedelta(hours=24)), *parked)).fetchone()[0])
         links_skipped = breakers = 0
         if _table_exists(conn, "ingestion_events"):
             for kind, count in conn.execute(
@@ -186,19 +224,32 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         reasons[group][code] = reasons[group].get(code, 0) + int(row["n"])
     total = sum(groups.values())
     kept_new, kept_adds = groups.get("new", 0), groups.get("adds", 0)
-    not_kept = sum(groups.get(g, 0) for g in ("basic", "place", "known", "backlog", "retired",
-                                                "other", "expired"))
+    not_kept = sum(groups.get(g, 0) for g in ("basic", "place", "known", "withdrawn", "older",
+                                                "no_project", "backlog", "retired", "other", "expired"))
     waiting = groups.get("waiting", 0) + groups.get("failed", 0)
 
-    landed = [{"store": str(r["store"] or "-"), "project": r["project"], "path": r["path"],
-               "written": int(r["written"] or 0), "reinforced": int(r["reinforced"] or 0)}
-              for r in landed_rows]
-    landed.sort(key=lambda r: (-(r["written"] + r["reinforced"]), str(r["path"])))
-    moved = [{"from": str(r["src"]), "to": str(r["dst"]), "count": int(r["n"])} for r in moved_rows]
+    landed_map: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
+    for row in landed_rows:
+        store, project = str(row["store"] or "-"), row["project"]
+        if row["path"] != row["dest_path"]:
+            store, project = _landing(row["path"], store, project)
+        key = (store, project, row["path"])
+        entry = landed_map.setdefault(key, {"store": store, "project": project, "path": row["path"],
+                                            "written": 0, "reinforced": 0})
+        entry["written" if row["state"] == "written" else "reinforced"] += int(row["n"])
+    landed = sorted(landed_map.values(), key=lambda r: (-(r["written"] + r["reinforced"]), str(r["path"])))
+    moved_all = sum(int(r["n"]) for r in moved_rows)
+    # what went into a brain instead of an every-turn file and was written there
+    moved: dict[tuple[str, str], int] = {}
+    for row in moved_rows:
+        if row["state"] == "written":
+            key = (str(row["src"]), str(row["dst"]))
+            moved[key] = moved.get(key, 0) + int(row["n"])
 
     projects = {str(r["project"]) for r in landed if r["store"] == "DDD" and r["project"]}
     spellings = sorted({p for p in projects
-                        if any(q != p and q.casefold() == p.casefold() for q in projects)})
+                        if _PROJECT_NAME.match(p)
+                        and any(q != p and q.casefold() == p.casefold() for q in projects)})
     db_bytes = 0
     try:
         db_bytes = queries.ingestion_db_path().stat().st_size
@@ -206,9 +257,6 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         pass
     last_cleanup = cleanup[0] if cleanup else None
     attention: list[dict[str, Any]] = []
-    if groups.get("place"):
-        example = place_example["scope"][len("project:"):] if place_example else None
-        attention.append({"code": "no_project", "count": groups["place"], "example": example})
     if groups.get("failed"):
         attention.append({"code": "failed", "count": groups["failed"]})
     if waiting_long:
@@ -223,7 +271,7 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
     if spellings:
         attention.append({"code": "spelling", "count": len(spellings), "example": ", ".join(spellings)})
 
-    return {
+    return _scrub({
         "window": window, "since": since, "total": total,
         "totals": {"new": kept_new, "adds": kept_adds, "reinforced": groups.get("reinforced", 0),
                    "not_kept": not_kept, "waiting": waiting},
@@ -233,19 +281,25 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
             "captured": total,
             "basic_dropped": groups.get("basic", 0),
             "place_dropped": groups.get("place", 0),
-            "moved": sum(m["count"] for m in moved),
+            "moved": moved_all,
             "reinforced": groups.get("reinforced", 0),
             "known": groups.get("known", 0),
+            "withdrawn": groups.get("withdrawn", 0),
+            "older": groups.get("older", 0),
             "written": kept_new + kept_adds,
         },
-        "landed": landed, "moved": moved, "attention": attention,
+        "landed": landed,
+        "moved": [{"from": src, "to": dst, "count": n} for (src, dst), n in sorted(moved.items())],
+        "attention": attention,
         "store_bytes": db_bytes, "last_cleanup_at": last_cleanup,
-    }
+    })
 
 
 def list_units(filters: dict[str, Any] | None = None, page: int = 1) -> dict[str, Any]:
     """One readable row per unit, newest first, filtered by outcome, source, place,
-    store / project / path (a landed row), keyword and window; pages of at most 50."""
+    store / project / path / path prefix (a landed row: where the unit really landed),
+    keyword and window; pages of at most 50. A keyword matches the redacted text only, so
+    a search cannot confirm a secret the view does not show."""
     filters = dict(filters or {})
     page = max(1, int(page or 1))
     page_size = min(50, max(1, int(filters.get("page_size") or 25)))
@@ -263,11 +317,16 @@ def list_units(filters: dict[str, Any] | None = None, page: int = 1) -> dict[str
         params.extend(stores)
     for name, column in (("source", "COALESCE(i.source_v2, i.source)"), ("store", _STORE),
                          ("project", "json_extract(u.destination,'$.project')"),
-                         ("path", "json_extract(u.destination,'$.relative_path')")):
+                         ("path", _LANDED_PATH)):
         value = filters.get(name)
         if value:
             clauses.append(f"{column} = ?")
             params.append(value)
+    prefix = filters.get("path_prefix")
+    if prefix:
+        # case-sensitive (LIKE is not): Projects/swarmai/ is not Projects/SwarmAI/
+        clauses.append(f"substr({_LANDED_PATH}, 1, length(?)) = ?")
+        params.extend((str(prefix), str(prefix)))
     keyword = str(filters.get("keyword") or "").strip()
     if keyword:
         escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -275,34 +334,49 @@ def list_units(filters: dict[str, Any] | None = None, page: int = 1) -> dict[str
         params.append(f"%{escaped}%")
     where = " AND ".join(clauses)
     sql_base = f"FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id WHERE {where}"
+    select = f"""SELECT u.unit_id, u.candidate_id, u.claim_group, u.destination, u.decision,
+                        u.state, u.reason, i.created_at, COALESCE(i.source_v2, i.source) AS source,
+                        i.source_ref, {_LANDED_PATH} AS landed_path
+                 {sql_base} ORDER BY i.created_at DESC, u.unit_id"""
+    search_capped = False
     with closing(queries.connect_ro()) as conn:
         conn.row_factory = sqlite3.Row
-        total = int(conn.execute(f"SELECT COUNT(*) {sql_base}", params).fetchone()[0])
-        rows = conn.execute(
-            f"""SELECT u.unit_id, u.candidate_id, u.claim_group, u.destination, u.decision,
-                       u.state, u.reason, i.created_at, COALESCE(i.source_v2, i.source) AS source,
-                       i.source_ref
-                {sql_base} ORDER BY i.created_at DESC, u.unit_id LIMIT ? OFFSET ?""",
-            (*params, page_size, (page - 1) * page_size)).fetchall()
+        if keyword:
+            # the raw text matched in SQL; keep only rows whose REDACTED text still matches
+            found = conn.execute(f"{select} LIMIT ?", (*params, _KEYWORD_CANDIDATES + 1)).fetchall()
+            search_capped = len(found) > _KEYWORD_CANDIDATES
+            needle = keyword.casefold()
+            found = [row for row in found[:_KEYWORD_CANDIDATES]
+                     if needle in _clean(str(row["claim_group"] or "")).casefold()]
+            total = len(found)
+            rows = found[(page - 1) * page_size: page * page_size]
+        else:
+            total = int(conn.execute(f"SELECT COUNT(*) {sql_base}", params).fetchone()[0])
+            rows = conn.execute(f"{select} LIMIT ? OFFSET ?",
+                                (*params, page_size, (page - 1) * page_size)).fetchall()
     items = []
     for row in rows:
         fields = _unit_fields(_json(row["claim_group"], {}))
         destination = _json(row["destination"], {})
         destination = destination if isinstance(destination, dict) else {}
         vector = (_json(row["decision"], {}) or {}).get("version_vector") or {}
+        store, project = destination.get("store"), destination.get("project")
+        path, section = destination.get("relative_path"), destination.get("section")
+        if row["landed_path"] != path:              # reinforced an entry in another file
+            store, project = _landing(row["landed_path"], store, project)
+            path, section = row["landed_path"], None
         items.append({
             "unit_id": row["unit_id"], "candidate_id": row["candidate_id"],
             "created_at": row["created_at"], "source": row["source"],
-            "source_ref": _clip_utf8(str(row["source_ref"] or ""), 200),
+            "source_ref": str(row["source_ref"] or ""),
             **{key: fields[key] for key in ("kind", "type", "title", "text", "scope")},
             "state": row["state"], "reason": row["reason"],
             "group": reason_group(row["state"], row["reason"]),
-            "store": destination.get("store"), "project": destination.get("project"),
-            "path": destination.get("relative_path"), "section": destination.get("section"),
+            "store": store, "project": project, "path": path, "section": section,
             "moved_from": destination.get("rerouted_from"),
             "relation": "same" if fields["same"] else ("adds" if fields["adds"] else None),
             "target": fields["same"] or fields["adds"],
             "basis": vector.get("basis") if isinstance(vector, dict) else None,
         })
-    return {"items": items, "page": page, "page_size": page_size, "total": total,
-            "has_next": page * page_size < total}
+    return _scrub({"items": items, "page": page, "page_size": page_size, "total": total,
+                   "has_next": page * page_size < total, "search_capped": search_capped})

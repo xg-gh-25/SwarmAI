@@ -43,7 +43,7 @@ export interface LandedOverview {
   groups: Record<string, number>;
   reasons: Record<string, Record<string, number>>;
   sources: Record<string, number>;
-  steps: { captured: number; basicDropped: number; placeDropped: number; moved: number; reinforced: number; known: number; written: number };
+  steps: { captured: number; basicDropped: number; placeDropped: number; moved: number; reinforced: number; known: number; withdrawn: number; older: number; written: number };
   landed: LandedRow[];
   moved: MovedRow[];
   attention: FlowAttention[];
@@ -62,6 +62,8 @@ export interface UnitFilters {
   store?: string;
   project?: string;
   path?: string;
+  /** Where the unit really landed starts with this (case-sensitive): one project's files. */
+  pathPrefix?: string;
   keyword?: string;
 }
 
@@ -91,7 +93,7 @@ export interface FlowUnit {
   basis: string | null;
 }
 
-export interface UnitsPage { items: FlowUnit[]; page: number; pageSize: number; total: number; hasNext: boolean }
+export interface UnitsPage { items: FlowUnit[]; page: number; pageSize: number; total: number; hasNext: boolean; searchCapped: boolean }
 
 export interface IngestionItem {
   id: string;
@@ -208,7 +210,7 @@ export const ingestionService = {
   landed: (window: IngestionWindow) => getMapped<LandedOverview>('/ingestion/landed', { window }),
   units: (filters: UnitFilters, page: number, pageSize = 25) => getMapped<UnitsPage>('/ingestion/units', {
     window: filters.window, outcome: filters.outcome, place: filters.place, source: filters.source,
-    store: filters.store, project: filters.project, path: filters.path,
+    store: filters.store, project: filters.project, path: filters.path, path_prefix: filters.pathPrefix,
     keyword: filters.keyword?.trim() || undefined, page, page_size: pageSize,
   }),
   items: (filters: IngestionFilters, page: number) =>

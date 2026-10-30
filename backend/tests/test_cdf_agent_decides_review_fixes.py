@@ -58,6 +58,8 @@ def test_a_repeated_correction_declared_the_same_keeps_its_repeat(tmp_path, said
                               repeats=entry.shown(), adds=None)), ws)
     assert d.decision == ("reinforce" if reinforced else "reject")
     assert d.version_vector["repeats"] == entry.anchor
+    # where the same entry is, for the Cognition flow view (it may be another file)
+    assert (d.version_vector["same_anchor"], d.version_vector["same_path"]) == (entry.anchor, entry.path)
 
 
 # 2 ── the fork of a failed forking turn is dropped

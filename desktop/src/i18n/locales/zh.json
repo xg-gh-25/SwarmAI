@@ -1812,18 +1812,19 @@
     "and": "和",
     "group": {
       "basic": "没过基础检查",
-      "place": "指向不存在的项目",
+      "place": "放不进去（Hive 教训说的是另一个 Brain 的项目）",
       "known": "已经知道的内容",
       "backlog": "一次性清理积压时丢弃",
       "retired": "被已下线的质量判官拒收",
       "other": "其他原因未保留",
       "expired": "超时未处理",
       "waiting": "等待中",
-      "failed": "处理失败"
+      "failed": "处理失败",
+      "no_project": "指向不存在的项目（公共大脑接管之前被丢掉）",
+      "withdrawn": "和你撤回过的内容相同",
+      "older": "比已有条目更旧"
     },
     "att": {
-      "no_project": "{{n}} 条指向不存在的项目，被丢掉了",
-      "no_projectExample": "例如“{{example}}”",
       "failed": "{{n}} 条处理失败",
       "waiting_long": "{{n}} 条等待超过 24 小时",
       "breaker": "有 source 因反复失败被暂停了 {{n}} 次",
@@ -1832,7 +1833,8 @@
       "links_skipped": "{{n}} 条指向已有条目的关联没连上：找不到被关联的条目",
       "spelling": "同一个项目有两种写法：{{example}}",
       "ask": "让 Swarm 看看",
-      "prompt": "看下认知沉淀里的这个问题：{{text}}。找到原因并修掉。"
+      "prompt": "看下认知沉淀里的这个问题：{{text}}。找到原因并修掉。",
+      "spellingPrompt": "同一个项目有两种写法"
     },
     "landedTitle": "落到了哪里",
     "landedHint": "点一行看具体条目",
@@ -1891,12 +1893,14 @@
     },
     "out": {
       "dropped": "丢掉 {{n}}",
-      "noProject": "{{n}} 条项目不存在",
       "moved": "{{n}} 条移出每轮文件",
       "reinforced": "{{n}} 条强化已有条目",
       "known": "{{n}} 条已经知道，跳过",
       "written": "写入 {{n}}",
-      "writtenSplit": "新增 {{new}} · 补充 {{adds}}"
+      "writtenSplit": "新增 {{new}} · 补充 {{adds}}",
+      "place": "{{n}} 条放不进去",
+      "withdrawn": "{{n}} 条是你撤回过的，拒收",
+      "older": "{{n}} 条比已有条目旧，跳过"
     },
     "alsoRetired": "{{n}} 条被 agent 自主判断之前的质量判官拒收（已下线）",
     "alsoBacklog": "{{n}} 条在一次性丢弃旧积压时清掉",
@@ -2036,6 +2040,13 @@
         "scheduled": "定时",
         "maintenance": "维护"
       }
-    }
+    },
+    "alsoNoProject": "{{n}} 条因指向不存在的项目被丢掉（公共大脑接管之前）",
+    "alsoOther": "{{n}} 条因其他原因未保留",
+    "alsoExpired": "{{n}} 条超时未处理",
+    "alsoWaiting": "{{n}} 条在等待或处理失败",
+    "cmpWithdrawn": "和你撤回过的内容相同，拒收，不会再进来。",
+    "cmpOlder": "已有条目更新，这条旧的跳过。",
+    "searchCapped": "只搜了前 {{n}} 条匹配；缩小搜索范围才能看到其余的。"
   }
 }

@@ -108,6 +108,7 @@ export function CdfUnitFeed({ window, overview, focus, onClearFocus }: {
         {units.isError && <OverlayError compact message={t('ingestion.loadFailed')} onRetry={() => { void units.refetch(); }} testid="cdf-units-error" />}
         {units.data && items.length === 0 && <OverlayEmpty testid="cdf-units-empty">{t('cdf.feedEmpty')}</OverlayEmpty>}
         {items.map((unit) => <UnitRow key={unit.unitId} unit={unit} />)}
+        {units.data?.pages[0]?.searchCapped && <p className="px-2.5 py-2 text-small text-[var(--color-text-muted)]">{t('cdf.searchCapped', { n: '5,000' })}</p>}
         {units.hasNextPage && (
           <div className="mt-1 px-2.5 py-2">
             <button type="button" className="text-small text-[var(--color-primary)]" disabled={units.isFetchingNextPage}
@@ -232,6 +233,8 @@ function Trace({ unit, time }: { unit: FlowUnit; time: string }) {
   if (unit.group === 'adds') compared = unit.target ? t('cdf.cmpAdds', { target: unit.target }) : t('cdf.cmpAddsNoTarget');
   else if (unit.group === 'reinforced') compared = unit.target ? t('cdf.cmpSame', { target: unit.target }) : t('cdf.cmpSameText');
   else if (unit.group === 'known') compared = unit.target ? t('cdf.cmpKnown', { target: unit.target }) : t('cdf.cmpKnownText');
+  else if (unit.group === 'withdrawn') compared = t('cdf.cmpWithdrawn');
+  else if (unit.group === 'older') compared = t('cdf.cmpOlder');
   else if (unit.group === 'new') compared = t('cdf.cmpNew');
   else compared = t('cdf.cmpNone');
 

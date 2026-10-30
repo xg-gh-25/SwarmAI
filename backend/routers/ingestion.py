@@ -93,6 +93,7 @@ class UnitsResponse(StrictResponse):
     page_size: int
     total: int
     has_next: bool
+    search_capped: bool
 
 
 class FlowResponse(StrictResponse):
@@ -197,12 +198,14 @@ async def get_units(
     store: str | None = Query(None, max_length=40),
     project: str | None = Query(None, max_length=200),
     path: str | None = Query(None, max_length=400),
+    path_prefix: str | None = Query(None, max_length=400),
     keyword: str | None = Query(None, max_length=200),
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=100_000),
     page_size: int = Query(25, ge=1, le=50),
 ) -> UnitsResponse:
     filters = {"window": window, "outcome": outcome, "place": place, "source": source,
-               "store": store, "project": project, "path": path, "keyword": keyword,
+               "store": store, "project": project, "path": path,
+               "path_prefix": path_prefix, "keyword": keyword,
                "page_size": page_size}
     return UnitsResponse.model_validate(await executors.run_nav(flow_view.list_units, filters, page))
 

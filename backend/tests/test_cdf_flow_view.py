@@ -31,20 +31,21 @@ def iso(delta: timedelta = timedelta()) -> str:
 
 
 def _seed(conn: sqlite3.Connection, n: int, source: str, state: str, reason: str | None,
-          claim: dict, destination: dict | None, *, age: timedelta = timedelta()) -> None:
+          claim: dict, destination: dict | None, *, age: timedelta = timedelta(),
+          vector: dict | None = None, source_ref: str = "session-1", defer: str | None = None) -> None:
     cid = f"c{n}"
     conn.execute("""INSERT INTO ingestion_inbox
         (id,idem_key,source,source_ref,lane,payload,payload_schema,content_hash,envelope,
          project_snapshot,project_candidates,state,versions,created_at,source_v2)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (cid, f"idem{n}", source, "session-1", "session", json.dumps(claim), "cognition:v2",
+        (cid, f"idem{n}", source, source_ref, "session", json.dumps(claim), "cognition:v2",
          f"h{n}", "{}", "{}", "[]", "done", "{}", iso(-age), source))
-    decision = {"version_vector": {"basis": "inferred"}}
+    decision = {"version_vector": {"basis": "inferred", **(vector or {})}}
     conn.execute("""INSERT INTO ingestion_units
-        (unit_id,candidate_id,claim_group,decision,destination,reason,state,updated_at)
-        VALUES(?,?,?,?,?,?,?,?)""",
+        (unit_id,candidate_id,claim_group,decision,destination,reason,state,updated_at,defer_reason)
+        VALUES(?,?,?,?,?,?,?,?,?)""",
         (f"{cid}.unit", cid, json.dumps(claim), json.dumps(decision),
-         json.dumps(destination) if destination else None, reason, state, iso()))
+         json.dumps(destination) if destination else None, reason, state, iso(), defer))
 
 
 IMPROVEMENT = {"store": "DDD", "project": "SwarmAI",
@@ -67,9 +68,9 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _seed(conn, 3, "S2", "reinforced", "reinforced",
           {**lesson, "title": "Same one", "same": "aa11 | Compaction thresholds"}, IMPROVEMENT)
     _seed(conn, 4, "S2", "rejected", "already_exists", {**lesson, "title": "Known one"}, IMPROVEMENT)
-    _seed(conn, 5, "S7", "rejected", "unknown_project",
+    _seed(conn, 5, "S6", "rejected", "project_outside_brain",
           {"kind": "gap", "gap_kind": "debt", "title": "Gap", "what": "x",
-           "scope": "project:CNTech IVT Tenets"}, None)
+           "scope": "project:CNTech IVT Tenets"}, None, source_ref=f"hive:run?token={_SECRET}")
     _seed(conn, 6, "S2", "rejected", "speculative", {**lesson, "title": "Old judge"}, IMPROVEMENT)
     _seed(conn, 7, "S2", "written", "new",
           {"kind": "event", "event_kind": "event", "title": "Landed", "what": f"key {_SECRET}"},
@@ -78,6 +79,21 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
           {**IMPROVEMENT, "project": "swarmai", "relative_path": "Projects/swarmai/2-understanding/TECH.md"})
     _seed(conn, 9, "S2", "written", "new", {**lesson, "title": "Too old"}, IMPROVEMENT,
           age=timedelta(days=3))
+    # a project unit the same as a Memory entry: it strengthened that entry, not IMPROVEMENT
+    _seed(conn, 10, "S7", "reinforced", "reinforced", {**lesson, "title": "Same as memory"}, IMPROVEMENT,
+          vector={"same_path": ".context/MEMORY.md", "same_anchor": ".context/MEMORY.md#Pitfalls#x"})
+    _seed(conn, 11, "S7", "rejected", "withdrawn", {**lesson, "title": "You withdrew it"}, IMPROVEMENT)
+    _seed(conn, 12, "S7", "rejected", "older_than_existing", {**lesson, "title": "Older"}, IMPROVEMENT)
+    # moved out of an every-turn file, then skipped as known: moved, but not written there
+    _seed(conn, 13, "S7", "rejected", "already_exists", {**lesson, "title": "Moved then known"},
+          {**IMPROVEMENT, "rerouted_from": "MEMORY"})
+    _seed(conn, 14, "S2", "written", "contradicts", {**lesson, "title": "Legacy write"}, IMPROVEMENT)
+    _seed(conn, 15, "S7", "rejected", "unknown_project", {**lesson, "title": "Legacy no project"}, None)
+    # parked on purpose (waits for its section) for two days: not an anomaly
+    _seed(conn, 16, "S7", "deferred", "missing_section", {**lesson, "title": "Parked"}, IMPROVEMENT,
+          age=timedelta(days=2), defer="missing_section")
+    _seed(conn, 17, "S7", "rejected", "already_exists", {**lesson, "title": "Has a key",
+          "what": f"the key is {_SECRET}"}, IMPROVEMENT)
     conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)",
                  (iso(), "relation_skipped", "{}"))
     conn.commit()
@@ -94,10 +110,13 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.mark.parametrize(("state", "reason", "group"), [
-    ("written", "new", "new"), ("written", "adds", "adds"), ("written", "contradicts", "adds"),
-    ("reinforced", "reinforced", "reinforced"), ("rejected", "already_exists", "known"),
-    ("merged", None, "known"), ("rejected", "noisy", "basic"),
-    ("rejected", "unknown_project", "place"), ("rejected", "discarded_backlog", "backlog"),
+    ("written", "new", "new"), ("written", "adds", "adds"), ("written", "contradicts", "new"),
+    ("written", None, "new"), ("reinforced", "reinforced", "reinforced"),
+    ("rejected", "already_exists", "known"), ("merged", None, "known"),
+    ("rejected", "withdrawn", "withdrawn"), ("rejected", "older_than_existing", "older"),
+    ("rejected", "noisy", "basic"), ("rejected", "credentialed_url", "basic"),
+    ("rejected", "project_outside_brain", "place"), ("rejected", "unknown_project", "no_project"),
+    ("rejected", "gap_without_project", "no_project"), ("rejected", "discarded_backlog", "backlog"),
     ("rejected", "speculative", "retired"), ("rejected", "something_new", "other"),
     ("deferred", "missing_section", "waiting"), ("failed_poison", None, "failed"),
     ("expired_unprocessed", "expired_unprocessed", "expired"),
@@ -115,21 +134,23 @@ def test_declared_target_reads_like_the_entry():
 def test_overview_adds_up_and_raises_only_real_anomalies(db: Path):
     before = hashlib.sha256(db.read_bytes()).hexdigest()
     view = flow_view.landed_overview("24h")
-    assert view["total"] == 8                                   # c9 is outside the window
-    assert view["totals"] == {"new": 3, "adds": 1, "reinforced": 1, "not_kept": 3, "waiting": 0}
-    assert view["steps"] == {"captured": 8, "basic_dropped": 0, "place_dropped": 1, "moved": 1,
-                             "reinforced": 1, "known": 1, "written": 4}
-    assert view["sources"] == {"S7": 3, "S2": 5}
+    assert view["total"] == 15                                  # c9 and c16 are older
+    assert view["totals"] == {"new": 4, "adds": 1, "reinforced": 2, "not_kept": 8, "waiting": 0}
+    assert view["steps"] == {"captured": 15, "basic_dropped": 0, "place_dropped": 1, "moved": 2,
+                             "reinforced": 2, "known": 3, "withdrawn": 1, "older": 1, "written": 5}
+    assert view["sources"] == {"S7": 8, "S2": 6, "S6": 1}
+    # moved and then written; the one moved and then skipped as known is not "went there"
     assert view["moved"] == [{"from": "EVOLUTION", "to": "DDD", "count": 1}]
-    improvement = next(r for r in view["landed"] if r["path"].endswith("SwarmAI/2-understanding/IMPROVEMENT.md"))
-    assert (improvement["written"], improvement["reinforced"]) == (2, 1)
+    by_path = {r["path"]: r for r in view["landed"]}
+    improvement = by_path["Projects/SwarmAI/2-understanding/IMPROVEMENT.md"]
+    assert (improvement["written"], improvement["reinforced"]) == (3, 1)
+    memory = by_path[".context/MEMORY.md"]                      # where the reinforcement landed
+    assert (memory["store"], memory["project"], memory["reinforced"]) == ("MEMORY", None, 1)
     codes = {a["code"]: a for a in view["attention"]}
-    assert codes["no_project"]["count"] == 1
-    assert codes["no_project"]["example"] == "CNTech IVT Tenets"
+    assert set(codes) == {"links_skipped", "spelling", "no_cleanup"}   # parked is not late
     assert codes["links_skipped"]["count"] == 1
     assert codes["spelling"]["example"] == "SwarmAI, swarmai"
     assert codes["no_cleanup"]["since"] is None                 # maintenance never completed
-    assert "failed" not in codes and "waiting_long" not in codes and "breaker" not in codes
     assert hashlib.sha256(db.read_bytes()).hexdigest() == before
 
 
@@ -142,32 +163,48 @@ def test_recent_cleanup_is_not_an_anomaly(db: Path):
 
 
 def test_units_filter_and_read_whole(db: Path):
-    every = flow_view.list_units({"window": "24h"})
-    assert every["total"] == 8
+    every = flow_view.list_units({"window": "24h", "page_size": 50})
+    assert every["total"] == 15
     by_title = {item["title"]: item for item in every["items"]}
     adds = by_title["Adds one"]
     assert (adds["group"], adds["relation"], adds["target"]) == ("adds", "adds", "R22 quota defers units body")
     assert adds["moved_from"] == "EVOLUTION"
     assert by_title["Same one"]["relation"] == "same"
     assert by_title["Check where units landed"]["text"] == "Search the stores for the title. " * 40
-    assert _SECRET not in by_title["Landed"]["text"]
     assert by_title["Gap"]["type"] == "debt" and by_title["Gap"]["group"] == "place"
+    memory = by_title["Same as memory"]
+    assert (memory["store"], memory["path"], memory["project"]) == ("MEMORY", ".context/MEMORY.md", None)
+    assert by_title["You withdrew it"]["group"] == "withdrawn"
+    assert by_title["Legacy write"]["group"] == "new"
 
     def titles(**filters) -> set[str]:
-        return {item["title"] for item in flow_view.list_units({"window": "24h", **filters})["items"]}
-    assert titles(outcome="new") == {"Check where units landed", "Landed", "Lowercase"}
+        return {item["title"] for item in flow_view.list_units({"window": "24h", "page_size": 50, **filters})["items"]}
+    assert titles(outcome="new") == {"Check where units landed", "Landed", "Lowercase", "Legacy write"}
     assert titles(outcome="adds") == {"Adds one"}
-    assert titles(outcome="reinforced") == {"Same one"}
-    assert titles(outcome="not_kept") == {"Known one", "Gap", "Old judge"}
+    assert titles(outcome="reinforced") == {"Same one", "Same as memory"}
+    assert titles(outcome="not_kept") == {"Known one", "Gap", "Old judge", "You withdrew it", "Older",
+                                          "Moved then known", "Legacy no project", "Has a key"}
     assert titles(place="every_turn") == {"Landed"}
-    assert titles(project="swarmai") == {"Lowercase"}
-    assert titles(path=IMPROVEMENT["relative_path"], outcome="all") == {
-        "Check where units landed", "Adds one", "Same one", "Known one", "Old judge"}
+    assert titles(path=".context/MEMORY.md") == {"Same as memory"}
+    assert "Same as memory" not in titles(path=IMPROVEMENT["relative_path"])
+    assert titles(path_prefix="Projects/swarmai/") == {"Lowercase"}    # case-sensitive
+    assert "Lowercase" not in titles(path_prefix="Projects/SwarmAI/")
     assert titles(keyword="R22") == {"Adds one"}
     assert titles(keyword="%") == set()
     assert "Too old" in titles(window="7d")
     page = flow_view.list_units({"window": "24h", "page_size": 999}, 1)
     assert page["page_size"] == 50
+
+
+def test_no_secret_reaches_the_view_or_a_search(db: Path):
+    every = flow_view.list_units({"window": "24h", "page_size": 50})
+    blob = json.dumps(every)
+    assert _SECRET not in blob                                   # text, source_ref, every field
+    assert _SECRET not in json.dumps(flow_view.landed_overview("24h"))
+    # a search for the hidden value cannot confirm it exists
+    assert flow_view.list_units({"window": "24h", "keyword": _SECRET})["total"] == 0
+    assert flow_view.list_units({"window": "24h", "keyword": _SECRET[:8]})["total"] == 0
+    assert flow_view.list_units({"window": "24h", "keyword": "the key is"})["total"] == 1
 
 
 def test_units_rejects_unknown_filters(db: Path):
@@ -183,8 +220,9 @@ def test_routes_validate(db: Path):
     client = TestClient(app)
     landed = client.get("/api/ingestion/landed?window=24h")
     assert landed.status_code == 200
-    assert landed.json()["totals"]["new"] == 3
+    assert landed.json()["totals"]["new"] == 4
     units = client.get("/api/ingestion/units?outcome=adds")
     assert units.status_code == 200 and units.json()["items"][0]["title"] == "Adds one"
     assert client.get("/api/ingestion/units?outcome=bogus").status_code == 422
     assert client.get("/api/ingestion/units?page_size=51").status_code == 422
+    assert client.get("/api/ingestion/units?page=100001").status_code == 422

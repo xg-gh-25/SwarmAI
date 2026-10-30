@@ -38,7 +38,7 @@ import type { DispatchPrompt } from './overlayRegistry';
 
 const EVERY_TURN = ['TIMELINE', 'EVOLUTION', 'STEERING', 'USER', 'TOOLS', 'MEMORY'];
 const GENERAL = ['COMMON_DDD', 'KNOWLEDGE'];
-const NOT_KEPT_GROUPS = ['known', 'backlog', 'place', 'retired', 'basic', 'other', 'expired'];
+const NOT_KEPT_GROUPS = ['known', 'withdrawn', 'older', 'backlog', 'place', 'no_project', 'retired', 'basic', 'other', 'expired'];
 const KEPT = 'var(--color-zone-cognitive)';
 const KEPT_SOFT = 'color-mix(in srgb, var(--color-zone-cognitive) 40%, transparent)';
 const WARN_TINT = 'color-mix(in srgb, var(--color-status-warning) 8%, transparent)';
@@ -103,7 +103,7 @@ function Activity({ onDispatch, close }: { onDispatch?: DispatchPrompt; close?: 
                     {line.extra && <span className="text-[var(--color-text-muted)]"> · {line.extra}</span>}
                   </span>
                   {onDispatch && <button type="button" className="btn-sm btn-secondary"
-                    onClick={() => ask(line.extra ? `${line.main} (${line.extra})` : line.main)}>{t('cdf.att.ask')}</button>}
+                    onClick={() => ask(line.prompt)}>{t('cdf.att.ask')}</button>}
                 </div>
               );
             })}
@@ -149,21 +149,27 @@ function Verdict({ data, window }: { data: LandedOverview; window: IngestionWind
   );
 }
 
-export function attentionText(t: TFunction, item: FlowAttention): { main: string; extra?: string } {
+/** The line shown for an anomaly; `prompt` is what goes to chat: built from counts and our own
+ *  words only, never from stored text (a project name came from a model reading the session). */
+export function attentionText(t: TFunction, item: FlowAttention): { main: string; extra?: string; prompt: string } {
   const count = fmt(item.count ?? 0);
   switch (item.code) {
-    case 'no_project':
-      return { main: t('cdf.att.no_project', { n: count }), extra: item.example ? t('cdf.att.no_projectExample', { example: item.example }) : undefined };
     case 'no_cleanup':
-      return { main: item.since
+    {
+      const main = item.since
         ? t('cdf.att.no_cleanupSince', { size: bytes(item.bytes ?? 0), since: item.since.slice(0, 10) })
-        : t('cdf.att.no_cleanup', { size: bytes(item.bytes ?? 0) }) };
+        : t('cdf.att.no_cleanup', { size: bytes(item.bytes ?? 0) });
+      return { main, prompt: main };
+    }
     case 'spelling':
-      return { main: t('cdf.att.spelling', { example: item.example ?? '' }) };
+      return { main: t('cdf.att.spelling', { example: item.example ?? '' }), prompt: t('cdf.att.spellingPrompt') };
     case 'failed': case 'waiting_long': case 'breaker': case 'links_skipped':
-      return { main: t(`cdf.att.${item.code}`, { n: count }) };
+    {
+      const main = t(`cdf.att.${item.code}`, { n: count });
+      return { main, prompt: main };
+    }
     default:
-      return { main: `${item.code} · ${count}` };
+      return { main: `${item.code} · ${count}`, prompt: `${item.code} · ${count}` };
   }
 }
 
@@ -238,10 +244,12 @@ function buildTiers(t: TFunction, rows: LandedRow[]): Array<{ key: 'every_turn' 
     return { store, list, ...sum(list) };
   }).filter((entry) => entry.list.length > 0)
     .sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced));
-  const storeRow = (entry: { store: string; written: number; reinforced: number }): DestRow => ({
+  const storeRow = (entry: { store: string; list: LandedRow[]; written: number; reinforced: number }): DestRow => ({
     key: entry.store, label: t(`cdf.store.${entry.store}`, { defaultValue: entry.store }),
     hint: t(`cdf.storeHint.${entry.store}`, { defaultValue: '' }) || undefined,
-    written: entry.written, reinforced: entry.reinforced, filter: { store: entry.store },
+    written: entry.written, reinforced: entry.reinforced,
+    // one file (every every-turn store): filter by where units really landed
+    filter: entry.list.length === 1 && entry.list[0].path ? { path: entry.list[0].path } : { store: entry.store },
   });
   const projects = new Map<string, LandedRow[]>();
   for (const row of rows.filter((item) => item.store === 'DDD')) {
@@ -253,7 +261,7 @@ function buildTiers(t: TFunction, rows: LandedRow[]): Array<{ key: 'every_turn' 
     .sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced))
     .flatMap((entry) => [
       { key: `p-${entry.name}`, label: entry.name, written: entry.written, reinforced: entry.reinforced,
-        filter: { store: 'DDD', project: entry.name } },
+        filter: { pathPrefix: `Projects/${entry.name}/` } },
       ...(entry.list.length > 1 ? [...entry.list].sort((a, b) => (b.written + b.reinforced) - (a.written + a.reinforced))
         .map((row) => ({ key: `f-${row.path}`, label: fileName(row.path), written: row.written, reinforced: row.reinforced,
           indent: true, filter: { path: row.path ?? undefined } })) : []),
@@ -271,9 +279,14 @@ function HowItDecides({ data }: { data: LandedOverview }) {
   const sources = Object.entries(data.sources).sort((a, b) => b[1] - a[1]);
   const retired = data.groups.retired ?? 0;
   const backlog = data.groups.backlog ?? 0;
+  const g = (name: string) => data.groups[name] ?? 0;
   const also = [
     retired > 0 ? t('cdf.alsoRetired', { n: fmt(retired) }) : null,
     backlog > 0 ? t('cdf.alsoBacklog', { n: fmt(backlog) }) : null,
+    g('no_project') > 0 ? t('cdf.alsoNoProject', { n: fmt(g('no_project')) }) : null,
+    g('other') > 0 ? t('cdf.alsoOther', { n: fmt(g('other')) }) : null,
+    g('expired') > 0 ? t('cdf.alsoExpired', { n: fmt(g('expired')) }) : null,
+    data.totals.waiting > 0 ? t('cdf.alsoWaiting', { n: fmt(data.totals.waiting) }) : null,
   ].filter(Boolean).join('; ');
   const steps: Array<{ key: string; out: ReactNode }> = [
     { key: 'captured', out: (
@@ -286,12 +299,14 @@ function HowItDecides({ data }: { data: LandedOverview }) {
         ))}
       </div>) },
     { key: 'basic', out: <Out tone="dim">{t('cdf.out.dropped', { n: fmt(s.basicDropped) })}</Out> },
-    { key: 'place', out: s.placeDropped > 0 ? <Out tone="warn">{t('cdf.out.noProject', { n: fmt(s.placeDropped) })}</Out>
+    { key: 'place', out: s.placeDropped > 0 ? <Out tone="warn">{t('cdf.out.place', { n: fmt(s.placeDropped) })}</Out>
       : <Out tone="dim">{t('cdf.out.dropped', { n: '0' })}</Out> },
     { key: 'trust', out: <Out tone="accent">{t('cdf.out.moved', { n: fmt(s.moved) })}</Out> },
     { key: 'compare', out: <>
       <Out tone="kept">{t('cdf.out.reinforced', { n: fmt(s.reinforced) })}</Out>
-      <Out tone="dim">{t('cdf.out.known', { n: fmt(s.known) })}</Out></> },
+      <Out tone="dim">{t('cdf.out.known', { n: fmt(s.known) })}</Out>
+      {s.withdrawn > 0 && <Out tone="dim">{t('cdf.out.withdrawn', { n: fmt(s.withdrawn) })}</Out>}
+      {s.older > 0 && <Out tone="dim">{t('cdf.out.older', { n: fmt(s.older) })}</Out>}</> },
     { key: 'written', out: <>
       <Out tone="kept">{t('cdf.out.written', { n: fmt(s.written) })}</Out>
       <Out tone="dim">{t('cdf.out.writtenSplit', { new: fmt(data.totals.new), adds: fmt(data.totals.adds) })}</Out></> },

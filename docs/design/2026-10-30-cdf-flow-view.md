@@ -38,10 +38,17 @@ NOT NULL` counts a stored JSON `null`, so every card read as "ran" for every uni
 
 - `GET /api/ingestion/landed?window=` (`core/ingestion/flow_view.landed_overview`):
   totals, groups, sources, steps, landed rows (store / project / path), moved
-  (from → to), attention (`no_project`, `failed`, `waiting_long`, `breaker`,
-  `no_cleanup`, `links_skipped`, `spelling`).
+  (from → to, written ones), attention (`failed`, `waiting_long` — a parked deferral is not
+  late —, `breaker`, `no_cleanup`, `links_skipped`, `spelling`).
+- A reinforcement lands where the entry it is the same as is: `pipeline_v2` records
+  `same_path` / `same_anchor` in the decision, and the view counts and filters by it.
+- Groups follow the step that decided: `known` (already there), `withdrawn` (you withdrew
+  it), `older` (an existing entry is newer), `place` (a Hive lesson about another Brain);
+  outcomes of earlier versions (`no_project`, `retired`, `backlog`) are named apart.
 - `GET /api/ingestion/units` (`list_units`): outcome, place, source, store / project /
-  path, keyword, window; pages of at most 50; title and text whole and secret-redacted.
+  path / path prefix (where it really landed), keyword, window; pages of at most 50; title
+  and text whole. Every string of both responses is secret-redacted, and a keyword matches
+  the redacted text only. A prompt sent to chat is built from counts and our own words.
 - `reason_group(state, reason)` is the only mapping from a stored outcome to its step;
   the frontend phrases a group and never re-derives one.
 - Health, extraction coverage, model calls, the review table and the weekly history stay

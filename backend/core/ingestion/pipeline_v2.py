@@ -213,6 +213,15 @@ def _with_relations(decision: UnitDecision, declared: dict[str, Any],
     return decision
 
 
+def _same_entry(decision: UnitDecision, entry: Any) -> UnitDecision:
+    """*decision* naming the entry the unit is the same as: a reinforcement strengthens
+    that entry, which may sit in another file than the unit's own destination (the
+    Cognition flow view shows where it really landed)."""
+    decision.version_vector["same_anchor"] = entry.anchor
+    decision.version_vector["same_path"] = entry.path
+    return decision
+
+
 def _decision(unit_id: str, decision: str, action: str, reason: str, *,
               vectors: list[dict[str, Any]], **values: Any) -> UnitDecision:
     hashes = [str(vector.get("prompt_hash", "")) for vector in vectors]
@@ -713,10 +722,10 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         if isinstance(unit, CognitionUnit):
             support = reinforce_or_reject(declared_rel["same"].anchor, resolved, source_unit_id=unit_id)
             if support.reinforced:
-                return _with_relations(_decision(unit_id, "reinforce", "reinforce", "reinforced", **done),
-                                       declared_rel, refused)
-        return _with_relations(_decision(unit_id, "reject", "reject", "already_exists", **done),
-                               declared_rel, refused)
+                return _same_entry(_with_relations(_decision(unit_id, "reinforce", "reinforce", "reinforced", **done),
+                                                   declared_rel, refused), declared_rel["same"])
+        return _same_entry(_with_relations(_decision(unit_id, "reject", "reject", "already_exists", **done),
+                                           declared_rel, refused), declared_rel["same"])
     # last before writing: a unit refused or already known never asks for a section
     if not _section_exists(root, destination):
         return _decision(unit_id, "defer", "defer", "missing_section", **done)

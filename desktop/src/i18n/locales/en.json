@@ -1813,18 +1813,19 @@
     "and": " and ",
     "group": {
       "basic": "failed a basic check",
-      "place": "named no such project",
+      "place": "could not be placed (a Hive lesson about another Brain's project)",
       "known": "already known",
       "backlog": "cleared in a one-time backlog cleanup",
       "retired": "dropped by the retired quality reviewer",
       "other": "not kept for another reason",
       "expired": "expired before it was processed",
       "waiting": "waiting",
-      "failed": "failed to process"
+      "failed": "failed to process",
+      "no_project": "named no such project (dropped before the General Brain took these)",
+      "withdrawn": "the same as something you withdrew",
+      "older": "older than an existing entry"
     },
     "att": {
-      "no_project": "{{n}} items named a project that doesn't exist and were dropped",
-      "no_projectExample": "e.g. “{{example}}”",
       "failed": "{{n}} items failed to process",
       "waiting_long": "{{n}} items have waited more than 24 hours",
       "breaker": "A source was paused {{n}} times after repeated failures",
@@ -1833,7 +1834,8 @@
       "links_skipped": "{{n}} links to earlier entries could not be made — the linked entry was not found",
       "spelling": "One project is written with two spellings: {{example}}",
       "ask": "Ask Swarm to look",
-      "prompt": "Look into this in the Cognition flow: {{text}}. Find the cause and fix it."
+      "prompt": "Look into this in the Cognition flow: {{text}}. Find the cause and fix it.",
+      "spellingPrompt": "One project is written with two spellings"
     },
     "landedTitle": "Where it landed",
     "landedHint": "click a row to see its items",
@@ -1892,12 +1894,14 @@
     },
     "out": {
       "dropped": "{{n}} dropped",
-      "noProject": "{{n}} named no such project",
       "moved": "{{n}} moved out of every-turn files",
       "reinforced": "{{n}} reinforced an entry",
       "known": "{{n}} already known — skipped",
       "written": "{{n}} written",
-      "writtenSplit": "{{new}} new · {{adds}} add to an entry"
+      "writtenSplit": "{{new}} new · {{adds}} add to an entry",
+      "place": "{{n}} could not be placed",
+      "withdrawn": "{{n}} you had withdrawn — refused",
+      "older": "{{n}} older than an existing entry — skipped"
     },
     "alsoRetired": "{{n}} dropped by the quality reviewer that ran before the agent-decides change (now retired)",
     "alsoBacklog": "{{n}} cleared once when the old backlog was discarded",
@@ -2037,6 +2041,13 @@
         "scheduled": "scheduled",
         "maintenance": "maintenance"
       }
-    }
+    },
+    "alsoNoProject": "{{n}} dropped for naming no such project, before the General Brain took these",
+    "alsoOther": "{{n}} not kept for another reason",
+    "alsoExpired": "{{n}} expired before they were processed",
+    "alsoWaiting": "{{n}} waiting or failed",
+    "cmpWithdrawn": "The same as something you withdrew → refused; it stays out.",
+    "cmpOlder": "An existing entry is newer → this older one is skipped.",
+    "searchCapped": "Searched the first {{n}} matches; narrow the search to see the rest."
   }
 }
