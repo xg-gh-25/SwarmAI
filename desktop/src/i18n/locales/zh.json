@@ -1198,7 +1198,13 @@
     "extractionCoverage": "提取覆盖率",
     "parkedDomains": "待加入领域：{{values}}",
     "sameOrigin": "注入文件与改投副本同源：{{count}}",
-    "rates": "写入 {{written}}% · 强化 {{reinforced}}% · 分母 {{denominator}}（written + reinforced + rejected）"
+    "rates": "写入 {{written}}% · 强化 {{reinforced}}% · 分母 {{denominator}}（written + reinforced + rejected）",
+    "corrections": {
+      "none": "{{days}} 天内还没有归过类的纠正",
+      "rate": "重复纠正率 {{pct}}（{{repeat}}/{{confirmed}}，{{days}} 天）",
+      "bar": "门槛 {{bar}}",
+      "small": "不到 10 次，按次数判"
+    }
   },
   "swarmWorkspace": {
     "warning": {

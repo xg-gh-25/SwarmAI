@@ -1,8 +1,8 @@
 """Correction ledger routes (core/ingestion/correction_ledger; design
 docs/design/2026-10-30-autonomy-tenets-gaps.md §2).
 
-- ``GET  /api/ingestion/corrections/pending`` — a session's (or a Brain's) corrections
-  still waiting for the person's choice, each with the classes it offers.
+- ``GET  /api/ingestion/corrections/pending`` — corrections still waiting for the
+  person's choice (a session's, a Brain's, or all of them), each with its classes.
 - ``POST /api/ingestion/corrections/{id}/confirm`` — the person's choice. Like the
   redaction route it takes only a loopback request marked as a user action
   (``X-Swarm-User-Action: correction``): the class of a correction is the person's to
@@ -84,8 +84,6 @@ class RateResponse(_Strict):
 @router.get("/pending", response_model=PendingResponse)
 async def get_pending(session_id: str | None = Query(None, min_length=1),
                       brain: str | None = Query(None, min_length=1)) -> PendingResponse:
-    if session_id is None and brain is None:
-        raise HTTPException(status_code=400, detail="name a session or a Brain")
     rows = await executors.run_nav(lambda: ledger.pending(session_id, brain=brain))
     return PendingResponse(corrections=[PendingCorrection.model_validate(r) for r in rows])
 

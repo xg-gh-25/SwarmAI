@@ -103,7 +103,6 @@ class HealthResponse(StrictResponse):
     inbox_bytes: int
     memory_bytes: int
     evolution_bytes: int
-    recurrence: list[dict[str, Any]]
     llm_by_source: list[dict[str, Any]]
     review: dict[str, Any]   # after-session review metrics (2026-10-29-cdf-session-review.md §12)
 

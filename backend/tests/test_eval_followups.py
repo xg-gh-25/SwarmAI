@@ -367,3 +367,26 @@ def test_a_follow_up_line_says_one_case_or_n_cases_never_case_s():
     assert flipped[0]["headline"]["en"] == "1 offline case passed last time and fails now"
     for item in one + two + flipped:
         assert "(s)" not in item["what"]["en"] and "(s)" not in item["headline"]["en"]
+
+
+def test_rule9_repeat_corrections_and_waiting_ones():
+    """Rule 9: the correction ledger's rate above the L2 bar, and corrections waiting
+    for their class (Autonomy Tenets E7)."""
+    from core.eval_followups import build_follow_ups
+
+    def rate(**kw):
+        base = {"window_days": 28, "confirmed": 20, "repeat": 3, "unconfirmed": 0,
+                "small_sample": False, "thresholds": {"L2": 0.2, "L3": 0.05}}
+        return {**base, **kw}
+
+    def rule9(r):
+        return [i for i in build_follow_ups([], [], corrections=r) if i["rule"] == 9]
+
+    assert rule9(rate()) == []                                   # 15%: under the bar
+    [over] = rule9(rate(repeat=5))                              # 25%
+    assert over["kind"] == "evolution" and "5 of 20" in over["what"]["en"]
+    assert rule9(rate(confirmed=6, repeat=2, small_sample=True)) == []   # few: at most 2 repeats
+    assert len(rule9(rate(confirmed=6, repeat=3, small_sample=True))) == 1
+    [waiting] = rule9(rate(unconfirmed=4))
+    assert waiting["kind"] == "eval" and waiting["severity"] == "low"
+    assert rule9(None) == [] and rule9(rate(confirmed=0, repeat=0)) == []

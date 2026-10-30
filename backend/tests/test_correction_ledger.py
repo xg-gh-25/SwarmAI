@@ -176,3 +176,9 @@ def test_an_escalation_is_a_correction_only_against_swarms_pick(ws):
     assert cl.record_escalation(esc("Use the order date")) == rid   # no session: still one row
     row = [r for r in cl.pending(brain="Billing") if r["id"] == rid][0]
     assert row["surface"] == "escalation" and "not the recommended" in row["text"]
+
+
+def test_pending_keeps_to_the_window(ws):
+    _open("错了 old one", "c-old", now=NOW - timedelta(days=40))
+    _open("错了 new one", "c-new", now=NOW)
+    assert [r["client_id"] for r in cl.pending(now=NOW)] == ["c-new"]

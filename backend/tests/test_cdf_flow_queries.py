@@ -98,7 +98,7 @@ def test_overview_stats_and_health_queries(seeded: Path, monkeypatch: pytest.Mon
         "utc_day": datetime.now(timezone.utc).date().isoformat(),
         "source": "S2", "calls": 3, "input_tokens": 2400, "output_tokens": 310,
     }]
-    assert health["recurrence"] == []
+    assert "recurrence" not in health   # replaced by the correction ledger
 
 
 def test_list_filters_page_cap_and_window_cap(seeded: Path):

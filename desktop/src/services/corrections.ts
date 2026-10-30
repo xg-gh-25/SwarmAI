@@ -7,7 +7,7 @@
  * message of that session, so the picker under a message needs no request of its own.
  *
  * Key exports:
- * - `correctionsService` — `pending(sessionId)`, `confirm(id, choice)`
+ * - `correctionsService` — `pending(sessionId)`, `pendingAll()`, `rate()`, `confirm(id, choice)`
  * - `usePendingCorrection(sessionId, clientId, sentAt)` — the row for one message, or null
  * - `mapPending` — snake_case → camelCase for one row
  */
@@ -39,11 +39,42 @@ export function mapPending(raw: Record<string, unknown>): PendingCorrection {
   };
 }
 
+/** The repeat-correction rate over the window (backend correction_ledger.rate). */
+export interface CorrectionRate {
+  windowDays: number;
+  confirmed: number;
+  unconfirmed: number;
+  repeat: number;
+  rate: number | null;
+  smallSample: boolean;
+  bar: number;
+}
+
+const num = (v: unknown, d = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+
+export function mapRate(raw: Record<string, unknown>): CorrectionRate {
+  const thresholds = (raw.thresholds && typeof raw.thresholds === 'object' ? raw.thresholds : {}) as Record<string, unknown>;
+  return {
+    windowDays: num(raw.window_days, 28), confirmed: num(raw.confirmed), unconfirmed: num(raw.unconfirmed),
+    repeat: num(raw.repeat), rate: typeof raw.rate === 'number' ? raw.rate : null,
+    smallSample: raw.small_sample === true, bar: num(thresholds.L2, 0.2),
+  };
+}
+
 export const correctionsService = {
   async pending(sessionId: string): Promise<PendingCorrection[]> {
     const r = await api.get<{ corrections: Record<string, unknown>[] }>(
       '/ingestion/corrections/pending', { params: { session_id: sessionId } });
     return (r.data.corrections ?? []).map(mapPending);
+  },
+  /** Every correction still waiting (the CDF panel), oldest first. */
+  async pendingAll(): Promise<PendingCorrection[]> {
+    const r = await api.get<{ corrections: Record<string, unknown>[] }>('/ingestion/corrections/pending');
+    return (r.data.corrections ?? []).map(mapPending);
+  },
+  async rate(): Promise<CorrectionRate> {
+    const r = await api.get<Record<string, unknown>>('/ingestion/corrections/rate');
+    return mapRate(r.data);
   },
   /** The person's choice: a candidate key, 'new' or 'not_correction'. */
   async confirm(id: string, choice: string): Promise<void> {

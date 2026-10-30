@@ -15,6 +15,9 @@ const items = vi.fn();
 const detail = vi.fn();
 const health = vi.fn();
 const stats = vi.fn();
+const corrRate = vi.fn();
+const corrPending = vi.fn();
+const corrConfirm = vi.fn();
 
 vi.mock('../../services/attention', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -26,6 +29,13 @@ vi.mock('../../services/ingestion', async (orig) => ({
     flow: (...args: unknown[]) => flow(...args), items: (...args: unknown[]) => items(...args),
     detail: (...args: unknown[]) => detail(...args), health: (...args: unknown[]) => health(...args),
     stats: (...args: unknown[]) => stats(...args),
+  },
+}));
+vi.mock('../../services/corrections', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  correctionsService: {
+    rate: (...args: unknown[]) => corrRate(...args), pendingAll: (...args: unknown[]) => corrPending(...args),
+    confirm: (...args: unknown[]) => corrConfirm(...args), pending: async () => [],
   },
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({
@@ -42,10 +52,6 @@ const itemPage = { items: [{ id: 'c1', createdAt: '2026-10-27T00:00:00Z', source
   page: 1, pageSize: 25, total: 1, hasNext: false, windowDays: 30 };
 const healthData = { lanes: { immediate: { backlog: 0, oldestWaitSeconds: null } }, events: [], breakers: [],
   lastCleanupAt: null, inboxCount: 1, inboxBytes: 100, memoryBytes: 20, evolutionBytes: 30,
-  recurrence: [{ anchor: 'a', title: 'Verify first', writtenAt: '2026-10-20T00:00:00Z',
-    recurrenceCount: 2, recurrenceTimes: [], intervalSeconds: [172800, 259200],
-    lastIntervalSeconds: 259200, beforeRatePerDay: 1, afterRatePerDay: 0.2,
-    launchAt: '2026-10-20T00:00:00Z', launchSource: 'correction_unit_write' }],
   llmBySource: [{ utcDay: '2026-10-27', source: 'S2', calls: 3, inputTokens: 2400, outputTokens: 310 }],
   review: { agentSelfWritten: 2, agentSelfWithdrawn: 1, agentSelfWithdrawnRate: 0.5, byType: {
     code: { reviews: 4, units: 9, invalid: 1, sampled: 1, missed: 1, covered: 3, missRate: 0.25 },
@@ -65,10 +71,15 @@ function defaults() {
   attention.mockResolvedValue({ items: [], counts: { blocking: 0, review: 0 } });
   flow.mockResolvedValue(overview); items.mockResolvedValue(itemPage); detail.mockResolvedValue(detailData);
   health.mockResolvedValue(healthData); stats.mockResolvedValue({ days: 365, rows: [] });
+  corrRate.mockResolvedValue({ windowDays: 28, confirmed: 20, unconfirmed: 1, repeat: 5, rate: 0.25,
+    smallSample: false, bar: 0.2 });
+  corrPending.mockResolvedValue([{ id: 'cor-9', clientId: 'so_1', text: 'Delivery sent back: fix the refund report',
+    candidates: [{ key: 'k1', kind: 'entry', title: 'Refunds counted by order date' }] }]);
+  corrConfirm.mockResolvedValue(undefined);
 }
 
 beforeEach(() => {
-  for (const mock of [attention, flow, items, detail, health, stats]) mock.mockReset();
+  for (const mock of [attention, flow, items, detail, health, stats, corrRate, corrPending, corrConfirm]) mock.mockReset();
   defaults();
 });
 
@@ -81,8 +92,11 @@ describe('Need You Flow tabs', () => {
     fireEvent.click(screen.getByTestId('cdf-tab'));
     await waitFor(() => expect(flow).toHaveBeenCalledOnce());
     expect(screen.getByTestId('cdf-flow')).toBeInTheDocument();
-    expect(await screen.findByText('纠错复发')).toBeInTheDocument();
-    expect(screen.getByText('Verify first')).toBeInTheDocument();
+    // the correction ledger: the rate against its bar, and what waits for the person's choice
+    expect(await screen.findByText(/ingestion\.corrections\.rate:25%\/5\/20\/28/)).toBeInTheDocument();
+    expect(screen.getByText('Delivery sent back: fix the refund report')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refunds counted by order date' }));
+    await waitFor(() => expect(corrConfirm).toHaveBeenCalledWith('cor-9', 'k1'));
     expect(screen.getByText('2400')).toBeInTheDocument();
     // after-session review metrics, per session type (session review §12)
     expect(screen.getByText('写过非代码文件')).toBeInTheDocument();

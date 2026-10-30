@@ -186,61 +186,6 @@ def test_resolved_unit_evidence_dispatches_cited_usage(
     assert calls == [([anchor], "cited_as_evidence", "session-3")]
 
 
-def test_recurrence_counts_only_post_write_user_message_support(conn) -> None:
-    from core.ingestion.queries import recurrence
-
-    write_at = _at(-10)
-    anchor = ".context/MEMORY.md#Corrections#cand:corr.u"
-    conn.execute(
-        """INSERT INTO ingestion_inbox(
-             id,idem_key,source,source_ref,lane,payload,payload_schema,content_hash,
-             envelope,project_snapshot,project_candidates,created_at
-           ) VALUES('corr','corr','S1','r','immediate','{}','v','h','{}','{}','[]',?)""",
-        (_at(-11),),
-    )
-    conn.execute(
-        """INSERT INTO ingestion_units(
-             unit_id,candidate_id,claim_group,destination,state,updated_at
-           ) VALUES('corr.u','corr',?,?,'written',?)""",
-        ('{"kind":"cognition","type":"correction","title":"Verify first"}',
-         '{"store":"MEMORY","section":"Corrections"}', write_at),
-    )
-    conn.execute(
-        """INSERT INTO ingestion_writes(
-             op_id,op_kind,unit_id,target_path,anchors_present,anchors_absent,
-             relations,step,created_at,updated_at
-           ) VALUES('corr-write','ingestion_unit','corr.u','.context/MEMORY.md',
-                    '[]','[]','[]','done',?,?)""",
-        (write_at, write_at),
-    )
-    roots = [
-        ("before-user", "user_message", _at(-11)),
-        ("after-user-1", "user_message", _at(-8)),
-        ("after-user-2", "user_message", _at(-5)),
-        ("after-tool", "tool_text", _at(-3)),
-    ]
-    for root_id, kind, observed in roots:
-        conn.execute(
-            """INSERT INTO evidence_roots(
-                 root_id,root_kind,locator,content_hash,trust,parent_root_ids,observed_at,created_at
-               ) VALUES(?,?,?,?,?,'[]',?,?)""",
-            (root_id, kind, root_id, root_id, "user" if kind == "user_message" else "external",
-             observed, observed),
-        )
-        conn.execute(
-            """INSERT INTO claim_support(
-                 claim_anchor,root_id,source_unit_id,weight,polarity,created_at
-               ) VALUES(?,?,?,1.0,'support',?)""",
-            (anchor, root_id, root_id, observed),
-        )
-    [row] = recurrence(conn)
-    assert row["title"] == "Verify first"
-    assert row["recurrence_count"] == 2
-    assert row["interval_seconds"] == [2 * 86400, 3 * 86400]
-    assert row["last_interval_seconds"] == 3 * 86400
-    assert row["before_rate_per_day"] == 1.0
-
-
 def test_bootstrap_progress_counts_candidates_by_project(conn) -> None:
     from core.ingestion.queries import bootstrap_progress
 

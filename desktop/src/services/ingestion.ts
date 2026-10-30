@@ -77,20 +77,6 @@ export interface IngestionStats {
   rows: Array<Record<string, unknown>>;
 }
 
-export interface RecurrenceRow {
-  anchor: string;
-  title: string;
-  writtenAt: string;
-  recurrenceCount: number;
-  recurrenceTimes: string[];
-  intervalSeconds: number[];
-  lastIntervalSeconds: number | null;
-  beforeRatePerDay: number | null;
-  afterRatePerDay: number;
-  launchAt: string;
-  launchSource: string;
-}
-
 export interface LlmSourceDay {
   utcDay: string;
   source: string;
@@ -126,7 +112,6 @@ export interface IngestionHealth {
   inboxBytes: number;
   memoryBytes: number;
   evolutionBytes: number;
-  recurrence: RecurrenceRow[];
   llmBySource: LlmSourceDay[];
   review?: ReviewHealth;
 }

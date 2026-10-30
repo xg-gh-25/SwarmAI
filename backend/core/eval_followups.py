@@ -30,9 +30,14 @@ Rules (numbered as in the design):
   8. (evolution) an online check is kept in fewer than 90% of turns or sessions, or
      the user corrected the agent in any session this week; a check already listed
      by rule 4 as worse than last week is not listed twice
+  9. the correction ledger (core/ingestion/correction_ledger): (evolution) the
+     repeat-correction rate over 28 days is above the L2 bar (20%; with fewer than 10
+     confirmed corrections, more than 2 repeats), and (eval) corrections are waiting
+     for the person to say which class they belong to
 
 Inputs: the run records (EvalHistory), the daily canary state (the per-session
-quick check, which writes no run record) and the online-scoring state. From the
+quick check, which writes no run record), the online-scoring state and the
+correction ledger's rate (counts only, no correction text). From the
 online state only these fields are read, each bounded: a check id of the form
 ``O<n>_NAME``, its ``rate``, up to 3 example sessions' ``title`` (80 chars) or
 ``session_id``, the low sessions' ``title`` / ``session_id``, the type name of a
@@ -353,6 +358,37 @@ def _standing(checks: Mapping[str, Any], worse: set, include_session_text: bool)
     return out
 
 
+_SMALL_SAMPLE_REPEATS = 2
+
+
+def _corrections(rate: Mapping[str, Any] | None) -> list[dict]:
+    """Rule 9: the repeat-correction rate (Autonomy Tenets E7) and the corrections
+    still waiting for their class."""
+    if not isinstance(rate, Mapping):
+        return []
+    out = []
+    repeat, confirmed = rate.get("repeat"), rate.get("confirmed")
+    bar = (rate.get("thresholds") or {}).get("L2")
+    days = rate.get("window_days")
+    if isinstance(repeat, int) and isinstance(confirmed, int) and confirmed and isinstance(bar, (int, float)):
+        over = repeat > _SMALL_SAMPLE_REPEATS if rate.get("small_sample") else repeat / confirmed > bar
+        if over:
+            out.append(_item(
+                "medium", 9,
+                f"{repeat} of {confirmed} corrections in {days} days repeat a class already known ({repeat / confirmed:.0%})",
+                f"{days} 天里 {confirmed} 次纠正中有 {repeat} 次是已知的那一类（{repeat / confirmed:.0%}）", "",
+                "Something written down did not stop the same mistake: look at those entries and why they did not hold.",
+                "已经沉淀过的东西没挡住同样的错：看看是哪些条目、为什么没起作用。", kind=EVOLUTION))
+    waiting = rate.get("unconfirmed")
+    if isinstance(waiting, int) and waiting > 0:
+        out.append(_item(
+            "low", 9, f"{waiting} corrections are waiting for you to say which kind they are",
+            f"有 {waiting} 次纠正还等你归类", "",
+            "Until you choose, they are not in the repeat-correction rate.",
+            "你归类之前，它们不进重复纠正率。"))
+    return out
+
+
 def _overdue(runs, full_runs, state, now: datetime) -> list[dict]:
     out = []
     quick = next((_ts(r.get("triggered_at")) for r in runs if run_line(r) == "quick"), None)
@@ -424,9 +460,11 @@ def _daily_canary_run(state: Mapping[str, Any] | None) -> dict | None:
 def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mapping[str, Any]],
                      online_state: Mapping[str, Any] | None = None, now: datetime | None = None,
                      shadowed: Iterable[str] = (), daily_canary: Mapping[str, Any] | None = None,
-                     include_session_text: bool = True) -> list[dict]:
+                     include_session_text: bool = True,
+                     corrections: Mapping[str, Any] | None = None) -> list[dict]:
     """``history`` is the run records; ``cases`` the merged golden set;
-    ``daily_canary`` the daily canary state."""
+    ``daily_canary`` the daily canary state; ``corrections`` the correction
+    ledger's ``rate()``."""
     now = now or datetime.now(timezone.utc)
     runs = [r for r in history if isinstance(r, Mapping)]
     canary = _daily_canary_run(daily_canary)
@@ -443,7 +481,7 @@ def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mappi
     items = (_bvt_failures(bvt_run, by_id) + _not_measured(measured, by_id)
              + _offline_regressions(full_runs, by_id) + _online(online_state, include_session_text)
              + _overdue(runs, full_runs, online_state, now) + _always_failing(full_runs, by_id)
-             + _golden_set(cases, shadowed))
+             + _golden_set(cases, shadowed) + _corrections(corrections))
     return sorted(items, key=lambda i: (_SEVERITY[i["severity"]], i["rule"]))
 
 

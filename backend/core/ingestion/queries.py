@@ -360,72 +360,6 @@ def daily_stats(range: int = 30) -> dict[str, Any]:
     return {"days": days, "rows": [dict(row) for row in rows]}
 
 
-def recurrence(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Return user-message recurrences for each written correction unit."""
-    if not (_table_exists(conn, "claim_support") and _table_exists(conn, "evidence_roots")):
-        return []
-    rows = conn.execute(
-        """SELECT u.unit_id,u.claim_group,u.destination,w.target_path,w.updated_at
-           FROM ingestion_units u JOIN ingestion_writes w ON w.unit_id=u.unit_id
-           WHERE json_extract(u.claim_group,'$.type')='correction' AND w.step='done'
-           ORDER BY w.updated_at,u.unit_id"""
-    ).fetchall()
-    now = _utc_now()
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        claim = _json(row["claim_group"], {})
-        destination = _json(row["destination"], {})
-        section = str(destination.get("section") or "")
-        anchor = f"{row['target_path']}#{section}#cand:{row['unit_id']}"
-        persisted_anchor = conn.execute(
-            "SELECT claim_anchor FROM claim_support WHERE claim_anchor LIKE ? "
-            "ORDER BY claim_anchor LIMIT 1",
-            (f"%#cand:{row['unit_id']}",),
-        ).fetchone()
-        if persisted_anchor is not None:
-            anchor = str(persisted_anchor[0])
-        written_at = str(row["updated_at"])
-        support = conn.execute(
-            """SELECT cs.created_at FROM claim_support cs
-               JOIN evidence_roots r ON r.root_id=cs.root_id
-               WHERE cs.claim_anchor=? AND cs.inactive=0 AND cs.polarity='support'
-                 AND r.root_kind='user_message'
-               ORDER BY cs.created_at,cs.root_id""",
-            (anchor,),
-        ).fetchall()
-        try:
-            written = datetime.fromisoformat(written_at.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        observed: list[datetime] = []
-        for item in support:
-            try:
-                observed.append(datetime.fromisoformat(str(item[0]).replace("Z", "+00:00")))
-            except ValueError:
-                continue
-        recurred = [value for value in observed if value > written]
-        points = [written, *recurred]
-        intervals = [int((right - left).total_seconds())
-                     for left, right in zip(points, points[1:])]
-        before = [value for value in observed if value <= written]
-        before_days = max(1.0, (written - min(before)).total_seconds() / 86400) if before else None
-        after_days = max(1.0, (now - written).total_seconds() / 86400)
-        result.append({
-            "anchor": anchor,
-            "title": str(claim.get("title") or row["unit_id"]),
-            "written_at": written_at,
-            "recurrence_count": len(recurred),
-            "recurrence_times": [value.isoformat() for value in recurred],
-            "interval_seconds": intervals,
-            "last_interval_seconds": intervals[-1] if intervals else None,
-            "before_rate_per_day": (len(before) / before_days) if before_days else None,
-            "after_rate_per_day": len(recurred) / after_days,
-            "launch_at": written_at,
-            "launch_source": "correction_unit_write",
-        })
-    return result
-
-
 def bootstrap_progress(conn: sqlite3.Connection, project: str) -> dict[str, Any]:
     """Return terminal/total bootstrap candidate counts for one project."""
     project = str(project or "").strip()
@@ -634,7 +568,6 @@ def health() -> dict[str, Any]:
 
         cleanup = conn.execute("SELECT last_completed_at FROM ingestion_lanes WHERE lane='maintenance'").fetchone()
         inbox_count = int(conn.execute("SELECT COUNT(*) FROM ingestion_inbox").fetchone()[0])
-        recurrence_rows = recurrence(conn)
         llm_rows = conn.execute(
             """SELECT utc_day,source,calls,input_tokens,output_tokens
                FROM ingestion_llm_usage WHERE utc_day>=?
@@ -670,6 +603,5 @@ def health() -> dict[str, Any]:
             "last_cleanup_at": cleanup[0] if cleanup else None,
             "inbox_count": inbox_count, "inbox_bytes": db_bytes,
             "memory_bytes": size("MEMORY.md"), "evolution_bytes": size("EVOLUTION.md"),
-            "recurrence": recurrence_rows,
             "llm_by_source": [dict(row) for row in llm_rows],
             "review": review}

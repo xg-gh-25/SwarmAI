@@ -16,6 +16,7 @@ import {
 } from '../../services/ingestion';
 import { Hint, SectionLabel, Segmented, Stat, StatusBadge, tableHeadClass } from '../overlay';
 import { OverlayEmpty, OverlayError, OverlayLoading } from './OverlayState';
+import { CorrectionLedgerBlock } from './CorrectionLedgerBlock';
 
 const WINDOWS: Array<{ key: IngestionWindow; label: string }> = [
   { key: '24h', label: '24h' }, { key: '7d', label: '7d' }, { key: '30d', label: '30d' },
@@ -44,12 +45,6 @@ function json(value: unknown): string {
 function readString(value: Record<string, unknown>, key: string): string {
   const found = value[key];
   return typeof found === 'string' ? found : '';
-}
-
-function intervalLabel(seconds: number | null): string {
-  if (seconds == null) return '—';
-  const days = seconds / 86400;
-  return days >= 1 ? `${days.toFixed(1)} 天` : `${Math.max(1, Math.round(seconds / 3600))} 小时`;
 }
 
 function weekOf(day: string): string {
@@ -214,14 +209,7 @@ export function CognitiveDistillationFlow() {
               row.missRate == null ? '—' : `${(row.missRate * 100).toFixed(0)}%（${row.missed}/${row.missed + row.covered}）`];
           })}
         />}
-        {health.data && health.data.recurrence.length > 0 && <HealthTable
-          title="纠错复发"
-          headers={['纠错', '次数', '最近间隔', '规则前 / 后（日率）']}
-          rows={health.data.recurrence.map((row) => [
-            row.title, String(row.recurrenceCount), intervalLabel(row.lastIntervalSeconds),
-            `${row.beforeRatePerDay == null ? '—' : row.beforeRatePerDay.toFixed(2)} / ${row.afterRatePerDay.toFixed(2)}`,
-          ])}
-        />}
+        <CorrectionLedgerBlock />
       </section>
 
       <section className="space-y-2">

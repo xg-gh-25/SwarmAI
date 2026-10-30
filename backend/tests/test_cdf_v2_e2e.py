@@ -505,10 +505,10 @@ def test_s6_library_inbox_and_link_rejections(cdf_env, monkeypatch) -> None:
     assert (result.status, result.detail) == ("rejected", "credentialed_url")
 
 
-def test_reinforcement_recurrence_and_echo_are_real_worker_outcomes(cdf_env) -> None:
+def test_reinforcement_and_echo_are_real_worker_outcomes(cdf_env) -> None:
     """Independent user roots reinforce once; a target-descended echo cannot reinforce."""
     from core.ingestion.sources import s1_user
-    from core.ingestion import api_v2, queries
+    from core.ingestion import api_v2
     from core.ingestion.store import connect_ro
 
     first = _record_person_message(cdf_env, "correction-1", "ONE COPY CLAIM: never bypass review.")[0]
@@ -522,10 +522,8 @@ def test_reinforcement_recurrence_and_echo_are_real_worker_outcomes(cdf_env) -> 
     assert rows[-1]["state"] == "reinforced", [(row["state"], row["reason"]) for row in rows]
     conn = connect_ro()
     support = conn.execute("SELECT claim_anchor,root_id FROM claim_support").fetchall()
-    recurrence_rows = queries.recurrence(conn)
     conn.close()
     assert len(support) == 1
-    assert len(recurrence_rows) == 1 and recurrence_rows[0]["recurrence_count"] == 1
     overview = _flow_is_read_only(cdf_env["data"])
     assert overview["overview"]
 

@@ -22,7 +22,8 @@ This module is the only writer of the ``correction_ledger`` table (the CDF store
 - ``confirm(row_id, choice)`` — the person's choice: a key among that row's candidates,
   ``"new"`` or ``"not_correction"``. Any other key is refused, so a class can only be
   one the person was shown.
-- ``pending(session_id)`` — the session's rows still waiting, for the picker.
+- ``pending(session_id=None, brain=None)`` — rows still waiting: a session's (the
+  picker under its messages), a Brain's, or all of them (the CDF panel).
 - ``rate(window_days, brain=None, now=None)`` — the rate with its coverage figures.
 - ``record_chat_message(session_id, client_id, text)`` — the chat send path's entry:
   detect, find the session's Brain and the reply being corrected, open a row.
@@ -271,20 +272,26 @@ def _row(r: sqlite3.Row) -> dict[str, Any]:
             "status": r["status"], "class_kind": r["class_kind"], "class_key": r["class_key"]}
 
 
-def pending(session_id: Optional[str] = None, *, brain: Optional[str] = None) -> list[dict[str, Any]]:
-    """Rows still waiting for the person, oldest first (a session's, or a Brain's)."""
+PENDING_LIMIT = 50
+
+
+def pending(session_id: Optional[str] = None, *, brain: Optional[str] = None,
+            window_days: int = 28, now: Optional[datetime] = None) -> list[dict[str, Any]]:
+    """Rows still waiting for the person within the window, oldest first: a session's,
+    a Brain's, or (neither named) all of them, at most ``PENDING_LIMIT``."""
     conn = _ro()
     if conn is None:
         return []
     try:
-        sql, args = "SELECT * FROM correction_ledger WHERE status='unconfirmed'", []
+        since = (_now(now) - timedelta(days=window_days)).isoformat()
+        sql, args = "SELECT * FROM correction_ledger WHERE status='unconfirmed' AND at >= ?", [since]
         if session_id is not None:
             sql += " AND session_id=?"
             args.append(session_id)
         if brain is not None:
             sql += " AND brain=?"
             args.append(brain)
-        return [_row(r) for r in conn.execute(sql + " ORDER BY at", args).fetchall()]
+        return [_row(r) for r in conn.execute(sql + f" ORDER BY at LIMIT {PENDING_LIMIT}", args).fetchall()]
     finally:
         conn.close()
 

@@ -40,7 +40,10 @@ def test_pending_then_confirm_by_the_person(client):
     assert bad.status_code == 400
     rate = client.get("/api/ingestion/corrections/rate").json()
     assert rate["confirmed"] == 1 and rate["rate"] == 1.0
-    assert client.get("/api/ingestion/corrections/pending").status_code == 400
+    # neither named: every row still waiting (the CDF panel)
+    cl.open_row(surface="escalation", text="chose B, not the recommended A", client_id="esc-1")
+    every = client.get("/api/ingestion/corrections/pending").json()["corrections"]
+    assert [r["client_id"] for r in every] == ["esc-1"]
 
 
 def test_a_non_loopback_request_cannot_confirm(tmp_path, monkeypatch):

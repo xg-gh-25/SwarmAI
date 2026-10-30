@@ -434,7 +434,8 @@ class EvalService:
             runs, cases = list(self._runs), list(self._cases)
         return build_follow_ups(runs, cases, self._context_state(".session-quality-state.json"),
                                 shadowed=self.shadowed_private_ids,
-                                daily_canary=self._context_state(".eval-canary-daily.json"))
+                                daily_canary=self._context_state(".eval-canary-daily.json"),
+                                corrections=_correction_rate())
 
     def _context_state(self, name: str) -> dict | None:
         """A JSON state file under .context/ as written, or None when absent / unreadable."""
@@ -1525,3 +1526,15 @@ def get_eval_service() -> EvalService:
                     logger.error("eval_service: init failed: %s", e)
                     _eval_service = EvalService(workspace_root=None)
     return _eval_service
+
+
+
+def _correction_rate() -> dict | None:
+    """The correction ledger's 28-day rate for the follow-up list, or None when it
+    cannot be read (the list never fails because of it)."""
+    try:
+        from core.ingestion.correction_ledger import rate
+        return rate(28)
+    except Exception:  # noqa: BLE001
+        logger.debug("correction rate unavailable", exc_info=True)
+        return None
