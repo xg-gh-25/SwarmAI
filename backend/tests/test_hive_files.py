@@ -50,6 +50,24 @@ def test_a_listed_report_is_sealed_with_its_path_and_bytes(hive_ws):
         os.close(fd)
 
 
+def test_a_pipeline_runs_report_comes_back_when_the_run_ends(hive_ws):
+    """dispatch-center §3: the run engine writes REPORT.md, so no turn lists it; the
+    turn whose rows end the run (a pipeline_summary) seals it, once, never another run's."""
+    from core import hive_records as hr
+    rid = "run_0123abcd"
+    _write(hive_ws / "Projects" / "Lib" / ".artifacts" / "runs" / rid / "REPORT.md", "# run report")
+    _write(hive_ws / "Projects" / "Lib" / ".artifacts" / "runs" / "run_ffffffff" / "REPORT.md", "# other")
+    listed = _write(hive_ws / "Outputs" / "so_aaaaaaaaaaaa" / "notes.md", "notes")
+    rows = _rows_listing(listed)
+    rows[-1]["content"].append({"type": "pipeline_summary", "runId": rid, "status": "completed"})
+    rows[-1]["content"].append({"type": "pipeline_stage", "runId": "run_ffffffff", "stage": "evaluate"})  # not ended
+    hr.seal_turn(hive_ws, SID, rows)
+    assert sorted(e["path"] for e in _files(hive_ws)) == [
+        f"Outputs/so_aaaaaaaaaaaa/notes.md", f"Projects/Lib/.artifacts/runs/{rid}/REPORT.md"]
+    hr.seal_turn(hive_ws, SID, _rows_listing(i="b"))                          # a later turn: not again
+    assert len(_files(hive_ws)) == 2
+
+
 def test_what_is_never_sealed(hive_ws, tmp_path, monkeypatch):
     from core import hive_records as hr
     outside = _write(tmp_path / "outside" / "secret.md", "not yours")

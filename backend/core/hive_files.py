@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import stat
 from pathlib import Path
@@ -132,11 +133,39 @@ def _read(workspace: Path, abs_path: str, cap: int) -> tuple[str, bytes]:
         os.close(dfd)
 
 
+_RUN_ID_RE = re.compile(r"run_[0-9a-f]{8,32}")
+
+
+def report_paths(workspace: Path, rows: list[dict]) -> list[str]:
+    """The ``REPORT.md`` of each pipeline run that ended in these rows (a
+    ``pipeline_summary`` block names it; the run engine writes it, so no
+    ``turn_deliverables`` lists it), at ``Projects/<P>/.artifacts/runs/<id>/`` (design
+    dispatch-center §3: the run's report comes back with the run)."""
+    ids: list[str] = []
+    for r in rows or []:
+        content = r.get("content") if isinstance(r, dict) else None
+        for b in content if isinstance(content, list) else []:
+            rid = b.get("runId") if isinstance(b, dict) and b.get("type") == "pipeline_summary" else None
+            if isinstance(rid, str) and _RUN_ID_RE.fullmatch(rid) and rid not in ids:
+                ids.append(rid)
+    out: list[str] = []
+    for rid in ids:
+        for p in sorted(Path(workspace).glob(f"Projects/*/.artifacts/runs/{rid}/REPORT.md"))[:1]:
+            out.append(str(p))
+    return out
+
+
 def seal_files(workspace: Path, session_id: str, rows: list[dict]) -> list[dict]:
-    """Seal each deliverable the rows list as a ``file`` entry; the sealed entries. Never raises."""
+    """Seal each deliverable the rows list, and the report of each pipeline run that
+    ended in them (``report_paths``), as a ``file`` entry; the sealed entries. Never
+    raises."""
     from core import hive_records
     out = []
-    for ap in deliverable_paths(rows):
+    try:
+        reports = report_paths(workspace, rows)
+    except OSError:
+        reports = []
+    for ap in [*deliverable_paths(rows), *[r for r in reports if r not in deliverable_paths(rows)]]:
         try:
             rel, data = _read(Path(workspace), ap, hive_records.MAX_BYTES["file"])
             out.append(hive_records.append(workspace, session_id, "file", data=data, path=rel, listed=ap))
