@@ -104,7 +104,7 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   marks it stale until it re-runs). Triggered after a session ends (the quick check), by
   deploy, by the schedule or by the user's own dashboard button ONLY — **never inside a coding
   pipeline**; CI runs only the eval machinery's own unit tests, never an eval.
-- **Between-session cognition** — hooks fire between turns (warm start, briefing injection,
+- **Between-session cognition** — hooks fire between turns (warm start,
   audit markers); scheduled **jobs** (launchd) run background work independent of any chat;
   **self-healing** respawns a broken session invisibly.
 

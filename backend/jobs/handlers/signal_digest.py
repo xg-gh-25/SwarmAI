@@ -5,7 +5,7 @@ Takes buffered raw signals, groups them, calls Bedrock Sonnet 4.6 for
 LLM summarization with relevance scoring, and writes:
   1. A human-readable markdown digest → Knowledge/Signals/
   2. A machine-readable JSON file → Services/signals/signal_digest.json
-     (consumed by L4 proactive_intelligence._get_signal_highlights)
+     (read by the signal Slack formatter and hooks.signal_ddd_bridge)
 """
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def handle_signal_digest(
     # last write of the day IS the digest. (Was: append-with-`---` separator.)
     digest_path.write_text(digest_md)
 
-    # Write L4 JSON digest for proactive_intelligence._get_signal_highlights()
+    # Write the JSON digest (signal Slack formatter, signal_ddd_bridge)
     _write_l4_json(signals, scored_items)
 
     # Clear processed signals from buffer
@@ -504,8 +504,7 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
 def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     """Write Services/signals/signal_digest.json in the schema L4 expects.
 
-    Consumers (the Slack Signal Digest, the session briefing's signal
-    highlights, the signal→DDD bridge) expect:
+    Consumers (the Slack Signal Digest, the signal→DDD bridge) expect:
       { "items": [{ "fetched_at", "relevance_score", "title", "summary",
                      "source", "urgency", "feed_id", "lang", "platform",
                      "region" }] }

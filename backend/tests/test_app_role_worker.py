@@ -278,15 +278,14 @@ def test_a_worker_handle_that_failed_to_start_stops_cleanly(as_role, tmp_path, m
 # ── no other dispatch's work reaches a worker's prompt (C1/C2 of the 2026-10-30
 #    Hive-vs-Host review) ──────────────────────────────────────────────────────
 
-def test_a_worker_injects_no_session_briefing(as_role, tmp_path, monkeypatch):
-    """The briefing is built from MEMORY and DailyActivity, which on a worker hold
-    other dispatches' work."""
+def test_a_worker_injects_no_governance_audit_hint(as_role, tmp_path, monkeypatch):
+    """The audit hint is about the Host's governed files, not a worker's dispatch."""
     from tests.test_prompt_builder_properties import _make_builder
-    from core import proactive_intelligence
+    from core import governance_audit
     ws = tmp_path / "ws"
     (ws / ".context").mkdir(parents=True)
-    monkeypatch.setattr(proactive_intelligence, "build_session_briefing",
-                        lambda wd: "## Session Briefing\nEARLIER BRIEFING MARKER")
+    monkeypatch.setattr(governance_audit, "audit_hint",
+                        lambda wd, model: "- EARLIER BRIEFING MARKER")
 
     def full_text() -> str:
         cfg: dict = {}

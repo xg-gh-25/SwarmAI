@@ -5168,7 +5168,7 @@ class SessionRouter:
 
         # PER-SESSION SYSTEM-PROMPT CACHE (run_1dc710db): a chat-tab session's
         # system prompt is essentially constant for its life; re-assembling the full
-        # ~85K (build_session_briefing ~1.1s) every user message is waste. But the
+        # ~85K every user message is waste. But the
         # ONLY turn where the assembled prompt is discarded — and therefore the only
         # turn where reusing a possibly-stale cache is HARMLESS — is a WARM reuse
         # (send() reuses the live subprocess via client.query(); options.system_prompt

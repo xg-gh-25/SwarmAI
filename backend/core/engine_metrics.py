@@ -1,7 +1,6 @@
 """Core Engine metrics collector — unified health & growth data for L3 self-governing.
 
 Aggregates data from:
-- proactive_state.json (learning, effectiveness, work distribution)
 - MEMORY.md (section sizes, entry ages, freshness)
 - DailyActivity/ (coverage, distillation health)
 - context_health findings (DDD staleness, git health)
@@ -253,7 +252,7 @@ def collect_hook_stats(ws_path: Path) -> dict[str, Any]:
 def collect_engine_metrics(ws_path_str: str) -> dict[str, Any]:
     """Collect all Core Engine metrics for the dashboard API.
 
-    Aggregates: learning state, memory effectiveness, DDD health,
+    Aggregates: memory effectiveness, DDD health,
     hook stats, context health findings.
     """
     ws_path = Path(ws_path_str)
@@ -261,22 +260,6 @@ def collect_engine_metrics(ws_path_str: str) -> dict[str, Any]:
         "collected_at": datetime.now().isoformat(timespec="seconds"),
         "engine_level": _compute_engine_level(ws_path),
     }
-
-    # 1. Proactive learning state
-    try:
-        from core.proactive_learning import load_learning_state
-        state = load_learning_state(ws_path)
-        metrics["learning"] = {
-            "work_type_distribution": state.work_type_distribution,
-            "effectiveness": state.effectiveness,
-            "total_observations": len(state.observations),
-            "item_history_size": len(state.item_history),
-            "preferred_work_type": state.preferred_work_type(),
-            "learning_summary": state.learning_summary(),
-        }
-    except Exception as exc:
-        logger.debug("Failed to load learning state: %s", exc)
-        metrics["learning"] = {"error": str(exc)}
 
     # 2. Memory effectiveness
     try:
@@ -327,19 +310,11 @@ def _compute_engine_level(ws_path: Path) -> dict[str, Any]:
     # L0-L2: DONE (hardcoded, verified in prior sessions)
     # L3: Check which features are active
     l3_features = {
-        "proactive_gap_detection": False,
         "session_type_detection": False,
         "memory_effectiveness_tracking": False,
         "ddd_auto_update_suggestions": False,
         "growth_metrics_dashboard": False,
     }
-
-    # Check proactive gap detection — the session-start briefing builder
-    try:
-        from core.proactive_intelligence import build_session_briefing  # noqa: F401
-        l3_features["proactive_gap_detection"] = True
-    except ImportError:
-        pass
 
     # Check if session-type detection exists (channel sessions get lighter prompts)
     try:

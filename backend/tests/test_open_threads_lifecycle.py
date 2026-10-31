@@ -3,10 +3,8 @@
 Design B (CDF single writer): nothing writes COE threads into MEMORY.md's Open
 Threads. ``core.coe_threads`` computes which COEs are open from the registry's
 status (the baseline, folded by distillation from distilled days) and the COE
-signals of the days not marked distilled; the briefing renders them as P0 items,
-and a COE-keyed thread already in Open Threads follows that state. A thread is the
-COE's thread only when its title has the same ``coe_key``, never shared words.
-Deliverables never close a thread.
+signals of the days not marked distilled. A COE is the same COE only when its
+title has the same ``coe_key``, never shared words.
 """
 
 from __future__ import annotations
@@ -15,7 +13,6 @@ import json
 from pathlib import Path
 
 from core import coe_threads
-from core.proactive_intelligence import _merge_coe_threads, _parse_open_threads
 
 MEMORY = """# Memory
 
@@ -105,16 +102,6 @@ def test_inner_bold_markers_do_not_change_the_key():
     assert coe_threads.coe_key("fix **inner** bug.") == coe_threads.coe_key("Fix inner bug")
 
 
-def test_the_briefing_threads_follow_the_coe_state(tmp_path: Path):
-    ws = _ws(tmp_path, {"2026-10-27": [("resolution", "streaming freeze + overall slowness")]})
-    threads = _merge_coe_threads(_parse_open_threads(MEMORY), coe_threads.coe_states(ws))
-    titles = [(t["priority"], t["title"], bool(t.get("coe"))) for t in threads]
-    # the resolved COE's old thread is hidden; the open COE with no thread is a P0
-    # item; a thread that is no COE is untouched
-    assert titles == [("P0", "chat messages showing Interrupted chip", True),
-                      ("P1", "Frontend reconcile race", False)]
-
-
 def test_an_archived_undistilled_day_still_counts(tmp_path: Path):
     """After the cutover nothing marks a day distilled, and retention archives an
     undistilled day after 180 days (the .md moves to Knowledge/Archives/, the sidecar
@@ -130,57 +117,12 @@ def test_an_archived_undistilled_day_still_counts(tmp_path: Path):
     assert "vanished problem" not in _open(ws)
 
 
-
-
-
-
 def test_open_problem_titles_come_from_the_coe_state(tmp_path: Path):
     from hooks.daily_activity_hook import _open_problem_titles
     ws = _ws(tmp_path)
     assert _open_problem_titles(ws) == ["streaming freeze + overall slowness",
                                         "chat messages showing Interrupted chip"]
     assert _open_problem_titles(tmp_path / "missing") == []
-
-
-# ── one parser for the DailyActivity "Delivered" sections ──────────────────────
-
-DA = """---
-date: 2026-10-27
----
-## 10:00 | aaa | first session
-**Delivered:**
-- shipped the open-thread fix
-- wrote the HLD
-**Lessons:**
-- not a deliverable
-## 11:00 | bbb | second session
-**Delivered:**
-- published to Pippin
-**Next:** something
-"""
-
-
-def test_parse_delivered_reads_every_session_block():
-    from core.proactive_learning import parse_delivered
-    assert parse_delivered(DA) == ["shipped the open-thread fix", "wrote the HLD",
-                                   "published to Pippin"]
-
-
-def test_parse_delivered_reads_the_older_header_too():
-    from core.proactive_learning import parse_delivered
-    old = "## 09:00 | x | s\n**Deliverables:**\n- old one\n### Next\n- not it\n"
-    assert parse_delivered(old) == ["old one"]
-
-
-def test_briefing_hints_see_the_delivered_lines(tmp_path: Path):
-    """The briefing's deliverables (used to drop finished continue-hints) were read with
-    a header the writer no longer emits, so they were always empty."""
-    from core.proactive_intelligence import _extract_recent_deliverables
-    (tmp_path / "2026-10-27.md").write_text(DA, encoding="utf-8")
-    assert _extract_recent_deliverables(tmp_path) == [
-        "shipped the open-thread fix", "wrote the hld", "published to pippin"]
-
-
 
 
 # ── the summariser reuses an open COE title ────────────────────────────────────
@@ -220,9 +162,3 @@ def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
             for i in range(sm.LLM_ENRICHMENT_THRESHOLD + 2)]
     asyncio.run(sm.SummarizationPipeline().summarize(msgs, open_problems=["a problem"]))
     assert seen["open_problems"] == ["a problem"]
-
-
-def test_parse_delivered_skips_the_empty_section_placeholder():
-    from core.proactive_learning import parse_delivered
-    text = "## 10:00 | s | t\n\n**Delivered:**\n- None recorded\n\n**Outputs:**\n- None recorded\n"
-    assert parse_delivered(text) == []

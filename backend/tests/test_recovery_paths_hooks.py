@@ -1,7 +1,7 @@
-"""Execution tests for recovery paths in context_health_hook.py and proactive_intelligence.py.
+"""Execution tests for recovery paths in context_health_hook.py.
 
-Tests T11-T16 from design doc. Forces error/fallback paths that have zero
-execution coverage in the two largest hook modules.
+Tests T11-T14 from design doc. Forces error/fallback paths that have zero
+execution coverage in context_health_hook.
 
 METHODOLOGY: Call REAL functions with mocked external deps (filesystem, DB,
 embedding API). Each test forces the specific error path and verifies
@@ -142,98 +142,3 @@ class TestT13CultivationDeadlineOverflow:
                 continue
 
         assert skipped == 5
-
-
-# ═══════════════════════════════════════════════════════════════════
-# T15: Learning State Save Failure (proactive_intelligence)
-# Path: build_session_briefing() — learning state persistence
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestT15LearningStateSaveFailure:
-    """When learning state save fails, function continues (no crash).
-    Next session still gets a briefing (degrades to default)."""
-
-    @pytest.mark.asyncio
-    async def test_save_failure_does_not_propagate(self):
-        """Learning state write failure is caught and logged, not propagated."""
-        state = {"last_briefing_suggested": "focus_a", "score": 0.8}
-        save_path = "/tmp/nonexistent_dir/state.json"
-
-        # Simulate the save failure (directory doesn't exist)
-        saved = False
-        try:
-            try:
-                Path(save_path).write_text("{}")
-            except (OSError, IOError):
-                # This is what the real code does: catch and log
-                pass
-            saved = True  # Function continues normally
-        except Exception:
-            saved = False
-
-        assert saved is True  # Never propagates
-
-    @pytest.mark.asyncio
-    async def test_missing_state_returns_default_briefing(self):
-        """When no learning state exists, briefing still generates."""
-        # The pattern: try to load state → catch → use defaults
-        try:
-            state = None
-            raise FileNotFoundError("No learning state file")
-        except FileNotFoundError:
-            state = {"last_briefing_suggested": None}
-
-        # Function continues with defaults
-        assert state is not None
-        assert state["last_briefing_suggested"] is None
-
-
-# ═══════════════════════════════════════════════════════════════════
-# T16: Health Todo Creation Failure (proactive_intelligence)
-# Path: _get_health_highlights() — todo_manager.create_todo failure
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestT16HealthTodoCreationFailure:
-    """When create_todo fails, health finding is still surfaced
-    (just not persisted as a todo)."""
-
-    @pytest.mark.asyncio
-    async def test_create_todo_failure_does_not_crash(self):
-        """todo_manager.create_todo() failing doesn't crash the briefing."""
-        findings = []
-        todo_created = False
-
-        # Simulate finding a health issue
-        finding = {"type": "gap", "severity": "high", "message": "RSS growing"}
-        findings.append(finding)
-
-        # Simulate create_todo failure
-        try:
-            raise RuntimeError("DB locked — can't create todo")
-        except Exception:
-            # Real code: logs WARNING, continues
-            todo_created = False
-
-        # Finding still collected even if todo creation failed
-        assert len(findings) == 1
-        assert findings[0]["message"] == "RSS growing"
-        assert todo_created is False
-
-    @pytest.mark.asyncio
-    async def test_multiple_findings_survive_one_todo_failure(self):
-        """Multiple health findings — one todo failure doesn't block others."""
-        findings = ["gap_1", "gap_2", "gap_3"]
-        todos_created = 0
-
-        for i, f in enumerate(findings):
-            try:
-                if i == 1:
-                    raise RuntimeError("DB locked")
-                todos_created += 1
-            except Exception:
-                continue
-
-        assert todos_created == 2
-        assert len(findings) == 3  # All findings preserved

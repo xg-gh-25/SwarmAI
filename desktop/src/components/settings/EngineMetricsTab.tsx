@@ -1,7 +1,7 @@
 /**
  * Core Engine growth metrics dashboard.
  *
- * Displays: engine level progress, memory effectiveness, learning state,
+ * Displays: engine level progress, memory effectiveness,
  * DDD health, session volume, and context health findings.
  * Data from GET /api/system/engine-metrics.
  */
@@ -84,10 +84,7 @@ export default function EngineMetricsTab() {
   // All data passes through deepSnakeToCamel in system.ts — trust camelCase only
   const level = metrics.engineLevel ?? { current: 'unknown', l3Progress: '0/0', l3Features: {}, levels: {} };
   const memory = (metrics.memory ?? { status: 'error' }) as Record<string, unknown>;
-  const learning = (metrics.learning ?? {}) as Record<string, unknown>;
   const sessions = (metrics.sessions ?? {}) as Record<string, unknown>;
-  const effectiveness = (learning.effectiveness ?? {}) as Record<string, unknown>;
-  const workDist = (learning.workTypeDistribution ?? {}) as Record<string, number>;
 
   return (
     <div className="space-y-6">
@@ -149,7 +146,7 @@ export default function EngineMetricsTab() {
 
       {/* Stats Row */}
       <section className="bg-[var(--color-card)] rounded-lg p-5">
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <Stat
             label="Sessions (7d)"
             value={sessions.last7dSessions as number ?? '-'}
@@ -159,16 +156,6 @@ export default function EngineMetricsTab() {
             label="Memory Freshness"
             value={`${memory.freshnessScore ?? 0}%`}
             sub={`${memory.totalEntries ?? 0} entries`}
-          />
-          <Stat
-            label="Follow Rate"
-            value={`${Math.round((effectiveness.followRate as number ?? 0) * 100)}%`}
-            sub={`${effectiveness.totalSuggestions ?? 0} suggestions`}
-          />
-          <Stat
-            label="Observations"
-            value={learning.totalObservations as number ?? 0}
-            sub={learning.learningSummary as string ?? ''}
           />
         </div>
       </section>
@@ -201,28 +188,6 @@ export default function EngineMetricsTab() {
                 </span>
               </div>
             ))}
-          </div>
-        </section>
-      )}
-
-      {/* Work Distribution */}
-      {Object.keys(workDist).length > 0 && (
-        <section className="bg-[var(--color-card)] rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Work Distribution</h3>
-          <div className="space-y-2">
-            {Object.entries(workDist)
-              .sort(([,a], [,b]) => b - a)
-              .map(([type, count]) => {
-                const total = Object.values(workDist).reduce((a, b) => a + b, 0);
-                return (
-                  <ProgressBar
-                    key={type}
-                    value={count}
-                    max={total}
-                    label={type.charAt(0).toUpperCase() + type.slice(1)}
-                  />
-                );
-              })}
           </div>
         </section>
       )}

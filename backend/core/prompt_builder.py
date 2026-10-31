@@ -1162,7 +1162,7 @@ class PromptBuilder:
 
         ``include_ephemeral`` (阶段二 prompt-builder 两分, default True = old
         behavior byte-for-byte): when False, the per-turn EPHEMERAL layers
-        (BOOTSTRAP/DailyActivity/briefing/user-suggestions/session-digest/
+        (BOOTSTRAP/DailyActivity/audit-hint/user-suggestions/session-digest/
         UI-SENSE/terminal/deferred-MCP) AND the resume-context injection are
         SKIPPED, yielding the input-INDEPENDENT base — the cacheable/warmable
         "default" half that ``build_default_system_prompt`` returns. The core
@@ -1301,7 +1301,7 @@ class PromptBuilder:
 
             # recall#G ephemeral-budget observability (run_a16d61ad, design §G):
             # the 12 context files are token-budgeted inside load_all(), but the
-            # EPHEMERAL sections appended below (DailyActivity, briefing, user
+            # EPHEMERAL sections appended below (DailyActivity, audit hint, user
             # suggestions, sibling digest, editor, deferred-MCP) are NOT — they
             # just `+=` onto ephemeral_text against a fixed EPHEMERAL_HEADROOM
             # reservation with no combined ceiling. On a 1M model that is fine
@@ -1316,7 +1316,7 @@ class PromptBuilder:
             # The 12 core context files are assembled and committed to
             # system_prompt HERE, BEFORE any ephemeral section runs. This is the
             # structural fix: a failure in any ephemeral section (a NameError, a
-            # bad briefing, a broken digest) can append nothing and lose only
+            # bad audit hint, a broken digest) can append nothing and lose only
             # itself — it can NEVER zero out the core context, because core is
             # already committed. Ephemeral sections accumulate into `ephemeral_text`
             # and are committed ONCE, after this, below.
@@ -1368,11 +1368,11 @@ class PromptBuilder:
             #    committed ABOVE. A failure in any ephemeral section can never
             #    drop the core context files.
             # 阶段二 prompt-builder 两分: `include_ephemeral=False` (default_builder)
-            # skips EVERY per-turn ephemeral sub-block below (bootstrap/daily, briefing,
+            # skips EVERY per-turn ephemeral sub-block below (bootstrap/daily, audit hint,
             # user-suggestions, session-digest, UI-SENSE/terminal/deferred-MCP), yielding
             # the input-independent cacheable base. Each of the 5 sub-blocks carries its
             # own `if include_ephemeral` guard (NOT a single raise — a raise only aborts
-            # the FIRST block and lets briefing/SENSE leak into the base; Gate-2 HIGH
+            # the FIRST block and lets the audit hint/SENSE leak into the base; Gate-2 HIGH
             # run_f638ebc3). Core context files were committed ABOVE this region, so
             # skipping here never drops them.
             ephemeral_text = ""
@@ -1392,42 +1392,24 @@ class PromptBuilder:
             except Exception as exc:
                 logger.warning("Ephemeral (bootstrap/daily) injection failed: %s", exc)
 
-            # ── Proactive Intelligence briefing (ephemeral) ──
-            # Skipped for channel sessions: briefing is for session planning,
-            # not quick chat exchanges (~2K tokens saved). Skipped on a worker
-            # Hive: it is built from MEMORY and DailyActivity, which there hold
-            # other dispatches' work (design 2026-10-29-hive-run-record-and-
-            # worker-role §3.2, as DailyActivity above).
-            _t_briefing_start = time.perf_counter()
+            # ── Governance audit hint (ephemeral) ──
+            # One line when the default model differs from the model the governed
+            # files were last audited for (core.governance_audit). Skipped for
+            # channel sessions and on a worker Hive, like DailyActivity above.
+            _t_hint_start = time.perf_counter()
             from core.app_role import is_worker as _is_worker
             if include_ephemeral and not is_channel and not _is_worker():
                 try:
-                    from .proactive_intelligence import build_session_briefing
-                    # build_session_briefing is now filesystem-ONLY (run_05b42b8b,
-                    # SwarmAI TECH.md purity invariant): it reads only MEMORY.md +
-                    # DailyActivity to produce the Suggested-focus section. The DB /
-                    # eval / glob-all-pipelines legs that made it a loop-starvation
-                    # risk (99s peak, the RP53 concern this OFFLOAD once mitigated)
-                    # are DELETED, not offloaded. The to_thread wrap is kept as cheap
-                    # insurance (fs reads are still I/O), but the function no longer
-                    # opens a sqlite connection on the assembly path.
-                    # io pool: build_session_briefing is fs-only now (sqlite/glob
-                    # legs deleted).
-                    briefing = await executors.run_in("io", build_session_briefing, working_directory)
-                    # The default-model-changed hint is computed here, where the
-                    # config is known; build_session_briefing stays filesystem-only.
                     from .governance_audit import audit_hint
                     hint = await executors.run_in(
                         "io", audit_hint, working_directory,
                         self._config.get("default_model") if self._config is not None else None,
                     )
                     if hint:
-                        briefing = f"{briefing}\n{hint}" if briefing else f"## Session Briefing\n{hint}"
-                    if briefing:
-                        ephemeral_text += f"\n\n{briefing}"
+                        ephemeral_text += f"\n\n## Governance Audit\n{hint}"
                 except Exception as exc:
-                    logger.warning("Proactive intelligence injection failed: %s", exc)
-            _t_briefing = time.perf_counter() - _t_briefing_start
+                    logger.warning("Governance audit hint failed: %s", exc)
+            _t_hint = time.perf_counter() - _t_hint_start
 
             # ── Skill Registry injection removed (2026-04-14) ──
             # The Claude Agent SDK injects a comprehensive skill list via
@@ -1506,7 +1488,7 @@ class PromptBuilder:
             if context_text or ephemeral_text:
                 _t_total = time.perf_counter() - _t_total_start
                 # recall#G: ephemeral = the block appended after the budgeted loader
-                # baseline (briefing/suggestions/digest/editor/MCP; resume is injected
+                # baseline (audit hint/suggestions/digest/editor/MCP; resume is injected
                 # later, separately, budget-enforced in build_resume_context). Since
                 # the core/ephemeral split (run_e47c1cfb), ephemeral_text IS exactly
                 # that block, so its token count is measured directly (no subtraction).
@@ -1515,15 +1497,15 @@ class PromptBuilder:
                 logger.info(
                     "Injected centralized context: %d chars, ~%d tokens "
                     "(loader=%d, ephemeral=%d / headroom=%d), "
-                    "timing: total=%.2fs (ensure=%.3fs, load=%.3fs, briefing=%.3fs)",
+                    "timing: total=%.2fs (ensure=%.3fs, load=%.3fs, audit_hint=%.3fs)",
                     len(context_text) + len(ephemeral_text), _est_tokens,
                     locals().get("_loader_tok", 0), _ephemeral_tok, EPHEMERAL_HEADROOM,
-                    _t_total, _t_ensure, _t_load, _t_briefing,
+                    _t_total, _t_ensure, _t_load, _t_hint,
                 )
                 # WARN (never truncate, never crash): the ephemeral sections are
                 # cognition/continuity content — we do NOT clip them mid-assembly
-                # (that would silently drop a briefing health-warning or a user
-                # suggestion). We surface the overshoot so it is VISIBLE instead of
+                # (that would silently drop part of a recent session or the audit
+                # hint). We surface the overshoot so it is VISIBLE instead of
                 # silently eating the context-file budget. The 1M model absorbs it;
                 # the warning is the signal to revisit what ephemeral content costs.
                 #
@@ -1531,13 +1513,13 @@ class PromptBuilder:
                 # RESUME_CONTEXT_HEADROOM (5K), but resume context is appended LATER
                 # (into system_prompt, not context_text) and is NOT in _ephemeral_tok
                 # here. So the threshold is intentionally LOOSER than what's measured
-                # — this UNDER-warns (fires only on real briefing/digest blowups),
+                # — this UNDER-warns (fires only on real DailyActivity/digest blowups),
                 # never false-alarms. That bias is deliberate: a spurious warning
                 # every session would be worse than missing a marginal overshoot.
                 if _ephemeral_tok > EPHEMERAL_HEADROOM:
                     logger.warning(
                         "ephemeral context (%d tok) exceeds reserved headroom "
-                        "(%d tok) by %d — briefing/digest/suggestions are eating "
+                        "(%d tok) by %d — DailyActivity/digest/suggestions are eating "
                         "into the context-file budget. Not truncated (cognition "
                         "content); revisit ephemeral section sizes.",
                         _ephemeral_tok, EPHEMERAL_HEADROOM,
@@ -1773,7 +1755,7 @@ class PromptBuilder:
         Returns the cacheable/warmable base system prompt STRING = 11 context
         files + stable framing + volatile datetime/runtime tail, parameterized
         ONLY by (session_type × model) via ``channel_context`` and the model in
-        ``agent_config`` — NO per-turn ephemeral (briefing/UI-SENSE/DailyActivity/
+        ``agent_config`` — NO per-turn ephemeral (audit hint/UI-SENSE/DailyActivity/
         recall/resume). This is exactly ``build_system_prompt`` with the ephemeral
         block skipped.
 
@@ -2062,7 +2044,7 @@ class PromptBuilder:
         last_used) — it does NOT read the database. The prior implementation did a
         per-sibling indexed message lookup to show each tab's last message text;
         that was the 2nd database source on the system-prompt assembly path (the 1st
-        was build_session_briefing's Radar-todos). The judgment-relevant signal is
+        was the retired session briefing's Radar-todos). The judgment-relevant signal is
         "a sibling session IS active" (R29 parallel-session coordination), which the
         in-memory registry already carries; the last-message CONTENT was feed data
         that belongs to the dashboard, not the system prompt. HARD invariant: no
@@ -2335,7 +2317,7 @@ class PromptBuilder:
         # first spawn; on a warm reuse it is DISCARDED anyway (send() reuses the live
         # subprocess via client.query() with only the user message — options.system_prompt's
         # sole consumer is _spawn(), state==COLD). So re-assembling the full ~85K
-        # prompt (build_session_briefing ~1.1s) every turn is waste. When the caller
+        # prompt every turn is waste. When the caller
         # hands us a cached prompt (from this unit's first build) AND this is not a
         # resume turn, reuse it verbatim and skip the assembly.
         #

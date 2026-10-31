@@ -365,7 +365,7 @@ class ContextHealthHook:
         result = run_eval(golden_set_filtered, "session_canary", None, root,
                           programmatic_only=True)
 
-        # Persist canary result for session briefing
+        # Persist canary result
         canary_file = root / ".context" / _CANARY_STATE_FILE
         import json as _json
         cases_error = result.get("cases_error", 0)
@@ -826,7 +826,7 @@ class ContextHealthHook:
                     exc, inner_exc,
                 )
 
-        # 3h. Adversarial meta-monitoring — surface degradation in session briefing
+        # 3h. Adversarial meta-monitoring — record degradation in the findings
         try:
             from core.adversarial_meta import check_adversarial_health
             artifacts_dir = root / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts"
@@ -928,7 +928,7 @@ class ContextHealthHook:
         #     longer invisible for the daemon's whole lifetime. (run_e9861490)
         findings += self._check_recall_degradation()
 
-        # Persist findings for session briefing
+        # Persist findings (read by the Engine metrics view)
         self._persist_findings(root, findings)
 
         # Report
@@ -1358,7 +1358,7 @@ class ContextHealthHook:
         adopting the canonical kills the divergence and means this number equals
         what actually enters the prompt. Emits WARNING/EMERGENCY (observability,
         not a gate — see threshold note above). Persists to
-        self._token_measurement for the session briefing.
+        self._token_measurement.
         """
         from core.context_directory_loader import ContextDirectoryLoader
 
@@ -1375,7 +1375,7 @@ class ContextHealthHook:
             file_tokens[fname] = tokens
             total_tokens += tokens
 
-        # Store measurement for external consumers (session briefing, optimizer job)
+        # Store measurement for external consumers (optimizer job)
         self._token_measurement = {
             "total_tokens": total_tokens,
             "per_file": file_tokens,
@@ -1597,7 +1597,7 @@ class ContextHealthHook:
         return findings
 
     def _persist_findings(self, root: Path, findings: list[str]) -> None:
-        """Write findings to health_findings.json for session briefing.
+        """Write findings to health_findings.json (read by the Engine metrics view).
 
         The proactive intelligence system reads this file at session start
         to surface health alerts. Structured as:

@@ -19,7 +19,7 @@ Runs weekly (Monday 11am ICT via memory-health job). Two phases:
   - Capability gaps detected from error/lesson patterns
 
 Phase 1 runs every time (even dry_run). Phase 2 only on real runs.
-Integrity failures are logged to health_findings.json for session briefing.
+Integrity failures are logged to health_findings.json (read by the Engine metrics view).
 """
 
 from __future__ import annotations
@@ -286,7 +286,7 @@ def run_memory_health(dry_run: bool = False) -> dict:
 
     _write_summary_to_daily(report, actions)
 
-    # ── 6. Update health_findings.json for session briefing ────────
+    # ── 6. Update health_findings.json ────────
 
     _update_health_findings(report, actions, integrity_findings)
 

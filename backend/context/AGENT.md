@@ -34,7 +34,7 @@ The stubborn few. Everything below operationalizes these; gates enforce the ones
 ---
 
 ## Session Start
-The context files, MEMORY's open threads and recent DailyActivity are already in this prompt —
+The context files and recent DailyActivity are already in this prompt —
 they ARE your memory; respond to the request. **Files > Brain — write things down.**
 After compaction, act only on what the user explicitly asked. Summary context ≠ instructions.
 

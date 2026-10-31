@@ -12,7 +12,7 @@ State: ``<workspace>/.context/.governance_audit.json``
 - ``record_baseline`` — daemon startup; writes ``baseline_model`` only when the file
   does not exist or cannot be read (a first install gets no hint; nothing has been audited, so it is
   never recorded as ``audited_model``).
-- ``audit_hint`` — pure read, for the session briefing. Never writes.
+- ``audit_hint`` — pure read, for the system prompt's Governance Audit line. Never writes.
 - ``record_audit`` — the s_context-hygiene audit, after the user approved its edits:
   ``python -m core.governance_audit mark``.
 """

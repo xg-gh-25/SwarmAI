@@ -9,7 +9,6 @@ a garbage collector that fixes what it can and only escalates genuine judgment c
 
 - User asks "are loops healthy?", "check memory", "brain health"
 - Proactively after shipping a major feature (>5 files changed)
-- When session briefing flags degraded health
 
 ## How to Run
 

@@ -473,10 +473,10 @@ class TestEphemeralBudgetCeiling:
 
         # A unique, huge marker briefing — far beyond EPHEMERAL_HEADROOM (~9K tok).
         marker = "ZZUNIQUEBRIEFINGMARKERZZ"
-        huge_briefing = "## Session Briefing\n" + (marker + " ") * 12000  # ~36K+ tok
+        huge_briefing = "- " + (marker + " ") * 12000  # ~36K+ tok
 
         with mock.patch(
-            "core.proactive_intelligence.build_session_briefing",
+            "core.governance_audit.audit_hint",
             return_value=huge_briefing,
         ), caplog.at_level(logging.WARNING, logger="core.prompt_builder"):
             agent_config = self._run_build(tmp_path)
@@ -498,8 +498,8 @@ class TestEphemeralBudgetCeiling:
         import unittest.mock as mock
 
         with mock.patch(
-            "core.proactive_intelligence.build_session_briefing",
-            return_value="## Session Briefing\n**System health:** ok",
+            "core.governance_audit.audit_hint",
+            return_value="- Default model changed to x; audited for y.",
         ), caplog.at_level(logging.WARNING, logger="core.prompt_builder"):
             self._run_build(tmp_path)
 
@@ -573,11 +573,11 @@ class TestSystemPromptFaultIsolation:
 
     # ── AC2: ephemeral fault isolation ──────────────────────────────────
     def test_ac2_ephemeral_failure_leaves_core_intact(self, tmp_path):
-        """An exception in an ephemeral producer (briefing) must NOT drop core."""
+        """An exception in an ephemeral producer (the audit hint) must NOT drop core."""
         import unittest.mock as mock
         self._seed_daily(tmp_path)
         with mock.patch(
-            "core.proactive_intelligence.build_session_briefing",
+            "core.governance_audit.audit_hint",
             side_effect=RuntimeError("boom in ephemeral"),
         ):
             cfg = self._run_build(tmp_path)
@@ -1004,30 +1004,30 @@ class TestDefaultBuilderSplit:
         )
 
     def test_default_builder_excludes_briefing_with_teeth(self, tmp_path):
-        """Gate-2 HIGH (run_f638ebc3): the briefing sub-block is a SEPARATE ephemeral
-        try-block from bootstrap/daily. An empty tmpdir yields an empty briefing, so
+        """The audit-hint sub-block is a SEPARATE ephemeral try-block from
+        bootstrap/daily. An empty tmpdir yields no hint, so
         the plain exclusion test passes even if the skip only covers the FIRST block
-        (the raise-hack bug). Force a NON-EMPTY briefing and assert it is STILL
+        (the raise-hack bug). Force a NON-EMPTY hint and assert it is STILL
         excluded from the base — this has teeth for the per-block-guard fix.
-        Mutation-proof: drop the `include_ephemeral` guard on the briefing block →
+        Mutation-proof: drop the `include_ephemeral` guard on the hint block →
         the marker leaks into the base → RED."""
         import asyncio
         import unittest.mock as mock
         builder = _make_builder()
         agent_config: dict = {}
         with mock.patch(
-            "core.proactive_intelligence.build_session_briefing",
-            return_value="## EPHEMERAL_BRIEFING_MARKER\nlive briefing content",
+            "core.governance_audit.audit_hint",
+            return_value="- EPHEMERAL_BRIEFING_MARKER live audit hint",
         ):
             out = asyncio.run(builder.build_default_system_prompt(
                 agent_config=agent_config,
                 working_directory=str(tmp_path),
             ))
         assert "EPHEMERAL_BRIEFING_MARKER" not in out, (
-            "briefing (a per-turn ephemeral sub-block) leaked into the cacheable "
+            "the audit hint (a per-turn ephemeral sub-block) leaked into the cacheable "
             "default base — every ephemeral sub-block must carry its own "
             "include_ephemeral guard, not just the first"
         )
         # And core is still intact (the guard didn't over-skip).
         from core.prompt_builder import assert_core_sections
-        assert not assert_core_sections(out), "core dropped while excluding briefing"
+        assert not assert_core_sections(out), "core dropped while excluding the audit hint"

@@ -73,7 +73,7 @@ INTAKE CLASSIFICATION:
 - User source → surface brief → user decides
 - Agent source with 3x evidence → surface brief → user decides (never auto-written)
 - Agent source with <3x → nothing to submit; CDF extracts the correction from the session
-- Automation source → propose only, surface in session briefing
+- Automation source → propose only, surface to the user in the current chat
 
 ---
 
@@ -284,7 +284,7 @@ If answers are no/no/no → don't add. Simplify or skip.
 1. Read `.context/EVOLUTION.md`
 2. Check for Candidates approaching threshold (2/3)
 3. Scan active corrections for promotion opportunity
-4. Report in session briefing if any promotions pending
+4. Report pending promotions to the user in the current chat
 
 ---
 

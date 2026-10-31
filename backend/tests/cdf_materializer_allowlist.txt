@@ -39,7 +39,6 @@ core/ddd_packager.py:emit_target_aim  # exempt: writes the package output dir
 core/ddd_packager.py:emit_target_open_plugin  # exempt: writes the package output dir
 core/ddd_packager.py:package_ddd  # exempt: writes the package output dir
 core/ddd_skill_registry.py:_write_manifest_atomic  # exempt: DDD skill manifest
-core/engine_metrics.py:collect_engine_metrics  # exempt: via load_learning_state: the briefing learning-state JSON, not a governed file
 core/escalation.py:save_escalation  # exempt: escalation JSON under the escalations dir
 core/eval_service.py:EvalService._clear_inflight_marker  # exempt: eval in-flight marker
 core/eval_service.py:EvalService._persist_golden_set  # exempt: private golden set YAML
@@ -56,7 +55,6 @@ core/knowledge_graph.py:_locked_read_modify_write  # exempt: .knowledge-graph.ya
 core/knowledge_graph.py:save_graph  # exempt: .knowledge-graph.yaml (derived relation graph)
 core/library_health.py:write_report_atomic  # exempt: Knowledge/.library-health.json report
 core/memory_injection.py:select_context_file  # writes only injection_selection in ingestion.db; source MEMORY/EVOLUTION files are read-only
-core/proactive_intelligence.py:build_session_briefing  # exempt: via load_learning_state: the briefing learning-state JSON
 core/product_registry.py:ProductRegistry._atomic_write_json  # exempt: product registry JSON
 core/product_registry.py:ProductRegistry._mutate  # exempt: product registry lock
 core/projection_layer.py:ProjectionLayer._cleanup_stale_entries  # exempt: projected skill copies under .claude/skills/
@@ -135,7 +133,6 @@ main.py:lifespan  # exempt: via _migrate_legacy_state_dir: legacy state dir move
 main.py:read_backend_json  # exempt: backend.json (reads with a lock opened for write)
 main.py:remove_backend_json  # exempt: backend.json
 main.py:write_backend_json  # exempt: backend.json
-routers/ddd_brain.py:_write_watermark  # exempt: brain watermark file
 routers/pollinate.py:_write_publish_state  # exempt: pollinate publish sidecar
 routers/workspace_api.py:create_file._create  # exempt: non-governed paths only: governed targets go through apply_user_edit
 routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
@@ -143,6 +140,7 @@ routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths
 routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only; governed trees go through move_tree
 scripts/cdf_move_misrouted.py:run  # exempt: one-time CDF repair; backs up and moves governed entries through the CDF writer
 scripts/cdf_relink_skipped.py:run  # exempt: one-time CDF repair; records relations through the CDF writer
+scripts/memory_relocate.py:run  # exempt: one-time CDF repair; moves MEMORY/EVOLUTION entries through governed_edit after writing the destination
 scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
 scripts/da_resummarize.py:backup  # exempt: copies DailyActivity (working memory) into ~/.swarm-ai/backups
 scripts/da_resummarize.py:rebuild_day  # exempt: one-time DailyActivity history repair (working memory)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import unittest.mock as mock
 
 from core import governance_audit as ga
 
@@ -42,8 +41,7 @@ def test_briefing_uses_default_model_not_the_tab_override(tmp_path):
     ga.record_baseline(tmp_path, "older-model")             # builder's default is claude-sonnet-4-6
     for agent_config in ({}, {"model": "older-model"}):
         builder = _make_builder()
-        with mock.patch("core.proactive_intelligence.build_session_briefing", return_value=None):
-            asyncio.run(builder.build_system_prompt(agent_config=agent_config, working_directory=str(tmp_path)))
+        asyncio.run(builder.build_system_prompt(agent_config=agent_config, working_directory=str(tmp_path)))
         full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "")
         assert "Default model changed to claude-sonnet-4-6" in full, agent_config
 

@@ -2,7 +2,7 @@
 
 BUG (retro run_864c23b4, point 1): run_conversation calls build_options →
 build_system_prompt on EVERY user message, re-assembling the full ~85K system
-prompt (build_session_briefing alone ~1.087s of 1.54s). But the system prompt of
+prompt (then ~1.5s, most of it the since-retired session briefing). But the system prompt of
 an active chat-tab session is essentially constant for the session's life — it is
 built once at first spawn and thereafter, on a warm reuse, DISCARDED (send() reuses
 the live subprocess via client.query() with only the user message; options.system_prompt's

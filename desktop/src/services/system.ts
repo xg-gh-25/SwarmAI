@@ -277,7 +277,7 @@ export const systemService = {
 
   /**
    * Get Core Engine growth metrics for the dashboard.
-   * Returns learning state, memory effectiveness, DDD health, session stats.
+   * Returns memory effectiveness, DDD health, session stats.
    */
   async getEngineMetrics(): Promise<EngineMetrics> {
     try {
@@ -287,7 +287,6 @@ export const systemService = {
       return {
         collectedAt: '',
         engineLevel: { current: 'unknown', l3Progress: '0/0', l3Features: {}, levels: {} },
-        learning: {},
         memory: { status: 'error' },
         dddSuggestions: [],
         dddHealth: { projects: [] },
@@ -528,7 +527,6 @@ export interface EngineMetrics {
     l3Features: Record<string, boolean>;
     levels: Record<string, string>;
   };
-  learning: Record<string, unknown>;
   memory: Record<string, unknown>;
   dddSuggestions: Array<Record<string, string>>;
   dddHealth: { projects: Array<Record<string, unknown>> };

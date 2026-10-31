@@ -134,7 +134,7 @@ synonyms — they cause confusion across the skill ecosystem.
   _Avoid:_ "listener", "handler" (handlers are in the job system).
 
 - **signal** — An external information item (RSS, GitHub trending, HN) ingested
-  by the signal pipeline into `signal_digest.json`. Surfaces in session briefings.
+  by the signal pipeline into `signal_digest.json`.
   _Avoid:_ "feed" (that's the source), "news" (too narrow).
 
 ---

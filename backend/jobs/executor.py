@@ -2095,7 +2095,7 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
 
     Tracks consecutive failures and writes a high-visibility alert to
     .job-results.jsonl when the streak hits _FAILURE_ALERT_THRESHOLD.
-    This surfaces in the session briefing so the user notices.
+    This surfaces in the Jobs & Runs history so the user notices.
     """
     if job_id not in state.jobs:
         state.jobs[job_id] = JobState()
@@ -2152,14 +2152,13 @@ def _write_failure_streak_alert(
 ) -> None:
     """Write a high-visibility alert entry to .job-results.jsonl.
 
-    This entry appears in the session briefing alongside normal job results,
-    making failures impossible to miss. Fires at two boundaries: the FIRST
+    This entry appears in the Jobs & Runs history (routers/jobs.py) alongside
+    normal job results, making failures impossible to miss. Fires at two boundaries: the FIRST
     failure (`single=True`, run_d383e9a0 P0-3) and again when a streak hits
     _FAILURE_ALERT_THRESHOLD — not on every failure between.
 
     `single`: this is a lone failure, NOT a streak and NOT in 24h cooldown yet.
-    The briefing renders job_name/status verbatim
-    (proactive_intelligence._format_job_result_highlights), so the text must NOT
+    The history renders job_name/status verbatim, so the text must NOT
     claim "consecutive" or "cooldown" for a single failure — that would be a
     user-facing lie (the job will just retry on its next scheduled tick).
 

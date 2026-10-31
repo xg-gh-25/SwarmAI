@@ -7,7 +7,7 @@ Sonnet 4.6. Proposals are drafts for human review — Sonnet is fast (10-20s)
 and sufficient for proposal-quality output that gets refined by the user.
 
 Proposals are written to .artifacts/skill-proposals/ for human review.
-Never auto-deployed. Surfaced in session briefing as [skill-proposal].
+Never auto-deployed.
 
 Triggered by: weekly-maintenance (after memory_health + ddd_refresh).
 Cost: ~$0.04/run (Sonnet 4.6, ~8K input, ~3K output). Only runs when

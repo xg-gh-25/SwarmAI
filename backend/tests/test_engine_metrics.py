@@ -210,7 +210,7 @@ class TestCollectEngineMetrics:
         result = collect_engine_metrics(str(ws_dir))
         assert "collected_at" in result
         assert "engine_level" in result
-        assert "learning" in result
+        assert "learning" not in result  # the briefing learning state is gone
         assert "memory" in result
         assert "ddd_suggestions" in result
         assert "ddd_health" in result

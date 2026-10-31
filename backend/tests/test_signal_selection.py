@@ -109,12 +109,11 @@ class TestSingleSourceConstants:
             assert hasattr(ss, name), f"{name} must be defined in signal_selection.py"
 
     def test_no_duplicate_literal_in_other_modules(self):
-        """executor.py and proactive_intelligence.py must NOT re-declare the
-        denoising sets/dict as literals — they import from signal_selection."""
+        """executor.py must NOT re-declare the denoising sets/dict as literals —
+        it imports from signal_selection."""
         import jobs.executor as ex
-        import core.proactive_intelligence as pi
 
-        for mod in (ex, pi):
+        for mod in (ex,):
             src = inspect.getsource(mod)
             # The eastmoney/china-trending/reference-commits literals are the
             # denoising values; a frozenset/dict literal of them in these
@@ -128,12 +127,10 @@ class TestSingleSourceConstants:
 
     def test_no_duplicate_label_map_in_other_modules(self):
         """The DISPLAY source-label map must also live only in signal_selection —
-        both callers use readable_source() (run_cda1e759, closes the last drift
-        risk from run_44342b40's REVIEW+Gate-2)."""
+        the executor uses readable_source()."""
         import jobs.executor as ex
-        import core.proactive_intelligence as pi
 
-        for mod in (ex, pi):
+        for mod in (ex,):
             src = inspect.getsource(mod)
             assert "_FEED_SOURCE_LABELS = {" not in src, \
                 f"{mod.__name__} re-declares the display label map literal"

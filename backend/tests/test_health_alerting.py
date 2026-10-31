@@ -1,12 +1,9 @@
 """
-Tests for Sprint 3: Health Alerting — health findings in session briefing.
+Tests for Health Alerting — ContextHealthHook persists its findings.
 
 Acceptance criteria:
 1. ContextHealthHook persists findings to health_findings.json
-2. proactive_intelligence reads health_findings and shows alerts in briefing
-3. Critical findings auto-create Radar todos
-4. Weekly memory_health results surface in briefing
-5. All existing tests pass
+2. A later write keeps the weekly memory_health results
 """
 
 from __future__ import annotations

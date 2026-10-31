@@ -18,9 +18,8 @@ After the CDF cutover distillation never runs, so every new day is in the delta 
 the registry stays as the frozen baseline. Matching is by ``coe_key`` only (the key the
 registry uses), never by shared words. Nothing here writes a file.
 
-Readers: the session briefing (open COEs are its P0 items, and a COE-keyed thread in
-MEMORY's Open Threads follows this state), and the DailyActivity summariser (open COE
-titles, so a later report of the same problem reuses its title and key).
+Reader: the DailyActivity summariser (open COE titles, so a later report of the same
+problem reuses its title and key).
 
 Key public symbols: ``coe_key``, ``COEState``, ``coe_states``, ``open_coes``,
 ``open_coe_titles``.

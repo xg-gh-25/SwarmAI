@@ -18,7 +18,7 @@ instructions written for an older model). Both share the same red line (§4).
 >   rebuild is needed. Orthogonal.
 > - **NOT a scheduled job.** A batch judge over a curated store finds ~0 and mis-deletes
 >   load-bearing content; a weekly report nobody reads is noise. Both modes run when a
->   person or the briefing asks for them.
+>   person or the governance-audit hint asks for them.
 
 ---
 
@@ -151,7 +151,7 @@ mode and MUST never grow one (§3 + §4). Every hit is a lead for human judgment
 
 ## 7. Audit Mode — re-read the governed files for the current model
 
-**When:** the session briefing says the default model changed; the user asks for a prompt
+**When:** the system prompt's Governance Audit line says the default model changed; the user asks for a prompt
 audit; or a batch of governance changes is about to land.
 
 **Scope:** SOUL, AGENT (edit the `backend/context/` source), STEERING, SELF, TOOLS (`.context/`).
@@ -177,7 +177,7 @@ skill, a better tool result or an edit to the rule that already covers it.
 3. Edit through the routing in §1; re-read each whole file afterwards (AGENT R30 (6)); append one
    `compress` line to `.context/EVOLUTION_CHANGELOG.jsonl`.
 4. Record the audit: `"$SWARM_BACKEND_BIN" py -m core.governance_audit mark` (clears the
-   briefing hint until the default model changes again).
+   Governance Audit line until the default model changes again).
 5. System files are live only after rebuild + restart (needs the user's approval). After that,
    the deploy-triggered eval runs the golden cases whose `affected_by` names a changed file plus
    every behavior case, twice (`eval_runner run --affected-by <file> --with-behavior --repeat 2`),

@@ -1,4 +1,4 @@
-"""Welcome screen v2 — the briefing endpoint is gone (docs/design/welcome-screen-v2.md).
+"""The briefings are gone: the Welcome endpoint (docs/design/welcome-screen-v2.md) and the session-start prompt briefing.
 
 What is tested:
 - routers.system exposes no /briefing or /briefing/dismiss route: the Welcome
@@ -23,18 +23,13 @@ def test_no_briefing_executor_pool():
     assert "briefing" not in executors._POOL_SPECS
 
 
-def test_welcome_briefing_data_builder_is_gone():
-    """The structured Welcome briefing (and everything only it used) is deleted;
-    the session-start prompt briefing stays."""
-    import core.proactive_intelligence as pi
+def test_session_briefing_is_gone():
+    """The session-start prompt briefing (MEMORY Open Threads + DailyActivity hints)
+    is deleted with its scoring and learning-state modules."""
+    import importlib.util
 
-    for name in (
-        "build_session_briefing_data", "get_focus_keywords", "_extract_working_items",
-        "_extract_jobs_summary", "_tail_read_lines", "_extract_report_field",
-        "_extract_report_confidence", "_extract_first_heading", "_detect_content_media_type",
-    ):
-        assert not hasattr(pi, name), name
-    assert callable(pi.build_session_briefing)
+    for mod in ("core.proactive_intelligence", "core.proactive_scoring", "core.proactive_learning"):
+        assert importlib.util.find_spec(mod) is None, mod
 
 
 def test_no_briefing_slack_formatter():

@@ -57,8 +57,8 @@ def _core_holds(ws: Path) -> tuple[bool, str]:
     from core.prompt_builder import assert_core_sections
 
     cfg: dict = {}
-    with mock.patch("core.proactive_intelligence.build_session_briefing",
-                    side_effect=RuntimeError("briefing broke")):
+    with mock.patch("core.governance_audit.audit_hint",
+                    side_effect=RuntimeError("audit hint broke")):
         arun(_builder().build_system_prompt(agent_config=cfg, working_directory=str(ws)))
     missing = assert_core_sections(_full(cfg))
     return (not missing), f"core sections missing: {missing}"

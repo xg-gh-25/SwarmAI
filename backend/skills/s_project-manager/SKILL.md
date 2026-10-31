@@ -228,8 +228,7 @@ built yet) and `N/A` (a section that doesn't apply to this brain's asset shape) 
 pass. Asset-awareness is the whole point — see the script's module docstring.
 
 > **Relationship to the passive health scan:** `context_health_hook._check_ddd_completeness`
-> is a *daily background* scan that only flags half-created projects (1–3 of 4 docs) in
-> the session briefing. This P6 gate is the *on-demand* superset (full six-section +
+> is a *daily background* scan that only flags half-created projects (1–3 of 4 docs). This P6 gate is the *on-demand* superset (full six-section +
 > asset-aware ⑤/⑥) you run as the setup flow's exit criterion. Different cadence + scope
 > — they do not compete.
 

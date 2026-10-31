@@ -32,10 +32,6 @@ engines:
     path: "backend/core/context_injector.py"
     description: "Cold resume from ~3K to ~50-100K tokens of structured context"
 
-  - name: "Proactive Intelligence (L0-L4)"
-    path: "backend/core/proactive_intelligence.py"
-    description: "Session briefing, corrections, open threads, signals — fires on every session start"
-
   - name: "Slack Channel Adapter"
     path: "backend/channels/adapters/slack.py"
     description: "24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users"

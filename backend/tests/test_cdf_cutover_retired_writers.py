@@ -4,8 +4,6 @@ Tests:
 - distillation_hook and user_observer_hook are gone, and main.py registers neither.
 - EvolutionMaintenanceHook.execute leaves EVOLUTION.md byte-identical and has no
   mutating method left (quality gate, fold, size valve, lifecycle).
-- L4 effectiveness scoring (once in the distillation hook) runs from the briefing's
-  update_learning_from_activity, once per new DailyActivity session.
 - memory_health reports MEMORY size against the injection budget, not a valve.
 - context_health's write-governance check keeps the orphan-section alarm, no caps.
 - s_ddd-persist's bundled writer refuses inside SwarmAI and appends elsewhere.
@@ -16,7 +14,6 @@ import asyncio
 import importlib.util
 from pathlib import Path
 
-from core.proactive_learning import LearningState, update_learning_from_activity
 
 BACKEND = Path(__file__).resolve().parents[1]
 
@@ -56,27 +53,6 @@ def _day(daily: Path, stem: str, sessions: int, delivered: list[str]) -> None:
     body = "\n".join(f"- {d}" for d in delivered)
     (daily / f"{stem}.md").write_text(
         f"---\nsessions_count: {sessions}\n---\n\n**Delivered:**\n{body}\n", encoding="utf-8")
-
-
-def test_effectiveness_scoring_runs_once_per_new_session(tmp_path: Path):
-    daily = tmp_path / "DailyActivity"
-    daily.mkdir()
-    _day(daily, "2026-10-27", 1, ["fix the recall budget"])
-    state = LearningState(last_briefing_suggested=["fix the recall budget", "write the HLD"])
-
-    state = update_learning_from_activity(state, daily)
-    assert state.effectiveness["total_suggestions"] == 2
-    assert state.effectiveness["followed"] == 1
-
-    # same file, same session count: the dedup guard skips it
-    state = update_learning_from_activity(state, daily)
-    assert state.effectiveness["total_suggestions"] == 2
-
-    # a new session on the day is counted
-    _day(daily, "2026-10-27", 2, ["fix the recall budget", "write the HLD"])
-    state = update_learning_from_activity(state, daily)
-    assert state.effectiveness["total_suggestions"] == 4
-    assert state.effectiveness["followed"] == 3
 
 
 def test_memory_health_reports_the_size_and_caps_nothing():

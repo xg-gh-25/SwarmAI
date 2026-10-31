@@ -945,7 +945,6 @@ const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string 
   { icon: 'search', name: 'Recall', desc: 'searches the archived cold layer (FTS5) on demand', tag: 'hook' },
   { icon: 'water_drop', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
   { icon: 'published_with_changes', name: 'Override & withdraw', desc: 'a declared newer decision replaces an entry; the record stays outside the file', tag: 'hook' },
-  { icon: 'assignment', name: 'Session briefing', desc: 'start-of-session cognition inject', tag: 'hook' },
   { icon: 'genetics', name: 'Evolution capture', desc: 'corrections → pattern detection', tag: 'hook' },
 ];
 const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [

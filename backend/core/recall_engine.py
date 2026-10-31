@@ -154,7 +154,7 @@ class RecallEngine:
         if no relevant results found.
 
         Args:
-            query: Search query (typically focus keywords from proactive briefing).
+            query: Search query.
             max_tokens: Token budget for the recalled content.
 
         Returns:

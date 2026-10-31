@@ -217,7 +217,7 @@ class GateManager:
         return promoted
 
     def get_promotion_summary(self) -> dict[str, Any]:
-        """Get summary of all gates for session briefing / dashboard."""
+        """Get summary of all gates for a dashboard."""
         summary: dict[str, Any] = {}
         for name, gate in self._gates.items():
             summary[name] = {

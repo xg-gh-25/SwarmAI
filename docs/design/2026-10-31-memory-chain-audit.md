@@ -3,7 +3,7 @@ title: Memory 链路审计与修复 —— 从提取源头到 MEMORY.md
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: M1–M3、A1–A3、E1–E2 已落地（2026-10-31）；39 条重新复盘等 E2；晨报去留待 XG 定
+status: M1–M3、A1–A4、E1–E2 已落地（2026-10-31）；39 条重新复盘等 E2
 scope: 只管 Memory 链路。提取时机（S7 什么时候跑）、事件/gap、DailyActivity 归
   docs/design/2026-10-31-extraction-at-task-end.md（另一个 session），本文不改那些。
 ---
@@ -145,6 +145,10 @@ EVOLUTION 编号会被复用（已修）；judge 的 same / adds 精度两条和
 - **A2 —— 晨报不读 Open Threads。** 来源只剩 COE 状态和 DailyActivity 的后续项（后者归
   extraction-at-task-end E5）。`loops_health` 删掉 M4，`s_radar-todo` 和 CONTEXT.md 的说法改正。
   晨报本身是否保留（0/54）交给 XG。
+- **A4 —— 删掉晨报（XG 2026-10-31 批准）。** `proactive_intelligence` / `proactive_scoring` /
+  `proactive_learning` 三个模块、学习状态和 Settings→Engine 里只靠它的「采纳率 / 观察次数 / 工作分布」
+  一起删掉。「默认模型变了」的提示与晨报无关，单独留在系统提示的 `## Governance Audit` 下。
+  AGENT.md Session Start 不再说 open threads 在 prompt 里。
 - **A3 —— MEMORY 的节由写入方保证。** MEMORY 的节由类型决定（产品定义，不是用户的结构），所以写入
   MEMORY 时节不存在就补上，不挂起；DDD 文档的结构归人管，仍然挂起。模板改成 CDF 的节和现行规则。
 

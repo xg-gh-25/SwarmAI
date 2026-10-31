@@ -32,7 +32,7 @@ class TestEngineDiscovery:
     def test_load_engines_from_yaml(self):
         """Engines are loaded from the YAML registry file."""
         engines = _load_engines()
-        assert len(engines) >= 10, f"Expected 10+ engines, got {len(engines)}"
+        assert engines, "engines.yaml lists no engine"
         # Each engine has required fields
         for e in engines:
             assert "name" in e
