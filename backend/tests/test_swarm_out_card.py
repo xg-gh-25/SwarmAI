@@ -54,6 +54,11 @@ def test_open_runs_count_only_unsettled_runs_under_a_project_agent(tmp_path, mon
     swarm_out_settle._update(rows[1]["dispatch_id"], lambda rec: rec.update(settled={"outcome": "passed"}))
     swarm_out_settle._update(rows[3]["dispatch_id"], lambda rec: rec.update(abandoned_at="x"))
     assert swarm_out.open_runs_by_hive() == {"demo": 1}
+    # only a tie-breaker: a log it cannot read, or a row without an id, never fails a dispatch
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: (_ for _ in ()).throw(OSError("unreadable")))
+    assert swarm_out.open_runs_by_hive() == {}
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: [{"dispatch_id": 7, "hive": "demo", "project_agent": {}}])
+    assert swarm_out.open_runs_by_hive() == {}
 
 
 def test_pick_hive_is_deterministic_and_refuses_when_none_can_take_it():

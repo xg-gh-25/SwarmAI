@@ -602,8 +602,12 @@ def open_runs_by_hive() -> dict[str, int]:
     (swarm_out_settle), so it is not counted."""
     from core import swarm_out_settle
     out: dict[str, int] = {}
-    for r in _read_log():
-        if not isinstance(r.get("project_agent"), dict):
+    try:
+        rows = _read_log()
+    except (OSError, ValueError):
+        return {}                 # only a tie-breaker: an unreadable log never fails a dispatch
+    for r in rows:
+        if not isinstance(r.get("project_agent"), dict) or not isinstance(r.get("dispatch_id"), str):
             continue
         try:
             rec = swarm_out_settle.load(r["dispatch_id"])

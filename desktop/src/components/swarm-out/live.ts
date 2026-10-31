@@ -123,7 +123,7 @@ export function checkStatus(s: string | null | undefined): SwarmOutCheckStatus {
 const checkWord = (s: string): string => i18n.t(`swarmOut.check.${CHECK_KEYS[checkStatus(s)]}`);
 
 /** True when a run named checks and one of them did not run cleanly (the amber line). */
-export const checksIncomplete = (res: SwarmOutResult): boolean => (res.checks ?? []).some((c) => c.status !== 'ran');
+export const checksIncomplete = (res: SwarmOutResult): boolean => (res.checks ?? []).some((c) => checkStatus(c.status) !== 'ran');
 
 /** "校验：tests 跑了 · lint 没看到" for a run whose Project Agent named checks, else null. */
 export function checksLine(res: SwarmOutResult): string | null {
