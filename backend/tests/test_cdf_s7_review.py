@@ -475,3 +475,32 @@ def test_the_lead_of_a_fragment_window_is_the_message_before_its_item() -> None:
     assert s7_review._last_user_before([a, big, b], fragment) is a
     assert s7_review._last_user_before([a, big, b], b) is a
     assert s7_review._last_user_before([a, big, b], a) is None
+
+
+def test_an_id_the_record_shows_for_an_item_stands_for_its_anchors(cdf_env, tmp_path, monkeypatch, model) -> None:
+    """A review cites the ids the record shows (a message id, a tool call's id) as often as
+    the anchors: each stands for its item's anchors; an id the record never showed is
+    still refused."""
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    _record_person_message(cdf_env, "m1", "把迁移脚本审一遍")
+    asyncio.run(cdf_env["db"].messages.put({"id": "a1", "session_id": SESSION, "role": "assistant",
+                                            "content": [{"type": "tool_use", "id": "toolu_bdrk_01ABC", "name": "Read",
+                                                         "input": {"file_path": "/w/migrate.py"}},
+                                                        {"type": "text", "text": "迁移会删列且不备份"}]}))
+    def unit(title, evidence):
+        return {"kind": "cognition", "type": "pitfall", "scope": "project:SwarmAI", "title": title,
+                "what": f"{title}.", "applicability": "When writing a migration.", "evidence": evidence}
+    run = Runner([unit("Back up before dropping a column", ["toolu_bdrk_01ABC"]),
+                  unit("A migration that drops a column loses data", ["a1"]),
+                  unit("Never shown", ["toolu_bdrk_01NOPE"])],
+                 {"relations": [{"unit": 1, "relation": "new"}, {"unit": 2, "relation": "new"}]})
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=run)
+    assert out["units"] == 2 and out["invalid"] == 1
+    from core.ingestion.api import connect_ro
+    conn = connect_ro()
+    try:
+        cited = [json.loads(r[0])["evidence"] for r in conn.execute(
+            "SELECT payload FROM ingestion_inbox WHERE source_v2='S7'")]
+    finally:
+        conn.close()
+    assert all(e and all(a.startswith("event:") for a in e) for e in cited), cited

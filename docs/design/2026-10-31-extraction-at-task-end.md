@@ -146,6 +146,10 @@ from what is cited (`pipeline_v2.Facts`): the agent's words and tool output are
 registered as external, so such a unit stays in its project's DDD and never reaches a
 file read every turn. The window is registered once, and that one registration serves
 the record, the evidence check and the read set.
+The record also shows the ids its producers gave an item (a message id, a tool call's
+id), and a first re-review cited those instead of anchors (22 of 37 units). Each such id,
+as shown in that window, stands for its item's anchors; an id the record never showed is
+refused as before.
 
 ## 4. Existing data
 
