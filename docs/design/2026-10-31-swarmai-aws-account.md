@@ -191,7 +191,12 @@ hive_fleet: {
     原来的目录限制一直没生效）。改为一个 PreToolUse hook，CLI 在任何模式、对子 agent 也会调：文件工具只放行
     会话目录和共享的 DDD 文档，相对路径按会话目录解析，`~` 开头的路径拒绝（CLI 会把它展开成主目录），Glob / Grep
     的路径模式不能是绝对路径或带 `..`，目录里配置 CLI 的文件（`.claude/`、`.mcp.json`、`CLAUDE.md`、`AGENTS.md`）
-    不能写；只放行列出的其他工具和已按级别筛过的 MCP；其余工具和 hook 自己出错都拒绝；
+    不能写；WebFetch 只能访问公网地址（本机回环上的 daemon、局域网、云的元数据地址，以及解析到这些地址的公网
+    域名都拒绝，解析不了、带用户名的 URL（两种 URL 解析器会读出不同的主机）也拒绝；检查和 CLI 自己解析之间 DNS
+    答案变了的情况（DNS rebinding）hook 管不到，要靠一个按实际连接地址检查的出口代理，记为已知缺口）；只放行列出的其他工具和已按级别筛过的 MCP；其余工具和 hook 自己出错都拒绝；
+  - MCP 是白名单：MCP 在会话的限制之外、带着 owner 自己的登录运行，非 owner 用到它就是以 owner 的身份做事。public
+    用户只有渠道自己的工具；trusted 用户另外只有 owner 逐个共享的 MCP（MCP 条目里写 `"share_with_trusted": true`）；
+    其他级别、以后新加的 MCP 默认都没有；提示词里"可以启用"的 MCP 列表也按同样的规则筛；
   - 不加载任何 setting source、关掉 skill 里的内联 shell：会话写进自己目录的文件不会变成 CLI 的配置或 hook；
   - 不给 add_dirs；对 SwarmAI 账号的 token 目录、`~/.aws`、ADA、Midway、SSH、`~/.config`、`~/.claude` 和密钥库
     加 `Read` 拒绝规则作为第二层（任何模式下都生效）。
@@ -241,7 +246,8 @@ hive_fleet: {
   指到 `swarmai` 行、这一行标 `merged`；改之前把"哪一行、原来的认证方式、挪了哪些 Hive"追加到
   `<data dir>/aws/hive-accounts-migration.json`（0600，不含密钥）。行不删，`auth_config` 不动（所以也没有密钥要挪进
   密钥库）；STS 失败的行原样留着，下次启动再试，设置页对这一行点"Verify"也会再试一次。
-- 另一个账号的行：它的凭证只用于停止、清理、读（`instance_exists`、Swarm Out 显示它的问题）；启动、更新、改密码、
+- 另一个账号的行：它的凭证必须还能到达这一行记录的账号（每个 access key 用 STS 核对一次；没有自己凭证、走默认链的
+  行，默认链后来可能指向别处），不是就什么都不做并说明；凭证只用于停止、清理、读（`instance_exists`、Swarm Out 显示它的问题）；启动、更新、改密码、
   Swarm Out 派单和回答、重试都拒绝并说明"这台 Hive 在另一个账号"。
 - 账号够不着（另一个账号、登录过期、SwarmAI 账号断开）时：删除 Hive 或账号返回 409、什么都不删（否则表里的行没了，
   实例还在跑、还在计费）；停止、启动不会卡在 `stopping` / `starting`，转成 `error` 并写明原因。

@@ -12,6 +12,8 @@ Questions answered:
    shell, only for a non-owner? (``~`` paths and the CLI's own config files in the folder
    are denied: the CLI expands ``~`` itself, and project settings could add hooks.)
 4. are the account's work-doing POSTs refused without X-Swarm-User-Action?
+5. does WebFetch reach only public web addresses (never the daemon on loopback, the local
+   network, cloud metadata, or a public name that resolves to any of them)?
 
 Measured 2026-10-31 with the real CLI in bypassPermissions: before, a Read outside the
 session's folder went through and a sandboxed Bash wrote ~/.swarm-ai, printed a planted
@@ -25,7 +27,8 @@ from pathlib import Path
 
 import pytest
 
-from core.prompt_builder import _rule_path, restricted_session_policy, restricted_tool_gate
+from core.prompt_builder import (_reaches_this_machine, _rule_path, restricted_session_policy,
+                                 restricted_tool_gate)
 from core.security_hooks import create_file_access_permission_handler
 
 
@@ -90,11 +93,17 @@ def _decide(gate, tool, tool_input, **extra):
     ("BashOutput", {"bash_id": "1"}, "deny"),
     ("SomeFutureTool", {}, "deny"),
     ("WebFetch", {"url": "https://example.com", "prompt": "x"}, "allow"),
+    ("WebFetch", {"url": "http://127.0.0.1:18321/api/hive/accounts", "prompt": "x"}, "deny"),
+    ("WebFetch", {"url": "http://169.254.169.254/latest/meta-data/", "prompt": "x"}, "deny"),
+    ("WebFetch", {"url": "https://intranet.internal/x", "prompt": "x"}, "deny"),
     ("Skill", {"skill": "x"}, "deny"),
     ("mcp__slack__post", {}, "allow"),                                # filtered by tier earlier
     ("Agent", {"prompt": "x"}, "allow"),
 ])
-def test_gate_decides(tmp_path, tool, inp, want):
+def test_gate_decides(tmp_path, monkeypatch, tool, inp, want):
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **k: [
+        (2, 1, 6, "", ("93.184.215.14", 0))])  # a public address, no network in tests
     gate, sender = _gate(tmp_path)
     (tmp_path / "outside").mkdir()
     o = str(tmp_path / "outside")
@@ -154,3 +163,43 @@ async def test_build_options_confines_only_a_non_owner_channel(tier, restricted,
         assert opts.setting_sources == ["project"]
         assert all(getattr(m.hooks[0], "__name__", "") != "gate"
                    for m in (opts.hooks or {}).get("PreToolUse", []))
+
+
+@pytest.mark.parametrize("url,addrs,want", [
+    ("https://example.com/a", ["93.184.215.14"], False),
+    ("http://127.0.0.1:18321/", None, True),           # the daemon
+    ("http://[::1]:18321/", None, True),
+    ("http://169.254.169.254/", None, True),          # cloud metadata
+    ("http://10.0.0.5/", None, True),
+    ("http://localhost:18321/", None, True),
+    ("http://swarm.localhost/", None, True),
+    ("http://printer.local/", None, True),
+    ("http://intranet/", None, True),                 # no dot: a local name
+    ("https://rebind.example/", ["127.0.0.1"], True),  # a public name resolving here
+    ("https://mixed.example/", ["93.184.215.14", "192.168.1.2"], True),
+    ("https://gone.example/", OSError, True),          # unresolvable: fail closed
+    ("file:///etc/hosts", None, True),
+    # read differently by the CLI's URL parser: the host it would fetch is not the one checked
+    ("http://127.0.0.1:18321\\@example.com/health", None, True),
+    ("https://10.0.0.1\\@example.com/admin", None, True),
+    ("http://evil@example.com/", None, True),
+    ("http://example.com\t.evil/", None, True),
+    ("https://example.com/a@b", ["93.184.215.14"], False),  # @ in the path is fine
+    # IPv4 inside IPv6
+    ("http://[::ffff:127.0.0.1]/", None, True),
+    ("http://[::127.0.0.1]/", None, True),
+    ("http://[64:ff9b::7f00:1]/", None, True),
+    ("http://[2002:7f00:1::]/", None, True),
+    ("https://v6.example/", ["2606:4700::6810:84e5"], False),
+    ("ftp://example.com/", None, True),
+])
+def test_what_counts_as_this_machine(monkeypatch, url, addrs, want):
+    import socket
+
+    def fake(host, *_a, **_k):
+        if addrs is OSError:
+            raise OSError("no such host")
+        assert addrs is not None, f"{host} should be decided without DNS"
+        return [(2, 1, 6, "", (a, 0)) for a in addrs]
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    assert _reaches_this_machine(url) is want

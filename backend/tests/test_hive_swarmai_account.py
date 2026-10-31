@@ -18,6 +18,8 @@ Questions answered:
    cannot be reached keeps the row (409); stop/start never leave 'stopping'/'starting'
    behind (they end in 'error' saying why); Verify names another account; the disconnected SwarmAI row takes no Hive;
    Swarm Out only reads another account's Hive.
+6. another account's credentials must still reach the account the row records (a
+   default-chain row can since point elsewhere): checked with STS once per access key.
 """
 import asyncio
 import json
@@ -75,14 +77,16 @@ def test_swarmai_row_without_the_account_connected_is_refused(monkeypatch):
         ha.session_for(row, "us-east-1", "stop")
 
 
-def test_another_account_only_stops_cleans_up_and_reads(pinned):
+def test_another_account_only_stops_cleans_up_and_reads(pinned, monkeypatch):
+    checked = []
+    monkeypatch.setattr(ha, "_pin_other", lambda row, session: checked.append(row["id"]))
     row = _row()
     with pytest.raises(ha.OtherAccountError):
         ha.session_for(row, "us-east-1", "manage")
     for purpose in ("stop", "cleanup", "read"):
         s = ha.session_for(row, "us-east-1", purpose)
         assert s.get_credentials().access_key == "AKIAOLD"
-    assert pinned == []
+    assert pinned == [] and checked == ["r1", "r1", "r1"]  # each use is pinned
 
 
 def test_legacy_mode_rows_work_as_before(monkeypatch):
@@ -432,3 +436,71 @@ def test_swarm_out_only_reads_another_accounts_hive(monkeypatch):
     swarm_out._s3({"_account": {}, "region": "us-east-1"}, "read")
     swarm_out._s3({"_account": {}, "region": "us-east-1"})
     assert seen == ["read", "manage"]
+
+
+# ── 6. another account's row is pinned to its recorded account ────────────────────
+
+class _FakeSession:
+    def __init__(self, account, key="AKIAONE"):
+        self.account, self.key, self.sts_calls = account, key, 0
+
+    def get_credentials(self):
+        outer = self
+
+        class C:
+            def get_frozen_credentials(self):
+                return type("F", (), {"access_key": outer.key})()
+        return C()
+
+    def client(self, name, **_kw):
+        outer = self
+
+        class Sts:
+            def get_caller_identity(self):
+                outer.sts_calls += 1
+                return {"Account": outer.account}
+        assert name == "sts"
+        return Sts()
+
+
+def test_other_row_credentials_that_reach_another_account_do_nothing(monkeypatch):
+    ha._pinned_other.clear()
+    row = _row(id="pin-1")
+    good = _FakeSession("222222222222")
+    ha._pin_other(row, good)
+    ha._pin_other(row, good)
+    assert good.sts_calls == 1  # once per access key
+    moved = _FakeSession("999999999999", key="AKIATWO")  # the default chain changed
+    with pytest.raises(ha.OtherAccountError, match="nothing was done"):
+        ha._pin_other(row, moved)
+
+
+def test_other_row_without_credentials_is_refused():
+    class NoCreds:
+        def get_credentials(self):
+            return None
+    with pytest.raises(aws_account.AccountError):
+        ha._pin_other(_row(id="pin-2"), NoCreds())
+
+
+def test_session_for_pins_other_rows_only_in_swarmai_mode(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ha, "_pin_other", lambda row, session: seen.append(row["id"]))
+    monkeypatch.setattr(ha, "swarmai_account", lambda: None)
+    ha.session_for(_row(id="legacy"), "us-east-1", "stop")
+    monkeypatch.setattr(ha, "swarmai_account", lambda: dict(MODE))
+    ha.session_for(_row(id="other"), "us-east-1", "stop")
+    assert seen == ["other"]
+
+
+def test_a_failed_sts_check_is_an_account_error(monkeypatch):
+    ha._pinned_other.clear()
+
+    class Broken(_FakeSession):
+        def client(self, name, **_kw):
+            class Sts:
+                def get_caller_identity(self):
+                    raise RuntimeError("ExpiredToken")
+            return Sts()
+    with pytest.raises(aws_account.AccountError, match="nothing was done"):
+        ha._pin_other(_row(id="pin-3"), Broken("x"))

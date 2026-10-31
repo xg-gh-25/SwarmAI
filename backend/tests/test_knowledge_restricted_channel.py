@@ -62,7 +62,7 @@ def test_cli_rejects_abbreviated_options(monkeypatch):
         knowledge_cli.main(["find", "--proj", "P", "--query", "x"])
 
 
-async def _options(channel_context, tmp_path, monkeypatch):
+async def _options(channel_context, tmp_path, monkeypatch, *, enable_mcp=False, agent_config=None):
     from unittest.mock import MagicMock
     from core import initialization_manager as im
     from core.prompt_builder import PromptBuilder
@@ -72,8 +72,10 @@ async def _options(channel_context, tmp_path, monkeypatch):
     values = {"thinking_mode": "adaptive", "thinking_effort": "high"}
     cfg.get = MagicMock(side_effect=lambda k, d=None: values.get(k, d))
     cfg.get_model = MagicMock(return_value="claude-opus-5-5")
+    agent_config = agent_config if agent_config is not None else {}
+    agent_config.setdefault("model", "claude-opus-5-5")
     return await PromptBuilder(cfg).build_options(
-        agent_config={"model": "claude-opus-5-5"}, enable_skills=False, enable_mcp=False,
+        agent_config=agent_config, enable_skills=False, enable_mcp=enable_mcp,
         resume_session_id=None, session_context={"sdk_session_id": "sid"},
         channel_context=channel_context, editor_context=None, terminal_context=None,
         cached_system_prompt="CACHED")

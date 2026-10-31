@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -111,7 +112,45 @@ def session_for(row: dict, region: str, purpose: str = "manage"):
             f"This Hive is in another AWS account ({row.get('account_id')}): it can only be "
             "stopped or deleted. Verify the account in Settings > Hive if it is in fact the "
             "SwarmAI account.")
-    return _legacy_session(row, region)
+    session = _legacy_session(row, region)
+    if mode is not None:
+        _pin_other(row, session)
+    return session
+
+
+#: (row id, access key id) -> the account STS answered; a new key is checked again
+_pinned_other: dict = {}
+_pinned_lock = threading.Lock()
+
+
+def _pin_other(row: dict, session) -> None:
+    """Another account's credentials must still reach the account the row records: a row
+    without keys of its own uses the default chain, which can since point somewhere else,
+    and a stop or delete there would act on another account's resources by name. Runs
+    STS once per access key (blocking: callers are off the event loop)."""
+    from botocore.config import Config
+    creds = session.get_credentials()
+    if creds is None:
+        raise aws_account.AccountError("no_credentials",
+                                       "No credentials reach this Hive's AWS account.")
+    key = (row.get("id"), creds.get_frozen_credentials().access_key)
+    with _pinned_lock:
+        actual = _pinned_other.get(key)
+    if actual is None:
+        sts = session.client("sts", config=Config(connect_timeout=10, read_timeout=15,
+                                                  retries={"max_attempts": 1}))
+        try:
+            actual = sts.get_caller_identity()["Account"]
+        except Exception as exc:  # noqa: BLE001 — expired / deleted key, offline
+            raise aws_account.AccountError(
+                "unverified", "Could not confirm this Hive's AWS account "
+                              f"({type(exc).__name__}): nothing was done.") from exc
+        with _pinned_lock:
+            _pinned_other[key] = actual
+    if actual != row.get("account_id"):
+        raise OtherAccountError(
+            f"This Hive's credentials now reach AWS account {actual}, not {row.get('account_id')} "
+            "where the Hive is recorded: nothing was done.")
 
 
 #: what ``session_for`` raises instead of reaching some other account

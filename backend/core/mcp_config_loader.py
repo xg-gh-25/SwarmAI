@@ -520,6 +520,24 @@ def _get_tier(entry: dict) -> str:
     return tier
 
 
+#: an MCP entry's opt-in for trusted (non-owner) channel users. Absent = not shared.
+SHARE_FIELD = "share_with_trusted"
+
+
+def trusted_shared_names(workspace_path: Path) -> frozenset:
+    """Names and ids of the enabled MCP entries the owner shared with trusted channel
+    users (``"share_with_trusted": true``). Everything else stays the owner's: an MCP
+    runs outside the session's limits with the owner's own sign-ins."""
+    catalog_path, dev_path = get_mcp_file_paths(workspace_path)
+    entries = merge_layers(read_layer(catalog_path, default_enabled=False),
+                           read_layer(dev_path, default_enabled=True))
+    out: set = set()
+    for entry in entries:
+        if entry.get(SHARE_FIELD) is True:
+            out |= {v for v in (entry.get("name"), entry.get("id")) if v}
+    return frozenset(out)
+
+
 def load_mcp_config_tiered(
     workspace_path: Path,
     enable_mcp: bool,

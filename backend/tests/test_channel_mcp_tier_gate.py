@@ -1,97 +1,77 @@
-"""Tests for the non-owner sensitive-MCP gate (Phase-0 gap G2).
+"""Which MCP servers a channel sender may reach: an allowlist
+(core/prompt_builder.mcps_for_tier, core/mcp_config_loader.trusted_shared_names).
 
-The load-bearing logic is ``strip_sensitive_mcps`` (the SINGLE source the
-``build_options`` TRUSTED branch calls) built on the ``_is_sensitive_mcp``
-predicate + the ``_SENSITIVE_MCP_SUBSTRINGS`` set. These tests drive the REAL
-``strip_sensitive_mcps`` — NOT a locally re-derived copy of the comprehension
-(that was the M1 test-theater finding: a mirror can't catch a regression in the
-original). Mutation-sensitive: empty ``_SENSITIVE_MCP_SUBSTRINGS`` or break the
-strip and these go RED.
+An MCP server runs outside the session's limits, with the owner's own sign-ins, so a
+non-owner who reaches it acts as the owner. Questions answered:
+1. does a public user get only the channel's own tools, a trusted user also exactly the
+   MCPs the owner shared, any other tier nothing more, and the owner everything?
+2. is "shared" read from the MCP entry's own opt-in (share_with_trusted), with an entry
+   that does not say so, or a disabled one, not shared?
+3. in build_options: are the loaded MCPs and the "enable me" list of a trusted session
+   filtered to what was shared?
 """
-
 from __future__ import annotations
+
+import json
 
 import pytest
 
-from core.prompt_builder import (
-    _SENSITIVE_MCP_SUBSTRINGS,
-    _is_sensitive_mcp,
-    strip_sensitive_mcps,
-)
+from core.mcp_config_loader import SHARE_FIELD, trusted_shared_names
+from core.prompt_builder import CHANNEL_TOOLS_MCP, mcps_for_tier
+
+ALL = {CHANNEL_TOOLS_MCP, "builder-mcp", "slack-mcp", "mail-mcp", "some-new-mcp"}
 
 
-# --- the sensitive predicate against LIVE MCP names --------------------------
-
-@pytest.mark.parametrize("name", [
-    "user-aws-outlook-mcp",   # live id in mcp-dev.json — XG email (act-as-XG)
-    "user-aws-sentral-mcp",   # live id in mcp-dev.json — XG revenue/CRM
-    "aws-outlook",
-    "aws-sentral",
-    "outlook-mcp",
-    "sentral-mcp",
-    "AWS-OUTLOOK-MCP",        # case-insensitive
+@pytest.mark.parametrize("tier,want", [
+    ("public", {CHANNEL_TOOLS_MCP}),
+    ("trusted", {CHANNEL_TOOLS_MCP, "slack-mcp"}),
+    ("guest", {CHANNEL_TOOLS_MCP}),          # an unknown tier: nothing more
+    ("owner", ALL),
 ])
-def test_sensitive_mcps_flagged(name):
-    # Remove the matching substring from _SENSITIVE_MCP_SUBSTRINGS -> RED.
-    assert _is_sensitive_mcp(name) is True
+def test_mcps_for_tier(tier, want):
+    assert mcps_for_tier(ALL, tier, {"slack-mcp"}) == want
 
 
-@pytest.mark.parametrize("name", [
-    "channel-tools",          # the always-safe channel MCP
-    "user-builder-mcp",
-    "user-slack-mcp",
-    "user-hs-kmine-mcp",
-    "user-aws-knowledge-mcp",
-    "playwright",
-    "git",
-])
-def test_non_sensitive_mcps_allowed(name):
-    # A trusted teammate keeps these (skills + safe integrations) — false-positive
-    # here would break legitimate trusted workflows (pre-mortem risk).
-    assert _is_sensitive_mcp(name) is False
+def _workspace(tmp_path, dev, catalog=()):
+    mcps = tmp_path / ".claude" / "mcps"
+    mcps.mkdir(parents=True)
+    (mcps / "mcp-dev.json").write_text(json.dumps(list(dev)))
+    (mcps / "mcp-catalog.json").write_text(json.dumps(list(catalog)))
+    return tmp_path
 
 
-def test_sensitive_set_is_single_source_and_nonempty():
-    # Fail-closed contract: the set exists, is non-empty, and is the ONE place
-    # the gate reads from (a rename/addition is caught by substring match).
-    assert _SENSITIVE_MCP_SUBSTRINGS
-    assert "aws-outlook" in _SENSITIVE_MCP_SUBSTRINGS
-    assert "aws-sentral" in _SENSITIVE_MCP_SUBSTRINGS
+def _entry(name, **kw):
+    return {"id": name, "name": name, "connection_type": "stdio",
+            "config": {"command": "true"}, "tier": "always", **kw}
 
 
-# --- integration: the REAL strip_sensitive_mcps (single source) --------------
-# These call the SAME function build_options calls — a regression in the strip
-# (not just the predicate) is caught here (M1 fix).
-
-def test_trusted_strip_removes_sensitive_keeps_safe():
-    servers = {
-        "channel-tools": {},
-        "user-builder-mcp": {},
-        "user-slack-mcp": {},
-        "user-aws-outlook-mcp": {},
-        "user-aws-sentral-mcp": {},
-    }
-    kept = strip_sensitive_mcps(servers)
-    # sensitive stripped
-    assert "user-aws-outlook-mcp" not in kept
-    assert "user-aws-sentral-mcp" not in kept
-    # safe kept (trusted teammate still has skills + channel-tools + builder)
-    assert "channel-tools" in kept
-    assert "user-builder-mcp" in kept
-    assert "user-slack-mcp" in kept
-    assert len(kept) == 3
+def test_shared_names_come_from_the_entrys_own_opt_in(tmp_path):
+    ws = _workspace(tmp_path, [
+        _entry("slack-mcp", **{SHARE_FIELD: True}),
+        _entry("builder-mcp"),
+        _entry("mail-mcp", **{SHARE_FIELD: "yes"}),          # only literal true counts
+        _entry("off-mcp", enabled=False, **{SHARE_FIELD: True}),
+    ])
+    assert trusted_shared_names(ws) == frozenset({"slack-mcp"})
 
 
-def test_trusted_strip_is_fail_closed_for_new_sensitive_name():
-    # A newly-added integration whose name contains a sensitive substring is
-    # stripped by DEFAULT — no per-integration allowlisting needed.
-    servers = {"user-aws-outlook-v2-mcp": {}, "user-notes-mcp": {}}
-    kept = strip_sensitive_mcps(servers)
-    assert "user-aws-outlook-v2-mcp" not in kept  # caught by 'aws-outlook'
-    assert "user-notes-mcp" in kept
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", ["trusted", "public"])
+async def test_build_options_keeps_only_what_the_tier_may_reach(tier, tmp_path, monkeypatch):
+    from tests.test_knowledge_restricted_channel import _options
+    _workspace(tmp_path, [_entry("slack-mcp", **{SHARE_FIELD: True}), _entry("builder-mcp"),
+                          _entry("deferred-shared", tier="ondemand", **{SHARE_FIELD: True}),
+                          _entry("deferred-mine", tier="ondemand")])
+    captured = {}
 
-
-def test_all_safe_servers_survive_strip():
-    servers = {"channel-tools": {}, "user-builder-mcp": {}}
-    kept = strip_sensitive_mcps(servers)
-    assert kept == servers  # nothing sensitive -> untouched
+    ctx = {"channel_id": "c1", "channel_type": "slack",
+           "sender_identity": {"permission_tier": tier, "external_id": "u1"}}
+    opts = await _options(ctx, tmp_path, monkeypatch, enable_mcp=True, agent_config=captured)
+    names = set((opts.mcp_servers or {}).keys())
+    deferred = {d["name"] for d in captured.get("_deferred_mcps") or []}
+    if tier == "trusted":
+        assert "slack-mcp" in names and "builder-mcp" not in names
+        assert deferred == {"deferred-shared"}
+    else:
+        assert not names & {"slack-mcp", "builder-mcp"}
+        assert deferred == set()

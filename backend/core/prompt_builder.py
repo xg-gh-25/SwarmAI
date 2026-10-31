@@ -148,32 +148,22 @@ def assert_core_sections(prompt_text: str) -> list[str]:
     return missing
 
 
-# ── Sensitive MCP gate (G2) — single source of truth ──────────────────
-# MCP servers a NON-OWNER channel sender must never reach (even TRUSTED tier):
-# email = acting-as-XG + personal data; sentral = XG revenue/CRM (raw business
-# data). STEERING #6 forbids both for allowlisted users. Matched by stable name
-# SUBSTRING so a rename/prefix variant (user-aws-outlook-mcp, aws-outlook, …) is
-# still caught, and a newly-added sensitive integration is caught by default when
-# its name contains one of these — fail-closed. To share a currently-sensitive
-# MCP with trusted teammates, that is a deliberate one-line removal HERE.
-_SENSITIVE_MCP_SUBSTRINGS = ("aws-outlook", "aws-sentral", "outlook-mcp", "sentral-mcp")
+# ── MCP for non-owner channel users — an allowlist ─────────────────────────
+# An MCP server runs outside the session's limits with the owner's own sign-ins, so a
+# non-owner reaching it acts as the owner. Public users get only the channel's own tools;
+# trusted users also get the MCPs the owner shared one by one (``share_with_trusted`` in
+# the MCP entry, core/mcp_config_loader.trusted_shared_names). Any other tier, and any
+# MCP added later, gets nothing by default.
+CHANNEL_TOOLS_MCP = "channel-tools"
 
 
-def _is_sensitive_mcp(name: str) -> bool:
-    """True if an MCP server name matches the sensitive set (G2, non-owner strip)."""
-    low = name.lower()
-    return any(sub in low for sub in _SENSITIVE_MCP_SUBSTRINGS)
-
-
-def strip_sensitive_mcps(mcp_servers: dict) -> dict:
-    """Return *mcp_servers* without the sensitive set (G2 non-owner strip).
-
-    THE single source of the non-owner strip — the ``build_options`` TRUSTED
-    branch calls this, and the test drives THIS (not a re-derived copy), so a
-    regression in the strip logic is caught, not only a regression in the
-    predicate (avoids the re-derivation test-theater class, M1).
-    """
-    return {name: cfg for name, cfg in mcp_servers.items() if not _is_sensitive_mcp(name)}
+def mcps_for_tier(names: Any, tier: str, shared: Any) -> set:
+    """Which of ``names`` a channel sender of ``tier`` may use (owner: all)."""
+    names = set(names)
+    if tier == "owner":
+        return names
+    allowed = {CHANNEL_TOOLS_MCP} | (set(shared) if tier == "trusted" else set())
+    return names & allowed
 
 
 # DailyActivity injection uses ``core.memory_injection.select_daily_activity``.
@@ -549,8 +539,10 @@ def restricted_session_policy() -> dict:
       never name every secret on the machine;
     - a PreToolUse hook (``restricted_tool_gate``), which the CLI runs in every mode and
       for subagents too, lets through only the file tools on allowed paths, the tools in
-      ``_RESTRICTED_PASS_TOOLS`` and MCP tools (already filtered by tier), and denies
-      everything else, including on its own error;
+      ``_RESTRICTED_PASS_TOOLS`` and MCP tools (already filtered by tier, ``mcps_for_tier``),
+      lets WebFetch reach only public web addresses (never the daemon on loopback, the
+      local network or cloud metadata), and denies everything else, including on its
+      own error;
     - ``Read`` deny rules on the owner's credential stores as a second layer (the CLI
       applies deny rules in every mode; ``//abs`` / ``~/`` syntax, ``_rule_path``);
     - no setting sources and no inline shell in skills: files the session writes into its
@@ -566,6 +558,68 @@ def restricted_session_policy() -> dict:
             "~/.ssh/**", "~/.config/**", "~/.claude/**", "~/.claude.json",
             _rule_path(Path(secrets))]
     return {"deny_read": deny, "disallow": list(PromptBuilder._BASH_TOOLS)}
+
+
+def _not_global(ip: Any) -> bool:
+    """An address that is not public, including an IPv4 address carried inside IPv6
+    (mapped, 6to4, the deprecated ::a.b.c.d form, NAT64 64:ff9b::/96)."""
+    import ipaddress
+    if not ip.is_global:
+        return True
+    if ip.version == 6:
+        embedded = [ip.ipv4_mapped, ip.sixtofour]
+        packed = int(ip)
+        if packed >> 32 == 0 or ip in ipaddress.ip_network("64:ff9b::/96"):
+            embedded.append(ipaddress.IPv4Address(packed & 0xFFFFFFFF))
+        return any(e is not None and not e.is_global for e in embedded)
+    return False
+
+
+def _reaches_this_machine(url: str) -> bool:
+    """True when ``url`` is not a plain public web address: a non-http(s) scheme, a
+    name without a dot or under localhost / .local / .internal, or a host whose address
+    (an IP literal, or any address it resolves to) is not globally routable — loopback
+    (the daemon), private, link-local (cloud metadata). Fails closed: unresolvable =
+    True, and so is anything two URL parsers can read differently (whitespace or a
+    control character, user info before the host: ``http://127.0.0.1\\@example.com`` is
+    example.com here and 127.0.0.1 to the CLI's WHATWG parser): the CLI must fetch the
+    host checked here. Blocking (DNS); call
+    off the event loop.
+
+    Not covered: a name whose DNS answer changes between this check and the CLI's own
+    lookup (DNS rebinding); only an egress proxy that checks the connected address can.
+    The daemon itself is plain http and the CLI fetches over https only."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F for c in url):
+        return True
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").rstrip(".").lower()
+        if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+            return True
+    except ValueError:
+        return True
+    if parts.scheme not in ("http", "https") or not host or ("." not in host and ":" not in host):
+        return True
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        return True
+    try:
+        return _not_global(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return True
+    for info in infos:
+        try:
+            if _not_global(ipaddress.ip_address(info[4][0].split("%")[0])):
+                return True
+        except ValueError:
+            return True
+    return not infos
 
 
 def restricted_tool_gate(file_handler: Any, cwd: str) -> Any:
@@ -587,6 +641,10 @@ def restricted_tool_gate(file_handler: Any, cwd: str) -> Any:
         try:
             tool = input_data.get("tool_name") or ""
             tool_input = dict(input_data.get("tool_input") or {})
+            if tool == "WebFetch":  # never this machine, its network or cloud metadata
+                if await asyncio.to_thread(_reaches_this_machine, str(tool_input.get("url") or "")):
+                    return _deny("Only public web addresses can be fetched in this session.")
+                return {}
             if tool.startswith("mcp__") or tool in _RESTRICTED_PASS_TOOLS:
                 return {}
             key = _RESTRICTED_FILE_TOOLS.get(tool)
@@ -2364,6 +2422,18 @@ class PromptBuilder:
             extra_always=extra_mcps,
         )
 
+        # Non-owner channel sender: which MCPs it may reach (an allowlist, mcps_for_tier)
+        _sender_tier: Optional[str] = None
+        _shared_mcps: frozenset = frozenset()
+        if _channel_sender_dir and channel_context:
+            from .mcp_config_loader import trusted_shared_names
+            _sender_tier = channel_context.get("sender_identity", {}).get(
+                "permission_tier", "public")
+            _shared_mcps = trusted_shared_names(Path(working_directory))
+            # ...and only those are offered as "enable me" in its prompt
+            deferred_mcps = [d for d in deferred_mcps or [] if d.get("name") in mcps_for_tier(
+                [d.get("name")], _sender_tier, _shared_mcps)]
+
         # 4a. Store deferred MCPs for system prompt injection
         if deferred_mcps:
             agent_config["_deferred_mcps"] = deferred_mcps
@@ -2384,8 +2454,8 @@ class PromptBuilder:
 
         # 5. Build sandbox configuration
         sandbox_settings = self.build_sandbox_config()
-        # A non-owner channel session's Bash is confined by the OS, never by text
-        # matching alone (restricted_session_policy).
+        # A non-owner channel session is confined by what the CLI enforces (no Bash, the
+        # restricted_tool_gate hook), never by text matching (restricted_session_policy).
         _restricted = restricted_session_policy() if _channel_sender_dir else None
         if _restricted:
             from claude_agent_sdk import HookMatcher
@@ -2398,41 +2468,13 @@ class PromptBuilder:
         # 6. Inject channel-specific MCP servers
         mcp_servers = self.inject_channel_mcp(mcp_servers, channel_context, working_directory)
 
-        # 6a. Non-owner channel sessions: MCP access depends on permission tier.
-        #   - PUBLIC:  strip to channel-tools only (no access to owner's integrations)
-        #   - TRUSTED: keep MCPs EXCEPT the sensitive set (G2) — a trusted teammate
-        #     must not reach XG's email (act-as-XG) or revenue/CRM data through the
-        #     bot. STEERING #6 forbids external actions as XG + raw personal data
-        #     even for allowlisted users; behavioral prose alone is not a gate.
-        if _channel_sender_dir and mcp_servers and channel_context:
-            sender = channel_context.get("sender_identity", {})
-            tier = sender.get("permission_tier", "public")
-            if tier == "public":
-                safe_mcps = {
-                    name: config for name, config in mcp_servers.items()
-                    if name == "channel-tools"
-                }
-                stripped = len(mcp_servers) - len(safe_mcps)
-                if stripped:
-                    logger.info(
-                        "Public channel user: stripped %d MCP servers "
-                        "(kept only channel-tools)",
-                        stripped,
-                    )
-                mcp_servers = safe_mcps
-            else:
-                # TRUSTED (and any non-owner, non-public tier): fail-closed strip
-                # of the sensitive set via the shared single-source helper (so the
-                # test drives THIS code, not a copy — M1).
-                safe_mcps = strip_sensitive_mcps(mcp_servers)
-                stripped = len(mcp_servers) - len(safe_mcps)
-                if stripped:
-                    logger.info(
-                        "Trusted channel user: stripped %d sensitive MCP server(s) "
-                        "(email/revenue), kept %d",
-                        stripped, len(safe_mcps),
-                    )
-                mcp_servers = safe_mcps
+        # 6a. Non-owner channel session: only the MCPs its tier may reach (allowlist).
+        if _sender_tier is not None and mcp_servers:
+            keep = mcps_for_tier(mcp_servers, _sender_tier, _shared_mcps)
+            if len(keep) < len(mcp_servers):
+                logger.info("Channel user (tier %s): %d MCP server(s) not available, kept %s",
+                            _sender_tier, len(mcp_servers) - len(keep), sorted(keep))
+            mcp_servers = {n: c for n, c in mcp_servers.items() if n in keep}
 
         # 7. Resolve model (with Bedrock conversion if needed)
         model = self.resolve_model(agent_config)
