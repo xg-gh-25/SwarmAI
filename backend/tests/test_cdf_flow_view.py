@@ -243,3 +243,16 @@ def test_the_trend_has_one_bucket_per_hour_or_day_and_a_previous_period(db: Path
     month = flow_view.landed_overview("30d")
     assert len(month["series"]) == 30
     assert month["previous"] is None              # no item reaches 60 days back: no full period
+
+
+def test_a_brain_is_the_file_a_unit_landed_in_not_the_project_it_named(db: Path):
+    """A unit that named a project that does not exist but was written into SwarmAI's
+    documents is counted under SwarmAI, never as a Brain of its own name."""
+    conn = sqlite3.connect(db)
+    _seed(conn, 40, "S7", "written", "new", {"kind": "cognition", "title": "Named CDF", "what": "x"},
+          {**IMPROVEMENT, "project": "CDF"})
+    conn.commit(); conn.close()
+    landed = flow_view.landed_overview("24h")["landed"]
+    assert not [r for r in landed if r["project"] == "CDF"]
+    improvement = next(r for r in landed if r["path"] == IMPROVEMENT["relative_path"])
+    assert improvement["project"] == "SwarmAI" and improvement["written"] == 4    # 3 seeded + this one

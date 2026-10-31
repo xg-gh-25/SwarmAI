@@ -163,8 +163,9 @@ def _scrub(value: Any) -> Any:
 
 
 def _landing(path: str | None, store: str | None, project: str | None) -> tuple[str | None, str | None]:
-    """The store and project of the file a unit landed in (*path*), when it is not the
-    unit's own destination (a reinforcement of an entry elsewhere)."""
+    """The store and project of the file a unit landed in (*path*): a project's file names
+    its Brain by its folder, whatever the unit declared; a reinforcement of an entry
+    elsewhere names that file's store."""
     if not path:
         return store, project
     if path.startswith(".context/"):
@@ -272,9 +273,10 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
 
     landed_map: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
     for row in landed_rows:
-        store, project = str(row["store"] or "-"), row["project"]
-        if row["path"] != row["dest_path"]:
-            store, project = _landing(row["path"], store, project)
+        # the Brain is the file it landed in, never the name the unit declared: a unit that
+        # named a project that does not exist ("CDF") but was written into SwarmAI's
+        # documents belongs to SwarmAI (the row a click opens filters by that path)
+        store, project = _landing(row["path"], str(row["store"] or "-"), row["project"])
         key = (store, project, row["path"])
         entry = landed_map.setdefault(key, {"store": store, "project": project, "path": row["path"],
                                             "written": 0, "reinforced": 0})
