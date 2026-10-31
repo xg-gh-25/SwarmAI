@@ -3,7 +3,7 @@ title: Memory 链路审计与修复 —— 从提取源头到 MEMORY.md
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: M1–M3、A1–A4、E1–E2 已落地（2026-10-31）；39 条重新复盘等 E2
+status: M1–M3、A1–A4、E1–E2、C1–C6 已落地（2026-10-31）；39 条重新复盘等 E2
 scope: 只管 Memory 链路。提取时机（S7 什么时候跑）、事件/gap、DailyActivity 归
   docs/design/2026-10-31-extraction-at-task-end.md（另一个 session），本文不改那些。
 ---
@@ -168,3 +168,38 @@ EVOLUTION 编号会被复用（已修）；judge 的 same / adds 精度两条和
   逐字放进 `user_quote`；只关乎一份文档、一个工具的纠正按 M1 的适用面声明 scope。
 - **E2 —— 存量。** K005 → General Brain；C067、C070、C071 → SwarmAI DDD（`memory_relocate.py`
   扩展到 EVOLUTION）。CLASS B 不动。
+
+## 8. 链路 C：四类知识的最终内容（同一套路，从最终价值倒推）
+
+四类各有各的价值：Lesson 是唯一会积累的（改变以后的判断）；Gap 的价值在于被关闭；Event 只给复盘读，
+不参与判断；Reference 的价值在于找到来源。按这个看最终内容：
+
+**实测**
+- **Lesson**：零利益读者抽样 SwarmAI DDD 75 条，CDF 写的条目约三成该撤（修好的 bug 写成 pitfall、
+  看一眼代码就知道的签名和 schema、本该是 gap 的写成 lesson、同主题重复互相矛盾），旧条目多是教训埋在
+  叙事和 run id 里。world / agent 单元没有用户原话或测量时全部去 General Brain，而 General Brain 不在
+  关系比对的池里：同一个错再犯一次认不出是 repeats，重犯不计数，自学的判断永远到不了每轮读的文件，
+  所以 MEMORY / EVOLUTION 几乎收不到东西。
+- **Gap**：event 只能关闭本 session 开的 gap，工作大多在另一个 session native 做完，SwarmAI 48 个 gap
+  全开着。
+- **Reference**：17 份留在盘上的几乎都是已保存的设计文档某一版的摘要，不写原文在哪，每一版一份。
+- **S7 记录**：记录给每一条都带了 id（含 agent 自己的话和工具输出），证据检查只认用户消息和测量，
+  引了就整条被拒（evidence_not_in_index）。
+
+**修复**
+- **C1 —— 记录只显示能引用的 id。**
+- **C2 —— event 可以关闭本项目任何 session 开的、CDF 写的 open gap**；复盘第二轮给 event 看最近的
+  open gap（标 "(open gap)"）。存量：逐个对过代码和 git，关闭 11 个已做完的（48 → 37）。
+- **C3 —— General Brain 进关系比对的池**（只算 CDF 写入的 General 文档，不含 reference，按 mtime 缓存）；
+  General 里的 `[correction]` 算作已记录的纠正。
+- **C4 —— 重犯是测量。** 一个关于 agent 的纠正，声明 repeats 另一个 session 记录过的纠正、且不引外部内容，
+  进 EVOLUTION（admitted_by=repeat）；第一次仍在 General Brain。
+- **C5 —— 写入时的规则（S7 prompt）。** 本记录里修好的 bug 是 event，lesson 只写能防住它的普适规则；
+  看一眼代码就知道的不是 lesson；还开着的是 gap；reference 只记下一个 session 找不到的来源（外部链接、
+  只存在于这次对话的结果），已保存的文档不复制。
+- **C6 —— 存量清理。** General Brain 文档进自动撤回的范围；6 位零利益读者逐条审 649 条 CDF 条目，
+  我核过后撤下 82 条（看一眼代码就知道 29、过时 20、已修的 bug 16、重复 14、状态 3），原文在 vault；
+  11 份复制设计文档的 reference 移到 archive；10 个孤儿 lock 文件移到废纸篓。
+- **还剩**：SwarmAI DDD 里 CDF 之前写的约 1,100 条旧条目，多数有真教训但埋在叙事和 run id 里，要改写
+  不是撤，单独做；Event 只追加，不清理。
+
