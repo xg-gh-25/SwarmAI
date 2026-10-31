@@ -79,14 +79,15 @@ def test_the_hive_gives_this_sessions_lessons_and_its_runs_only(tmp_path, monkey
         hive_lessons.collect("../x")
 
 
-def test_the_hive_caps_what_it_gives(tmp_path, monkeypatch):
+def test_the_hive_gives_every_lesson_whatever_its_size(tmp_path, monkeypatch):
+    """A cap of 50 and a silent skip of any unit over 8 KB lost lessons."""
     from core import hive_lessons
     monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(hive_lessons, "MAX_LESSONS", 2)
-    big = _pitfall("big", what="x" * (hive_lessons.MAX_UNIT_BYTES + 1))
-    _inbox([("S7", SID, "main", _pitfall(f"l{i}")) for i in range(3)] + [("S7", SID, "main", big)])
+    big = _pitfall("big", what="a long lesson " * 1500)
+    _inbox([("S7", SID, "main", _pitfall(f"l{i}")) for i in range(60)] + [("S7", SID, "main", big)])
     out = hive_lessons.collect(SID)
-    assert [x["unit"]["title"] for x in out["lessons"]] == ["l0", "l1"] and out["truncated"]
+    assert len(out["lessons"]) == 61 and out["truncated"] is False
+    assert "big" in [x["unit"]["title"] for x in out["lessons"]]
 
 
 def test_a_hive_without_an_inbox_gives_nothing(tmp_path, monkeypatch):
@@ -199,11 +200,11 @@ def test_taking_again_sends_nothing_twice(cdf_env):
     assert lost["candidates"] == first["candidates"]                  # the CDF knows it: duplicate
 
 
-def test_a_run_takes_at_most_its_room(cdf_env):
+def test_a_run_takes_every_lesson(cdf_env):
     from core import hive_lessons
-    lessons = [{"unit": _pitfall(f"l{i}")} for i in range(4)]
-    out = hive_lessons.ingest(DID, "P", lessons, set(), room=2)
-    assert len(out["candidates"]) == 2
+    lessons = [{"unit": _pitfall(f"l{i}")} for i in range(60)]
+    out = hive_lessons.ingest(DID, "P", lessons, set())
+    assert len(out["candidates"]) == 60
 
 
 def test_a_check_with_nothing_to_queue_records_no_attempt(cdf_env):
@@ -241,25 +242,19 @@ def test_one_poisoned_unit_does_not_stop_the_others(cdf_env):
     assert len(out["candidates"]) == 2 and out["unreadable"] == 1
 
 
-def test_refused_units_use_the_runs_budget_and_leave_no_row(cdf_env, monkeypatch):
+def test_refused_units_leave_no_row_and_no_count_caps_a_run(cdf_env, monkeypatch):
     from core import hive_lessons, swarm_out
     invalid = [{"unit": {"kind": "cognition", "type": "pitfall", "scope": "project:P",
                          "title": f"n{i}", "what": "w", "evidence": ["event:x"]}} for i in range(3)]
-    out = hive_lessons.ingest(DID, "P", invalid, set(), room=2)
-    assert len(out["refused"]) == 2 and out["candidates"] == []
-    big = _pitfall("big", what="x" * hive_lessons.MAX_UNIT_BYTES)
-    assert len(hive_lessons.ingest(DID, "P", [{"unit": big}], set())["refused"]) == 1
-    from core.ingestion.store import connect_rw
-    conn = connect_rw()
-    try:
-        assert conn.execute("SELECT COUNT(*) FROM evidence_roots").fetchone()[0] == 0
-    finally:
-        conn.close()
+    out = hive_lessons.ingest(DID, "P", invalid, set())
+    assert len(out["refused"]) == 3 and out["candidates"] == []
+    big = _pitfall("big", what="a long lesson " * 1500)          # a large unit (20 KB) is taken
+    assert len(hive_lessons.ingest(DID, "P", [{"unit": big}], set())["candidates"]) == 1
     hive_lessons._legacy_path(DID).parent.mkdir(parents=True, exist_ok=True)
     hive_lessons._legacy_path(DID).write_text(json.dumps({"lessons": [{"unit": _pitfall("one more")}]}))
-    full = {"candidates": ["c"] * 10, "refused": [f"r{i}" for i in range(hive_lessons.MAX_LESSONS - 10)]}
-    took = hive_lessons.settle(DID, "P", full)                    # the run's room is used
-    assert took["pending"] == 0 and took["candidates"] == ["c"] * 10 and _inbox_count() == 0
+    full = {"candidates": ["c"] * 10, "refused": [f"r{i}" for i in range(60)]}
+    took = hive_lessons.settle(DID, "P", full)              # 70 settled already: still taken
+    assert took["pending"] == 0 and took["candidates"][-1].startswith("cand-")
 
 
 def test_the_general_brain_takes_world_lessons_only(cdf_env):

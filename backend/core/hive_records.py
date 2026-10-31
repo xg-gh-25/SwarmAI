@@ -46,7 +46,10 @@ up to the size listed) and keeps it before moving the cursor; it then deletes th
 bundles the newest outcome no longer refers to (``_prune_bundles``); a failed check stops the pull, keeps what is kept, and the next
 check retries. The manifest is not trusted either: it can leave entries out, but an entry
 it adds still has to pass, and a run keeps at most ``MAX_KEPT_ENTRIES`` entries and
-``MAX_KEPT_BYTES`` bytes on disk. The time kept is this machine's. After a pull every reader
+``MAX_KEPT_BYTES`` bytes on disk, except its lessons and close (``ALWAYS_KEPT``); a turn
+or file past them is kept as a marked line without its bytes, so nothing after it is
+lost. A session's lessons are sealed in as many entries as they need. The time kept is
+this machine's. After a pull every reader
 reads the local copy only, within its own read cap: ``turn_rows`` (the result summary;
 ``complete`` only when the record starts at the session's first turn), ``bundle_path``
 (core/hive_return), ``lesson_units`` (core/hive_lessons). ``sweep_host`` removes kept
@@ -497,13 +500,40 @@ def seal_lessons(workspace: Path, session_id: str) -> Optional[dict]:
         got = hive_lessons.collect(session_id, exclude=sealed)
         if not got["lessons"]:
             return None
-        entry = append(workspace, session_id, "lessons", data=json.dumps(
-            {"lessons": [{"source": x["source"], "unit": x["unit"]} for x in got["lessons"]],
-             "truncated": got["truncated"]}, ensure_ascii=False).encode("utf-8"))
-        tmp = d / f".tmp-sealed-{secrets.token_hex(4)}"
-        tmp.write_text(json.dumps(sorted(sealed | {x["id"] for x in got["lessons"]})), encoding="utf-8")
-        os.replace(tmp, d / SEALED_LESSONS)
+        entry = None
+        for batch in _lesson_batches(got["lessons"]):
+            body = _lessons_body(batch)
+            if len(body) > MAX_BYTES["lessons"]:
+                # one unit larger than an entry holds: named in the log, never sent
+                logger.error("hive_records: lesson %s of %s is larger than a record entry (%d bytes)",
+                             batch[0]["id"], session_id, len(body))
+            else:
+                entry = append(workspace, session_id, "lessons", data=body)
+            # each entry is marked sealed as soon as it is written: a failure later in the
+            # loop leaves only the rest for the next seal, never a lesson sent twice
+            sealed |= {x["id"] for x in batch}
+            tmp = d / f".tmp-sealed-{secrets.token_hex(4)}"
+            tmp.write_text(json.dumps(sorted(sealed)), encoding="utf-8")
+            os.replace(tmp, d / SEALED_LESSONS)
         return entry
+
+
+def _lessons_body(batch: list[dict]) -> bytes:
+    return json.dumps({"lessons": [{"source": x["source"], "unit": x["unit"]} for x in batch],
+                       "truncated": False}, ensure_ascii=False).encode("utf-8")
+
+
+def _lesson_batches(lessons: list[dict]) -> list[list[dict]]:
+    """*lessons* in consecutive batches whose entry stays within MAX_BYTES["lessons"]: a
+    session gives as many lessons as it has, in as many entries as they need (a cap of 50
+    units of 8 KB kept one entry within the limit by dropping the rest)."""
+    batches: list[list[dict]] = []
+    for item in lessons:
+        if batches and len(_lessons_body(batches[-1] + [item])) <= MAX_BYTES["lessons"]:
+            batches[-1].append(item)
+        else:
+            batches.append([item])
+    return batches
 
 
 def seal_end(workspace: Path, session_id: str, reason: str) -> None:
@@ -613,8 +643,10 @@ PULL_PAGES = 5
 LISTING_MAX = 256 * 1024
 MAX_KEPT_ENTRIES = 2_000
 MAX_KEPT_BYTES = 300 * 1024 * 1024
+# kinds kept past the caps above: a run's lessons and its close are small and are what
+# the host acts on; a cap that stopped the pull lost them for good
+ALWAYS_KEPT = frozenset({"lessons", "closed"})
 TURN_READ_BYTES = 20 * 1024 * 1024       # turn entries read back for one summary
-MAX_UNITS_READ = 200
 
 
 def _host_root() -> Path:
@@ -678,13 +710,14 @@ def turn_rows(dispatch_id: str) -> tuple[list[dict], bool, bool]:
 
 
 def lesson_units(dispatch_id: str) -> list[dict]:
+    """Every lesson unit the run's kept record holds, in order."""
     out: list[dict] = []
     for e in local_entries(dispatch_id):
-        if e.get("kind") == "lessons" and len(out) < MAX_UNITS_READ:
+        if e.get("kind") == "lessons":
             body = _read_local(dispatch_id, e)
             if isinstance(body, dict) and isinstance(body.get("lessons"), list):
                 out += [x for x in body["lessons"] if isinstance(x, dict)]
-    return out[:MAX_UNITS_READ]
+    return out
 
 
 def bundle_path(dispatch_id: str, seq: int, key: str) -> Optional[Path]:
@@ -881,11 +914,13 @@ async def pull(row: dict, inst: dict) -> dict:
                 used = await asyncio.to_thread(_kept_bytes, d, kept)
                 for e in listed[:PAGE]:
                     why = _valid_entry(e, cur + 1)
-                    if not why and (len(kept) >= MAX_KEPT_ENTRIES or used + e["size"] > MAX_KEPT_BYTES):
+                    if not why and e["kind"] not in ALWAYS_KEPT and (
+                            len(kept) >= MAX_KEPT_ENTRIES or used + e["size"] > MAX_KEPT_BYTES):
                         why = "record_too_large"
-                    if why == "record_too_large" and e["kind"] == "file" and len(kept) < MAX_KEPT_ENTRIES:
-                        # a deliverable never blocks the turns, lessons and close after it:
-                        # its line is kept, marked, without the bytes (core/hive_files)
+                    if why == "record_too_large" and e["kind"] in ("file", "turn"):
+                        # a deliverable or a turn never blocks what comes after it: its line
+                        # is kept, marked, without the bytes (core/hive_files; turn_rows
+                        # reads the turns it has)
                         entry = {**{k: e[k] for k in ("seq", "kind", "sha256", "size", "path") if k in e},
                                  "file": _name(e["seq"], "file"), "at": _now(), "skipped": why,
                                  **({"listed": e["listed"]} if "listed" in e else {})}

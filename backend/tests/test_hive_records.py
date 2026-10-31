@@ -634,16 +634,32 @@ def test_a_torn_line_in_the_kept_manifest_is_cut_before_the_next_entry(host, hiv
     assert got["seq"] == 2 and [e["seq"] for e in hr.local_entries(DID)] == [1, 2]
 
 
-def test_a_run_keeps_no_more_than_its_budget(host, hive_ws, monkeypatch):
+def test_past_its_budget_a_run_keeps_its_lessons_and_close_and_marks_its_turns(host, hive_ws, monkeypatch):
+    """A cap that stopped the pull lost the lessons and the close after it for good."""
     from core import hive_records as hr
-    monkeypatch.setattr(hr, "MAX_KEPT_ENTRIES", 2)
-    for i in range(4):
-        hr.append(hive_ws, SID, "closed", data=b"{}")
+    monkeypatch.setattr(hr, "MAX_KEPT_ENTRIES", 1)
+    hr.seal_turn(hive_ws, SID, _turn_rows("one"))
+    hr.seal_turn(hive_ws, SID, _turn_rows("two"))
+    hr.append(hive_ws, SID, "lessons", data=json.dumps({"lessons": [{"unit": _pitfall("kept")}]}).encode())
+    hr.append(hive_ws, SID, "closed", data=b"{}")
     got = asyncio.run(hr.pull(ROW, {"id": "h"}))
-    assert got["seq"] == 2 and got["error"] == "record_too_large"
-    monkeypatch.setattr(hr, "MAX_KEPT_ENTRIES", 100)
-    monkeypatch.setattr(hr, "MAX_KEPT_BYTES", 3)
-    assert asyncio.run(hr.pull(ROW, {"id": "h"}))["error"] == "record_too_large"
+    kept = hr.local_entries(DID)
+    assert got["error"] is None and [e["kind"] for e in kept] == ["turn", "turn", "lessons", "closed"]
+    assert kept[1].get("skipped") == "record_too_large" and "skipped" not in kept[2]
+    assert [x["unit"]["title"] for x in hr.lesson_units(DID)] == ["kept"]
+
+
+def test_a_sessions_lessons_are_sealed_in_as_many_entries_as_they_need(hive_ws, monkeypatch):
+    from core import hive_records as hr
+    monkeypatch.setitem(hr.MAX_BYTES, "lessons", 4096)
+    _inbox([("S7", SID, "main", _pitfall(f"lesson {i}")) for i in range(30)])
+    hr.seal_lessons(hive_ws, SID)
+    es = [e for e in hr.entries(hive_ws, SID)["entries"] if e["kind"] == "lessons"]
+    assert len(es) > 1 and all(e["size"] <= 4096 for e in es)
+    titles = [x["unit"]["title"] for e in es
+              for x in json.loads((hr.session_dir(hive_ws, SID) / e["file"]).read_text())["lessons"]]
+    assert sorted(titles) == sorted(f"lesson {i}" for i in range(30))
+    assert hr.seal_lessons(hive_ws, SID) is None                    # all sealed, none twice
 
 
 def test_a_listing_larger_than_its_cap_is_not_read(host, hive_ws, monkeypatch):

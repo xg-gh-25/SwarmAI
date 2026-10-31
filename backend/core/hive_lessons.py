@@ -9,9 +9,10 @@ host takes them; a run's record (core/hive_records) seals them.
 
 **Hive side — ``collect(session_id)``** (served at ``GET /api/hive/lessons/{session}``,
 routers/hive_brains): the cognition and gap units of that session's main passes, and the
-units of every S3 run whose contract names the session as its creator, oldest first, at
-most ``MAX_LESSONS``, each at most ``MAX_UNIT_BYTES`` of JSON. A read-only connection to
-the inbox; nothing on the Hive changes. ``exclude`` leaves out units already sealed.
+units of every S3 run whose contract names the session as its creator, oldest first, all
+of them, whatever their size (a cap of 50 units and a skip of any unit over 8 KB lost
+lessons; the record seals them in as many entries as they need). A read-only connection
+to the inbox; nothing on the Hive changes. ``exclude`` leaves out units already sealed.
 
 **Host side.** The units come back in the run's record (core/hive_records), or, from a
 Hive that keeps none, through ``take`` (``GET /api/hive/lessons/{session}``), and are kept
@@ -33,8 +34,9 @@ only writer of a Brain; a store that is busy or failing leaves them for the next
   It cites external content and no user message of this machine, so the provenance
   rule (pipeline_v2._admitted) keeps it out of every per-turn injected store; it reaches its
   Brain's DDD, marked external. ``relation_hint`` is dropped (its target is a Hive anchor).
-- at most ``MAX_LESSONS`` units per run (queued or refused), and ``INGEST_BUDGET_S`` of
-  queueing per call; a unit is validated before any row is written for it. A unit
+- every unit of the run is taken, however many; ``INGEST_BUDGET_S`` of queueing per call
+  (the rest waits for the next check); a unit is validated before any row is written
+  for it. A unit
   settled for the run (taken, or refused by this machine's contract) is not sent again;
   a busy or failing store leaves it pending.
 
@@ -56,8 +58,8 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-MAX_LESSONS = 50            # per dispatched run: what the Hive gives, and what the host takes
-MAX_UNIT_BYTES = 8192
+# the HTTP body read from an older Hive that keeps no record (``take``): it caps itself
+# at 50 units of 8 KB, so this is a transport guard, never what is kept
 MAX_BODY_BYTES = 512 * 1024
 INGEST_BUDGET_S = 20.0      # one check's queueing; the rest waits for the next check
 SOURCES = ("S2", "S3", "S7")
@@ -91,9 +93,10 @@ def _created_by(run_id: str, session_id: str) -> bool:
 
 
 def collect(session_id: str, exclude: Optional[set] = None) -> dict[str, Any]:
-    """The lessons the Hive's sources extracted for one dispatched session, oldest first
-    (the same first ``MAX_LESSONS`` on every request), each with its inbox ``id``;
-    ``exclude``: inbox ids to leave out (already sealed into the run's record)."""
+    """Every lesson the Hive's sources extracted for one dispatched session, oldest
+    first, each with its inbox ``id``; ``exclude``: inbox ids to leave out (already
+    sealed into the run's record). ``truncated`` is always False (kept for the record's
+    readers)."""
     from core.hive_bundle import SESSION_RE
     from core.ingestion import standing
     if not SESSION_RE.fullmatch(session_id or ""):
@@ -110,24 +113,17 @@ def collect(session_id: str, exclude: Optional[set] = None) -> dict[str, Any]:
     finally:
         conn.close()
     out: list[dict[str, Any]] = []
-    truncated = False
     skip = exclude or set()
     for row_id, source, payload in rows:
-        if row_id in skip:
-            continue
-        if not isinstance(payload, str) or len(payload.encode("utf-8")) > MAX_UNIT_BYTES:
+        if row_id in skip or not isinstance(payload, str):
             continue
         try:
             unit = json.loads(payload)
         except ValueError:
             continue
-        if not isinstance(unit, dict):
-            continue
-        if len(out) >= MAX_LESSONS:
-            truncated = True
-            break
-        out.append({"id": row_id, "source": source, "unit": unit})
-    return {"lessons": out, "truncated": truncated}
+        if isinstance(unit, dict):
+            out.append({"id": row_id, "source": source, "unit": unit})
+    return {"lessons": out, "truncated": False}
 
 
 # ── host side ──────────────────────────────────────────────────────────────────
@@ -143,10 +139,9 @@ def _digest(unit: dict) -> str:
                                      separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def ingest(dispatch_id: str, brain: str, lessons: list[Any], done: set[str],
-           room: int = MAX_LESSONS) -> dict[str, Any]:
-    """Queue the Hive's lessons in this machine's CDF, settling at most ``room`` new ones
-    (queued or refused: both use the run's budget). Never raises for one unit.
+def ingest(dispatch_id: str, brain: str, lessons: list[Any], done: set[str]) -> dict[str, Any]:
+    """Queue the Hive's lessons in this machine's CDF, as many as INGEST_BUDGET_S allows
+    in this call (the rest waits for the next check). Never raises for one unit.
 
     ``done`` = digests already settled for this run (taken, or refused for good); they
     are not sent again. Returns ``candidates`` (queued or already known to the CDF),
@@ -163,10 +158,9 @@ def ingest(dispatch_id: str, brain: str, lessons: list[Any], done: set[str],
     attempt = None
     deadline = time.monotonic() + INGEST_BUDGET_S
     known = set(done)
-    settled = 0                     # this check's new candidates and refusals: the room they use
-    for item in lessons[:MAX_LESSONS]:
-        if settled >= room or time.monotonic() > deadline:
-            break                   # the run's budget, or this check's time: stop here
+    for item in lessons:
+        if time.monotonic() > deadline:
+            break                   # this check's time: the rest waits for the next one
         unit = item.get("unit") if isinstance(item, dict) else None
         if not isinstance(unit, dict):
             out["unreadable"] += 1
@@ -185,14 +179,11 @@ def ingest(dispatch_id: str, brain: str, lessons: list[Any], done: set[str],
             continue
         raw = {k: v for k, v in unit.items() if k not in ("evidence", "relation_hint")}
         try:
-            # checked before anything is written: an oversized or invalid unit leaves no row
-            if size > MAX_UNIT_BYTES:
-                raise ValueError("too large")
+            # checked before anything is written: an invalid unit leaves no row
             contracts_v2.SOURCE_UNIT.validate_python({**raw, "evidence": ["doc:pending"]})
         except ValueError:          # this machine's contract refuses the unit
             out["refused"].append(d)
             known.add(d)
-            settled += 1
             continue
         try:
             root = api_v2.register_root(
@@ -219,7 +210,6 @@ def ingest(dispatch_id: str, brain: str, lessons: list[Any], done: set[str],
         else:
             continue                # busy, or the store failed: not settled, tried again
         known.add(d)
-        settled += 1
     if attempt is not None:
         queued = len(out["candidates"])
         api_v2.record_extraction_attempt(attempt, status="ok" if queued else "no_unit",
@@ -289,17 +279,16 @@ def pending_state(dispatch_id: str, brain: str, prev: Optional[dict], *,
     Brain takes that is not queued yet (``pending``: a store that could not queue them),
     what it would not take (``skipped``), and what was queued (``candidates``)."""
     old = prev if isinstance(prev, dict) else {}
-    rec = {"candidates": _strs(old.get("candidates"))[:MAX_LESSONS],
-           "taken": _strs(old.get("taken"))[:MAX_LESSONS],
-           "refused": _strs(old.get("refused"))[:MAX_LESSONS],
+    rec = {"candidates": _strs(old.get("candidates")),
+           "taken": _strs(old.get("taken")),
+           "refused": _strs(old.get("refused")),
            "accepted_at": old.get("accepted_at") if isinstance(old.get("accepted_at"), str) else None,
            "truncated": old.get("truncated") is True if truncated is None else truncated,
            "error": error}
     waiting, skipped, seen = _waiting(dispatch_id, brain, set(rec["taken"]) | set(rec["refused"]))
-    room = max(0, MAX_LESSONS - len(rec["candidates"]) - len(rec["refused"]))
-    rec.update(returned=seen, pending=min(len(waiting), room), skipped=skipped,
+    rec.update(returned=seen, pending=len(waiting), skipped=skipped,
                # the waiting units by host-made hashes, no Hive text
-               digests=[_digest(w["unit"]) for w in waiting[:room]])
+               digests=[_digest(w["unit"]) for w in waiting])
     return rec
 
 
@@ -338,18 +327,17 @@ def settle(dispatch_id: str, brain: str, prev: Optional[dict], *,
     queues them."""
     old = prev if isinstance(prev, dict) else {}
     rec = pending_state(dispatch_id, brain, old, error=None, truncated=truncated)
-    room = MAX_LESSONS - len(rec["candidates"]) - len(rec["refused"])
-    if room > 0 and rec["pending"]:
+    if rec["pending"]:
         settled = set(rec["taken"]) | set(rec["refused"])
         waiting, _skipped, _seen = _waiting(dispatch_id, brain, settled)
         try:
-            out = ingest(dispatch_id, brain, waiting, settled, room)
+            out = ingest(dispatch_id, brain, waiting, settled)
         except Exception as exc:  # noqa: BLE001 — the CDF store unavailable: they stay waiting
             logger.error("hive_lessons: queueing %s failed: %s", dispatch_id, type(exc).__name__)
             return pending_state(dispatch_id, brain, rec, error="not_queued")
-        rec["candidates"] = list(dict.fromkeys(rec["candidates"] + out["candidates"]))[:MAX_LESSONS]
-        rec["taken"] = (rec["taken"] + out["taken"])[:MAX_LESSONS]
-        rec["refused"] = (rec["refused"] + out["refused"])[:MAX_LESSONS]
+        rec["candidates"] = list(dict.fromkeys(rec["candidates"] + out["candidates"]))
+        rec["taken"] = rec["taken"] + out["taken"]
+        rec["refused"] = rec["refused"] + out["refused"]
         rec["accepted_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return pending_state(dispatch_id, brain, rec, error=None)
 
@@ -391,7 +379,7 @@ async def take(row: dict, inst: dict, prev: Optional[dict]) -> Optional[dict]:
             "not_supported" if status == 404 else "bad_session" if status == 400 else f"http_{status}"))
     if not isinstance(body, dict) or not isinstance(body.get("lessons"), list):
         return pending_state(did, brain, old, error="unexpected_body")
-    lessons = [{"source": x.get("source"), "unit": x.get("unit")} for x in body["lessons"][:MAX_LESSONS]
+    lessons = [{"source": x.get("source"), "unit": x.get("unit")} for x in body["lessons"]
                if isinstance(x, dict)]
     await asyncio.to_thread(_keep_legacy, did, lessons)
     return await asyncio.to_thread(settle, did, brain, old, truncated=body.get("truncated") is True)
@@ -406,7 +394,7 @@ def states(candidates: list[str]) -> dict[str, int]:
     written (any of its rows written), rejected (every row ended without a write),
     pending (not judged yet, or a row still open)."""
     out = {"written": 0, "rejected": 0, "pending": 0}
-    ids = list(dict.fromkeys(_strs(candidates)))[:MAX_LESSONS]
+    ids = list(dict.fromkeys(_strs(candidates)))
     if not ids:
         return out
     from core.ingestion import standing
