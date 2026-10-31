@@ -5,17 +5,26 @@ day (``summarize_session_day``) and upserts that day's row in DailyActivity. Rec
 success/failure in ``ComplianceTracker``. Design:
 docs/design/2026-10-31-daily-activity-useful.md.
 
+It is also the producer of the ToDos sessions leave (design
+docs/design/2026-10-31-continue-lookback-todo.md D2): the summary is shown every open
+ToDo and answers new / same / done; ``apply_todo_actions`` creates the new ones
+(``ai_detected``, pending) and sends a finished one to review through the guarded
+write (``todo_manager.to_review``), never to handled. A row holds no follow-up list.
+
 Key public symbols:
 
 - ``DailyActivityExtractionHook`` — Implements ``SessionLifecycleHook``.
 - ``summarize_session_day``       — One session-day's summary (also used by
                                     ``scripts/da_resummarize.py``).
 - ``messages_on_day``             — The messages of one local day.
+- ``open_todos_shown``            — The open ToDos a summary is shown.
+- ``apply_todo_actions``          — Apply a summary's ToDo actions.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import subprocess
@@ -416,29 +425,89 @@ def current_row(workspace: Path, session_id: str, day: date) -> "dict | None":
 
 def earlier_row(workspace: Path, session_id: str, day: date, *, days: int = 7,
                 ) -> "dict[str, str] | None":
-    """``{"day", "title", "sentence", "next"}`` of this session's latest row in the *days*
-    before *day*, so the summary of *day* records only what is new and carries forward
-    the follow-ups still open (``next``: their texts)."""
-    from core.daily_activity_writer import read_open_next_items
+    """``{"day", "title", "sentence"}`` of this session's latest row in the *days* before
+    *day*, so the summary of *day* records only what is new. Work it left open is in
+    the ToDos the summary is shown, not here."""
     for back in range(1, days + 1):
         earlier = day - timedelta(days=back)
         row = current_row(workspace, session_id, earlier)
         if row is not None:
-            # only what is still open (another session may have resolved one since), and
-            # only what passes the injection scanner again: the text goes into a prompt
-            still = {i["next_id"] for i in read_open_next_items(workspace, days=days, until=day)
-                     if i.get("session_id") == session_id}
-            try:
-                from core.injection_patterns import scan_text
-            except Exception:  # noqa: BLE001 — without the scanner nothing is carried
-                return {"day": earlier.isoformat(), "title": str(row.get("title") or ""),
-                        "sentence": str(row.get("summary_sentence") or ""), "next": []}
             return {"day": earlier.isoformat(), "title": str(row.get("title") or ""),
-                    "sentence": str(row.get("summary_sentence") or ""),
-                    "next": [str(i.get("text")) for i in row.get("next_items") or []
-                             if isinstance(i, dict) and i.get("text")
-                             and i.get("next_id") in still and not scan_text(str(i["text"]))]}
+                    "sentence": str(row.get("summary_sentence") or "")}
     return None
+
+
+def _scanner():
+    """The injection scanner, or None when it cannot load (then nothing untrusted is
+    shown to or written from the model)."""
+    try:
+        from core.injection_patterns import scan_text
+    except Exception:  # noqa: BLE001 — fail closed: callers drop what they cannot check
+        logger.warning("injection scanner unavailable; ToDos are neither shown nor written")
+        return None
+    return scan_text
+
+
+async def open_todos_shown() -> list[dict[str, str]]:
+    """The open ToDos a summary is shown (``{"id", "title"}``, oldest first): every
+    pending / overdue / in_discussion one, the whole title. A title can come from an
+    email or a chat, so one the injection scanner flags is left out of the prompt."""
+    from core.todo_manager import todo_manager
+    scan = _scanner()
+    if scan is None:
+        return []
+    rows = await todo_manager.list_open()
+    return [{"id": str(r["id"]), "title": " ".join(str(r.get("title") or "").split())}
+            for r in rows if r.get("id") and r.get("title") and not scan(str(r["title"]))]
+
+
+async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, day: date,
+                             session_title: str, files: "list[str] | None" = None) -> dict:
+    """Apply a summary's ToDo actions (already checked by ``_valid_todos`` against the
+    ToDos it was shown): ``new`` → an ``ai_detected`` pending ToDo (the manager's title
+    dedup returns an open one with the same title instead); ``done`` → review through
+    ``todo_manager.to_review`` (only an active ToDo with no review state moves; a
+    person's Confirm sets handled); ``same`` → nothing. Model text that the injection
+    scanner flags is not written; credentials are redacted. One failing action does
+    not stop the others. Returns ``{"created": [ids], "to_review": [ids]}``."""
+    from core.credential_patterns import redact_credentials
+    from core.todo_manager import todo_manager
+    from schemas.todo import ToDoCreate, ToDoSourceType
+    done: dict = {"created": [], "to_review": []}
+    scan = _scanner()
+    if scan is None or not actions:
+        return done
+    where = f"session {session_id}, {day.isoformat()}"
+    for action in actions:
+        try:
+            if action.get("action") == "done":
+                note = (f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] Finished in "
+                        f"{where} ({session_title}), by its activity summary.")
+                if await todo_manager.to_review(action["todo_id"], note, source="daily_activity"):
+                    done["to_review"].append(action["todo_id"])
+            elif action.get("action") == "new":
+                title = redact_credentials(action.get("title") or "")
+                description = redact_credentials(action.get("description") or "")
+                if not title or scan(title) or scan(description):
+                    logger.warning("ToDo from %s not written: injection pattern", where)
+                    continue
+                context = {"type": "session", "session_id": session_id, "day": day.isoformat(),
+                           "detection_reason": "left open by the session (activity summary)",
+                           "files": list(files or [])[:20], "next_step": title}
+                todo = await todo_manager.create(ToDoCreate(
+                    workspace_id="", title=title,
+                    description=f"{description}\n\nFrom {where}: {session_title}".strip(),
+                    # no source: the manager's title dedup then matches an open ToDo of
+                    # any origin (a source narrows it to ToDos with that same source)
+                    source=None, source_type=ToDoSourceType.AI_DETECTED,
+                    linked_context=json.dumps(context, ensure_ascii=False)))
+                done["created"].append(todo.id)
+        except Exception:  # noqa: BLE001 — one action never stops the row or the others
+            logger.warning("ToDo action from %s failed", where, exc_info=True)
+    if done["created"] or done["to_review"]:
+        logger.info("ToDos from %s: %d new, %d to review", where,
+                    len(done["created"]), len(done["to_review"]))
+    return done
 
 
 def _merged(previous: "list | None", new: list) -> list:
@@ -455,7 +524,7 @@ async def summarize_session_day(
     *,
     day: date,
     workspace: Path,
-    open_next_items: list[dict[str, str]],
+    open_todos: list[dict[str, str]],
     open_problems: "list[str] | None" = None,
     previous: "dict | None" = None,
     start: int = 0,
@@ -473,7 +542,7 @@ async def summarize_session_day(
     summary = await pipeline.summarize(
         day_messages[start:end],
         session_id=context.session_id,
-        open_next_items=open_next_items,
+        open_todos=open_todos,
         open_problems=open_problems if open_problems is not None else _open_problem_titles(workspace),
         earlier=earlier_row(workspace, context.session_id, day),
         day=day.isoformat(),
@@ -613,26 +682,22 @@ class DailyActivityExtractionHook:
         A complete row is left alone (no model call). Otherwise the messages it does
         not cover are summarized part by part, the row written after each part, so a
         cut run keeps what it did and the next idle continues from there. A part
-        without a model answer never replaces a row the model wrote.
+        without a model answer never replaces a row the model wrote. After each written
+        part its ToDo actions are applied; the next part is shown the open ToDos again,
+        so what an earlier part created is ``same``, not new.
         """
-        from core.daily_activity_writer import read_open_next_items
-
         row = current_row(workspace, context.session_id, day)
         start = resume_point(row, day_messages)
         if start == len(day_messages):
             logger.debug("DailyActivity of %s unchanged for session %s", day, context.session_id)
             return False
         previous = row if start else None
-        # this session's own follow-ups are not in the list: its new row carries forward
-        # those still open (the earlier day's are shown with it, earlier_row)
-        open_items = [item for item in read_open_next_items(workspace, days=7, until=day)
-                      if item.get("session_id") != context.session_id]
         written = False
         for part in self._pipeline.parts(day_messages[start:]):
             end = start + len(part)
             summary, day_context = await summarize_session_day(
                 self._pipeline, context, day_messages, day=day, workspace=workspace,
-                open_next_items=open_items, previous=previous, start=start, end=end,
+                open_todos=await open_todos_shown(), previous=previous, start=start, end=end,
             )
             if previous is None and self._is_noise_summary(summary):
                 self._record_noise(context)
@@ -646,6 +711,11 @@ class DailyActivityExtractionHook:
                 raise  # Re-raise so hook manager logs it
             logger.info("DailyActivity extracted for session %s → %s", context.session_id, path)
             written = True
+            if summary.enriched:
+                await apply_todo_actions(
+                    summary.todos, session_id=context.session_id, day=day,
+                    session_title=summary.session_title or "",
+                    files=summary.files_modified)
             if not summary.enriched:
                 return written      # model unavailable: the next idle starts again
             previous = current_row(workspace, context.session_id, day)
@@ -683,9 +753,9 @@ class DailyActivityExtractionHook:
 
         Returns False (keep) if ANY substantive content exists.
         """
-        # A model-written record with a sentence or a follow-up is kept
+        # A model-written record with a sentence or a ToDo action is kept
         if getattr(summary, "enriched", False) and (
-                getattr(summary, "summary_sentence", "") or getattr(summary, "next_items", None)):
+                getattr(summary, "summary_sentence", "") or getattr(summary, "todos", None)):
             return False
         # PE-2 fix: access actual StructuredSummary fields safely
         decisions = getattr(summary, "decisions", None) or []

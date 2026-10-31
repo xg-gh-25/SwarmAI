@@ -284,19 +284,25 @@ class TestModelWrittenRecord:
     async def test_the_answer_fills_the_record(self, monkeypatch, pipeline):
         answer = {"title": "解析器修复", "summary_sentence": "修好了解析器的空行崩溃，测试全绿。",
                   "deliverables": ["commit abc: parser skips blank lines"], "key_outputs": ["core/parser.py"],
-                  "validation_status": "unit tests green", "next_items": ["发布 2.4"],
-                  "resolves": ["aaaaaaaaaaaa", "not-offered"], "coe_signal": "bogus", "coe_topic": ""}
+                  "validation_status": "unit tests green",
+                  "todos": [{"action": "new", "title": "给解析器补\n边界测试", "description": "空行之外"},
+                            {"action": "done", "todo_id": "t-open"},
+                            {"action": "done", "todo_id": "not-offered"},
+                            {"action": "same", "todo_id": "t-open"}],
+                  "coe_signal": "bogus", "coe_topic": ""}
         monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm",
                             staticmethod(lambda prompt: answer))
         msgs = [_user("修一下解析器空行崩溃的问题"), _assistant("好的，已修复。")]
         summary = await pipeline.summarize(
-            msgs, session_id="s1", open_next_items=[{"next_id": "aaaaaaaaaaaa", "text": "x"}])
+            msgs, session_id="s1", open_todos=[{"id": "t-open", "title": "修解析器"}])
         assert summary.enriched is True
         assert summary.session_title == "解析器修复"
         assert summary.summary_sentence == "修好了解析器的空行崩溃，测试全绿。"
         assert summary.deliverables == ["commit abc: parser skips blank lines"]
-        assert [i["text"] for i in summary.next_items] == ["发布 2.4"]
-        assert summary.resolves == ["aaaaaaaaaaaa"]   # only ids that were offered
+        # only offered ids, each once; a new title on one line
+        assert summary.todos == [
+            {"action": "new", "title": "给解析器补 边界测试", "description": "空行之外"},
+            {"action": "done", "todo_id": "t-open"}]
         assert summary.coe_signal == ""                # unknown value reset
 
     @pytest.mark.asyncio
@@ -308,7 +314,7 @@ class TestModelWrittenRecord:
         summary = await pipeline.summarize(msgs, session_id="s1")
         assert summary.enriched is False
         assert summary.summary_sentence == ""
-        assert summary.next_items == [] and summary.deliverables == []
+        assert summary.todos == [] and summary.deliverables == []
 
     @pytest.mark.asyncio
     async def test_the_prompt_carries_the_earlier_day_and_asks_for_the_outcome(self, monkeypatch, pipeline):
@@ -322,7 +328,9 @@ class TestModelWrittenRecord:
         prompt = prompts[0]
         assert "Already recorded on 2026-10-30: DB migration: Half the tables moved." in prompt
         assert "## Conversation on 2026-10-31:" in prompt
-        assert "where it ended" in prompt and "at most three" in prompt
+        assert "where it ended" in prompt and "at most 3 in all" in prompt
+        assert "Never a release step" in prompt          # release state is read live (D4)
+        assert "follow-up" not in prompt.lower()
 
     @pytest.mark.asyncio
     async def test_a_long_day_is_summarized_in_parts_each_message_whole(self, monkeypatch, pipeline):
@@ -359,27 +367,57 @@ class TestModelWrittenRecord:
         assert summary.enriched is False and summary.summary_sentence == ""
 
     @pytest.mark.asyncio
-    async def test_a_continued_record_keeps_what_it_resolved_and_answers_are_one_line(
+    async def test_a_continued_record_shows_no_applied_actions_and_answers_are_one_line(
             self, monkeypatch, pipeline):
         answer = {"title": "Parser\nfix", "summary_sentence": "a\nb", "deliverables": ["x\ny"],
-                  "key_outputs": [], "validation_status": "", "next_items": ["n\nm"],
-                  "resolves": ["old000000001"], "coe_signal": "", "coe_topic": ""}
+                  "key_outputs": [], "validation_status": "", "todos": [],
+                  "coe_signal": "", "coe_topic": ""}
         prompts: list[str] = []
         monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm",
                             staticmethod(lambda prompt: prompts.append(prompt) or answer))
-        so_far = {"title": "Parser", "summary_sentence": "s", "resolves": ["old000000001"]}
+        so_far = {"title": "Parser", "summary_sentence": "s",
+                  "todos": [{"action": "new", "title": "APPLIED-EARLIER"}]}
         summary = await pipeline.summarize([_user("more on the parser please")], session_id="s",
-                                           open_next_items=[], so_far=so_far)
-        assert summary.resolves == ["old000000001"]   # no longer open, still resolved
+                                           open_todos=[], so_far=so_far)
         assert summary.session_title == "Parser fix" and summary.deliverables == ["x y"]
-        assert [i["text"] for i in summary.next_items] == ["n m"]
         assert "record so far" in prompts[0]           # one message is enough when continuing
+        assert "APPLIED-EARLIER" not in prompts[0]     # applied actions are not shown again
+        assert summary.todos == []
+
+    @pytest.mark.asyncio
+    async def test_each_part_adds_its_todo_actions(self, monkeypatch, pipeline):
+        """A long day in parts: every part's actions are kept (a later part never has
+        to repeat an earlier one's), and the record shown to a later part has none."""
+        import core.summarization as sm
+        monkeypatch.setattr(sm, "_CHUNK_TOKENS", 20)
+        base = {"title": "t", "summary_sentence": "s", "deliverables": [], "key_outputs": [],
+                "validation_status": "", "coe_signal": "", "coe_topic": ""}
+        replies = iter([{**base, "todos": [{"action": "new", "title": "PART-ONE-WORK"}]},
+                        {**base, "todos": [{"action": "new", "title": "part two work"}]}])
+        prompts: list[str] = []
+        monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm",
+                            staticmethod(lambda prompt: prompts.append(prompt) or next(replies)))
+        summary = await pipeline.summarize([_user("a" * 80), _assistant("b" * 80)])
+        assert len(prompts) == 2 and "PART-ONE-WORK" not in prompts[1].split("## Conversation")[0]
+        assert [t["title"] for t in summary.todos] == ["PART-ONE-WORK", "part two work"]
+
+    def test_at_most_three_new_todos_and_only_offered_ids(self):
+        from core.summarization import TODOS_MAX_NEW
+        actions = [{"action": "new", "title": f"work {i}"} for i in range(5)] + [
+            {"action": "new", "title": "   "}, {"action": "bogus", "todo_id": "a"}, "junk",
+            {"action": "same", "todo_id": "a"}, {"action": "done", "todo_id": "a"},
+            {"action": "done", "todo_id": "b"}]
+        out = SummarizationPipeline._valid_todos(actions, [{"id": "a", "title": "x"}])
+        assert [a["title"] for a in out if a["action"] == "new"] == [
+            f"work {i}" for i in range(TODOS_MAX_NEW)]
+        assert [a for a in out if a["action"] != "new"] == [{"action": "same", "todo_id": "a"}]
+        assert SummarizationPipeline._valid_todos("not a list", []) == []
 
     def test_the_schema_asks_only_for_fields_with_a_reader(self):
         from core.summarization import _ENRICHMENT_SCHEMA
         assert set(_ENRICHMENT_SCHEMA["properties"]) == {
             "title", "summary_sentence", "deliverables", "key_outputs", "validation_status",
-            "next_items", "resolves", "coe_signal", "coe_topic"}
+            "todos", "coe_signal", "coe_topic"}
         assert set(_ENRICHMENT_SCHEMA["required"]) == set(_ENRICHMENT_SCHEMA["properties"])
 
     def test_the_timestamp_is_the_last_message(self, pipeline):

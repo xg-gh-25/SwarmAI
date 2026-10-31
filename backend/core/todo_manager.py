@@ -225,6 +225,14 @@ class ToDoManager:
 
         return checked_results
 
+    async def list_open(self) -> "list[dict]":
+        """Every open ToDo (pending / overdue / in_discussion), oldest first: the work
+        still to do, as one list (design 2026-10-31-continue-lookback-todo D2)."""
+        rows: list[dict] = []
+        for status in ACTIVE_STATUSES:
+            rows.extend(await db.todos.list_by_status(status))
+        return sorted(rows, key=lambda r: str(r.get("created_at") or ""))
+
     async def to_review(self, todo_id: str, note: str, *, source: str) -> bool:
         """Put an active ToDo with no review state into review (``review_state=
         'completed'``, status unchanged; only a person's Confirm sets ``handled``),
@@ -512,16 +520,16 @@ class ToDoManager:
     async def _find_duplicate(
         self, workspace_id: str, title: str, source: Optional[str]
     ) -> Optional[dict]:
-        """Check if a pending/in_discussion todo with same title+source exists.
+        """Check if an active (pending / overdue / in_discussion) todo with the same
+        title+source exists.
 
-        Returns the existing todo dict if found, None otherwise.
-        Only matches active statuses (pending, in_discussion) — handled/cancelled
-        todos do NOT block re-creation.
+        Returns the existing todo dict if found, None otherwise. Handled / cancelled
+        todos do NOT block re-creation; an overdue one is still open work, so it does.
 
         When source is None, matches on title-only (any source).
         When source is provided, requires exact title+source match.
         """
-        active_statuses = (ToDoStatus.PENDING.value, ToDoStatus.IN_DISCUSSION.value)
+        active_statuses = ACTIVE_STATUSES
         all_todos = await db.todos.list_by_workspace(workspace_id)
         for todo in all_todos:
             if todo.get("status") not in active_statuses:

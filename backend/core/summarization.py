@@ -49,12 +49,25 @@ _ENRICHMENT_SCHEMA = {
         "title": {"type": "string"},
         "summary_sentence": {"type": "string"},
         "deliverables": _STR_LIST, "key_outputs": _STR_LIST,
-        "validation_status": {"type": "string"}, "next_items": _STR_LIST, "resolves": _STR_LIST,
+        "validation_status": {"type": "string"},
+        "todos": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["new", "same", "done"]},
+                "todo_id": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+            },
+            "required": ["action"],
+        }},
         "coe_signal": {"type": "string"}, "coe_topic": {"type": "string"},
     },
     "required": ["title", "summary_sentence", "deliverables", "key_outputs",
-                 "validation_status", "next_items", "resolves", "coe_signal", "coe_topic"],
+                 "validation_status", "todos", "coe_signal", "coe_topic"],
 }
+
+#: New ToDos one session-day may propose (design 2026-10-31-continue-lookback-todo D2).
+TODOS_MAX_NEW = 3
 
 # Centralized patterns — shared with distillation_hook.py to prevent drift.
 # Summarization uses the BROAD variant (runs on raw conversation).
@@ -84,10 +97,12 @@ class StructuredSummary:
     ``files_modified`` (write tool calls), ``open_questions`` and a derived
     ``session_title``. Written by the model (``enriched`` says it answered):
     ``session_title``, ``summary_sentence``, ``deliverables``, ``key_outputs``,
-    ``validation_status``, ``next_items`` (``[{"next_id", "text"}]`` once the session id
-    is known), ``resolves`` (ids from the open list), ``coe_signal``
-    ("" | "candidate" | "resolution") and ``coe_topic``. ``git_commits`` is the
-    session's commits that day, set by the hook.
+    ``validation_status``, ``todos`` (what the session leaves for later, as ToDo
+    actions: ``{"action": "new", "title", "description"}``, ``{"action": "same" |
+    "done", "todo_id"}`` naming an open ToDo it was shown; the hook applies them, design
+    2026-10-31-continue-lookback-todo D2), ``coe_signal`` ("" | "candidate" |
+    "resolution") and ``coe_topic``. ``git_commits`` is the session's commits that day,
+    set by the hook. A row holds no follow-up list: work left for later is a ToDo.
     """
 
     topics: list[str] = field(default_factory=list)
@@ -103,8 +118,7 @@ class StructuredSummary:
     session_title: str = ""
     timestamp: str = ""  # HH:MM of the last message summarized
     summary_sentence: str = ""
-    next_items: list[dict[str, str]] = field(default_factory=list)
-    resolves: list[str] = field(default_factory=list)
+    todos: list[dict[str, str]] = field(default_factory=list)
     enriched: bool = False
 
 
@@ -156,8 +170,8 @@ result, not the conversation.
 
 ## Files written by tool calls: {files}
 
-## Open follow-ups from the previous 7 days
-{open_next_items}
+## Open ToDos (the only list of work still to do)
+{open_todos}
 
 Record it with the summary tool, in the language the session is held in. Never truncate
 a sentence or add an ellipsis. Use an empty string or array when there is nothing.
@@ -174,13 +188,16 @@ a sentence or add an ellipsis. Use an empty string or array when there is nothin
   question. Not plans and not the user's requests.
 - key_outputs: where the results are: file paths, commits, documents, recipients.
 - validation_status: what was verified and how; what is still unverified.
-- next_items: at most three: the work the next session most needs, agreed or clearly
-  left open and not done in this transcript, one per workstream, each a complete action
-  someone can pick up without the conversation. Not one already on the open list below
-  (resolve or leave it). Release steps (push, build, restart, deploy) only when the user
-  left one pending. Empty when the work is finished. Do not assign ids.
-- resolves: ids from the open list whose completion is explicit in this transcript.
-  Not by similarity, and not plans.
+- todos: work this session leaves for later, and the open ToDos it finished:
+  - {{"action": "new", "title", "description"}}: at most {todos_max} in all, work agreed or
+    clearly left open and not done in this transcript, one per workstream. The title is
+    a complete action; the description says what, why, and where it stopped, so someone
+    can pick it up without the conversation. Never a release step (push, build,
+    restart, deploy): that state is read live, not recorded.
+  - {{"action": "same", "todo_id"}}: the work is already an open ToDo below (write no new one).
+  - {{"action": "done", "todo_id"}}: this transcript finished that open ToDo, explicitly;
+    not by similarity, not a plan. A person confirms it.
+  Empty when nothing is left and nothing listed was finished.
 - coe_signal: "candidate" when the session reports a production problem that is still
   being investigated, "resolution" when it fixes one, otherwise "".
 - coe_topic: that problem, or "". If it is one of these open problems, copy its title
@@ -191,7 +208,8 @@ _SO_FAR_BLOCK = """
 ## The record so far for this day (from the earlier part of the conversation)
 {record}
 The conversation below continues the same day. Answer with the record for the whole
-day: keep what still holds, add what is new, and leave out follow-ups that got done.
+day: keep what still holds and add what is new. The ToDo actions of the earlier part
+are already taken: list in todos only the actions the conversation below adds.
 Write summary_sentence again for the whole day, within its limit: do not append to the
 earlier one.
 """
@@ -202,16 +220,14 @@ earlier one.
 _CHUNK_TOKENS = 100_000
 
 def record_of(row: dict[str, Any]) -> dict[str, Any]:
-    """The record so far, from a sidecar row: the answer's fields, follow-ups as text."""
+    """The record so far, from a sidecar row: the answer's fields. Its ToDo actions were
+    applied when it was written, so they are not part of it."""
     return {
         "title": str(row.get("title") or ""),
         "summary_sentence": str(row.get("summary_sentence") or ""),
         "deliverables": list(row.get("deliverables") or []),
         "key_outputs": list(row.get("key_outputs") or []),
         "validation_status": str(row.get("validation_status") or ""),
-        "next_items": [str(i.get("text")) for i in row.get("next_items") or []
-                       if isinstance(i, dict) and i.get("text")],
-        "resolves": list(row.get("resolves") or []),
         "coe_signal": str(row.get("coe_signal") or ""),
         "coe_topic": str(row.get("coe_topic") or ""),
     }
@@ -220,9 +236,7 @@ def record_of(row: dict[str, Any]) -> dict[str, Any]:
 _EARLIER_BLOCK = """
 ## Earlier in this session
 Already recorded on {day}: {title}: {sentence}
-Its follow-ups then: {next}
-Record only what happened on the day of the conversation below. Those follow-ups that are
-still open belong in next_items (as one of the three); leave out those done since.
+Record only what happened on the day of the conversation below.
 """
 
 
@@ -265,7 +279,7 @@ class SummarizationPipeline:
         messages: list[dict],
         *,
         session_id: str = "",
-        open_next_items: list[dict[str, str]] | None = None,
+        open_todos: list[dict[str, str]] | None = None,
         open_problems: list[str] | None = None,
         earlier: dict[str, str] | None = None,
         day: str = "",
@@ -277,8 +291,8 @@ class SummarizationPipeline:
         ``so_far``: the record already written for the earlier messages of this day
         (``record_of``); *messages* then continue it and the answer is the record for
         the whole day so far.
-        ``open_next_items``: open follow-ups of the previous 7 days; the model may
-        resolve only these ids. ``open_problems``: titles of the open COEs
+        ``open_todos``: the open ToDos (``{"id", "title"}``); a ``same`` / ``done``
+        action may name only these. ``open_problems``: titles of the open COEs
         (core.coe_threads), copied when the session reports the same problem.
         ``earlier``: ``{"day", "title", "sentence"}`` of this session's last row on an
         earlier day, so the model records only what is new. ``enrich=False`` keeps
@@ -296,7 +310,7 @@ class SummarizationPipeline:
         if enrich and (so_far or len(messages) > LLM_ENRICHMENT_THRESHOLD):
             try:
                 summary = await self._enrich_with_llm(
-                    summary, messages, open_next_items=open_next_items or [],
+                    summary, messages, open_todos=open_todos or [],
                     open_problems=open_problems or [], earlier=earlier, day=day,
                     so_far=so_far,
                 )
@@ -304,13 +318,34 @@ class SummarizationPipeline:
                 logger.warning("Activity summary model call failed: %s", exc)
 
         summary.summary_sentence = self._one_line(summary.summary_sentence)
-        self._assign_next_ids(summary, session_id)
-        # the record so far keeps the ids it resolved: they are no longer open
-        allowed_resolutions = {
-            item.get("next_id", "") for item in (open_next_items or [])
-        } | set((so_far or {}).get("resolves") or [])
-        summary.resolves = [item for item in summary.resolves if item in allowed_resolutions]
+        summary.todos = self._valid_todos(summary.todos, open_todos or [])
         return summary
+
+    @classmethod
+    def _valid_todos(cls, actions: list, open_todos: list[dict[str, str]]) -> list[dict[str, str]]:
+        """The model's ToDo actions that can be applied: ``same`` / ``done`` naming an
+        open ToDo it was shown, ``new`` with a title (at most TODOS_MAX_NEW); each id
+        once. Anything else is dropped."""
+        offered = {str(t.get("id")) for t in open_todos if t.get("id")}
+        out: list[dict[str, str]] = []
+        seen: set[str] = set()
+        new = 0
+        for a in actions if isinstance(actions, list) else []:
+            if not isinstance(a, dict):
+                continue
+            action = a.get("action")
+            if action in ("same", "done"):
+                tid = str(a.get("todo_id") or "")
+                if tid in offered and tid not in seen:
+                    seen.add(tid)
+                    out.append({"action": action, "todo_id": tid})
+            elif action == "new" and new < TODOS_MAX_NEW:
+                title = cls._one_line(str(a.get("title") or ""))
+                if title:
+                    new += 1
+                    out.append({"action": "new", "title": title[:500],
+                                "description": str(a.get("description") or "").strip()[:10000]})
+        return out
 
     @staticmethod
     def _last_time(messages: list[dict]) -> str:
@@ -586,30 +621,12 @@ class SummarizationPipeline:
         """*text* on one line, whitespace collapsed; nothing cut."""
         return " ".join((text or "").split())
 
-    @staticmethod
-    def _assign_next_ids(summary: StructuredSummary, session_id: str) -> None:
-        """Assign stable short ids from session identity, ordinal, and full text."""
-        import hashlib
-
-        assigned: list[dict[str, str]] = []
-        for ordinal, item in enumerate(summary.next_items, 1):
-            text = item.get("text", "") if isinstance(item, dict) else str(item)
-            text = text.strip()
-            if not text:
-                continue
-            material = f"{session_id}\0{ordinal}\0{text}".encode("utf-8")
-            assigned.append({
-                "next_id": hashlib.sha256(material).hexdigest()[:12],
-                "text": text,
-            })
-        summary.next_items = assigned
-
     async def _enrich_with_llm(
         self,
         summary: StructuredSummary,
         messages: list[dict],
         *,
-        open_next_items: list[dict[str, str]] | None = None,
+        open_todos: list[dict[str, str]] | None = None,
         open_problems: list[str] | None = None,
         earlier: dict[str, str] | None = None,
         day: str = "",
@@ -626,7 +643,6 @@ class SummarizationPipeline:
             earlier_text = _EARLIER_BLOCK.format(
                 day=earlier.get("day", ""), title=earlier.get("title", ""),
                 sentence=earlier.get("sentence", ""),
-                next="; ".join(earlier.get("next") or []) or "(none)",
             )
         # Dedicated 'llm' pool (run_c8ad52f8), not the default ThreadPoolExecutor:
         # this runs in the post-session hook window — if the user sends a message
@@ -634,6 +650,10 @@ class SummarizationPipeline:
         # sampler. The dedicated pool insulates it.
         from core import executors
         answer: dict = dict(so_far or {})
+        answer.pop("todos", None)
+        # each part lists only the ToDo actions it adds; they are collected here, so a
+        # later part never has to repeat (or can drop) an earlier part's actions
+        todo_actions: list = []
         for index, conversation in enumerate(chunks, 1):
             prompt = _ENRICHMENT_PROMPT.format(
                 earlier=earlier_text,
@@ -643,13 +663,16 @@ class SummarizationPipeline:
                 part=f" (part {index} of {len(chunks)})" if len(chunks) > 1 else "",
                 conversation=conversation,
                 files="; ".join(summary.files_modified) or "(none)",
-                open_next_items=json.dumps(open_next_items or [], ensure_ascii=False),
+                open_todos=json.dumps(open_todos or [], ensure_ascii=False),
+                todos_max=TODOS_MAX_NEW,
                 open_problems="; ".join(f'"{x}"' for x in (open_problems or [])) or "(none)",
                 sentence_cjk=SENTENCE_LIMIT_CJK, sentence_words=SENTENCE_LIMIT_WORDS,
             )
             answer = await executors.run_in("llm", self._call_enrichment_llm, prompt)
             if not answer:
                 return summary  # the call failed; _call_enrichment_llm logged why
+            part_todos = answer.pop("todos", None)
+            todo_actions.extend(part_todos if isinstance(part_todos, list) else [])
         enriched = self._normalize_enrichment(answer)
 
         if enriched["title"]:
@@ -670,8 +693,7 @@ class SummarizationPipeline:
         summary.deliverables = enriched["deliverables"]
         summary.key_outputs = enriched["key_outputs"]
         summary.validation_status = enriched["validation_status"]
-        summary.next_items = [{"text": item} for item in enriched["next_items"]]
-        summary.resolves = enriched["resolves"]
+        summary.todos = todo_actions
         summary.coe_signal = enriched["coe_signal"]
         summary.coe_topic = enriched["coe_topic"]
         summary.enriched = True
@@ -799,10 +821,10 @@ class SummarizationPipeline:
     @staticmethod
     def _normalize_enrichment(data: dict) -> dict[str, Any]:
         """The answer's fields, normalized: every string on one line (a line break in a
-        title or follow-up would add a line of its own to the day file and the prompt),
+        title would add a line of its own to the day file and the prompt),
         non-string and empty entries dropped, an unknown coe_signal reset to ""."""
         result: dict[str, Any] = {}
-        for key in ("deliverables", "key_outputs", "next_items", "resolves"):
+        for key in ("deliverables", "key_outputs"):
             entries = data.get(key, [])
             entries = entries if isinstance(entries, list) else []
             result[key] = [SummarizationPipeline._one_line(e) for e in entries

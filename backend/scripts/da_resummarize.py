@@ -19,8 +19,9 @@ Per day file:
   lock, after every model call of that day is done.
 
 Days are rebuilt in order and, within a day, sessions in the order they started, in
-batches of ``--jobs``: each batch sees the follow-ups the earlier ones opened or
-resolved, as the hook did at the time. Only sessions that already have a row or block
+batches of ``--jobs``. A rebuilt row is history: it is shown no ToDos and its ToDo
+actions are not applied (work left open lives in the ToDos, design
+2026-10-31-continue-lookback-todo D2). Only sessions that already have a row or block
 somewhere are rebuilt. A row that is already complete (written by the model, same
 message count) is not asked again, so a second run redoes only what failed.
 
@@ -324,25 +325,8 @@ def backup(da_dir: Path, root: Path) -> Path:
 
 # ── rebuilding ────────────────────────────────────────────────────────────────
 
-def _open_after(base: list[dict], records: list[dict]) -> list[dict]:
-    """*base* open follow-ups plus those *records* opened, minus those they resolved."""
-    resolved = {i for r in records for i in r.get("resolves") or []}
-    items = list(base) + [{**i, "session_id": str(r.get("session_id"))}
-                          for r in records for i in r.get("next_items") or []
-                          if isinstance(i, dict)]
-    seen: set[str] = set()
-    out = []
-    for item in items:
-        nid = item.get("next_id")
-        if nid in resolved or nid in seen:
-            continue
-        seen.add(nid)
-        out.append(item)
-    return out
-
-
 async def _rebuild_one(pipeline, conn, info, ws: Path, day: date, sid: str,
-                       open_items: list[dict], problems: list[str]):
+                       problems: list[str]):
     """The new summary of *sid* on *day*, part by part in memory, or None when the
     model did not write all of it (the old row stays)."""
     from core.daily_activity_writer import _summary_to_jsonl_record
@@ -358,7 +342,7 @@ async def _rebuild_one(pipeline, conn, info, ws: Path, day: date, sid: str,
         end = start + len(part)
         for _attempt in range(2):     # one retry of a failed model call
             summary, day_ctx = await summarize_session_day(
-                pipeline, ctx, msgs, day=day, workspace=ws, open_next_items=open_items,
+                pipeline, ctx, msgs, day=day, workspace=ws, open_todos=[],
                 open_problems=problems, previous=previous, start=start, end=end)
             if summary.enriched:
                 break
@@ -374,15 +358,13 @@ async def rebuild_day(plan: DayPlan, conn, info, ws: Path, scope: Scope, jobs: i
     """Summarize the plan's sessions (in start order, in batches), then write the day
     once. Returns counts."""
     from core.daily_activity_writer import (
-        _atomic_write, _day_lock, open_next_items_in, parse_frontmatter, render_session,
-        write_frontmatter,
+        _atomic_write, _day_lock, parse_frontmatter, render_session, write_frontmatter,
     )
     from core.summarization import SummarizationPipeline
     from hooks.daily_activity_hook import _open_problem_titles
 
     day = date.fromisoformat(plan.day)
     da_dir = ws / "Knowledge" / "DailyActivity"
-    base_open = open_next_items_in(da_dir, days=7, until=day - timedelta(days=1))
     problems = _open_problem_titles(ws)
     pipeline = SummarizationPipeline()
     started = {sid: (day_messages(conn, sid, plan.day) or [{}])[0].get("created_at", "")
@@ -392,10 +374,8 @@ async def rebuild_day(plan: DayPlan, conn, info, ws: Path, scope: Scope, jobs: i
     errors = 0
     for k in range(0, len(order), max(jobs, 1)):
         batch = order[k:k + max(jobs, 1)]
-        open_items = _open_after(base_open, [new[sid][2] for sid in order[:k] if sid in new])
         results = await asyncio.gather(
-            *(_rebuild_one(pipeline, conn, info, ws, day, sid,
-                           [i for i in open_items if i.get("session_id") != sid], problems)
+            *(_rebuild_one(pipeline, conn, info, ws, day, sid, problems)
               for sid in batch), return_exceptions=True)
         for sid, result in zip(batch, results):
             if isinstance(result, BaseException):
@@ -497,7 +477,7 @@ async def repair(args) -> int:
 
 _SUMMARY_FIELDS = ("topics", "decisions", "files_modified", "open_questions", "deliverables",
                    "key_outputs", "validation_status", "coe_signal", "coe_topic",
-                   "summary_sentence", "next_items", "resolves")
+                   "summary_sentence")
 
 
 def summary_of(row: dict):

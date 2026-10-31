@@ -143,7 +143,7 @@ def test_the_summariser_is_asked_to_reuse_an_open_problem_title(monkeypatch):
     msgs = [{"role": "user", "content": "the streaming froze again"},
             {"role": "assistant", "content": "found the stall"}]
     asyncio.run(pipe._enrich_with_llm(summary, msgs,
-                                      open_next_items=[], open_problems=["streaming freeze + overall slowness"]))
+                                      open_todos=[], open_problems=["streaming freeze + overall slowness"]))
     assert '"streaming freeze + overall slowness"' in seen["prompt"]
     assert "copy its title" in seen["prompt"] and "exactly" in seen["prompt"]
 
@@ -153,7 +153,7 @@ def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
     import core.summarization as sm
     seen = {}
 
-    async def _enrich(self, summary, messages, *, open_next_items=None, open_problems=None,
+    async def _enrich(self, summary, messages, *, open_todos=None, open_problems=None,
                       **_kwargs):
         seen["open_problems"] = open_problems
         return summary

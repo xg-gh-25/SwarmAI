@@ -3,10 +3,11 @@
 Two files per local day:
 
 1. **Markdown** (``YYYY-MM-DD.md``) — the human-readable record, indexed for recall:
-   one block per session (title, summary, Delivered, Outputs, Validation, Next).
+   one block per session (title, summary, Delivered, Outputs, Validation). Work left
+   for later is a ToDo, not a line here (design 2026-10-31-continue-lookback-todo).
 2. **JSONL sidecar** (``YYYY-MM-DD.jsonl``) — one JSON line per session with the
-   structured fields; read by the prompt injection, the open-follow-up list, the COE
-   threads and the session statistics.
+   structured fields; read by the prompt injection, the COE threads and the session
+   statistics.
 
 Identity rule (run_1ec5ea9d): a session has ONE block per kind in a day file. Every
 producer writes through ``upsert_session_block``, which removes that session's old
@@ -165,8 +166,6 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
     lines.append(f"## {ts} | {session_id} | {title}")
     if summary.summary_sentence:
         lines.append(f"Summary: {summary.summary_sentence}")
-    if summary.resolves:
-        lines.append("resolves: [" + ", ".join(summary.resolves) + "]")
     lines.extend(["", "**Delivered:**"])
     lines.extend(f"- {item}" for item in summary.deliverables)
     if not summary.deliverables:
@@ -182,12 +181,6 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
 
     lines.extend(["", "**Validation:**"])
     lines.append(f"- {summary.validation_status}" if summary.validation_status else "- Not recorded")
-
-    lines.extend(["", "**Next:**"])
-    for item in summary.next_items:
-        lines.append(f"- [{item['next_id']}] {item['text']}")
-    if not summary.next_items:
-        lines.append("- None")
     lines.append("")
     return "\n".join(lines)
 
@@ -379,8 +372,6 @@ def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -
         "enriched": summary.enriched,
         "title": _shown_title(summary, context),
         "summary_sentence": summary.summary_sentence,
-        "next_items": summary.next_items,
-        "resolves": summary.resolves,
         "topics": summary.topics,
         "decisions": summary.decisions,
         "files_modified": summary.files_modified,
@@ -500,12 +491,6 @@ def _sanitize_summary_injection(summary: StructuredSummary) -> None:
                     len(val) - len(kept), fname,
                 )
                 setattr(summary, fname, kept)
-    kept_next = [item for item in summary.next_items
-                 if not (isinstance(item, dict) and scan_text(str(item.get("text", ""))))]
-    if len(kept_next) != len(summary.next_items):
-        logger.warning("Dropped %d injected Next item(s) from DailyActivity",
-                       len(summary.next_items) - len(kept_next))
-        summary.next_items = kept_next
 
 
 def read_open_next_items(workspace_path: Path, *, days: int = 7,

@@ -57,7 +57,7 @@ Summary: 你看看这个问题；还有那个
 
 ANSWER = {"title": "Parser fix", "summary_sentence": "Fixed the parser crash.",
           "deliverables": ["parser skips blank lines"], "key_outputs": [], "validation_status": "",
-          "next_items": ["Release 2.4"], "resolves": [], "coe_signal": "", "coe_topic": ""}
+          "todos": [], "coe_signal": "", "coe_topic": ""}
 
 
 def _db(path):
@@ -207,7 +207,7 @@ def test_a_row_whose_real_day_is_outside_the_run_is_kept(ws):
     assert "sess-b" in {r["session_id"] for r in R._rows(da / "2026-10-20.jsonl")}
 
 
-def test_a_later_session_sees_the_followups_an_earlier_one_opened_that_day(ws):
+def test_a_rebuilt_row_is_history_shown_no_todos_and_writing_none(ws):
     import sqlite3 as _sq
     conn = _sq.connect(ws / "data.db")
     conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?)", [
@@ -224,10 +224,16 @@ def test_a_later_session_sees_the_followups_an_earlier_one_opened_that_day(ws):
     def llm(prompt):
         prompts.append(prompt)
         mark = "FROM-A" if "please fix the parser" in prompt else "FROM-OTHER"
-        return dict(ANSWER, next_items=[f"follow-up {mark}"])
-    _run_with(ws, llm, jobs=1)
+        return dict(ANSWER, todos=[{"action": "new", "title": f"work {mark}"}])
+    with patch("core.todo_manager.todo_manager.create",
+               side_effect=AssertionError("history writes no ToDo")):
+        _run_with(ws, llm, jobs=1)
     later = next(p for p in prompts if "release it" in p)
-    assert "follow-up FROM-A" in later                       # sess-a's follow-up, same day
+    assert "work FROM-A" not in later
+    assert later.split("## Open ToDos")[1].split("\n")[1] == "[]"
+    da = ws / "SwarmWS" / "Knowledge" / "DailyActivity"
+    rows = [json.loads(l) for l in (da / "2026-10-20.jsonl").read_text().splitlines() if l.strip()]
+    assert all("next_items" not in r for r in rows if r.get("enriched"))
 
 
 def test_restore_archives_puts_back_deleted_days_only(tmp_path):

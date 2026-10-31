@@ -20,7 +20,7 @@ from core.summarization import StructuredSummary, SummarizationPipeline
 FULL = {
     "title": "召回截断修复",
     "summary_sentence": "本次修复了召回截断，并验证了结果。",
-    "next_items": [], "resolves": [],
+    "todos": [],
     "deliverables": ["修复召回截断", "Fixed Y"],
     "key_outputs": ["code: a.py → b"],
     "validation_status": "tests green",
