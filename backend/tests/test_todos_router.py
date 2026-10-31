@@ -463,6 +463,18 @@ class TestFlowClosureEndpoints:
         ok = client.put(f"/api/todos/{todo['id']}", json={"title": f"Rotate {key}"})
         assert ok.status_code == 200 and key not in ok.json()["title"]
 
+    def test_suggest_done_is_a_review_only_a_person_closes(self, client: TestClient, workspace_id: str):
+        """An automated writer says a ToDo is done: it goes to review as a suggestion,
+        marked so the 7-day auto-confirm skips it; the status stays open."""
+        import json as _json
+        todo = _create_todo(client, workspace_id, title="Ship the guide")
+        resp = client.post(f"/api/todos/{todo['id']}/suggest-done", json={"note": "commit abc shows it"})
+        assert resp.status_code == 200 and resp.json()["moved"] is True
+        after = client.get(f"/api/todos/{todo['id']}").json()
+        assert after["status"] == "pending" and after["review_state"] == "completed"
+        assert _json.loads(after["linked_context"])["review_suggested_by"] == "api"
+        assert client.post("/api/todos/nope/suggest-done", json={"note": "x"}).status_code == 404
+
     def test_review_invalid_action(self, client: TestClient, workspace_id: str):
         todo = _create_todo(client, workspace_id, title="bad action")
         resp = client.post(f"/api/todos/{todo['id']}/review", json={"action": "nope"})

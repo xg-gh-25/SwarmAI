@@ -40,6 +40,11 @@ class FakeApi:
         self.todos.append(todo)
         return todo
 
+    def suggest_done(self, todo_id, note):
+        todo = next(t for t in self.todos if t["id"] == todo_id)
+        todo["review_state"], todo["note"] = "completed", note
+        return {"moved": True}
+
 
 def _row(sid, title, sentence, *, next_items=(), resolves=(), ts="10:00", **extra):
     return {"session_id": sid, "timestamp": ts, "session_start": "", "message_count": 4,
@@ -132,7 +137,11 @@ def test_every_item_gets_one_decision_and_open_ones_become_todos(ws):
     rec = {r["key"]: r for r in M._rows(ws / "record.jsonl")}
     assert out["da"] == 4 and out["gap"] == 1 and out["event"] == 1
     assert rec["da:open00000002"]["decision"] == "release"
-    assert rec["da:open00000003"]["decision"] == "done"
+    # a done is never closed on the model's word: it is a ToDo the person confirms
+    done = rec["da:open00000003"]
+    assert done["decision"] == "done" and done["review"] == "suggested"
+    made = next(t for t in api.todos if t["id"] == done["created_todo_id"])
+    assert made["review_state"] == "completed" and "Fixed the tab parser crash" in made["note"]
     assert rec["da:same00000001"] == {**rec["da:same00000001"], "decision": "same", "todo_id": "t-board"}
     # an uncited done stays open and becomes a ToDo, with its source
     assert rec["da:open00000001"]["decision"] == "open" and "r999" in rec["da:open00000001"]["note"]
@@ -149,7 +158,7 @@ def test_every_item_gets_one_decision_and_open_ones_become_todos(ws):
     (gap,) = withdrawn
     assert "cand:cand-" + "a" * 24 in gap[0] and gap[2] == "done"
     assert rec[f"gap:{gap[0]}"]["created_todo_id"] in gap[1]
-    assert len(api.todos) == 4
+    assert len(api.todos) == 5
 
 
 def test_a_second_run_changes_nothing(ws):
@@ -261,3 +270,36 @@ def test_an_interrupted_create_is_reused_not_made_again(ws):
     rec = {r["key"]: r for r in M._rows(ws / "record.jsonl")}
     assert rec["da:open00000001"]["created_todo_id"] == "made-before"
     assert not any(t["title"] == "Write the parser tests" for t in api.todos)
+
+
+
+def test_a_release_without_a_release_step_in_its_text_is_open():
+    item = M.Item(key="da:x", source="da", text="开始第 4 步：向导和更换账号。", day="2026-10-31")
+    got = M.checked({"decision": "release"}, item, [], [], [])
+    assert got["decision"] == "open" and "names no release step" in got["note"]
+    push = M.Item(key="da:y", source="da", text="git push origin main", day="2026-10-31")
+    assert M.checked({"decision": "release"}, push, [], [], [])["decision"] == "release"
+
+
+def test_review_closed_gives_back_what_a_model_closed_once(tmp_path):
+    record = tmp_path / "record.jsonl"
+    rows = [{"key": "da:a", "source": "da", "day": "2026-10-30", "text": "Write the guide", "decision": "done",
+             "cite": "abc1234"},
+            {"key": "da:b", "source": "da", "day": "2026-10-30", "text": "开始第 4 步", "decision": "release"},
+            {"key": "da:c", "source": "da", "day": "2026-10-30", "text": "git push origin main",
+             "decision": "release"},
+            {"key": "da:d", "source": "da", "day": "2026-10-30", "text": "x", "decision": "expired"}]
+    record.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    api = FakeApi()
+    assert M.review_closed(record, api, apply=False) == {"done_to_review": 1, "release_to_open": 1}
+    assert api.todos == []                                   # a dry run writes nothing
+    M.review_closed(record, api, apply=True)
+    rec = {r["key"]: r for r in M._rows(record)}
+    assert rec["da:a"]["review"] == "suggested" and rec["da:b"]["created_todo_id"]
+    assert "created_todo_id" not in rec["da:c"] and "created_todo_id" not in rec["da:d"]
+    by_id = {t["id"]: t for t in api.todos}
+    assert by_id[rec["da:a"]["created_todo_id"]]["review_state"] == "completed"
+    assert "review_state" not in by_id[rec["da:b"]["created_todo_id"]]
+    lines = record.read_text()
+    assert M.review_closed(record, api, apply=True) == {"done_to_review": 0, "release_to_open": 0}
+    assert record.read_text() == lines and len(api.todos) == 2

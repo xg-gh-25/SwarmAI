@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from schemas.todo import (
     ToDoCreate,
@@ -158,6 +158,23 @@ async def update_todo(todo_id: str, data: ToDoUpdate):
     if not todo:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
     return todo
+
+
+class SuggestDoneRequest(BaseModel):
+    note: str = Field(..., min_length=1, max_length=2000)
+
+
+@router.post("/{todo_id}/suggest-done")
+async def suggest_done(todo_id: str, request: SuggestDoneRequest):
+    """Something other than a person (a model, a migration) says this ToDo is done.
+
+    It goes to review as a suggestion (todo_manager.to_review, suggested=True): it is
+    never auto-confirmed, and only a person's Confirm closes it (a Reject puts the work
+    back in To Do). An automated writer never closes a person's ToDo itself."""
+    if not await todo_manager.get(todo_id):
+        raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
+    moved = await todo_manager.to_review(todo_id, request.note, source="api", suggested=True)
+    return {"todo_id": todo_id, "moved": moved}
 
 
 @router.delete("/{todo_id}")

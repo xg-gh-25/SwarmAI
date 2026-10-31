@@ -3,7 +3,7 @@ title: DailyActivity, Timeline and ToDo — one job each
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: design r2 (premise review folded in)
+status: design r3 (premise review folded in; r3: a model never closes the person's work)
 follows: 2026-10-31-extraction-at-task-end.md, 2026-10-31-daily-activity-useful.md
 ---
 # DailyActivity, Timeline and ToDo — one job each
@@ -104,10 +104,24 @@ machine.
   are recorded as "expired, not migrated" with their ids, not turned into ToDos.
 - **Per item, one model call** with evidence it can cite: the later rows of all
   sessions (row id + text) and the commit subjects of the repos the item's session
-  worked in. Answers: done (must cite a row id or a commit sha that exists), release
-  step, same as an open ToDo (its id), still open. No answer, a failure or an
-  uncited "done" → still open. Still open → an `ai_detected` pending ToDo with its
-  source. next_id is the idempotency key: a second run changes nothing.
+  worked in. Answers: done, release step, same as an open ToDo (its id), still open.
+  No answer, a failure or an uncited "done" → still open. Still open → an
+  `ai_detected` pending ToDo with its source. next_id is the idempotency key: a second
+  run changes nothing.
+- **r3 — a model's verdict never closes the person's work.** r2 let a cited "done" and
+  a "release" close an item outright. Checking that the cited row or commit *exists*
+  does not check that it *shows the work finished*, and no deterministic check can; the
+  live run proved it (2 of the last 9 closed wrongly: a planned next step judged a
+  release step, a month-summary check "done" by citing the injection commit). That
+  broke D2's own rule for the live producer (a model's done goes to review, a person
+  closes it). Now the same rule holds at every door:
+  - done → a ToDo in review as a suggestion (`POST /api/todos/{id}/suggest-done`,
+    `todo_manager.to_review(suggested=True)`): never auto-confirmed; Confirm closes it,
+    Reject puts it back in To Do;
+  - release → stands only when the item's text names a release step (push, build,
+    restart, deploy, ...: a parsed-text check, `RELEASE_WORDS`); otherwise open;
+  - same → stays: it names an open ToDo, which keeps the work.
+  `--review-closed` applies this to what the r2 runs already decided.
 - **`follow_up` gaps:** every project's IMPROVEMENT is scanned; each is checked the same
   way; still open → ToDo, then withdrawn with status `moved` (the vault keeps it).
 - **Event `follow_up` text** in TIMELINE: listed; still-open ones checked the same way.

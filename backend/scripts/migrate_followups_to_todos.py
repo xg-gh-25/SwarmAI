@@ -27,6 +27,11 @@ ToDos. Answers: ``done`` (must cite a row id or a commit sha from the evidence),
 ToDos are created through the daemon's API (``POST /api/todos``), so the daemon stays
 the only writer of its database; batches see the ToDos the earlier ones created.
 
+A model's verdict never closes the person's work by itself: a ``done`` becomes a ToDo
+in review as a suggestion (only a person's Confirm closes it, never the 7-day
+auto-confirm), and a ``release`` stands only when the text names a release step.
+``--review-closed`` applies the same rule to what an earlier run already decided.
+
 Every decision is one line of the record (JSONL) keyed by the item (``da:<next_id>``,
 ``gap:<anchor>``, ``event:<hash>``): a second run skips what is recorded, so it changes
 nothing. ``--max-items`` bounds one run (each run continues where the last stopped).
@@ -62,6 +67,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 WINDOW_DAYS = 7
+# What makes a follow-up a release step (design D4: release state is read live, never a
+# ToDo). A model's "release" stands only when the text says so in these words: a model
+# verdict alone never closes the person's work.
+RELEASE_WORDS = re.compile(
+    r"\bpush\b|\bbuild\b|rebuild|build:all|prod\.sh|重启|重建|restart|deploy|部署|发版|"
+    r"\bCI\b|bootstrap|launchctl", re.I)
 _EVENT_HEAD = re.compile(r"^### (\d{4}-\d{2}-\d{2})\s+(.*)$")
 _EVENT_FOLLOW = re.compile(r"^- follow_up:\s*(.+)$")
 _GAP_FOLLOW = "gap kind: follow_up"
@@ -334,6 +345,10 @@ class TodoApi:
         from core.injection_patterns import scan_text
         return [t for t in self.open() if not scan_text(str(t.get("title") or ""))]
 
+    def suggest_done(self, todo_id: str, note: str) -> dict:
+        """Put a ToDo in review as a suggestion: a person closes it (never auto-confirmed)."""
+        return self._call("POST", f"/api/todos/{todo_id}/suggest-done", {"note": note[:2000]})
+
     def create(self, title: str, description: str, linked: dict) -> dict:
         return self._call("POST", "/api/todos", {
             "workspace_id": "", "title": title[:500], "description": description[:10000],
@@ -359,16 +374,21 @@ def prompt_for(item: Item, rows, commits, todos) -> str:
 
 
 def checked(answer: dict, item: Item, rows, commits, todos) -> dict:
-    """The decision that stands: a done must cite evidence that was shown, a same must
-    name a shown ToDo; anything else is open."""
+    """The decision that stands. A model's verdict never closes the person's work by
+    itself: a done must cite evidence that was shown, and even then it becomes a ToDo in
+    review that only a person confirms (apply_decision); a release stands only when the
+    text names a release step (RELEASE_WORDS); a same must name a shown ToDo, whose
+    open ToDo keeps the work. Anything else is open."""
     decision = answer.get("decision") if isinstance(answer, dict) else None
     later = {r[0] for r in rows if (r[1], r[2]) > item.after}
     shas = {c[0] for c in commits if c[1] >= (item.day or "")}
     cite = str((answer or {}).get("cite") or "").strip()
     tid = str((answer or {}).get("todo_id") or "").strip()
     if decision == "done" and (cite in later or cite in shas):
-        return {"decision": "done", "cite": cite}
-    if decision == "release":
+        evidence = next((r[3] for r in rows if r[0] == cite), None) or next(
+            (f"commit {c[0]} {c[1]}: {c[2]}" for c in commits if c[0] == cite), cite)
+        return {"decision": "done", "cite": cite, "evidence": evidence}
+    if decision == "release" and RELEASE_WORDS.search(item.text):
         return {"decision": "release"}
     if decision == "same" and tid in {t["id"] for t in todos}:
         return {"decision": "same", "todo_id": tid}
@@ -376,7 +396,8 @@ def checked(answer: dict, item: Item, rows, commits, todos) -> dict:
     description = str((answer or {}).get("description") or "").strip() or item.text
     note = "" if decision in ("open", None) else f" (model said {decision}"
     if note:
-        note += f", cite {cite!r} not in the evidence)" if decision == "done" else ")"
+        note += (f", cite {cite!r} not in the evidence)" if decision == "done"
+                 else ", but the text names no release step)" if decision == "release" else ")")
     return {"decision": "open", "title": title, "description": description, "note": note.strip()}
 
 
@@ -414,20 +435,41 @@ def _migrated(api, key: str) -> "str | None":
     return None
 
 
+def _done_note(decision: dict) -> str:
+    return (f"The migration judged this finished, citing {decision.get('cite')}: "
+            f"{' '.join(str(decision.get('evidence') or '').split())[:1500]}. "
+            "Confirm if it is done; reject to put it back in To Do.")
+
+
+def to_todo(item: Item, decision: dict, api) -> dict:
+    """The ToDo of an item that is still open, or judged done (then in review as a
+    suggestion: a model's verdict never closes the person's work, only a person does).
+    Returns the record fields: created_todo_id (+ review) or todo_refused."""
+    done = decision["decision"] == "done"
+    title = decision.get("title") or " ".join(item.text.split())[:500]
+    description = decision.get("description") or "\n\n".join(p for p in (item.text, item.context) if p)
+    linked = {"type": "migration", "migrated_from": item.key, "session_id": item.session_id,
+              "day": item.day, "detection_reason": f"{item.source} follow-up, migrated",
+              "files": item.files[:20], "next_step": title}
+    origin = f"Moved from {item.key} ({item.day or 'no day'})."
+    out: dict = {}
+    try:
+        out["created_todo_id"] = _migrated(api, item.key) or api.create(
+            title, f"{description}\n\n{origin}", linked)["id"]
+        if done:
+            api.suggest_done(out["created_todo_id"], _done_note(decision))
+            out["review"] = "suggested"
+    except Exception as exc:  # noqa: BLE001 -- refused (e.g. the injection gate): recorded
+        out["todo_refused"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 def apply_decision(item: Item, decision: dict, api, withdraw, record: Path) -> dict:
     row = {"key": item.key, "source": item.source, "day": item.day, "text": item.text,
            **decision}
-    if decision["decision"] == "open":
-        linked = {"type": "migration", "migrated_from": item.key, "session_id": item.session_id,
-                  "day": item.day, "detection_reason": f"open {item.source} follow-up, migrated",
-                  "files": item.files[:20], "next_step": decision["title"]}
-        origin = f"Moved from {item.key} ({item.day or 'no day'})."
-        existing = _migrated(api, item.key)
-        try:
-            row["created_todo_id"] = existing or api.create(
-                decision["title"], f"{decision['description']}\n\n{origin}", linked)["id"]
-        except Exception as exc:  # noqa: BLE001 -- refused (e.g. the injection gate): recorded
-            row["todo_refused"] = f"{type(exc).__name__}: {exc}"
+    if decision["decision"] in ("open", "done"):
+        row.update(to_todo(item, decision, api))
+        if "todo_refused" in row:
             _append(record, row)
             return row                    # a gap whose ToDo was refused stays in its document
     if item.source == "gap":
@@ -435,7 +477,7 @@ def apply_decision(item: Item, decision: dict, api, withdraw, record: Path) -> d
         # recorded, not retried, so a second run never makes a second ToDo; the gap
         # stays in its document and the record says so
         try:
-            if decision["decision"] in ("open", "same"):
+            if decision["decision"] in ("open", "same", "done"):
                 target = row.get("created_todo_id") or decision.get("todo_id")
                 withdraw(item.anchor, f"moved to ToDo {target}", status="done")
             else:
@@ -559,6 +601,49 @@ async def run(workspace: Path, *, record: Path, api, apply: bool, max_items: int
     return counts
 
 
+def review_closed(record: Path, api, *, apply: bool, repos: "list[Path] | None" = None) -> dict:
+    """Bring the person back the items an earlier run closed on a model's word alone:
+    a recorded ``done`` without a ToDo becomes a ToDo in review as a suggestion (the
+    person confirms or rejects it), and a recorded ``release`` whose text names no
+    release step becomes an open ToDo. Each record line gets the ToDo id, so a second
+    run changes nothing. The record is backed up first."""
+    rows = _rows(record) if record.exists() else []
+
+    def subject(sha: str) -> str:
+        for repo in repos or []:
+            out = _git(["log", "-1", "--format=%h %ad %s", "--date=short", sha], repo).strip()
+            if out:
+                return f"commit {out}"
+        return f"{sha} (an activity row or commit shown to it then)"
+
+    todo = [r for r in rows if not r.get("created_todo_id") and not r.get("todo_refused") and (
+        r.get("decision") == "done"
+        or (r.get("decision") == "release" and not RELEASE_WORDS.search(str(r.get("text") or ""))))]
+    counts = {"done_to_review": sum(r["decision"] == "done" for r in todo),
+              "release_to_open": sum(r["decision"] == "release" for r in todo)}
+    if not apply or not todo:
+        return counts
+    backup = record.with_suffix(f".jsonl.bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    backup.write_bytes(record.read_bytes())
+    if backup.read_bytes() != record.read_bytes():
+        raise SystemExit(f"record backup {backup} does not match; nothing changed")
+    changed = {}
+    for r in todo:
+        item = Item(key=r["key"], source=r["source"], text=str(r.get("text") or ""),
+                    day=str(r.get("day") or ""))
+        if r["decision"] == "done":
+            decision = {"decision": "done", "cite": r.get("cite"),
+                        "evidence": subject(str(r.get("cite") or ""))}
+        else:
+            decision = {"decision": "open"}
+        fields = to_todo(item, decision, api)
+        changed[r["key"]] = {**fields, "reviewed": "the earlier run closed it on a model's word"}
+    lines = [json.dumps({**r, **changed.get(r.get("key"), {})}, ensure_ascii=False) for r in rows]
+    record.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    counts["refused"] = sum("todo_refused" in v for v in changed.values())
+    return counts
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--workspace", default="~/.swarm-ai/SwarmWS")
@@ -569,9 +654,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--rerender-only", action="store_true")
+    parser.add_argument("--review-closed", action="store_true",
+                        help="give the person back what an earlier run closed on a model's word")
     args = parser.parse_args(argv)
     ws = Path(args.workspace).expanduser()
     os.environ.setdefault("SWARM_WORKSPACE", str(ws))
+    if args.review_closed:
+        repos = repositories(window_rows(ws / "Knowledge" / "DailyActivity", date.today()), ws)
+        print(json.dumps(review_closed(Path(args.record).expanduser(), TodoApi(args.api),
+                                       apply=args.apply, repos=repos), ensure_ascii=False, indent=1))
+        return 0
     out = asyncio.run(run(ws, record=Path(args.record).expanduser(), api=TodoApi(args.api),
                           apply=args.apply, max_items=args.max_items, jobs=args.jobs,
                           backup_root=Path(args.backup_root).expanduser() if args.apply else None,
