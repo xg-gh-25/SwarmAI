@@ -633,6 +633,9 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 1. 先验证 §8 前两条，并在一台装了 AWS CLI 2.32+ 的机器上把 AWS 登录端到端跑一次（§6.3b）。然后 `core/aws_account.py`、记录、§5.6 生成、`aws-credentials` 子命令、
    `~/.swarm-ai/aws/config`、`GET /api/aws-account`（状态 + 能力）、设置页"SwarmAI 账号"（只看）。
 2. 本机消费方改走入口（§5.4 前十行），`auth_method` 的读者改读 `source`，删 `jobs/bedrock` 兜底和 executor 冻结密钥。
+   非 owner 的渠道会话（Slack 等）**不给** `swarmai` profile 的环境变量：第 1 步只靠命令文字拦它们
+   （`security_hooks.owner_command_denial`），绕得过去；一旦子进程默认走这个 profile，`aws --profile swarmai`
+   就不会在命令里出现账号的字样。
 3. Hive：消费方改走入口，Hive 模式自动建记录，§5.5 迁移，Hive 设置页去掉账号块。
 4. 向导 ②–④ 和设置页的登录、更换账号：探测、ADA（Isengard、Conduit）、App 内 SSO 登录（§6.3）、AWS 登录
    （§6.3b）、更多方式、先只用对话。

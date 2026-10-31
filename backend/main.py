@@ -21,6 +21,7 @@ from core import session_registry
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router, apps_router
 from routers.ingestion import router as ingestion_router
+from routers.aws_account import router as aws_account_router
 from routers.ingestion_redact import router as ingestion_redact_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
 from routers.pipelines import router as pipelines_router
@@ -1421,6 +1422,16 @@ async def lifespan(app: FastAPI):
     _set_gw_port(backend_port)
     if _bjson_written:
         logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
+        # The SwarmAI AWS account (design 2026-10-31-swarmai-aws-account §5): record,
+        # the `swarmai` credential_process profile and one verification, off the
+        # critical path. Only the backend that owns backend.json writes these files.
+        async def _aws_account_startup():
+            from core import aws_account as _aws_account, executors as _executors
+            try:
+                await _executors.run_in("subprocess", _aws_account.startup, backend_port)
+            except Exception:
+                logger.warning("aws_account startup failed", exc_info=True)
+        asyncio.create_task(_aws_account_startup())
     else:
         # The conflict guard already logged a WARNING with the owner's pid/port.
         logger.info("backend.json NOT written (port=%d, mode=%s) — owned by another live backend",
@@ -1824,6 +1835,7 @@ from routers.ingestion_wake import router as ingestion_wake_router
 app.include_router(ingestion_wake_router)
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
+app.include_router(aws_account_router, prefix="/api/aws-account", tags=["aws-account"])
 app.include_router(todos_router, prefix="/api/todos", tags=["todos"])
 app.include_router(search_router, prefix="/api/search", tags=["search"])
 app.include_router(workspace_config_router, prefix="/api/workspaces", tags=["workspace-config"])

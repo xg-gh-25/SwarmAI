@@ -2,7 +2,7 @@
 (core/swarm_out_ops.py; docs/design/2026-10-31-swarm-out-ops-registry.md §5, §8).
 
 Questions answered (design §8 invariants 1-4):
-1. is every route the app serves under /api/swarm-out and /api/hive, and every route
+1. is every route the app serves under /api/swarm-out, /api/hive and /api/aws-account, and every route
    the Host proxy forwards, a row of the table, and every row a real route?
 2. is every person-only op's path (every proxy write among them) denied by the gate in its plain, query, encoded,
    ``..``, quote-split and trailing-slash spellings, called by curl, a variable, Python or
@@ -22,7 +22,7 @@ from core.run_owner_gate import _decide, _user_only_deny
 from core.swarm_out_ops import OWNER, PERSON
 
 _SKIP_METHODS = {"HEAD", "OPTIONS"}
-_PREFIXES = ("/api/swarm-out", "/api/hive")
+_PREFIXES = ("/api/swarm-out", "/api/hive", "/api/aws-account")
 
 
 def _app_routes() -> "set[tuple[str, str]]":

@@ -1,8 +1,8 @@
 /**
  * Settings page tab layout wrapper.
  *
- * 9 tabs (8 in non-desktop builds — Hive Accounts is desktop-only): General, AI &
- * Models, Channels, Hive Accounts, Backup, Core Engine, System, Capabilities, About.
+ * 10 tabs (9 in non-desktop builds — Hive Accounts is desktop-only): General, SwarmAI
+ * Account (the one AWS account, read-only for now), AI & Models, Channels, Hive Accounts, Backup, Core Engine, System, Capabilities, About.
  * Skills + MCP Servers moved OUT to the first-class "Capabilities" nav card/overlay
  * (CapabilitiesOverlay, run_b5d98151) — user-facing ability browsing lives there now,
  * not in a Settings data-table. The "Capabilities" tab here is the runtime OS-eval
@@ -22,6 +22,7 @@ import CapabilitiesTab from './CapabilitiesTab';
 import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
 import HiveTab from './HiveTab';
+import AwsAccountTab from './AwsAccountTab';
 import BackupTab from './BackupTab';
 import { isDesktop } from '../../services/tauri';
 
@@ -34,6 +35,7 @@ import { isDesktop } from '../../services/tauri';
  */
 const ALL_TABS = [
   { id: 'general', label: 'General', icon: 'settings', width: '4xl' as const },
+  { id: 'aws-account', label: 'SwarmAI Account', icon: 'account_circle', width: '4xl' as const },
   { id: 'ai-models', label: 'AI & Models', icon: 'smart_toy', width: '4xl' as const },
   { id: 'channels', label: 'Channels', icon: 'forum', width: '4xl' as const },
   { id: 'hive', label: 'Hive Accounts', icon: 'cloud', desktopOnly: true, width: '4xl' as const },
@@ -92,6 +94,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
           const content = (
             <>
               {activeTab === 'general' && <GeneralTab />}
+              {activeTab === 'aws-account' && <AwsAccountTab />}
               {activeTab === 'ai-models' && <AIModelsTab />}
               {activeTab === 'channels' && <ChannelsTab />}
               {activeTab === 'hive' && <HiveTab />}

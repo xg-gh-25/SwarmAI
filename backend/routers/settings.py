@@ -32,8 +32,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Keys accepted from PUT requests — only DEFAULT_CONFIG keys minus secrets.
-WRITABLE_KEYS: frozenset[str] = frozenset(DEFAULT_CONFIG.keys()) - SECRET_KEYS
+# Keys accepted from PUT requests — only DEFAULT_CONFIG keys minus secrets, and never
+# the SwarmAI AWS account / chat path / Hive fleet: only core.aws_account and its own
+# routes write those (design 2026-10-31-swarmai-aws-account §5.1).
+from core.aws_account import PROTECTED_CONFIG_KEYS as _AWS_ACCOUNT_KEYS  # noqa: E402
+
+def writable_keys(defaults: "dict") -> "frozenset[str]":
+    """The keys ``PUT /api/settings`` accepts for a given DEFAULT_CONFIG."""
+    return frozenset(defaults.keys()) - SECRET_KEYS - _AWS_ACCOUNT_KEYS
+
+
+WRITABLE_KEYS: frozenset[str] = writable_keys(DEFAULT_CONFIG)
 
 # Expected types for known config keys — derived from DEFAULT_CONFIG values.
 # Used for lightweight type validation on PUT. Keys with None defaults accept any type.

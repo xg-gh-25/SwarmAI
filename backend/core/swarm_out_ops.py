@@ -1,7 +1,8 @@
 """swarm_out_ops — every Swarm Out and Hive-management operation, and who may call it.
 
 Design: docs/design/2026-10-31-swarm-out-ops-registry.md §5 (phase 1). This is data,
-not a framework: one row per HTTP operation of ``/api/swarm-out`` and ``/api/hive``,
+not a framework: one row per HTTP operation of ``/api/swarm-out``, ``/api/hive`` and
+``/api/aws-account``,
 plus one per Host-proxy route (generated from ``core.swarm_out_remote.ROUTES``).
 
 Readers:
@@ -56,6 +57,9 @@ def _op(name: str, method: str, path: str, callers: "tuple[str, ...]", weight: s
 
 _SO = "/api/swarm-out"
 _HV = "/api/hive"
+_AA = "/api/aws-account"
+#: the ``python-backend aws-credentials`` subcommand a ``credential_process`` runs
+CREDENTIAL_PROCESS = "internal:credential_process"
 _P = (PERSON,)
 _PO = (PERSON, OWNER)
 _POC = (PERSON, OWNER, CONDUCTOR)
@@ -112,6 +116,13 @@ _STATIC: "tuple[Op, ...]" = (
         _P, "off_machine"),
     _op("hive.brain.sync", "POST", f"{_HV}/instances/{{instance_id}}/brains/{{brain}}/sync", _P,
         "off_machine"),
+    # ── the SwarmAI AWS account (routers/aws_account.py; design
+    # 2026-10-31-swarmai-aws-account §7.7). Step 1 is read-only; the credentials route
+    # answers only the per-boot token the credential_process subcommand reads. ──
+    _op("aws_account.get", "GET", _AA, _PO, "read"),
+    _op("aws_account.verify", "POST", f"{_AA}/verify", _PO, "read"),
+    _op("aws_account.check", "POST", f"{_AA}/check", _PO, "read"),
+    _op("aws_account.credentials", "GET", f"{_AA}/credentials", (OWNER, CREDENTIAL_PROCESS), "read"),
     # ── served by a Hive, called by the Host's daemon (routers/hive_brains.py; 404 on a
     # desktop). No agent calls them, on either side. ──
     _op("hive.serve.brain_install", "PUT", f"{_HV}/brains/{{brain}}", (HOST,), "change"),

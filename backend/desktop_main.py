@@ -21,13 +21,15 @@ system Python:
   the reason) and exits 2 when any unit was refused. It never processes work.
 - ``ingest wake [--wait N]`` — nudge the daemon's CDF worker and print the 24h Flow
   overview (s_memory-distill's manual trigger). It never processes work either.
+- ``aws-credentials`` — the ``credential_process`` of SwarmAI's ``swarmai`` AWS profile:
+  asks the daemon for credentials pinned to the SwarmAI account (``core/aws_account.py``).
 - ``py <script.py> [args]`` / ``py -m <module> [args]`` / ``py -c <code> [args]`` — run
   Python with the interpreter and modules this program carries (``runpy``). Product code
   that used to spawn a system ``python`` (MCP scripts, the self-upgrader, scheduled jobs,
   skill scripts) uses this instead.
 
 Public: ``main(argv)``, ``run_py(argv)``, ``run_pipeline_v1(argv)``, ``run_hook(argv)``,
-``run_knowledge(argv)``,
+``run_knowledge(argv)``, ``run_aws_credentials(argv)``,
 ``WINDOWS_PIPELINE_MESSAGE``.
 """
 import json
@@ -121,6 +123,55 @@ def run_pipeline_v1(argv: "list[str]") -> int:
 def run_knowledge(argv: "list[str]") -> int:
     from core.knowledge_cli import main as knowledge_main
     return knowledge_main(argv)
+
+
+# ── aws-credentials ───────────────────────────────────────────────────────────
+
+def run_aws_credentials(argv: "list[str]") -> int:
+    """``credential_process`` for SwarmAI's ``swarmai`` AWS profile.
+
+    Asks the running daemon (port + per-boot token in ``<data dir>/aws/daemon.json``)
+    for short-term credentials pinned to the SwarmAI account and prints them in the
+    ``credential_process`` JSON format. Holds no credentials itself and refreshes
+    nothing: the daemon is the only place that resolves (design
+    2026-10-31-swarmai-aws-account §5.3). Exit 1 with a one-line reason on stderr."""
+    import urllib.error
+    import urllib.request
+
+    data_dir = os.environ.get("SWARM_DATA_DIR") or str(Path.home() / ".swarm-ai")
+    try:
+        endpoint = json.loads((Path(data_dir) / "aws" / "daemon.json").read_text(encoding="utf-8"))
+        port, token = int(endpoint["port"]), str(endpoint["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        print("SwarmAI: the daemon is not running (no aws/daemon.json)", file=sys.stderr)
+        return 1
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/aws-account/credentials",
+                                 headers={"X-Swarm-Credentials-Token": token})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        # hang guard: the daemon may run ada (seconds) and STS; it never takes minutes
+        with opener.open(req, timeout=120) as resp:
+            body = resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            msg = json.loads(exc.read() or b"{}").get("message") or exc.reason
+        except ValueError:
+            msg = exc.reason
+        print(f"SwarmAI AWS account: {msg}", file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"SwarmAI: cannot reach the daemon on port {port} ({exc})", file=sys.stderr)
+        return 1
+    try:
+        creds = json.loads(body)
+        if creds.get("Version") != 1 or not creds.get("AccessKeyId"):
+            raise ValueError
+    except ValueError:
+        print("SwarmAI: the daemon answered something that is not credentials", file=sys.stderr)
+        return 1
+    sys.stdout.write(json.dumps(creds))
+    sys.stdout.flush()
+    return 0
 
 
 # ── hook ──────────────────────────────────────────────────────────────────────
@@ -432,6 +483,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return run_knowledge(argv[1:])
     if argv and argv[0] == "ingest":
         return run_ingest(argv[1:])
+    if argv and argv[0] == "aws-credentials":
+        return run_aws_credentials(argv[1:])
     if argv and argv[0] == "daemon":
         argv = argv[1:]
     return run_daemon(argv)

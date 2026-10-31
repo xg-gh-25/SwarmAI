@@ -1145,6 +1145,67 @@
         "skill": "skill",
         "mcp": "MCP server"
       }
+    },
+    "awsAccount": {
+      "title": "SwarmAI Account",
+      "lead": "One AWS account for chat (Bedrock), Hive, cloud storage and voice.",
+      "loading": "Loading…",
+      "loadFailed": "Could not load the account.",
+      "state": {
+        "unconnected": "Not connected",
+        "connected": "Connected",
+        "needs_login": "Sign in again",
+        "account_mismatch": "Wrong account",
+        "unverified": "Not verified"
+      },
+      "source": {
+        "ada": "ADA",
+        "sso": "AWS SSO",
+        "login": "AWS sign-in",
+        "profile": "Profile {{name}}",
+        "keys": "Access keys",
+        "instance_role": "Instance role"
+      },
+      "remedy": {
+        "needs_login_ada": "Midway has expired. Run mwinit -f in a terminal, then verify again.",
+        "needs_login": "The sign-in has expired. Sign in again, then verify again.",
+        "account_mismatch": "The credentials belong to another account. Fix the sign-in or change the account.",
+        "unverified": "SwarmAI could not confirm this account yet.",
+        "unconnected": "No AWS account is connected. Chat runs only if it uses a key."
+      },
+      "unsupported": "This sign-in method arrives in a later version; the account is shown but not used yet.",
+      "capabilities": "Capabilities",
+      "allReady": "Bedrock, Hive, cloud storage and voice are ready.",
+      "notChecked": "Not checked yet.",
+      "cap": {
+        "bedrock": "Bedrock",
+        "hive": "Hive",
+        "storage": "Cloud storage",
+        "voice": "Voice"
+      },
+      "capStatus": {
+        "ok": "ready",
+        "missing": "missing",
+        "unknown": "unknown",
+        "not_applicable": "not used"
+      },
+      "checkedAt": "Checked {{time}}",
+      "verify": "Verify again",
+      "check": "Check capabilities",
+      "details": "Details",
+      "callerArn": "Signed in as",
+      "verifiedAt": "Verified",
+      "chatVia": "Chat uses",
+      "chatViaValue": {
+        "aws": "this account (Bedrock)",
+        "bedrock_key": "a Bedrock API key",
+        "anthropic": "an Anthropic key"
+      },
+      "profileFile": "Profile for child processes",
+      "derived": "Set up from your previous settings.",
+      "changeLater": "Changing the account is not available here yet: use AI & Models for sign-in, and Hive Accounts for Hive.",
+      "readOnlyBasis": "Hive and cloud storage are checked read-only for now: whether they can create resources is checked before the first Hive is built.",
+      "actionFailed": "That did not work. Try again in a moment."
     }
   },
   "canvas": {

@@ -1145,6 +1145,67 @@
         "skill": "Skill",
         "mcp": "MCP 服务器"
       }
+    },
+    "awsAccount": {
+      "title": "SwarmAI 账号",
+      "lead": "对话（Bedrock）、Hive、云存储和语音都用这一个 AWS 账号。",
+      "loading": "加载中…",
+      "loadFailed": "账号信息加载失败。",
+      "state": {
+        "unconnected": "未连接",
+        "connected": "已连接",
+        "needs_login": "需要重新登录",
+        "account_mismatch": "账号不符",
+        "unverified": "未核实"
+      },
+      "source": {
+        "ada": "ADA",
+        "sso": "AWS SSO",
+        "login": "AWS 登录",
+        "profile": "Profile {{name}}",
+        "keys": "访问密钥",
+        "instance_role": "实例角色"
+      },
+      "remedy": {
+        "needs_login_ada": "Midway 已过期。在终端运行 mwinit -f，然后重新核实。",
+        "needs_login": "登录已过期。重新登录后再核实。",
+        "account_mismatch": "凭证属于另一个账号。修好登录，或者更换账号。",
+        "unverified": "SwarmAI 还没能确认这个账号。",
+        "unconnected": "还没有连接 AWS 账号。只有用 key 的对话能用。"
+      },
+      "unsupported": "这种登录方式在后续版本支持；账号先显示在这里，暂不使用。",
+      "capabilities": "能力",
+      "allReady": "Bedrock、Hive、云存储、语音都可用。",
+      "notChecked": "还没检查。",
+      "cap": {
+        "bedrock": "Bedrock",
+        "hive": "Hive",
+        "storage": "云存储",
+        "voice": "语音"
+      },
+      "capStatus": {
+        "ok": "可用",
+        "missing": "缺权限",
+        "unknown": "未知",
+        "not_applicable": "不使用"
+      },
+      "checkedAt": "检查于 {{time}}",
+      "verify": "重新核实",
+      "check": "检查能力",
+      "details": "详细",
+      "callerArn": "登录身份",
+      "verifiedAt": "核实时间",
+      "chatVia": "对话使用",
+      "chatViaValue": {
+        "aws": "这个账号（Bedrock）",
+        "bedrock_key": "Bedrock API key",
+        "anthropic": "Anthropic key"
+      },
+      "profileFile": "子进程用的 profile",
+      "derived": "从你之前的设置接过来的。",
+      "changeLater": "这里暂时还不能更换账号：登录方式在 AI & Models 里改，Hive 在 Hive Accounts 里管。",
+      "readOnlyBasis": "Hive 和云存储目前只检查能不能读；能不能创建资源，在建第一台 Hive 前检查。",
+      "actionFailed": "没有成功，请稍后再试。"
     }
   },
   "canvas": {
