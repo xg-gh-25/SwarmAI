@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -36,7 +37,7 @@ class ShipError(ValueError):
     """The commit cannot be shipped; the message is safe to show the person."""
 
 
-def _git(cwd: Path, *args: str, timeout: int = 60) -> str:
+def _git(cwd: Path, *args: str, timeout: float = 60) -> str:
     try:
         p = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args],
                            cwd=str(cwd), env={**os.environ, **_GIT_ENV}, capture_output=True,
@@ -64,13 +65,15 @@ def state(checkout: Path) -> dict:
     return {"branch": ref[len("refs/heads/"):], "sha": sha, "dirty": sum(1 for e in dirty.split("\0") if e)}
 
 
-def _tracking_base(checkout: Path, url: str, branch: str, sha: str) -> Optional[str]:
+def _tracking_base(checkout: Path, url: str, branch: str, sha: str,
+                   left=lambda: 60.0) -> Optional[str]:
     """The merge-base of ``sha`` with the tracking branch of a remote of the checkout
-    whose URL is ``url``; None when there is none."""
+    whose URL is ``url``; None when there is none. ``left()``: how long the next git
+    call may run (``pack``'s time left)."""
     from core import task_repos
     try:
         # the configured URLs (``remote -v`` shows them after any ``insteadOf`` rewrite)
-        lines = _git(checkout, "config", "--get-regexp", r"^remote\..*\.url$").splitlines()
+        lines = _git(checkout, "config", "--get-regexp", r"^remote\..*\.url$", timeout=left()).splitlines()
     except ShipError:
         return None                          # no remote at all
     for line in lines:
@@ -80,11 +83,11 @@ def _tracking_base(checkout: Path, url: str, branch: str, sha: str) -> Optional[
         remote = key[len("remote."):-len(".url")]
         for ref in (f"refs/remotes/{remote}/{branch}", f"refs/remotes/{remote}/HEAD"):
             try:
-                _git(checkout, "rev-parse", "--verify", "--quiet", ref + "^{commit}")
+                _git(checkout, "rev-parse", "--verify", "--quiet", ref + "^{commit}", timeout=left())
             except ShipError:
                 continue
             try:
-                base = _git(checkout, "merge-base", sha, ref).strip()
+                base = _git(checkout, "merge-base", sha, ref, timeout=left()).strip()
             except ShipError:
                 continue                     # no common history
             if _SHA_RE.fullmatch(base):
@@ -93,12 +96,18 @@ def _tracking_base(checkout: Path, url: str, branch: str, sha: str) -> Optional[
 
 
 def pack(checkout: Path, url: str, branch: str, sha: str,
-         full: bool = False) -> tuple[Optional[Path], Optional[str], int]:
+         full: bool = False, timeout: float = GIT_TIMEOUT_S) -> tuple[Optional[Path], Optional[str], int]:
     """A bundle whose ``HEAD`` is ``sha``: thin (``base..sha``) unless ``full`` or there is
     no base. ``(None, sha, 0)`` when the remote has ``sha`` already (nothing to send). The
-    caller removes the file. Raises ShipError, also when HEAD moved off ``sha``."""
+    caller removes the file. Raises ShipError, also when HEAD moved off ``sha``.
+    ``timeout``: how long its git calls may run in all (a dispatch passes what is left
+    of its deadline, core/swarm_out); each also keeps its own cap."""
     checkout = Path(checkout)
-    base = None if full else _tracking_base(checkout, url, branch, sha)
+    end = time.monotonic() + timeout
+
+    def left(cap: float = 60.0) -> float:
+        return max(0.001, min(cap, end - time.monotonic()))
+    base = None if full else _tracking_base(checkout, url, branch, sha, left)
     if base == sha:
         return None, sha, 0
     fd, name = tempfile.mkstemp(prefix="swarm-repo-", suffix=".bundle")
@@ -108,8 +117,8 @@ def pack(checkout: Path, url: str, branch: str, sha: str,
         # HEAD, not a ref written for the purpose: the checkout is never changed. The
         # bundle is checked to hold exactly ``sha`` (HEAD may have moved since ``state``).
         _git(checkout, "bundle", "create", str(path), "HEAD", *([f"^{base}"] if base else []),
-             timeout=GIT_TIMEOUT_S)
-        heads = _git(checkout, "bundle", "list-heads", str(path)).split()
+             timeout=left(GIT_TIMEOUT_S))
+        heads = _git(checkout, "bundle", "list-heads", str(path), timeout=left()).split()
         if sha not in heads:
             raise ShipError(f"{checkout.name} moved while it was being packed; send the task again")
         size = path.stat().st_size

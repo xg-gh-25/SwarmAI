@@ -35,7 +35,9 @@ import urllib.request
 
 
 #: under the agent's Bash ceiling (10 minutes); past it the CLI says the task may have
-#: been sent (``maybe_sent``), never that nothing was
+#: been sent (``maybe_sent``), never that nothing was. The backend answers before it:
+#: a whole dispatch runs within core/swarm_out.DISPATCH_DEADLINE_S, a step that does not
+#: fit failing with its reason (tests/test_swarm_out_deadline.py ties the two)
 DISPATCH_TIMEOUT_S = 540
 
 
@@ -146,7 +148,8 @@ def main(argv: list[str] | None = None) -> int:
             return _call("POST", "/spec", body)
         # a dispatch may sync the Brain, send this machine's commits, wait for the Hive
         # to prepare the workspace (a first clone of a large repository takes minutes)
-        # and to name the session; past DISPATCH_TIMEOUT_S the answer is maybe_sent
+        # and to name the session, all within the backend's DISPATCH_DEADLINE_S; past
+        # DISPATCH_TIMEOUT_S (no answer at all) the answer is maybe_sent
         return _call("POST", "/dispatch", {**body, "hive": args.hive, "title": args.title,
                                            "brief": args.brief, "revision": args.revision},
                      timeout=DISPATCH_TIMEOUT_S)

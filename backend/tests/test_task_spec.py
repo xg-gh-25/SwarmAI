@@ -264,7 +264,8 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
         if sync_error:
             raise sync_error
 
-    async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None, dispatch_id=None):
+    async def dispatch(hive, title, task, origin, repos, *, segment, agent, extra=None, dispatch_id=None,
+                       deadline=None):
         calls["dispatch"].append({"hive": hive, "task": task, "repos": repos, "segment": segment,
                                   "agent": agent, "extra": extra, "dispatch_id": dispatch_id})
         return {"dispatch_id": "so_1"}

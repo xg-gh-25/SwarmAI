@@ -132,6 +132,56 @@ class SwarmOutMaybeSent(SwarmOutError):
     (the router answers 504, the dispatch card says so)."""
 
 
+#: One deadline for a whole dispatch (``dispatch_spec`` and the ``dispatch`` it calls).
+#: The dispatch CLI stops waiting after scripts/swarm_out.DISPATCH_TIMEOUT_S (under the
+#: agent's 10-minute Bash ceiling) and can then only say the task may be running; so
+#: every step that asks the Hive something, or packs a repository for it, runs within
+#: what is left of this, and a step that does not fit fails, naming the step, before
+#: the session starts (nothing was sent). The step guards (PREPARE_TIMEOUT_S,
+#: SHIP_TIMEOUT_S, ...) still cap each step; httpx timeouts are per read or write, never
+#: a total, so the deadline is kept with asyncio.wait_for.
+DISPATCH_DEADLINE_S = 480
+#: the best-effort release of a work order after a failure, on top of the deadline
+RELEASE_WAIT_S = 10
+#: less time than this left for a step: it is not started
+_MIN_STEP_S = 1.0
+
+
+class _Deadline:
+    """What is left of one dispatch's DISPATCH_DEADLINE_S, on the monotonic clock."""
+
+    def __init__(self, seconds: float):
+        self._at = time.monotonic() + seconds
+
+    def left(self) -> float:
+        return self._at - time.monotonic()
+
+    def budget(self, step: str, cap: float, keep: float = 0.0) -> float:
+        """How long *step* may take: its own *cap*, or less when less is left once
+        *keep* (the session's window, held back for it) is set aside. Raises
+        SwarmOutError when what is left is too short to start the step (a step whose
+        own cap is shorter than _MIN_STEP_S is not refused for that)."""
+        t = min(cap, self.left() - keep)
+        if t < min(cap, _MIN_STEP_S):
+            raise SwarmOutError(f"the dispatch ran out of time before {step} (a dispatch has "
+                                f"{DISPATCH_DEADLINE_S:g} s in all); nothing was sent")
+        return t
+
+
+async def _within(deadline: _Deadline, step: str, cap: float, make, keep: Optional[float] = None,
+                  hint: str = "") -> Any:
+    """``await make()`` within *step*'s budget (``_Deadline.budget``; *keep* defaults to
+    the session's window). A step that runs past it is stopped and fails as
+    SwarmOutError naming the step: it comes before the session, so nothing was sent."""
+    t = deadline.budget(step, cap, SESSION_ID_WAIT_S if keep is None else keep)
+    try:
+        return await asyncio.wait_for(make(), t)
+    except asyncio.TimeoutError:
+        raise SwarmOutError(f"{step} did not finish in the {t:.0f} s the dispatch had left "
+                            f"(a dispatch has {DISPATCH_DEADLINE_S:g} s in all); nothing was sent"
+                            + (f". {hint}" if hint else "")) from None
+
+
 def _state_dir() -> Path:
     from config import get_app_data_dir
     d = Path(get_app_data_dir()) / "state" / "swarm-out"
@@ -272,8 +322,9 @@ def task_message(task: str, order: Optional[dict]) -> str:
 
 
 _SHA_RE = re.compile(r"[0-9a-f]{40,64}")
-#: hang guard for a Hive preparing a task's workspace (clones a repository it has not
-#: cloned before, so minutes are normal)
+#: the read guard of a Hive preparing a task's workspace (it clones a repository it has
+#: not cloned before, so minutes are normal). The prepare as a whole runs within the
+#: dispatch's DISPATCH_DEADLINE_S; this is also the delay of LATE_RELEASE_S
 PREPARE_TIMEOUT_S = 1200
 
 
@@ -335,18 +386,50 @@ async def _prepare_work(client: httpx.AsyncClient, inst: dict[str, Any], work_id
     return order
 
 
-async def _release_work(client: httpx.AsyncClient, work_id: str) -> None:
-    """Best effort: the Hive removes a workspace whose session never started."""
+#: A prepare this side gave up on goes on in the Hive's thread (the dropped request does
+#: not stop it, routers/hive_brains) and can make the workspace again after the release
+#: that follows at once; so the order is released once more, LATE_RELEASE_S later. That
+#: covers a prepare that ends within it (the usual first clone); nothing on the Hive
+#: bounds a prepare, so one that runs longer (waiting on another order's clone of the
+#: same repository, several repositories) still leaves its workspace to the Hive's
+#: retention sweep: only the Hive's release and prepare agreeing on a cancelled order
+#: closes that. In memory: a daemon restart leaves it to the sweep too.
+LATE_RELEASE_S = PREPARE_TIMEOUT_S
+_LATE_RELEASES: set = set()
+
+
+async def _release_late(inst: dict[str, Any], work_id: str) -> None:
+    await asyncio.sleep(LATE_RELEASE_S)
     try:
-        await client.post(f"/api/hive/work/{work_id}/release")
-    except httpx.HTTPError:
+        async with _client(inst) as client:
+            await _release_work(client, work_id)
+    except Exception as e:                          # best effort, like the first release
+        logger.warning("swarm_out: releasing work order %s again failed (%s)", work_id, type(e).__name__)
+
+
+def _release_again_later(inst: dict[str, Any], work_id: str) -> None:
+    try:
+        task = asyncio.get_running_loop().create_task(_release_late(inst, work_id))
+    except RuntimeError:
+        return
+    _LATE_RELEASES.add(task)
+    task.add_done_callback(_LATE_RELEASES.discard)
+
+
+async def _release_work(client: httpx.AsyncClient, work_id: str) -> None:
+    """Best effort: the Hive removes a workspace whose session never started. Bounded by
+    RELEASE_WAIT_S, so a Hive that does not answer never holds up the failure's answer."""
+    try:
+        await asyncio.wait_for(client.post(f"/api/hive/work/{work_id}/release"), RELEASE_WAIT_S)
+    except (httpx.HTTPError, asyncio.TimeoutError):
         logger.warning("swarm_out: releasing work order %s failed", work_id)
 
 
 async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-out",
                    repos: Optional[list] = None, *, segment: str = "",
                    agent: Optional[dict] = None, extra: Optional[dict] = None,
-                   dispatch_id: Optional[str] = None) -> dict[str, Any]:
+                   dispatch_id: Optional[str] = None,
+                   deadline: Optional[_Deadline] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
     repos}. ``repos``: ``[{url, ref[, sha]}]`` the task works on (core/task_repos; ``sha``:
     this machine's commit, its bundle kept on the Hive first by ``_ship_repos``).
@@ -357,7 +440,9 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
     ``dispatch_id``: the id ``dispatch_spec`` chose (its pipeline run is named after it);
     a new one otherwise. The Hive prepares the task's workspace under it first (a work
     order, core/hive_workspace); every failure after that releases it, except a session
-    that may have started."""
+    that may have started. ``deadline``: the dispatch's (``dispatch_spec``'s); a new
+    DISPATCH_DEADLINE_S otherwise. Every step runs within it, the session's window
+    (SESSION_ID_WAIT_S) held back until the session is started."""
     from core import task_repos
     title = " ".join((title or "").split())[:MAX_TITLE_CHARS]
     task = (task or "").strip()
@@ -369,9 +454,12 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
         declared = task_repos.parse(repos)
     except task_repos.TaskRepoError as e:
         raise SwarmOutError(str(e)) from None
+    deadline = deadline or _Deadline(DISPATCH_DEADLINE_S)
     inst = await _instance(hive_ref)
+    name = inst["name"]
     async with _client(inst) as client:
-        r = await client.get("/api/chat/sessions/admission-state")
+        r = await _within(deadline, f"checking Hive {name}", HTTP_TIMEOUT_S,
+                          lambda: client.get("/api/chat/sessions/admission-state"))
         if r.status_code != 200:
             raise SwarmOutError(f"Hive {inst['name']} did not answer (HTTP {r.status_code})")
         if r.json().get("saturated"):
@@ -382,23 +470,35 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
         # Hive that can take the task has its model set
         from core import swarm_out_model
         try:
-            await swarm_out_model.align(client, inst["name"])
+            # at most three requests (read the settings, check the model, set it)
+            await _within(deadline, f"setting Hive {name}'s model", 3 * HTTP_TIMEOUT_S,
+                          lambda: swarm_out_model.align(client, inst["name"]))
         except swarm_out_model.ModelAlignError as e:
             raise SwarmOutError(f"{e}; the task was not sent") from None
         # the Hive's backend makes the work order real before the session starts
         # (design 2026-10-30-run-spec §4.3): a failure there sends nothing
         dispatch_id = dispatch_id or new_dispatch_id()
+        work = _work_repos(declared)
+        prepare_step = f"preparing the workspace on Hive {name}"
+        deadline.budget(prepare_step, PREPARE_TIMEOUT_S, SESSION_ID_WAIT_S)   # nothing asked yet
         try:
-            order = await _prepare_work(client, inst, dispatch_id, _work_repos(declared))
+            order = await _within(deadline, prepare_step, PREPARE_TIMEOUT_S,
+                                  lambda: _prepare_work(client, inst, dispatch_id, work),
+                                  hint="A first clone of a large repository can take this long; the Hive "
+                                       "goes on building its copy, so sending the task again in a few "
+                                       "minutes is usually faster")
         except BaseException:
             await _release_work(client, dispatch_id)     # a prepare this side gave up on
+            _release_again_later(inst, dispatch_id)      # ... may still be running there
             raise
         from core import hive_workspace
         declared = hive_workspace.task_repos_of(order)
         try:
+            # the window held back for it, or what is left when that is less
+            wait = deadline.budget(f"starting the session on Hive {name}", SESSION_ID_WAIT_S)
             session_id = await asyncio.wait_for(
                 _start_session(client, task_message(segment + task, order), dispatch_id,
-                               _pin_request(agent, task)), SESSION_ID_WAIT_S)
+                               _pin_request(agent, task)), wait)
         except (asyncio.TimeoutError, httpx.ReadTimeout):
             # The task may have been sent and taken: the Hive may be running it. Record
             # the dispatch without a session so this Hive's questions are still listed,
@@ -406,7 +506,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             row = {**(extra or {}), **_log_row(inst, None, title, origin, declared, agent, dispatch_id)}
             await asyncio.to_thread(_append, json.dumps(row, ensure_ascii=False) + "\n")
             raise SwarmOutMaybeSent(
-                f"Hive {inst['name']} did not name the session within {SESSION_ID_WAIT_S}s; "
+                f"Hive {inst['name']} did not name the session within {wait:.0f}s; "
                 "the task may be running there. Check the Hive's own page before sending "
                 "it again.") from None
         except BaseException:
@@ -489,9 +589,11 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     Hive's copy differs, then dispatches with the project section and the pin. The row
     records the spec; the result says what the sync did (``brain_sync``). No
     ``hive_ref``: ``pick_hive`` chooses (the person named none). ``brief``: one or two
-    sentences of what the task is, for the dispatch card."""
+    sentences of what the task is, for the dispatch card. The whole of it runs within one
+    DISPATCH_DEADLINE_S, started here and passed to every step (``_Deadline``)."""
     from core import brain_sync_host, task_spec
     from core.project_registry import get_swarmws
+    deadline = _Deadline(DISPATCH_DEADLINE_S)
     ws = get_swarmws()
     try:
         spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, execution, why,
@@ -512,13 +614,17 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     if hive_ref:
         hive_reason = "named"
     else:
-        hive_ref, hive_reason = pick_hive((await fleet())["hives"])
+        # the Hives are probed at once, each within PROBE_TIMEOUT_S
+        hive_ref, hive_reason = pick_hive((await _within(deadline, "choosing a Hive", 4 * PROBE_TIMEOUT_S,
+                                                         fleet))["hives"])
     inst = await _instance(hive_ref)
     # a Hive that cannot prepare the workspace would run the task the old way: it is
     # refused before anything (the Brain included) is sent to it (run-spec §4.4)
-    await _require_work_orders(inst)
+    await _within(deadline, f"checking Hive {inst['name']}", 2 * PROBE_TIMEOUT_S,
+                  lambda: _require_work_orders(inst))
     try:
-        remote = await brain_sync_host.hive_brains(inst)
+        remote = await _within(deadline, f"reading Hive {inst['name']}'s Brains", 2 * HTTP_TIMEOUT_S,
+                               lambda: brain_sync_host.hive_brains(inst))
         if not remote["supported"]:
             raise SwarmOutError(f"Hive {inst['name']}'s version cannot receive Brains; update it once")
         local = await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)
@@ -526,12 +632,15 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
             raise SwarmOutError(f"{brain} cannot be packaged: {local['error']}")
         have = remote["brains"].get(brain) or {}
         synced = "up to date"
+        sync_step = f"syncing {brain} to Hive {inst['name']}"
         if have.get("digest") != local["digest"]:
-            await brain_sync_host.sync(inst, brain, ws)
+            await _within(deadline, sync_step, brain_sync_host.SYNC_TIMEOUT_S,
+                          lambda: brain_sync_host.sync(inst, brain, ws))
             synced = "synced"
         elif have.get("current_digest") != local["digest"]:
             # the Hive's copy was changed there: the host is the only writer, so it is restored
-            await brain_sync_host.sync(inst, brain, ws)
+            await _within(deadline, sync_step, brain_sync_host.SYNC_TIMEOUT_S,
+                          lambda: brain_sync_host.sync(inst, brain, ws))
             n = have.get("changed_files")
             synced = f"restored {n} file(s) the Hive had changed" if isinstance(n, int) else "restored"
     except brain_sync_host.SyncRefused as e:
@@ -554,12 +663,13 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     # result is read (core/swarm_out_results)
     agent["validations"] = [{"id": v["id"], "command": v["command"]} for v in spec["validations"]]
     # this machine's commit of each repository, put on the Hive before the task starts
-    await _ship_repos(inst, spec["repos"])
+    await _ship_repos(inst, spec["repos"], deadline)
     row = await dispatch(hive_ref, title, spec["task"], origin,
                          [{"url": r["url"], "ref": r["ref"], **({"sha": r["sha"]} if r.get("sha") else {}),
                            "name": r["name"], "access": r["access"]}
                           for r in spec["repos"]],
                          segment=task_spec.segment(spec, run_id), agent=agent, dispatch_id=dispatch_id,
+                         deadline=deadline,
                          extra={"brief": " ".join((brief or "").split())[:MAX_BRIEF_CHARS],
                                 "hive_reason": hive_reason, "brain_sync": synced,
                                 "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}
@@ -585,26 +695,32 @@ async def _require_work_orders(inst: dict[str, Any]) -> None:
 SHIP_TIMEOUT_S = 600
 
 
-async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]]) -> None:
+async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]],
+                      deadline: Optional[_Deadline] = None) -> None:
     """Each repository with a commit of this machine (``sha``): a git bundle of it
     (core/repo_ship) to the Hive's ``PUT /api/hive/repos``, which only keeps it
     (core/hive_repo_inbox); the Hive's backend fetches it when it prepares the workspace
     (core/hive_workspace). A
     remote that has the commit already needs no bundle. Raises SwarmOutError; nothing is
-    sent to the session then. (design 2026-10-30-hive-task-repos-from-host §2)"""
+    sent to the session then. (design 2026-10-30-hive-task-repos-from-host §2)
+    ``deadline``: the dispatch's; packing (its ``git bundle``) and each upload run within
+    what is left of it."""
     from core import repo_ship
+    deadline = deadline or _Deadline(DISPATCH_DEADLINE_S)
     for r in repos:
         if not r.get("sha"):
             continue
+        git_s = deadline.budget(f"packing {r['name']}", repo_ship.GIT_TIMEOUT_S, SESSION_ID_WAIT_S)
         try:
             path, _base, size = await asyncio.to_thread(
-                repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"])
+                repo_ship.pack, Path(r["checkout"]), r["url"], r["ref"], r["sha"], timeout=git_s)
         except repo_ship.ShipError as e:
             raise SwarmOutError(f"{r['name']} could not be packed: {e}; nothing was sent") from None
         if path is None:
             continue                         # the remote has the commit: the Hive fetches it
         try:
-            status, detail = await _put_repo(inst, r, path, size)
+            status, detail = await _within(deadline, f"sending {r['name']} to Hive {inst['name']}",
+                                           SHIP_TIMEOUT_S, lambda: _put_repo(inst, r, path, size))
         finally:
             path.unlink(missing_ok=True)
         if status == 200:
