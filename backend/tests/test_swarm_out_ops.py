@@ -5,7 +5,9 @@ Questions answered (design §8 invariants 1-4):
 1. is every route the app serves under /api/swarm-out and /api/hive, and every route
    the Host proxy forwards, a row of the table, and every row a real route?
 2. is every person-only op's path (every proxy write among them) denied by the gate in its plain, query, encoded,
-   ``..``, quote-split and trailing-slash spellings, while the owner agent's ops are not?
+   ``..``, quote-split and trailing-slash spellings, called by curl, a variable, Python or
+   Node, while the owner agent's ops are not, and a command that only names a route (a
+   search, a file being written) is not judged?
 3. is any command naming Swarm Out or the Hive routes denied in a non-owner channel?
 4. does the ``scripts.swarm_out`` CLI call only ops the owner agent may call?
 """
@@ -101,10 +103,14 @@ def _spellings(path: str) -> "list[str]":
         f"curl -s {url.replace('/api/', '//api//', 1)}",
         f"curl -s {url.replace('/api/swarm-out/remote/s-abc123/', '/api/swarm-out/remote/s-abc123//', 1)}",
         f"for u in {url},x; do curl $u; done",
-        f"echo {url}.",
-        f"echo {url}:",
-        f"X=({url}]",
-        f"echo {{u:{url}}}",
+        f"curl -s {url}.",
+        f"curl -s {url}:",
+        f"X=({url}]; curl $X",
+        f"curl -s {{u:{url}}}",
+        f"C=curl; $C {url}",
+        f"cu\\rl -s {url}",
+        f"python3 - <<'EOF'\nimport urllib.request as u\nu.urlopen('{url}')\nEOF",
+        f"node -e \"fetch('{url}', {{method: 'POST'}})\"",
         f"python3 -c \"import urllib.request as u; u.urlopen('{url}')\"",
     ]
 
@@ -139,6 +145,19 @@ def test_the_deny_names_the_op_and_reaches_the_hook_decision():
     d = _decide("sess-1", cmd, {"command": cmd})
     assert d is not None
     assert "hive.credentials" in d["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "rg -n '/api/hive/instances' desktop/src",
+    "grep -rn /api/swarm-out/runs/x/discard docs/",
+    "cat docs/design/x.md | grep /api/ingestion/redact",
+    "sed -n 1,40p core/x.py  # /api/pipelines/run_1/decision",
+    # a file being written whose text names the route and even a curl line
+    "cat > /tmp/notes.md <<'EOF'\nrun: curl -X POST http://127.0.0.1:18321/api/swarm-out/runs/so_1/discard\nEOF",
+    "python3 - <<'EOF'\np='t.py'; s=open(p).read(); s=s.replace('a', 'curl http://h/api/hive/instances/i/credentials'); open(p,'w').write(s)\nEOF",
+])
+def test_naming_a_route_without_calling_it_is_not_judged(cmd):
+    assert _user_only_deny(cmd) is None, cmd
 
 
 def test_a_path_continuing_past_the_op_is_not_the_op():

@@ -31,7 +31,9 @@ For a ``pipeline_v1.py`` command:
   recorded the person's approval for this exact command: the gate takes the run over
   if needed and writes the ``auth`` event from the run's ``land_request``
   (``_record_approval``).
-- a Bash call to the human-only ``/api/pipelines/<id>/decision`` is denied, and so is
+- a Bash command that sends an HTTP request (``_makes_http_call``; one that only names a
+  route, in a search or a file being edited, is not judged) to the human-only
+  ``/api/pipelines/<id>/decision`` is denied, and so is
   one to the user-only CDF redaction ``/api/ingestion/redact`` (CDF §13 tombstone: only
   the person triggers it, from the Flow view), and one to any Swarm Out / Hive route
   the owner agent may not call (``core.swarm_out_ops``, the table the regexes are
@@ -370,15 +372,43 @@ def _as_routed(command: str) -> str:
     return s
 
 
+# An HTTP request in a command: a client program run as a word of the command line (not
+# inside a heredoc's body, which is a file's text or a script's), or a client library
+# called anywhere (``python -c`` / ``python - <<EOF`` / ``node -e``).
+_HEREDOC_BODY_RE = re.compile(
+    r"<<-?[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n.*?\n[ \t]*\2[ \t]*(?=\n|$)", re.S)
+_HTTP_CLI_RE = re.compile(r"(?:^|[\s;&|(`'\"=])(?:curl|wget|xh|http|https|httpie)(?=[\s'\";&|)]|$)")
+_HTTP_LIB_RE = re.compile(
+    r"\burlopen\s*\(|\brequests\.(?:get|post|put|patch|delete|request|Session)\b|\bhttpx\.|\baiohttp\b"
+    r"|\bhttp\.client\b|\bfetch\s*\(|\baxios\b|\bXMLHttpRequest\b")
+
+
+def _makes_http_call(command: str) -> bool:
+    """Whether *command* sends an HTTP request (see the patterns above). A command that
+    only names a route (a search, a file being written, a test or doc being edited) does
+    not: the person-only checks are for calls, and every one of their past denials in
+    the owner's sessions was a command that only named the path."""
+    outside = _HEREDOC_BODY_RE.sub("<<heredoc", command)
+    bare = re.sub(r"[\"'\\]", "", outside)
+    return bool(_HTTP_CLI_RE.search(outside) or _HTTP_CLI_RE.search(bare) or _HTTP_LIB_RE.search(command))
+
+
 def _user_only_deny(command: str) -> "dict | None":
     """The deny for a command that calls a route only the person may call (the
-    redaction route; a Swarm Out or Hive operation the owner agent may not call,
-    ``core.swarm_out_ops``), else None.
-    Pure string work: the gate runs it on every Bash command, before any filter. The
-    command is also matched URL-decoded with ``.``/``..`` path segments collapsed, as
-    the server would route it. This is a speed bump, not a boundary: a path assembled at
-    run time (variables, a script file) is not seen; the agent and the daemon share an
-    OS user (boundary A)."""
+    pipeline decision route, the redaction route; a Swarm Out or Hive operation the owner
+    agent may not call, ``core.swarm_out_ops``), else None.
+    Pure string work: the gate runs it on every Bash command, before any filter. Only a
+    command that sends an HTTP request is judged (``_makes_http_call``): naming a route
+    in a search, a file's text or an edit is not calling it. The command is also matched
+    URL-decoded with ``.``/``..`` path segments collapsed, as the server would route it.
+    This is a speed bump, not a boundary: a path assembled at run time (variables, a
+    script file) is not seen; the agent and the daemon share an OS user (boundary A)."""
+    if not _makes_http_call(command):
+        return None
+    if _HUMAN_ONLY_API_RE.search(command):
+        return _deny("a pipeline decision is answered by a person (the chat question card "
+                     "or the dashboard), never by a command. Ask with AskUserQuestion using "
+                     "the run's ask_user_question payload, then wait for the answer.")
     # also with shell quotes and backslashes removed: the shell joins "…/runs/"$D"/stop"
     # into the path the server routes
     bare = re.sub(r"[\"'\\]", "", command)
@@ -392,8 +422,7 @@ def _user_only_deny(command: str) -> "dict | None":
     if op is not None:
         return _deny(f"`{op.name}` ({op.method} {op.path}) is the person's to do in the App "
                      "(Swarm Out, or Settings → Hive), never a command. Tell the user what you "
-                     "think should be done and why; they decide. (Searching code or docs for "
-                     "this path? Search a part of it instead.)")
+                     "think should be done and why; they decide.")
     return None
 
 
@@ -402,10 +431,6 @@ def _decide(sid: str, command: str, tool_input: dict,
     """The decision for one Bash command (module docstring). S6-3: pipeline commands
     run in the agent's own process; the hook hands them no token, only this session's
     id (``_with_session``), and records the person's approval of an approved action."""
-    if _HUMAN_ONLY_API_RE.search(command or ""):
-        return _deny("a pipeline decision is answered by a person (the chat question card "
-                     "or the dashboard), never by a command. Ask with AskUserQuestion using "
-                     "the run's ask_user_question payload, then wait for the answer.")
     user_only = _user_only_deny(command or "")
     if user_only is not None:
         return user_only
