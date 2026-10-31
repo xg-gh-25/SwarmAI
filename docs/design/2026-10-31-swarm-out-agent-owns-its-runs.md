@@ -265,3 +265,19 @@ R20 现在："the exceptions are the task-opening restatement (§ Assumptions / 
 - **Hive 写的文字进了 agent 上下文。** 补 §2.6：默认不读，要读时 `read` 并包在数据框里；读了以后能做的动作都有上限。
 - **`watch` 的读取频率自相矛盾。** 定成每 30 秒调 `list_runs`，被盯着时 Hive 每 30 秒被探一次（§2.3）。
 - **小处：** 重发计数和命令记录放进 settle 记录；接续块要登记进 `injected_blocks`、走两条注入路径、按会话存"上一轮看到的指纹"；§2.4 补上 `waiting_input`、`not_held`/`idle`、`hive_stopped`/`hive_gone`、`no_session_id`；旧单不算占着；`SWARM_WORKSPACE` 已被前缀覆盖；行号按现在的代码改正。
+
+## 8. 实现与设计的不同（2026-10-31 实现时记下）
+
+- **模块名：** §2.5 的卡片和转交在 `core/swarm_out_wait_card.py`（`core/swarm_out_relay.py` 早已是"Hive 会话事件转发"，不能重名）。§2.3 在 `core/swarm_out_follow.py`，agent 命令的限制在 `core/swarm_out_actor.py`。
+- **"手动已落地"仍然只给人。** 审查第二轮指出：它会让这一单了结、释放 Hive 工作区，连同还没落地的提交（不论是否已封进 bundle）。agent 落地一律走 `return-land`。
+- **agent 的命令必须是面板此刻给人的那些**（`/runs` 行的 `actions`）：验收只在 `awaiting`、且 `ended_at` 等于行上的最终结果；停止只在运行中。没有 `dispatched_from` 的旧单 agent 一律不能动。
+- **gate 拒绝命令以人的名义调 run 路由：** HTTP 调用文字里有 `person`、或请求体来自文件 / stdin，就拒绝。审查第二轮指出这一层仍可绕过（JSON 转义、`-sd @f`、`-K`、`wget --post-file`、python 一行），见 §9。
+- **重发计数：** 发送前在 settle 记录的锁里先记一笔，发送被拒（400/403/422）才撤回；504（可能已到 Hive）和取消都照样计数。
+- **跟单指纹** 比 §2.3 多了 `ended`、`ended_at`、`why`、`why_not`；运行中的 Hive 活动名不算变化（只有 `answer_sent` 算）；卡片只有"已转交 / 没转交（带原因）"算变化。
+- **"已看过"记录**（`state/swarm-out/seen/<会话 id 的哈希>.json`）：`watch` 把告诉过的每一单都记上（只记本会话派的单），digest 只记真正列出的单；比较时 token 和记录任一相符就算没变。Hive 一次没回探测的 unknown 不进 digest（`no_session_id` 照报）。
+- **§2.10 不做：** 代码里没有任何地方读 `SWARMWS` 环境变量，清掉它保护不了什么。
+- **锁文件：** 除了 `ci.yml`，`build-macos` / `build-windows` / `dev-build` / `eval-gate` / `release` 也是同一行不按锁安装，一起改成 `uv sync --locked --extra dev --active`（装进各自已激活的 `.venv`，PATH 写法不变）。`uv lock` 只补了 lxml、httpx 两个直接依赖，没有版本变化。
+
+## 9. 留给 XG 的决定
+
+审查第二轮后仍开着一个 HIGH：命令里的 HTTP 调用可以写 `by: person`，用 gate 文字匹配看不到的写法冒充人，绕过 agent 的全部限制。按 AGENT R2，第二轮后还开着的 HIGH 交给人决定这个机制该不该存在。

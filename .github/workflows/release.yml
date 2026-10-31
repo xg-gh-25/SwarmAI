@@ -113,7 +113,7 @@ jobs:
           uv venv .venv
           if [ -d .venv/Scripts ]; then bin=.venv/Scripts; else bin=.venv/bin; fi
           source "$bin/activate"
-          uv pip install -e ".[dev]"
+          uv sync --locked --extra dev --active  # uv.lock: the versions every developer and Hive runs
           p="$PWD/$bin"; command -v cygpath >/dev/null 2>&1 && p="$(cygpath -w "$p")"
           echo "$p" >> "$GITHUB_PATH"
 

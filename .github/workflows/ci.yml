@@ -32,7 +32,7 @@ jobs:
           pip install uv
           uv venv .venv
           source .venv/bin/activate
-          uv pip install -e ".[dev]"
+          uv sync --locked --extra dev --active  # uv.lock: the versions every developer and Hive runs
           echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
 
       - name: Create .env
@@ -123,7 +123,7 @@ jobs:
           pip install uv
           uv venv .venv
           source .venv/bin/activate
-          uv pip install -e ".[dev]"
+          uv sync --locked --extra dev --active  # uv.lock: the versions every developer and Hive runs
           echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
           cp .env.example .env
 
@@ -170,7 +170,7 @@ jobs:
           pip install uv
           uv venv .venv
           source .venv/Scripts/activate
-          uv pip install -e ".[dev]"
+          uv sync --locked --extra dev --active  # uv.lock: the versions every developer and Hive runs
           echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
           cp .env.example .env
 

@@ -567,27 +567,52 @@ def _pin_request(agent: Optional[dict], task: str = "") -> Optional[dict]:
 MAX_BRIEF_CHARS = 400
 
 
-def pick_hive(hives: list[dict[str, Any]]) -> tuple[str, str]:
+def pick_hive(hives: list[dict[str, Any]], open_runs: Optional[dict[str, int]] = None) -> tuple[str, str]:
     """(name, reason) of the Hive a task goes to when none is named: running and
-    reachable, not saturated; the fewest streaming sessions, then the lowest memory, then
-    the name. Deterministic. Raises SwarmOutError when none can take a task. ``reason``
-    is a code the card words (core/swarm_out_card, the desktop card): ``only_free``,
-    ``idle`` or ``least_busy:<streaming>``; a named Hive's is ``named``."""
+    reachable, not saturated; the fewest of this Host's runs still open there
+    (``open_runs`` by Hive name: a run waiting on the person is not streaming but still
+    holds its Hive), then the fewest streaming sessions, then the lowest memory, then the
+    name. Deterministic. Raises SwarmOutError when none can take a task. ``reason`` is a
+    code the card words (core/swarm_out_card, the desktop card): ``only_free``, ``idle``
+    (nothing open, nothing streaming) or ``least_busy:<n>`` (n: the larger of the two);
+    a named Hive's is ``named``."""
+    held = open_runs or {}
     ok = [h for h in hives if h.get("status") == "running" and h.get("reachable") is True
           and h.get("saturated") is False and isinstance(h.get("streaming"), int)]
     if not ok:
         raise SwarmOutError("no running Hive can take a task now (none is running, reachable "
                             "and not full); start one from the Hive card")
-    ok.sort(key=lambda h: (h["streaming"], h["memory_percent"] if isinstance(h.get("memory_percent"), (int, float))
-                           else 101.0, str(h.get("name"))))
+    ok.sort(key=lambda h: (held.get(str(h.get("name")), 0), h["streaming"],
+                           h["memory_percent"] if isinstance(h.get("memory_percent"), (int, float)) else 101.0,
+                           str(h.get("name"))))
     best = ok[0]
+    busy = max(held.get(str(best.get("name")), 0), best["streaming"])
     if len(ok) == 1:
         reason = "only_free"
-    elif best["streaming"] == 0:
+    elif busy == 0:
         reason = "idle"
     else:
-        reason = f"least_busy:{best['streaming']}"
+        reason = f"least_busy:{busy}"
     return str(best["name"]), reason
+
+
+def open_runs_by_hive() -> dict[str, int]:
+    """This Host's runs still open on each Hive (by name): dispatched under a Project
+    Agent and neither settled nor discarded. A row without one never settles
+    (swarm_out_settle), so it is not counted."""
+    from core import swarm_out_settle
+    out: dict[str, int] = {}
+    for r in _read_log():
+        if not isinstance(r.get("project_agent"), dict):
+            continue
+        try:
+            rec = swarm_out_settle.load(r["dispatch_id"])
+        except swarm_out_settle.SettleError:
+            continue
+        if rec.get("settled") or rec.get("abandoned_at"):
+            continue
+        out[str(r.get("hive"))] = out.get(str(r.get("hive")), 0) + 1
+    return out
 
 
 async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: str, acceptance: str,
@@ -629,7 +654,8 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
     else:
         # the Hives are probed at once, each within PROBE_TIMEOUT_S
         hive_ref, hive_reason = pick_hive((await _within(deadline, "choosing a Hive", 4 * PROBE_TIMEOUT_S,
-                                                         fleet))["hives"])
+                                                         fleet))["hives"],
+                                          await asyncio.to_thread(open_runs_by_hive))
     inst = await _instance(hive_ref)
     # a Hive that cannot prepare the workspace would run the task the old way: it is
     # refused before anything (the Brain included) is sent to it (run-spec §4.4)

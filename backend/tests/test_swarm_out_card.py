@@ -36,6 +36,26 @@ def H(name, status="running", reachable=True, saturated=False, streaming=0, mem=
             "streaming": streaming, "memory_percent": mem}
 
 
+def test_a_hive_holding_a_run_that_waits_on_the_person_is_not_idle():
+    """design agent-owns-its-runs §2.8: two runs went to demo while explorer was free,
+    because a run waiting on the person streams nothing."""
+    both_quiet = [H("demo", streaming=0, mem=10), H("explorer", streaming=0, mem=10)]
+    assert swarm_out.pick_hive(both_quiet) == ("demo", "idle")
+    assert swarm_out.pick_hive(both_quiet, {"demo": 1}) == ("explorer", "idle")
+    assert swarm_out.pick_hive(both_quiet, {"demo": 2, "explorer": 1}) == ("explorer", "least_busy:1")
+
+
+def test_open_runs_count_only_unsettled_runs_under_a_project_agent(tmp_path, monkeypatch):
+    from core import swarm_out_settle
+    rows = [{"dispatch_id": f"so_{i:012x}", "hive": h, **({"project_agent": {}} if pa else {})}
+            for i, (h, pa) in enumerate([("demo", True), ("demo", True), ("demo", False), ("explorer", True)])]
+    monkeypatch.setattr(swarm_out, "_read_log", lambda: rows)
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
+    swarm_out_settle._update(rows[1]["dispatch_id"], lambda rec: rec.update(settled={"outcome": "passed"}))
+    swarm_out_settle._update(rows[3]["dispatch_id"], lambda rec: rec.update(abandoned_at="x"))
+    assert swarm_out.open_runs_by_hive() == {"demo": 1}
+
+
 def test_pick_hive_is_deterministic_and_refuses_when_none_can_take_it():
     assert swarm_out.pick_hive([H("b", streaming=1), H("a", streaming=1, mem=20), H("c", streaming=2)]) \
         == ("a", "least_busy:1")
