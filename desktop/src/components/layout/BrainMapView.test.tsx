@@ -266,7 +266,8 @@ describe('BrainMapView · Project Agent form', () => {
         field({ key: 'handles', label: 'Typical requests', kind: 'edit', shape: 'list', required: true, value: ['fix a bug'], path: 'intake.handles' })] },
       { id: 'profiles', title: 'Pipeline profiles', purpose: 'Reference.', fields: [
         field({ key: 'profiles', label: 'Profiles', kind: 'fixed', shape: 'view', editable: false,
-          value: [{ name: 'bugfix', for: 'a defect', stages: ['build', 'test'], modes: ['code-change'] }] })] },
+          // the shape project_agent_form sends: no mode picks a profile (Run Spec)
+          value: [{ name: 'bugfix', for: 'a defect', stages: ['build', 'test'] }] })] },
     ],
     modes: [{ id: 'code-change', standard: true, isDefault: true, placements: ['chat-tab'], ownPlacements: false }],
     missing: [], skeleton: false, enforced: 'The guardrails of this definition are enforced when the agent runs on a Hive.',
@@ -291,6 +292,9 @@ describe('BrainMapView · Project Agent form', () => {
     expect(screen.getByTestId('pa-field-repos').textContent).toContain('From the Brain');
     expect(screen.getByTestId('pa-repos').textContent).toContain('github.com/acme/lib');
     expect(screen.getByTestId('pa-enforced').textContent).toContain('on a Hive');
+    // the profiles reference renders the shape the backend sends (no modes per profile)
+    expect(screen.getByTestId('pa-profiles').textContent).toContain('build → test');
+    expect(screen.getByTestId('pa-profiles').textContent).not.toContain('Modes that start here');
   });
 
   it('saves the changes in one request, rows dropped highest first, then confirms', async () => {

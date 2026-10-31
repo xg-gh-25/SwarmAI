@@ -138,9 +138,10 @@ function View({ f }: { f: AgentFormField }) {
       return <div>{((v as { name: string; what: string }[]) ?? []).map((g) => (
         <div key={g.name} className="grid grid-cols-[200px_1fr] gap-3 py-1 text-small"><b>{g.name}</b><span className="text-[var(--color-text-muted)]">{g.what}</span></div>))}</div>;
     case 'profiles':
-      return <Table head={['Profile', 'For', 'Stages', 'Modes that start here']} testid="pa-profiles"
-        rows={((v as { name: string; for: string; stages: string[]; modes: string[] }[]) ?? []).map((p) => [
-          <b key="n">{p.name}</b>, p.for, <span key="s" className="text-meta text-[var(--color-text-muted)]">{p.stages.join(' → ')}</span>, p.modes.join(', ') || '—'])} />;
+      // no mode picks a profile (the profile is chosen per dispatch, design 2026-10-30-run-spec)
+      return <Table head={['Profile', 'For', 'Stages']} testid="pa-profiles"
+        rows={((v as { name: string; for: string; stages: string[] }[]) ?? []).map((p) => [
+          <b key="n">{p.name}</b>, p.for, <span key="s" className="text-meta text-[var(--color-text-muted)]">{p.stages.join(' → ')}</span>])} />;
     default:
       return <div className="text-small py-1">{typeof v === 'string' ? v : JSON.stringify(v)}</div>;
   }
