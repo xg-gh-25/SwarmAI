@@ -258,7 +258,6 @@ class TestMigrateLegacyStateDir:
         old_dir = tmp_path / ".context"
         old_dir.mkdir()
         (old_dir / "session_checkpoint.json").write_text('{"test": 1}')
-        (old_dir / "corrections.jsonl").write_text('{"line": 1}\n')
 
         state_dir = tmp_path / "state"
         monkeypatch.setattr(paths, "APP_DATA_DIR", tmp_path)
@@ -267,7 +266,6 @@ class TestMigrateLegacyStateDir:
         paths._migrate_legacy_state_dir()
 
         assert (state_dir / "session_checkpoint.json").read_text() == '{"test": 1}'
-        assert (state_dir / "corrections.jsonl").read_text() == '{"line": 1}\n'
         assert not old_dir.exists()  # empty dir removed
 
     def test_noop_when_old_dir_missing(self, tmp_path, monkeypatch):

@@ -149,7 +149,7 @@ This replaces the previous model where DDD events only fired from the DailyActiv
 
 #### Consumer 3: ObservationMiner
 
-**Update (shipped):** The ObservationMiner has since landed as `backend/core/observation_miner.py` — the "Future/Step 3" framing below is historical. It extracts patterns from the ring:
+**Update (removed 2026-10-31):** The ObservationMiner shipped as `backend/core/observation_miner.py` and wrote `state/patterns.jsonl`, but nothing ever read that file, so the miner and the file were deleted. The ring stays for the DDD Event Emitter. What it was meant to extract:
 - Repeated tool sequences (e.g., Read -> Edit -> Bash test cycle)
 - Common file clusters (files that are always edited together)
 - Intent patterns that correlate with corrections

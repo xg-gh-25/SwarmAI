@@ -87,8 +87,8 @@ def _migrate_legacy_state_dir() -> None:
     old_dir = APP_DATA_DIR / ".context"
     if not old_dir.is_dir():
         return
-    # Only migrate the two known runtime files — anything else is unexpected
-    _FILES_TO_MIGRATE = ("session_checkpoint.json", "corrections.jsonl")
+    # Only migrate the known runtime file — anything else is unexpected
+    _FILES_TO_MIGRATE = ("session_checkpoint.json",)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     for fname in _FILES_TO_MIGRATE:
         old_path = old_dir / fname

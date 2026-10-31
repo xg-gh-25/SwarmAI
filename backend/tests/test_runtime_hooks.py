@@ -1,7 +1,6 @@
 """Tests for runtime_hooks.py — real-time correction capture and error detection.
 
 Verifies:
-- PostToolUseFailure writes to corrections.jsonl
 - Consecutive failure detection injects additionalContext after 2+ failures
 - UserPromptSubmit detects CN + EN correction patterns
 - Hook timeout behavior
@@ -14,12 +13,6 @@ from unittest.mock import MagicMock
 
 
 @pytest.fixture
-def corrections_file(tmp_path):
-    """Provide a temp corrections.jsonl path."""
-    return tmp_path / "corrections.jsonl"
-
-
-@pytest.fixture
 def session_context():
     """Minimal session_context dict."""
     return {"sdk_session_id": "test-session-123"}
@@ -27,50 +20,6 @@ def session_context():
 
 # ---------------------------------------------------------------------------
 # PostToolUseFailure: correction capture
-# ---------------------------------------------------------------------------
-
-class TestCorrectionCapture:
-
-    @pytest.mark.asyncio
-    async def test_tool_failure_writes_jsonl(self, corrections_file, session_context):
-        """PostToolUseFailure hook appends valid JSONL to corrections file."""
-        from core.runtime_hooks import create_correction_capture_hook
-
-        hook = create_correction_capture_hook(str(corrections_file), session_context)
-        input_data = {
-            "tool_name": "Bash",
-            "tool_input": {"command": "git push origin main"},
-            "error": "Permission denied (publickey).",
-            "tool_use_id": "tu_001",
-        }
-        result = await hook(input_data, "tu_001", MagicMock())
-
-        assert result == {}  # observe-only, no additionalContext
-        assert corrections_file.exists()
-
-        line = json.loads(corrections_file.read_text().strip())
-        assert line["type"] == "tool_failure"
-        assert line["tool"] == "Bash"
-        assert "Permission denied" in line["error"]
-        assert line["session_id"] == "test-session-123"
-        assert "ts" in line
-
-    @pytest.mark.asyncio
-    async def test_multiple_failures_append(self, corrections_file, session_context):
-        """Multiple failures append multiple lines."""
-        from core.runtime_hooks import create_correction_capture_hook
-
-        hook = create_correction_capture_hook(str(corrections_file), session_context)
-
-        for i in range(3):
-            await hook({"tool_name": "Bash", "tool_input": {}, "error": f"err-{i}", "tool_use_id": f"tu_{i}"}, f"tu_{i}", MagicMock())
-
-        lines = corrections_file.read_text().strip().split("\n")
-        assert len(lines) == 3
-
-
-# ---------------------------------------------------------------------------
-# PostToolUseFailure: error pattern detection (consecutive failures)
 # ---------------------------------------------------------------------------
 
 class TestErrorPatternDetection:
@@ -241,14 +190,18 @@ class TestRegisterRuntimeHooks:
 
         sdk_hooks = registry.build_sdk_hooks()
 
-        # PostToolUseFailure: correction_capture + error_pattern_detector (chained)
+        # PostToolUseFailure: error_pattern_detector
         assert "PostToolUseFailure" in sdk_hooks
         # PostToolUse: failure_tracker_reset + file_tracker + session_checkpoint (chained)
         assert "PostToolUse" in sdk_hooks
         # UserPromptSubmit: post_compact_injection + enforcement injector (chained)
         assert "UserPromptSubmit" in sdk_hooks
-        # SubagentStop: subagent_capture
+        # SubagentStop: the review audit marker
         assert "SubagentStop" in sdk_hooks
+        names = {name for event in registry._hooks.values() for name, *_ in event}
+        assert "error_pattern_detector" in names
+        # their only output was state/corrections.jsonl, which nothing read
+        assert not names & {"correction_capture", "subagent_capture"}
 
 
 # ---------------------------------------------------------------------------
@@ -946,92 +899,6 @@ class TestSessionCheckpoint:
         assert data["tool_count"] == 2
 
 
-# ---------------------------------------------------------------------------
-# Phase 2: Subagent transcript capture (SubagentStop)
-# ---------------------------------------------------------------------------
-
-class TestSubagentCapture:
-
-    @pytest.mark.asyncio
-    async def test_subagent_errors_captured(self, corrections_file, session_context):
-        """SubagentStop reads transcript and captures errors to corrections.jsonl."""
-        from core.runtime_hooks import create_subagent_capture_hook
-
-        # Create a fake transcript file
-        transcript = corrections_file.parent / "transcript.jsonl"
-        lines = [
-            '{"type": "text", "content": "Working on task..."}',
-            '{"type": "text", "content": "Error: FileNotFoundError: /missing.py"}',
-            '{"type": "text", "content": "Done."}',
-        ]
-        transcript.write_text("\n".join(lines))
-
-        hook = create_subagent_capture_hook(str(corrections_file), session_context)
-        await hook(
-            {"agent_id": "agent-1", "agent_transcript_path": str(transcript), "agent_type": "general"},
-            None, MagicMock(),
-        )
-
-        assert corrections_file.exists()
-        entry = json.loads(corrections_file.read_text().strip())
-        assert entry["type"] == "subagent_finding"
-        assert "FileNotFoundError" in entry["summary"]
-
-    @pytest.mark.asyncio
-    async def test_subagent_no_errors_no_write(self, corrections_file, session_context):
-        """SubagentStop with clean transcript writes nothing."""
-        from core.runtime_hooks import create_subagent_capture_hook
-
-        transcript = corrections_file.parent / "transcript.jsonl"
-        lines = [
-            '{"type": "text", "content": "Task complete. All tests pass."}',
-        ]
-        transcript.write_text("\n".join(lines))
-
-        hook = create_subagent_capture_hook(str(corrections_file), session_context)
-        await hook(
-            {"agent_id": "agent-2", "agent_transcript_path": str(transcript), "agent_type": "general"},
-            None, MagicMock(),
-        )
-
-        assert not corrections_file.exists()
-
-    @pytest.mark.asyncio
-    async def test_subagent_missing_transcript_graceful(self, corrections_file, session_context):
-        """Missing transcript file doesn't crash."""
-        from core.runtime_hooks import create_subagent_capture_hook
-
-        hook = create_subagent_capture_hook(str(corrections_file), session_context)
-        result = await hook(
-            {"agent_id": "agent-3", "agent_transcript_path": "/nonexistent/path.jsonl", "agent_type": "general"},
-            None, MagicMock(),
-        )
-        assert result == {}
-
-    @pytest.mark.asyncio
-    async def test_subagent_large_transcript_tail_only(self, corrections_file, session_context):
-        """Only reads last 5KB of large transcripts."""
-        from core.runtime_hooks import create_subagent_capture_hook
-
-        transcript = corrections_file.parent / "big_transcript.jsonl"
-        # Write 50KB of padding + error at the end
-        padding = '{"type": "text", "content": "' + "x" * 1000 + '"}\n' * 50
-        error_line = '{"type": "text", "content": "Error: ImportError: no module named foo"}\n'
-        transcript.write_text(padding + error_line)
-
-        hook = create_subagent_capture_hook(str(corrections_file), session_context)
-        await hook(
-            {"agent_id": "agent-4", "agent_transcript_path": str(transcript), "agent_type": "general"},
-            None, MagicMock(),
-        )
-
-        assert corrections_file.exists()
-        entry = json.loads(corrections_file.read_text().strip())
-        assert "ImportError" in entry["summary"]
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: Post-compact injection (UserPromptSubmit)
 # ---------------------------------------------------------------------------
 
 class TestPostCompactInjection:

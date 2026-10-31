@@ -49,9 +49,9 @@ GATE_CLASS = {
     "shared_checkout_pre": ADVISORY, "enforcement_injector": ADVISORY,
     "pre_tool_logger": OBSERVE, "post_compact_summary": OBSERVE, "pre_compact_flag": OBSERVE,
     "post_compact_injection": OBSERVE, "notification_capture": OBSERVE, "stop_capture": OBSERVE,
-    "correction_capture": OBSERVE, "error_pattern_detector": OBSERVE,
+    "error_pattern_detector": OBSERVE,
     "failure_tracker_reset": OBSERVE, "file_tracker": OBSERVE, "session_checkpoint": OBSERVE,
-    "subagent_capture": OBSERVE, "agent_tool_audit": OBSERVE,
+    "agent_tool_audit": OBSERVE,
     "observation_recorder": OBSERVE, "observation_completer": OBSERVE,
     "cdf_usage_observer": OBSERVE,
 }

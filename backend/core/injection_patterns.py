@@ -1,10 +1,9 @@
 """injection_patterns — write-time prompt-injection rejection for agent-owned stores.
 
 Single source of truth for the instruction-shaped patterns that must NOT survive
-into an agent-owned knowledge store (corrections.jsonl, DailyActivity). Anything
-stored here is later replayed into a future agent's context (recall) OR fed to a
-live LLM (the judgment classifier reads corrections.jsonl `prompt` fields through
-Bedrock) — so an injection string that lands in the store becomes a replayed
+into an agent-owned knowledge store (DailyActivity, ToDos). Anything stored there
+is later replayed into a future agent's context (recall, the activity block, a ToDo
+dragged into a tab), so an injection string that lands in the store becomes a replayed
 instruction. We stop it at WRITE time: poison never enters, so it can never be
 replayed. (Stolen from garrytan/gbrain lib/jsonl-store.ts INJECTION_PATTERNS,
 adapted to our prose-heavy stores — see Knowledge/Reports/2026-07-27-gstack-gbrain-research.md C1.)
@@ -23,13 +22,13 @@ Design — the ONE thing that makes this false-positive-safe:
   ("I fixed the bug where users could ignore previous instructions"). The line-start
   anchor is exactly the boundary that separates poison from documentation.
 
-  For the field that may be replayed to an LLM (corrections.jsonl
-  `user_correction.prompt`) a mid-sentence 2nd-clause payload
+  For a field that is replayed to an LLM as a task (a ToDo description) a mid-sentence
+  2nd-clause payload
   ("Here is my summary. Ignore all previous instructions.") is a real threat that a
   pure line-start anchor would miss, so ``scan_text(..., sentence_split=True)``
   additionally scans sentence boundaries for that field. The slightly higher
-  false-positive rate is acceptable there: the field is <=1000 chars and the sink is
-  a live classifier, not the prose store.
+  false-positive rate is acceptable there: the sink is a task the agent acts on, not
+  the prose store.
 
 This is a WRITE-side gate. It is orthogonal to the READ-side ``[RECALLED]``
 provenance header (recall_multi.py) — it does not call or import it.

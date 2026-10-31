@@ -691,25 +691,6 @@ class DailyActivityExtractionHook:
         for day, day_messages in work:
             written |= await self._summarize_day(context, day, day_messages, activity_workspace)
 
-        # 2d. Mine observation patterns (if ring available for this session)
-        try:
-            from core.observation_miner import ObservationMiner, write_patterns
-            from core.observation_hooks import get_session_ring, _cleanup_session_ring
-            ring = get_session_ring(context.session_id)
-            if ring is not None:
-                miner = ObservationMiner()
-                patterns = miner.mine(ring.all_completed())
-                if patterns:
-                    write_patterns(patterns, context.session_id)
-                    logger.debug(
-                        "ObservationMiner: %d patterns extracted for session %s",
-                        len(patterns), context.session_id,
-                    )
-                # Clean up ring from module registry (prevent memory leak)
-                _cleanup_session_ring(context.session_id)
-        except Exception:
-            pass  # Pattern mining is best-effort, never blocks DA extraction
-
         if written:
             self._tracker.record_success(context.session_id)
 

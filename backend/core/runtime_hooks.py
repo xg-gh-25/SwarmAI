@@ -11,7 +11,6 @@ additionalContext but never block or modify tool inputs/outputs.
 Key public symbols:
 
 - ``register_runtime_hooks``         — Wire all runtime hooks into a HookRegistry
-- ``create_correction_capture_hook`` — PostToolUseFailure → corrections.jsonl
 - ``create_error_pattern_detector``  — PostToolUseFailure → hint after 2+ failures
 """
 
@@ -34,11 +33,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default corrections log path — can be overridden in factory functions
-from jobs.paths import STATE_DIR as _STATE_DIR
-_DEFAULT_CORRECTIONS_PATH = str(
-    _STATE_DIR / "corrections.jsonl"
-)
+from jobs.paths import STATE_DIR as _STATE_DIR  # noqa: E402
 
 # Consecutive failure threshold before injecting a hint
 _FAILURE_HINT_THRESHOLD = 2
@@ -54,69 +49,6 @@ _FAILURE_HINT_THRESHOLD = 2
 # Boundary-tested in test_runtime_hooks.py.
 _LANG_CJK_WEIGHT_THRESHOLD = 0.30
 
-# Rotation: keep the newest N entries when file exceeds MAX_SIZE_BYTES.
-# 500 entries × ~1.5KB = ~750KB — well within reason for a local log.
-_MAX_CORRECTIONS_ENTRIES = 500
-_MAX_CORRECTIONS_SIZE_BYTES = 512 * 1024  # 512KB trigger threshold
-
-# Free-text VALUE fields per correction entry type that carry attacker-influenced
-# content: a subagent's summary is scanned for injection before it is written.
-# `tool_failure` fields are deliberately NOT scanned — they are self-generated tool
-# output/input, FP-prone, and an attacker controlling them already controls the agent
-# (low marginal safety).
-_CORRECTION_SCAN_FIELDS: dict[str, tuple[str, ...]] = {
-    "subagent_finding": ("summary",),
-}
-_CORRECTION_SENTENCE_SPLIT_FIELDS: tuple[str, ...] = ()
-
-
-def _append_correction(path: str, entry: dict) -> None:
-    """Append a correction entry to JSONL file, rotating when oversized.
-
-    Write-time injection gate (run_6af300b3): before writing, scan the
-    attacker-influenced free-text fields for injection patterns. On a hit the
-    entry is DROPPED (not written) and logged — poison never enters the store, so
-    it can never be replayed into a future agent's context or fed to the judgment
-    classifier's live LLM. See core/injection_patterns.py.
-
-    Rotation: delegates to ``utils.jsonl_rotation.rotate_jsonl_if_oversized``
-    (512 KB trigger, keeps newest 500 entries).  One stat() per write;
-    rotation is rare (~monthly at normal usage).  Best-effort — never raises.
-    """
-    try:
-        # ── Write-time injection gate: drop a poisoned entry, never store it ──
-        scan_fields_for_type = _CORRECTION_SCAN_FIELDS.get(str(entry.get("type", "")))
-        if scan_fields_for_type:
-            from core.injection_patterns import scan_fields
-            to_scan = {f: entry.get(f) for f in scan_fields_for_type}
-            hits = scan_fields(to_scan, sentence_split_fields=_CORRECTION_SENTENCE_SPLIT_FIELDS)
-            if hits:
-                logger.warning(
-                    "Dropped correction entry (type=%s): injection pattern(s) %s in field(s) %s",
-                    entry.get("type"), list(hits.values()), list(hits.keys()),
-                )
-                return
-
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-
-        # Append the new entry
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(line)
-
-        # Rotate if oversized
-        from utils.jsonl_rotation import rotate_jsonl_if_oversized
-        rotate_jsonl_if_oversized(
-            p,
-            max_size_bytes=_MAX_CORRECTIONS_SIZE_BYTES,
-            max_entries=_MAX_CORRECTIONS_ENTRIES,
-        )
-
-    except Exception:
-        logger.exception("Failed to write correction to %s", path)
-
-
 def _extract_field(data: Any, field: str, default: Any = "") -> Any:
     """Extract field from dict or object — SDK hook inputs can be either."""
     if isinstance(data, dict):
@@ -125,44 +57,7 @@ def _extract_field(data: Any, field: str, default: Any = "") -> Any:
 
 
 # ---------------------------------------------------------------------------
-# PostToolUseFailure: correction capture → corrections.jsonl
-# ---------------------------------------------------------------------------
-
-def create_correction_capture_hook(
-    corrections_path: Optional[str] = None,
-    session_context: Optional[dict] = None,
-):
-    """Factory: creates a PostToolUseFailure hook that logs tool failures.
-
-    Args:
-        corrections_path: Path to corrections.jsonl (default: ~/.swarm-ai/state/)
-        session_context: Session context dict for session_id extraction
-    """
-    path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-    ctx = session_context if session_context is not None else {}
-    sid = ctx.get("sdk_session_id", "unknown")
-
-    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
-        tool = _extract_field(input_data, "tool_name", "unknown")
-        tool_input = _extract_field(input_data, "tool_input", {})
-        error = _extract_field(input_data, "error", "")
-
-        entry = {
-            "ts": time.time(),
-            "session_id": sid,
-            "type": "tool_failure",
-            "tool": tool,
-            "input_summary": str(tool_input)[:500],
-            "error": str(error)[:1000],
-        }
-        _append_correction(path, entry)
-        return {}
-
-    return _hook
-
-
-# ---------------------------------------------------------------------------
-# PostToolUseFailure: error pattern detection → additionalContext hint
+# PostToolUseFailure: consecutive-failure hint
 # ---------------------------------------------------------------------------
 
 def create_error_pattern_detector(
@@ -428,27 +323,6 @@ def create_session_checkpoint(
     return _hook
 
 
-# ---------------------------------------------------------------------------
-# SubagentStop: transcript capture
-# ---------------------------------------------------------------------------
-
-_SUBAGENT_TAIL_BYTES = 5 * 1024  # Read last 5KB of transcript
-
-_ERROR_PATTERNS = re.compile(
-    r"""(?i)(?:
-        Error:\s+\S+
-      | Exception:\s+\S+
-      | FAILED\s+tests/
-      | AssertionError
-      | ImportError
-      | FileNotFoundError
-      | KeyError
-      | TypeError
-      | ValueError
-      | RuntimeError
-    )""",
-    re.VERBOSE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -733,8 +607,7 @@ def create_agent_tool_audit_hook(
         # The transcript READ + marker writes run in ONE
         # off-loop thread hop below — the sub-agent transcript is on the same disk
         # the daemon is actively writing, so reading it inline would block the event
-        # loop on a busy disk (RP53; the sibling create_subagent_capture_hook already
-        # offloads its transcript read via to_thread).
+        # loop on a busy disk (RP53).
         transcript_path = _extract_field(input_data, "agent_transcript_path", "")
         last_message = _extract_field(input_data, "last_assistant_message", "")
 
@@ -1150,70 +1023,6 @@ def _expert_answer(final_text: str) -> dict:
             "recheck_answers": answers}
 
 
-def create_subagent_capture_hook(
-    corrections_path: Optional[str] = None,
-    session_context: Optional[dict] = None,
-):
-    """Factory: creates a SubagentStop hook that reads the agent transcript.
-
-    Reads the last 5KB of the transcript, extracts error patterns via regex,
-    and writes findings to corrections.jsonl.  Observe-only.
-    """
-    path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-    ctx = session_context if session_context is not None else {}
-    sid = ctx.get("sdk_session_id", "unknown")
-
-    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
-        transcript_path = _extract_field(input_data, "agent_transcript_path", "")
-        agent_id = _extract_field(input_data, "agent_id", "unknown")
-
-        if not transcript_path:
-            return {}
-
-        try:
-            p = Path(transcript_path)
-            if not p.exists():
-                return {}
-
-            # Read tail of transcript — OFF-LOOP (run_a1f4c2d8). Bounded to
-            # _SUBAGENT_TAIL_BYTES, but a transcript lives on the same disk the agent is
-            # actively writing to, so even a seek+read is real latency on the loop. The
-            # stat and the read stay in ONE helper: the seek offset is derived from the
-            # size, so splitting them would open a window where the file grew between
-            # measuring and seeking.
-            def _read_tail() -> str:
-                size = p.stat().st_size
-                with open(p, "r", encoding="utf-8", errors="replace") as f:
-                    if size > _SUBAGENT_TAIL_BYTES:
-                        f.seek(size - _SUBAGENT_TAIL_BYTES)
-                        f.readline()  # skip partial first line
-                    return f.read()
-
-            tail = await asyncio.to_thread(_read_tail)
-
-            # Extract error patterns
-            errors = _ERROR_PATTERNS.findall(tail)
-            if not errors:
-                return {}
-
-            summary = "; ".join(dict.fromkeys(errors))[:500]  # dedup, cap at 500 chars
-            entry = {
-                "ts": time.time(),
-                "session_id": sid,
-                "type": "subagent_finding",
-                "agent_id": agent_id,
-                "summary": summary,
-            }
-            _append_correction(path, entry)
-
-        except Exception:
-            logger.exception("Failed to capture subagent transcript from %s", transcript_path)
-
-        return {}
-
-    return _hook
-
-
 # ---------------------------------------------------------------------------
 # UserPromptSubmit: post-compact context injection
 # ---------------------------------------------------------------------------
@@ -1592,20 +1401,12 @@ def create_persist_skill_tracker_reset(session_context: Optional[dict] = None):
 def register_runtime_hooks(
     registry: "HookRegistry",
     session_context: dict,
-    corrections_path: Optional[str] = None,
 ) -> None:
     """Register all runtime hooks into a HookRegistry.
 
     Called from hook_builder.build_hooks() to wire runtime observation.
     """
-    path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-
     # PostToolUseFailure hooks
-    registry.register(
-        "PostToolUseFailure",
-        create_correction_capture_hook(path, session_context),
-        "correction_capture",
-    )
     registry.register(
         "PostToolUseFailure",
         create_error_pattern_detector(session_context),
@@ -1676,13 +1477,6 @@ def register_runtime_hooks(
     # was removed: it graded SwarmAI's own golden set, not a product behaviour.
     # Design 2026-10-24-swarmai-usable-by-anyone P7. Eval runs on demand / on schedule.)
 
-    # Phase 2: SubagentStop transcript capture
-    registry.register(
-        "SubagentStop",
-        create_subagent_capture_hook(path, session_context),
-        "subagent_capture",
-    )
-
     # Gate 2 Agent Tool Audit: write marker file on SubagentStop
     registry.register(
         "SubagentStop",
@@ -1724,8 +1518,8 @@ def register_runtime_hooks(
         logger.debug("observation_hooks registration failed", exc_info=True)
 
     logger.info(
-        "Runtime hooks registered: correction_capture, error_pattern_detector, "
+        "Runtime hooks registered: error_pattern_detector, "
         "failure_tracker_reset, file_tracker, session_checkpoint, memory_edit_guard, "
-        "subagent_capture, post_compact_injection, "
+        "post_compact_injection, "
         "observation_recorder, observation_completer"
     )
