@@ -6327,21 +6327,27 @@ def knowledge_command_denial(command: str) -> "str | None":
     return None
 
 
-_SWARM_OUT_WORD_RE = re.compile(r"swarm[_-]?out", re.IGNORECASE)
+# Swarm Out by name, and the Hive-management routes (core/swarm_out_ops: a non-owner
+# channel agent is never a caller of either)
+_SWARM_OUT_WORD_RE = re.compile(r"swarm[_-]?out|/api/+hive\b", re.IGNORECASE)
 
 
 def owner_command_denial(command: str) -> "str | None":
     """Why a Bash *command* in a restricted (non-owner channel) session is denied, or
     None: the knowledge command (``knowledge_command_denial``), and anything that names
-    Swarm Out (the CLI ``scripts.swarm_out`` or the daemon's ``/api/swarm-out`` routes):
+    Swarm Out (the CLI ``scripts.swarm_out`` or the daemon's ``/api/swarm-out`` routes)
+    or the Hive-management routes (``/api/hive``):
     dispatching to the owner's Hives sends their code out and spends their money, and
     ``runs`` shows their dispatches (design 2026-10-30-swarm-out-dispatch-card §4).
-    Checked with quotes and backslashes removed. A usability guard like the knowledge
+    Checked with quotes and backslashes removed, also URL-decoded with ``.``/``..`` and
+    doubled slashes collapsed (``run_owner_gate._as_routed``). A usability guard like the knowledge
     one, not a boundary; the CLI refuses on its own as well (``RESTRICTED_ENV``)."""
     why = knowledge_command_denial(command)
     if why:
         return why
-    if _SWARM_OUT_WORD_RE.search(re.sub(r"[\"'\\]", "", command or "")):
+    from core.run_owner_gate import _as_routed
+    bare = re.sub(r"[\"'\\]", "", command or "")
+    if _SWARM_OUT_WORD_RE.search(bare) or _SWARM_OUT_WORD_RE.search(_as_routed(bare)):
         return "Swarm Out is only available to the owner"
     return None
 

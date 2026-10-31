@@ -97,7 +97,7 @@ def _task(args) -> str:
     return args.task if args.task is not None else open(args.task_file, encoding="utf-8").read()
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="swarm_out")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("route")
@@ -123,7 +123,11 @@ def main(argv: list[str] | None = None) -> int:
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
     sub.add_parser("hives")
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     from core.knowledge_cli import RESTRICTED_ENV
     if os.environ.get(RESTRICTED_ENV):
         # a non-owner channel session: Swarm Out is the owner's (their Hives, their code)

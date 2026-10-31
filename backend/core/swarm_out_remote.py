@@ -111,7 +111,9 @@ def match_route(method: str, path: str, sid: str) -> tuple[Route, str]:
     """The route for ``method`` + ``path`` (relative to /api) and the upstream path,
     with every ``{sid}`` equal to the session and every other parameter checked and
     quoted. Raises RemoteError(404) for anything else."""
-    parts = path.strip("/").split("/")
+    parts = path.split("/")
+    if "" in parts:          # a leading, trailing or doubled "/": not a route's spelling
+        raise RemoteError(404, "not found")
     for route in ROUTES:
         if route.method != method:
             continue

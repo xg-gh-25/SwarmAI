@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "Swarm Out 能力登记表：一张操作表、从表生成的门、写清楚它挡不住什么"
-status: r3 — 第一阶段范围和 ⑤ 已定（XG 2026-10-31）；第二阶段排期、devtools 待定（§9）
+status: r4 — 第一阶段已实现（§10 记录和设计的出入）；第二阶段排期、devtools 待定（§9）
 related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.6 Conductor、§5.8 代答、P0-c）
 ---
 
@@ -123,13 +123,20 @@ class Op:
 | `run.return_prepare` `run.rerun` `run.stop` | person | change |
 | `ask.answer`（审批和提问共用一条路由；门分不出请求体，整条按人专用；代答提问将来走内部调用 `internal:wp_answer`，swarm-run §5.8） | person | off_machine |
 | `remote.relay`（开 / 关长连接） | person | change |
-| `remote.read`（`ROUTES` 里的 GET） | person | read |
+| `remote.read`（`ROUTES` 里的 GET） | person, owner_agent（和 run review 第一轮的决定一致：读不受限，`run.result` 本来就把 Hive 写的文字交给 agent） | read |
 | `remote.write`（`ROUTES` 里其余的，含 `DELETE …/pending/…`） | person | change |
 | `hive.credentials` | person | off_machine（拿到它就能冒充人，§2.4 ③） |
 | `hive.create` `hive.delete` `hive.reset_password` `hive.account.*` | person | irreversible / off_machine |
-| `hive.start` `hive.stop` `hive.update` `hive.brain_sync` 及其余 `/api/hive/*` 读 | 按路由逐条定 | 逐条定 |
+| `hive.start` `hive.retry`（开机器，花钱） | person | off_machine |
+| `hive.stop`（停掉这台 Hive 上在跑的单，和 `run.stop` 一样是人的） | person | change |
+| `hive.update`（升级已有的 Hive；agent 应自己做，不该交回给人） | person, owner_agent | change |
+| `hive.latest_version` `hive.brain.status` | person, owner_agent | read |
+| `hive.instance.list` `hive.instance.get` `hive.account.list` | person（和人专用的建 / 删同一路径；门按路径判断，agent 看 Hive 走 `hive.list` / `hive.fleet`） | read |
+| `hive.account.verify` | person | off_machine |
+| `hive.brain.sync_defaults` `hive.brain.sync`（Brain 送出本机；派单自带的同步不经这两条） | person | off_machine |
+| `hive.serve.*`（`routers/hive_brains.py`，Hive 上才有，桌面上 404） | internal:host（Host 的 daemon 经网络调） | 逐条 |
 
-（`/api/hive/*` 的完整清单在实现第 2 步从 `app.routes` 生成后逐条定调用方，设计里不预先拍板。）
+（实现时从 `app.routes` 逐条定下，完整清单以 `core/swarm_out_ops.py` 为准。）
 
 ### 5.2 门从表生成
 
@@ -164,15 +171,24 @@ class Op:
 `./img/a.png`）在今天的浏览器打开里本来就解析错。
 
 **做法：**
-- daemon 多监听一个只读端口（桌面模式；dev 和 Hive 不开）：同一进程里第二个 `uvicorn.Server`，挂一个只有一条
-  路由的小 ASGI 应用：`GET /f/<编码后的绝对路径>`，复用 `_resolve_file_path` 和 50 MB 上限
-  （`routers/workspace_api.py:1562-1586`），只读，不挂任何 API、不发 CORS 头。端口默认 daemon 端口 + 1，
-  被占用就换一个空闲端口。
-- 路径放在 URL 路径里而不是查询串里，所以报告里的相对链接和 fetch 解析到同目录的文件，能用了。
-- 前端问一次地址：`GET /api/workspace/content-origin` → `{base}`；`HtmlRenderer` 的"在浏览器打开"改用
-  `contentFileUrl(path)`。应用内 iframe 不变（已经是不透明 origin），图片、PDF、音视频不变。
-- 兜底：daemon 的 `/api/workspace/file/raw` 返回 `text/html` 时加 `Content-Security-Policy: sandbox allow-scripts
-  allow-popups`（不给 allow-same-origin）。应用内 iframe 本来就有这个 sandbox，不受影响；以后任何地方再在顶层打开
+- daemon 多监听一个只读端口（`SWARMAI_MODE` 为 daemon / subprocess 时；dev 和 Hive 不开）：同一进程里第二个
+  `uvicorn.Server`（不接管信号，SIGTERM 仍归 daemon），只回答 `GET|HEAD /f/<令牌>/<路径>`，其余 404，不挂任何
+  API、不发 CORS 头，50 MB 上限同 raw 路由。端口默认 daemon 端口 + 1，被占用就换一个空闲端口。
+- **令牌按目录发（r4，实现时改）：** 路径不直接放绝对路径，而是 `GET /api/workspace/content-url?path=` 由
+  daemon 按 raw 路由同样的规则解析文件，给文件所在目录发一个随机令牌，返回 `{url}`。内容端口只读令牌目录下的
+  文件（解析后判断，符号链接也算）。原因：放绝对路径的话，页面可以同源 fetch 读到整个 home 下的文件
+  （如 `~/.aws`）。令牌只在内存里，daemon 重启即失效。
+- **不发令牌的目录（审查后加）：** home 及以上、home 下一级（`~/Desktop`、`~/Downloads`、`~/.swarm-ai`）、工作区根；
+  这些文件回落到 raw URL。任何以 `.` 开头的路径段（`.env`、`.git/config`）不回答。
+- **内容 origin 的响应带 `connect-src 'self'; form-action 'none'`：** 页面能 fetch 同目录的文件，不能 fetch 别的站；
+  CDN 的脚本和图片照常加载，所以经图片 URL 带出数据仍可能（残留，下面"仍然存在"）。
+- 报告里的相对链接和 fetch 解析到同目录的文件，能用了。
+- `HtmlRenderer` 的"在浏览器打开"改用 `contentFileUrl(path)`：拿到 `{url}` 就开它，`null`（内容端口没开）或
+  请求失败就开 raw URL。应用内 iframe 不变（已经是不透明 origin），图片、PDF、音视频不变。
+- 兜底：daemon 的 `/api/workspace/file/raw` 除 PDF 和图片 / 音频 / 视频（`+xml` 类型除外，SVG 能跑脚本）外，
+  一律加 `Content-Security-Policy: sandbox allow-scripts allow-popups`（不给 allow-same-origin），所有响应加
+  `X-Content-Type-Options: nosniff`。审查发现按类型列"要防的"会漏（`.rdf`、`.xsl` 等 `+xml` 类型浏览器也当文档跑），
+  所以改成按类型列"不用防的"。应用内 iframe 本来就有这个 sandbox，不受影响；以后任何地方再在顶层打开
   这个 URL，也拿不到 API 的同源。
 - 内容 origin 上的页面仍可以向 daemon 发跨源的"简单请求"（和今天用 `file://` 打开 HTML 一样，
   `FileEditorCore.tsx:1549`）。命令路由要带 `so_` 加 12 位十六进制的单号，猜不到；其余路由的跨站请求问题
@@ -180,6 +196,7 @@ class Op:
 
 **要验证（实现第一步就做）：** WKWebView / 系统浏览器打开 `http://localhost:<内容端口>/f/…` 能正常渲染；
 daemon 和内容端口一起起停（launchd 重启、`backend.json`）；Internal 实例（18421）不撞端口。
+结果见 §10。
 
 ### 5.6 暂不做（r1 有，r2 去掉）
 
@@ -250,3 +267,37 @@ correctness，每类最多两轮。
 **待定**
 3. 第二阶段（人签名）要不要现在排期做验证：平台级，影响所有"只有人能做"的操作，也是 Swarm Run P0-c 的前提。
 4. 发布版的 devtools 是否关掉（和第二阶段相关，也独立于它）。
+
+## 10. 实现记录（r4）
+
+**和设计的出入**
+- §5.5 内容 origin 改成按目录发令牌（`/api/workspace/content-url`），不放绝对路径；兜底 CSP 覆盖 SVG / XML。
+- `remote.read` 的调用方加上 owner_agent，和 run review 第一轮已定、已测的行为一致（§5.1 表）。
+- 非 owner 的 channel 会话的拒绝（`owner_command_denial`）多认 `/api/hive`：表里写着 channel agent 不是任何
+  op 的调用方，原来只认 swarm-out 字样，会漏掉 Hive 管理路由。
+- CLI 拆出 `_parser()`，供 §5.3 的断言按调用验证（不读源码）。
+- 门的规范化多一步：连续的 `/` 并成一个（服务器会把 `…/stop//` 重定向到 `…/stop`，代理原来也会去掉路径两头的 `/`）；
+  路径的结尾判断改成"后面不是能接着组成路径的字符"。代理现在只认规范路径（空段一律 404）。
+- 非 owner channel 的拒绝也看解码、折叠后的命令。
+
+**审查（security + correctness，两轮）** 第一轮 13 条，按原因归成 8 组一次修完：门的结尾和 `//` 写法放过了旧正则拦得住的
+命令（回归）；raw 的 CSP 漏 `+xml`；内容 origin 一个令牌覆盖范围过大且页面能把数据发出去；`SO_REUSEADDR` 在 macOS 上能
+和别的程序的 `0.0.0.0` 监听并存；server 没起来也发 URL；符号链接文件 404；channel 拒绝不解码；一个测试因 httpx 先规范化
+`..` 而碰巧通过。
+
+**仍然存在**
+- 门是减速带（§2.4）：运行时拼出的路径、脚本文件里的 URL 看不到。
+- 门按路径判断：命令里只是提到 `/api/hive/instances` 这类人专用路径（例如 `rg` 搜代码）也会被拒，拒绝信息让 agent
+  改搜路径的一部分。
+- 内容 origin 上的页面仍可经图片 URL 把它读到的同目录文件带出去，也仍能向 daemon 发跨源的"简单请求"（§5.5）。
+
+**验证**
+- 内容端口：在临时 HOME、空闲端口上从源码起一个 subprocess 模式的后端，`content-url` 返回内容端口 URL，
+  报告 200，同目录 `data.json` 可读，内容端口上 `/api/health` 404，无 CORS 头；raw 路由对 HTML 带 sandbox CSP；
+  后端停后两个端口都关。daemon 端口 18321 + 1 = 18322、Internal 18421 + 1 = 18422，都不冲突。
+- 测试：`tests/test_swarm_out_ops.py`（§8 不变量 1–4）、`tests/test_content_origin.py`（不变量 5），每个防线
+  都做了 mutation 检查。
+
+**没验证**
+- 系统浏览器里报告脚本的同目录 fetch 真跑通（HTTP 同源 fetch，按标准行为推断）。
+- 打包后的 daemon 在 launchd 下起停（需要 build 和重启）。

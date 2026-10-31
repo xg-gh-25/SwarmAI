@@ -33,7 +33,9 @@ For a ``pipeline_v1.py`` command:
   (``_record_approval``).
 - a Bash call to the human-only ``/api/pipelines/<id>/decision`` is denied, and so is
   one to the user-only CDF redaction ``/api/ingestion/redact`` (CDF §13 tombstone: only
-  the person triggers it, from the Flow view).
+  the person triggers it, from the Flow view), and one to any Swarm Out / Hive route
+  the owner agent may not call (``core.swarm_out_ops``, the table the regexes are
+  generated from).
 
 Fail-open on its own errors (never blocks a command because the gate broke).
 Public: ``create_run_owner_gate``, ``parse_cli_calls``, ``AFTER_APPROVAL``.
@@ -64,15 +66,11 @@ _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 _HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
 # The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
 _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
-# The person's commands on a Swarm Out run (run-review §1.1; routers/swarm_out.py):
-# accept (the verdict, landing the commits or "landed by hand"), re-run with a
-# correction, stop, discard.
-_USER_ONLY_SETTLE_RE = re.compile(
-    r"/api/swarm-out/runs/[^\s/'\"]+/(?:verdict|manual-landed|return/land|rerun|stop|discard)\b"
-    # the same actions on a run's Hive session through the Host proxy (routers/
-    # swarm_out_remote): sending into it, answering for it, stopping, compacting it
-    r"|/api/swarm-out/remote/[^\s/'\"]+/chat/(?:stream|answer-question|cmd-permission-continue"
-    r"|stop|compact|refresh)\b")
+# The person's Swarm Out and Hive operations (accept / re-run / stop / discard a run,
+# answer a Hive's question, its session through the Host proxy, a Hive's password,
+# creating / deleting a Hive …) are not listed here: they are the rows of
+# core.swarm_out_ops whose callers leave out the owner agent, and the gate's regexes
+# are generated from that table (docs/design/2026-10-31-swarm-out-ops-registry.md §5.2).
 # Actions the person approves first: handled by the
 # phase="approved" registration, after dangerous_command_gate.
 AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot"})
@@ -359,10 +357,11 @@ _DOT_SEGMENT_RE = re.compile(r"/(?:\.(?=/)|[^/\s'\"]+/\.\.(?=/))")
 
 
 def _as_routed(command: str) -> str:
-    """``command`` URL-decoded (twice: a double-encoded path) with ``/./`` and
-    ``/<seg>/../`` collapsed, until nothing changes."""
+    """``command`` URL-decoded (twice: a double-encoded path) with runs of ``/`` made
+    one (``…/stop//`` is redirected to ``…/stop``, and the Host proxy strips the slashes
+    around its path) and ``/./`` and ``/<seg>/../`` collapsed, until nothing changes."""
     from urllib.parse import unquote
-    s = unquote(unquote(command))
+    s = re.sub(r"/{2,}", "/", unquote(unquote(command)))
     for _ in range(32):
         t = _DOT_SEGMENT_RE.sub("", s)
         if t == s:
@@ -373,7 +372,8 @@ def _as_routed(command: str) -> str:
 
 def _user_only_deny(command: str) -> "dict | None":
     """The deny for a command that calls a route only the person may call (the
-    redaction route, a Swarm Out task's acceptance), else None.
+    redaction route; a Swarm Out or Hive operation the owner agent may not call,
+    ``core.swarm_out_ops``), else None.
     Pure string work: the gate runs it on every Bash command, before any filter. The
     command is also matched URL-decoded with ``.``/``..`` path segments collapsed, as
     the server would route it. This is a speed bump, not a boundary: a path assembled at
@@ -387,10 +387,13 @@ def _user_only_deny(command: str) -> "dict | None":
         return _deny("withdrawing written knowledge is the person's action (the Flow view's "
                      "撤回 button), never a command. Tell the user which unit you think should "
                      "be withdrawn and why; they decide.")
-    if _USER_ONLY_SETTLE_RE.search(command):
-        return _deny("the commands on a Swarm Out run (accept, re-run with a correction, stop, "
-                     "discard) are the person's, on its card, never a command. Tell the user what "
-                     "you think and why; they decide.")
+    from core import swarm_out_ops
+    op = swarm_out_ops.person_only_match(command)
+    if op is not None:
+        return _deny(f"`{op.name}` ({op.method} {op.path}) is the person's to do in the App "
+                     "(Swarm Out, or Settings → Hive), never a command. Tell the user what you "
+                     "think should be done and why; they decide. (Searching code or docs for "
+                     "this path? Search a part of it instead.)")
     return None
 
 
