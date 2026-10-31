@@ -174,7 +174,7 @@ def _unit_text(unit: SourceUnit) -> str:
         fields = (unit.title, unit.what, unit.how, unit.why, unit.applicability,
                   unit.rejected_alternatives)
     elif isinstance(unit, EventUnit):
-        fields = (unit.title, unit.what, unit.impact, unit.outcome, unit.follow_up)
+        fields = (unit.title, unit.what, unit.impact, unit.outcome)
     elif isinstance(unit, GapUnit):
         fields = (unit.title, unit.what, unit.why, unit.proposed_next)
     else:

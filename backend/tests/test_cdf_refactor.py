@@ -100,7 +100,7 @@ def _hits(monkeypatch, anchor):  # kept for importers: retrieval no longer exist
     (_cog(scope="user", user_kind="profile"), "USER", ".context/USER.md", None),
     (_cog(scope="project:widget", type="pitfall", topic="architecture"), "DDD",
      "Projects/Widget/2-understanding/TECH.md", "Runtime Traps"),
-    ({"kind": "gap", "gap_kind": "follow_up", "scope": "project:Widget", "title": "Open",
+    ({"kind": "gap", "gap_kind": "debt", "scope": "project:Widget", "title": "Open",
       "what": "The tab does not refresh.", "evidence": ["event:e1"]}, "DDD",
      "Projects/Widget/2-understanding/IMPROVEMENT.md", "What to Watch For"),
 ])
@@ -122,7 +122,7 @@ def test_an_unknown_project_goes_to_the_general_brain_under_its_name(tmp_path, u
 
 
 def test_a_gap_of_an_unknown_project_goes_to_the_general_brains_open_gaps(tmp_path, user_words):
-    gap = {"kind": "gap", "gap_kind": "follow_up", "scope": "project:Nope", "title": "Open",
+    gap = {"kind": "gap", "gap_kind": "debt", "scope": "project:Nope", "title": "Open",
            "what": "The tab does not refresh.", "evidence": ["event:e1"]}
     decision = run_unit_v2(_row(gap), _ws(tmp_path))
     assert (decision.destination.store, decision.destination.section) == ("COMMON_DDD", "Open Gaps")

@@ -58,7 +58,10 @@ def layer_of(type_: str) -> str:
 Scope = str  # "user" | "agent" | "world" | "project:<name>"
 EvidenceAnchor = Annotated[str, Field(min_length=3, pattern=r"^(event|finding|run_event|doc|commit|unit|metric|web):.+")]
 ReferenceKind = Literal["learned", "analysis", "design", "spec", "note", "link"]
-GapKind = Literal["debt", "risk", "deferred_finding", "process_issue", "follow_up"]
+# A gap is a weak point of the project that stays until fixed. Work a session leaves
+# for later is not a gap: it is a ToDo, written by the session's activity summary
+# (design 2026-10-31-continue-lookback-todo D2).
+GapKind = Literal["debt", "risk", "deferred_finding", "process_issue"]
 
 
 # What _valid_scope accepts, in words: shown to the extractor (extract_llm.unit_schema),
@@ -199,7 +202,6 @@ class EventUnit(_Unit):
     what: str = Field(min_length=1)
     impact: str | None = None
     outcome: str | None = None
-    follow_up: str | None = None
     event_kind: Literal["event", "month_summary", "month_supplement"] = "event"
     # the open gaps of the run's project this event fixed, by id (a pipeline run's
     # REFLECT report only; design 2026-10-30-cdf-gap-lifecycle §2)
@@ -222,7 +224,8 @@ class EventUnit(_Unit):
 
 
 class GapUnit(_Unit):
-    """An open improvement area / follow-up (§5.5 S3 part 5). Never reinforced."""
+    """A weak point of the project still open: debt, a risk, a deferred finding, a
+    process issue (§5.5 S3 part 5). Never reinforced."""
 
     kind: Literal["gap"] = "gap"
     gap_kind: GapKind
@@ -270,7 +273,7 @@ SOURCE_UNIT = TypeAdapter(SourceUnit)
 # First principle: these fields are never truncated, regex-stripped or line-folded.
 SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
     "cognition": ("title", "what", "how", "why", "applicability", "rejected_alternatives"),
-    "event": ("title", "what", "impact", "outcome", "follow_up"),
+    "event": ("title", "what", "impact", "outcome"),
     "gap": ("title", "what", "why", "proposed_next"),
     "reference": ("title", "summary", "body", "source_url"),
 }
@@ -279,10 +282,13 @@ SEMANTIC_FIELDS: dict[str, tuple[str, ...]] = {
 # TIMELINE is injected every turn, so an event must change how the work stands. Stated
 # by both extraction prompts (extract_llm, s7_review) and the card 1 event check.
 EVENT_RULE = ("An event is recorded only when it changes how the work stands: a deliverable "
-              "the user asked for landed, a decision or change of direction, real loss or "
-              "rework. Routine operations are not events whether they succeed or fail: a "
-              "build, a restart, a deploy, an install, a test run, checking a result, "
-              "dispatching the next step of a plan.\n")
+              "the user asked for landed, a decision or change of direction (and why), a "
+              "milestone, an incident (and how it was resolved), real loss or rework, "
+              "worded as it stands at the end. Routine operations are not events whether "
+              "they succeed or fail: a build, a restart, a deploy, an install, a test run, "
+              "checking a result, dispatching the next step of a plan. An event is never a "
+              "status (not pushed, not built) and never work still to do: open work is a "
+              "ToDo, written by the session's own activity summary.\n")
 def event_date_rule() -> str:
     """The date an event falls back to: with none in the source the model invented one
     (2025-01-01T00:00:00), which filed the event under a month of its own."""

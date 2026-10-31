@@ -344,7 +344,7 @@ def _ddd_entry(group: Mapping[str, Any], title: str, fallback_body: str,
         entry: dict[str, Any] = {
             "type": "gap", "title": title, "what": group.get("what") or fallback_body,
             "why": group.get("why"), "how": group.get("proposed_next"),
-            "applicability": f"gap kind: {group.get('gap_kind', 'follow_up')}"}
+            "applicability": f"gap kind: {group.get('gap_kind') or 'unknown'}"}
     else:
         entry = {
             "type": str(group.get("type") or _model_value(
@@ -390,7 +390,7 @@ def _render_ddd(unit_id: str, group: Mapping[str, Any], *, answer: Any = None,
 
 # the text fields of an entry (one line in a governed file); a reference is a document
 _ENTRY_TEXT_FIELDS = frozenset({"title", "what", "how", "why", "applicability", "rejected_alternatives",
-                                "impact", "outcome", "follow_up", "proposed_next", "text"})
+                                "impact", "outcome", "proposed_next", "text"})
 
 
 def _defang(text: str) -> str:
@@ -424,7 +424,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
         # i.e. a forged event, in a file read every turn
         lines = [f"### {_one_line(group.get('when', today))} {_one_line(title)}",
                  f"- what: {_one_line(group.get('what', fallback_body))}"]
-        for name in ("impact", "outcome", "follow_up"):
+        for name in ("impact", "outcome"):
             if group.get(name) is not None:
                 lines.append(f"- {name}: {_one_line(group[name])}")
         meta = [f"cand:{unit_id}", f"event_key:{event_key}", f"source:{source}",
@@ -474,7 +474,7 @@ def _render_block(decision: UnitDecision | Mapping[str, Any], unit_id: str,
     entry_type = str(group.get("type") or _model_value(answer, "entry_type",
                                                         group.get("type_hint") or "guideline"))
     if kind == "gap":
-        entry_type = f"gap:{group.get('gap_kind', 'follow_up')}"
+        entry_type = f"gap:{group.get('gap_kind') or 'unknown'}"
         fields = [("", group.get("what")), ("**Why:** ", group.get("why")),
                   ("**Next:** ", group.get("proposed_next"))]
         body = " ".join(f"{label}{value}" for label, value in fields if value not in (None, ""))

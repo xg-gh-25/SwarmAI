@@ -122,3 +122,29 @@ def test_routing_touches_no_filesystem_from_a_read_only_cwd(tmp_path, monkeypatc
         assert os.listdir(cwd) == []
     finally:
         cwd.chmod(0o755)
+
+
+def test_open_work_is_no_cdf_unit():
+    """Design 2026-10-31-continue-lookback-todo D2: work left for later is a ToDo, so a
+    follow_up gap and an event's follow_up field are refused; the other gap kinds stay."""
+    import pydantic
+    import pytest as _pytest
+    from core.ingestion import contracts_v2 as C
+    base = {"kind": "gap", "scope": "project:P", "title": "t", "what": "w", "evidence": ["event:e1"]}
+    for kind in ("debt", "risk", "deferred_finding", "process_issue"):
+        assert C.SOURCE_UNIT.validate_python({**base, "gap_kind": kind}).gap_kind == kind
+    with _pytest.raises(pydantic.ValidationError):
+        C.SOURCE_UNIT.validate_python({**base, "gap_kind": "follow_up"})
+    event = {"kind": "event", "when": "2026-10-31", "title": "t", "what": "w", "outcome": "o",
+             "evidence": ["event:e1"]}
+    C.SOURCE_UNIT.validate_python(event)
+    with _pytest.raises(pydantic.ValidationError):
+        C.SOURCE_UNIT.validate_python({**event, "follow_up": "do the next thing"})
+    assert "never work still to do" in C.EVENT_RULE and "ToDo" in C.EVENT_RULE
+
+
+def test_the_review_prompt_sends_next_steps_to_todos_not_gaps():
+    from core.ingestion.sources import s7_review
+    prompt = " ".join(s7_review.build_prompt(("cognition", "gap", "event"), {}, "", "record").split())
+    assert "the session's own activity summary makes them ToDos" in prompt
+    assert "what is left open as gaps" not in prompt

@@ -252,8 +252,10 @@ context may hold only a summary of it).
 
 1. After-action review. Ask: what was intended? what actually happened? why did the two
    differ (a pitfall or a correction)? what to do next time (a guideline or a process)?
-   Record the trade-offs you made as decisions, what is left open as gaps, and what
-   happened that matters later as events.
+   Record the trade-offs you made as decisions, the project's weak points still open
+   (debt, a risk, a deferred finding, a process issue) as gaps, and what happened that
+   matters later as events. The next steps of the work are not recorded here: the
+   session's own activity summary makes them ToDos.
 2. Keep a unit only if all three hold: it is useful in another task; a capable person who
    was not here would go wrong or waste time without it; you can point to its evidence.
 3. Write each unit as situation (applicability: a recognisable trigger, not "when

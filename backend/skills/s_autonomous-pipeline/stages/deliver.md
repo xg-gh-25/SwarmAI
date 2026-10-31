@@ -6,7 +6,7 @@ Write `artifacts/reflect.json` through `"$SWARM_BACKEND_BIN" pipeline-v1 reflect
 - `decisions`: `{"kind": "cognition", "type": "decision", "scope", "title", "what", "why", "rejected_alternatives"}` (write `none` when there was no alternative).
 - `corrections`: cognition of `type` `correction` or `pitfall`; a pitfall's `applicability` says when it bites.
 - `practices`: cognition of `type` `guideline` or `process`.
-- `gaps`: `{"kind": "gap", "gap_kind": debt | risk | deferred_finding | process_issue | follow_up, "scope", "title", "what"}`.
+- `gaps`: `{"kind": "gap", "gap_kind": debt | risk | deferred_finding | process_issue, "scope", "title", "what"}`.
 
 Every row's `evidence` cites this run's anchors (`"$SWARM_BACKEND_BIN" pipeline-v1 events --project <P> --run-id <R>` lists them). `scope` says where it belongs: `project:<P>` (its DDD, or the repo's shared file when the project has none), `world`, or `user`. A cognition unit that replaces an existing entry of the project says so in `overrides`: `["<8-character id> | <the entry's first line, copied>"]`, the id as `knowledge find` / `get` printed it. CDF retires that entry once the unit is written, only if the id and first line name exactly one entry CDF wrote and this run said it later; a replacement that is only related is not an override. (RF-4 checks the report's shape, it names no candidates.)
 

@@ -568,7 +568,7 @@ def test_s3_real_pipeline_lands_reflects_and_writes_five_parts(
             how="Use the structured validation report.",
             why="The report then cites measured run evidence.")],
         "gaps": [{
-            "kind": "gap", "gap_kind": "follow_up", "scope": "project:P",
+            "kind": "gap", "gap_kind": "debt", "scope": "project:P",
             "title": "Observe report quality", "what": "Report quality needs a production observation window.",
             "why": "One E2E run cannot establish field precision.",
             "proposed_next": "Observe each source until it has thirty candidates.",

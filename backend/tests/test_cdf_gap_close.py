@@ -270,7 +270,7 @@ def test_a_unit_the_same_as_a_closed_gap_is_written_again(tmp_path, monkeypatch)
     und = tmp_path / "Projects" / "Widget" / "2-understanding"
     und.mkdir(parents=True)
     improvement = und / "IMPROVEMENT.md"
-    unit = {"kind": "gap", "gap_kind": "follow_up", "scope": "project:Widget", "title": "Tab refresh",
+    unit = {"kind": "gap", "gap_kind": "debt", "scope": "project:Widget", "title": "Tab refresh",
             "what": "The tab does not refresh after the user switches back to it.", "evidence": ["event:e1"]}
     row = {"id": "c", "unit_id": "c.unit", "unit_kind": "gap", "source_v2": "S3", "source_ref": "r",
            "extraction_pass": "main", "payload": json.dumps(unit),
@@ -278,7 +278,7 @@ def test_a_unit_the_same_as_a_closed_gap_is_written_again(tmp_path, monkeypatch)
            "envelope": json.dumps({"root_ids": ["root-1"], "lineage_root_ids": ["root-1"],
                                    "strength": "inferred", "read_external": True, "cited_external": False}),
            "project_candidates": "[]", "project_hint": None, "project_snapshot": "{}"}
-    entry = "**Tab refresh** The tab does not refresh after the user switches back to it. gap kind: follow_up <!-- cand:cand-old.unit -->"
+    entry = "**Tab refresh** The tab does not refresh after the user switches back to it. gap kind: debt <!-- cand:cand-old.unit -->"
     improvement.write_text(f"# IMPROVEMENT\n\n## What to Watch For\n\n- [x] {entry}\n", encoding="utf-8")
     decision = pipeline_v2.run_unit_v2(row, tmp_path)
     assert decision.action == "add"
