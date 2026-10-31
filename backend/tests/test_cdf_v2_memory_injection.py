@@ -211,3 +211,19 @@ def test_timeline_template_is_copy_if_missing_and_mode_0644(tmp_path):
     timeline.write_text(original + "user event\n", encoding="utf-8")
     loader.ensure_directory()
     assert timeline.read_text(encoding="utf-8").endswith("user event\n")
+
+
+def test_the_prompt_path_reads_no_database():
+    """System-prompt purity (design 2026-10-31-continue-lookback-todo D2): ToDos live in
+    the database and are not injected; the injection and the prompt builder import no
+    database module."""
+    import ast
+    from pathlib import Path
+    import core.memory_injection as memory_injection
+    import core.prompt_builder as prompt_builder
+    for module in (memory_injection, prompt_builder):
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        names = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        names |= {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        assert not {n for n in names if n == "database" or n.startswith("database.")
+                    or n.endswith("todo_manager")}, module.__name__
