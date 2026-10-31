@@ -138,7 +138,12 @@ check, is noted in the run's audit for the human, who decides the push. What a r
 may block only once it is a deterministic check (a test that fails, for the stated reason, on
 the defect and passes on the fix). A gate
 decides from a parsed command, a diff or path set, a marker, a count or hash, an exit code or
-test outcome, or a human's decision, never from a model's opinion. Every model loop has a
+test outcome, or the decision of whoever answers for the work, never from a model's opinion of
+its own work. Who answers follows delegation: a person answers for what they run or dispatch; an
+agent that dispatches workers answers for them. It decides their waits, records each as its own
+decision (never as a person's), and escalates what it cannot handle. It may never decide more
+than it may do itself without asking: anything off-machine, irreversible, or touching the
+person's data still goes to the person. Every model loop has a
 budget held by a counter; reaching it ends the rounds, not the work: what is still open goes
 to the human (P6). **Tell: I am about to block on what a model said, or let a model loop run
 with nothing counting it.**

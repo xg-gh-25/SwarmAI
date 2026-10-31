@@ -3,7 +3,7 @@ title: Hive 审批 —— 按责任链：谁派的单，谁负责、谁审批
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: r2 design only（无代码）；§6 的 SOUL P5 补充等 XG 批
+status: r2 design only（无代码）；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
 tags: [swarm-out, hive, approval, host, governance, accountability]
 related:
   - docs/design/2026-10-31-swarm-out-hive-decisions.md（pipeline 决定的快照和回答）
@@ -149,7 +149,7 @@ host 管 worker，就要读 worker 写的东西；所以防注入要做在这条
   - owner agent 的回答和 escalate 命令；
   - 超出授权的类别直接进 Needs You，标明归属。
 - **P1：** `decision` 类：引擎的 `host_answer` 事件、决定计数分开、Autonomy Judge 认它。
-- **P2（等 §6 批准）：** `hive_local`、`run_authorization` 两类。
+- **P2：** `hive_local`、`run_authorization` 两类（§6 的 P5 补充已批）。
 - **另起：** §4 第 1 层的 Hive 防注入能力。
 
 | # | 不变量 |
@@ -165,15 +165,25 @@ host 管 worker，就要读 worker 写的东西；所以防注入要做在这条
 
 审查分工：类别映射和 Hive 侧拒收由 security 审；`dispatched_by` 的来源由 security 加 api-contract 审；引擎的 `host_answer` / `authorized_by` 由 state-machine 加 correctness 审。
 
-## 6. SOUL P5 的补充（等 XG 批）
+## 6. SOUL P5 的补充（XG 2026-10-31 已批）
 
-`question` 和 `decision` 不涉及 P5：它们是任务本身的问题，不是 gate，按 SOUL P10 本来就是 agent 的事。`hive_local` 和 `run_authorization` 是让 host（模型）
-放行一个 gate，和 P5 字面上的"never from a model's opinion"冲突。起草的补充见 s_self-evolution 提案；批准前 P2 不接。
+`question` 和 `decision` 不涉及 P5：它们是任务本身的问题，不是 gate，按 SOUL P10 本来就是 agent 的事。`hive_local` 和 `run_authorization` 是让 host 放行一个 gate。
+P5 原句是 gate 只从确定性事实"or a human's decision, never from a model's opinion"里出结果，现在改为（`backend/context/SOUL.md` P5；`SELF.md` 的 My Gates 同步）：
+
+> … or the decision of whoever answers for the work, never from a model's opinion of its own work. Who answers follows delegation: a person answers for what
+> they run or dispatch; an agent that dispatches workers answers for them. It decides their waits, records each as its own decision (never as a person's), and
+> escalates what it cannot handle. It may never decide more than it may do itself without asking: anything off-machine, irreversible, or touching the person's
+> data still goes to the person.
+
+本设计和这句一一对应：
+- "of its own work"：agent 仍然不能给自己的命令开 gate；
+- "records each as its own decision"：`answered_by: host`、`host_answer`；
+- 最后一句：§2.2 里"交给人"的那几类，由 Hive 桥确定性拒收。
 
 ## 7. 修订记录
 
 - r1：类别和 host 回答；`approver` 是派工单上的一个开关；"不能批"的理由写成"怕 host 被注入"。
-- r2：按 XG 的责任链重写：
+- r2（P5 补充随后获批）：按 XG 的责任链重写：
   - `approver` 开关改为由谁派的推出（`dispatched_by` / `owner_session`）；
   - 边界的理由改为"委派出去的权力不超过委派方自己的"，类别按"影响到什么"定；
   - 超出授权的照旧交给人，但标明是哪个 host session 的单子；

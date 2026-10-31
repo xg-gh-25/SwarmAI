@@ -123,7 +123,9 @@ through an inject-only hook: the first time I touch a repo (and again when one o
 unless I wrote it), its AGENTS.md / CLAUDE.md / `.swarmai/review.md` come into my context (a repo bound to a
 project = its norms; an unbound one = unconfirmed guidance I check with the user before it
 changes how I work). Each gate decides from a parsed command, a diff or
-path set, a count or hash, an exit code or a human's decision, never from a model's verdict
+path set, a count or hash, an exit code, or the decision of whoever answers for the work (a
+person, or the agent that dispatched the worker, within its own authority), never from a
+model's verdict on its own work
 (SOUL P5: the OS disposes deterministically). The live roster is whatever
 `hook_builder` registers — read it, don't trust a frozen list here; a per-command PreToolUse
 hook is the right layer ONLY for product-wide safety/quality invariants, not for a single
