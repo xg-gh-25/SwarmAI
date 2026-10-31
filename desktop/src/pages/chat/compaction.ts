@@ -91,7 +91,7 @@ function systemMessage(id: string, text: string, metadata: Message['metadata']):
   return { id, role: 'system', content: [{ type: 'text', text }], timestamp: localTimestamp(), metadata };
 }
 
-/** The ``turnOf`` mark of a live compaction, kept when the message is replaced. */
+/** The ``turnOf`` mark of a running compaction, kept when it turns into a failure. */
 const turnOfOf = (m: Message) => (typeof m.metadata?.turnOf === 'string' ? { turnOf: m.metadata.turnOf } : {});
 
 /** Index of the current turn's start (the last user message), or -1. */
@@ -126,8 +126,9 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
     const last = msgs[msgs.length - 1];
     const emptyPlaceholder = last && msgs.length - 1 > start && last.role === 'assistant' && last.content.length === 0;
     // in front of the turn's empty placeholder, the compaction is that turn's: say so
-    // by id (an injected CLI turn has no user message before it, so the order alone
-    // cannot tell it from the previous turn's; attachCompactions reads turnOf)
+    // by id while it runs (a CLI-started turn has no user message before it, so the
+    // order alone cannot tell it from the previous turn's; attachCompactions reads
+    // turnOf for a running one only — a done one is placed by the order, as on reload)
     if (emptyPlaceholder) store.insertBefore(last.id, { ...msg, metadata: { ...msg.metadata, turnOf: last.id } });
     else store.append(msg);
   };
@@ -148,7 +149,7 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
   if (recordId && msgs.some((m) => m.id === id)) return;
   const done = systemMessage(id, text, recordId ? { compaction: record } : undefined);
   if (live) {
-    store.updateById(live.id, (m) => ({ ...done, metadata: { ...done.metadata, ...turnOfOf(m) } }));
+    store.updateById(live.id, () => done);   // placed by the order now, as on reload
     return;
   }
   // A record-less (legacy / fallback) notice repeated in the same turn is one
@@ -171,10 +172,15 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
  *
  *  A turn starts at a user message that was sent (not a queued one, which is sent
  *  later, nor a steer the CLI read into the running turn) and at a turn the CLI started
- *  itself (`turn_source: injected`, no user message before it). A compaction marked
- *  `turnOf` (inserted in front of that turn's placeholder) belongs to that turn. A
- *  compaction is attached only to an answer TabView paints (`painted`); otherwise, as
- *  in a turn with no answer yet, it stays in the list and TabView renders it inline. */
+ *  itself (`turn_source: injected`, no user message before it). The order decides,
+ *  and it is the order history has (compact_summary.splice_into_history), so a
+ *  reloaded list places every compaction where the live one did. One live-only
+ *  exception: a compaction still RUNNING that is marked `turnOf` a CLI-started turn
+ *  (inserted in front of its placeholder) goes with that turn, whose bee says it; once
+ *  it is done it is placed by the order, as on reload (under the answer before that
+ *  turn, where it happened). A compaction is attached only to an answer TabView paints
+ *  (`painted`); otherwise, as in a turn with no answer yet, it stays in the list and
+ *  TabView renders it inline. */
 export function attachCompactions(msgs: readonly Message[],
                                   painted: (m: Message) => boolean = () => true): {
   byAssistant: Map<string, Message[]>; attached: Set<string>;
@@ -198,9 +204,11 @@ export function attachCompactions(msgs: readonly Message[],
       pending.push(m);
     } else if (m.role === 'assistant') {
       if (m.metadata?.turn_source === 'injected') {
-        // the compactions marked as this turn's move with it; the rest end the turn before
-        const mine = pending.filter((c) => c.metadata?.turnOf === m.id);
-        pending = pending.filter((c) => c.metadata?.turnOf !== m.id);
+        // this turn's own compaction while it runs (live only) moves with it; the rest,
+        // and it once done, end the turn before
+        const runningHere = (c: Message) => c.metadata?.turnOf === m.id && c.metadata?.compactPhase === 'running';
+        const mine = pending.filter(runningHere);
+        pending = pending.filter((c) => !runningHere(c));
         flush();
         pending = mine;
       }

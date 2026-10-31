@@ -128,3 +128,28 @@ describe('SessionTab — background agents wording', () => {
     }
   });
 });
+
+describe('SessionTab — background agents never cross tabs', () => {
+  it('each tab shows only its own session\'s agents; a tab with no session shows none', async () => {
+    const { backgroundAgentsStore } = await import('../../../stores/backgroundAgentsStore');
+    backgroundAgentsStore.apply('sess-A', [{ toolUseId: 'a', status: 'running', description: 'A work' }]);
+    backgroundAgentsStore.apply('sess-B', []);
+    try {
+      const mk = (id: string, sessionId?: string) => (
+        <SessionTab key={id} tab={{ id, title: id, agentId: 'a', isNew: false, sessionId }}
+          index={0} isActive={false} onSelect={vi.fn()} onClose={vi.fn()} status="idle" />);
+      const view = render(<div>{mk('tA', 'sess-A')}{mk('tB', 'sess-B')}{mk('tN')}</div>);
+      const marks = view.getAllByTestId('tab-background-agents');
+      expect(marks).toHaveLength(1);
+      expect(marks[0].parentElement?.textContent).toContain('tA');
+      // B starts one: A keeps its own count, B gets its own
+      const { act, waitFor } = await import('@testing-library/react');
+      act(() => backgroundAgentsStore.apply('sess-B', [{ toolUseId: 'b', status: 'running', description: 'B work' },
+                                                       { toolUseId: 'c', status: 'running', description: 'B more' }]));
+      await waitFor(() => expect(view.getAllByTestId('tab-background-agents').map((m) => m.textContent)).toEqual(['1', '2']));
+    } finally {
+      backgroundAgentsStore.apply('sess-A', []);
+      backgroundAgentsStore.apply('sess-B', []);
+    }
+  });
+});

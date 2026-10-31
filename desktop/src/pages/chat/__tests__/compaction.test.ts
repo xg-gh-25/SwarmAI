@@ -146,11 +146,19 @@ describe('attachCompactions — steers, CLI turns and answers not painted', () =
     expect(got.has('i1')).toBe(false);
   });
 
-  it('a compaction marked as a CLI turn\'s (turnOf) goes with that turn', () => {
-    const msgs = [user('u1'), asst('a1', 'x'), sys('compact-2', { compactPhase: 'running', turnOf: 'i1' }), injected('i1', 'answer')];
-    const got = attachCompactions(msgs).byAssistant;
-    expect(got.get('i1')?.map((m) => m.id)).toEqual(['compact-2']);
-    expect(got.has('a1')).toBe(false);
+  it('a CLI turn\'s running compaction (turnOf) goes with that turn; once done, by the order as on reload', () => {
+    const running = [user('u1'), asst('a1', 'x'), sys('compact-live-2', { compactPhase: 'running', turnOf: 'i1' }), injected('i1', 'answer')];
+    const live = attachCompactions(running).byAssistant;
+    expect(live.get('i1')?.map((m) => m.id)).toEqual(['compact-live-2']);
+    expect(live.has('a1')).toBe(false);
+    // done: the record replaced it in place (no turnOf) — the same place a reload gives
+    const doneLive = attachCompactions([user('u1'), asst('a1', 'x'), sys('compact-r2', { compaction: { ...REC, id: 'r2' } }), injected('i1', 'answer')]);
+    const reloaded = attachCompactions([user('u1'), asst('a1', 'x'), sys('compact-r2', { compaction: { ...REC, id: 'r2' } }), injected('i1', 'answer')]);
+    expect(doneLive.byAssistant.get('a1')?.map((m) => m.id)).toEqual(['compact-r2']);
+    expect(reloaded.byAssistant.get('a1')?.map((m) => m.id)).toEqual(['compact-r2']);
+    // failed keeps its turnOf but is no longer running: placed by the order too
+    const failed = attachCompactions([user('u1'), asst('a1', 'x'), sys('compact-live-3', { compactPhase: 'failed', turnOf: 'i1' }), injected('i1', 'answer')]);
+    expect(failed.byAssistant.get('a1')?.map((m) => m.id)).toEqual(['compact-live-3']);
   });
 
   it('an answer the list does not paint keeps its compaction in the list', () => {
@@ -161,7 +169,7 @@ describe('attachCompactions — steers, CLI turns and answers not painted', () =
 });
 
 describe('applyCompactionEvent — the turn a turn-start compaction belongs to', () => {
-  it('in front of an empty placeholder it carries the placeholder id, kept when the record replaces it', () => {
+  it('in front of an empty placeholder a running one carries the placeholder id; the record replaces it in place', () => {
     const store = new MessageStore();
     store.replace([user('u1'), asst('i1')]);
     applyCompactionEvent(store, { type: 'context_compacting', message: 'Compacting' } as never);
@@ -170,7 +178,8 @@ describe('applyCompactionEvent — the turn a turn-start compaction belongs to',
     expect(store.messages.map((m) => m.role)).toEqual(['user', 'system', 'assistant']);
     applyCompactionEvent(store, { type: 'context_compacted', message: 'done', compaction: { ...REC, id: 'r9' } } as never);
     const done = store.messages.find((m) => m.id === 'compact-r9')!;
-    expect(done.metadata?.turnOf).toBe('i1');
+    expect(done.metadata?.turnOf).toBeUndefined();          // placed by the order, as on reload
     expect(toCompactionInfo(done)?.phase).toBe('done');
+    expect(store.messages.map((m) => m.id)).toEqual(['u1', 'compact-r9', 'i1']);
   });
 });
