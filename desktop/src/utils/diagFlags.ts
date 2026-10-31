@@ -11,6 +11,9 @@
  *     localStorage.setItem('SWARM_OT01_DIAG', '1')   // enable (then reproduce)
  *     localStorage.removeItem('SWARM_OT01_DIAG')      // disable
  *
+ * (In the installed App the console to type this into exists only when the App was
+ * started with SWARMAI_DEBUG=1, e.g. `open --env SWARMAI_DEBUG=1 -a SwarmAI`.)
+ *
  * localStorage access is try-guarded: a Tauri/webview context that throws on
  * storage access must never break a render or a stream handler.
  *

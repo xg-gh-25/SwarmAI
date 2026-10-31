@@ -2920,6 +2920,16 @@ async fn check_python_version() -> Result<String, String> {
     Err("Python is not installed or not in PATH".to_string())
 }
 
+/// Whether the main window's web inspector is available. A debug build always has it.
+/// A release build has it only when the App was launched with `SWARMAI_DEBUG` set to a
+/// value other than empty or `0` (macOS: `open --env SWARMAI_DEBUG=1 -a SwarmAI`):
+/// whoever opens the inspector runs JavaScript as the App's UI, which can call every
+/// command the UI can (terminal, files, the daemon's routes as the App), so it stays
+/// closed unless the person asked for it (docs/design/2026-10-31-human-proof-verification.md §8).
+fn devtools_wanted(debug_build: bool, swarmai_debug: Option<&std::ffi::OsStr>) -> bool {
+    debug_build || swarmai_debug.map_or(false, |v| !v.is_empty() && v != "0")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -2968,6 +2978,10 @@ pub fn run() {
             // Without this, clicking http(s) links in chat navigates the webview away
             // from the React app, causing a fullscreen loading state with no way to
             // return (no back button, no close — app is bricked until restart).
+            let devtools = devtools_wanted(
+                cfg!(debug_assertions),
+                std::env::var_os("SWARMAI_DEBUG").as_deref(),
+            );
             {
                 use tauri_plugin_opener::OpenerExt;
                 let handle = app.handle().clone();
@@ -2986,7 +3000,8 @@ pub fn run() {
                     .resizable(true)
                     .fullscreen(false)
                     .center()
-                    .zoom_hotkeys_enabled(false);
+                    .zoom_hotkeys_enabled(false)
+                    .devtools(devtools);
 
                 // title_bar_style and hidden_title are macOS-only APIs
                 #[cfg(target_os = "macos")]
@@ -3016,21 +3031,10 @@ pub fn run() {
                     .build()?;
             }
 
-            // Open DevTools automatically in debug builds or when SWARMAI_DEBUG is set
-            #[cfg(debug_assertions)]
-            {
+            // When the inspector is available (devtools_wanted), open it at start.
+            if devtools {
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
-                }
-            }
-
-            // Also check for SWARMAI_DEBUG env var to enable in release builds
-            #[cfg(not(debug_assertions))]
-            {
-                if std::env::var("SWARMAI_DEBUG").is_ok() {
-                    if let Some(window) = app.get_webview_window("main") {
-                        window.open_devtools();
-                    }
                 }
             }
 
@@ -3445,5 +3449,26 @@ mod adaptive_probe_tests {
     fn never_started_fails_ceiling_not_deadstreak() {
         let d = probe_loop_decision(ProbeOutcome::Dead, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK * 5, COLD_START_CEILING_SECS, COLD_START_DEAD_STREAK, false);
         assert_eq!(d, LoopDecision::FailCeiling);
+    }
+}
+
+#[cfg(test)]
+mod devtools_tests {
+    use super::devtools_wanted;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn a_debug_build_always_has_the_inspector() {
+        assert!(devtools_wanted(true, None));
+        assert!(devtools_wanted(true, Some(OsStr::new("0"))));
+    }
+
+    #[test]
+    fn a_release_build_has_it_only_when_asked() {
+        assert!(!devtools_wanted(false, None));
+        assert!(!devtools_wanted(false, Some(OsStr::new(""))));
+        assert!(!devtools_wanted(false, Some(OsStr::new("0"))));
+        assert!(devtools_wanted(false, Some(OsStr::new("1"))));
+        assert!(devtools_wanted(false, Some(OsStr::new("yes"))));
     }
 }

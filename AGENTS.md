@@ -337,7 +337,9 @@ it in `hook_builder.py` and update this list — don't restate it in other docs.
 
 ### Startup Failures ("Backend service failed to start")
 
-1. Open DevTools Console (Cmd+Option+I) → look for `[Platform]` and `[Health Check]` logs
+1. Open DevTools Console (Cmd+Option+I) → look for `[Platform]` and `[Health Check]` logs.
+   A release App has the inspector only when launched with `SWARMAI_DEBUG=1`
+   (macOS: quit it, then `open --env SWARMAI_DEBUG=1 -a SwarmAI`); `tauri dev` always has it.
 2. `[Platform] isDesktop=false` → Tauri detection broken (check `__TAURI_INTERNALS__`)
 3. `[Health Check] FATAL: got HTML instead of JSON` → API URL is wrong
 4. `[Health Check] Response: {status: "healthy"}` → Backend OK, problem is elsewhere

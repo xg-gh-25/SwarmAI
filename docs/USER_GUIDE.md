@@ -515,7 +515,10 @@ Currently SwarmAI is built on the Claude Agent SDK and only supports Claude mode
 ### Where are the logs?
 
 - **Backend logs**: `~/.swarm-ai/logs/`
-- **Frontend**: Browser DevTools (Cmd+Option+I in the Tauri window)
+- **Frontend**: Browser DevTools (Cmd+Option+I in the Tauri window). The installed App has
+  them only when started with `SWARMAI_DEBUG=1`: quit SwarmAI, then run
+  `open --env SWARMAI_DEBUG=1 -a SwarmAI` (macOS). They are off otherwise, because the
+  inspector can run any command the App's window can.
 - **Claude CLI logs**: Check `~/.claude/` directory
 
 ---
