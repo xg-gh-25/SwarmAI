@@ -198,13 +198,18 @@ _TYPE_QUESTIONS = {
 }
 
 _EXAMPLES = """- research: which sources were reliable and which not, and why; the conclusions and
-  what they rest on; what is still unresolved (gap). A finished report is a reference.
+  what they rest on; what is still unresolved (gap).
 - documents and decks: what the user's feedback on structure, length and tone showed;
-  which writing was accepted and which was changed. The final version is a reference.
+  which writing was accepted and which was changed.
 - mockups and design: what each round changed and why; directions rejected and why.
 - brainstorming: ideas chosen and dropped, and why (decision); open questions (gap);
   ideas worth bringing back later (reference).
-- code: root cause, fix and rejected alternatives, only when not obvious."""
+- code: root cause, fix and rejected alternatives, only when not obvious.
+- a reference is only for a source the next session cannot otherwise find: an outside
+  link (its URL), or a result that exists only in this conversation. A report, design,
+  mockup or deck saved as a file is found where it is (the workspace and the bound
+  repositories are searched): record what was decided about it, never a copy or summary
+  of one of its versions."""
 
 _WHERE = """Where a unit goes follows from what you declare and what it rests on:
 - scope "user" (the user's own rule, profile or environment) is read in every future
@@ -264,7 +269,11 @@ context may hold only a summary of it).
    knowledge and is not written into any unit. A problem the record leaves open at its
    end is a gap; one opened and solved within it is not. Something that changed how the
    work stands is an event, worded as it stands now ("X fixed", not "root cause of X
-   found" when the fix followed).
+   found" when the fix followed). A bug found and fixed within this record is not a
+   pitfall: the fix is an event, and a lesson is only the general rule that would have
+   caught it, when that rule holds beyond this one piece of code. What one look at the code
+   or the data answers (a signature, a schema, a constant's value, a file's layout) is no
+   lesson. A problem still open is a gap, never a lesson.
 7. Per kind of work:
 {_EXAMPLES}
 

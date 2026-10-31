@@ -602,6 +602,19 @@ def _home(unit: SourceUnit, destination: Any, project: str | None, subject: str 
     return home.model_copy(update={"rerouted_from": destination.store})
 
 
+def _repeat_opens(unit: Any, declared_rel: dict[str, Any], declared: Any, destination: Any,
+                  facts: Facts) -> bool:
+    """Whether a correction about the agent that its evidence kept out of EVOLUTION goes
+    there anyway: it declares it repeats a recorded correction (one of
+    ``relations_v2.corrections``), so the mistake has now been made in two conversations,
+    and it cites nothing external. A first occurrence stays in the General Brain."""
+    from . import relations_v2
+    earlier = declared_rel.get("repeats")
+    return (isinstance(unit, CognitionUnit) and unit.type == "correction" and earlier is not None
+            and declared.store == "EVOLUTION" and destination.store != "EVOLUTION"
+            and not facts.cited_external and bool(relations_v2.corrections([earlier])))
+
+
 def _event_known(root: Path, event_key: str) -> bool:
     """Whether an event with *event_key* is already in TIMELINE or on its way there."""
     try:
@@ -683,6 +696,7 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         user_check = {"holds": verdict.holds, "reason": verdict.reason, "version": _check.CHECK_VERSION}
         if not verdict.holds:
             facts = replace(facts, user_words=False)
+    declared_destination = destination
     if not _admitted(destination.store, facts):
         destination = _home(unit, destination, corpus_project, subject,
                             cited_external=facts.cited_external)
@@ -727,6 +741,13 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
             refused.append({"relation": name, "ref": ref, "reason": why})
         else:
             declared_rel[name] = entry
+    admitted_by = None
+    if _repeat_opens(unit, declared_rel, declared_destination, destination, facts):
+        # the same mistake recorded in two conversations is a measurement: the repeat
+        # goes where the correction was declared for, read in every session
+        destination = declared_destination
+        done["destination"] = destination
+        admitted_by = "repeat"
     for name in ("same", "adds"):
         entry = declared_rel.get(name)
         if entry is None or not entry.section.startswith("withdrawn:"):
@@ -783,6 +804,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     # what the entry rests on: the trust the baseline registers it with, so a unit citing
     # it later is no stronger than it; only "external" is marked in the file
     result.version_vector["basis"] = facts.basis
+    if admitted_by:
+        result.version_vector["admitted_by"] = admitted_by
     if event_key:
         result.version_vector["event_key"] = event_key
     return result

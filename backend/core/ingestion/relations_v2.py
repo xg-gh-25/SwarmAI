@@ -5,8 +5,8 @@ decides whether its new unit is new, the same as an entry, adds to one, or (for 
 correction) repeats an earlier correction. Code never judges that; it does two things:
 
 - ``candidates(...)`` — retrieval only: for one unit, the entries it may be related to
-  (the BM25 best of the every-turn files and the project's DDD, the earlier units of the
-  same session, and every captured correction), each shown as ``<id> | <first line>``
+  (the BM25 best of the every-turn files, the General Brain and the project's DDD, the
+  earlier units of the same session, and every captured correction), each shown as ``<id> | <first line>``
   with its text, for the agent to declare against.
 - ``resolve(ref, pool)`` — the fact check: a declaration ``"<8-character id> | <first
   line>"`` stands only when the id and the first line name exactly one entry of the pool
@@ -81,10 +81,42 @@ def _entries_of(path: Path, workspace: Path) -> list[Entry]:
     return out
 
 
+_GENERAL_CACHE: dict[str, tuple[tuple[int, int], bool]] = {}
+
+
+def general_brain_files(workspace: Path) -> list[Path]:
+    """The General Brain documents CDF writes into: the top-level Library documents that
+    hold a CDF entry (``route_general``). A Library document no unit was ever written to
+    (an org chart, a standard) is reference, not an entry a unit is declared against.
+    Whether a file holds one is cached by its mtime and size."""
+    lib = Path(workspace) / "Knowledge" / "Library"
+    if not lib.is_dir():
+        return []
+    out = []
+    for path in sorted(lib.glob("*.md")):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        key, stamp = str(path), (st.st_mtime_ns, st.st_size)
+        hit = _GENERAL_CACHE.get(key)
+        if hit is None or hit[0] != stamp:
+            try:
+                has = "<!-- cand:" in path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            _GENERAL_CACHE[key] = hit = (stamp, has)
+        if hit[1]:
+            out.append(path)
+    return out
+
+
 def pool(workspace: Path, project: str | None) -> list[Entry]:
-    """Every entry a unit may be declared against: the every-turn files and the main
-    docs of *project*'s DDD (archives are not in force)."""
-    files = [workspace / rel for rel in EVERY_TURN_FILES]
+    """Every entry a unit may be declared against: the every-turn files, the General
+    Brain documents CDF writes into (read in every project, so a lesson filed there is
+    found again from any project) and the main docs of *project*'s DDD (archives are not
+    in force)."""
+    files = [workspace / rel for rel in EVERY_TURN_FILES] + general_brain_files(workspace)
     if project:
         from core.ddd_paths import ddd_path
         from core.project_registry import DDD_CANONICAL_DOCS
@@ -134,8 +166,10 @@ def candidates(text: str, entries: list[Entry], *, top: int = TOP,
 
 
 def corrections(entries: list[Entry]) -> list[Entry]:
-    """The captured corrections (EVOLUTION's Corrections Captured)."""
-    return [e for e in entries if e.path.endswith("EVOLUTION.md") and "Correction" in e.section]
+    """The captured corrections: EVOLUTION's Corrections Captured and the General Brain's
+    (where a correction no user words back is kept), so a repeat of either is found."""
+    return [e for e in entries if "Correction" in e.section
+            and (e.path.endswith("EVOLUTION.md") or e.path.startswith("Knowledge/Library/"))]
 
 
 def restated(title: str, what: str, entries: list[Entry], path: str) -> Entry | None:
