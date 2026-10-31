@@ -51,14 +51,17 @@ class TestSkillParity:
     def test_window_parameterized_not_hardcoded_200k(self, tmp_path):
         f = tmp_path / "s.md"
         f.write_text("word " * 1000, encoding="utf-8")
-        # default window (141K) gives a different % than 200K
-        default = subprocess.run([sys.executable, str(PY_ENTRY), str(f)],
+        # the default window is this checkout's effective budget, not a literal
+        import os
+        from core.context_directory_loader import EFFECTIVE_1M_BUDGET
+        env = {**os.environ, "PYTHONPATH": str(REPO / "backend")}
+        default = subprocess.run([sys.executable, str(PY_ENTRY), str(f)], env=env,
                                  capture_output=True, text=True, timeout=30).stdout
         windowed = subprocess.run([sys.executable, str(PY_ENTRY), "--window", "200000", str(f)],
-                                  capture_output=True, text=True, timeout=30).stdout
-        assert "141,000 tokens" in default
+                                  env=env, capture_output=True, text=True, timeout=30).stdout
+        assert f"{EFFECTIVE_1M_BUDGET:,} tokens" in default
         assert "200,000 tokens" in windowed
-        assert "141,000" not in windowed  # window actually applied
+        assert f"{EFFECTIVE_1M_BUDGET:,}" not in windowed  # window actually applied
 
     def test_no_wc_w_heuristic_remains(self):
         """The old wc-w*1.8 + hardcoded 200000 must be gone from the shell script."""

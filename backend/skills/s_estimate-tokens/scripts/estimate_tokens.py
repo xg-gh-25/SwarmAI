@@ -21,7 +21,7 @@ Usage:
 
 --window defaults to the effective context-file assembly budget for a 1M model,
 derived at runtime from context_directory_loader.EFFECTIVE_1M_BUDGET (base budget −
-ephemeral headroom; currently 141K). Run with --help to see the live value.
+ephemeral headroom; currently 133K). Run with --help to see the live value.
 Override for other budgets.
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ from pathlib import Path
 # Falls back to the current value only if the canonical module is unreachable
 # (e.g. run from a frozen bundle with no source) — a fail-SAFE default, not a 2nd
 # source of truth: when the module IS reachable, this always tracks it.
-_DEFAULT_WINDOW_FALLBACK = 141_000
+_DEFAULT_WINDOW_FALLBACK = 133_000
 
 
 def _load_effective_1m_budget() -> int:

@@ -1344,7 +1344,7 @@ class ContextHealthHook:
     # anchored to the effective assembly budget; EMERGENCY is a clear-over.
     # DERIVED from the budget SoT in context_directory_loader (run_72ca2a97) — a
     # change to BUDGET_1M_MODEL or the ephemeral formula now propagates here
-    # automatically (no hand-typed literal). WARNING = 141K, EMERGENCY = 180K.
+    # automatically (no hand-typed literal). WARNING = 133K, EMERGENCY = 172K.
     _WARNING_THRESHOLD = _CDL_EFFECTIVE_1M_BUDGET
     _EMERGENCY_THRESHOLD = _CDL_EFFECTIVE_1M_BUDGET + _CDL_EMERGENCY_MARGIN
 

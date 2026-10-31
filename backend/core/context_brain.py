@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # (run_72ca2a97), the SAME constants context_health_hook uses, so the overlay's
 # token_block and the deep-check report can never disagree. A change to
 # BUDGET_1M_MODEL or the ephemeral formula propagates here automatically.
-# WARNING = 141K effective (150K base − 9K ephemeral); EMERGENCY = WARNING + 39K.
+# WARNING = 133K effective (150K base − 17K ephemeral); EMERGENCY = WARNING + 39K.
 _WARNING_THRESHOLD = EFFECTIVE_1M_BUDGET
 _EMERGENCY_THRESHOLD = EFFECTIVE_1M_BUDGET + EMERGENCY_MARGIN
 

@@ -456,19 +456,19 @@ class TestEffectiveBudgetSingleSource:
             RESUME_CONTEXT_HEADROOM,
         )
         assert EPHEMERAL_HEADROOM == DAILY_ACTIVITY_INJECTION_BUDGET + RESUME_CONTEXT_HEADROOM
-        assert EPHEMERAL_HEADROOM == 9_000
+        assert EPHEMERAL_HEADROOM == 17_000
 
     def test_effective_1m_budget_derived_from_base_minus_headroom(self):
         """EFFECTIVE_1M_BUDGET = BUDGET_1M_MODEL - EPHEMERAL_HEADROOM (import-safe
         module constants — Gate-1 v2 crux: compute_token_budget is an instance
-        method, uncallable at module scope). Resolves to 141_000."""
+        method, uncallable at module scope). Resolves to 133_000."""
         from core.context_directory_loader import (
             BUDGET_1M_MODEL,
             EFFECTIVE_1M_BUDGET,
             EPHEMERAL_HEADROOM,
         )
         assert EFFECTIVE_1M_BUDGET == BUDGET_1M_MODEL - EPHEMERAL_HEADROOM
-        assert EFFECTIVE_1M_BUDGET == 141_000
+        assert EFFECTIVE_1M_BUDGET == 133_000
 
     def test_effective_1m_budget_matches_compute_token_budget_1m(self, tmp_dirs):
         """The BUDGET_1M_MODEL shortcut must NOT diverge from the real
@@ -486,7 +486,7 @@ class TestEffectiveBudgetSingleSource:
             EMERGENCY_MARGIN,
         )
         assert EMERGENCY_MARGIN == 39_000
-        assert EFFECTIVE_1M_BUDGET + EMERGENCY_MARGIN == 180_000
+        assert EFFECTIVE_1M_BUDGET + EMERGENCY_MARGIN == 172_000
 
     def test_daily_cap_change_propagates_to_headroom(self, monkeypatch):
         """PROPAGATION (the whole point): changing the daily-cap input must move
@@ -500,10 +500,10 @@ class TestEffectiveBudgetSingleSource:
 
     def test_base_budget_change_propagates_to_effective(self, monkeypatch):
         """PROPAGATION: raising BUDGET_1M_MODEL must move the effective budget when
-        recomputed — no frozen 141_000 literal severs the chain."""
+        recomputed — no frozen 133_000 literal severs the chain."""
         import core.context_directory_loader as cdl
         recomputed = 200_000 - cdl.EPHEMERAL_HEADROOM
-        assert recomputed == 191_000  # a 200K base yields 191K effective, tracks base
+        assert recomputed == 183_000  # a 200K base yields 183K effective, tracks base
 
     def test_no_bare_effective_literal_in_derived_sites(self):
         """Grep guard: the derived sites must not re-hardcode 9000/141000/180000
@@ -1469,3 +1469,16 @@ class TestCoreSectionNames:
     def test_self_portrait_included_despite_user_customized(self):
         from core.context_directory_loader import core_section_names
         assert "Self-Portrait" in core_section_names()
+
+
+def test_the_daily_activity_selection_and_the_reserved_headroom_use_one_budget():
+    """The selection's budget is the one the headroom reserves (they once drifted:
+    12000 selected against 4000 reserved, a warning on every session)."""
+    from core import memory_injection as M
+    from core.context_directory_loader import (
+        DAILY_ACTIVITY_INJECTION_BUDGET, EPHEMERAL_HEADROOM, RESUME_CONTEXT_HEADROOM,
+        TIMELINE_BUDGET_TOKENS,
+    )
+    assert M.DAILY_ACTIVITY_BUDGET is DAILY_ACTIVITY_INJECTION_BUDGET
+    assert M.TIMELINE_BUDGET is TIMELINE_BUDGET_TOKENS
+    assert EPHEMERAL_HEADROOM >= M.DAILY_ACTIVITY_BUDGET + RESUME_CONTEXT_HEADROOM

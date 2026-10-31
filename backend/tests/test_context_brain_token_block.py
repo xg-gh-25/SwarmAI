@@ -40,8 +40,8 @@ def test_token_block_has_total_and_budget(fake_context_dir: Path):
     block = build_context_token_block(fake_context_dir)
     assert block["total_tokens"] > 0
     assert block["budget"] > 0
-    assert block["warning_threshold"] == 141_000
-    assert block["emergency_threshold"] == 180_000
+    assert block["warning_threshold"] == 133_000
+    assert block["emergency_threshold"] == 172_000
     # total must equal the sum of per-file tokens (no double count, no drop)
     assert block["total_tokens"] == sum(f["tokens"] for f in block["per_file"])
 

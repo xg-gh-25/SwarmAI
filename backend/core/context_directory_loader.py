@@ -130,8 +130,10 @@ floor so the budget remains strictly inside the model window."""
 # change had to be hand-synced across every mirror (the drift class run_1b2655df hit).
 # Everything below is DERIVED by arithmetic from module constants, so a change to
 # BUDGET_1M_MODEL or TOKEN_CAP_PER_DAILY_FILE propagates to all consumers automatically.
-DAILY_ACTIVITY_INJECTION_BUDGET = 4000
-"""Whole-unit budget for seven days of DailyActivity working memory."""
+DAILY_ACTIVITY_INJECTION_BUDGET = 12000
+"""Whole-unit budget for seven days of DailyActivity working memory (measured
+2026-10-31 on the repaired history: ~100-250 tokens a row, 6-15 sessions a day).
+core.memory_injection selects with it; the headroom below reserves it."""
 
 
 TIMELINE_BUDGET_TOKENS = 1500
@@ -145,10 +147,10 @@ RESUME_CONTEXT_HEADROOM = 5000
 """Reserve for the resume-context block appended after the budgeted assembly."""
 
 EPHEMERAL_HEADROOM = DAILY_ACTIVITY_INJECTION_BUDGET + RESUME_CONTEXT_HEADROOM
-"""Ephemeral overhead: one 4K DailyActivity selector plus resume headroom."""
+"""Ephemeral overhead: the 12K DailyActivity selection plus resume headroom."""
 
 EFFECTIVE_1M_BUDGET = BUDGET_1M_MODEL - EPHEMERAL_HEADROOM
-"""Effective context-file budget for a 1M-context model = 141,000.
+"""Effective context-file budget for a 1M-context model = 133,000.
 
 Uses the two module constants directly (NOT ``compute_token_budget`` — that is an
 instance method, uncallable at module import). This is exact for the 1M case: the
@@ -159,7 +161,7 @@ estimate-tokens skill) derive their WARNING threshold from this constant."""
 
 EMERGENCY_MARGIN = 39_000
 """Gap between the WARNING and EMERGENCY context-budget thresholds. Historically
-stable at 39K (both the old 91K→130K and the current 141K→180K gaps = 39K)."""
+stable at 39K (the old 91K→130K and 141K→180K, and the current 133K→172K)."""
 
 # Whole-file-private context files — the single source of truth for the
 # private lane (design 2026-07-06 §4). These carry XG's personal / self data

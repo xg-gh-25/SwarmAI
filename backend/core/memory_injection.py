@@ -20,13 +20,15 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
+from core.context_directory_loader import (
+    DAILY_ACTIVITY_INJECTION_BUDGET as DAILY_ACTIVITY_BUDGET,
+    TIMELINE_BUDGET_TOKENS as TIMELINE_BUDGET,
+)
 from core.daily_activity_writer import parse_frontmatter, read_jsonl_sidecar
 
-# Seven days of rows, one per session-day (measured 2026-10-31 on the repaired
-# history: ~100-250 tokens a row, 6-15 sessions a day). Whole rows, newest first;
-# what does not fit is named in the suffix.
-DAILY_ACTIVITY_BUDGET = 12000
-TIMELINE_BUDGET = 1500
+# Seven days of rows, one per session-day, whole rows newest first; what does not fit
+# is named in the suffix. The budgets are the loader's, which reserves the same room
+# (EPHEMERAL_HEADROOM): one number, so the reservation and the selection never differ.
 SELECTION_VERSION = "cdf-whole-v1"     # the recorded selection: every unit of the file
 
 
