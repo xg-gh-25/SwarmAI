@@ -3,7 +3,7 @@ title: Memory 链路审计与修复 —— 从提取源头到 MEMORY.md
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: M1–M3、A1–A4、E1–E2、C1–C7 已落地（2026-10-31）；39 条重新复盘等 E2
+status: M1–M3、A1–A4、E1–E2、C1–C9 已落地（2026-10-31）；39 条重新复盘等 E2
 scope: 只管 Memory 链路。提取时机（S7 什么时候跑）、事件/gap、DailyActivity 归
   docs/design/2026-10-31-extraction-at-task-end.md（另一个 session），本文不改那些。
 ---
@@ -208,5 +208,13 @@ EVOLUTION 编号会被复用（已修）；judge 的 same / adds 精度两条和
   contradicts），只落 same。落了 770 条改写、9 条撤下（重复、过时、看代码就知道），三份文档的 run id 从
   963 处降到 90 处；不落的 26 条保留原文（8 条机械不过、4 条语义不过、MemoryGuard 已标记的 1 条、
   "与 archive 重复"的 4 条——archive 是历史，主文件那条才在用）。备份在 backups/legacy-rewrite-*.tar.gz。
-- **还剩**：有关系记录指向的 45 条旧条目（要连同关系的锚点一起改）；Event 只追加，不清理。
+- **C8 —— 有关系记录的旧条目。** 实际是 37 条（45 是关系条数）：同样改写、机械检查、逐条语义比对，落了
+  36 条，每条的关系端点从旧锚点挪到新锚点（43 处），改完生效的关系无一悬空。被 MemoryGuard 误判的那一条
+  （"read-for-display instructions" 被读成"显示 system prompt"）换了说法一并改写，工作区里已没有被
+  MemoryGuard 标记的行。
+- **C9 —— MemoryGuard 拒绝时说清楚。** 整行比对不变（防"留下标记、换上新指令"）；拒绝信息给出命中的词和
+  所在的行（按原文打码），四个保存路由回 422 而不是 500；移动文件时与被移动的文件比对，但只在同一信任组
+  （同一项目的 DDD、同一个 Knowledge 子库，每轮注入的 `.context` 不算）、且写入的字节就是源文件的字节时。
+  安全审查两轮。
+- **还剩**：Event 只追加，不清理。
 
