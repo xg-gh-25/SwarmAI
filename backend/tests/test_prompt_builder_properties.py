@@ -569,7 +569,7 @@ class TestSystemPromptFaultIsolation:
         for hdr in self._CORE_HEADERS:
             assert hdr in full, f"core section {hdr!r} missing after daily-activity path"
         # The daily section itself should also have made it in.
-        assert "## Daily Activity (last 7 days)" in full
+        assert "## Daily Activity (recent days)" in full
 
     # ── AC2: ephemeral fault isolation ──────────────────────────────────
     def test_ac2_ephemeral_failure_leaves_core_intact(self, tmp_path):
@@ -671,7 +671,7 @@ class TestSystemPromptFaultIsolation:
         # The ephemeral seam also reconnected (daily rode through). A leftover
         # .needs_distillation flag no longer asks for a manual distill: the
         # distillation hook and its fallback were retired at the CDF cutover.
-        assert "## Daily Activity (last 7 days)" in out
+        assert "## Daily Activity (recent days)" in out
         assert "## Memory Maintenance Required" not in out
 
     # ── AC4: fail-loud ──────────────────────────────────────────────────

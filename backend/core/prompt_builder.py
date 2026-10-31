@@ -177,8 +177,8 @@ def strip_sensitive_mcps(mcp_servers: dict) -> dict:
 
 
 # DailyActivity injection uses ``core.memory_injection.select_daily_activity``.
-# It admits complete session rows of the last 7 days into one 4K budget and never
-# slices text.
+# It admits the complete session rows of the two most recent days that have rows (within
+# the last 7) and never slices text.
 
 # ── Autocompact trigger threshold (NOT a cost cap — STEERING #2) ──────────────
 # The CLI fires autocompact (summarize earlier context + CONTINUE the turn; it
@@ -1350,7 +1350,7 @@ class PromptBuilder:
             # the async body only concatenates. Both fault paths are unchanged: an
             # unreadable file is skipped, never fatal.
             def _read_ephemeral_files() -> tuple[str, str, str]:
-                """Return bootstrap text, selected seven-day activity, and flag path."""
+                """Return bootstrap text and the selected recent activity."""
                 bootstrap = ""
                 bootstrap_path = context_dir / "BOOTSTRAP.md"
                 if bootstrap_path.exists():
@@ -1398,7 +1398,7 @@ class PromptBuilder:
                     ephemeral_text = f"## Onboarding\n{_bootstrap_content}"
 
                 if _daily_content:
-                    ephemeral_text += f"\n\n## Daily Activity (last 7 days)\n{_daily_content}"
+                    ephemeral_text += f"\n\n## Daily Activity (recent days)\n{_daily_content}"
             except Exception as exc:
                 logger.warning("Ephemeral (bootstrap/daily) injection failed: %s", exc)
 

@@ -249,7 +249,7 @@ def _simulate_build(
             estimate=ContextDirectoryLoader.estimate_tokens,
         )
         if selected.text:
-            context_text += f"\n\n## Daily Activity (last 7 days)\n{selected.text}"
+            context_text += f"\n\n## Daily Activity (recent days)\n{selected.text}"
 
         # Distillation flag
         flag_path = daily_dir / ".needs_distillation"
@@ -434,7 +434,7 @@ class TestE2EDirectChannel:
     def test_daily_activity_injected(self, workspace):
         """DailyActivity files appear as ephemeral sections."""
         prompt, _ = _simulate_build(workspace)
-        assert "## Daily Activity (last 7 days)" in prompt
+        assert "## Daily Activity (recent days)" in prompt
         assert "group channel exclusion" in prompt
 
     def test_daily_activity_only_last_2(self, workspace):
@@ -444,7 +444,7 @@ class TestE2EDirectChannel:
         (da_dir / "2026-03-01.md").write_text("# Old\n\n- Ancient activity")
         prompt, _ = _simulate_build(workspace)
         assert "Ancient activity" not in prompt
-        assert "## Daily Activity (last 7 days)" in prompt
+        assert "## Daily Activity (recent days)" in prompt
 
     def test_html_comments_stripped(self, workspace):
         """HTML comments from templates are not in the final prompt."""
@@ -812,7 +812,7 @@ class TestE2EDailyActivityWholeUnitBudget:
             "\n".join(json.dumps(row) for row in rows) + "\n"
         )
         prompt, _ = _simulate_build(workspace)
-        assert "## Daily Activity (last 7 days)" in prompt
+        assert "## Daily Activity (recent days)" in prompt
         assert "more sessions not shown" in prompt
         for i in range(100):
             assert (f"complete-session-{i} " in prompt) == (f"Title {i}: " in prompt)

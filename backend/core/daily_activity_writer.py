@@ -25,7 +25,6 @@ Key public symbols:
 - ``upsert_session_block``  — The one way to write a session's block (any kind).
 - ``append_daily_text``     — Append session-less text (captures, job notes) under the lock.
 - ``read_jsonl_sidecar``    — Read structured session data from a JSONL sidecar.
-- ``read_open_next_items``  — Follow-ups of recent days not resolved since.
 - ``parse_frontmatter``     — Parse YAML frontmatter from file content.
 - ``write_frontmatter``     — Serialize frontmatter dict + body to string.
 """
@@ -491,62 +490,6 @@ def _sanitize_summary_injection(summary: StructuredSummary) -> None:
                     len(val) - len(kept), fname,
                 )
                 setattr(summary, fname, kept)
-
-
-def read_open_next_items(workspace_path: Path, *, days: int = 7,
-                         until: date | None = None) -> list[dict[str, str]]:
-    """Unresolved Next items of the *days* newest sidecars, oldest first.
-
-    ``until``: only days up to and including it (the open list as it was then; the
-    history repair rebuilds days in order with it)."""
-    return open_next_items_in(Path(workspace_path) / "Knowledge" / "DailyActivity",
-                              days=days, until=until)
-
-
-def open_next_items_in(directory: Path, *, days: int = 7,
-                       until: date | None = None) -> list[dict[str, str]]:
-    """``read_open_next_items`` for a DailyActivity directory.
-
-    A follow-up is open when it is in its session's latest row of the window (a newer
-    row of the session carries forward what is still open and so replaces the older
-    lists) and no row resolved it. Each item carries its ``session_id``. The one rule
-    for every reader: the hook, the injection and the briefing."""
-    files = sorted(Path(directory).glob("*.jsonl"), reverse=True)
-    if until is not None:
-        files = [f for f in files if f.stem[:10] <= until.isoformat()]
-    files = files[:days]
-    records = [record for path in reversed(files) for record in read_jsonl_sidecar(path)]
-    resolved = {
-        next_id
-        for record in records
-        for next_id in record.get("resolves", [])
-        if isinstance(next_id, str)
-    }
-    latest: dict[str, dict] = {}
-    for n, record in enumerate(records):         # oldest first: a later row wins
-        sid = record.get("session_id")
-        if not sid:
-            latest[f"\0{n}"] = record           # no identity: a row of its own
-        elif record.get("enriched") is not False or str(sid) not in latest:
-            # a row the model did not write (no answer) never replaces the session's
-            # earlier list: its empty Next would erase what is still open
-            latest[str(sid)] = record
-    seen: set[str] = set()
-    open_items: list[dict[str, str]] = []
-    for record in latest.values():
-        for item in record.get("next_items", []):
-            if not isinstance(item, dict):
-                continue
-            next_id = item.get("next_id")
-            text = item.get("text")
-            if not isinstance(next_id, str) or not isinstance(text, str):
-                continue
-            if next_id in resolved or next_id in seen:
-                continue
-            seen.add(next_id)
-            open_items.append({"next_id": next_id, "text": text,
-                               "session_id": str(record.get("session_id"))})
-    return open_items
 
 
 def render_session(summary: StructuredSummary, context: HookContext) -> "tuple[str, dict[str, Any]]":

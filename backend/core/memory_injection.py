@@ -2,8 +2,9 @@
 
 - ``select_context_file``: MEMORY.md / EVOLUTION.md whole, every unit (no budget, no
   score: design 2026-10-30-cdf-agent-decides D11).
-- ``select_daily_activity`` admits complete session rows of the last 7 days, newest
-  first (design docs/design/2026-10-31-daily-activity-useful.md D7).
+- ``select_daily_activity`` admits the complete session rows of the two most recent
+  days that have rows, newest first, with no follow-up lines (design
+  docs/design/2026-10-31-continue-lookback-todo.md D1).
 - ``select_timeline`` admits complete month summaries and event units, counted on the
   text the prompt shows.
 - Nothing slices, shortens, or rewrites semantic content.
@@ -26,8 +27,8 @@ from core.context_directory_loader import (
 )
 from core.daily_activity_writer import parse_frontmatter, read_jsonl_sidecar
 
-# Seven days of rows, one per session-day, whole rows newest first; what does not fit
-# is named in the suffix. The budgets are the loader's, which reserves the same room
+# The rows of the two most recent days that have rows, one per session-day, whole rows
+# newest first; what does not fit is named in the suffix. The budgets are the loader's, which reserves the same room
 # (EPHEMERAL_HEADROOM): one number, so the reservation and the selection never differ.
 SELECTION_VERSION = "cdf-whole-v1"     # the recorded selection: every unit of the file
 
@@ -55,7 +56,14 @@ def _admit(units: list[str], budget: int, estimate: Callable[[str], int]) -> Sel
     return Selection("\n".join(kept), omitted, used)
 
 
-def _recent_days(today: date, count: int = 7) -> list[date]:
+#: the days of rows injected: the most recent days that have rows, within the last 7
+#: (design 2026-10-31-continue-lookback-todo D1: recall of rows by age is 83% useful
+#: within 2 days, 42% at 3-7; older rows are reached by recall)
+DAILY_ACTIVITY_DAYS = 2
+_LOOKBACK_DAYS = 7
+
+
+def _recent_days(today: date, count: int = _LOOKBACK_DAYS) -> list[date]:
     return [today - timedelta(days=offset) for offset in range(count)]
 
 
@@ -71,14 +79,9 @@ def _legacy_records(path: Path) -> list[dict]:
         block = body[match.end():end]
         summary_match = re.search(r"^Summary:\s*(.+)$", block, re.MULTILINE)
         sentence = summary_match.group(1).strip() if summary_match else ""
-        next_items: list[dict[str, str]] = []
-        for next_text in re.findall(r"^\*\*Next:\*\*\s*(.+)$", block, re.MULTILINE):
-            material = f"{match.group(2).strip()}\0{next_text}".encode("utf-8")
-            next_items.append({"next_id": hashlib.sha256(material).hexdigest()[:12], "text": next_text})
         records.append({
             "session_id": match.group(2).strip(), "timestamp": match.group(1),
             "title": match.group(3).strip(), "summary_sentence": sentence,
-            "next_items": next_items, "resolves": [],
         })
     return records
 
@@ -90,28 +93,16 @@ def _upgrade_record(record: dict) -> dict:
     if not upgraded.get("summary_sentence"):
         delivered = [item for item in upgraded.get("deliverables", []) if isinstance(item, str)]
         upgraded["summary_sentence"] = "; ".join(delivered)
-    upgraded.setdefault("next_items", [])
-    upgraded.setdefault("resolves", [])
     return upgraded
 
 
-def _row(day: date, record: dict, open_ids: set[str], shown: set[str]) -> str:
-    """One session row: date, time, title, what was done, its open follow-ups."""
+def _row(day: date, record: dict) -> str:
+    """One session row: date, time, title, what was done and where it stopped. Work
+    left for later is a ToDo, never a line here (design 2026-10-31-continue-lookback-todo)."""
     title = str(record.get("title") or "Untitled").strip()
     sentence = str(record.get("summary_sentence") or "").strip()
     head = f"- {day.isoformat()} {record.get('timestamp', '')} {title}".rstrip()
-    lines = [head + (f": {sentence}" if sentence else "")]
-    for item in record.get("next_items", []):
-        if not isinstance(item, dict):
-            continue
-        next_id, text = item.get("next_id"), item.get("text")
-        if isinstance(next_id, str) and isinstance(text, str) and next_id in open_ids:
-            key = " ".join(text.lower().split())
-            if key in shown:
-                continue                    # the same follow-up from another session
-            shown.add(key)
-            lines.append(f"  - Next [{next_id}]: {text}")
-    return "\n".join(lines)
+    return head + (f": {sentence}" if sentence else "")
 
 
 def select_daily_activity(
@@ -121,22 +112,21 @@ def select_daily_activity(
     estimate: Callable[[str], int],
     budget: int = DAILY_ACTIVITY_BUDGET,
 ) -> Selection:
-    """Session rows of the last 7 days as whole units: days newest first, rows newest
-    first within a day. A row shows the follow-ups still open by ``open_next_items_in``
-    (its session's latest row, not resolved), each text once."""
+    """The session rows of the DAILY_ACTIVITY_DAYS most recent days that have rows,
+    within the last 7, as whole units: days newest first, rows newest first within a
+    day. What does not fit is named in the suffix."""
     directory = Path(workspace) / "Knowledge" / "DailyActivity"
-    days = _recent_days(today)
-    records_by_day = {}
-    for day in days:
+    records_by_day: dict[date, list[dict]] = {}
+    for day in _recent_days(today):
         records = read_jsonl_sidecar(directory / f"{day.isoformat()}.jsonl")
         raw_records = records or _legacy_records(directory / f"{day.isoformat()}.md")
-        records_by_day[day] = [_upgrade_record(record) for record in raw_records]
-    from core.daily_activity_writer import open_next_items_in
-    open_ids = {item["next_id"] for item in open_next_items_in(directory, days=7, until=today)}
-    shown: set[str] = set()
+        if raw_records:
+            records_by_day[day] = [_upgrade_record(record) for record in raw_records]
+        if len(records_by_day) == DAILY_ACTIVITY_DAYS:
+            break
     units = [
-        _row(day, record, open_ids, shown)
-        for day in days
+        _row(day, record)
+        for day in records_by_day
         for record in sorted(records_by_day[day], key=lambda r: str(r.get("timestamp") or ""),
                              reverse=True)
     ]

@@ -1211,7 +1211,7 @@ class ContextHealthHook:
 
         Checks:
         1. Open Threads body↔state: ✅ entries under active subsections
-        2. Stale forward-references: "Next:", "TODO:", "NOT yet" in entries
+        2. Stale forward-references: "TODO:", "NOT yet" in entries
            older than 14 days (likely completed but not updated)
         3. Index↔body count mismatch (caught structurally by index regen,
            but flagged here for visibility)
@@ -1249,7 +1249,6 @@ class ContextHealthHook:
         # Patterns that suggest "this hasn't happened yet" in entries > 14d old
         stale_patterns = [
             (r"NOT yet (?:created|built|implemented|shipped)", "NOT yet"),
-            (r"Next:\s+build\b", "Next: build"),
             (r"TODO:\s+\w", "TODO:"),
             (r"not yet built", "not yet built"),
             (r"\bdeferred\b|\bon hold\b", "deferred/on hold"),  # only flag if > 30d

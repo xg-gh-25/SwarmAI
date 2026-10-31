@@ -29,22 +29,25 @@ def test_daily_admits_whole_rows_counts_overflow_and_hides_resolved(tmp_path):
     assert "(1 more sessions not shown; they are in Knowledge/DailyActivity/)" in result.text
 
 
-def test_rows_cover_all_seven_days_compactly_and_no_day_summary(tmp_path):
+def test_the_two_most_recent_days_with_rows_and_no_followup_lines(tmp_path):
+    """Design 2026-10-31-continue-lookback-todo D1: the rows of the two most recent days
+    that have rows (a day without rows is skipped, not counted), no Next lines; work
+    left for later is a ToDo. An old day summary block is never a row."""
     directory = tmp_path / "Knowledge" / "DailyActivity"
     _write_jsonl(directory / "2026-10-27.jsonl", [
         {"session_id": "a", "timestamp": "09:00", "title": "Parser fix",
          "summary_sentence": "Fixed the blank-line crash.",
          "next_items": [{"next_id": "x1", "text": "Release 2.4"}], "resolves": [],
          "deliverables": ["a very long deliverable that must not be injected"]}])
-    _write_jsonl(directory / "2026-10-21.jsonl", [
-        {"session_id": "b", "timestamp": "18:00", "title": "Docs", "summary_sentence": "Wrote the guide.",
-         "next_items": [], "resolves": []}])
-    (directory / "2026-10-21.md").write_text("## 日汇总\n主线：旧的日汇总。\n")
+    _write_jsonl(directory / "2026-10-24.jsonl", [
+        {"session_id": "b", "timestamp": "18:00", "title": "Docs", "summary_sentence": "Wrote the guide."}])
+    (directory / "2026-10-24.md").write_text("## 日汇总\n主线：旧的日汇总。\n")
+    _write_jsonl(directory / "2026-10-22.jsonl", [
+        {"session_id": "c", "timestamp": "08:00", "title": "Older", "summary_sentence": "Not shown."}])
     result = select_daily_activity(tmp_path, today=date(2026, 10, 27), estimate=len, budget=10_000)
     assert result.text == (
         "- 2026-10-27 09:00 Parser fix: Fixed the blank-line crash.\n"
-        "  - Next [x1]: Release 2.4\n"
-        "- 2026-10-21 18:00 Docs: Wrote the guide."
+        "- 2026-10-24 18:00 Docs: Wrote the guide."
     )
 
 
@@ -205,36 +208,3 @@ def test_timeline_template_is_copy_if_missing_and_mode_0644(tmp_path):
     timeline.write_text(original + "user event\n", encoding="utf-8")
     loader.ensure_directory()
     assert timeline.read_text(encoding="utf-8").endswith("user event\n")
-
-
-def test_a_followup_is_open_only_in_its_sessions_latest_row_and_shown_once(tmp_path):
-    from core.daily_activity_writer import open_next_items_in
-    directory = tmp_path / "Knowledge" / "DailyActivity"
-    _write_jsonl(directory / "2026-10-26.jsonl", [
-        {"session_id": "a", "timestamp": "10:00", "title": "Parser", "summary_sentence": "Started.",
-         "next_items": [{"next_id": "old-a", "text": "Write the parser tests"}], "resolves": []}])
-    _write_jsonl(directory / "2026-10-27.jsonl", [
-        {"session_id": "a", "timestamp": "09:00", "title": "Parser", "summary_sentence": "Tests written.",
-         "next_items": [{"next_id": "new-a", "text": "Push commit abc"}], "resolves": []},
-        {"session_id": "b", "timestamp": "11:00", "title": "Docs", "summary_sentence": "Docs done.",
-         "next_items": [{"next_id": "b1", "text": "push   commit ABC"}], "resolves": []}])
-    items = open_next_items_in(directory, days=7, until=date(2026, 10, 27))
-    assert {i["next_id"] for i in items} == {"new-a", "b1"}       # a's older list is replaced
-    assert {i["session_id"] for i in items} == {"a", "b"}
-    text = select_daily_activity(tmp_path, today=date(2026, 10, 27), estimate=len, budget=10_000).text
-    assert "Write the parser tests" not in text
-    assert text.lower().count("commit abc") == 1                  # the same follow-up once
-
-
-def test_a_row_without_a_model_answer_does_not_erase_open_followups(tmp_path):
-    from core.daily_activity_writer import open_next_items_in
-    directory = tmp_path / "Knowledge" / "DailyActivity"
-    _write_jsonl(directory / "2026-10-26.jsonl", [
-        {"session_id": "a", "enriched": True, "next_items": [{"next_id": "keep1", "text": "Ship it"}],
-         "resolves": []},
-        {"title": "no id", "next_items": [{"next_id": "x1", "text": "Old row one"}]},
-        {"title": "no id", "next_items": [{"next_id": "x2", "text": "Old row two"}]}])
-    _write_jsonl(directory / "2026-10-27.jsonl", [
-        {"session_id": "a", "enriched": False, "next_items": [], "resolves": []}])
-    ids = {i["next_id"] for i in open_next_items_in(directory, days=7, until=date(2026, 10, 27))}
-    assert ids == {"keep1", "x1", "x2"}
