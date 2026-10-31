@@ -3,7 +3,7 @@ title: Memory 链路审计与修复 —— 从提取源头到 MEMORY.md
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: M1–M3、A1–A4、E1–E2、C1–C6 已落地（2026-10-31）；39 条重新复盘等 E2
+status: M1–M3、A1–A4、E1–E2、C1–C7 已落地（2026-10-31）；39 条重新复盘等 E2
 scope: 只管 Memory 链路。提取时机（S7 什么时候跑）、事件/gap、DailyActivity 归
   docs/design/2026-10-31-extraction-at-task-end.md（另一个 session），本文不改那些。
 ---
@@ -200,6 +200,13 @@ EVOLUTION 编号会被复用（已修）；judge 的 same / adds 精度两条和
 - **C6 —— 存量清理。** General Brain 文档进自动撤回的范围；6 位零利益读者逐条审 649 条 CDF 条目，
   我核过后撤下 82 条（看一眼代码就知道 29、过时 20、已修的 bug 16、重复 14、状态 3），原文在 vault；
   11 份复制设计文档的 reference 移到 archive；10 个孤儿 lock 文件移到废纸篓。
-- **还剩**：SwarmAI DDD 里 CDF 之前写的约 1,100 条旧条目，多数有真教训但埋在叙事和 run id 里，要改写
-  不是撤，单独做；Event 只追加，不清理。
+- **C7 —— 旧条目改写。** SwarmAI DDD 里 CDF 之前的条目 1,192 条，只动带机器来源标记的 833 条（无标记的
+  可能是人写的，不碰），其中 45 条有关系记录指向（整文件改写会换掉它们的身份），也不碰。796 条交 6 位读者
+  改写：只许去掉 run id、commit、session id、日期、经过叙事和查不到的内部编号，标题写成规则本身，判断、
+  条件、例外、理由一条不少；每条先过机械检查（类型标签、尾部注释原样，原文的代码名和路径一个不少、
+  不多出新的，id 去净，长度不低于原文 45%），再交另一组读者逐条比对语义（same / lost / added /
+  contradicts），只落 same。落了 770 条改写、9 条撤下（重复、过时、看代码就知道），三份文档的 run id 从
+  963 处降到 90 处；不落的 26 条保留原文（8 条机械不过、4 条语义不过、MemoryGuard 已标记的 1 条、
+  "与 archive 重复"的 4 条——archive 是历史，主文件那条才在用）。备份在 backups/legacy-rewrite-*.tar.gz。
+- **还剩**：有关系记录指向的 45 条旧条目（要连同关系的锚点一起改）；Event 只追加，不清理。
 
