@@ -364,8 +364,8 @@ def test_an_event_closes_an_open_gap_another_session_opened(cdf_env):
     finally:
         conn.close()
     assert ok.targets == [gap_anchor] and ok.closes == [gap_anchor]
-    assert [r["reason"] for r in refused.refused] == ["closed", "human_written", "other_session",
-                                                      "other_session"]
+    assert [r["reason"] for r in refused.refused] == ["not_an_open_gap", "human_written",
+                                                      "other_session", "other_session"]
     assert external.targets == []
 
 

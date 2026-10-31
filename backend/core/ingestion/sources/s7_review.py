@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 REVIEW_VERSION = "cdf-review-r17-v1"
 ALLOWED_KINDS = ("cognition", "gap", "reference", "event")
+CORRECTIONS_SHOWN = 8   # the captured corrections closest to a new correction, for `repeats`
 GAPS_SHOWN = 5          # the project's open gaps closest to an event, shown so it may close them
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 CODE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".kt",
@@ -669,7 +670,7 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
         text = " ".join(str(getattr(unit, f, "") or "") for f in ("title", "what", "why", "how", "summary"))
         also = list(earlier)
         if getattr(unit, "type", None) == "correction":
-            also += corrections
+            also += relations_v2.candidates(text, corrections, top=CORRECTIONS_SHOWN)
         also += relations_v2.candidates(text, withdrawn_pool, top=2)
         # an event is compared with the events (TIMELINE) and with the project's open
         # gaps it may close; the rest with the shared pool

@@ -230,7 +230,8 @@ def check_session_own(conn: sqlite3.Connection, *, workspace: Path, project: str
                 out.closes.append(entry.anchor)
             continue
         if row is not None and row[1] == "gap":
-            out.refused.append({"ref": ref, "reason": "closed"})
+            # ticked done, or kept outside a project's IMPROVEMENT (the General Brain)
+            out.refused.append({"ref": ref, "reason": "not_an_open_gap"})
             continue
         # an event or anything else: the review's own candidate only (an S1 unit the user
         # dictated may carry the session id as its ref and is never this review's to retire)

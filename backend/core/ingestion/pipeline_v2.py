@@ -603,16 +603,35 @@ def _home(unit: SourceUnit, destination: Any, project: str | None, subject: str 
 
 
 def _repeat_opens(unit: Any, declared_rel: dict[str, Any], declared: Any, destination: Any,
-                  facts: Facts) -> bool:
+                  facts: Facts, row: Any) -> bool:
     """Whether a correction about the agent that its evidence kept out of EVOLUTION goes
     there anyway: it declares it repeats a recorded correction (one of
-    ``relations_v2.corrections``), so the mistake has now been made in two conversations,
-    and it cites nothing external. A first occurrence stays in the General Brain."""
+    ``relations_v2.corrections``) that another conversation recorded, so the mistake has
+    now been made in two, and it cites nothing external. A first occurrence stays in the
+    General Brain; a repeat of this conversation's own entry is no second occurrence."""
     from . import relations_v2
     earlier = declared_rel.get("repeats")
-    return (isinstance(unit, CognitionUnit) and unit.type == "correction" and earlier is not None
+    if not (isinstance(unit, CognitionUnit) and unit.type == "correction" and earlier is not None
             and declared.store == "EVOLUTION" and destination.store != "EVOLUTION"
-            and not facts.cited_external and bool(relations_v2.corrections([earlier])))
+            and not facts.cited_external and relations_v2.corrections([earlier])):
+        return False
+    cand = re.search(r"cand:(cand-[0-9a-f]+)\.unit", earlier.text)
+    if cand is None:
+        return True                       # a correction written before CDF or by a person
+    session = _get(row, "source_ref")
+    try:
+        from .store import connect_ro
+        conn = connect_ro()
+    except (OSError, sqlite3.Error):
+        return False                      # unknown whose it is: stays in the General Brain
+    try:
+        found = conn.execute("SELECT source_ref FROM ingestion_inbox WHERE id=?",
+                             (cand.group(1),)).fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    return not (found and session and found[0] == session)
 
 
 def _event_known(root: Path, event_key: str) -> bool:
@@ -742,7 +761,7 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         else:
             declared_rel[name] = entry
     admitted_by = None
-    if _repeat_opens(unit, declared_rel, declared_destination, destination, facts):
+    if _repeat_opens(unit, declared_rel, declared_destination, destination, facts, row):
         # the same mistake recorded in two conversations is a measurement: the repeat
         # goes where the correction was declared for, read in every session
         destination = declared_destination

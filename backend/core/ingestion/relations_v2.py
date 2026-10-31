@@ -81,34 +81,48 @@ def _entries_of(path: Path, workspace: Path) -> list[Entry]:
     return out
 
 
-_GENERAL_CACHE: dict[str, tuple[tuple[int, int], bool]] = {}
+_GENERAL_CACHE: dict[str, tuple[tuple[int, int], list["Entry"] | None]] = {}
 
 
-def general_brain_files(workspace: Path) -> list[Path]:
-    """The General Brain documents CDF writes into: the top-level Library documents that
-    hold a CDF entry (``route_general``). A Library document no unit was ever written to
-    (an org chart, a standard) is reference, not an entry a unit is declared against.
-    Whether a file holds one is cached by its mtime and size."""
+def _general_entries(workspace: Path) -> list["Entry"]:
+    """The entries of the General Brain documents CDF writes into (``route_general``):
+    the top-level Library documents that hold a CDF entry. A Library document no unit was
+    ever written to (an org chart, a standard) and a reference CDF wrote (its header
+    names the one candidate it came from) are not entries a unit is declared against. Parsed once per
+    version of a file (its mtime and size)."""
     lib = Path(workspace) / "Knowledge" / "Library"
     if not lib.is_dir():
         return []
-    out = []
+    out: list[Entry] = []
+    seen = set()
     for path in sorted(lib.glob("*.md")):
         try:
             st = path.stat()
         except OSError:
             continue
         key, stamp = str(path), (st.st_mtime_ns, st.st_size)
+        seen.add(key)
         hit = _GENERAL_CACHE.get(key)
         if hit is None or hit[0] != stamp:
             try:
-                has = "<!-- cand:" in path.read_text(encoding="utf-8", errors="replace")
+                text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            _GENERAL_CACHE[key] = hit = (stamp, has)
+            brain = "<!-- cand:" in text and _is_brain_document(text)
+            hit = (stamp, _entries_of(path, workspace) if brain else None)
+            _GENERAL_CACHE[key] = hit
         if hit[1]:
-            out.append(path)
+            out += hit[1]
+    for key in [k for k in _GENERAL_CACHE if k.startswith(str(lib)) and k not in seen]:
+        del _GENERAL_CACHE[key]                       # a file that is gone
     return out
+
+
+def _is_brain_document(text: str) -> bool:
+    """A General Brain document (many units, ``writer`` writes ``ingestion_candidate:
+    n/a (multi-unit)`` in its header), not one reference (its header names the one
+    candidate it came from)."""
+    return "\ningestion_candidate: cand-" not in text
 
 
 def pool(workspace: Path, project: str | None) -> list[Entry]:
@@ -116,7 +130,7 @@ def pool(workspace: Path, project: str | None) -> list[Entry]:
     Brain documents CDF writes into (read in every project, so a lesson filed there is
     found again from any project) and the main docs of *project*'s DDD (archives are not
     in force)."""
-    files = [workspace / rel for rel in EVERY_TURN_FILES] + general_brain_files(workspace)
+    files = [workspace / rel for rel in EVERY_TURN_FILES]
     if project:
         from core.ddd_paths import ddd_path
         from core.project_registry import DDD_CANONICAL_DOCS
@@ -126,7 +140,7 @@ def pool(workspace: Path, project: str | None) -> list[Entry]:
     for path in files:
         if path.is_file():
             out += _entries_of(path, workspace)
-    return out
+    return out + _general_entries(workspace)
 
 
 TIMELINE_FILE = ".context/TIMELINE.md"
@@ -166,10 +180,13 @@ def candidates(text: str, entries: list[Entry], *, top: int = TOP,
 
 
 def corrections(entries: list[Entry]) -> list[Entry]:
-    """The captured corrections: EVOLUTION's Corrections Captured and the General Brain's
-    (where a correction no user words back is kept), so a repeat of either is found."""
-    return [e for e in entries if "Correction" in e.section
-            and (e.path.endswith("EVOLUTION.md") or e.path.startswith("Knowledge/Library/"))]
+    """The captured corrections, so a repeat of one is found: EVOLUTION's Corrections
+    Captured, and the General Brain's ``[correction]`` entries (where a correction no user
+    words back is kept, under its topic's section, e.g. "What Failed")."""
+    return [e for e in entries
+            if (e.path.endswith("EVOLUTION.md") and "Correction" in e.section)
+            or (e.path.startswith("Knowledge/Library/")
+                and e.text.lstrip().startswith("- [correction]"))]
 
 
 def restated(title: str, what: str, entries: list[Entry], path: str) -> Entry | None:
