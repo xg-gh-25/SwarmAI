@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "第二阶段验证：'只有人能做'在什么前提下能成为边界"
-status: r2 — 验证方案，已过一次零上下文审查（§9），待 XG 定是否开始（§8）
+status: r2 — 验证方案，已过一次零上下文审查（§9）；§8 第 1 件已做，其余待 XG 定（§8）
 related: docs/design/2026-10-31-swarm-out-ops-registry.md（§2.4 绕过路径、§6 第二阶段）· docs/design/2026-10-31-swarm-run.md（P0-c）
 ---
 
@@ -19,7 +19,7 @@ related: docs/design/2026-10-31-swarm-out-ops-registry.md（§2.4 绕过路径�
    的内容，各是一条路（§4）。其中四条今天完全绕开任何验证方：
    - `PUT /api/settings` 能直接关掉 agent 自己的沙箱；
    - 下一个 session 会在沙箱外运行 agent 写进工作区的 MCP 配置；
-   - webview 有权限以任意参数运行 `python3` / `node`；
+   - webview 有权限以任意参数运行 `python3` / `node`，以及启动能跑任意 Python 的 sidecar（2026-10-31 已删，§8）；
    - 文件工具不受沙箱管。
 
 所以第二阶段不是"半天验证一下签名"，而是一项平台安全工程：每条通道都要关上，人的签名才有意义。这份方案的作用，是用尽量少的成本判断"能不能全部关上、要付出多少"，再决定做不做。
@@ -52,7 +52,7 @@ related: docs/design/2026-10-31-swarm-out-ops-registry.md（§2.4 绕过路径�
 | 沙箱只管 Bash；owner session 用 `bypassPermissions`，没有文件路径检查（那个检查只给 channel session 用） | `core/prompt_builder.py:2360`；`security_hooks.create_file_access_permission_handler` |
 | 沙箱默认关；开了也给写整个 `~/.swarm-ai/`；9 个命令在沙箱外跑：`docker,ps,pgrep,pkill,top,open,screencapture,osascript,launchctl` | `core/app_config_manager.py:100-103`；`core/prompt_builder.py:2363` |
 | 沙箱配置只有 `enabled`、`excludedCommands`、`network`，没有"禁止读 / 写某路径"；它是全局设置，不能按 session 设 | `core/prompt_builder.py:859-868` |
-| webview 有权限以任意参数执行 `node` / `python` / `python3`，前端代码没有一处用到（自 initial commit 起就有） | `desktop/src-tauri/capabilities/default.json`；`desktop/src` 里没有任何 `@tauri-apps/plugin-shell` 引用 |
+| webview 有权限以任意参数执行 `node` / `python` / `python3`，也能以任意参数启动 `python-backend` sidecar（`py -c` 能跑任意 Python）；前端代码没有一处用到（自 initial commit 起就有；§8 已删） | `desktop/src-tauri/capabilities/default.json`；`desktop/src` 里没有任何 `@tauri-apps/plugin-shell` 引用 |
 | webview 能开集成终端（PTY，在沙箱外） | `desktop/src-tauri/src/terminal.rs:146` `pty_spawn` |
 | 发布版编进了 devtools；webview 的 CSP 只限了 `img-src` | `desktop/src-tauri/Cargo.toml:16`；`tauri.conf.json:15` |
 | 这台机器的 Hive 账户没存自己的密钥，走默认凭证链（用户的 `~/.aws`） | `hive_accounts`：`access_keys`、`auth_config` 为 `{}`；`hive/provisioner.py:186-196` |
@@ -69,7 +69,7 @@ related: docs/design/2026-10-31-swarm-out-ops-registry.md（§2.4 绕过路径�
 | 2 | 文件工具、MCP 工具 | 不受沙箱管，读写所有用户文件 | owner session 也要有拒绝规则或路径检查 | `bypassPermissions` 下，CLI 的拒绝规则还对文件工具生效吗？ |
 | 3 | 下个 session 会执行的配置 | 往 SwarmWS 写 MCP 配置或 hooks，下个 session 在沙箱外跑 | 这些配置移出 agent 可写的目录，或禁止写 | CLI 从哪些路径读 MCP、hooks、settings？能不能指到别处？ |
 | 4 | daemon 当副手 | 经本机 HTTP 改沙箱设置、加 MCP、装插件、做人专用的 Swarm Out 动作 | 所有改变 agent 能力的路由和所有人专用路由都要求"人的证明"（§5） | 这类路由一共有多少？（用第一阶段登记表的办法，枚举 `app.routes`） |
-| 5 | webview | 一处脚本注入就能以任意参数运行 python / node（在沙箱外，以 App 身份）、开终端、开检查器 | 删掉没用的 shell 执行权限；发布版关掉 devtools；限 `script-src`；终端和签名都要原生手势 | 现有渲染有没有可执行脚本的注入点？ |
+| 5 | webview | 一处脚本注入就能以任意参数运行 python / node（在沙箱外，以 App 身份）、开终端、开检查器 | 删掉没用的 shell 权限（已做，§8）；发布版关掉 devtools；限 `script-src`；终端和签名都要原生手势 | 现有渲染有没有可执行脚本的注入点？ |
 | 6 | 系统和界面 | `osascript`、`screencapture`、剪贴板（`pbpaste`）、`docker -v $HOME` | 沙箱外命令清单清空；剪贴板和截屏列为读的通道 | 逐个命令在沙箱里试 |
 | 7 | Hive 侧 | Hive 自己的 agent 和 Hive daemon 同用户；Host 用户的凭证有 Hive root | Hive 账户用专用凭证、放 agent 读不到的地方，泄露过的都要轮换；Hive 侧同样需要沙箱；Hive 拒绝转发它不认识的人专用路径 | agent 能用的凭证真的碰不到 Hive 吗？（用 dry-run 实测，不只看策略模拟） |
 
@@ -142,7 +142,13 @@ ad-hoc 签名下每次升级都要重新授权的话，就需要 Developer ID �
 
 ## 8. 和第二阶段无关、现在就值得做的两件事
 
-1. **删掉 webview 的 `shell:allow-execute`（node / python / python3，任意参数）。** 前端没有一处用到它；今天任何一处脚本注入，都能借它在沙箱外运行任意代码。删掉不影响任何功能，sidecar 的 `shell:allow-spawn` 不动。
+1. **删掉 webview 的全部 shell 权限（已做）。** 一共四条：
+   - `shell:allow-execute`：以任意参数运行 node / python / python3；
+   - `shell:allow-spawn`：以任意参数启动 `python-backend` sidecar，而 `python-backend py -c <代码>` 能执行任意 Python（`backend/desktop_main.py` `_run_py`），所以它和上一条一样危险；
+   - `shell:allow-kill`；
+   - `shell:allow-open`。
+
+   这四条前端都没有用到：打开链接和文件走 `plugin-opener`，后端由 Rust 用 `std::process::Command` 启动，终端用 App 自己的 `pty_*` 命令。今天任何一处脚本注入，都能借它们在沙箱外运行任意代码；删掉不影响任何功能。`desktop/src/__tests__/tauriCapabilities.test.ts` 防止它们被加回来。r2 里写的"sidecar 的 `shell:allow-spawn` 不动"是错的。
 2. **发布版关掉 devtools。** 代价是线上出问题时没法开检查器。
 
 **要 XG 定：**

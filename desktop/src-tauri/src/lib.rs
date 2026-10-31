@@ -13,8 +13,12 @@ mod runtime_deploy;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
-// tauri_plugin_shell: ShellExt import removed, but plugin still initialized
-// for its "open" capability (open URLs in system browser via shell:allow-open).
+// tauri_plugin_shell is still initialized, but the webview has no shell permission
+// (capabilities/default.json): links and files open through tauri_plugin_opener, the
+// backend is started below with std::process::Command, and the terminal uses the
+// pty_* commands. A grant to execute or spawn would let one script injection in the
+// webview run code outside the agent sandbox, as the App
+// (docs/design/2026-10-31-human-proof-verification.md §8).
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
