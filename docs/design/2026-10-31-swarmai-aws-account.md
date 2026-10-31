@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "SwarmAI 账号：一个 AWS 账号，产品底层统一管理"
-status: r3.1 — 按用户旅程重写安装、升级、设置和管理（§6、§7）；r3 已过一次零上下文审查（§11）；待 XG 定（§10）
+status: r4.1 — 认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
 related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-10-31-swarm-out-ops-registry.md
 ---
 
@@ -17,29 +17,31 @@ related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-
 内部账号用 ADA 或 AWS SSO 认证，外部账号用 AWS SSO；安装只给这两种方式。Hive 默认开一台，数量可调，但至少一台。
 然后把这些当产品来管。
 
+**XG 2026-10-31（r4 的输入）：** Hive 要有上限，最多 8 台，防误操作。认证方式不局限于 SSO 和 ADA：外部用户普遍
+怎么认证、内部除了 ADA 还有什么通用场景，一起考虑。整个流程要顺，尤其不能让用户因为向导直接被挡在外面。
+
 今天的问题是两套互不相干的身份、十来处各自解析凭证（§2）。底层的解法是**一条账号记录 + 一个解析入口 + 一条交付
 凭证的通道**（§5，r2 已定形）。r3 在上面加两层：用户在什么时刻、看到什么、做什么（§6）；产品怎么持续管理这个
 账号和它的 Hive（§7）。
 
 ## 2. 用户和时刻
 
-| | 内部用户（Amazon 员工，Isengard 账号） | 外部用户（自己的 AWS 账号） |
+| | 内部用户（Amazon 员工） | 外部用户（自己或公司的 AWS 账号） |
 |---|---|---|
-| **第一次安装** | 账号 ID → ADA（默认）或 AWS SSO → 登录 → 核实 → Hive | 账号 ID → AWS SSO → 登录 → 核实 → Hive |
+| **第一次安装** | 先探测本机已有的凭证；有就一键用，没有就 ADA 或 SSO 登录 → 核实 → Hive | 先探测；有就一键用，没有就 AWS 登录或 SSO → 核实 → Hive |
 | **升级到这个版本** | 老配置自动生成账号记录；一致就不打扰；不一致才问（§6.4） | 同左 |
 | **之后（设置页）** | 一页"SwarmAI 账号"：状态、能力、Hive 数量（§6.5） | 同左 |
 
-还有一种运行方式是 **Hive 本身**。今天 Hive 也走同一个向导（`OnboardingPage.tsx` 的 `isHive` 分支）；r3 里 Hive
+还有一种运行方式是 **Hive 本身**。今天 Hive 也走同一个向导（`OnboardingPage.tsx` 的 `isHive` 分支）；r4 里 Hive
 模式（`SWARMAI_MODE=hive`）跳过 ②–⑤：daemon 启动时用实例角色自动建记录（§5.1），不做 Hive 数量对齐（§7.3）。
 
-内部和外部的差别只有四处，其余流程完全一样：
+内部和外部的差别只在"推荐哪几种登录方式"和"权限从哪来"，流程本身一样（具体场景见 §6.2）：
 
 | | 内部 | 外部 |
 |---|---|---|
 | 怎么判断 | `~/.midway` 或 `~/.ada` 存在 → 内部（今天的 `/system/auth-hint` 已经这样判断）；没有就默认外部，向导上一键切换 | 同左 |
-| 认证方式 | ADA（默认）、AWS SSO | AWS SSO |
-| 登录前提 | Midway 有效（`mwinit`） | 账号接入了 IAM Identity Center，用户有一个能进这个账号的权限集 |
-| 权限 | Isengard Admin 角色通常都够 | 由用户的权限集决定；产品提供一份权限模板（§7.4） |
+| 推荐的登录方式 | ADA、AWS SSO | AWS 登录（控制台账号）、AWS SSO |
+| 权限 | Isengard / Conduit 的角色（通常 Admin 就够） | 用户自己的 IAM 用户、角色或权限集；产品提供权限模板（§7.4） |
 
 ## 3. 现状（2026-10-31 读过，审查逐条复核）
 
@@ -81,15 +83,18 @@ related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-
 2. **一个解析入口**（§5.2）：daemon 里要 AWS 会话只从这里拿。
 3. **一条交付通道**（§5.3）：daemon 起的每个子进程都通过同一个 SwarmAI profile 拿凭证，自动刷新，长会话不断。
 4. **账号钉死**：每次解析出新凭证都核对账号，对不上就明确报错，绝不悄悄打到别的账号。
-5. **新装只有两种认证方式**：ADA 和 AWS SSO；SSO 在 App 里完成登录，不需要用户装 AWS CLI。
-6. **Hive 是账号的一部分**：默认一台，数量可调，至少一台；数量是用户定的期望值，产品负责对齐（§7.3）。
-7. **升级不打扰**：老用户的配置自动接上，只有不一致时才问。
-8. **按能力看就绪**：Bedrock、Hive、云存储、语音各自就绪与否、缺什么权限、怎么补。
-9. **对每个用户都成立（P7）**：内部和外部；macOS、Linux、Windows。
+5. **认证方式覆盖真实场景，但界面上只推荐两种**（§6.2）：本机已有的凭证优先一键用；内部推荐 ADA、SSO，外部推荐
+   AWS 登录、SSO；其余方式收在"更多方式"里；实在连不上 AWS 也能先只用对话进产品。
+6. **Hive 是账号的一部分**：默认一台，数量可调，1 到 8 台；数量是用户定的期望值，产品负责对齐（§7.3）。
+7. **向导不把人挡在外面**：每一个失败页都有出路（重试、换方式、先只用对话、稍后配置），每一步的等待都有明确的
+   终点（§6.1）。
+8. **升级不打扰**：老用户的配置自动接上，只有不一致时才问。
+9. **按能力看就绪**：Bedrock、Hive、云存储、语音各自就绪与否、缺什么权限、怎么补。
+10. **对每个用户都成立（P7）**：内部和外部；macOS、Linux、Windows。
 
 **非目标**
 - 不支持多个账号（XG 已定）。
-- 不加花费上限（STEERING #2）。花费只显示估算，不拦。
+- 不加花费上限（STEERING #2）。花费只显示估算，不拦。Hive 最多 8 台是 XG 定的防误操作上限，限的是台数不是钱。
 - 不改 Hive 上的身份：仍是实例角色，在同一个账号里。
 - 不动用户自己的 `~/.aws/config` 和 `~/.aws/credentials`。
 - 不在 App 里替用户开通 IAM Identity Center 或改权限集：那是账号管理员的操作，产品只说明缺什么、给模板。
@@ -98,25 +103,29 @@ related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-
 
 ### 5.1 账号记录
 
-`config.json` 里一个对象（非密钥部分）。SSO 的刷新令牌和客户端密钥放**系统密钥库**（macOS Keychain、Windows
+`config.json` 里一个对象（非密钥部分）。SSO 的刷新令牌、客户端密钥和访问密钥（`keys` 来源）放**系统密钥库**（macOS Keychain、Windows
 Credential Manager、Linux Secret Service；`backup_manager` 已经这样存它的 token），只有 daemon 读；系统没有密钥库
-时退回 `secrets.json`（0600）并在设置页说明。静态密钥（老配置）放 `secrets.json`，不再进 SQLite。
+时退回 `secrets.json`（0600）并在设置页说明。静态密钥不再进 SQLite。
 
 ```
 aws_account: {
   context: "internal" | "external",
-  source: "ada" | "sso" | "instance_role"            # 新装只会是前两种；Hive 上是 instance_role
-        | "profile" | "keys" | "bedrock_key" | "none",  # 只为升级上来的老配置保留（§6.4）
-  account_id: "533267412361" | null,   # 用户输入、STS 核实；bedrock_key / none 为 null，不钉
-  ada: { role, provider: "isengard", bin },          # ada 的绝对路径在配置时记下
+  source: "ada" | "sso" | "login"                    # 推荐的登录方式（§6.2）
+        | "profile" | "keys" | "instance_role",       # 本机已有的凭证、访问密钥、实例角色
+  account_id: "533267412361",          # STS 核实，钉死
+  ada: { role, provider: "isengard" | "conduit", bin },   # ada 的绝对路径在配置时记下
   sso: { start_url, sso_region, role },              # App 自己登录（§6.3）；令牌在系统密钥库
-  profile: "name",                                   # 老配置：用户已有的 profile
+  login: { session },                                # AWS 登录（§6.3b）；会话在 SwarmAI 自己的配置和缓存里
+  profile: "name",                                   # 用户已有的 profile（SAML 工具、aws-vault、老配置等）
   region: "us-east-1",                               # 主区域：Bedrock、云存储、语音、新 Hive 的默认区域
   caller_arn, verified_at,
   state: 见 §7.1
 }
+chat: {
+  via: "aws" | "bedrock_key" | "anthropic"   # 对话走哪条路；默认 aws（用上面的账号调 Bedrock）
+}
 hive_fleet: {
-  desired_count: 1,                    # ≥ 1
+  desired_count: 1,                    # 1..8
   instance_type: "m7g.xlarge",         # 新 Hive 的默认规格
   region: null                         # null = 用主区域
 }
@@ -124,8 +133,9 @@ hive_fleet: {
 
 - `source` 替代 `auth_method`。过渡期由 `source` 推出 `auth_method` 给旧读者（`auth_remediation`、凭证横幅、
   会话启动前检查），第二步把这些读者改读 `source`，然后删掉 `auth_method`。
-- `bedrock_key` / `none`：老配置里只有 Bedrock API key 或只有 Anthropic key 的用户，调不了 STS，没有账号 ID、
-  不钉；Hive、云存储和语音标为"需要 AWS 账号"。
+- **对话的路和 AWS 账号分开记**：`chat.via` 是 `bedrock_key` 或 `anthropic` 时，对话用那把 key（存系统密钥库），
+  AWS 账号记录可以有也可以没有。没有时 Hive、云存储和语音标为"需要连接 AWS 账号"，一个按钮回到 ②；有时它们照常
+  用账号。这样"Bedrock 暂时不通、先用 key 对话"不会丢掉已经连好的账号。r3 的 `bedrock_key` / `none` 来源改成这里。
 - `instance_role`：Hive 上（`SWARMAI_MODE=hive`）由 daemon 启动时用 STS 和 IMDS 区域**自动建**。
 - **`aws_account` 和 `hive_fleet` 不能经通用的 `PUT /api/settings` 写**（`routers/settings.py:35` 的
   `WRITABLE_KEYS` 把它们排除），只能经 §7.7 的专用路由写。`ada.bin` 只接受配置时找到的那个路径（属于用户、不在
@@ -135,7 +145,9 @@ hive_fleet: {
 
 - `record()`：读记录；Hive 模式下没有就自动建。
 - `credentials() -> 短期凭证`：按 `source` 解析：ada 调记录里的 `ada credentials print --account --role`；sso 用
-  App 自己的 Identity Center 令牌调 `GetRoleCredentials`（§6.3）；profile 直接用；keys 读 `secrets.json`；instance_role
+  App 自己的 Identity Center 令牌调 `GetRoleCredentials`（§6.3）；login 调 AWS CLI 的
+  `aws configure export-credentials --profile swarmai-login --format process`（指向 SwarmAI 自己的配置和缓存目录，
+  由 CLI 自己续期，§6.3b）；profile 直接用；keys 读系统密钥库；instance_role
   读 IMDS。令牌的刷新只在 daemon 里做（§5.3），不会有两个进程同时刷新。**每次拿到一个新的
   access key ID 就做一次 STS 核对**，账号和记录不符就抛 `AccountMismatch`（带两个账号 ID）。结果缓存到过期前几分钟；
   同一时间只有一次解析（锁）。
@@ -159,7 +171,9 @@ hive_fleet: {
 - `child_env()` 返回：`AWS_CONFIG_FILE=~/.swarm-ai/aws/config`、`AWS_PROFILE=swarmai`、`AWS_REGION` /
   `AWS_DEFAULT_REGION=主区域`，并**去掉**进程环境里其余的 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
   `AWS_SESSION_TOKEN` / `AWS_DEFAULT_PROFILE` / 凭证 token 变量，免得 CLI 按优先级先用了它们。
-- `bedrock_key` 来源：`child_env()` 只给 `AWS_BEARER_TOKEN_BEDROCK` 和区域（今天的做法），不给 profile。
+- 对话的路（`chat.via`）只决定模型相关的变量：`aws` → `CLAUDE_CODE_USE_BEDROCK=1`；`bedrock_key` → 再加
+  `AWS_BEARER_TOKEN_BEDROCK`；`anthropic` → `ANTHROPIC_API_KEY`，关掉 `CLAUDE_CODE_USE_BEDROCK`。有 AWS 账号时，
+  profile 照给（job、skill 还要用 S3、Polly）；没有时只清掉 AWS 变量。
 - `instance_role`（Hive）：`child_env()` 只给区域，清掉 profile 和密钥，子进程走实例角色（今天的做法）。
 - 思考网关用 `session()`，和 `child_env()` 同源，签名用的 key 和 CLI 一致。
 - 用户自己的 `~/.aws/config` 一个字都不改。
@@ -184,11 +198,11 @@ hive_fleet: {
 
 ### 5.5 Hive 账号表的迁移
 
-迁移前备份 `hive_accounts`（0600，且备份里去掉明文密钥：密钥先挪进 `secrets.json` 再备份），STEERING #20。
+迁移前备份 `hive_accounts`（0600，且备份里去掉明文密钥：密钥先挪进系统密钥库再备份），STEERING #20。
 
 | 情况 | 处理 |
 |---|---|
-| 一行，STS 核实是 SwarmAI 账号 | 合并：实例的 `account_ref` 指向 SwarmAI 账号；密钥（如有）挪进 `secrets.json` |
+| 一行，STS 核实是 SwarmAI 账号 | 合并：实例的 `account_ref` 指向 SwarmAI 账号；密钥（如有）挪进系统密钥库 |
 | 一行，是另一个账号 | 不合并。这个账号的凭证保留，**只用于这些实例的停止、终止、清理**，直到用户把实例迁走或销毁；设置页显示"这台 Hive 在另一个账号" |
 | 多行 | 与 SwarmAI 账号相同的合并；其余按上一行 |
 | 零行但有实例 | 实例按 SwarmAI 账号处理，第一次操作前核对实例确实在这个账号里，不在就提示 |
@@ -199,7 +213,8 @@ hive_fleet: {
 ### 5.6 现有记录怎么生成
 
 第一次启动新版本时，从 `auth_method` 和实际在用的来源推出 `source`（ada：从 `~/.aws/config` 的默认段或
-`ada profile print` 读账号和角色；sso：用户选过的 profile，记为 `profile` 来源，§6.4；apikey / bedrock_api_key：对应来源），用 STS 核实。
+`ada profile print` 读账号和角色；sso：用户选过的 profile，记为 `profile` 来源，§6.4；apikey / bedrock_api_key：记成 `chat.via` 的 `anthropic` / `bedrock_key`，再看本机默认链能不能解析出 AWS 账号，
+能就一起记上），用 STS 核实。
 推不出来，或者 launchd 环境里找不到 ada：记录标"未核实"，**不猜**，设置页请用户确认。
 
 
@@ -221,35 +236,68 @@ hive_fleet: {
 （`core/backup_manager.py:102-107`），放在账号之后会盖掉刚建的状态。恢复出来的 Hive 按升级处理（§6.4、§5.5）：
 ② 预填它们所在的账号，⑤ 显示"已有 N 台"，不再默认新建。Hive 模式跳过 ②–⑤（§2）。
 
-**② 账号 ID 和认证方式**
-- 一个输入框：12 位 AWS 账号 ID。内部用户检测到 ADA 已配置时，预填 ADA 当前的账号（今天 `adaDetails` 已经探测到）。
-- 内部 / 外部按 §2 判断，显示为一行小字"Amazon 员工？切换"，不是一道问题。
-- 认证方式：内部给 ADA（默认）和 AWS SSO 两张卡；外部只有 AWS SSO，不显示选择。
-- ADA 多一个"角色"输入：ADA 已配置时预填它当前的角色（`_probe_ada_details` 已经返回 `role_name`，
-  `routers/system.py:768-786`），否则默认 `Admin`。
-- SSO 多两个输入：SSO 起始地址（`https://xxx.awsapps.com/start`）和 SSO 区域；用户的 `~/.aws/config` 里已有
-  `sso_session` 或 sso profile 时，从那里预填（只读，不改它）。
+**② 连接 AWS 账号：先探测，再问**
 
-**③ 登录**
-- **ADA：** App 直接调 `ada credentials print --account <ID> --role <角色> --provider isengard`（只读，不写任何
-  凭证文件；和 §5.3 的 `credential_process` 是同一个调用）。Midway 过期时显示"在终端运行 `mwinit -f`，完成后
-  自动继续"，App 每几秒重试一次，成功就进下一步。其他失败各给一句话：角色不对或这个账号你没有该角色（"改角色"）；账号
-  不在 Isengard（"这个账号不能用 ADA，改用 SSO"）；找不到 ada（"安装 ada"）。
-- **SSO：** App 自己走 IAM Identity Center 的设备授权（§6.3）：点"登录"→ 浏览器打开 AWS 登录页（页上的验证码在
-  App 里同时显示）→ 用户在浏览器里登录并允许 → App 收到令牌，列出这个用户在**输入的那个账号**里能用的角色；只有
-  一个就直接选中，多个就让用户选（优先显示名字带 Admin 的）。这个账号不在用户能进的账号里 → 明确报错
-  "这次 SSO 登录看不到账号 X"，并列出能看到的账号。
+进入这一步时，App 先探测本机已有的 AWS 凭证。**自动探测只做不会弹窗、不会写文件、不会挂住的那部分：**
+- ADA 已配置的账号和角色（今天的 `_probe_ada_details`，`routers/system.py:768-786`）；
+- 静态密钥的 profile：用 STS 拿账号 ID 和身份；
+- SSO 和登录会话的 profile：读缓存里令牌的过期时间，还有效（离过期十分钟以上）才直接用缓存的令牌取一次身份，
+  **不刷新**（刷新会改写用户的 `~/.aws/sso/cache`、`~/.aws/login/cache`，还可能和用户自己的 CLI 抢同一个令牌）；
+- 实例角色（在 EC2 或云桌面上时）。
 
-③ 和 ④ 都能返回上一步，也都有"稍后配置"。
+其余 profile 只**列出来**，每行一个"检测"按钮，由用户点了才跑：`credential_process`（可能弹 Touch ID、YubiKey、
+钥匙串，或者挂住）、带 `mfa_serial` 的 assume-role（要输验证码）、令牌快过期或已过期的 SSO / 登录 profile（点了走
+App 内登录，§6.3、§6.3b）。
+
+每个探测在**自己的子进程**里跑，同时最多几个，到时间上限就连子进程一起杀掉（防挂住，不是业务超时）；要输入的
+地方一律拒绝而不是等待（没有终端时 botocore 默认会用 `getpass` 等输入）。一行出错或超时只影响那一行。环境变量里的
+凭证不探测：daemon 由 launchd 或 App 启动，通常没有用户 shell 里的变量；有的也多是会过期的临时凭证（§6.2 不支持）。
+
+探测结果决定这一页长什么样：
+
+| 探测结果 | 页面 |
+|---|---|
+| 找到能用的凭证 | 列出"找到的 AWS 账号"，每行：账号 ID、身份（如 `Admin` 角色、IAM 用户名）、来源（ADA、profile 名）。默认选中最合适的一个（内部优先 ADA，其次和 ADA 同账号的 profile）。一个按钮"用这个账号" |
+| 只找到需要登录的 profile | 列出来，每行一个"登录"按钮（SSO profile 走 §6.3 的 App 内登录，读它的起始地址、区域、账号和角色） |
+| 什么都没找到 | 账号 ID 输入框 + 推荐的两种登录方式（内部 ADA、SSO；外部 AWS 登录、SSO） |
+
+不管哪种，下面都有两行：
+- "更多方式"（展开）：用已有的 profile（手选）、粘贴访问密钥、实例角色；
+- "先只用对话"：粘贴 Bedrock API key 或 Anthropic key，马上能用对话，Hive、云存储、语音以后连上 AWS 账号再开。
+
+选中一个**探测到的 SSO profile** 时，记录不记成 `profile`，而是读出它的起始地址、区域、账号和角色，记成 `sso`，
+之后由 App 自己的令牌续期（§6.3），不再和用户的 CLI 共用 `~/.aws/sso/cache`。选中探测到的**登录会话** profile 时
+同理，在 SwarmAI 自己的登录配置里重新登录一次（§6.3b）。其余 profile（静态密钥、`credential_process`、assume-role）
+记成 `profile`，由 daemon 按用户的配置解析。
+
+账号 ID 是锚点：用户填了 ID，就只把这个账号的结果标成可选，别的账号灰掉并写明"不是你填的账号"；用户没填，
+选中哪个就钉哪个。内部 / 外部按 §2 判断，显示为一行小字"Amazon 员工？切换"，只影响推荐哪两种方式。
+
+**③ 登录**（只有没选到现成凭证时才有这一步）
+- **ADA：** 账号 ID、角色（ADA 已配置时预填，否则默认 `Admin`）、提供方（Isengard 默认，可选 Conduit）。App 直接调
+  `ada credentials print --account <ID> --role <角色> --provider <提供方>`（只读，不写任何凭证文件；和 §5.3 的
+  `credential_process` 是同一个调用）。Midway 过期时显示"在终端运行 `mwinit -f`，完成后自动继续"，App 每几秒重试，
+  成功就进下一步。其他失败各给一句话：角色不对或你没有这个角色（"改角色"）；账号不在这个提供方（"换提供方或改用
+  SSO"）；找不到 ada（"安装 ada"）。
+- **AWS SSO：** 起始地址（`https://xxx.awsapps.com/start`）和 SSO 区域（本机已有 sso 配置时预填，只读，不改它）。
+  App 自己走设备授权（§6.3）：点"登录"→ 浏览器打开 AWS 登录页（验证码在 App 里同时显示）→ 用户登录并允许 →
+  App 列出这个用户能进的账号和角色；填了账号 ID 就只看这个账号，只有一个角色就直接选中，多个就让用户选（优先
+  显示名字带 Admin 的）。看不到填的账号 → "这次 SSO 登录看不到账号 X"，列出能看到的账号。
+- **AWS 登录（外部推荐）：** 用 AWS 控制台的账号密码在浏览器里登录，拿短期凭证（§6.3b）。适合一个人一个账号、
+  没有 Identity Center 的用户，也是 AWS 推荐用来替代长期访问密钥的方式。
+
+②、③、④ 每个失败页都有同一组出路：重试、换一种方式、先只用对话、稍后配置；也都能返回上一步。
 
 **④ 核实**
 - STS `GetCallerIdentity` 的账号必须等于输入的账号 ID，否则停在这一步，说明两边各是哪个账号。
 - 通过后记录写入，状态"已连接"，然后跑能力检查（§7.2），一行一个能力：Bedrock、Hive、云存储、语音。
-- **Bedrock 不可用就不能往下走**（没有模型，SwarmAI 什么都做不了），提示缺什么（模型访问没开、区域里没有该模型、
-  权限缺哪个动作）。其余能力缺权限只标出来，不挡。
+- Bedrock 不可用时说明缺什么（模型访问没开、区域里没有该模型、权限缺哪个动作），给两条路：补好后"重新检查"，
+  或者"先只用对话"（`chat.via` 换成 Bedrock API key 或 Anthropic key；账号记录保留，Hive、云存储照常用它；补好后
+  在设置页切回）。其余能力缺权限只标出来，
+  不挡。
 
 **⑤ Hive**
-- 默认"创建 1 台"，数量可加（最少 1），规格默认 m7g.xlarge，区域默认主区域；按钮上写清后果："创建 1 台 Hive，
+- 默认"创建 1 台"，数量 1 到 8，规格默认 m7g.xlarge，区域默认主区域；按钮上写清后果："创建 1 台 Hive，
   约 $119/月，计入账号 533267412361"。
 - 点了就提交创建，**不等它建完**（一台 Hive 要建 EC2、IAM 角色、S3、CloudFront，CloudFront 部署最长等 20 分钟，
   `hive/provisioner.py:1006`），向导直接往下走；建造进度在设置页和 Swarm Out 里看。
@@ -258,20 +306,47 @@ hive_fleet: {
 - 为什么不挡：本机对话只需要 Bedrock。为了一台云上的 Hive 把用户挡在整个产品外面，代价不对等。"至少一台"由
   §7.3 的期望数量来保证，而不是由向导卡住。
 
-**"稍后配置"** 在 ②–④ 都有，作为出错时的出口；走了它，对话不可用，设置页显示"未连接"。
+**"稍后配置"** 在 ②–④ 都有；走了它，进产品，对话不可用，设置页和凭证横幅显示"未连接"并一键回到 ②。"先只用
+对话"的用户 ⑤ 显示"连接 AWS 账号后再建"，跳过。
 
-### 6.2 认证方式只给两种之后，别的方式去哪
+**为什么这样不会把人挡在外面：** 最常见的情况（本机已经有能用的 AWS 凭证）一键就过；真没有凭证的人至少能用
+Bedrock API key 或 Anthropic key 先用起来；所有失败都有出路；会挂住的调用都有时间上限。
 
-| 方式 | 新装 | 老用户 |
-|---|---|---|
-| ADA | 有（内部） | 照常 |
-| AWS SSO | 有（内部、外部） | 用 profile 的老配置照常；设置页建议改成 App 内登录 |
-| 已有 profile、静态密钥 | 收起来的"高级"入口（§10 第 1 条） | 照常，标"旧方式" |
-| 只有 Bedrock API key、只有 Anthropic key | 没有（今天外部用户的向导里有 Anthropic key，r3 去掉） | 照常，标"旧方式"；Hive、云存储、语音不可用 |
-| 实例角色 | 没有（只在 Hive 上自动用） | 照常 |
+### 6.2 真实场景和认证方式
 
-去掉 Anthropic key 以后，外部用户最常见的情况（一个人一个 AWS 账号，没有 Organizations）只剩 SSO 一条路，而单个
-账号里开的 Identity Center 不能给账号分配权限集（§8）。所以 §10 第 1 条要和这一节一起定。
+按用户实际怎么拿到 AWS 凭证排（常见程度是判断，不是测量）。"界面"一列：**推荐** = ②里的卡片；**探测** = 本机有就
+出现在"找到的 AWS 账号"里；**更多** = 收在"更多方式"里；**对话** = "先只用对话"。
+
+**外部用户**
+
+| 场景 | 典型用户 | 记为 | 界面 | 能用 Hive |
+|---|---|---|---|---|
+| IAM 用户的长期访问密钥，已在 `~/.aws/credentials` | 个人、小团队，最常见 | `profile` | 探测 | 能 |
+| AWS 控制台账号登录（`aws login`，短期凭证） | 个人、一个账号、没有 Identity Center | `login` | 推荐 | 能 |
+| IAM Identity Center（SSO） | 有 AWS Organizations 的公司 | `sso` | 推荐 | 能 |
+| 公司 SSO（Okta、Entra 等）经 SAML 工具、aws-vault、Granted 生成的 profile | 中大型公司 | `profile` | 探测 / 更多 | 能 |
+| 手上只有访问密钥，本机还没配 | 个人 | `keys` | 更多 | 能 |
+| 在 EC2、云桌面上运行 | 工程师 | `instance_role` | 探测 | 看能力检查 |
+| 只有 Bedrock API key | 想先试试的人 | `chat.via = bedrock_key` | 对话 | 不能（要再连 AWS 账号） |
+| 只有 Anthropic key，没有 AWS | 不用 AWS 的人 | `chat.via = anthropic` | 对话 | 不能（要再连 AWS 账号） |
+
+**内部用户（Amazon）**
+
+| 场景 | 记为 | 界面 | 能用 Hive |
+|---|---|---|---|
+| ADA + Isengard 账号（最常见） | `ada` | 推荐 / 探测 | 能 |
+| ADA + Conduit 账号 | `ada`（提供方 conduit） | 推荐（选提供方） | 能 |
+| `~/.aws/config` 里已经有 ADA 的 `credential_process` profile | `ada`（从 profile 读出账号和角色；命令里的 ada 路径必须就是探测到的那个，否则记成 `profile`） | 探测（点"检测"） | 能 |
+| 团队的 IAM Identity Center | `sso` | 推荐 | 能 |
+| Cloud Desktop、开发 EC2 上的实例角色 | `instance_role` | 探测 | 看能力检查（这类角色常常没有 EC2、IAM 权限） |
+| Isengard 账号上的 Bedrock API key | `chat.via = bedrock_key` | 对话 | 不能（要再连 AWS 账号） |
+
+**不支持，写明原因：** 从 Isengard 或控制台复制粘贴的临时凭证（一小时左右就过期，过期后 SwarmAI 无法自己续，
+用户会以为产品坏了）。
+
+**收敛的方式：** 记录只有一种形状（§5.1），所有 AWS 来源都经同一个入口出凭证（§5.2），对话的路单独一个字段，
+只是界面按场景分了层。新增一种
+来源 = 加一个 `source` 值和它的解析函数，不动别的。
 
 ### 6.3 App 内的 SSO 登录
 
@@ -289,6 +364,26 @@ IAM Identity Center 的设备授权是公开 API，App 自带的 botocore 里就
   续不了就进入"需要重新登录"（§7.1），设置页和凭证横幅上一个按钮重新走设备授权。
 - 令牌能活多久由 Identity Center 管理员设定（通常 8 小时到几天），产品不改它，只在过期前提示。
 
+### 6.3b AWS 登录（`aws login`）
+
+AWS 给控制台账号（IAM 用户或根用户）提供了浏览器登录拿短期凭证的方式，CLI 的命令是 `aws login`，SDK 用 profile
+里的 `login_session` 自动续期。**登录和续期都交给 AWS CLI**：
+- 登录用的 OAuth 客户端是 AWS 给 CLI 注册的，App 不冒用。
+- App 自带的 botocore 虽然有续期代码（`botocore/credentials.py:2721` 的 `LoginProvider`），但它要 `awscrt` 里的
+  `EC` 做签名，App 里的 `awscrt` 是 0.26.1，没有 `EC`（实测 `botocore.compat.EC` 为 `None`）；`amazon-transcribe`
+  又把 `awscrt` 钉在 0.26.x，升上去会弄坏语音。所以 daemon 不在进程里续期，而是调
+  `aws configure export-credentials`，CLI 用它自己带的依赖续期。
+
+- App 用 SwarmAI 自己的配置文件和缓存目录跑登录和导出（`AWS_CONFIG_FILE=~/.swarm-ai/aws/login-config`、
+  `AWS_LOGIN_CACHE_DIRECTORY=~/.swarm-ai/aws/login-cache`），先把 `[profile swarmai-login]` 和 `region` 写好再跑
+  `aws login --profile swarmai-login`，免得 CLI 在没有终端时追问。不改用户的 `~/.aws`。
+- 缓存目录 0700、文件 0600，不进备份；里面的刷新令牌由 CLI 管，放不进系统密钥库，设置页写明。
+- 本机没有 AWS CLI，或版本太旧（本机现在是 2.24.10，没有这个命令）：这张卡写明"需要较新的 AWS CLI"，给安装链接，
+  并提示可以先用 SSO 或"更多方式"。不让这张卡成为死路。
+- 要在第 1 步核实的事：要求的 CLI 最低版本；CLI 是否认自定义的 `AWS_CONFIG_FILE` 和 `AWS_LOGIN_CACHE_DIRECTORY`；
+  `export-credentials` 能否导出登录会话；IAM 用户需要哪条权限（根用户不需要）；会话最长多久。以上是读 SDK 代码
+  得到的，还没有真跑过；任何一条不成立，这张卡就不放进推荐，外部用户的推荐只剩 SSO 和探测。
+
 ### 6.4 升级：老用户第一次启动新版本
 
 升级不进向导。新版本第一次启动时，后台按 §5.6 从老配置生成记录并用 STS 核实；然后按结果分三种：
@@ -296,7 +391,7 @@ IAM Identity Center 的设备授权是公开 API，App 自带的 botocore 里就
 | 情况 | 用户看到什么 |
 |---|---|
 | 核实通过，Hive（如有）都在同一个账号 | 什么都不弹。设置页"SwarmAI 账号"直接显示结果；一次性的一行提示"SwarmAI 账号已接上：533267412361" |
-| 核实通过，但：没有 Hive / 有 Hive 在另一个账号 / 用的是"旧方式" | 设置页顶部一条待办，点开是一张确认卡，只问不一致的那一项（例："你还没有 Hive。创建 1 台，约 $119/月？"） |
+| 核实通过，但：没有 Hive / 有 Hive 在另一个账号 | 设置页顶部一条待办，点开是一张确认卡，只问不一致的那一项（例："你还没有 Hive。创建 1 台，约 $119/月？"） |
 | 推不出来或核实失败（ada 在 launchd 下找不到、登录过期、断网） | 记录标"未核实"；凭证横幅按来源提示重新登录（§7.6）；登录后自动重新核实，不需要用户重配 |
 
 - **已有的 Hive 直接接管**：同账号的按 §5.5 合并，期望数量 = max(1, 同账号里计入数量的台数，§7.3)；另一个账号的
@@ -321,7 +416,7 @@ SwarmAI 账号  533267412361 · ADA (Admin) · us-east-1          ● 已连接
 能力      Bedrock ✓   云存储 ✓   语音 ✓   Hive ✓
           （有缺口时只显示缺的那一项和怎么补，例：
            Hive ✗ 缺 ec2:RunInstances — 把权限模板交给账号管理员 [复制模板]）
-Hive      2 台（期望 2，最少 1）    约 $238/月                [− ] 2 [+]
+Hive      2 台（期望 2，1–8 台）    约 $238/月                [− ] 2 [+]
           hive-a  m7g.xlarge  us-east-1  运行中
           hive-b  m7g.xlarge  us-east-1  创建中 12 分钟
 ▸ 详细    调用身份 ARN · 核实时间 · 凭证来源 · 区域
@@ -345,9 +440,12 @@ Hive      2 台（期望 2，最少 1）    约 $238/月                [− ] 2
 |---|---|---|
 | 未连接 | 没有记录（新装走了"稍后配置"） | 用户走 ②–④ |
 | 已连接 | 记录核实过，凭证能解析 | — |
-| 需要重新登录 | ADA：Midway 过期；SSO：令牌和刷新令牌都过期 | 用户登录后自动回到"已连接" |
+| 需要重新登录 | ADA：Midway 过期；SSO：令牌和刷新令牌都过期；AWS 登录：会话过期（CLI 报要重新登录）；profile：用户自己的凭证过期 | 用户登录后自动回到"已连接" |
 | 账号不符 | 解析出的凭证不是记录里的账号（例如 ada 账号被别处改了） | 用户在设置页确认：改回，或更换账号 |
 | 未核实 | 升级时推不出来，或 STS 暂时调不通 | 下次成功解析时自动核实 |
+
+对话的路另显示一行：走账号的 Bedrock，还是"只用对话"的 key。没有账号记录、只用 key 对话时，账号状态是"未连接"，
+对话照常。
 
 **Hive 状态**（Hive 模式下没有）
 
@@ -379,7 +477,17 @@ Hive 模式（`SWARMAI_MODE=hive`）只检查 Bedrock 和它自己那几个 S3 �
 
 ### 7.3 Hive 数量：期望值和对齐
 
-- `hive_fleet.desired_count` 是用户定的（向导、设置页），最少 1。
+- `hive_fleet.desired_count` 是用户定的（向导、设置页），1 到 8。
+- **最多 8 台**（XG 定，防误操作）。所有会让 Hive 变多的路由——改期望数量、`POST /api/hive/instances`
+  （`routers/hive.py:446-486`）、重试（`routers/hive.py:651-678`）——都在同一把机群锁里**先数再插入（或改状态）**，
+  数和写之间没有别的 await；今天 `create_instance` 的检查和插入在两个分开的数据库块里，中间有 await，照这样加检查
+  并发两个请求能一起过。规则：
+  - 创建：计入数量 + 1 ≤ 8；
+  - 重试：不算这一行自己的计入数量 + 1 ≤ 8（出错但 EC2 还在的那一行本来就计入，不能因此拒绝重试它）；
+  - 替换：新旧一对算一台，所以 8 台时也能替换；
+  - 已经超过 8 台（老用户、恢复备份）：不终止任何一台，期望数量记成 8，显示"已有 N 台，超过上限 8，只能减少"，
+    上限只挡增加。
+  界面上加号到 8 置灰，旁边写"最多 8 台"。
 - **对齐**：daemon 定期比较期望数量和这台 SwarmAI 记录的 Hive（`hive_instances`）。今天没有任何东西把 EC2 的实际
   状态同步回这张表，所以对齐要按实例所在的账号和区域调 `describe_instances`，把结果写回表；查不到（断网、
   权限）当作还在，和 `_ec2_present`（`provisioner.py:1717`）一样。
@@ -394,7 +502,7 @@ Hive 模式（`SWARMAI_MODE=hive`）只检查 Bedrock 和它自己那几个 S3 �
 - **替换**：新旧两台记成一对，对齐期间不把多出来的那台当"多了"。
 - **多了**（用户调小）：让用户选删哪台；不能删到 0。
 - **最后一台**：不能删除，只能替换（先建好新的，再终止旧的）。
-- 花费：每台按规格显示月度估算，数量旁边显示合计；不设上限。
+- 花费：每台按规格显示月度估算，数量旁边显示合计；不设花费上限。
 
 ### 7.4 外部用户的权限模板
 
@@ -446,7 +554,9 @@ Center 里把它挂到权限集上。模板和能力检查从同一份动作清�
 |---|---|---|
 | 读账号状态、能力、Hive 状态 | 人和 agent | read |
 | 重新核实、跑能力检查 | 人和 agent | read |
-| 发起 SSO 登录、ADA 登录 | 人 | change |
+| 发起 SSO 登录、AWS 登录、ADA 登录 | 人 | change |
+| 自动探测本机凭证 | 人和 agent | read（只做 §6.1 ② 里不弹窗、不写文件的那部分） |
+| 逐行"检测"一个 profile | 人 | change（会执行用户 profile 里的程序，可能弹窗） |
 | 更换账号、改认证方式或角色 | 人 | change |
 | 改 Hive 期望数量（调大会创建） | 人 | off_machine |
 | 替换 Hive、终止旧账号里的 Hive | 人 | irreversible |
@@ -466,6 +576,12 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 - **外部单账号用户没有 Identity Center 组织实例：** 只在单个账号里开的 Identity Center（账号实例）不能给 AWS
   账号分配权限集（[AWS 文档](https://docs.aws.amazon.com/singlesignon/latest/userguide/account-instances-identity-center.html)），
   这类用户要先开 AWS Organizations 才能用 SSO。见 §10 第 1 条。
+- **探测会执行用户配置里的程序：** 所以自动探测不碰 `credential_process`、MFA 和需要刷新的 profile，这些由用户
+  逐行点"检测"（§6.1 ②）；每个探测在可杀的子进程里，到时间上限连子进程杀掉。
+- **`aws login` 依赖 AWS CLI，且不能在 daemon 进程里续期**（`awscrt` 版本冲突，§6.3b）：没有 CLI 或核实不过时，
+  这张卡不进推荐，不是死路。
+- **用户自己的 profile 背后是 SSO 或登录会话时**，daemon 和用户的 CLI 会刷新同一份缓存。所以探测到这类 profile
+  时改记成 App 自己的 `sso` / `login`（§6.1 ②）；用户手选这类 profile 记成 `profile` 时，接受这个竞争，设置页提示。
 - **钉的是账号不是角色：** ada 换角色账号不变，权限缺口由能力检查报。
 - **断网：** 核对结果缓存；断网时用上次结果并标"未核实"，不阻塞。钉死是防打错账号，不是安全边界。
 - **ada 在 launchd 下找不到：** 配置时记绝对路径。
@@ -478,7 +594,8 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
    `~/.swarm-ai/aws/config`、`GET /api/aws-account`（状态 + 能力）、设置页"SwarmAI 账号"（只看）。
 2. 本机消费方改走入口（§5.4 前十行），`auth_method` 的读者改读 `source`，删 `jobs/bedrock` 兜底和 executor 冻结密钥。
 3. Hive：消费方改走入口，Hive 模式自动建记录，§5.5 迁移，Hive 设置页去掉账号块。
-4. 向导 ②–④ 和设置页的登录、更换账号：ADA 路径和 App 内 SSO 登录（§6.3）。
+4. 向导 ②–④ 和设置页的登录、更换账号：探测、ADA（Isengard、Conduit）、App 内 SSO 登录（§6.3）、AWS 登录
+   （§6.3b）、更多方式、先只用对话。
 5. Hive 数量：`hive_fleet`、向导 ⑤、设置页数量、对齐（§7.3）、权限模板（§7.4）和 provisioner 建时打标签、
    新桶名、升级确认卡（§6.4）。
 
@@ -488,10 +605,15 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 2. **钉死：** 解析出的凭证账号和记录不符时抛错、状态"账号不符"，不退回默认链；access key ID 变了就重新核对。
 3. **交付：** `child_env()` 每种来源给什么、清掉什么；真实冒烟：CLI 实际签名用的 key 属于记录的账号。
 4. **迁移和升级：** §5.5 每种情况；§6.4 三种情况各显示什么；没有 Hive 的老用户不会被自动建。
-5. **向导：** 输入的账号 ID 和 STS 不符时停在 ④；Bedrock 不可用时不能往下；Hive 能力不够时向导仍能完成。
+5. **向导：** 输入的账号 ID 和 STS 不符时停在 ④；探测到的凭证一键可用，不是填的账号的灰掉；每个失败页都有
+   重试、换方式、先只用对话、稍后配置；自动探测不执行 `credential_process`、不刷新、不写 `~/.aws`；一个挂住的
+   `credential_process` 或要 MFA 的 profile 点"检测"后在时间上限内结束、不留子进程；Bedrock 不可用时能"先只用
+   对话"进产品；Hive 能力不够时向导仍能完成。
 6. **SSO：** 设备授权、看不到输入账号时的报错、令牌续期、续不了进"需要重新登录"、重新登录后恢复；客户端过期后
-   重新注册；令牌不在 `config.json` / `secrets.json` / 备份里（有系统密钥库时）。
-7. **Hive 数量：** 不能删到 0；调大直接创建；别的原因少了只提示不创建；最后一台只能替换；表里 `error` 但 EC2 还在
+   重新注册；令牌不在 `config.json` / `secrets.json` / 备份里（有系统密钥库时）；AWS 登录的缓存目录 0700、不进备份。
+   **对话的路：** `chat.via` 三种值下 `child_env()` 给什么、清什么；只用 key 对话时有账号记录的 Hive 照常。
+7. **Hive 数量：** 不能删到 0，不能超过 8（期望数量、直接创建、重试三条路由都挡；7 台时并发 N 个创建请求只成功
+   一个；第 8 台出错后能重试；8 台时能替换；已有 10 台的老用户不被终止，只能减少）；调大直接创建；别的原因少了只提示不创建；最后一台只能替换；表里 `error` 但 EC2 还在
    的计入；同一次调大并发两个请求只建差额；替换期间不报"多了"。
 10. **谁能做：** §7.7 的每个路由都在操作表里，调用方和分量如表；`PUT /api/settings` 写 `aws_account` / `hive_fleet`
     不生效；`ada.bin` 改成别的路径被拒。
@@ -507,18 +629,16 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 
 ## 10. 要 XG 定
 
-1. **外部用户没有 Identity Center 组织实例**（个人或小公司的单个 AWS 账号）：
-   (a) 只给 SSO，向导说明怎么开 Organizations 和 Identity Center；
-   (b) 在 ② 加一个收起来的"高级：用已有的 AWS profile"，覆盖这类用户和已经有自己凭证习惯的工程师。
-   推荐 (b)：主路径仍是两种，(b) 不显示在卡片里，只是一个链接。不选 (b) 的话，单账号的外部用户装好以后什么都
-   用不了（§6.2）。
-2. **Hive 是否挡住向导完成**：推荐不挡（§6.1 ⑤ 的理由），"至少一台"由期望数量和 Hive 状态保证；Hive 状态是
-   待办，可以"以后再说"，但期望数量不降到 0（§7.1）。
-3. **Hive 的花费确认**：创建按钮上写清台数、月度估算和账号，点了就是同意；不再单独弹确认。推荐这样。
-4. **没有 Hive 的老用户**：只提示、一键创建，不自动建。推荐这样。
-5. **"至少一台"怎么算**：已停止的 Hive 也算（它还在，随时能开）。推荐这样。
-6. r2 留下的：方案 B 和分步；一个主区域、Hive 保留自己的区域；另一个账号里的 Hive 保留旧凭证只用于停止和终止；
-   实施方式（R1，跨模块、改数据形状、有迁移）：直接改，还是走 pipeline。
+1. **界面分层**（§6.1 ②、§6.2）：探测到的凭证优先一键用；推荐内部 ADA、SSO，外部 AWS 登录、SSO；访问密钥、手选
+   profile、实例角色收在"更多方式"；Bedrock API key、Anthropic key 放在"先只用对话"。推荐这样。
+2. **AWS 登录先靠 AWS CLI**（§6.3b）：登录和续期都交给 CLI（daemon 里的 `awscrt` 和语音依赖冲突，不能自己续）；
+   没有 CLI 时提示安装、并给别的路；第 1 步核实不过就先不放进推荐。推荐这样。
+3. **Hive 不挡向导**：推荐不挡；Hive 状态是待办，可以"以后再说"，期望数量不降到 0（§7.1）。
+4. **Hive 花费确认**：按钮上写清台数、月度估算和账号，点了就是同意。推荐这样。
+5. **没有 Hive 的老用户**：只提示、一键创建，不自动建。推荐这样。
+6. **"至少一台"怎么算**：已停止的也算。推荐这样。
+7. r2 留下的：一个主区域、Hive 保留自己的区域；另一个账号里的 Hive 保留旧凭证只用于停止和终止；实施方式
+   （R1，跨模块、改数据形状、有迁移）：直接改，还是走 pipeline。
 
 ## 11. 审查记录
 
@@ -553,3 +673,20 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 
 已知、不在本设计范围：今天的备份把 `hive_accounts` 整表导出（`core/backup_manager.py:106`），老配置里明文的静态
 密钥会进备份；§5.5 的迁移把密钥挪出这张表以后不再有。
+
+**r3.1 → r4：** XG 给出三点（§1）：Hive 最多 8 台；认证方式按外部、内部的真实场景考虑；不能让向导把人挡在外面。
+- §6.2 按场景列出外部 8 种、内部 6 种拿凭证的方式，各自记成哪个 `source`、放在界面哪一层、能不能用 Hive。
+- 向导 ② 改成"先探测，再问"：本机已有的凭证一键可用。
+- 新来源 `login`（AWS 登录，§6.3b）；ADA 加 Conduit；"只用对话"的来源改名 `anthropic`。
+- 每个失败页都有同一组出路，Bedrock 不可用也能先只用对话进产品。
+- Hive 1 到 8 台，两条创建路由都挡。
+
+**r4 → r4.1：** 一次零上下文审查（security + correctness），3 HIGH、7 MEDIUM、4 LOW，核实后全部吸收：
+- **AWS 登录在 daemon 里续不了期**：`LoginProvider` 要 `awscrt` 的 `EC`，App 里的 0.26.1 没有（实测），语音的依赖又钉住
+  这个版本。改为登录和续期都交给 AWS CLI（`export-credentials`），核实不过就不进推荐。
+- **探测不是只读、会挂住**：自动探测只做不弹窗、不写文件的部分（静态密钥、ADA、有效的缓存令牌不刷新、实例角色）；
+  `credential_process`、MFA、要刷新的 profile 由用户逐行点"检测"；每个探测在可杀的子进程里；不探测环境变量。
+- **8 台上限能被并发绕过**：三条会变多的路由在一把锁里先数再写；重试不算自己；替换算一台；已超过 8 台的只能减。
+- **对话的路和 AWS 账号分开**（`chat.via`）：只用 key 对话不会丢掉账号；`child_env()` 按 `chat.via` 给变量。
+- 探测到的 SSO / 登录 profile 改记成 App 自己的 `sso` / `login`，避免和用户的 CLI 抢缓存；AWS 登录的缓存目录权限和备份；
+  "需要重新登录"补上登录会话和 profile；云桌面的实例角色"看能力检查"；逐行检测算 `change`。
