@@ -57,6 +57,8 @@ import { ASSISTANT_NAME } from '../assistantName';
 import { ReadOnlyContext } from '../readOnlyContext';
 import { AssistantHeader } from './AssistantHeader';
 import { StreamingBee } from './StreamingBee';
+import { CompactChip, compactRunningLabel } from './CompactNotice';
+import { toCompactionInfo } from '../compaction';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
@@ -189,6 +191,9 @@ export interface AssistantMessageViewProps {
   pendingPermissionRequestId?: string;
   /** Whether the assistant message is still streaming */
   isStreaming?: boolean;
+  /** The context compactions of this turn (TabView): a running one is the bee's line
+   *  while the turn streams; each is otherwise one quiet line under the turn. */
+  compactions?: Message[];
   /** The current session ID for the save API call */
   sessionId?: string;
   /** Whether this is the last assistant message in the session */
@@ -228,6 +233,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
+  compactions,
   sessionId,
   isLastAssistant,
   continued = false,
@@ -579,10 +585,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         {contentBlocks}
         {/* Streaming indicator — the bee at the end of the streaming content
             (it flies while the turn works; after 45s quiet a line says what it waits on). */}
-        {isStreaming && <StreamingBee content={message.content} sessionId={sessionId} />}
+        {isStreaming && <StreamingBee content={message.content} sessionId={sessionId}
+          status={compactions?.some((m) => toCompactionInfo(m)?.phase === 'running') ? compactRunningLabel(t) : undefined} />}
         {/* A running sub-agent shows in its Agents panel row (TurnZones,
             fed by subagent_progress) — no separate timer banner. */}
       </div>
+
+      {/* The turn's context compactions: one quiet line each (the summary behind a toggle). */}
+      {compactions?.map((m) => <CompactChip key={m.id} message={m} isStreaming={!!isStreaming} />)}
 
       {/* Next steps — the reply's trailing ```next-steps block as clickable chips.
           Only on the latest successful answer (older or interrupted suggestions are stale). */}

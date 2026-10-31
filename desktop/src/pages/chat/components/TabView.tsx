@@ -53,6 +53,7 @@ import { WelcomeScreen } from './WelcomeScreen';
 import { SwarmOutWelcome } from '../../../components/swarm-out/SwarmOutWelcome';
 import { isSwarmOutTab } from '../swarmOut';
 import { CompactNotice } from './CompactNotice';
+import { attachCompactions, reuseCompactions } from '../compaction';
 import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
 import { focusAgent } from '../agentFocus';
@@ -661,6 +662,18 @@ function TabViewImpl({
     () => messages.reduce((last, m, i) => (m.role === 'user' ? i : last), -1),
     [messages],
   );
+  // Each compaction shown with the turn it happened in, not as a row of the list
+  // (pages/chat/compaction.attachCompactions); the arrays are stable per messages.
+  const compactionsRef = useRef<Map<string, Message[]> | undefined>(undefined);
+  const compactions = useMemo(() => {
+    // the answers this list paints (the same two rules the render loop returns null by):
+    // a compaction is attached only to one of those, else it stays a divider here
+    const next = attachCompactions(messages, (m) => m.content.length > 0
+      || (m.metadata?.turn_source !== 'injected' && !steerFlags.get(m.id)?.continued));
+    next.byAssistant = reuseCompactions(compactionsRef.current, next.byAssistant);
+    compactionsRef.current = next.byAssistant;
+    return next;
+  }, [messages, steerFlags]);
 
   const lastResumeBoundaryIdx = useMemo(
     () => messages.reduce((lastIdx, m, i) =>
@@ -734,12 +747,14 @@ function TabViewImpl({
         const keys = bubbleKeys(messages);
         return messages.map((msg, idx) => {
           // System messages render as divider lines. Three variants by id prefix:
-          //   'compact-' → compaction divider + collapsible summary card
+          //   'compact-' → shown with its turn's answer (CompactChip there); only
+          //                one in a turn with no answer yet is a divider here
           //                (CompactNotice; live and history share the id).
           //   'refresh-' → 'Context Refreshed' (same-session context refresh)
           //   else       → 'Session Resumed' (true resume boundary)
           if (msg.role === 'system') {
             if (msg.id.startsWith('compact-')) {
+              if (compactions.attached.has(msg.id)) return null;   // shown with its turn
               return <CompactNotice key={msg.id} message={msg} isStreaming={isStreaming && idx > lastUserIdx} />;
             }
             const isRefresh = msg.id.startsWith('refresh-');
@@ -824,6 +839,7 @@ function TabViewImpl({
                   pendingToolUseId={resolvedPendingToolUseId}
                   pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
                   isStreaming={isLastAssistantForStreaming}
+                  compactions={compactions.byAssistant.get(msg.id)}
                   sessionId={sessionId}
                   isLastAssistant={idx === lastAssistantIdx}
                   continued={steerFlags.get(msg.id)?.continued}

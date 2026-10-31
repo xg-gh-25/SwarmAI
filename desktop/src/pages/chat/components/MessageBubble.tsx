@@ -35,6 +35,8 @@ export interface MessageBubbleProps {
   pendingToolUseId?: string;
   pendingPermissionRequestId?: string;
   isStreaming?: boolean;
+  /** The context compactions of this message's turn, shown with it (TabView). */
+  compactions?: Message[];
   sessionId?: string;
   isLastAssistant?: boolean;
   /** Steer segments (pages/chat/steerChain): see AssistantMessageView. */
@@ -64,6 +66,7 @@ function MessageBubbleImpl({
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
+  compactions,
   sessionId,
   isLastAssistant,
   continued,
@@ -98,6 +101,7 @@ function MessageBubbleImpl({
       pendingToolUseId={pendingToolUseId}
       pendingPermissionRequestId={pendingPermissionRequestId}
       isStreaming={isStreaming}
+      compactions={compactions}
       sessionId={sessionId}
       isLastAssistant={isLastAssistant}
       continued={continued}

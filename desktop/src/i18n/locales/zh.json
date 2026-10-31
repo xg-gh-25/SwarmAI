@@ -208,7 +208,8 @@
       "trigger": {
         "auto": "自动",
         "manual": "手动"
-      }
+      },
+      "chip": "上下文已压缩"
     },
     "list": {
       "loadEarlier": "↑ 加载更早的消息",
@@ -273,7 +274,9 @@
       "permissionNeeded": "等你批准",
       "error": "出错",
       "newContent": "有新内容",
-      "unread": "有未读消息"
+      "unread": "有未读消息",
+      "background_one": "{{count}} 个后台 agent 在运行",
+      "background_other": "{{count}} 个后台 agent 在运行"
     },
     "alerts": {
       "label": "待你处理",

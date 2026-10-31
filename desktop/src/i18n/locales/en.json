@@ -208,7 +208,8 @@
       "trigger": {
         "auto": "auto",
         "manual": "manual"
-      }
+      },
+      "chip": "Context compacted"
     },
     "list": {
       "loadEarlier": "↑ Load earlier messages",
@@ -273,7 +274,9 @@
       "permissionNeeded": "Permission needed",
       "error": "Error",
       "newContent": "New content",
-      "unread": "Unread messages"
+      "unread": "Unread messages",
+      "background_one": "{{count}} background agent running",
+      "background_other": "{{count}} background agents running"
     },
     "alerts": {
       "label": "Needs You",

@@ -73,3 +73,58 @@ describe('SessionTab active-state styling', () => {
     }
   });
 });
+
+describe('SessionTab — background agents after the turn ended', () => {
+  const tab: OpenTab = { id: 'tab-bg', title: 'Work', agentId: 'agent-1', isNew: false, sessionId: 'sess-bg' };
+  const renderTab = (status?: 'streaming' | 'idle') =>
+    render(<SessionTab tab={tab} index={0} isActive={false} onSelect={vi.fn()} onClose={vi.fn()} status={status} />);
+
+  it('idle with running background agents: a working ring, their count and what each does', async () => {
+    const { backgroundAgentsStore } = await import('../../../stores/backgroundAgentsStore');
+    backgroundAgentsStore.apply('sess-bg', [
+      { toolUseId: 'a', status: 'running', description: 'Review the parser' },
+      { toolUseId: 'b', status: 'running', description: 'Search the docs' },
+      { toolUseId: 'c', status: 'completed', description: 'Done one' },
+    ]);
+    try {
+      renderTab('idle');
+      const el = screen.getByTestId('tab-background-agents');
+      expect(el.textContent).toBe('2');
+      expect(el.getAttribute('title')).toContain('Review the parser');
+      expect(el.getAttribute('title')).not.toContain('Done one');
+    } finally {
+      backgroundAgentsStore.apply('sess-bg', []);
+    }
+  });
+
+  it('while the turn streams the streaming dot says it; none running shows nothing', async () => {
+    const { backgroundAgentsStore } = await import('../../../stores/backgroundAgentsStore');
+    backgroundAgentsStore.apply('sess-bg', [{ toolUseId: 'a', status: 'running', description: 'x' }]);
+    try {
+      const view = renderTab('streaming');
+      expect(view.queryByTestId('tab-background-agents')).toBeNull();
+      view.unmount();
+      backgroundAgentsStore.apply('sess-bg', [{ toolUseId: 'a', status: 'completed', description: 'x' }]);
+      renderTab('idle');
+      expect(screen.queryByTestId('tab-background-agents')).toBeNull();
+    } finally {
+      backgroundAgentsStore.apply('sess-bg', []);
+    }
+  });
+});
+
+describe('SessionTab — background agents wording', () => {
+  it('one agent reads in the singular', async () => {
+    const i18n = (await import('../../../i18n')).default;
+    const { backgroundAgentsStore } = await import('../../../stores/backgroundAgentsStore');
+    await i18n.changeLanguage('en');
+    backgroundAgentsStore.apply('sess-one', [{ toolUseId: 'a', status: 'running', description: 'x' }]);
+    try {
+      render(<SessionTab tab={{ id: 't-one', title: 'W', agentId: 'a', isNew: false, sessionId: 'sess-one' }}
+        index={0} isActive={false} onSelect={vi.fn()} onClose={vi.fn()} status="idle" />);
+      expect(screen.getByTestId('tab-background-agents').getAttribute('aria-label')).toBe('1 background agent running');
+    } finally {
+      backgroundAgentsStore.apply('sess-one', []);
+    }
+  });
+});

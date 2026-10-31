@@ -66,3 +66,22 @@ describe('backgroundAgentsStore', () => {
     });
   });
 });
+
+describe('useRunningAgentDescriptions', () => {
+  it('a progress update keeps the same list; a start or end gives a new one', async () => {
+    const { renderHook, act } = await import('@testing-library/react');
+    const { backgroundAgentsStore, useRunningAgentDescriptions } = await import('../backgroundAgentsStore');
+    backgroundAgentsStore.apply('hook-s', [{ toolUseId: 'a', status: 'running', description: 'Review', toolUses: 1 }]);
+    try {
+      const { result } = renderHook(() => useRunningAgentDescriptions('hook-s'));
+      const first = result.current;
+      expect(first).toEqual(['Review']);
+      act(() => backgroundAgentsStore.apply('hook-s', [{ toolUseId: 'a', status: 'running', description: 'Review', toolUses: 9 }]));
+      expect(result.current).toBe(first);
+      act(() => backgroundAgentsStore.apply('hook-s', [{ toolUseId: 'a', status: 'completed', description: 'Review' }]));
+      expect(result.current).toEqual([]);
+    } finally {
+      backgroundAgentsStore.apply('hook-s', []);
+    }
+  });
+});

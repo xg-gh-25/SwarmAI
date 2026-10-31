@@ -5,6 +5,7 @@ import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { TabStatusIndicator } from './TabStatusIndicator';
 import { TabNoticeDot } from './TabNoticeBar';
+import { useRunningAgentDescriptions } from '../../../stores/backgroundAgentsStore';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import type { SwarmOutActivity } from '../../../components/swarm-out/useSwarmOutActivity';
@@ -68,6 +69,11 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
   const hive = variant === 'hive';
   const { t } = useTranslation();
   const displayTitle = truncateTitle(tab.title, maxTitleLength);
+  // the turn may be over while background agents of this session still work: the tab
+  // says so too (the Swarm Out tabs show their own work)
+  const bgAgents = useRunningAgentDescriptions(pinned || hive ? undefined : tab.sessionId);
+  const turnShown = status === 'streaming' || status === 'waiting_input'
+    || status === 'permission_needed' || status === 'error';
   const isUnread = !isActive && status === 'complete_unread';
   // Show shortcut hint for first 9 tabs (Cmd/Ctrl+1 through Cmd/Ctrl+9)
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -138,6 +144,19 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
 
       {/* Tab status indicator (streaming, error, etc.) — skip for unread since we show dot */}
       {status && status !== 'complete_unread' && <TabStatusIndicator status={status} />}
+
+      {/* Background agents still running after the turn ended: a hollow working ring and
+          their count; the tab is free for the next message. Hover lists what each does. */}
+      {!turnShown && bgAgents.length > 0 && (
+        <span data-testid="tab-background-agents" className="inline-flex items-center gap-1 flex-shrink-0 text-[var(--color-primary)]"
+          role="img"
+          aria-label={tf(t, 'chat.tabStatus.background', '{{count}} background agents running', { count: bgAgents.length })}
+          title={[tf(t, 'chat.tabStatus.background', '{{count}} background agents running', { count: bgAgents.length }),
+                  ...bgAgents.filter(Boolean).map((d) => `· ${d}`)].join('\n')}>
+          <span className="w-2 h-2 rounded-full border-2 border-[var(--color-primary)] animate-pulse" />
+          <span className="text-[10.5px] leading-none tabular-nums">{bgAgents.length}</span>
+        </span>
+      )}
 
       {/* Background tab with an in-tab warning/error notice */}
       <TabNoticeDot tabId={tab.id} sessionId={tab.sessionId} isActive={isActive} />

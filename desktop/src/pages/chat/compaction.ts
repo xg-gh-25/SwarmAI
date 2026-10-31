@@ -91,6 +91,9 @@ function systemMessage(id: string, text: string, metadata: Message['metadata']):
   return { id, role: 'system', content: [{ type: 'text', text }], timestamp: localTimestamp(), metadata };
 }
 
+/** The ``turnOf`` mark of a live compaction, kept when the message is replaced. */
+const turnOfOf = (m: Message) => (typeof m.metadata?.turnOf === 'string' ? { turnOf: m.metadata.turnOf } : {});
+
 /** Index of the current turn's start (the last user message), or -1. */
 function turnStart(msgs: Message[]): number {
   for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].role === 'user') return i;
@@ -122,12 +125,16 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
   const add = (msg: Message) => {
     const last = msgs[msgs.length - 1];
     const emptyPlaceholder = last && msgs.length - 1 > start && last.role === 'assistant' && last.content.length === 0;
-    if (emptyPlaceholder) store.insertBefore(last.id, msg);
+    // in front of the turn's empty placeholder, the compaction is that turn's: say so
+    // by id (an injected CLI turn has no user message before it, so the order alone
+    // cannot tell it from the previous turn's; attachCompactions reads turnOf)
+    if (emptyPlaceholder) store.insertBefore(last.id, { ...msg, metadata: { ...msg.metadata, turnOf: last.id } });
     else store.append(msg);
   };
   if (event.type === 'context_compacting') {
     if (event.phase === 'failed') {
-      const failed = (m: Message) => ({ ...m, content: [{ type: 'text', text }], metadata: { compactPhase: 'failed' } } as Message);
+      const failed = (m: Message) => ({ ...m, content: [{ type: 'text', text }],
+        metadata: { compactPhase: 'failed', ...turnOfOf(m) } } as Message);
       if (live) store.updateById(live.id, failed);
       else add(systemMessage(`${COMPACT_LIVE_PREFIX}${Date.now()}-${rand()}`, text, { compactPhase: 'failed' }));
       return;
@@ -141,7 +148,7 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
   if (recordId && msgs.some((m) => m.id === id)) return;
   const done = systemMessage(id, text, recordId ? { compaction: record } : undefined);
   if (live) {
-    store.updateById(live.id, () => done);
+    store.updateById(live.id, (m) => ({ ...done, metadata: { ...done.metadata, ...turnOfOf(m) } }));
     return;
   }
   // A record-less (legacy / fallback) notice repeated in the same turn is one
@@ -155,4 +162,64 @@ export function applyCompactionEvent(store: CompactionStore, event: StreamEvent)
     }
   }
   add(done);
+}
+
+/** Compactions placed on the turn they happened in: `byAssistant` maps the turn's last
+ *  assistant message to its compaction messages (in order); `attached` is every one so
+ *  placed. A compaction is a turn event, not conversation: shown inline it sat below
+ *  the answer that kept streaming above it.
+ *
+ *  A turn starts at a user message that was sent (not a queued one, which is sent
+ *  later, nor a steer the CLI read into the running turn) and at a turn the CLI started
+ *  itself (`turn_source: injected`, no user message before it). A compaction marked
+ *  `turnOf` (inserted in front of that turn's placeholder) belongs to that turn. A
+ *  compaction is attached only to an answer TabView paints (`painted`); otherwise, as
+ *  in a turn with no answer yet, it stays in the list and TabView renders it inline. */
+export function attachCompactions(msgs: readonly Message[],
+                                  painted: (m: Message) => boolean = () => true): {
+  byAssistant: Map<string, Message[]>; attached: Set<string>;
+} {
+  const byAssistant = new Map<string, Message[]>();
+  const attached = new Set<string>();
+  let pending: Message[] = [];
+  let last: Message | null = null;
+  const flush = () => {
+    if (last && pending.length && painted(last)) {
+      byAssistant.set(last.id, [...(byAssistant.get(last.id) ?? []), ...pending]);
+      for (const m of pending) attached.add(m.id);
+    }
+    pending = [];
+    last = null;
+  };
+  for (const m of msgs) {
+    if (m.role === 'user') {
+      if (!m.isQueued && !m.metadata?.steered) flush();
+    } else if (m.role === 'system' && m.id.startsWith('compact-')) {
+      pending.push(m);
+    } else if (m.role === 'assistant') {
+      if (m.metadata?.turn_source === 'injected') {
+        // the compactions marked as this turn's move with it; the rest end the turn before
+        const mine = pending.filter((c) => c.metadata?.turnOf === m.id);
+        pending = pending.filter((c) => c.metadata?.turnOf !== m.id);
+        flush();
+        pending = mine;
+      }
+      last = m;
+    }
+  }
+  flush();
+  return { byAssistant, attached };
+}
+
+/** ``next`` with every array that holds the same messages as in ``prev`` replaced by
+ *  ``prev``'s: a memoized bubble whose turn's compactions did not change keeps its
+ *  props while the streaming list is rebuilt on every token. */
+export function reuseCompactions(prev: Map<string, Message[]> | undefined,
+                                 next: Map<string, Message[]>): Map<string, Message[]> {
+  if (!prev) return next;
+  for (const [id, list] of next) {
+    const old = prev.get(id);
+    if (old && old.length === list.length && old.every((m, i) => m === list[i])) next.set(id, old);
+  }
+  return next;
 }

@@ -16,9 +16,10 @@
  * - `backgroundAgentsStore` — `apply(sessionId, agents)`, `applySnapshot(map)`, `get`, `subscribe`
  * - `useBackgroundAgents(sessionId)` — React subscription for one session
  * - `useHasRunningAgent(sessionId, ids)` — boolean subscription: re-renders only when it flips
+ * - `useRunningAgentDescriptions(sessionId)` — what the running ones do; re-renders only when that list changes
  * - `agentStatus(sessionId, toolUseId, kept)` — the status an Agent row shows
  */
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 
 export type BackgroundAgentStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'lost';
 
@@ -105,6 +106,22 @@ export function useBackgroundAgents(sessionId: string | undefined): { agents: Ba
   const st = useSyncExternalStore(backgroundAgentsStore.subscribe, backgroundAgentsStore.snapshot);
   return { agents: (sessionId && st.bySession.get(sessionId)) || EMPTY, loaded: st.loaded };
 }
+
+/**
+ * The descriptions of a session's running background agents (one entry each, '' when
+ * an agent has none). The subscription is a string key (count + descriptions), so a
+ * progress update (tool count, elapsed) re-renders nobody; only an agent starting or
+ * ending does. The tab header reads it: the turn may be over while the session works.
+ */
+export function useRunningAgentDescriptions(sessionId: string | undefined): string[] {
+  const key = useSyncExternalStore(backgroundAgentsStore.subscribe, () => {
+    const running = backgroundAgentsStore.get(sessionId).filter((a) => a.status === 'running');
+    return running.length ? `${running.length}\u0001${running.map((a) => a.description.replace(/\s+/g, ' ')).join('\u0001')}` : '';
+  });
+  return useMemo(() => (key ? key.split('\u0001').slice(1) : NONE), [key]);
+}
+
+const NONE: string[] = [];
 
 /**
  * Whether one of these call ids is a background agent the daemon still runs. The

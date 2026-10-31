@@ -10,7 +10,12 @@
  * stays neutral grey. A legacy text-only notice (no record) renders its own
  * text: first line as the title, the rest as the explanation.
  *
- * @exports CompactNotice
+ * CompactChip — the same compaction shown with the turn it happened in (TabView
+ * attaches each compaction to its turn's last assistant message): one quiet line under
+ * the turn, the summary behind a toggle. While the turn streams a running compaction is
+ * not a line: the turn's bee says it (StreamingBee ``status``).
+ *
+ * @exports CompactNotice, CompactChip, compactRunningLabel
  */
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -110,3 +115,69 @@ function CompactNoticeImpl({ message, isStreaming }: CompactNoticeProps) {
 }
 
 export const CompactNotice = memo(CompactNoticeImpl);
+
+
+/** The bee's line while a compaction of the streaming turn runs. */
+export function compactRunningLabel(t: ReturnType<typeof useTranslation>['t']): string {
+  return tf(t, 'chat.compact.running', 'Compacting conversation context…');
+}
+
+function CompactChipImpl({ message, isStreaming }: CompactNoticeProps) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const info = toCompactionInfo(message);
+  if (info?.phase === 'running' && isStreaming) return null;   // the bee says it
+  const block = message.content.find((b) => b.type === 'text');
+  const text = block && 'text' in block ? String(block.text ?? '') : '';
+  let icon = 'compress';
+  let title: string;
+  let why = '';
+  let failed = false;
+  const parts: string[] = [];
+  if (!info) {
+    title = (text || tf(t, 'chat.compact.chip', 'Context compacted')).split('\n')[0];
+  } else if (info.phase === 'failed') {
+    failed = true;
+    icon = 'error';
+    title = tf(t, 'chat.compact.failed', 'Context compaction failed');
+    why = tf(t, 'chat.compact.failedDetail', 'The conversation was not summarized; the turn continues with the full context.');
+  } else if (info.phase === 'running') {
+    title = tf(t, 'chat.compact.interrupted', 'Context compaction did not finish');
+  } else {
+    title = tf(t, 'chat.compact.chip', 'Context compacted');
+    why = tf(t, 'chat.compact.doneDetail', 'The conversation reached the context threshold. Earlier messages have been summarized, and the summary is sent to the agent as context instead of the full text.');
+    if (info.preTokens !== undefined && info.postTokens !== undefined) {
+      parts.push(`${formatTokensK(info.preTokens)} → ${formatTokensK(info.postTokens)}`);
+    }
+    if (info.durationMs !== undefined) {
+      parts.push(tf(t, 'chat.compact.duration', '{{seconds}}s', { seconds: Math.round(info.durationMs / 1000) }));
+    }
+    parts.push(tf(t, `chat.compact.trigger.${info.trigger}`, info.trigger));
+  }
+  const summary = info?.phase === 'done' ? info.summary : '';
+  return (
+    <div data-testid="compact-chip" data-phase={info?.phase ?? 'legacy'} className="mt-2">
+      <div className={`flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs ${failed ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-muted)]'}`}
+        title={why || undefined}>
+        <span className="material-symbols-outlined icon-sm shrink-0">{icon}</span>
+        <span className="font-medium">{title}</span>
+        {parts.length > 0 && <span className="opacity-80">· {parts.join(' · ')}</span>}
+        {summary && (
+          <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)}
+            data-testid="compact-chip-toggle"
+            className="ml-1 inline-flex items-center gap-0.5 rounded px-1 hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors">
+            <span className="material-symbols-outlined icon-xs">{open ? 'expand_more' : 'chevron_right'}</span>
+            {tf(t, 'chat.compact.summary', 'Conversation Summary')}
+          </button>
+        )}
+      </div>
+      {summary && open && (
+        <div data-testid="compact-summary" className="mt-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-hover)]/40 px-3 py-2 text-sm">
+          <MarkdownRenderer content={summary} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const CompactChip = memo(CompactChipImpl);

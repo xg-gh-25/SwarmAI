@@ -66,3 +66,23 @@ describe('streaming indicator', () => {
     expect(container.querySelector('span.animate-pulse.w-2.h-4')).toBeNull();
   });
 });
+
+describe('a compaction of the streaming turn', () => {
+  const running: Message = { id: 'compact-live-1', role: 'system', timestamp: new Date().toISOString(),
+    content: [{ type: 'text', text: 'Compacting' }], metadata: { compactPhase: 'running' } };
+  const done: Message = { id: 'compact-r1', role: 'system', timestamp: new Date().toISOString(),
+    content: [{ type: 'text', text: 'done' }],
+    metadata: { compaction: { id: 'r1', trigger: 'auto', pre_tokens: 750000, post_tokens: 12000, duration_ms: 55000, summary: 'S' } } };
+
+  it('running: the bee says so at once, and there is no line under the turn', () => {
+    render(<ToastProvider><AssistantMessageView message={message} isLastAssistant sessionId="s1" isStreaming compactions={[running]} /></ToastProvider>);
+    expect(document.querySelector('.streaming-bee-note-text')?.textContent).toBe('Compacting conversation context…');
+    expect(screen.queryByTestId('compact-chip')).toBeNull();
+  });
+
+  it('done: one line under the turn with its sizes; the bee keeps its own wait line', () => {
+    render(<ToastProvider><AssistantMessageView message={message} isLastAssistant sessionId="s1" isStreaming compactions={[done]} /></ToastProvider>);
+    expect(screen.getByTestId('compact-chip').textContent).toContain('750K → 12K');
+    expect(document.querySelector('.streaming-bee-note-text')).toBeNull();
+  });
+});

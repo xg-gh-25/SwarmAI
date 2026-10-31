@@ -31,6 +31,9 @@ export interface StreamingBeeProps {
   /** The streaming message's content: its identity changing is "new content". */
   content: ContentBlock[];
   sessionId?: string;
+  /** What the turn is doing that the stream does not show (a context compaction):
+   *  shown at once, in place of the 45s wait line. */
+  status?: string;
 }
 
 /** The hint; `time` false drops the clock (the screen-reader copy, announced once). */
@@ -47,7 +50,7 @@ function waitText(w: StreamingWait, t: ReturnType<typeof useTranslation>['t'], z
   return withTime ? out : out.replace(/\s*·\s*$/, '');
 }
 
-export function StreamingBee({ content, sessionId }: StreamingBeeProps) {
+export function StreamingBee({ content, sessionId, status }: StreamingBeeProps) {
   const { t, i18n } = useTranslation();
   const reducedMotion = usePrefersReducedMotion();
   const wait = useStreamingWait(content, sessionId);
@@ -68,9 +71,11 @@ export function StreamingBee({ content, sessionId }: StreamingBeeProps) {
       </div>
       {/* The live region stays mounted and only its TEXT appears — screen
           readers often skip a live region that is inserted already filled. */}
-      {wait && <span className="streaming-bee-note-text" aria-hidden="true" data-wait={wait.kind}>{waitText(wait, t, zh)}</span>}
+      {status
+        ? <span className="streaming-bee-note-text" aria-hidden="true" data-wait="status">{status}</span>
+        : wait && <span className="streaming-bee-note-text" aria-hidden="true" data-wait={wait.kind}>{waitText(wait, t, zh)}</span>}
       <span className="streaming-bee-note sr-only" role="status" aria-live="polite">
-        {wait ? waitText(wait, t, zh, false) : ''}
+        {status || (wait ? waitText(wait, t, zh, false) : '')}
       </span>
     </div>
   );
