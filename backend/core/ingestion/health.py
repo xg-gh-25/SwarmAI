@@ -172,6 +172,8 @@ def connect_health() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
+    from .cognition_level import ensure_schema
+    ensure_schema(conn)
     return conn
 
 
@@ -1038,6 +1040,14 @@ def _pass(conn: sqlite3.Connection, workspace: Path, call: Call, model_id: str, 
         if ing is not None:
             units = in_force_units(written_units(ing, now - timedelta(days=CANDIDATE_DAYS)), workspace)
         stats = score(units, conn, call=call, model_id=model_id, now=now, rng=rng, renew=renew)
+        from . import cognition_level as cl
+        try:
+            cl.record_marks(conn, workspace, now)
+        except (OSError, sqlite3.Error):
+            logger.warning("CDF health: rule marks not recorded", exc_info=True)
+        corrections, covered_from = cl._corrections(now)
+        filled = cl.backfill(conn, data, covered_from, cl.recorded_pairs(corrections, data, now), call=call,
+                             model_id=model_id, now=now, renew=renew)
         since = now - WINDOWS["7d"]
         written = _written_by_dest(ing, since)
         val = value(conn, since, written, now)
@@ -1055,7 +1065,7 @@ def _pass(conn: sqlite3.Connection, workspace: Path, call: Call, model_id: str, 
             else:
                 reading = {**fresh, "at": _iso(now), "input_hash": digest, "model": model_id,
                            "basis": {"scored": val["scored"], "checks": len(checks), "window": "7d"}}
-        snapshot = {"at": _iso(now), "checks": checks, "scoring": stats, "reading": reading,
+        snapshot = {"at": _iso(now), "checks": checks, "scoring": stats, "backfill": filled, "reading": reading,
                     "reading_failed": reading_failed}
         conn.execute("INSERT INTO runs(at, snapshot) VALUES (?,?)",
                      (_iso(now), json.dumps(snapshot, ensure_ascii=False)))

@@ -23,7 +23,7 @@ from routers import agents_router, skills_router, experts_router, mcp_router, ch
 from routers.ingestion import router as ingestion_router
 from routers.aws_account import router as aws_account_router
 from routers.ingestion_redact import router as ingestion_redact_router
-from routers.cognition_health import router as cognition_health_router
+from routers.cognition_health import router as cognition_health_router, level_router as cognition_level_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
 from routers.pipelines import router as pipelines_router
 from routers.pollinate import router as pollinate_router
@@ -1853,6 +1853,7 @@ app.include_router(attention_router, tags=["attention"])  # prefix /api/attentio
 app.include_router(ingestion_router, tags=["ingestion"])  # prefix /api/ingestion set in router
 app.include_router(ingestion_redact_router, tags=["ingestion"])
 app.include_router(cognition_health_router, tags=["ingestion"])
+app.include_router(cognition_level_router, tags=["ingestion"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
 # A Hive's own Brains (install endpoint + list; 404 off a Hive), design 2026-10-28 §6

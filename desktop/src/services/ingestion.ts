@@ -226,6 +226,24 @@ export interface CognitionHealth {
   agreement: { judgedByPerson: number; agreed: number; rate: number | null };
 }
 
+/** GET /ingestion/cognition-level — Swarm's cognition level (backend core/ingestion/cognition_level.py). */
+export interface LevelWeek {
+  week: string; start: string; sessions: number; known: number; corrected: number;
+  notCorrectedRate: number | null; source: 'recorded' | 'backfilled' | 'mixed' | 'none';
+  corrections: number; repeats: number; repeatRate: number | null;
+}
+export interface CognitionLevelData {
+  weeks: LevelWeek[];
+  marks: Array<{ at: string; kind: string; label: string }>;
+  coveredFrom: string | null;
+  latest: LevelWeek | null;
+  earliest: LevelWeek | null;
+  audit: { month: string; baseline: boolean; outcomes: Record<string, number>; total: number;
+    previous: { month: string; outcomes: Record<string, number>; total: number } | null } | null;
+  used: { usedRate: number | null; matureWritten: number; matureUsed: number; windowDays: number };
+  backfillWeeks: number;
+}
+
 function camelKey(key: string): string {
   return key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
@@ -260,6 +278,7 @@ export const ingestionService = {
   bootstrapProgress: (project: string) => getMapped<BootstrapProgress>(
     '/ingestion/bootstrap-progress', { project }),
   health: () => getMapped<IngestionHealth>('/ingestion/health'),
+  cognitionLevel: () => getMapped<CognitionLevelData>('/ingestion/cognition-level'),
   cognitionHealth: (window: HealthWindow) => getMapped<CognitionHealth>('/ingestion/cognition-health', { window }),
   recheckHealth: async () => {
     const response = await api.post('/ingestion/cognition-health/recheck', undefined, {

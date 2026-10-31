@@ -4,6 +4,7 @@
 - ``POST /api/ingestion/cognition-health/recheck``: one pass in a background thread
   (``core.ingestion.health.start_recheck``); 409 while a pass runs. Needs a loopback
   request marked ``X-Swarm-User-Action: recheck`` (each pass spends model calls).
+- ``GET /api/ingestion/cognition-level``: Swarm's cognition level (first Needs You tab).
 - ``PUT /api/ingestion/cognition-health/verdicts/{unit_id}``: the person's verdict on a
   sampled entry. Like the redaction route it needs a loopback request marked as a user
   action (``X-Swarm-User-Action: verdict``): the person's verdict is what calibrates the
@@ -21,6 +22,7 @@ from core import executors
 from core.ingestion import health
 
 router = APIRouter(prefix="/api/ingestion/cognition-health", tags=["ingestion"])
+level_router = APIRouter(prefix="/api/ingestion/cognition-level", tags=["ingestion"])
 
 Verdict = Literal["useful", "weak", "withdraw"]
 Status = Literal["pass", "fail", "no_data"]
@@ -155,6 +157,47 @@ class HealthOverview(Strict):
     agreement: Agreement
 
 
+class LevelWeek(Strict):
+    week: str
+    start: str
+    sessions: int
+    known: int
+    corrected: int
+    not_corrected_rate: float | None
+    source: Literal["recorded", "backfilled", "mixed", "none"]
+    corrections: int
+    repeats: int
+    repeat_rate: float | None
+
+
+class LevelMark(Strict):
+    at: str
+    kind: str
+    label: str
+
+
+class AuditTotals(Strict):
+    month: str
+    outcomes: dict[str, int]
+    total: int
+
+
+class Audit(AuditTotals):
+    baseline: bool
+    previous: AuditTotals | None
+
+
+class CognitionLevel(Strict):
+    weeks: list[LevelWeek]
+    marks: list[LevelMark]
+    covered_from: str | None
+    latest: LevelWeek | None
+    earliest: LevelWeek | None
+    audit: Audit | None
+    used: Used
+    backfill_weeks: int
+
+
 class RecheckResponse(Strict):
     started: bool
 
@@ -183,6 +226,13 @@ def _user_action(request: Request, header: str | None, expected: str) -> None:
         loopback = False
     if not loopback or header != expected:
         raise HTTPException(status_code=403, detail="This needs a local user action")
+
+
+@level_router.get("", response_model=CognitionLevel)
+async def get_cognition_level() -> CognitionLevel:
+    """Swarm's cognition level for the first Needs You tab (core/ingestion/cognition_level)."""
+    from core.ingestion import cognition_level
+    return CognitionLevel.model_validate(await executors.run_nav(cognition_level.level))
 
 
 @router.post("/recheck", response_model=RecheckResponse)

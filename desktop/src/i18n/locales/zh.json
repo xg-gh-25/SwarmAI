@@ -2050,6 +2050,68 @@
     "sendNow": "直接发送",
     "sendNowLabel": "直接发送：{{title}}"
   },
+  "cogLevel": {
+    "title": "Swarm 认知度",
+    "hint": "它有没有越来越少让你操心",
+    "empty": "还没有哪一周的对话够多，算不出来。",
+    "line": {
+      "none": "量过的对话还不够",
+      "notComparable": "还看不出趋势：前几周是回补的，量法不一样",
+      "better": "在变好：需要你纠正的越来越少",
+      "worse": "在变差：需要你纠正的变多了",
+      "flat": "和之前差不多"
+    },
+    "notCorrected": "的对话不用你纠正",
+    "basis": "{{week}} 这周 · {{n}} 个对话",
+    "source": {
+      "backfilled": "回补：判官读你的原话判断",
+      "mixed": "部分回补",
+      "none": ""
+    },
+    "repeats": "本周你纠正的错里，是以前纠正过的",
+    "legend": {
+      "notCorrected": "不用你纠正的对话",
+      "repeats": "纠正里是旧错重犯的",
+      "backfilled": "回补（判官从你的原话判断）",
+      "marks": "认知规则的改动"
+    },
+    "mark": {
+      "review": "会后复盘开始记纠正",
+      "version": "版本 {{v}}"
+    },
+    "point": "{{week}} 这周：{{rate}} 不用纠正，{{n}} 个对话",
+    "repeatPoint": "{{week}} 这周：{{corrections}} 次纠正里 {{repeats}} 次是旧错重犯",
+    "chain": {
+      "title": "犯的错卡在哪一环",
+      "rule": "每月把真犯过的错倒查一遍：要用的知识，事先有没有、有没有送到眼前、送到了用对没有、是不是已经过时。哪一环漏得多，就该补哪一环。",
+      "month": "{{month}} · {{n}} 个错",
+      "baseline": "{{label}} 基线 · {{n}} 个错",
+      "count": "个错 · {{pct}}",
+      "prev": "上月 {{n}}",
+      "none": "还没有月度错误倒查：下个月 1 号跑第一次。"
+    },
+    "stage": {
+      "missing": "学到并存进脑子",
+      "notDelivered": "送到眼前",
+      "usedWrong": "用对",
+      "stale": "保持正确"
+    },
+    "stageQ": {
+      "missing": "这条知识事先在不在",
+      "notDelivered": "有，但这次有没有被找出来",
+      "usedWrong": "送到了，判断有没有用上",
+      "stale": "存着的知识有没有过时"
+    },
+    "stageFix": {
+      "missing": "事先没有：要补写入",
+      "notDelivered": "有但没送到：要补召回",
+      "usedWrong": "送到仍犯：判断的问题",
+      "stale": "内容过时：要补更新"
+    },
+    "used": "写进去的知识 {{days}} 天内被用到 {{pct}}",
+    "usedNone": "写进去的知识 {{days}} 天内有没有被用到：还没有满 {{days}} 天的条目",
+    "openHealth": "CDF 自己转得对不对 → 健康度"
+  },
   "cogHealth": {
     "loadFailed": "健康度加载失败。",
     "w7d": "7 天",

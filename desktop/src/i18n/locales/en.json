@@ -2050,6 +2050,68 @@
     "sendNow": "Send now",
     "sendNowLabel": "Send now: {{title}}"
   },
+  "cogLevel": {
+    "title": "Swarm's cognition",
+    "hint": "Is it needing you less",
+    "empty": "No week has enough conversations yet.",
+    "line": {
+      "none": "Not enough conversations measured yet",
+      "notComparable": "Too early for a trend: the earlier weeks were back-filled, measured another way",
+      "better": "Getting better: you have to correct it less often",
+      "worse": "Getting worse: you have to correct it more often",
+      "flat": "About the same as before"
+    },
+    "notCorrected": "of conversations you did not have to correct",
+    "basis": "week of {{week}} · {{n}} conversations",
+    "source": {
+      "backfilled": "back-filled from your own words",
+      "mixed": "partly back-filled",
+      "none": ""
+    },
+    "repeats": "of this week's corrections repeat one you made before",
+    "legend": {
+      "notCorrected": "conversations you did not have to correct",
+      "repeats": "corrections that repeat an earlier one",
+      "backfilled": "back-filled (a judge read your own words)",
+      "marks": "a change to the rules it reads"
+    },
+    "mark": {
+      "review": "the review starts recording corrections",
+      "version": "version {{v}}"
+    },
+    "point": "week of {{week}}: {{rate}} not corrected, {{n}} conversations",
+    "repeatPoint": "week of {{week}}: {{repeats}} of {{corrections}} corrections were repeats",
+    "chain": {
+      "title": "Where its mistakes come from",
+      "rule": "Each month every real mistake is traced back: was the knowledge it needed already there, was it put in front of it, did it use it right, was it still true. The link that leaks most is the one to fix.",
+      "month": "{{month}} · {{n}} mistakes",
+      "baseline": "baseline of {{label}} · {{n}} mistakes",
+      "count": "mistakes · {{pct}}",
+      "prev": "{{n}} the month before",
+      "none": "No monthly mistake audit yet: the first one runs on the 1st of next month."
+    },
+    "stage": {
+      "missing": "Learned and kept",
+      "notDelivered": "Put in front of it",
+      "usedWrong": "Used right",
+      "stale": "Still true"
+    },
+    "stageQ": {
+      "missing": "was the knowledge there beforehand",
+      "notDelivered": "it was there; was it found this time",
+      "usedWrong": "it was found; did the judgment use it",
+      "stale": "was what it held out of date"
+    },
+    "stageFix": {
+      "missing": "missing: improve what is written",
+      "notDelivered": "not delivered: improve recall",
+      "usedWrong": "delivered and still wrong: a judgment problem",
+      "stale": "out of date: improve updating"
+    },
+    "used": "{{pct}} of written knowledge was used within {{days}} days",
+    "usedNone": "Whether written knowledge gets used within {{days}} days: no entry is old enough yet",
+    "openHealth": "Is CDF itself working → Health"
+  },
   "cogHealth": {
     "loadFailed": "Could not load the health view.",
     "w7d": "7 days",

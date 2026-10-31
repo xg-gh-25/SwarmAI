@@ -28,6 +28,7 @@ import { Tabs } from '../overlay';
 import { CognitiveDistillationFlow } from './CognitiveDistillationFlow';
 import { CdfGuideline } from './CdfGuideline';
 import { CdfHealth } from './CdfHealth';
+import { CognitionLevel } from './CognitionLevel';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 import { NeedsYouRow } from './NeedsYouRow';
@@ -75,7 +76,12 @@ export function NeedYouContent(props: NeedYouContentProps) {
       />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'attention' && <AttentionQueueContent {...props} />}
+        {tab === 'attention' && (
+          <>
+            <AttentionQueueContent {...props} />
+            <CognitionLevel onOpenHealth={() => setTab('health')} />
+          </>
+        )}
         {tab === 'flow' && <CognitiveDistillationFlow onDispatch={props.onDispatch} close={props.close} />}
         {tab === 'health' && <CdfHealth />}
         {tab === 'guide' && <CdfGuideline />}
