@@ -71,10 +71,13 @@ def test_each_job_gets_its_answer_through_its_own_tool(converse, name, call, ans
 @pytest.mark.parametrize("stop, mangle, kind", [
     ("max_tokens", lambda a: {}, "truncated"),
     ("tool_use", lambda a: {k: v for k, v in a.items() if k != next(iter(a))}, "invalid"),
+    ("content_filtered", None, "filtered"),
 ])
 def test_an_unusable_reply_raises(converse, name, call, answer, stop, mangle, kind):
     set_reply, _seen = converse
-    set_reply(_tool(name, mangle(answer), stop=stop))
+    # a filtered reply carries no content at all (Bedrock: stopReason content_filtered)
+    set_reply({"stopReason": stop, "output": {"message": {"content": []}}} if mangle is None
+              else _tool(name, mangle(answer), stop=stop))
     with pytest.raises(StructuredOutputError) as e:
         call()
     assert e.value.kind == kind

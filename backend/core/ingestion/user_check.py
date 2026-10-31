@@ -144,9 +144,11 @@ def _ask(claim: str, user_texts: list[str], prompt: Any, model_id: str | None) -
                                 description="Record whether the person's words state the claim.",
                                 max_attempts=2, usage=usage, feature=llm_usage.feature())
         except (StructuredOutputError, Exception) as exc:  # noqa: BLE001 — fail closed: not the user's
-            logger.warning("CDF user check did not answer (%s): the unit stays out of the every-turn files",
-                           type(exc).__name__)
-            return Verdict(False, f"check failed: {type(exc).__name__}")
+            # a reply the provider's filter withheld is that, not a "no": recorded by its
+            # kind so the health view can tell it from a check that said no
+            why = getattr(exc, "kind", None) or type(exc).__name__
+            logger.warning("CDF user check did not answer (%s): the unit stays out of the every-turn files", why)
+            return Verdict(False, f"check failed: {why}")
         finally:
             if usage:
                 llm_usage.record(usage)

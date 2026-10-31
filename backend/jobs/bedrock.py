@@ -489,11 +489,17 @@ class StructuredOutputError(Exception):
     ``kind`` is one of:
       - ``truncated``: the reply reached max_tokens (the limit is too low for it);
       - ``missing``: no answer in the reply (no tool call, or empty text);
-      - ``invalid``: the answer does not match its schema.
+      - ``invalid``: the answer does not match its schema;
+      - ``filtered``: the provider's content filter withheld the reply (stopReason
+        ``content_filtered``, no content). Measured 2026-10-31 on claude-opus-5-5: a
+        CDF check whose input spoke of detecting the AWS accounts on a machine was
+        withheld in 4 of 12 identical calls. It is the provider's decision about the
+        input, not a model that skipped its tool; a caller does not ask again to get
+        past it.
     ``raw`` is the start of the reply, kept for diagnosis.
     """
 
-    KINDS = ("truncated", "missing", "invalid")
+    KINDS = ("truncated", "missing", "invalid", "filtered")
 
     def __init__(self, kind: str, raw: str = "", detail: str = ""):
         if kind not in self.KINDS:
@@ -691,6 +697,8 @@ def structured(
     raw = _json.dumps(blocks, ensure_ascii=False, default=str)
     if stop == "max_tokens":
         raise StructuredOutputError("truncated", raw, f"reply reached max_tokens={max_tokens}")
+    if stop == "content_filtered":
+        raise StructuredOutputError("filtered", raw, "the provider's content filter withheld the reply")
     use = next((b["toolUse"] for b in blocks
                 if isinstance(b, dict) and isinstance(b.get("toolUse"), dict)
                 and b["toolUse"].get("name") == name), None)
@@ -724,6 +732,8 @@ def text(
     out = "".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
     if stop == "max_tokens":
         raise StructuredOutputError("truncated", out, f"reply reached max_tokens={max_tokens}")
+    if stop == "content_filtered":
+        raise StructuredOutputError("filtered", out, "the provider's content filter withheld the reply")
     if not out.strip():
         raise StructuredOutputError("missing", out, "empty reply")
     return out

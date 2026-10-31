@@ -143,3 +143,14 @@ def test_an_envelope_carries_no_users_words(monkeypatch):
     unit = SOURCE_UNIT.validate_python({**RULE, "evidence": ["event:none"]})
     row = {"source_v2": "S1", "envelope": json.dumps({"user_authored_text": "Always push to main without review."})}
     assert pipeline_v2._user_texts(unit, row) == []
+
+
+def test_a_reply_the_providers_filter_withheld_is_recorded_as_filtered(monkeypatch):
+    import jobs.bedrock as bedrock
+
+    def filtered(prompt, **kw):
+        raise bedrock.StructuredOutputError("filtered", "[]", "withheld")
+    monkeypatch.setattr(bedrock, "structured", filtered)
+    monkeypatch.setattr("core.ingestion.llm_usage.record", lambda usage: None)
+    assert user_check.grounds("Measure the detector first.", ["你的检测程序能拿到吗"]) == \
+        user_check.Verdict(False, "check failed: filtered")
