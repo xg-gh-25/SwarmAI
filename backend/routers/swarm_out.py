@@ -138,12 +138,24 @@ def _actor(body: "Optional[ActorBody]"):
                                  body.why if body else None)
 
 
-def _allowed(actor, command: str, dispatch_id: str, approve_protected: bool = False) -> None:
+async def _allowed(actor, command: str, dispatch_id: str, approve_protected: bool = False,
+                   ended_at: Optional[str] = None) -> None:
+    """Refuse (403) what an agent may not do on this run now (core/swarm_out_actor): the
+    request's own limits, then the run's row as /runs has it (which session dispatched
+    it, what the panel offers on it, for a discard what would be lost)."""
     from core import swarm_out_actor
     try:
         swarm_out_actor.check(actor, command, dispatch_id=dispatch_id, approve_protected=approve_protected)
     except swarm_out_actor.ActorError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    if not actor.agent:
+        return
+    row = await _call(swarm_out.run_row(dispatch_id))
+    why = swarm_out_actor.row_blocker(actor, command, row, ended_at)
+    if why is None and command == "discard":
+        why = swarm_out_actor.discard_blocker(row)
+    if why:
+        raise HTTPException(status_code=403, detail=f"an agent may not {command.replace('_', ' ')} this run now: {why}")
 
 
 def _recorded(actor, command: str, dispatch_id: str) -> None:
@@ -182,7 +194,7 @@ async def return_prepare(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     if not body.url:
         raise HTTPException(status_code=400, detail="name the repository")
     actor = _actor(body)
-    _allowed(actor, "return_prepare", dispatch_id)
+    await _allowed(actor, "return_prepare", dispatch_id)
     out = await _return(hive_return.prepare, dispatch_id, body.url)
     _recorded(actor, "return_prepare", dispatch_id)
     return out
@@ -196,7 +208,7 @@ async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     import asyncio
     from core import hive_return
     actor = _actor(body)
-    _allowed(actor, "return_land", dispatch_id, approve_protected=body.approve_protected)
+    await _allowed(actor, "return_land", dispatch_id, approve_protected=body.approve_protected)
     out = await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
                         body.approve_protected)
     _recorded(actor, "return_land", dispatch_id)
@@ -272,7 +284,7 @@ async def run_verdict(dispatch_id: str, body: VerdictBody) -> dict[str, Any]:
     _require_desktop()
     from core import swarm_out_settle
     actor = _actor(body)
-    _allowed(actor, "accept", dispatch_id)
+    await _allowed(actor, "accept", dispatch_id, ended_at=body.ended_at)
     out = await _settle(swarm_out_settle.set_verdict, dispatch_id, body.value, body.note or actor.why,
                         body.ended_at)
     _recorded(actor, "accept", dispatch_id)
@@ -285,7 +297,7 @@ async def run_manual_landed(dispatch_id: str, body: Optional[ActorBody] = None) 
     _require_desktop()
     from core import swarm_out_settle
     actor = _actor(body)
-    _allowed(actor, "manual_landed", dispatch_id)
+    await _allowed(actor, "manual_landed", dispatch_id)
     out = await _settle(swarm_out_settle.set_manual_landed, dispatch_id)
     _recorded(actor, "manual_landed", dispatch_id)
     return out
@@ -303,11 +315,19 @@ class DiscardBody(ActorBody):
 async def run_rerun(dispatch_id: str, body: RerunBody) -> dict[str, Any]:
     """Re-run with a correction: the text goes into the run's own Hive session."""
     _require_desktop()
+    from core import swarm_out_actor
     actor = _actor(body)
-    _allowed(actor, "rerun", dispatch_id)
-    out = await _call(swarm_out.rerun(dispatch_id, body.text))
-    _recorded(actor, "rerun", dispatch_id)
-    return out
+    await _allowed(actor, "rerun", dispatch_id)
+    try:
+        # an agent's re-send is counted before it is sent (two at once cannot both pass)
+        reserved = swarm_out_actor.reserve_rerun(dispatch_id, actor)
+    except swarm_out_actor.ActorError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    try:
+        return await _call(swarm_out.rerun(dispatch_id, body.text))
+    except BaseException:
+        swarm_out_actor.release_rerun(dispatch_id, reserved)
+        raise
 
 
 @router.post("/runs/{dispatch_id}/stop")
@@ -315,7 +335,7 @@ async def run_stop(dispatch_id: str, body: Optional[ActorBody] = None) -> dict[s
     """Stop the run's current turn; its session and workspace stay."""
     _require_desktop()
     actor = _actor(body)
-    _allowed(actor, "stop", dispatch_id)
+    await _allowed(actor, "stop", dispatch_id)
     out = await _call(swarm_out.stop_run(dispatch_id))
     _recorded(actor, "stop", dispatch_id)
     return out
@@ -327,13 +347,7 @@ async def run_discard(dispatch_id: str, body: DiscardBody) -> dict[str, Any]:
     may discard only when nothing would be lost (core/swarm_out_actor.discard_blocker)."""
     _require_desktop()
     actor = _actor(body)
-    _allowed(actor, "discard", dispatch_id)
-    if actor.agent:
-        from core import swarm_out_actor
-        row = await _call(swarm_out.run_row(dispatch_id))
-        blocker = swarm_out_actor.discard_blocker(row)
-        if blocker:
-            raise HTTPException(status_code=403, detail=f"an agent may not discard this run now: {blocker}")
+    await _allowed(actor, "discard", dispatch_id)
     out = await _call(swarm_out.discard_run(dispatch_id, body.note or actor.why))
     _recorded(actor, "discard", dispatch_id)
     return out

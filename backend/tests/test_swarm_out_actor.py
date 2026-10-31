@@ -55,16 +55,6 @@ def test_an_agent_does_not_land_protected_paths(state):
         act.check(_agent(), "return_land", dispatch_id=DID, approve_protected=True)
 
 
-def test_an_agent_re_sends_at_most_twice(state):
-    for _ in range(act.MAX_AGENT_RERUNS):
-        act.check(_agent(), "rerun", dispatch_id=DID)
-        act.record(DID, _agent(), "rerun")
-    with pytest.raises(act.ActorError, match="re-sent this run 2 times"):
-        act.check(_agent(), "rerun", dispatch_id=DID)
-    # the person's re-sends are not counted and not limited
-    act.check(act.actor("person", None, ""), "rerun", dispatch_id=DID)
-
-
 def test_an_agents_command_is_kept_with_its_session_and_reason(state):
     act.record(DID, _agent("tests pass and the report matches"), "accept")
     act.record(DID, act.actor("person", None, ""), "accept")      # not an agent's: not kept here
@@ -105,6 +95,57 @@ def test_an_agent_may_discard_when_only_the_verdict_is_open():
     assert act.discard_blocker(_run(settle={"why_not": []})) is None
 
 
+# ── what the run offers now, and who dispatched it ──────────────────────────
+
+def _offer(*keys, accept=None, **kw):
+    acts = [{"key": k, **({"variant": accept} if k == "accept" else {})} for k in keys]
+    res = kw.pop("result", {"ended": "completed", "provisional": False, "ended_at": "2026-10-31T00:00:00Z"})
+    return _run(actions=acts, dispatched_from="s-abc123", stage=kw.pop("stage", "awaiting"), result=res, **kw)
+
+
+def test_an_agent_gives_only_what_the_panel_offers_now():
+    a = _agent()
+    assert act.row_blocker(a, "stop", _offer("accept", "rerun", "discard", accept="verdict")) is not None
+    assert act.row_blocker(a, "accept", _offer("accept", accept="verdict"), "2026-10-31T00:00:00Z") is None
+    # not the final result the row shows
+    assert "final result" in act.row_blocker(a, "accept", _offer("accept", accept="verdict"), "2026-10-30T00:00:00Z")
+    assert "final result" in act.row_blocker(a, "accept", _offer("accept", accept="verdict",
+                                             result={"ended": "completed", "provisional": True,
+                                                     "ended_at": "x"}), "x")
+    # commits to land are not accepted by a verdict, and the reverse
+    assert act.row_blocker(a, "accept", _offer("accept", accept="land"), "2026-10-31T00:00:00Z") is not None
+    assert act.row_blocker(a, "return_land", _offer("accept", accept="land")) is None
+    # commits only in the Hive's workspace: never "landed by hand" by an agent
+    assert "only in the Hive" in act.row_blocker(a, "manual_landed", _offer("accept", accept="manual"))
+    assert act.row_blocker(a, "manual_landed", _offer("accept", accept="land")) is None
+    # the person is not limited
+    assert act.row_blocker(act.actor("person", None, ""), "stop", _offer()) is None
+
+
+def test_an_agent_gives_commands_only_on_runs_its_session_dispatched():
+    other = act.actor("agent", "s-other", "w")
+    assert "another session" in act.row_blocker(other, "rerun", _offer("rerun"))
+    assert act.row_blocker(_agent(), "rerun", _offer("rerun")) is None
+    # a run from before the dispatching session was recorded: no owner to compare
+    assert act.row_blocker(other, "rerun", {**_offer("rerun"), "dispatched_from": None}) is None
+
+
+def test_an_agent_does_not_discard_while_its_hive_is_not_answering():
+    assert "not answering" in act.discard_blocker(_run(running=None, state="unknown"))
+
+
+def test_two_re_sends_at_once_cannot_pass_the_limit_and_a_failed_one_does_not_count(state):
+    a = _agent()
+    first = act.reserve_rerun(DID, a)
+    act.reserve_rerun(DID, a)
+    with pytest.raises(act.ActorError, match="2 times"):
+        act.reserve_rerun(DID, a)
+    act.release_rerun(DID, first)
+    assert act.agent_reruns(DID) == 1
+    act.reserve_rerun(DID, a)
+    assert act.reserve_rerun(DID, act.actor("person", None, "")) is None
+
+
 # ── the routes ──────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -120,6 +161,8 @@ def client(state, monkeypatch):
 
     async def rerun(dispatch_id, text):
         calls.append(("rerun", dispatch_id, text))
+        if text == "fail":
+            raise swarm_out.SwarmOutError("the Hive did not take the correction")
         return {"sent": True}
     monkeypatch.setattr(swarm_out, "discard_run", discard_run)
     monkeypatch.setattr(swarm_out, "rerun", rerun)
@@ -132,10 +175,13 @@ def _rows(monkeypatch, row):
     monkeypatch.setattr(swarm_out, "run_row", run_row)
 
 
+AGENT = {"by": "agent", "session": "s-abc123", "why": "w"}
+
+
 def test_the_discard_route_refuses_an_agent_while_code_is_not_landed(client, monkeypatch):
     c, calls = client
-    _rows(monkeypatch, _run(settle={"why_not": ["verdict", "code"]}))
-    r = c.post(f"/api/swarm-out/runs/{DID}/discard", json={"by": "agent", "session": "s-abc123", "why": "w"})
+    _rows(monkeypatch, _offer("discard", settle={"why_not": ["verdict", "code"]}))
+    r = c.post(f"/api/swarm-out/runs/{DID}/discard", json=AGENT)
     assert r.status_code == 403 and "not landed" in r.json()["detail"]
     assert calls == []
     # a bare request is an agent's too
@@ -147,18 +193,39 @@ def test_the_discard_route_refuses_an_agent_while_code_is_not_landed(client, mon
 
 def test_the_discard_route_lets_an_agent_discard_and_keeps_why(client, monkeypatch):
     c, calls = client
-    _rows(monkeypatch, _run())
-    r = c.post(f"/api/swarm-out/runs/{DID}/discard",
-               json={"by": "agent", "session": "s-abc123", "why": "nothing to keep"})
+    _rows(monkeypatch, _offer("discard"))
+    r = c.post(f"/api/swarm-out/runs/{DID}/discard", json={**AGENT, "why": "nothing to keep"})
     assert r.status_code == 200 and calls == [("discard", DID, "nothing to keep")]
     assert swarm_out_settle.load(DID)["commands"][0]["command"] == "discard"
 
 
-def test_the_rerun_route_refuses_a_third_agent_re_send(client):
+def test_the_routes_refuse_an_agent_of_another_session(client, monkeypatch):
     c, calls = client
-    body = {"by": "agent", "session": "s-abc123", "why": "w", "text": "fix the test"}
+    _rows(monkeypatch, _offer("rerun", "discard"))
+    body = {**AGENT, "session": "s-other"}
+    assert c.post(f"/api/swarm-out/runs/{DID}/discard", json=body).status_code == 403
+    assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**body, "text": "x"}).status_code == 403
+    assert calls == []
+
+
+def test_the_rerun_route_refuses_a_third_agent_re_send_and_a_failed_one_does_not_count(client, monkeypatch):
+    c, calls = client
+    _rows(monkeypatch, _offer("rerun"))
+    body = {**AGENT, "text": "fix the test"}
+    assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**body, "text": "fail"}).status_code == 400
     assert [c.post(f"/api/swarm-out/runs/{DID}/rerun", json=body).status_code for _ in range(3)] == [200, 200, 403]
-    assert len(calls) == 2
+    assert len(calls) == 3
+
+
+def test_the_verdict_route_takes_an_agents_accept_only_on_the_final_result(client, monkeypatch):
+    c, _ = client
+    seen: list = []
+    monkeypatch.setattr(swarm_out_settle, "set_verdict", lambda *a: seen.append(a) or {"ok": True})
+    _rows(monkeypatch, _offer("accept", "rerun", "discard", accept="verdict"))
+    url = f"/api/swarm-out/runs/{DID}/verdict"
+    assert c.post(url, json={**AGENT, "value": "pass", "ended_at": "old"}).status_code == 403
+    assert c.post(url, json={**AGENT, "value": "pass", "ended_at": "2026-10-31T00:00:00Z"}).status_code == 200
+    assert len(seen) == 1
 
 
 def test_the_land_route_refuses_an_agent_protected_landing(client, monkeypatch):
@@ -166,7 +233,8 @@ def test_the_land_route_refuses_an_agent_protected_landing(client, monkeypatch):
     from core import hive_return
     landed: list = []
     monkeypatch.setattr(hive_return, "land", lambda *a: landed.append(a) or {"landed": True})
-    body = {"by": "agent", "session": "s-abc123", "why": "w", "key": "k", "tip": "t"}
+    _rows(monkeypatch, _offer("accept", "discard", accept="land"))
+    body = {**AGENT, "key": "k", "tip": "t"}
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json={**body, "approve_protected": True}).status_code == 403
     assert landed == []
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
@@ -186,6 +254,28 @@ def test_the_dispatch_route_passes_the_dispatching_session(state, monkeypatch):
     r = TestClient(app).post("/api/swarm-out/dispatch", json={
         "title": "t", "task": "x", "brain": "B", "revision": "r", "session": "s-abc123"})
     assert r.status_code == 200 and seen["dispatched_from"] == "s-abc123"
+
+
+# ── a command cannot say it is the person's ─────────────────────────────────
+
+@pytest.mark.parametrize("cmd", [
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/discard -d '{\"by\":\"person\"}'",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/return/land -d @/tmp/body.json",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/rerun --data-binary @-",
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/stop --json '{\"by\":\"Person\"}'",
+])
+def test_a_command_on_a_run_that_speaks_as_the_person_is_refused(cmd):
+    from core import run_owner_gate
+    assert run_owner_gate._user_only_deny(cmd) is not None, cmd
+
+
+def test_an_agents_own_command_on_a_run_is_not_refused():
+    from core import run_owner_gate
+    assert run_owner_gate._user_only_deny(
+        "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/stop -d '{\"by\":\"agent\"}'") is None
+    # the CLI line is no HTTP call in the command text: a reason may say "the person"
+    assert run_owner_gate._user_only_deny(
+        '"$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop ' + DID + ' --why "the person asked"') is None
 
 
 # ── the session id reaches the CLI; the CLI does not dispatch without it ────
@@ -224,6 +314,12 @@ def test_the_cli_does_not_dispatch_without_a_session(monkeypatch, capsys):
     assert cli.main(["dispatch", "--task", "x", "--brain", "B", "--acceptance", "a", "--execution", "native",
                      "--returns", "answer", "--title", "t", "--revision", "r"]) == 0
     assert calls[-1][2]["session"] == "s-abc123"
+
+
+def test_the_cli_refuses_what_is_not_a_dispatch_id(capsys):
+    from scripts import swarm_out as cli
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(["stop", "../hives", "--why", "w"])
 
 
 def test_the_cli_frames_what_the_hive_wrote(monkeypatch, capsys):

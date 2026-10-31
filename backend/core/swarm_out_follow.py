@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -45,7 +46,8 @@ logger = logging.getLogger(__name__)
 WATCH_MAX_S = 540
 WATCH_EVERY_S = 30
 MAX_WATCHED = 20
-#: at most this many runs in one digest (the newest changes first); the rest are named
+#: at most this many runs in one digest (the newest dispatches first); the rest are
+#: counted, and left unseen for the next digest
 MAX_DIGEST = 10
 
 
@@ -57,22 +59,41 @@ def _card(row: dict[str, Any], request_id: Any) -> Optional[dict[str, Any]]:
     return swarm_out_wait_card.status(str(row.get("dispatch_id") or ""), str(request_id or ""))
 
 
+def _card_mark(card: Optional[dict[str, Any]]) -> str:
+    """What of a card's outcome is news: forwarded, or not with why (a card only built
+    or asked is not: the agent itself just asked it)."""
+    if not card or card.get("status") not in ("forwarded", "not_forwarded"):
+        return ""
+    why = str(card.get("reason") or "")
+    return card["status"] + (":" + hashlib.sha256(why.encode()).hexdigest()[:8] if why else "")
+
+
 def _waits(row: dict[str, Any], data: dict[str, Any]) -> list[tuple[str, str, str, str]]:
     sid = row.get("session_id")
     out = []
     for w in list(data.get("asks") or []) + list(data.get("answered") or []):
         if isinstance(w, dict) and sid and w.get("session_id") == sid:
-            card = _card(row, w.get("request_id")) or {}
             out.append((str(w.get("request_id") or ""), str(w.get("kind") or ""), str(w.get("phase") or ""),
-                        str(card.get("status") or "")))
+                        _card_mark(_card(row, w.get("request_id")))))
     return sorted(set(out))
+
+
+#: a running run's state_reason is the Hive's activity name, which changes all the time:
+#: only these reasons of a running run are news
+_RUNNING_REASONS = ("answer_sent",)
 
 
 def fingerprint(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     settle = row.get("settle") if isinstance(row.get("settle"), dict) else {}
     settled = settle.get("settled") if isinstance(settle.get("settled"), dict) else None
-    return {"state": row.get("state"), "reason": row.get("state_reason"), "stage": row.get("stage"),
-            "result": row.get("result_status"), "waits": [list(w) for w in _waits(row, data)],
+    res = row.get("result") if isinstance(row.get("result"), dict) else {}
+    reason = row.get("state_reason")
+    if row.get("state") == "running" and reason not in _RUNNING_REASONS:
+        reason = "activity"
+    return {"state": row.get("state"), "reason": reason, "stage": row.get("stage"), "why": row.get("why"),
+            "result": row.get("result_status"), "ended": res.get("ended"), "ended_at": res.get("ended_at"),
+            "why_not": sorted(settle.get("why_not") or []),
+            "waits": [list(w) for w in _waits(row, data)],
             "settled": (settled or {}).get("outcome") if settled else None}
 
 
@@ -123,19 +144,31 @@ def _load_seen(session: Optional[str]) -> dict[str, str]:
     return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(d, dict) else {}
 
 
-def mark_seen(session: Optional[str], seen: dict[str, str]) -> None:
-    """Record the fingerprints *session* has now seen (merged over what it had)."""
+_SEEN_LOCK = threading.Lock()
+
+
+def mark_seen(session: Optional[str], seen: dict[str, str], keep: Optional[set] = None) -> None:
+    """Record the fingerprints *session* has now seen (merged over what it had, under one
+    lock: a digest and a watch at once lose neither). ``keep``: the runs still listed;
+    the session's entries for any other are dropped, so the file stays small."""
     p = _seen_path(session or "")
     if p is None or not seen:
         return
     try:
-        merged = {**_load_seen(session), **seen}
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.parent / f".{p.name}.{secrets.token_hex(6)}.tmp"
-        tmp.write_text(json.dumps(merged), encoding="utf-8")
-        os.replace(tmp, p)
+        with _SEEN_LOCK:
+            _write_seen(p, session, seen, keep)
     except OSError:
         logger.warning("swarm_out_follow: could not record what a session has seen", exc_info=True)
+
+
+def _write_seen(p: Path, session: Optional[str], seen: dict[str, str], keep: Optional[set]) -> None:
+    merged = {**_load_seen(session), **seen}
+    if keep is not None:
+        merged = {k: v for k, v in merged.items() if k in keep or k in seen}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.parent / f".{p.name}.{secrets.token_hex(6)}.tmp"
+    tmp.write_text(json.dumps(merged), encoding="utf-8")
+    os.replace(tmp, p)
 
 
 # ── watch ────────────────────────────────────────────────────────────────────
@@ -168,7 +201,11 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
     ids = [i for i in dict.fromkeys(ids) if isinstance(i, str)][:MAX_WATCHED]
     if not ids:
         return {"changed": False, "token": _token({}), "runs": [], "changed_ids": []}
-    seen = _untoken(since)
+    # what the caller last saw: the token, and the session's record (a digest may have
+    # shown a change after the token was issued): a run is unchanged while it reads as
+    # either; a run in neither starts from now
+    record = _load_seen(session)
+    seen = {**record, **_untoken(since)}
     unknown_once: set[str] = set()
     deadline = time.monotonic() + max(0.0, wait_s)
     first = True
@@ -179,12 +216,12 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
         for i in ids:
             r = rows.get(i)
             now[i] = _hash(fingerprint(r, data)) if r else "missing"
-        if first and not seen:
-            seen = dict(now)                    # no since: wait for a change from now
+        if first:
+            seen = {i: seen.get(i, now[i]) for i in ids}
         first = False
         changed = []
         for i in ids:
-            if now[i] == seen.get(i):
+            if now[i] == seen.get(i) or now[i] == record.get(i):
                 unknown_once.discard(i)
                 continue
             r = rows.get(i) or {}
@@ -194,8 +231,10 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
             changed.append(i)
         if changed or time.monotonic() >= deadline:
             token_fps = {**seen, **{i: now[i] for i in changed}}
-            if changed:
-                mark_seen(session, {i: now[i] for i in changed})
+            # what the caller is told now it has seen: every run it asked about that this
+            # session dispatched (another session's runs are not its to mark)
+            own = {i: token_fps[i] for i in ids if (rows.get(i) or {}).get("dispatched_from") == session}
+            mark_seen(session, own, keep=set(rows))
             return {"changed": bool(changed), "changed_ids": changed, "token": _token(token_fps),
                     "runs": [summary(rows[i], data) if i in rows else {"dispatch_id": i, "state": "missing"}
                              for i in ids]}
@@ -203,6 +242,13 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
 
 
 # ── the digest before a session's next message ───────────────────────────────
+
+def listed_ids() -> set:
+    """The runs the background snapshot lists (what a session's seen record keeps)."""
+    from core import swarm_out
+    data = swarm_out.snapshot()
+    return {r.get("dispatch_id") for r in (data or {}).get("runs") or [] if isinstance(r, dict)}
+
 
 def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     """(block, fingerprints shown) for the next message of *session*: the runs it
@@ -216,14 +262,15 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     if not isinstance(data, dict):
         return None, {}
     seen = _load_seen(session)
-    lines, shown = [], {}
-    for r in data.get("runs") or []:
+    lines, shown, more = [], {}, 0
+    for r in data.get("runs") or []:                 # newest dispatch first
         if not isinstance(r, dict) or r.get("dispatched_from") != session:
             continue
-        if r.get("state") == "unknown":
-            continue                             # said when it is known again
         h = _hash(fingerprint(r, data))
         if seen.get(r.get("dispatch_id")) == h:
+            continue
+        if len(lines) >= MAX_DIGEST:
+            more += 1                                # named, not shown: not marked seen
             continue
         shown[str(r.get("dispatch_id"))] = h
         s = summary(r, data)
@@ -239,8 +286,7 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
         lines.append(f"- {s['dispatch_id']} 「{title}」: " + " · ".join(b for b in bits if b))
     if not lines:
         return None, {}
-    more = len(lines) - MAX_DIGEST
-    body = "\n".join(lines[:MAX_DIGEST]) + (f"\n- and {more} more: `swarm_out runs`" if more > 0 else "")
+    body = "\n".join(lines) + (f"\n- and {more} more that changed: `swarm_out runs`" if more else "")
     block = (f"{DIGEST_HEADER}\nRuns this session dispatched changed since your last turn. Tell the "
              "person where they are in a sentence or two first, handle what you can (the Swarm Out "
              f"skill), then answer the message.\n{body}")

@@ -224,6 +224,27 @@ def person_only_match(text: str) -> "Op | None":
     return None
 
 
+#: the commands on a run an agent may give with its limits (core/swarm_out_actor): a
+#: request says who gives it (``by``), which the routes cannot verify
+AGENT_LIMITED = frozenset({"run.accept", "run.manual_landed", "run.return_prepare", "run.return_land",
+                           "run.rerun", "run.stop", "run.discard"})
+
+
+@lru_cache(maxsize=1)
+def _agent_limited() -> "tuple[tuple[Op, re.Pattern[str]], ...]":
+    return tuple((op, re.compile(_template_re(op.path))) for op in ops() if op.name in AGENT_LIMITED)
+
+
+def agent_limited_match(text: str) -> "Op | None":
+    """The first command on a run whose path appears in *text* (decoded, de-quoted by
+    the caller), else None: the gate makes sure such a call cannot say it is the
+    person's (core/run_owner_gate)."""
+    for op, rx in _agent_limited():
+        if rx.search(text):
+            return op
+    return None
+
+
 def match(method: str, path: str) -> "Op | None":
     """The op for a concrete request (``path`` without the query), else None."""
     for op in ops():

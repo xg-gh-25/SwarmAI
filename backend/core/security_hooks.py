@@ -1806,21 +1806,22 @@ def create_ask_question_gate(
         # because the agent has no answer command; an unattended channel pick
         # (answered_by="auto") or free text records nothing, so the run keeps
         # waiting and the agent re-asks.
-        if answered_by == "person" and isinstance(answer, dict) and any(
+        # A PERSON's answer on a Hive card (a dispatched run's wait, asked in the chat
+        # that dispatched it) is forwarded to the Hive here, in the daemon, for the
+        # same reason: the agent has no answer command (core/swarm_out_wait_card, design
+        # 2026-10-31-swarm-out-agent-owns-its-runs §2.5). It never raises. A Hive card is
+        # never also a local pipeline decision: its text is the Hive's, which could end
+        # in a local decision's marker.
+        from . import swarm_out_wait_card
+        hive_card = any(isinstance(q, dict) and str(q.get("question", "")).startswith(
+            swarm_out_wait_card.MARKER_PREFIX) for q in questions)
+        if answered_by == "person" and isinstance(answer, dict) and hive_card:
+            await swarm_out_wait_card.forward(actual_session_id, questions, answer)
+        elif answered_by == "person" and isinstance(answer, dict) and any(
                 isinstance(q, dict) and "[" in str(q.get("question", "")) for q in questions):
             from . import pipeline_human
             await asyncio.to_thread(pipeline_human.record_card_answer,
                                     actual_session_id, answer)
-
-        # A PERSON's answer on a Hive card (a dispatched run's wait, asked in the chat
-        # that dispatched it) is forwarded to the Hive here, in the daemon, for the
-        # same reason: the agent has no answer command (core/swarm_out_wait_card, design
-        # 2026-10-31-swarm-out-agent-owns-its-runs §2.5). It never raises.
-        if answered_by == "person" and isinstance(answer, dict):
-            from . import swarm_out_wait_card
-            if any(isinstance(q, dict) and str(q.get("question", "")).startswith(
-                    swarm_out_wait_card.MARKER_PREFIX) for q in questions):
-                await swarm_out_wait_card.forward(actual_session_id, questions, answer)
 
         # answer is the user's answers dict.
         return {

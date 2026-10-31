@@ -168,6 +168,40 @@ def test_the_hives_refusal_is_kept_and_forwarding_never_raises(hive, monkeypatch
     assert _forward(qs, {qs[0]["question"]: "a — the fixture"})["status"] == "not_forwarded"
 
 
+def test_a_forward_that_happened_is_never_overwritten_as_not_forwarded(hive):
+    qs = _card("dc-1")
+    _forward(qs, {qs[0]["question"]: "a — the fixture"})
+    rec = wc._load(DID, "dc-1")
+    rec["forward"] = None                                        # a second answer read it before
+    wc._not(rec, "this question was already answered")
+    assert wc.status(DID, "dc-1")["status"] == "forwarded"
+
+
+def test_a_built_card_is_not_news_but_why_it_was_not_forwarded_is(hive):
+    data = {"runs": [ROW], "asks": [DECISION], "answered": []}
+    before = swarm_out_follow.fingerprint(ROW, data)
+    qs = _card("dc-1")
+    assert swarm_out_follow.fingerprint(ROW, data) == before     # only asked
+    _forward(qs, {qs[0]["question"]: "free text"})
+    first = swarm_out_follow.fingerprint(ROW, data)
+    _card("dc-1")
+    _forward(qs, {qs[0]["question"]: "a — the fixture"}, session="sess-b")
+    assert swarm_out_follow.fingerprint(ROW, data) != first      # not forwarded again, for another reason
+
+
+def test_a_hive_card_is_never_recorded_as_a_local_pipeline_decision(hive, monkeypatch):
+    from core import pipeline_human
+    recorded: list = []
+    monkeypatch.setattr(pipeline_human, "record_card_answer", lambda *a: recorded.append(a) or [])
+    qs = _card("dc-1")
+    qs[0]["question"] += " [dc-local]"                           # Hive text ending in a local marker
+    _gate(qs, {qs[0]["question"]: "a — the fixture"}, "person", monkeypatch)
+    assert recorded == []
+    plain = [{"question": "Pick one [dc-local]", "options": [{"label": "a"}, {"label": "b"}]}]
+    _gate(plain, {plain[0]["question"]: "a"}, "person", monkeypatch)
+    assert len(recorded) == 1
+
+
 def test_a_card_not_forwarded_is_news_to_the_agent_following(hive):
     data = {"runs": [ROW], "asks": [DECISION], "answered": []}
     before = swarm_out_follow.fingerprint(ROW, data)

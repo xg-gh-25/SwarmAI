@@ -77,6 +77,12 @@ _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
 # wait forwarded from the chat both rely on, so only the App sends it (design
 # 2026-10-31-swarm-out-agent-owns-its-runs P10).
 _USER_ONLY_CHAT_ANSWER_RE = re.compile(r"/api/chat/answer-question\b")
+# A command on a run says who gives it (``by``; core/swarm_out_actor), which the route
+# cannot verify: a call from a command may not say it is the person's, and may not send
+# a body this gate cannot read (a file, stdin) — design agent-owns-its-runs §2.1.
+_SPEAKS_AS_PERSON_RE = re.compile(r"person", re.IGNORECASE)
+_BODY_UNSEEN_RE = re.compile(r"(?:^|\s)(?:-d|--data(?:-binary|-urlencode|-raw)?|--json|-F|--form|-T|--upload-file)"
+                             r"\s*=?\s*['\"]?@")
 # The person's Swarm Out and Hive operations (accept / re-run / stop / discard a run,
 # answer a Hive's question, its session through the Host proxy, a Hive's password,
 # creating / deleting a Hive …) are not listed here: they are the rows of
@@ -431,6 +437,11 @@ def _user_only_deny(command: str) -> "dict | None":
                      "撤回 button), never a command. Tell the user which unit you think should "
                      "be withdrawn and why; they decide.")
     from core import swarm_out_ops
+    run_op = swarm_out_ops.agent_limited_match(command)
+    if run_op is not None and (_SPEAKS_AS_PERSON_RE.search(command) or _BODY_UNSEEN_RE.search(command)):
+        return _deny(f"`{run_op.name}` from a command is the agent's: give it with the Swarm Out CLI "
+                     "(`swarm_out <command> <dispatch_id> --why …`), which says so. A call that says it "
+                     "is the person's, or sends a body from a file, is refused.")
     op = swarm_out_ops.person_only_match(command)
     if op is not None:
         return _deny(f"`{op.name}` ({op.method} {op.path}) is the person's to do in the App "

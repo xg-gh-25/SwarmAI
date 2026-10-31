@@ -146,6 +146,14 @@ def _task(args) -> str:
     return args.task if args.task is not None else open(args.task_file, encoding="utf-8").read()
 
 
+def _dispatch_id(v: str) -> str:
+    """A dispatch id as the daemon writes it (it goes into a URL path)."""
+    import re
+    if not re.fullmatch(r"so_[0-9a-f]{12}", v or ""):
+        raise argparse.ArgumentTypeError(f"not a dispatch id: {v!r}")
+    return v
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="swarm_out")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -176,19 +184,19 @@ def _parser() -> argparse.ArgumentParser:
     u.add_argument("--hive", required=True, help="the Hive's name")
     u.add_argument("--version", help="a release version, e.g. 2.3.0")
     w = sub.add_parser("watch", help="wait until one of the runs changes (at most 9 minutes)")
-    w.add_argument("dispatch_ids", nargs="+")
+    w.add_argument("dispatch_ids", nargs="+", type=_dispatch_id)
     w.add_argument("--since", help="the token the last watch printed")
     cd = sub.add_parser("card", help="the question card that asks the person one of a run's waits")
-    cd.add_argument("dispatch_id")
+    cd.add_argument("dispatch_id", type=_dispatch_id)
     cd.add_argument("request_id")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
-    rd.add_argument("dispatch_id")
+    rd.add_argument("dispatch_id", type=_dispatch_id)
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
     for name, extra in (("accept", ("--ended-at",)), ("manual-landed", ()), ("stop", ()),
                         ("return-prepare", ("--url",)), ("return-land", ("--key", "--tip")),
                         ("rerun", ("--text-file",)), ("discard", ())):
         c = sub.add_parser(name)
-        c.add_argument("dispatch_id")
+        c.add_argument("dispatch_id", type=_dispatch_id)
         c.add_argument("--why", required=True, help="one sentence the person sees: why this command")
         for flag in extra:
             c.add_argument(flag, required=True)

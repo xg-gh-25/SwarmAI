@@ -184,7 +184,9 @@ async def card(dispatch_id: str, request_id: str) -> dict[str, Any]:
 
 def _not(rec: Optional[dict[str, Any]], why: str) -> dict[str, Any]:
     out = {"status": "not_forwarded", "reason": why, "at": _now()}
-    if rec is not None:
+    on_disk = _load(rec["dispatch_id"], rec["request_id"]) if rec is not None else None
+    if rec is not None and ((on_disk or {}).get("forward") or {}).get("status") != "forwarded":
+        # never over a forward that happened: the person's answer did reach the Hive
         rec["forward"] = out
         try:
             _save(rec)
@@ -199,10 +201,24 @@ async def forward(session: Optional[str], questions: Any, answers: Any) -> Optio
     the card is no Hive card. Never raises: the chat answer goes on either way. The
     caller has checked that the answer is the person's."""
     try:
-        return await _forward(session, questions, answers)
+        return await _forward_once(session, questions, answers)
     except Exception:  # noqa: BLE001 — never break the chat's own answer path
         logger.warning("swarm_out_wait_card: forwarding failed", exc_info=True)
         return {"status": "not_forwarded", "reason": "forwarding failed", "at": _now()}
+
+
+_LOCKS: dict[tuple, "asyncio.Lock"] = {}
+
+
+async def _forward_once(session, questions, answers):
+    """One forward at a time per card: two answers at once cannot both pass the
+    "already forwarded" check."""
+    import asyncio
+    keys = {m.groups() for q in (questions if isinstance(questions, list) else []) if isinstance(q, dict)
+            for m in [_MARKER_RE.match(str(q.get("question", "")))] if m}
+    lock = _LOCKS.setdefault(next(iter(keys)) if len(keys) == 1 else ("", ""), asyncio.Lock())
+    async with lock:
+        return await _forward(session, questions, answers)
 
 
 async def _forward(session, questions, answers):

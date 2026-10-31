@@ -127,11 +127,72 @@ def test_a_change_the_agent_saw_while_watching_is_not_in_the_digest(state, monke
     assert fol.digest("sess-a") == (None, {})
 
 
-def test_the_digest_skips_unknown_and_carries_no_hive_text(state, monkeypatch):
-    _snapshot(monkeypatch, _data(_row(A, "unknown", "hive_silent"),
+def test_the_digest_tells_unknown_too_and_carries_no_hive_text(state, monkeypatch):
+    # a run that never got a session stays unknown for good: it must be told
+    _snapshot(monkeypatch, _data(_row(A, "unknown", "no_session_id"),
                                  _row(B, "waiting", "decision", result={"report": "SECRET"})))
     block, shown = fol.digest("sess-a")
-    assert A not in block and B in block and "SECRET" not in block and set(shown) == {B}
+    assert A in block and B in block and "SECRET" not in block and set(shown) == {A, B}
+
+
+def test_a_re_run_that_finished_between_two_looks_is_a_change(state, monkeypatch):
+    first = _row(A, "stopped", "idle", stage="awaiting", result_status="fetched",
+                 result={"ended": "completed", "ended_at": "2026-10-31T01:00:00Z"})
+    again = {**first, "result": {"ended": "completed", "ended_at": "2026-10-31T02:00:00Z"}}
+    assert fol._hash(fol.fingerprint(first, _data(first))) != fol._hash(fol.fingerprint(again, _data(again)))
+    _snapshot(monkeypatch, _data(first))
+    fol.mark_seen("sess-a", fol.digest("sess-a")[1])
+    _snapshot(monkeypatch, _data(again))
+    assert A in fol.digest("sess-a")[0]
+
+
+def test_a_running_runs_activity_is_not_news(state, monkeypatch):
+    _feed(monkeypatch, [_data(_row(A, reason="tool_use")), _data(_row(A, reason="thinking"))])
+    assert _watch([A], wait_s=0.05)["changed"] is False
+    _feed(monkeypatch, [_data(_row(A, reason="tool_use")), _data(_row(A, reason="answer_sent"))])
+    assert _watch([A])["changed"] is True
+
+
+def test_runs_beyond_the_digest_are_left_unseen_for_the_next(state, monkeypatch):
+    many = [_row(f"so_{i:012x}", "stopped", "idle") for i in range(fol.MAX_DIGEST + 3)]
+    _snapshot(monkeypatch, _data(*many))
+    block, shown = fol.digest("sess-a")
+    assert len(shown) == fol.MAX_DIGEST and "and 3 more" in block
+    fol.mark_seen("sess-a", shown)
+    _, rest = fol.digest("sess-a")
+    assert len(rest) == 3
+
+
+def test_what_watch_told_is_not_told_again_even_without_a_change(state, monkeypatch):
+    _feed(monkeypatch, [_data(_row(A, "stopped", "idle"))])
+    assert _watch([A], wait_s=0.05)["changed"] is False          # told the state, no change
+    _snapshot(monkeypatch, _data(_row(A, "stopped", "idle")))
+    assert fol.digest("sess-a") == (None, {})
+
+
+def test_watch_with_an_old_token_does_not_repeat_what_a_digest_showed(state, monkeypatch):
+    _feed(monkeypatch, [_data(_row(A))])
+    token = _watch([A], wait_s=0.05)["token"]
+    done = _data(_row(A, "stopped", "idle"))
+    _snapshot(monkeypatch, done)
+    fol.mark_seen("sess-a", fol.digest("sess-a")[1])            # the digest told it
+    _feed(monkeypatch, [done])
+    assert _watch([A], since=token, wait_s=0.05)["changed"] is False
+
+
+def test_watch_does_not_mark_another_sessions_runs(state, monkeypatch):
+    other = _row(B, "stopped", "idle", session="sess-b")
+    _feed(monkeypatch, [_data(_row(B, session="sess-b")), _data(other)])
+    _watch([B], session="sess-a")
+    assert B not in fol._load_seen("sess-a")                     # not sess-a's to mark
+    _snapshot(monkeypatch, _data(other))
+    assert B in fol.digest("sess-b")[0]
+
+
+def test_the_seen_record_keeps_only_runs_still_listed(state):
+    fol.mark_seen("sess-a", {A: "x", B: "y"})
+    fol.mark_seen("sess-a", {A: "z"}, keep={A})
+    assert fol._load_seen("sess-a") == {A: "z"}
 
 
 def test_no_digest_without_a_session_or_a_snapshot(state, monkeypatch):

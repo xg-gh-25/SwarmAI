@@ -497,7 +497,7 @@ def _dispatch_digest(session: Optional[str]) -> Optional[str]:
         from . import swarm_out_follow
         block, shown = swarm_out_follow.digest(session)
         if block:
-            swarm_out_follow.mark_seen(session, shown)
+            swarm_out_follow.mark_seen(session, shown, keep=swarm_out_follow.listed_ids())
         return block
     except Exception:  # noqa: BLE001 — a digest that fails is not shown; the turn goes on
         logger.warning("session_router: dispatched-runs digest failed", exc_info=True)
@@ -5409,7 +5409,8 @@ class SessionRouter:
         # it last saw them. Like the terminal block it has no system-prompt sink, so it
         # rides the query on every path (no double-inject); it goes in before the
         # terminal block, which stays outermost.
-        _dispatch_block = _dispatch_digest(session_id)
+        # file reads and one write: off the event loop
+        _dispatch_block = await asyncio.to_thread(_dispatch_digest, session_id)
         query_content = _prepend_block_to_query(query_content, _dispatch_block)
         query_content = _prepend_terminal_to_query(query_content, terminal_context)
 
