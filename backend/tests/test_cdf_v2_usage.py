@@ -229,6 +229,8 @@ def test_missing_section_parks_without_retry_then_requeues_and_writes(
     monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
     monkeypatch.setattr("core.ingestion.pipeline_v2._user_texts",
                         lambda unit, row: ["verify current state before editing, please"])
+    from core.ingestion import user_check
+    monkeypatch.setattr(user_check, "grounds", lambda claim, texts: user_check.Verdict(True, "said"))
     payload = {
         "kind": "cognition", "type": "guideline", "scope": "world",
         "title": "Verify current state", "what": "Verify current state before editing.",

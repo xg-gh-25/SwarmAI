@@ -2,7 +2,8 @@
 pinned elsewhere; the rest of the set is named in the design's verification plan.
 
 - I1: a correction the review declared for EVOLUTION, resting on the user's own words,
-  is written there with no model call on the way;
+  is written there with one model call on the way: the isolated check that the claim
+  comes from those words (user_check.grounds), which sees nothing else of the session;
 - I2: a unit citing external content, or resting on neither the user's words nor a
   measurement, reaches none of the five every-turn files — only a DDD;
 - I3: a quote that is not in the cited user message never reaches the user's files,
@@ -47,8 +48,12 @@ def no_model(monkeypatch):
     monkeypatch.setattr(llm.BedrockJudge, "__init__", boom)
 
 
-def test_i1_a_quoted_correction_reaches_evolution_with_no_model_call(tmp_path, said, no_model):
+def test_i1_a_quoted_correction_reaches_evolution_with_only_the_isolated_check(tmp_path, said, no_model, monkeypatch):
+    from core.ingestion import user_check
+    asked = []
+    monkeypatch.setattr(user_check, "grounds", lambda claim, texts: asked.append(texts) or user_check.Verdict(True, "r"))
     d = run_unit_v2(_row(_cog(scope="agent", type="correction")), _ws(tmp_path))
+    assert asked == [[SAID]]
     assert (d.decision, d.destination.store, d.destination.section) == (
         "write", "EVOLUTION", "Corrections Captured")
     assert d.version_vector["basis"] == "user"

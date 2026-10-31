@@ -705,13 +705,17 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
 
     facts = _facts(unit, row, resolved)
     user_check = None
-    if destination.store in USER_CONTEXT_STORES and facts.user_words:
+    if destination.store in USER_CONTEXT_STORES | AGENT_SELF_STORES and facts.user_words:
         # the quote is in the user's message; whether it says what the unit claims is
         # asked of a model that sees only the user's messages and the claim (decision D,
-        # user_check): injected text in the session cannot reach it. Not said: not the
-        # user's words, so the unit goes to the project's DDD like any other.
+        # user_check): injected text in the session cannot reach it. The user's own files
+        # need the words to state it; MEMORY and EVOLUTION need the claim to come from
+        # them (an agent's lesson may generalise the correction). Not so: not the user's
+        # words, so the unit goes where its other facts admit it (a measurement), else
+        # to the project's DDD like any other.
         from . import user_check as _check
-        verdict = _check.says(_check.claim_of(unit), _user_texts(unit, row))
+        ask = _check.says if destination.store in USER_CONTEXT_STORES else _check.grounds
+        verdict = ask(_check.claim_of(unit), _user_texts(unit, row))
         user_check = {"holds": verdict.holds, "reason": verdict.reason, "version": _check.CHECK_VERSION}
         if not verdict.holds:
             facts = replace(facts, user_words=False)

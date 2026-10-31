@@ -46,6 +46,7 @@ def user_check_agrees(monkeypatch):
     the check itself is in test_cdf_user_check."""
     from core.ingestion import user_check
     monkeypatch.setattr(user_check, "says", lambda claim, texts: user_check.Verdict(True, "said"))
+    monkeypatch.setattr(user_check, "grounds", lambda claim, texts: user_check.Verdict(True, "said"))
 
 
 @pytest.fixture
