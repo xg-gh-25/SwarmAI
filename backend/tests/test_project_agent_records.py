@@ -39,7 +39,7 @@ def test_checks_come_from_the_runs_bash_calls():
     res = sor.summarize(_messages(_bash("a", "cd backend &&  pytest   -q tests/", False),
                                   _bash("b", "npm run build", False), _bash("c", "npm run build", True)),
                         agent=AGENT)
-    assert res["checks"] == [{"id": "tests", "status": "ran"}, {"id": "lint", "status": "not_run"},
+    assert res["checks"] == [{"id": "tests", "status": "ran"}, {"id": "lint", "status": "not_seen"},
                              {"id": "build", "status": "errored"}]       # the last build call errored
     assert sor.summarize(_messages(), agent=None)["checks"] is None
 
@@ -64,8 +64,8 @@ def test_runs_carries_the_hosts_agent_and_only_the_hosts_check_ids():
     run = sor.public({"result": res}, [], {**AGENT, "execution": "pipeline"})
     assert run["project_agent"]["execution"] == "pipeline"
     assert sor.public({"result": res}, [], {**AGENT, "execution": "made-up"})["project_agent"]["execution"] is None
-    assert pub["checks"] == [{"id": "tests", "status": "ran"}, {"id": "lint", "status": "not_run"},
-                             {"id": "build", "status": "not_run"}]
+    assert pub["checks"] == [{"id": "tests", "status": "ran"}, {"id": "lint", "status": "not_seen"},
+                             {"id": "build", "status": "not_seen"}]
     old = sor.public({"result": res}, [], None)
     assert old["project_agent"] is None and old["checks"] is None and old["gate_refusals"] is None
 
@@ -149,7 +149,7 @@ def test_only_bash_calls_count_as_running_a_check():
         {"type": "tool_use", "id": "w", "name": "Write", "display": {"tool": "Write", "object": "pytest -q"}},
         {"type": "tool_result", "tool_use_id": "w", "is_error": False}]}]
     res = sor.summarize(_messages(write), agent=AGENT)
-    assert res["checks"][0] == {"id": "tests", "status": "not_run"}
+    assert res["checks"][0] == {"id": "tests", "status": "not_seen"}
 
 
 def test_runs_rows_get_the_agent_part(monkeypatch):
@@ -169,7 +169,7 @@ def test_a_check_is_run_only_when_a_call_runs_it_not_when_it_mentions_it():
     mentions = [_bash("g", 'grep -rn "pytest -q" .', False), _bash("e", "echo 'later: npm run build'", False),
                 _bash("h", "cat > s.sh <<EOF\nruff check .\nEOF", False)]
     res = sor.summarize(_messages(*mentions), agent=AGENT)
-    assert [c["status"] for c in res["checks"]] == ["not_run", "not_run", "not_run"]
+    assert [c["status"] for c in res["checks"]] == ["not_seen", "not_seen", "not_seen"]
     no_result = [{"role": "assistant", "content": [
         {"type": "tool_use", "id": "x", "name": "Bash", "display": {"object": "x; npm run build"}}]}]
     assert sor.summarize(_messages(no_result), agent=AGENT)["checks"][2] == {"id": "build", "status": "unknown"}

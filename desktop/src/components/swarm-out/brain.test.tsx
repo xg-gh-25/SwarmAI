@@ -37,12 +37,16 @@ describe('the Brain of a run', () => {
     expect(brainLabel(run('a', null, null))).toBe('没走 Project Agent');
   });
 
-  it('says which checks ran, errored or did not run, never that they passed', () => {
+  it('says which checks ran, errored or were not seen, never that they passed or did not run', () => {
     expect(checksLine(res())).toBeNull();
-    expect(checksLine(res({ checks: [{ id: 'tests', status: 'ran' }, { id: 'lint', status: 'not_run' },
-      { id: 'build', status: 'errored' }] }))).toBe('校验：tests 跑了 · lint 没跑 · build 报错了');
-    expect(checksLine(res({ checks_partial: true, checks: [{ id: 'lint', status: 'not_run' },
+    expect(checksLine(res({ checks: [{ id: 'tests', status: 'ran' }, { id: 'lint', status: 'not_seen' },
+      { id: 'build', status: 'errored' }] }))).toBe('校验：tests 跑了 · lint 没看到 · build 报错了');
+    expect(checksLine(res({ checks_partial: true, checks: [{ id: 'lint', status: 'not_seen' },
       { id: 'x', status: 'unknown' }] }))).toBe('校验：lint 没看到 · x 跑了但没有结果（只读了最近的轮次）');
+    // a record kept before "not seen" says not_run: it reads as not seen, never "没跑"
+    const legacy = checksLine(res({ checks: [{ id: 'lint', status: 'not_run' as never }] }));
+    expect(legacy).toBe('校验：lint 没看到');
+    expect(legacy).not.toContain('没跑');
   });
 
   it('says what came back as lessons, what is not queued yet, and what CDF did', () => {
@@ -80,14 +84,41 @@ describe('the Brain of a run', () => {
 
   it('groups the week by Brain, runs without a Project Agent last', () => {
     const rows = breakdown(inWindow([
-      run('1', 'Lib', res({ checks: [{ id: 't', status: 'not_run' }] })),
+      run('1', 'Lib', res({ checks: [{ id: 't', status: 'not_seen' }] })),
       run('2', 'Lib', res({ ended: 'error' })),
       run('3', 'General', res()),
       run('4', null, res()),
       run('5', 'Lib', res(), 200),                     // older than 7 days
-      run('6', 'Lib', res({ provisional: true, checks: [{ id: 't', status: 'not_run' }] })),   // still going
+      run('6', 'Lib', res({ provisional: true, checks: [{ id: 't', status: 'not_seen' }] })),   // still going
     ], NOW, 7), 'brain');
-    expect(rows.map((r) => [r.label, r.agent ?? null, r.tally.runs, r.tally.by.completed, r.tally.by.error, r.tally.checksNotRun])).toEqual([
+    expect(rows.map((r) => [r.label, r.agent ?? null, r.tally.runs, r.tally.by.completed, r.tally.by.error, r.tally.checksMissed])).toEqual([
       ['Lib', 'code-change · bugfix', 3, 2, 1, 1], ['通用', 'Runner Agent', 1, 1, 0, 0], ['没走 Project Agent', null, 1, 1, 0, 0]]);
+  });
+});
+
+describe('the review strip names each check by what the Host saw', () => {
+  it('says errored for an errored check and not seen for a legacy not_run, never "not run"', async () => {
+    const { machineChecks } = await import('./runReview');
+    const { checkStatus } = await import('./live');
+    expect(checkStatus('not_run')).toBe('not_seen');
+    expect(checkStatus('whatever')).toBe('not_seen');
+    expect(checkStatus('errored')).toBe('errored');
+    const r = { result: res({ ended: 'completed', checks: [{ id: 'types', status: 'errored' },
+      { id: 'lint', status: 'not_run' as never }, { id: 'e2e', status: 'unknown' }] }) } as never;
+    const line = machineChecks(r).find((c) => c.key === 'checks');
+    expect(line?.ok).toBe(false);
+    expect(line?.text).toContain('报错：types');
+    expect(line?.text).toContain('没看到：lint');
+    expect(line?.text).toContain('跑了但没有结果：e2e');
+    expect(line?.text).not.toContain('没跑');
+  });
+
+  it('has no "not run" word left in either language', async () => {
+    const en = (await import('../../i18n/locales/en.json')).default as Record<string, any>;
+    const zh = (await import('../../i18n/locales/zh.json')).default as Record<string, any>;
+    for (const d of [en, zh]) {
+      expect(d.swarmOut.check.notRun).toBeUndefined();
+      expect(d.swarmOut.review.check.checksMissed).toBeUndefined();
+    }
   });
 });

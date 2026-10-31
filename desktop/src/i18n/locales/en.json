@@ -1463,8 +1463,8 @@
       "unknown": "State unknown"
     },
     "byBrain": {
-      "checks_one": "{{count}} check not run or errored",
-      "checks_other": "{{count}} checks not run or errored"
+      "checks_one": "{{count}} check not seen or errored",
+      "checks_other": "{{count}} checks not seen or errored"
     },
     "guide": {
       "openHive": "Open Hive",
@@ -1525,7 +1525,6 @@
       "ran": "ran",
       "errored": "errored",
       "unknown": "ran with no result",
-      "notRun": "not run",
       "notSeen": "not seen",
       "line": "Checks: {{list}}",
       "linePartial": "Checks: {{list}} (only the latest turns were read)"
@@ -1857,7 +1856,6 @@
         "ended": "Finished",
         "notEnded": "Ended: {{how}}",
         "checksRan": "Checks ran",
-        "checksMissed": "Not run: {{list}}",
         "files_one": "{{count}} file came back",
         "files_other": "{{count}} files came back",
         "bundleSealed": "Commits sealed in a bundle",
@@ -1868,7 +1866,10 @@
         "unanswered_one": "{{count}} left unanswered",
         "unanswered_other": "{{count}} left unanswered",
         "filesOnHive_one": "{{count}} file written on the Hive",
-        "filesOnHive_other": "{{count}} files written on the Hive"
+        "filesOnHive_other": "{{count}} files written on the Hive",
+        "checks_not_seen": "Not seen: {{list}}",
+        "checks_errored": "Errored: {{list}}",
+        "checks_unknown": "No result: {{list}}"
       },
       "rerunBox": {
         "title": "Re-run with correction",

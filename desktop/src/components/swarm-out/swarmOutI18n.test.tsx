@@ -58,7 +58,7 @@ const RICH = result({
   pipeline: { run_id: 'r1', profile: 'full', status: 'completed', landing: 'landed', landed_sha: '7d34ab1',
     audit: [{ dim: 'Quality', verdict: 'WARN', detail: '1 finding' }, { dim: 'Speed', verdict: 'N/A', detail: null }] },
   project_agent: { brain: 'widget', mode: 'build', profile: 'full', delivery: 'bundle' },
-  checks: [{ id: 'tests', status: 'ran' }, { id: 'lint', status: 'not_run' }, { id: 'types', status: 'errored' }, { id: 'e2e', status: 'unknown' }],
+  checks: [{ id: 'tests', status: 'ran' }, { id: 'lint', status: 'not_seen' }, { id: 'types', status: 'errored' }, { id: 'e2e', status: 'unknown' }],
   checks_partial: true,
   gate_refusals: { no_git_push: 2, integrity: 1, 'error:scope': 1 },
   lessons: LESSONS,

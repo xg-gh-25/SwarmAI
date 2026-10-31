@@ -113,20 +113,24 @@ export function brainLabel(r: SwarmOutRun): string {
   return b === 'General' ? i18n.t('swarmOut.brain.general') : b;
 }
 
-const CHECK_KEYS: Record<SwarmOutCheckStatus, string> = { ran: 'ran', errored: 'errored', unknown: 'unknown', not_run: 'notRun' };
-const checkWord = (s: SwarmOutCheckStatus): string => i18n.t(`swarmOut.check.${CHECK_KEYS[s] ?? 'notRun'}`);
+const CHECK_KEYS: Record<SwarmOutCheckStatus, string> = { ran: 'ran', errored: 'errored', unknown: 'unknown', not_seen: 'notSeen' };
+
+/** A check status as it is shown: a value from before `not_seen` (`not_run`) or any value
+ *  outside the set reads as not seen. Every reader of a check's status goes through it. */
+export function checkStatus(s: string | null | undefined): SwarmOutCheckStatus {
+  return s === 'ran' || s === 'errored' || s === 'unknown' || s === 'not_seen' ? s : 'not_seen';
+}
+const checkWord = (s: string): string => i18n.t(`swarmOut.check.${CHECK_KEYS[checkStatus(s)]}`);
 
 /** True when a run named checks and one of them did not run cleanly (the amber line). */
 export const checksIncomplete = (res: SwarmOutResult): boolean => (res.checks ?? []).some((c) => c.status !== 'ran');
 
-/** "校验：tests 跑了 · lint 没跑" for a run whose Project Agent named checks, else null.
- *  When older turns were not read, "没跑" is only "没看到". */
+/** "校验：tests 跑了 · lint 没看到" for a run whose Project Agent named checks, else null. */
 export function checksLine(res: SwarmOutResult): string | null {
   const c = res.checks;
   if (!c || c.length === 0) return null;
-  const word = (s: SwarmOutCheckStatus) => (s === 'not_run' && res.checks_partial ? i18n.t('swarmOut.check.notSeen') : checkWord(s));
   return i18n.t(res.checks_partial ? 'swarmOut.check.linePartial' : 'swarmOut.check.line',
-    { list: c.map((x) => `${x.id} ${word(x.status)}`).join(' · ') });
+    { list: c.map((x) => `${x.id} ${checkWord(x.status)}`).join(' · ') });
 }
 
 /** "执行方式和派发时定的不同：建了 pipeline run" when the run did not run the way the
@@ -531,7 +535,8 @@ export interface RunTally {
   judge: { PASS: number; WARN: number; BLOCK: number };
   lessonsReturned: number;
   lessonsWritten: number;
-  checksNotRun: number;
+  /** checks not seen or errored (anything but ran) */
+  checksMissed: number;
 }
 
 /** The numbers of a set of runs: what the history's summary line and each row of the
@@ -540,7 +545,7 @@ export interface RunTally {
 export function tallyRuns(runs: SwarmOutRun[]): RunTally {
   const t: RunTally = { runs: runs.length, by: { completed: 0, error: 0, stopped: 0, other: 0, running: 0 }, known: 0,
     unattended: 0, loops: 0, unanswered: 0, medianActive: null, cost: 0, costMissing: 0, tokens: 0, tokensMissing: 0, tokensPartial: 0,
-    judge: { PASS: 0, WARN: 0, BLOCK: 0 }, lessonsReturned: 0, lessonsWritten: 0, checksNotRun: 0 };
+    judge: { PASS: 0, WARN: 0, BLOCK: 0 }, lessonsReturned: 0, lessonsWritten: 0, checksMissed: 0 };
   const active: number[] = [];
   for (const r of runs) {
     const o = historyOutcome(r);
@@ -562,7 +567,7 @@ export function tallyRuns(runs: SwarmOutRun[]): RunTally {
     if (j) t.judge[judgeState(j.verdicts).state] += 1;
     t.lessonsReturned += res.lessons?.returned ?? 0;
     t.lessonsWritten += res.lessons?.written ?? 0;
-    if (!res.provisional && o !== 'running') t.checksNotRun += (res.checks ?? []).filter((c) => c.status !== 'ran').length;
+    if (!res.provisional && o !== 'running') t.checksMissed += (res.checks ?? []).filter((c) => checkStatus(c.status) !== 'ran').length;
   }
   if (active.length) {
     active.sort((a, b) => a - b);

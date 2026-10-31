@@ -1463,8 +1463,8 @@
       "unknown": "状态未知"
     },
     "byBrain": {
-      "checks_one": "{{count}} 个校验没跑或报错",
-      "checks_other": "{{count}} 个校验没跑或报错"
+      "checks_one": "{{count}} 个校验没看到或报错",
+      "checks_other": "{{count}} 个校验没看到或报错"
     },
     "guide": {
       "openHive": "打开 Hive",
@@ -1525,7 +1525,6 @@
       "ran": "跑了",
       "errored": "报错了",
       "unknown": "跑了但没有结果",
-      "notRun": "没跑",
       "notSeen": "没看到",
       "line": "校验：{{list}}",
       "linePartial": "校验：{{list}}（只读了最近的轮次）"
@@ -1857,7 +1856,6 @@
         "ended": "做完了",
         "notEnded": "结束方式：{{how}}",
         "checksRan": "检查都跑了",
-        "checksMissed": "没跑：{{list}}",
         "files_one": "交回 {{count}} 个文件",
         "files_other": "交回 {{count}} 个文件",
         "bundleSealed": "提交已封进 bundle",
@@ -1868,7 +1866,10 @@
         "unanswered_one": "{{count}} 个没答",
         "unanswered_other": "{{count}} 个没答",
         "filesOnHive_one": "Hive 上写了 {{count}} 个文件",
-        "filesOnHive_other": "Hive 上写了 {{count}} 个文件"
+        "filesOnHive_other": "Hive 上写了 {{count}} 个文件",
+        "checks_not_seen": "没看到：{{list}}",
+        "checks_errored": "报错：{{list}}",
+        "checks_unknown": "跑了但没有结果：{{list}}"
       },
       "rerunBox": {
         "title": "修正重跑",

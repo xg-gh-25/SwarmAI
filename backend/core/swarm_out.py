@@ -1578,7 +1578,19 @@ async def run_result(dispatch_id: str) -> dict[str, Any]:
     from core import swarm_out_results
     await asyncio.to_thread(_log_row_of, dispatch_id)
     rec = await asyncio.to_thread(swarm_out_results.load, dispatch_id)
-    return {"dispatch_id": dispatch_id, "record": rec}
+    return {"dispatch_id": dispatch_id, "record": _shown_checks(rec)}
+
+
+def _shown_checks(rec: Any) -> Any:
+    """A copy of a kept record with its check statuses as they are shown (a record from
+    before ``not_seen`` says ``not_run``); the file itself is not touched."""
+    from core import swarm_out_results
+    res = (rec or {}).get("result") if isinstance(rec, dict) else None
+    if not isinstance(res, dict) or not isinstance(res.get("checks"), list):
+        return rec
+    checks = [{**c, "status": swarm_out_results.check_status(c.get("status"))} if isinstance(c, dict) else c
+              for c in res["checks"]]
+    return {**rec, "result": {**res, "checks": checks}}
 
 
 async def refresh_result(dispatch_id: str) -> dict[str, Any]:

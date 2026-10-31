@@ -18,7 +18,7 @@
 import i18n from '../../i18n';
 import type { SwarmOutAction, SwarmOutAsk, SwarmOutCommand, SwarmOutResult, SwarmOutRun, SwarmOutStage } from '../../services/swarmOut';
 import { judgeState, type JudgeState } from './judge';
-import { brainLabel, runJudge } from './live';
+import { brainLabel, checkStatus, runJudge } from './live';
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -246,8 +246,12 @@ export function machineChecks(r: SwarmOutRun, full?: SwarmOutResult | null): { k
   out.push({ key: 'ended', ok: res.ended === 'completed', text: res.ended === 'completed' ? t('ended') : t('notEnded', { how: res.ended }) });
   const checks = res.checks ?? [];
   if (checks.length) {
-    const missed = checks.filter((c) => c.status !== 'ran').map((c) => c.id);
-    out.push({ key: 'checks', ok: missed.length === 0, text: missed.length === 0 ? t('checksRan') : t('checksMissed', { list: missed.join(', ') }) });
+    // by what the Host can say of each: not seen, errored, ran with no result
+    const of = (st: string) => checks.filter((c) => checkStatus(c.status) === st).map((c) => c.id).join(', ');
+    const missed = (['not_seen', 'errored', 'unknown'] as const)
+      .map((st) => [st, of(st)] as const).filter(([, list]) => list)
+      .map(([st, list]) => t(`checks_${st}`, { list }));
+    out.push({ key: 'checks', ok: missed.length === 0, text: missed.length === 0 ? t('checksRan') : missed.join(' · ') });
   }
   // a file "came back" only when it is here or was sent back (local / not_placed); the
   // rest were written on the Hive and stayed there (an answer that also wrote files)

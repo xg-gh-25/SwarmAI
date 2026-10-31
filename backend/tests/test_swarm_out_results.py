@@ -716,14 +716,14 @@ def test_a_check_run_under_a_wall_clock_cap_or_env_counts():
             + _bash("cd desktop && perl -e 'alarm 300; exec @ARGV' npx tsc --noEmit >/dev/null 2>&1", 2)
             + _bash("env -u SWARMAI_MODE timeout 120 npm run build", 3, err=True))
     got = _status(rows)
-    assert got == {"smoke-import": "ran", "skills-lint": "not_run", "tsc": "ran", "build": "errored"}
+    assert got == {"smoke-import": "ran", "skills-lint": "not_seen", "tsc": "ran", "build": "errored"}
 
 
 def test_a_check_only_mentioned_does_not_count():
     rows = (_bash('grep -n "python scripts/smoke_import.py" AGENTS.md', 1)
             + _bash("echo npx tsc --noEmit", 2)
             + _bash("for c in scripts/lint_skills.py; do python $c; done", 3))
-    assert set(_status(rows).values()) == {"not_run"}
+    assert set(_status(rows).values()) == {"not_seen"}
 
 
 def test_the_runs_own_test_report_comes_first():
@@ -733,7 +733,8 @@ def test_the_runs_own_test_report_comes_first():
              {"repo": "swarmai", "command": "npm run build", "result": "not_run"}]
     rows = _bash("for c in scripts/lint_skills.py; do python $c; done", 1)   # a loop: unreadable
     got = _status(rows, tests)
-    assert got == {"smoke-import": "ran", "skills-lint": "ran", "tsc": "errored", "build": "unknown"}
+    # a row the run itself marked not run is "not seen", never "ran with no result"
+    assert got == {"smoke-import": "ran", "skills-lint": "ran", "tsc": "errored", "build": "not_seen"}
 
 
 def test_public_carries_a_run_id_of_its_shape_only():
@@ -767,3 +768,38 @@ def test_matching_a_hive_written_command_stays_linear():
 ])
 def test_a_wrapper_value_never_swallows_a_separator(line, ran):
     assert res._runs(line, "make") is ran
+
+
+# ── the grid never says "not run" (design agent-owns-its-runs §2.7, I1–I2) ────
+
+@pytest.mark.parametrize("rows,tests", [
+    ([], None),                                                              # no call at all
+    (_bash("python scripts/smoke_import.py", 1), None),                      # a call with no result
+    (_bash("for s in smoke_import; do python scripts/$s.py; done", 1), None),  # a loop: not seen
+    ([], [{"repo": "swarmai", "command": "python scripts/smoke_import.py", "result": r}
+          for r in ("pass", "fail", "not_run", "skipped")]),
+])
+def test_no_input_makes_a_check_not_run(rows, tests):
+    assert "not_run" not in _status(rows, tests).values()
+
+
+@pytest.mark.parametrize("kept", ["not_run", "passed", None, 7])
+def test_a_kept_status_outside_the_set_is_published_as_not_seen(kept):
+    record = {"result": {"ended": "completed", "checks": [{"id": "smoke-import", "status": kept}]}}
+    pub = res._public_agent(record["result"], {**_AGENT, "brain": "SwarmAI"})
+    assert {c["id"]: c["status"] for c in pub["checks"]}["smoke-import"] == "not_seen"
+
+
+def test_the_panels_record_reads_a_legacy_not_run_as_not_seen_and_leaves_the_file(tmp_path, monkeypatch):
+    did = "so_aaaaaaaaaaaa"
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(swarm_out, "_log_row_of", lambda d: {"dispatch_id": d})
+    kept = {"dispatch_id": did, "summary_version": 10,
+            "result": {"ended": "completed", "checks": [{"id": "lint", "status": "not_run"},
+                                                        {"id": "tsc", "status": "ran"}]}}
+    res.save(kept)
+    path = next(tmp_path.rglob(f"{did}*.json"))
+    before = path.read_bytes()
+    out = asyncio.run(swarm_out.run_result(did))
+    assert [c["status"] for c in out["record"]["result"]["checks"]] == ["not_seen", "ran"]
+    assert path.read_bytes() == before

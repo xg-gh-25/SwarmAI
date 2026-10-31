@@ -57,7 +57,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 10
+SUMMARY_VERSION = 11
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -157,7 +157,18 @@ def _is_turn_start(row: dict) -> bool:
     return not (isinstance(meta, dict) and ("steered" in meta or "steer" in meta))
 
 
-_CHECK_STATUSES = ("ran", "errored", "unknown", "not_run")
+#: what the Host can say about a required check: it saw it run, saw it error, saw it run
+#: with no result, or saw no record of it (``not_seen``). Never "not run": a check run in
+#: a shell loop, a script or a target is not seen, and a Host that says "not run" for it
+#: says something false (design 2026-10-31-swarm-out-agent-owns-its-runs §2.7).
+_CHECK_STATUSES = ("ran", "errored", "unknown", "not_seen")
+
+
+def check_status(v: Any) -> str:
+    """A kept check status as it is shown: a value from before ``not_seen`` (``not_run``)
+    or any value not in the set reads as ``not_seen``. Used on every read of a kept
+    record, which is never rewritten for it."""
+    return v if v in _CHECK_STATUSES else "not_seen"
 _REFUSAL_KEY_RE = re.compile(r"[A-Za-z0-9_.:-]{1,90}")
 # where a command starts in a shell line: its beginning, or after a separator
 _CMD_START = r"(?:^|&&|\|\||;|\||\n|\(|\$\()\s*"
@@ -202,9 +213,11 @@ def _checks(blocks: list[dict], agent: Optional[dict],
     ``errored`` for a ``fail``, ``unknown`` otherwise, by the last command that runs the
     check. A check the report does not list is read from the Bash calls: ``ran`` when a
     call runs it and its result was not an error, ``errored`` when the last such call
-    errored, ``not_run`` otherwise (the persisted call: ``display.object``, the command as
-    shown, cut at its display limit). Never "passed": both are the Hive's own word on
-    whether a command errored, not on what it found."""
+    errored, ``not_seen`` otherwise: the Host found no call or report row that runs it,
+    which is not "it did not run" (the persisted call: ``display.object``, the command as
+    shown, cut at its display limit). A report row the run marked ``not_run`` is
+    ``not_seen`` too. Never "passed": both are the Hive's own word on whether a command
+    errored, not on what it found."""
     wanted = [v for v in (agent or {}).get("validations") or [] if isinstance(v, dict)
               and isinstance(v.get("id"), str) and _norm(v.get("command"))]
     if not wanted:
@@ -224,10 +237,11 @@ def _checks(blocks: list[dict], agent: Optional[dict],
     for v in wanted:
         said = [r for cmd, r in reported if _runs(cmd, _norm(v["command"]))]
         if said:
-            out.append({"id": v["id"], "status": {"pass": "ran", "fail": "errored"}.get(said[-1], "unknown")})
+            out.append({"id": v["id"], "status": {"pass": "ran", "fail": "errored",
+                                                  "not_run": "not_seen"}.get(said[-1], "unknown")})
             continue
         hits = [e for cmd, e in calls if _runs(cmd, _norm(v["command"]))]
-        status = "not_run" if not hits else "unknown" if hits[-1] is None \
+        status = "not_seen" if not hits else "unknown" if hits[-1] is None \
             else "errored" if hits[-1] else "ran"
         out.append({"id": v["id"], "status": status})
     return out
@@ -875,7 +889,7 @@ def _public_agent(res: dict, agent: Any) -> dict:
                           # before the choice was made per dispatch has none
                           "execution": agent.get("execution") if agent.get("execution") in ("native", "pipeline")
                           else None},
-        "checks": [{"id": i, "status": got.get(i) if got.get(i) in _CHECK_STATUSES else "not_run"}
+        "checks": [{"id": i, "status": check_status(got.get(i))}
                    for i in ids if isinstance(i, str)] if ids else None,
         "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},
         "checks_partial": res.get("checks_partial") is True,

@@ -199,7 +199,7 @@ function Breakdown({ runs, dimKey, setDim, selected, onSelect }: {
                   <td className={`${td} max-w-[240px]`}>
                     <span className="font-medium">{g.label}</span>
                     {g.agent && <span className={dim}> · {g.agent}</span>}
-                    {g.tally.checksNotRun > 0 && <span className="ml-1.5 text-[11px]" style={{ color: TONE_VAR.attention }}>{t('swarmOut.byBrain.checks', { count: g.tally.checksNotRun })}</span>}
+                    {g.tally.checksMissed > 0 && <span className="ml-1.5 text-[11px]" style={{ color: TONE_VAR.attention }}>{t('swarmOut.byBrain.checks', { count: g.tally.checksMissed })}</span>}
                   </td>
                   <td className={`${td} text-right`}>{g.tally.runs}</td>
                   <td className={td}><OutcomeBar t={g.tally} /></td>

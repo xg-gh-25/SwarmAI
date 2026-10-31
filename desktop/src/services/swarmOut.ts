@@ -118,10 +118,11 @@ export interface SwarmOutAgent {
   validations?: { id: string; command: string }[];
 }
 
-/** ran: a Bash call ran the check's command (with any arguments) and did not error;
- *  errored: its last such call errored; unknown: that call has no recorded result;
- *  not_run: no call ran it. Never "passed". */
-export type SwarmOutCheckStatus = 'ran' | 'errored' | 'unknown' | 'not_run';
+/** ran: the run's test record or a Bash call ran the check's command and did not error;
+ *  errored: its last such run errored; unknown: that run has no recorded result;
+ *  not_seen: the Host found no record that ran it (a check run in a loop or a script is
+ *  not seen: it is never "not run"). Never "passed". */
+export type SwarmOutCheckStatus = 'ran' | 'errored' | 'unknown' | 'not_seen';
 
 export type SwarmOutExecutionDiff = 'made_a_run' | 'no_run' | 'other_profile' | 'other_run';
 
