@@ -269,3 +269,26 @@ def test_commits_recount_rewrites_only_rows_whose_commits_change(ws):
     assert rows["sess-a"]["enriched"] is True and rows["sess-a"]["summary_sentence"]
     assert "commit: abc1234 Mine: the parser fix" in (da / "2026-10-20.md").read_text(encoding="utf-8")
     assert (da / "2026-10-19.md").read_text(encoding="utf-8") == before_md   # unchanged day
+
+
+def test_commits_recount_adds_and_never_removes_a_listed_commit(ws):
+    """A listed commit the current attribution no longer finds stays; one it finds is
+    added once, matched by sha (an older row cut the subject differently)."""
+    import asyncio
+    da = ws / "SwarmWS" / "Knowledge" / "DailyActivity"
+    _run(ws, [])
+    path = da / "2026-10-20.jsonl"
+    rows = R._rows(path)
+    for r in rows:
+        if r["session_id"] == "sess-a":
+            r["git_commits"] = ["old0001 Kept: found by an attribution since changed",
+                                "abc1234 Mine: the parser fi"]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    def capture(start, files, sid, windows, until, workspace, subjects):
+        return ["abc1234 Mine: the parser fix…", "new0002 Mine: tests for it"] if sid == "sess-a" else []
+    with patch.object(H.DailyActivityExtractionHook, "_capture_git_activity", staticmethod(capture)):
+        asyncio.run(R.recount_commits(_args(ws, until="2026-10-20")))
+    got = {r["session_id"]: r for r in R._rows(path)}["sess-a"]["git_commits"]
+    assert got == ["old0001 Kept: found by an attribution since changed",
+                   "abc1234 Mine: the parser fi", "new0002 Mine: tests for it"]

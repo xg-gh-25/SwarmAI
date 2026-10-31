@@ -544,9 +544,19 @@ async def recount_commits(args) -> int:
                 DailyActivityExtractionHook._capture_git_activity, min(stamps),
                 list(row.get("files_modified") or []), sid, _bash_call_windows(msgs),
                 datetime.fromisoformat(max(stamps)), ws, commit_subjects(msgs))
-            if commits != list(row.get("git_commits") or []):
+            # a recount fills in what the old attribution missed; it never removes a
+            # commit a row already lists (the repo list and the cap have changed since,
+            # neither is evidence that the commit was not the session's)
+            before = list(row.get("git_commits") or [])
+            listed = {c.split(" ", 1)[0] for c in before}
+            commits = before + [c for c in commits if c.split(" ", 1)[0] not in listed]
+            if commits != before:
                 plans.setdefault(day, {})[sid] = (row, commits)
     changed = sum(len(v) for v in plans.values())
+    for day, rows in sorted(plans.items()):
+        for sid, (row, commits) in rows.items():
+            before = list(row.get("git_commits") or [])
+            print(f"  {day} {sid[:12]} {len(before)} -> {len(commits)}")
     print(f"days {since}..{until}: {changed} rows whose commits change in {len(plans)} day files")
     if not args.apply or not plans:
         print("dry run: nothing written (add --apply)" if not args.apply else "nothing to change")
