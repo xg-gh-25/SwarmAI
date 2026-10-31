@@ -263,6 +263,9 @@ class ChannelGateway:
         # Pre-warmed session ID (MeshClaw pattern): eliminates ~4s cold-start
         # latency on the owner's first message after daemon restart.
         self._prewarmed_session_id: Optional[str] = None
+        #: the owner the pre-warmed unit was built for (its tools and hooks are fixed at
+        #: spawn): only that sender adopts it
+        self._prewarmed_owner_id: Optional[str] = None
         self._prewarm_task: Optional[asyncio.Task] = None
         # Message counter for lazy rate-limiter eviction (G8/PE6)
         self._msg_counter: int = 0
@@ -344,6 +347,7 @@ class ChannelGateway:
                 pass
         self._prewarm_task = None
         self._prewarmed_session_id = None
+        self._prewarmed_owner_id = None
 
         # Cancel all pending retry tasks first
         for channel_id, task in list(self._retry_tasks.items()):
@@ -726,19 +730,27 @@ class ChannelGateway:
                 except (ValueError, TypeError):
                     channel_config = {}
 
-            allowed = _parse_json_list(channel_config.get("allowed_senders"))
+            # the owner is allowed_senders[0], a column of the channel row (as in
+            # _resolve_sender_identity), not a key of its config JSON. Read from the
+            # config, it was never found: the unit was built as an anonymous public
+            # sender, so the owner's first message adopted a confined session.
+            allowed = _parse_json_list(channel.get("allowed_senders"))
             owner_id = allowed[0] if allowed else None
+            if not owner_id:
+                # no owner yet (the first DM bootstraps one): nothing to pre-warm for
+                logger.info("channel_gateway.prewarm_skipped (no owner yet)")
+                return
             channel_context = {
                 "channel_type": channel.get("channel_type", ""),
                 "channel_id": channel.get("id", ""),
                 "is_group": False,
                 "is_owner": True,
-                **({"sender_identity": SenderIdentity(
-                    external_id=owner_id or "owner",
+                "sender_identity": SenderIdentity(
+                    external_id=owner_id,
                     display_name="Owner",
                     permission_tier=PermissionTier.OWNER,
                     is_owner=True,
-                ).to_dict()} if owner_id else {}),
+                ).to_dict(),
             }
             # Per-channel model override: must be included at prewarm time
             # so the subprocess spawns with the correct model (SDK locks model
@@ -752,6 +764,7 @@ class ChannelGateway:
             )
             if temp_id:
                 self._prewarmed_session_id = temp_id
+                self._prewarmed_owner_id = owner_id
                 logger.info(
                     "channel_gateway.prewarm_ready session_id=%s", temp_id,
                 )
@@ -759,6 +772,12 @@ class ChannelGateway:
                 logger.info("channel_gateway.prewarm_skipped (spawn failed or blocked)")
         except Exception as exc:
             logger.warning("channel_gateway.prewarm_failed: %s", exc)
+
+    def _prewarm_is_for(self, sender_identity: Optional[SenderIdentity]) -> bool:
+        """A pre-warmed unit's tools and hooks were fixed for one sender at spawn: only that
+        owner adopts it (any other sender gets a session built for their own tier)."""
+        return bool(self._prewarmed_session_id) and sender_identity is not None and \
+            sender_identity.is_owner and sender_identity.external_id == self._prewarmed_owner_id
 
     async def _try_adopt_prewarmed(self, session_id: str) -> bool:
         """Adopt the pre-warmed unit for a real session. Returns True on success."""
@@ -774,6 +793,7 @@ class ChannelGateway:
         # Always clear — if rejection means unit died/evicted, retrying is
         # noise. Let the next message take the normal cold-start path.
         self._prewarmed_session_id = None
+        self._prewarmed_owner_id = None
         if adopted:
             logger.info(
                 "channel_gateway.prewarm_adopted %s → %s",
@@ -1712,7 +1732,7 @@ class ChannelGateway:
         # and we have a pre-warmed IDLE subprocess, adopt it to skip
         # the ~4s CLI spawn latency.
         prewarm_adopted = False
-        if is_new_session and is_owner and self._prewarmed_session_id:
+        if is_new_session and is_owner and self._prewarm_is_for(sender_identity):
             prewarm_adopted = await self._try_adopt_prewarmed(session_id)
 
         # Log inbound message to channel_messages ---------------------------------

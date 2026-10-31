@@ -1103,7 +1103,7 @@ class TestSessionPrewarming:
 
         with patch("channels.gateway.session_registry") as mock_reg:
             mock_reg.session_router = mock_router
-            channel = {"id": "ch1", "agent_id": "default"}
+            channel = {"id": "ch1", "agent_id": "default", "allowed_senders": '["W_OWNER"]'}
             await gateway._prewarm_owner_session(channel)
 
         assert gateway._prewarmed_session_id == fake_temp_id
@@ -1113,6 +1113,35 @@ class TestSessionPrewarming:
         assert call_args[0][0] == "default"
         assert call_args[1]["channel_context"]["is_owner"] is True
         assert call_args[1]["channel_context"]["channel_id"] == "ch1"
+
+    @pytest.mark.asyncio
+    async def test_prewarm_is_built_for_the_owner_in_the_channel_row(self, gateway, mock_db):
+        """The owner is allowed_senders[0] of the channel ROW (not its config JSON): the
+        pre-warmed unit carries the owner's identity and tier, so the owner's first
+        message never adopts a session confined as an anonymous public sender."""
+        mock_router = MagicMock()
+        mock_router.prewarm_channel_session = AsyncMock(return_value="prewarm-1")
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            await gateway._prewarm_owner_session({
+                "id": "ch1", "agent_id": "default", "allowed_senders": '["W_OWNER", "W_FRIEND"]',
+                "config": {"bot_token": "x"}})
+        ctx = mock_router.prewarm_channel_session.call_args[1]["channel_context"]
+        assert ctx["sender_identity"] == {"external_id": "W_OWNER", "display_name": "Owner",
+                                          "permission_tier": "owner", "is_owner": True}
+        assert gateway._prewarmed_owner_id == "W_OWNER"
+
+    @pytest.mark.asyncio
+    async def test_no_owner_yet_means_no_prewarm(self, gateway, mock_db):
+        mock_router = MagicMock()
+        mock_router.prewarm_channel_session = AsyncMock(return_value="prewarm-1")
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            await gateway._prewarm_owner_session({"id": "ch1", "agent_id": "default",
+                                                  "allowed_senders": "[]",
+                                                  "config": {"allowed_senders": ["W_OWNER"]}})
+        mock_router.prewarm_channel_session.assert_not_awaited()
+        assert gateway._prewarmed_session_id is None
 
     @pytest.mark.asyncio
     async def test_prewarm_none_on_failure(self, gateway, mock_db):
@@ -1152,6 +1181,18 @@ class TestSessionPrewarming:
             await gateway._prewarm_owner_session(channel)
 
         assert gateway._prewarmed_session_id is None
+
+    def test_only_the_owner_it_was_built_for_adopts_the_prewarm(self, gateway):
+        from channels.base import PermissionTier, SenderIdentity
+        gateway._prewarmed_session_id, gateway._prewarmed_owner_id = "prewarm-1", "W_OWNER"
+        owner = SenderIdentity("W_OWNER", "Owner", PermissionTier.OWNER, True)
+        other = SenderIdentity("W_NEW_OWNER", "x", PermissionTier.OWNER, True)
+        friend = SenderIdentity("W_OWNER", "x", PermissionTier.TRUSTED, False)
+        assert gateway._prewarm_is_for(owner)
+        assert not gateway._prewarm_is_for(other) and not gateway._prewarm_is_for(friend)
+        assert not gateway._prewarm_is_for(None)
+        gateway._prewarmed_session_id = None
+        assert not gateway._prewarm_is_for(owner)
 
     async def test_try_adopt_prewarmed_success(self, gateway):
         """Adoption clears _prewarmed_session_id and delegates to router."""
