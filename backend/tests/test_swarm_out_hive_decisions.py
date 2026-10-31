@@ -10,8 +10,11 @@ Design: docs/design/2026-10-31-swarm-out-hive-decisions.md. What must hold:
   the card open it goes on the card with the option's exact label; with no card it is
   recorded on the run and the session gets a continue message in fixed words, taken
   once the router accepts it. A wrong option, another card's digest, a truncated
-  decision or a refusal by the run is refused (listed as such) and records nothing; a
-  passing failure is tried again.
+  decision or a refusal by the run is refused and records nothing; a passing failure is
+  tried again. Each answered decision is closed once in ``closed/``: ``why: delivered``
+  when the run took it, ``why: answer_refused`` with a reason code when not; a refused
+  one the run stops waiting on is closed again plainly; a restart never writes over a
+  delivered close.
 - Host: it shows exactly the snapshot, a listed decision makes its run ``waiting``
   whatever the session reports, and an answer takes one of its option ids with the
   digest of what was shown.
@@ -134,6 +137,15 @@ class Env:
     def asks(self):
         return [json.loads(v) for k, v in self.store.objects.items() if "/ask/" in k]
 
+    def closed(self, key, sid=SID):
+        """The close the Hive wrote for *key*, without its time, or None."""
+        raw = self.store.objects.get(f"bridge/worker-1/closed/{sid}/{key}.json")
+        if raw is None:
+            return None
+        body = json.loads(raw)
+        assert body.pop("request_id") == key and isinstance(body.pop("closed_at"), float)
+        return body
+
 
 def _run(coro):
     asyncio.run(coro)
@@ -156,7 +168,7 @@ def test_a_waiting_decision_is_listed_while_its_run_waits_and_gone_after(tmp_pat
         e = env.entry(key)
         assert e["kind"] == "decision" and e["run_id"] == RUN and e["session_id"] == SID
         assert e["decision_request_id"] == "q1" and e["question"] == "Which storage?"
-        assert e["truncated"] is False and e["refused"] is False
+        assert e["truncated"] is False and "refused" not in e
         assert [o["id"] for o in e["options"]] == ["a", "b"]
         assert e["options"][1]["reversible"] is False and e["options"][1]["risk"] == "high"
         assert e["asked_at"] == "2026-10-31T01:02:03Z"         # when the run asked
@@ -238,7 +250,7 @@ def test_a_decision_too_long_to_show_whole_is_listed_as_truncated_and_not_answer
         await _pass(env, n=2)
     _run(go())
     assert env.router.calls == [] and env.recorded == []
-    assert env.entry(key)["refused"] is True
+    assert env.closed(key) == {"why": "answer_refused", "reason": "too_long"}
 
 
 def test_a_decision_with_an_overlong_option_id_is_not_listed(tmp_path):
@@ -323,6 +335,99 @@ def test_an_answer_with_no_card_is_recorded_and_the_session_is_continued(tmp_pat
     assert f"Continue pipeline run {RUN}" in message and 'option id "a"' in message
     # fixed words: it does not speak as the person, and carries no run-written text
     assert "I answered" not in message and "files" not in message and "Which storage" not in message
+    assert env.closed(key) == {"why": "delivered"}     # recorded on the run: taken
+
+
+def test_a_card_answer_is_closed_delivered_once_the_run_stops_waiting(tmp_path):
+    pending = _pending()
+    env = Env(tmp_path, [_item(pending)])
+    env.card(pending)
+    key = _key(pending)
+
+    async def go():
+        await _pass(env)
+        env.answer(key, "b")
+        await _pass(env)                           # handed to the card
+        assert env.closed(key) is None             # the run has not taken it yet
+        env.decisions = []                         # the ask gate recorded it
+        await _pass(env)
+    _run(go())
+    assert env.closed(key) == {"why": "delivered"}
+
+
+def test_a_refused_decision_the_run_stops_waiting_on_is_closed_plainly(tmp_path):
+    env = Env(tmp_path, [_item()])
+    key = _key()
+
+    async def go():
+        await _pass(env)
+        env.answer(key, "c")                       # no such option
+        await _pass(env)
+        assert env.closed(key) == {"why": "answer_refused", "reason": "no_option"}
+        env.decisions = []                         # answered on the Hive's own page
+        await _pass(env)
+    _run(go())
+    assert env.closed(key) == {}
+
+
+def test_a_card_answer_whose_turn_failed_is_delivered_once_the_run_took_it(tmp_path):
+    pending = _pending()
+    env = Env(tmp_path, [_item(pending)])
+    env.card(pending)
+    key = _key(pending)
+    def failing(session_id, answer, tool_use_id=None, answered_by="person"):
+        async def gen():
+            yield {"type": "error", "code": "MODEL_ERROR"}
+        return gen()
+    env.router.continue_with_answer = failing
+
+    async def go():
+        await _pass(env)
+        env.answer(key, "b")
+        await _pass(env)                           # handed to the card; its turn errors
+        env.decisions = []                         # the ask gate recorded it all the same
+        await _pass(env)
+    _run(go())
+    assert env.closed(key) == {"why": "delivered"}
+
+
+def test_a_close_that_failed_to_write_is_written_on_a_later_pass(tmp_path):
+    env = Env(tmp_path, [_item()])
+    key = _key()
+    real_put = env.store.put
+    failures = []
+
+    def flaky(k, body):
+        if "/closed/" in k and not failures:
+            failures.append(k)
+            raise OSError("s3 down")
+        real_put(k, body)
+    env.store.put = flaky
+
+    async def go():
+        await _pass(env)
+        env.answer(key, "a")
+        await _pass(env)                           # recorded; its close fails
+        assert env.closed(key) is None and failures
+        await _pass(env)
+    _run(go())
+    assert env.closed(key) == {"why": "delivered"}
+
+
+def test_a_restart_never_writes_over_a_delivered_close(tmp_path):
+    env = Env(tmp_path, [_item()])
+    key = _key()
+
+    async def go():
+        await _pass(env)
+        env.answer(key, "a")
+        await _pass(env)
+        assert env.closed(key) == {"why": "delivered"}
+        restarted = env.new_bridge()               # the run still lists it a moment longer
+        env.record_error = __import__("core.run_protocol.engine", fromlist=["EngineError"]).EngineError("taken")
+        await _pass(env, restarted)
+    _run(go())
+    assert env.closed(key) == {"why": "delivered"}
 
 
 def test_a_rewritten_card_cannot_swap_what_an_option_stands_for(tmp_path):
@@ -340,12 +445,13 @@ def test_a_rewritten_card_cannot_swap_what_an_option_stands_for(tmp_path):
         await _pass(env, n=2)
     _run(go())
     assert env.recorded == [] and env.router.calls == []
-    assert env.entry(key)["refused"] is True
+    assert env.closed(key) == {"why": "answer_refused", "reason": "changed"}
 
 
-@pytest.mark.parametrize("over", [{"option_id": "c"}, {"option_id": None}, {"request_id": "dc-other"},
-                                  {"shown_sha256": None}, {"shown_sha256": "0" * 64}])
-def test_an_answer_that_names_no_option_or_another_card_is_refused(tmp_path, over):
+@pytest.mark.parametrize("over,reason", [({"option_id": "c"}, "no_option"), ({"option_id": None}, "no_option"),
+                                         ({"request_id": "dc-other"}, "no_option"),
+                                         ({"shown_sha256": None}, "changed"), ({"shown_sha256": "0" * 64}, "changed")])
+def test_an_answer_that_names_no_option_or_another_card_is_refused(tmp_path, over, reason):
     env = Env(tmp_path, [_item()])
     key = _key()
 
@@ -355,10 +461,10 @@ def test_an_answer_that_names_no_option_or_another_card_is_refused(tmp_path, ove
         await _pass(env, n=2)
     _run(go())
     assert env.recorded == [] and env.router.calls == []
-    assert env.entry(key)["refused"] is True
+    assert env.closed(key) == {"why": "answer_refused", "reason": reason}
 
 
-def test_a_pick_the_run_refuses_is_listed_as_refused(tmp_path):
+def test_a_pick_the_run_refuses_is_closed_as_refused(tmp_path):
     from core.run_protocol.engine import EngineError
     env = Env(tmp_path, [_item()])
     env.record_error = EngineError("decision answer is not for the current pending decision")
@@ -370,7 +476,7 @@ def test_a_pick_the_run_refuses_is_listed_as_refused(tmp_path):
         await _pass(env, n=2)
     _run(go())
     assert env.router.calls == []                  # no continue message for an unrecorded pick
-    assert env.entry(key)["refused"] is True
+    assert env.closed(key) == {"why": "answer_refused", "reason": "run_refused"}
 
 
 @pytest.mark.parametrize("error", [OSError("lock"), ValueError("torn json"), LookupError("no engine yet")])
@@ -387,7 +493,7 @@ def test_a_passing_failure_to_record_is_tried_again(tmp_path, error):
         env.record_error = None
         await _pass(env)
     _run(go())
-    assert env.recorded == [(RUN, "q1", "a")] and env.entry(key)["refused"] is False
+    assert env.recorded == [(RUN, "q1", "a")] and env.closed(key) == {"why": "delivered"}
 
 
 def test_a_record_that_keeps_failing_is_refused_after_its_tries(tmp_path):
@@ -400,7 +506,7 @@ def test_a_record_that_keeps_failing_is_refused_after_its_tries(tmp_path):
         env.answer(key, "a")
         await _pass(env, n=MAX_RECORD_TRIES + 1)
     _run(go())
-    assert env.entry(key)["refused"] is True
+    assert env.closed(key) == {"why": "answer_refused", "reason": "not_recorded"}
 
 
 @pytest.mark.parametrize("reply", [
@@ -555,10 +661,12 @@ def test_host_writes_the_option_and_what_it_showed(monkeypatch):
         asyncio.run(swarm_out.answer("h1", SID, "dc-abc", option_id="a", shown_sha256=shown))
 
 
-@pytest.mark.parametrize("entries", [[], [_entry(refused=True)], [_entry(truncated=True)],
-                                     [_entry(session_id="sess-2")]])
-def test_host_refuses_an_answer_to_a_decision_it_cannot_answer(monkeypatch, entries):
+@pytest.mark.parametrize("entries,closed", [([], False), ([_entry()], True), ([_entry(truncated=True)], False),
+                                            ([_entry(session_id="sess-2")], False)])
+def test_host_refuses_an_answer_to_a_decision_it_cannot_answer(monkeypatch, entries, closed):
     s3 = _snapshot_env(monkeypatch, entries)
+    if closed:                                     # the Hive refused or closed it already
+        s3.objects[f"bridge/worker-1/closed/{SID}/dc-abc.json"] = b'{"why": "answer_refused"}'
     shown = swarm_out._clean_decision(entries[0], "worker-1")["shown_sha256"] if entries else None
     with pytest.raises(swarm_out.SwarmOutError):
         asyncio.run(swarm_out.answer("h1", SID, "dc-abc", option_id="b", shown_sha256=shown))
@@ -633,7 +741,7 @@ def test_e2e_card_open_the_delivered_pick_is_recorded_by_the_card_path(real_run)
 def test_an_unreadable_decision_list_keeps_the_questions_and_says_so(monkeypatch):
     from tests.test_swarm_out_host import _answer_env, INST
     _answer_env(monkeypatch, {SNAP: b"{torn"})
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1"}])
 
     async def no_states(inst):

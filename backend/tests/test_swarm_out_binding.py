@@ -207,7 +207,7 @@ def test_list_runs_names_owners_and_marks_an_unnamed_session(monkeypatch):
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1"},
         {"kind": "approval", "session_id": "s9", "request_id": "r9"}])
     out = asyncio.run(swarm_out.list_runs())
@@ -245,7 +245,9 @@ def test_an_old_close_is_not_read_and_not_listed():
     assert reads == []
 
 
-def test_a_refused_ask_does_not_mark_its_run_waiting(monkeypatch):
+def test_a_refused_answer_marks_its_run_waiting_on_the_person(monkeypatch):
+    """Design 2026-10-31-swarm-out-single-loop-fixes §2.1: an answer the Hive did not use
+    leaves the run waiting on the person (answer on the Hive's page, or discard)."""
     rows = [{"dispatch_id": "d1", "hive_id": "h1", "hive": "worker-1", "session_id": "s1", "title": "T"}]
     monkeypatch.setattr(swarm_out, "_read_log", lambda: list(rows))
 
@@ -254,9 +256,10 @@ def test_a_refused_ask_does_not_mark_its_run_waiting(monkeypatch):
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1", "refused": True}])
-    assert asyncio.run(swarm_out.list_runs())["runs"][0]["waiting"] is False
+    run = asyncio.run(swarm_out.list_runs())["runs"][0]
+    assert (run["waiting"], run["state_reason"]) == (True, "answer_refused")
 
 
 def test_a_plain_close_with_no_answer_is_not_read():
@@ -286,7 +289,7 @@ def test_a_dispatch_with_no_session_id_is_not_reported_as_stopped(monkeypatch):
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [])
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [])
     monkeypatch.setattr(swarm_out, "_session_states", live)
     out = asyncio.run(swarm_out.list_runs())
     assert {r["dispatch_id"]: r["running"] for r in out["runs"]} == {"d1": True, "d2": None}
@@ -307,7 +310,7 @@ def test_a_running_hive_never_dispatched_to_still_shows_its_questions(monkeypatc
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [
         {"kind": "approval", "session_id": "s7", "request_id": "r7"}])
     monkeypatch.setattr(swarm_out, "_session_states", live)
     out = asyncio.run(swarm_out.list_runs())
@@ -328,7 +331,7 @@ def test_an_unreadable_store_keeps_the_logs_hives(monkeypatch):
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h, *_a: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1"}])
     out = asyncio.run(swarm_out.list_runs())
     assert [a["request_id"] for a in out["asks"]] == ["r1"]

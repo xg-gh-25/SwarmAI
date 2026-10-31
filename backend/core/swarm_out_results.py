@@ -57,10 +57,13 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 9
+SUMMARY_VERSION = 10
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
+#: a pipeline run id (core/run_protocol: ``run_`` and 8 hex): the one Hive-reported id
+#: /runs carries, by its shape (the host agent names a Hive run by it)
+_RUN_ID_RE = re.compile(r"run_[0-9a-f]{8}")
 _NAME_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 
 ENDED = ("completed", "turn_limit", "error", "crashed", "paused", "no_terminal", "stopped",
@@ -158,6 +161,20 @@ _CHECK_STATUSES = ("ran", "errored", "unknown", "not_run")
 _REFUSAL_KEY_RE = re.compile(r"[A-Za-z0-9_.:-]{1,90}")
 # where a command starts in a shell line: its beginning, or after a separator
 _CMD_START = r"(?:^|&&|\|\||;|\||\n|\(|\$\()\s*"
+# what may run a command without being the command: a wall-clock cap (perl -e '...'
+# exec @ARGV, timeout / gtimeout N), env [-u X] [K=V ...], K=V, nice, time. A check run
+# under one (every SwarmAI agent caps its tests this way) is still that check. Each
+# branch starts with a different token and env's own K=V words are the outer K=V branch,
+# so a word matches one way only; a value never takes in a separator (; & | ( )), where
+# a command can start again, except inside one $( ... ) (VAR=$(pwd) pytest). The match
+# stays linear on Hive-written commands.
+_MAX_CALL_CHARS = 4096       # a command line is matched within its first 4 KB
+_WRAPPERS = (r"(?:(?:perl\s+-e\s+(?:'[^']*'|\"[^\"]*\")"
+             r"|g?timeout(?:\s+-[A-Za-z-]+(?:=[^\s;&|()]+)?)*\s+\d+(?:\.\d+)?[smhd]?"
+             r"|env(?:\s+(?:-u\s+[^\s;&|()]+|-i))*"
+             r"|[A-Za-z_][A-Za-z0-9_]*=(?:\$\([^()]*\)|[^\s;&|()])*"
+             r"|nice(?:\s+-n\s*-?\d+)?"
+             r"|time)\s+)*")
 
 
 def _norm(cmd: Any) -> str:
@@ -166,26 +183,34 @@ def _norm(cmd: Any) -> str:
 
 def _runs(call: str, check: str) -> bool:
     """True when the shell line *call* runs *check* as a command of its own (at its
-    start or after ``&&``, ``;``, ``|``, a newline, ``(``), with any arguments — not
-    when it only mentions it (``grep "pytest -q"``, ``echo ...``) or writes it into a
-    heredoc (a match after ``<<``)."""
-    for m in re.finditer(_CMD_START + re.escape(check) + r"(?=$|\s|;|&|\||\))", call):
+    start or after ``&&``, ``;``, ``|``, a newline, ``(``, past any ``_WRAPPERS``), with
+    any arguments — not when it only mentions it (``grep "pytest -q"``, ``echo ...``)
+    or writes it into a heredoc (a match after ``<<``)."""
+    call = call[:_MAX_CALL_CHARS]
+    for m in re.finditer(_CMD_START + _WRAPPERS + re.escape(check) + r"(?=$|\s|;|&|\||\))", call):
         if "<<" not in call[:m.start()]:
             return True
     return False
 
 
-def _checks(blocks: list[dict], agent: Optional[dict]) -> Optional[list[dict]]:
-    """Each check the dispatch expected (``agent.validations``, the host's own list):
-    ``ran`` when a Bash call's command contains it and that call's result was not an
-    error, ``errored`` when the last such call errored, ``not_run`` otherwise. Read
-    from the persisted call (``display.object``, the command as shown, cut at its
-    display limit): never "passed" — a result says whether the command errored, not
-    what it found."""
+def _checks(blocks: list[dict], agent: Optional[dict],
+            tests: Optional[list[dict]] = None) -> Optional[list[dict]]:
+    """Each check the dispatch expected (``agent.validations``, the host's own list).
+
+    First from the run's own TEST report (``tests``: the commands of the session's
+    pipeline summary, the record the run's REPORT shows): ``ran`` for a ``pass``,
+    ``errored`` for a ``fail``, ``unknown`` otherwise, by the last command that runs the
+    check. A check the report does not list is read from the Bash calls: ``ran`` when a
+    call runs it and its result was not an error, ``errored`` when the last such call
+    errored, ``not_run`` otherwise (the persisted call: ``display.object``, the command as
+    shown, cut at its display limit). Never "passed": both are the Hive's own word on
+    whether a command errored, not on what it found."""
     wanted = [v for v in (agent or {}).get("validations") or [] if isinstance(v, dict)
               and isinstance(v.get("id"), str) and _norm(v.get("command"))]
     if not wanted:
         return None
+    reported = [("\n".join(_norm(x) for x in str(t.get("command")).splitlines()), t.get("result"))
+                for t in tests or [] if isinstance(t, dict) and isinstance(t.get("command"), str)]
     errored = {b.get("tool_use_id"): b.get("is_error") is True for b in blocks
                if b.get("type") == "tool_result"}
     calls = []
@@ -197,6 +222,10 @@ def _checks(blocks: list[dict], agent: Optional[dict]) -> Optional[list[dict]]:
             calls.append(("\n".join(_norm(x) for x in str(line).splitlines()), errored.get(b.get("id"))))
     out = []
     for v in wanted:
+        said = [r for cmd, r in reported if _runs(cmd, _norm(v["command"]))]
+        if said:
+            out.append({"id": v["id"], "status": {"pass": "ran", "fail": "errored"}.get(said[-1], "unknown")})
+            continue
         hits = [e for cmd, e in calls if _runs(cmd, _norm(v["command"]))]
         status = "not_run" if not hits else "unknown" if hits[-1] is None \
             else "errored" if hits[-1] else "ran"
@@ -431,7 +460,8 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
 
     return {
         "ended": ended, "provisional": provisional, "outcome_recorded": bool(after_outcomes),
-        "checks": _checks(all_blocks, agent), "gate_refusals": refusals,
+        "checks": _checks(all_blocks, agent, summaries[-1].get("tests") if summaries else None),
+        "gate_refusals": refusals,
         # older turns were not read: a check or refusal there is not seen
         "checks_partial": bool(has_more),
         # any turn of the session has an outcome: the Hive records them, so a missing one
@@ -579,7 +609,8 @@ async def _fetch(row: dict) -> dict:
                 rec["fetch_error"] = "unexpected_body"
             else:
                 agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
-                rec["result"] = summarize(body, r.headers.get("x-has-more") == "1", agent)
+                # a summary reads Hive-written text: off the event loop
+                rec["result"] = await asyncio.to_thread(summarize, body, r.headers.get("x-has-more") == "1", agent)
                 rec["summary_version"] = SUMMARY_VERSION
                 etag = r.headers.get("etag")
                 rec["etag"] = etag[:200] if isinstance(etag, str) else None
@@ -653,7 +684,7 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
         return False
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
     if rows:
-        rec["result"] = summarize(rows, partial, agent)
+        rec["result"] = await asyncio.to_thread(summarize, rows, partial, agent)
         from core import hive_files
         attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did))
         rec["summary_version"] = SUMMARY_VERSION
@@ -966,8 +997,8 @@ def _usage(res: dict, spend: Optional[dict]) -> dict[str, Any]:
 def public(record: Optional[dict], declared: Any = None, agent: Any = None,
            spend: Optional[dict] = None) -> Optional[dict]:
     """The result as ``/runs`` carries it, which the CLI prints and the local agent
-    reads: built field by field from enums, fixed value lists, numbers and shas. No
-    string the Hive chose gets in: a repository appears under the URL, ref and
+    reads: built field by field from enums, fixed value lists, numbers, shas and a
+    pipeline run id of its fixed shape. No other string the Hive chose gets in: a repository appears under the URL, ref and
     directory this Host sent (``declared``, the dispatch log row's ``repos``; a
     repository the Hive reports that was not declared is left out), and a change card
     of another repository has no name. The reply, error messages, audit details,
@@ -992,7 +1023,7 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None,
         audit = [{"dim": a["dim"], "verdict": a.get("verdict") if a.get("verdict") in _VERDICTS else None,
                   "detail": None}
                  for a in (p.get("audit") or []) if isinstance(a, dict) and a.get("dim") in _DIMS]
-        pipeline = {"run_id": None, "profile": _one_of(p.get("profile"), PROFILE_STAGES),
+        pipeline = {"run_id": _match(_RUN_ID_RE, p.get("run_id")), "profile": _one_of(p.get("profile"), PROFILE_STAGES),
                     "status": _one_of(p.get("status"), RUN_END_STATUSES),
                     "landing": _one_of(p.get("landing"), _LANDINGS),
                     "landed_sha": _match(_SHA_RE, p.get("landed_sha")), "audit": audit[:5]}

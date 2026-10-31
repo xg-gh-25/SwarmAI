@@ -306,8 +306,8 @@ function HistoryRow({ r, open, onOpen, compact }: {
 
 const ROW_COLUMNS = '7px minmax(0,2.4fr) minmax(0,1.4fr) minmax(0,1.1fr) minmax(0,0.8fr) minmax(0,0.6fr) minmax(0,0.8fr) minmax(0,0.6fr) minmax(0,0.9fr) 18px';
 
-function Records({ runs, asks, now, filter, setFilter, group, groupLabel, onClearGroup, compact, onReload }: {
-  runs: SwarmOutRun[]; asks: SwarmOutAsk[]; now: number; filter: RecordFilter; setFilter: (f: RecordFilter) => void;
+function Records({ runs, asks, answered, now, filter, setFilter, group, groupLabel, onClearGroup, compact, onReload }: {
+  runs: SwarmOutRun[]; asks: SwarmOutAsk[]; answered?: SwarmOutAsk[]; now: number; filter: RecordFilter; setFilter: (f: RecordFilter) => void;
   group: string | null; groupLabel: string; onClearGroup: () => void; compact: boolean; onReload: () => void;
 }) {
   const { t } = useTranslation();
@@ -361,7 +361,7 @@ function Records({ runs, asks, now, filter, setFilter, group, groupLabel, onClea
         </div>
       )}
       {open && (
-        <RunOverlay runs={runs} asks={asks} order={open.order} walk="records" id={open.id} now={now}
+        <RunOverlay runs={runs} asks={asks} answered={answered} order={open.order} walk="records" id={open.id} now={now}
           onSelect={(id) => setOpen((o) => (o ? { ...o, id } : o))}
           onSettled={(id) => setOpen((o) => (o ? { ...o, order: o.order.filter((x) => x !== id) } : o))}
           onClose={() => setOpen(null)} onReload={onReload} />
@@ -397,7 +397,7 @@ export function HistoryView({ hidden, now, compact = false }: { hidden: boolean;
           <div className="mt-4"><Summary x={tally} /></div>
           <DailyBars runs={windowed} now={now} days={days ?? 30} />
           <Breakdown runs={windowed} dimKey={dimKey} setDim={setDim} selected={group} onSelect={setGroup} />
-          <Records runs={inGroup} asks={data.asks ?? []} now={now} filter={filter} setFilter={setFilter} group={group} groupLabel={groupLabel}
+          <Records runs={inGroup} asks={data.asks ?? []} answered={data.answered ?? []} now={now} filter={filter} setFilter={setFilter} group={group} groupLabel={groupLabel}
             onClearGroup={() => setGroup(null)} compact={compact} onReload={reload} />
         </>
       )}

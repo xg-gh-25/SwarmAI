@@ -7,7 +7,7 @@ like a permission prompt (core/permission_prompt):
 - ``question_block(event)`` — the block stored for an ``ask_user_question``
   event (``SessionRouter._persist_stream_event`` adds it to the turn's row, in
   the shape the live card has: ``{type, toolUseId, questions}``);
-- ``record_answer(session_id, tool_use_id, answer_json)`` — the answers onto that
+- ``record_answer(session_id, tool_use_id, answer_json, answered_by)`` — the answers (and who gave them) onto that
   block (``answers``: the dict the card shows), before the turn continues. The
   write reaches other tabs on the transcript feed (core/transcript_feed).
 
@@ -36,8 +36,10 @@ def question_block(event: dict) -> Optional[dict]:
     return {"type": BLOCK_TYPE, "toolUseId": tid, "questions": questions}
 
 
-async def record_answer(session_id: str, tool_use_id: str, answer_json: str) -> bool:
-    """Write the answers (the JSON the answer endpoint sends on) onto the block."""
+async def record_answer(session_id: str, tool_use_id: str, answer_json: str,
+                        answered_by: Optional[str] = None) -> bool:
+    """Write the answers (the JSON the answer endpoint sends on) onto the block, with who
+    gave them (``person`` / ``host``; the Swarm Out result counts it)."""
     try:
         answers = json.loads(answer_json) if answer_json else None
     except (TypeError, ValueError):
@@ -47,7 +49,7 @@ async def record_answer(session_id: str, tool_use_id: str, answer_json: str) -> 
     try:
         from database import db
         return await db.messages.update_question_answers(
-            session_id, tool_use_id, {str(k): str(v) for k, v in answers.items()})
+            session_id, tool_use_id, {str(k): str(v) for k, v in answers.items()}, answered_by)
     except Exception as exc:  # noqa: BLE001 — a display record never fails the answer
         logger.warning("question_prompt.record_failed session=%s tool_use=%s: %s",
                        session_id, tool_use_id, exc)

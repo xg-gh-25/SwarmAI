@@ -83,7 +83,11 @@ def test_stage_order(env):
     rows, _ = env
     rows[DID] = _row()
     d = st.derive(_row(waiting=True, running=True), K(True))
-    assert d["stage"] == "needs_answer" and A(d) == ["*answer", "open_session", "discard"]
+    assert d["stage"] == "needs_answer" and A(d) == ["answer:hint", "open_session", "discard"]
+    d = st.derive(_row(waiting=True, state_reason="answer_refused"), K(True))
+    assert d["stage"] == "needs_answer" and A(d) == ["*open_session", "discard"]
+    d = st.derive(_row(running=True, state_reason="answer_sent"), K(True))
+    assert d["stage"] == "running" and A(d) == ["open_session", "discard"]
     d = st.derive(_row(running=True), K(True))
     assert d["stage"] == "running" and A(d) == ["*stop", "open_session", "discard"]
     r = _row()
@@ -110,24 +114,27 @@ def test_a_result_that_did_not_deliver_is_stopped(env, ended):
     assert A(d) == ["*rerun", "open_session", "discard"]
 
 
-@pytest.mark.parametrize("stage,alive,accept,want", [
-    ("running", True, None, ["*stop", "open_session", "discard"]),
-    ("running", False, None, ["*stop", "discard"]),
-    ("needs_answer", True, None, ["*answer", "open_session", "discard"]),
-    ("awaiting", True, "verdict", ["*accept:verdict", "rerun", "open_session", "discard"]),
-    ("awaiting", True, "land", ["*accept:land", "rerun", "open_session", "discard"]),
-    ("awaiting", True, "manual", ["*accept:manual", "rerun", "open_session", "discard"]),
-    ("awaiting", True, None, ["*rerun", "open_session", "discard"]),
-    ("awaiting", False, "verdict", ["*accept:verdict", "discard"]),
-    ("stopped", True, None, ["*rerun", "open_session", "discard"]),
-    ("stopped", False, None, ["discard"]),
-    ("accepted", True, None, ["open_session:read_only"]),
-    ("accepted", False, None, []),
-    ("discarded", True, None, []),
-    ("expired", True, None, []),
+@pytest.mark.parametrize("stage,alive,accept,want,reason", [
+    ("running", True, None, ["*stop", "open_session", "discard"], None),
+    ("running", False, None, ["*stop", "discard"], None),
+    ("running", True, None, ["open_session", "discard"], "answer_sent"),
+    ("needs_answer", True, None, ["answer:hint", "open_session", "discard"], None),
+    ("needs_answer", True, None, ["*open_session", "discard"], "answer_refused"),
+    ("needs_answer", False, None, ["discard"], "answer_refused"),
+    ("awaiting", True, "verdict", ["*accept:verdict", "rerun", "open_session", "discard"], None),
+    ("awaiting", True, "land", ["*accept:land", "rerun", "open_session", "discard"], None),
+    ("awaiting", True, "manual", ["*accept:manual", "rerun", "open_session", "discard"], None),
+    ("awaiting", True, None, ["*rerun", "open_session", "discard"], None),
+    ("awaiting", False, "verdict", ["*accept:verdict", "discard"], None),
+    ("stopped", True, None, ["*rerun", "open_session", "discard"], None),
+    ("stopped", False, None, ["discard"], None),
+    ("accepted", True, None, ["open_session:read_only"], None),
+    ("accepted", False, None, [], None),
+    ("discarded", True, None, [], None),
+    ("expired", True, None, [], None),
 ])
-def test_every_stage_offers_exactly_its_row(stage, alive, accept, want):
-    got = st._actions(stage, alive, accept)
+def test_every_stage_offers_exactly_its_row(stage, alive, accept, want, reason):
+    got = st._actions(stage, alive, accept, reason)
     assert A({"actions": got}) == want
     assert sum(1 for a in got if a["primary"]) <= 1
     assert all(a["key"] != "discard" for a in got[:-1])     # discard is last when offered

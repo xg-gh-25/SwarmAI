@@ -19,9 +19,11 @@ and a session's directory may not be links.
 - ``turn``: the rows of the turn that just ended (``turn_slice``: after the last row an
   earlier turn entry holds, up to the turn's end time), as a projection (``turn_projection``): only the
   blocks ``swarm_out_results.summarize`` reads, string fields capped. ``first_turn`` says
-  the slice starts at the session's beginning. Sealed after every turn end, in a task of
-  its own (core/session_router), in turn order; a turn whose rows could not be read
-  seals ``{"error": ...}`` so the gap is visible.
+  the slice starts at the session's beginning. ``answers``: the questions of earlier
+  entries answered since they were sealed (an answer arrives after its turn ended, so
+  its row was sealed without it); ``turn_rows`` puts them back on their blocks. Sealed
+  after every turn end, in a task of its own (core/session_router), in turn order; a
+  turn whose rows could not be read seals ``{"error": ...}`` so the gap is visible.
 - ``lessons``: the session's lesson units not sealed before (core/hive_lessons.collect),
   sealed when its session job ends (done or failed, also failed by a restart), when a
   pipeline it created lands, and when the session is deleted.
@@ -348,9 +350,28 @@ def _tool_use(b: dict) -> dict:
     return out
 
 
-def turn_projection(rows: list[dict], *, first_turn: bool = False) -> bytes:
+MAX_LATER_ANSWERS = 50            # the newest answered questions a turn entry repeats
+
+
+def later_answers(rows: list[dict]) -> list[dict]:
+    """``{toolUseId, answers, answered_by}`` of the answered ``ask_user_question`` blocks
+    in *rows* (rows already sealed: their entry may hold the question without its
+    answer), the newest ``MAX_LATER_ANSWERS``."""
+    out: list[dict] = []
+    for r in rows:
+        for b in r.get("content") if isinstance(r, dict) and isinstance(r.get("content"), list) else []:
+            if isinstance(b, dict) and b.get("type") == "ask_user_question" \
+                    and isinstance(b.get("toolUseId"), str) and isinstance(b.get("answers"), dict) and b["answers"]:
+                out.append({"toolUseId": _cap(b["toolUseId"], FIELD_MAX), "answers": _cap(b["answers"], FIELD_MAX),
+                            "answered_by": b.get("answered_by") if b.get("answered_by") in ("person", "host") else None})
+    return out[-MAX_LATER_ANSWERS:]
+
+
+def turn_projection(rows: list[dict], *, first_turn: bool = False,
+                    answers: Optional[list[dict]] = None) -> bytes:
     """The turn's rows, keeping what the host's summary reads: role, id, time, the steer
-    marks, and the blocks it counts; a tool result keeps its id and error flag only."""
+    marks, and the blocks it counts; a tool result keeps its id and error flag only.
+    ``answers``: ``later_answers`` of the rows earlier entries hold."""
     out = []
     for r in rows:
         if not isinstance(r, dict):
@@ -375,11 +396,17 @@ def turn_projection(rows: list[dict], *, first_turn: bool = False) -> bytes:
                     **({"metadata": {k: True for k in ("steer", "steered") if k in meta}}
                        if any(k in meta for k in ("steer", "steered")) else {}),
                     "content": blocks})
-    head = {"first_turn": first_turn}
+    head: dict[str, Any] = {"first_turn": first_turn}
+    if answers:
+        head["answers"] = answers
     body = json.dumps({**head, "rows": out}, ensure_ascii=False).encode("utf-8")
-    while len(body) > MAX_BYTES["turn"] and out:
-        # too large: the earliest rows of the turn go first (the end says how it ended)
-        out.pop(0)
+    while len(body) > MAX_BYTES["turn"] and (out or head.get("answers")):
+        # too large: earlier turns' answers go first (they are repeated by the next
+        # entry), then the earliest rows of the turn (the end says how it ended)
+        if head.get("answers"):
+            head.pop("answers")
+        else:
+            out.pop(0)
         body = json.dumps({**head, "rows": out, "truncated": True}, ensure_ascii=False).encode("utf-8")
     return body
 
@@ -430,8 +457,12 @@ def seal_turn(workspace: Path, session_id: str, rows: Optional[list[dict]],
             if rows is None:
                 return append(workspace, session_id, "turn",
                               data=json.dumps({"rows": [], "error": error or "rows unreadable"}).encode())
-            sliced, first = turn_slice(rows, after_id=_sealed_through(d), until=until)
-            entry = append(workspace, session_id, "turn", data=turn_projection(sliced, first_turn=first))
+            marker = _sealed_through(d)
+            sliced, first = turn_slice(rows, after_id=marker, until=until)
+            ids = [r.get("id") if isinstance(r, dict) else None for r in rows]
+            earlier = rows[:ids.index(marker) + 1] if marker is not None and marker in ids else []
+            entry = append(workspace, session_id, "turn",
+                           data=turn_projection(sliced, first_turn=first, answers=later_answers(earlier)))
             last = next((r.get("id") for r in reversed(sliced)
                          if isinstance(r, dict) and isinstance(r.get("id"), str)), None)
             if last is not None:
@@ -616,6 +647,7 @@ def turn_rows(dispatch_id: str) -> tuple[list[dict], bool, bool]:
     turn, whether older turns were left out to stay within TURN_READ_BYTES)."""
     turns = [e for e in local_entries(dispatch_id) if e.get("kind") == "turn"]
     chunks: list[list[dict]] = []
+    answers: dict[str, dict] = {}
     used = 0
     partial = False
     for e in reversed(turns):
@@ -627,9 +659,22 @@ def turn_rows(dispatch_id: str) -> tuple[list[dict], bool, bool]:
         body = _read_local(dispatch_id, e)
         if isinstance(body, dict) and isinstance(body.get("rows"), list):
             chunks.append([r for r in body["rows"] if isinstance(r, dict)])
+            for a in body.get("answers") if isinstance(body.get("answers"), list) else []:
+                if isinstance(a, dict) and isinstance(a.get("toolUseId"), str) and isinstance(a.get("answers"), dict):
+                    answers.setdefault(a["toolUseId"], a)
     first = _read_local(dispatch_id, turns[0]) if turns else None
     complete = isinstance(first, dict) and first.get("first_turn") is True
-    return [r for c in reversed(chunks) for r in c], complete, partial
+    rows = [r for c in reversed(chunks) for r in c]
+    # a question answered after its turn was sealed: its answer came with a later entry
+    for r in rows:
+        for b in r.get("content") if isinstance(r.get("content"), list) else []:
+            if isinstance(b, dict) and b.get("type") == "ask_user_question" and not b.get("answers") \
+                    and b.get("toolUseId") in answers:
+                got = answers[b["toolUseId"]]
+                b["answers"] = got["answers"]
+                if got.get("answered_by") in ("person", "host"):
+                    b["answered_by"] = got["answered_by"]
+    return rows, complete, partial
 
 
 def lesson_units(dispatch_id: str) -> list[dict]:

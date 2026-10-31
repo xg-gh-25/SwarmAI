@@ -286,16 +286,25 @@ def _act(key: str, primary: bool = False, variant: Optional[str] = None) -> dict
     return a
 
 
-def _actions(stage: str, alive: bool, accept: Optional[str]) -> list[dict[str, Any]]:
+def _actions(stage: str, alive: bool, accept: Optional[str],
+             reason: Optional[str] = None) -> list[dict[str, Any]]:
     """The commands a person can give in ``stage``, in their order (§1.2): at most one
     primary, "open session" while the session can be opened, "discard" last.
     ``alive``: the run's Hive session can still take a message; ``accept``: how accept
-    works here (``land`` / ``manual`` / ``verdict``), None when it cannot."""
+    works here (``land`` / ``manual`` / ``verdict``), None when it cannot; ``reason``:
+    the run's ``state_reason``. Waiting on an answer, ``answer`` is a hint, not a
+    command (the answer is given on the wait card: design 2026-10-31-swarm-out-single-
+    loop-fixes §2.3); after an answer the Hive refused, opening the session to answer
+    there leads; after an answer sent and not yet taken there is nothing to do but wait."""
     session = [_act("open_session")] if alive else []
     if stage == "running":
+        if reason == "answer_sent":
+            return [*session, _act("discard")]
         return [_act("stop", True), *session, _act("discard")]
     if stage == "needs_answer":
-        return [_act("answer", True), *session, _act("discard")]
+        if reason == "answer_refused":
+            return [*([_act("open_session", True)] if alive else []), _act("discard")]
+        return [_act("answer", False, "hint"), *session, _act("discard")]
     if stage == "awaiting":
         head = [_act("accept", True, accept)] if accept else []
         rerun = [_act("rerun", not head)] if alive else []
@@ -396,7 +405,7 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         accept = "verdict"
     why_not = [w for w, ok in (("verdict", decided), ("code", code_done), ("files", files_done),
                                ("lessons", lessons_done)) if not ok]
-    return {"stage": stage, "actions": _actions(stage, alive, accept), "why": why,
+    return {"stage": stage, "actions": _actions(stage, alive, accept, row.get("state_reason")), "why": why,
             "verdict": verdict, "code": code,
             "settles": not why_not and not row.get("waiting") and not row.get("running"),
             "why_not": why_not, "settled": settled}

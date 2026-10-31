@@ -103,8 +103,10 @@ def live_questions(monkeypatch):
 
 
 async def _settle():
-    for _ in range(5):
-        await asyncio.sleep(0)
+    """Let the tasks a pass started run. A close or an answer is written in a thread
+    (asyncio.to_thread), so yielding to the loop alone is not enough."""
+    for _ in range(25):
+        await asyncio.sleep(0.002)
 
 
 def test_question_is_delivered_through_the_router_and_the_turn_is_read(env):
@@ -202,6 +204,206 @@ def test_prompt_that_left_the_board_gets_a_closed_marker(env):
 
     asyncio.run(go())
     assert "bridge/worker-1/closed/sess-2/req-5.json" in store.objects
+    assert "why" not in json.loads(store.objects["bridge/worker-1/closed/sess-2/req-5.json"])
+
+
+def test_a_prompt_the_session_took_from_the_bridge_is_closed_delivered(env):
+    """``why: delivered`` is the Host's only sign its answer was used: written when the
+    prompt leaves the board after this bridge handed the answer over, never written over."""
+    pm, router, store, bridge = env
+    key = "bridge/worker-1/closed/sess-1/toolu_1.json"
+
+    async def go():
+        _question(pm, router)
+        await bridge.tick()
+        _answer(store, "sess-1", "toolu_1", {"request_id": "toolu_1", "answers": {"Which database?": "sqlite"}})
+        await bridge.tick()
+        await _settle()
+        assert key not in store.objects            # still on the board: not taken yet
+        pm._prompts.clear()                        # the session took it
+        await bridge.tick()
+        await bridge.reconcile()                   # a restart closes nothing already closed
+
+    asyncio.run(go())
+    body = json.loads(store.objects[key])
+    assert body["why"] == "delivered" and body["request_id"] == "toolu_1"
+
+
+def test_a_failed_handover_is_not_closed_delivered(env):
+    pm, router, store, bridge = env
+
+    async def failing(*a, **k):
+        yield {"type": "error", "code": "SESSION_NOT_FOUND"}
+    router.continue_with_cmd_permission = lambda *a, **k: failing()
+
+    async def go():
+        _approval(pm, router, rid="req-8")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-8", {"request_id": "req-8", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+        pm._prompts.clear()                        # it left for another reason
+        await bridge.tick()
+
+    asyncio.run(go())
+    assert "why" not in json.loads(store.objects["bridge/worker-1/closed/sess-2/req-8.json"])
+
+
+def test_an_error_after_the_session_took_the_answer_keeps_it_delivered(env):
+    """The continued turn reports an error, but the session had already taken the answer
+    (the prompt left the board): the answer was used."""
+    pm, router, store, bridge = env
+
+    async def took_then_failed(*a, **k):
+        pm._prompts.clear()                        # the session took it
+        yield {"type": "assistant", "content": []}   # and went on
+        yield {"type": "error", "code": "MODEL_ERROR"}
+    router.continue_with_cmd_permission = lambda *a, **k: took_then_failed()
+
+    async def go():
+        _approval(pm, router, rid="req-7")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-7", {"request_id": "req-7", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+        await bridge.tick()
+
+    asyncio.run(go())
+    assert json.loads(store.objects["bridge/worker-1/closed/sess-2/req-7.json"])["why"] == "delivered"
+
+
+def test_an_error_as_the_first_event_after_the_handover_keeps_it_delivered(env):
+    """The unit hands the decision to the waiting hook before it yields: an error that
+    is the first event (the stream failed after) does not mean the approval was unused."""
+    pm, router, store, bridge = env
+
+    async def handed_then_error(*a, **k):
+        pm._prompts.clear()
+        yield {"type": "error", "code": "STREAM_ERROR"}
+    router.continue_with_cmd_permission = lambda *a, **k: handed_then_error()
+
+    async def go():
+        _approval(pm, router, rid="req-5")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-5", {"request_id": "req-5", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+        await bridge.tick()
+
+    asyncio.run(go())
+    assert json.loads(store.objects["bridge/worker-1/closed/sess-2/req-5.json"])["why"] == "delivered"
+
+
+@pytest.mark.parametrize("took,why", [(True, "delivered"), (False, None)])
+def test_a_continuation_that_raises_before_its_first_event(env, took, why):
+    """Raised after the hand-over (the prompt is off the board): the answer was used.
+    Raised before it (the prompt still waits): tried again, never closed delivered."""
+    pm, router, store, bridge = env
+    calls = []
+
+    async def raises(*a, **k):
+        calls.append(1)
+        if took and len(calls) == 1:
+            pm._prompts.clear()
+        raise RuntimeError("stream failed")
+        yield  # pragma: no cover
+    router.continue_with_cmd_permission = lambda *a, **k: raises()
+
+    async def go():
+        _approval(pm, router, rid="req-4")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-4", {"request_id": "req-4", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+        if not took:
+            await bridge.tick()                    # still on the board: delivered again
+            await _settle()
+            pm._prompts.clear()                    # then it leaves for another reason
+        await bridge.tick()
+
+    asyncio.run(go())
+    close = json.loads(store.objects["bridge/worker-1/closed/sess-2/req-4.json"])
+    assert close.get("why") == why
+    assert len(calls) == (1 if took else 2)
+
+
+def test_only_an_error_event_logs_a_warning(env, caplog):
+    pm, router, store, bridge = env
+
+    async def fine(*a, **k):
+        pm._prompts.clear()
+        yield {"type": "assistant", "content": []}
+        yield {"type": "result"}
+    router.continue_with_cmd_permission = lambda *a, **k: fine()
+
+    async def go():
+        _approval(pm, router, rid="req-3")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-3", {"request_id": "req-3", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+
+    with caplog.at_level("WARNING", logger="core.swarm_out_bridge"):
+        asyncio.run(go())
+    assert not [r for r in caplog.records if "reported" in r.getMessage()]
+
+    async def broken(*a, **k):
+        yield {"type": "error", "code": "SESSION_NOT_FOUND"}
+    router.continue_with_cmd_permission = lambda *a, **k: broken()
+
+    async def again():
+        _approval(pm, router, rid="req-2")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-2", {"request_id": "req-2", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="core.swarm_out_bridge"):
+        asyncio.run(again())
+    assert [r.getMessage() for r in caplog.records if "reported" in r.getMessage()] == \
+        ["swarm_out_bridge: continuation for req-2 reported SESSION_NOT_FOUND"]
+
+
+def test_a_handover_that_failed_as_the_session_ended_is_not_closed_delivered(env):
+    """The session ended during the hand-over (its prompts left the board with it): the
+    answer was never used."""
+    pm, router, store, bridge = env
+
+    async def gone(*a, **k):
+        pm._prompts.clear()
+        yield {"type": "error", "code": "SESSION_NOT_FOUND"}
+    router.continue_with_cmd_permission = lambda *a, **k: gone()
+
+    async def go():
+        _approval(pm, router, rid="req-6")
+        await bridge.tick()
+        _answer(store, "sess-2", "req-6", {"request_id": "req-6", "decision": "deny", "shown_sha256": SHOWN})
+        await bridge.tick()
+        await _settle()
+        await bridge.tick()
+
+    asyncio.run(go())
+    assert "why" not in json.loads(store.objects["bridge/worker-1/closed/sess-2/req-6.json"])
+
+
+@pytest.mark.parametrize("body,reason", [
+    ({"request_id": "req-1", "decision": "approve"}, "changed"),                    # no digest
+    ({"request_id": "req-1", "decision": "maybe", "shown_sha256": SHOWN}, "no_option"),
+    ({"request_id": "other", "decision": "deny"}, "no_option"),
+])
+def test_a_refused_answer_says_why_by_code(env, body, reason):
+    pm, router, store, bridge = env
+
+    async def go():
+        _approval(pm, router)
+        await bridge.tick()
+        _answer(store, "sess-2", "req-1", body)
+        await bridge.tick()
+
+    asyncio.run(go())
+    closed = json.loads(store.objects["bridge/worker-1/closed/sess-2/req-1.json"])
+    assert (closed["why"], closed["reason"]) == ("answer_refused", reason)
 
 
 def test_reconcile_closes_asks_left_from_before_a_restart(env):

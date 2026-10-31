@@ -41,6 +41,9 @@ chown -R "$SWARM_USER:$SWARM_USER" "$INSTALL_DIR"
 rm /tmp/hive.tar.gz
 # M7: Persist the bucket name for the Swarm Out bridge (core/swarm_out_bridge.py).
 echo "$HIVE_S3_BUCKET" > "$INSTALL_DIR/.hive-bucket"
+# The newest installed Node as the default node / npm / npx; a Hive older than the
+# frontend needs does not come up (design 2026-10-31-swarm-out-single-loop-fixes §2.7).
+bash "$INSTALL_DIR/hive/ensure-node.sh"
 
 # ── 4. Python venv + deps ──
 echo "[4/9] Setting up Python environment..."

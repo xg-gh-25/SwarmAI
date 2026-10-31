@@ -688,3 +688,82 @@ async def test_a_workspace_is_released_whenever_its_session_did_not_start(monkey
     with pytest.raises(swarm_out.SwarmOutError) as e:
         await swarm_out.dispatch("worker-1", "t", "task")
     assert "nope" not in str(e.value)                                     # not a repository this order named
+
+
+# ── the checks grid agrees with the run's own report (design 2026-10-31-swarm-out-single-loop-fixes §2.6) ──
+
+_AGENT = {"validations": [{"id": "smoke-import", "command": "python scripts/smoke_import.py"},
+                          {"id": "skills-lint", "command": "python scripts/lint_skills.py"},
+                          {"id": "tsc", "command": "npx tsc --noEmit"},
+                          {"id": "build", "command": "npm run build"}]}
+
+
+def _bash(cmd, i, err=False):
+    return [{"role": "assistant", "content": [{"type": "tool_use", "id": f"t{i}", "name": "Bash",
+                                               "display": {"tool": "Bash", "object": cmd}}]},
+            {"role": "assistant", "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "is_error": err}]}]
+
+
+def _status(rows, tests=None):
+    if tests is not None:
+        rows = rows + [{"role": "assistant", "content": [{"type": "pipeline_summary", "runId": "run_8d2d6794",
+                                                          "status": "completed", "tests": tests}]}]
+    return {c["id"]: c["status"] for c in res.summarize(rows, False, _AGENT)["checks"]}
+
+
+def test_a_check_run_under_a_wall_clock_cap_or_env_counts():
+    rows = (_bash("perl -e 'alarm 110; exec @ARGV' python scripts/smoke_import.py > /tmp/s.log 2>&1", 1)
+            + _bash("cd desktop && perl -e 'alarm 300; exec @ARGV' npx tsc --noEmit >/dev/null 2>&1", 2)
+            + _bash("env -u SWARMAI_MODE timeout 120 npm run build", 3, err=True))
+    got = _status(rows)
+    assert got == {"smoke-import": "ran", "skills-lint": "not_run", "tsc": "ran", "build": "errored"}
+
+
+def test_a_check_only_mentioned_does_not_count():
+    rows = (_bash('grep -n "python scripts/smoke_import.py" AGENTS.md', 1)
+            + _bash("echo npx tsc --noEmit", 2)
+            + _bash("for c in scripts/lint_skills.py; do python $c; done", 3))
+    assert set(_status(rows).values()) == {"not_run"}
+
+
+def test_the_runs_own_test_report_comes_first():
+    tests = [{"repo": "swarmai", "command": "python scripts/smoke_import.py (venv with mcp<2)", "result": "pass"},
+             {"repo": "swarmai", "command": "python scripts/lint_skills.py", "result": "pass"},
+             {"repo": "swarmai", "command": "npx tsc --noEmit", "result": "fail"},
+             {"repo": "swarmai", "command": "npm run build", "result": "not_run"}]
+    rows = _bash("for c in scripts/lint_skills.py; do python $c; done", 1)   # a loop: unreadable
+    got = _status(rows, tests)
+    assert got == {"smoke-import": "ran", "skills-lint": "ran", "tsc": "errored", "build": "unknown"}
+
+
+def test_public_carries_a_run_id_of_its_shape_only():
+    def pub(run_id):
+        rec = {"result": {"work": {}, "pipeline": {"run_id": run_id, "profile": "bugfix", "status": "completed"}}}
+        return res.public(rec)["pipeline"]["run_id"]
+    assert pub("run_8d2d6794") == "run_8d2d6794"
+    for bad in ("run_x; rm -rf /", "RUN_8D2D6794", "run_8d2d67945", None, 7):
+        assert pub(bad) is None
+
+
+def test_matching_a_hive_written_command_stays_linear():
+    """A Hive writes the commands this matches: a crafted one must not stall the Host
+    (each wrapper word matches one way only, and a line is matched within 4 KB)."""
+    for line in (" ".join(["env A=1"] * 60) + " x",
+                 " ".join(["A=1"] * 2000) + " make",
+                 "perl -e 'alarm 1' " * 300 + "make",
+                 "timeout -k 5 " * 400 + "make",
+                 "A=;" * 3000, "A=1;" * 2000, "env -u X;" * 1000):
+        start = time.monotonic()
+        res._runs(line, "make")
+        assert time.monotonic() - start < 0.1, line[:40]
+
+
+
+@pytest.mark.parametrize("line,ran", [
+    ("A=1 make", True), ("A=1;make", True), ("PYTHONPATH=$(pwd) make", True), ("X=\"a\" make", True),
+    ("env -u X;make", True), ("timeout -k=5 30 make", True),
+    ("A=x;echo make", False), ("env -u X;echo make", False), ("A=$(x);echo make", False),
+    ("timeout -k=x;echo 5 make", False),
+])
+def test_a_wrapper_value_never_swallows_a_separator(line, ran):
+    assert res._runs(line, "make") is ran

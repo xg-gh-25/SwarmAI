@@ -8,9 +8,13 @@ does on a desktop. This module does not add a second way to wait. It only:
 - mirrors every open prompt on the board to
   ``s3://<bucket>/bridge/<hive>/ask/<session>/<key>.json``;
 - writes ``bridge/<hive>/closed/<session>/<key>.json`` once a mirrored prompt is no
-  longer open (answered on the Hive's own web page, expired, or the session ended),
-  so the Host stops showing it, or with ``why: answer_refused`` when an answer does
-  not match the prompt still waiting (the Host then shows it as not delivered);
+  longer open, so the Host stops showing it: with ``why: delivered`` when the session
+  took the answer this bridge handed over (the Host's only sign its answer was used;
+  never written over), plainly when it left otherwise (answered on the Hive's own web
+  page, expired, the session ended); and while it is still open, with ``why:
+  answer_refused`` and a ``reason`` code (``no_option``, ``changed``, ``too_long``)
+  when an answer does not match the prompt still waiting (design
+  2026-10-31-swarm-out-single-loop-fixes §2.1);
 - hands each pass to ``core.swarm_out_decisions``, which lists the pipeline runs
   waiting on a person's decision in ``bridge/<hive>/decisions.json`` and answers them;
   a run's own question card for such a decision is not mirrored here (one decision is
@@ -266,18 +270,20 @@ class Bridge:
         return out
 
     def _valid(self, key: str, mirrored: _Mirrored, raw: bytes,
-               waiting: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
-        """The answer to deliver, or None. ``waiting`` is the ask record of the request
-        still on the board: an approve must name it (``shown_sha256``) and must not be for
-        a command too long to have been shown whole; a deny needs no check; a question's
-        answer must cover exactly the questions waiting."""
+               waiting: Optional[dict[str, Any]] = None) -> tuple[Optional[dict[str, Any]], str]:
+        """(the answer to deliver, None) or (None, the reason code it is refused with:
+        ``no_option`` it is unreadable or answers something else, ``changed`` it was given
+        for a card that does not show what waits now, ``too_long`` an approve of a command
+        too long to have been shown whole). ``waiting`` is the ask record of the request
+        still on the board: an approve must name it (``shown_sha256``); a deny needs no
+        check; a question's answer must cover exactly the questions waiting."""
         try:
             ans = json.loads(raw)
         except ValueError:
             logger.warning("swarm_out_bridge: unreadable answer for %s", key)
-            return None
+            return None, "no_option"
         if not isinstance(ans, dict) or ans.get("request_id") != key:
-            return None
+            return None, "no_option"
         if mirrored.kind == "question":
             answers = ans.get("answers")
             ok = (isinstance(answers, dict) and 0 < len(answers) <= MAX_ANSWERS
@@ -285,27 +291,29 @@ class Bridge:
                           and len(k) <= MAX_ANSWER_CHARS and len(v) <= MAX_ANSWER_CHARS
                           for k, v in answers.items()))
             # it answers the questions still waiting, not a rewritten mirror of them
+            if not ok:
+                return None, "no_option"
             asked = {q.get("question") for q in (waiting or {}).get("questions") or []}
-            if ok and waiting is not None and set(answers) != asked:
+            if waiting is not None and set(answers) != asked:
                 logger.warning("swarm_out_bridge: answer for %s does not match the waiting "
                                "questions; not delivered", key)
-                ok = False
-            return {"answers": answers} if ok else None
+                return None, "changed"
+            return {"answers": answers}, ""
         decision = ans.get("decision")
         if decision not in DECISIONS:
-            return None
+            return None, "no_option"
         if decision == "deny":   # always safe: no content check (an older Host sends none)
-            return {"decision": decision}
+            return {"decision": decision}, ""
         if waiting is None or ans.get("shown_sha256") != approval_digest(
                 waiting.get("tool_name", ""), waiting.get("command", ""), waiting.get("reason", "")):
             logger.warning("swarm_out_bridge: approval for %s does not match the waiting "
                            "request; not delivered", key)
-            return None
+            return None, "changed"
         if decision == "approve" and waiting.get("truncated"):
             logger.warning("swarm_out_bridge: approval for %s refused: the command was too "
                            "long to be shown whole", key)
-            return None
-        return {"decision": decision}
+            return None, "too_long"
+        return {"decision": decision}, ""
 
     def _deliver(self, key: str, mirrored: _Mirrored, answer: dict[str, Any]) -> None:
         if mirrored.kind == "question":
@@ -322,23 +330,31 @@ class Bridge:
         logger.info("swarm_out_bridge: delivered %s for %s", mirrored.kind, key)
 
     async def _drain(self, key: str, gen) -> None:
-        """Read the continued turn to its end. A continuation that fails (raises, or
-        reports an error event such as SESSION_NOT_FOUND) is forgotten as delivered,
-        so the next pass tries again while the prompt is still on the board."""
-        failed = False
+        """Read the continued turn to its end. The hand-over failed when the first event
+        is SESSION_NOT_FOUND (no unit waits), or when the continuation raised before its
+        first event and the prompt is still on the board (taking the answer takes the
+        prompt off the board, before the unit yields anything): then the answer is
+        forgotten as delivered, and the next pass tries again while the prompt is on the
+        board (one that left with its session closes plainly). Any other error comes
+        after the session got the answer, so it stays delivered: the answer was used."""
+        seen = False
+        handover_failed = False
         try:
             async with contextlib.aclosing(gen) as events:
                 async for ev in events:
                     if isinstance(ev, dict) and ev.get("type") == "error":
-                        failed = True
-                        logger.warning("swarm_out_bridge: continuation for %s reported %s",
-                                       key, str(ev.get("code", "error"))[:60])
+                        code = str(ev.get("code", "error"))[:60]
+                        logger.warning("swarm_out_bridge: continuation for %s reported %s", key, code)
+                        if not seen and code == "SESSION_NOT_FOUND":
+                            handover_failed = True
+                    seen = True
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            failed = True
             logger.warning("swarm_out_bridge: continuation for %s failed (%s)", key, type(e).__name__)
-        if failed:
+            if not seen and key in self._open_now():
+                handover_failed = True
+        if handover_failed:
             self._delivered.discard(key)
 
     async def reconcile(self) -> None:
@@ -379,15 +395,21 @@ class Bridge:
                 logger.warning("swarm_out_bridge: mirroring %s failed (%s)", key, type(e).__name__)
                 continue
             self._mirrored[key] = _Mirrored(sid, rec["kind"])
-        # 2. close the ones that left the board
+        # 2. close the ones that left the board. One the session took from this bridge
+        # (handed over and not failed since) says so: ``why: delivered`` is the Host's
+        # only sign its answer was used, and nothing closes that key again. A refused one
+        # is closed again plainly: it is settled now (answered on the Hive's page,
+        # expired, or the session ended), no longer "not delivered"
         for key in [k for k in self._mirrored if k not in open_now]:
             m = self._mirrored.pop(key)
+            delivered = key in self._delivered
             self._delivered.discard(key)
-            # a refused one is closed again plainly: it is settled now (answered on the
-            # Hive's page, expired, or the session ended), no longer "not delivered"
             self._refused.discard(key)
-            body = json.dumps({"request_id": key, "closed_at": time.time()}).encode()
-            await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{m.session_id}/{key}.json", body)
+            close = {"request_id": key, "closed_at": time.time()}
+            if delivered:
+                close["why"] = "delivered"
+            await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{m.session_id}/{key}.json",
+                                    json.dumps(close).encode())
         # 3. deliver answers for the ones still open, once each
         waiting = {k: m for k, m in self._mirrored.items()
                    if k not in self._delivered and k not in self._refused}
@@ -402,15 +424,15 @@ class Bridge:
             if raw is None:
                 continue
             sid, item = open_now[key]
-            answer = self._valid(key, m, raw, _ask_record(self.hive, sid, key, item))
+            answer, reason = self._valid(key, m, raw, _ask_record(self.hive, sid, key, item))
             if answer is not None:
                 self._deliver(key, m, answer)
             else:
-                # not delivered, and the Host is told why; the request stays on the
-                # board for the Hive's own page (or expires)
+                # not delivered, and the Host is told why (a reason code: the Host words
+                # it); the request stays on the board for the Hive's own page (or expires)
                 self._refused.add(key)
                 body = json.dumps({"request_id": key, "closed_at": time.time(),
-                                   "why": "answer_refused"}).encode()
+                                   "why": "answer_refused", "reason": reason}).encode()
                 await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{m.session_id}/{key}.json", body)
 
 

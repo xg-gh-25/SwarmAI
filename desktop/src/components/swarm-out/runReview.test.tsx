@@ -52,7 +52,7 @@ const A = (key: SwarmOutAction['key'], primary = false, variant?: SwarmOutAction
   ({ key, primary, ...(variant ? { variant } : {}) });
 const ACTIONS: Record<string, SwarmOutAction[]> = {
   running: [A('stop', true), A('open_session'), A('discard')],
-  needs_answer: [A('answer', true), A('open_session'), A('discard')],
+  needs_answer: [A('answer', false, 'hint'), A('open_session'), A('discard')],
   awaiting: [A('accept', true, 'verdict'), A('rerun'), A('open_session'), A('discard')],
   stopped: [A('rerun', true), A('open_session'), A('discard')],
   accepted: [A('open_session', false, 'read_only')],
@@ -131,10 +131,49 @@ const shown = () => screen.getAllByTestId(/^swarm-out-cmd-/).map((b) => `${b.dat
 describe('the command panel', () => {
   it.each(Object.keys(ACTIONS).filter((k) => ACTIONS[k].length))('renders exactly the %s actions, primary first, discard last', (stage) => {
     panel(run('x1', stage as SwarmOutRun['stage']));
-    const want = ACTIONS[stage];
+    const want = ACTIONS[stage].filter((a) => a.variant !== 'hint');       // a hint is not a button
     const order = [...want.filter((a) => a.primary), ...want.filter((a) => !a.primary && a.key !== 'discard'), ...want.filter((a) => a.key === 'discard')];
     expect(shown()).toEqual(order.map((a) => `${a.primary ? '*' : ''}${a.key}`));
   });
+
+  it('waiting on an answer, the panel points to the card instead of offering an Answer button', () => {
+    panel(run('x1', 'needs_answer'));
+    expect(screen.queryByTestId('swarm-out-cmd-answer')).toBeNull();
+    expect(screen.getByTestId('swarm-out-command-hint').textContent).toContain('card on the left');
+  });
+
+  it('with no wait card here, the hint says where to answer instead', () => {
+    render(<CommandPanel r={run('x1', 'needs_answer')} full={null} mode="list" setMode={vi.fn()} onDone={vi.fn()}
+      onShowDeliverable={vi.fn()} hasWaits={false} />);
+    expect(screen.getByTestId('swarm-out-command-hint').textContent).not.toContain('card on the left');
+  });
+
+  it('a button holds only its name and key; what it does is a line apart', () => {
+    panel(run('x1', 'awaiting'));
+    const accept = screen.getByTestId('swarm-out-cmd-accept');
+    expect(accept.textContent).toBe('AcceptA');
+    expect(accept.textContent).not.toContain('settled');
+    expect(screen.getAllByTestId('swarm-out-command-help').map((h) => h.textContent).join(' ')).toContain('this run is settled');
+    expect(screen.getByTestId('swarm-out-cmd-discard').textContent).toBe('Discard…⇧D');
+  });
+
+  it.each([['answer_sent', 'Answered, waiting for the Hive'], ['answer_refused', 'Answer not used']])(
+    'the state line says %s', (reason, text) => {
+      panel(run('x1', reason === 'answer_sent' ? 'running' : 'needs_answer', { state_reason: reason,
+        actions: reason === 'answer_sent' ? [A('open_session'), A('discard')] : [A('open_session', true), A('discard')] }));
+      expect(screen.getByTestId('swarm-out-review-stage').textContent).toContain(text);
+    });
+
+  it.each([['discard', 'swarm-out-review-discard'], ['rerun', 'swarm-out-review-rerun']])(
+    '%s confirms in the one sheet: Cancel and the confirm side by side', (key, id) => {
+      panel(run('x1', 'awaiting'));
+      fireEvent.click(screen.getByTestId(`swarm-out-cmd-${key}`));
+      const sheet = screen.getByTestId('confirm-sheet');
+      expect(sheet.getAttribute('data-for')).toBe(id);
+      const row = screen.getByTestId('swarm-out-review-cancel').parentElement!;
+      expect(row.contains(screen.getByTestId('swarm-out-review-submit'))).toBe(true);
+      expect((screen.getByTestId('swarm-out-review-box') as HTMLTextAreaElement).rows).toBeGreaterThanOrEqual(4);
+    });
 
   it('a discarded run offers nothing', () => {
     panel(run('x1', 'discarded'));
@@ -293,7 +332,7 @@ describe('the run list', () => {
     fireEvent.click(within(overlay).getByTestId('swarm-out-cmd-rerun'));
     const box = within(overlay).getByTestId('swarm-out-review-box') as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: 'half written' } });
-    fireEvent.click(within(overlay).getByTestId('swarm-out-review-cancel').previousElementSibling!);   // focus off the box
+    fireEvent.click(within(overlay).getByTestId('swarm-out-review-stage'));   // focus off the box
     fireEvent.keyDown(window, { key: 'j' });
     fireEvent.mouseDown(overlay);
     expect(screen.getByTestId('swarm-out-review-position').textContent).toBe('Waiting for you 1 / 2');
@@ -311,12 +350,40 @@ describe('the run list', () => {
       <RunList runs={[run('q1', 'needs_answer'), run('a2', 'awaiting')]} asks={[ask]} now={NOW} onReload={vi.fn()} /></OpenSessionContext.Provider>);
     fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);
     const overlay = await screen.findByTestId('swarm-out-review-overlay');
-    fireEvent.change(within(overlay).getByLabelText(/Which port\?/), { target: { value: '80' } });
+    fireEvent.click(within(overlay).getByText('Other (custom answer)'));
+    fireEvent.change(within(overlay).getByPlaceholderText(/Enter your custom answer/), { target: { value: '80' } });
     fireEvent.keyDown(document.body, { key: 'j' });
     fireEvent.mouseDown(overlay);
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(screen.getByTestId('swarm-out-review-position').textContent).toBe('Waiting for you 1 / 2');
-    expect((within(overlay).getByLabelText(/Which port\?/) as HTMLInputElement).value).toBe('80');
+    expect((within(overlay).getByPlaceholderText(/Enter your custom answer/) as HTMLInputElement).value).toBe('80');
+    // the card is above the tabs, not inside what came back
+    expect(within(overlay).getByTestId('swarm-out-review-waits')).toBeTruthy()
+  });
+
+  it('the answer key (W) takes you to the wait card, or with none here to where to answer', async () => {
+    const ask = { kind: 'decision' as const, hive: 'explorer', hive_id: 'h1', session_id: sid(1), request_id: 'dc-1',
+      asked_at: '2026-10-31T09:00:00Z', question: 'Which?', why: '', options: [
+        { id: 'a', choice: 'x', consequence: '', reversible: true, risk: 'low' as const },
+        { id: 'b', choice: 'y', consequence: '', reversible: true, risk: 'low' as const }] };
+    const { unmount } = render(<OpenSessionContext.Provider value={vi.fn()}>
+      <RunList runs={[run('q1', 'needs_answer')]} asks={[ask]} now={NOW} onReload={vi.fn()} /></OpenSessionContext.Provider>);
+    fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    const dialog = within(overlay).getByRole('dialog');
+    dialog.focus();
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(dialog, { key: 'w' });
+    expect(document.activeElement?.tagName).toBe('BUTTON');
+    expect(document.activeElement?.textContent).toContain('a — x');          // the card's first option
+    unmount();
+    render(<OpenSessionContext.Provider value={vi.fn()}>
+      <RunList runs={[run('q2', 'needs_answer')]} asks={[]} now={NOW} onReload={vi.fn()} /></OpenSessionContext.Provider>);
+    fireEvent.click(screen.getAllByTestId('swarm-out-row')[0]);
+    const lone = await screen.findByTestId('swarm-out-review-overlay');
+    fireEvent.click(within(lone).getByTestId('swarm-out-review-tab-cost'));
+    fireEvent.keyDown(within(lone).getByRole('dialog'), { key: 'w' });
+    expect(within(lone).getByTestId('swarm-out-review-tab-deliverable').getAttribute('aria-selected')).toBe('true');
   });
 
   it('closing the card puts focus back on the row that opened it', async () => {

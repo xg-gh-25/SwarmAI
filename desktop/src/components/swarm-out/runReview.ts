@@ -55,6 +55,16 @@ export function asksOf(r: SwarmOutRun, asks: SwarmOutAsk[]): SwarmOutAsk[] {
   return asks.filter((a) => a.hive_id === r.hive_id && a.session_id === r.session_id && !a.refused);
 }
 
+/** Every wait of the run its big card shows (design 2026-10-31-swarm-out-single-loop-
+ *  fixes §2.2): the ones waiting first, then the refused ones, then the ones answered
+ *  from here (sent, taken, gone: one line each). */
+export function waitsOf(r: SwarmOutRun, asks: SwarmOutAsk[], answered: SwarmOutAsk[] = []): SwarmOutAsk[] {
+  if (!r.session_id) return [];
+  const own = (a: SwarmOutAsk) => a.hive_id === r.hive_id && a.session_id === r.session_id;
+  return [...asks.filter((a) => own(a) && !a.refused), ...asks.filter((a) => own(a) && a.refused),
+    ...answered.filter(own)];
+}
+
 /** When the run started waiting in its stage (the list's "waited" column): the first
  *  question asked, the result's end, the settle; a running run counts from when it was
  *  sent. ISO, or null. */
@@ -197,7 +207,10 @@ export function commandMeta(a: SwarmOutAction): CommandMeta {
       ? { name: `${base}.openReadOnly.name`, does: `${base}.openReadOnly.does`, key: 'o', hint: 'O' }
       : { name: `${base}.open.name`, does: `${base}.open.does`, key: 'o', hint: 'O' };
     case 'discard': return { name: `${base}.discard.name`, does: `${base}.discard.does`, key: 'd', shift: true, hint: '⇧D' };
-    case 'answer': return { name: `${base}.answer.name`, does: `${base}.answer.does`, key: null, hint: null };
+    // not a button: its key takes you to the wait card (or, with none here, to where to
+    // answer). Not A: accept's key, a stage away (pressing it as the run moves on must
+    // never accept)
+    case 'answer': return { name: `${base}.answer.name`, does: `${base}.answer.does`, key: 'w', hint: 'W' };
     default: return { name: `${base}.open.name`, does: `${base}.open.does`, key: null, hint: null };
   }
 }

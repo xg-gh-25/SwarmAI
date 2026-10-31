@@ -2,6 +2,9 @@
   "name": "swarmai",
   "private": true,
   "version": "2.3.0",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

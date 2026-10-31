@@ -11,7 +11,7 @@
  *
  * @exports AskUserQuestion (default)
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AskUserQuestion as AskUserQuestionType } from '../../types';
 import { ActDone, ActFrame, ActOption } from './ActCard';
@@ -27,6 +27,9 @@ interface AskUserQuestionProps {
    * Sourced from the persisted block, so it survives tab-switch + reconcile.
    */
   answers?: Record<string, string>;
+  /** Whether something is picked or typed and not yet submitted (a host card, such as
+   *  Swarm Out's run card, keeps it from a step away). */
+  onDirty?: (dirty: boolean) => void;
 }
 
 export default function AskUserQuestion({
@@ -35,6 +38,7 @@ export default function AskUserQuestion({
   onSubmit,
   disabled = false,
   answers: submittedAnswers,
+  onDirty,
 }: AskUserQuestionProps) {
   const { t } = useTranslation();
   // Defensive: questions may arrive as undefined/non-array from malformed
@@ -44,6 +48,10 @@ export default function AskUserQuestion({
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [customInputs, setCustomInputs] = useState<Record<string, string>>({});
   const [showCustom, setShowCustom] = useState<Record<string, boolean>>({});
+  const dirty = Object.values(answers).some((v) => v.length > 0)
+    || Object.values(customInputs).some((v) => !!v.trim());
+  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
+  useEffect(() => () => onDirty?.(false), [onDirty]);
 
   const handleOptionToggle = (question: string, optionLabel: string, multiSelect: boolean) => {
     if (disabled) return;

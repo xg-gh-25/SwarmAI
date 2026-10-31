@@ -736,3 +736,23 @@ def test_3b_the_summary_carries_the_audit_rows(tmp_path, monkeypatch):
     assert sb["audit"] == rows and sb["auditCard"] == "C"
     _write_run(tmp_path, "run_old", {"status": "completed", "stages": {}, "audit_card": "C"})
     assert pse.summary_block("run_old", pse.read_stage_state("run_old"), "now")["audit"] is None
+
+
+def test_the_summary_carries_the_runs_test_commands(tmp_path):
+    """``tests``: the commands of the run's TEST report as its audit keeps them, what
+    the Swarm Out checks grid reads (design 2026-10-31-swarm-out-single-loop-fixes §2.6)."""
+    import json
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_audit.json").write_text(json.dumps({"details": {"test_reports": {"swarmai": [
+        {"command": "python scripts/smoke_import.py", "result": "pass"},
+        {"command": "npx vitest run", "result": "not_run", "reason": "node 18"},
+        {"command": "x" * 900, "result": "weird"},
+        {"result": "unreadable"}]}}}))
+    state = {"status": "completed", "profile": "direct", "stages": {}, "run_dir": str(run_dir)}
+    tests = pse.summary_block("run_x", state, "now")["tests"]
+    assert tests[:2] == [{"repo": "swarmai", "command": "python scripts/smoke_import.py", "result": "pass"},
+                         {"repo": "swarmai", "command": "npx vitest run", "result": "not_run"}]
+    assert len(tests[2]["command"]) == pse.MAX_SUMMARY_COMMAND and tests[2]["result"] == "other"
+    assert len(tests) == 3
+    assert pse.summary_block("run_x", dict(state, run_dir=str(tmp_path / "none")), "now")["tests"] == []

@@ -192,7 +192,7 @@ def test_a_slow_question_read_does_not_hold_up_the_poll(monkeypatch):
     async def states(inst):
         return {"s1": {"streaming": True, "waiting_input": False, "activity": "streaming"}}
 
-    def slow(s3, bucket, hive):
+    def slow(s3, bucket, hive, *_a):
         time.sleep(1.0)
         return []
     monkeypatch.setattr(swarm_out, "_hive_statuses", statuses)

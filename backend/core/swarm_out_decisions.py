@@ -2,8 +2,8 @@
 
 A pipeline v1 run that cannot decide alone records a DC-1 decision and waits
 (``awaiting_human``). The run's own state is the truth about what waits, so this module
-does not give a decision a lifecycle of its own (no ask / closed markers, no
-reconcile). Each pass of the bridge it:
+does not give a decision a lifecycle of its own (no ask marker, no reconcile). Each pass
+of the bridge it:
 
 - reads every waiting decision from the runs' event logs
   (``pipeline_human.pending_decisions``). That read is all-or-nothing: if any run
@@ -25,7 +25,13 @@ reconcile). Each pass of the bridge it:
     still waits two passes later, the answer is recorded here.
   - No card: the answer is recorded here (``answer_from_dashboard(source="swarm_out")``),
     then the session gets the dashboard's continue message.
-  A refused answer is listed in the snapshot as ``refused``.
+- closes each answered decision once in ``bridge/<hive>/closed/<session>/<key>.json``,
+  as the bridge closes a question: ``why: delivered`` when the run took this bridge's
+  answer (recorded here, or answered on its card and then no longer waiting), ``why:
+  answer_refused`` with a ``reason`` code when it was not used (``no_option``,
+  ``changed``, ``too_long``, ``run_refused``, ``not_recorded``). A refused one that the
+  run stops waiting on is closed again plainly (settled elsewhere). The Host shows a
+  decision as received only on ``delivered``.
 
 Design: docs/design/2026-10-31-swarm-out-hive-decisions.md.
 
@@ -164,6 +170,10 @@ class DecisionMirror:
         self._continues: dict[str, tuple[str, str, int]] = {}   # key -> (session, message, tries)
         self._sending: set[str] = set()
         self._tasks: set[asyncio.Task] = set()
+        self._session_of: dict[str, str] = {}          # key -> its session (kept after it is gone)
+        self._closed: dict[str, str] = {}              # key -> the why it was closed with
+        self._card_failed: set[str] = set()            # a card answer whose turn reported an error
+        self._close_retry: dict[str, tuple[str, Optional[str], str]] = {}   # key -> (session, why, reason)
 
     async def run_pass(self, board: dict[str, tuple[str, dict[str, Any]]]) -> set[str]:
         """One pass. *board* is the bridge's open prompts by key, ``(session, item)``.
@@ -180,13 +190,29 @@ class DecisionMirror:
         if found is None:
             return {bkey for bkey, _ in self._cards.values()}
         self._read(found, board)
+        # a card answer whose continued turn failed: tried again while the run still waits;
+        # one the run took anyway (no longer waiting) stays delivered
+        for key in list(self._card_failed):
+            if key in self._items:
+                self._delivered.discard(key)
+            self._card_failed.discard(key)
+        await self._retry_closes()
         self._check_cards()
         for gone in [k for k in self._delivered | self._refused | self._no_card
                      | set(self._record_failures) if k not in self._items]:
+            # no longer waiting: answered on its card by this bridge -> delivered; a
+            # refused one settled elsewhere -> closed plainly
+            if gone in self._refused:
+                await self._close(gone, None)
+            elif gone in self._delivered and gone not in self._no_card:
+                await self._close(gone, "delivered")
             self._delivered.discard(gone)
             self._refused.discard(gone)
             self._no_card.discard(gone)
             self._record_failures.pop(gone, None)
+        # what is kept per key lives as long as the key waits (a gone key is closed above)
+        self._session_of = {k: v for k, v in self._session_of.items() if k in self._items}
+        self._closed = {k: v for k, v in self._closed.items() if k in self._items}
         await self._deliver_answers()
         await self._write_snapshot()
         return {bkey for bkey, _ in self._cards.values()}
@@ -206,6 +232,7 @@ class DecisionMirror:
             key = decision_key(str(d.get("run_id")), sid, int(d.get("owner_generation") or 0),
                                d["decision"])
             items[key] = d
+            self._session_of[key] = sid
             marker = decision_protocol._marker(str(d["decision"].get("request_id")))
             for bkey, (bsid, b) in board.items():
                 if bsid != sid or b.get("kind") != "ask_user_question":
@@ -235,9 +262,7 @@ class DecisionMirror:
     async def _write_snapshot(self) -> None:
         entries = []
         for key, d in list(self._items.items())[:MAX_DECISIONS]:
-            entry = _entry(key, d)
-            entry["refused"] = key in self._refused
-            entries.append(entry)
+            entries.append(_entry(key, d))
         if len(self._items) > MAX_DECISIONS:
             logger.warning("swarm_out_decisions: %d decisions wait; the Host is shown %d",
                            len(self._items), MAX_DECISIONS)
@@ -248,23 +273,70 @@ class DecisionMirror:
             await asyncio.to_thread(self.store.put, self.prefix + SNAPSHOT, body)
             self._written = body
 
-    def _valid(self, key: str, raw: bytes, entry: dict[str, Any]) -> Optional[str]:
-        """The option to deliver, or None (the reason is logged)."""
+    def _valid(self, key: str, raw: bytes, entry: dict[str, Any]) -> tuple[Optional[str], str]:
+        """(the option to deliver, "") or (None, the reason code it is refused with)."""
         try:
             ans = json.loads(raw)
         except ValueError:
             ans = None
         option = ans.get("option_id") if isinstance(ans, dict) and ans.get("request_id") == key else None
         if not isinstance(option, str) or option not in {o["id"] for o in entry["options"]}:
-            why = "names no option of the waiting decision"
+            why, code = "names no option of the waiting decision", "no_option"
         elif ans.get("shown_sha256") != decision_digest(entry):
-            why = "was given for a card that does not show this decision"
+            why, code = "was given for a card that does not show this decision", "changed"
         elif entry["truncated"]:
-            why = "is for a decision too long to be shown whole"
+            why, code = "is for a decision too long to be shown whole", "too_long"
         else:
-            return option
+            return option, ""
         logger.warning("swarm_out_decisions: answer for %s %s; not delivered", key, why)
-        return None
+        return None, code
+
+    async def _refuse(self, key: str, reason: str) -> None:
+        self._refused.add(key)
+        await self._close(key, "answer_refused", reason)
+
+    async def _close(self, key: str, why: Optional[str], reason: str = "") -> None:
+        """Close *key* in ``closed/`` once: ``delivered`` is final, a refusal may be
+        replaced by a plain close (settled elsewhere). After a restart an existing close
+        is read first, so a delivered one is never written over."""
+        sid = self._session_of.get(key)
+        if not sid:
+            return
+        before = self._closed.get(key)
+        if before == "delivered" or (before is not None and why is not None):
+            return
+        path = f"{self.prefix}closed/{sid}/{key}.json"
+        if before is None:
+            try:
+                raw = await asyncio.to_thread(self.store.get, path)
+                old = json.loads(raw) if raw else None
+            except Exception as e:  # noqa: BLE001 — unreadable: written below, as if absent
+                logger.warning("swarm_out_decisions: reading the close of %s failed (%s)",
+                               key, type(e).__name__)
+                old = None
+            if isinstance(old, dict) and old.get("why") == "delivered":
+                self._closed[key] = "delivered"
+                return
+        body: dict[str, Any] = {"request_id": key, "closed_at": time.time()}
+        if why:
+            body["why"] = why
+        if reason:
+            body["reason"] = reason
+        try:
+            await asyncio.to_thread(self.store.put, path, json.dumps(body).encode())
+        except Exception as e:  # noqa: BLE001 — written again at the start of the next pass
+            logger.warning("swarm_out_decisions: closing %s failed (%s)", key, type(e).__name__)
+            self._close_retry[key] = (sid, why, reason)
+            return
+        self._close_retry.pop(key, None)
+        self._closed[key] = why or ""
+
+    async def _retry_closes(self) -> None:
+        """Write again each close whose write failed (its key may be gone by now: the
+        session is kept with it)."""
+        for key, (sid, why, reason) in list(self._close_retry.items()):
+            self._session_of.setdefault(key, sid)
+            await self._close(key, why, reason)
 
     async def _deliver_answers(self) -> None:
         waiting = [k for k in self._items if k not in self._delivered and k not in self._refused]
@@ -279,9 +351,9 @@ class DecisionMirror:
             raw = await asyncio.to_thread(self.store.get, akey)
             if raw is None:
                 continue
-            option = self._valid(key, raw, _entry(key, d))
+            option, reason = self._valid(key, raw, _entry(key, d))
             if option is None:
-                self._refused.add(key)
+                await self._refuse(key, reason)
                 continue
             self._delivered.add(key)
             self._spawn(self._answer(key, d, option), f"swarm-out-decision-{key}")
@@ -305,7 +377,7 @@ class DecisionMirror:
             if ok:
                 self._on_card[key] = 0
             else:
-                self._delivered.discard(key)        # tried again next pass
+                self._card_failed.add(key)          # next pass: tried again if still waiting
             return
         try:
             await asyncio.to_thread(self._record, str(d.get("run_id")),
@@ -313,7 +385,7 @@ class DecisionMirror:
         except EngineError as e:
             # the run refuses it: it moved on, or another answer came first
             logger.warning("swarm_out_decisions: the run refused %s (%s)", key, e)
-            self._refused.add(key)
+            await self._refuse(key, "run_refused")
             return
         except Exception as e:
             tries = self._record_failures.get(key, 0) + 1
@@ -321,11 +393,12 @@ class DecisionMirror:
             logger.warning("swarm_out_decisions: %s not recorded (%s), try %d of %d",
                            key, type(e).__name__, tries, MAX_RECORD_TRIES)
             if tries >= MAX_RECORD_TRIES:
-                self._refused.add(key)
+                await self._refuse(key, "not_recorded")
             else:
                 self._delivered.discard(key)
             return
         self._record_failures.pop(key, None)
+        await self._close(key, "delivered")       # the run holds the answer now
         self._continues[key] = (sid, _continue_message(d, option_id), 0)
         await self._send_continue(key)
 

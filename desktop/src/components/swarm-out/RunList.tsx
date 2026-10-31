@@ -98,8 +98,11 @@ function Row({ r, asks, now, onOpen, onReload, compact }: { r: SwarmOutRun; asks
   );
 }
 
-export function RunList({ runs, asks, now, onReload, compact = false }: {
-  runs: SwarmOutRun[]; asks: SwarmOutAsk[]; now: number; onReload: () => void;
+export function RunList({ runs, asks, answered = [], now, onReload, compact = false }: {
+  runs: SwarmOutRun[]; asks: SwarmOutAsk[];
+  /** the waits answered from here (the big card shows each as one line) */
+  answered?: SwarmOutAsk[];
+  now: number; onReload: () => void;
   /** the dashboard is narrow: rows drop the autonomy word and shorten Open session */
   compact?: boolean;
 }) {
@@ -152,7 +155,7 @@ export function RunList({ runs, asks, now, onReload, compact = false }: {
       </button>
       {showDone && <div className="flex flex-col">{s.done.map(row)}</div>}
       {open && (
-        <RunOverlay runs={runs} asks={asks} order={open.order} id={open.id} now={now}
+        <RunOverlay runs={runs} asks={asks} answered={answered} order={open.order} id={open.id} now={now}
           onSelect={(id) => setOpen((o) => (o ? { ...o, id } : o))}
           onSettled={(id) => setOpen((o) => (o ? { ...o, order: o.order.filter((x) => x !== id) } : o))}
           onClose={() => setOpen(null)} onReload={onReload} />

@@ -3,7 +3,7 @@ title: Swarm Out 单路畅通 —— 等待的回答链路、等待卡、命令�
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: r2 design-spec（无代码）
+status: r2 design-spec；实现见 pipeline run_8437ff7e（§7 记实现与设计的出入）
 tags: [swarm-out, hive, ux, decision, bridge, records]
 related:
   - docs/design/2026-10-31-swarm-out-hive-decisions.md（决定快照）
@@ -51,12 +51,13 @@ XG 对界面的三条反馈（原话）：
 
 | `why` | 什么时候写 | 以后会不会变 |
 |---|---|---|
-| `delivered` | 回答被用上的那一刻：问题 / 审批是 `_deliver` 把回答交给会话成功；决定是卡片路径 `continue_with_answer` 成功，或者记录路径 `answer_from_dashboard` 成功。在那一刻就写，不等它离开列表：否则 Hive 恰好在这之间重启，`reconcile` 会写一个 `why: restart` 的关闭，用上了的回答就显示成没用上 | 不变：写了 `delivered` 的 key，离开列表时和重启后的 `reconcile` 都不再写关闭 |
+| `delivered` | Hive 用上了这个回答：问题 / 审批是桥把回答交给会话（`_deliver`）以后，会话接走它、它离开等待列表的那一轮；决定是记录路径 `answer_from_dashboard` 成功的那一刻，或者卡片路径交出回答以后 run 不再等它的那一轮 | 不变：写了 `delivered` 的 key 不再写别的关闭（重启后决定这边先读已有的关闭；问题这边 `reconcile` 本来就跳过已关闭的 key） |
 | `answer_refused`，带 `reason`（固定的几个代码） | 回答没有被用上：`no_option`（选的不是这个等待的选项）、`changed`（回答对应的卡片和现在的内容不一样）、`too_long`（内容太长没显示全，不收批准）、`run_refused`（run 已经往前走了，或者别处先回答了）、`not_recorded`（记录重试用完） | 可以变成没有 `why` 的关闭：被拒以后这个等待在别处了结了（Hive 自己的页面、过期、会话结束），拒绝不再重要 |
 | 无 | 等待离开了，但不是因为 Host 的回答：在 Hive 自己的页面回答了、过期了、会话结束了、Hive 重启 | — |
 
 - 决定今天没有关闭记录，只是从 `decisions.json` 里消失。改成和问题一样写 `closed/`（决定的 key 以 `dc-` 开头，桥的 `closed/*` 写权限已经覆盖，不改 IAM）。快照条目里的 `refused` 字段删掉，拒绝只看 `closed/`。
-- `reason` 是代码，不是 Hive 写的句子；Host 按代码显示自己的文案（中英两份）。
+- `reason` 是代码，不是 Hive 写的句子；Host 按代码显示自己的文案（中英两份）。Host 列表里这个代码叫 `refused_reason`（审批自己的 `reason` 字段是它的说明文字，不能重名）。
+- 交出回答到会话接走之间如果 Hive 重启，问题这边 `reconcile` 会写 `why: restart`，Host 显示"已不再等待"。这个窗口不超过一轮（约 20 秒），显示也是诚实的（Host 确实不知道它用没用上）。
 - 只有 `delivered` 才说明 Hive 用了这个回答。等待从列表里消失、或者一个没有 `why` 的关闭，都**不能**当成"Hive 已收到"。
 
 **Host 怎么推阶段（`core/swarm_out.py`）：** `_open_asks` 和 `_read_decisions` 合成一个 `_waits(hive, session)`，对每个 key 看四样东西：还在不在列表里（`ask/` 未关 / `decisions.json` 里有）、`answer/` 有没有、`closed/` 有没有、关闭的 `why`：
@@ -122,7 +123,7 @@ XG 对界面的三条反馈（原话）：
 
 - **数据库：** `update_question_answers` 同时写 `answered_by`（`person` / `host`，`continue_with_answer` 已经有这个参数），为 hive-approvals 设计预留。
 - **封存一轮时（`hive_records.seal_turn` / `turn_projection`）：** 除了这一轮自己的行，再带一个 `answers` 列表：在读到的行（`list_by_session_paginated` 本来就读最近 `TURN_ROWS` 行）里，**已经封存过的**那些行上，有答案的 `ask_user_question` 块，各取 `{toolUseId, answers, answered_by}`。被回答的问题一定在回答之前的那一轮里，所以回答之后的下一轮封存时就会带上它。同一个答案出现在几个条目里没关系，按 `toolUseId` 去重。
-- **Host 读（`swarm_out_results.summarize`）：** 先把所有 `turn` 条目里的 `answers` 按 `toolUseId` 合到块上，再按现在的口径计数（`answers` 非空才算回答）。
+- **Host 读（`hive_records.turn_rows`，`summarize` 的输入就是它）：** 把读到的所有 `turn` 条目里的 `answers` 按 `toolUseId` 合到块上；`summarize` 不改，按现在的口径计数（`answers` 非空才算回答）。问题所在的条目因为读取上限没读到时，答案不会凭空造一个块。
 
 不改成重新封存旧条目：记录是只追加的（`append` 带 sha256 进 manifest），Host 也已经拉走了旧条目。
 
@@ -130,24 +131,24 @@ XG 对界面的三条反馈（原话）：
 
 `_checks` 每个检查的状态按两处来源定：
 
-1. **run 自己的测试记录。** 这一单有 pipeline run 时，它的 `Outputs/<dispatch>/pipeline/test_report.json` 已经作为文件条目交回（这一单是第 13 条）。对每个检查，在 `reports[].commands[]` 里找 `command` 跑了这个检查的条目（同一个 `_runs`，先去掉包装）：`result: pass` → `ran`，`fail` → `errored`，其它 → `unknown`。这和 REPORT 读的是同一份。
+1. **run 自己的测试记录。** `Outputs/<dispatch>/pipeline/test_report.json` 只是那一单的 agent 自己选的位置，不是约定。run 自己的记录是它的 TEST 校验报告：DELIVER 时写进 run 目录的 `run_audit.json`（`details.test_reports`），REPORT 的测试段就是从这里渲染的。所以 run 结束时写的 `pipeline_summary` 块带上这些命令（`tests`: `{repo, command, result}`，命令截到 500 字、最多 60 条），它随运行记录交回 Host。对每个检查，在这些命令里找跑了这个检查的那条（同一个 `_runs`，先去掉包装）：`pass` → `ran`，`fail` → `errored`，其它 → `unknown`。
 2. **会话里的 Bash 调用**（现在的做法），用于没有测试记录、或者测试记录里没有这一项的检查。`_runs` 在匹配前先去掉命令前面的常见包装：`perl -e '…' `（`exec @ARGV` 那种）、`timeout` / `gtimeout <n>`、`env [-u X] [K=V …]`、`K=V`、`nice`、`time`。循环变量里的命令（`for c in …; python $c`）仍然认不出来，这时第一处来源会补上。
 
 状态的词照旧（`ran` / `errored` / `unknown` / `not_run`），不出现"passed"：两处来源都是 Hive 自己报的，Host 只说它跑没跑、报没报错。
 
 ### 2.7 Hive 的 Node（P7）
 
-Hive 的安装脚本在装完 `nodejs20` 之后，把默认的 `node` / `npm` / `npx` 指到 20（AL2023 用 `alternatives`，或把 `node-20` 的目录放到 PATH 最前）。装完要检查：
-`node --version` 不低于前端 `package.json` 里 `engines` 写的版本，不够就让安装失败，别让 Hive 带着旧版本起来。已有的两台 Hive 跟下一次更新一起换。
+`hive/ensure-node.sh`：在 `/usr/bin` 里找已装的 Node（`node-<major>` 和 `node`），把最新的一个和它自己的 `npm` / `npx` 链接到 `/usr/local/bin`（服务、`sudo -u swarm` 和登录 shell 的 PATH 里都排在 `/usr/bin` 前面），再检查版本不低于前端要求。前端 `desktop/package.json` 原来没有 `engines`，现在写上 `"node": ">=20.19.0"`（jsdom 自己的下限），脚本里的下限由测试保持和它一致。
+新装 Hive（`user_data` 下载包之后）不够就安装失败；更新（SSM 更新脚本）不够只打 WARN、继续更新，因为后端不需要 Node，不该因为前端测试跑不了就挡住整个更新。已有的两台 Hive 跟下一次更新一起换。
 
 ### 2.8 测试不吃环境（P8）
 
-先在一个带 Hive 环境变量的子进程里复现那 3 个失败（`SWARMAI_MODE=hive`，以及 Hive 的数据目录、工作区变量），再分别在去掉 `SWARMAI_MODE` 以后复现（run 报告说去掉以后仍然失败）。找到漏进来的环境以后，在测试 fixture 里把它清掉或固定住，不在产品代码里为测试开后门。
-Hive 上的 run 每次都要手动 `env -u SWARMAI_MODE` 才能跑测试，这本身也是这个问题：fixture 修好以后，带着 Hive 环境跑测试应该和本机一样。
+本机复现不了：全新 venv（`uv pip install -e ".[dev]"`，和 Hive 上 run 的做法一样）、`SWARMAI_MODE=hive`、空 `HOME`，这个文件都全过。run 的反思里写的是"在全新 venv 里、当前 main 上照样失败"，所以原因在 Hive 机器本身（Linux、它的 Python 或 git），不在本机能造的环境里。
+做法：E2E 那一单在 Hive 上跑这个文件，并把失败的测试名和报错原文带回来；按带回的原因修 fixture，不在产品代码里为测试开后门。Hive 上的 run 每次都要手动 `env -u SWARMAI_MODE` 才能跑测试，这本身也要在那时一起看。
 
 ### 2.9 删测试时提醒改 BVT manifest（P9 的预防）
 
-在仓库自己的提交检查里（和 `lint_doc_frontmatter.py` 同一处）加一步 `bash scripts/run_bvt.sh --list`：manifest 里有不存在的文件就挡住提交，并说是哪个。
+`scripts/precommit_bvt_manifest.sh`（进仓库，有测试）：暂存区里有 `backend/tests/` 的改动时跑 `bash scripts/run_bvt.sh --list`，manifest 里有不存在的文件就挡住提交，并说是哪个。本机的 pre-commit 钩子（`.git/hooks/pre-commit`，不进仓库）调用它，AGENTS.md 的钩子表里加了一行；CI 的 BVT 步骤本来就会因为同样的原因失败，不另加。
 这是这个仓库自己的纪律，放在仓库里，不进产品的 gate（SOUL P7）。
 
 ### 2.10 `/runs` 带上 run id（P10）
@@ -198,3 +199,12 @@ Hive 上的 run 每次都要手动 `env -u SWARMAI_MODE` 才能跑测试，这�
 - **错误原文要覆盖所有状态码和对象形式的 `detail`**，两个旧测试一起改（§2.4）。
 - **`answer` 的画法由后端标出**（`variant: "hint"`），前端不再按 key 猜（§2.3）。
 - **P6、P10 查清了原因**，修法从"二选一待查"定成具体的一种（§2.6、§2.10）。
+
+## 7. 实现与本设计的出入（run_8437ff7e）
+
+- §2.1 `delivered` 的写入时机改成"会话接走、离开等待列表时"（问题 / 审批）和"run 记下或不再等待时"（决定），不是"交出的那一刻"：交出以后续接失败会重试，那时写 `delivered` 会说错。
+- §2.1 Host 列表里拒绝原因的字段名是 `refused_reason`（`reason` 已经是审批的说明）。
+- §2.5 合并答案放在 `hive_records.turn_rows`，`summarize` 不改。
+- §2.6 来源改成 run 自己的 TEST 校验报告（`pipeline_summary.tests`），不读 agent 自己放在 `Outputs/` 下的文件。
+- §2.7 更新路径只警告不失败；`engines` 是新加的。
+- §2.8 本机复现不了，放到 E2E 在 Hive 上复现。

@@ -1,9 +1,10 @@
 /**
  * LiveDispatches — the live part of the Swarm Out dashboard.
  *
- * Questions: are a Hive's open questions shown with their answer controls; does an
- * approval send exactly approve/deny; does a question's answer cover every question
- * before it can be sent; is Hive-written text shown as text (no HTML rendered).
+ * Questions: are a Hive's open questions shown with their answer controls (the chat's
+ * own card, SwarmOutWaitCard); does an approval send exactly approve/deny; does a
+ * question's answer cover every question before it can be sent; is a decision sent
+ * only on Submit; is Hive-written text shown as text (no HTML rendered).
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -54,11 +55,13 @@ describe('LiveDispatches', () => {
   it('sends a question only when every question has an answer', async () => {
     runs.mockResolvedValue({ runs: [], asks: [question], errors: [] });
     render(<LiveDispatches />);
-    const submit = await screen.findByText('提交回答');
+    const submit = (await screen.findByText('提交全部回答')).closest('button')!;
     fireEvent.click(screen.getByText('sqlite'));
-    expect((submit as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('回答：Which port?'), { target: { value: '8080' } });
-    expect((submit as HTMLButtonElement).disabled).toBe(false);
+    expect(submit.disabled).toBe(true);
+    // a question with no options is answered in the chat card's own words field
+    fireEvent.click(screen.getAllByText('其他（自己填写）')[1]);
+    fireEvent.change(screen.getByPlaceholderText('输入你自己的回答…'), { target: { value: '8080' } });
+    expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
     await waitFor(() => expect(answer).toHaveBeenCalledWith(question, { answers: { 'Which DB?': 'sqlite', 'Which port?': '8080' } }));
   });
@@ -102,6 +105,9 @@ describe('LiveDispatches', () => {
     fireEvent.click(screen.getByText('b'));
     fireEvent.click(screen.getByText('提交回答'));
     await waitFor(() => expect(answer).toHaveBeenCalledWith(multi, { answers: { 'Which?': 'a, b' } }));
+    // sent: the card is one line with what was chosen, and cannot be sent again
+    expect((await screen.findByTestId('swarm-out-wait-done')).textContent).toContain('a, b');
+    expect(screen.queryByText('提交回答')).toBeNull();
   });
 
   it('says how many questions or options were not shown (D4)', async () => {
@@ -110,10 +116,11 @@ describe('LiveDispatches', () => {
     expect((await screen.findByTestId('swarm-out-ask-omitted')).textContent).toContain('3');
   });
 
-  it('a refused answer is shown as not delivered, with no controls (fixing spec B)', async () => {
-    runs.mockResolvedValue({ runs: [], asks: [{ ...approval, refused: true }], errors: [] });
+  it('a refused answer is shown as not used, with its reason and no controls (fixing spec B)', async () => {
+    runs.mockResolvedValue({ runs: [], asks: [{ ...approval, refused: true, phase: 'refused' as const,
+      refused_reason: 'changed' as const, chosen: 'approve' }], errors: [] });
     render(<LiveDispatches />);
-    expect(await screen.findByTestId('swarm-out-ask-refused')).toBeTruthy();
+    expect((await screen.findByTestId('swarm-out-ask-refused')).textContent).toContain('你看到以后它在 Hive 上变了');
     expect(screen.queryByText('批准')).toBeNull();
     expect(screen.queryByText('拒绝')).toBeNull();
   });
@@ -123,17 +130,18 @@ describe('LiveDispatches', () => {
       options: [{ label: 'Yes, with tests', description: '' }, { label: 'Yes', description: '' }] }] };
     runs.mockResolvedValue({ runs: [], asks: [multi], errors: [] });
     render(<LiveDispatches />);
-    const withTests = await screen.findByText('Yes, with tests');
-    fireEvent.click(withTests);
-    expect(withTests.getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByText('Yes').getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(withTests);                       // deselects
-    expect(withTests.getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(screen.getByText('Yes'));
-    fireEvent.click(withTests);
+    const box = (label: string) => screen.getByText(label).closest('button')!;
+    await screen.findByText('Yes, with tests');
+    fireEvent.click(box('Yes, with tests'));
+    expect(box('Yes, with tests').getAttribute('data-selected')).toBe('true');
+    expect(box('Yes').getAttribute('data-selected')).toBe('false');
+    fireEvent.click(box('Yes, with tests'));          // deselects
+    expect(box('Yes, with tests').getAttribute('data-selected')).toBe('false');
+    fireEvent.click(box('Yes'));
+    fireEvent.click(box('Yes, with tests'));
     fireEvent.click(screen.getByText('提交回答'));
-    // option order, not click order
-    await waitFor(() => expect(answer).toHaveBeenCalledWith(multi, { answers: { 'How?': 'Yes, with tests, Yes' } }));
+    // the picks as the chat's own card joins them (in the order picked)
+    await waitFor(() => expect(answer).toHaveBeenCalledWith(multi, { answers: { 'How?': 'Yes, Yes, with tests' } }));
   });
 
   it('names a possible owner and marks a dispatch whose session was never named (J1)', async () => {
@@ -160,10 +168,17 @@ describe('LiveDispatches', () => {
     render(<LiveDispatches />);
     await screen.findByText('一个 pipeline run 需要你拍板');
     expect(screen.getByText('它自己定不了的原因：both fit')).toBeTruthy();
-    expect(screen.getByText('migration、不可撤回、高风险')).toBeTruthy();
+    expect(screen.getByText('不可撤回')).toBeTruthy();
+    expect(screen.getByText('高风险')).toBeTruthy();
     expect(screen.getByTestId('swarm-out-ask').querySelector('input')).toBeNull();
+    const submit = screen.getByTestId('swarm-out-wait-submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);                  // nothing picked yet
     fireEvent.click(screen.getByText('b — sqlite'));
-    await waitFor(() => expect(answer).toHaveBeenCalledWith(decision, { option_id: 'b' }));
+    expect(answer).not.toHaveBeenCalled();               // a pick alone sends nothing
+    fireEvent.click(screen.getByText('a — files'));      // and can be changed
+    fireEvent.click(submit);
+    await waitFor(() => expect(answer).toHaveBeenCalledWith(decision, { option_id: 'a' }));
+    expect((await screen.findByTestId('swarm-out-wait-done')).textContent).toContain('a — files');
   });
 
   it('a pipeline decision too long to show whole offers no options', async () => {

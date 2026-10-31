@@ -1937,7 +1937,39 @@
       "notPlaced": "came back, but could not be put in the Brain here",
       "positionRecords": "Record {{n}} / {{total}}",
       "previousRecord": "Previous record",
-      "nextRecord": "Next record"
+      "nextRecord": "Next record",
+      "hint": {
+        "answer": "Answer it on the card on the left (pick, then submit); the run goes on."
+      },
+      "stateReason": {
+        "answer_sent": "Answered, waiting for the Hive",
+        "answer_refused": "Answer not used"
+      }
+    },
+    "wait": {
+      "done": "Answered",
+      "sent": "Sent · waiting for the Hive to take it (about every 20 s)",
+      "taken": "Hive received",
+      "takenAt": "Hive received · {{at}}",
+      "gone": "Not used: this wait was settled somewhere else",
+      "refused": "Not used: {{reason}}",
+      "refusedHint": "Answer it in the Hive session, or discard this run.",
+      "openSession": "Open session",
+      "submit": "Submit choice",
+      "decisionMeta": "Decision",
+      "questionMeta": "Question",
+      "approvalMeta": "Approval",
+      "approved": "approved",
+      "denied": "denied",
+      "failed": "Not sent: {{error}}",
+      "reason": {
+        "no_option": "the answer is not one of its options",
+        "changed": "it changed on the Hive after you saw it",
+        "too_long": "it is too long to show whole here",
+        "run_refused": "the run already moved on, or another answer came first",
+        "not_recorded": "the Hive could not record it",
+        "other": "the Hive did not say why"
+      }
     }
   },
   "usage": {

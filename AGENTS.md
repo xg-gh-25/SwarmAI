@@ -585,6 +585,7 @@ Claude trailer to Swarm). An earlier version of this file called them dead; that
 | `pre-commit` | CMHK SDK-drift check | live |
 | `pre-commit` | `scripts/lint_doc_frontmatter.py --staged` (when `docs/*.md` is staged); CI runs the same check as `--diff BASE` on the docs a push / PR adds or modifies | live |
 | `pre-commit` | `scripts/sync_discussions.py --check` mirror drift (when `docs/discussions/` is staged) | live |
+| `pre-commit` | `scripts/precommit_bvt_manifest.sh`: when `backend/tests/` is staged, `backend/tests/bvt_manifest.txt` must name only files that exist (deleting a test without its manifest line stops the BVT); CI's BVT step fails the same way | live |
 | `pre-commit` | `scripts/precommit_breaks.sh`: a staged change that breaks a caller (a removed function still called, a removed keyword still passed, a new required parameter not passed), from the code graph (`core.code_intel.changed --staged --breaks`); only such a definite break blocks, anything it cannot check lets the commit through with a line | live |
 
 What these hooks do NOT cover:

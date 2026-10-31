@@ -404,7 +404,7 @@ def _runs_env(monkeypatch, tmp_path, state_handler, asks=()):
     (tmp_path / "dispatches.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
     _answer_env(monkeypatch, {})
-    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, bucket, hive: [dict(a) for a in asks])
+    monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, bucket, hive, *_a: [dict(a) for a in asks])
     _use(monkeypatch, state_handler)
 
 

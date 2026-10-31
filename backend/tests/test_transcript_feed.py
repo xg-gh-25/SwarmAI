@@ -133,7 +133,7 @@ async def test_a_question_and_its_answer_are_stored(hub):
         resp = await chat_router.get_session_messages(sid, req, limit=None, before_id=None, turns=None)
     blocks = [b for m in json.loads(resp.body) for b in m["content"]]
     qb = [b for b in blocks if b.get("type") == "ask_user_question"]
-    assert qb == [{**q, "answers": {"Which one?": "A"}}]
+    assert qb == [{**q, "answers": {"Which one?": "A"}, "answered_by": "person"}]
     assert int(resp.headers["X-Transcript-Rev"]) > 0
     assert "ask_user_question" in _TOOL_ONLY_TYPES
     answered = [e for e in _feed(hub, sid) if e["type"] == "transcript_row"

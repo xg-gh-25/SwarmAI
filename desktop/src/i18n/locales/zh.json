@@ -1937,7 +1937,39 @@
       "notPlaced": "带回了，但没能放进本机的 Brain 目录",
       "positionRecords": "记录 {{n}} / {{total}}",
       "previousRecord": "上一条记录",
-      "nextRecord": "下一条记录"
+      "nextRecord": "下一条记录",
+      "hint": {
+        "answer": "在左边的卡片上回答（先选再提交），这一单就会继续。"
+      },
+      "stateReason": {
+        "answer_sent": "已回答，等 Hive 接收",
+        "answer_refused": "回答没用上"
+      }
+    },
+    "wait": {
+      "done": "已回答",
+      "sent": "已送出 · 等 Hive 接收（约 20 秒一轮）",
+      "taken": "Hive 已收到",
+      "takenAt": "Hive 已收到 · {{at}}",
+      "gone": "这个回答没有被用上，等待已经在别处了结",
+      "refused": "没用上：{{reason}}",
+      "refusedHint": "可以到 Hive 会话里直接回答，或者丢弃这一单。",
+      "openSession": "打开会话",
+      "submit": "提交选择",
+      "decisionMeta": "决定",
+      "questionMeta": "问题",
+      "approvalMeta": "审批",
+      "approved": "批准",
+      "denied": "拒绝",
+      "failed": "没送出：{{error}}",
+      "reason": {
+        "no_option": "回答不是它的选项之一",
+        "changed": "你看到以后它在 Hive 上变了",
+        "too_long": "内容太长，这里显示不全",
+        "run_refused": "run 已经往前走了，或者别处先回答了",
+        "not_recorded": "Hive 没能记下它",
+        "other": "Hive 没说原因"
+      }
     }
   },
   "usage": {

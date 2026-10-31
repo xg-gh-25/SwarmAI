@@ -63,7 +63,8 @@ export type SwarmOutCommand = 'accept' | 'rerun' | 'discard' | 'stop' | 'open_se
 export interface SwarmOutAction {
   key: SwarmOutCommand;
   primary: boolean;
-  variant?: 'land' | 'manual' | 'verdict' | 'read_only';
+  /** hint: not a command, a pointer to where the person acts (the wait card) */
+  variant?: 'land' | 'manual' | 'verdict' | 'read_only' | 'hint';
 }
 
 export interface SwarmOutSettle {
@@ -225,6 +226,9 @@ export interface SwarmOutDecisionOption {
   risk: 'low' | 'high';
 }
 
+export type SwarmOutWaitPhase = 'waiting' | 'sent' | 'taken' | 'refused' | 'gone';
+export type SwarmOutRefusalReason = 'no_option' | 'changed' | 'too_long' | 'run_refused' | 'not_recorded' | 'other';
+
 export interface SwarmOutAsk {
   /** decision: a pipeline run on the Hive waits on a person's pick (open while the run waits) */
   kind: 'question' | 'approval' | 'decision';
@@ -247,6 +251,16 @@ export interface SwarmOutAsk {
   possible_dispatch_title?: string | null;
   /** the Hive refused the answer given (it did not match what was waiting): not delivered */
   refused?: boolean;
+  /** where the wait is (design 2026-10-31-swarm-out-single-loop-fixes §2.1): ``asks``
+   *  holds waiting and refused, ``answered`` holds sent, taken and gone */
+  phase?: SwarmOutWaitPhase;
+  /** refused: why the Hive did not use the answer (a code; the Host words it) */
+  refused_reason?: SwarmOutRefusalReason;
+  /** what the person chose (from the Host's own answer file) */
+  chosen?: string;
+  /** answered: the question (a decision's or a question's) or an approval's command */
+  question_text?: string;
+  answered_at?: string;
   /** questions / options the Host did not list */
   omitted?: { questions: number; options: number };
   /** decision: the run, its question, why the evidence was not enough, its options */
@@ -259,6 +273,9 @@ export interface SwarmOutAsk {
 export interface SwarmOutRuns {
   runs: SwarmOutRun[];
   asks: SwarmOutAsk[];
+  /** the waits answered from here (sent, taken, gone), for the cards' one line; absent
+   *  from an older backend */
+  answered?: SwarmOutAsk[];
   errors: string[];
   /** tasks refused at intake, all time (dispatch-center §2.3); ``private``: of them,
    *  because they need a private network. null: unreadable; absent: older backend */

@@ -8,8 +8,11 @@ monitoring beyond what the dashboard needs to list a run.
 - ``dispatch`` — start a session on the Hive with the task and return as soon as the
   Hive names the session. The turn keeps running on the Hive after we disconnect
   (``routers/chat.py`` detaches a turn whose client went away; measured 2026-10-27).
-- ``list_runs`` — the local dispatch log, each row with its Hive's open questions
-  (each naming its dispatch; an answer the Hive refused stays listed as not delivered)
+- ``list_runs`` — the local dispatch log, each row with its Hive's waits (each naming
+  its dispatch) in two lists: ``asks``, what needs the person (waiting, or an answer
+  the Hive refused, with its ``refused_reason`` code), and ``answered``, what was answered from
+  here (sent, taken: the Hive closed it ``why: delivered``, gone: closed otherwise),
+  each with what was chosen (design 2026-10-31-swarm-out-single-loop-fixes §2.1);
   and whether its session is streaming on the Hive right now. Computed by
   ``refresh_runs`` (one at a time) and kept as ``snapshot``; ``run_refresh_loop``
   recomputes it every minute so runs settle and Hive workspaces are released even
@@ -903,7 +906,8 @@ def _clean_decision(rec: Any, hive: str) -> Optional[dict[str, Any]]:
     out["truncated"] = rec.get("truncated") is not False or cut
     out["shown_sha256"] = decision_digest(out)
     if rec.get("refused") is True:
-        out["refused"] = True
+        # a Hive from before decision closes says so in its snapshot (no reason given)
+        out["snapshot_refused"] = True
     return out
 
 
@@ -933,56 +937,196 @@ def _too_old(asked_at: str, now: float) -> bool:
     return now - t > ASK_MAX_AGE_S
 
 
-def _open_asks(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
-    """Questions the Hive wrote that are neither answered, closed nor too old, and the
-    ones whose answer the Hive's bridge refused (``refused``: not delivered, the person
-    must answer on the Hive's own page) so a refusal is never mistaken for delivery."""
-    def keys(prefix: str) -> dict[str, Any]:
-        found: dict[str, Any] = {}
-        paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-            found.update({o["Key"][len(prefix):]: o.get("LastModified") for o in page.get("Contents", [])})
-        return found
+#: why a Hive did not use an answer (``closed/`` ``reason``); anything else is "other"
+REFUSAL_REASONS = ("no_option", "changed", "too_long", "run_refused", "not_recorded")
+#: a wait's phase on the Host (design 2026-10-31-swarm-out-single-loop-fixes §2.1)
+WAIT_PHASES = ("waiting", "sent", "taken", "refused", "gone")
+MAX_CHOSEN_CHARS = 1000
+#: bodies that never change once written (an answer, a delivered close), and the ask a
+#: card answered, by object key and its LastModified: read once, not every poll
+_BODIES: dict[tuple[str, str], Any] = {}
+_BODIES_MAX = 4000
+
+
+def _keys(s3, bucket: str, prefix: str) -> dict[str, Any]:
+    found: dict[str, Any] = {}
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        found.update({o["Key"][len(prefix):]: o.get("LastModified") for o in page.get("Contents", [])})
+    return found
+
+
+def _age_ok(lm: Any, now: float) -> bool:
+    """An object written within the longest wait (no LastModified: kept)."""
+    return not hasattr(lm, "timestamp") or now - lm.timestamp() <= ASK_MAX_AGE_S
+
+
+def _body(s3, bucket: str, key: str, lm: Any, cap: int, keep: bool) -> Any:
+    """A bridge object's JSON, or None when it is unreadable. ``keep``: it never changes
+    once written, so it is read once per LastModified."""
+    ck = (key, str(lm))
+    if keep and ck in _BODIES:
+        return _BODIES[ck]
+    try:
+        body = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read(cap))
+    except Exception:  # noqa: BLE001 — unreadable: the caller treats it as absent
+        logger.debug("swarm out: bridge object %s unreadable", key, exc_info=True)
+        return None
+    if keep:
+        if len(_BODIES) >= _BODIES_MAX:
+            _BODIES.clear()
+        _BODIES[ck] = body
+    return body
+
+
+def _chosen(kind: str, answer: Any) -> str:
+    """What the person chose, from the Host's own answer file (only the Host writes
+    ``answer/``: the Hive role can only read it), for the card's one line."""
+    if not isinstance(answer, dict):
+        return ""
+    if kind == "decision":
+        label = answer.get("shown_label")
+        out = label if isinstance(label, str) and label else str(answer.get("option_id") or "")
+    elif kind == "approval":
+        out = answer.get("decision") if answer.get("decision") in ("approve", "deny") else ""
+    else:
+        vals = answer.get("answers") if isinstance(answer.get("answers"), dict) else {}
+        out = " · ".join(str(v) for v in vals.values())
+    return out[:MAX_CHOSEN_CHARS]
+
+
+def _open_asks(s3, bucket: str, hive: str,
+               answered_out: Optional[list[dict[str, Any]]] = None,
+               decisions: Optional[list[dict[str, Any]]] = None) -> list[dict[str, Any]]:
+    """The waits of one Hive that need the person (design 2026-10-31-swarm-out-single-
+    loop-fixes §2.1): questions and approvals the Hive wrote that are neither answered,
+    closed nor too old, and the ones whose answer the Hive's bridge refused (``refused``,
+    with its ``refused_reason`` code: not used, so never mistaken for delivery; an
+    approval's own ``reason`` is its text).
+
+    ``decisions``: the pipeline decisions the Hive lists (``_read_decisions``); one
+    answered here is marked the same way (refused, or moved to the answered list).
+    None when the list could not be read: then an answered decision is not listed at
+    all this time (it may still be waiting; never concluded gone from a list not read).
+    ``answered_out``: when given, the waits answered from here are appended to it with
+    their ``phase``: ``sent`` (the Hive has not closed it), ``taken`` (closed ``why:
+    delivered``, the only sign the answer was used), ``gone`` (closed otherwise, or no
+    longer listed: answered on the Hive's page, expired, the session ended). Each keeps
+    ``chosen`` (from the Host's own answer file) and ``question_text``; an answer older
+    than the longest wait is no longer listed."""
     base = f"bridge/{hive}/"
-    asks = keys(base + "ask/")
-    answered = keys(base + "answer/")
-    closed = keys(base + "closed/")
+    asks = _keys(s3, bucket, base + "ask/")
+    answered = _keys(s3, bucket, base + "answer/")
+    closed = _keys(s3, bucket, base + "closed/")
     now = time.time()
 
-    def refused(rel: str) -> bool:
-        """A recent close that says the answer was refused (older ones are past the
-        longest wait anyway, so their bodies are not read)."""
-        lm = closed.get(rel)
-        if lm is None or (hasattr(lm, "timestamp") and now - lm.timestamp() > ASK_MAX_AGE_S):
-            return False
-        try:
-            body = json.loads(s3.get_object(Bucket=bucket, Key=base + "closed/" + rel)["Body"].read(4096))
-        except Exception:   # unreadable: treated as an ordinary close
-            logger.debug("swarm out: close record %s unreadable, treated as ordinary",
-                         rel, exc_info=True)
-            return False
-        return isinstance(body, dict) and body.get("why") == "answer_refused"
+    def close_of(rel: str) -> Optional[dict[str, Any]]:
+        """The close record (``{}`` when it is unreadable: an ordinary close), or None."""
+        if rel not in closed:
+            return None
+        ck = (base + "closed/" + rel, str(closed[rel]))
+        body = _BODIES.get(ck)
+        if body is None:
+            body = _body(s3, bucket, ck[0], closed[rel], 4096, keep=False)
+            # a delivered close is final (kept); a refusal may still turn plain
+            if isinstance(body, dict) and body.get("why") == "delivered":
+                _BODIES[ck] = body
+        return body if isinstance(body, dict) else {}
+
+    def phase_of(rel: str, listed: bool) -> tuple[str, str]:
+        cl = close_of(rel)
+        if cl is None:
+            return ("sent" if listed else "gone"), ""
+        if cl.get("why") == "delivered":
+            return "taken", ""
+        if cl.get("why") == "answer_refused":
+            reason = cl.get("reason")
+            return "refused", reason if reason in REFUSAL_REASONS else "other"
+        return "gone", ""
+
+    def answered_entry(rec: dict[str, Any], rel: str, phase: str, answer: Any) -> dict[str, Any]:
+        if rec["kind"] == "decision":
+            text = answer.get("shown_question") if isinstance(answer, dict) else None
+            question = text if isinstance(text, str) and text else rec.get("question", "")
+        elif rec["kind"] == "approval":
+            question = rec.get("command", "")
+        else:
+            question = next((q["question"] for q in rec.get("questions") or []), "")
+        return {"kind": rec["kind"], "hive": hive, "session_id": rec["session_id"],
+                "request_id": rec["request_id"], "asked_at": rec.get("asked_at", ""),
+                "phase": phase, "chosen": _chosen(rec["kind"], answer),
+                "question_text": str(question)[:MAX_CHOSEN_CHARS],
+                "answered_at": str(answer.get("answered_at", ""))[:40] if isinstance(answer, dict) else ""}
 
     out = []
     for rel in sorted(asks):
-        was_refused = False
-        if rel in closed:
-            # a refusal always follows a Host answer: no other close body is read
-            if rel not in answered or not refused(rel):
-                continue
-            was_refused = True
-        elif rel in answered:
+        is_answered = rel in answered
+        if rel in closed and not is_answered:
+            continue                               # closed before any answer from here
+        if is_answered and not _age_ok(answered[rel], now):
             continue
-        try:
-            body = s3.get_object(Bucket=bucket, Key=base + "ask/" + rel)["Body"].read(64 * 1024)
-            clean = _clean_ask(json.loads(body), hive)
-        except Exception as e:   # one unreadable or malformed ask must not hide the others
-            logger.warning("swarm_out: skipped an unreadable ask from %s (%s)", hive, type(e).__name__)
+        listed = rel not in closed
+        # an answered ask's text is read once (by LastModified: a restart rewrites it)
+        raw = _body(s3, bucket, base + "ask/" + rel, asks[rel], 64 * 1024, keep=is_answered)
+        if raw is None:   # one unreadable or malformed ask must not hide the others
+            logger.warning("swarm_out: skipped an unreadable ask from %s", hive)
             continue
-        if clean is not None and not _too_old(clean["asked_at"], now):
-            if was_refused:
-                clean["refused"] = True
+        clean = _clean_ask(raw, hive)
+        if clean is None:
+            continue
+        clean = dict(clean)
+        if not is_answered:
+            if not _too_old(clean["asked_at"], now):
+                clean["phase"] = "waiting"
+                out.append(clean)
+            continue
+        phase, reason = phase_of(rel, listed)
+        answer = _body(s3, bucket, base + "answer/" + rel, answered[rel], 64 * 1024, keep=True)
+        if phase == "refused":
+            clean.update(refused=True, phase="refused", refused_reason=reason, chosen=_chosen(clean["kind"], answer))
             out.append(clean)
+        elif answered_out is not None:
+            answered_out.append(answered_entry(clean, rel, phase, answer))
+    # the pipeline decisions: listed in decisions.json, answered and closed like a question
+    listed_rel = set()
+    for d in list(decisions or []):
+        rel = f"{d['session_id']}/{d['request_id']}.json"
+        listed_rel.add(rel)
+        if rel not in answered:
+            d.pop("snapshot_refused", None)
+            d["phase"] = "waiting"
+            continue
+        decisions.remove(d)
+        phase, reason = phase_of(rel, True)
+        if phase == "sent" and d.pop("snapshot_refused", False):
+            phase, reason = "refused", "other"
+        answer = _body(s3, bucket, base + "answer/" + rel, answered[rel], 64 * 1024, keep=True)
+        if phase == "refused":
+            d.update(refused=True, phase="refused", refused_reason=reason, chosen=_chosen("decision", answer))
+            out.append(d)
+        elif answered_out is not None:
+            answered_out.append(answered_entry(d, rel, phase, answer))
+    # a Hive from before decision closes never closes one: an answered decision it no
+    # longer lists may have been taken, so it is not shown as "not used"
+    closes_decisions = any(rel.partition("/")[2].startswith(DECISION_KEY_PREFIX) for rel in closed)
+    if answered_out is not None and decisions is not None:
+        # an answered decision the Hive no longer lists: its card text is in the answer
+        for rel, lm in sorted(answered.items()):
+            sid, _, name = rel.partition("/")
+            rid = name[:-5] if name.endswith(".json") else ""
+            if not rid.startswith(DECISION_KEY_PREFIX) or rel in listed_rel or not _age_ok(lm, now) \
+                    or not KEY_RE.match(sid) or not KEY_RE.match(rid):
+                continue
+            answer = _body(s3, bucket, base + "answer/" + rel, lm, 64 * 1024, keep=True)
+            if not isinstance(answer, dict):
+                continue
+            phase, _reason = phase_of(rel, False)
+            if rel not in closed and not closes_decisions:
+                continue
+            rec = {"kind": "decision", "session_id": sid, "request_id": rid,
+                   "asked_at": "", "question": ""}
+            # no longer waiting: a refusal no longer matters (settled elsewhere)
+            answered_out.append(answered_entry(rec, rel, "gone" if phase == "refused" else phase, answer))
     return out
 
 
@@ -1011,11 +1155,15 @@ async def _session_states(inst: dict[str, Any]) -> Optional[dict[str, dict[str, 
 
 def run_state(row: dict[str, Any], hive_status: Optional[str],
               sessions: Optional[dict[str, dict[str, Any]]], has_open_ask: bool,
-              has_open_decision: bool = False) -> tuple[str, str]:
+              has_open_decision: bool = False, has_refused: bool = False,
+              has_sent: bool = False) -> tuple[str, str]:
     """(state, reason) of one dispatched run: waiting | running | stopped | unknown.
 
-    A pipeline decision of the session that the Hive lists as waiting (not refused)
-    decides ``waiting``: the run waits on a person whether or not a turn is open.
+    A pipeline decision of the session that the Hive lists as waiting (not answered)
+    decides ``waiting``: the run waits on a person whether or not a turn is open. Then an
+    answer the Hive refused (``answer_refused``: the person answers on the Hive's page
+    or discards), then an answer sent and not yet taken while nothing else waits
+    (``running``, ``answer_sent``: nothing to do but wait for the Hive's next pass).
     Otherwise the Hive's own report of the session decides when there is one; an open
     mirrored question decides ``waiting`` only when the Hive could not be asked.
     "stopped" means the session is not working now: the Host cannot tell a finished run
@@ -1028,6 +1176,10 @@ def run_state(row: dict[str, Any], hive_status: Optional[str],
         return "unknown", "no_session_id"
     if has_open_decision:
         return "waiting", "decision"
+    if has_refused:
+        return "waiting", "answer_refused"
+    if has_sent and not has_open_ask:
+        return "running", "answer_sent"
     if sessions is None:
         return ("waiting", "question") if has_open_ask else ("unknown", "hive_silent")
     e = sessions.get(row["session_id"])
@@ -1053,17 +1205,21 @@ async def _read_hive(hive_id: str) -> tuple[list[dict[str, Any]], Optional[dict[
         return [], None, ["could not read a Hive record"]
 
     def read_asks() -> tuple[list[dict[str, Any]], bool]:
-        """The open asks (cleaned), then the waiting pipeline decisions; a decision list
-        that cannot be read keeps the asks (and is reported)."""
+        """The waits (cleaned), each with its ``phase``: the ones that need the person
+        (waiting, refused) and the ones answered from here (sent, taken, gone; split off
+        by _compute_runs). A decision list that cannot be read keeps the questions (and
+        is reported)."""
         s3 = _s3(inst, "read")
-        found = _open_asks(s3, inst["s3_bucket"], inst["name"])
+        decisions: Optional[list[dict[str, Any]]]
         try:
-            found += _read_decisions(s3, inst["s3_bucket"], inst["name"])
+            decisions = _read_decisions(s3, inst["s3_bucket"], inst["name"])
         except Exception as e:
             logger.warning("swarm_out: reading the decisions of %s failed (%s)",
                            inst["name"], type(e).__name__)
-            return found, False
-        return found, True
+            decisions = None          # unknown: no answered decision is concluded gone
+        answered: list[dict[str, Any]] = []
+        found = _open_asks(s3, inst["s3_bucket"], inst["name"], answered, decisions)
+        return found + (decisions or []) + answered, decisions is not None
 
     async def questions() -> None:
         try:
@@ -1220,19 +1376,26 @@ async def _compute_runs() -> dict[str, Any]:
     targets = sorted(h for h, st in status_of.items() if st in ("running", None))
     results = await asyncio.gather(*(_read_hive(h) for h in targets))
     asks: list[dict[str, Any]] = []
+    answered: list[dict[str, Any]] = []
     sessions_of: dict[str, Optional[dict[str, dict[str, Any]]]] = {}
     for hive_id, (hive_asks, sessions, errs) in zip(targets, results):
-        asks.extend(hive_asks)
+        for a in hive_asks:
+            # ``asks``: what needs the person (waiting, refused), as every reader counts
+            # it; ``answered``: answered from here (sent, taken, gone), for the cards
+            (answered if a.get("phase") in ("sent", "taken", "gone") else asks).append(a)
         sessions_of[hive_id] = sessions
         errors.extend(errs)
     open_asks = {(a["hive_id"], a.get("session_id")) for a in asks if not a.get("refused")}
     open_decisions = {(a["hive_id"], a.get("session_id")) for a in asks
                       if not a.get("refused") and a.get("kind") == "decision"}
+    refused_of = {(a["hive_id"], a.get("session_id")) for a in asks if a.get("refused")}
+    sent_of = {(a["hive_id"], a.get("session_id")) for a in answered if a.get("phase") == "sent"}
     for r in rows:
+        at = (r["hive_id"], r.get("session_id"))
         state, reason = run_state(r, status_of.get(r["hive_id"]),
                                   sessions_of.get(r["hive_id"]),
-                                  (r["hive_id"], r.get("session_id")) in open_asks,
-                                  (r["hive_id"], r.get("session_id")) in open_decisions)
+                                  at in open_asks, at in open_decisions,
+                                  at in refused_of, at in sent_of)
         r["state"], r["state_reason"] = state, reason
         r["waiting"] = state == "waiting"
         r["running"] = None if state == "unknown" else state == "running"
@@ -1246,7 +1409,7 @@ async def _compute_runs() -> dict[str, Any]:
         r["session_unknown"] = not r.get("session_id")
         if r["session_unknown"]:
             unnamed.setdefault(r["hive_id"], r.get("title"))   # rows are newest first
-    for a in asks:
+    for a in [*asks, *answered]:
         a["dispatch_title"] = titles.get((a["hive_id"], a.get("session_id")))
         a["possible_dispatch_title"] = unnamed.get(a["hive_id"]) if a["dispatch_title"] is None else None
     # each run's kept result (core/swarm_out_results); the checks due start here
@@ -1272,7 +1435,7 @@ async def _compute_runs() -> dict[str, Any]:
         refusals = await asyncio.to_thread(refusal_counts)
     except (OSError, UnicodeError):
         refusals = None
-    return {"runs": rows, "asks": asks, "errors": errors, "refusals": refusals}
+    return {"runs": rows, "asks": asks, "answered": answered, "errors": errors, "refusals": refusals}
 
 
 # ── the person's commands on a run (design 2026-10-31-swarm-out-run-review §3.3) ──
@@ -1523,7 +1686,7 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
         listed = await asyncio.to_thread(_read_decisions, s3, inst["s3_bucket"], inst["name"])
         rec = next((d for d in listed if d["session_id"] == session_id
                     and d["request_id"] == request_id), None)
-        if rec is None or rec.get("refused"):
+        if rec is None or await asyncio.to_thread(_load, "closed/") is not None:
             raise SwarmOutError("this decision is no longer waiting on the Hive")
         if await asyncio.to_thread(_load, "answer/") is not None:
             raise SwarmOutError("this question was already answered")
@@ -1532,6 +1695,11 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
         if shown_sha256 != rec["shown_sha256"]:
             raise SwarmOutError("the decision changed on the Hive since it was shown; reload")
         body["shown_sha256"] = shown_sha256
+        # what the person picked from, for the card's line once the Hive stops listing
+        # it (the Hive reads only request_id, option_id and shown_sha256)
+        option = next(o for o in rec["options"] if o["id"] == option_id)
+        body["shown_label"] = f"{option_id} — {option['choice']}"[:MAX_CHOSEN_CHARS]
+        body["shown_question"] = rec.get("question", "")[:MAX_CHOSEN_CHARS]
         await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
         return {"ok": True, "request_id": request_id}
     raw = await asyncio.to_thread(_load, "ask/")

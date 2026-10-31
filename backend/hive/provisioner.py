@@ -1305,6 +1305,11 @@ rsync -a --delete \
 # Re-install Python package (picks up new deps from pyproject.toml)
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 
+# The newest installed Node as the default node / npm / npx (design
+# 2026-10-31-swarm-out-single-loop-fixes §2.7). The backend needs no Node, so a Hive whose
+# Node is older than the frontend needs still updates; the reason is in this output.
+bash /opt/swarmai/hive/ensure-node.sh || echo "WARN: the Hive's Node is older than the frontend needs; its frontend tests cannot run"
+
 # NOTE: /etc/caddy/Caddyfile lives OUTSIDE /opt/swarmai/ — never touched by rsync.
 # The deployed Caddyfile has inline bcrypt auth written by user_data.py.
 # Caddy config changes require a dedicated SSM command (update_caddyfile).

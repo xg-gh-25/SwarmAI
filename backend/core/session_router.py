@@ -6141,7 +6141,7 @@ class SessionRouter:
         # turn goes on, so a reload during the continuation shows it answered.
         if tool_use_id:
             from .question_prompt import record_answer
-            await record_answer(session_id, tool_use_id, answer)
+            await record_answer(session_id, tool_use_id, answer, answered_by)
 
         # The writer's row key is the originating turn's client_id (stashed by
         # send_message), so this continuation row carries the SAME

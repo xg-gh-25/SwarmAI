@@ -30,10 +30,11 @@
  * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutRun } from '../../services/swarmOut';
+import { type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';
+import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { JudgeTag } from './JudgeTag';
 import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
 import { RunList } from './RunList';
@@ -46,10 +47,6 @@ const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-car
 const muted = 'text-[var(--color-text-muted)]';
 const btn = 'px-2.5 py-1 rounded-md text-[12.5px] border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50';
 
-function errText(e: unknown, fallback: string): string {
-  const m = (e as { message?: string })?.message;
-  return m && m.length < 200 ? m : fallback;
-}
 
 /** A small status dot in a tone (./tone). */
 export function Dot({ tone, className = '' }: { tone: Tone; className?: string }) {
@@ -59,152 +56,6 @@ export function Dot({ tone, className = '' }: { tone: Tone; className?: string }
 /** A card border tinted for a tone that should stand out (attention, error); others keep the plain border. */
 const cardTint = (tone: Tone): React.CSSProperties | undefined =>
   tone === 'error' || tone === 'attention' ? { borderColor: `color-mix(in srgb, ${TONE_VAR[tone]} 45%, var(--color-border))` } : undefined;
-
-/** One question a Hive waits on, with its answer controls (the run's big card shows
- *  the questions of its session; the run view, those of no listed run). */
-export function AskCard({ ask, onDone, onDirty }: { ask: SwarmOutAsk; onDone: () => void;
-  /** whether something picked or typed has not been sent (the run's card keeps it) */
-  onDirty?: (dirty: boolean) => void }) {
-  const { t } = useTranslation();
-  // single-select / typed answers: the text; multi-select: the picked labels
-  const [picks, setPicks] = useState<Record<string, string>>({});
-  const [multi, setMulti] = useState<Record<string, string[]>>({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const send = async (body: { answers?: Record<string, string>; decision?: 'approve' | 'deny'; option_id?: string }) => {
-    setBusy(true);
-    setError('');
-    try {
-      await swarmOutService.answer(ask, body);
-      onDone();
-    } catch (e) {
-      setError(errText(e, t('swarmOut.live.submitFailed')));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const questions = ask.questions ?? [];
-  const isMulti = (q: SwarmOutQuestion) => q.multiSelect && q.options.length > 0;
-  // a multi-select answer is its picks joined with ", " in option order (as the chat's
-  // AskUserQuestion); kept as a list until sent, so a label with a comma stays whole
-  const answerOf = (q: SwarmOutQuestion) => (isMulti(q)
-    ? q.options.map((o) => o.label).filter((l) => (multi[q.question] ?? []).includes(l)).join(', ')
-    : (picks[q.question] ?? ''));
-  const complete = questions.length > 0 && questions.every((q) => answerOf(q).trim());
-  const toggle = (q: SwarmOutQuestion, label: string) => {
-    if (!isMulti(q)) { setPicks((p) => ({ ...p, [q.question]: label })); return; }
-    setMulti((m) => {
-      const cur = m[q.question] ?? [];
-      return { ...m, [q.question]: cur.includes(label) ? cur.filter((x) => x !== label) : [...cur, label] };
-    });
-  };
-  const picked = (q: SwarmOutQuestion, label: string) =>
-    isMulti(q) ? (multi[q.question] ?? []).includes(label) : picks[q.question] === label;
-  const omitted = (ask.omitted?.questions ?? 0) + (ask.omitted?.options ?? 0);
-  const dirty = Object.values(picks).some((v) => v.trim()) || Object.values(multi).some((v) => v.length > 0);
-  useEffect(() => { onDirty?.(dirty); }, [dirty, onDirty]);
-  useEffect(() => () => onDirty?.(false), [onDirty]);
-
-  return (
-    <div className={`${card} px-4 py-3`} style={{ borderLeft: `3px solid ${TONE_VAR.attention}`, ...cardTint('attention') }} data-testid="swarm-out-ask">
-      <div className={`text-[12px] flex items-center gap-1.5 min-w-0 ${muted}`}>
-        <Dot tone="attention" />
-        <span className="min-w-0 truncate">{ask.hive} · <span data-testid="swarm-out-ask-source">{ask.dispatch_title
-          ?? (ask.possible_dispatch_title ? t('swarmOut.ask.maybe', { title: ask.possible_dispatch_title }) : t('swarmOut.ask.otherSession'))}</span> · {when(ask.asked_at)} · <span style={{ color: TONE_VAR.attention }}>{ask.refused ? t('swarmOut.ask.notDelivered') : t('swarmOut.ask.waiting')}</span></span>
-      </div>
-      {ask.refused ? (
-        <div className="mt-1 text-[12.5px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-refused">
-          {t('swarmOut.ask.refused')}
-        </div>
-      ) : ask.kind === 'decision' ? (
-        <>
-          <div className="mt-1 font-medium">{t('swarmOut.ask.decisionTitle')}</div>
-          <div className="mt-1 whitespace-pre-wrap">{ask.question}</div>
-          {ask.why && <div className={`mt-0.5 text-[12.5px] ${muted}`}>{t('swarmOut.ask.decisionWhy', { why: ask.why })}</div>}
-          {ask.truncated && (
-            <div className="mt-1 text-[12px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-truncated">
-              {t('swarmOut.ask.decisionTruncated')}
-            </div>
-          )}
-          {/* the run takes one of its options, nothing typed; a decision not shown whole is answered on the Hive */}
-          {!ask.truncated && <div className="mt-2 flex flex-col gap-1.5" data-testid="swarm-out-ask-decision">
-            {(ask.options ?? []).map((o) => (
-              <button key={o.id} type="button" className={`${btn} text-left`} disabled={busy}
-                onClick={() => send({ option_id: o.id })}>
-                <span className="font-medium">{o.id} — {o.choice}</span>
-                {(o.consequence || !o.reversible || o.risk === 'high') && (
-                  <span className={`block text-[12px] ${muted}`}>
-                    {[o.consequence, !o.reversible ? t('swarmOut.ask.irreversible') : '',
-                      o.risk === 'high' ? t('swarmOut.ask.highRisk') : ''].filter(Boolean).join(t('swarmOut.sep.list'))}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>}
-        </>
-      ) : ask.kind === 'approval' ? (
-        <>
-          <div className="mt-1 font-medium">{t('swarmOut.ask.approvalTitle')}{ask.tool_name && <span className={`ml-1.5 font-mono text-[12px] ${muted}`} data-testid="swarm-out-ask-tool">{ask.tool_name}</span>}</div>
-          {ask.reason && <div className={`mt-0.5 text-[12.5px] ${muted}`}>{ask.reason}</div>}
-          <pre className="mt-2 mb-0 p-2 rounded-md bg-[var(--color-hover)] text-[12px] whitespace-pre-wrap break-all font-mono">{ask.command}</pre>
-          {ask.truncated && (
-            <div className="mt-1 text-[12px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-truncated">
-              {t('swarmOut.ask.truncated')}
-            </div>
-          )}
-          <div className="mt-2 flex gap-2">
-            {!ask.truncated && <button type="button" className={btn} disabled={busy} onClick={() => send({ decision: 'approve' })}>{t('swarmOut.ask.approve')}</button>}
-            <button type="button" className={btn} disabled={busy} onClick={() => send({ decision: 'deny' })}>{t('swarmOut.ask.deny')}</button>
-          </div>
-        </>
-      ) : (
-        <>
-          {questions.map((q) => (
-            <div key={q.question} className="mt-2">
-              <div className="font-medium whitespace-pre-wrap">{q.question}</div>
-              {q.options.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {q.options.map((o) => (
-                    <button
-                      key={o.label}
-                      type="button"
-                      title={o.description || undefined}
-                      aria-pressed={picked(q, o.label)}
-                      className={`${btn} ${picked(q, o.label) ? 'bg-[var(--color-hover)] font-medium' : ''}`}
-                      onClick={() => toggle(q, o.label)}
-                    >{o.label}</button>
-                  ))}
-                </div>
-              )}
-              {/* a multi-select question with options is answered by its picks only */}
-              {!(q.multiSelect && q.options.length > 0) && (
-                <input
-                  aria-label={t('swarmOut.ask.answerFor', { question: q.question })}
-                  className="mt-1.5 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[12.5px]"
-                  placeholder={q.options.length ? t('swarmOut.ask.ownAnswer') : t('swarmOut.ask.yourAnswer')}
-                  value={q.options.some((o) => o.label === picks[q.question]) ? '' : (picks[q.question] ?? '')}
-                  onChange={(e) => setPicks((p) => ({ ...p, [q.question]: e.target.value }))}
-                />
-              )}
-            </div>
-          ))}
-          {omitted > 0 && (
-            <div className={`mt-1.5 text-[12px] ${muted}`} data-testid="swarm-out-ask-omitted">
-              {t('swarmOut.ask.omitted', { count: omitted })}
-            </div>
-          )}
-          <div className="mt-2">
-            <button type="button" className={btn} disabled={busy || !complete}
-              onClick={() => send({ answers: Object.fromEntries(questions.map((q) => [q.question, answerOf(q)])) })}>{t('swarmOut.ask.submit')}</button>
-          </div>
-        </>
-      )}
-      {error && <div className="mt-1.5 text-[12px] text-[var(--color-status-error)]" role="alert">{error}</div>}
-    </div>
-  );
-}
 
 /** A part with no data source yet: its title and what is missing, demoted. */
 export function Tbd({ title, missing, testId }: { title: string; missing: string; testId?: string }) {
@@ -458,10 +309,17 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
   const at = now ?? Date.now();
   const runs = data?.runs ?? [];
   const asks = data?.asks ?? [];
-  // a question of a listed run is answered on that run's card; the rest here
+  const answered = data?.answered ?? [];
+  // a wait of a listed run is answered on that run's card; the rest here (one answered
+  // here stays as its one line while its answer is within the longest wait)
   const listed = new Set(runs.filter((r) => r.session_id).map((r) => `${r.hive_id}/${r.session_id}`));
-  const loose = asks.filter((a) => !a.refused && !listed.has(`${a.hive_id}/${a.session_id}`));
-  const refused = asks.filter((a) => a.refused);
+  const mine = (a: SwarmOutAsk) => listed.has(`${a.hive_id}/${a.session_id}`);
+  const loose = [...asks.filter((a) => !a.refused && !mine(a)), ...answered.filter((a) => !mine(a))];
+  const refused = asks.filter((a) => a.refused && !mine(a));
+  const sourceOf = (a: SwarmOutAsk) => (
+    <>{a.hive} · <span data-testid="swarm-out-ask-source">{a.dispatch_title
+      ?? (a.possible_dispatch_title ? t('swarmOut.ask.maybe', { title: a.possible_dispatch_title }) : t('swarmOut.ask.otherSession'))}</span>{a.asked_at ? ` · ${when(a.asked_at)}` : ''}</>
+  );
   const unasked = data ? waitingUnasked(data) : [];
   const n = panelNumbers(data, fleet);
   const noRuns = !!data && runs.length === 0;
@@ -482,14 +340,14 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
 
       {loose.length > 0 && (
         <section className="mt-4 flex flex-col gap-2" data-testid="swarm-out-waiting">
-          {loose.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
+          {loose.map((a) => <SwarmOutWaitCard key={`${a.hive_id}/${a.request_id}`} wait={a} onAnswered={reload} source={sourceOf(a)} />)}
         </section>
       )}
       {(unasked.length > 0 || refused.length > 0) && (
         <section className="mt-4" data-testid="swarm-out-on-hive-page">
           <div className={`text-[12px] mb-1.5 ${muted}`}>{t(refused.length ? 'swarmOut.waiting.refused' : 'swarmOut.waiting.unasked')}<OpenHive onOpenHive={onOpenHive} /></div>
           <div className="flex flex-col gap-2">
-            {refused.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
+            {refused.map((a) => <SwarmOutWaitCard key={`${a.hive_id}/${a.request_id}`} wait={a} onAnswered={reload} source={sourceOf(a)} />)}
             {unasked.map((r) => <div key={r.dispatch_id} className={`text-[12.5px] ${muted}`} data-testid="swarm-out-waiting-unasked">{r.title} · {r.hive}</div>)}
           </div>
         </section>
@@ -497,7 +355,7 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
 
       {noRuns ? (
         <div className={`mt-5 text-[12px] ${muted}`}>{t('swarmOut.noRuns')}</div>
-      ) : <RunList runs={runs} asks={asks} now={at} onReload={reload} compact={compact} />}
+      ) : <RunList runs={runs} asks={asks} answered={answered} now={at} onReload={reload} compact={compact} />}
       <Tbd title={t('swarmOut.tbdParts.scheduled')} missing={t('swarmOut.tbdParts.scheduledMissing')} />
     </div>
   );

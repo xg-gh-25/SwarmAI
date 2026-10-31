@@ -929,9 +929,11 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         await self._report(row_id)
         return True
 
-    async def update_question_answers(self, session_id: str, tool_use_id: str, answers: dict) -> bool:
-        """Set ``answers`` on the stored ``ask_user_question`` block ``tool_use_id``
-        (core/question_prompt). True when a row changed; an answered block stays."""
+    async def update_question_answers(self, session_id: str, tool_use_id: str, answers: dict,
+                                      answered_by: Optional[str] = None) -> bool:
+        """Set ``answers`` (and who gave them, ``answered_by``: person or host) on the
+        stored ``ask_user_question`` block ``tool_use_id`` (core/question_prompt). True
+        when a row changed; an answered block stays."""
         import json as _json
         needle = f'%"toolUseId": "{tool_use_id}"%'
         async with self._get_connection() as conn:
@@ -953,6 +955,8 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                     if isinstance(blk, dict) and blk.get("type") == "ask_user_question" \
                             and blk.get("toolUseId") == tool_use_id and not blk.get("answers"):
                         blk["answers"] = dict(answers)
+                        if answered_by in ("person", "host"):
+                            blk["answered_by"] = answered_by
                         hit = True
                 if hit:
                     await conn.execute(

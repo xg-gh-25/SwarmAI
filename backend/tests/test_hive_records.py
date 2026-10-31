@@ -1058,3 +1058,66 @@ def test_lessons_need_no_one_to_take_them():
     from routers import swarm_out as so_router
     assert not hasattr(hive_lessons, "accept") and not hasattr(sor, "accept_lessons")
     assert not hasattr(so_router, "lessons_accept")
+
+
+# ── a question answered after its turn was sealed (design 2026-10-31-swarm-out-single-loop-fixes §2.5) ──
+
+def _asked(i="q"):
+    """A turn that stops on a question (the answer comes after the turn ended)."""
+    return [
+        {"id": f"u{i}", "role": "user", "created_at": "2026-10-29T01:00:00Z", "content": [{"type": "text", "text": "go"}]},
+        {"id": f"a{i}", "role": "assistant", "created_at": "2026-10-29T01:00:01Z", "content": [
+            {"type": "ask_user_question", "toolUseId": "toolu_q", "questions": [{"question": "A or B?"}]},
+            {"type": "turn_outcome", "ended": "paused", "at": "2026-10-29T01:00:01+00:00"}]},
+    ]
+
+
+def _answered(rows):
+    out = json.loads(json.dumps(rows))
+    out[1]["content"][0]["answers"] = {"A or B?": "A"}
+    out[1]["content"][0]["answered_by"] = "person"
+    return out
+
+
+def test_an_answer_given_after_its_turn_was_sealed_reaches_the_summary(host, hive_ws):
+    from core import hive_records as hr
+    from core import swarm_out_results as sor
+    asked = _asked()
+    hr.seal_turn(hive_ws, SID, asked)                         # the turn stops on the question
+    # record_answer wrote the answer onto the stored row; the next turn is sealed after it
+    hr.seal_turn(hive_ws, SID, _answered(asked) + _turn_rows("chose A", i="b"))
+    second = json.loads((hr.session_dir(hive_ws, SID) / hr.entries(hive_ws, SID)["entries"][1]["file"]).read_text())
+    assert second["answers"] == [{"toolUseId": "toolu_q", "answers": {"A or B?": "A"}, "answered_by": "person"}]
+    assert "toolu_q" not in json.dumps(second["rows"])         # the question row is not sealed twice
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    rows, complete, _partial = hr.turn_rows(DID)
+    (block,) = [b for r in rows for b in r["content"] if b.get("type") == "ask_user_question"]
+    assert block["answers"] == {"A or B?": "A"} and block["answered_by"] == "person"
+    human = sor.summarize(rows, False, None)["work"]["human"]
+    assert (human["answered_questions"], human["unanswered"]) == (1, 0)
+
+
+def test_a_later_answer_whose_question_is_not_read_adds_nothing(host, hive_ws, monkeypatch):
+    from core import hive_records as hr
+    from core import swarm_out_results as sor
+    asked = _asked()
+    hr.seal_turn(hive_ws, SID, asked)
+    hr.seal_turn(hive_ws, SID, _answered(asked) + _turn_rows("chose A", i="b"))
+    asyncio.run(hr.pull(ROW, {"id": "h"}))
+    monkeypatch.setattr(hr, "TURN_READ_BYTES", 1)              # only the newest entry is read
+    rows, _complete, partial = hr.turn_rows(DID)
+    assert partial and not [b for r in rows for b in r["content"] if b.get("type") == "ask_user_question"]
+    human = sor.summarize(rows, True, None)["work"]["human"]
+    assert (human["answered_questions"], human["unanswered"]) == (0, 0)
+
+
+def test_a_too_large_turn_drops_earlier_answers_before_its_own_rows(monkeypatch):
+    from core import hive_records as hr
+    answers = [{"toolUseId": f"t{i}", "answers": {"q": "a" * 1500}, "answered_by": "person"} for i in range(40)]
+    rows = _turn_rows("the end")
+    monkeypatch.setitem(hr.MAX_BYTES, "turn", len(hr.turn_projection(rows)) + 100)
+    got = json.loads(hr.turn_projection(rows, answers=answers))
+    assert "answers" not in got and got["rows"][-1]["content"][0]["text"] == "the end"
+    assert len(got["rows"]) == len(rows)                       # the turn's own rows stay
+    assert len(hr.later_answers([{"content": [{"type": "ask_user_question", "toolUseId": f"t{i}",
+                                                "answers": {"q": "a"}}]} for i in range(80)])) == hr.MAX_LATER_ANSWERS

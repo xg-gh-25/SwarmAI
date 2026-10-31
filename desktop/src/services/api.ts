@@ -64,7 +64,28 @@ export function parseApiError(error: AxiosError): ErrorResponse {
     return data;
   }
 
-  // Otherwise, create error from status code
+  // The reason the backend gave (FastAPI's ``detail``: a string, or an object with a
+  // ``message``) is the message, whatever the status: a refusal such as "this question
+  // was already answered" must reach the person, not become "Invalid request". The
+  // per-status text below is only for a response that says nothing.
+  const reason = backendReason(data);
+  const base = fromStatus(status, data, error);
+  return reason ? { ...base, message: reason } : base;
+}
+
+/** ``detail`` when it is a string, ``detail.message`` when it is an object with one. */
+function backendReason(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const detail = (data as { detail?: unknown }).detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (typeof detail === 'object' && detail !== null) {
+    const m = (detail as { message?: unknown }).message;
+    if (typeof m === 'string' && m.trim()) return m;
+  }
+  return null;
+}
+
+function fromStatus(status: number, data: unknown, error: AxiosError): ErrorResponse {
   switch (status) {
     case 400:
       return {
@@ -93,7 +114,7 @@ export function parseApiError(error: AxiosError): ErrorResponse {
       };
     }
     case 429: {
-      const retryAfter = error.response.headers['retry-after'];
+      const retryAfter = error.response?.headers?.['retry-after'];
       return {
         code: ErrorCodes.RATE_LIMIT_EXCEEDED,
         message: 'Too many requests',

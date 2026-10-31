@@ -444,9 +444,39 @@ def attach_stage_docs(blocks: list[dict], state: Optional[dict]) -> list[dict[st
     return out
 
 
+#: the TEST commands a summary lists, and how much of each command
+MAX_SUMMARY_TESTS = 60
+MAX_SUMMARY_COMMAND = 500
+
+
+def _test_commands(run_dir: Optional[str]) -> list[dict[str, str]]:
+    """The commands of the run's TEST validation report, as its audit keeps them
+    (``run_audit.json`` ``details.test_reports``, the record the REPORT's test section is
+    rendered from): ``{repo, command, result}``, result one of pass / fail / not_run."""
+    if not run_dir:
+        return []
+    try:
+        path = Path(run_dir) / "run_audit.json"
+        if path.stat().st_size > 4 * 1024 * 1024:
+            return []
+        reports = (json.loads(path.read_text(encoding="utf-8")).get("details") or {}).get("test_reports")
+    except (OSError, ValueError, AttributeError):
+        return []
+    out: list[dict[str, str]] = []
+    for repo, rows in sorted(reports.items()) if isinstance(reports, dict) else []:
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and isinstance(row.get("command"), str):
+                result = row.get("result") if row.get("result") in ("pass", "fail", "not_run") else "other"
+                out.append({"repo": str(repo)[:100], "command": row["command"][:MAX_SUMMARY_COMMAND],
+                            "result": result})
+    return out[:MAX_SUMMARY_TESTS]
+
+
 def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
     """The run's execution summary, written once when it ends: how it ended, whether it
-    landed / is push-ready, its audit card and its documents."""
+    landed / is push-ready, its audit card, its documents, and the commands of its TEST
+    report (``tests``: what the Swarm Out checks grid reads, the same record the REPORT
+    shows)."""
     if not state or state.get("status") not in RUN_END_STATUSES:
         return None
     run_dir = state.get("run_dir")
@@ -470,4 +500,4 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
             "notLandedReason": _clip(state.get("reason"), 200) if not_landed else None,
             "stagesDone": sum(1 for s in order if _status(state, s) == "completed"),
             "docs": docs, "at": at, "auditCard": state.get("audit_card"),
-            "audit": state.get("audit_rows")}
+            "audit": state.get("audit_rows"), "tests": _test_commands(run_dir)}
