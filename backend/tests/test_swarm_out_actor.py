@@ -267,26 +267,40 @@ def test_the_dispatch_route_passes_the_dispatching_session(state, monkeypatch):
     assert r.status_code == 200 and seen["dispatched_from"] == "s-abc123"
 
 
-# ── a command cannot say it is the person's ─────────────────────────────────
+# ── a command on a run goes through the CLI, never a direct call (design §9, A) ──
+
+_RUN = "http://127.0.0.1:18321/api/swarm-out/runs/" + DID
+
 
 @pytest.mark.parametrize("cmd", [
-    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/discard -d '{\"by\":\"person\"}'",
-    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/return/land -d @/tmp/body.json",
-    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/rerun --data-binary @-",
-    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/stop --json '{\"by\":\"Person\"}'",
+    # what round 2 of the review found passing a text match on the body
+    f"curl -s -X POST {_RUN}/discard -d '{{\"by\":\"person\"}}'",
+    f"curl -s -X POST {_RUN}/discard -d '{{\"by\":\"\\u0070erson\",\"why\":\"x\"}}'",
+    f"curl -sd @b.json {_RUN}/discard",
+    f"curl --data-ascii @b.json {_RUN}/return/land",
+    f"curl -K c.txt {_RUN}/rerun",
+    f"wget --post-file=b.json {_RUN}/stop",
+    f"http POST {_RUN}/verdict < b.json",
+    "python3 -c \"import urllib.request as u; u.urlopen(u.Request('" + "http://127.0.0.1:18321/api/swarm-out/runs/"
+    + DID + "/discard', data=open('b').read().encode(), method='POST'))\"",
+    # and the agent's own word too: there is one way to give these, the CLI
+    f"curl -s -X POST {_RUN}/stop -d '{{\"by\":\"agent\"}}'",
+    f"curl -s -X POST {_RUN}/return/prepare -d '{{}}'",
 ])
-def test_a_command_on_a_run_that_speaks_as_the_person_is_refused(cmd):
+def test_a_direct_call_to_a_run_command_from_a_command_is_refused(cmd):
     from core import run_owner_gate
-    assert run_owner_gate._user_only_deny(cmd) is not None, cmd
+    deny = run_owner_gate._user_only_deny(cmd)
+    assert deny is not None, cmd
+    assert "scripts.swarm_out" in deny["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_an_agents_own_command_on_a_run_is_not_refused():
+def test_the_cli_line_and_reading_a_run_are_not_refused():
     from core import run_owner_gate
-    assert run_owner_gate._user_only_deny(
-        "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/stop -d '{\"by\":\"agent\"}'") is None
     # the CLI line is no HTTP call in the command text: a reason may say "the person"
     assert run_owner_gate._user_only_deny(
         '"$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop ' + DID + ' --why "the person asked"') is None
+    assert run_owner_gate._user_only_deny(f"curl -s {_RUN}/result") is None
+    assert run_owner_gate._user_only_deny("curl -s http://127.0.0.1:18321/api/swarm-out/runs") is None
 
 
 # ── the session id reaches the CLI; the CLI does not dispatch without it ────

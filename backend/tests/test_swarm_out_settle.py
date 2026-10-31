@@ -576,10 +576,15 @@ _ANSWER = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/asks/hv1/sess-1/
 
 @pytest.mark.parametrize("tail", ["verdict", "return/prepare", "return/land",
                                   "rerun", "stop", "discard"])
-def test_run_commands_are_the_dispatching_agents_too(tail):
+def test_run_commands_are_given_through_the_cli_never_by_a_direct_call(tail):
+    """The dispatching agent gives them too, through scripts.swarm_out (which says it is
+    the agent's); a direct HTTP call from a command is refused in every spelling the
+    server routes the same way (design 2026-10-31-swarm-out-agent-owns-its-runs §9)."""
     from core import run_owner_gate
     base = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/"
-    assert run_owner_gate._user_only_deny(f"{base}{tail} -d '{{}}'") is None
+    enc = f"%{ord(tail[0]):02x}{tail[1:]}"
+    for form in (f"{base}{tail} -d '{{}}'", f"{base}{enc}", f"{base}x/../{tail}", f"{base}./{tail}"):
+        assert run_owner_gate._user_only_deny(form) is not None, form
 
 
 def test_landed_by_hand_stays_the_persons():

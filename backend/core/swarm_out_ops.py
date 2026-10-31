@@ -227,7 +227,9 @@ def person_only_match(text: str) -> "Op | None":
 
 
 #: the commands on a run an agent may give with its limits (core/swarm_out_actor): a
-#: request says who gives it (``by``), which the routes cannot verify
+#: request says who gives it (``by``), which the routes cannot verify, so an agent gives
+#: them only through the Swarm Out CLI and core/run_owner_gate refuses a direct HTTP call
+#: to any of them from a command
 AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
                            "run.rerun", "run.stop", "run.discard"})
 

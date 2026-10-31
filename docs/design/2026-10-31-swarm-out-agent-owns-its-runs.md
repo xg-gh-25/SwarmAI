@@ -271,7 +271,7 @@ R20 现在："the exceptions are the task-opening restatement (§ Assumptions / 
 - **模块名：** §2.5 的卡片和转交在 `core/swarm_out_wait_card.py`（`core/swarm_out_relay.py` 早已是"Hive 会话事件转发"，不能重名）。§2.3 在 `core/swarm_out_follow.py`，agent 命令的限制在 `core/swarm_out_actor.py`。
 - **"手动已落地"仍然只给人。** 审查第二轮指出：它会让这一单了结、释放 Hive 工作区，连同还没落地的提交（不论是否已封进 bundle）。agent 落地一律走 `return-land`。
 - **agent 的命令必须是面板此刻给人的那些**（`/runs` 行的 `actions`）：验收只在 `awaiting`、且 `ended_at` 等于行上的最终结果；停止只在运行中。没有 `dispatched_from` 的旧单 agent 一律不能动。
-- **gate 拒绝命令以人的名义调 run 路由：** HTTP 调用文字里有 `person`、或请求体来自文件 / stdin，就拒绝。审查第二轮指出这一层仍可绕过（JSON 转义、`-sd @f`、`-K`、`wget --post-file`、python 一行），见 §9。
+- **命令不能直接调 run 路由：** 起初按请求体文字拦（`person`、文件 / stdin 请求体），审查第二轮指出可绕过（JSON 转义、`-sd @f`、`-K`、`wget --post-file`、python 一行）；按 §9 XG 的选择，改成一律拒绝直接调用，agent 只走命令行。
 - **重发计数：** 发送前在 settle 记录的锁里先记一笔，发送被拒（400/403/422）才撤回；504（可能已到 Hive）和取消都照样计数。
 - **跟单指纹** 比 §2.3 多了 `ended`、`ended_at`、`why`、`why_not`；运行中的 Hive 活动名不算变化（只有 `answer_sent` 算）；卡片只有"已转交 / 没转交（带原因）"算变化。
 - **"已看过"记录**（`state/swarm-out/seen/<会话 id 的哈希>.json`）：`watch` 把告诉过的每一单都记上（只记本会话派的单），digest 只记真正列出的单；比较时 token 和记录任一相符就算没变。Hive 一次没回探测的 unknown 不进 digest（`no_session_id` 照报）。
@@ -281,3 +281,5 @@ R20 现在："the exceptions are the task-opening restatement (§ Assumptions / 
 ## 9. 留给 XG 的决定
 
 审查第二轮后仍开着一个 HIGH：命令里的 HTTP 调用可以写 `by: person`，用 gate 文字匹配看不到的写法冒充人，绕过 agent 的全部限制。按 AGENT R2，第二轮后还开着的 HIGH 交给人决定这个机制该不该存在。
+
+**XG 选了 A（2026-10-31）：** 命令里不能直接调这几条 run 路由。gate 不再看请求体写了什么：一条命令只要直接调到它们（curl、wget、httpie、python / node 一行），不论怎么写、写的 `by` 是什么，一律拒绝，提示用 `swarm_out` 命令行。命令行在自己的进程里发请求，固定说 `by: agent`，后端按 agent 的规矩查。剩下的口子是在脚本文件里运行时拼出调用，和所有"只给人"的路由一样，要靠"人签名"（ops-registry 第二阶段）才能堵死。

@@ -128,9 +128,12 @@ def _spellings(path: str) -> "list[str]":
     ]
 
 
-@pytest.mark.parametrize("op", [o for o in swarm_out_ops.ops() if OWNER not in o.callers],
+@pytest.mark.parametrize("op", [o for o in swarm_out_ops.ops()
+                                if OWNER not in o.callers or o.name in swarm_out_ops.AGENT_LIMITED],
                          ids=lambda o: o.name)
 def test_person_only_ops_are_denied_in_every_spelling(op):
+    """Also the commands on a run the agent gives through the CLI only: a direct call
+    could say it is the person's (design 2026-10-31-swarm-out-agent-owns-its-runs §9)."""
     path = _concrete(op.path)
     for cmd in _spellings(path):
         d = _user_only_deny(cmd)
@@ -138,7 +141,8 @@ def test_person_only_ops_are_denied_in_every_spelling(op):
         assert d["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-@pytest.mark.parametrize("op", [o for o in swarm_out_ops.ops() if OWNER in o.callers],
+@pytest.mark.parametrize("op", [o for o in swarm_out_ops.ops()
+                                if OWNER in o.callers and o.name not in swarm_out_ops.AGENT_LIMITED],
                          ids=lambda o: o.name)
 def test_owner_agent_ops_are_not_denied(op):
     url = f"http://127.0.0.1:18321{_concrete(op.path)}"

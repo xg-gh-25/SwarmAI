@@ -78,14 +78,12 @@ _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
 # 2026-10-31-swarm-out-agent-owns-its-runs P10).
 _USER_ONLY_CHAT_ANSWER_RE = re.compile(r"/api/chat/answer-question\b")
 # A command on a run says who gives it (``by``; core/swarm_out_actor), which the route
-# cannot verify: a call from a command may not say it is the person's, and may not send
-# a body this gate cannot read (a file, stdin) — design agent-owns-its-runs §2.1.
-_SPEAKS_AS_PERSON_RE = re.compile(r"person", re.IGNORECASE)
-_BODY_UNSEEN_RE = re.compile(r"(?:^|\s)(?:-d|--data(?:-binary|-urlencode|-raw)?|--json|-F|--form|-T|--upload-file)"
-                             r"\s*=?\s*['\"]?@")
-# The person's Swarm Out and Hive operations (accept / re-run / stop / discard a run,
-# answer a Hive's question, its session through the Host proxy, a Hive's password,
-# creating / deleting a Hive …) are not listed here: they are the rows of
+# cannot verify. So an agent gives these commands only through the Swarm Out CLI (its own
+# process sends ``by: agent``); an HTTP call to one of them from a command is refused
+# whatever its body says (design 2026-10-31-swarm-out-agent-owns-its-runs §9, option A).
+# The person's Swarm Out and Hive operations (landing commits by hand, answering a Hive's
+# question, its session through the Host proxy, a Hive's password, creating / deleting a
+# Hive …) are not listed here: they are the rows of
 # core.swarm_out_ops whose callers leave out the owner agent, and the gate's regexes
 # are generated from that table (docs/design/2026-10-31-swarm-out-ops-registry.md §5.2).
 # Actions the person approves first: handled by the
@@ -438,10 +436,11 @@ def _user_only_deny(command: str) -> "dict | None":
                      "be withdrawn and why; they decide.")
     from core import swarm_out_ops
     run_op = swarm_out_ops.agent_limited_match(command)
-    if run_op is not None and (_SPEAKS_AS_PERSON_RE.search(command) or _BODY_UNSEEN_RE.search(command)):
-        return _deny(f"`{run_op.name}` from a command is the agent's: give it with the Swarm Out CLI "
-                     "(`swarm_out <command> <dispatch_id> --why …`), which says so. A call that says it "
-                     "is the person's, or sends a body from a file, is refused.")
+    if run_op is not None:
+        return _deny(f"`{run_op.name}` is given with the Swarm Out CLI "
+                     "(`\"$SWARM_BACKEND_BIN\" py -m scripts.swarm_out <command> <dispatch_id> --why …`), "
+                     "never as a direct HTTP call: the CLI says the command is the agent's, and the "
+                     "daemon then checks it against the run.")
     op = swarm_out_ops.person_only_match(command)
     if op is not None:
         return _deny(f"`{op.name}` ({op.method} {op.path}) is the person's to do in the App "
