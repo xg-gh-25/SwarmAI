@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 REVIEW_VERSION = "cdf-review-r17-v1"
 ALLOWED_KINDS = ("cognition", "gap", "reference", "event")
+GAPS_SHOWN = 5          # the project's open gaps closest to an event, shown so it may close them
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 CODE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".kt",
                            ".swift", ".c", ".cc", ".cpp", ".h", ".rb", ".sh", ".sql", ".css"})
@@ -308,6 +309,7 @@ def relation_prompt(units: list[Any], shown: list[list[Any]],
     """Turn two: for each unit just recorded, the entries it may relate to (retrieval
     only); the agent declares how it relates. *own*: the anchors this session's earlier
     reviews wrote, marked so an event can replace them."""
+    from core.ingestion.overrides import is_open_gap
     own = own or set()
     blocks = []
     for i, (unit, entries) in enumerate(zip(units, shown), 1):
@@ -318,6 +320,8 @@ def relation_prompt(units: list[Any], shown: list[list[Any]],
             lines.append("(none)")
         for entry in entries:
             mark = " (this session)" if entry.anchor in own else ""
+            if is_open_gap(entry):
+                mark += " (open gap)"
             lines.append(f"- {entry.shown()}  ({entry.path}){mark}")
             # whole: an entry cut short cannot be judged the same, added to or replaced
             lines.append("  " + " ".join(entry.text.split()))
@@ -339,10 +343,12 @@ answering with the relations schema, one item per unit. For each unit:
   than "adds" beside it: one current entry per thing.
 - repeats (corrections only): the earlier correction of the same mistake, when you made
   it again.
-- An event or a gap an earlier review of this session recorded (marked "(this session)")
-  that this unit finishes, corrects or restates: an event declares it in overrides (a gap
-  it finished then closes); a unit that says the same as an event already recorded is
-  "same".
+- An event an earlier review of this session recorded (marked "(this session)") that this
+  unit finishes, corrects or restates: an event declares it in overrides. A unit that says
+  the same as an event already recorded is "same".
+- An open gap (marked "(open gap)"), whichever conversation recorded it, that the work
+  this event records finished: the event declares it in overrides and the gap is closed.
+  Only when the work done here finished it, never one that is merely related.
 Copy "<id> | <first line>" exactly as shown. Leave a field empty when unsure.
 
 {listing}
@@ -647,6 +653,8 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
     timeline = relations_v2.timeline_entries(workspace)
     withdrawn_pool = relations_v2.withdrawn_entries(pipeline_v2._withdrawn_records())
     corrections = relations_v2.corrections(pool)
+    from core.ingestion.overrides import is_open_gap
+    open_gaps = [e for e in pool if is_open_gap(e)]
     out = []
     for unit in units:
         text = " ".join(str(getattr(unit, f, "") or "") for f in ("title", "what", "why", "how", "summary"))
@@ -654,8 +662,13 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
         if getattr(unit, "type", None) == "correction":
             also += corrections
         also += relations_v2.candidates(text, withdrawn_pool, top=2)
-        # an event is compared with the events (TIMELINE), the rest with the shared pool
-        searched = timeline if getattr(unit, "kind", "") == "event" else pool
+        # an event is compared with the events (TIMELINE) and with the project's open
+        # gaps it may close; the rest with the shared pool
+        if getattr(unit, "kind", "") == "event":
+            also += relations_v2.candidates(text, open_gaps, top=GAPS_SHOWN)
+            searched = timeline
+        else:
+            searched = pool
         out.append(relations_v2.candidates(text, searched, also=also))
     return out
 

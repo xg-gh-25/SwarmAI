@@ -175,17 +175,27 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
     return out
 
 
+def is_open_gap(entry) -> bool:
+    """An entry of IMPROVEMENT "What to Watch For" with a ``gap kind:``, not ticked done."""
+    from .gaps import SECTION, _PREFIX
+    prefix = _PREFIX.match(entry.text.lstrip())
+    return (entry.path.endswith("IMPROVEMENT.md") and entry.section == SECTION
+            and "gap kind:" in entry.text and bool(prefix) and prefix.group(1).lower() != "x")
+
+
 def check_session_own(conn: sqlite3.Connection, *, workspace: Path, project: str | None,
                       source: str, declared, session_ref: str | None,
                       cited_external: bool = True) -> Checked:
-    """The anchors an event's declared overrides may retire: an event or a gap that this
-    same session's earlier review wrote (design 2026-10-31-extraction-at-task-end E3).
+    """The anchors an event's declared overrides may retire: an event that this same
+    session's earlier review wrote (design 2026-10-31-extraction-at-task-end E3), and an
+    open CDF-written gap of the project, whichever session opened it (it is closed).
 
     The later review of a session completes what an earlier one recorded half done
     ("root cause found" -> "fixed"), so it is the context that may replace it: by id and
     first line, a live CDF-written TIMELINE event or IMPROVEMENT gap whose candidate's
-    ``source_ref`` is this session. Another session's entry, a person's entry, a
-    cognition entry, or a declaration from any source but S7 retires nothing. A later
+    ``source_ref`` is this session. Another session's event, a person's entry, a
+    cognition entry, a gap already closed, or a declaration from any source but S7
+    retires nothing. A later
     pass is later by construction (its entry is not written yet), so no time is compared.
     """
     from . import relations_v2
@@ -209,10 +219,21 @@ def check_session_own(conn: sqlite3.Connection, *, workspace: Path, project: str
         if cand is None:
             out.refused.append({"ref": ref, "reason": "human_written"})
             continue
-        # the review's own candidate only: an S1 unit the user dictated may carry the
-        # session id as its ref and is never this review's to retire
         row = conn.execute("SELECT source_ref, unit_kind, COALESCE(source_v2, source) "
                            "FROM ingestion_inbox WHERE id=?", (cand.group(1),)).fetchone()
+        if row is not None and row[1] == "gap" and is_open_gap(entry):
+            # a gap closes when an event says it is done, whichever session opened it:
+            # the work that finishes a gap is usually done in a later conversation. Only
+            # an open, CDF-written gap of this project (the pool holds no other's)
+            if entry.anchor not in out.targets:
+                out.targets.append(entry.anchor)
+                out.closes.append(entry.anchor)
+            continue
+        if row is not None and row[1] == "gap":
+            out.refused.append({"ref": ref, "reason": "closed"})
+            continue
+        # an event or anything else: the review's own candidate only (an S1 unit the user
+        # dictated may carry the session id as its ref and is never this review's to retire)
         if row is None or row[0] != session_ref or row[2] != "S7":
             out.refused.append({"ref": ref, "reason": "other_session"})
             continue

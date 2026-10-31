@@ -322,3 +322,65 @@ def test_a_cap_already_past_does_not_pull_the_review_into_the_past(cdf_env, monk
     finally:
         conn.close()
     assert datetime.fromisoformat(nb) > datetime.now(timezone.utc) + timedelta(minutes=50)
+
+
+# ── a gap closes when an event says it is done, whichever session opened it ────────
+
+_GAPS = ("# IMPROVEMENT\n\n## What to Watch For\n\n"
+         "- [guideline] **Swarm Run design doc not yet written** the doc. gap kind: follow_up "
+         "<!-- cand:cand-eeeeeeeeeeeeeeeeeeeeeeee.unit -->\n"
+         "- [x] **An earlier gap already closed** done. gap kind: debt "
+         "<!-- cand:cand-ffffffffffffffffffffffff.unit -->\n"
+         "- [guideline] **A gap a person wrote** stays. gap kind: risk\n"
+         "\n## What Failed\n\n"
+         "- [pitfall] **A lesson another session wrote** never an event's to retire. "
+         "<!-- cand:cand-999999999999999999999999.unit -->\n")
+
+
+def _pool_ref(cdf_env, title):
+    from core.ingestion import relations_v2
+    entry = next(e for e in relations_v2.pool(cdf_env["workspace"], "P") if title in e.text)
+    return entry.shown(), entry.anchor
+
+
+def test_an_event_closes_an_open_gap_another_session_opened(cdf_env):
+    from core.ingestion.api import connect_rw
+    _timeline(cdf_env, _EV_OTHER)
+    (cdf_env["ddd"] / "IMPROVEMENT.md").write_text(_GAPS, encoding="utf-8")
+    conn = connect_rw()
+    try:
+        _cand(conn, "cand-eeeeeeeeeeeeeeeeeeeeeeee", "sess-2", kind="gap")
+        _cand(conn, "cand-ffffffffffffffffffffffff", "sess-2", kind="gap")
+        _cand(conn, "cand-999999999999999999999999", "sess-2", kind="cognition")
+        _cand(conn, "cand-bbbbbbbbbbbbbbbbbbbbbbbb", "sess-2")
+        gap_ref, gap_anchor = _pool_ref(cdf_env, "design doc not yet written")
+        closed_ref, _ = _pool_ref(cdf_env, "already closed")
+        person_ref, _ = _pool_ref(cdf_env, "A gap a person wrote")
+        lesson_ref, _ = _pool_ref(cdf_env, "A lesson another session wrote")
+        event_ref, _ = _ref(cdf_env, "Release notes")
+        ok = _own(conn, cdf_env, [gap_ref])
+        refused = _own(conn, cdf_env, [closed_ref, person_ref, lesson_ref, event_ref])
+        external = _own(conn, cdf_env, [gap_ref], cited_external=True)
+    finally:
+        conn.close()
+    assert ok.targets == [gap_anchor] and ok.closes == [gap_anchor]
+    assert [r["reason"] for r in refused.refused] == ["closed", "human_written", "other_session",
+                                                      "other_session"]
+    assert external.targets == []
+
+
+def test_an_event_is_shown_the_open_gaps_it_may_close(cdf_env):
+    from core.ingestion.sources import s7_review
+    from core.ingestion.contracts_v2 import EventUnit
+    _timeline(cdf_env, _EV_OLD)
+    (cdf_env["ddd"] / "IMPROVEMENT.md").write_text(_GAPS, encoding="utf-8")
+    unit = EventUnit(when="2026-10-31", title="Swarm Run design doc written",
+                     what="The Swarm Run design doc landed", impact="design settled",
+                     evidence=["event:input:x"], scope="project:P")
+    (shown,) = s7_review._candidates([unit], cdf_env["workspace"], "P", [])
+    gaps = [e for e in shown if "gap kind:" in e.text]
+    assert [e.head for e in gaps] == [
+        "- [guideline] **Swarm Run design doc not yet written** the doc. gap kind: follow_up"]
+    text = s7_review.relation_prompt([unit], [shown])
+    line = next(l for l in text.splitlines() if l.startswith(f"- {gaps[0].shown()}"))
+    assert line.endswith("(open gap)"), line
