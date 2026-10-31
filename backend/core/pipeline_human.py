@@ -9,7 +9,10 @@ Public symbols:
 - ``owned_runs`` — non-terminal v1 runs a session currently owns.
 - ``owner_live`` — whether a session is streaming / waiting for input right now.
 - ``record_card_answer`` — record a person's AskUserQuestion pick as ``human_answer``.
-- ``answer_from_dashboard`` — record a dashboard decision click.
+- ``answer_from_dashboard`` — record a dashboard decision click (or, with
+  ``source="swarm_out"``, a pick a person made on the Host for a Hive's run).
+- ``pending_decisions`` — every v1 run waiting on a person's decision (Swarm Out's
+  Hive bridge mirrors them to the Host).
 - ``continue_prompt`` — the message that hands a run back to its owner session.
 - ``on_user_stop`` / ``on_session_lost`` — pause the session's active runs.
 - ``record_owner`` — sign a takeover as an ``owner_transfer`` event.
@@ -148,16 +151,61 @@ def record_card_answer(session_id: str, answers: Any) -> list[dict[str, str]]:
 
 
 def answer_from_dashboard(run_id: str, request_id: str, option_id: str,
-                          workspace: Optional[Path] = None) -> dict[str, Any]:
-    """Record a dashboard decision click. Raises on a stale or unknown request."""
+                          workspace: Optional[Path] = None,
+                          source: str = "dashboard") -> dict[str, Any]:
+    """Record a person's decision pick made off the chat card: a dashboard click, or
+    (``source="swarm_out"``) a pick on the Host for this Hive's run. Raises on a stale
+    or unknown request."""
     engine = load_engine(run_id, workspace)
     if engine is None:
         raise LookupError(run_id)
     result = engine.answer_decision(request_id=request_id, option_id=option_id)
-    logger.info("pipeline_human: decision %s of %s answered on the dashboard: %s",
-                request_id, run_id, option_id)
+    logger.info("pipeline_human: decision %s of %s answered on the %s: %s",
+                request_id, run_id, source, option_id)
     return {"state": result["state"], "answer": result["answer"],
             "owner_session_id": engine.owner_session()}
+
+
+def pending_decisions() -> list[dict[str, Any]]:
+    """Every non-terminal v1 run waiting on a person's decision, as
+    ``{run_id, project, session_id, owner_generation, asked_at, decision}``:
+    ``decision`` is ``RunEngine.pending_decision()`` (its question card included),
+    ``session_id`` the run's owner now, ``owner_generation`` how many takeovers led to
+    that owner, and ``asked_at`` when the decision was recorded. Read from each run's own
+    event log, so it holds across a restart and has no expiry.
+
+    All or nothing: a run that cannot be read raises (logged), so a caller never takes a
+    run it could not read for one that stopped waiting. Blocking: call it off the event
+    loop."""
+    from core import run_index
+    out = []
+    for rf in run_index.runs(_workspace()):
+        data = rf.data
+        run_id = rf.path.parent.name
+        if not run_id.startswith("run_") or data.get("status") != "awaiting_human" \
+                or "decision_cap" not in data:
+            continue
+        try:
+            engine = load_engine(run_id)
+            if engine is None:
+                raise LookupError(f"run {run_id} has no v1 engine")
+            pending = engine.pending_decision()
+            if pending is None:
+                continue
+            events = engine.store.read_events()
+            asked_at = next((e.get("at") for e in reversed(events)
+                             if e.get("kind") == "decision"
+                             and (e.get("payload") or {}).get("request_id") == pending["request_id"]),
+                            None)
+            out.append({"run_id": run_id, "project": engine.project,
+                        "session_id": engine.owner_session(),
+                        "owner_generation": sum(e.get("kind") == "owner_transfer" for e in events),
+                        "asked_at": asked_at, "decision": pending})
+        except Exception:
+            logger.warning("pipeline_human: cannot read the decision of %s", run_id,
+                           exc_info=True)
+            raise
+    return out
 
 
 def continue_prompt(run_id: str, project: str) -> str:

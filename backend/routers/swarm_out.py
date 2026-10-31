@@ -75,6 +75,8 @@ class AnswerBody(BaseModel):
     decision: Optional[str] = None
     # an approval names what the card showed (core.swarm_out.answer)
     shown_sha256: Optional[str] = Field(default=None, max_length=64)
+    # a pipeline decision is answered with one of its option ids
+    option_id: Optional[str] = Field(default=None, max_length=200)
 
 
 async def _call(coro) -> Any:
@@ -289,4 +291,5 @@ async def answer(hive_id: str, session_id: str, request_id: str, body: AnswerBod
     _require_desktop()
     return await _call(swarm_out.answer(hive_id, session_id, request_id,
                                         answers=body.answers, decision=body.decision,
-                                        shown_sha256=body.shown_sha256))
+                                        shown_sha256=body.shown_sha256,
+                                        option_id=body.option_id))

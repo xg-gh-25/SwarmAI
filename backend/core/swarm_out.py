@@ -17,7 +17,9 @@ monitoring beyond what the dashboard needs to list a run.
 - ``answer`` — validate an answer against the question the Hive wrote, then write it
   to ``bridge/<hive>/answer/…``. Only the Host can write there. An approval carries
   what the card showed (``shown_sha256``) and is refused when the ask changed since,
-  or when the command was too long to show whole (a deny is always written).
+  or when the command was too long to show whole (a deny is always written). A pipeline
+  decision (``kind: decision``, listed in the Hive's ``decisions.json``) is answered with
+  one of its option ids and what its card showed.
 
 Hive credentials are read from ``hive_instances`` inside the daemon and never leave
 this module: no return value, log line or dispatch record carries them. Outbound
@@ -40,6 +42,8 @@ from typing import Any, Optional
 import httpx
 
 from core.swarm_out_bridge import MAX_COMMAND_CHARS, approval_digest
+from core.swarm_out_decisions import DECISION_CAPS, KEY_PREFIX as DECISION_KEY_PREFIX, \
+    MAX_DECISIONS, SNAPSHOT as DECISIONS_SNAPSHOT, decision_digest
 
 # Hive-reported counts of what it did not mirror are capped like every Hive field
 _MAX_OMITTED = 10_000
@@ -743,6 +747,65 @@ def _clean_ask(rec: Any, hive: str) -> Optional[dict[str, Any]]:
     return out
 
 
+def _clean_decision(rec: Any, hive: str) -> Optional[dict[str, Any]]:
+    """One entry of a Hive's ``decisions.json``, rebuilt from known fields, each typed
+    and capped as the Hive caps it: a pipeline run's question, why the evidence was not
+    enough, and 2-3 options. An option id is kept whole (it is sent back as is); an entry
+    whose ids are not short distinct strings is dropped. ``shown_sha256`` is what the
+    card shows (the answer carries it; the Hive delivers only on a match);
+    ``truncated``: a field was longer than the card shows, so it is not answered here."""
+    if not isinstance(rec, dict) or rec.get("kind") != "decision":
+        return None
+    sid, rid, run_id = (str(rec.get(k, "")) for k in ("session_id", "request_id", "run_id"))
+    if not (KEY_RE.match(sid) and KEY_RE.match(rid) and KEY_RE.match(run_id)) \
+            or not rid.startswith(DECISION_KEY_PREFIX):
+        return None
+    opts = rec.get("options") if isinstance(rec.get("options"), list) else []
+    options = []
+    for o in opts[:3]:
+        oid = o.get("id") if isinstance(o, dict) else None
+        if not isinstance(oid, str) or not 0 < len(oid) <= 200:
+            return None
+        options.append({"id": oid, "choice": str(o.get("choice", ""))[:DECISION_CAPS["choice"]],
+                        "consequence": str(o.get("consequence", ""))[:DECISION_CAPS["consequence"]],
+                        "reversible": o.get("reversible") is not False,
+                        "risk": "high" if o.get("risk") == "high" else "low"})
+    if len(options) < 2 or len(options) != len(opts) or len({o["id"] for o in options}) != len(options):
+        return None
+    fields = {k: str(rec.get(k, "")) for k in ("decision_request_id", "question", "why")}
+    cut = any(len(v) > DECISION_CAPS[k] for k, v in fields.items()) or any(
+        len(str(o.get(k, ""))) > DECISION_CAPS[k] for o in opts for k in ("choice", "consequence"))
+    out: dict[str, Any] = {"kind": "decision", "hive": hive, "session_id": sid, "request_id": rid,
+                           "asked_at": str(rec.get("asked_at", ""))[:40], "run_id": run_id,
+                           "project": str(rec.get("project", ""))[:100],
+                           "decision_kind": str(rec.get("decision_kind", ""))[:60],
+                           "options": options,
+                           **{k: v[:DECISION_CAPS[k]] for k, v in fields.items()}}
+    out["truncated"] = rec.get("truncated") is not False or cut
+    out["shown_sha256"] = decision_digest(out)
+    if rec.get("refused") is True:
+        out["refused"] = True
+    return out
+
+
+def _read_decisions(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
+    """The pipeline decisions the Hive lists as waiting (its ``decisions.json``, the
+    whole current list, rewritten each pass it can read its runs), cleaned. None listed:
+    an empty list (an older Hive writes no snapshot)."""
+    try:
+        raw = s3.get_object(Bucket=bucket, Key=f"bridge/{hive}/{DECISIONS_SNAPSHOT}")["Body"].read(2 * 1024 * 1024)
+    except s3.exceptions.NoSuchKey:
+        return []
+    body = json.loads(raw)
+    entries = body.get("decisions") if isinstance(body, dict) else None
+    out = []
+    for rec in (entries if isinstance(entries, list) else [])[:MAX_DECISIONS]:
+        clean = _clean_decision(rec, hive)
+        if clean is not None:
+            out.append(clean)
+    return out
+
+
 def _too_old(asked_at: str, now: float) -> bool:
     try:
         t = calendar.timegm(time.strptime(asked_at, "%Y-%m-%dT%H:%M:%SZ"))
@@ -828,19 +891,24 @@ async def _session_states(inst: dict[str, Any]) -> Optional[dict[str, dict[str, 
 
 
 def run_state(row: dict[str, Any], hive_status: Optional[str],
-              sessions: Optional[dict[str, dict[str, Any]]], has_open_ask: bool) -> tuple[str, str]:
+              sessions: Optional[dict[str, dict[str, Any]]], has_open_ask: bool,
+              has_open_decision: bool = False) -> tuple[str, str]:
     """(state, reason) of one dispatched run: waiting | running | stopped | unknown.
 
-    The Hive's own report of the session decides when there is one; an open (not
-    refused) mirrored question decides ``waiting`` only when the Hive could not be
-    asked. "stopped" means the session is not working now: the Host cannot tell a
-    finished run from a failed or stopped one."""
+    A pipeline decision of the session that the Hive lists as waiting (not refused)
+    decides ``waiting``: the run waits on a person whether or not a turn is open.
+    Otherwise the Hive's own report of the session decides when there is one; an open
+    mirrored question decides ``waiting`` only when the Hive could not be asked.
+    "stopped" means the session is not working now: the Host cannot tell a finished run
+    from a failed or stopped one."""
     if hive_status == "gone":
         return "stopped", "hive_gone"
     if hive_status is not None and hive_status != "running":
         return "stopped", "hive_stopped"
     if not row.get("session_id"):
         return "unknown", "no_session_id"
+    if has_open_decision:
+        return "waiting", "decision"
     if sessions is None:
         return ("waiting", "question") if has_open_ask else ("unknown", "hive_silent")
     e = sessions.get(row["session_id"])
@@ -865,15 +933,28 @@ async def _read_hive(hive_id: str) -> tuple[list[dict[str, Any]], Optional[dict[
         logger.warning("swarm_out: reading the Hive record failed (%s)", type(e).__name__)
         return [], None, ["could not read a Hive record"]
 
-    def read_asks() -> list[dict[str, Any]]:
+    def read_asks() -> tuple[list[dict[str, Any]], bool]:
+        """The open asks (cleaned), then the waiting pipeline decisions; a decision list
+        that cannot be read keeps the asks (and is reported)."""
         s3 = _s3(inst)
-        return _open_asks(s3, inst["s3_bucket"], inst["name"])  # cleaned
+        found = _open_asks(s3, inst["s3_bucket"], inst["name"])
+        try:
+            found += _read_decisions(s3, inst["s3_bucket"], inst["name"])
+        except Exception as e:
+            logger.warning("swarm_out: reading the decisions of %s failed (%s)",
+                           inst["name"], type(e).__name__)
+            return found, False
+        return found, True
 
     async def questions() -> None:
         try:
             # bounded like the probes: a slow S3 must not hold up the others' poll (the
             # worker thread may finish later; its answer is then dropped)
-            for rec in await asyncio.wait_for(asyncio.to_thread(read_asks), QUESTIONS_TIMEOUT_S):
+            found, decisions_read = await asyncio.wait_for(asyncio.to_thread(read_asks),
+                                                           QUESTIONS_TIMEOUT_S)
+            if not decisions_read:
+                errors.append(f"could not read the decisions of Hive {inst['name']}")
+            for rec in found:
                 rec["hive_id"] = inst["id"]
                 asks.append(rec)
         except SwarmOutError as e:
@@ -1026,10 +1107,13 @@ async def _compute_runs() -> dict[str, Any]:
         sessions_of[hive_id] = sessions
         errors.extend(errs)
     open_asks = {(a["hive_id"], a.get("session_id")) for a in asks if not a.get("refused")}
+    open_decisions = {(a["hive_id"], a.get("session_id")) for a in asks
+                      if not a.get("refused") and a.get("kind") == "decision"}
     for r in rows:
         state, reason = run_state(r, status_of.get(r["hive_id"]),
                                   sessions_of.get(r["hive_id"]),
-                                  (r["hive_id"], r.get("session_id")) in open_asks)
+                                  (r["hive_id"], r.get("session_id")) in open_asks,
+                                  (r["hive_id"], r.get("session_id")) in open_decisions)
         r["state"], r["state_reason"] = state, reason
         r["waiting"] = state == "waiting"
         r["running"] = None if state == "unknown" else state == "running"
@@ -1269,7 +1353,15 @@ async def fleet() -> dict[str, Any]:
     return {"hives": out, "running": len(running)}
 
 
-def _check_answer(rec: dict[str, Any], answers: Any, decision: Any) -> dict[str, Any]:
+def _check_answer(rec: dict[str, Any], answers: Any, decision: Any,
+                  option_id: Any = None) -> dict[str, Any]:
+    if rec.get("kind") == "decision":
+        if not isinstance(option_id, str) or option_id not in {o["id"] for o in rec["options"]}:
+            raise SwarmOutError("pick one of the decision's options")
+        if rec["truncated"]:
+            raise SwarmOutError("this decision is too long to show whole; answer it on the "
+                                "Hive's own page")
+        return {"option_id": option_id}
     if rec.get("kind") == "approval":
         if decision not in ("approve", "deny"):
             raise SwarmOutError("an approval takes approve or deny")
@@ -1289,10 +1381,12 @@ def _check_answer(rec: dict[str, Any], answers: Any, decision: Any) -> dict[str,
 
 async def answer(hive_ref: str, session_id: str, request_id: str,
                  answers: Any = None, decision: Any = None,
-                 shown_sha256: Any = None) -> dict[str, Any]:
+                 shown_sha256: Any = None, option_id: Any = None) -> dict[str, Any]:
     """Write the person's answer for an open question to the bridge. An approval names
     what the card showed (``shown_sha256``); it is refused when the ask changed since,
-    or when the command was too long to be shown whole."""
+    or when the command was too long to be shown whole. A pipeline decision (a
+    ``dc-`` request the Hive lists in ``decisions.json``) is answered with one of its
+    option ids and what its card showed."""
     if not KEY_RE.match(session_id or "") or not KEY_RE.match(request_id or ""):
         raise SwarmOutError("unknown question")
     inst = await _instance(hive_ref)
@@ -1306,6 +1400,21 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
         except s3.exceptions.NoSuchKey:
             return None
 
+    if request_id.startswith(DECISION_KEY_PREFIX):
+        listed = await asyncio.to_thread(_read_decisions, s3, inst["s3_bucket"], inst["name"])
+        rec = next((d for d in listed if d["session_id"] == session_id
+                    and d["request_id"] == request_id), None)
+        if rec is None or rec.get("refused"):
+            raise SwarmOutError("this decision is no longer waiting on the Hive")
+        if await asyncio.to_thread(_load, "answer/") is not None:
+            raise SwarmOutError("this question was already answered")
+        body = {"request_id": request_id, **_check_answer(rec, None, None, option_id),
+                "answered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        if shown_sha256 != rec["shown_sha256"]:
+            raise SwarmOutError("the decision changed on the Hive since it was shown; reload")
+        body["shown_sha256"] = shown_sha256
+        await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
+        return {"ok": True, "request_id": request_id}
     raw = await asyncio.to_thread(_load, "ask/")
     if raw is None:
         raise SwarmOutError("unknown question")
@@ -1327,15 +1436,19 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
     if rec["kind"] == "approval" and isinstance(shown_sha256, str):
         body["shown_sha256"] = shown_sha256
 
-    def _put() -> None:
-        try:   # IfNoneMatch: two answers at once — the second is refused, not overwritten
-            s3.put_object(Bucket=inst["s3_bucket"], Key=base + "answer/" + rel,
-                          Body=json.dumps(body, ensure_ascii=False).encode(), IfNoneMatch="*",
-                          ContentType="application/json", ServerSideEncryption="AES256")
-        except Exception as e:
-            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if code in ("PreconditionFailed", "ConditionalRequestConflict"):
-                raise SwarmOutError("this question was already answered") from None
-            raise
-    await asyncio.to_thread(_put)
+    await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
     return {"ok": True, "request_id": request_id}
+
+
+def _put_once(s3, inst: dict[str, Any], key: str, body: dict[str, Any]) -> None:
+    """Write an answer. IfNoneMatch: two answers at once — the second is refused, not
+    overwritten."""
+    try:
+        s3.put_object(Bucket=inst["s3_bucket"], Key=key,
+                      Body=json.dumps(body, ensure_ascii=False).encode(), IfNoneMatch="*",
+                      ContentType="application/json", ServerSideEncryption="AES256")
+    except Exception as e:
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+        if code in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise SwarmOutError("this question was already answered") from None
+        raise

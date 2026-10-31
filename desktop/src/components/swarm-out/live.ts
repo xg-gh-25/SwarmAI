@@ -196,6 +196,8 @@ export function hiveStatusLabel(status: string): string {
 export function errorLabel(e: string): string {
   const q = /^could not read the questions of Hive (.+)$/.exec(e);
   if (q) return i18n.t('swarmOut.error.questions', { hive: q[1] });
+  const dq = /^could not read the decisions of Hive (.+)$/.exec(e);
+  if (dq) return i18n.t('swarmOut.error.decisions', { hive: dq[1] });
   if (e === 'could not list the running Hives') return i18n.t('swarmOut.error.hiveList');
   if (e === 'could not read a Hive record') return i18n.t('swarmOut.error.hiveRecord');
   if (e === "could not read the runs' acceptance") return i18n.t('swarmOut.error.acceptance');

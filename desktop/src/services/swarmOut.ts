@@ -216,8 +216,18 @@ export interface SwarmOutQuestion {
   options: { label: string; description: string }[];
 }
 
+/** One option of a pipeline run's decision (the run's DC-1 options). */
+export interface SwarmOutDecisionOption {
+  id: string;
+  choice: string;
+  consequence: string;
+  reversible: boolean;
+  risk: 'low' | 'high';
+}
+
 export interface SwarmOutAsk {
-  kind: 'question' | 'approval';
+  /** decision: a pipeline run on the Hive waits on a person's pick (open while the run waits) */
+  kind: 'question' | 'approval' | 'decision';
   hive: string;
   hive_id: string;
   session_id: string;
@@ -227,7 +237,7 @@ export interface SwarmOutAsk {
   tool_name?: string;
   command?: string;
   reason?: string;
-  /** the command was longer than the card shows: it cannot be approved here */
+  /** the command (or a decision's text) was longer than the card shows: it cannot be approved or answered here */
   truncated?: boolean;
   /** what the card shows; an approval sends it back (the Hive delivers only on a match) */
   shown_sha256?: string;
@@ -239,6 +249,11 @@ export interface SwarmOutAsk {
   refused?: boolean;
   /** questions / options the Host did not list */
   omitted?: { questions: number; options: number };
+  /** decision: the run, its question, why the evidence was not enough, its options */
+  run_id?: string;
+  question?: string;
+  why?: string;
+  options?: SwarmOutDecisionOption[];
 }
 
 export interface SwarmOutRuns {
@@ -362,9 +377,10 @@ export const swarmOutService = {
     return data as { result: SwarmOutResult | null; result_error: string | null };
   },
 
-  async answer(ask: SwarmOutAsk, body: { answers?: Record<string, string>; decision?: 'approve' | 'deny' }): Promise<void> {
+  async answer(ask: SwarmOutAsk, body: { answers?: Record<string, string>; decision?: 'approve' | 'deny'; option_id?: string }): Promise<void> {
     const seg = [ask.hive_id, ask.session_id, ask.request_id].map(encodeURIComponent);
-    const payload = ask.kind === 'approval' ? { ...body, shown_sha256: ask.shown_sha256 } : body;
+    // an approval and a decision name what the card showed (the Hive delivers only on a match)
+    const payload = ask.kind === 'approval' || ask.kind === 'decision' ? { ...body, shown_sha256: ask.shown_sha256 } : body;
     await api.post(`/swarm-out/asks/${seg[0]}/${seg[1]}/${seg[2]}/answer`, payload);
   },
 };

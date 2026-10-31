@@ -146,4 +146,39 @@ describe('LiveDispatches', () => {
     fireEvent.click(screen.getByTestId('swarm-out-section-done'));      // an older dispatch, never named: kept in view
     expect(screen.getAllByTestId('swarm-out-row').map((r) => r.getAttribute('data-id'))).toEqual(['d9']);
   });
+
+  it('a pipeline decision is answered with one of its options, nothing typed', async () => {
+    const decision = {
+      kind: 'decision' as const, hive: 'worker-1', hive_id: 'h1', session_id: 's3', request_id: 'dc-1',
+      asked_at: '2026-10-27T02:00:00Z', run_id: 'run_a', question: 'Which storage?', why: 'both fit',
+      options: [
+        { id: 'a', choice: 'files', consequence: 'simple', reversible: true, risk: 'low' as const },
+        { id: 'b', choice: 'sqlite', consequence: 'migration', reversible: false, risk: 'high' as const },
+      ],
+    };
+    runs.mockResolvedValue({ runs: [], asks: [decision], errors: [] });
+    render(<LiveDispatches />);
+    await screen.findByText('一个 pipeline run 需要你拍板');
+    expect(screen.getByText('它自己定不了的原因：both fit')).toBeTruthy();
+    expect(screen.getByText('migration、不可撤回、高风险')).toBeTruthy();
+    expect(screen.getByTestId('swarm-out-ask').querySelector('input')).toBeNull();
+    fireEvent.click(screen.getByText('b — sqlite'));
+    await waitFor(() => expect(answer).toHaveBeenCalledWith(decision, { option_id: 'b' }));
+  });
+
+  it('a pipeline decision too long to show whole offers no options', async () => {
+    const decision = {
+      kind: 'decision' as const, hive: 'worker-1', hive_id: 'h1', session_id: 's3', request_id: 'dc-2',
+      asked_at: '2026-10-27T02:00:00Z', run_id: 'run_a', question: 'Which storage?', why: '', truncated: true,
+      options: [
+        { id: 'a', choice: 'files', consequence: '', reversible: true, risk: 'low' as const },
+        { id: 'b', choice: 'sqlite', consequence: '', reversible: true, risk: 'low' as const },
+      ],
+    };
+    runs.mockResolvedValue({ runs: [], asks: [decision], errors: [] });
+    render(<LiveDispatches />);
+    await screen.findByTestId('swarm-out-ask-truncated');
+    expect(screen.queryByTestId('swarm-out-ask-decision')).toBeNull();
+    expect(screen.queryByText('a — files')).toBeNull();
+  });
 });

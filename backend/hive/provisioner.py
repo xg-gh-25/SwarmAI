@@ -90,6 +90,8 @@ HIVE_IAM_POLICY = {
             "Resource": [
                 "arn:aws:s3:::swarmai-hive-*/bridge/${aws:PrincipalTag/HiveName}/ask/*",
                 "arn:aws:s3:::swarmai-hive-*/bridge/${aws:PrincipalTag/HiveName}/closed/*",
+                # the pipeline decisions waiting on a person (core/swarm_out_decisions)
+                "arn:aws:s3:::swarmai-hive-*/bridge/${aws:PrincipalTag/HiveName}/decisions.json",
             ],
         },
         {

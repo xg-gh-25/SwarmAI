@@ -1317,7 +1317,12 @@
       "yourAnswer": "Your answer",
       "omitted_one": "{{count}} more question or option is not shown (too many or empty); the full content is on this Hive's own page.",
       "omitted_other": "{{count}} more questions or options are not shown (too many or empty); the full content is on this Hive's own page.",
-      "submit": "Submit answer"
+      "submit": "Submit answer",
+      "decisionTitle": "A pipeline run needs your decision",
+      "decisionWhy": "Why it can't decide alone: {{why}}",
+      "irreversible": "irreversible",
+      "highRisk": "high risk",
+      "decisionTruncated": "This decision is too long to show in full here. It can't be answered here: read it on this Hive's own page and decide there."
     },
     "kpi": {
       "waiting": "Waiting for your answer",
@@ -1500,6 +1505,7 @@
     },
     "error": {
       "questions": "Can't read Hive {{hive}}'s questions: \"Waiting for you\" may be incomplete",
+      "decisions": "Can't read Hive {{hive}}'s pipeline decisions: \"Waiting for you\" may be incomplete",
       "hiveList": "Can't list the Hives: only the Hives in the dispatch log are shown",
       "hiveRecord": "One Hive's record can't be read",
       "acceptance": "Can't read the tasks' acceptance"

@@ -72,7 +72,7 @@ export function AskCard({ ask, onDone, onDirty }: { ask: SwarmOutAsk; onDone: ()
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const send = async (body: { answers?: Record<string, string>; decision?: 'approve' | 'deny' }) => {
+  const send = async (body: { answers?: Record<string, string>; decision?: 'approve' | 'deny'; option_id?: string }) => {
     setBusy(true);
     setError('');
     try {
@@ -118,6 +118,32 @@ export function AskCard({ ask, onDone, onDirty }: { ask: SwarmOutAsk; onDone: ()
         <div className="mt-1 text-[12.5px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-refused">
           {t('swarmOut.ask.refused')}
         </div>
+      ) : ask.kind === 'decision' ? (
+        <>
+          <div className="mt-1 font-medium">{t('swarmOut.ask.decisionTitle')}</div>
+          <div className="mt-1 whitespace-pre-wrap">{ask.question}</div>
+          {ask.why && <div className={`mt-0.5 text-[12.5px] ${muted}`}>{t('swarmOut.ask.decisionWhy', { why: ask.why })}</div>}
+          {ask.truncated && (
+            <div className="mt-1 text-[12px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-truncated">
+              {t('swarmOut.ask.decisionTruncated')}
+            </div>
+          )}
+          {/* the run takes one of its options, nothing typed; a decision not shown whole is answered on the Hive */}
+          {!ask.truncated && <div className="mt-2 flex flex-col gap-1.5" data-testid="swarm-out-ask-decision">
+            {(ask.options ?? []).map((o) => (
+              <button key={o.id} type="button" className={`${btn} text-left`} disabled={busy}
+                onClick={() => send({ option_id: o.id })}>
+                <span className="font-medium">{o.id} — {o.choice}</span>
+                {(o.consequence || !o.reversible || o.risk === 'high') && (
+                  <span className={`block text-[12px] ${muted}`}>
+                    {[o.consequence, !o.reversible ? t('swarmOut.ask.irreversible') : '',
+                      o.risk === 'high' ? t('swarmOut.ask.highRisk') : ''].filter(Boolean).join(t('swarmOut.sep.list'))}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>}
+        </>
       ) : ask.kind === 'approval' ? (
         <>
           <div className="mt-1 font-medium">{t('swarmOut.ask.approvalTitle')}{ask.tool_name && <span className={`ml-1.5 font-mono text-[12px] ${muted}`} data-testid="swarm-out-ask-tool">{ask.tool_name}</span>}</div>

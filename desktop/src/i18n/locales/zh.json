@@ -1317,7 +1317,12 @@
       "yourAnswer": "你的回答",
       "omitted_one": "还有 {{count}} 个问题或选项没有显示（太多或为空），完整内容在这台 Hive 自己的页面上。",
       "omitted_other": "还有 {{count}} 个问题或选项没有显示（太多或为空），完整内容在这台 Hive 自己的页面上。",
-      "submit": "提交回答"
+      "submit": "提交回答",
+      "decisionTitle": "一个 pipeline run 需要你拍板",
+      "decisionWhy": "它自己定不了的原因：{{why}}",
+      "irreversible": "不可撤回",
+      "highRisk": "高风险",
+      "decisionTruncated": "这个决定的内容太长，这里没有完整显示，不能在这里回答：去这台 Hive 自己的页面看全文再决定。"
     },
     "kpi": {
       "waiting": "等你回答",
@@ -1500,6 +1505,7 @@
     },
     "error": {
       "questions": "读不到 Hive {{hive}} 的问题：「等你」可能不全",
+      "decisions": "读不到 Hive {{hive}} 的 pipeline 决定：「等你」可能不全",
       "hiveList": "读不到 Hive 列表：只显示派发记录里的 Hive",
       "hiveRecord": "有一台 Hive 的记录读不出来",
       "acceptance": "读不出单子的验收状态"

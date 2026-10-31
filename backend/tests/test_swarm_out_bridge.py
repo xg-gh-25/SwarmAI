@@ -71,7 +71,8 @@ def env(tmp_path):
     pm = PermissionManager(persist_path=tmp_path / "pending.json")
     router = FakeRouter()
     store = FakeStore()
-    return pm, router, store, Bridge("worker-1", store, pm=pm, router=router)
+    # no pipeline runs here (the real provider would read this machine's workspace)
+    return pm, router, store, Bridge("worker-1", store, pm=pm, router=router, decisions=lambda: [])
 
 
 def _question(pm, router, board_sid="temp-1", unit_sid="sess-1", tid="toolu_1"):

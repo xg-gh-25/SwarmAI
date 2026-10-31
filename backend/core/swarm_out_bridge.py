@@ -11,6 +11,10 @@ does on a desktop. This module does not add a second way to wait. It only:
   longer open (answered on the Hive's own web page, expired, or the session ended),
   so the Host stops showing it, or with ``why: answer_refused`` when an answer does
   not match the prompt still waiting (the Host then shows it as not delivered);
+- hands each pass to ``core.swarm_out_decisions``, which lists the pipeline runs
+  waiting on a person's decision in ``bridge/<hive>/decisions.json`` and answers them;
+  a run's own question card for such a decision is not mirrored here (one decision is
+  never shown as two);
 - reads ``bridge/<hive>/answer/<session>/<key>.json`` (written only by the Host,
   which holds the account credentials; the Hive role can read but not write there)
   and delivers a valid answer the way the web page does. An approval must name what
@@ -221,8 +225,10 @@ class Bridge:
     a task kept here until it ends, as ``routers/chat.py`` keeps a detached turn.
     """
 
-    def __init__(self, hive: str, store: Store, pm=None, router=None):
+    def __init__(self, hive: str, store: Store, pm=None, router=None,
+                 decisions=None, record_decision=None):
         from .permission_manager import permission_manager
+        from .swarm_out_decisions import DecisionMirror
         self.hive = hive
         self.store = store
         self.pm = pm or permission_manager
@@ -232,6 +238,10 @@ class Bridge:
         self._delivered: set[str] = set()
         self._refused: set[str] = set()   # an answer that does not match what is waiting
         self._tasks: set[asyncio.Task] = set()
+        # the pipeline decisions waiting on a person (tests pass their own readers)
+        self.decisions = DecisionMirror(hive, store, lambda: self.router, KEY_RE,
+                                        decisions=decisions, record_decision=record_decision)
+        self._hidden: set[str] = set()
 
     @property
     def router(self):
@@ -348,7 +358,13 @@ class Bridge:
                 await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{rel}", body)
 
     async def tick(self) -> None:
-        open_now = self._open_now()
+        board = self._open_now()
+        try:
+            self._hidden = await self.decisions.run_pass(board)
+        except Exception as e:   # S3 down: the prompts still get their pass
+            logger.warning("swarm_out_bridge: the decision pass failed (%s)", type(e).__name__)
+        # a waiting decision's own card is shown once, as the decision
+        open_now = {k: v for k, v in board.items() if k not in self._hidden}
         # 1. mirror new prompts
         for key, (sid, item) in open_now.items():
             if key in self._mirrored:
