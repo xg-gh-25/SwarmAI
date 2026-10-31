@@ -1289,7 +1289,8 @@
       "unanswered_other": "{{count}} 没答",
       "more_one": "显示更早的 {{count}} 条",
       "more_other": "显示更早的 {{count}} 条",
-      "refusals": "拒收 {{count}} 次 · 其中需要私有网络的 {{private}} 次"
+      "refusals_one": "拒收 {{count}} 次 · 其中需要私有网络的 {{private}} 次",
+      "refusals_other": "拒收 {{count}} 次 · 其中需要私有网络的 {{private}} 次"
     },
     "tbdParts": {
       "occupancy": "工蜂占用",
