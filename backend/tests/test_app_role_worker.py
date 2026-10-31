@@ -382,3 +382,17 @@ def test_the_startup_replay_queues_every_session_that_missed_its_hooks(as_role, 
     as_role(None, None)
     asyncio.run(lm.LifecycleManager._scan_unprocessed_sessions(mgr))
     assert len(fired) == 12
+
+
+def test_the_hook_queue_never_drops_a_session():
+    """A bound of 100 dropped a session's hooks (summary, ToDos, review request)."""
+    from core.session_hooks import BackgroundHookExecutor, HookContext, SessionLifecycleHookManager
+
+    async def go():
+        ex = BackgroundHookExecutor(SessionLifecycleHookManager())
+        ex._ensure_started = lambda: None             # queue only: no worker drains it
+        for i in range(500):
+            ex.fire(HookContext(session_id=f"s{i}", agent_id="a", message_count=2,
+                                session_start_time="", session_title="t"))
+        return ex._queue.qsize()
+    assert asyncio.run(go()) == 500

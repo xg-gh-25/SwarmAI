@@ -210,15 +210,13 @@ class BackgroundHookExecutor:
       designed to be idempotent and will retry next session/startup.
     """
 
-    QUEUE_MAX_SIZE: int = 100
-
     def __init__(self, hook_manager: SessionLifecycleHookManager) -> None:
         self._hook_manager = hook_manager
         self._pending: set[asyncio.Task] = set()
         self._git_lock = asyncio.Lock()
-        self._queue: asyncio.Queue[_HookWorkItem | None] = asyncio.Queue(
-            maxsize=self.QUEUE_MAX_SIZE
-        )
+        # unbounded: one item per session or single hook; a bound of 100 dropped a
+        # session's hooks (its summary, ToDos and review request) when it filled
+        self._queue: asyncio.Queue[_HookWorkItem | None] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
         self._started = False
         # Per-hook status tracking: {hook_name: {last_run, last_status, total_runs, total_errors}}
@@ -358,14 +356,7 @@ class BackgroundHookExecutor:
         """
         self._ensure_started()
         item = _HookWorkItem(context=context, skip_hooks=skip_hooks)
-        try:
-            self._queue.put_nowait(item)
-        except asyncio.QueueFull:
-            logger.warning(
-                "Hook queue full (%d items) — dropping hooks for session %s",
-                self.QUEUE_MAX_SIZE,
-                context.session_id,
-            )
+        self._queue.put_nowait(item)
 
     def fire_single(
         self,
@@ -381,15 +372,7 @@ class BackgroundHookExecutor:
         item = _HookWorkItem(
             context=context, single_hook=hook, single_timeout=timeout
         )
-        try:
-            self._queue.put_nowait(item)
-        except asyncio.QueueFull:
-            logger.warning(
-                "Hook queue full (%d items) — dropping hook '%s' for session %s",
-                self.QUEUE_MAX_SIZE,
-                hook.name,
-                context.session_id,
-            )
+        self._queue.put_nowait(item)
 
     @property
     def pending_count(self) -> int:
@@ -419,11 +402,7 @@ class BackgroundHookExecutor:
         extraction means that session's summary is permanently lost.
         """
         # Send sentinel to tell worker to exit after current queue
-        try:
-            self._queue.put_nowait(None)
-        except asyncio.QueueFull:
-            # Queue is full — force-cancel the worker
-            pass
+        self._queue.put_nowait(None)
 
         tasks_to_wait: set[asyncio.Task] = set()
         if self._worker_task and not self._worker_task.done():
