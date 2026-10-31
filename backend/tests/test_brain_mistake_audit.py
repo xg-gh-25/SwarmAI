@@ -161,3 +161,34 @@ def test_a_month_before_the_records_is_skipped_and_reports_are_named_by_month(cd
     _setup(cdf_env)
     res = run_brain_mistake_audit({"workspace": str(ws)}, ask=_ask, now=NOW)
     assert Path(res["output_path"]).name == "2026-11-brain-mistake-audit.md"
+
+
+def test_the_model_reads_each_mistake_and_entry_whole():
+    """Cut at 800 / 900 characters, a mistake or an entry could read as lacking what it
+    says further on, which the chain then counts as missing knowledge."""
+    from jobs.handlers import brain_mistake_audit as audit
+    tail = "THE-DECISIVE-TAIL"
+    long_mistake = "x " * 600 + tail
+    seen = []
+
+    def ask(prompt, schema):
+        seen.append(prompt)
+        return {"verdicts": [], "match": -1, "stale": False, "reasoning": "r"}
+    audit._classify([{"id": "m1", "mode": "chat", "project": "P", "mistake": long_mistake}], ask)
+    audit._match({"knowledge": "k", "mistake": "m"}, [{"text": "y " * 600 + tail}], ask)
+    assert all(tail in p for p in seen) and len(seen) == 2
+
+
+def test_a_correction_is_collected_whole():
+    import json as _json
+    import sqlite3 as _sq
+    from jobs.handlers import brain_mistake_audit as audit
+    conn = _sq.connect(":memory:")
+    conn.execute("CREATE TABLE ingestion_inbox (id TEXT, payload TEXT, project_snapshot TEXT, source_ref TEXT)")
+    conn.execute("CREATE TABLE ingestion_units (unit_id TEXT, candidate_id TEXT, state TEXT, updated_at TEXT)")
+    what = "w " * 600 + "THE-DECISIVE-TAIL"
+    conn.execute("INSERT INTO ingestion_inbox VALUES ('c1', ?, '{}', 's')",
+                 (_json.dumps({"type": "correction", "title": "t", "what": what}),))
+    conn.execute("INSERT INTO ingestion_units VALUES ('u1', 'c1', 'written', '2026-10-15T00:00:00')")
+    (item,) = audit._corrections(conn, "2026-10-01", "2026-11-01")
+    assert item["mistake"].endswith("THE-DECISIVE-TAIL")

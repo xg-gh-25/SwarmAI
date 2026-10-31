@@ -105,7 +105,7 @@ def _pipeline_findings(ws: Path, start: str, end: str) -> list[dict]:
             out.append({"id": str(f.get("canonical_id") or ""), "date": created[:10], "mode": "pipeline",
                         "project": str(run.get("project") or run_dir.parents[2].name),
                         "run_dir": str(run_dir), "severity": str(f.get("severity") or ""),
-                        "mistake": str(f["claim"])[:800]})
+                        "mistake": str(f["claim"])})
     return out
 
 
@@ -124,7 +124,7 @@ def _corrections(conn: sqlite3.Connection, start: str, end: str) -> list[dict]:
             continue
         text = " ".join(str(p.get(k) or "") for k in ("title", "what", "why")).strip()
         out.append({"id": str(uid), "date": str(at)[:10], "mode": "chat", "project": project,
-                    "source_ref": source_ref, "mistake": text[:800]})
+                    "source_ref": source_ref, "mistake": text})
     return out
 
 
@@ -253,7 +253,8 @@ def _classify(items: list[dict], ask: Callable[[str, dict], dict]) -> dict[str, 
 def _match(item: dict, cands: list[dict], ask: Callable[[str, dict], dict]) -> dict:
     if not cands:
         return {"match": -1, "stale": False, "reasoning": "no candidate entry"}
-    listing = "\n".join(f"[{i}] {c['text'][:900]}" for i, c in enumerate(cands))
+    # whole: an entry cut short can look as if it lacks the knowledge it states further on
+    listing = "\n".join(f"[{i}] {c['text']}" for i, c in enumerate(cands))
     prompt = (f"Needed knowledge: {item['knowledge']}\nMistake: {item['mistake']}\n\n"
               "Which entry below states the needed knowledge (index, or -1 if none does)? Is "
               "that entry stale, i.e. does it say something the needed knowledge contradicts? "
@@ -378,7 +379,7 @@ def run_brain_mistake_audit(config: dict | None = None, *, ask: Callable[[str, d
             else:
                 outcome, head = "事先没有", ""
             rows.append({**item, "outcome": outcome, "entry_head": head,
-                         "judgment": verdict.get("reasoning", "")[:400]})
+                         "judgment": verdict.get("reasoning", "")})
         changes = [c for c in brain_changes(conn, since=start) if str(c.get("at") or "") < end]
         conflicts = [c for c in changes if c["kind"] == "conflict"]
         summary_counts = brain_change_summary(changes)
