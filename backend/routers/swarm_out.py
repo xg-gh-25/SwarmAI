@@ -339,6 +339,25 @@ async def run_discard(dispatch_id: str, body: DiscardBody) -> dict[str, Any]:
     return out
 
 
+class CardBody(BaseModel):
+    request_id: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/runs/{dispatch_id}/card")
+async def wait_card(dispatch_id: str, body: CardBody) -> dict[str, Any]:
+    """The AskUserQuestion input that asks the person one of the run's waits in the
+    chat (core/swarm_out_wait_card). The person's pick is forwarded by the daemon."""
+    _require_desktop()
+    from core import swarm_out_wait_card
+    try:
+        return await swarm_out_wait_card.card(dispatch_id, body.request_id)
+    except (swarm_out_wait_card.CardError, swarm_out.SwarmOutError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception("swarm_out card failed")
+        raise HTTPException(status_code=500, detail="Swarm Out request failed")
+
+
 class WatchBody(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=20)
     since: Optional[str] = Field(default=None, max_length=8000)

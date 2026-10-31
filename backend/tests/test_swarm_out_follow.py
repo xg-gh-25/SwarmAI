@@ -68,7 +68,7 @@ def test_a_new_wait_or_its_phase_is_a_change(state, monkeypatch):
     _feed(monkeypatch, [_data(_row(A)), _data(_row(A), asks=[ask])])
     first = _watch([A])
     assert first["changed"] and first["runs"][0]["waits"] == [
-        {"request_id": "r1", "kind": "decision", "phase": "waiting", "refused_reason": None}]
+        {"request_id": "r1", "kind": "decision", "phase": "waiting", "refused_reason": None, "card": None}]
     _feed(monkeypatch, [_data(_row(A), answered=[{**ask, "phase": "sent"}])])
     second = _watch([A], since=first["token"])
     assert second["changed"] and second["runs"][0]["waits"][0]["phase"] == "sent"

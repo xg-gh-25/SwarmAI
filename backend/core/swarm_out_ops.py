@@ -73,6 +73,9 @@ _STATIC: "tuple[Op, ...]" = (
     _op("run.refresh", "POST", f"{_SO}/runs/{{dispatch_id}}/refresh", _PO, "read"),
     # waits until a followed run changes (core/swarm_out_follow; agent-owns-its-runs §2.3)
     _op("run.watch", "POST", f"{_SO}/watch", _PO, "read"),
+    # the chat card for one of a run's waits (core/swarm_out_wait_card): it writes only
+    # this machine's record of the card; the person's pick is forwarded by the daemon
+    _op("ask.card", "POST", f"{_SO}/runs/{{dispatch_id}}/card", _PO, "change"),
     _op("task.route", "POST", f"{_SO}/route", _POC, "read"),
     _op("task.spec", "POST", f"{_SO}/spec", _POC, "read"),
     _op("task.dispatch", "POST", f"{_SO}/dispatch", _POC, "off_machine"),

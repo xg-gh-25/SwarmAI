@@ -1687,8 +1687,11 @@ def _check_answer(rec: dict[str, Any], answers: Any, decision: Any,
 
 async def answer(hive_ref: str, session_id: str, request_id: str,
                  answers: Any = None, decision: Any = None,
-                 shown_sha256: Any = None, option_id: Any = None) -> dict[str, Any]:
-    """Write the person's answer for an open question to the bridge. An approval names
+                 shown_sha256: Any = None, option_id: Any = None,
+                 via: Optional[str] = None) -> dict[str, Any]:
+    """Write the person's answer for an open question to the bridge. ``via="chat"``: the
+    person answered it on a chat card in the session that dispatched the run, and the
+    daemon forwarded it (core/swarm_out_wait_card); kept on the answer. An approval names
     what the card showed (``shown_sha256``); it is refused when the ask changed since,
     or when the command was too long to be shown whole. A pipeline decision (a
     ``dc-`` request the Hive lists in ``decisions.json``) is answered with one of its
@@ -1725,6 +1728,8 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
         option = next(o for o in rec["options"] if o["id"] == option_id)
         body["shown_label"] = f"{option_id} — {option['choice']}"[:MAX_CHOSEN_CHARS]
         body["shown_question"] = rec.get("question", "")[:MAX_CHOSEN_CHARS]
+        if via == "chat":
+            body["via"] = "chat"
         await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
         return {"ok": True, "request_id": request_id}
     raw = await asyncio.to_thread(_load, "ask/")
@@ -1747,6 +1752,8 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
                                 "Hive's own page, or deny it here")
     if rec["kind"] == "approval" and isinstance(shown_sha256, str):
         body["shown_sha256"] = shown_sha256
+    if via == "chat":
+        body["via"] = "chat"
 
     await asyncio.to_thread(_put_once, s3, inst, base + "answer/" + rel, body)
     return {"ok": True, "request_id": request_id}

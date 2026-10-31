@@ -377,8 +377,10 @@ def test_hives_lists_names_and_status_without_addresses_or_credentials(monkeypat
                   "'x.cloudfront.net','u','p2','a1','b')")
     monkeypatch.setattr(swarm_out, "_db_path", lambda: str(db))
     out = asyncio.run(swarm_out.hives())
-    assert out == {"hives": [{"name": "alpha", "status": "stopped", "region": "us-west-2"},
-                             {"name": "worker-1", "status": "running", "region": "us-east-1"}],
+    # the id is the row's key, which an agent updates a Hive by (agent-owns-its-runs P4)
+    assert out == {"hives": [{"id": "h2", "name": "alpha", "status": "stopped", "region": "us-west-2"},
+                             {"id": INST["id"], "name": "worker-1", "status": "running",
+                              "region": "us-east-1"}],
                    "running": 1}
     text = json.dumps(out)
     assert "s3cret-pass" not in text and "cloudfront" not in text

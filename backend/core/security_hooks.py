@@ -1812,6 +1812,16 @@ def create_ask_question_gate(
             await asyncio.to_thread(pipeline_human.record_card_answer,
                                     actual_session_id, answer)
 
+        # A PERSON's answer on a Hive card (a dispatched run's wait, asked in the chat
+        # that dispatched it) is forwarded to the Hive here, in the daemon, for the
+        # same reason: the agent has no answer command (core/swarm_out_wait_card, design
+        # 2026-10-31-swarm-out-agent-owns-its-runs §2.5). It never raises.
+        if answered_by == "person" and isinstance(answer, dict):
+            from . import swarm_out_wait_card
+            if any(isinstance(q, dict) and str(q.get("question", "")).startswith(
+                    swarm_out_wait_card.MARKER_PREFIX) for q in questions):
+                await swarm_out_wait_card.forward(actual_session_id, questions, answer)
+
         # answer is the user's answers dict.
         return {
             "hookSpecificOutput": {

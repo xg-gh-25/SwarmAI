@@ -13,6 +13,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title <t> --brief <one or two sentences> --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits --revision <r> [--hive <name>] [--mode <m>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [...] [--since <token>]
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out read <dispatch_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out manual-landed|stop|discard <dispatch_id> --why <one sentence>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
@@ -33,9 +34,11 @@ Every task goes under a Brain's Project Agent (``General`` = the Runner Agent, f
 task that belongs to no Brain); its repositories come from the definition. How it runs
 (``--execution``) is chosen here for this request, not by the Project Agent.
 
-There is deliberately no answer command: a Hive's questions and approvals are answered
-by the person in the Swarm Out panel. An agent that reads Hive-written text (``runs``)
-must not be one command away from approving what that text asks for.
+There is deliberately no answer command: an agent that reads Hive-written text must not
+be one command away from approving what that text asks for. A Hive's questions,
+decisions and approvals are answered by the person: in the Swarm Out panel, or in the
+chat that dispatched the run, on the card ``card`` builds (AskUserQuestion with that
+input, unchanged); the daemon forwards the person's pick (core/swarm_out_wait_card).
 
 Prints the daemon's JSON reply; exits 1 when the daemon refuses. A dispatch that may
 have reached the Hive without an answer prints ``"maybe_sent": true``.
@@ -175,6 +178,9 @@ def _parser() -> argparse.ArgumentParser:
     w = sub.add_parser("watch", help="wait until one of the runs changes (at most 9 minutes)")
     w.add_argument("dispatch_ids", nargs="+")
     w.add_argument("--since", help="the token the last watch printed")
+    cd = sub.add_parser("card", help="the question card that asks the person one of a run's waits")
+    cd.add_argument("dispatch_id")
+    cd.add_argument("request_id")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id")
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
@@ -255,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         # the route answers within WATCH_MAX_S (540 s); this waits a little longer
         return _call("POST", "/watch", {"ids": args.dispatch_ids, "since": args.since,
                                         "session": _session()}, timeout=WATCH_TIMEOUT_S)
+    if args.cmd == "card":
+        return _call("POST", f"/runs/{args.dispatch_id}/card", {"request_id": args.request_id}, framed=True)
     if args.cmd == "read":
         return _call("GET", f"/runs/{args.dispatch_id}/result", framed=True)
     if args.cmd in ("spec", "dispatch"):

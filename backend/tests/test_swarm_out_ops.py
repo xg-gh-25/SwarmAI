@@ -238,6 +238,7 @@ _CLI_ARGS = {
     "update-hive": ["--hive", "h1"],
     "read": ["so_0123456789ab"],
     "watch": ["so_0123456789ab", "--since", "e30="],
+    "card": ["so_0123456789ab", "req1"],
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
     "manual-landed": ["so_0123456789ab", "--why", "w"],
     "stop": ["so_0123456789ab", "--why", "w"],

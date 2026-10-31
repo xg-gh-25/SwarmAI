@@ -51,12 +51,20 @@ MAX_DIGEST = 10
 
 # ── the fingerprint ──────────────────────────────────────────────────────────
 
-def _waits(row: dict[str, Any], data: dict[str, Any]) -> list[tuple[str, str, str]]:
+def _card(row: dict[str, Any], request_id: Any) -> Optional[dict[str, Any]]:
+    """The chat card's forward outcome for this wait (core/swarm_out_wait_card), or None."""
+    from core import swarm_out_wait_card
+    return swarm_out_wait_card.status(str(row.get("dispatch_id") or ""), str(request_id or ""))
+
+
+def _waits(row: dict[str, Any], data: dict[str, Any]) -> list[tuple[str, str, str, str]]:
     sid = row.get("session_id")
     out = []
     for w in list(data.get("asks") or []) + list(data.get("answered") or []):
         if isinstance(w, dict) and sid and w.get("session_id") == sid:
-            out.append((str(w.get("request_id") or ""), str(w.get("kind") or ""), str(w.get("phase") or "")))
+            card = _card(row, w.get("request_id")) or {}
+            out.append((str(w.get("request_id") or ""), str(w.get("kind") or ""), str(w.get("phase") or ""),
+                        str(card.get("status") or "")))
     return sorted(set(out))
 
 
@@ -78,8 +86,11 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     waits = []
     for w in list(data.get("asks") or []) + list(data.get("answered") or []):
         if isinstance(w, dict) and row.get("session_id") and w.get("session_id") == row.get("session_id"):
+            card = _card(row, w.get("request_id"))
             waits.append({"request_id": w.get("request_id"), "kind": w.get("kind"), "phase": w.get("phase"),
-                          "refused_reason": w.get("refused_reason")})
+                          "refused_reason": w.get("refused_reason"),
+                          # the chat card's outcome; its reason is this daemon's own text
+                          "card": card})
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
     return {"dispatch_id": row.get("dispatch_id"), "title": row.get("title"), "hive": row.get("hive"),
             "state": row.get("state"), "state_reason": row.get("state_reason"), "stage": row.get("stage"),
