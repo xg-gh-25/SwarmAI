@@ -230,11 +230,13 @@ async def watch(ids: list[str], since: Optional[str] = None, session: Optional[s
                 continue
             changed.append(i)
         if changed or time.monotonic() >= deadline:
-            token_fps = {**seen, **{i: now[i] for i in changed}}
+            # what the caller has now been told: the current state, except a run held
+            # back by one unknown read (it keeps what was seen before)
+            token_fps = {i: (seen[i] if i in unknown_once else now[i]) for i in ids}
             # what the caller is told now it has seen: every run it asked about that this
             # session dispatched (another session's runs are not its to mark)
             own = {i: token_fps[i] for i in ids if (rows.get(i) or {}).get("dispatched_from") == session}
-            mark_seen(session, own, keep=set(rows))
+            await asyncio.to_thread(mark_seen, session, own, set(rows))
             return {"changed": bool(changed), "changed_ids": changed, "token": _token(token_fps),
                     "runs": [summary(rows[i], data) if i in rows else {"dispatch_id": i, "state": "missing"}
                              for i in ids]}
@@ -266,6 +268,8 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
     for r in data.get("runs") or []:                 # newest dispatch first
         if not isinstance(r, dict) or r.get("dispatched_from") != session:
             continue
+        if r.get("state") == "unknown" and r.get("state_reason") != "no_session_id":
+            continue          # one slow probe is not news; told once the Hive answers (not marked)
         h = _hash(fingerprint(r, data))
         if seen.get(r.get("dispatch_id")) == h:
             continue

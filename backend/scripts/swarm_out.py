@@ -15,7 +15,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [...] [--since <token>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out read <dispatch_id>
-    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out manual-landed|stop|discard <dispatch_id> --why <one sentence>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop|discard <dispatch_id> --why <one sentence>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --why <w>
@@ -192,7 +192,7 @@ def _parser() -> argparse.ArgumentParser:
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
-    for name, extra in (("accept", ("--ended-at",)), ("manual-landed", ()), ("stop", ()),
+    for name, extra in (("accept", ("--ended-at",)), ("stop", ()),
                         ("return-prepare", ("--url",)), ("return-land", ("--key", "--tip")),
                         ("rerun", ("--text-file",)), ("discard", ())):
         c = sub.add_parser(name)
@@ -222,7 +222,7 @@ def _run_command(args) -> int:
     return _call("POST", f"{path}/{args.cmd}", actor)
 
 
-_RUN_COMMANDS = ("accept", "manual-landed", "stop", "return-prepare", "return-land", "rerun", "discard")
+_RUN_COMMANDS = ("accept", "stop", "return-prepare", "return-land", "rerun", "discard")
 
 
 def _fetch(path: str) -> "dict | None":

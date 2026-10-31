@@ -74,6 +74,25 @@ def test_a_new_wait_or_its_phase_is_a_change(state, monkeypatch):
     assert second["changed"] and second["runs"][0]["waits"][0]["phase"] == "sent"
 
 
+def test_a_stale_token_does_not_write_an_older_state_over_the_record(state, monkeypatch):
+    _feed(monkeypatch, [_data(_row(A))])
+    token = _watch([A], wait_s=0.05)["token"]                     # token: running
+    done = _data(_row(A, "stopped", "idle"))
+    _snapshot(monkeypatch, done)
+    fol.mark_seen("sess-a", fol.digest("sess-a")[1])              # record: stopped
+    _feed(monkeypatch, [done])
+    _watch([A], since=token, wait_s=0.05)                          # unchanged against the record
+    _snapshot(monkeypatch, done)
+    assert fol.digest("sess-a") == (None, {}), "the record went back to the token's state"
+
+
+def test_one_slow_probe_is_not_in_the_digest_but_no_session_is(state, monkeypatch):
+    _snapshot(monkeypatch, _data(_row(A, "unknown", "hive_silent")))
+    assert fol.digest("sess-a") == (None, {})
+    _snapshot(monkeypatch, _data(_row(A, "unknown", "no_session_id")))
+    assert A in fol.digest("sess-a")[0]
+
+
 def test_one_unknown_read_is_not_news_two_are(state, monkeypatch):
     unknown = _row(A, "unknown", "hive_silent")
     _feed(monkeypatch, [_data(_row(A)), _data(unknown), _data(_row(A))])

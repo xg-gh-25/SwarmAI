@@ -325,8 +325,14 @@ async def run_rerun(dispatch_id: str, body: RerunBody) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail=str(e))
     try:
         return await _call(swarm_out.rerun(dispatch_id, body.text))
-    except BaseException:
-        swarm_out_actor.release_rerun(dispatch_id, reserved)
+    except HTTPException as e:
+        # refused before anything was sent: it does not count. A 504 (it may have
+        # reached the Hive) and a cancelled request keep counting.
+        if e.status_code in (400, 403, 422):
+            try:
+                swarm_out_actor.release_rerun(dispatch_id, reserved)
+            except Exception:  # noqa: BLE001 — the command's own error is the answer
+                logger.warning("swarm_out: a re-send reservation was not released", exc_info=True)
         raise
 
 

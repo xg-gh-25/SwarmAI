@@ -79,7 +79,7 @@ def test_names_are_unique_and_rows_well_formed():
 
 
 #: the irreversible ops an owner agent may call, and only these
-_AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.manual_landed", "run.return_land",
+_AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.return_land",
                        "run.discard"}
 
 
@@ -240,7 +240,6 @@ _CLI_ARGS = {
     "watch": ["so_0123456789ab", "--since", "e30="],
     "card": ["so_0123456789ab", "req1"],
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
-    "manual-landed": ["so_0123456789ab", "--why", "w"],
     "stop": ["so_0123456789ab", "--why", "w"],
     "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],
     "return-land": ["so_0123456789ab", "--why", "w", "--key", "k", "--tip", "t"],

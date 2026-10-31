@@ -574,12 +574,18 @@ def test_path_refuses_what_is_not_a_dispatch_id():
 _ANSWER = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/asks/hv1/sess-1/"
 
 
-@pytest.mark.parametrize("tail", ["verdict", "manual-landed", "return/prepare", "return/land",
+@pytest.mark.parametrize("tail", ["verdict", "return/prepare", "return/land",
                                   "rerun", "stop", "discard"])
 def test_run_commands_are_the_dispatching_agents_too(tail):
     from core import run_owner_gate
     base = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/"
     assert run_owner_gate._user_only_deny(f"{base}{tail} -d '{{}}'") is None
+
+
+def test_landed_by_hand_stays_the_persons():
+    from core import run_owner_gate
+    base = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/"
+    assert run_owner_gate._user_only_deny(f"{base}manual-landed -d '{{}}'") is not None
 
 
 def test_answering_a_hives_wait_stays_refused_in_every_spelling():

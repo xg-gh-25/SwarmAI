@@ -9,10 +9,12 @@ agent the routes refuse what is the person's to decide:
 
 - any command from a session other than the one that dispatched the run, or without a
   reason (``why``);
+- any command on a run no agent session is recorded as having dispatched (an older run);
 - a command the panel does not offer the person on the run now (its ``/runs`` row's
   ``actions``): accept only while the run awaits it, on the final result the row shows
-  (``ended_at``); "landed by hand" only for commits that can be landed, never for commits
-  that exist only in the Hive's workspace; stop only while it runs (``row_blocker``);
+  (``ended_at``); stop only while it runs (``row_blocker``);
+- "landed by hand" at all: it settles the run and releases its workspace with any
+  commits not landed yet; an agent lands commits with ``return_land``;
 - landing commits that change the repository's protected paths (``approve_protected``);
 - re-sending with a correction more than ``MAX_AGENT_RERUNS`` times (``reserve_rerun``
   counts it under the run's lock before it is sent);
@@ -85,7 +87,7 @@ def check(a: Actor, command: str, *, dispatch_id: str = "",
 #: which offered action of the run's row each command needs (core/swarm_out_settle
 #: _actions): accept's variant says how accept works on the run now
 _NEEDS = {"accept": ("accept", "verdict"), "return_prepare": ("accept", "land"),
-          "return_land": ("accept", "land"), "manual_landed": ("accept", "land"),
+          "return_land": ("accept", "land"),
           "rerun": ("rerun", None), "stop": ("stop", None), "discard": ("discard", None)}
 
 
@@ -99,15 +101,19 @@ def row_blocker(a: Actor, command: str, row: Optional[dict[str, Any]],
     if not isinstance(row, dict):
         return "the run is not in the list of runs now; try again in a moment"
     owner = row.get("dispatched_from")
-    if owner and a.session != owner:
+    if not owner:
+        # a run from before the dispatching session was recorded: no agent owns it
+        return "no agent session is recorded as having dispatched this run: the person gives commands on it"
+    if a.session != owner:
         return "another session dispatched this run: only that session (or the person) gives commands on it"
+    if command == "manual_landed":
+        # "landed by hand" settles the run and releases its workspace with whatever
+        # commits are not landed yet: an agent lands commits with return_land instead
+        return "an agent lands commits with return-land; saying they were landed by hand is the person's"
     key, variant = _NEEDS[command]
     offered = {x.get("key"): x.get("variant") for x in row.get("actions") or [] if isinstance(x, dict)}
     if key not in offered or (variant is not None and offered[key] != variant):
         stage = row.get("stage") or "?"
-        if command == "manual_landed" and offered.get("accept") == "manual":
-            return ("its commits exist only in the Hive's workspace: the person decides how they are "
-                    "landed")
         return f"the run does not offer `{command}` now (stage {stage}); see its actions in `runs`"
     if command == "accept":
         from core.swarm_out_settle import _final

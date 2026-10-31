@@ -177,6 +177,15 @@ def test_a_forward_that_happened_is_never_overwritten_as_not_forwarded(hive):
     assert wc.status(DID, "dc-1")["status"] == "forwarded"
 
 
+def test_a_forwarded_wait_gets_no_new_card(hive):
+    qs = _card("dc-1")
+    _forward(qs, {qs[0]["question"]: "a — the fixture"})
+    with pytest.raises(wc.CardError, match="already forwarded"):
+        _card("dc-1")
+    assert wc.status(DID, "dc-1")["status"] == "forwarded"
+    assert wc._LOCKS == {}                                        # the lock map does not grow
+
+
 def test_a_built_card_is_not_news_but_why_it_was_not_forwarded_is(hive):
     data = {"runs": [ROW], "asks": [DECISION], "answered": []}
     before = swarm_out_follow.fingerprint(ROW, data)

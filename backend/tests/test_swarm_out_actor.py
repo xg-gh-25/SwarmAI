@@ -115,9 +115,9 @@ def test_an_agent_gives_only_what_the_panel_offers_now():
     # commits to land are not accepted by a verdict, and the reverse
     assert act.row_blocker(a, "accept", _offer("accept", accept="land"), "2026-10-31T00:00:00Z") is not None
     assert act.row_blocker(a, "return_land", _offer("accept", accept="land")) is None
-    # commits only in the Hive's workspace: never "landed by hand" by an agent
-    assert "only in the Hive" in act.row_blocker(a, "manual_landed", _offer("accept", accept="manual"))
-    assert act.row_blocker(a, "manual_landed", _offer("accept", accept="land")) is None
+    # "landed by hand" is never an agent's: it would release commits not landed yet
+    for variant in ("manual", "land"):
+        assert "by hand is the person's" in act.row_blocker(a, "manual_landed", _offer("accept", accept=variant))
     # the person is not limited
     assert act.row_blocker(act.actor("person", None, ""), "stop", _offer()) is None
 
@@ -126,8 +126,8 @@ def test_an_agent_gives_commands_only_on_runs_its_session_dispatched():
     other = act.actor("agent", "s-other", "w")
     assert "another session" in act.row_blocker(other, "rerun", _offer("rerun"))
     assert act.row_blocker(_agent(), "rerun", _offer("rerun")) is None
-    # a run from before the dispatching session was recorded: no owner to compare
-    assert act.row_blocker(other, "rerun", {**_offer("rerun"), "dispatched_from": None}) is None
+    # a run no agent session is recorded as having dispatched is the person's
+    assert "no agent session" in act.row_blocker(_agent(), "rerun", {**_offer("rerun"), "dispatched_from": None})
 
 
 def test_an_agent_does_not_discard_while_its_hive_is_not_answering():
@@ -215,6 +215,17 @@ def test_the_rerun_route_refuses_a_third_agent_re_send_and_a_failed_one_does_not
     assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**body, "text": "fail"}).status_code == 400
     assert [c.post(f"/api/swarm-out/runs/{DID}/rerun", json=body).status_code for _ in range(3)] == [200, 200, 403]
     assert len(calls) == 3
+
+
+def test_a_re_send_that_may_have_reached_the_hive_keeps_counting(client, monkeypatch):
+    c, _ = client
+    _rows(monkeypatch, _offer("rerun"))
+
+    async def maybe(dispatch_id, text):
+        raise swarm_out.SwarmOutMaybeSent("the Hive did not answer in time")
+    monkeypatch.setattr(swarm_out, "rerun", maybe)
+    assert c.post(f"/api/swarm-out/runs/{DID}/rerun", json={**AGENT, "text": "x"}).status_code == 504
+    assert act.agent_reruns(DID) == 1
 
 
 def test_the_verdict_route_takes_an_agents_accept_only_on_the_final_result(client, monkeypatch):

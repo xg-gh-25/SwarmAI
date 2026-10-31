@@ -85,7 +85,9 @@ _STATIC: "tuple[Op, ...]" = (
     # paths, discard while something would be lost, re-send more than twice) the routes
     # refuse for ``by: agent`` (core/swarm_out_actor) ──
     _op("run.accept", "POST", f"{_SO}/runs/{{dispatch_id}}/verdict", _PO, "irreversible"),
-    _op("run.manual_landed", "POST", f"{_SO}/runs/{{dispatch_id}}/manual-landed", _PO, "irreversible"),
+    # "landed by hand" settles the run and releases its workspace with any commits not
+    # landed yet: the person's (an agent lands commits with return/land)
+    _op("run.manual_landed", "POST", f"{_SO}/runs/{{dispatch_id}}/manual-landed", _P, "irreversible"),
     _op("run.return_prepare", "POST", f"{_SO}/runs/{{dispatch_id}}/return/prepare", _PO, "change"),
     _op("run.return_land", "POST", f"{_SO}/runs/{{dispatch_id}}/return/land", _PO, "irreversible"),
     _op("run.rerun", "POST", f"{_SO}/runs/{{dispatch_id}}/rerun", _PO, "change"),
@@ -226,7 +228,7 @@ def person_only_match(text: str) -> "Op | None":
 
 #: the commands on a run an agent may give with its limits (core/swarm_out_actor): a
 #: request says who gives it (``by``), which the routes cannot verify
-AGENT_LIMITED = frozenset({"run.accept", "run.manual_landed", "run.return_prepare", "run.return_land",
+AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
                            "run.rerun", "run.stop", "run.discard"})
 
 

@@ -178,6 +178,9 @@ async def card(dispatch_id: str, request_id: str) -> dict[str, Any]:
            "dispatched_from": row.get("dispatched_from"), "shape": _shape(questions),
            "questions": qmap, "options": omap, "hive_shown_sha256": wait.get("shown_sha256"),
            "created_at": _now(), "forward": None}
+    old = _load(dispatch_id, request_id)
+    if ((old or {}).get("forward") or {}).get("status") == "forwarded":
+        raise CardError("the person's answer to this wait was already forwarded to the Hive")
     _save(rec)
     return {"questions": questions}
 
@@ -216,9 +219,14 @@ async def _forward_once(session, questions, answers):
     import asyncio
     keys = {m.groups() for q in (questions if isinstance(questions, list) else []) if isinstance(q, dict)
             for m in [_MARKER_RE.match(str(q.get("question", "")))] if m}
-    lock = _LOCKS.setdefault(next(iter(keys)) if len(keys) == 1 else ("", ""), asyncio.Lock())
-    async with lock:
-        return await _forward(session, questions, answers)
+    key = next(iter(keys)) if len(keys) == 1 else ("", "")
+    lock = _LOCKS.setdefault(key, asyncio.Lock())
+    try:
+        async with lock:
+            return await _forward(session, questions, answers)
+    finally:
+        if not lock.locked() and _LOCKS.get(key) is lock:
+            _LOCKS.pop(key, None)          # no one waits on it: the map does not grow
 
 
 async def _forward(session, questions, answers):
