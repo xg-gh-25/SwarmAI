@@ -61,9 +61,10 @@ CHECK_TIMEOUT = 10
 # does not false-fail on its absence — the exact "permanently dead auto-commit"
 # class the _ok_to_commit comment (~:808) warns about (a removed section left in
 # `required` makes the gate return False unconditionally).
+# The sections CDF writes into MEMORY.md, one per type (MEMORY_TYPE_TO_SECTION).
 MEMORY_SECTIONS = [
-    "## Principles", "## Corrections", "## Decisions",
-    "## Guidelines", "## Pitfalls", "## Open Threads",
+    "## Principles", "## Corrections", "## Decisions", "## Guidelines",
+    "## Pitfalls", "## Processes", "## Models",
 ]
 # Dated-entry sections used for the distillation-recency and dedup checks.
 # Entries look like:  - [DEC01] ... | ..., 2026-06-25, ...
@@ -81,7 +82,9 @@ EVOLUTION_CLASS_RE = r"^### CLASS [ABC]"
 # a check starts depending on a new section/marker.
 PROBE_REGISTRY = [
     ("M1", "MEMORY.md", "## Decisions"),
-    ("M4", "MEMORY.md", "## Open Threads"),
+    # M4 (Open Threads) removed 2026-10-31: open work is not a MEMORY section any more
+    # (design 2026-10-31-memory-chain-audit A1) — nothing wrote it, and it was injected
+    # into every session as a frozen status board.
     # E3/E4 anchor on the stable section, not a single CLASS header: size-valve
     # archival moves whole CLASS blocks into EVOLUTION-archive*.md (### CLASS A
     # went 2026-07-19), which made this probe report DRIFTED on a healthy file.
@@ -282,19 +285,6 @@ class SelfLoopsHealthEngine:
             id="M1", name="Distillation recency", dimension="memory",
             status="pass" if gap < 5 else ("warn" if gap < 10 else "fail"),
             detail=f"Newest: {newest}, gap: {gap}d",
-        ))
-
-        # M4: Open Threads hygiene (stale >30d)
-        ot_section = self._extract_section(memory, "## Open Threads", "## ")
-        # Look for dates that are >30d old in OT entries
-        ot_dates = re.findall(r"20\d{2}-\d{2}-\d{2}", ot_section)
-        stale = sum(1 for d in ot_dates if (date.today() - date.fromisoformat(d)).days > 30)
-        # Count Resolved entries (candidates for auto-archive)
-        resolved_entries = len(re.findall(r"^- ✅", ot_section, re.MULTILINE))
-        self.report.findings.append(Finding(
-            id="M4", name="Open Threads hygiene", dimension="memory",
-            status="pass" if stale == 0 else ("warn" if stale <= 2 else "fail"),
-            detail=f"{stale} stale date references in OT" + (f", {resolved_entries} resolved entries" if resolved_entries else ""),
         ))
 
         # M5: Archive health

@@ -253,8 +253,11 @@ context may hold only a summary of it).
 {types}
 5. Ask about yourself as well (scope "agent"): where was your judgment wrong this time, why
    did the user correct you, which of your ways of working are reliable and which are not.
-   Every time the user corrected you is a correction unit; when it was about how a skill
-   behaved, name that skill in skill.
+   Every time the user corrected you is a correction unit: copy the user's words that
+   corrected you, verbatim, into user_quote (a correction without them is not read in
+   every session); when it was about how a skill behaved, name that skill in skill. A
+   correction about one document, tool or subject only (not how you work) is declared for
+   that subject, like any narrow fact.
 6. Record what stays true, as it stands at the end of this record. The state of the
    moment (not pushed, needs a build, not verified yet, a count that will change) is not
    knowledge and is not written into any unit. A problem the record leaves open at its

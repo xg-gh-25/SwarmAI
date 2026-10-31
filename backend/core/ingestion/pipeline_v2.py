@@ -282,6 +282,9 @@ def _section_exists(root: Path, destination: DestinationV2) -> bool:
         return False
     if destination.section is None:
         return True
+    from .writer import product_sections
+    if destination.section in product_sections(destination.store):
+        return True                  # the writer adds a product-defined section itself
     headings = {" ".join(match.group(1).split())
                 for match in _H2.finditer(target.read_text(encoding="utf-8"))}
     return " ".join(destination.section.split()) in headings

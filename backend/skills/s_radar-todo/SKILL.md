@@ -292,8 +292,8 @@ If you're not confident the answer is yes → don't create it.
 
 - **Vague observations** — "might want to look at X" is not a todo. If you can't fill
   `next_step` with a concrete action, it's not ready.
-- **Things already tracked** — If it's in MEMORY.md Open Threads, don't duplicate as
-  a ToDo. Those are agent-level tracking; ToDos are user-facing.
+- **Things already tracked** — An open gap in a project's IMPROVEMENT.md (written and
+  closed by the knowledge flow) is not duplicated as a ToDo.
 - **Minor improvements** — "could refactor this function" is not worth a todo slot.
   Note it in the session, move on.
 - **More than 2 per session** — If you've already created 2, the 3rd one isn't

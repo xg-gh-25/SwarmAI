@@ -34,8 +34,8 @@ def ws(tmp_path, monkeypatch):
     und.mkdir(parents=True)
     (ws / "Projects/SwarmAI/.project.json").write_text('{"name":"SwarmAI"}', encoding="utf-8")
     (und / "PRODUCT.md").write_text("# Product\n\n## Vision\n\n- existing.\n", encoding="utf-8")
-    (und / "IMPROVEMENT.md").write_text("# I\n\n## What Failed\n\n" + _entry("pitfall", "Already in the DDD"),
-                                        encoding="utf-8")
+    (und / "IMPROVEMENT.md").write_text("# I\n\n## What Failed\n\n" + _entry("pitfall", "Already in the DDD")
+                                        + "\n## What to Watch For\n", encoding="utf-8")
     from core.ingestion.store import connect_rw
     conn = connect_rw()
     conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,payload_schema,content_hash,"
@@ -90,3 +90,40 @@ def test_a_dry_run_writes_nothing(ws):
     before = {p: p.read_bytes() for p in ws.rglob("*.md")}
     assert memory_relocate.run(ws, apply=False)["to_move"] == 3
     assert {p: p.read_bytes() for p in ws.rglob("*.md")} == before
+
+
+def test_open_threads_keep_their_knowledge_and_the_section_leaves(ws):
+    from scripts import memory_relocate
+    memory = ws / ".context/MEMORY.md"
+    memory.write_text(memory.read_text(encoding="utf-8") + (
+        "\n## Open Threads\n\n### P0 — Blocking\n"
+        "- 🔴 **streaming freeze + overall slowness — stalls** (reported 1x)\n  Status: diagnosed.\n"
+        "- 🔴 **chat Interrupted chip** (reported 1x)\n  Status: COE candidate.\n\n### P1\n"
+        "- 🟡 **Frontend reconcile race — guarded** — watch it.\n"
+        "  <!-- ref:0 | last:2026-08-06 | decay:active -->\n  **Two axes resolved.**\n\n"
+        "---\n\n_Entries are written by CDF._\n"), encoding="utf-8")
+    report = memory_relocate.move_open_threads(ws, apply=True)
+    assert report["moved"] == 2
+    text = memory.read_text(encoding="utf-8")
+    assert "Open Threads" not in text and "Interrupted" not in text
+    assert text.rstrip().endswith("_Entries are written by CDF._") and "Stays too" in text
+    improvement = (ws / "Projects/SwarmAI/2-understanding/IMPROVEMENT.md").read_text(encoding="utf-8")
+    assert "- [model] **streaming freeze + overall slowness — stalls** (reported 1x)\n  Status: diagnosed." in improvement
+    assert "- [pitfall] **Frontend reconcile race — guarded**" in improvement and "**Two axes resolved.**" in improvement
+    assert "Interrupted" not in improvement
+    assert memory_relocate.move_open_threads(ws, apply=True) == {"open_threads": False}
+
+
+def test_an_evolution_entry_moves_by_its_heading(ws):
+    from scripts import memory_relocate
+    evo = ws / ".context/EVOLUTION.md"
+    evo.write_text("# E\n\n## Corrections Captured\n\n### C070 | 2026-10-29\n- **Correction**: **Narrow one** body.\n"
+                   "<!-- cand:cand-e.unit -->\n\n"
+                   "### C071 | 2026-10-29\n- **Correction**: kept one\n\n## Competence Learned\n", encoding="utf-8")
+    report = memory_relocate.run(ws, apply=True, source=".context/EVOLUTION.md",
+                                 entries=[("C070 |", "ddd:lesson", "a pipeline stage")])
+    assert report["moved"] == 1
+    text = evo.read_text(encoding="utf-8")
+    assert "C070" not in text and "### C071 | 2026-10-29\n- **Correction**: kept one" in text
+    improvement = (ws / "Projects/SwarmAI/2-understanding/IMPROVEMENT.md").read_text(encoding="utf-8")
+    assert "- [correction] **Narrow one** body. (EVOLUTION C070, 2026-10-29) <!-- cand:cand-e.unit -->" in improvement

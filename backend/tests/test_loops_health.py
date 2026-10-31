@@ -115,7 +115,7 @@ class TestHealthCheckSchema:
 
     def test_check_count(self, health_data):
         # 29 dimension checks (C3 and K1 removed 2026-08-14) + the P0 probe.
-        assert len(health_data["findings"]) == 26  # M2, M3 retired with the distillation hook; E1, E2 with the evolution cycle
+        assert len(health_data["findings"]) == 25  # M2, M3 retired with the distillation hook; E1, E2 with the evolution cycle; M4 with Open Threads
 
     def test_finding_schema(self, health_data):
         for f in health_data["findings"]:
@@ -138,7 +138,7 @@ class TestDimensionChecks:
         assert _ids(health_data, "context") == {"C1", "C2", "C4"}
 
     def test_memory_checks(self, health_data):
-        assert _ids(health_data, "memory") == {"M1", "M4", "M5", "M6"}
+        assert _ids(health_data, "memory") == {"M1", "M5", "M6"}
 
     def test_evolution_checks(self, health_data):
         assert _ids(health_data, "evolution") == {"E3", "E4"}

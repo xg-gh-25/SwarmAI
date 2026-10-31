@@ -133,10 +133,17 @@ def _section_bounds(content: str, section: str) -> tuple[int, int]:
     return match.end(), end
 
 
+# a closing footer: a ``---`` rule and text with no heading up to the end of the file
+_FOOTER = re.compile(r"\n---[ \t]*\n(?:(?!^## ).)*\Z", re.MULTILINE | re.DOTALL)
+
+
 def _append_section(content: str, section: str | None, block: str) -> str:
     if not section:  # STEERING / USER / TOOLS route with no section: append at end of file
         return f"{content.rstrip(chr(10))}\n\n{block.strip()}\n" if content.strip() else f"{block.strip()}\n"
     _, end = _section_bounds(content, section)
+    footer = _FOOTER.search(content)
+    if footer and footer.start() < end:      # the last section: the entry goes before the footer
+        end = footer.start() + 1
     before = content[:end].rstrip("\n")
     after = content[end:].lstrip("\n")
     joined = f"{before}\n\n{block.strip()}\n"
@@ -240,8 +247,34 @@ def _append_timeline(content: str, group: dict[str, Any], block: str) -> str:
     return before + f"\n\n{block.strip()}\n" + ("\n" + after if after else "")
 
 
+def product_sections(store: str) -> frozenset[str]:
+    """The sections the product defines for an every-turn store by the unit's type
+    (MEMORY: ``MEMORY_TYPE_TO_SECTION``; EVOLUTION: corrections and competence), so the
+    writer adds a missing one itself; a DDD document's structure is the person's and a
+    missing section there waits for them (``pipeline_v2._section_exists``)."""
+    if store == "MEMORY":
+        from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
+        return frozenset(MEMORY_TYPE_TO_SECTION.values())
+    if store == "EVOLUTION":
+        return frozenset({"Corrections Captured", "Competence Learned"})
+    return frozenset()
+
+
+def _ensure_product_section(content: str, store: str, section: str | None) -> str:
+    """*content* with ``## <section>`` added when it is one of the store's product
+    sections and missing: before a closing ``---`` footer at the end, else at the end."""
+    if not section or section not in product_sections(store):
+        return content
+    if re.search(rf"^##\s+{re.escape(section)}\s*$", content, re.MULTILINE):
+        return content
+    footer = _FOOTER.search(content)
+    head, tail = (content[:footer.start()], content[footer.start():]) if footer else (content, "")
+    return f"{head.rstrip(chr(10))}\n\n## {section}\n{tail if tail else ''}"
+
+
 def _compose_intended(content: str, target: Path, store: str, section: str,
                       group: dict[str, Any], block: str) -> bytes:
+    content = _ensure_product_section(content, store, section or None)
     if store == "TIMELINE":
         return _append_timeline(content, group, block).encode("utf-8")
     if store == "COMMON_DDD":

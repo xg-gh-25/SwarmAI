@@ -41,7 +41,7 @@ NO_LONGER_TRUE = (
     "Redacted tombstone retains its cand: identity",
     "General Brain scope for the change feed covers both Knowledge/Learned and Knowledge/Library",
     "DDD decay is age-only; usage records do not feed it",
-    ".ddd-usage.json writers are dead code",
+    ".ddd-usage writers are dead code",
     "DDD superseded_by marker must be inside the metadata comment",
     "DDD supersession mechanism deferred",
     "Withdrawing the highest EVOLUTION entry causes id reuse",
@@ -49,7 +49,7 @@ NO_LONGER_TRUE = (
     "Fix `same` by requiring judge to enumerate",
     "Judge `adds` verdict treats same domain as same subject",
     "Verbatim quote check over-blocks `contradicts`",
-    "Delete .ddd-usage.json rather than repair it",
+    "Delete .ddd-usage",
 )
 _BARE = re.compile(r"^[0-9a-f]{32}$")
 _SCOPES = {"project:swarmws": "project:SwarmAI"}

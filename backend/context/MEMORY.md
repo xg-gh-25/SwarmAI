@@ -5,60 +5,44 @@
 # Memory — What I Remember
 
 > **What this file is:** MEMORY.md is context-file slot 7 — my cross-session cognitive
-> memory (distilled principles, decisions, corrections, lessons). AGENT-OWNED: I maintain
+> memory (principles, decisions, corrections, lessons), read in every session. AGENT-OWNED: I maintain
 > it, you direct it ("remember X" / "forget X" / "correct memory"). It's curated, not raw
 > — session detail lives in DailyActivity; my self-corrections/bias in EVOLUTION.md;
 > domain knowledge in a project's DDD docs.
 
-_Curated long-term memory. Distilled from DailyActivity, not raw logs._
-
 ## Memory Rules
 
-1. **Agent-owned, user-directed.** I maintain this file. The user tells me what to remember, forget, or correct — I decide how and where it goes in the structure.
-2. **Curated, not raw.** Only distilled, high-value content belongs here. Session details, transient context, and one-off observations stay in DailyActivity.
-3. **Verify before trusting.** Memory can be stale. Before promoting claims from DailyActivity, verify against workspace files and recent activity. Stale memory that gets distilled becomes a self-reinforcing false belief.
-4. **Recency over volume.** When sections grow long, archive resolved items and compress old entries. A lean memory is more useful than a complete one.
-5. **Open Threads are live.** Check them every session start. Resolve what's done. Stale open threads erode trust. Open COEs are not written here: the session briefing lists them as P0 from the COE signals, and a COE's thread here follows that state.
-6. **COEs are mandatory.** Any problem investigated across 2+ sessions or reported 3+ times gets a COE entry. An open COE is a P0 item in the session briefing.
-7. **Corrections are permanent.** Never delete a correction — they're the most valuable entries. Archive to a summary only when the pattern is fully internalized.
+1. **Agent-owned, user-directed.** I maintain this file. The user tells me what to remember, forget, or correct — I decide how and where it goes.
+2. **Written only by the knowledge flow (CDF).** Every entry comes in as a candidate the agent declared (type, scope, what it rests on) and is written whole, or not at all. Nothing edits this file by hand.
+3. **Read in every session, so only what changes judgment in most tasks.** Principles, decisions, models, corrections and broad lessons belong here. A fact that matters only when one tool, library, API, project or subject comes up, however reliable, lives with that subject (a project's DDD, or the General Brain) and is recalled when it is relevant.
+4. **Kept true, not trimmed.** The file is injected whole; nothing is cut to fit. An entry leaves when a later decision overrides it or it is withdrawn, never because it is old.
+5. **Not a task list.** Open work is a gap in the project it belongs to, or a ToDo; the state of the moment (not done yet, needs a build) is not memory.
+6. **Verify before trusting.** Memory can be stale: check it against the source before acting on it.
 
 ## How This Works
 
-**Memory model:**
-- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Working memory: what each session did, written as it happens.
-- **MEMORY.md** (this file) — Long-term memory. Every entry is written by the knowledge flow (CDF): what I learn in sessions, runs and your instructions is submitted as a candidate, judged, and added here whole, or not at all. Recurring themes, key decisions, lessons and corrections earn a place; one-off observations stay in DailyActivity.
+- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — working memory: what each session did, written as it happens.
+- **MEMORY.md** (this file) — long-term memory across every project, written by CDF from what I learn in sessions, runs and your instructions.
+- **EVOLUTION.md** — how I am corrected and what I learned about my own judgment.
+- **A project's DDD** — what one project is and decided, recalled when a session works on it.
 
-**What reaches each session:** this file, whole when it fits its budget; otherwise its most load-bearing entries, each whole, and the rest stay here, reachable by recall. Nothing is cut or pruned to fit.
+## Principles
 
-## Recent Context
+## Corrections
 
-_(Nothing yet — we haven't started working together.)_
+## Decisions
 
-## Key Decisions
+## Guidelines
 
-_(Decisions made that should persist across sessions.)_
+## Pitfalls
 
-## Lessons Learned
+## Processes
 
-_(Patterns, preferences, and hard-won knowledge.)_
+## Models
 
 ## COE Registry
 
-_(Correction of Errors — complex problems investigated across sessions.)_
-
-## Open Threads
-
-### P0 — Blocking
-_(None)_
-
-### P1 — Important
-_(None)_
-
-### P2 — Nice to have
-_(None)_
-
-### Resolved (archive)
-_(None)_
+_(Correction of Errors — post-mortems of problems investigated across sessions.)_
 
 ---
 

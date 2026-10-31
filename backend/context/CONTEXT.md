@@ -83,9 +83,10 @@ synonyms — they cause confusion across the skill ecosystem.
 
 ## Memory & Context
 
-- **memory** — Long-term curated knowledge in `.context/MEMORY.md`. Agent-owned,
-  distilled from DailyActivity. Contains: Recent Context, Key Decisions, Lessons
-  Learned, COE Registry, Open Threads.
+- **memory** — Long-term knowledge in `.context/MEMORY.md`, read in every session:
+  written by CDF only, one section per type (Principles, Corrections, Decisions,
+  Guidelines, Pitfalls, Processes, Models) plus the COE Registry. Open work is not
+  memory: it is a gap in its project or a ToDo.
   _Avoid:_ "context" (that's the 11-file system prompt), "history" (that's raw
   chat transcript), "knowledge" (that's `KNOWLEDGE.md`).
 
