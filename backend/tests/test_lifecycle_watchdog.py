@@ -290,7 +290,7 @@ class TestPytestOrphanReaper:
         async def fake_to_thread(fn, *a, **kw):
             return fn(*a, **kw)
 
-        async def fake_is_owned_orphan(pid):
+        async def fake_is_owned_orphan(pid, **_kw):
             return True  # Confirmed orphan
 
         with patch("core.lifecycle_manager.asyncio.to_thread", side_effect=fake_to_thread), \
@@ -316,7 +316,7 @@ class TestPytestOrphanReaper:
         async def fake_to_thread(fn, *a, **kw):
             return fn(*a, **kw)
 
-        async def fake_is_owned_orphan(pid):
+        async def fake_is_owned_orphan(pid, **_kw):
             return False  # Not an orphan (no ownership tag or owner alive)
 
         with patch("core.lifecycle_manager.asyncio.to_thread", side_effect=fake_to_thread), \

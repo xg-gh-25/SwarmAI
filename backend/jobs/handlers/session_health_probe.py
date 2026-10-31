@@ -1,7 +1,8 @@
 """Job handler for the runtime session-health probe (run_f646b175).
 
 Wires the real runtime fetchers (localhost daemon /health + /sessions/streaming-state,
-resource_monitor RSS, tree_cpu_seconds, daemon log tail) into the pure-logic
+resource_monitor RSS, tree_cpu_seconds, daemon log tail, the live detached
+backend children) into the pure-logic
 ``core.session_health_probe.session_health_probe`` and, on a RED result, sends a
 Slack notification via s_notify.
 
@@ -13,6 +14,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
@@ -156,6 +158,35 @@ def _read_log() -> str:
         return ""  # fail-safe: unreadable log → probe treats as no-progress-unknown
 
 
+def _fetch_children() -> list[dict]:
+    """Live detached backend children (``spawn_child``) of this install: owned by the
+    backend this job runs under, or by one that is gone (the reaper's next pass ends
+    those). Another install's children (a live owner that is not ours) are left out."""
+    import psutil
+    from core.code_intel.build import DETACHED_CHILD_PATTERN
+    from core.session_utils import read_owner_pid
+    pattern = re.compile(DETACHED_CHILD_PATTERN)
+    mine = os.environ.get("SWARMAI_OWNER_PID")
+    now = time.time()
+    out: list[dict] = []
+    for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        try:
+            cmd = " ".join(proc.info.get("cmdline") or [])
+            if not pattern.search(cmd):
+                continue
+            owner = read_owner_pid(proc.pid)
+            if owner is None:
+                continue
+            if str(owner) != mine and psutil.pid_exists(owner):
+                continue
+            cpu = proc.cpu_times()
+            out.append({"pid": proc.pid, "cmd": cmd, "cpu_s": cpu.user + cpu.system,
+                        "age_s": now - (proc.info.get("create_time") or now)})
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return out
+
+
 def _deployed_commit() -> Optional[str]:
     try:
         from utils.runtime_paths import current_backend_dir
@@ -195,6 +226,7 @@ def run_session_health_probe(
             log_reader=_read_log,
             expected_commit=expected_commit,
             deployed_commit_fetcher=_deployed_commit if expected_commit else None,
+            children_fetcher=_fetch_children,
         ) if probe_fn is None else probe()
     except Exception as e:
         logger.error("session-health probe crashed: %s", e)

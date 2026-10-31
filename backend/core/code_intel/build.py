@@ -424,11 +424,24 @@ def spawn_build(project: str, *, repo: str | None = None, full: bool = False,
     return spawn_child(args)
 
 
+#: The modules ``spawn_child`` may run. A detached child outlives whoever started it
+#: (a job, a request, the daemon itself), so nothing waits for it; the daemon's orphan
+#: reaper finds the ones a previous daemon left behind by this list
+#: (``DETACHED_CHILD_PATTERN``). A module not listed here cannot be spawned, so a new
+#: kind of child is never one the reaper does not know.
+DETACHED_MODULES = ("core.code_intel.build", "core.library_mounts")
+# ERE for ``pgrep -f``; it must not start with "-", or pgrep reads it as an option
+DETACHED_CHILD_PATTERN = "(^| )-m (" + "|".join(m.replace(".", "\\.") for m in DETACHED_MODULES) + ")( |$)"
+
+
 def spawn_child(args: list[str]):
     """``python <args>`` (the backend's own Python, packaged or not) as a detached
     child in its own session, output appended to ``<app data>/logs/code_intel_build.log``.
-    Every code-graph write the daemon asks for goes through here."""
+    Every code-graph write the daemon asks for goes through here. *args* starts with
+    ``-m <module>``, the module one of ``DETACHED_MODULES``."""
     import subprocess
+    if len(args) < 2 or args[0] != "-m" or args[1] not in DETACHED_MODULES:
+        raise ValueError(f"spawn_child runs only {DETACHED_MODULES}, not {args[:2]}")
     from config import get_app_data_dir
     from utils.backend_bin import py_command
     log_dir = get_app_data_dir() / "logs"

@@ -1831,7 +1831,7 @@ class LifecycleManager:
     # chain walking, ppid==1 checks) and replaces it with a definitive
     # ownership tag.  No more false positives.
 
-    async def _is_owned_orphan(self, pid: int) -> bool:
+    async def _is_owned_orphan(self, pid: int, *, previous_instance_only: bool = False) -> bool:
         """Check if a process is an orphan owned by this or a previous backend.
 
         Reads the process's environment to find SWARMAI_OWNER_PID.
@@ -1843,6 +1843,10 @@ class LifecycleManager:
         - No SWARMAI_OWNER_PID → not a SwarmAI process
         - Owner PID is alive → legitimate child of a running backend
         - Can't read env → assume not orphan (fail safe)
+
+        *previous_instance_only*: a process this backend owns is never an orphan, even
+        reparented to launchd. A detached child (``spawn_child``) is reparented as soon
+        as the job that started it exits, while it is still doing this backend's work.
         """
         try:
             # Read the process's environment via /proc or ps
@@ -1853,6 +1857,8 @@ class LifecycleManager:
             # If the owner is us, check if the process's direct parent is alive
             # (it should be — if it's not, the process was reparented = orphan)
             my_pid = os.getpid()
+            if owner_pid == my_pid and previous_instance_only:
+                return False
             if owner_pid == my_pid:
                 # Our child — check if it's in known_pids (active session).
                 # If not in known_pids, it's a leaked child from a crashed
@@ -1898,6 +1904,7 @@ class LifecycleManager:
         label: str,
         known_pids: set[int],
         require_orphaned: bool = False,
+        previous_instance_only: bool = False,
     ) -> int:
         """Find and kill processes matching *pattern* via ``pgrep -f``.
 
@@ -1908,6 +1915,8 @@ class LifecycleManager:
             require_orphaned: If True, only kill processes confirmed as
                 SwarmAI orphans via ownership tag (SWARMAI_OWNER_PID).
                 Processes without the tag are never killed.
+            previous_instance_only: with *require_orphaned*, only a process whose
+                owning backend is dead (``_is_owned_orphan``).
 
         Returns:
             Number of processes killed.
@@ -1938,7 +1947,8 @@ class LifecycleManager:
                 continue
 
             if require_orphaned:
-                if not await self._is_owned_orphan(pid):
+                if not await self._is_owned_orphan(
+                        pid, previous_instance_only=previous_instance_only):
                     continue
 
             try:
@@ -2051,7 +2061,10 @@ class LifecycleManager:
         1. Claude CLI + SDK workers
         2. Dev backend (``python main.py``)
         3. Zombie pytest (including xdist workers)
-        4. MCP server processes (dynamic from config)
+        4. Detached backend children (``spawn_child``: code-graph builds, library
+           code indexing) a previous backend left; this backend's own are never
+           touched, however long they run (the health probe reports a runaway one)
+        5. MCP server processes (dynamic from config)
 
         Re-snapshots known_pids before each pattern to minimize the
         TOCTOU window between PID discovery and kill.
@@ -2070,6 +2083,12 @@ class LifecycleManager:
             await self._reap_by_pattern(
                 "pytest", "pytest",
                 self._snapshot_known_pids(), require_orphaned=True,
+            )
+            from core.code_intel.build import DETACHED_CHILD_PATTERN
+            await self._reap_by_pattern(
+                DETACHED_CHILD_PATTERN, "detached_child",
+                self._snapshot_known_pids(), require_orphaned=True,
+                previous_instance_only=True,
             )
 
             # ── MCP server orphan reaping ──────────────────────────────────

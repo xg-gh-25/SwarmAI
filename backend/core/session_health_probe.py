@@ -7,6 +7,7 @@ healthy RIGHT NOW". This is the RUNTIME / dynamic-liveness axis — distinct fro
     and chat-contract checks (developer tooling, not shipped)
 This probe answers only: daemon up? sessions progressing (not wedged)? RAM under
 budget? deployed binary == expected? any unrecovered failure events in the window?
+any detached background child stuck at full CPU?
 
 Wedged-detection reuses the PRODUCTION-TESTED interval CPU-delta primitive
 (`resource_monitor.tree_cpu_seconds`, the same signal `session_unit._tool_hang_probe`
@@ -34,6 +35,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_RSS_THRESHOLD_MB = 3500          # PROACTIVE reclaim threshold (36GB machine)
 CPU_PROBE_INTERVAL_S = 2.0               # same window as session_unit._tool_hang_probe
 CPU_LIVE_EPSILON = 0.05                  # cpu-seconds delta above which = "working"
+
+# A detached backend child (core.code_intel.build.spawn_child) nothing waits for: one
+# that has spent this much CPU is stuck, not slow. The largest full code-graph rebuild
+# measured (2,500 files, 41k nodes) used about 35 CPU seconds; a child waiting for its
+# turn to parse uses almost none. A smoke alarm: the probe reports, it never kills.
+RUNAWAY_CHILD_CPU_S = 1800.0
 
 # Log events that indicate a GENUINE TERMINAL failure in the window. A bare match
 # is not enough — see scan_unrecovered_events for the "followed by recovery" logic.
@@ -198,6 +205,7 @@ def session_health_probe(
     deployed_commit_fetcher: Optional[Callable[[], Optional[str]]] = None,
     rss_threshold_mb: float = DEFAULT_RSS_THRESHOLD_MB,
     sleep_fn: Callable[[float], None] = time.sleep,
+    children_fetcher: Optional[Callable[[], list[dict]]] = None,
 ) -> ProbeResult:
     """Zero-LLM runtime health snapshot. All I/O is injected for testability.
 
@@ -264,11 +272,34 @@ def session_health_probe(
     except Exception as e:
         checks.append(Check("no_unrecovered_events", True, f"log unreadable (fail-safe): {e}"))
 
+    # 6. No detached background child stuck at full CPU (``children_fetcher``: one
+    #    ``{pid, cmd, cpu_s, age_s}`` per live child).
+    if children_fetcher is not None:
+        try:
+            runaway = runaway_children(children_fetcher())
+            checks.append(Check("no_runaway_children", not runaway,
+                                "; ".join(runaway) if runaway else "none"))
+        except Exception as e:
+            checks.append(Check("no_runaway_children", True,
+                                f"children unreadable (fail-safe): {e}"))
+
     failed = [c for c in checks if not c.ok]
     status = "healthy" if not failed else "degraded"
     summary = ("all checks pass" if not failed
                else "FAILED: " + ", ".join(c.name for c in failed))
     return ProbeResult(status=status, checks=checks, summary=summary)
+
+
+def runaway_children(children: list[dict], cpu_limit_s: float = RUNAWAY_CHILD_CPU_S) -> list[str]:
+    """One line per child that has used more than *cpu_limit_s* CPU seconds: its pid,
+    CPU minutes, age in hours and command, so the reader can tell what is stuck."""
+    out = []
+    for c in children:
+        cpu = float(c.get("cpu_s") or 0)
+        if cpu > cpu_limit_s:
+            out.append(f"pid {c.get('pid')} used {cpu / 60:.0f} CPU min over "
+                       f"{float(c.get('age_s') or 0) / 3600:.1f} h: {str(c.get('cmd', ''))[:160]}")
+    return out
 
 
 def _session_log_progressed(
