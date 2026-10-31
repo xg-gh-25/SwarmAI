@@ -360,3 +360,23 @@ def test_a_relations_turn_that_fails_in_the_review_is_asked_again_fresh(cdf_env,
     finally:
         conn.close()
     assert "relations_failed" not in rng and "Prompt is too long" in rng["relations_retried"][0]
+
+
+# ── a long session: its earlier units are ranked, not all shown under every unit ─────
+
+def test_a_long_session_shows_only_the_closest_earlier_units(tmp_path):
+    from core.ingestion.relations_v2 import Entry
+    from core.ingestion.contracts_v2 import SOURCE_UNIT
+    ws = _ws(tmp_path)
+    earlier = [Entry(id=f"e{i}", anchor=f"Knowledge/Notes/x.md#S#cand:{i}", path="Knowledge/Notes/x.md",
+                     section="S", text=f"- [guideline] **Topic number {i}** about subject{i} only")
+               for i in range(300)]
+    earlier.append(Entry(id="hit", anchor="Knowledge/Notes/x.md#S#cand:hit", path="Knowledge/Notes/x.md",
+                         section="S", text="- [pitfall] **Refresh the tab after a deploy** old bundle"))
+    unit = SOURCE_UNIT.validate_python({"kind": "cognition", "type": "pitfall", "scope": "agent",
+                                        "title": "Refresh the tab after a deploy", "what": "The tab keeps the old bundle.",
+                                        "applicability": "After a deploy.", "evidence": ["event:e"]})
+    (shown,) = s7_review._candidates([unit], ws, "wid-get", earlier)
+    own = [e for e in shown if e in earlier]
+    assert any(e.id == "hit" for e in own)
+    assert len(own) <= s7_review.EARLIER_SHOWN

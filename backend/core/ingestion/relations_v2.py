@@ -172,8 +172,8 @@ def withdrawn_entries(records) -> list[Entry]:
 
 def candidates(text: str, entries: list[Entry], *, top: int = TOP,
                also: Iterable[Entry] = ()) -> list[Entry]:
-    """The *top* entries of *entries* closest to *text* (BM25), plus *also* (the
-    session's earlier units, the captured corrections), each once."""
+    """The *top* entries of *entries* closest to *text* (BM25), plus *also* (the closest of
+    the session's earlier units, the captured corrections), each once."""
     from core.memory_index import _bm25_scores
     best: list[Entry] = []
     if (text or "").strip() and entries:

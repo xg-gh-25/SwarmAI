@@ -70,8 +70,11 @@ it may exist. DailyActivity keeps its idle cadence: it is the working memory a p
 session needs within minutes, and each idle now sends only the new messages.
 
 **E2 — A pass sees what this session already recorded.** The relation step is shown,
-for every unit, the live entries earlier passes of this session wrote, from the shared
-pool and from TIMELINE (`_earlier_units`), marked "(this session)". An event's BM25
+for every unit, the ten live entries earlier passes of this session wrote that are
+closest to it (BM25, like every other pool), from the shared pool and from TIMELINE
+(`_earlier_units`), marked "(this session)". Showing all of them under every unit made
+the prompt of a long session pass 1M tokens, the relations turn failed and its units
+stood as new; that failure counts as an errored review in health C2. An event's BM25
 candidates come from TIMELINE, every other unit's from the shared pool as before: TIMELINE
 does not join the shared pool, so a lesson is never matched to an event and DDD
 candidates are not crowded out.

@@ -352,3 +352,13 @@ def test_reference_path_cannot_leave_the_workspace(env, tmp_path):
     assert health.locate(unit, env["ws"], []) is None
     unit["path"] = str(outside)
     assert health.locate(unit, env["ws"], []) is None
+
+
+def test_a_review_whose_relations_turn_failed_is_an_error(env):
+    rows = [("ok", json.dumps({"relations_failed": ["fresh: RuntimeError: Prompt is too long"]})),
+            ("ok", "{}"), ("ok", "not json")]
+    for i, (status, rng) in enumerate(rows):
+        env["ing"].execute("INSERT INTO extraction_attempts(attempt_id,source,evidence_range,extractor_version,"
+                           "started_at,status) VALUES (?,?,?,?,?,?)", (f"r{i}", "S7", rng, "v", iso(), status))
+    c2 = next(c for c in health.run_checks(health._ingestion_ro(), None, env["ws"], NOW) if c["id"] == "C2")
+    assert c2["value"]["errored"] == 1 and c2["value"]["attempts"] == 3 and c2["status"] != "pass"

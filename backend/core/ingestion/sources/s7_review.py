@@ -38,6 +38,8 @@ REVIEW_VERSION = "cdf-review-r17-v1"
 ALLOWED_KINDS = ("cognition", "gap", "reference", "event")
 CORRECTIONS_SHOWN = 8   # the captured corrections closest to a new correction, for `repeats`
 GAPS_SHOWN = 5          # the project's open gaps closest to an event, shown so it may close them
+EARLIER_SHOWN = 10      # this session's earlier units closest to a unit: a long session has hundreds,
+                        # and all of them under every unit made the relations prompt pass 1M tokens
 WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 CODE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".kt",
                            ".swift", ".c", ".cc", ".cpp", ".h", ".rb", ".sh", ".sql", ".css"})
@@ -681,7 +683,9 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
     out = []
     for unit in units:
         text = " ".join(str(getattr(unit, f, "") or "") for f in ("title", "what", "why", "how", "summary"))
-        also = list(earlier)
+        # ranked like every other pool: the earlier unit a unit restates or finishes is
+        # about the same thing, so it is among the closest
+        also = relations_v2.candidates(text, earlier, top=EARLIER_SHOWN)
         if getattr(unit, "type", None) == "correction":
             also += relations_v2.candidates(text, corrections, top=CORRECTIONS_SHOWN)
         also += relations_v2.candidates(text, withdrawn_pool, top=2)

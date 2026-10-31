@@ -665,7 +665,12 @@ def run_checks(ing: sqlite3.Connection | None, data: sqlite3.Connection | None, 
     failed = ing.execute("SELECT COUNT(*) FROM ingestion_s2_jobs WHERE state='failed' "
                          "AND COALESCE(finished_at, requested_at) >= ?", (_iso(d7),)).fetchone()[0]
     attempts, errored = ing.execute(
-        "SELECT COUNT(*), COALESCE(SUM(status = 'failed'),0) FROM extraction_attempts "
+        # a review whose relations turn failed wrote its units as new without comparing
+        # them: recorded as ok, it is an error all the same
+        # (CASE, not AND: SQLite does not promise to skip json_extract on bad JSON)
+        "SELECT COUNT(*), COALESCE(SUM(status = 'failed' OR CASE WHEN json_valid(evidence_range) "
+        "THEN json_extract(evidence_range, '$.relations_failed') IS NOT NULL END),0) "
+        "FROM extraction_attempts "
         "WHERE source='S7' AND started_at >= ? AND status <> 'running'", (_iso(d7),)).fetchone() \
         if _table(ing, "extraction_attempts") else (0, 0)
     out.append(_check("C2", "no_data" if not (attempts or failed) else
