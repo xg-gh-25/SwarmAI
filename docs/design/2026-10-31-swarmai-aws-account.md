@@ -182,9 +182,22 @@ hive_fleet: {
   有记录但解析不了时报错，**绝不退回默认链**（那可能是另一个账号）。
 - `<data dir>/aws/config` 里的 `swarmai` profile 仍然写着，`credential_process` 是同一个子命令，给明确想用
   SwarmAI 账号的工具用（`AWS_CONFIG_FILE=… AWS_PROFILE=swarmai`）；默认没有任何东西设它。
-- 非 owner 的渠道会话（Slack 等）同样拿到 `awsCredentialExport`（它们的对话本来就走产品的 Bedrock），但它只在
-  CLI 内部用，不进 agent 的环境变量；命令里写到账号的仍被 `security_hooks.owner_command_denial` 拦下（文字匹配，
-  减速带，不是边界：agent 和 daemon 是同一个系统用户）。
+- 非 owner 的渠道会话（Slack 等）同样拿到 `awsCredentialExport`（它们的对话本来就走产品的 Bedrock），它只在
+  CLI 内部用。**这类会话的限制由 CLI 执行，不靠文字匹配**（`prompt_builder.restricted_session_policy` /
+  `restricted_tool_gate`）：
+  - 没有 Bash。沙箱里的 Bash 实测仍能写 `~/.swarm-ai`、看到 daemon 的凭证环境变量、查钥匙串，读的黑名单也列不全
+    本机所有密钥；
+  - 会话跑在 `bypassPermissions`，CLI 在这个模式下从不调 `can_use_tool`（实测：会话目录外的文件 Read 照样成功，
+    原来的目录限制一直没生效）。改为一个 PreToolUse hook，CLI 在任何模式、对子 agent 也会调：文件工具只放行
+    会话目录和共享的 DDD 文档，相对路径按会话目录解析，`~` 开头的路径拒绝（CLI 会把它展开成主目录），Glob / Grep
+    的路径模式不能是绝对路径或带 `..`，目录里配置 CLI 的文件（`.claude/`、`.mcp.json`、`CLAUDE.md`、`AGENTS.md`）
+    不能写；只放行列出的其他工具和已按级别筛过的 MCP；其余工具和 hook 自己出错都拒绝；
+  - 不加载任何 setting source、关掉 skill 里的内联 shell：会话写进自己目录的文件不会变成 CLI 的配置或 hook；
+  - 不给 add_dirs；对 SwarmAI 账号的 token 目录、`~/.aws`、ADA、Midway、SSH、`~/.config`、`~/.claude` 和密钥库
+    加 `Read` 拒绝规则作为第二层（任何模式下都生效）。
+  2026-10-31 用真 CLI 实测：目录外 Read（含子 agent 发起的）、`~/.zshrc`、`~/.swarm-ai` 下的 Grep、绝对路径 Glob、
+  写 `.claude/settings.json` 都被拒，目录内读写正常，没有 Bash。
+  `owner_command_denial` 的文字匹配仍在，现在只是提示。
 - 用户自己的 `~/.aws` 一个字都不改。
 
 ### 5.4 消费方改走入口（按风险从低到高）

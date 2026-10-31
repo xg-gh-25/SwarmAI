@@ -10,7 +10,7 @@ Changing the account (wizard, settings) arrives with design §9 step 4.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
 
 from core import aws_account, executors
@@ -24,9 +24,19 @@ async def get_account():
     return aws_account.view()
 
 
+def _require_app(user_action: str | None) -> None:
+    """A POST that does work (ada, STS, a Bedrock call) comes from the app or the agent,
+    never from a web page: ``X-Swarm-User-Action`` is not a CORS-safelisted header, so a
+    cross-site page cannot send it without a preflight the daemon refuses."""
+    if not user_action:
+        raise HTTPException(status_code=403, detail="X-Swarm-User-Action required")
+
+
 @router.post("/verify")
-async def verify_account():
+async def verify_account(
+        user_action: str | None = Header(default=None, alias="X-Swarm-User-Action")):
     """Resolve and pin again now (one STS call; ada or the profile may run)."""
+    _require_app(user_action)
     try:
         await executors.run_in("aws_account", aws_account.resolve, True)
     except aws_account.AccountError:
@@ -35,8 +45,10 @@ async def verify_account():
 
 
 @router.post("/check")
-async def check_capabilities():
+async def check_capabilities(
+        user_action: str | None = Header(default=None, alias="X-Swarm-User-Action")):
     """Run the capability checks (one 1-token Bedrock call plus read-only AWS calls)."""
+    _require_app(user_action)
     await executors.run_in("aws_account", aws_account.run_capability_checks,
                            AppConfigManager.instance())
     return aws_account.view()

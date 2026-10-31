@@ -5,6 +5,8 @@
  */
 import api from './api';
 
+const USER_ACTION = { headers: { 'X-Swarm-User-Action': 'aws-account' } };
+
 export type AwsAccountState =
   | 'unconnected' | 'connected' | 'needs_login' | 'account_mismatch' | 'unverified';
 export type CapabilityStatus = 'ok' | 'missing' | 'unknown' | 'not_applicable';
@@ -41,10 +43,11 @@ export const awsAccountService = {
   async get(): Promise<AwsAccountView> {
     return (await api.get<AwsAccountView>('/aws-account')).data;
   },
+  // Work-doing POSTs carry X-Swarm-User-Action: a cross-site page cannot send it.
   async verify(): Promise<AwsAccountView> {
-    return (await api.post<AwsAccountView>('/aws-account/verify')).data;
+    return (await api.post<AwsAccountView>('/aws-account/verify', null, USER_ACTION)).data;
   },
   async check(): Promise<AwsAccountView> {
-    return (await api.post<AwsAccountView>('/aws-account/check')).data;
+    return (await api.post<AwsAccountView>('/aws-account/check', null, USER_ACTION)).data;
   },
 };

@@ -513,6 +513,112 @@ def with_app_session_id(session_env: "dict | None", session_context: "dict | Non
 
 
 
+def _rule_path(path: Path) -> str:
+    """A path in Claude Code's permission-rule syntax: ``~/…`` under the home directory,
+    ``//…`` for any other absolute path (a single leading ``/`` would be read relative
+    to the settings' project — measured: such a rule denied nothing)."""
+    path = Path(path).expanduser()
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return "/" + path.as_posix()
+
+
+#: tools a non-owner channel session may use besides the path-checked file tools
+_RESTRICTED_PASS_TOOLS = frozenset({
+    "WebFetch", "WebSearch", "TodoWrite", "ToolSearch", "Task", "Agent",
+    "AskUserQuestion", "ExitPlanMode"})
+#: names in the session's folder that would configure the CLI itself (project settings,
+#: hooks, skills, MCP, instructions): never writable from the session
+_RESTRICTED_CONFIG_NAMES = frozenset({".claude", ".mcp.json", "claude.md", "agents.md"})
+#: file tool -> the input key holding its path
+_RESTRICTED_FILE_TOOLS = {"Read": "file_path", "Write": "file_path", "Edit": "file_path",
+                          "MultiEdit": "file_path", "NotebookEdit": "notebook_path",
+                          "Glob": "path", "Grep": "path"}
+
+
+def restricted_session_policy() -> dict:
+    """What a non-owner channel session may do (enforced, not text matching).
+
+    The agent and the daemon run as one OS user, and the session runs in
+    ``bypassPermissions``, where the CLI never calls ``can_use_tool`` (measured
+    2026-10-31: a Read outside the session's directory went through). So:
+
+    - no Bash at all. A sandboxed Bash was measured to still write the data dir, see the
+      daemon's credential variables and query the keychain, and its read deny-list can
+      never name every secret on the machine;
+    - a PreToolUse hook (``restricted_tool_gate``), which the CLI runs in every mode and
+      for subagents too, lets through only the file tools on allowed paths, the tools in
+      ``_RESTRICTED_PASS_TOOLS`` and MCP tools (already filtered by tier), and denies
+      everything else, including on its own error;
+    - ``Read`` deny rules on the owner's credential stores as a second layer (the CLI
+      applies deny rules in every mode; ``//abs`` / ``~/`` syntax, ``_rule_path``);
+    - no setting sources and no inline shell in skills: files the session writes into its
+      own folder (``.claude/settings.json`` hooks, skills) never configure the CLI.
+
+    Returns ``{"deny_read": [paths], "disallow": [tools]}``.
+    """
+    from config import get_app_data_dir
+    from core.app_config_manager import AppConfigManager
+    data = Path(get_app_data_dir())
+    secrets = AppConfigManager.instance()._secret_path  # noqa: SLF001
+    deny = [_rule_path(data / "aws") + "/**", "~/.aws/**", "~/.ada/**", "~/.midway/**",
+            "~/.ssh/**", "~/.config/**", "~/.claude/**", "~/.claude.json",
+            _rule_path(Path(secrets))]
+    return {"deny_read": deny, "disallow": list(PromptBuilder._BASH_TOOLS)}
+
+
+def restricted_tool_gate(file_handler: Any, cwd: str) -> Any:
+    """The PreToolUse hook for a non-owner channel session (``restricted_session_policy``).
+    ``file_handler`` is ``create_file_access_permission_handler`` for the session's
+    directory; relative paths are resolved against the session's ``cwd``. Fails closed."""
+
+    def _deny(reason: str) -> dict:
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "deny",
+                                       "permissionDecisionReason": reason}}
+
+    def _abs(value: str) -> str:
+        return value if os.path.isabs(value) else os.path.join(cwd, value)
+
+    _WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+
+    async def gate(input_data: Any, _tool_use_id: Any, _context: Any) -> dict:
+        try:
+            tool = input_data.get("tool_name") or ""
+            tool_input = dict(input_data.get("tool_input") or {})
+            if tool.startswith("mcp__") or tool in _RESTRICTED_PASS_TOOLS:
+                return {}
+            key = _RESTRICTED_FILE_TOOLS.get(tool)
+            if key is None:
+                return _deny(f"{tool} is not available in this session.")
+            outside = _deny("Only paths inside this session's folder can be used.")
+            # a pattern can name a path of its own: only plain relative ones
+            for extra in ("pattern", "glob") if tool in ("Glob", "Grep") else ():
+                pat = str(tool_input.get(extra) or "")
+                if tool == "Grep" and extra == "pattern":
+                    continue  # Grep's pattern is a regex over contents, not a path
+                if pat.startswith(("/", "~")) or ".." in pat:
+                    return outside
+            raw = str(tool_input.get(key) or cwd)
+            if raw.startswith("~"):  # the CLI expands it to the home directory
+                return outside
+            tool_input[key] = _abs(raw)
+            if tool in _WRITE_TOOLS and _RESTRICTED_CONFIG_NAMES & {
+                    part.lower() for part in Path(os.path.relpath(
+                        os.path.realpath(tool_input[key]), os.path.realpath(cwd))).parts}:
+                return _deny("Files that configure the agent cannot be written here.")
+            res = await file_handler(tool, tool_input, {})
+            if (res or {}).get("behavior") == "allow":
+                return {}
+            return _deny((res or {}).get("message") or "Not available in this session.")
+        except Exception:  # noqa: BLE001 — the gate is a boundary: deny on its own error
+            logger.exception("restricted_tool_gate failed; denying")
+            return _deny("Not available in this session.")
+
+    return gate
+
+
 def _aws_account_cli_settings(config: Any) -> dict:
     """``core.aws_account.cli_settings``, never failing a spawn on its own error."""
     try:
@@ -838,7 +944,8 @@ class PromptBuilder:
         CLI versions auto-enable sandbox under ``bypassPermissions`` mode as a
         safety fallback — defeating the user's intent to disable it.
 
-        Sandbox is an **app-level** setting, not per-agent.  All sandbox config
+        Sandbox is an **app-level** setting, not per-agent (a non-owner channel session
+        has no Bash at all: ``restricted_session_policy``).  All sandbox config
         lives in ``config.json`` via ``AppConfigManager``.  Per-agent
         ``sandbox_enabled`` DB column is a legacy no-op (kept for migration
         safety, never read).
@@ -2277,6 +2384,16 @@ class PromptBuilder:
 
         # 5. Build sandbox configuration
         sandbox_settings = self.build_sandbox_config()
+        # A non-owner channel session's Bash is confined by the OS, never by text
+        # matching alone (restricted_session_policy).
+        _restricted = restricted_session_policy() if _channel_sender_dir else None
+        if _restricted:
+            from claude_agent_sdk import HookMatcher
+            hooks = dict(hooks or {})
+            hooks["PreToolUse"] = [
+                HookMatcher(matcher=None, hooks=[
+                    restricted_tool_gate(file_access_handler, _channel_sender_dir)]),
+                *(hooks.get("PreToolUse") or [])]
 
         # 6. Inject channel-specific MCP servers
         mcp_servers = self.inject_channel_mcp(mcp_servers, channel_context, working_directory)
@@ -2353,7 +2470,7 @@ class PromptBuilder:
         max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
         # Build add_dirs: the app data dir, always, then sandbox_additional_write_paths.
-        add_dirs = additional_dirs(self._config)
+        add_dirs = additional_dirs(self._config) if not _restricted else []
 
         # Build extra CLI args for features not yet in ClaudeAgentOptions.
         extra_args: dict[str, str | None] = {}
@@ -2476,6 +2593,11 @@ class PromptBuilder:
             # user's AWS configuration. Empty when there is no resolvable account.
             **_aws_account_cli_settings(self._config),
         }
+        if _restricted:
+            cli_settings.setdefault("permissions", {}).setdefault("deny", []).extend(
+                f"Read({path})" for path in _restricted["deny_read"])
+            cli_settings["disableSkillShellExecution"] = True
+            setting_sources = []
         # How big that listing is for this session, against its budget. Log only, so
         # it runs in the background and never delays the spawn.
         _listing_cwd = _channel_sender_dir or working_directory
@@ -2509,6 +2631,7 @@ class PromptBuilder:
                 *(mcp_disallowed_tools or []),
                 # enable_*=False restriction, carried as a blacklist (run_9cfdb08d).
                 *self.resolve_disallowed_tools(agent_config),
+                *((_restricted or {}).get("disallow") or []),
                 "TaskCreate", "TaskGet", "TaskList",
                 "TaskOutput", "TaskStop", "TaskUpdate",
             ],
