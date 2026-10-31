@@ -483,9 +483,8 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
     ToDos it was shown).
 
     ``new`` → an ``ai_detected`` pending ToDo through ``todo_manager.create`` (which
-    redacts credentials and refuses text the injection scanner flags). One session-day
-    makes at most TODOS_MAX_NEW, counted from the ToDos it already made (any status),
-    and never one whose title it already made: the day can be summarized again (a
+    redacts credentials and refuses text the injection scanner flags). A session-day
+    never makes one whose title it already made (any status): the day can be summarized again (a
     later part, a run that starts over, a retry after a failed write) and must not
     multiply or bring back a ToDo a person closed. The manager's title dedup also
     returns an open ToDo of any origin with the same title. ``done`` → review through
@@ -494,7 +493,6 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
     action does not stop the others. Returns ``{"created", "existing", "to_review"}``
     (ids)."""
     from core.credential_patterns import redact_credentials
-    from core.summarization import TODOS_MAX_NEW
     from core.todo_manager import todo_manager
     from schemas.todo import ToDoCreate, ToDoSourceType
     done: dict = {"created": [], "existing": [], "to_review": []}
@@ -510,7 +508,6 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
     known = {str(r.get("id")) for r in rows or []}
     mine = [r for r in rows or [] if _session_day_of(r) == (session_id, day.isoformat())]
     made = {_title_key(r.get("title")) for r in mine}
-    allowance = TODOS_MAX_NEW - len(mine)
     for action in actions:
         try:
             if action.get("action") == "done":
@@ -523,10 +520,6 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
                 title = action.get("title") or ""
                 # compared as stored: the create gate redacts credentials in the title
                 if rows is None or not title or _title_key(redact_credentials(title)) in made:
-                    continue
-                if allowance <= 0:
-                    logger.info("ToDo from %s not written: %d already made that day",
-                                where, TODOS_MAX_NEW)
                     continue
                 context = {"type": "session", "session_id": session_id, "day": day.isoformat(),
                            "detection_reason": "left open by the session (activity summary)",
@@ -544,7 +537,6 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
                     done["existing"].append(todo.id)
                 else:
                     known.add(todo.id)
-                    allowance -= 1
                     done["created"].append(todo.id)
         except ValueError as exc:
             logger.warning("ToDo from %s not written: %s", where, exc)

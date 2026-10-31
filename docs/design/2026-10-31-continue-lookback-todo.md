@@ -57,7 +57,8 @@ follow-up list.
   does not register this hook (`session_hooks.register_default_hooks`), so no ToDo is
   written where nobody sees it.
 - The summarizer is shown **every** open ToDo (pending, overdue, in_discussion: id and
-  whole title) and answers, at most three items: a new one (title + a description that
+  whole title) and answers with items, as many as the session left open (a cap of
+  three dropped real open work on 2026-10-31, so there is none): a new one (title + a description that
   stands alone: what, why, where it stopped, session and day), `same` as an open ToDo
   (nothing written), or `done` naming an open ToDo the session finished. `done` goes
   through the guard the lifecycle hook already uses (`db.todos.update_if`: only an

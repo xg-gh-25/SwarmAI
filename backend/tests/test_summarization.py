@@ -328,7 +328,7 @@ class TestModelWrittenRecord:
         prompt = prompts[0]
         assert "Already recorded on 2026-10-30: DB migration: Half the tables moved." in prompt
         assert "## Conversation on 2026-10-31:" in prompt
-        assert "where it ended" in prompt and "at most 3 in all" in prompt
+        assert "where it ended" in prompt and "at most" not in prompt.split("todos:")[1].split("same")[0]
         assert "Never a release step" in prompt          # release state is read live (D4)
         assert "follow-up" not in prompt.lower()
 
@@ -401,15 +401,16 @@ class TestModelWrittenRecord:
         assert len(prompts) == 2 and "PART-ONE-WORK" not in prompts[1].split("## Conversation")[0]
         assert [t["title"] for t in summary.todos] == ["PART-ONE-WORK", "part two work"]
 
-    def test_at_most_three_new_todos_and_only_offered_ids(self):
-        from core.summarization import TODOS_MAX_NEW
-        actions = [{"action": "new", "title": f"work {i}"} for i in range(5)] + [
+    def test_every_new_todo_is_kept_whole_and_only_offered_ids(self):
+        long = "why " * 800
+        actions = [{"action": "new", "title": f"work {i}", "description": long} for i in range(5)] + [
             {"action": "new", "title": "   "}, {"action": "bogus", "todo_id": "a"}, "junk",
             {"action": "same", "todo_id": "a"}, {"action": "done", "todo_id": "a"},
             {"action": "done", "todo_id": "b"}]
         out = SummarizationPipeline._valid_todos(actions, [{"id": "a", "title": "x"}])
-        assert [a["title"] for a in out if a["action"] == "new"] == [
-            f"work {i}" for i in range(TODOS_MAX_NEW)]
+        new = [a for a in out if a["action"] == "new"]
+        assert [a["title"] for a in new] == [f"work {i}" for i in range(5)]
+        assert all(a["description"] == long.strip() for a in new)      # never cut
         assert [a for a in out if a["action"] != "new"] == [{"action": "same", "todo_id": "a"}]
         assert SummarizationPipeline._valid_todos("not a list", []) == []
 

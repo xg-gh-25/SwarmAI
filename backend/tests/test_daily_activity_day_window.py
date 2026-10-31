@@ -398,9 +398,9 @@ def _seed_mine(d, tid, title, *, status="pending", day=None):
                              "linked_context": json.dumps(ctx)}))
 
 
-def test_a_session_day_makes_at_most_three_and_never_brings_back_a_closed_one(tmp_path, todo_db):
-    """The day can be summarized again (a later part, a run that starts over): the cap
-    is per session-day, counted from the ToDos it already made, and a title it already
+def test_a_session_day_writes_all_its_open_work_and_never_brings_back_a_closed_one(tmp_path, todo_db):
+    """The day can be summarized again (a later part, a run that starts over): no count
+    caps what it writes (a cap of three dropped real open work), and a title it already
     made (even one a person cancelled) is not written again."""
     _seed_mine(todo_db, "m1", "Write the parser tests")
     _seed_mine(todo_db, "m2", "Drop the old flag", status="cancelled")
@@ -410,7 +410,7 @@ def test_a_session_day_makes_at_most_three_and_never_brings_back_a_closed_one(tm
                                     {"action": "new", "title": "Ship the docs"},
                                     {"action": "new", "title": "Tag the release notes"}]))
     titles = sorted(t["title"] for t in _todos(todo_db))
-    assert titles == ["Drop the old flag", "Ship the docs", "Write the parser tests"]
+    assert titles == ["Drop the old flag", "Ship the docs", "Tag the release notes", "Write the parser tests"]
 
 
 def test_actions_are_applied_before_the_row_so_a_failed_write_loses_none(tmp_path, todo_db, monkeypatch):
