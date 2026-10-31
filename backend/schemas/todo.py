@@ -224,8 +224,9 @@ def validate_linked_context(source_type: str, ctx: dict) -> dict:
 # ── Lifecycle Configuration ──────────────────────────────────────────
 
 TODO_LIFECYCLE = {
-    "soft_expire_days": 30,       # pending → cancelled
-    "overdue_cancel_days": 14,    # overdue → cancelled
+    # an open ToDo untouched this long is shown in Needs You (never closed on a timer)
+    "stale_pending_days": 30,
+    "stale_overdue_days": 14,
     "purge_retention_days": 14,   # terminal → hard delete
     "archive_before_purge": True, # dump to JSONL before delete
 }

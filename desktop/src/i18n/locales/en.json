@@ -2076,7 +2076,8 @@
       "db_recovery": "Data recovery",
       "ingestion": "Cognitive Distillation",
       "local_root": "Repository",
-      "swarm_out": "Swarm Out"
+      "swarm_out": "Swarm Out",
+      "todo": "ToDo"
     },
     "fillHint": "Add to the chat input",
     "sendNow": "Send now",

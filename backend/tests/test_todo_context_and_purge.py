@@ -301,12 +301,13 @@ class TestLifecyclePurge:
         assert self._count_todos(db_path) == 3
 
 
-class TestOverdueEscalation:
-    """Overdue todos that stay overdue too long get auto-cancelled."""
+class TestStaleTodosAreShownNotCancelled:
+    """An open ToDo is never closed on a timer (design 2026-10-31-continue-lookback-todo
+    r3): one untouched for long is shown in Needs You, and the person decides."""
 
     @pytest.fixture
     def db_path(self, tmp_path):
-        db_file = tmp_path / "test_data.db"
+        db_file = tmp_path / "data.db"
         conn = sqlite3.connect(str(db_file))
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
@@ -337,30 +338,46 @@ class TestOverdueEscalation:
         conn.close()
         return db_file
 
-    def test_overdue_auto_cancel(self, db_path):
-        """Overdue todos > cancel_days old get cancelled."""
-        from jobs.executor import _escalate_overdue_todos
+    def test_old_open_todos_are_shown_in_needs_you_and_left_open(self, db_path, monkeypatch):
+        import core.attention_authority as aa
 
         now = datetime.now(timezone.utc)
-        old_ts = (now - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        recent_ts = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-
+        ts = lambda d: (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
         conn = sqlite3.connect(str(db_path))
         _cols = ("id, workspace_id, title, description, source, source_type, status, "
-                 "priority, due_date, linked_context, task_id, created_at, updated_at")
-        _ins = f"INSERT INTO todos ({_cols}) VALUES (?, 'swarmws', ?, NULL, NULL, 'email', 'overdue', 'high', NULL, '{{}}', NULL, ?, ?)"
-        # Old overdue — should be cancelled
-        conn.execute(_ins, (str(uuid.uuid4()), "Old overdue task", old_ts, old_ts))
-        # Recent overdue — should survive
-        conn.execute(_ins, (str(uuid.uuid4()), "Recent overdue task", recent_ts, recent_ts))
+                 "priority, due_date, linked_context, task_id, review_state, created_at, updated_at")
+        _ins = (f"INSERT INTO todos ({_cols}) VALUES (?, 'swarmws', ?, NULL, NULL, 'email', ?, "
+                "'high', NULL, '{}', NULL, ?, ?, ?)")
+        for tid, title, status, review, age in (
+                ("p-old", "Old pending", "pending", None, 40),
+                ("p-new", "Recent pending", "pending", None, 3),
+                ("p-rev", "Old pending in review", "pending", "completed", 40),
+                ("o-old", "Old overdue", "overdue", None, 20),
+                ("o-new", "Recent overdue", "overdue", None, 3),
+                ("h-old", "Old handled", "handled", None, 90)):
+            conn.execute(_ins, (tid, title, status, review, ts(age), ts(age)))
         conn.commit()
         conn.close()
+        monkeypatch.setattr(aa, "get_app_data_dir", lambda: db_path.parent)
 
-        result = _escalate_overdue_todos(cancel_days=14, db_path=db_path)
-        assert result["cancelled_count"] == 1
+        items = {it.id: it for it in aa._collect_stale_todos()}
+        assert set(items) == {"todo:stale_pending", "todo:stale_overdue"}
+        pending = items["todo:stale_pending"]
+        assert pending.tier == aa.TIER_REVIEW and pending.title.startswith("1 pending ToDo ")
+        assert "Old pending" in pending.dispatch["message"]
+        assert "Recent pending" not in pending.dispatch["message"]
+        assert "in review" not in pending.dispatch["message"]
+        assert "todo:stale_pending" in {it.id for it in aa.collect(db_path.parent).items}
 
         conn = sqlite3.connect(str(db_path))
-        statuses = conn.execute("SELECT title, status FROM todos ORDER BY title").fetchall()
+        statuses = dict(conn.execute("SELECT id, status FROM todos").fetchall())
         conn.close()
-        assert ("Old overdue task", "cancelled") in statuses
-        assert ("Recent overdue task", "overdue") in statuses
+        assert statuses["p-old"] == "pending" and statuses["o-old"] == "overdue"
+
+    def test_maintenance_cancels_no_open_todo(self):
+        """No maintenance step writes status='cancelled' on a ToDo (the timer cancels are gone)."""
+        import inspect
+        import jobs.executor as ex
+        source = inspect.getsource(ex)
+        assert "SET status = 'cancelled'" not in source
+        assert not hasattr(ex, "_expire_stale_todos") and not hasattr(ex, "_escalate_overdue_todos")

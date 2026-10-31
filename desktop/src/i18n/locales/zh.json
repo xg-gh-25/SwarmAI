@@ -2076,7 +2076,8 @@
       "db_recovery": "数据恢复",
       "ingestion": "认知沉淀",
       "local_root": "代码仓库",
-      "swarm_out": "Swarm Out"
+      "swarm_out": "Swarm Out",
+      "todo": "待办"
     },
     "fillHint": "放进聊天输入框",
     "sendNow": "直接发送",

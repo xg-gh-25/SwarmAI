@@ -806,6 +806,57 @@ def _collect_ingestion() -> list[AttentionItem]:
 # ── Aggregator ───────────────────────────────────────────────────────────────
 
 
+def _collect_stale_todos() -> list[AttentionItem]:
+    """Open ToDos nobody has touched for long (design 2026-10-31-continue-lookback-todo
+    r3): they are no longer cancelled on a timer, so they are shown here, as one REVIEW
+    item per kind: pending untouched for TODO_LIFECYCLE["stale_pending_days"], overdue
+    untouched for ["stale_overdue_days"]. A click puts the list in a chat, where the
+    person keeps, updates or cancels each. Read-only (the ToDo table is opened read
+    only); fail-soft; a missing database is silent."""
+    items: list[AttentionItem] = []
+    try:
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+        from schemas.todo import TODO_LIFECYCLE
+
+        db_path = Path(get_app_data_dir()) / "data.db"
+        if not db_path.exists():
+            return []
+        now = datetime.now(timezone.utc)
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        try:
+            for status, days in (("pending", TODO_LIFECYCLE["stale_pending_days"]),
+                                 ("overdue", TODO_LIFECYCLE["stale_overdue_days"])):
+                cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+                rows = conn.execute(
+                    "SELECT id, title FROM todos WHERE status = ? AND review_state IS NULL "
+                    "AND COALESCE(updated_at, created_at) < ? ORDER BY updated_at",
+                    (status, cutoff)).fetchall()
+                if not rows:
+                    continue
+                n = len(rows)
+                what = "pending" if status == "pending" else "overdue"
+                titles = "\n" + "\n".join(f"- {_one_line(t, 120)}" for _i, t in rows[:30])
+                if n > 30:
+                    titles += f"\n- … and {n - 30} more"
+                items.append(AttentionItem(
+                    id=f"todo:stale_{status}", source="todo", tier=TIER_REVIEW, brain=None,
+                    title=f"{n} {what} ToDo{'s' if n != 1 else ''} untouched for {days}+ days",
+                    summary=f"{n} in ToDo",
+                    detail="Nothing closes them on a timer: keep, update or cancel each.",
+                    dispatch={"message": _prompt(
+                        f"Go through my {what} ToDos untouched for {days} days or more: for "
+                        "each, tell me whether it still matters, then I decide to keep, "
+                        "update or cancel it.",
+                        [("ToDos", titles)],
+                        [f"todo {i}" for i, _t in rows[:30]])}))
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("attention: stale ToDo source failed: %s", exc)
+    return items
+
+
 def collect(
     workspace_root: Path,
     *,
@@ -836,6 +887,7 @@ def collect(
     items += _collect_ingestion()  # OS-level CDF anomalies; missing DB is silent
     items += _collect_local_roots()  # a repository a Brain started reading
     items += _collect_swarm_out()    # OS-level summary of what Swarm Out waits on
+    items += _collect_stale_todos()  # open ToDos nobody touched for long
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

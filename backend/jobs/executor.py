@@ -1166,18 +1166,10 @@ def _handle_maintenance(
         if old_tokens > 0:
             actions.append(f"Reset monthly token counter (was {old_tokens} tokens)")
 
-    # Expire stale pending todos (>30 days)
-    todo_result = _expire_stale_todos(max_age_days=30)
-    if todo_result:
-        actions.append(todo_result)
-
-    # Auto-cancel overdue todos stuck for >14 days
+    # An open ToDo is never closed on a timer (design 2026-10-31-continue-lookback-todo
+    # r3: only a person closes the person's work); one untouched for long is shown in
+    # Needs You instead (core.attention_authority._collect_stale_todos).
     from schemas.todo import TODO_LIFECYCLE
-    overdue_result = _escalate_overdue_todos(
-        cancel_days=TODO_LIFECYCLE["overdue_cancel_days"],
-    )
-    if overdue_result["cancelled_count"] > 0:
-        actions.append(f"Auto-cancelled {overdue_result['cancelled_count']} stale overdue todos")
 
     # Purge terminal todos (handled/cancelled/deleted) older than 14 days
     purge_result = _purge_terminal_todos(
@@ -1799,84 +1791,6 @@ def _parse_cli_output(stdout: str) -> dict:
 
 
 # ── Todo Lifecycle: Expiration, Escalation, Purge ────────────────────
-
-
-def _expire_stale_todos(max_age_days: int = 30) -> str:
-    """Cancel pending todos older than max_age_days.
-
-    Returns a summary string for maintenance logging.
-    Handled/cancelled/deleted todos are untouched.
-    """
-    import sqlite3
-
-    if not DB_PATH.exists():
-        return ""
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).strftime(
-        "%Y-%m-%dT%H:%M:%S+00:00"
-    )
-
-    try:
-        with sqlite3.connect(str(DB_PATH), timeout=5.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            cursor = conn.execute(
-                """UPDATE todos SET status = 'cancelled', updated_at = ?
-                   WHERE status = 'pending' AND created_at < ?""",
-                (now, cutoff),
-            )
-            count = cursor.rowcount
-            if count > 0:
-                return f"Expired {count} stale todos (>{max_age_days} days)"
-    except Exception as exc:
-        logger.warning("Todo expiration failed: %s", exc)
-    return ""
-
-
-def _escalate_overdue_todos(
-    cancel_days: int = 14,
-    db_path: Path | None = None,
-) -> dict:
-    """Auto-cancel overdue todos that have been overdue for too long.
-
-    Overdue todos with updated_at older than cancel_days are cancelled.
-    Active statuses (pending, in_discussion) are NEVER touched.
-
-    Args:
-        cancel_days: Days after which overdue todos auto-cancel.
-        db_path: Override DB path for testing.
-
-    Returns:
-        Dict with cancelled_count.
-    """
-    import sqlite3
-    from datetime import timedelta
-
-    _db = db_path or DB_PATH
-    if not _db.exists():
-        return {"cancelled_count": 0}
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=cancel_days)).strftime(
-        "%Y-%m-%dT%H:%M:%S+00:00"
-    )
-
-    try:
-        with sqlite3.connect(str(_db), timeout=5.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            cursor = conn.execute(
-                """UPDATE todos SET status = 'cancelled', updated_at = ?
-                   WHERE status = 'overdue' AND updated_at < ?""",
-                (now, cutoff),
-            )
-            count = cursor.rowcount
-            if count > 0:
-                logger.info("Auto-cancelled %d overdue todos (>%dd)", count, cancel_days)
-            return {"cancelled_count": count}
-    except Exception as exc:
-        logger.warning("Overdue escalation failed: %s", exc)
-        return {"cancelled_count": 0}
 
 
 def _purge_terminal_todos(
