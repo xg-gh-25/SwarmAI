@@ -113,7 +113,10 @@ async def _run(ctx, session, *records, update_if=True):
         for r in records:
             st.enter_context(r)
         mock_db = st.enter_context(patch("hooks.todo_lifecycle_hook.db"))
+        st.enter_context(patch("core.todo_manager.db", mock_db))
         mock_tm = st.enter_context(patch("hooks.todo_lifecycle_hook.todo_manager"))
+        from core.todo_manager import ToDoManager
+        mock_tm.to_review = ToDoManager().to_review      # the real write, on the mocked db
         run = st.enter_context(patch("subprocess.run", side_effect=AssertionError("no git")))
         mock_db.sessions.get = AsyncMock(return_value=session)
         mock_db.todos.get = AsyncMock(return_value={"id": "x", "updated_at": "u0",
@@ -158,8 +161,8 @@ async def test_a_refused_conditional_write_writes_no_notes():
     """A Confirm / Reject (or a finished ToDo) wins: no notes are appended."""
     db_, _tm, _notes = await _run(_make_context(), _session("todo-done"),
                                   *_records(cards=[_row("a.py")]), update_if=False)
-    import hooks.todo_lifecycle_hook as mod
-    assert db_.todos.update_if.call_count == mod._CAS_TRIES   # re-read, re-tried, then left
+    import core.todo_manager as tm_mod
+    assert db_.todos.update_if.call_count == tm_mod._CAS_TRIES   # re-read, re-tried, then left
 
 
 @pytest.mark.asyncio
@@ -277,7 +280,9 @@ async def test_notes_and_review_state_are_one_write_that_loses_to_a_user_edit(tm
                        "title": "t", "source_type": "manual", "priority": "none", "created_at": now,
                        "updated_at": now, "linked_context": json.dumps({"notes": "mine"})})
     out = {"entries": {("repo", "/r", "a.py")}, "landings": [], "partial": False, "match": []}
+    import core.todo_manager as tm_mod
     monkeypatch.setattr(mod, "db", d)
+    monkeypatch.setattr(tm_mod, "db", d)
     await TodoLifecycleHook()._handle_explicit_binding("a", out)
     row = await d.todos.get("a")
     assert row["review_state"] == "completed"
@@ -299,7 +304,7 @@ async def test_notes_and_review_state_are_one_write_that_loses_to_a_user_edit(tm
         conn.close()
         return row
     monkeypatch.setattr(d.todos, "get", get_then_user_edits)
-    monkeypatch.setattr(mod, "_CAS_TRIES", 1)
+    monkeypatch.setattr(tm_mod, "_CAS_TRIES", 1)
     await TodoLifecycleHook()._handle_explicit_binding("b", out)
     row = await real_get("b")
     assert json.loads(row["linked_context"]) == {"notes": "user"} and row["review_state"] is None

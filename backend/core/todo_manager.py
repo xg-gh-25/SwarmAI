@@ -11,6 +11,7 @@ cache is properly invalidated (Requirement 34.2).
 
 Requirements: 4.1-4.9, 6.1-6.8, 34.2
 """
+import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -29,6 +30,11 @@ from schemas.todo import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: the statuses an automatic write may change (handled / cancelled / deleted are final)
+ACTIVE_STATUSES = ("pending", "overdue", "in_discussion")
+#: a write that lost to a concurrent edit is retried on a fresh read this many times
+_CAS_TRIES = 2
 
 
 class ToDoManager:
@@ -218,6 +224,35 @@ class ToDoManager:
             checked_results.append(self._dict_to_response(checked))
 
         return checked_results
+
+    async def to_review(self, todo_id: str, note: str, *, source: str) -> bool:
+        """Put an active ToDo with no review state into review (``review_state=
+        'completed'``, status unchanged; only a person's Confirm sets ``handled``),
+        appending *note* to its ``linked_context.notes`` in the same write. ONE
+        conditional write per try (``db.todos.update_if``, only while the row is as
+        read), so a Confirm, Reject or edit made meanwhile wins. True when it moved."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        for _ in range(_CAS_TRIES):
+            row = await db.todos.get(todo_id)
+            if not row:
+                return False
+            try:
+                ctx = json.loads(row.get("linked_context") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                ctx = {}
+            if not isinstance(ctx, dict):
+                ctx = {}
+            existing = ctx.get("notes") or ""
+            ctx["notes"] = f"{existing}\n{note}".strip() if existing else note
+            if await db.todos.update_if(
+                    todo_id, {"review_state": "completed", "completed_at": now,
+                              "linked_context": json.dumps(ctx, ensure_ascii=False)},
+                    status_in=ACTIVE_STATUSES, review_state_null=True,
+                    where_eq={"updated_at": row.get("updated_at")}):
+                logger.info("ToDo %s: to review (source=%s)", todo_id[:8], source)
+                return True
+        logger.info("ToDo %s: changed meanwhile or not active; left as it is", todo_id[:8])
+        return False
 
     async def transition_status(
         self,

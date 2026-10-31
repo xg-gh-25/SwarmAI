@@ -40,11 +40,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from core.session_hooks import HookContext
-from core.todo_manager import todo_manager
+from core.todo_manager import ACTIVE_STATUSES as _ACTIVE, todo_manager
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -52,12 +52,8 @@ logger = logging.getLogger(__name__)
 # Must match swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG["id"]
 _WORKSPACE_ID = "swarmws"
 
-#: the statuses an automatic write may change (handled / cancelled / deleted are final)
-_ACTIVE = ("pending", "overdue", "in_discussion")
 _LANDINGS_MAX = 20
 _NOTE_LINES = 10
-#: a write that lost to a concurrent edit is retried on a fresh read this many times
-_CAS_TRIES = 2
 
 
 def _files_overlap(todo_files: list[str], changed_files: list[str]) -> bool:
@@ -204,29 +200,8 @@ class TodoLifecycleHook:
                                         status_in=_ACTIVE, review_state_null=True):
                 logger.info("ToDo %s: -> in_discussion (source=hook_explicit)", todo_id[:8])
             return
-        note = _note(out)
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        for _ in range(_CAS_TRIES):
-            row = await db.todos.get(todo_id)
-            if not row:
-                return
-            try:
-                ctx = json.loads(row.get("linked_context") or "{}")
-            except (json.JSONDecodeError, TypeError):
-                ctx = {}
-            if not isinstance(ctx, dict):
-                ctx = {}
-            existing = ctx.get("notes") or ""
-            ctx["notes"] = f"{existing}\n{note}".strip() if existing else note
-            # the review state and the notes in ONE write, only while the row is as read
-            if await db.todos.update_if(
-                    todo_id, {"review_state": "completed", "completed_at": now,
-                              "linked_context": json.dumps(ctx, ensure_ascii=False)},
-                    status_in=_ACTIVE, review_state_null=True,
-                    where_eq={"updated_at": row.get("updated_at")}):
-                logger.info("ToDo %s: to review (source=hook_explicit)", todo_id[:8])
-                return
-        logger.info("ToDo %s: changed meanwhile or not active; left as it is", todo_id[:8])
+        # the review state and the notes in ONE write, only while the row is as read
+        await todo_manager.to_review(todo_id, _note(out), source="hook_explicit")
 
     async def _handle_implicit_matching(self, changed_files: list[str]) -> None:
         """Match the session's changed files against pending todos' linked files."""
