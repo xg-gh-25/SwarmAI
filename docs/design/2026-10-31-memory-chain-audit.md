@@ -3,7 +3,7 @@ title: Memory 链路审计与修复 —— 从提取源头到 MEMORY.md
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: 实施中（XG 2026-10-31："确保 Memory 里面留下的真是我们想要的，而且没有遗漏"）
+status: M1–M3 已落地（2026-10-31）；Open Threads、EVOLUTION 存量、39 条重新复盘留给下一步
 scope: 只管 Memory 链路。提取时机（S7 什么时候跑）、事件/gap、DailyActivity 归
   docs/design/2026-10-31-extraction-at-task-end.md（另一个 session），本文不改那些。
 ---
@@ -76,17 +76,31 @@ scope: 只管 Memory 链路。提取时机（S7 什么时候跑）、事件/gap�
 目标、再删源，经 `governed_edit.apply_user_edit`（archive 先行、baseline 修订），可重跑。
 
 **M3 —— 找回因格式丢掉的单元（一次性，`scripts/cdf_replay_invalid.py`）**
-45 条里去掉已经过时的 12 条（§4），其余把 evidence 补上 `event:` 前缀（仅当该事件在登记
-里存在）、`project:SwarmWS` 改成 `project:SwarmAI`，按原 session 重新入队，走正常判定
-（可信度、已存在检查）。
+证据是裸 id 的补上 `event:input:` 前缀（仅当它是同一 session 登记过的输入）；`project:SwarmWS`
+改成 `project:SwarmAI`；读集给该 session 在那次复盘结束前的全部输入（只会比原读集大，
+外部内容的标记不会变弱）；去掉已不成立的；按原 session 以 S7 重新入队，走正常判定。
+
+实际结果：45 条里 **39 条没有可引用的证据**（引用的是一句话、提交说明或消息 uuid，复盘的
+证据索引只收用户消息和实测结果），CDF 只留能指出证据的，补回去也会再被拒，不替它们编
+证据；2 条已不成立；**4 条补回，全部写入**（SwarmAI 的 PROJECT / TECH / IMPROVEMENT）。
+39 条的原文仍在 `extraction_attempts.invalid_units`，其中不少还有价值（几条安全审查结论、
+Hive 隔离决定、"把 Hive worker 当作直接延伸"）。找回它们的正确办法是让这些 session 从当时
+的水位重新复盘一次；那要求一次复盘能看到本 session 之前写过的单元以免重复，正是
+extraction-at-task-end E2 在做的事，所以等 E2 落地后做。
 
 **不在本次（记为下一条链路）**
 - Open Threads 换成 SwarmAI IMPROVEMENT 的 gap，晨报改读 gap：属于"开放问题/晨报"链路。
 - EVOLUTION 存量（Competence Learned 里的窄知识）：EVOLUTION 链路，同一套路。
 
-## 3. MEMORY 搬迁表
+## 3. MEMORY 搬迁结果
 
-（由 `memory_relocate.py --plan` 生成，见脚本内 `PLAN`；保留的不列。）
+26 条搬出（`scripts/memory_relocate.py` 的 `PLAN`，逐条写了原因），MEMORY.md 81,460 → 67,269
+字节：20 条只在 SwarmAI 有用的进 SwarmAI DDD（CDF 自己按类型和主题会选的文档和节），5 条
+工具/库的窄知识进 General Brain `general-knowledge.md`，1 条 tenets 文档的模型进
+`cntech-ivt-autonomous-tenets.md`。目标里没有重复；5 条 CDF 条目的去向记录和关系已更新。
+
+保留的判断：原则、跨项目的工程教训、"价值优先"、COE Registry（STEERING #20 引用它，
+事故教训塑造每次判断）。
 
 ## 4. 不再找回的 12 条（已不成立）
 
