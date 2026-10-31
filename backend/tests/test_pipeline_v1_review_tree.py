@@ -90,7 +90,12 @@ def test_an_edit_after_the_last_review_keeps_review_open(rig):
     r.edit({"backend/core/mod.py": "def add(a, b):\n    return a + b  # again\n"})
     out = r.v1("stage-complete")
     assert out.get("ok") is False and "RV-4" in str(out.get("checks")), out
-    assert "review-start" in out["next"]["command"]
+    # the visit's first round answered with nothing to fix: its review is closed, so an
+    # edit now is code no review will see; restore it (design 2026-10-31 §3 change 1)
+    assert "Restore the reviewed code" in out["next"]["why"], out["next"]
+    again = r.v1("review-start")
+    assert again.get("ok") is False and not again.get("handouts"), again
+    assert "git -C" in again["error"] and "restore --source=" in again["error"]
 
 
 def test_a_change_no_review_completed_cannot_land(rig):

@@ -130,12 +130,34 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
             ("re-dispatch R2 once for the lines that used a word not allowed (" + named
              + "): review-address with {\"pass\": <this pass>, \"items\": []} writes the "
              "new R2 handout, then spawn it")
+    # an expert whose latest first-round answer could not be read produced no findings:
+    # ask it once more, before anything else decides the stage (design 2026-10-31 §3
+    # change 2: a passing check set used to end REVIEW over a lost review)
+    if review_protocol.unusable_reasks(events):
+        return "run", _cmd(engine, "review-start"), \
+            "an expert answer could not be read: review-start asks it once more, with " \
+            "the parser's reasons"
     if any(row.get("check") == "RV-4" for row in blocking):
-        # S6-2: the code changed since a review saw it (TEST sent the run back, or an
-        # edit after R2): only the change since then is reviewed
+        series = review_protocol.first_round_series(events,
+                                                    review_protocol.visit_start(events))
+        if series:
+            # an edit after this visit's first round: a fixing pass, or code to restore
+            # (design 2026-10-31 §3 change 1)
+            why = engine._edit_after_review(engine.check_context(), events)
+            closed = why.startswith("this review's fixing passes are done")
+            return "fix", _cmd(engine, "stage-complete" if closed
+                               else "review-address --artifact -"), why
+        # S6-2: the code changed since a review saw it (TEST or DELIVER sent the run
+        # back): this visit's first round reviews only the change since then
         return "run", _cmd(engine, "review-start"), \
             "the code changed since the last review: review-start hands out an " \
             "incremental review of that change only"
+    if any(len(hs) >= 2 and (review_protocol.answer_of(events, hs[-1]["event_id"]) or {})
+           .get("payload", {}).get("state") not in review_protocol.USABLE_ANSWER
+           for hs in review_protocol.first_round_series(
+               events, review_protocol.visit_start(events)).values()):
+        return "run", _cmd(engine, "stage-complete"), \
+            "an expert gave no usable answer twice: the review checks decide the stage"
     if not blocking and (latest or dispatched == 0):
         # every answer is in (or this change needs no expert) and the checks pass
         return "run", _cmd(engine, "stage-complete"), \
@@ -144,23 +166,6 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
         return "run", _cmd(engine, "review-start"), \
             "start the review: deterministic checks, then the expert handouts (if it " \
             "dispatches none, complete the stage)"
-    # an expert whose latest answer was not parsed produced no findings: one redispatch
-    # (review-start), then the RV checks decide (re-audit 99f96949)
-    states = {e["payload"].get("handout_event_id"): e["payload"].get("state")
-              for e in events if e.get("kind") == "answer"}
-    per_expert: dict[Any, list[dict[str, Any]]] = {}
-    for event in events:
-        if event.get("kind") == "handout" and event.get("stage") == "review" \
-                and event.get("round") == 1:
-            per_expert.setdefault(event["payload"].get("expert_id"), []).append(event)
-    unusable = [hs for hs in per_expert.values()
-                if states.get(hs[-1]["event_id"]) not in ("parsed", "partial")]
-    if unusable:
-        if any(len(hs) < 2 for hs in unusable):
-            return "run", _cmd(engine, "review-start"), \
-                "an expert answer could not be parsed: review-start dispatches it once more"
-        return "run", _cmd(engine, "stage-complete"), \
-            "an expert gave no usable answer twice: the review checks decide the stage"
     return "fix", _cmd(engine, "review-address --artifact -"), \
         ("address the open findings once (cluster by file ±10 lines), prove each "
          "(review-proof, or the test that shows the fix in your next report), then "

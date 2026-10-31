@@ -25,6 +25,7 @@ from typing import Any, Mapping, Sequence
 
 from core import run_worktree
 from core.run_protocol import checks, git_tree, lifecycle, review, validation_report
+from core.run_protocol import answers as answer_protocol
 from core.run_protocol import findings as finding_protocol
 from core.run_protocol.infra import InfrastructureError
 from core.run_protocol.documents import DocumentStore, complete_stage
@@ -1239,6 +1240,14 @@ class RunEngine:
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         events = self.store.read_events()
         attempt = sum(1 for event in events if event.get("kind") == "address") + 1
+        # one fixing pass per visit, a second only for open HIGHs (design 2026-10-31 §3
+        # change 1); a pass with no items (an R2 re-dispatch) is never refused here
+        items = artifact.get("items") if isinstance(artifact, Mapping) else None
+        ids = [item.get("finding_id") for item in items or ()
+               if isinstance(item, Mapping) and isinstance(item.get("finding_id"), str)]
+        refusal = review.address_refusal(events, orchestrator.findings(events), ids)
+        if refusal:
+            raise EngineError(f"review-address wrote nothing: {refusal}")
         problems = self._handoff_problems(orchestrator, artifact, events)
         artifact, tested, unresolved = self._resolve_reported_tests(orchestrator, artifact)
         problems += [line for line in unresolved if line not in problems]
@@ -2653,6 +2662,9 @@ class RunEngine:
             return {"ok": False, "reviewers": [], "handouts": [], "failed": failed,
                     "error": "deterministic REVIEW checks fail; no expert is spawned until "
                              f"they pass: {failed}"}
+        reasks = review.unusable_reasks(self.store.read_events())
+        if reasks:
+            return self._reask_reviews(reasks)
         if context.run.get("unreviewed"):
             return self._incremental_review(context)
         repos = self.effective_repos()
@@ -2688,8 +2700,8 @@ class RunEngine:
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         handouts = []
         events = self.store.read_events()
-        prior = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
-                 and e.get("round") == 1]
+        start = review.visit_start(events)
+        series = review.first_round_series(events, start)
         answers = {e["payload"]["handout_event_id"]: e for e in events
                    if e.get("kind") == "answer" and e.get("stage") == "review"}
         knowledge = self._expert_knowledge(changed)
@@ -2708,20 +2720,25 @@ class RunEngine:
                 review_input = ddd_map + "\n\n" + review_input
             if item.get("high_risk"):
                 review_input = review.high_risk_notice(item["reason"]) + review_input
-            mine = [h for h in prior if h["payload"]["expert_id"] == item["id"]]
-            expert_attempt = attempt
+            # this visit's review of the same code by this expert (a re-ask, never a
+            # new review: design 2026-10-31 §3 change 2)
+            mine = [h for (expert, _trees), hs in series.items() if expert == item["id"]
+                    for h in hs]
+            expert_attempt = max((int(e["attempt"]) for e in events
+                                  if e.get("kind") == "handout" and e.get("stage") == "review"
+                                  and e.get("round") == 1
+                                  and e["payload"].get("expert_id") == item["id"]),
+                                 default=attempt - 1) + 1
             if mine:
-                # a second review-start (resume, retry): never a third dispatch (§A3.2)
+                # a second review-start (resume, retry): pending, answered, or asked
+                # twice already (a re-ask is written by _reask_reviews); never a third
+                # dispatch (§A3.2), and hitting it is recorded (F18)
                 latest = answers.get(mine[-1]["event_id"])
-                if latest is None or latest["payload"].get("state") in ("parsed", "partial"):
-                    continue                # still pending, or answered
-                if len(mine) >= 2:
-                    # no usable output twice: RV-1a/1c decide; a third dispatch is the
-                    # cap (§A3.2), and hitting it is recorded (F18)
+                if latest is not None and len(mine) >= 2 \
+                        and latest["payload"].get("state") not in review.USABLE_ANSWER:
                     self.record_cap_exceeded("dispatch", stage="review",
                                              attempt=int(mine[-1]["attempt"]))
-                    continue
-                expert_attempt = int(mine[-1]["attempt"]) + 1
+                continue
             handouts.append(orchestrator.handout(
                 expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
                 at=_now(), expert_instructions=instructions,
@@ -2906,17 +2923,23 @@ class RunEngine:
             reasons.append("the design names security boundaries")
         return reasons
 
-    # an expert's incremental reviews per run; past it RV-4 keeps failing (S6-2)
-    _INCREMENTAL_CAP = 3
-
     def _incremental_review(self, context: checks.CheckContext) -> dict[str, Any]:
-        """S6-2 (§3.3.3): the code changed since the last tree a review saw (TEST went
-        back to REVIEW, or an edit after R2). Review exactly diff(last reviewed tree,
-        current tree): correctness, plus each earlier R1 expert the roster would pick
-        for this diff. R1-format handouts (new findings go through address / R2)."""
+        """S6-2 (§3.3.3): the code changed since the last tree a review saw. Review
+        exactly diff(last reviewed tree, current tree): correctness, plus each earlier R1
+        expert the roster would pick for this diff. R1-format handouts (new findings go
+        through address / R2). It is only ever the FIRST round of a visit TEST or DELIVER
+        reopened (design 2026-10-31 §3 change 1): an edit after this visit's first round
+        is either a fixing pass (review-address) or, once the passes are done, code no
+        review will see, which the run must restore."""
         last = context.run["last_reviewed_trees"]
         trees = {name: tree for name, tree in context.run["code_trees"].items() if tree}
         repos = self.effective_repos()
+        events = self.store.read_events()
+        series = review.first_round_series(events, review.visit_start(events))
+        now_key = json.dumps(trees, sort_keys=True)
+        if any(key != now_key for _expert, key in series):
+            return {"ok": False, "reviewers": [], "handouts": [],
+                    "error": self._edit_after_review(context, events)}
         changed, diffs = [], []
         per_repo: dict[str, dict[str, Any]] = {}
         for name in sorted(context.run["unreviewed"]):
@@ -2935,7 +2958,6 @@ class RunEngine:
             per_repo[name] = {"root": root, "base": self._fork_base(name, root), "diff": diff,
                               "paths": [row["path"] for row in mine if not row["is_test"]
                                         and not row["path"].endswith(_DOC_SUFFIXES)]}
-        events = self.store.read_events()
         r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
               and e.get("round") == 1]
         earlier = {e["payload"]["expert_id"] for e in r1}
@@ -2946,24 +2968,23 @@ class RunEngine:
         picked = set(picked_rows)
         roster = ["correctness"] + sorted((picked & earlier) - {"correctness"})
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
-        answered = {e["payload"]["handout_event_id"] for e in events
-                    if e.get("kind") == "answer"}
         handouts = []
         knowledge = self._expert_knowledge(changed)
         callers = self._callers_block({name: {"root": item["root"], "base": last[name],
                                               "tree": trees[name]}
                                        for name, item in per_repo.items()})
         for expert in roster:
-            mine = [e for e in r1 if e["payload"]["expert_id"] == expert]
-            pending = [e for e in mine if e["event_id"] not in answered
-                       and e["payload"].get("code_trees") == trees]
-            if pending:
-                continue                            # this diff is already handed out
-            if sum(1 for e in mine if e["payload"].get("incremental_from")) \
-                    >= self._INCREMENTAL_CAP:
-                self.record_cap_exceeded("dispatch", stage="review",
-                                         attempt=int(mine[-1]["attempt"]))
+            same = series.get((expert, now_key), [])
+            if same:
+                # handed out, answered, or asked twice already (_reask_reviews writes
+                # the one re-ask): never a third dispatch (§A3.2, F18)
+                latest = review.answer_of(events, same[-1]["event_id"])
+                if latest is not None and len(same) >= 2 \
+                        and latest["payload"].get("state") not in review.USABLE_ANSWER:
+                    self.record_cap_exceeded("dispatch", stage="review",
+                                             attempt=int(same[-1]["attempt"]))
                 continue
+            mine = [e for e in r1 if e["payload"]["expert_id"] == expert]
             attempt = max((int(e["attempt"]) for e in mine), default=0) + 1
             block = knowledge[0] if expert == "correctness" and knowledge[0] else ""
             ddd_map = self._expert_map(expert)
@@ -2983,6 +3004,89 @@ class RunEngine:
                 knowledge_project=self._knowledge_project()))
         return {"reviewers": [{"id": e, "reason": "incremental review"} for e in roster],
                 "handouts": handouts, "incremental": True}
+
+    def _reask_reviews(self, reasks: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """Ask each first-round review whose answer could not be read once more: the
+        same review input, headed by the parser's reasons (design 2026-10-31 §3 change
+        2). Same code trees, so it is a re-ask of that review, never a new one."""
+        events = self.store.read_events()
+        orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
+        handouts, reviewers = [], []
+        for handout in reasks:
+            payload = handout["payload"]
+            expert = payload["expert_id"]
+            instructions = review.expert_prompt(expert)
+            original = review.review_input_of(payload.get("prompt"), expert, instructions,
+                                              read_blob=self.store.read_blob)
+            if original is None:
+                raise EngineError(f"the prompt of {expert}'s review cannot be read from "
+                                  "the run's audit store; it cannot be asked again")
+            answer = review.answer_of(events, handout["event_id"])
+            attempt = max(int(e["attempt"]) for e in events if e.get("kind") == "handout"
+                          and e.get("stage") == "review" and e.get("round") == 1
+                          and e["payload"].get("expert_id") == expert) + 1
+            handouts.append(orchestrator.handout(
+                expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
+                expert_instructions=instructions,
+                review_input=self._reask_notice(answer or {}) + original,
+                code_trees=payload.get("code_trees"),
+                incremental_from=payload.get("incremental_from"),
+                knowledge_items=payload.get("knowledge_items") or (),
+                knowledge_project=payload.get("knowledge_project")))
+            reviewers.append({"id": expert, "reason": "its answer could not be read: asked "
+                                                      "once more"})
+        return {"reviewers": reviewers, "handouts": handouts}
+
+    def _reask_notice(self, answer: Mapping[str, Any]) -> str:
+        """The head of a re-asked review handout: why the expert's last answer could not
+        be used, from the parser itself (design 2026-10-31 §3 change 2)."""
+        payload = answer.get("payload") or {}
+        raw = payload.get("raw")
+        if isinstance(raw, Mapping) and isinstance(raw.get("blob"), str):
+            try:
+                raw = self.store.read_blob(raw["blob"]).decode("utf-8", "replace")
+            except (OSError, StoreError, ValueError):
+                raw = None
+        errors: Sequence[str] = ()
+        if isinstance(raw, str):
+            try:
+                errors = answer_protocol.parse_answer(raw, expert_id=str(payload.get("expert_id")),
+                                              round=1).errors
+            except answer_protocol.AnswerError as exc:
+                errors = (str(exc),)
+        lines = "\n".join(f"- {line}" for line in errors[:8]) or "- (the parser gave no reason)"
+        return ("YOUR PREVIOUS ANSWER TO THIS REVIEW COULD NOT BE READ, so none of its "
+                "findings were recorded. The parser said:\n" + lines + "\nAnswer again in "
+                "the OUTPUT CONTRACT. This is a first-round review: write only finding rows "
+                "(or NO FINDINGS); a status row is only for R2, so if an earlier finding "
+                "is broken again, write it as a new finding.\n\n")
+
+    def _edit_after_review(self, context: checks.CheckContext,
+                           events: Sequence[Mapping[str, Any]]) -> str:
+        """What to do about code changed after this visit's first review round: address
+        the findings it fixes while a fixing pass is left, else restore the reviewed
+        code (design 2026-10-31 §3 change 1)."""
+        rows = review.ReviewOrchestrator(self.store, self.run_dir).findings(events)
+        phase = review.review_phase(events, rows)
+        if phase != "closed":
+            return ("the code changed after this review's first round: review-address the "
+                    "findings the change fixes, so R2 reviews it (" + ("open HIGH / "
+                    "CRITICAL findings only" if phase == "high" else "one fixing pass")
+                    + "); an incremental review is only the first round of a review TEST "
+                    "or DELIVER reopened")
+        last = context.run.get("last_reviewed_trees") or {}
+        repos = self.effective_repos()
+        steps = []
+        for name, paths in sorted((context.run.get("unreviewed") or {}).items()):
+            if name in repos and last.get(name):
+                steps.append(f"git -C {repos[name]} restore --source={last[name]} "
+                             "--worktree -- " + " ".join(paths[:20]))
+        return ("this review's fixing passes are done and the code changed after it; no "
+                "review will see that change, so it cannot land. Restore the reviewed code ("
+                + ("; ".join(steps) or "the files changed since the last review")
+                + "; delete a file the review did not see), then stage-complete. To change "
+                "code after REVIEW, complete REVIEW and change it in TEST: that opens a new "
+                "review of the change")
 
     def _audit_facts(self) -> dict[str, Any]:
         """Measured inputs the audit cannot read from events (§E9.3, D5): how many repos

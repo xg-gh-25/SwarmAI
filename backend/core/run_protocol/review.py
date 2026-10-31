@@ -139,12 +139,171 @@ def r2_redispatch_targets(events: Sequence[Mapping[str, Any]]
     return out
 
 
+# ── one REVIEW visit: two rounds, a third only for HIGH (design 2026-10-31-pipeline-
+# review-close-and-landing-route §3 change 1) ─────────────────────────────────────
+USABLE_ANSWER = ("parsed", "partial")
+RESIDUAL = ("residual: listed in the REPORT as a remaining risk; this review's fixing "
+            "passes are done, so no code change")
+RESIDUAL_HIGH = ("this review's fixing passes are done: it stays an open HIGH in the "
+                 "REPORT and the audit (a person may accept it with accept-finding)")
+
+
+def visit_start(events: Sequence[Mapping[str, Any]]) -> int:
+    """Index of the first event of the current REVIEW visit: just after the latest
+    ``review_reopen`` (TEST or DELIVER sent the run back), 0 for the first visit."""
+    start = 0
+    for index, event in enumerate(events):
+        if event.get("kind") == "review_reopen":
+            start = index + 1
+    return start
+
+
+def _trees_key(payload: Mapping[str, Any]) -> str:
+    return json.dumps(payload.get("code_trees") or {}, sort_keys=True)
+
+
+def first_round_series(events: Sequence[Mapping[str, Any]], start: int
+                       ) -> dict[tuple[str, str], list[Mapping[str, Any]]]:
+    """The visit's first-round reviews: round-1 REVIEW handouts from *start*, per
+    (expert, reviewed code trees). A handout of the same expert on the same trees is a
+    re-ask of the same review, never a new one."""
+    out: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for event in events[start:]:
+        if event.get("kind") == "handout" and event.get("stage") == "review" \
+                and event.get("round") == 1:
+            payload = event.get("payload") or {}
+            out.setdefault((payload.get("expert_id"), _trees_key(payload)), []).append(event)
+    return out
+
+
+def answer_of(events: Sequence[Mapping[str, Any]], handout_id: Any
+              ) -> Mapping[str, Any] | None:
+    for event in events:
+        if event.get("kind") == "answer" \
+                and (event.get("payload") or {}).get("handout_event_id") == handout_id:
+            return event
+    return None
+
+
+def unusable_reasks(events: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Latest handouts of this visit's first-round reviews whose answer could not be
+    used and that were not asked again yet: each gets one more dispatch."""
+    out = []
+    for series in first_round_series(events, visit_start(events)).values():
+        answer = answer_of(events, series[-1]["event_id"])
+        if answer is not None and len(series) < 2 \
+                and (answer.get("payload") or {}).get("state") not in USABLE_ANSWER:
+            out.append(series[-1])
+    return out
+
+
+def _in_visit(events: Sequence[Mapping[str, Any]], start: int) -> set[Any]:
+    return {event.get("event_id") for event in events[start:]}
+
+
+def review_phase(events: Sequence[Mapping[str, Any]],
+                 rows: Sequence[Mapping[str, Any]]) -> str:
+    """Where the current visit's review stands: ``fix`` (its first fixing pass, or the
+    first round, is still to come), ``high`` (one pass and its R2 are done and a HIGH /
+    CRITICAL raised in this visit is still open: one more pass, for those only) or
+    ``closed`` (no more fixing passes in this visit). A fixing pass is one review-address
+    with items (its address events share an attempt); it is done once no R2 is pending,
+    no address is without its R2 and no R2 line waits to be asked again."""
+    start = visit_start(events)
+    passes: list[Any] = []
+    for event in events[start:]:
+        if event.get("kind") == "address" and event.get("attempt") not in passes:
+            passes.append(event.get("attempt"))
+    # a pass's R2 is not done while one is pending, an address has none, or a line
+    # used a word its finding does not take (it is asked once more)
+    in_flight = bool(passes) and bool(pending_r2(events) or uncovered_addresses(events)
+                                      or r2_redispatch_targets(events))
+    done = len(passes) - (1 if in_flight else 0)
+    here = _in_visit(events, start)
+    mine = [row for row in rows if row.get("answer_event_id") in here]
+    if done >= 2:
+        return "closed"
+    if done == 1:
+        if len(passes) >= 2:
+            return "high"           # the HIGH pass is waiting for its R2
+        return "high" if any(_open_high(row) for row in mine) else "closed"
+    series = first_round_series(events, start)
+    answered = bool(series) and all(answer_of(events, s[-1]["event_id"]) is not None
+                                    for s in series.values())
+    if not passes and answered and not unusable_reasks(events) \
+            and not any(not fd.is_closed(row) for row in mine):
+        return "closed"             # the first round found nothing to fix
+    return "fix"
+
+
+def _open_high(row: Mapping[str, Any]) -> bool:
+    return fd.normalize_severity(str(row.get("severity") or "LOW")) in ("HIGH", "CRITICAL") \
+        and not fd.is_closed(row)
+
+
+def fixable(events: Sequence[Mapping[str, Any]],
+            rows: Sequence[Mapping[str, Any]]) -> tuple[str, set[str]]:
+    """(the visit's phase, the findings a fixing pass may still address): in ``fix``
+    every finding this visit raised, in ``high`` its open HIGH / CRITICAL ones, in
+    ``closed`` none, each widened by its ±10-line cluster, which a pass fixes as one
+    (plan_fix_handoff) whatever review raised the mates. ``address_refusal`` and
+    ``close_with`` both read this, so what ``findings`` says to fix is what a pass
+    accepts."""
+    phase = review_phase(events, rows)
+    if phase == "closed":
+        return phase, set()
+    here = _in_visit(events, visit_start(events))
+    by_id = {row["canonical_id"]: row for row in rows}
+    mine = {cid for cid, row in by_id.items() if row.get("answer_event_id") in here}
+    base = mine if phase == "fix" else {cid for cid in mine if _open_high(by_id[cid])}
+    allowed = set(base)
+    for cluster in cluster_findings([row for row in rows if row["status"] != "refuted"]):
+        if base & set(cluster["findings"]):
+            allowed |= set(cluster["findings"])
+    return phase, allowed
+
+
+def address_refusal(events: Sequence[Mapping[str, Any]], rows: Sequence[Mapping[str, Any]],
+                    finding_ids: Sequence[str]) -> str | None:
+    """Why a fixing pass on *finding_ids* is refused in the current visit, or None."""
+    if not finding_ids:
+        return None
+    phase, allowed = fixable(events, rows)
+    if phase == "closed":
+        return ("this review's fixing passes are done (one pass and its R2, and no HIGH "
+                "left open): the open findings are residual risks in the REPORT; complete "
+                "REVIEW (stage-complete)")
+    by_id = {row["canonical_id"]: row for row in rows}
+    outside = sorted(cid for cid in finding_ids if cid in by_id and cid not in allowed)
+    if not outside:
+        return None
+    here = _in_visit(events, visit_start(events))
+    earlier = [cid for cid in outside if by_id[cid].get("answer_event_id") not in here]
+    if len(earlier) == len(outside):
+        return ("raised in an earlier review of this run, whose passes are done (residual "
+                "risks): " + ", ".join(earlier))
+    return ("the second fixing pass is for open HIGH / CRITICAL findings (and their "
+            "cluster) only; these are residual risks: " + ", ".join(outside))
+
+
 def close_with(row: Mapping[str, Any], ledger: Mapping[str, Any] | None, *,
-               uncovered: bool, redispatch: bool) -> str:
+               uncovered: bool, redispatch: bool, may_fix: bool = True) -> str:
     """What closes *row* now, from the closure table and the R2 ledger (design 2026-10-
-    26-pipeline-review-closure §3.2). ``""`` when it is closed."""
+    26-pipeline-review-closure §3.2). ``""`` when it is closed. When no fixing pass of
+    this visit may address it (*may_fix*: ``fixable``), a step that needs a code change
+    or another pass reads as a residual risk instead (design 2026-10-31 §3 change 1);
+    steps that change no code are kept."""
     if fd.is_closed(row):
         return ""
+    step = _close_step(row, ledger, uncovered=uncovered, redispatch=redispatch)
+    needs_pass = step.startswith(("fix it", "R2 has not judged the test ADEQUATE"))
+    if needs_pass and not may_fix:
+        return RESIDUAL_HIGH if _open_high(row) else RESIDUAL
+    return step
+
+
+def _close_step(row: Mapping[str, Any], ledger: Mapping[str, Any] | None, *,
+                uncovered: bool, redispatch: bool) -> str:
     status, r2 = row.get("status"), row.get("r2_status")
     if row.get("expert") == fd.GATE0_EXPERT:
         return GATE0_CLOSES
@@ -180,6 +339,7 @@ def closure_view(rows: Sequence[Mapping[str, Any]],
     ledger = r2_ledger(events)
     uncovered = set(uncovered_addresses(events))
     redo = {cid for _answer, wrong in r2_redispatch_targets(events).values() for cid in wrong}
+    _phase, may_fix = fixable(events, rows)
     out = []
     for row in rows:
         cid = row["canonical_id"]
@@ -188,7 +348,8 @@ def closure_view(rows: Sequence[Mapping[str, Any]],
                     "status": row.get("status"), "r2_status": row.get("r2_status"),
                     "closed": fd.is_closed(row),
                     "close_with": close_with(row, ledger.get(cid), uncovered=cid in uncovered,
-                                             redispatch=cid in redo)})
+                                             redispatch=cid in redo,
+                                             may_fix=cid in may_fix)})
     return out
 
 
@@ -234,6 +395,30 @@ def lint_prompt(prompt: str, *, expert_id: str, round: int) -> list[str]:
     if expert_id == "gate0-skeptic" and "Gate-0 only: first non-empty line is VERDICT:" not in prompt:
         errors.append("Gate-0 prompt lacks verdict contract")
     return errors
+
+
+def review_input_of(prompt: Any, expert_id: str, instructions: str, *,
+                    read_blob=None) -> str | None:
+    """The review input a handout's prompt was built from (``build_prompt`` read
+    backwards). When *prompt* was built from other instructions (the expert's prompt
+    file changed since), everything after its header lines, so a re-ask still carries
+    the whole review. None only when the prompt cannot be read."""
+    if isinstance(prompt, Mapping) and isinstance(prompt.get("blob"), str) and read_blob:
+        try:
+            prompt = read_blob(prompt["blob"]).decode("utf-8")
+        except Exception:  # noqa: BLE001 -- unreadable blob: no faithful copy
+            return None
+    if not isinstance(prompt, str):
+        return None
+    lines = prompt.split("\n", 2)
+    if len(lines) < 3 or lines[0] != f"EXPERT-ID: {expert_id}":
+        return None
+    rest = lines[2] if lines[1].startswith("PIPELINE-HANDOUT") else prompt.split("\n", 1)[1]
+    head = f"\n{instructions.strip()}\n\n"
+    tail = f"\n\n{OUTPUT_CONTRACT}\n"
+    if rest.endswith(tail):
+        rest = rest[:len(rest) - len(tail)]
+    return rest[len(head):] if rest.startswith(head) else rest.strip()
 
 
 def build_prompt(expert_id: str, instructions: str, review_input: str,
