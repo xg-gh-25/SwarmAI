@@ -8,8 +8,9 @@ docs/design/2026-10-31-daily-activity-useful.md.
 It is also the producer of the ToDos sessions leave (design
 docs/design/2026-10-31-continue-lookback-todo.md D2): the summary is shown every open
 ToDo and answers new / same / done; ``apply_todo_actions`` creates the new ones
-(``ai_detected``, pending) and sends a finished one to review through the guarded
-write (``todo_manager.to_review``), never to handled. A row holds no follow-up list.
+(``ai_detected``, pending; at most 3 per session-day) and sends a finished one to
+review as a suggestion through the guarded write (``todo_manager.to_review``): only a
+person closes it. A row holds no follow-up list.
 
 Key public symbols:
 
@@ -438,12 +439,12 @@ def earlier_row(workspace: Path, session_id: str, day: date, *, days: int = 7,
 
 
 def _scanner():
-    """The injection scanner, or None when it cannot load (then nothing untrusted is
-    shown to or written from the model)."""
+    """The injection scanner, or None when it cannot load (then no ToDo title is shown
+    to the model)."""
     try:
         from core.injection_patterns import scan_text
     except Exception:  # noqa: BLE001 — fail closed: callers drop what they cannot check
-        logger.warning("injection scanner unavailable; ToDos are neither shown nor written")
+        logger.warning("injection scanner unavailable; no ToDo is shown to the summary")
         return None
     return scan_text
 
@@ -461,52 +462,95 @@ async def open_todos_shown() -> list[dict[str, str]]:
             for r in rows if r.get("id") and r.get("title") and not scan(str(r["title"]))]
 
 
+def _session_day_of(row: dict) -> "tuple[str, str] | None":
+    """``(session_id, day)`` of a ToDo this hook wrote, from its linked_context."""
+    try:
+        ctx = json.loads(row.get("linked_context") or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(ctx, dict) or ctx.get("type") != "session":
+        return None
+    return str(ctx.get("session_id") or ""), str(ctx.get("day") or "")
+
+
+def _title_key(title: str) -> str:
+    return " ".join(str(title or "").lower().split())
+
+
 async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, day: date,
                              session_title: str, files: "list[str] | None" = None) -> dict:
     """Apply a summary's ToDo actions (already checked by ``_valid_todos`` against the
-    ToDos it was shown): ``new`` → an ``ai_detected`` pending ToDo (the manager's title
-    dedup returns an open one with the same title instead); ``done`` → review through
-    ``todo_manager.to_review`` (only an active ToDo with no review state moves; a
-    person's Confirm sets handled); ``same`` → nothing. Model text that the injection
-    scanner flags is not written; credentials are redacted. One failing action does
-    not stop the others. Returns ``{"created": [ids], "to_review": [ids]}``."""
-    from core.credential_patterns import redact_credentials
+    ToDos it was shown).
+
+    ``new`` → an ``ai_detected`` pending ToDo through ``todo_manager.create`` (which
+    redacts credentials and refuses text the injection scanner flags). One session-day
+    makes at most TODOS_MAX_NEW, counted from the ToDos it already made (any status),
+    and never one whose title it already made: the day can be summarized again (a
+    later part, a run that starts over, a retry after a failed write) and must not
+    multiply or bring back a ToDo a person closed. The manager's title dedup also
+    returns an open ToDo of any origin with the same title. ``done`` → review through
+    ``todo_manager.to_review`` as a suggestion (only an active ToDo with no review
+    state moves; no auto-confirm; a person closes it). ``same`` → nothing. One failing
+    action does not stop the others. Returns ``{"created", "existing", "to_review"}``
+    (ids)."""
+    from core.summarization import TODOS_MAX_NEW
     from core.todo_manager import todo_manager
     from schemas.todo import ToDoCreate, ToDoSourceType
-    done: dict = {"created": [], "to_review": []}
-    scan = _scanner()
-    if scan is None or not actions:
+    done: dict = {"created": [], "existing": [], "to_review": []}
+    if not actions:
         return done
     where = f"session {session_id}, {day.isoformat()}"
+    try:
+        rows = await todo_manager.list_all()
+    except Exception:  # noqa: BLE001 -- without the list nothing new is written (no dedup)
+        logger.warning("ToDos from %s: the ToDo list is unreadable; no new ones", where,
+                       exc_info=True)
+        rows = None
+    known = {str(r.get("id")) for r in rows or []}
+    mine = [r for r in rows or [] if _session_day_of(r) == (session_id, day.isoformat())]
+    made = {_title_key(r.get("title")) for r in mine}
+    allowance = TODOS_MAX_NEW - len(mine)
     for action in actions:
         try:
             if action.get("action") == "done":
-                note = (f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] Finished in "
-                        f"{where} ({session_title}), by its activity summary.")
-                if await todo_manager.to_review(action["todo_id"], note, source="daily_activity"):
+                note = (f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] Reported finished in "
+                        f"{where} ({session_title}) by its activity summary; confirm or reject.")
+                if await todo_manager.to_review(action["todo_id"], note, source="daily_activity",
+                                                suggested=True):
                     done["to_review"].append(action["todo_id"])
             elif action.get("action") == "new":
-                title = redact_credentials(action.get("title") or "")
-                description = redact_credentials(action.get("description") or "")
-                if not title or scan(title) or scan(description):
-                    logger.warning("ToDo from %s not written: injection pattern", where)
+                title = action.get("title") or ""
+                if rows is None or not title or _title_key(title) in made:
+                    continue
+                if allowance <= 0:
+                    logger.info("ToDo from %s not written: %d already made that day",
+                                where, TODOS_MAX_NEW)
                     continue
                 context = {"type": "session", "session_id": session_id, "day": day.isoformat(),
                            "detection_reason": "left open by the session (activity summary)",
                            "files": list(files or [])[:20], "next_step": title}
                 todo = await todo_manager.create(ToDoCreate(
                     workspace_id="", title=title,
-                    description=f"{description}\n\nFrom {where}: {session_title}".strip(),
+                    description=f"{action.get('description') or ''}\n\nFrom {where}: "
+                                f"{session_title}".strip(),
                     # no source: the manager's title dedup then matches an open ToDo of
                     # any origin (a source narrows it to ToDos with that same source)
                     source=None, source_type=ToDoSourceType.AI_DETECTED,
                     linked_context=json.dumps(context, ensure_ascii=False)))
-                done["created"].append(todo.id)
+                made.add(_title_key(title))
+                if todo.id in known:
+                    done["existing"].append(todo.id)
+                else:
+                    known.add(todo.id)
+                    allowance -= 1
+                    done["created"].append(todo.id)
+        except ValueError as exc:
+            logger.warning("ToDo from %s not written: %s", where, exc)
         except Exception:  # noqa: BLE001 — one action never stops the row or the others
             logger.warning("ToDo action from %s failed", where, exc_info=True)
-    if done["created"] or done["to_review"]:
-        logger.info("ToDos from %s: %d new, %d to review", where,
-                    len(done["created"]), len(done["to_review"]))
+    if any(done.values()):
+        logger.info("ToDos from %s: %d new, %d already open, %d to review", where,
+                    len(done["created"]), len(done["existing"]), len(done["to_review"]))
     return done
 
 
@@ -682,9 +726,9 @@ class DailyActivityExtractionHook:
         A complete row is left alone (no model call). Otherwise the messages it does
         not cover are summarized part by part, the row written after each part, so a
         cut run keeps what it did and the next idle continues from there. A part
-        without a model answer never replaces a row the model wrote. After each written
-        part its ToDo actions are applied; the next part is shown the open ToDos again,
-        so what an earlier part created is ``same``, not new.
+        without a model answer never replaces a row the model wrote. Each part's ToDo
+        actions are applied before its row is written; the next part is shown the open
+        ToDos again, so what an earlier part created is ``same``, not new.
         """
         row = current_row(workspace, context.session_id, day)
         start = resume_point(row, day_messages)
@@ -704,6 +748,14 @@ class DailyActivityExtractionHook:
                 return written
             if previous is not None and not summary.enriched:
                 return written      # keep the model's row; the next idle tries again
+            if summary.enriched:
+                # before the row: a row says these messages are done, so actions applied
+                # after it would be lost if the write succeeded and this run then stopped;
+                # applied first, a retry repeats them harmlessly (session-day dedup)
+                await apply_todo_actions(
+                    summary.todos, session_id=context.session_id, day=day,
+                    session_title=summary.session_title or "",
+                    files=summary.files_modified)
             try:
                 path = await write_daily_activity(summary, day_context, day=day)
             except Exception as exc:
@@ -711,11 +763,6 @@ class DailyActivityExtractionHook:
                 raise  # Re-raise so hook manager logs it
             logger.info("DailyActivity extracted for session %s → %s", context.session_id, path)
             written = True
-            if summary.enriched:
-                await apply_todo_actions(
-                    summary.todos, session_id=context.session_id, day=day,
-                    session_title=summary.session_title or "",
-                    files=summary.files_modified)
             if not summary.enriched:
                 return written      # model unavailable: the next idle starts again
             previous = current_row(workspace, context.session_id, day)

@@ -138,8 +138,12 @@ def test_open_work_is_no_cdf_unit():
     event = {"kind": "event", "when": "2026-10-31", "title": "t", "what": "w", "outcome": "o",
              "evidence": ["event:e1"]}
     C.SOURCE_UNIT.validate_python(event)
-    with _pytest.raises(pydantic.ValidationError):
-        C.SOURCE_UNIT.validate_python({**event, "follow_up": "do the next thing"})
+    assert "follow_up" not in C.SOURCE_UNIT.json_schema()["$defs"]["EventUnit"]["properties"]
+    # a payload stored (or sent by a Hive) before the change still validates; the key
+    # is dropped (model_dump wrote it as null on every event)
+    for legacy in (None, "do the next thing"):
+        unit = C.SOURCE_UNIT.validate_python({**event, "follow_up": legacy})
+        assert not hasattr(unit, "follow_up") and "follow_up" not in unit.model_dump()
     assert "never work still to do" in C.EVENT_RULE and "ToDo" in C.EVENT_RULE
 
 

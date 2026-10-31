@@ -236,3 +236,28 @@ def test_a_later_batch_is_shown_the_todos_an_earlier_one_created(ws):
     asyncio.run(M.run(ws, record=ws / "record.jsonl", api=api, apply=True, max_items=100, jobs=1,
                       today=TODAY, llm=llm, withdraw=lambda a, r, status: None))
     assert [t["title"] for t in api.todos].count("Write the parser tests") == 1
+
+
+
+def test_a_refused_todo_is_recorded_and_the_run_goes_on(ws):
+    class Refusing(FakeApi):
+        def create(self, title, description, linked):
+            if "parser tests" in title:
+                raise ValueError("ai_detected ToDo refused: injection pattern")
+            return super().create(title, description, linked)
+    api = Refusing([{"id": "t-board", "title": "Clean the ToDo board", "status": "pending"}])
+    withdrawn: list = []
+    out = _go(ws, api, withdrawn)
+    rec = {r["key"]: r for r in M._rows(ws / "record.jsonl")}
+    assert "injection pattern" in rec["da:open00000001"]["todo_refused"]
+    assert out["left"] == 0 and len(withdrawn) == 1       # the gap's ToDo was made
+
+
+def test_an_interrupted_create_is_reused_not_made_again(ws):
+    api = FakeApi([{"id": "t-board", "title": "Clean the ToDo board", "status": "pending"},
+                   {"id": "made-before", "title": "Earlier title", "status": "pending",
+                    "linked_context": json.dumps({"migrated_from": "da:open00000001"})}])
+    _go(ws, api, [])
+    rec = {r["key"]: r for r in M._rows(ws / "record.jsonl")}
+    assert rec["da:open00000001"]["created_todo_id"] == "made-before"
+    assert not any(t["title"] == "Write the parser tests" for t in api.todos)

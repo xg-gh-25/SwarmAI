@@ -97,6 +97,9 @@ class ToDoManager:
 
         Validates: Requirements 1.3, 4.1, 6.2
         """
+        if data.source_type.value == "ai_detected":
+            data = self._gated_ai_detected(data)
+
         # Default workspace_id to SwarmWS if not provided
         workspace_id = data.workspace_id
         if not workspace_id:
@@ -233,12 +236,39 @@ class ToDoManager:
             rows.extend(await db.todos.list_by_status(status))
         return sorted(rows, key=lambda r: str(r.get("created_at") or ""))
 
-    async def to_review(self, todo_id: str, note: str, *, source: str) -> bool:
+    @staticmethod
+    def _gated_ai_detected(data: ToDoCreate) -> ToDoCreate:
+        """The one gate for a ToDo a model wrote (``ai_detected``, from any producer:
+        the session summary, a migration, the API): credentials redacted, and refused
+        (ValueError) when the injection scanner flags the title or a sentence of the
+        description, or cannot load. The text came from a transcript that may hold
+        fetched content, and a ToDo is read back into an agent's context."""
+        from core.credential_patterns import redact_credentials
+        try:
+            from core.injection_patterns import scan_text
+        except Exception as exc:  # noqa: BLE001 -- fail closed: nothing unchecked is written
+            raise ValueError("injection scanner unavailable; ai_detected ToDo not written") from exc
+        title = redact_credentials(data.title)
+        description = redact_credentials(data.description) if data.description else data.description
+        if scan_text(title) or scan_text(description or "", sentence_split=True):
+            raise ValueError("ai_detected ToDo refused: injection pattern")
+        return data.model_copy(update={"title": title, "description": description})
+
+    async def list_all(self) -> "list[dict]":
+        """Every ToDo row, any status (single-workspace model)."""
+        return list(await db.todos.list())
+
+    async def to_review(self, todo_id: str, note: str, *, source: str,
+                        suggested: bool = False) -> bool:
         """Put an active ToDo with no review state into review (``review_state=
         'completed'``, status unchanged; only a person's Confirm sets ``handled``),
         appending *note* to its ``linked_context.notes`` in the same write. ONE
         conditional write per try (``db.todos.update_if``, only while the row is as
-        read), so a Confirm, Reject or edit made meanwhile wins. True when it moved."""
+        read), so a Confirm, Reject or edit made meanwhile wins. True when it moved.
+
+        ``suggested``: a model said the work is done (not a recorded outcome); the
+        mark ``review_suggested_by`` keeps the 7-day auto-confirm off it, so only a
+        person closes it (lifecycle_manager._sweep_auto_confirm_todos)."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
         for _ in range(_CAS_TRIES):
             row = await db.todos.get(todo_id)
@@ -252,6 +282,8 @@ class ToDoManager:
                 ctx = {}
             existing = ctx.get("notes") or ""
             ctx["notes"] = f"{existing}\n{note}".strip() if existing else note
+            if suggested:
+                ctx["review_suggested_by"] = source
             if await db.todos.update_if(
                     todo_id, {"review_state": "completed", "completed_at": now,
                               "linked_context": json.dumps(ctx, ensure_ascii=False)},

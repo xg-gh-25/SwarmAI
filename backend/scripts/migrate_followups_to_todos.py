@@ -328,6 +328,12 @@ class TodoApi:
     def open(self) -> list[dict]:
         return [t for t in self.all() if t.get("status") in ("pending", "overdue", "in_discussion")]
 
+    def shown(self) -> list[dict]:
+        """The open ToDos a prompt may show: a title the injection scanner flags (a ToDo
+        can come from an email or a chat) is left out, as in the session summary."""
+        from core.injection_patterns import scan_text
+        return [t for t in self.open() if not scan_text(str(t.get("title") or ""))]
+
     def create(self, title: str, description: str, linked: dict) -> dict:
         return self._call("POST", "/api/todos", {
             "workspace_id": "", "title": title[:500], "description": description[:10000],
@@ -396,6 +402,18 @@ def _append(record: Path, row: dict) -> None:
                             ensure_ascii=False) + "\n")
 
 
+def _migrated(api, key: str) -> "str | None":
+    """The id of a ToDo an earlier, interrupted run already made for *key*."""
+    for todo in api.all():
+        try:
+            ctx = json.loads(todo.get("linked_context") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(ctx, dict) and ctx.get("migrated_from") == key:
+            return todo["id"]
+    return None
+
+
 def apply_decision(item: Item, decision: dict, api, withdraw, record: Path) -> dict:
     row = {"key": item.key, "source": item.source, "day": item.day, "text": item.text,
            **decision}
@@ -404,8 +422,14 @@ def apply_decision(item: Item, decision: dict, api, withdraw, record: Path) -> d
                   "day": item.day, "detection_reason": f"open {item.source} follow-up, migrated",
                   "files": item.files[:20], "next_step": decision["title"]}
         origin = f"Moved from {item.key} ({item.day or 'no day'})."
-        todo = api.create(decision["title"], f"{decision['description']}\n\n{origin}", linked)
-        row["created_todo_id"] = todo["id"]
+        existing = _migrated(api, item.key)
+        try:
+            row["created_todo_id"] = existing or api.create(
+                decision["title"], f"{decision['description']}\n\n{origin}", linked)["id"]
+        except Exception as exc:  # noqa: BLE001 -- refused (e.g. the injection gate): recorded
+            row["todo_refused"] = f"{type(exc).__name__}: {exc}"
+            _append(record, row)
+            return row                    # a gap whose ToDo was refused stays in its document
     if item.source == "gap":
         # the ToDo exists now: a withdrawal that fails (the file changed meanwhile) is
         # recorded, not retried, so a second run never makes a second ToDo; the gap
@@ -495,6 +519,8 @@ async def run(workspace: Path, *, record: Path, api, apply: bool, max_items: int
     done_keys = recorded(record)
     items, expired = da_items(da_dir, today)
     items += gap_items(workspace) + event_items(workspace)
+    seen: set[str] = set()
+    items = [i for i in items if not (i.key in seen or seen.add(i.key))]   # one per key
     todo_items = [i for i in items if i.key not in done_keys]
     expired = [e for e in expired if e["key"] not in done_keys]
     counts = {"da": sum(i.source == "da" for i in items),
@@ -516,7 +542,7 @@ async def run(workspace: Path, *, record: Path, api, apply: bool, max_items: int
         decisions: dict[str, int] = {}
         for k in range(0, len(batch_items), max(1, jobs)):
             batch = batch_items[k:k + max(1, jobs)]
-            todos = api.open()
+            todos = api.shown() if hasattr(api, "shown") else api.open()
             answers = await asyncio.gather(*(asyncio.to_thread(
                 llm, prompt_for(i, rows, commits, todos)) for i in batch),
                 return_exceptions=True)

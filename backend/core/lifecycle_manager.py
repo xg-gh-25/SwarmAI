@@ -45,6 +45,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+
+def _review_suggested(row: dict) -> bool:
+    """Whether a model only said this ToDo is done (todo_manager.to_review)."""
+    import json as _json
+    try:
+        ctx = _json.loads(row.get("linked_context") or "{}")
+    except (TypeError, ValueError):
+        return False
+    return isinstance(ctx, dict) and bool(ctx.get("review_suggested_by"))
+
 class LifecycleManager:
     """Centralized background maintenance for all SessionUnits.
 
@@ -1465,6 +1475,8 @@ class LifecycleManager:
     async def _sweep_auto_confirm_todos(self) -> int:
         """7-day auto-confirm: a completed-awaiting-review todo not reviewed within
         7 days → review_state='confirmed', review_kind='auto', reviewed_at=now.
+        Not one a model only said is done (``linked_context.review_suggested_by``,
+        todo_manager.to_review): a person closes that.
         This resolves the review BEFORE the 14-day purge, so every archived row
         carries a final review_state (no 'never reviewed' gaps). Batch UPDATE."""
         from database import db
@@ -1478,6 +1490,7 @@ class LifecycleManager:
             if r.get("review_state") == "completed"
             and (r.get("completed_at") or "") < cutoff
             and r.get("completed_at")
+            and not _review_suggested(r)
         ]
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S+00:00")
         for todo in stale:

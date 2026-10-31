@@ -213,6 +213,16 @@ class EventUnit(_Unit):
     same: OverrideRef | None = None
     overrides: list[OverrideRef] = Field(default_factory=list, max_length=OVERRIDES_TOP)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _no_follow_up(cls, data):
+        """A payload stored, or sent by a Hive, before follow_up was removed (design
+        2026-10-31-continue-lookback-todo D2) still carries the key (null when unset):
+        it is dropped, so the event stays valid. Open work is a ToDo now."""
+        if isinstance(data, dict) and "follow_up" in data:
+            data = {k: v for k, v in data.items() if k != "follow_up"}
+        return data
+
     @model_validator(mode="after")
     def _impact_or_outcome(self):
         if not (self.impact or self.outcome):

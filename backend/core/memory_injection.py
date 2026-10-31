@@ -268,8 +268,7 @@ def select_timeline(
         unit for month in (current, previous) for unit in units
         if unit.section == month and _is_month_summary(unit.text)
     ]
-    summary_identities = {unit.identity for unit in summaries}
-    events = sum(1 for unit in units if unit.identity not in summary_identities)
+    events = sum(1 for unit in units if not _is_month_summary(unit.text))
     # counted on what the prompt shows: the loader strips the metadata comments
     ordered = [_shown(unit.text) for unit in summaries]
     selected = _admit([text for text in ordered if text], budget, estimate)
