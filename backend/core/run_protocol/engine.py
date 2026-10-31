@@ -56,6 +56,27 @@ class IntegrationRequired(EngineError):
 # files whose change never needs an expert (review_start, RV-4)
 _DOC_SUFFIXES = (".md", ".txt", ".rst")
 
+
+def _patch_paths_changed(root: str, then_base: str, then_tree: str, now_base: str,
+                         now_tree: str) -> list[str]:
+    """The paths whose part of the run's patch differs between (then_base -> then_tree)
+    and (now_base -> now_tree), compared file by file as LG-1's patch id does: line
+    numbers and blob ids aside, every other byte counts (whitespace and indentation
+    included). A path in one patch only counts; renames are a delete plus an add."""
+    def per_file(base: str, tree: str) -> dict[str, str]:
+        out: dict[str, list[str]] = {}
+        current = None
+        for line in _git(root, "diff-tree", "-p", "--binary", "--no-renames", base,
+                         tree).splitlines():
+            if line.startswith("diff --git "):
+                current = line
+                out[current] = []
+            elif current is not None and not line.startswith("index "):
+                out[current].append(re.sub(r"^@@ -[0-9,]+ \+[0-9,]+ @@", "@@", line))
+        return {head.split(" b/", 1)[-1]: "\n".join(body) for head, body in out.items()}
+    then, now = per_file(then_base, then_tree), per_file(now_base, now_tree)
+    return sorted(path for path in set(then) | set(now) if then.get(path) != now.get(path))
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -890,7 +911,10 @@ class RunEngine:
         - ``reviewed_patches``: the patch ids every REVIEW completion recorded;
         - ``unreviewed``: per repo, the non-doc paths that differ between the last tree
           a review round saw (a review handout or a REVIEW completion) and the current
-          tree; unknown -> every changed path (fails closed)."""
+          tree; unknown -> every changed path (fails closed). When the run base moved
+          since that review (and the review recorded its base), the paths whose own
+          patch differs (``_patch_paths_changed``), so main's commits are not counted;
+        - ``changed_since_review``: the same, doc-class paths included."""
         memo = self.__dict__.setdefault("_review_memo", {})
         patch_ids: dict[str, str] = {}
         for name, root in roots.items():
@@ -905,34 +929,49 @@ class RunEngine:
                     memo[key] = None
             if memo[key] is not None:
                 patch_ids[name] = memo[key]
-        reviewed, last = [], None
+        reviewed, last, last_bases = [], None, {}
         for event in events:
             payload = event.get("payload") or {}
             if event.get("stage") != "review":
                 continue
-            if event.get("kind") == "stage_complete" and isinstance(payload.get("code_trees"), dict):
+            if event.get("kind") in ("stage_complete", "handout") \
+                    and isinstance(payload.get("code_trees"), dict):
                 last = payload["code_trees"]
-                if isinstance(payload.get("patch_ids"), dict):
+                last_bases = payload.get("bases") if isinstance(payload.get("bases"), dict) \
+                    else {}
+                if event.get("kind") == "stage_complete" \
+                        and isinstance(payload.get("patch_ids"), dict):
                     reviewed.append(payload["patch_ids"])
-            elif event.get("kind") == "handout" and isinstance(payload.get("code_trees"), dict):
-                last = payload["code_trees"]
         unreviewed: dict[str, list[str]] = {}
+        since: dict[str, list[str]] = {}
         for name, root in roots.items():
             before, now = (last or {}).get(name), code_trees.get(name)
             if not before or not now or before == now:
                 continue
-            key = ("names", root, before, now)
+            then_base, now_base = last_bases.get(name), bases.get(name)
+            key = ("changed", root, before, now, then_base, now_base)
             if key not in memo:
                 try:
-                    out = _git(root, "diff", "--name-only", "--no-renames", before, now)
-                    memo[key] = sorted(p for p in out.splitlines()
-                                       if p and not p.endswith(_DOC_SUFFIXES))
+                    if then_base and now_base and then_base != now_base:
+                        # main moved under the run (a landing's sync): what changed is
+                        # the run's own patch, file by file, never main's new commits
+                        memo[key] = _patch_paths_changed(root, then_base, before,
+                                                         now_base, now)
+                    else:
+                        memo[key] = sorted(p for p in _git(
+                            root, "diff", "--name-only", "--no-renames", before,
+                            now).splitlines() if p)
                 except EngineError:
                     memo[key] = ["(the last reviewed tree is unreadable)"]
             if memo[key]:
-                unreviewed[name] = memo[key]
+                since[name] = memo[key]
+            code = [p for p in memo[key] if not p.endswith(_DOC_SUFFIXES)]
+            if code:
+                unreviewed[name] = code
         return {"patch_ids": patch_ids, "reviewed_patches": reviewed,
-                "unreviewed": unreviewed, "last_reviewed_trees": dict(last or {})}
+                "unreviewed": unreviewed, "changed_since_review": since,
+                "last_reviewed_trees": dict(last or {}),
+                "last_reviewed_bases": dict(last_bases or {})}
 
     @staticmethod
     def _patch_reviewed(context: checks.CheckContext) -> bool:
@@ -1282,7 +1321,8 @@ class RunEngine:
         if not specs and not roster:
             raise EngineError("review-address has nothing to record: no items, no "
                               "address without its R2, and no R2 line to re-dispatch")
-        trees = self._current_code(list(self.contract["expected_repos"]))[1]
+        current = self._current_code(list(self.contract["expected_repos"]))
+        trees, run_bases = current[1], current[2]
         callers = self._r2_callers_block(events, trees)
         prepared = []
         for expert, ids in roster.items():
@@ -1309,7 +1349,7 @@ class RunEngine:
                 expert_id=expert, stage="review", round=2, attempt=len(previous_r2) + 2,
                 at=at, expert_instructions=review.expert_prompt(expert),
                 review_input=review_input, finding_ids=ids, code_trees=trees,
-                allowed_status=allowed, redispatch_of=answer_id)
+                allowed_status=allowed, redispatch_of=answer_id, bases=run_bases)
             specs.append(spec)
             prepared.append(ready)
         read = len(events)
@@ -2276,7 +2316,9 @@ class RunEngine:
             return {"ok": False, **result, "state": self.projection()}
         payload = {"stage_attempt_event_id": result["stage_attempt_event_id"]}
         if stage == "review":       # the code REVIEW signed off on (S6-2: LG-1, RV-4)
-            payload.update(code_trees={k: v for k, v in context.run["code_trees"].items() if v},
+            payload.update(bases={k: v for k, v in (context.run.get("run_bases") or {}).items()
+                                  if v and context.run["code_trees"].get(k)},
+                           code_trees={k: v for k, v in context.run["code_trees"].items() if v},
                            patch_ids=dict(context.run["patch_ids"]))
         self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
@@ -2293,20 +2335,20 @@ class RunEngine:
         return out
 
     def _doc_paths_since_review(self, context: checks.CheckContext) -> dict[str, list[str]]:
-        """repo -> the paths changed between the last tree a review saw and now, every
-        one doc-class (the incremental review's own rule left nothing to review)."""
+        """repo -> the paths changed since the last tree a review saw, every one
+        doc-class (the incremental review's own rule left nothing to review). The same
+        facts as ``unreviewed`` (``_review_facts``: the run's own patch when main moved)."""
         out: dict[str, list[str]] = {}
         last = context.run.get("last_reviewed_trees") or {}
-        for name, root in self.effective_repos().items():
+        since = context.run.get("changed_since_review") or {}
+        for name in self.effective_repos():
             before, now = last.get(name), context.run["code_trees"].get(name)
             if now and not before:
                 return {}      # a repo no review saw a tree of: not doc-only (fail closed)
-            if not before or not now or before == now:
-                continue
-            paths = sorted(p for p in _git(root, "diff", "--name-only", "--no-renames",
-                                           before, now).splitlines() if p)
-            if paths:
-                out[name] = paths
+            if since.get(name):
+                if any(not p.endswith(_DOC_SUFFIXES) for p in since[name]):
+                    return {}
+                out[name] = list(since[name])
         return out
 
     def _complete_review_without_experts(self) -> bool:
@@ -2336,6 +2378,8 @@ class RunEngine:
             stage="review", attempt=result["attempt"],
             payload={"stage_attempt_event_id": result["stage_attempt_event_id"],
                      "code_trees": {k: v for k, v in context.run["code_trees"].items() if v},
+                     "bases": {k: v for k, v in (context.run.get("run_bases") or {}).items()
+                               if v and context.run["code_trees"].get(k)},
                      "patch_ids": dict(context.run["patch_ids"])})
         self._settle()
         self._write_review_documents()
@@ -2743,6 +2787,7 @@ class RunEngine:
                 expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
                 at=_now(), expert_instructions=instructions,
                 review_input=review_input, code_trees=trees, knowledge_items=items,
+                bases={name: item["base"] for name, item in per_repo.items()},
                 knowledge_project=self._knowledge_project()))
         if not handouts:
             self._write_review_documents()
@@ -2942,18 +2987,35 @@ class RunEngine:
                     "error": self._edit_after_review(context, events)}
         changed, diffs = [], []
         per_repo: dict[str, dict[str, Any]] = {}
+        then_bases = context.run.get("last_reviewed_bases") or {}
+        run_bases = context.run.get("run_bases") or {}
         for name in sorted(context.run["unreviewed"]):
             root = repos[name]
+            moved = bool(then_bases.get(name) and run_bases.get(name)
+                         and then_bases[name] != run_bases[name])
+            # main moved under the run (a landing's sync): the paths whose own patch
+            # changed, shown as the run's patch now and as it was reviewed, never
+            # main's new commits (design 2026-10-31 §3 change 3)
+            span = ([run_bases[name], trees[name], "--"]
+                    + (context.run.get("changed_since_review") or {}).get(name, [])
+                    if moved else [last[name], trees[name]])
             mine = []
-            for line in _git(root, "diff", "--numstat", "--no-renames", last[name],
-                             trees[name]).splitlines():
+            for line in _git(root, "diff", "--numstat", "--no-renames", *span).splitlines():
                 ins, delete, path = line.split("\t", 2)
                 mine.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
                              "deletions": int(delete) if delete.isdigit() else 0,
                              "is_test": "/tests/" in path or path.startswith("tests/")})
             changed += mine
-            diff = _git(root, "diff", "--no-ext-diff", "--no-renames", last[name], trees[name])
-            diffs.append(f"## {name} (changed since the last review)\n" + diff)
+            diff = _git(root, "diff", "--no-ext-diff", "--no-renames", *span)
+            if moved:
+                before = _git(root, "diff", "--no-ext-diff", "--no-renames", then_bases[name],
+                              last[name], "--", *span[3:])
+                diffs.append(f"## {name}: main moved under the run and its own patch changed "
+                             "in these files (a conflict resolution, or an edit)\n### the "
+                             "run's patch of them now\n" + diff + "\n### the same files as "
+                             "the last review saw them\n" + before)
+            else:
+                diffs.append(f"## {name} (changed since the last review)\n" + diff)
             # the guidance is the run's base version, as for R1 (§3.5.2)
             per_repo[name] = {"root": root, "base": self._fork_base(name, root), "diff": diff,
                               "paths": [row["path"] for row in mine if not row["is_test"]
@@ -3000,6 +3062,7 @@ class RunEngine:
                              + (callers + "\n\n" if callers else "")
                              + "\n\n".join(diffs),
                 code_trees=trees, incremental_from={k: last[k] for k in trees if k in last},
+                bases=context.run.get("run_bases"),
                 knowledge_items=knowledge[1] if knowledge[0] and expert == "correctness" else (),
                 knowledge_project=self._knowledge_project()))
         return {"reviewers": [{"id": e, "reason": "incremental review"} for e in roster],
@@ -3031,6 +3094,7 @@ class RunEngine:
                 review_input=self._reask_notice(answer or {}) + original,
                 code_trees=payload.get("code_trees"),
                 incremental_from=payload.get("incremental_from"),
+                bases=payload.get("bases"),
                 knowledge_items=payload.get("knowledge_items") or (),
                 knowledge_project=payload.get("knowledge_project")))
             reviewers.append({"id": expert, "reason": "its answer could not be read: asked "
@@ -3554,6 +3618,18 @@ class RunEngine:
                                           events=tuple(self.store.read_events()))
             lg1_passed, lg1_detail = checks.evaluate("LG-1", context)
             lg1_cause = None
+            if not lg1_passed and self._lands_unreviewed(state, context, carry_error):
+                # the change at landing is not the one REVIEW completed on (a conflict
+                # resolution, an edit in DELIVER): back to REVIEW for that difference,
+                # whether or not the TEST report is fresh (design 2026-10-31 §3 change 3)
+                record("LG-1", False, ("the change at landing is not the one REVIEW "
+                                       "completed on: back to REVIEW | " + lg1_detail)[:1500],
+                       "review_reopened")
+                if carry_error is not None:
+                    record("LG-4", False, str(carry_error), "review_reopened")
+                close("the run goes back to REVIEW")
+                self._settle()
+                return self._reopen_review_from_deliver()
             if not lg1_passed and carry_error is None:
                 moved = self._base_moved_note(before_sync)
                 if moved:
@@ -3622,6 +3698,49 @@ class RunEngine:
         self._copy_report(text=report.decode("utf-8"))
         self._settle(); self.write_projection()
         return {"ok": True, "commits": commits, "state": self.projection()}
+
+    def _lands_unreviewed(self, state: Mapping[str, Any], context: checks.CheckContext,
+                          carry_error: "IntegrationRequired | None") -> bool:
+        """Whether this landing goes back to REVIEW: the run's patch (known for every
+        repo) is not one a REVIEW completion recorded, no rebase is left to resolve
+        (a sync that only changed the patch is fine), and DELIVER has not sent the run
+        back before (``lifecycle.DELIVER_REOPEN_CAP``)."""
+        if "review" not in lifecycle.PROFILE_STAGES[self.contract["profile"]]:
+            return False
+        if carry_error is not None and carry_error.code != "patch_changed":
+            return False
+        if state.get("deliver_reopens", 0) >= lifecycle.DELIVER_REOPEN_CAP:
+            return False
+        patch_ids = context.run.get("patch_ids") or {}
+        if any(name not in patch_ids for name in self.contract["expected_repos"]):
+            return False
+        return not self._patch_reviewed(context)
+
+    def _reopen_review_from_deliver(self) -> dict[str, Any]:
+        """DELIVER's half of the review reopen (design 2026-10-31 §3 change 3): the same
+        route as TEST's. Only doc-class files differ: the engine completes that REVIEW
+        itself and the run goes on in TEST; otherwise the agent runs review-start."""
+        context = self.check_context()
+        doc_paths = (self._doc_paths_since_review(context)
+                     if not context.run.get("unreviewed") else {})
+        payload: dict[str, Any] = {"reason": "the change at landing is not the one REVIEW "
+                                             "completed on", "from": "deliver"}
+        if doc_paths:
+            payload["doc_paths"] = doc_paths
+        self.store.append_new(writer=self.authority.writer("cli"), kind="review_reopen",
+                              at=_now(), ordinal=NEXT, payload=payload)
+        self._settle()
+        if not context.run.get("unreviewed") and self._complete_review_without_experts():
+            self.write_projection()
+            return {"ok": False, "reopened": "test", "state": self.projection(),
+                    "error": "the change at landing differs from the reviewed one only in "
+                             "doc-class files: REVIEW is complete again; run the tests on "
+                             "this tree, complete TEST, then land"}
+        self.write_projection()
+        return {"ok": False, "reopened": "review", "state": self.projection(),
+                "error": "the change at landing is not the one REVIEW completed on (a "
+                         "conflict resolution or an edit): the run is back in REVIEW; run "
+                         "review-start for an incremental review of what changed"}
 
     def _commit_normal(self, *, bases: Mapping[str, str], bindings: Mapping[str, Any],
                        message: str, attempt: int, attempt_event_id: str

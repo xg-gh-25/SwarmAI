@@ -11,7 +11,8 @@ What is tested, through real runs (``tests/pipeline_v1_rig.py``):
   (the new patch id recorded), completes TEST on the report it was given and the run
   lands (LG-1 passes);
 - TEST changes a code file: REVIEW reopens as before;
-- a ``.md`` changed in DELIVER still fails LG-1 (the landing rule is unchanged);
+- a ``.md`` changed in DELIVER still fails LG-1 (the landing rule is unchanged); the
+  landing completes REVIEW itself and the run goes back to TEST;
 - the Run Audit lists the doc-class paths no review was sent.
 """
 from __future__ import annotations
@@ -74,7 +75,11 @@ def test_a_doc_change_in_deliver_still_fails_lg1(rig):
     r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     out = r.v1("land", "--message", "fix: x\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     assert out.get("ok") is not True or out.get("state", {}).get("landing") != "landed", out
-    assert "LG-1" in json.dumps(out), out
+    # LG-1 still refuses it; the landing completes that REVIEW itself and the run is
+    # back in TEST for the new tree (design 2026-10-31 §3 change 3)
+    lg1 = [e["payload"] for e in r.events() if e["kind"] == "check"
+           and e["payload"].get("check_id") == "LG-1"][-1]
+    assert lg1["passed"] is False and out.get("reopened") == "test", out
 
 
 def test_doc_only_reopens_do_not_use_up_the_reopen_cap(rig):
@@ -122,12 +127,14 @@ def test_a_repo_no_review_saw_is_never_doc_only(monkeypatch):
     review fails closed (its code was never reviewed), whatever the other repo changed."""
     from types import SimpleNamespace
     from core.run_protocol import engine as engine_module
-    monkeypatch.setattr(engine_module, "_git", lambda root, *args: "README.md")
     fake = SimpleNamespace(effective_repos=lambda: {"x": "/nowhere-x", "y": "/nowhere-y"})
+    # changed_since_review: the review facts' paths (engine._review_facts)
     seen_both = SimpleNamespace(run={"last_reviewed_trees": {"x": "t8", "y": "t1"},
-                                     "code_trees": {"x": "t8", "y": "t2"}})
+                                     "code_trees": {"x": "t8", "y": "t2"},
+                                     "changed_since_review": {"y": ["README.md"]}})
     assert engine_module.RunEngine._doc_paths_since_review(fake, seen_both) == {
         "y": ["README.md"]}
     x_unseen = SimpleNamespace(run={"last_reviewed_trees": {"y": "t1"},
-                                    "code_trees": {"x": "t9", "y": "t2"}})
+                                    "code_trees": {"x": "t9", "y": "t2"},
+                                    "changed_since_review": {"y": ["README.md"]}})
     assert engine_module.RunEngine._doc_paths_since_review(fake, x_unseen) == {}

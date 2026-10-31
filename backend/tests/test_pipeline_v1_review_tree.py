@@ -105,7 +105,10 @@ def test_a_change_no_review_completed_cannot_land(rig):
     r.edit(FIX)                                     # edited in DELIVER
     r.v1("report-tests", "--artifact", r.artifact("report", r.report()))
     out = r.v1("land", "--message", "fix: swap" + SWARM)
-    assert out.get("ok") is False and "never reviewed" in str(out.get("failed")), out
+    # it does not land: the run goes back to REVIEW for that change (design 2026-10-31
+    # §3 change 3); nothing reached main
+    assert out.get("ok") is False and out.get("reopened") == "review", out
+    assert not [e for e in r.events() if e["kind"] == "land"]
 
 
 def test_past_the_reopen_cap_test_fails_instead(rig):

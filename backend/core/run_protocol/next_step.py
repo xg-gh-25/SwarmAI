@@ -249,8 +249,17 @@ def next_step(engine, *, previous_stage: str | None = None,
         else:
             # LG-1 (S6-1): after main moved and the worktree was synced, the TEST report
             # is for the old tree; test the new one before landing again
-            passed, detail = checks.evaluate("LG-1", engine.check_context())
-            if not passed:
+            context = engine.check_context()
+            passed, detail = checks.evaluate("LG-1", context)
+            if not passed and engine._lands_unreviewed(state, context, None):
+                # the change is not the reviewed one (a conflict resolution, an edit):
+                # land sends the run back to REVIEW first, no test run needed before
+                out.update(action="run", command=_cmd(engine,
+                                                      'land --message "<commit message>"'),
+                           why="the change differs from the one REVIEW completed on: land "
+                               "sends the run back to REVIEW for an incremental review of "
+                               "that difference (then TEST, then land)")
+            elif not passed:
                 out.update(action="write_artifact",
                            command=_cmd(engine, "report-tests --artifact -"),
                            why="the code changed since the TEST report (" + str(detail)[:200]

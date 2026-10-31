@@ -614,13 +614,14 @@ class ReviewOrchestrator:
                 code_trees: Mapping[str, Any] | None = None,
                 incremental_from: Mapping[str, Any] | None = None,
                 knowledge_items: Sequence[str] = (),
-                knowledge_project: str | None = None) -> dict[str, Any]:
+                knowledge_project: str | None = None,
+                bases: Mapping[str, Any] | None = None) -> dict[str, Any]:
         spec, prepared = self.handout_spec(
             expert_id=expert_id, stage=stage, round=round, attempt=attempt, at=at,
             expert_instructions=expert_instructions, review_input=review_input,
             finding_ids=finding_ids, code_trees=code_trees,
             incremental_from=incremental_from, knowledge_items=knowledge_items,
-            knowledge_project=knowledge_project)
+            knowledge_project=knowledge_project, bases=bases)
         spec = dict(spec)
         event, _ = self.store.append_new(writer=self.store.authority.writer("cli"),
                                          kind=spec.pop("kind"), at=spec.pop("at"),
@@ -645,6 +646,7 @@ class ReviewOrchestrator:
                      knowledge_project: str | None = None,
                      allowed_status: Mapping[str, Sequence[str]] | None = None,
                      redispatch_of: str | None = None,
+                     bases: Mapping[str, Any] | None = None,
                      ) -> tuple[dict[str, Any], dict[str, Any]]:
         """The handout event spec (for ``store.append_batch`` / ``append_new``) and what
         ``handout_written`` needs once it is on disk. Writes nothing: a prompt that fails
@@ -682,6 +684,8 @@ class ReviewOrchestrator:
                 payload["redispatch_of"] = redispatch_of
         if code_trees:          # what the expert sees: RV-4 / LG-1 bind to it (S6-2)
             payload["code_trees"] = dict(code_trees)
+            if bases:           # the run base under those trees (design 2026-10-31 §3)
+                payload["bases"] = {k: v for k, v in bases.items() if k in code_trees and v}
         if incremental_from:
             payload["incremental_from"] = dict(incremental_from)
         if knowledge_items:     # the PROJECT KNOWLEDGE entries this prompt carries (§3.4)

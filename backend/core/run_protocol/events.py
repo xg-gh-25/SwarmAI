@@ -101,6 +101,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
                       "allowed_status": dict, "redispatch_of": str,
                       "code_trees": dict, "incremental_from": dict, "nonce": str,
+                      # bases: each repo's run base under code_trees, so a later
+                      # review compares the run's own patch after main moved (design
+                      # 2026-10-31 §3 change 3)
+                      "bases": dict,
                       "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list, "knowledge_project": str}),
     # a host hook saw an expert spawned with exactly a handout's spawn prompt
     # (standalone §4.3, handout-by-file design §3.2)
@@ -267,13 +271,15 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # change whose patch one of these recorded
     "stage_complete": _spec("cli", ("stage", "attempt"), "stage",
                             {"stage_attempt_event_id": str},
-                            {"degraded": bool, "code_trees": dict, "patch_ids": dict}),
+                            {"degraded": bool, "code_trees": dict, "patch_ids": dict,
+                             "bases": dict}),
     # TEST changed the code: the run goes back to REVIEW for an incremental review
     # (S6-2, design usable-by-anyone §3.3.3); the engine appends it, never the agent
     # doc_paths: repo -> the doc-class paths (``.md/.txt/.rst``) changed since the last
     # reviewed tree when ONLY those changed: the engine completed that REVIEW itself
     # (design 2026-10-26-pipeline-review-closure §5.2 point 1)
-    "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str}, {"doc_paths": dict}),
+    "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str},
+                           {"doc_paths": dict, "from": str}),
     "gate0_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
     # what THINK / PLAN were given when EVALUATE completed (run-knowledge §3.6.3): the
     # ids knowledge_refs are checked against, and the DDD entries REFLECT dedups with;

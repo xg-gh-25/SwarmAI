@@ -137,7 +137,12 @@ def test_a_report_stale_before_the_sync_gets_no_prefix(rig):
     r.edit({"backend/core/other.py": "def other():\n    return 2\n"})   # after TEST
     r.commit_on_main({"elsewhere.py": "y = 1\n"})
     out = _land(r)
-    assert out.get("ok") is False and _lg1(out) and not _lg1(out).startswith("base_moved"), out
+    # an edit no review saw: back to REVIEW (design 2026-10-31 §3 change 3), never a
+    # base_moved failure
+    lg1 = [e["payload"] for e in r.events() if e["kind"] == "check"
+           and e["payload"].get("check_id") == "LG-1"][-1]
+    assert out.get("ok") is False and out.get("reopened") == "review", out
+    assert lg1.get("cause") == "review_reopened", lg1
 
 
 def test_a_failing_report_before_the_sync_gets_no_prefix(rig):

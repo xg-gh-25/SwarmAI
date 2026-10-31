@@ -50,9 +50,14 @@ BASE_MOVED_PREFIX = "base_moved:"
 # fold cannot read, so the detail text is never where a cause comes from; an older
 # event without ``cause`` is classified by its detail's prefix, which works only when
 # the detail stayed inline (``_cause_of``).
-CHECK_CAUSES = frozenset({"not_evaluated", "base_moved", "merge_conflict"})
+CHECK_CAUSES = frozenset({"not_evaluated", "base_moved", "merge_conflict",
+                          "review_reopened"})
 # how often TEST may send the run back to REVIEW (S6-2)
 REVIEW_REOPEN_CAP = 2
+# how often a landing may send the run back to REVIEW because the change at landing is
+# not the reviewed one (a conflict resolution, an edit in DELIVER: design 2026-10-31
+# §3 change 3). A second time, main kept conflicting with the run: a person looks.
+DELIVER_REOPEN_CAP = 1
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
 # the not-landed reasons that ARE a count cap being hit
 REASON_CAPS = {"checks_exhausted": "stage_attempt", "land_conflict": "land_attempt",
@@ -219,7 +224,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
         "last_land_intent": None, "last_report_render": None,
         "land_requests": {}, "auth_grants": {},
         "auth_consumed": {}, "expected_transition": None, "review_reopens": 0,
-        "base_moved_failures": 0,
+        "base_moved_failures": 0, "deliver_reopens": 0, "review_reopened_failures": 0,
     }
 
 
@@ -327,8 +332,14 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
             run["base_moved_failures"] = run.get("base_moved_failures", 0) + 1
             if run["base_moved_failures"] >= BASE_MOVED_CAP:
                 _set_pending(run, "base_kept_moving")
+        elif failed <= {"LG-1", "LG-4"} \
+                and all(cause[cid] == "review_reopened" for cid in failed):
+            # the change differs from the reviewed one and the run goes back to REVIEW
+            # (its review_reopen follows): not one of the run's 3 landing failures
+            run["review_reopened_failures"] = run.get("review_reopened_failures", 0) + 1
         elif failed & {"LG-1", "LG-4"}:
-            if number - run.get("base_moved_failures", 0) >= 3:
+            if number - run.get("base_moved_failures", 0) \
+                    - run.get("review_reopened_failures", 0) >= 3:
                 conflict = cause.get("LG-4") == "merge_conflict"
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
         return
@@ -402,19 +413,29 @@ def _complete(run: dict[str, Any], event: Mapping[str, Any]) -> None:
 
 
 def _review_reopen(run: dict[str, Any], event: Mapping[str, Any]) -> None:
-    """TEST changed the code (S6-2): back to REVIEW, which then reviews the change
-    since its last reviewed tree. Each visit gets its own stage attempts."""
-    if run["status"] != "active" or run["stage"] != "test" \
+    """TEST changed the code (S6-2), or the change at landing is not the reviewed one
+    (DELIVER, design 2026-10-31 §3 change 3): back to REVIEW, which then reviews the
+    change since its last reviewed tree. Each visit gets its own stage attempts."""
+    if run["status"] != "active" or run["stage"] not in ("test", "deliver") \
             or "review" not in PROFILE_STAGES[run["profile"]] \
-            or run.get("open_attempt") is not None:
-        raise LifecycleError("review_reopen is only for an active TEST between attempts")
-    # a doc-only reopen (the engine completes that REVIEW itself, review-closure §5.2
-    # point 1) is not one of the agent's REVIEW_REOPEN_CAP incremental reviews
-    doc_only = bool((event.get("payload") or {}).get("doc_paths"))
-    if not doc_only and run.get("review_reopens", 0) >= REVIEW_REOPEN_CAP:
-        raise LifecycleError("review_reopen cap reached")
-    if not doc_only:
-        run["review_reopens"] = run.get("review_reopens", 0) + 1
+            or run.get("open_attempt") is not None \
+            or (run["stage"] == "deliver" and run.get("pending_landing") is not None):
+        raise LifecycleError("review_reopen is only for an active TEST or a DELIVER that "
+                             "can still land, between attempts")
+    if run["stage"] == "deliver":
+        if run.get("deliver_reopens", 0) >= DELIVER_REOPEN_CAP:
+            raise LifecycleError("review_reopen cap reached for DELIVER")
+        run["deliver_reopens"] = run.get("deliver_reopens", 0) + 1
+        run["stages"]["deliver"] = "pending"
+        run["last_land_intent"], run["last_report_render"] = None, None
+    else:
+        # a doc-only reopen (the engine completes that REVIEW itself, review-closure
+        # §5.2 point 1) is not one of the agent's REVIEW_REOPEN_CAP incremental reviews
+        doc_only = bool((event.get("payload") or {}).get("doc_paths"))
+        if not doc_only and run.get("review_reopens", 0) >= REVIEW_REOPEN_CAP:
+            raise LifecycleError("review_reopen cap reached")
+        if not doc_only:
+            run["review_reopens"] = run.get("review_reopens", 0) + 1
     run["stages"]["test"] = "pending"
     run["stages"]["review"] = "open"
     run["stage"] = "review"
