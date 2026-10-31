@@ -65,11 +65,13 @@ def pause_kind(raw: Mapping[str, Any]) -> Optional[str]:
 USER_CANCEL_REASON = "cancelled_by_user"
 
 
-def needs_you(status: str, kind: Optional[str], reason: Optional[str] = None) -> bool:
+def needs_you(status: str, kind: Optional[str], reason: Optional[str] = None,
+              landed_as: Optional[Mapping[str, Any]] = None) -> bool:
     """A pause a person must act on, or a run that was abandoned without them (a run
-    the user cancelled is their own decision, R5 review)."""
+    the user cancelled is their own decision, R5 review; a run whose change is on main
+    all the same, ``landed_as``, leaves nothing to act on: design 2026-10-31 §3)."""
     if status == "abandoned":
-        return reason != USER_CANCEL_REASON
+        return reason != USER_CANCEL_REASON and not landed_as
     return kind in NEEDS_YOU_PAUSE_KINDS
 
 

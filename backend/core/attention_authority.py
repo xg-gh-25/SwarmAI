@@ -273,7 +273,8 @@ def _collect_paused_runs(pipeline_runs: Optional[list[dict]] = None) -> list[Att
             try:
                 resp = _to_response(raw)
                 reason = raw.get("reason") if isinstance(raw.get("reason"), str) else None
-                if not pm.needs_you(resp.status.value, resp.pause_kind, reason):
+                landed = raw.get("landed_as") if isinstance(raw.get("landed_as"), dict) else None
+                if not pm.needs_you(resp.status.value, resp.pause_kind, reason, landed):
                     continue
                 project = raw.get("_project", raw.get("project", "unknown"))
                 run_id = resp.id

@@ -147,6 +147,25 @@ def test_paused_run_carries_real_run_id(monkeypatch):
     assert "run_realid123" in it.dispatch["message"]
 
 
+def test_an_abandoned_run_whose_change_landed_is_not_an_attention_item(monkeypatch):
+    """Design 2026-10-31 §3 change 4: an abandoned run with ``landed_as`` (its change
+    is on main all the same) asks nothing of the person; without it, it does."""
+    from schemas.pipeline_run import PipelineRunStatus
+
+    class _Resp:
+        status = PipelineRunStatus.ABANDONED
+        pause_kind = None
+        id = "run_handlanded"
+        requirement = "landed by hand"
+
+    import routers.pipelines as pl
+    monkeypatch.setattr(pl, "_to_response", lambda raw: _Resp())
+    raw = {"_project": "SwarmAI", "id": "run_handlanded", "reason": "landed natively"}
+    assert len(aa._collect_paused_runs(pipeline_runs=[raw])) == 1
+    landed = {**raw, "landed_as": {"repo": "a" * 40}}
+    assert aa._collect_paused_runs(pipeline_runs=[landed]) == []
+
+
 def test_db_recovery_collector_surfaces_pending_marker(tmp_path, monkeypatch):
     """run_a456640f (option B): a boot-time DB-recovery marker must surface as a
     BLOCKING attention item so the recover-vs-discard decision reaches the user

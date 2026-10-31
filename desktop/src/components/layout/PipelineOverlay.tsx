@@ -364,14 +364,18 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
 }
 
 /** Status → pill {label, dot color, text color}. "Needs you" is DERIVED, not a raw
- *  status: abandoned OR a v1 pause kind → needs you; else the raw status. Kept
- *  consistent with statusDot's colors so the pill and any dot never disagree. */
-function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false): { label: string; tone: Tone } {
+ *  status: a v1 pause kind, or an abandoned run the backend says needs you (its
+ *  ``needs_you``: not a user cancel, and its change did not land elsewhere); else the
+ *  raw status. Kept consistent with statusDot's colors so the pill and any dot never
+ *  disagree. */
+function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false,
+  needsYou = true, landedAs: Record<string, string> | null = null): { label: string; tone: Tone } {
   if (pauseKind === 'decision') return { label: 'needs your decision', tone: 'error' };
   if (pauseKind === 'stopped') return { label: 'stopped', tone: 'warning' };
   if (pauseKind === 'worktree') return { label: 'worktree unavailable', tone: 'warning' };
   if (pauseKind === 'idle') return { label: 'idle', tone: 'warning' };
-  if (s === 'abandoned') return { label: 'needs you', tone: 'error' };
+  if (s === 'abandoned' && landedAs) return { label: 'landed outside the pipeline', tone: 'success' };
+  if (s === 'abandoned') return needsYou ? { label: 'needs you', tone: 'error' } : { label: 'abandoned', tone: 'neutral' };
   // completed but its change is not on main (the pipeline gives no push verdict)
   if (s === 'completed' && notLanded) return { label: 'not landed', tone: 'warning' };
   if (s === 'completed') return { label: 'completed', tone: 'success' };
@@ -386,7 +390,7 @@ function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false):
 function RunRow({ r, onOpenRun, close, showProject }: {
   r: PipelineRunSummary; onOpenRun: (id: string) => void; close: () => void; showProject?: string;
 }) {
-  const pill = statusPill(r.status, r.pauseKind, r.notLanded);
+  const pill = statusPill(r.status, r.pauseKind, r.notLanded, r.needsYou, r.landedAs);
   return (
     <div
       data-testid={`pipeline-run-${r.id}`}
@@ -520,7 +524,7 @@ function RunDetailDrawer({
           // rest (profile · cycle · finish-time) is demoted secondary meta. Timestamp is
           // FINISH (updatedAt, fallback createdAt) to match the list row for this run —
           // was createdAt/START, a list-vs-drawer inconsistency.
-          const pill = statusPill(detail.status, detail.pauseKind);
+          const pill = statusPill(detail.status, detail.pauseKind, false, detail.needsYou, detail.landedAs);
           const note = detail.pauseKind ? PAUSE_NOTE[detail.pauseKind] : undefined;
           return (
           <>

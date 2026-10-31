@@ -66,6 +66,7 @@ _TAKEOVER = frozenset({
     "stage-complete", "review-start", "land", "reflect-prepare", "gate0-start",
     "review-address", "review-proof", "resume", "restore", "abandon",
     "decision-request", "run-land", "accept-finding", "discard-snapshot", "report-tests",
+    "landed-as",
 })
 _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 # The daemon's human-only pipeline endpoint (docs/design/pipeline-v1-human-loop.md).

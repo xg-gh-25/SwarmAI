@@ -55,6 +55,19 @@ def _repos(values: list[str]) -> dict[str, str]:
     return out
 
 
+def _commit_args(values: list[str]) -> dict[str, str]:
+    """``[REPO=]COMMIT`` arguments -> {repo: commit}; a bare commit is ``{"": commit}``."""
+    out: dict[str, str] = {}
+    for value in values:
+        repo, sep, commit = value.partition("=")
+        if not sep:
+            repo, commit = "", value
+        if not commit or repo in out:
+            raise EngineError(f"landed-as: {value!r} is not [REPO=]COMMIT, once per repo")
+        out[repo] = commit
+    return out
+
+
 def _json_arg(value: str | None) -> dict[str, Any]:
     """``--artifact``: ``-`` is the request's stdin, anything else the JSON itself. A
     file name never reaches here: the CLI (agent cwd) reads the file and sends it as
@@ -162,6 +175,13 @@ def parser() -> argparse.ArgumentParser:
     abandon.add_argument("--project", required=True)
     abandon.add_argument("--run-id", required=True)
     abandon.add_argument("--reason", required=True)
+    # the change landed outside the pipeline all the same (design 2026-10-31 §3 change 4)
+    abandon.add_argument("--landed-as", action="append", default=[],
+                         metavar="[REPO=]COMMIT")
+    landed_as = sub.add_parser("landed-as")
+    landed_as.add_argument("--project", required=True)
+    landed_as.add_argument("--run-id", required=True)
+    landed_as.add_argument("commits", nargs="+", metavar="[REPO=]COMMIT")
     decision_request = sub.add_parser("decision-request")
     decision_request.add_argument("--project", required=True)
     decision_request.add_argument("--run-id", required=True)
@@ -395,7 +415,17 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
     if args.command == "restore":
         return {"ok": True, **engine.restore()}
     if args.command == "abandon":
-        return {"ok": True, **engine.abandon(reason=args.reason)}
+        out = {"ok": True, **engine.abandon(reason=args.reason)}
+        if args.landed_as:
+            try:
+                out.update(engine.landed_as(_commit_args(args.landed_as)))
+            except EngineError as exc:
+                # the run IS abandoned; only the landing record was refused
+                return {**out, "ok": False, "abandoned": True,
+                        "error": f"abandoned, but landed-as was refused: {exc}"}
+        return out
+    if args.command == "landed-as":
+        return {"ok": True, **engine.landed_as(_commit_args(args.commits))}
     if args.command == "decision-request":
         return {"ok": True, **engine.request_decision(
             _json_arg(args.artifact), document=args.document)}

@@ -115,6 +115,8 @@ export interface PipelineRunSummary {
   pauseKind: PipelinePauseKind;
   /** The user has to act on this run: the backend's one definition (routers.pipelines._needs_you). */
   needsYou: boolean;
+  /** An abandoned run whose change is on main all the same: repo -> commit. */
+  landedAs: Record<string, string> | null;
   checkpointReason: string | null;
   /** v1: the chat session that drives the run now. */
   ownerSessionId: string | null;
@@ -200,9 +202,23 @@ export interface PipelineRunDetail {
   decision: PipelineDecision | null;
   /** v1: the chat session that drives the run now. */
   ownerSessionId: string | null;
+  /** The user has to act on this run (backend core.pipeline_metrics.needs_you). */
+  needsYou: boolean;
+  /** An abandoned run whose change is on main all the same: repo -> commit. */
+  landedAs: Record<string, string> | null;
   createdAt: string;
   updatedAt: string;
   auditCard: string | null;
+}
+
+/** ``landed_as`` from the API: repo -> commit, or null. */
+export function landedAsOf(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const out: Record<string, string> = {};
+  for (const [repo, sha] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof sha === 'string') out[repo] = sha;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
@@ -218,6 +234,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     updatedAt: (r.updated_at as string) ?? '',
     pauseKind: (r.pause_kind as PipelineRunSummary['pauseKind']) ?? null,
     needsYou: r.needs_you === true,
+    landedAs: landedAsOf(r.landed_as),
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
     ownerSessionId: (r.owner_session_id as string | null) ?? null,
     notLanded: r.not_landed === true,
@@ -365,6 +382,8 @@ export const pipelinesService = {
         pauseKind: (data.pause_kind as PipelinePauseKind) ?? null,
         decision: decisionToCamel(data.decision),
         ownerSessionId: (data.owner_session_id as string | null) ?? null,
+        needsYou: data.needs_you === true,
+        landedAs: landedAsOf(data.landed_as),
         continuePrompt: (data.continue_prompt as string) ?? '',
         createdAt: (data.created_at as string) ?? '',
         updatedAt: (data.updated_at as string) ?? '',

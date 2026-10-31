@@ -16,7 +16,7 @@ import type { SwarmOutRun } from '../../services/swarmOut';
 const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   id: 'run_a', requirement: 'Fix it', status: 'completed', profile: 'bugfix', progress: '8/8',
   cycleTimeMin: 20, tokensActual: 1000, createdAt: '', updatedAt: '2026-10-20T00:00:00Z',
-  pauseKind: null, needsYou: false, checkpointReason: null, ownerSessionId: null,
+  pauseKind: null, needsYou: false, landedAs: null, checkpointReason: null, ownerSessionId: null,
   notLanded: false, reportPath: null, auditCard: null, ...o,
 });
 const analytics = (runs: PipelineRunSummary[], project = 'P'): PipelineAnalytics => ({
@@ -60,6 +60,9 @@ describe('brainMapModel', () => {
     expect(runTone(run({ status: 'running' }))).toBe('running');
     expect(runTone(run({ status: 'completed' }))).toBe('landed');
     expect(runTone(run({ status: 'completed', notLanded: true }))).toBe('failed');
+    // abandoned, but its change is on main all the same (backend landed_as)
+    expect(runTone(run({ status: 'abandoned', landedAs: { repo: 'a'.repeat(40) } }))).toBe('landed');
+    expect(runTone(run({ status: 'abandoned' }))).toBe('failed');
     expect(runTone(run({ status: 'paused' }))).toBe('stopped');
   });
 

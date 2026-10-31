@@ -405,6 +405,22 @@ describe('PipelineOverlay', () => {
     expect(row.getByText('not landed')).toBeInTheDocument();
     expect(row.queryByText('completed')).toBeNull();
   });
+
+  it('an abandoned run reads the backend\'s needs_you; one whose change landed elsewhere says so', async () => {
+    const runs = structuredClone(ANALYTICS);
+    runs.byProject[0].runs[0] = { ...runs.byProject[0].runs[0], status: 'abandoned',
+      needsYou: false, landedAs: { swarmai: 'a'.repeat(40) } } as typeof runs.byProject[0]['runs'][0];
+    runs.byProject[0].runs[1] = { ...runs.byProject[0].runs[1], status: 'abandoned',
+      pauseKind: null, needsYou: false } as typeof runs.byProject[0]['runs'][0];
+    fetchAnalytics.mockResolvedValue(runs);
+    renderAndOpen();
+    await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
+    const landed = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_done1'));
+    expect(landed.getByText('landed outside the pipeline')).toBeInTheDocument();
+    expect(landed.queryByText('needs you')).toBeNull();
+    const cancelled = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_paused1'));
+    expect(cancelled.getByText('abandoned')).toBeInTheDocument();
+  });
 });
 
 

@@ -88,6 +88,8 @@ class PipelineRunSummary(BaseModel):
     updated_at: str = ""
     pause_kind: Optional[str] = None
     needs_you: bool = Field(False, description="the user has to act on this run (core.pipeline_metrics.needs_you)")
+    landed_as: Optional[dict[str, str]] = Field(
+        None, description="an abandoned run whose change is on main all the same: repo -> commit")
     checkpoint_reason: Optional[str] = None
     owner_session_id: Optional[str] = Field(
         None, description="Pipeline v1: the chat session that drives the run now")
@@ -216,6 +218,9 @@ class PipelineRunDetail(BaseModel):
         None, description="Pipeline v1: the pending human decision, when pause_kind is 'decision'")
     owner_session_id: Optional[str] = Field(
         None, description="Pipeline v1: the chat session that drives the run now")
+    needs_you: bool = Field(False, description="the user has to act on this run (core.pipeline_metrics.needs_you)")
+    landed_as: Optional[dict[str, str]] = Field(
+        None, description="an abandoned run whose change is on main all the same: repo -> commit")
     created_at: str = ""
     updated_at: str = ""
     audit_card: Optional[str] = Field(None, description="Renderer-owned final run audit card")

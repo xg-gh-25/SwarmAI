@@ -57,6 +57,8 @@ export function runTone(r: PipelineRunSummary): RunTone {
   if (r.needsYou) return 'needs';
   if (r.status === 'running') return 'running';
   if (r.status === 'completed') return r.notLanded ? 'failed' : 'landed';
+  // an abandoned run whose change is on main all the same (backend landed_as)
+  if (r.status === 'abandoned' && r.landedAs) return 'landed';
   if (r.status === 'failed' || r.status === 'abandoned') return 'failed';
   return 'stopped';
 }

@@ -1882,6 +1882,70 @@ class RunEngine:
         return {"event": event, "retention": entries, "state": self.projection()}
 
     @_one_operation
+    def landed_as(self, commits: Mapping[str, str]) -> dict[str, Any]:
+        """Record that an abandoned run's change is on main as *commits* (repo -> rev;
+        a single-repo run may give ``{"": rev}``), so nobody is asked to act on it (design
+        2026-10-31 §3 change 4). Each commit must be in its repo's integration branch
+        and carry this run's change: it is the run's own branch tip, or its patch is the
+        one the latest REVIEW completion recorded (file by file, ``_patch_paths_changed``).
+        Anything else is refused with what differs."""
+        state = self.projection()
+        if state["status"] != "abandoned":
+            raise EngineError("landed-as is for an abandoned run")
+        if state.get("landed_as"):
+            raise EngineError(f"landed-as is already recorded: {state['landed_as']}")
+        expected = list(self.contract["expected_repos"])
+        given = dict(commits)
+        if set(given) == {""} and len(expected) == 1:
+            given = {expected[0]: given[""]}
+        if set(given) != set(expected):
+            raise EngineError(f"landed-as needs one commit per repo: {sorted(expected)}")
+        branches = self._recorded_branches()
+        run_branches = {row.get("repo_name"): row.get("branch")
+                        for row in self._read_json(self._retention_path(), {}).get(
+                            "worktrees", []) if isinstance(row, Mapping)}
+        reviewed: dict[str, Any] = {}
+        for event in self.store.read_events():
+            if event.get("kind") == "stage_complete" and event.get("stage") == "review":
+                reviewed = event.get("payload") or {}
+        reserved = f".aidlc/deliverables/{self.run_id}/"
+        resolved: dict[str, str] = {}
+        for name in expected:
+            root = self.contract["repo_roots"][name]
+            try:
+                sha = _git(root, "rev-parse", "--verify", f"{given[name]}^{{commit}}")
+            except EngineError as exc:
+                raise EngineError(f"{name}: {given[name]} is not a commit") from exc
+            branch = branches.get(name) or "HEAD"
+            probe = subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", sha,
+                                    branch], capture_output=True, text=True, timeout=60)
+            if probe.returncode != 0:
+                raise EngineError(f"{name}: {sha[:12]} is not on {branch}")
+            tip = None
+            if run_branches.get(name):
+                try:
+                    tip = _git(root, "rev-parse", "--verify", run_branches[name])
+                except EngineError:
+                    tip = None
+            if tip != sha:
+                base = (reviewed.get("bases") or {}).get(name)
+                tree = (reviewed.get("code_trees") or {}).get(name)
+                if not base or not tree:
+                    raise EngineError(f"{name}: {sha[:12]} is not the run's branch tip and "
+                                      "the run recorded no reviewed change to compare it with")
+                differ = [path for path in _patch_paths_changed(root, base, tree,
+                                                                f"{sha}^", sha)
+                          if not path.startswith(reserved)]
+                if differ:
+                    raise EngineError(f"{name}: {sha[:12]} does not carry the reviewed change; "
+                                      "it differs in " + ", ".join(differ[:20]))
+            resolved[name] = sha
+        self.store.append_new(writer=self.authority.writer("cli"), kind="landed_as",
+                              at=_now(), ordinal=NEXT, payload={"commits": resolved})
+        self._settle(); self.write_projection()
+        return {"landed_as": resolved, "state": self.projection()}
+
+    @_one_operation
     def restore(self) -> dict[str, Any]:
         state = self.projection()
         if not (state["status"] == "abandoned" or

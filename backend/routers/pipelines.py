@@ -313,6 +313,8 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
     status = pm.display_status(raw)
     kind = pm.pause_kind(raw)
     done, total = pm.progress(raw)
+    # an abandoned run whose change is on main all the same (design 2026-10-31 §3)
+    landed_as = raw.get("landed_as") if isinstance(raw.get("landed_as"), dict) else None
     report = _get_swarmws() / "Projects" / project / ".artifacts" / "runs" / raw["id"] \
         / "REPORT.md"
     return PipelineRunSummary(
@@ -326,7 +328,8 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
         pause_kind=kind,
-        needs_you=pm.needs_you(status, kind, raw.get("reason")),
+        needs_you=pm.needs_you(status, kind, raw.get("reason"), landed_as),
+        landed_as=landed_as,
         checkpoint_reason=raw.get("reason"),
         owner_session_id=raw.get("session_id"),
         not_landed=status == "completed" and raw.get("landing") == "not_landed",
@@ -483,6 +486,7 @@ async def pipeline_run_detail(run_id: str):
     if found is None:
         return missing
     raw, report_md, report_path, lessons, decision, project = found
+    landed_as = raw.get("landed_as") if isinstance(raw.get("landed_as"), dict) else None
     return PipelineRunDetail(
         id=run_id, project=project, requirement=_text(raw.get("requirement")),
         continue_prompt=continue_prompt(run_id, project),
@@ -494,5 +498,8 @@ async def pipeline_run_detail(run_id: str):
                  for c in raw.get("commits") or [] if isinstance(c, dict)],
         checkpoint_reason=raw.get("reason"), pause_kind=pm.pause_kind(raw),
         decision=decision, owner_session_id=raw.get("session_id"),
+        needs_you=pm.needs_you(pm.display_status(raw), pm.pause_kind(raw), raw.get("reason"),
+                               landed_as),
+        landed_as=landed_as,
         created_at=_text(raw.get("created_at")), updated_at=_text(raw.get("updated_at")),
         audit_card=raw.get("audit_card"))

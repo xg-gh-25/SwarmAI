@@ -769,7 +769,17 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             raise LifecycleError("cannot abandon a terminal run")
         run["reason"] = event["payload"]["reason"]
         _schedule(run, event, "abandoned")
+    elif kind == "landed_as":
+        commits = event["payload"]["commits"]
+        if run["status"] != "abandoned" or run.get("landed_as"):
+            raise LifecycleError("landed_as is recorded once, on an abandoned run")
+        if not commits or not all(_commit_sha(sha) for sha in commits.values()):
+            raise LifecycleError("landed_as requires full commit SHAs")
+        run["landed_as"] = dict(commits)
     elif kind == "restore":
+        if run.get("landed_as"):
+            raise LifecycleError("the run's change already landed (landed_as): nothing to "
+                                 "restore")
         _restore(run, event)
     elif kind == "render":
         attempt = run.get("open_attempt")
