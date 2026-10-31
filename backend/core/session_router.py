@@ -473,6 +473,37 @@ UI_STATE_NOTHING = "## Current UI State\nNothing is shown now: no open file, Can
 _RENDER = object()  # "render the UI block yourself" (callers that did not decide)
 
 
+def _prepend_block_to_query(query_content: Any, block: Optional[str]) -> Any:
+    """*query_content* with *block* in front (a leading text part for a multimodal
+    list); unchanged when there is no block. Pure."""
+    if not block:
+        return query_content
+    if isinstance(query_content, list):
+        return [{"type": "text", "text": block}, *query_content]
+    return f"{block}\n\n{query_content}"
+
+
+def _dispatch_digest(session: Optional[str]) -> Optional[str]:
+    """The block of runs this session dispatched that changed since it last saw them
+    (core/swarm_out_follow.digest), recorded as seen now; None when there are none, on
+    a Hive, or when reading them failed (a turn never waits on it). Seen is recorded as
+    the block is put on the query: a turn that then fails does not show it again, and
+    the change is still in Swarm Out and Need-You. *session* is the app session id the
+    hook context carries, the one run_owner_gate exports to the Swarm Out CLI."""
+    import os
+    if os.environ.get("SWARMAI_MODE") == "hive":
+        return None
+    try:
+        from . import swarm_out_follow
+        block, shown = swarm_out_follow.digest(session)
+        if block:
+            swarm_out_follow.mark_seen(session, shown)
+        return block
+    except Exception:  # noqa: BLE001 — a digest that fails is not shown; the turn goes on
+        logger.warning("session_router: dispatched-runs digest failed", exc_info=True)
+        return None
+
+
 def _decide_ui_block(unit: Any, editor_context: Optional[dict], warm: bool) -> Optional[str]:
     """The UI-state block to put on THIS turn's query, or None. The one writer and
     reader of ``unit._last_ui_block`` (what this subprocess last received).
@@ -5374,6 +5405,12 @@ class SessionRouter:
         # ONLY carrier on every path — hence unconditional, no double-inject. This
         # runs LAST so the terminal block is the OUTERMOST (leading) prefix; the
         # _prefix_parts capture below mirrors that order (terminal inserted first).
+        # agent-owns-its-runs §2.3: the runs this session dispatched that changed since
+        # it last saw them. Like the terminal block it has no system-prompt sink, so it
+        # rides the query on every path (no double-inject); it goes in before the
+        # terminal block, which stays outermost.
+        _dispatch_block = _dispatch_digest(session_id)
+        query_content = _prepend_block_to_query(query_content, _dispatch_block)
         query_content = _prepend_terminal_to_query(query_content, terminal_context)
 
         # TSCC/security-scan alignment (run_380413c5): capture the EXACT
@@ -5400,6 +5437,8 @@ class SessionRouter:
         _term = _build_terminal_prefix_block(terminal_context)
         if _term:
             _prefix_parts.append(_term)
+        if _dispatch_block:
+            _prefix_parts.append(_dispatch_block)
         if _will_reuse_live:
             _dyn = _build_dynamic_prefix_block(
                 editor_context, getattr(unit, "_recall_query_block", None),

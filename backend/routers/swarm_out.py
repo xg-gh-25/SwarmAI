@@ -339,6 +339,24 @@ async def run_discard(dispatch_id: str, body: DiscardBody) -> dict[str, Any]:
     return out
 
 
+class WatchBody(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=20)
+    since: Optional[str] = Field(default=None, max_length=8000)
+    session: Optional[str] = Field(default=None, max_length=80)
+    wait_s: Optional[float] = Field(default=None, ge=0)
+
+
+@router.post("/watch")
+async def watch(body: WatchBody) -> dict[str, Any]:
+    """Wait until one of the runs changes, or ``wait_s`` (at most WATCH_MAX_S) passes
+    (core/swarm_out_follow). Read only: Host fields, no text a Hive wrote."""
+    _require_desktop()
+    from core import swarm_out_follow
+    wait = min(body.wait_s if body.wait_s is not None else swarm_out_follow.WATCH_MAX_S,
+               swarm_out_follow.WATCH_MAX_S)
+    return await _call(swarm_out_follow.watch(body.ids, body.since, body.session, wait))
+
+
 @router.get("/runs")
 async def runs() -> dict[str, Any]:
     _require_desktop()

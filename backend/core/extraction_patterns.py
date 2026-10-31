@@ -103,6 +103,7 @@ _EMOJI_PREFIX = re.compile(r"^(?:\u2705|\u274c|\u26a0\ufe0f|\U0001f534|\U0001f7e
 _SOURCE_NOISE_PATTERNS = re.compile(
     r"(?:"
     r"^#*\s*Current UI State\b"                                  # injected UI-State block
+    r"|^#*\s*Your dispatched runs \(changed since your last turn\)"  # dispatch digest
     r"|what you are currently showing the user in the app"
     r"|request-time snapshot"
     r"|^\s*>\s*(?:Configure project|Task\s*:)"                    # gradle/brazil build log

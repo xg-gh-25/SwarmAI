@@ -17,6 +17,7 @@ Key public symbols:
 - ``RESUME_HEADER`` / ``RESUME_FOOTER`` — the cold-resume history wrapper.
 - ``RECALL_HEADER`` / ``RECALL_PROVENANCE`` / ``RECALL_HINT`` — the recall block.
 - ``UI_STATE_HEADERS`` — the UI-state block headers (``prompt_builder``).
+- ``DISPATCH_DIGEST_HEADER`` — the dispatched-runs digest (``core.swarm_out_follow``).
 - ``META_PREFIXES`` — every shape, as prefixes, for per-content-block readers.
 """
 
@@ -59,6 +60,9 @@ RECALL_MISS = (
 TERMINAL_HEADER = "## Attached Terminal Output"
 
 UI_STATE_HEADERS = ("## Current UI State", "## Currently Open File")
+# The runs a session dispatched that changed since its last turn (core/swarm_out_follow
+# .digest): single-\n-joined like the UI state, so the first blank line ends it.
+DISPATCH_DIGEST_HEADER = "## Your dispatched runs (changed since your last turn)"
 TASK_CONTINUATION_HEADER = "## Task Continuation"
 SYSTEM_NOTE = "SYSTEM NOTE"
 TASK_NOTIFICATION_OPEN = "<task-notification"
@@ -70,7 +74,7 @@ INJECT_DELIM = "\n\n---\n\n"
 
 # Shapes for readers that see one content block at a time.
 META_PREFIXES = (
-    *UI_STATE_HEADERS, TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER,
+    *UI_STATE_HEADERS, DISPATCH_DIGEST_HEADER, TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER,
     _RESUME_PREFIX, RECALL_HEADER,
     TERMINAL_HEADER, TASK_CONTINUATION_HEADER, "[Request interrupted",
 )
@@ -134,7 +138,7 @@ def _strip_leading(prompt: str) -> str:
             s = t[len(RECALL_MISS):]
         elif t.startswith(TERMINAL_HEADER):
             s = _cut_terminal_block(t)
-        elif t.startswith(UI_STATE_HEADERS):
+        elif t.startswith((*UI_STATE_HEADERS, DISPATCH_DIGEST_HEADER)):
             # Single-\n-joined internally; the first blank line is the seam.
             s = _cut_after(t, "\n\n")
         elif t.startswith((TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER)):

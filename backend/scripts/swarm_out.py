@@ -12,6 +12,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out spec --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits [--mode <m>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --title <t> --brief <one or two sentences> --brain <B> --task-file <f> --acceptance <a> --execution native|pipeline:<profile> --why <one sentence> --returns answer|document|commits --revision <r> [--hive <name>] [--mode <m>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [...] [--since <token>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out read <dispatch_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out manual-landed|stop|discard <dispatch_id> --why <one sentence>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
@@ -54,6 +55,8 @@ import urllib.request
 #: a whole dispatch runs within core/swarm_out.DISPATCH_DEADLINE_S, a step that does not
 #: fit failing with its reason (tests/test_swarm_out_deadline.py ties the two)
 DISPATCH_TIMEOUT_S = 540
+#: the watch route answers within 540 s (core/swarm_out_follow.WATCH_MAX_S)
+WATCH_TIMEOUT_S = 570
 
 
 def _base(api: str = "swarm-out") -> str:
@@ -169,6 +172,9 @@ def _parser() -> argparse.ArgumentParser:
     u = sub.add_parser("update-hive", help="update a Hive to a release (default: the latest published)")
     u.add_argument("--hive", required=True, help="the Hive's name")
     u.add_argument("--version", help="a release version, e.g. 2.3.0")
+    w = sub.add_parser("watch", help="wait until one of the runs changes (at most 9 minutes)")
+    w.add_argument("dispatch_ids", nargs="+")
+    w.add_argument("--since", help="the token the last watch printed")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id")
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
@@ -245,6 +251,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_command(args)
     if args.cmd == "update-hive":
         return _update_hive(args)
+    if args.cmd == "watch":
+        # the route answers within WATCH_MAX_S (540 s); this waits a little longer
+        return _call("POST", "/watch", {"ids": args.dispatch_ids, "since": args.since,
+                                        "session": _session()}, timeout=WATCH_TIMEOUT_S)
     if args.cmd == "read":
         return _call("GET", f"/runs/{args.dispatch_id}/result", framed=True)
     if args.cmd in ("spec", "dispatch"):
