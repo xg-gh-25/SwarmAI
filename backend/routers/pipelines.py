@@ -303,12 +303,10 @@ def _iso_week_start(iso_ts: str) -> Optional[str]:
 
 
 def continue_prompt(run_id: str, project: str) -> str:
-    """The prompt the dashboard puts in the owner session to continue a run: it names the
-    real status command (core.pipeline_command via worktree_write_gate.v1_command)."""
-    from core.worktree_write_gate import v1_command
-    status = v1_command(f"status --project {project} --run-id {run_id}")
-    return (f"Continue pipeline run {run_id} (project {project}): run `{status}` first, "
-            "then carry on from its current stage.")
+    """The prompt the dashboard puts in the owner session to continue a run
+    (core.pipeline_human.continue_prompt, which Swarm Out's bridge uses too)."""
+    from core.pipeline_human import continue_prompt as _continue_prompt
+    return _continue_prompt(run_id, project)
 
 
 def _summary(raw: dict, project: str) -> PipelineRunSummary:

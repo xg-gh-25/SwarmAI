@@ -10,6 +10,7 @@ Public symbols:
 - ``owner_live`` — whether a session is streaming / waiting for input right now.
 - ``record_card_answer`` — record a person's AskUserQuestion pick as ``human_answer``.
 - ``answer_from_dashboard`` — record a dashboard decision click.
+- ``continue_prompt`` — the message that hands a run back to its owner session.
 - ``on_user_stop`` / ``on_session_lost`` — pause the session's active runs.
 - ``record_owner`` — sign a takeover as an ``owner_transfer`` event.
 
@@ -157,6 +158,15 @@ def answer_from_dashboard(run_id: str, request_id: str, option_id: str,
                 request_id, run_id, option_id)
     return {"state": result["state"], "answer": result["answer"],
             "owner_session_id": engine.owner_session()}
+
+
+def continue_prompt(run_id: str, project: str) -> str:
+    """The prompt put in the owner session to continue a run: it names the real status
+    command (core.pipeline_command via worktree_write_gate.v1_command)."""
+    from core.worktree_write_gate import v1_command
+    status = v1_command(f"status --project {project} --run-id {run_id}")
+    return (f"Continue pipeline run {run_id} (project {project}): run `{status}` first, "
+            "then carry on from its current stage.")
 
 
 def _stop(session_id: str, kind: str, reason: str) -> list[str]:
