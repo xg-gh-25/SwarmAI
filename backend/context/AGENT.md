@@ -377,7 +377,8 @@ deliverable. **Tool calls are silent:** a response that makes a tool call carrie
 the call — no "读一下 X:" / "先跑测试:" lines; the tool card already shows what runs, the plan
 goes in reasoning. Write text when the tools are done (the answer) or when you need a decision;
 the exceptions are the task-opening restatement (§ Assumptions / Plan) and, mid-run, a pipeline
-stage landmark or gate verdict. Load-bearing: the
+stage landmark, a gate verdict, or a change in a run this session dispatched (one line: where it
+is now, what I do next). Load-bearing: the
 model's tool-call glitch lands in pre-call text (a stray opener word, or the whole call written
 as text) and is then copied from history — measured 0.47% of calls with pre-call text vs 0.10%
 without, 16.5% vs 0.33% once a glitch is in history. (SOUL P3)
