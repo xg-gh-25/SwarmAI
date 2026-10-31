@@ -1045,9 +1045,7 @@ def _pass(conn: sqlite3.Connection, workspace: Path, call: Call, model_id: str, 
             cl.record_marks(conn, workspace, now)
         except (OSError, sqlite3.Error):
             logger.warning("CDF health: rule marks not recorded", exc_info=True)
-        corrections, covered_from = cl._corrections(now)
-        filled = cl.backfill(conn, data, covered_from, cl.recorded_pairs(corrections, data, now), call=call,
-                             model_id=model_id, now=now, renew=renew)
+        filled = cl.judge_sessions(conn, data, call=call, model_id=model_id, now=now, renew=renew)
         since = now - WINDOWS["7d"]
         written = _written_by_dest(ing, since)
         val = value(conn, since, written, now)

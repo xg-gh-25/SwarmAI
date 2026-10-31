@@ -2055,24 +2055,16 @@
     "hint": "Is it needing you less",
     "empty": "No week has enough conversations yet.",
     "line": {
-      "none": "Not enough conversations measured yet",
-      "notComparable": "Too early for a trend: the earlier weeks were back-filled, measured another way",
-      "better": "Getting better: you have to correct it less often",
-      "worse": "Getting worse: you have to correct it more often",
-      "flat": "About the same as before"
-    },
-    "notCorrected": "of conversations you did not have to correct",
-    "basis": "week of {{week}} · {{n}} conversations",
-    "source": {
-      "backfilled": "back-filled from your own words",
-      "mixed": "partly back-filled",
-      "none": ""
+      "tooFew": "Too early for a trend: it needs {{n}} weeks of conversations",
+      "better": "Getting better: {{now}} of the last 4 weeks' conversations needed no correction, against {{before}} the 4 weeks before",
+      "worse": "Getting worse: {{now}} of the last 4 weeks' conversations needed no correction, against {{before}} the 4 weeks before",
+      "flat": "About the same: {{now}} over the last 4 weeks, {{before}} the 4 weeks before"
     },
     "repeats": "of this week's corrections repeat one you made before",
     "legend": {
-      "notCorrected": "conversations you did not have to correct",
+      "trend": "4-week share not corrected",
+      "week": "one week",
       "repeats": "corrections that repeat an earlier one",
-      "backfilled": "back-filled (a judge read your own words)",
       "marks": "a change to the rules it reads"
     },
     "mark": {
@@ -2110,7 +2102,14 @@
     },
     "used": "{{pct}} of written knowledge was used within {{days}} days",
     "usedNone": "Whether written knowledge gets used within {{days}} days: no entry is old enough yet",
-    "openHealth": "Is CDF itself working → Health"
+    "openHealth": "Is CDF itself working → Health",
+    "notCorrected": "of the last 4 weeks' conversations you did not have to correct",
+    "thisWeek": "this week {{rate}} · {{n}} conversations",
+    "thisWeekNone": "this week: too few conversations yet",
+    "how": "Every week is judged the same way: a judge reads only your own messages and decides whether you corrected it.",
+    "agreeCorrected": "Checked against the review's record: of {{n}} conversations it recorded a correction in, the judge found {{a}}.",
+    "agreeClean": "Of {{n}} it read through with none, the judge agreed on {{a}}.",
+    "agreeNone": "The review's record has nothing to check the judge against yet."
   },
   "cogHealth": {
     "loadFailed": "Could not load the health view.",

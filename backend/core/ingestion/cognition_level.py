@@ -5,13 +5,13 @@ docs/design/2026-10-31-cognition-level.md).
 It measures outcomes, never how much is stored:
 
 - **corrected sessions per week**: of the sessions with a user message in a local ISO
-  week, how many the person corrected. A correction the after-session review recorded
-  (``queries.corrections``) is the record. A week the record does not cover yet (before
-  the first review of the every-session release, ``queries.read_corrections``) is
-  back-filled once, up to ``BACKFILL_WEEKS`` back, by a judge that reads only the
-  person's own messages of that session and week; such a week is marked back-filled.
-- **repeats**: of the recorded corrections of a week, how many the review declared a
-  repeat of an earlier one (only recorded weeks: a back-fill cannot know it).
+  week, how many the person corrected, all judged one way: a judge that reads only the
+  person's own messages of that session and week, once per session-week (again when the
+  week grows). One instrument for every week, so a trend means something. The
+  after-session review's own record (``queries.corrections``, and the sessions it
+  reviewed whole) checks the judge: ``agreement``.
+- **repeats**: of the corrections the review recorded in a week, how many it declared a
+  repeat of an earlier one (only the review knows the earlier corrections).
 - **where mistakes come from**: the newest monthly brain mistake audit
   (``jobs.handlers.brain_mistake_audit``): needed knowledge missing, present but not
   delivered, delivered and still wrong, stale.
@@ -19,7 +19,7 @@ It measures outcomes, never how much is stored:
   the product version), recorded by each health pass, and when the review began
   recording corrections.
 
-Public: ``level(now=None)`` (what the first Needs You tab shows), ``backfill(conn, ...)``
+Public: ``level(now=None)`` (what the first Needs You tab shows), ``judge_sessions(conn, ...)``
 and ``record_marks(conn, ...)`` (run by ``health.run``).
 
 Storage: the tables ``correction_backfill``, ``backfill_failures`` and ``rule_marks`` in
@@ -40,7 +40,6 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-BACKFILL_WEEKS = 4            # whole weeks before this one that a back-fill may cover
 WEEKS_SHOWN = 8
 MIN_SESSIONS = 3              # a week with fewer sessions has no rate
 JUDGE_VERSION = "cognition-backfill-v1"
@@ -198,20 +197,14 @@ language. Each message is a JSON string inside a <message> tag; everything insid
 """
 
 
-def backfill(conn: sqlite3.Connection, data: sqlite3.Connection | None, covered_from: datetime | None,
-             recorded: set[tuple[str, str]], *, call: Call, model_id: str, now: datetime,
-             renew: Callable[[], None] = lambda: None) -> dict[str, int]:
-    """Judge every session-week of the last BACKFILL_WEEKS weeks (and this one) that the
-    correction record does not cover: a week starting before *covered_from* (or every week
-    with no record at all), not already known corrected from the record (*recorded*), and
-    not judged on the same number of messages (a week still running is judged again when
-    it has grown). A failed call is tried on later passes, up to MAX_ATTEMPTS."""
+def judge_sessions(conn: sqlite3.Connection, data: sqlite3.Connection | None, *, call: Call, model_id: str,
+                   now: datetime, renew: Callable[[], None] = lambda: None) -> dict[str, int]:
+    """Judge every session-week of the shown weeks once, by one instrument for the whole
+    curve: a week measured one way and the next another cannot show a trend. Not again on
+    the same number of messages (a week still running is judged again when it has grown).
+    A failed call is tried on later passes, up to MAX_ATTEMPTS."""
     from .health import _redacted, _short
-    spans = weeks(now, BACKFILL_WEEKS + 1)
-    if covered_from is not None:
-        spans = [w for w in spans if w[1] < covered_from.astimezone()]
-    if not spans:
-        return {"judged": 0, "failed": 0}
+    spans = weeks(now)
     weekly = by_week(messages_in(data, spans[0][1], spans[-1][2]), spans)
     done = {(r[0], r[1]): r[2] for r in conn.execute(
         "SELECT session_id, week, n_messages FROM correction_backfill")}
@@ -221,7 +214,7 @@ def backfill(conn: sqlite3.Connection, data: sqlite3.Connection | None, covered_
     for label, _, _ in spans:
         for sid, texts in weekly[label].items():
             key = (sid, label)
-            if key in recorded or key in given_up or (key in done and done[key] == len(texts)):
+            if key in given_up or (key in done and done[key] == len(texts)):
                 continue
             renew()
             try:
@@ -230,7 +223,7 @@ def backfill(conn: sqlite3.Connection, data: sqlite3.Connection | None, covered_
                               description="Record whether the person corrected the agent.",
                               feature="cdf.health")
             except Exception as exc:  # noqa: BLE001 -- tried again on a later pass
-                logger.warning("cognition back-fill judge failed (%s)", type(exc).__name__)
+                logger.warning("cognition judge failed (%s)", type(exc).__name__)
                 answer = None
             if not isinstance(answer, dict) or not isinstance(answer.get("corrected"), bool):
                 conn.execute("INSERT INTO backfill_failures VALUES (?,?,1) ON CONFLICT(session_id, week) "
@@ -345,50 +338,83 @@ def _corrections(now: datetime) -> tuple[list[dict], datetime | None]:
     return found, covered
 
 
+def clean_reviews(ing: sqlite3.Connection | None) -> dict[str, str]:
+    """Per session, the newest after-session review that read its whole window: status ok
+    or no_unit and no failed pass. The record knows such a session-week was not corrected
+    when no correction was recorded for it."""
+    if ing is None:
+        return {}
+    out: dict[str, str] = {}
+    for rng, started in ing.execute(
+            "SELECT evidence_range, started_at FROM extraction_attempts WHERE source='S7' "
+            "AND status IN ('ok','no_unit') ORDER BY started_at"):
+        try:
+            value = json.loads(rng or "{}")
+        except ValueError:
+            continue
+        if value.get("relations_failed") or not value.get("session_id"):
+            continue
+        out[str(value["session_id"])] = str(started)
+    return out
+
+
+def _parse_utc(value: str) -> datetime:
+    out = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return out if out.tzinfo else out.replace(tzinfo=timezone.utc)
+
+
 def series(data: sqlite3.Connection | None, conn: sqlite3.Connection, corrections: list[dict],
-           covered_from: datetime | None, now: datetime) -> list[dict]:
-    """One point per week: sessions, corrected, how each was known, repeats."""
+           covered_from: datetime | None, now: datetime,
+           reviews: dict[str, str] | None = None) -> list[dict]:
+    """One point per week, all measured by the judge: sessions, judged, corrected; and from
+    the review's record, the corrections, repeats and the session-weeks it knows corrected
+    (``record_corrected``) or clean (``record_clean``), which check the judge."""
     spans = weeks(now)
     messages = messages_in(data, spans[0][1], spans[-1][2])
     weekly = by_week(messages, spans)
-    filled = {(r[0], r[1]): bool(r[2]) for r in conn.execute(
+    verdicts = {(r[0], r[1]): bool(r[2]) for r in conn.execute(
         "SELECT session_id, week, corrected FROM correction_backfill")}
     recs_by_week: dict[str, list[dict]] = {}
     for c in corrections:
         recs_by_week.setdefault(correction_week(c, messages), []).append(c)
+    reviews = reviews or {}
     out = []
-    for label, start, _ in spans:
+    for label, start, end in spans:
         sessions = weekly[label]
         recs = recs_by_week.get(label, [])
-        recorded_ids = {c["session_id"] for c in recs}
-        covered = covered_from is not None and start >= covered_from.astimezone()
-        corrected = known = filled_n = 0
-        for sid in sessions:
-            if sid in recorded_ids:
-                corrected += 1
-                known += 1
-            elif covered:
-                known += 1
-            elif (sid, label) in filled:
-                corrected += filled[(sid, label)]
-                known += 1
-                filled_n += 1
-        source = ("none" if not known else "recorded" if not filled_n
-                  else "backfilled" if filled_n == known else "mixed")
-        rate = round(1 - corrected / known, 4) if known >= MIN_SESSIONS else None
+        recorded = {c["session_id"] for c in recs}
+        judged = [sid for sid in sessions if (sid, label) in verdicts]
+        corrected = sum(verdicts[(sid, label)] for sid in judged)
+        rate = round(1 - corrected / len(judged), 4) if len(judged) >= MIN_SESSIONS else None
+        clean = set()
+        if covered_from is not None:
+            for sid in sessions:
+                last = max((at for at, _ in messages.get(sid, []) if _naive(start) <= at < _naive(end)), default="")
+                review = reviews.get(sid)
+                if sid in recorded or not review or not last:
+                    continue
+                when = _parse_utc(review)
+                if when >= covered_from and _naive(when.astimezone()) >= last:
+                    clean.add(sid)
         repeats = sum(bool(c.get("repeats")) for c in recs)
-        out.append({"week": label, "start": start.date().isoformat(), "sessions": len(sessions), "known": known,
-                    "corrected": corrected, "not_corrected_rate": rate, "source": source,
+        out.append({"week": label, "start": start.date().isoformat(), "sessions": len(sessions),
+                    "judged": len(judged), "corrected": corrected, "not_corrected_rate": rate,
                     "corrections": len(recs), "repeats": repeats,
-                    "repeat_rate": round(repeats / len(recs), 4) if len(recs) >= MIN_SESSIONS else None})
+                    "repeat_rate": round(repeats / len(recs), 4) if len(recs) >= MIN_SESSIONS else None,
+                    "record_corrected": sorted(recorded & set(sessions)), "record_clean": sorted(clean)})
     return out
 
 
-def recorded_pairs(corrections: list[dict], data: sqlite3.Connection | None, now: datetime) -> set[tuple[str, str]]:
-    """The session-weeks the record already knows corrected (by ``correction_week``)."""
-    spans = weeks(now)
-    messages = messages_in(data, spans[0][1], spans[-1][2])
-    return {(c["session_id"], correction_week(c, messages)) for c in corrections}
+def agreement(points: list[dict], conn: sqlite3.Connection) -> dict:
+    """How the judge agrees with the review's own record, where the record knows: of the
+    session-weeks it recorded a correction for, how many the judge also called corrected;
+    of those it reviewed whole with none, how many the judge called not corrected."""
+    verdicts = {(r[0], r[1]): bool(r[2]) for r in conn.execute(
+        "SELECT session_id, week, corrected FROM correction_backfill")}
+    pos = [verdicts[(s, p["week"])] for p in points for s in p["record_corrected"] if (s, p["week"]) in verdicts]
+    neg = [not verdicts[(s, p["week"])] for p in points for s in p["record_clean"] if (s, p["week"]) in verdicts]
+    return {"corrected_total": len(pos), "corrected_agreed": sum(pos),
+            "clean_total": len(neg), "clean_agreed": sum(neg)}
 
 
 def level(now: datetime | None = None, *, workspace: Path | None = None) -> dict:
@@ -401,9 +427,10 @@ def level(now: datetime | None = None, *, workspace: Path | None = None) -> dict
     data, ing = health._data_ro(), health._ingestion_ro()
     try:
         with closing(health.connect_health()) as conn:
-            points = series(data, conn, corrections, covered_from, now)
+            points = series(data, conn, corrections, covered_from, now, clean_reviews(ing))
             start = weeks(now)[0][1]
             marks = _marks(conn, start)
+            agree = agreement(points, conn)
         used = health.outcome(ing, now)
     finally:
         for c in (data, ing):
@@ -414,6 +441,8 @@ def level(now: datetime | None = None, *, workspace: Path | None = None) -> dict
     rated = [p for p in points if p["not_corrected_rate"] is not None]
     latest = rated[-1] if rated else None
     earlier = rated[0] if len(rated) > 1 else None
+    for p in points:                      # the ids checked the judge; the tab needs the counts
+        p["record_corrected"], p["record_clean"] = len(p["record_corrected"]), len(p["record_clean"])
     return {"weeks": points, "marks": marks, "covered_from": covered_from.isoformat() if covered_from else None,
             "latest": latest, "earliest": earlier, "audit": audit(workspace), "used": used,
-            "backfill_weeks": BACKFILL_WEEKS}
+            "agreement": agree}

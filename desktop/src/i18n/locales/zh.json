@@ -2055,24 +2055,16 @@
     "hint": "它有没有越来越少让你操心",
     "empty": "还没有哪一周的对话够多，算不出来。",
     "line": {
-      "none": "量过的对话还不够",
-      "notComparable": "还看不出趋势：前几周是回补的，量法不一样",
-      "better": "在变好：需要你纠正的越来越少",
-      "worse": "在变差：需要你纠正的变多了",
-      "flat": "和之前差不多"
-    },
-    "notCorrected": "的对话不用你纠正",
-    "basis": "{{week}} 这周 · {{n}} 个对话",
-    "source": {
-      "backfilled": "回补：判官读你的原话判断",
-      "mixed": "部分回补",
-      "none": ""
+      "tooFew": "还看不出趋势：要满 {{n}} 周的对话",
+      "better": "在变好：近 4 周 {{now}} 的对话不用你纠正，前 4 周是 {{before}}",
+      "worse": "在变差：近 4 周 {{now}} 的对话不用你纠正，前 4 周是 {{before}}",
+      "flat": "和之前差不多：近 4 周 {{now}}，前 4 周 {{before}}"
     },
     "repeats": "本周你纠正的错里，是以前纠正过的",
     "legend": {
-      "notCorrected": "不用你纠正的对话",
+      "trend": "4 周合计：不用你纠正",
+      "week": "单周",
       "repeats": "纠正里是旧错重犯的",
-      "backfilled": "回补（判官从你的原话判断）",
       "marks": "认知规则的改动"
     },
     "mark": {
@@ -2110,7 +2102,14 @@
     },
     "used": "写进去的知识 {{days}} 天内被用到 {{pct}}",
     "usedNone": "写进去的知识 {{days}} 天内有没有被用到：还没有满 {{days}} 天的条目",
-    "openHealth": "CDF 自己转得对不对 → 健康度"
+    "openHealth": "CDF 自己转得对不对 → 健康度",
+    "notCorrected": "近 4 周的对话不用你纠正",
+    "thisWeek": "本周 {{rate}} · {{n}} 个对话",
+    "thisWeekNone": "本周对话还太少",
+    "how": "每周都用同一种量法：判官只读你说的话，判断你有没有纠正我。",
+    "agreeCorrected": "用复盘的记录核对：复盘记下有纠正的 {{n}} 个对话里，判官判出了 {{a}} 个。",
+    "agreeClean": "复盘读完、没发现纠正的 {{n}} 个里，判官同意 {{a}} 个。",
+    "agreeNone": "复盘记录里还没有能用来核对判官的对话。"
   },
   "cogHealth": {
     "loadFailed": "健康度加载失败。",

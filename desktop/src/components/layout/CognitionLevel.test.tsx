@@ -34,20 +34,24 @@ vi.mock('../../services/attention', async (orig) => ({
 }));
 
 import { NeedYouContent } from './NeedYouOverlay';
-import { levelLine } from './CognitionLevel';
+import { levelLine, rolling } from './cognitionLevelText';
 
-const W = (week: string, rate: number | null, source: LevelWeek['source'], extra: Partial<LevelWeek> = {}): LevelWeek => ({
-  week, start: `2026-10-${week.slice(-2)}`, sessions: 10, known: 10, corrected: 0, notCorrectedRate: rate, source,
-  corrections: 0, repeats: 0, repeatRate: null, ...extra,
+const W = (week: string, rate: number | null, judged = 10, extra: Partial<LevelWeek> = {}): LevelWeek => ({
+  week, start: `2026-10-${week.slice(-2)}`, sessions: judged, judged,
+  corrected: rate == null ? 0 : Math.round(judged * (1 - rate)), notCorrectedRate: rate,
+  corrections: 0, repeats: 0, repeatRate: null, recordCorrected: 0, recordClean: 0, ...extra,
 });
+const eight = (first: number, last: number) => [
+  ...[1, 2, 3, 4].map((i) => W(`W1${i}`, first)), ...[5, 6, 7, 8].map((i) => W(`W1${i}`, last))];
 
 const DATA: CognitionLevelData = {
-  weeks: [W('W40', null, 'none', { known: 0 }), W('W41', 0.4, 'backfilled'), W('W42', 0.5, 'backfilled'),
-    W('W44', 0.6, 'recorded', { corrections: 12, repeats: 2, repeatRate: 0.17 })],
-  marks: [], coveredFrom: null, latest: W('W44', 0.6, 'recorded'), earliest: null,
+  weeks: [W('W40', null, 0), ...eight(0.4, 0.6).slice(0, 7),
+    W('W18', 0.6, 10, { corrections: 12, repeats: 2, repeatRate: 0.17 })],
+  marks: [], coveredFrom: null, latest: null, earliest: null,
   audit: { month: '2026-10', baseline: false, total: 10,
     outcomes: { 事先没有: 6, 有但没送到: 3, 送到仍犯: 1, 'DDD 内容过时': 0 }, previous: null },
-  used: { usedRate: null, matureWritten: 0, matureUsed: 0, windowDays: 14 }, backfillWeeks: 4,
+  used: { usedRate: null, matureWritten: 0, matureUsed: 0, windowDays: 14 },
+  agreement: { correctedTotal: 14, correctedAgreed: 13, cleanTotal: 0, cleanAgreed: 0 },
 };
 
 function wrap({ children }: { children: ReactNode }) {
@@ -57,12 +61,15 @@ function wrap({ children }: { children: ReactNode }) {
 describe('cognition level', () => {
   beforeEach(() => cognitionLevel.mockReset().mockResolvedValue(DATA));
 
-  it('a trend only between weeks measured the same way', () => {
-    expect(levelLine(t, DATA.weeks)).toBe(en.cogLevel.line.notComparable);
-    expect(levelLine(t, [W('a', 0.4, 'backfilled'), W('b', 0.5, 'backfilled')])).toBe(en.cogLevel.line.better);
-    expect(levelLine(t, [W('a', 0.5, 'recorded'), W('b', 0.4, 'mixed')])).toBe(en.cogLevel.line.notComparable);
-    expect(levelLine(t, [W('a', 0.5, 'recorded'), W('b', 0.4, 'recorded')])).toBe(en.cogLevel.line.worse);
-    expect(levelLine(t, [W('a', 0.5, 'recorded'), W('b', 0.52, 'recorded')])).toBe(en.cogLevel.line.flat);
+  it('the trend pools four weeks against the four before', () => {
+    expect(levelLine(t, eight(0.4, 0.6).slice(0, 7))).toBe(t('cogLevel.line.tooFew', { n: 8 }));
+    expect(levelLine(t, eight(0.4, 0.6))).toBe(t('cogLevel.line.better', { now: '60%', before: '40%' }));
+    expect(levelLine(t, eight(0.6, 0.4))).toBe(t('cogLevel.line.worse', { now: '40%', before: '60%' }));
+    expect(levelLine(t, eight(0.5, 0.5))).toBe(t('cogLevel.line.flat', { now: '50%', before: '50%' }));
+    // weighted by conversations: a 2-conversation week cannot swing the share
+    const r = rolling([W('a', 0.5, 20), W('b', 0.5, 20), W('c', 0.5, 20), W('d', 0, 2)]);
+    expect(r[3]).toBeCloseTo(1 - (30 + 2) / 62, 5);
+    expect(r[2]).toBeNull();
   });
 
   it('sits under the queue in the first tab, with this week and the chain', async () => {
@@ -72,6 +79,7 @@ describe('cognition level', () => {
       & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(section).toHaveTextContent('60%');
     expect(section).toHaveTextContent('2 / 12');
+    expect(screen.getByTestId('level-agreement')).toHaveTextContent('of 14 conversations it recorded a correction in, the judge found 13');
     const missing = within(screen.getByTestId('level-chain')).getByTestId('level-stage-missing');
     expect(missing).toHaveTextContent('6');
     expect(missing).toHaveTextContent('60%');

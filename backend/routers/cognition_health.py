@@ -161,13 +161,21 @@ class LevelWeek(Strict):
     week: str
     start: str
     sessions: int
-    known: int
+    judged: int
     corrected: int
     not_corrected_rate: float | None
-    source: Literal["recorded", "backfilled", "mixed", "none"]
     corrections: int
     repeats: int
     repeat_rate: float | None
+    record_corrected: int
+    record_clean: int
+
+
+class LevelAgreement(Strict):
+    corrected_total: int
+    corrected_agreed: int
+    clean_total: int
+    clean_agreed: int
 
 
 class LevelMark(Strict):
@@ -195,7 +203,7 @@ class CognitionLevel(Strict):
     earliest: LevelWeek | None
     audit: Audit | None
     used: Used
-    backfill_weeks: int
+    agreement: LevelAgreement
 
 
 class RecheckResponse(Strict):

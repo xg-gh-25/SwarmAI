@@ -228,9 +228,9 @@ export interface CognitionHealth {
 
 /** GET /ingestion/cognition-level — Swarm's cognition level (backend core/ingestion/cognition_level.py). */
 export interface LevelWeek {
-  week: string; start: string; sessions: number; known: number; corrected: number;
-  notCorrectedRate: number | null; source: 'recorded' | 'backfilled' | 'mixed' | 'none';
-  corrections: number; repeats: number; repeatRate: number | null;
+  week: string; start: string; sessions: number; judged: number; corrected: number;
+  notCorrectedRate: number | null; corrections: number; repeats: number; repeatRate: number | null;
+  recordCorrected: number; recordClean: number;
 }
 export interface CognitionLevelData {
   weeks: LevelWeek[];
@@ -241,7 +241,7 @@ export interface CognitionLevelData {
   audit: { month: string; baseline: boolean; outcomes: Record<string, number>; total: number;
     previous: { month: string; outcomes: Record<string, number>; total: number } | null } | null;
   used: { usedRate: number | null; matureWritten: number; matureUsed: number; windowDays: number };
-  backfillWeeks: number;
+  agreement: { correctedTotal: number; correctedAgreed: number; cleanTotal: number; cleanAgreed: number };
 }
 
 function camelKey(key: string): string {

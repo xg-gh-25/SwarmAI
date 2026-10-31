@@ -3,13 +3,21 @@ title: "Swarm's cognition level: is it needing the person less"
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: implemented (r1 + correctness review fixes)
+status: implemented (r2: one instrument for every week)
 ---
 
 # Swarm's cognition level
 
 Mockup: `Knowledge/Mockups/2026-10-31-needs-you-cognition.html` (approved by XG 2026-10-31,
 "按这版做，回补 4 周"). Companion of `2026-10-31-cdf-health.md`.
+
+r2 (XG: "先不考虑cost 我们先保证这个东西有用"): r1 measured back-filled weeks with a judge
+and recorded weeks with the review's record. The two instruments differ (the review records
+every small correction), so the curve could not show a trend: this week read 28% against
+33-61% before, an artifact of the switch. Now every shown week is judged the same way, the
+review's record checks the judge (of 14 conversations it recorded a correction in, the judge
+found 13), and the curve's line and the headline pool four weeks (single weeks swing by
+20-40 points), weighted by conversations.
 
 ## 1. What it answers
 
