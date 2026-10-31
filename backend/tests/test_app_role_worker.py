@@ -214,7 +214,7 @@ def test_the_worker_startup_replay_skips_sessions_with_a_job(as_role, tmp_path, 
         count_by_session=lambda sid: _async(5))))
     monkeypatch.setattr("core.session_inputs.session_input_ids", lambda sid: [])
     fired: list[str] = []
-    mgr = SimpleNamespace(_hook_executor=object(), STARTUP_BACKLOG_CAP=5,
+    mgr = SimpleNamespace(_hook_executor=object(),
                           enqueue_hooks=lambda ctx: fired.append(ctx.session_id))
     as_role("hive", None)
     asyncio.run(lm.LifecycleManager._scan_unprocessed_sessions(mgr))
@@ -359,3 +359,26 @@ def test_the_set_aside_helper_moves_a_workers_memory(as_role, tmp_path, monkeypa
     as_role("hive", None)
     asyncio.run(main._set_aside_inherited_cognition())
     assert not (ws / ".context" / "MEMORY.md").exists() and (ws / worker_reset.MARKER).exists()
+
+
+def test_the_startup_replay_queues_every_session_that_missed_its_hooks(as_role, tmp_path, monkeypatch):
+    """A cap of 5 left the rest of a backlog unsummarized for good (a session past the
+    24-hour window is never scanned again)."""
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
+    from core import lifecycle_manager as lm
+    now = datetime.now().isoformat()
+    sessions = [SimpleNamespace(id=f"sess_{i:02d}_backlog", created_at=now, title="t", agent_id="default")
+                for i in range(12)]
+    import core.session_manager as sm
+    import core.initialization_manager as im
+    import database
+    monkeypatch.setattr(sm.session_manager, "list_sessions", lambda limit=50: _async(sessions))
+    monkeypatch.setattr(im.initialization_manager, "get_cached_workspace_path", lambda: str(tmp_path))
+    monkeypatch.setattr(database, "db", SimpleNamespace(messages=SimpleNamespace(
+        count_by_session=lambda sid: _async(5))))
+    monkeypatch.setattr("core.session_inputs.session_input_ids", lambda sid: [])
+    fired: list[str] = []
+    mgr = SimpleNamespace(_hook_executor=object(), enqueue_hooks=lambda ctx: fired.append(ctx.session_id))
+    as_role(None, None)
+    asyncio.run(lm.LifecycleManager._scan_unprocessed_sessions(mgr))
+    assert len(fired) == 12

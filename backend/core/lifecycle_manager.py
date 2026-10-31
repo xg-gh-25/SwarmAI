@@ -82,7 +82,6 @@ class LifecycleManager:
     # ::TestWaitingInputTimeoutVsAskTimeout. (Was 120 min — too short, killed the
     # session before the answer-wait could even fire.)
     WAITING_INPUT_TIMEOUT_SECONDS: float = 14700.0  # 4h05m — see note above
-    STARTUP_BACKLOG_CAP: int = 5  # Max sessions to process on startup scan
     # R6 (§9.9): an IDLE chat session that is owned by NO live window — not in
     # open_tabs.json — and has sat unowned longer than this is an orphan
     # (closed-window / crashed-frontend / SSE-drop). Reaped so it can't squat a
@@ -1757,13 +1756,11 @@ class LifecycleManager:
                 logger.debug("DailyActivity read failed: %s", exc)
 
             fired = 0
-            # Cap startup backlog to prevent flooding the hook queue.
-            # 19+ unprocessed sessions × 7 hooks each = 133 items serial.
-            # Process only the most recent — older sessions are less
-            # valuable and the next startup will catch them.
+            # Every session of the window that missed its hooks is queued: a cap of 5
+            # (3 of 34 startups reached it) left the rest unsummarized for good, since a
+            # session past the 24-hour window is never scanned again. The queue holds one
+            # item per session and the worker runs them in the background, one by one.
             for session in sessions:
-                if fired >= self.STARTUP_BACKLOG_CAP:
-                    break
                 created = getattr(session, "created_at", "") or ""
                 if created < cutoff:
                     continue  # Too old
