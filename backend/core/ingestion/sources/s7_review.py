@@ -382,10 +382,16 @@ def apply_relations(units: list[Any], answer: dict[str, Any] | None) -> list[Any
     return out
 
 
-def _record(session_id: str, window: list[dict[str, Any]], user_events: dict[str, list[str]]) -> str:
-    """The window as the review reads it: each item with the anchors it may be cited by."""
+def _record(session_id: str, window: list[dict[str, Any]], user_events: dict[str, list[str]],
+            citable: tuple[str, ...]) -> str:
+    """The window as the review reads it: each item with the anchors it may be cited by,
+    which are only those in the evidence index (*citable*). The agent's own words and
+    tool output are read, never cited: offering their anchors made the review cite them
+    and lose the unit to the evidence check."""
     own = s2_session.window_roots(session_id, window)
     shown, _ = s2_session._with_anchors(window, own, user_events)
+    allowed = set(citable)
+    shown = [{**item, "anchors": [a for a in item["anchors"] if a in allowed]} for item in shown]
     return "\n".join(json.dumps(item, ensure_ascii=False, default=str) for item in shown)
 
 
@@ -697,7 +703,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     for number, window in enumerate(chunks, 1):
         window_rows = [r for r in window if "part_of" not in r] or window
         index, anchors, read = evidence(session_id, window_rows, input_rows)
-        record = _record(session_id, window, user_events)
+        record = _record(session_id, window, user_events, anchors)
         prompt = build_prompt(ALLOWED_KINDS, sig, index, record, (number, len(chunks)), projects, general)
         attempt = api_v2.ExtractionAttempt(
             source="S7", attempt_id=f"attempt:{uuid.uuid4().hex}", extractor_version=REVIEW_VERSION,

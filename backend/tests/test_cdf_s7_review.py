@@ -122,6 +122,13 @@ def test_review_session_two_turns(cdf_env, tmp_path, monkeypatch, model) -> None
                    f'event:{users[1]} (user message): "不对，以后都要先出 mockup 再写代码"'):
         assert needle in index, needle               # the index quotes each message in full
     assert "好的。" in record and f"event:{users[1]}" in record      # the record, with its anchors
+    # only what may be cited carries an anchor: the agent's own words and tool output
+    # are read, never cited (the check below refuses them, so offering them loses units)
+    shown = [json.loads(line) for line in record.split("</session-record>")[0].strip().splitlines()]
+    citable = {line.split()[1] for line in index.splitlines() if line.startswith("- event:")}
+    assert any(item["anchors"] for item in shown)
+    assert all(set(item["anchors"]) <= citable for item in shown), shown
+    assert [item["anchors"] for item in shown if item.get("role") == "assistant"] == [[]]
     assert (second["resume"], second["fork"], second["schema"]) == ("fork-1", False, s7_review.RELATION_SCHEMA)
     assert entry.shown() in second["prompt"] and "Unit 1:" in second["prompt"]
     assert dropped == [("fork-1", sdk)]
