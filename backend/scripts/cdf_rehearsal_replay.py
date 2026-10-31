@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CDF rehearsal replay: run the real session-review/S4/S6 sources over a COPY of a workspace.
+"""CDF rehearsal replay: run the real session-review and S4 sources over a COPY of a workspace.
 
 Design 2026-10-26 §14 stage B, step 2 of the full rehearsal. It points the backend at
 a data dir and workspace given on the command line (a copy, never the live
@@ -11,7 +11,6 @@ the worker and writer, and prints one JSON report.
 - S4: ``ddd_refresh._recent_commits`` + ``s4_code.extract_commits`` per governed repo.
 - Governance proposals are not a source: the GC table is read directly by the people
   who decide them (governance_miner, the C&M dashboard and Needs You).
-- S6: ``signal_ddd_bridge.bridge_signals_to_ddd`` on the copy's current digest.
 - Between sources the worker drains under the real owner lock; Bedrock usage is read
   from ``core.ingestion.llm_usage.totals`` (the ingestion_llm_usage record) and the run
   stops at ``--max-usd``.
@@ -33,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 BACKEND = Path(__file__).resolve().parents[1]
-SOURCES = ("s2", "s4", "s6")
+SOURCES = ("s2", "s4")
 
 
 def guard_paths(data_dir: Path, workspace: Path) -> None:
@@ -148,9 +147,6 @@ def _items(source: str, data_dir: Path, workspace: Path, since: datetime,
                 if rows:
                     out.append((project_dir.name, repo, rows))
         return out
-    if source == "s6":
-        digest = workspace / "Services" / "signals" / "signal_digest.json"
-        return [digest] if digest.is_file() else []
     raise ValueError(source)
 
 
@@ -168,9 +164,6 @@ def _enqueue(source: str, item: Any, workspace: Path, llm: Any | None) -> int:
         return len(extract_commits(rows, workspace=workspace, project_hint=project,
                                    project_snapshot={"project": project, "repo": str(repo)},
                                    llm=llm))
-    if source == "s6":
-        from hooks.signal_ddd_bridge import bridge_signals_to_ddd
-        return bridge_signals_to_ddd(str(workspace), llm=llm)
     raise ValueError(source)
 
 

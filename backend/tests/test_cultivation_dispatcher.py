@@ -295,9 +295,8 @@ class TestOrchestratorSubscriptions:
         tasks = orch.get_tasks_for_event(
             EventType.SIGNAL_DIGEST, root=Path("/tmp"), ws_path="/tmp"
         )
-        # Only signal_ddd_bridge should respond to SIGNAL_DIGEST
-        assert len(tasks) == 1
-        assert tasks[0].name == "signal_ddd_bridge"
+        # nothing subscribes to SIGNAL_DIGEST since the signal bridge was removed
+        assert tasks == []
 
 
 # ── Singleton + Convenience API ────────────────────────────────────────────

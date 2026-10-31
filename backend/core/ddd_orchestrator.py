@@ -11,7 +11,6 @@ Channels (see self.channels in __init__ for the live set):
     - DDD→KNOWLEDGE injection
     - Knowledge staleness detection
     - Entity index validation
-    - Signal→DDD bridge (hooks.signal_ddd_bridge)
     - Entry lifecycle (per-entry decay/reclaim)
 
 Note: the auto_refresh channels (mechanical/memory/llm content-rewrite) were
@@ -167,7 +166,6 @@ class DddCultivationOrchestrator:
     _CHANNEL_BUDGETS: dict[str, float] = {
         "ddd_staleness": 2.0,
         "knowledge_staleness": 1.0,
-        "signal_ddd_bridge": 3.0,
         # mechanical_refresh/memory_refresh/llm_refresh budgets REMOVED (run_781ffbd9)
     }
 
@@ -187,9 +185,6 @@ class DddCultivationOrchestrator:
         self.channels: list[tuple[str, ChannelFn, set[EventType]]] = [
             ("ddd_staleness", self._ch_ddd_staleness, {
                 EventType.GIT_COMMIT, EventType.TIMER_30MIN,
-            }),
-            ("signal_ddd_bridge", self._ch_signal_bridge, {
-                EventType.SIGNAL_DIGEST,
             }),
             # mechanical_refresh / memory_refresh / llm_refresh channels REMOVED
             # (run_781ffbd9): the auto_refresh module produced zero output in 2
@@ -252,10 +247,8 @@ class DddCultivationOrchestrator:
         for name, channel_fn, subscribed_events in self.channels:
             if event_type in subscribed_events:
                 budget = self._CHANNEL_BUDGETS.get(name, 3.0)
-                # Priority mapping: signal = 1, staleness = 2, knowledge = 3
-                if name in ("signal_ddd_bridge",):
-                    priority = 1
-                elif name in ("ddd_staleness",):
+                # Priority mapping: staleness = 2, knowledge = 3
+                if name in ("ddd_staleness",):
                     priority = 2
                 else:
                     priority = 3
@@ -403,17 +396,4 @@ class DddCultivationOrchestrator:
         return findings
 
     # ── Channel 2: Auto-Apply Proposals + Feedback ─────────────────────────
-
-    # ── Channel 5: Entity Index Validation ─────────────────────────────────
-    def _ch_signal_bridge(self, root: Path, ws_path: str) -> list[str]:
-        """Signal→DDD bridge (high-relevance signals → proposals)."""
-        from hooks.signal_ddd_bridge import bridge_signals_to_ddd
-
-        proposal_count = bridge_signals_to_ddd(ws_path)
-        if proposal_count > 0:
-            logger.info(
-                "ddd_orchestrator: signal bridge generated %d proposals",
-                proposal_count,
-            )
-        return []
 

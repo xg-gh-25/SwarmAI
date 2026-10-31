@@ -5,7 +5,7 @@ Takes buffered raw signals, groups them, calls Bedrock Sonnet 4.6 for
 LLM summarization with relevance scoring, and writes:
   1. A human-readable markdown digest → Knowledge/Signals/
   2. A machine-readable JSON file → Services/signals/signal_digest.json
-     (read by the signal Slack formatter and hooks.signal_ddd_bridge)
+     (read by the signal Slack formatter)
 """
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def handle_signal_digest(
     # last write of the day IS the digest. (Was: append-with-`---` separator.)
     digest_path.write_text(digest_md)
 
-    # Write the JSON digest (signal Slack formatter, signal_ddd_bridge)
+    # Write the JSON digest (signal Slack formatter)
     _write_l4_json(signals, scored_items)
 
     # Clear processed signals from buffer

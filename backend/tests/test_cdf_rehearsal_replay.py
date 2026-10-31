@@ -45,7 +45,7 @@ def test_dry_run_counts_window_and_calls_nothing(cdf_env) -> None:
     report = replay_mod.replay(cdf_env["data"], cdf_env["workspace"], days=7, dry_run=True)
     assert report["sources"]["s2"]["items"] == 1
     assert "s5" not in report["sources"]                  # governance is read, not replayed
-    assert report["sources"]["s6"]["items"] == 0          # no signal digest in the copy
+    assert "s6" not in report["sources"]                   # the signal bridge is gone
     assert report["usage"]["calls"] == 0 and "outcomes" not in report
 
 
