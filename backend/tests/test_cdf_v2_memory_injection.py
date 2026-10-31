@@ -94,8 +94,11 @@ def test_timeline_summary_first_excludes_not_injected_and_keeps_units_whole(tmp_
         f"\n\n## Not injected\n{private}\n"
     )
     result = select_timeline(timeline, today=date(2026, 10, 27), estimate=len, budget=10_000)
-    assert result.text.index("九月汇总") < result.text.index("十月事件")
+    # month summaries only (design 2026-10-31-continue-lookback-todo D3): an event is
+    # read from the file when looking back, and one line says so
+    assert "九月汇总" in result.text and "十月事件" not in result.text
     assert "私密事件" not in result.text
+    assert result.text.endswith("(1 events are in .context/TIMELINE.md; read them when looking back)")
 
     from core.ingestion.units import parse_units
     parsed_summary = next(unit for unit in parse_units(timeline) if "九月汇总" in unit.text)
@@ -103,8 +106,8 @@ def test_timeline_summary_first_excludes_not_injected_and_keeps_units_whole(tmp_
     assert len(shown) < len(parsed_summary.text)    # the unit carries a metadata comment
     small = select_timeline(timeline, today=date(2026, 10, 27), estimate=len, budget=len(shown))
     assert small.text.startswith(shown)             # counted on what the prompt shows
-    assert "完整事件正文" not in small.text
-    assert "(1 more events not shown; read .context/TIMELINE.md)" in small.text
+    none = select_timeline(timeline, today=date(2026, 10, 27), estimate=len, budget=len(shown) - 1)
+    assert "(1 more month summaries not shown)" in none.text and "九月汇总" not in none.text
 
 
 def test_timeline_private_for_group_and_nonowner_prompts(tmp_path):

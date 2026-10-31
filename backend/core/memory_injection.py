@@ -5,8 +5,9 @@
 - ``select_daily_activity`` admits the complete session rows of the two most recent
   days that have rows, newest first, with no follow-up lines (design
   docs/design/2026-10-31-continue-lookback-todo.md D1).
-- ``select_timeline`` admits complete month summaries and event units, counted on the
-  text the prompt shows.
+- ``select_timeline`` admits complete month summaries (current and previous month),
+  counted on the text the prompt shows; events are read from the file (design
+  docs/design/2026-10-31-continue-lookback-todo.md D3).
 - Nothing slices, shortens, or rewrites semantic content.
 """
 from __future__ import annotations
@@ -248,7 +249,12 @@ def select_timeline(
     estimate: Callable[[str], int],
     budget: int = TIMELINE_BUDGET,
 ) -> Selection:
-    """Select month summaries first, then newest events, never partial units."""
+    """The month summaries of the current and previous month, never partial units.
+
+    Events are not injected (design 2026-10-31-continue-lookback-todo D3: Timeline is
+    for looking back, DailyActivity for continuing work): they are read from the file
+    when the work looks back, and one line says how many there are and where. The
+    current month has no summary until it ends, so until then none of it is shown."""
     timeline = Path(timeline)
     if not timeline.is_file():
         return Selection("", 0, 0)
@@ -263,15 +269,18 @@ def select_timeline(
         if unit.section == month and _is_month_summary(unit.text)
     ]
     summary_identities = {unit.identity for unit in summaries}
-    events = [unit for unit in reversed(units) if unit.identity not in summary_identities]
+    events = sum(1 for unit in units if unit.identity not in summary_identities)
     # counted on what the prompt shows: the loader strips the metadata comments
-    ordered = [_shown(unit.text) for unit in [*summaries, *events]]
+    ordered = [_shown(unit.text) for unit in summaries]
     selected = _admit([text for text in ordered if text], budget, estimate)
+    notes = []
     if selected.omitted:
-        suffix = (f"({selected.omitted} more events not shown; "
-                  "read .context/TIMELINE.md)")
+        notes.append(f"({selected.omitted} more month summaries not shown)")
+    if events:
+        notes.append(f"({events} events are in .context/TIMELINE.md; read them when looking back)")
+    if notes:
         return Selection(
-            selected.text + ("\n" if selected.text else "") + suffix,
+            "\n".join(part for part in (selected.text, *notes) if part),
             selected.omitted,
             selected.used_tokens,
         )

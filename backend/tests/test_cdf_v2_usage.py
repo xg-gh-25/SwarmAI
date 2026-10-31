@@ -113,7 +113,7 @@ def test_fixed_layer_selection_does_not_record_usage(tmp_path: Path, monkeypatch
         timeline, today=datetime(2026, 10, 27, tzinfo=timezone.utc).date(),
         estimate=lambda text: len(text), budget=1000,
     )
-    assert "happened" in selected.text
+    assert "1 events are in .context/TIMELINE.md" in selected.text   # events: read from the file
     assert calls == []
 
 

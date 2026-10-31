@@ -92,7 +92,7 @@ a flat ban (cognitive self-evolution IS the point).
 | 7 | **MEMORY** | Cross-session **cognitive knowledge** (distilled: principles/decisions/corrections) | agent-owned · **s_persist** ✅ (autonomous) |
 | 8 | **EVOLUTION** | Self-evolution / correction registry | agent-owned · **s_persist** ✅ (autonomous) |
 | 9 | **KNOWLEDGE** | A **directory index of `Knowledge/`** (Notes/Reports/Library/Archives/…) — a pointer file, **NOT** a home for system/product architecture prose | auto/user · index only |
-| 10 | **TIMELINE** | Append-only episodic memory: key events plus monthly summaries for Retro | agent-owned · CDF summary lane and EventUnits |
+| 10 | **TIMELINE** | Looking back: key events (a decision and why, a milestone, an incident and how it was resolved) plus monthly summaries; only the summaries are injected, events are read from the file | agent-owned · CDF summary lane and EventUnits |
 
 **Two load-bearing rules this map enforces:** (1) **SwarmAI product/system architecture is NOT
 knowledge for KNOWLEDGE.md.** SwarmAI is itself a DDD (`Projects/SwarmAI/`), so its deep
