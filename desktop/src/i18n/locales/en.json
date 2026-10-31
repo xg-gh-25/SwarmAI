@@ -2504,8 +2504,8 @@
       }
     },
     "gaps": {
-      "name": "Open items",
-      "desc": "Things the AI noted as not done yet"
+      "name": "Gaps",
+      "desc": "The project's weak points still open: debt, risks, deferred findings, process issues"
     },
     "type": {
       "principle": "Principle",
@@ -2515,7 +2515,7 @@
       "guideline": "Lesson",
       "pitfall": "Pitfall",
       "process": "Process",
-      "gap": "Open"
+      "gap": "Gap"
     },
     "source": {
       "S0": "from a summary",
