@@ -64,7 +64,6 @@ test_lint_skills_scope.py  # L7: skill metadata lint covers exactly the shipped 
 test_lint_skills_owner.py  # K3: shipped files name no specific person (closing guards)
 test_eval_fresh_install.py  # eval-as-product: a fresh install loads and passes the product set
 test_eval_product_set.py  # eval-as-product: the product set is shippable to every user
-test_context_loader_dormant_filter.py  # a dormant MEMORY entry stays out of the prompt
 test_eval_case_admission.py  # eval-as-product: purpose and the case caps are enforced on add
 test_eval_offline_fixture.py  # eval-as-product: offline product cases run in the shipped fixture workspace
 test_eval_followups.py  # eval-as-product: follow-up rules, health route, routine reports
