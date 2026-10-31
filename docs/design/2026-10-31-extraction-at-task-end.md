@@ -128,6 +128,25 @@ time within the day's window. When the stored command was cut inside the subject
 cut start is matched as a prefix instead. Commits made by a pipeline run or a sub-agent
 are not in the session's transcript and stay unattributed (known limit).
 
+**E8 — The work is reviewed and citable, not only the person's words.** Measured
+2026-10-31: 12 reviews in a day and a half covered a stretch with no user message (5 to
+314 messages of agent work each, all in sessions a person used) and returned "no user
+message", moving the watermark past work that was then never reviewed. And of the 74
+review units refused in 7 days, every class had one cause: the review is asked to
+record what the agent learned from its own work, but could cite only the person's
+messages and measured fields. With nothing to cite it wrote sentences, commit notes or
+message ids (refused as format), then the agent's and tools' anchors once the record
+showed them (refused as not in the index), then empty evidence once those were hidden
+(refused as too short), and the prompt told it to record nothing when the index was
+empty. Now only a session no person ever wrote in is passed over. Every record item
+carries its anchors and is citable; a window with no user message shows the person's
+last message before it as context, not citable, so an old message cannot become the
+user's words for a claim it does not state. Trust is unchanged and decided downstream
+from what is cited (`pipeline_v2.Facts`): the agent's words and tool output are
+registered as external, so such a unit stays in its project's DDD and never reaches a
+file read every turn. The window is registered once, and that one registration serves
+the record, the evidence check and the read set.
+
 ## 4. Existing data
 
 - TIMELINE: the 3 duplicate pairs and the superseded interim event are retired with
