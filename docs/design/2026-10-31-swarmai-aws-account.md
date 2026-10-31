@@ -193,7 +193,12 @@ hive_fleet: {
     的路径模式不能是绝对路径或带 `..`，目录里配置 CLI 的文件（`.claude/`、`.mcp.json`、`CLAUDE.md`、`AGENTS.md`）
     不能写；WebFetch 只能访问公网地址（本机回环上的 daemon、局域网、云的元数据地址，以及解析到这些地址的公网
     域名都拒绝，解析不了、带用户名的 URL（两种 URL 解析器会读出不同的主机）也拒绝；检查和 CLI 自己解析之间 DNS
-    答案变了的情况（DNS rebinding）hook 管不到，要靠一个按实际连接地址检查的出口代理，记为已知缺口）；只放行列出的其他工具和已按级别筛过的 MCP；其余工具和 hook 自己出错都拒绝；
+    答案变了的情况（DNS rebinding）由出口代理挡住，见下一条）；
+  - 出口代理（`core/egress_proxy.py`）：这类会话的 CLI 所有对外连接都走 daemon 里的一个代理（`HTTPS_PROXY`，
+    回环地址不走代理，会话取凭证要连回 daemon）。代理只接受 `CONNECT host:port`，自己解析主机，所有地址都是公网才连，
+    而且连的就是它检查过的那个地址，CLI 选不了地址。实测：经代理 WebFetch example.com 正常；`127.0.0.1.nip.io`
+    （公网域名，解析到本机）被代理拒绝。CLI 要自己登录（没有 SwarmAI 账号、也没有 API key，走 ADA / Midway 默认链，
+    可能要连内网）时不走代理，这时会话没有 WebFetch；代理起不来时同样没有 WebFetch；只放行列出的其他工具和已按级别筛过的 MCP；其余工具和 hook 自己出错都拒绝；
   - MCP 是白名单：MCP 在会话的限制之外、带着 owner 自己的登录运行，非 owner 用到它就是以 owner 的身份做事。public
     用户只有渠道自己的工具；trusted 用户另外只有 owner 逐个共享的 MCP（MCP 条目里写 `"share_with_trusted": true`）；
     其他级别、以后新加的 MCP 默认都没有；提示词里"可以启用"的 MCP 列表也按同样的规则筛；

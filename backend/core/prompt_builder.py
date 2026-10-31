@@ -543,6 +543,11 @@ def restricted_session_policy() -> dict:
       lets WebFetch reach only public web addresses (never the daemon on loopback, the
       local network or cloud metadata), and denies everything else, including on its
       own error;
+    - all of the CLI's outbound traffic goes through ``core.egress_proxy``, which
+      connects only to public addresses it resolved itself (DNS rebinding). When the
+      proxy cannot start, or the CLI would sign in itself over the default chain (no
+      SwarmAI account and no API key: ADA / Midway can need the local network), the
+      session gets no WebFetch instead;
     - ``Read`` deny rules on the owner's credential stores as a second layer (the CLI
       applies deny rules in every mode; ``//abs`` / ``~/`` syntax, ``_rule_path``);
     - no setting sources and no inline shell in skills: files the session writes into its
@@ -561,18 +566,9 @@ def restricted_session_policy() -> dict:
 
 
 def _not_global(ip: Any) -> bool:
-    """An address that is not public, including an IPv4 address carried inside IPv6
-    (mapped, 6to4, the deprecated ::a.b.c.d form, NAT64 64:ff9b::/96)."""
-    import ipaddress
-    if not ip.is_global:
-        return True
-    if ip.version == 6:
-        embedded = [ip.ipv4_mapped, ip.sixtofour]
-        packed = int(ip)
-        if packed >> 32 == 0 or ip in ipaddress.ip_network("64:ff9b::/96"):
-            embedded.append(ipaddress.IPv4Address(packed & 0xFFFFFFFF))
-        return any(e is not None and not e.is_global for e in embedded)
-    return False
+    """``core.egress_proxy.not_public`` (one rule for the gate and the proxy)."""
+    from core.egress_proxy import not_public
+    return not_public(ip)
 
 
 def _reaches_this_machine(url: str) -> bool:
@@ -586,9 +582,9 @@ def _reaches_this_machine(url: str) -> bool:
     host checked here. Blocking (DNS); call
     off the event loop.
 
-    Not covered: a name whose DNS answer changes between this check and the CLI's own
-    lookup (DNS rebinding); only an egress proxy that checks the connected address can.
-    The daemon itself is plain http and the CLI fetches over https only."""
+    A name whose DNS answer changes between this check and the CLI's own lookup (DNS
+    rebinding) is caught by the egress proxy the session's CLI goes through
+    (``core.egress_proxy``): it connects only to the public address it checked."""
     import ipaddress
     import socket
     from urllib.parse import urlsplit
@@ -675,6 +671,21 @@ def restricted_tool_gate(file_handler: Any, cwd: str) -> Any:
             return _deny("Not available in this session.")
 
     return gate
+
+
+def _cli_credentials_need_no_network(config: Any) -> bool:
+    """True when the CLI gets its model credentials without signing in over the network
+    itself: from the SwarmAI account through the daemon on loopback, or an API key. Only
+    then can all of its other traffic go through the egress proxy."""
+    try:
+        from core import aws_account
+        if aws_account.get_chat_via(config) != "aws":
+            return True
+        # the export the CLI will actually get (cli_settings can withhold it)
+        return "awsCredentialExport" in _aws_account_cli_settings(config)
+    except Exception:  # noqa: BLE001 — unknown: assume it needs the network
+        logger.warning("could not tell how the CLI signs in", exc_info=True)
+        return False
 
 
 def _aws_account_cli_settings(config: Any) -> dict:
@@ -2570,6 +2581,22 @@ class PromptBuilder:
             # refuses in a non-owner channel session; the Bash handler denies it too.
             from core.knowledge_cli import RESTRICTED_ENV
             session_env = {**(session_env or {}), RESTRICTED_ENV: "1"}
+        if _restricted:
+            # every outbound connection of the CLI: public addresses only (DNS rebinding)
+            from core import egress_proxy
+            if not _cli_credentials_need_no_network(self._config):
+                # the CLI would sign in itself through the default chain (ADA, Midway,
+                # SSO), which can need this network: no proxy, so no WebFetch either
+                logger.info("restricted session without the SwarmAI account: no WebFetch")
+                _restricted["disallow"] = [*_restricted["disallow"], "WebFetch"]
+            else:
+                try:
+                    session_env = {**(session_env or {}), **egress_proxy.session_env(
+                        await egress_proxy.ensure_started())}
+                except OSError:
+                    logger.warning("egress proxy did not start: this session gets no WebFetch",
+                                   exc_info=True)
+                    _restricted["disallow"] = [*_restricted["disallow"], "WebFetch"]
 
         # ── Max turns: per-message API roundtrip limit ─────────────
         #
