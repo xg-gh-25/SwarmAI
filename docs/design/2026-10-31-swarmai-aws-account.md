@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "SwarmAI 账号：一个 AWS 账号，产品底层统一管理"
-status: r4.1 — 认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
+status: r4.2 — 认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
 related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-10-31-swarm-out-ops-registry.md
 ---
 
@@ -380,9 +380,27 @@ AWS 给控制台账号（IAM 用户或根用户）提供了浏览器登录拿短
 - 缓存目录 0700、文件 0600，不进备份；里面的刷新令牌由 CLI 管，放不进系统密钥库，设置页写明。
 - 本机没有 AWS CLI，或版本太旧（本机现在是 2.24.10，没有这个命令）：这张卡写明"需要较新的 AWS CLI"，给安装链接，
   并提示可以先用 SSO 或"更多方式"。不让这张卡成为死路。
-- 要在第 1 步核实的事：要求的 CLI 最低版本；CLI 是否认自定义的 `AWS_CONFIG_FILE` 和 `AWS_LOGIN_CACHE_DIRECTORY`；
-  `export-credentials` 能否导出登录会话；IAM 用户需要哪条权限（根用户不需要）；会话最长多久。以上是读 SDK 代码
-  得到的，还没有真跑过；任何一条不成立，这张卡就不放进推荐，外部用户的推荐只剩 SSO 和探测。
+**已核实（2026-10-31，读 [AWS 文档](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html)
+和 [aws-cli v2 源码](https://github.com/aws/aws-cli/tree/v2/awscli/customizations/login)）：**
+
+| 前提 | 结论 | 依据 |
+|---|---|---|
+| CLI 版本 | 最低 2.32.0；本机 2.24.10 要更新 | 文档 Prerequisites |
+| 谁能用 | 根用户、IAM 用户、经 IAM 联合登录的身份（Isengard 的控制台登录应属于这一类，未实测）；用 IAM Identity Center 的走 SSO | 文档 Prerequisites |
+| 权限 | IAM 用户、角色要有托管策略 `SignInLocalDevelopmentAccess`（`AdministratorAccess` 的 `*` 应已包含，未实测）；根用户不需要 | 文档 Prerequisites |
+| 自定义配置文件 | 认：`login_session` 写进会话的 `config_file`，即 `AWS_CONFIG_FILE` | `login.py` 的 `_update_profile_with_login_session` |
+| 自定义缓存目录 | 认 `AWS_LOGIN_CACHE_DIRECTORY` | 文档 Cached Credentials；`get_login_token_cache_directory` |
+| 导出给别的进程 | `aws configure export-credentials --profile <p> --format process` 是官方给出的用法，CLI 负责续期 | 文档 Sharing Login credentials as process credentials |
+| 没有终端时会不会追问 | 区域：配置里有或传 `--region` 就不问；"覆盖已有会话"只在 profile 已绑别的会话时问；Agent Toolkit 提示在 stdin 不是终端时跳过 | `login.py` 的 `_resolve_region`、`accept_change_to_existing_profile_if_needed`；`agenttoolkit/hint.py` 的 `_is_eligible` |
+| 会不会一直挂着 | 浏览器回调最多等 10 分钟，超时报错退出 | `sso/utils.py` 的 `_OVERALL_TIMEOUT` |
+| 会话多久 | 每 15 分钟自动续一次，整段会话最长 12 小时（受该身份的会话时长限制），之后要重新 `aws login` | 文档 Run a command with your profile |
+
+**对设计的影响：**
+- 12 小时上限意味着 AWS 登录的用户大约每天要重新登录一次（ADA 的 Midway 约 20 小时，SSO 由管理员定）。卡片上写明
+  "每次最长 12 小时"；过期按 §7.6 进"需要重新登录"，设置页一个按钮重新跑 `aws login`。
+- App 调 `aws login --profile swarmai-login --region <主区域>`，配置文件里先写好这个 profile，就不会有任何追问。
+- 浏览器打不开时用 `aws login --remote`（浏览器里拿到授权码，粘回 App）。
+- **还没有端到端跑过**（需要 2.32 以上的 CLI 和一次真实的浏览器登录），列在第 1 步。
 
 ### 6.4 升级：老用户第一次启动新版本
 
@@ -590,7 +608,7 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 ## 9. 分步和验证计划
 
 **分步（旧路径在新路径通过测试前保留）**
-1. 先验证 §8 前两条。然后 `core/aws_account.py`、记录、§5.6 生成、`aws-credentials` 子命令、
+1. 先验证 §8 前两条，并在一台装了 AWS CLI 2.32+ 的机器上把 AWS 登录端到端跑一次（§6.3b）。然后 `core/aws_account.py`、记录、§5.6 生成、`aws-credentials` 子命令、
    `~/.swarm-ai/aws/config`、`GET /api/aws-account`（状态 + 能力）、设置页"SwarmAI 账号"（只看）。
 2. 本机消费方改走入口（§5.4 前十行），`auth_method` 的读者改读 `source`，删 `jobs/bedrock` 兜底和 executor 冻结密钥。
 3. Hive：消费方改走入口，Hive 模式自动建记录，§5.5 迁移，Hive 设置页去掉账号块。
@@ -632,7 +650,8 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 1. **界面分层**（§6.1 ②、§6.2）：探测到的凭证优先一键用；推荐内部 ADA、SSO，外部 AWS 登录、SSO；访问密钥、手选
    profile、实例角色收在"更多方式"；Bedrock API key、Anthropic key 放在"先只用对话"。推荐这样。
 2. **AWS 登录先靠 AWS CLI**（§6.3b）：登录和续期都交给 CLI（daemon 里的 `awscrt` 和语音依赖冲突，不能自己续）；
-   没有 CLI 时提示安装、并给别的路；第 1 步核实不过就先不放进推荐。推荐这样。
+   CLI 低于 2.32 时卡片上写明并给更新链接和别的路；会话最长 12 小时，每天大约登录一次。前提已按文档和源码核实，
+   端到端跑通后放进推荐。推荐这样。
 3. **Hive 不挡向导**：推荐不挡；Hive 状态是待办，可以"以后再说"，期望数量不降到 0（§7.1）。
 4. **Hive 花费确认**：按钮上写清台数、月度估算和账号，点了就是同意。推荐这样。
 5. **没有 Hive 的老用户**：只提示、一键创建，不自动建。推荐这样。
@@ -641,6 +660,9 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
    （R1，跨模块、改数据形状、有迁移）：直接改，还是走 pipeline。
 
 ## 11. 审查记录
+
+**向导第二步的 mockup：** `Knowledge/Mockups/2026-10-31-aws-account-wizard-step2.html`（SwarmWS 里，七个状态：
+找到账号、外部没找到、内部没找到、Midway 过期、ADA 角色不对、SSO 设备授权、先只用对话）。
 
 **r1 → r2：** 一次零上下文 correctness 审查，5 HIGH、12 MEDIUM、3 LOW，全部吸收。
 - **交付方式改了：** r1 的"注入短期凭证、过期前刷新"做不到（进程起来后环境改不了），改为 SwarmAI 自己的
