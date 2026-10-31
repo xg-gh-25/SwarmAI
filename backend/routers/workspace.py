@@ -713,6 +713,7 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
         if request.expected_revision is None:
             raise HTTPException(status_code=409, detail="expected_revision is required")
         from core.ingestion.api import StaleRevision, apply_user_edit
+        from core.memory_guard import MemoryGuardError
         try:
             await asyncio.to_thread(
                 apply_user_edit, target_path, file_bytes,
@@ -720,6 +721,9 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
             )
         except StaleRevision:
             raise HTTPException(status_code=409, detail="The target revision is stale")
+        except MemoryGuardError as exc:
+            # the person's own text, with the phrase to reword (never a 500 with no reason)
+            raise HTTPException(status_code=422, detail=str(exc))
     else:
         try:
             await asyncio.to_thread(target_path.write_bytes, file_bytes)
@@ -798,6 +802,7 @@ async def write_file(
         raise HTTPException(status_code=409, detail="binary file, not overwritten")
 
     from core.ingestion.api import StaleRevision, apply_user_edit
+    from core.memory_guard import MemoryGuardError
     if _cdf_is_governed(file_path):
         if request.expected_revision is None:
             raise HTTPException(status_code=409, detail="expected_revision is required")
@@ -811,6 +816,9 @@ async def write_file(
                 status_code=409,
                 detail="This governed file changed on disk. Reload it before saving.",
             )
+        except MemoryGuardError as exc:
+            # the person's own text, with the phrase to reword (never a 500 with no reason)
+            raise HTTPException(status_code=422, detail=str(exc))
         try:
             relative_path = file_path.relative_to(workspace_root)
         except ValueError:

@@ -1859,6 +1859,7 @@ async def put_workspace_file(
     # Governed corpus writes are optimistic and journaled. Non-governed files
     # retain the existing editor behavior.
     from core.ingestion.api import StaleRevision, apply_user_edit
+    from core.memory_guard import MemoryGuardError
     if _cdf_is_governed(target):
         expected = body.get("expected_revision")
         if not isinstance(expected, str):
@@ -1876,6 +1877,9 @@ async def put_workspace_file(
                 status_code=409,
                 detail="This governed file changed on disk. Reload it before saving.",
             )
+        except MemoryGuardError as exc:
+            # the person's own text, with the phrase to reword (never a 500 with no reason)
+            raise HTTPException(status_code=422, detail=str(exc))
         if not is_external:
             _invalidate_tree_cache()
         return {"success": True, "path": path, "revision": revision}
@@ -2246,14 +2250,19 @@ async def rename_item(request: FolderRenameRequest):
         def _governed_rename() -> None:
             # two journaled governed edits; a crash between them leaves a copy, never a loss
             data = old_target.read_bytes()
-            apply_user_edit(new_target, data, expected_revision="", actor="user")
+            apply_user_edit(new_target, data, expected_revision="", actor="user",
+                            moved_from=old_target)
             # the revision of the bytes copied: a change made since refuses the delete
             apply_user_edit(old_target, None, expected_revision=hashlib.sha256(data).hexdigest(),
                             actor="user")
+        from core.memory_guard import MemoryGuardError
         try:
             await asyncio.to_thread(_governed_rename)
         except StaleRevision:
             raise HTTPException(status_code=409, detail="The file changed while it was being moved")
+        except MemoryGuardError as exc:
+            # the person's own text, with the phrase to reword (never a 500 with no reason)
+            raise HTTPException(status_code=422, detail=str(exc))
         _invalidate_tree_cache()
         logger.info("Renamed governed file '%s' → '%s'", request.old_path, request.new_path)
         return {"old_path": request.old_path, "new_path": request.new_path}

@@ -62,6 +62,70 @@ def _archive_path(path: Path, op_id: str) -> Path:
     return path.parent / ".archive" / f"{path.name}.{op_id.split(':')[-1]}.{digest}"
 
 
+def _trust_group(path: Path) -> tuple[str, ...] | None:
+    """Where a governed file's text is trusted the same: one project's DDD, one Knowledge
+    store (Notes, Library, Learned, Inbox); the every-turn ``.context`` files form none."""
+    try:
+        parts = path.relative_to(Path(get_swarmws()).resolve(strict=False)).parts
+    except ValueError:
+        return None
+    if len(parts) >= 2 and parts[0] in ("Projects", "Knowledge"):
+        return parts[:2]
+    return None
+
+
+def _moved_bytes(target: Path, new_bytes: bytes | None, moved_from: Path | None) -> bytes | None:
+    """The source bytes a move may be compared with, or None (compare with the target's
+    own text): the source is a governed file in the same trust group as *target* (a move
+    never lifts a line into another project, another store or a file read every turn),
+    read once from its resolved path under its lock, and holding exactly the bytes being
+    written (a move is a copy; any other text is an ordinary write)."""
+    if moved_from is None or new_bytes is None:
+        return None
+    source = Path(moved_from).expanduser().resolve(strict=False)
+    group = _trust_group(target)
+    if not is_governed(source) or group is None or _trust_group(source) != group:
+        return None
+    with md_lock(source, blocking=True):
+        try:
+            data = source.read_bytes()
+        except OSError:
+            return None
+    return data if hashlib.sha256(data).digest() == hashlib.sha256(new_bytes).digest() else None
+
+
+def _refusal(guard: MemoryGuard, extra, text: str) -> str:
+    """Why an edit is refused, so a person can fix it: each new finding's pattern, the
+    words that matched and the line they are on (a line holding a blocked phrase is
+    compared whole, so any new wording of it is new while the phrase stays). The line is
+    shown from *text* as written, redacted like the saved text would be (the secret
+    patterns are case-sensitive, so the lower-cased comparison key cannot be redacted)."""
+    from core.memory_guard import _INVISIBLE_CHARS
+    # the same lines and keys _blocked compares, so a key maps back to its line(s) by
+    # position (a line may itself hold " / ", the separator of a two-line key)
+    lines = _INVISIBLE_CHARS.sub("", text.replace("\u2028", "\n").replace("\u2029", "\n")).splitlines()
+    norm = [" ".join(ln.split()).casefold() for ln in lines]
+    original: dict[str, str] = {}
+    for i, key in enumerate(norm):
+        original.setdefault(key, lines[i])
+        if i + 1 < len(lines):
+            original.setdefault(key + " / " + norm[i + 1], lines[i] + "\n" + lines[i + 1])
+    parts = []
+    for name, key in sorted(extra)[:3]:
+        raw = original.get(key)
+        if raw is None:                       # never shown un-redacted: no excerpt
+            parts.append(name)
+            continue
+        line = " ".join(guard.scan(raw).sanitized_content.split())
+        found = next((f.match for f in guard.scan("\n" + line).findings
+                      if f.action == "reject" and f.pattern_name == name), "")
+        excerpt = line if len(line) <= 160 else line[:157] + "..."
+        parts.append(f'{name}: "{found}" in the line "{excerpt}"')
+    more = f" (and {len(extra) - 3} more)" if len(extra) > 3 else ""
+    return ("Content rejected by MemoryGuard: " + "; ".join(parts) + more
+            + ". Reword or remove that phrase to save the file.")
+
+
 def _blocked(guard: MemoryGuard, text: str) -> "Counter[tuple[str, str]]":
     """The reject findings (injection, role hijack, exfiltration) of *text*, each counted
     with the line it is on: ``(pattern, line)``, or ``(pattern, line + next line)`` for a
@@ -87,7 +151,8 @@ def _blocked(guard: MemoryGuard, text: str) -> "Counter[tuple[str, str]]":
     return out
 
 
-def _sanitize(path: Path, data: bytes | None, expected_revision: str) -> bytes | None:
+def _sanitize(path: Path, data: bytes | None, expected_revision: str,
+              admitted: bytes | None = None) -> bytes | None:
     """The bytes to write: secrets redacted and invisible characters stripped over the
     whole text; refused when the new text holds a blocked match (injection, role
     hijack, exfiltration) more often than the current file does.
@@ -99,7 +164,8 @@ def _sanitize(path: Path, data: bytes | None, expected_revision: str) -> bytes |
     about an injection filter) impossible to edit at all. The current bytes compared
     are the version *expected_revision* names, or the edit is stale. Not covered: a
     match the old text held inside a code fence or a quote that the new text unwraps
-    (the count is the same)."""
+    (the count is the same). *admitted*: for a move, the bytes of the governed file
+    moved here, admitted where they were; their matches are not new at the new path."""
     if data is None:
         return None
     try:
@@ -115,15 +181,14 @@ def _sanitize(path: Path, data: bytes | None, expected_revision: str) -> bytes |
     if hashlib.sha256(current).hexdigest() != expected_revision and (current or expected_revision):
         raise StaleRevision(f"expected {expected_revision}, found {hashlib.sha256(current).hexdigest()}")
     try:
-        old = current.decode("utf-8")
+        old = (admitted if admitted is not None else current).decode("utf-8")
     except UnicodeDecodeError:
         old = ""
     guard = MemoryGuard()
     extra = _blocked(guard, text) - _blocked(guard, old)
     if extra:
         from core.memory_guard import MemoryGuardError
-        names = sorted({name for name, _match in extra})
-        raise MemoryGuardError(f"Content rejected by MemoryGuard: {', '.join(names)}")
+        raise MemoryGuardError(_refusal(guard, extra, text))
     if _blocked(guard, old):
         logger.warning("governed_edit: %s already holds blocked matches %s (kept, not added)",
                        path, sorted({n for n, _m in _blocked(guard, old)}))
@@ -162,13 +227,16 @@ def _insert_user_plan(conn: sqlite3.Connection, *, op_id: str, path: Path,
 
 
 def apply_user_edit(path: Path, new_bytes: bytes | None, *, expected_revision: str,
-                    actor: str = "user") -> str:
-    """Apply one optimistic, archive-first governed edit and revise the baseline."""
+                    actor: str = "user", moved_from: Path | None = None) -> str:
+    """Apply one optimistic, archive-first governed edit and revise the baseline.
+    *moved_from*: the governed file whose bytes this edit copies here (a move); the guard
+    compares with them instead of the empty new path."""
     target = Path(path).expanduser().resolve(strict=False)
     if not is_governed(target):
         raise PermissionError("path is not a governed corpus file")
     target.parent.mkdir(parents=True, exist_ok=True)
-    new_bytes = _sanitize(target, new_bytes, expected_revision)
+    admitted = _moved_bytes(target, new_bytes, moved_from)
+    new_bytes = _sanitize(target, new_bytes, expected_revision, admitted)
     conn = _connection()
     try:
         ensure_baseline(conn=conn)

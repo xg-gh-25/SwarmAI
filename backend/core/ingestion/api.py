@@ -230,11 +230,13 @@ def revision_of(path: Path) -> str:
 
 
 def apply_user_edit(path: Path, new_bytes: bytes | None, *, expected_revision: str,
-                    actor: str = "user") -> str:
+                    actor: str = "user", moved_from: Path | None = None) -> str:
     """governed_edit: journaled user write/create/delete (new_bytes=None deletes, archive-first).
-    Raises StaleRevision. Revises baseline (§13). Returns new revision."""
+    Raises StaleRevision. Revises baseline (§13). Returns new revision. *moved_from*: the
+    governed file a move copies here (the guard compares with it)."""
     from .governed_edit import apply_user_edit as _impl
-    return _impl(path, new_bytes, expected_revision=expected_revision, actor=actor)
+    return _impl(path, new_bytes, expected_revision=expected_revision, actor=actor,
+                 moved_from=moved_from)
 
 
 def tree_revision_of(root: Path) -> str:
