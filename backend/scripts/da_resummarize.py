@@ -509,14 +509,102 @@ def summary_of(row: dict):
                              enriched=bool(row.get("enriched")))
 
 
-async def recount_commits(args) -> int:
-    """Recompute every row's commits by the current attribution (no model call) and
-    re-render the day's block and row when they changed (design
-    2026-10-31-extraction-at-task-end E7)."""
+def _rewrite_rows(da_dir: Path, plans: dict, update) -> None:
+    """Re-render the rows of *plans* ({day: {session: (row, value)}}) after
+    ``update(summary, value)``, block and sidecar row together, under the day lock;
+    every other row and block is kept byte for byte. The caller backed up first."""
     from core.daily_activity_writer import (
         _atomic_write, _day_lock, parse_frontmatter, render_session, write_frontmatter,
     )
     from core.session_hooks import HookContext
+    for day, rows in sorted(plans.items()):
+        md, jsonl = da_dir / f"{day}.md", da_dir / f"{day}.jsonl"
+        rendered = {}
+        for sid, (row, value) in rows.items():
+            summary = summary_of(row)
+            update(summary, value)
+            ctx = HookContext(session_id=sid, agent_id="default",
+                              message_count=int(row.get("message_count") or 0),
+                              session_start_time=str(row.get("session_start") or ""),
+                              session_title=str(row.get("title") or ""))
+            block, record = render_session(summary, ctx)
+            record["enriched"] = bool(row.get("enriched"))
+            rendered[sid] = (block, record)
+        with _day_lock(md):
+            fm, body = parse_frontmatter(md.read_text(encoding="utf-8")) if md.exists() else ({}, "")
+            parts = []
+            for seg in split_day(body):
+                if seg.kind == "summary" and seg.session in rendered:
+                    parts.append(rendered[seg.session][0])
+                else:
+                    parts.append(seg.text)
+            lines = []
+            for raw in jsonl.read_text(encoding="utf-8").splitlines():
+                try:
+                    sid = str(json.loads(raw).get("session_id"))
+                except (ValueError, AttributeError):
+                    lines.append(raw)
+                    continue
+                lines.append(json.dumps(rendered[sid][1], ensure_ascii=False, separators=(",", ":"))
+                             if sid in rendered else raw)
+            _atomic_write(md, write_frontmatter(dict(fm or {}), "\n".join(parts)))
+            _atomic_write(jsonl, "\n".join(lines) + "\n")
+        print(f"  {day}: {len(rows)} rows")
+
+
+async def shorten_sentences(args) -> int:
+    """Write again, within the limit, every model-written summary sentence that is over
+    it (core.summarization.sentence_length): one short model call per row, from the
+    sentence and its deliverables (no transcript). A rewrite still over the limit is
+    not used; nothing is cut."""
+    from core import summarization as S
+    ws = Path(args.workspace).expanduser()
+    da_dir = ws / "Knowledge" / "DailyActivity"
+    until = args.until or date.today().isoformat()
+    since = args.since or (date.fromisoformat(until) - timedelta(days=6)).isoformat()
+    todo: list[tuple[str, str, dict, int, int]] = []
+    for jsonl in sorted(da_dir.glob("20*.jsonl")):
+        day = jsonl.stem
+        if not since <= day <= until:
+            continue
+        for row in _rows(jsonl):
+            sentence = str(row.get("summary_sentence") or "")
+            length, limit = S.sentence_length(sentence)
+            if row.get("enriched") and row.get("session_id") and length > limit:
+                todo.append((day, str(row["session_id"]), row, length, limit))
+    print(f"days {since}..{until}: {len(todo)} sentences over the limit")
+    if not args.apply or not todo:
+        print("dry run: nothing written (add --apply)" if not args.apply else "nothing to change")
+        return 0
+    sem = asyncio.Semaphore(max(1, args.jobs))
+
+    async def one(item):
+        day, sid, row, length, limit = item
+        async with sem:
+            new = await asyncio.to_thread(S.SummarizationPipeline._shorten_sentence,
+                                          str(row["summary_sentence"]),
+                                          list(row.get("deliverables") or []), length, limit)
+        return item, new
+    plans: dict = {}
+    kept = 0
+    for (day, sid, row, length, limit), new in await asyncio.gather(*(one(i) for i in todo)):
+        if new and S.sentence_length(new)[0] <= limit:
+            plans.setdefault(day, {})[sid] = (row, new)
+        else:
+            kept += 1
+    print(f"rewritten within the limit: {sum(len(v) for v in plans.values())}; kept as they are: {kept}")
+    if not plans:
+        return 0
+    dest = backup(da_dir, Path(args.backup_root).expanduser())
+    print(f"backup verified: {dest}")
+    _rewrite_rows(da_dir, plans, lambda summary, sentence: setattr(summary, "summary_sentence", sentence))
+    return 0
+
+
+async def recount_commits(args) -> int:
+    """Recompute every row's commits by the current attribution (no model call) and
+    re-render the day's block and row when they changed (design
+    2026-10-31-extraction-at-task-end E7)."""
     from hooks.daily_activity_hook import (
         DailyActivityExtractionHook, _bash_call_windows, commit_subjects,
     )
@@ -563,39 +651,7 @@ async def recount_commits(args) -> int:
         return 0
     dest = backup(da_dir, Path(args.backup_root).expanduser())
     print(f"backup verified: {dest}")
-    for day, rows in sorted(plans.items()):
-        md, jsonl = da_dir / f"{day}.md", da_dir / f"{day}.jsonl"
-        rendered = {}
-        for sid, (row, commits) in rows.items():
-            summary = summary_of(row)
-            summary.git_commits = commits
-            ctx = HookContext(session_id=sid, agent_id="default",
-                              message_count=int(row.get("message_count") or 0),
-                              session_start_time=str(row.get("session_start") or ""),
-                              session_title=str(row.get("title") or ""))
-            block, record = render_session(summary, ctx)
-            record["enriched"] = bool(row.get("enriched"))
-            rendered[sid] = (block, record)
-        with _day_lock(md):
-            fm, body = parse_frontmatter(md.read_text(encoding="utf-8")) if md.exists() else ({}, "")
-            parts = []
-            for seg in split_day(body):
-                if seg.kind == "summary" and seg.session in rendered:
-                    parts.append(rendered[seg.session][0])
-                else:
-                    parts.append(seg.text)
-            lines = []
-            for raw in jsonl.read_text(encoding="utf-8").splitlines():
-                try:
-                    sid = str(json.loads(raw).get("session_id"))
-                except (ValueError, AttributeError):
-                    lines.append(raw)
-                    continue
-                lines.append(json.dumps(rendered[sid][1], ensure_ascii=False, separators=(",", ":"))
-                             if sid in rendered else raw)
-            _atomic_write(md, write_frontmatter(dict(fm or {}), "\n".join(parts)))
-            _atomic_write(jsonl, "\n".join(lines) + "\n")
-        print(f"  {day}: {len(rows)} rows")
+    _rewrite_rows(da_dir, plans, lambda summary, commits: setattr(summary, "git_commits", commits))
     return 0
 
 
@@ -642,9 +698,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--restore-archives", action="store_true")
+    parser.add_argument("--sentences", action="store_true",
+                        help="write again every summary sentence over its limit (one short model call each)")
     parser.add_argument("--commits", action="store_true",
                         help="only recompute each row's commits (no model call)")
     args = parser.parse_args(argv)
+    if args.sentences:
+        return asyncio.run(shorten_sentences(args))
     if args.commits:
         return asyncio.run(recount_commits(args))
     if args.restore_archives:

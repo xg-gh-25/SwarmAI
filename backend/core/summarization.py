@@ -108,6 +108,44 @@ class StructuredSummary:
     enriched: bool = False
 
 
+#: The longest summary sentence: Chinese characters (an ASCII word or number counts as
+#: one, as a reader counts it in mixed text), or English words. The week's list shows
+#: one line per session (memory_injection), and the user asked for 60 characters.
+SENTENCE_LIMIT_CJK = 60
+SENTENCE_LIMIT_WORDS = 30
+_CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_ASCII_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+/-]*")
+
+
+def sentence_length(text: str) -> tuple[int, int]:
+    """(length, limit) of a summary sentence: Chinese characters plus ASCII words
+    against SENTENCE_LIMIT_CJK when it holds Chinese, else words against
+    SENTENCE_LIMIT_WORDS."""
+    cjk = len(_CJK.findall(text))
+    words = len(_ASCII_WORD.findall(text))
+    if cjk:
+        return cjk + words, SENTENCE_LIMIT_CJK
+    return len(text.split()), SENTENCE_LIMIT_WORDS
+
+
+_SHORTEN_PROMPT = """\
+This is the one-sentence summary of a chat session's work for one day. It is too long:
+{length} where the limit is {limit} ({unit}). Write it again as ONE sentence within the
+limit, in the same language: what was done and where it ended. Keep the main result;
+drop details, which are recorded separately (below). Never cut a sentence short or add
+an ellipsis.
+
+Sentence: {sentence}
+
+Recorded separately: {deliverables}
+"""
+
+_SHORTEN_SCHEMA = {
+    "type": "object",
+    "properties": {"summary_sentence": {"type": "string"}},
+    "required": ["summary_sentence"],
+}
+
 _ENRICHMENT_PROMPT = """\
 You are writing the activity record of one chat session for one day. The next session
 reads it to learn what was done and what is still open, so describe the work and its
@@ -124,9 +162,12 @@ result, not the conversation.
 Record it with the summary tool, in the language the session is held in. Never truncate
 a sentence or add an ellipsis. Use an empty string or array when there is nothing.
 - title: a few words naming the work, as a noun phrase. Not the user's request quoted.
-- summary_sentence: one sentence of about 30 words, or 60 characters in Chinese: what
-  was done and where it ended. Name the result (built, fixed, decided, answered, dropped,
-  still in progress), not that a discussion took place. The details go in deliverables.
+- summary_sentence: one sentence of AT MOST {sentence_cjk} Chinese characters (an English
+  word or a number counts as one) or {sentence_words} English words: the list of the
+  week shows one line per session, so a longer one is not read. What was done and
+  where it ended. Name the result (built, fixed, decided, answered, dropped, still in
+  progress), not that a discussion took place. A day with several pieces of work:
+  name the main one and how many more. The details go in deliverables.
   For example: "修好了 Brain Hub 的加载错误，测试通过，等 build 后生效。"
 - deliverables: results that exist at the end of this transcript, each understandable
   alone: a commit or file and what it does, a decision and its reason, the answer to a
@@ -151,6 +192,8 @@ _SO_FAR_BLOCK = """
 {record}
 The conversation below continues the same day. Answer with the record for the whole
 day: keep what still holds, add what is new, and leave out follow-ups that got done.
+Write summary_sentence again for the whole day, within its limit: do not append to the
+earlier one.
 """
 
 # Conversation per model call (estimated tokens). The model's window is 200K; a long
@@ -602,6 +645,7 @@ class SummarizationPipeline:
                 files="; ".join(summary.files_modified) or "(none)",
                 open_next_items=json.dumps(open_next_items or [], ensure_ascii=False),
                 open_problems="; ".join(f'"{x}"' for x in (open_problems or [])) or "(none)",
+                sentence_cjk=SENTENCE_LIMIT_CJK, sentence_words=SENTENCE_LIMIT_WORDS,
             )
             answer = await executors.run_in("llm", self._call_enrichment_llm, prompt)
             if not answer:
@@ -610,7 +654,19 @@ class SummarizationPipeline:
 
         if enriched["title"]:
             summary.session_title = enriched["title"]
-        summary.summary_sentence = enriched["summary_sentence"]
+        sentence = enriched["summary_sentence"]
+        length, limit = sentence_length(sentence)
+        if length > limit:
+            # the prompt states the limit; a reply over it is asked once more, for that
+            # sentence alone. A rewrite still over it is not used: the sentence is never
+            # cut, so the original is kept (and logged).
+            shorter = await executors.run_in("llm", self._shorten_sentence, sentence,
+                                             enriched["deliverables"], length, limit)
+            if shorter and sentence_length(shorter)[0] <= limit:
+                sentence = shorter
+            else:
+                logger.info("DailyActivity sentence stays over its limit (%d > %d)", length, limit)
+        summary.summary_sentence = sentence
         summary.deliverables = enriched["deliverables"]
         summary.key_outputs = enriched["key_outputs"]
         summary.validation_status = enriched["validation_status"]
@@ -677,8 +733,21 @@ class SummarizationPipeline:
 
         return "\n\n".join(lines)
 
+    @classmethod
+    def _shorten_sentence(cls, sentence: str, deliverables: list[str], length: int,
+                          limit: int) -> str:
+        """*sentence* written again within *limit*, or "" when there is no usable answer."""
+        unit = "Chinese characters" if limit == SENTENCE_LIMIT_CJK else "words"
+        prompt = _SHORTEN_PROMPT.format(length=length, limit=limit, unit=unit, sentence=sentence,
+                                        deliverables="; ".join(deliverables) or "(none)")
+        answer = cls._call_enrichment_llm(prompt, schema=_SHORTEN_SCHEMA, name="sentence",
+                                          description="The summary sentence within its limit.")
+        value = answer.get("summary_sentence") if isinstance(answer, dict) else None
+        return cls._one_line(value) if isinstance(value, str) else ""
+
     @staticmethod
-    def _call_enrichment_llm(prompt: str) -> dict:
+    def _call_enrichment_llm(prompt: str, *, schema: dict | None = None, name: str = "summary",
+                             description: str = "Record the session summary.") -> dict:
         """The model's enrichment answer for *prompt*, or {} when there is none.
 
         Budget: runs inside DailyActivityExtractionHook (its own 900 s hang guard,
@@ -700,9 +769,10 @@ class SummarizationPipeline:
 
         from jobs.bedrock import StructuredOutputError, structured
         try:
-            return structured(prompt, schema=_ENRICHMENT_SCHEMA, model_id=model_id, feature="summarize.session",
+            return structured(prompt, schema=schema or _ENRICHMENT_SCHEMA, model_id=model_id,
+                              feature="summarize.session",
                               max_tokens=_ENRICHMENT_MAX_TOKENS, temperature=0.0,
-                              name="summary", description="Record the session summary.",
+                              name=name, description=description,
                               region=region, read_timeout=_ENRICHMENT_READ_TIMEOUT_S,
                               max_attempts=1)
         except StructuredOutputError as e:

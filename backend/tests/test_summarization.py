@@ -563,3 +563,59 @@ class TestFilesModifiedAreRealPaths:
         cmd = "echo " + "x" * (MAX_SUMMARY_LENGTH - 40) + " > /tmp/run_abc/evidence/pro"
         summary = ("Running: " + cmd)[:MAX_SUMMARY_LENGTH]
         assert pipeline._extract_files_modified([_tool_use("Bash", summary, "bash")]) == []
+
+
+# ---------------------------------------------------------------------------
+# The summary sentence stays within its limit (60 Chinese characters / 30 words)
+# ---------------------------------------------------------------------------
+
+class TestSentenceLimit:
+    LONG = ("对照代码实测评估了 Pipeline Swarm Run 设计，发现 5 处问题后更新至 r7.6，再按 Hive 同时支持人和 Host "
+            "的方向改写了接口与派发流程，并补充了验收清单与回退方案，等你确认后实现。")
+    SHORT = "评估 Swarm Run 设计并更新到 r7.6，等你确认后实现。"
+
+    def test_length_counts_chinese_characters_and_ascii_words(self):
+        from core.summarization import sentence_length
+        assert sentence_length("修好了 Brain Hub 的加载错误。") == (10, 60)   # 8 characters + 2 words
+        assert sentence_length("Fixed the Brain Hub loading error") == (6, 30)
+        assert sentence_length(self.LONG)[0] > 60 and sentence_length(self.SHORT)[0] <= 60
+
+    def test_the_prompt_states_the_limit(self):
+        from core.summarization import _ENRICHMENT_PROMPT, _SO_FAR_BLOCK
+        assert "{sentence_cjk}" in _ENRICHMENT_PROMPT and "do not append" in _SO_FAR_BLOCK
+
+    def _answer(self, sentence):
+        return {"title": "t", "summary_sentence": sentence, "deliverables": ["d1"], "key_outputs": [],
+                "validation_status": "", "next_items": [], "resolves": [], "coe_signal": "", "coe_topic": ""}
+
+    @pytest.mark.asyncio
+    async def test_an_over_long_sentence_is_written_again_once(self, monkeypatch, pipeline):
+        calls = []
+
+        def llm(prompt, **kw):
+            calls.append(kw.get("name", "summary"))
+            return self._answer(self.LONG) if kw.get("name") != "sentence" else {"summary_sentence": self.SHORT}
+        monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm", staticmethod(llm))
+        summary = await pipeline.summarize([_user("评估一下 Swarm Run 设计"), _assistant("好的")], session_id="s1")
+        assert summary.summary_sentence == self.SHORT
+        assert calls == ["summary", "sentence"]
+
+    @pytest.mark.asyncio
+    async def test_a_rewrite_still_too_long_keeps_the_original_and_nothing_is_cut(self, monkeypatch, pipeline):
+        calls = []
+
+        def llm(prompt, **kw):
+            calls.append(kw.get("name", "summary"))
+            return self._answer(self.LONG) if kw.get("name") != "sentence" else {"summary_sentence": self.LONG + "还有"}
+        monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm", staticmethod(llm))
+        summary = await pipeline.summarize([_user("评估一下 Swarm Run 设计"), _assistant("好的")], session_id="s1")
+        assert summary.summary_sentence == self.LONG
+        assert calls == ["summary", "sentence"]          # one more call at most
+
+    @pytest.mark.asyncio
+    async def test_a_sentence_within_the_limit_costs_no_extra_call(self, monkeypatch, pipeline):
+        calls = []
+        monkeypatch.setattr(SummarizationPipeline, "_call_enrichment_llm",
+                            staticmethod(lambda prompt, **kw: calls.append(1) or self._answer(self.SHORT)))
+        summary = await pipeline.summarize([_user("评估一下 Swarm Run 设计"), _assistant("好的")], session_id="s1")
+        assert summary.summary_sentence == self.SHORT and calls == [1]
