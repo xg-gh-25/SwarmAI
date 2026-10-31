@@ -27,7 +27,7 @@
  */
 import { useCallback, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { HiveAccount, HiveInstance, TRANSITIONAL_STATUSES } from '../../services/hive';
+import { HiveAccount, HiveInstance, TRANSITIONAL_STATUSES, MAX_HIVES, countedHives, hiveAccountView } from '../../services/hive';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { OverlayError } from './OverlayState';
 import { classifyLoadError } from '../../services/api';
@@ -62,6 +62,12 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
   const loading = accountsQ.isPending || instancesQ.isPending;
   const refresh = useCallback(() => invalidateOverlay(qc, 'hive'), [qc]);
 
+  const view_ = hiveAccountView(accounts);
+  const deployable = view_.deployable;
+  const limitReached = countedHives(instances) >= MAX_HIVES;
+  const deployBlocked = deployable.length === 0 ? 'Add an AWS account first (Accounts tab) to deploy a Hive'
+    : limitReached ? `At most ${MAX_HIVES} Hives: delete one to deploy another` : null;
+
   const myHives = instances.filter((i) => i.hiveType === 'my');
   const sharedHives = instances.filter((i) => i.hiveType !== 'my');
 
@@ -87,15 +93,15 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
         right={view === 'fleet' ? (
           <button
             onClick={() => setShowDeploy(true)}
-            disabled={accounts.length === 0}
-            title={accounts.length === 0 ? 'Add an AWS account first (Accounts tab) to deploy a Hive' : 'Deploy a new Hive'}
-            aria-label={accounts.length === 0 ? 'Deploy Hive — disabled: add an AWS account first' : 'Deploy Hive'}
+            disabled={deployBlocked !== null}
+            title={deployBlocked ?? 'Deploy a new Hive'}
+            aria-label={deployBlocked ? `Deploy Hive — disabled: ${deployBlocked}` : 'Deploy Hive'}
             data-testid="hive-deploy-btn"
             className="btn-sm btn-soft transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined icon-xs">add</span>Deploy Hive
           </button>
-        ) : (
+        ) : view_.canAdd ? (
           <button
             onClick={() => setShowAddAccount(true)}
             data-testid="hive-add-account-btn"
@@ -103,7 +109,7 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
           >
             <span className="material-symbols-outlined icon-xs">add</span>Add Account
           </button>
-        )}
+        ) : null}
       />
 
       <GuideBanner />
@@ -129,12 +135,14 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
           myHives={myHives}
           sharedHives={sharedHives}
           instances={instances}
-          accounts={accounts}
+          accounts={deployable}
+          limitReached={limitReached}
           onAction={refresh}
           onDeploy={() => setShowDeploy(true)}
         />
       ) : (
-        <AccountsView accounts={accounts} onAction={refresh} onAdd={() => setShowAddAccount(true)} />
+        <AccountsView accounts={view_.shown} onAction={refresh}
+          onAdd={view_.canAdd ? () => setShowAddAccount(true) : undefined} />
       )}
 
       {showAddAccount && (
@@ -145,7 +153,7 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
       )}
       {showDeploy && (
         <DeployHiveDialog
-          accounts={accounts}
+          accounts={deployable}
           onClose={() => setShowDeploy(false)}
           onDeployed={() => { setShowDeploy(false); void refresh(); }}
         />
@@ -180,11 +188,12 @@ function OverviewStrip({ instances }: { instances: HiveInstance[] }) {
 
 // ── Fleet view: overview + My/Shared instance sections ─────────────
 
-function FleetView({ myHives, sharedHives, instances, accounts, onAction, onDeploy }: {
+function FleetView({ myHives, sharedHives, instances, accounts, limitReached, onAction, onDeploy }: {
   myHives: HiveInstance[];
   sharedHives: HiveInstance[];
   instances: HiveInstance[];
   accounts: HiveAccount[];
+  limitReached: boolean;
   onAction: () => void;
   onDeploy: () => void;
 }) {
@@ -206,6 +215,7 @@ function FleetView({ myHives, sharedHives, instances, accounts, onAction, onDepl
           onAction={onAction}
           accounts={accounts}
           onDeploy={onDeploy}
+          limitReached={limitReached}
           showEmpty
         />
       </div>
@@ -216,7 +226,7 @@ function FleetView({ myHives, sharedHives, instances, accounts, onAction, onDepl
 // ── Accounts view: AWS account roster ───────────────────────────────
 
 function AccountsView({ accounts, onAction, onAdd }: {
-  accounts: HiveAccount[]; onAction: () => void; onAdd: () => void;
+  accounts: HiveAccount[]; onAction: () => void; onAdd?: () => void;
 }) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="hive-accounts-view">
@@ -231,13 +241,15 @@ function AccountsView({ accounts, onAction, onAdd }: {
           ))}
         </div>
       )}
-      <button
-        onClick={onAdd}
-        className="mt-3 text-meta text-primary hover:underline"
-        data-testid="hive-accounts-add-inline"
-      >
-        + Add another AWS account
-      </button>
+      {onAdd && (
+        <button
+          onClick={onAdd}
+          className="mt-3 text-meta text-primary hover:underline"
+          data-testid="hive-accounts-add-inline"
+        >
+          + Add another AWS account
+        </button>
+      )}
     </div>
   );
 }

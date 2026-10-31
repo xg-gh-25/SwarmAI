@@ -232,6 +232,28 @@ hive_fleet: {
 
 表保留一个版本（只读），下个版本再删。
 
+**第 3 步的实现**（`backend/hive/accounts.py`）：
+- 一个判断决定模式：记录能解析、且有账号 ID，就是"SwarmAI 模式"；否则一切照旧（每行用自己的凭证，可以加账号）。
+- SwarmAI 模式下有一行 `id='swarmai'`（`auth_method='swarmai'`，没有自己的凭证），会话取 `aws_account.boto_session`，
+  钉在记录的账号上；这一行的账号 ID 和记录不一致时任何操作都拒绝，不会落到别的账号。这一行已经有 Hive 时不改它的
+  账号 ID（换账号是 §7.5 的事）。
+- 迁移在 daemon 启动时跑（只在 SwarmAI 模式，幂等）：逐行用这一行自己的凭证调 STS，是 SwarmAI 账号就把它的 Hive
+  指到 `swarmai` 行、这一行标 `merged`；改之前把"哪一行、原来的认证方式、挪了哪些 Hive"追加到
+  `<data dir>/aws/hive-accounts-migration.json`（0600，不含密钥）。行不删，`auth_config` 不动（所以也没有密钥要挪进
+  密钥库）；STS 失败的行原样留着，下次启动再试，设置页对这一行点"Verify"也会再试一次。
+- 另一个账号的行：它的凭证只用于停止、清理、读（`instance_exists`、Swarm Out 显示它的问题）；启动、更新、改密码、
+  Swarm Out 派单和回答、重试都拒绝并说明"这台 Hive 在另一个账号"。
+- 账号够不着（另一个账号、登录过期、SwarmAI 账号断开）时：删除 Hive 或账号返回 409、什么都不删（否则表里的行没了，
+  实例还在跑、还在计费）；停止、启动不会卡在 `stopping` / `starting`，转成 `error` 并写明原因。
+- 不会把 Hive 挪到一个写着别的账号的 `swarmai` 行上（换过账号、那一行还有旧 Hive 时），否则这些 Hive 谁都操作不了。
+  已合并的行不能删（留着以便撤销）；备份文件读不了时先改名留着，不覆盖。
+- SwarmAI 账号断开时 `swarmai` 行显示为 `disconnected`：不能往里建 Hive，其他账号恢复原来的用法。
+- 路由：SwarmAI 模式下不能加账号、不能删 `swarmai` 行，新 Hive 只建在 `swarmai` 行；`GET /accounts` 给每行带
+  `role`（swarmai / other / merged / own）和 Hive 数。
+- 最多 8 台在这一步就挡住：创建和重试在同一把机群锁里先数再写（计入规则同 §7.3），期望数量留到第 5 步。
+- 界面：Hive 设置页和 Fleet 的账号页在 SwarmAI 模式下没有"加账号"，只列 SwarmAI 账号和还有 Hive 的其他账号；
+  部署对话框直接显示 SwarmAI 账号；到 8 台"部署"置灰并写明。
+
 ### 5.6 现有记录怎么生成
 
 第一次启动新版本时，从 `auth_method` 和实际在用的来源推出 `source`（ada：从 `~/.aws/config` 的默认段或

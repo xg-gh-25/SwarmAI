@@ -21,7 +21,7 @@
  * the SAME dialog pins to the viewport as before — behavior there is unchanged.
  */
 import { useState, useEffect, useRef } from 'react';
-import { hiveService, HiveAccount, HiveInstance, VerifyResult, TRANSITIONAL_STATUSES, getDeploySteps, isNewerVersion } from '../../services/hive';
+import { hiveService, HiveAccount, HiveInstance, VerifyResult, TRANSITIONAL_STATUSES, getDeploySteps, isNewerVersion, MAX_HIVES } from '../../services/hive';
 import { openExternal } from '../../utils/openExternal';
 import { copyToClipboard } from '../../utils/clipboard';
 import { isApiError } from '../../services/api';
@@ -68,7 +68,7 @@ export const INSTANCE_SIZES = [
 // ── Hive Section ──────────────────────────────────────────────────
 
 export function HiveSection({
-  title, instances, onAction, accounts, onDeploy, showEmpty,
+  title, instances, onAction, accounts, onDeploy, showEmpty, limitReached,
 }: {
   title: string;
   instances: HiveInstance[];
@@ -76,6 +76,8 @@ export function HiveSection({
   accounts?: HiveAccount[];
   onDeploy?: () => void;
   showEmpty?: boolean;
+  /** MAX_HIVES already counted: deploying is disabled */
+  limitReached?: boolean;
 }) {
   return (
     <section className="bg-[var(--color-card)] rounded-lg p-6">
@@ -84,7 +86,8 @@ export function HiveSection({
         {onDeploy && (
           <button
             onClick={onDeploy}
-            disabled={!accounts || accounts.length === 0}
+            disabled={!accounts || accounts.length === 0 || limitReached}
+            title={limitReached ? `At most ${MAX_HIVES} Hives` : undefined}
             className="btn-md btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined icon-sm">add</span>
@@ -503,8 +506,14 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
                 <span className="text-[var(--color-text-muted)] ml-2">({acc.label})</span>
               )}
             </div>
-            <div className="text-xs text-[var(--color-text-muted)]">
-              {acc.authMethod} {'·'} {acc.defaultRegion}
+            <div className="text-xs text-[var(--color-text-muted)]" data-testid="hive-account-detail">
+              {acc.role === 'swarmai'
+                ? <>New Hives are created here {'·'} change it in Settings {'>'} SwarmAI account</>
+                : acc.role === 'disconnected'
+                  ? <>The SwarmAI account is not connected {'·'} connect it in Settings {'>'} SwarmAI account to manage these Hives</>
+                : acc.role === 'other'
+                  ? <>Another AWS account: its {acc.hiveCount} Hive{acc.hiveCount === 1 ? '' : 's'} can only be stopped or deleted. Verify if it is the SwarmAI account.</>
+                  : <>{acc.authMethod} {'·'} {acc.defaultRegion}</>}
               {acc.verifiedAt && <span className="text-green-400 ml-2">{'✓'} verified</span>}
             </div>
           </div>
@@ -517,18 +526,25 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
           >
             {verifying ? '...' : 'Verify'}
           </button>
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded disabled:opacity-50"
-          >
-            {deleting ? '...' : '✕'}
-          </button>
+          {acc.role !== 'swarmai' && acc.role !== 'disconnected' && (
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              aria-label="Delete this account and its Hives"
+              className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded disabled:opacity-50"
+            >
+              {deleting ? '...' : '✕'}
+            </button>
+          )}
         </div>
       </div>
       {verifyResult && (
         <div className={`mt-2 text-xs ${verifyResult.success ? 'text-green-400' : 'text-red-400'}`}>
-          {verifyResult.success ? '✓ All checks passed' : `✗ ${verifyResult.error || 'Failed'}`}
+          {verifyResult.success
+            ? (verifyResult.checks?.sts as { merged?: boolean } | undefined)?.merged
+              ? '✓ This is the SwarmAI account: its Hives were moved there'
+              : '✓ All checks passed'
+            : `✗ ${verifyResult.error || 'Failed'}`}
         </div>
       )}
       {error && (
@@ -705,12 +721,19 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
 
           <div>
             <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account</label>
-            <select value={accountRef} onChange={(e) => setAccountRef(e.target.value)}
-              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)]">
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>{a.accountId} {a.label ? `(${a.label})` : ''}</option>
-              ))}
-            </select>
+            {accounts.length === 1 && accounts[0].role === 'swarmai' ? (
+              <div className="px-3 py-2 text-sm text-[var(--color-text)]" data-testid="hive-deploy-account">
+                <code>{accounts[0].accountId}</code>
+                <span className="text-[var(--color-text-muted)] ml-2">(SwarmAI account)</span>
+              </div>
+            ) : (
+              <select value={accountRef} onChange={(e) => setAccountRef(e.target.value)}
+                className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)]">
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>{a.accountId} {a.label ? `(${a.label})` : ''}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div>

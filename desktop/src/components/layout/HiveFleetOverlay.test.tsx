@@ -61,7 +61,14 @@ const mkInst = (o: Partial<HiveInstance>): HiveInstance => ({
 const ACCOUNT: HiveAccount = {
   id: 'a1', accountId: '123456789012', label: 'personal', authMethod: 'access_keys',
   defaultRegion: 'us-east-1', createdAt: '2026-07-01T00:00:00Z', verifiedAt: '2026-07-01T00:00:00Z',
+  role: 'own', hiveCount: 2,
 };
+// with the SwarmAI account connected (design 2026-10-31-swarmai-aws-account §5.5)
+const SWARMAI: HiveAccount = { ...ACCOUNT, id: 'swarmai', accountId: '111111111111',
+  label: 'SwarmAI account', authMethod: 'swarmai', role: 'swarmai', hiveCount: 1 };
+const OTHER: HiveAccount = { ...ACCOUNT, id: 'o1', accountId: '222222222222', role: 'other', hiveCount: 1 };
+const OTHER_EMPTY: HiveAccount = { ...ACCOUNT, id: 'o2', accountId: '333333333333', role: 'other', hiveCount: 0 };
+const MERGED: HiveAccount = { ...ACCOUNT, id: 'm1', accountId: '444444444444', role: 'merged', hiveCount: 0 };
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 beforeEach(() => {
@@ -132,6 +139,60 @@ describe('HiveFleetOverlay', () => {
     expect(screen.getByTestId('hive-deploy-btn')).toBeDisabled();
     // disabled state is discoverable (UX1): a title explains WHY
     expect(screen.getByTestId('hive-deploy-btn').getAttribute('title')).toContain('AWS account');
+  });
+
+  it('with the SwarmAI account: no adding accounts, another account only while it holds Hives', async () => {
+    listAccounts.mockResolvedValue([SWARMAI, OTHER, OTHER_EMPTY, MERGED]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('hive-view-accounts')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('hive-view-accounts'));
+    await waitFor(() => expect(screen.getByText('111111111111')).toBeInTheDocument());
+    expect(screen.getByText('222222222222')).toBeInTheDocument();
+    expect(screen.queryByText('333333333333')).toBeNull();
+    expect(screen.queryByText('444444444444')).toBeNull();
+    expect(screen.queryByTestId('hive-add-account-btn')).toBeNull();
+    expect(screen.queryByTestId('hive-accounts-add-inline')).toBeNull();
+    // the SwarmAI account cannot be deleted here; the other one can (with its Hives)
+    expect(screen.getAllByRole('button', { name: /Delete this account/ })).toHaveLength(1);
+    expect(screen.getByText(/can only be stopped or deleted/)).toBeInTheDocument();
+  });
+
+  it('with the SwarmAI account: a new Hive goes there, no account to choose', async () => {
+    listAccounts.mockResolvedValue([SWARMAI, OTHER]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('hive-deploy-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('hive-deploy-btn'));
+    await waitFor(() => expect(screen.getByTestId('hive-deploy-account')).toBeInTheDocument());
+    expect(screen.getByTestId('hive-deploy-account').textContent).toContain('111111111111');
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('at 8 counted Hives deploying is disabled; a failed create without EC2 does not count', async () => {
+    const eight = Array.from({ length: 8 }, (_, k) =>
+      mkInst({ id: `h${k}`, name: `h${k}`, ec2InstanceId: `i-${k}`, hiveType: 'shared' }));
+    listInstances.mockResolvedValue(eight);
+    const { unmount } = renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByText('h7')).toBeInTheDocument());
+    expect(screen.getByTestId('hive-deploy-btn')).toBeDisabled();
+    expect(screen.getByTestId('hive-deploy-btn').getAttribute('title')).toContain('At most 8');
+    unmount();
+    listInstances.mockResolvedValue([...eight.slice(0, 7),
+      mkInst({ id: 'f', name: 'failed', status: 'error', ec2InstanceId: null })]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByText('failed')).toBeInTheDocument());
+    expect(screen.getByTestId('hive-deploy-btn')).not.toBeDisabled();
+  });
+
+  it('a disconnected SwarmAI account: legacy accounts usable again, its Hives shown, not deployable', async () => {
+    listAccounts.mockResolvedValue([{ ...SWARMAI, role: 'disconnected' }, ACCOUNT]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('hive-view-accounts')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('hive-view-accounts'));
+    await waitFor(() => expect(screen.getByText('111111111111')).toBeInTheDocument());
+    expect(screen.getByText('123456789012')).toBeInTheDocument();
+    expect(screen.getByText(/SwarmAI account is not connected/)).toBeInTheDocument();
+    expect(screen.getByTestId('hive-add-account-btn')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Delete this account/ })).toHaveLength(1);
   });
 
   // ── failure/empty paths (REVIEW UX/Test gaps) ──

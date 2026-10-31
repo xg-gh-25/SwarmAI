@@ -15,6 +15,39 @@ export interface HiveAccount {
   defaultRegion: string;
   createdAt: string;
   verifiedAt: string | null;
+  /** swarmai: the SwarmAI account (new Hives go here) · disconnected: the SwarmAI row while
+   *  that account is not connected (nothing can be done with it) · other: another AWS
+   *  account, its Hives can only be stopped or deleted · merged: its Hives moved to the
+   *  SwarmAI account · own: no SwarmAI account connected, the account works as before */
+  role: 'swarmai' | 'disconnected' | 'other' | 'merged' | 'own';
+  hiveCount: number;
+}
+
+/** At most this many Hives (a guard against mis-operation; it counts machines). */
+export const MAX_HIVES = 8;
+
+/** Hives that count toward MAX_HIVES: every one whose EC2 instance may exist (a failed
+ *  create without an instance does not). Same rule as the backend (hive/accounts.py). */
+export function countedHives(instances: HiveInstance[]): number {
+  return instances.filter((i) => i.status !== 'deleted' && !(i.status === 'error' && !i.ec2InstanceId)).length;
+}
+
+/** What the Hive surfaces show and allow, from the accounts list. With the SwarmAI
+ *  account connected: new Hives only there, no adding accounts, and another account is
+ *  listed only while it still holds Hives. Without it: everything as before. */
+export function hiveAccountView(accounts: HiveAccount[]): {
+  swarmai: HiveAccount | null; canAdd: boolean; deployable: HiveAccount[]; shown: HiveAccount[];
+} {
+  const swarmai = accounts.find((a) => a.role === 'swarmai') ?? null;
+  if (!swarmai) {
+    const own = accounts.filter((a) => a.role === 'own');
+    const disconnected = accounts.filter((a) => a.role === 'disconnected' && a.hiveCount > 0);
+    return { swarmai: null, canAdd: true, deployable: own, shown: [...disconnected, ...own] };
+  }
+  return {
+    swarmai, canAdd: false, deployable: [swarmai],
+    shown: accounts.filter((a) => a.role === 'swarmai' || (a.role === 'other' && a.hiveCount > 0)),
+  };
 }
 
 export interface HiveInstance {

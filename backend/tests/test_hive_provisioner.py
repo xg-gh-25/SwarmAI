@@ -1291,6 +1291,13 @@ class TestG13InvalidPlaceholder:
 # ── PE Audit: Behavioral Tests (M10/M11) ────────────────────────
 
 
+async def _run_inline(fn, *a, **k):
+    """Stand-in for asyncio.to_thread. patch() makes an AsyncMock of it, which returns
+    its side effect's result un-awaited: a side effect that returns an executor future
+    let the call finish after the test's assertions. Running inline has no such race."""
+    return fn(*a, **k)
+
+
 def _make_provisioner_and_mocks():
     """Helper: create a provisioner with standard mocked instance/account."""
     from hive.provisioner import HiveProvisioner
@@ -1339,7 +1346,7 @@ class TestStopBehavioral:
              patch.object(p, "_set_cloudfront_enabled", new_callable=AsyncMock) as mock_cf, \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_running_loop().run_in_executor(None, lambda: fn(*a, **k))):
+             patch("hive.provisioner.asyncio.to_thread", side_effect=_run_inline):
 
             await p.stop("inst-1")
 
@@ -1379,7 +1386,7 @@ class TestStartBehavioral:
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True), \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_running_loop().run_in_executor(None, lambda: fn(*a, **k))):
+             patch("hive.provisioner.asyncio.to_thread", side_effect=_run_inline):
 
             await p.start("inst-1")
 
@@ -1399,7 +1406,7 @@ class TestStartBehavioral:
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=False), \
              patch.object(p, "_get_session", return_value=mock_session), \
              patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=lambda fn, *a, **k: asyncio.get_running_loop().run_in_executor(None, lambda: fn(*a, **k))):
+             patch("hive.provisioner.asyncio.to_thread", side_effect=_run_inline):
 
             await p.start("inst-1")
 

@@ -28,9 +28,9 @@ ALLOWED = {
     "jobs/executor.py": "frozen keys for the CLI only when there is no account",
     "routers/settings.py": "the credential probe when there is no account",
     "routers/system.py": "the setup wizard's verify (replaced by the account page, step 4)",
-    "core/swarm_out_bridge.py": "Hive (design step 3)",
-    "hive/provisioner.py": "Hive (design step 3)",
-    "routers/hive.py": "Hive (design step 3)",
+    "hive/accounts.py":
+        "a Hive row's own credentials: legacy mode, or another account's Hives (stop and "
+        "delete only); the SwarmAI account goes through aws_account",
     "skills/s_pollinate/scripts/tts/backends/polly.py":
         "a skill script run in the agent's shell, as the user",
 }

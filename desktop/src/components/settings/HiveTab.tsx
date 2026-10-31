@@ -12,7 +12,7 @@
  * consumes the same AccountCard/AddAccountDialog, so the two entries never drift).
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { hiveService, HiveAccount } from '../../services/hive';
+import { hiveService, HiveAccount, hiveAccountView } from '../../services/hive';
 import { AccountCard, AddAccountDialog } from './hiveComponents';
 
 export default function HiveTab() {
@@ -37,6 +37,8 @@ export default function HiveTab() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const view = hiveAccountView(accounts);
+
   if (loading) {
     return <div className="text-[var(--color-text-muted)] text-sm p-6">Loading...</div>;
   }
@@ -54,22 +56,24 @@ export default function HiveTab() {
       <section className="bg-[var(--color-card)] rounded-lg p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-[var(--color-text)]">AWS Accounts</h3>
-          <button
-            onClick={() => setShowAddAccount(true)}
-            className="btn-md btn-secondary transition-colors"
-          >
-            <span className="material-symbols-outlined icon-sm">add</span>
-            Add Account
-          </button>
+          {view.canAdd && (
+            <button
+              onClick={() => setShowAddAccount(true)}
+              className="btn-md btn-secondary transition-colors"
+            >
+              <span className="material-symbols-outlined icon-sm">add</span>
+              Add Account
+            </button>
+          )}
         </div>
 
-        {accounts.length === 0 ? (
+        {view.shown.length === 0 ? (
           <p className="text-xs text-[var(--color-text-muted)] text-center py-4">
             No AWS accounts configured. Add one to start deploying Hives.
           </p>
         ) : (
           <div className="space-y-2">
-            {accounts.map((acc) => (
+            {view.shown.map((acc) => (
               <AccountCard key={acc.id} account={acc} onDelete={refresh} />
             ))}
           </div>

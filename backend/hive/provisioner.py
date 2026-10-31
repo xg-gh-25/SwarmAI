@@ -181,22 +181,33 @@ class HiveProvisioner:
 
     # ── boto3 session ──────────────────────────────────────────────
 
-    def _get_session(self, account_row: dict, region: str = "us-east-1"):
-        """Create a boto3 Session from hive_accounts auth_config."""
-        import boto3
+    def _get_session(self, account_row: dict, region: str = "us-east-1",
+                     purpose: str = "manage"):
+        """The boto3 session for a Hive row: the SwarmAI account when it is connected,
+        another account's own credentials only to stop, clean up or read
+        (``hive.accounts.session_for``)."""
+        from hive.accounts import session_for
+        return session_for(account_row, region, purpose)
 
-        auth_config = json.loads(account_row.get("auth_config", "{}"))
-        auth_method = account_row.get("auth_method", "access_keys")
+    async def _session(self, account_row: dict, region: str = "us-east-1",
+                       purpose: str = "manage"):
+        """``_get_session`` off the event loop (resolving the account can run ada)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: self._get_session(account_row, region, purpose))
 
-        kwargs: dict[str, Any] = {"region_name": region}
-        if auth_method == "access_keys" and auth_config.get("access_key_id"):
-            kwargs["aws_access_key_id"] = auth_config["access_key_id"]
-            kwargs["aws_secret_access_key"] = auth_config.get("secret_access_key", "")
-        elif auth_method == "sso" and auth_config.get("profile"):
-            kwargs["profile_name"] = auth_config["profile"]
-        # else: default credential chain (IAM role, env vars, etc.)
-
-        return boto3.Session(**kwargs)
+    async def _lifecycle_session(self, instance_id: str, account_row: dict, region: str,
+                                 purpose: str):
+        """The session for stop/start, after their status gate: an account that cannot be
+        reached ends the Hive in 'error' saying why (as a failed stop/start does), never
+        stuck in 'stopping'/'starting'."""
+        from hive.accounts import ACCOUNT_ERRORS
+        try:
+            return await self._session(account_row, region, purpose)
+        except ACCOUNT_ERRORS as e:
+            await self._update_instance(instance_id, status="error",
+                                        error_message=str(e)[:300])
+            raise
 
     # ── DB helpers ─────────────────────────────────────────────────
 
@@ -909,7 +920,7 @@ class HiveProvisioner:
             # Persist resolved version
             await self._update_instance(instance_id, version=version)
 
-            session = self._get_session(account, region)
+            session = await self._session(account, region, "manage")
             aws_account_id = account.get("account_id", "")
 
             # Step 1: S3
@@ -1021,7 +1032,7 @@ class HiveProvisioner:
                 try:
                     instance = await self._get_instance(instance_id)
                     account = await self._get_account(instance["account_ref"])
-                    cleanup_session = self._get_session(account, instance["region"])
+                    cleanup_session = await self._session(account, instance["region"], "cleanup")
                     await self._cleanup_resources(
                         cleanup_session,
                         instance["region"],
@@ -1090,7 +1101,7 @@ class HiveProvisioner:
 
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        session = await self._lifecycle_session(instance_id, account, instance["region"], "stop")
         ec2_id = instance.get("ec2_instance_id")
         if not ec2_id:
             raise ValueError("No EC2 instance ID")
@@ -1139,7 +1150,7 @@ class HiveProvisioner:
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         region = instance["region"]
-        session = self._get_session(account, region)
+        session = await self._lifecycle_session(instance_id, account, region, "manage")
         ec2_id = instance.get("ec2_instance_id")
         if not ec2_id:
             raise ValueError("No EC2 instance ID")
@@ -1240,7 +1251,7 @@ class HiveProvisioner:
         try:
             instance = await self._get_instance(instance_id)
             account = await self._get_account(instance["account_ref"])
-            session = self._get_session(account, instance["region"])
+            session = await self._session(account, instance["region"], "manage")
             ec2_id = instance.get("ec2_instance_id")
             region = instance["region"]
             # Fail-loud on a missing persisted bucket rather than silently
@@ -1463,7 +1474,7 @@ echo "=== Update to v{version} verified ==="
 
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        session = await self._session(account, instance["region"], "manage")
         ec2_id = instance.get("ec2_instance_id")
         region = instance["region"]
 
@@ -1615,7 +1626,7 @@ echo "Password reset complete"
         """
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        session = await self._session(account, instance["region"], "manage")
         ec2_id = instance.get("ec2_instance_id")
         region = instance["region"]
 
@@ -1739,7 +1750,7 @@ fi
         if not ec2_id:
             return False
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        session = await self._session(account, instance["region"], "read")
         return await asyncio.to_thread(self._ec2_present, session, instance["region"], ec2_id)
 
     async def _forget_terminated_instance(self, session, region: str, instance_id: str,
@@ -1755,7 +1766,7 @@ fi
         cannot be made or does not complete: the caller then deletes nothing."""
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        session = await self._session(account, instance["region"], "cleanup")
         ec2_id = instance.get("ec2_instance_id")
         name = instance["name"]
         if not ec2_id:
@@ -1793,7 +1804,7 @@ fi
         """Delete all AWS resources for a Hive instance."""
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        session = await self._session(account, instance["region"], "cleanup")
         region = instance["region"]
 
         await self._update_instance(instance_id, status="deleting")

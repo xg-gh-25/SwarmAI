@@ -198,7 +198,7 @@ def test_a_slow_question_read_does_not_hold_up_the_poll(monkeypatch):
     monkeypatch.setattr(swarm_out, "_hive_statuses", statuses)
     monkeypatch.setattr(swarm_out, "_instance", instance)
     monkeypatch.setattr(swarm_out, "_session_states", states)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
     monkeypatch.setattr(swarm_out, "_open_asks", slow)
     async def timed():

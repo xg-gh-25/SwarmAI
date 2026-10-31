@@ -286,10 +286,13 @@ def _base(inst: dict[str, Any]) -> str:
     return f"https://{inst['cloudfront_domain']}"
 
 
-def _s3(inst: dict[str, Any]):
+def _s3(inst: dict[str, Any], purpose: str = "manage"):
+    """The Hive's S3 client: ``read`` to show its questions, ``manage`` to answer them
+    (another account's Hive may only be read; hive/accounts.session_for)."""
     from hive.provisioner import HiveProvisioner
     from database import db
-    session = HiveProvisioner(Path(db.db_path))._get_session(inst["_account"], inst["region"])
+    session = HiveProvisioner(Path(db.db_path))._get_session(
+        inst["_account"], inst["region"], purpose)
     return session.client("s3", region_name=inst["region"])
 
 
@@ -1052,7 +1055,7 @@ async def _read_hive(hive_id: str) -> tuple[list[dict[str, Any]], Optional[dict[
     def read_asks() -> tuple[list[dict[str, Any]], bool]:
         """The open asks (cleaned), then the waiting pipeline decisions; a decision list
         that cannot be read keeps the asks (and is reported)."""
-        s3 = _s3(inst)
+        s3 = _s3(inst, "read")
         found = _open_asks(s3, inst["s3_bucket"], inst["name"])
         try:
             found += _read_decisions(s3, inst["s3_bucket"], inst["name"])

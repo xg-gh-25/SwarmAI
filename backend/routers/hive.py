@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from database import db
+from hive import accounts as hive_accounts
 from hive.provisioner import ALLOWED_INSTANCE_TYPES, HiveProvisioner, HIVE_NAME_RE, AMI_ID_RE, VERSION_RE
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,10 @@ class HiveAccountResponse(BaseModel):
     default_region: str
     created_at: str
     verified_at: Optional[str] = None
+    # swarmai (the SwarmAI account) | other (another account: stop and delete only)
+    # | merged (its Hives moved to the SwarmAI account) | own (no SwarmAI account: as before)
+    role: str = "own"
+    hive_count: int = 0
 
 
 ALLOWED_REGIONS = frozenset({
@@ -128,7 +133,8 @@ ALLOWED_REGIONS = frozenset({
 
 class HiveInstanceCreate(BaseModel):
     name: str  # validated in create_instance: ^[a-z][a-z0-9-]{0,62}$
-    account_ref: str
+    # with the SwarmAI account connected: omitted or 'swarmai'; otherwise required
+    account_ref: Optional[str] = None
     region: str = "us-east-1"
     instance_type: str = "m7g.xlarge"
     owner_name: Optional[str] = None
@@ -249,17 +255,33 @@ class VerifyResult(BaseModel):
 
 @router.get("/accounts", response_model=list[HiveAccountResponse])
 async def list_accounts():
-    """List all configured AWS accounts."""
+    """List the AWS accounts Hives are in (design 2026-10-31-swarmai-aws-account §5.5).
+    With the SwarmAI account connected its row comes first and new Hives go there."""
+    try:
+        await hive_accounts.ensure_swarmai_row(db.db_path)
+    except Exception as e:  # noqa: BLE001 — the list still shows what is there
+        logger.warning("Could not create the SwarmAI account row: %s", e)
+    mode = hive_accounts.swarmai_account()
     async with _conn() as c:
-        cursor = await c.execute("SELECT * FROM hive_accounts ORDER BY created_at")
+        cursor = await c.execute(
+            "SELECT a.*, (SELECT COUNT(*) FROM hive_instances i WHERE i.account_ref = a.id) "
+            "AS hive_count FROM hive_accounts a "
+            "ORDER BY (a.id = ?) DESC, a.created_at", (hive_accounts.SWARMAI_ROW_ID,))
         rows = [dict(r) for r in await cursor.fetchall()]
-    return [HiveAccountResponse(**r) for r in rows]
+    return [HiveAccountResponse(**r, role=hive_accounts.row_role(r, mode)) for r in rows]
 
 
 @router.post("/accounts", response_model=HiveAccountResponse, status_code=201)
 async def create_account(body: HiveAccountCreate):
-    """Add a new AWS account."""
+    """Add an AWS account (only while the SwarmAI account is not connected: with it,
+    every new Hive is in the SwarmAI account)."""
     _require_desktop()
+    if hive_accounts.swarmai_account() is not None:
+        raise HTTPException(status_code=409, detail=(
+            "Hives use the SwarmAI account. To use another AWS account, change the SwarmAI "
+            "account in Settings > SwarmAI account."))
+    if body.auth_method in (hive_accounts.SWARMAI_METHOD, hive_accounts.MERGED_METHOD):
+        raise HTTPException(status_code=422, detail="Invalid auth_method")
     row = {
         "id": str(uuid.uuid4()),
         "account_id": body.account_id,
@@ -285,17 +307,35 @@ async def create_account(body: HiveAccountCreate):
 async def delete_account(account_id: str):
     """Remove an AWS account and all its Hive instances.
 
-    Cleans up AWS resources for each instance before deleting DB rows.
+    Cleans up AWS resources for each instance before deleting DB rows. The SwarmAI
+    account's row cannot be deleted (its Hives are deleted one by one).
     """
     _require_desktop()
+    if account_id == hive_accounts.SWARMAI_ROW_ID:
+        raise HTTPException(status_code=409, detail=(
+            "The SwarmAI account cannot be removed here; delete its Hives one by one."))
+    async with _conn() as c:
+        cursor = await c.execute("SELECT * FROM hive_accounts WHERE id = ?", (account_id,))
+        acct = await cursor.fetchone()
+    if acct is not None and acct["auth_method"] == hive_accounts.MERGED_METHOD:
+        # kept one version so the move to the SwarmAI account can be undone
+        raise HTTPException(status_code=409, detail=(
+            "This account's Hives were moved to the SwarmAI account; it is kept for now."))
     # U2: Read instances first, then cleanup AWS (long-running) OUTSIDE the connection,
     # then delete DB rows in a quick transaction. Avoids holding DB lock during AWS calls.
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE account_ref = ?", (account_id,))
         instances = [dict(r) for r in await cursor.fetchall()]
 
-    # Cleanup AWS resources (potentially minutes — EC2 terminate + CF disable)
     provisioner = _get_provisioner()
+    # An account that cannot be reached: refuse before anything, or the rows go and the
+    # instances keep running (and billing) with nothing tracking them.
+    if acct is not None and any(i.get("ec2_instance_id") for i in instances):
+        try:
+            await provisioner._session(dict(acct), instances[0]["region"], "cleanup")
+        except hive_accounts.ACCOUNT_ERRORS as e:
+            raise HTTPException(status_code=409, detail=f"Nothing was deleted: {e}")
+    # Cleanup AWS resources (potentially minutes — EC2 terminate + CF disable)
     for inst in instances:
         if inst.get("ec2_instance_id"):
             try:
@@ -326,20 +366,24 @@ async def verify_account(account_id: str):
             raise HTTPException(status_code=404, detail="Account not found")
         row = dict(row)
 
-    auth_config = json.loads(row.get("auth_config", "{}"))
     region = row.get("default_region", "us-east-1")
+    if hive_accounts.swarmai_account() is not None and row.get("auth_method") not in (
+            hive_accounts.SWARMAI_METHOD, hive_accounts.MERGED_METHOD):
+        outcome, actual = await hive_accounts.check_row(db.db_path, row)
+        if outcome == "other":
+            return VerifyResult(success=False, account_id=actual or row["account_id"], error=(
+                f"This is AWS account {actual}, not the SwarmAI account: its Hives can only "
+                "be stopped or deleted."))
+        if outcome == "merged":
+            return VerifyResult(success=True, account_id=row["account_id"],
+                                checks={"sts": {"status": "pass", "merged": True}})
+        if outcome == "unverified":
+            return VerifyResult(success=False, account_id=row["account_id"],
+                                error="Could not reach this account; try again later.")
 
     # M4: Wrap all boto3 calls in to_thread to avoid blocking the event loop
     def _run_checks():
-        import boto3
-        kwargs: dict = {"region_name": region}
-        if row["auth_method"] == "access_keys" and auth_config.get("access_key_id"):
-            kwargs["aws_access_key_id"] = auth_config["access_key_id"]
-            kwargs["aws_secret_access_key"] = auth_config.get("secret_access_key", "")
-        elif row["auth_method"] == "sso" and auth_config.get("profile"):
-            kwargs["profile_name"] = auth_config["profile"]
-
-        session = boto3.Session(**kwargs)
+        session = _get_provisioner()._get_session(row, region, "read")
         checks: dict = {}
 
         # STS
@@ -443,14 +487,19 @@ async def create_instance(body: HiveInstanceCreate):
             status_code=422,
             detail="Name must start with a letter, contain only lowercase letters/numbers/hyphens, max 63 chars.",
         )
-    async with _conn() as c:
-        cursor = await c.execute("SELECT id FROM hive_accounts WHERE id = ?", (body.account_ref,))
-        if not await cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Account not found")
-        # Check name uniqueness
-        cursor = await c.execute("SELECT id FROM hive_instances WHERE name = ?", (body.name,))
-        if await cursor.fetchone():
-            raise HTTPException(status_code=409, detail=f"Hive '{body.name}' already exists")
+    mode = hive_accounts.swarmai_account()
+    if mode is not None:
+        if body.account_ref not in (None, hive_accounts.SWARMAI_ROW_ID):
+            raise HTTPException(status_code=409, detail="New Hives are created in the SwarmAI account.")
+        await hive_accounts.ensure_swarmai_row(db.db_path)
+        account_ref = hive_accounts.SWARMAI_ROW_ID
+    elif body.account_ref is None:
+        raise HTTPException(status_code=422, detail="account_ref is required")
+    elif body.account_ref == hive_accounts.SWARMAI_ROW_ID:
+        raise HTTPException(status_code=409, detail=(
+            "The SwarmAI account is not connected: connect it in Settings > SwarmAI account."))
+    else:
+        account_ref = body.account_ref
 
     now = _now()
     row = {
@@ -458,7 +507,7 @@ async def create_instance(body: HiveInstanceCreate):
         "name": body.name,
         "owner_name": body.owner_name,
         "hive_type": body.hive_type,
-        "account_ref": body.account_ref,
+        "account_ref": account_ref,
         "region": body.region,
         "instance_type": body.instance_type,
         "ec2_instance_id": None, "ec2_public_ip": None,
@@ -473,7 +522,18 @@ async def create_instance(body: HiveInstanceCreate):
         "seed_data": None, "shared_content": None,
         "created_at": now, "updated_at": now,
     }
-    async with _conn() as c:
+    # count and insert under the fleet lock: two requests at 7 Hives cannot both pass
+    async with hive_accounts.fleet_lock, _conn() as c:
+        cursor = await c.execute("SELECT auth_method FROM hive_accounts WHERE id = ?", (account_ref,))
+        acct = await cursor.fetchone()
+        if not acct or acct["auth_method"] == hive_accounts.MERGED_METHOD:
+            raise HTTPException(status_code=404, detail="Account not found")
+        cursor = await c.execute("SELECT id FROM hive_instances WHERE name = ?", (body.name,))
+        if await cursor.fetchone():
+            raise HTTPException(status_code=409, detail=f"Hive '{body.name}' already exists")
+        n = await hive_accounts.counted(c)
+        if n + 1 > hive_accounts.MAX_HIVES:
+            raise HTTPException(status_code=409, detail=hive_accounts.over_limit_message(n))
         cols = ", ".join(row.keys())
         placeholders = ", ".join(f":{k}" for k in row.keys())
         await c.execute(
@@ -602,6 +662,9 @@ async def delete_instance(instance_id: str):
     provisioner = _get_provisioner()
     try:
         await provisioner.cleanup(instance_id)
+    except hive_accounts.ACCOUNT_ERRORS as e:
+        # raised before any AWS call: keep the row, or a running instance is forgotten
+        raise HTTPException(status_code=409, detail=f"Nothing was deleted: {e}")
     except Exception as e:
         logger.warning("Cleanup had errors (continuing with DB delete): %s", e)
 
@@ -677,7 +740,19 @@ async def retry_instance(instance_id: str, body: Optional[HiveRetryRequest] = No
             "This Hive's instance still exists: Retry deletes it and everything on it. "
             "Try Start first; to rebuild anyway, confirm, and its disks are saved as "
             "snapshots in your AWS account before anything is deleted."))
-    async with _conn() as c:
+    async with hive_accounts.fleet_lock, _conn() as c:
+        mode = hive_accounts.swarmai_account()
+        if mode is not None:
+            cursor = await c.execute(
+                "SELECT a.* FROM hive_accounts a JOIN hive_instances i ON i.account_ref = a.id "
+                "WHERE i.id = ?", (instance_id,))
+            acct = await cursor.fetchone()
+            if acct is None or hive_accounts.row_role(dict(acct), mode) != "swarmai":
+                raise HTTPException(status_code=409, detail=(
+                    "This Hive is in another AWS account: it can be deleted, not rebuilt there."))
+        n = await hive_accounts.counted(c, excluding=instance_id)
+        if n + 1 > hive_accounts.MAX_HIVES:
+            raise HTTPException(status_code=409, detail=hive_accounts.over_limit_message(n))
         cursor = await c.execute(
             "UPDATE hive_instances SET status='deleting', error_message=?, updated_at=? "
             "WHERE id=? AND status='error'",

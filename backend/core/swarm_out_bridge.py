@@ -78,8 +78,8 @@ class Store(Protocol):
 
 class S3Store:
     def __init__(self, bucket: str, region: str):
-        import boto3
-        self._s3 = boto3.client("s3", region_name=region)
+        from core import aws_account  # on a Hive: its instance role (the default chain)
+        self._s3 = aws_account.boto_session(region).client("s3", region_name=region)
         self._bucket = bucket
 
     def put(self, key: str, body: bytes) -> None:

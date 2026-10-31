@@ -161,7 +161,7 @@ def answer_env(monkeypatch):
     async def fake_instance(ref):
         return swarm_out._validate_instance(INST, {"id": "a1"})
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: s3)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": s3)
     return s3
 
 
@@ -205,7 +205,7 @@ def test_list_runs_names_owners_and_marks_an_unnamed_session(monkeypatch):
     async def fake_instance(ref):
         return swarm_out._validate_instance(INST, {"id": "a1"})
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1"},
@@ -252,7 +252,7 @@ def test_a_refused_ask_does_not_mark_its_run_waiting(monkeypatch):
     async def fake_instance(ref):
         return swarm_out._validate_instance(INST, {"id": "a1"})
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1", "refused": True}])
@@ -284,7 +284,7 @@ def test_a_dispatch_with_no_session_id_is_not_reported_as_stopped(monkeypatch):
     async def live(inst):
         return {"s1": {"streaming": True, "waiting_input": False, "activity": "streaming"}}
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [])
     monkeypatch.setattr(swarm_out, "_session_states", live)
@@ -305,7 +305,7 @@ def test_a_running_hive_never_dispatched_to_still_shows_its_questions(monkeypatc
         return {}
     monkeypatch.setattr(swarm_out, "_hive_statuses", running)
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
         {"kind": "approval", "session_id": "s7", "request_id": "r7"}])
@@ -326,7 +326,7 @@ def test_an_unreadable_store_keeps_the_logs_hives(monkeypatch):
         return swarm_out._validate_instance(INST, {"id": "a1"})
     monkeypatch.setattr(swarm_out, "_hive_statuses", broken)
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": None)
     monkeypatch.setattr(swarm_out, "_read_decisions", lambda s3, b, h: [])   # no pipeline decisions
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
         {"kind": "approval", "session_id": "s1", "request_id": "r1"}])

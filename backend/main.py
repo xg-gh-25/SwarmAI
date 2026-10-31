@@ -1432,6 +1432,16 @@ async def lifespan(app: FastAPI):
                 await _executors.run_in("subprocess", _aws_account.startup, backend_port)
             except Exception:
                 logger.warning("aws_account startup failed", exc_info=True)
+            if _aws_account.is_hive_mode():
+                return
+            try:  # Hive rows in the SwarmAI account move to it (design §5.5)
+                from database import db as _hdb
+                from hive import accounts as _hive_accounts
+                outcome = await _hive_accounts.migrate(_hdb.db_path)
+                if outcome:
+                    logger.info("hive accounts: %s", outcome)
+            except Exception:
+                logger.warning("hive account migration failed", exc_info=True)
         asyncio.create_task(_aws_account_startup())
     else:
         # The conflict guard already logged a WARNING with the owner's pid/port.

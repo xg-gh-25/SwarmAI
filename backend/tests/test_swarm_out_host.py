@@ -167,7 +167,7 @@ def _answer_env(monkeypatch, objects):
     async def fake_instance(ref):
         return swarm_out._validate_instance(INST, {"id": "a1"})
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
-    monkeypatch.setattr(swarm_out, "_s3", lambda inst: s3)
+    monkeypatch.setattr(swarm_out, "_s3", lambda inst, purpose="manage": s3)
     return s3
 
 
