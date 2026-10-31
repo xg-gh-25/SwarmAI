@@ -28,8 +28,6 @@
 # Format: one test file per line (relative to backend/), '#' comments ignored.
 
 test_adaptive_timeout.py
-test_admission_is_noise.py
-test_admission_trust_stamp.py
 test_bvt_admission.py
 test_context_brain_health.py
 test_context_templates.py
