@@ -1526,7 +1526,8 @@ class PromptBuilder:
             # the async body only concatenates. Both fault paths are unchanged: an
             # unreadable file is skipped, never fatal.
             def _read_ephemeral_files() -> tuple[str, str, str]:
-                """Return bootstrap text and the selected recent activity."""
+                """Return bootstrap text, the selected recent activity and the north
+                star headline (core.north_star: read from its file, never a database)."""
                 bootstrap = ""
                 bootstrap_path = context_dir / "BOOTSTRAP.md"
                 if bootstrap_path.exists():
@@ -1547,7 +1548,11 @@ class PromptBuilder:
                         estimate=ContextDirectoryLoader.estimate_tokens,
                     )
                     daily_activity = selection.text
-                return bootstrap, daily_activity
+                north_star = ""
+                if not is_channel and not is_worker():
+                    from core.north_star import headline_for_prompt
+                    north_star = headline_for_prompt()
+                return bootstrap, daily_activity, north_star
 
             # ── Ephemeral sections (each isolated) append to `ephemeral_text`,
             #    which is committed to system_prompt ONCE, AFTER core is already
@@ -1564,17 +1569,21 @@ class PromptBuilder:
             ephemeral_text = ""
             try:
                 if include_ephemeral:
-                    _bootstrap_content, _daily_content = await executors.run_in(
+                    _bootstrap_content, _daily_content, _north_star = await executors.run_in(
                         "io", _read_ephemeral_files
                     )
                 else:
-                    _bootstrap_content, _daily_content = "", ""
+                    _bootstrap_content, _daily_content, _north_star = "", "", ""
 
                 if _bootstrap_content:
                     ephemeral_text = f"## Onboarding\n{_bootstrap_content}"
 
                 if _daily_content:
                     ephemeral_text += f"\n\n## Daily Activity (recent days)\n{_daily_content}"
+                if _north_star:
+                    # Swarm's north star (SWARMAI.md § My North Star), so a question about
+                    # its own progress is answered from it at once
+                    ephemeral_text += f"\n\n## My North Star\n{_north_star}"
             except Exception as exc:
                 logger.warning("Ephemeral (bootstrap/daily) injection failed: %s", exc)
 

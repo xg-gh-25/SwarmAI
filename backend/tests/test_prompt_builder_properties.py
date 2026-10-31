@@ -571,6 +571,18 @@ class TestSystemPromptFaultIsolation:
         # The daily section itself should also have made it in.
         assert "## Daily Activity (recent days)" in full
 
+    def test_the_north_star_headline_is_in_the_desktop_prompt(self, tmp_path):
+        """SWARMAI.md § My North Star: the headline (read from its file) reaches every
+        desktop prompt; a worker Hive's prompt carries none."""
+        import unittest.mock as mock
+        self._seed_daily(tmp_path)
+        headline = "(as of 2026-10-31T12:00+00:00, 1 min ago)\n- Cognition: NORTH-STAR-LINE"
+        with mock.patch("core.north_star.headline_for_prompt", return_value=headline):
+            full = self._full(self._run_build(tmp_path))
+            assert "## My North Star\n" + headline in full
+            with mock.patch("core.app_role.is_worker", return_value=True):
+                assert "NORTH-STAR-LINE" not in self._full(self._run_build(tmp_path))
+
     # ── AC2: ephemeral fault isolation ──────────────────────────────────
     def test_ac2_ephemeral_failure_leaves_core_intact(self, tmp_path):
         """An exception in an ephemeral producer (the audit hint) must NOT drop core."""

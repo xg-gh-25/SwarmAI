@@ -131,8 +131,9 @@ floor so the budget remains strictly inside the model window."""
 # Everything below is DERIVED by arithmetic from module constants, so a change to
 # BUDGET_1M_MODEL or TOKEN_CAP_PER_DAILY_FILE propagates to all consumers automatically.
 DAILY_ACTIVITY_INJECTION_BUDGET = 12000
-"""Whole-unit budget for seven days of DailyActivity working memory (measured
-2026-10-31 on the repaired history: ~100-250 tokens a row, 6-15 sessions a day).
+"""Whole-unit budget for the DailyActivity rows of the two most recent days with rows
+(~100-250 tokens a row, 6-15 sessions a day; measured 2026-10-31 at ~2.4K). The slack
+also holds the north star headline (core.north_star, a few hundred tokens).
 core.memory_injection selects with it; the headroom below reserves it."""
 
 

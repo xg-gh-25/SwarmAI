@@ -1353,6 +1353,14 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.todo_sweep failed: %s", exc)
+        # the north star headline the prompt reads (core.north_star): DB reads only, no
+        # model call, off the event loop
+        try:
+            import asyncio
+            from core import north_star
+            await asyncio.to_thread(north_star.refresh)
+        except Exception as exc:
+            logger.warning("lifecycle_manager.north_star refresh failed: %s", exc)
 
     async def _sweep_auto_complete_todos(self) -> int:
         """Auto-complete dispatched todos whose session got an AI reply after dispatch.

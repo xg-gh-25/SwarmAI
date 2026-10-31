@@ -362,3 +362,12 @@ def test_a_review_whose_relations_turn_failed_is_an_error(env):
                            "started_at,status) VALUES (?,?,?,?,?,?)", (f"r{i}", "S7", rng, "v", iso(), status))
     c2 = next(c for c in health.run_checks(health._ingestion_ro(), None, env["ws"], NOW) if c["id"] == "C2")
     assert c2["value"]["errored"] == 1 and c2["value"]["attempts"] == 3 and c2["status"] != "pass"
+
+
+def test_a_pass_refreshes_the_north_star_headline(env, monkeypatch):
+    """The prompt's headline (core.north_star) follows every health pass."""
+    from core import north_star
+    calls = []
+    monkeypatch.setattr(north_star, "refresh", lambda *a, **k: calls.append(1) or {})
+    assert run(env, Judge())["status"] == "success"
+    assert calls == [1]

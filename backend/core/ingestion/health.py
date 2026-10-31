@@ -1072,6 +1072,11 @@ def _pass(conn: sqlite3.Connection, workspace: Path, call: Call, model_id: str, 
                     "reading_failed": reading_failed}
         conn.execute("INSERT INTO runs(at, snapshot) VALUES (?,?)",
                      (_iso(now), json.dumps(snapshot, ensure_ascii=False)))
+        try:
+            from core import north_star        # the prompt's headline follows the pass
+            north_star.refresh()
+        except Exception:  # noqa: BLE001 -- the headline is refreshed again by the sweep
+            logger.warning("CDF health: north star not refreshed", exc_info=True)
         return {"status": "success", "scored": sum(s["scored"] for s in stats.values()),
                 "judge_failed": sum(s["judge_failed"] for s in stats.values()),
                 "checks_failed": sum(c["status"] == "fail" for c in checks),
