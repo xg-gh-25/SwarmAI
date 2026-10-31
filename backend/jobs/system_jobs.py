@@ -223,6 +223,20 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- CDF health (core/ingestion/health.py; design 2026-10-31-cdf-health) ---
+    # Each weekday: the cognition system's deterministic checks, a judge's score of a
+    # sample of new entries per destination, and its reading. Scores only, never edits.
+    Job(
+        id="cdf-health",
+        name="CDF health — check the pipeline and score new entries",
+        type="cdf_health",
+        schedule="0 9 * * 1-5",        # weekday UTC 09:00 = ICT 17:00, after the day's sessions
+        enabled=True,
+        category="system",
+        safety=JobSafety(timeout_seconds=1800),
+        config={},
+    ),
+
     # --- DDD Auto-Refresh (detect stale project docs, generate proposals) ---
     Job(
         id="ddd-refresh",

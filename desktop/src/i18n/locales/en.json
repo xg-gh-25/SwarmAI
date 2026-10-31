@@ -2033,6 +2033,7 @@
     "review": "Review",
     "reviewHint": "Self-advancing — your input confirms or overrides",
     "tabGuide": "How it works",
+    "tabHealth": "Health",
     "openSwarmOut": "Open Swarm Out",
     "source": {
       "escalation": "Question",
@@ -2048,6 +2049,161 @@
     "fillHint": "Add to the chat input",
     "sendNow": "Send now",
     "sendNowLabel": "Send now: {{title}}"
+  },
+  "cogHealth": {
+    "loadFailed": "Could not load the health view.",
+    "w7d": "7 days",
+    "w30d": "30 days",
+    "per7d": "/ 7 days",
+    "per30d": "/ 30 days",
+    "recheck": "Check now",
+    "running": "Checking…",
+    "generatedAt": "Last checked {{at}}",
+    "neverRun": "Not checked yet: the check runs every weekday, or press Check now.",
+    "useful": "useful",
+    "passed": "checks pass",
+    "notEnough": "too few samples",
+    "noData": "no data yet",
+    "line": {
+      "ok": "The cognition system is working and what it keeps is useful",
+      "notEnough": "The cognition system is working; too few entries are scored yet to judge their value",
+      "checksFail": "{{count}} check(s) are failing",
+      "valueLow": "{{pct}} of what was kept is not useful",
+      "and": ", and "
+    },
+    "q": {
+      "value": "Is what was kept useful",
+      "checks": "Is CDF itself healthy",
+      "cost": "What CDF costs"
+    },
+    "valueNote": "Target {{target}} · {{scored}} entries scored by the judge",
+    "checksNote": "{{failing}} failing · {{noData}} with no data yet (not counted as passing)",
+    "costShare": "{{pct}} of the system's spend",
+    "perUseful": "≈ {{usd}} per useful entry",
+    "value": {
+      "clickHint": "Click a row to see the sampled entries and the judge's reasons",
+      "rule": "Each weekday a judge that took no part in writing them scores a sample of new entries in each destination, by what that destination is for: useful, weak or withdraw. The line in each bar is the target. The judge only scores; it removes nothing. It reads the entry alone, not the code, so it cannot tell an entry that went stale.",
+      "counts": "{{scored}} scored · {{written}} new",
+      "minNote": "A rate needs at least {{n}} scored entries",
+      "noSamples": "No entries scored here yet.",
+      "samplesHint": "Set your own verdict on an entry: it replaces the judge's in the rates and shows how far to trust the judge.",
+      "byYou": "your verdict",
+      "judgeSaid": "judge said {{verdict}}"
+    },
+    "group": {
+      "every_turn": "Read in every session",
+      "on_demand": "Looked up when relevant",
+      "other": "Gaps · references"
+    },
+    "groupHint": {
+      "every_turn": "a bad entry here misleads every turn: target 95%",
+      "on_demand": "found only when a judgment needs it",
+      "other": "open problems, sources found nowhere else"
+    },
+    "dest": {
+      "MEMORY": "MEMORY",
+      "EVOLUTION": "EVOLUTION",
+      "USER_FILES": "Your rules and preferences",
+      "DDD": "Project brains",
+      "GENERAL": "General Brain",
+      "GAP": "Open gaps",
+      "TIMELINE": "Timeline",
+      "REFERENCE": "References"
+    },
+    "destHint": {
+      "MEMORY": "judgments that hold across projects",
+      "EVOLUTION": "where the agent was corrected",
+      "USER_FILES": "STEERING / USER / TOOLS",
+      "DDD": "what each project is and what was decided",
+      "GENERAL": "lessons that belong to no one project",
+      "GAP": "problems still to solve",
+      "TIMELINE": "events and their outcomes",
+      "REFERENCE": "links and results seen only in a conversation"
+    },
+    "verdict": {
+      "useful": "useful",
+      "weak": "weak",
+      "withdraw": "withdraw"
+    },
+    "klass": {
+      "wrong_kind": "wrong kind",
+      "fixed_in_place": "fixed in place",
+      "lookup": "lookup",
+      "status": "status",
+      "copy": "copy of a saved document",
+      "unclear": "unclear"
+    },
+    "checks": {
+      "rule": "Deterministic checks, no model involved. A check with nothing to measure says so and does not count as passing.",
+      "name": "Check",
+      "measured": "Measured",
+      "requirement": "Requirement"
+    },
+    "check": {
+      "C1": "Every session reviewed",
+      "C2": "Reviews succeed",
+      "C3": "Review output valid",
+      "C4": "Nothing stuck",
+      "C5": "Every-turn files keep the rule",
+      "C6": "No event written twice",
+      "C7": "Relations intact",
+      "C8": "No unresolved alarms",
+      "C9": "Store intact",
+      "C10": "Knowledge is used"
+    },
+    "checkValue": {
+      "C1": "{{missing}} of {{sessions}} sessions with your messages have no review",
+      "C2": "{{failed}} failed reviews · {{errored}} of {{attempts}} attempts errored",
+      "C3": "{{invalid}} of {{units}} units refused as invalid",
+      "C4": "{{stalls}} stalled · {{waiting}} waiting over a day",
+      "C5": "{{withoutBasis}} of {{writes}} writes without your words, a measurement or a repeat",
+      "C6": "{{repeated}} repeated",
+      "C7": "{{dangling}} of {{endpoints}} point at nothing",
+      "C8": "{{alarms}} unresolved",
+      "C9": "store check: {{quickCheck}}",
+      "C10": "{{used}} of {{written}} entries read or cited after their write"
+    },
+    "requirement": {
+      "C1": "none missing (7 days)",
+      "C2": "none failed · errored ≤ 10%",
+      "C3": "refused ≤ 5% (7 days)",
+      "C4": "none",
+      "C5": "none (7 days)",
+      "C6": "none",
+      "C7": "none",
+      "C8": "none (7 days)",
+      "C9": "ok",
+      "C10": "some used"
+    },
+    "cost": {
+      "rule": "CDF's model spend by purpose. Each bar below is one day of the whole system's spend; the coloured part is CDF's. Recorded only, never capped.",
+      "calls": "{{calls}} calls",
+      "avg": "{{usd}} per call",
+      "unpriced": "{{calls}} calls have no recorded cost and are not in the totals."
+    },
+    "feature": {
+      "cdf_s7": "After-session review",
+      "cdf_s2": "Session extraction",
+      "cdf_s1": "Save to memory",
+      "cdf_s3": "Run reports",
+      "cdf_user_check": "Checking your words",
+      "cdf_health": "Health judge",
+      "cdf": "Other CDF"
+    },
+    "reading": {
+      "title": "The judge's reading",
+      "by": "Written by the judge from the last 7 days' numbers and scored entries · {{at}}. It only reads; it changes nothing.",
+      "staleNote": "the latest attempt failed, this is the previous reading",
+      "seen": "What it saw",
+      "why": "Why",
+      "suggest": "What to change",
+      "basis": "Based on {{scored}} scored entries and {{checks}} checks.",
+      "noAgreement": "How often the judge agrees with you is not known yet ({{n}} of your verdicts so far; 10 needed), so take it as a reference.",
+      "agreement": "The judge agreed with {{pct}} of your {{n}} verdicts.",
+      "failed": "The reading could not be written; the next check tries again.",
+      "none": "No reading yet."
+    },
+    "usedNote": "{{pct}} of older entries were used after their write"
   },
   "cdf": {
     "w24h": "24 hours",

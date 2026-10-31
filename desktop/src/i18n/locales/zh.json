@@ -2033,6 +2033,7 @@
     "review": "待确认",
     "reviewHint": "会自己往前推进，你的意见用来确认或推翻",
     "tabGuide": "工作原理",
+    "tabHealth": "健康度",
     "openSwarmOut": "打开 Swarm Out",
     "source": {
       "escalation": "提问",
@@ -2048,6 +2049,161 @@
     "fillHint": "放进聊天输入框",
     "sendNow": "直接发送",
     "sendNowLabel": "直接发送：{{title}}"
+  },
+  "cogHealth": {
+    "loadFailed": "健康度加载失败。",
+    "w7d": "7 天",
+    "w30d": "30 天",
+    "per7d": "/ 7 天",
+    "per30d": "/ 30 天",
+    "recheck": "立即检查",
+    "running": "检查中…",
+    "generatedAt": "上次检查 {{at}}",
+    "neverRun": "还没检查过：每个工作日自动检查一次，也可以点「立即检查」。",
+    "useful": "有用",
+    "passed": "检查通过",
+    "notEnough": "样本不足",
+    "noData": "还没有数据",
+    "line": {
+      "ok": "认知系统运转正常，沉淀的内容是有用的",
+      "notEnough": "认知系统运转正常；打过分的条目还太少，判断不了沉淀有没有用",
+      "checksFail": "有 {{count}} 项检查没通过",
+      "valueLow": "沉淀的内容有 {{pct}} 没价值",
+      "and": "，"
+    },
+    "q": {
+      "value": "沉淀的内容有没有用",
+      "checks": "CDF 系统是不是健康",
+      "cost": "CDF 花了多少"
+    },
+    "valueNote": "目标 {{target}} · 判官已给 {{scored}} 条打分",
+    "checksNote": "{{failing}} 项没通过 · {{noData}} 项还没有数据（不算通过）",
+    "costShare": "占全系统 {{pct}}",
+    "perUseful": "每条有用的沉淀约 {{usd}}",
+    "value": {
+      "clickHint": "点一行看抽到的条目和判官的理由",
+      "rule": "每个工作日从每个去处抽一些新进来的条目，交给没有参与写入的判官，按这个去处的用途打分：有用 / 一般 / 该撤。条里的竖线是目标。判官只打分，不删任何东西。它只看条目本身、不看代码，所以条目过时了它看不出来。",
+      "counts": "打分 {{scored}} · 新进 {{written}}",
+      "minNote": "每个去处至少 {{n}} 条打过分才算比例",
+      "noSamples": "这里还没有打过分的条目。",
+      "samplesHint": "你可以给条目改判：你的判断会替代判官的计入比例，也用来看判官可信到什么程度。",
+      "byYou": "你的判断",
+      "judgeSaid": "判官判 {{verdict}}"
+    },
+    "group": {
+      "every_turn": "每个 session 都读",
+      "on_demand": "用到时再查",
+      "other": "Gap · Reference"
+    },
+    "groupHint": {
+      "every_turn": "这里错一条，每轮都在误导判断：目标 95%",
+      "on_demand": "只在判断需要时被找出来",
+      "other": "还开着的问题 · 别处找不到的来源"
+    },
+    "dest": {
+      "MEMORY": "MEMORY",
+      "EVOLUTION": "EVOLUTION",
+      "USER_FILES": "你的规则和偏好",
+      "DDD": "项目的 DDD",
+      "GENERAL": "General Brain",
+      "GAP": "开着的 gap",
+      "TIMELINE": "Timeline",
+      "REFERENCE": "Reference"
+    },
+    "destHint": {
+      "MEMORY": "跨项目的判断",
+      "EVOLUTION": "被纠正过的地方",
+      "USER_FILES": "STEERING / USER / TOOLS",
+      "DDD": "每个项目是什么、定了什么",
+      "GENERAL": "不属于任何项目的经验",
+      "GAP": "还要解决的问题",
+      "TIMELINE": "事件和结果",
+      "REFERENCE": "外部链接、只在对话里出现过的结果"
+    },
+    "verdict": {
+      "useful": "有用",
+      "weak": "一般",
+      "withdraw": "该撤"
+    },
+    "klass": {
+      "wrong_kind": "类型写错",
+      "fixed_in_place": "当场已修好",
+      "lookup": "看代码就知道",
+      "status": "状态记录",
+      "copy": "已存文档的副本",
+      "unclear": "单独看不懂"
+    },
+    "checks": {
+      "rule": "确定性的检查，不靠模型判断；没有可测的就显示「还没有数据」，不算通过。",
+      "name": "检查",
+      "measured": "测到的",
+      "requirement": "要求"
+    },
+    "check": {
+      "C1": "都复盘了",
+      "C2": "复盘成功",
+      "C3": "复盘产出有效",
+      "C4": "没有卡住",
+      "C5": "每轮都读的文件守规矩",
+      "C6": "事件没写两遍",
+      "C7": "关系完整",
+      "C8": "没有未处理的异常",
+      "C9": "库完好",
+      "C10": "知识有被用到"
+    },
+    "checkValue": {
+      "C1": "有你消息的 {{sessions}} 个 session 里，{{missing}} 个没排复盘",
+      "C2": "{{failed}} 次复盘失败 · {{attempts}} 次尝试里 {{errored}} 次出错",
+      "C3": "{{units}} 个单元里 {{invalid}} 个格式无效被拒",
+      "C4": "{{stalls}} 处卡住 · {{waiting}} 个等了一天以上",
+      "C5": "{{writes}} 条写入里 {{withoutBasis}} 条没有你的原话、测量或重犯为依据",
+      "C6": "{{repeated}} 个重复",
+      "C7": "{{endpoints}} 个端点里 {{dangling}} 个指向空",
+      "C8": "{{alarms}} 个未处理",
+      "C9": "库检查：{{quickCheck}}",
+      "C10": "{{written}} 条较早的条目里 {{used}} 条写入后被读或引用"
+    },
+    "requirement": {
+      "C1": "没有遗漏（7 天）",
+      "C2": "没有失败 · 出错 ≤ 10%",
+      "C3": "被拒 ≤ 5%（7 天）",
+      "C4": "没有",
+      "C5": "没有（7 天）",
+      "C6": "没有",
+      "C7": "没有",
+      "C8": "没有（7 天）",
+      "C9": "ok",
+      "C10": "有被用到"
+    },
+    "cost": {
+      "rule": "CDF 的模型花费，按用途分。下面每根柱是一天全系统的花费，橙色是其中 CDF 的部分。只记录，不设上限。",
+      "calls": "{{calls}} 次调用",
+      "avg": "每次 {{usd}}",
+      "unpriced": "{{calls}} 次调用没有记录花费，不计入合计。"
+    },
+    "feature": {
+      "cdf_s7": "会后复盘",
+      "cdf_s2": "会话提取",
+      "cdf_s1": "保存到记忆",
+      "cdf_s3": "运行报告",
+      "cdf_user_check": "核对你的原话",
+      "cdf_health": "健康判官",
+      "cdf": "其他 CDF"
+    },
+    "reading": {
+      "title": "判官的解读",
+      "by": "判官读了近 7 天的数字和打过分的条目后写成 · {{at}}。只是解读，不改任何东西。",
+      "staleNote": "最近一次没写成，这是上一次的解读",
+      "seen": "看到了什么",
+      "why": "为什么",
+      "suggest": "建议",
+      "basis": "依据：{{scored}} 条打过分的条目、{{checks}} 项检查。",
+      "noAgreement": "判官和你判断的一致度还不知道（你已改判 {{n}} 条，要满 10 条），所以先当参考。",
+      "agreement": "你改判的 {{n}} 条里，判官和你一致的占 {{pct}}。",
+      "failed": "这次解读没写成，下次检查会再试。",
+      "none": "还没有解读。"
+    },
+    "usedNote": "较早的条目写入后有 {{pct}} 被用到"
   },
   "cdf": {
     "w24h": "24 小时",

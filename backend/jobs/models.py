@@ -34,6 +34,7 @@ class JobType(str, Enum):
     SESSION_HEALTH_PROBE = "session_health_probe"
     EVAL_SCHEDULED = "eval_scheduled"
     SESSION_QUALITY = "session_quality"
+    CDF_HEALTH = "cdf_health"
     LIBRARY_FRESHNESS = "library_freshness"
     LIBRARY_HEALTH = "library_health"
     WORKTREE_SWEEP = "worktree_sweep"

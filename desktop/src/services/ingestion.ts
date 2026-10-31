@@ -193,6 +193,39 @@ export interface IngestionFilters {
   pageSize?: number;
 }
 
+/** GET /ingestion/cognition-health — the Health tab (backend core/ingestion/health.py). */
+export type HealthWindow = '7d' | '30d';
+export type HealthVerdict = 'useful' | 'weak' | 'withdraw';
+export type CheckStatus = 'pass' | 'fail' | 'no_data';
+export interface WeekRate { week: string; rate: number | null; scored: number }
+export interface HealthSample {
+  unitId: string; title: string; project: string | null; verdict: HealthVerdict; klass: string | null;
+  reasonEn: string; reasonZh: string; userVerdict: HealthVerdict | null; writtenAt: string;
+}
+export interface HealthDestination {
+  key: string; group: 'every_turn' | 'on_demand' | 'other'; target: number; scored: number;
+  useful: number; weak: number; withdraw: number; rate: number | null; written: number;
+  trend: WeekRate[]; samples: HealthSample[];
+}
+export interface HealthCheck { id: string; status: CheckStatus; value: Record<string, number | string> | null; requirement: string }
+export interface HealthCostFeature { feature: string; usd: number; calls: number; avgUsd: number | null }
+export interface HealthReadingPart { seen: string[]; why: string[]; suggest: string[] }
+export interface CognitionHealth {
+  window: HealthWindow; generatedAt: string | null; running: boolean;
+  value: { rate: number | null; target: number; scored: number; trend: WeekRate[]; destinations: HealthDestination[] };
+  used: { usedRate: number | null; matureWritten: number; matureUsed: number; windowDays: number };
+  checks: HealthCheck[];
+  checksTrend: Array<{ at: string; passed: number; measured: number; total: number }>;
+  cost: {
+    cdfUsd: number; systemUsd: number; share: number | null; unpricedCalls: number; perUsefulUsd: number | null;
+    features: HealthCostFeature[]; days: Array<{ day: string; systemUsd: number; cdfUsd: number }>;
+  };
+  reading: { en: HealthReadingPart; zh: HealthReadingPart; at: string; inputHash: string; model: string;
+    basis: { scored: number; checks: number; window: string } } | null;
+  readingFailed: boolean;
+  agreement: { judgedByPerson: number; agreed: number; rate: number | null };
+}
+
 function camelKey(key: string): string {
   return key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
@@ -227,6 +260,18 @@ export const ingestionService = {
   bootstrapProgress: (project: string) => getMapped<BootstrapProgress>(
     '/ingestion/bootstrap-progress', { project }),
   health: () => getMapped<IngestionHealth>('/ingestion/health'),
+  cognitionHealth: (window: HealthWindow) => getMapped<CognitionHealth>('/ingestion/cognition-health', { window }),
+  recheckHealth: async () => {
+    const response = await api.post('/ingestion/cognition-health/recheck', undefined, {
+      headers: { 'X-Swarm-User-Action': 'recheck' },
+    });
+    return mapIngestionValue<{ started: boolean }>(response.data);
+  },
+  setHealthVerdict: async (unitId: string, verdict: HealthVerdict) => {
+    const response = await api.put(`/ingestion/cognition-health/verdicts/${encodeURIComponent(unitId)}`,
+      { verdict }, { headers: { 'X-Swarm-User-Action': 'verdict' } });
+    return mapIngestionValue<{ unitId: string; userVerdict: HealthVerdict }>(response.data);
+  },
   redact: async (anchor: string, reason: string) => {
     const response = await api.post('/ingestion/redact', { anchor, reason }, {
       headers: { 'X-Swarm-User-Action': 'redact' },

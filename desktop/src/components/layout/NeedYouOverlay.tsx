@@ -27,6 +27,7 @@ import type { AttentionEntry } from '../../services/attention';
 import { Tabs } from '../overlay';
 import { CognitiveDistillationFlow } from './CognitiveDistillationFlow';
 import { CdfGuideline } from './CdfGuideline';
+import { CdfHealth } from './CdfHealth';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 import { NeedsYouRow } from './NeedsYouRow';
@@ -53,7 +54,7 @@ function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]
   return [...groups.entries()];
 }
 
-type NeedYouTab = 'attention' | 'flow' | 'guide';
+type NeedYouTab = 'attention' | 'flow' | 'health' | 'guide';
 
 export function NeedYouContent(props: NeedYouContentProps) {
   const { t } = useTranslation();
@@ -66,6 +67,7 @@ export function NeedYouContent(props: NeedYouContentProps) {
         items={[
           { key: 'attention', label: t('needYou.tabAttention'), testid: 'need-you-tab' },
           { key: 'flow', label: t('needYou.tabFlow'), testid: 'cdf-tab' },
+          { key: 'health', label: t('needYou.tabHealth'), testid: 'cdf-health-tab' },
           { key: 'guide', label: t('needYou.tabGuide'), testid: 'cdf-guide-tab' },
         ]}
         value={tab}
@@ -75,6 +77,7 @@ export function NeedYouContent(props: NeedYouContentProps) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'attention' && <AttentionQueueContent {...props} />}
         {tab === 'flow' && <CognitiveDistillationFlow onDispatch={props.onDispatch} close={props.close} />}
+        {tab === 'health' && <CdfHealth />}
         {tab === 'guide' && <CdfGuideline />}
       </div>
     </div>

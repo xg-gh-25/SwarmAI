@@ -460,6 +460,20 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "cdf_health":
+            from core.ingestion.health import run as run_cdf_health
+            ch = run_cdf_health()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            ch_status = ch.get("status")
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status=_monitor_result_status(ch_status, ok={"success"}, benign={"busy", "skipped"}),
+                summary=(f"cdf-health: {ch.get('scored', 0)} scored, {ch.get('judge_failed', 0)} "
+                         f"left by a failed judge call, {ch.get('checks_failed', 0)} check(s) failing"
+                         if ch_status == "success" else f"cdf-health: {ch_status}"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "skill_proposer":
             from .handlers.skill_proposer import run_skill_proposer
             skill_result = run_skill_proposer()
