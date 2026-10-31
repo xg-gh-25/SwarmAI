@@ -149,7 +149,7 @@ describe('in English, nothing on the panel is Chinese', () => {
     fireEvent.click(rich);
     const overlay = await screen.findByTestId('swarm-out-review-overlay');
     await within(overlay).findByTestId('swarm-out-review-report');
-    for (const tab of ['reply', 'autonomy', 'process', 'cost', 'lessons', 'deliverable']) {
+    for (const tab of ['autonomy', 'process', 'cost', 'lessons', 'deliverable']) {
       fireEvent.click(within(overlay).getByTestId(`swarm-out-review-tab-${tab}`));
       expect(cjkIn(overlay.outerHTML)).toEqual([]);
     }

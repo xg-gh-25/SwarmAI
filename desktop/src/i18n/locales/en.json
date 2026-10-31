@@ -1791,7 +1791,9 @@
         "executionDiffers": "Ran differently from how it was sent",
         "noneUnanswered": "No unanswered questions",
         "unanswered_one": "{{count}} left unanswered",
-        "unanswered_other": "{{count}} left unanswered"
+        "unanswered_other": "{{count}} left unanswered",
+        "filesOnHive_one": "{{count}} file written on the Hive",
+        "filesOnHive_other": "{{count}} files written on the Hive"
       },
       "rerunBox": {
         "title": "Re-run with correction",
@@ -1810,12 +1812,11 @@
       },
       "tab": {
         "now": "Doing now",
-        "deliverable": "What came back {{count}}",
-        "reply": "Last reply",
+        "deliverable": "What came back",
         "autonomy": "Autonomy",
-        "process": "Process · {{count}} steps",
+        "process": "Process",
         "cost": "Cost",
-        "lessons": "Lessons {{count}}"
+        "lessons": "Lessons"
       },
       "section": {
         "you": "Waiting for you",
@@ -1857,7 +1858,16 @@
       "manualConfirm": "I merged it by hand: accept",
       "retry": "Try again",
       "landNoUrl": "No address to fetch these commits from: merge them by hand.",
-      "doneJustNow": "done just now"
+      "doneJustNow": "done just now",
+      "reply": "Final reply",
+      "deliverables_one": "{{count}} deliverable",
+      "deliverables_other": "{{count}} deliverables",
+      "onHive": "on the Hive, not brought back",
+      "refresh": "Refresh",
+      "notPlaced": "came back, but could not be put in the Brain here",
+      "positionRecords": "Record {{n}} / {{total}}",
+      "previousRecord": "Previous record",
+      "nextRecord": "Next record"
     }
   },
   "usage": {

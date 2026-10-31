@@ -8,7 +8,8 @@
  * not (a table by Brain, type or Hive: outcomes as a stacked bar, the share done
  * unattended, the median time, the spend, the Autonomy Judge, the lessons); what it
  * cost; and the runs themselves, newest first, each row the run card's summary that
- * opens into the card itself (RunCard, the same component).
+ * opens the run's big card (RunOverlay, the one card every run opens into; J / K walk
+ * the records as listed).
  *
  * Everything comes from /runs (the whole dispatch log, polled while shown) through
  * the pure functions of ./live (inWindow, tallyRuns, breakdown, dimensionCounts,
@@ -20,8 +21,9 @@
  */
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { SwarmOutRun } from '../../services/swarmOut';
-import { Dot, RunCard, Tbd } from './LiveDispatches';
+import type { SwarmOutAsk, SwarmOutRun } from '../../services/swarmOut';
+import { Dot, Tbd } from './LiveDispatches';
+import { RunOverlay } from './RunOverlay';
 import { useOpenRun } from './openSession';
 import {
   agentFacts, breakdown, dailyByOutcome, dimensionCounts, durationText, endedLabel, groupOf, historyOutcome, inWindow,
@@ -242,9 +244,9 @@ function Dimensions({ runs }: { runs: SwarmOutRun[] }) {
 }
 
 /** One record: the run card's summary (title, Brain · Agent, type, ending, time, spend,
- *  human loops, sent); a click opens the card itself in place. */
-function HistoryRow({ r, open, onToggle, compact, onReload }: {
-  r: SwarmOutRun; open: boolean; onToggle: () => void; compact: boolean; onReload: () => void;
+ *  human loops, sent); a click opens the run's big card. */
+function HistoryRow({ r, open, onOpen, compact }: {
+  r: SwarmOutRun; open: boolean; onOpen: () => void; compact: boolean;
 }) {
   const { t } = useTranslation();
   const openRun = useOpenRun(r);
@@ -272,8 +274,8 @@ function HistoryRow({ r, open, onToggle, compact, onReload }: {
   ) : <span />;
   return (
     <div className="border-t border-[var(--color-border)] first:border-t-0" data-testid="history-run" data-tone={tone} data-open={open || undefined}>
-      <div role="button" tabIndex={0} aria-expanded={open} onClick={onToggle}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+      <div role="button" tabIndex={0} aria-haspopup="dialog" onClick={onOpen}
+        onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
         className={`px-3 py-2 text-[12px] cursor-pointer hover:bg-[var(--color-hover)] ${open ? 'bg-[var(--color-hover)]' : ''}`}>
         {compact ? (
           <>
@@ -298,20 +300,20 @@ function HistoryRow({ r, open, onToggle, compact, onReload }: {
           </div>
         )}
       </div>
-      {open && <div className="px-3 pb-3 pt-1" data-testid="history-run-card"><RunCard r={r} onReload={onReload} /></div>}
     </div>
   );
 }
 
 const ROW_COLUMNS = '7px minmax(0,2.4fr) minmax(0,1.4fr) minmax(0,1.1fr) minmax(0,0.8fr) minmax(0,0.6fr) minmax(0,0.8fr) minmax(0,0.6fr) minmax(0,0.9fr) 18px';
 
-function Records({ runs, filter, setFilter, group, groupLabel, onClearGroup, compact, onReload }: {
-  runs: SwarmOutRun[]; filter: RecordFilter; setFilter: (f: RecordFilter) => void;
+function Records({ runs, asks, now, filter, setFilter, group, groupLabel, onClearGroup, compact, onReload }: {
+  runs: SwarmOutRun[]; asks: SwarmOutAsk[]; now: number; filter: RecordFilter; setFilter: (f: RecordFilter) => void;
   group: string | null; groupLabel: string; onClearGroup: () => void; compact: boolean; onReload: () => void;
 }) {
   const { t } = useTranslation();
   const [shown, setShown] = useState(PAGE);
-  const [openId, setOpenId] = useState<string | null>(null);
+  // the card: which run, and the records it walks, frozen when it opened
+  const [open, setOpen] = useState<{ id: string; order: string[] } | null>(null);
   const rows = runs.filter((r) => matchesFilter(r, filter));
   const filters: RecordFilter[] = ['all', 'error', 'stopped', 'human', 'unknown'];
   const chip = 'px-2.5 py-[2px] rounded-full border text-[11.5px]';
@@ -347,8 +349,8 @@ function Records({ runs, filter, setFilter, group, groupLabel, onClearGroup, com
             </div>
           )}
           {rows.slice(0, shown).map((r) => (
-            <HistoryRow key={r.dispatch_id} r={r} compact={compact} onReload={onReload}
-              open={openId === r.dispatch_id} onToggle={() => setOpenId((o) => (o === r.dispatch_id ? null : r.dispatch_id))} />
+            <HistoryRow key={r.dispatch_id} r={r} compact={compact} open={open?.id === r.dispatch_id}
+              onOpen={() => setOpen({ id: r.dispatch_id, order: rows.slice(0, shown).map((x) => x.dispatch_id) })} />
           ))}
           {rows.length > shown && (
             <button type="button" onClick={() => setShown((s) => s + PAGE)} data-testid="history-more"
@@ -357,6 +359,12 @@ function Records({ runs, filter, setFilter, group, groupLabel, onClearGroup, com
             </button>
           )}
         </div>
+      )}
+      {open && (
+        <RunOverlay runs={runs} asks={asks} order={open.order} walk="records" id={open.id} now={now}
+          onSelect={(id) => setOpen((o) => (o ? { ...o, id } : o))}
+          onSettled={(id) => setOpen((o) => (o ? { ...o, order: o.order.filter((x) => x !== id) } : o))}
+          onClose={() => setOpen(null)} onReload={onReload} />
       )}
     </section>
   );
@@ -389,7 +397,7 @@ export function HistoryView({ hidden, now, compact = false }: { hidden: boolean;
           <div className="mt-4"><Summary x={tally} /></div>
           <DailyBars runs={windowed} now={now} days={days ?? 30} />
           <Breakdown runs={windowed} dimKey={dimKey} setDim={setDim} selected={group} onSelect={setGroup} />
-          <Records runs={inGroup} filter={filter} setFilter={setFilter} group={group} groupLabel={groupLabel}
+          <Records runs={inGroup} asks={data.asks ?? []} now={now} filter={filter} setFilter={setFilter} group={group} groupLabel={groupLabel}
             onClearGroup={() => setGroup(null)} compact={compact} onReload={reload} />
         </>
       )}

@@ -140,15 +140,23 @@ describe('the view', () => {
     expect(screen.getAllByTestId('history-run')).toHaveLength(7);
   });
 
-  it('(6) a record opens into the run card itself', async () => {
+  it('(6) a record opens the run\'s big card, the same card the run view opens; J / K walk the records', async () => {
     render(<HistoryView hidden={false} now={NOW} />);
     await screen.findByTestId('history-verdict');
-    const row = screen.getAllByTestId('history-run').find((r) => r.textContent?.includes('task a'))!;
-    fireEvent.click(within(row).getByRole('button', { expanded: false }));
-    const cardEl = within(row).getByTestId('swarm-out-run');
-    expect(within(cardEl).getByTestId('judge-tag').textContent).toContain('! 1 WARN');
-    fireEvent.click(within(cardEl).getByTestId('swarm-out-run-toggle'));
-    expect((await within(cardEl).findByTestId('swarm-out-run-report')).textContent).toContain('the reply');
+    const rows = screen.getAllByTestId('history-run');
+    const row = rows.find((r) => r.textContent?.includes('task a'))!;
+    fireEvent.click(within(row).getByRole('button', { name: /task a/ }));
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    expect(within(row).queryByTestId('swarm-out-run')).toBeNull();   // no inline card any more
+    expect((await within(overlay).findByTestId('swarm-out-review-report')).textContent).toContain('the reply');
+    expect(within(overlay).getByTestId('swarm-out-review-position').textContent).toBe(`记录 ${rows.indexOf(row) + 1} / ${rows.length}`);
+    fireEvent.keyDown(window, { key: 'j' });
+    const next = rows[rows.indexOf(row) + 1];
+    const title = within(overlay).getByRole('dialog').getAttribute('aria-label')!;
+    expect(title).not.toContain('task a');
+    expect(next.textContent).toContain(title);
+    fireEvent.click(within(overlay).getByTestId('swarm-out-review-close'));
+    expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();
   });
 
   it('(7) no stale TBD: only occupancy has no source', async () => {

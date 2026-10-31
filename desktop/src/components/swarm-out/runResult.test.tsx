@@ -1,8 +1,8 @@
 /**
  * A run's result on the Swarm Out panel (design docs/design/2026-10-28-swarm-out-run-results.md
  * §4.6): how it ended, what it did for every kind of run (pipeline, native coding,
- * files, an answer), its numbers, the details on demand (the reply as plain text), and
- * the history's days by outcome.
+ * files, an answer), its numbers, the big card it opens (what came back drawn with the
+ * chat's rows, the reply as Hive markdown), and the history's days by outcome.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -253,52 +253,46 @@ describe('a run card', () => {
     expect(within(await card('failed one')).getByTestId('swarm-out-run-result').textContent).toContain('Hive 上已经没有这个会话');
   });
 
-  it('the details render the reply as markdown with no raw HTML, show the error, refresh, and close from their end', async () => {
+  it('"Open card" opens the big card: the reply as Hive markdown (no raw HTML, no local links), the error, refresh', async () => {
+    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
+      result: { ...RUN.result!, report: 'Done.\n<a href="https://evil.example">click</a> **bold**\n<script>alert(1)</script>\n\n![x](https://evil.example/x.png)\n\nsee `Knowledge/Reports/r.md`', report_chars: 600,
+        error: { code: 'MODEL_ERROR', message: 'throttled by the model' } },
+      fetch_error: null, checked_at: ago(0), fetched_at: ago(0) } });
     const c = await card('fix the widget');
+    expect(within(c).queryByTestId('swarm-out-run-detail')).toBeNull();   // no inline details any more
     fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
-    expect(c.dataset.open).toBe('true');
-    expect(c.style.gridColumn).toBe('1 / -1');   // open: the whole row
-    const report = await within(c).findByTestId('swarm-out-run-report');
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    const report = await within(overlay).findByTestId('swarm-out-review-report');
     expect(report.querySelector('strong')?.textContent).toBe('bold');   // markdown, not its source
     expect(report.textContent).not.toContain('**');
     expect(report.querySelector('a[href^="https://evil"]')).toBeNull();   // raw HTML is never rendered
     expect(report.querySelector('script, iframe')).toBeNull();
-    expect(within(c).getByText('throttled by the model')).toBeTruthy();
-    expect(within(c).getByText('全文 600 字，去 Hive 页面看')).toBeTruthy();
-    expect(within(c).getByTestId('swarm-out-run-repo').textContent).toContain('src/x.py');
-    expect(vi.mocked(swarmOutService.result)).toHaveBeenCalledTimes(1);
-    fireEvent.click(within(c).getByText('刷新结果'));
-    await vi.waitFor(() => expect(vi.mocked(swarmOutService.refresh)).toHaveBeenCalledWith(RUN.dispatch_id));
-    expect(within(c).queryByTestId('judge-tag')).toBeNull();   // not a pipeline run: no five rows
     expect(report.querySelector('img[src^="https://evil"]')).toBeNull();   // remote images dropped
-    fireEvent.click(within(c).getByTestId('swarm-out-run-collapse'));
-    expect(within(c).queryByTestId('swarm-out-run-detail')).toBeNull();
-    expect(c.dataset.open).toBeUndefined();
+    // a path in a Hive's reply names a file on the Hive: plain code, never a link here
+    expect(report.textContent).toContain('Knowledge/Reports/r.md');
+    expect(report.querySelector('[role="button"], [title="Open in Canvas"]')).toBeNull();
+    expect(within(overlay).getByTestId('swarm-out-review-error-message').textContent).toBe('throttled by the model');
+    expect(within(overlay).getByText('全文 600 字，去 Hive 页面看')).toBeTruthy();
+    expect(within(overlay).getByTestId('swarm-out-review-repo').textContent).toContain('x.py');
+    expect(vi.mocked(swarmOutService.result)).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(overlay).getByTestId('swarm-out-review-refresh'));
+    await vi.waitFor(() => expect(vi.mocked(swarmOutService.refresh)).toHaveBeenCalledWith(RUN.dispatch_id));
+    await vi.waitFor(() => expect(vi.mocked(swarmOutService.result)).toHaveBeenCalledTimes(2));   // read again
+    fireEvent.click(within(overlay).getByTestId('swarm-out-review-close'));
+    expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();
   });
 
-  it('a pipeline run shows its Autonomy Judge tag on the card, before any details are read', async () => {
+  it('a pipeline run shows its Autonomy Judge tag on the card, from /runs alone', async () => {
     const audit = [{ dim: 'Run Isolation', verdict: 'PASS', detail: null }, { dim: 'Quality', verdict: 'WARN', detail: null },
       { dim: 'Autonomy', verdict: 'PASS', detail: null }];
     vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN, result: result({ kinds: ['pipeline'],
       pipeline: { run_id: null, profile: 'research', status: 'completed', landing: 'no_code', landed_sha: null, audit } }) }],
     asks: [], errors: [] });
-    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
-      result: { ...RUN.result!, kinds: ['pipeline'], report: 'ok', report_chars: 2, pipeline: { run_id: 'run_1', profile: 'research',
-        status: 'completed', landing: 'no_code', landed_sha: null, audit: audit.map((x) => ({ ...x, detail: `${x.dim} 的数字` })) } },
-      fetch_error: null, checked_at: ago(0), fetched_at: ago(0) } });
     vi.mocked(swarmOutService.result).mockClear();
     const c = await card('fix the widget');
     const tag = within(c).getByTestId('judge-tag');
     expect(tag.textContent).toContain('! 1 WARN');
     expect(vi.mocked(swarmOutService.result)).not.toHaveBeenCalled();   // from /runs alone
-    fireEvent.click(tag);
-    expect(screen.getByTestId('judge-popover').textContent).not.toContain('Quality 的数字');   // numbers not read yet
-    fireEvent.click(tag);
-    fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
-    await within(c).findByTestId('swarm-out-run-report');
-    expect(within(c).getAllByTestId('judge-tag')).toHaveLength(1);   // one tag, not a second in the details
-    fireEvent.click(within(c).getByTestId('judge-tag'));
-    expect(screen.getByTestId('judge-popover').textContent).toContain('Quality 的数字');   // the record's numbers
   });
 
   it('a run with a Hive session has an Open button that opens it, titled run first', async () => {
@@ -314,7 +308,7 @@ describe('a run card', () => {
     expect(within(without).queryByTestId('swarm-out-run-open-button')).toBeNull();
   });
 
-  it('a file that came back opens its copy here; one that did not shows the Hive path', async () => {
+  it('a file that came back opens in the Canvas and closes the card; one left on the Hive says so', async () => {
     vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
       result: { ...RUN.result!, report: 'Done.', report_chars: 5, work: { ...RUN.result!.work, files: [
         { path: '/hive/ws/Knowledge/Reports/r.md', kind: 'content', local: 'Projects/P/deliverables/hive/x/Knowledge/Reports/r.md' },
@@ -324,24 +318,46 @@ describe('a run card', () => {
     document.addEventListener('swarm:open-file', on);
     const c = await card('fix the widget');
     fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
-    const btn = await within(c).findByTestId('swarm-out-run-file-local');
-    fireEvent.click(btn);
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    const box = await within(overlay).findByTestId('swarm-out-review-files');
+    expect(within(box).getByTestId('item-box-title').textContent).toContain('3 个交付物');
+    const here = within(box).getAllByTestId('swarm-out-review-file');
+    expect(here).toHaveLength(1);
+    const hive = within(box).getAllByTestId('swarm-out-review-file-hive');
+    expect(hive.map((h) => h.dataset.path)).toEqual(['/hive/ws/left.md', '/hive/ws/refused.md']);
+    expect(hive[0].textContent).toContain('在 Hive 上，没有带回');
+    expect(within(box).getAllByTestId('swarm-out-review-file-not-placed')).toHaveLength(1);   // said, only for that one
+    // the acceptance strip counts the files that came back (one of them could not be
+    // put in the Brain: △), not the one left on the Hive
+    expect(within(overlay).getAllByTestId('swarm-out-review-check').map((x) => x.textContent)).toContain('△ 交回 2 个文件');
+    fireEvent.click(here[0].querySelector('button')!);
     document.removeEventListener('swarm:open-file', on);
     expect(opened).toEqual(['Projects/P/deliverables/hive/x/Knowledge/Reports/r.md']);
-    expect(within(c).getAllByTestId('swarm-out-run-file-local')).toHaveLength(1);
-    expect(within(c).getByText('/hive/ws/left.md')).toBeTruthy();
-    expect(within(c).getAllByTestId('swarm-out-run-file-not-placed')).toHaveLength(1);   // said, only for that one
+    expect(screen.queryByTestId('swarm-out-review-overlay')).toBeNull();   // the Canvas opens beneath
   });
 
-  it('the details wait for the whole record: /runs counts are never shown as file lists', async () => {
+  it('an answer that wrote files on the Hive does not say they came back', async () => {
+    vi.mocked(swarmOutService.result).mockResolvedValue({ dispatch_id: RUN.dispatch_id, record: {
+      result: { ...RUN.result!, report: 'Done.', report_chars: 5, work: { ...RUN.result!.work, files: [
+        { path: '/hive/ws/Knowledge/Reports/r.md', kind: 'content' }] } } } } as never);
+    fireEvent.click(within(await card('fix the widget')).getByTestId('swarm-out-run-toggle'));
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    await within(overlay).findByTestId('swarm-out-review-files');
+    const checks = within(overlay).getAllByTestId('swarm-out-review-check').map((x) => x.textContent);
+    expect(checks).toContain('✓ Hive 上写了 1 个文件');
+    expect(checks.join(' ')).not.toContain('交回');
+  });
+
+  it('the card waits for the whole record: /runs counts are never shown as file lists', async () => {
     vi.mocked(swarmOutService.result).mockReturnValue(new Promise(() => {}));
     vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [{ ...RUN,
       result: result({ kinds: ['files'] }, { files: [{ kind: 'content' }], repos: [repo({ files: [], commits: [] })] }) }],
     asks: [], errors: [] });
-    const c = await card('fix the widget');
-    fireEvent.click(within(c).getByTestId('swarm-out-run-toggle'));
-    expect(within(c).getByText('正在读…')).toBeTruthy();
-    expect(within(c).queryByTestId('swarm-out-run-files')).toBeNull();
-    expect(within(c).queryByTestId('swarm-out-run-steps')).toBeNull();
+    fireEvent.click(within(await card('fix the widget')).getByTestId('swarm-out-run-toggle'));
+    const overlay = await screen.findByTestId('swarm-out-review-overlay');
+    expect(within(overlay).getByText('正在读…')).toBeTruthy();
+    expect(within(overlay).queryByTestId('swarm-out-review-files')).toBeNull();
+    expect(within(overlay).queryByTestId('swarm-out-review-repo')).toBeNull();
+    expect(within(overlay).queryAllByTestId('swarm-out-review-check').map((x) => x.textContent).join(' ')).not.toContain('文件');
   });
 });

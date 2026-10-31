@@ -292,12 +292,16 @@ export function BrainAgentView({ name, onDispatch, onRequestClose }: {
 }
 
 /** Conductor · Runs tab: the Chat tab lane and the Hive lane, each Run one card. */
-export function BrainRunsView({ name }: { name: string }) {
+export function BrainRunsView({ name, onRequestClose }: {
+  name: string;
+  /** the host overlay's close: a file opened from a run's big card opens in the Canvas */
+  onRequestClose?: () => void;
+}) {
   const { runs } = useBrainData(name);
   const hive = useBrainHiveRuns(name);
   return (
     <div className="p-4 max-w-[1240px]" data-testid="bm-panel-runs">
-      <RunsPanel name={name} runs={runs} hive={hive} />
+      <RunsPanel name={name} runs={runs} hive={hive} onRequestClose={onRequestClose} />
     </div>
   );
 }
@@ -434,8 +438,8 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
 
 const RUN_GRID = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))' };
 
-function RunsPanel({ name, runs, hive }: {
-  name: string; runs: PipelineRunSummary[];
+function RunsPanel({ name, runs, hive, onRequestClose }: {
+  name: string; runs: PipelineRunSummary[]; onRequestClose?: () => void;
   hive: { hive: SwarmOutRun[]; loaded: boolean; failed: boolean; reload: () => void };
 }) {
   const live = hive.hive.filter(hiveLive).length;
@@ -456,7 +460,7 @@ function RunsPanel({ name, runs, hive }: {
           : hive.hive.length === 0 ? <div className="text-meta text-[var(--color-text-muted)]" data-testid="bm-hive-empty">No Run went to a Hive under this Brain in the last 30 days. Swarm Out sends one.</div>
           : (
             <div className="grid gap-3" style={RUN_GRID}>
-              {hive.hive.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={hive.reload} />)}
+              {hive.hive.map((r) => <RunCard key={r.dispatch_id} r={r} onReload={hive.reload} onLeave={onRequestClose} />)}
             </div>
           )}
       </Lane>

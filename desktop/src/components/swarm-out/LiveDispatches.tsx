@@ -12,20 +12,16 @@
  * yet says TBD and which source is missing; nothing on this view is a sample. What went
  * on in the past (the runs by Brain, type, Hive) is the history view's (HistoryView).
  *
- * RunCard (the history view's and a Brain's Runs tab's card) shows what a run's Hive
- * recorded (design docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what
- * it did, its numbers; the details (the reply, code per repository, files, steps, a
- * pipeline's five rows) open on demand, with a second Hide at their end. A run that
- * waits on the person says so and opens its big card: commands are only there.
- * Every card names its Brain and Project Agent as two labelled fields, and its facts
- * (ended, duration, tokens, cost, human loops, failed steps) as a row of cells. A
- * pipeline run's Autonomy Judge tag sits next to how it ended: its verdicts come with
- * /runs, the numbers behind them once the details are read. A run whose Hive session
- * this Host knows has an explicit Open button (the title opens it too).
- *
- * The reply is the agent's markdown, rendered by the app's own MarkdownRenderer (the
- * chat's: no raw HTML, remote images dropped, an external link opens only on a click,
- * in the browser).
+ * RunCard (a Brain's Runs tab's card) shows what a run's Hive recorded (design
+ * docs/design/2026-10-28-swarm-out-run-results.md): how it ended, what it did, its
+ * numbers. Its "Open card" opens the run's big card (RunOverlay), the one place a run's
+ * details (what came back, the reply, autonomy, process, cost, lessons) and commands are:
+ * the Run view, the history and a Brain page all open that same card. A run that waits
+ * on the person says so. Every card names its Brain and Project Agent as two labelled
+ * fields, and its facts (ended, duration, tokens, cost, human loops, failed steps) as a
+ * row of cells. A pipeline run's Autonomy Judge tag sits next to how it ended (its
+ * verdicts come with /runs). A run whose Hive session this Host knows has an explicit
+ * Open button (the title opens it too).
  *
  * Status colours follow ./tone (green done or free, blue running, amber needs you or
  * did not finish, red failed, grey unknown): only the dot and the status word are
@@ -34,12 +30,11 @@
  * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutResult, type SwarmOutRun } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutRun } from '../../services/swarmOut';
 import { JudgeTag } from './JudgeTag';
-import MarkdownRenderer from '../common/MarkdownRenderer';
 import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
 import { RunList } from './RunList';
 import { RunOverlay } from './RunOverlay';
@@ -264,91 +259,6 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
   );
 }
 
-/** The details of a run, read from its whole record. The record is held by the card
- *  (`full` / `setFull`), so the card's Autonomy Judge tag gets its numbers from it. */
-function ResultDetail({ r, full, setFull, onRefreshed, onClose }: {
-  r: SwarmOutRun; full: SwarmOutResult | null; setFull: (res: SwarmOutResult | null) => void;
-  onRefreshed: () => void; onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const [state, setState] = useState<'idle' | 'loading' | 'failed'>('loading');
-  const id = r.dispatch_id;
-  const load = useCallback(async () => {
-    setState('loading');
-    try {
-      const rec = await swarmOutService.result(id);
-      setFull(rec.record?.result ?? null);
-      setState('idle');
-    } catch {
-      setState('failed');
-    }
-  }, [id, setFull]);
-  useEffect(() => { void load(); }, [load]);   // once, when the details open
-  const refresh = async () => {
-    setState('loading');
-    try {
-      await swarmOutService.refresh(r.dispatch_id);
-      onRefreshed();
-      await load();
-    } catch {
-      setState('failed');
-    }
-  };
-  // the details come from the whole record only: /runs carries counts, not the
-  // Hive-written text and paths shown here
-  const res = full;
-  const tools = Object.entries(res?.work.steps.by_tool ?? {});
-  return (
-    <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[12.5px]" data-testid="swarm-out-run-detail">
-      {state === 'loading' && <div className={muted}>{t('swarmOut.loading')}</div>}
-      {state === 'failed' && <div className={muted}>{t('swarmOut.detail.failed')}</div>}
-      {res?.error?.message && <div className="mb-2 text-[var(--color-status-error)] whitespace-pre-wrap">{res.error.message}</div>}
-      {full?.report ? (
-        <>
-          <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.lastReply')}</div>
-          <div className="mt-1 px-3 py-2 rounded-md bg-[var(--color-hover)] text-[12.5px] max-h-[480px] overflow-auto" data-testid="swarm-out-run-report">
-            <MarkdownRenderer content={full.report} />
-          </div>
-          {full.report_chars > full.report.length && <div className={`mt-1 text-[11.5px] ${muted}`}>{t('swarmOut.detail.fullReport', { count: full.report_chars })}</div>}
-        </>
-      ) : full && <div className={muted}>{t('swarmOut.detail.noReply')}</div>}
-      {(res?.work.repos ?? []).filter((x) => x.files.length || x.commits.length).map((x) => (
-        <div key={x.dir ?? x.url ?? ''} className="mt-2" data-testid="swarm-out-run-repo">
-          <div className={`text-[11.5px] ${muted}`}>{x.dir}{x.ref ? ` @ ${x.ref}` : ''}{t('swarmOut.detail.commitsOnly')}</div>
-          {x.files.map((f, i) => <div key={`${i}:${f.path}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path} <span className={muted}>+{f.added ?? '?'} −{f.deleted ?? '?'}</span></div>)}
-          {x.files_total > x.files.length && <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.moreFiles', { count: x.files_total - x.files.length })}</div>}
-          {x.commits.length > 0 && <div className={`font-mono text-[11.5px] ${muted}`}>{x.commits.map((c) => c.slice(0, 9)).join(' ')}{x.commits_total > x.commits.length ? t('swarmOut.detail.commitsTotal', { count: x.commits_total }) : ''}</div>}
-          {x.bundle?.error && <div className={`text-[11.5px] ${muted}`} data-testid="swarm-out-return-unavailable">{t('swarmOut.detail.bundleError', { error: x.bundle.error })}</div>}
-        </div>
-      ))}
-      {(res?.work.files ?? []).length > 0 && (
-        <div className="mt-2" data-testid="swarm-out-run-files">
-          <div className={`text-[11.5px] ${muted}`}>{t('swarmOut.detail.filesWritten')}</div>
-          {res!.work.files.map((f, i) => f.local ? (
-            // came back into the run's Brain (core/hive_files): opens the copy here
-            <button key={`${i}:${f.path ?? ''}`} type="button" title={f.local} data-testid="swarm-out-run-file-local"
-              className="block max-w-full text-left font-mono text-[11.5px] truncate text-[var(--color-primary)] hover:underline"
-              onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: f.local } }))}>
-              {f.local} <span className={muted}>{t('swarmOut.detail.fileHere')}</span>
-            </button>
-          ) : <div key={`${i}:${f.path ?? ''}`} className="font-mono text-[11.5px] truncate" title={f.path}>{f.path}
-            {f.not_placed && <span className={muted} data-testid="swarm-out-run-file-not-placed"> {t('swarmOut.detail.fileNotPlaced')}</span>}</div>)}
-        </div>
-      )}
-      {tools.length > 0 && (
-        <div className={`mt-2 text-[11.5px] ${muted}`} data-testid="swarm-out-run-steps">
-          {t('swarmOut.detail.toolCalls', { count: res!.work.steps.total, list: tools.map(([n, c]) => `${n} ${c}`).join(' · ') })}
-        </div>
-      )}
-      <div className="mt-2 flex gap-2">
-        <button type="button" className={btn} disabled={state === 'loading'} onClick={() => { void refresh(); }}>{t('swarmOut.detail.refresh')}</button>
-        {/* the details can be long: Hide is also at their end, not only at the top */}
-        <button type="button" className={btn} onClick={onClose} data-testid="swarm-out-run-collapse">{t('swarmOut.detail.collapse')}</button>
-      </div>
-    </div>
-  );
-}
-
 /** The card's facts as cells (label over value), wrapping to as many columns as fit; a
  *  strong cell (the total cost, the billed tokens) reads a size up. Also the cells of a
  *  local Run's card (layout/LocalRunCard), so the two cards read the same. */
@@ -387,7 +297,7 @@ function AgentFacts({ r }: { r: SwarmOutRun }) {
   );
 }
 
-function RunResult({ r, full }: { r: SwarmOutRun; full: SwarmOutResult | null }) {
+function RunResult({ r }: { r: SwarmOutRun }) {
   const { t } = useTranslation();
   const res = r.result;
   if (!res) {
@@ -398,8 +308,8 @@ function RunResult({ r, full }: { r: SwarmOutRun; full: SwarmOutResult | null })
   const ended = endedLabel(res);
   const work = workLines(res);
   const checks = checksLine(res);
-  // the verdicts come with /runs; the numbers behind them only in the whole record
-  const judge = (full && runJudge(full)) ?? runJudge(res);
+  // the verdicts come with /runs (the numbers behind them: the big card's Autonomy tab)
+  const judge = runJudge(res);
   return (
     <div className="mt-1.5" data-testid="swarm-out-run-result">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -449,11 +359,10 @@ function OpenRunButton({ r, open }: { r: SwarmOutRun; open: () => void }) {
   );
 }
 
-/** A run that waits on the person (its stage asks for a command) says what, and opens
- *  its big card: the card is the one place commands are given. */
-function ReviewLine({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
+/** A run that waits on the person (its stage asks for a command) says what; the card's
+ *  "Open card" button opens its big card, the one place commands are given. */
+function ReviewLine({ r }: { r: SwarmOutRun }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
   const stage = stageOf(r);
   const asks = actionsOf(r).some((a) => a.key !== 'open_session');
   if (!asks || !['needs_answer', 'awaiting', 'stopped', 'running'].includes(stage)) return null;
@@ -461,27 +370,28 @@ function ReviewLine({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) 
     <div className="mt-2 pt-2 border-t border-[var(--color-border)] flex items-center gap-2 text-[12.5px]" data-testid="swarm-out-review-line" data-stage={stage}>
       <span className="font-medium" style={{ color: stage === 'stopped' ? TONE_VAR.error : stage === 'running' ? TONE_VAR.busy : TONE_VAR.attention }}>{t(`swarmOut.review.stage.${stage}`)}</span>
       {r.cleanup_soon && <span className="text-[12px]" style={{ color: TONE_VAR.attention }} data-testid="swarm-out-cleanup-soon">{t('swarmOut.review.cleanupSoon')}</span>}
-      <button type="button" className={`ml-auto ${btn}`} onClick={() => setOpen(true)} data-testid="swarm-out-review-open-card">{t('swarmOut.review.openCard')}</button>
-      {open && <RunOverlay runs={[r]} asks={[]} order={[]} id={r.dispatch_id} now={Date.now()}
-        onSelect={() => {}} onClose={() => setOpen(false)} onReload={onReload ?? (() => {})} />}
     </div>
   );
 }
 
-export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void }) {
+export function RunCard({ r, onReload, onLeave }: {
+  r: SwarmOutRun; onReload?: () => void;
+  /** a file was opened from the run's big card: the host overlay steps aside so the
+   *  Canvas is in view (a Brain page) */
+  onLeave?: () => void;
+}) {
   const { t } = useTranslation();
+  // the run's big card (RunOverlay): the one place a run's details and commands are
   const [open, setOpen] = useState(false);
-  const [full, setFull] = useState<SwarmOutResult | null>(null);
-  const canOpen = !!r.result || r.result_status === 'failed';
+  const canOpen = !!r.result || r.result_status === 'failed' || actionsOf(r).some((a) => a.key !== 'open_session');
   const openRun = useOpenRun(r);
   const tone = runTone(r);
   return (
     // only a failed run, or one waiting on the person, tints its border: a stopped run keeps
     // its amber dot and word but does not need anything, so it does not compete with them
-    // open, a card takes the whole row so the reply has room to be read
     <div className={`${card} px-3.5 py-3 min-w-0`}
-      style={{ ...(tone === 'error' || r.state === 'waiting' ? cardTint(tone) : {}), ...(open ? { gridColumn: '1 / -1' } : {}) }}
-      data-testid="swarm-out-run" data-state={r.state ?? 'unknown'} data-tone={tone} data-open={open || undefined}>
+      style={tone === 'error' || r.state === 'waiting' ? cardTint(tone) : undefined}
+      data-testid="swarm-out-run" data-state={r.state ?? 'unknown'} data-tone={tone}>
       <div className="flex items-start gap-2 min-w-0">
         <span className="h-[18px] flex items-center"><Dot tone={tone} className={tone === 'busy' ? 'swarm-out-icon--busy' : ''} /></span>
         <RunTitle r={r} className="font-medium min-w-0 flex-1 line-clamp-2 leading-[18px]" />
@@ -491,19 +401,20 @@ export function RunCard({ r, onReload }: { r: SwarmOutRun; onReload?: () => void
         {r.hive} · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
       </div>
       <AgentFacts r={r} />
-      <RunResult r={r} full={full} />
-      <ReviewLine r={r} onReload={onReload} />
-      {(canOpen || openRun) && <div className="mt-2 flex items-center gap-3 min-w-0">
+      <RunResult r={r} />
+      <ReviewLine r={r} />
+      {(canOpen || openRun) && <div className="mt-2 flex items-center gap-2 min-w-0">
         {canOpen && (
-          <button type="button" className={`inline-flex items-center gap-0.5 text-[12px] ${muted} hover:text-[var(--color-text)]`} aria-expanded={open}
-            onClick={() => setOpen((o) => !o)} data-testid="swarm-out-run-toggle">
-            {open ? t('swarmOut.card.collapse') : t('swarmOut.card.details')}
-            <span className="material-symbols-outlined text-[16px]" aria-hidden>{open ? 'expand_less' : 'expand_more'}</span>
+          <button type="button" className={`${btn} inline-flex items-center gap-1`} aria-haspopup="dialog"
+            onClick={() => setOpen(true)} data-testid="swarm-out-run-toggle">
+            <span className="material-symbols-outlined text-[15px]" aria-hidden>open_in_full</span>
+            {t('swarmOut.review.openCard')}
           </button>
         )}
         {openRun && <span className="ml-auto"><OpenRunButton r={r} open={openRun} /></span>}
       </div>}
-      {open && <ResultDetail r={r} full={full} setFull={setFull} onRefreshed={onReload ?? (() => {})} onClose={() => setOpen(false)} />}
+      {open && <RunOverlay runs={[r]} asks={[]} order={[]} id={r.dispatch_id} now={Date.now()}
+        onSelect={() => {}} onClose={() => setOpen(false)} onFileOpened={onLeave} onReload={onReload ?? (() => {})} />}
     </div>
   );
 }

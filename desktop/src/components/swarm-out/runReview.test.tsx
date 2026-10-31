@@ -22,7 +22,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { renderHook } from '@testing-library/react';
 import { createElement, useState, type ReactNode } from 'react';
 import { swarmOutService, type SwarmOutAction, type SwarmOutRun } from '../../services/swarmOut';
-import { CommandPanel, type PanelMode } from './RunOverlay';
+import { CommandPanel, RunOverlay, type PanelMode } from './RunOverlay';
 import { RunList } from './RunList';
 import { OpenSessionContext, PanelHiddenContext, useOpenRun } from './openSession';
 import { brainChips, sections } from './runReview';
@@ -38,7 +38,7 @@ vi.mock('../../services/swarmOut', () => ({
     rerun: vi.fn(async () => undefined), stop: vi.fn(async () => undefined),
     discard: vi.fn(async () => ({ discarded: true, stopped: true })),
     result: vi.fn(() => new Promise(() => {})), answer: vi.fn(),
-    returnPrepare: vi.fn(), returnLand: vi.fn(),
+    returnPrepare: vi.fn(), returnLand: vi.fn(), refresh: vi.fn(),
   },
 }));
 const svc = vi.mocked(swarmOutService);
@@ -383,5 +383,58 @@ describe('opening a run\'s session', () => {
     const awaiting = renderHook(() => useOpenRun(run('a1', 'awaiting')), { wrapper: wrap(open) }).result.current;
     act(() => awaiting!());
     expect(open).toHaveBeenLastCalledWith(sid(1), 'task a1 · explorer', false);
+  });
+});
+
+// ── the big card (RunOverlay) ─────────────────────────────────────────────────
+
+describe('the big card', () => {
+  const record = (result: unknown) => ({ dispatch_id: 'x1', record: { result, fetch_error: null, checked_at: ENDED, fetched_at: ENDED } }) as never;
+  const card = (r: SwarmOutRun, over: Partial<Parameters<typeof RunOverlay>[0]> = {}) => {
+    const props = { runs: [r], asks: [], order: [r.dispatch_id], id: r.dispatch_id, now: NOW,
+      onSelect: vi.fn(), onSettled: vi.fn(), onClose: vi.fn(), onFileOpened: vi.fn(), onReload: vi.fn(), ...over };
+    render(<RunOverlay {...props} />);
+    return props;
+  };
+  const withFile = () => record({ ...run('x1', 'awaiting').result, report: 'Done.', report_chars: 5,
+    work: { ...run('x1', 'awaiting').result!.work, files: [{ path: '/hive/r.md', kind: 'content', local: 'Projects/P/deliverables/hive/x/r.md' }] } });
+
+  it('opened from the history, settling a record closes the card and drops it from J / K', async () => {
+    const p = card(run('x1', 'awaiting'), { walk: 'records', order: ['x0', 'x1', 'x2'] });
+    fireEvent.click(screen.getByTestId('swarm-out-cmd-accept'));
+    await waitFor(() => expect(p.onClose).toHaveBeenCalled());
+    expect(p.onSettled).toHaveBeenCalledWith('x1');
+    expect(p.onSelect).not.toHaveBeenCalled();   // never on to the next record
+    expect(screen.getByTestId('swarm-out-review-position').textContent).toBe('Record 2 / 3');
+  });
+
+  it('a file opened by a click inside closes it (and the host); one an agent opens does not', async () => {
+    svc.result.mockResolvedValue(withFile());
+    const p = card(run('x1', 'awaiting'));
+    const row = await screen.findByTestId('swarm-out-review-file');
+    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: 'a.md', by: 'agent' } }));
+    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: 'b.md' } }));   // not from a click in it
+    expect(p.onClose).not.toHaveBeenCalled();
+    fireEvent.click(row.querySelector('button')!);
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+    expect(p.onFileOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it('a record read with no result says why, never "loading" forever', async () => {
+    svc.result.mockResolvedValue(record(null));
+    card(run('x1', 'stopped', { result: null, result_status: 'failed', result_error: 'session_gone' }));
+    expect((await screen.findByTestId('swarm-out-review-no-result')).textContent).toContain('no longer');
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('a refresh that fails says so', async () => {
+    svc.result.mockResolvedValue(withFile());
+    svc.refresh.mockRejectedValueOnce(new Error('down'));
+    card(run('x1', 'awaiting'));
+    fireEvent.click(screen.getByTestId('swarm-out-review-refresh'));
+    expect((await screen.findByTestId('swarm-out-review-refresh-error')).textContent).toBeTruthy();
+    svc.refresh.mockResolvedValueOnce({ result: null, result_error: 'session_gone' } as never);
+    fireEvent.click(screen.getByTestId('swarm-out-review-refresh'));
+    await waitFor(() => expect(screen.getByTestId('swarm-out-review-refresh-error').textContent).toContain('no longer'));
   });
 });

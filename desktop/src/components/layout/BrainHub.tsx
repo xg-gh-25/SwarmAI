@@ -264,7 +264,7 @@ function BrainDetailShell(
           <BrainView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} addOpen={addOpen} />
         )}
         {detailView === 'agent' && <BrainAgentView name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />}
-        {detailView === 'runs' && <BrainRunsView name={name} />}
+        {detailView === 'runs' && <BrainRunsView name={name} onRequestClose={onRequestClose} />}
         {detailView === 'reflect' && <BrainLearnedView name={name} />}
         {detailView === 'eval' && <BrainEvalView name={name} />}
         {detailView === 'distribute' && <DistributeView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} />}

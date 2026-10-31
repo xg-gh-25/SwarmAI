@@ -1791,7 +1791,9 @@
         "executionDiffers": "执行方式和派的不一致",
         "noneUnanswered": "没有没答的问题",
         "unanswered_one": "{{count}} 个没答",
-        "unanswered_other": "{{count}} 个没答"
+        "unanswered_other": "{{count}} 个没答",
+        "filesOnHive_one": "Hive 上写了 {{count}} 个文件",
+        "filesOnHive_other": "Hive 上写了 {{count}} 个文件"
       },
       "rerunBox": {
         "title": "修正重跑",
@@ -1810,12 +1812,11 @@
       },
       "tab": {
         "now": "现在在做",
-        "deliverable": "交付物 {{count}}",
-        "reply": "最后的回复",
+        "deliverable": "交付物",
         "autonomy": "自主度",
-        "process": "过程 · {{count}} 步",
+        "process": "过程",
         "cost": "花费",
-        "lessons": "教训 {{count}}"
+        "lessons": "教训"
       },
       "section": {
         "you": "等你",
@@ -1857,7 +1858,16 @@
       "manualConfirm": "我已手工合进去：通过",
       "retry": "再试一次",
       "landNoUrl": "没有可以取回这些提交的地址：请手工合并。",
-      "doneJustNow": "刚做完"
+      "doneJustNow": "刚做完",
+      "reply": "最后的回复",
+      "deliverables_one": "{{count}} 个交付物",
+      "deliverables_other": "{{count}} 个交付物",
+      "onHive": "在 Hive 上，没有带回",
+      "refresh": "刷新",
+      "notPlaced": "带回了，但没能放进本机的 Brain 目录",
+      "positionRecords": "记录 {{n}} / {{total}}",
+      "previousRecord": "上一条记录",
+      "nextRecord": "下一条记录"
     }
   },
   "usage": {

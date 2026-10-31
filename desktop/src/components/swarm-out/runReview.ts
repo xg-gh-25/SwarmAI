@@ -222,8 +222,10 @@ export function typingIn(target: EventTarget | null): boolean {
 }
 
 /** The machine's checks on what came back, for the card's amber strip: each one ✓ or
- *  △, never a gate (no command waits on them). */
-export function machineChecks(r: SwarmOutRun): { key: string; ok: boolean; text: string }[] {
+ *  △, never a gate (no command waits on them). *full*: the run's whole record; only it
+ *  says which files are here (/runs counts files, without paths), so the files check
+ *  waits for it. */
+export function machineChecks(r: SwarmOutRun, full?: SwarmOutResult | null): { key: string; ok: boolean; text: string }[] {
   const res = r.result;
   if (!res) return [];
   const out: { key: string; ok: boolean; text: string }[] = [];
@@ -234,8 +236,12 @@ export function machineChecks(r: SwarmOutRun): { key: string; ok: boolean; text:
     const missed = checks.filter((c) => c.status !== 'ran').map((c) => c.id);
     out.push({ key: 'checks', ok: missed.length === 0, text: missed.length === 0 ? t('checksRan') : t('checksMissed', { list: missed.join(', ') }) });
   }
-  const files = res.work.files.length;
-  if (files) out.push({ key: 'files', ok: !res.work.files.some((f) => f.not_placed), text: t('files', { count: files }) });
+  // a file "came back" only when it is here or was sent back (local / not_placed); the
+  // rest were written on the Hive and stayed there (an answer that also wrote files)
+  const files = full?.work.files ?? [];
+  const back = files.filter((f) => f.local || f.not_placed).length;
+  if (back) out.push({ key: 'files', ok: !files.some((f) => f.not_placed), text: t('files', { count: back }) });
+  else if (files.length) out.push({ key: 'files', ok: true, text: t('filesOnHive', { count: files.length }) });
   const repos = res.work.repos ?? [];
   if (repos.some((x) => x.commits_total > 0)) {
     const sealed = repos.filter((x) => x.commits_total > 0).every((x) => x.bundle?.available !== false && !x.bundle?.error);
