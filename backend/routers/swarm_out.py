@@ -48,6 +48,17 @@ class DispatchBody(BaseModel):
     revision: Optional[str] = Field(default=None, max_length=64)
     # one or two sentences of what the task is, for the dispatch card
     brief: Optional[str] = Field(default=None, max_length=swarm_out.MAX_BRIEF_CHARS * 2)
+    # the agent session that dispatched it (the CLI's SWARM_APP_SESSION_ID): it follows
+    # the run (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1)
+    session: Optional[str] = Field(default=None, max_length=80)
+
+
+class ActorBody(BaseModel):
+    """Who gives a command on a run (core/swarm_out_actor): ``person`` from the App,
+    anything else is an agent's (the CLI says ``agent``, with its session and why)."""
+    by: Optional[str] = Field(default=None, max_length=10)
+    session: Optional[str] = Field(default=None, max_length=80)
+    why: Optional[str] = Field(default=None, max_length=1000)
 
 
 class RouteBody(BaseModel):
@@ -110,14 +121,39 @@ async def dispatch(body: DispatchBody) -> dict[str, Any]:
                                                body.acceptance or "", body.mode, body.execution,
                                                body.origin, seen_revision=body.revision,
                                                brief=body.brief or "", why=body.why or "",
-                                               returns=body.returns, needs_private=body.needs_private or ""))
+                                               returns=body.returns, needs_private=body.needs_private or "",
+                                               dispatched_from=body.session))
 
 
-class ReturnBody(BaseModel):
+class ReturnBody(ActorBody):
     url: Optional[str] = Field(default=None, max_length=300)
     key: Optional[str] = Field(default=None, max_length=16)
     tip: Optional[str] = Field(default=None, max_length=64)
     approve_protected: bool = False
+
+
+def _actor(body: "Optional[ActorBody]"):
+    from core import swarm_out_actor
+    return swarm_out_actor.actor(body.by if body else None, body.session if body else None,
+                                 body.why if body else None)
+
+
+def _allowed(actor, command: str, dispatch_id: str, approve_protected: bool = False) -> None:
+    from core import swarm_out_actor
+    try:
+        swarm_out_actor.check(actor, command, dispatch_id=dispatch_id, approve_protected=approve_protected)
+    except swarm_out_actor.ActorError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+def _recorded(actor, command: str, dispatch_id: str) -> None:
+    """Keep the agent's command in the run's settle record (after it succeeded); a
+    failure to keep it does not undo the command."""
+    from core import swarm_out_actor
+    try:
+        swarm_out_actor.record(dispatch_id, actor, command)
+    except Exception:  # noqa: BLE001 — the command happened; only its record is missing
+        logger.warning("swarm_out: agent command not recorded for %s", dispatch_id, exc_info=True)
 
 
 async def _return(fn, *args) -> dict[str, Any]:
@@ -145,17 +181,26 @@ async def return_prepare(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     from core import hive_return
     if not body.url:
         raise HTTPException(status_code=400, detail="name the repository")
-    return await _return(hive_return.prepare, dispatch_id, body.url)
+    actor = _actor(body)
+    _allowed(actor, "return_prepare", dispatch_id)
+    out = await _return(hive_return.prepare, dispatch_id, body.url)
+    _recorded(actor, "return_prepare", dispatch_id)
+    return out
 
 
 @router.post("/runs/{dispatch_id}/return/land")
 async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
-    """Land the prepared commits the person approved (the panel's button)."""
+    """Land the prepared commits: the panel's button, or the dispatching agent's command
+    (never for protected paths: core/swarm_out_actor)."""
     _require_desktop()
     import asyncio
     from core import hive_return
-    return await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
-                         body.approve_protected)
+    actor = _actor(body)
+    _allowed(actor, "return_land", dispatch_id, approve_protected=body.approve_protected)
+    out = await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
+                        body.approve_protected)
+    _recorded(actor, "return_land", dispatch_id)
+    return out
 
 
 @router.post("/route")
@@ -202,7 +247,7 @@ async def fleet() -> dict[str, Any]:
     return await _call(swarm_out.fleet())
 
 
-class VerdictBody(BaseModel):
+class VerdictBody(ActorBody):
     value: str = Field(max_length=10)
     note: str = Field(default="", max_length=4000)
     # the result the card showed (its ended_at): a newer turn voids the verdict
@@ -222,26 +267,35 @@ async def _settle(fn, *args) -> dict[str, Any]:
 
 @router.post("/runs/{dispatch_id}/verdict")
 async def run_verdict(dispatch_id: str, body: VerdictBody) -> dict[str, Any]:
-    """The person's pass on an answer or a document (run-review §1.1). Person-only:
-    core/run_owner_gate refuses it from a command, as for every command on a run."""
+    """The pass on an answer or a document (run-review §1.1), the person's or the
+    dispatching agent's (core/swarm_out_actor)."""
     _require_desktop()
     from core import swarm_out_settle
-    return await _settle(swarm_out_settle.set_verdict, dispatch_id, body.value, body.note, body.ended_at)
+    actor = _actor(body)
+    _allowed(actor, "accept", dispatch_id)
+    out = await _settle(swarm_out_settle.set_verdict, dispatch_id, body.value, body.note or actor.why,
+                        body.ended_at)
+    _recorded(actor, "accept", dispatch_id)
+    return out
 
 
 @router.post("/runs/{dispatch_id}/manual-landed")
-async def run_manual_landed(dispatch_id: str) -> dict[str, Any]:
-    """The person landed the commits by hand: the code is handled and the task passes."""
+async def run_manual_landed(dispatch_id: str, body: Optional[ActorBody] = None) -> dict[str, Any]:
+    """The commits were landed by hand: the code is handled and the task passes."""
     _require_desktop()
     from core import swarm_out_settle
-    return await _settle(swarm_out_settle.set_manual_landed, dispatch_id)
+    actor = _actor(body)
+    _allowed(actor, "manual_landed", dispatch_id)
+    out = await _settle(swarm_out_settle.set_manual_landed, dispatch_id)
+    _recorded(actor, "manual_landed", dispatch_id)
+    return out
 
 
-class RerunBody(BaseModel):
+class RerunBody(ActorBody):
     text: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
 
 
-class DiscardBody(BaseModel):
+class DiscardBody(ActorBody):
     note: str = Field(default="", max_length=4000)
 
 
@@ -249,21 +303,40 @@ class DiscardBody(BaseModel):
 async def run_rerun(dispatch_id: str, body: RerunBody) -> dict[str, Any]:
     """Re-run with a correction: the text goes into the run's own Hive session."""
     _require_desktop()
-    return await _call(swarm_out.rerun(dispatch_id, body.text))
+    actor = _actor(body)
+    _allowed(actor, "rerun", dispatch_id)
+    out = await _call(swarm_out.rerun(dispatch_id, body.text))
+    _recorded(actor, "rerun", dispatch_id)
+    return out
 
 
 @router.post("/runs/{dispatch_id}/stop")
-async def run_stop(dispatch_id: str) -> dict[str, Any]:
+async def run_stop(dispatch_id: str, body: Optional[ActorBody] = None) -> dict[str, Any]:
     """Stop the run's current turn; its session and workspace stay."""
     _require_desktop()
-    return await _call(swarm_out.stop_run(dispatch_id))
+    actor = _actor(body)
+    _allowed(actor, "stop", dispatch_id)
+    out = await _call(swarm_out.stop_run(dispatch_id))
+    _recorded(actor, "stop", dispatch_id)
+    return out
 
 
 @router.post("/runs/{dispatch_id}/discard")
 async def run_discard(dispatch_id: str, body: DiscardBody) -> dict[str, Any]:
-    """Discard the run: stop it, close it, release its Hive workspace. Final."""
+    """Discard the run: stop it, close it, release its Hive workspace. Final. An agent
+    may discard only when nothing would be lost (core/swarm_out_actor.discard_blocker)."""
     _require_desktop()
-    return await _call(swarm_out.discard_run(dispatch_id, body.note))
+    actor = _actor(body)
+    _allowed(actor, "discard", dispatch_id)
+    if actor.agent:
+        from core import swarm_out_actor
+        row = await _call(swarm_out.run_row(dispatch_id))
+        blocker = swarm_out_actor.discard_blocker(row)
+        if blocker:
+            raise HTTPException(status_code=403, detail=f"an agent may not discard this run now: {blocker}")
+    out = await _call(swarm_out.discard_run(dispatch_id, body.note or actor.why))
+    _recorded(actor, "discard", dispatch_id)
+    return out
 
 
 @router.get("/runs")

@@ -566,20 +566,30 @@ def test_path_refuses_what_is_not_a_dispatch_id():
             st._path(bad)
 
 
-# ── the person's actions only ────────────────────────────────────────────────
+# ── who may give the commands on a run ───────────────────────────────────────
+# Design 2026-10-31-swarm-out-agent-owns-its-runs §2.1: the dispatching agent gives them
+# too (its limits are core/swarm_out_actor's, tested in test_swarm_out_actor.py); a
+# Hive's wait is still answered by the person, so its route keeps every spelling refused.
 
-@pytest.mark.parametrize("tail", ["verdict", "manual-landed", "return/land",
+_ANSWER = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/asks/hv1/sess-1/"
+
+
+@pytest.mark.parametrize("tail", ["verdict", "manual-landed", "return/prepare", "return/land",
                                   "rerun", "stop", "discard"])
-def test_settle_routes_refused_from_a_command(tail):
+def test_run_commands_are_the_dispatching_agents_too(tail):
     from core import run_owner_gate
     base = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/"
-    deny = run_owner_gate._user_only_deny(f"{base}{tail} -d '{{}}'")
-    assert deny is not None
-    assert run_owner_gate._user_only_deny(
-        f"curl -s http://127.0.0.1:18321/api/swarm-out/runs/{DID}/result") is None
+    assert run_owner_gate._user_only_deny(f"{base}{tail} -d '{{}}'") is None
+
+
+def test_answering_a_hives_wait_stays_refused_in_every_spelling():
+    from core import run_owner_gate
+    tail = "answer"
+    assert run_owner_gate._user_only_deny(f"{_ANSWER}req1/{tail} -d '{{}}'") is not None
     # the forms the server routes the same way
     enc = f"%{ord(tail[0]):02x}{tail[1:]}"
-    for form in (f"{base}{enc}", f"{base}%25{ord(tail[0]):02x}{tail[1:]}", f"{base}x/../{tail}", f"{base}./{tail}"):
+    for form in (f"{_ANSWER}req1/{enc}", f"{_ANSWER}req1/%25{ord(tail[0]):02x}{tail[1:]}",
+                 f"{_ANSWER}req1/x/../{tail}", f"{_ANSWER}req1/./{tail}"):
         assert run_owner_gate._user_only_deny(form) is not None, form
 
 
@@ -591,10 +601,13 @@ def test_settle_routes_refused_from_a_command(tail):
     "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/cmd-permission-continue",
     "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/remote/sess-1/chat/compact/sess-1",
     # quotes the shell removes
-    'curl -s -X POST "http://127.0.0.1:18321/api/swarm-out/runs/"$D"/discard"',
-    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/'\"$D\"'/stop",
-    'curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/$D/disc""ard',
-    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/$D/re\\run",
+    'curl -s -X POST "http://127.0.0.1:18321/api/swarm-out/asks/"$H"/sess-1/req1/answer"',
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/asks/'\"$H\"'/sess-1/req1/answer",
+    'curl -s -X POST http://127.0.0.1:18321/api/swarm-out/asks/$H/sess-1/req1/ans""wer',
+    "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/asks/$H/sess-1/req1/an\\swer",
+    # the chat's own question card (P10): its answer is recorded as the person's
+    "curl -s -X POST http://127.0.0.1:18321/api/chat/answer-question -d '{}'",
+    'curl -s -X POST "http://127.0.0.1:18321/api/chat/"answer-question',
 ])
 def test_aliases_and_quoted_forms_are_refused(cmd):
     from core import run_owner_gate
@@ -609,9 +622,9 @@ def test_reading_a_runs_session_through_the_proxy_is_not_refused():
         assert run_owner_gate._user_only_deny(cmd) is None, cmd
 
 
-def test_the_live_hook_refuses_a_settle_route():
+def test_the_live_hook_refuses_answering_a_hives_wait():
     from core import run_owner_gate
     gate = run_owner_gate.create_run_owner_gate({"sdk_session_id": "s1"})
-    cmd = "curl -s -X POST http://127.0.0.1:18321/api/swarm-out/runs/" + DID + "/discard"
+    cmd = _ANSWER + "req1/answer"
     out = asyncio.run(gate({"tool_name": "Bash", "tool_input": {"command": cmd}}, "t1", None))
     assert (out.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"

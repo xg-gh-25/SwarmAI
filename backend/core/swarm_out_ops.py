@@ -74,14 +74,18 @@ _STATIC: "tuple[Op, ...]" = (
     _op("task.route", "POST", f"{_SO}/route", _POC, "read"),
     _op("task.spec", "POST", f"{_SO}/spec", _POC, "read"),
     _op("task.dispatch", "POST", f"{_SO}/dispatch", _POC, "off_machine"),
-    # ── the person's commands on a run (run-review §1.1) ──
-    _op("run.accept", "POST", f"{_SO}/runs/{{dispatch_id}}/verdict", _P, "irreversible"),
-    _op("run.manual_landed", "POST", f"{_SO}/runs/{{dispatch_id}}/manual-landed", _P, "irreversible"),
-    _op("run.return_prepare", "POST", f"{_SO}/runs/{{dispatch_id}}/return/prepare", _P, "change"),
-    _op("run.return_land", "POST", f"{_SO}/runs/{{dispatch_id}}/return/land", _P, "irreversible"),
-    _op("run.rerun", "POST", f"{_SO}/runs/{{dispatch_id}}/rerun", _P, "change"),
-    _op("run.stop", "POST", f"{_SO}/runs/{{dispatch_id}}/stop", _P, "change"),
-    _op("run.discard", "POST", f"{_SO}/runs/{{dispatch_id}}/discard", _P, "irreversible"),
+    # ── the commands on a run (run-review §1.1): the person's, and the dispatching agent's
+    # (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1): every run was dispatched by
+    # an agent, which answers for it. What an agent may not do with them (land protected
+    # paths, discard while something would be lost, re-send more than twice) the routes
+    # refuse for ``by: agent`` (core/swarm_out_actor) ──
+    _op("run.accept", "POST", f"{_SO}/runs/{{dispatch_id}}/verdict", _PO, "irreversible"),
+    _op("run.manual_landed", "POST", f"{_SO}/runs/{{dispatch_id}}/manual-landed", _PO, "irreversible"),
+    _op("run.return_prepare", "POST", f"{_SO}/runs/{{dispatch_id}}/return/prepare", _PO, "change"),
+    _op("run.return_land", "POST", f"{_SO}/runs/{{dispatch_id}}/return/land", _PO, "irreversible"),
+    _op("run.rerun", "POST", f"{_SO}/runs/{{dispatch_id}}/rerun", _PO, "change"),
+    _op("run.stop", "POST", f"{_SO}/runs/{{dispatch_id}}/stop", _PO, "change"),
+    _op("run.discard", "POST", f"{_SO}/runs/{{dispatch_id}}/discard", _PO, "irreversible"),
     # approvals and question answers share one route; the gate cannot read the body,
     # so the whole route is the person's (a Conductor answering a question will be an
     # internal call, swarm-run §5.8)

@@ -70,10 +70,23 @@ def test_names_are_unique_and_rows_well_formed():
     for op in swarm_out_ops.ops():
         assert op.callers and "restricted_agent" not in op.callers, op.name
         assert op.weight in {"read", "change", "irreversible", "off_machine"}, op.name
-        if op.weight in {"irreversible", "off_machine"} and op.name != "task.dispatch":
+        if op.weight in {"irreversible", "off_machine"} and op.name not in _AGENT_IRREVERSIBLE:
             # the design's rule: what is irreversible or leaves the machine is the person's
-            # (dispatching a task is the one owner-agent exception, design §5.1)
+            # (dispatching a task is an owner-agent exception, design §5.1; the commands on
+            # a run the agent dispatched are the others, each limited by
+            # core/swarm_out_actor: design 2026-10-31-swarm-out-agent-owns-its-runs §2.1)
             assert OWNER not in op.callers, op.name
+
+
+#: the irreversible ops an owner agent may call, and only these
+_AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.manual_landed", "run.return_land",
+                       "run.discard"}
+
+
+def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
+    got = {op.name for op in swarm_out_ops.ops()
+           if OWNER in op.callers and op.weight in {"irreversible", "off_machine"}}
+    assert got == _AGENT_IRREVERSIBLE
 
 
 _SAMPLE = {"dispatch_id": "so_0123456789ab", "sid": "s-abc123", "hive_id": "hv1",
@@ -222,6 +235,15 @@ _CLI_ARGS = {
                  "--returns", "answer", "--title", "t", "--revision", "r"],
     "runs": [],
     "hives": [],
+    "update-hive": ["--hive", "h1"],
+    "read": ["so_0123456789ab"],
+    "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
+    "manual-landed": ["so_0123456789ab", "--why", "w"],
+    "stop": ["so_0123456789ab", "--why", "w"],
+    "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],
+    "return-land": ["so_0123456789ab", "--why", "w", "--key", "k", "--tip", "t"],
+    "rerun": ["so_0123456789ab", "--why", "w", "--text-file", __file__],
+    "discard": ["so_0123456789ab", "--why", "w"],
 }
 
 
@@ -232,12 +254,15 @@ def test_cli_calls_only_owner_agent_ops(monkeypatch):
     sub = next(a for a in cli._parser()._actions if a.dest == "cmd")
     assert set(sub.choices) == set(_CLI_ARGS), "a new CLI subcommand: add it here"
     calls: list = []
-    monkeypatch.setattr(cli, "_call", lambda method, path, *a, **k: calls.append((method, path)) or 0)
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", "s-abc123")
+    monkeypatch.setattr(cli, "_fetch", lambda path: {"hives": [{"id": "inst1", "name": "h1"}]})
+    monkeypatch.setattr(cli, "_call", lambda method, path, *a, api="swarm-out", **k:
+                        calls.append((method, f"/api/{api}{path}")) or 0)
     for name, args in _CLI_ARGS.items():
         before = len(calls)
         assert cli.main([name, *args]) == 0
         assert len(calls) == before + 1, name
         method, path = calls[-1]
-        op = swarm_out_ops.match(method, "/api/swarm-out" + path)
+        op = swarm_out_ops.match(method, path)
         assert op is not None, (name, method, path)
         assert OWNER in op.callers, (name, op.name)

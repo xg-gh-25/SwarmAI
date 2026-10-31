@@ -331,38 +331,42 @@ export interface SwarmOutReturn {
   status: 'prepared' | 'landed' | 'rejected';
 }
 
+/** Every command the App sends on a run is the person's: the backend limits a command
+ *  that does not say so as an agent's (core/swarm_out_actor). */
+const PERSON = 'person';
+
 const runPath = (dispatchId: string, tail: string) => `/swarm-out/runs/${encodeURIComponent(dispatchId)}/${tail}`;
 
 export const swarmOutService = {
   async returnPrepare(dispatchId: string, url: string): Promise<SwarmOutReturn> {
-    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/prepare`, { url });
+    const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/prepare`, { url, by: PERSON });
     return data as SwarmOutReturn;
   },
   async returnLand(dispatchId: string, key: string, tip: string, approveProtected: boolean):
   Promise<{ landed: boolean; head: string | null; into: string | null }> {
     const { data } = await api.post(`/swarm-out/runs/${encodeURIComponent(dispatchId)}/return/land`,
-      { key, tip, approve_protected: approveProtected });
+      { key, tip, approve_protected: approveProtected, by: PERSON });
     return data as { landed: boolean; head: string | null; into: string | null };
   },
   /** Accept: the person's pass on the result that ended at `endedAt` (the one shown). */
   async accept(dispatchId: string, endedAt: string): Promise<void> {
-    await api.post(runPath(dispatchId, 'verdict'), { value: 'pass', note: '', ended_at: endedAt });
+    await api.post(runPath(dispatchId, 'verdict'), { value: 'pass', note: '', ended_at: endedAt, by: PERSON });
   },
   /** Accept commits that cannot be taken as they are: the person landed them by hand. */
   async manualLanded(dispatchId: string): Promise<void> {
-    await api.post(runPath(dispatchId, 'manual-landed'));
+    await api.post(runPath(dispatchId, 'manual-landed'), { by: PERSON });
   },
   /** Re-run with a correction: the text goes into the run's own Hive session. */
   async rerun(dispatchId: string, text: string): Promise<void> {
-    await api.post(runPath(dispatchId, 'rerun'), { text });
+    await api.post(runPath(dispatchId, 'rerun'), { text, by: PERSON });
   },
   /** Stop the run's current turn; its session and workspace stay. */
   async stop(dispatchId: string): Promise<void> {
-    await api.post(runPath(dispatchId, 'stop'));
+    await api.post(runPath(dispatchId, 'stop'), { by: PERSON });
   },
   /** Discard the run: stopped, closed, its Hive workspace removed. Final. */
   async discard(dispatchId: string, note: string): Promise<{ discarded: boolean; stopped: boolean | null }> {
-    const { data } = await api.post(runPath(dispatchId, 'discard'), { note });
+    const { data } = await api.post(runPath(dispatchId, 'discard'), { note, by: PERSON });
     return data as { discarded: boolean; stopped: boolean | null };
   },
   /** Every Hive with its load: what the panel's fleet and free slots read. No address

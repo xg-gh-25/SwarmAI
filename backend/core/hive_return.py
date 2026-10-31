@@ -431,7 +431,8 @@ _SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "
 
 
 def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False) -> dict[str, Any]:
-    """Land the prepared tip the person approved. The commit is built from objects only
+    """Land the prepared tip the person or the dispatching agent approved (an agent never
+    with ``approve_protected``: core/swarm_out_actor). The commit is built from objects only
     (``merge-tree --write-tree`` of the branch and the tip over the reviewed base, then
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
     main checkout fast-forwards to it, which runs no hook either."""

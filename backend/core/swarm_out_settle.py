@@ -5,7 +5,8 @@ docs/design/2026-10-30-dispatch-center.md §6).
 A task that went out under a Project Agent is followed to its end here, from what the
 Host already keeps (the dispatch row, the run's result, the code it brought back, its
 lessons) plus one small record per dispatch, ``state/swarm-out/settle/<dispatch>.json``,
-that holds only what the person decided:
+that holds what was decided, by the person or by the agent that dispatched the run
+(core/swarm_out_actor; ``commands`` keeps each of that agent's commands with its reason):
 
 - ``verdict``: ``pass``, for a task whose deliverable is an answer or a document,
   bound to the result it judged (``ended_at``): a new turn on the Hive voids it. A task
@@ -36,13 +37,14 @@ Settling tells the Hive to remove the task's workspace (``Hive/work/<id>/`` and
 ``Outputs/<id>/``), so code and files must have left it first: commits the Hive could
 not seal into a bundle (``unsealed``), a repository not yet landed, and a file not
 placed here hold the task back. Only discarding overrides that (the panel says what it
-removes). No model decides anything here (P5): the verdict is the person's, the rest is
-counted.
+removes). No model decides anything here (P5): the verdict is given by the person or the
+dispatching agent through the routes, the rest is counted.
 
 - ``annotate(rows)``         — each row's stage, actions and settle; settles and expires
   what is due.
-- ``set_verdict`` / ``set_manual_landed`` / ``discard`` — the person's actions (routes
-  in routers/swarm_out, person-only: core/run_owner_gate refuses them from a command).
+- ``set_verdict`` / ``set_manual_landed`` / ``discard`` — the person's or the dispatching
+  agent's actions (routes in routers/swarm_out; what an agent may not do with them is
+  core/swarm_out_actor's).
 - ``release_due`` — tell the Hives (``annotate`` hands each row out once per try, with backoff).
 
 Every write is a read-modify-write of one record under that dispatch's lock

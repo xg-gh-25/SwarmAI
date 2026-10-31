@@ -209,8 +209,9 @@ async def hives() -> dict[str, Any]:
     async with aiosqlite.connect(_db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
         cur = await conn.execute(
-            "SELECT name, status, region FROM hive_instances ORDER BY name")
-        rows = [{"name": r[0], "status": r[1], "region": r[2]} for r in await cur.fetchall()]
+            "SELECT id, name, status, region FROM hive_instances ORDER BY name")
+        # the id is the row's key, not a secret: an agent updates a Hive by it (hive.update)
+        rows = [{"id": r[0], "name": r[1], "status": r[2], "region": r[3]} for r in await cur.fetchall()]
     return {"hives": rows, "running": sum(1 for r in rows if r["status"] == "running")}
 
 
@@ -593,7 +594,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                         mode: Optional[str] = None, execution: Optional[str] = None,
                         origin: str = "swarm-out", *, seen_revision: str, brief: str = "",
                         why: str = "", returns: Optional[str] = None,
-                        needs_private: str = "") -> dict[str, Any]:
+                        needs_private: str = "", dispatched_from: Optional[str] = None) -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
     when the definition is not the revision the person was shown (``seen_revision``,
@@ -684,9 +685,16 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                          deadline=deadline,
                          extra={"brief": " ".join((brief or "").split())[:MAX_BRIEF_CHARS],
                                 "hive_reason": hive_reason, "brain_sync": synced,
+                                # the agent session that follows the run (agent-owns-its-runs §2.1)
+                                "dispatched_from": _session_or_none(dispatched_from),
                                 "repo_notes": [{"name": r["name"], "url": r["url"], "dirty": r.get("dirty") or 0}
                                                for r in spec["repos"]]})
     return {**row, "brain_sync": synced}
+
+
+def _session_or_none(sid: Optional[str]) -> Optional[str]:
+    from core.app_session_id import valid_app_session_id
+    return sid if valid_app_session_id(sid) else None
 
 
 async def _require_work_orders(inst: dict[str, Any]) -> None:
@@ -1353,6 +1361,15 @@ async def run_refresh_loop() -> None:
         except Exception as e:  # noqa: BLE001 — tried again next round
             logger.warning("swarm_out: refreshing the runs failed (%s)", type(e).__name__)
         await asyncio.sleep(REFRESH_EVERY_S)
+
+
+async def run_row(dispatch_id: str) -> Optional[dict[str, Any]]:
+    """One run's row as ``/runs`` has it now (state, settle, result), or None."""
+    data = await list_runs(SNAPSHOT_FRESH_S)
+    for r in data.get("runs") or []:
+        if isinstance(r, dict) and r.get("dispatch_id") == dispatch_id:
+            return r
+    return None
 
 
 async def list_runs(max_age_s: float = 0) -> dict[str, Any]:

@@ -280,6 +280,19 @@ def _fake_hive(monkeypatch, remote_digest, supported=True, current=None, sync_er
     return calls
 
 
+def test_a_dispatch_records_the_agent_session_that_follows_it(ws, monkeypatch):
+    """design 2026-10-31-swarm-out-agent-owns-its-runs §2.1: the row names the
+    dispatching session; a value that is not a session id is not kept."""
+    import core.swarm_out as so
+    from core.project_agent import revision
+    rev = revision(_brain(ws))
+    calls = _fake_hive(monkeypatch, "0" * 64)
+    for given, kept in (("s-abc123", "s-abc123"), ("../x", None), (None, None)):
+        asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "fix it", "tests pass", execution="native",
+                                     returns="commits", seen_revision=rev, dispatched_from=given))
+        assert calls["dispatch"][-1]["extra"]["dispatched_from"] == kept, given
+
+
 def test_a_dispatch_syncs_an_out_of_date_brain_and_pins_the_session(ws, monkeypatch):
     import core.swarm_out as so
     from core import brain_sync_host as host
@@ -340,6 +353,7 @@ def test_no_hive_named_picks_one_and_the_row_keeps_the_card_fields(ws, monkeypat
     d = calls["dispatch"][0]
     assert d["hive"] == "calm"
     assert d["extra"] == {"brief": "fix the thing", "hive_reason": "idle", "brain_sync": "synced",
+                          "dispatched_from": None,
                           "repo_notes": [{"name": d["extra"]["repo_notes"][0]["name"],
                                           "url": "https://github.com/acme/lib.git", "dirty": 0}]}
     calls = _fake_hive(monkeypatch, "0" * 64)
@@ -465,6 +479,7 @@ def test_the_dispatch_route_needs_a_brain(monkeypatch):
 def test_the_cli_sends_brain_mode_execution_and_acceptance(monkeypatch):
     import scripts.swarm_out as cli
     seen = []
+    monkeypatch.setenv("SWARM_APP_SESSION_ID", "s-abc123")
     monkeypatch.setattr(cli, "_call", lambda m, p, b=None, timeout=120: seen.append((m, p, b, timeout)) or 0)
     assert cli.main(["dispatch", "--hive", "h", "--title", "t", "--brain", "Lib", "--task", "x",
                      "--acceptance", "done", "--mode", "code-change", "--execution", "pipeline:bugfix",
@@ -472,7 +487,8 @@ def test_the_cli_sends_brain_mode_execution_and_acceptance(monkeypatch):
     assert seen[-1] == ("POST", "/dispatch", {"brain": "Lib", "task": "x", "acceptance": "done",
                                               "mode": "code-change", "execution": "pipeline:bugfix",
                                               "why": "a defect with a repro", "returns": "commits", "needs_private": "",
-                                              "hive": "h", "title": "t", "brief": "", "revision": "abc"},
+                                              "hive": "h", "title": "t", "brief": "", "revision": "abc",
+                                              "session": "s-abc123"},
                         cli.DISPATCH_TIMEOUT_S)
     assert cli.DISPATCH_TIMEOUT_S > 2 * 120
     cli.main(["route", "--task", "fix it", "--bound-project", "Lib"])

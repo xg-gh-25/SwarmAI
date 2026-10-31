@@ -25,7 +25,10 @@ For a ``pipeline_v1.py`` command:
   entry; composed with the pipeline rewrite into one updatedInput (design
   docs/design/2026-10-26-turn-cards-unified.md §3.2). A pipeline landing
   (``pipeline-v1 land`` / ``run-land``) gets the same export: the run's merge writes
-  the same stamp (design 2026-10-29-pipeline-retro-fixes F1).
+  the same stamp (design 2026-10-29-pipeline-retro-fixes F1). A line that names
+  ``scripts.swarm_out`` gets the export too (it is no landing): the Swarm Out CLI records
+  the session that dispatches a run and gives commands on it (design
+  2026-10-31-swarm-out-agent-owns-its-runs §2.1).
 - **approval**: the person-approved actions (``AFTER_APPROVAL`` with ``--request``)
   are handled in the ``phase="approved"`` registration, after dangerous_command_gate
   recorded the person's approval for this exact command: the gate takes the run over
@@ -35,8 +38,9 @@ For a ``pipeline_v1.py`` command:
   route, in a search or a file being edited, is not judged) to the human-only
   ``/api/pipelines/<id>/decision`` is denied, and so is
   one to the user-only CDF redaction ``/api/ingestion/redact`` (CDF §13 tombstone: only
-  the person triggers it, from the Flow view), and one to any Swarm Out / Hive route
-  the owner agent may not call (``core.swarm_out_ops``, the table the regexes are
+  the person triggers it, from the Flow view), one to the chat's question-card answer
+  ``/api/chat/answer-question`` (it records the answer as the person's), and one to any
+  Swarm Out / Hive route the owner agent may not call (``core.swarm_out_ops``, the table the regexes are
   generated from).
 
 Fail-open on its own errors (never blocks a command because the gate broke).
@@ -68,6 +72,11 @@ _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 _HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
 # The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
 _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
+# The chat's own question-card answer (routers/chat.py answer-question): it records the
+# answer as the person's (answered_by "person"), which a pipeline decision and a Hive
+# wait forwarded from the chat both rely on, so only the App sends it (design
+# 2026-10-31-swarm-out-agent-owns-its-runs P10).
+_USER_ONLY_CHAT_ANSWER_RE = re.compile(r"/api/chat/answer-question\b")
 # The person's Swarm Out and Hive operations (accept / re-run / stop / discard a run,
 # answer a Hive's question, its session through the Host proxy, a Hive's password,
 # creating / deleting a Hive …) are not listed here: they are the rows of
@@ -395,7 +404,8 @@ def _makes_http_call(command: str) -> bool:
 
 def _user_only_deny(command: str) -> "dict | None":
     """The deny for a command that calls a route only the person may call (the
-    pipeline decision route, the redaction route; a Swarm Out or Hive operation the owner
+    pipeline decision route, the redaction route, the chat answer route; a Swarm Out or
+    Hive operation the owner
     agent may not call, ``core.swarm_out_ops``), else None.
     Pure string work: the gate runs it on every Bash command, before any filter. Only a
     command that sends an HTTP request is judged (``_makes_http_call``): naming a route
@@ -413,6 +423,9 @@ def _user_only_deny(command: str) -> "dict | None":
     # into the path the server routes
     bare = re.sub(r"[\"'\\]", "", command)
     command = f"{command}\n{_as_routed(command)}\n{bare}\n{_as_routed(bare)}"
+    if _USER_ONLY_CHAT_ANSWER_RE.search(command):
+        return _deny("a question card is answered by the person in the chat, never by a "
+                     "command. Ask with AskUserQuestion and wait for their answer.")
     if _USER_ONLY_REDACT_RE.search(command):
         return _deny("withdrawing written knowledge is the person's action (the Flow view's "
                      "撤回 button), never a command. Tell the user which unit you think should "
@@ -524,6 +537,10 @@ _APPROVED_ACTIONS = frozenset({"run-land", "accept-finding", "discard-snapshot"}
 # matter; a wrapper script that does not name it is not seen). Never denies.
 
 _SW_MODULE = "scripts.session_worktree"
+#: the Swarm Out CLI records the dispatching session and the session of each command an
+#: agent gives on a run (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1); it gets
+#: the same export, and is no landing (no turn changes are read for it)
+_SO_MODULE = "scripts.swarm_out"
 
 
 def _session_worktree_export(command: str, sid: str, turn_id: "str | None",
@@ -596,7 +613,8 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             (phase == "check" and (_SW_MODULE in command or pipeline_command.is_land(command)))
             or (phase == "approved" and pipeline_command.is_land(command)
                 and any(c in command for c in AFTER_APPROVAL)))
-        if lands:
+        swarm_out_cli = phase == "check" and isinstance(command, str) and _SO_MODULE in command
+        if lands or swarm_out_cli:
             # pure string work, no IO
             sub_agent = bool(input_data.get("agent_id"))
             try:
@@ -607,7 +625,7 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
                 logger.warning("run_owner_gate: landing rewrite failed", exc_info=True)
                 export = None
             if export is not None:
-                if not sub_agent:
+                if lands and not sub_agent:
                     # TurnChanges reads this turn's landings only when it ran a landing
                     # command (design 2026-10-26-turn-cards-unified.md §3.3)
                     session_context["_turn_sw"] = True
