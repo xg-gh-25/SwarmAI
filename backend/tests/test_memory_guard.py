@@ -34,6 +34,17 @@ class TestMemoryGuard:
         assert "AKIAIOSFODNN7EXAMPLE" not in result.sanitized_content
         assert any(f.category == "secrets" and f.pattern_name == "aws_access_key" for f in result.findings)
 
+    def test_sk_inside_a_word_is_not_a_key_and_prefixed_keys_are(self):
+        """"task-..." holds the letters "sk-" but is an id, not a key; a project or
+        Anthropic key with hyphens after the prefix is still a key."""
+        guard = self._make_guard()
+        plain = "Closed ToDo task-1efe6d02abcdef0123456789 and disk-abcdefghijklmnopqrstuv."
+        assert guard.scan(plain).sanitized_content == plain
+        for key in ("sk-proj-abcdefghijklmnopqrstuvwxyz012345", "sk-ant-api03-abcdefghijklmnopqrstuvwx"):
+            result = guard.scan(f"key {key} here")
+            assert key not in result.sanitized_content
+            assert "[REDACTED:openai_key]" in result.sanitized_content
+
     def test_openai_key_redacted(self):
         """sk-... OpenAI keys are replaced with [REDACTED:openai_key]."""
         guard = self._make_guard()

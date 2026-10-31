@@ -158,8 +158,10 @@ class _PemKey(_CodeMatcher):
 _SECRET_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("aws_access_key", "[REDACTED:aws_key]",
      re.compile(r"AKIA[0-9A-Z]{16}")),
+    # starts a token: inside "task-..." or "disk-..." the letters "sk-" are ordinary
+    # text; hyphens and underscores in the body cover sk-proj-... and sk-ant-... keys
     ("openai_key", "[REDACTED:openai_key]",
-     re.compile(r"sk-[a-zA-Z0-9]{20,}")),
+     re.compile(r"(?<![A-Za-z0-9_-])sk-[-_A-Za-z0-9]{20,}")),
     ("bearer_token", "[REDACTED:bearer_token]",
      re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]{20,}")),
     ("pem_key", "[REDACTED:pem_key]", _PemKey()),
