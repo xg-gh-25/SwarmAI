@@ -1313,15 +1313,17 @@ class LifecycleManager:
     # ── Radar ToDo sweep ─────────────────────────────────────────────
 
     async def _sweep_todos(self) -> None:
-        """Periodic sweep: mark overdue todos + handle completed pipeline todos.
+        """Periodic sweep: mark overdue todos, and the flow-closure review steps.
 
         Non-fatal — failures are logged and skipped. Called from
         maintenance loop every 30th cycle (~30 min).
 
-        Three sweep actions:
         1. check_overdue() — pending todos past due_date → overdue
-        2. Pipeline-bound todos — if run.json shows completed → handled
-        3. Evolution proposals — unchanged >30 days → expired
+        2. auto-complete a dispatched todo whose session replied → review; 7-day
+           auto-confirm of a review that is not a model's suggestion
+
+        Nothing here closes an open ToDo by itself (design
+        2026-10-31-continue-lookback-todo r3: only a person closes the person's work).
         """
         try:
             from core.todo_manager import todo_manager
@@ -1329,79 +1331,6 @@ class LifecycleManager:
 
             # 1. Mark overdue todos
             overdue_count = await todo_manager.check_overdue()
-
-            # 2. Pipeline-bound todos: check if linked pipeline run completed
-            # PE-1 fix: file I/O in thread to avoid blocking event loop
-            handled_count = 0
-            try:
-                import json as _json
-                from config import get_swarmws
-
-                pending = await db.todos.list_by_status("pending")
-                todo_ids_to_handle: list[str] = []
-
-                def _check_pipeline_todos(todos_list):
-                    """Sync file I/O — runs in thread pool."""
-                    completed_ids = []
-                    for todo in todos_list:
-                        metadata = todo.get("metadata")
-                        if isinstance(metadata, str):
-                            try:
-                                metadata = _json.loads(metadata)
-                            except (_json.JSONDecodeError, TypeError):
-                                metadata = {}
-                        if not isinstance(metadata, dict):
-                            continue
-                        run_id = metadata.get("pipeline_run_id") or metadata.get("run_id")
-                        if not run_id:
-                            continue
-                        project = metadata.get("project", DEFAULT_PROJECT_NAME)
-                        run_path = (
-                            get_swarmws() / "Projects" / project
-                            / ".artifacts" / "runs" / run_id / "run.json"
-                        )
-                        if run_path.exists():
-                            try:
-                                run_data = _json.loads(run_path.read_text())
-                                if run_data.get("status") == "completed":
-                                    completed_ids.append(todo["id"])
-                            except (OSError, _json.JSONDecodeError):
-                                pass
-                    return completed_ids
-
-                import asyncio
-                todo_ids_to_handle = await asyncio.to_thread(
-                    _check_pipeline_todos, pending
-                )
-                for tid in todo_ids_to_handle:
-                    await db.todos.update(tid, {"status": "handled"})
-                    handled_count += 1
-            except Exception as exc:
-                logger.debug("todo_sweep: pipeline check error: %s", exc)
-
-            # 3. Evolution proposals >30 days → expire
-            expired_count = 0
-            try:
-                from datetime import datetime, timezone, timedelta
-                now = datetime.now(timezone.utc)
-                cutoff = now - timedelta(days=30)
-                pending = await db.todos.list_by_status("pending")
-                for todo in pending:
-                    title = todo.get("title", "")
-                    if "Evolution proposal" not in title:
-                        continue
-                    created_str = todo.get("created_at", "")
-                    try:
-                        created = datetime.fromisoformat(
-                            created_str.replace("Z", "+00:00")
-                        )
-                        if created < cutoff:
-                            await db.todos.update(todo["id"], {"status": "expired"})
-                            expired_count += 1
-                    except (ValueError, TypeError):
-                        pass
-            except Exception as exc:
-                logger.debug("todo_sweep: evolution expire error: %s", exc)
 
             # 4. ToDo flow-closure: auto-complete + 7-day auto-confirm (run_d28de5fd).
             # XG decision: this is a background JOB (this ~30-min sweep), NOT a hook —
@@ -1415,15 +1344,12 @@ class LifecycleManager:
             except Exception as exc:
                 logger.debug("todo_sweep: flow-closure error: %s", exc)
 
-            total = (overdue_count + handled_count + expired_count
-                     + auto_completed + auto_confirmed)
+            total = overdue_count + auto_completed + auto_confirmed
             if total > 0:
                 logger.info(
                     "lifecycle_manager.todo_sweep: %d transitions "
-                    "(overdue=%d, pipeline_handled=%d, expired=%d, "
-                    "auto_completed=%d, auto_confirmed=%d)",
-                    total, overdue_count, handled_count, expired_count,
-                    auto_completed, auto_confirmed,
+                    "(overdue=%d, auto_completed=%d, auto_confirmed=%d)",
+                    total, overdue_count, auto_completed, auto_confirmed,
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.todo_sweep failed: %s", exc)

@@ -381,3 +381,9 @@ class TestStaleTodosAreShownNotCancelled:
         source = inspect.getsource(ex)
         assert "SET status = 'cancelled'" not in source
         assert not hasattr(ex, "_expire_stale_todos") and not hasattr(ex, "_escalate_overdue_todos")
+        # nor the 30-minute lifecycle sweep: it moves a ToDo to overdue or to review, never
+        # to a closed status
+        from core.lifecycle_manager import LifecycleManager
+        sweep = inspect.getsource(LifecycleManager._sweep_todos)
+        for closed in ('"handled"', '"expired"', '"cancelled"'):
+            assert closed not in sweep, closed
