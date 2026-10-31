@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "SwarmAI 账号：一个 AWS 账号，产品底层统一管理"
-status: r4.2 — 认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
+status: r4.3 — 认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
 related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-10-31-swarm-out-ops-registry.md
 ---
 
@@ -238,26 +238,48 @@ hive_fleet: {
 
 **② 连接 AWS 账号：先探测，再问**
 
-进入这一步时，App 先探测本机已有的 AWS 凭证。**自动探测只做不会弹窗、不会写文件、不会挂住的那部分：**
-- ADA 已配置的账号和角色（今天的 `_probe_ada_details`，`routers/system.py:768-786`）；
-- 静态密钥的 profile：用 STS 拿账号 ID 和身份；
-- SSO 和登录会话的 profile：读缓存里令牌的过期时间，还有效（离过期十分钟以上）才直接用缓存的令牌取一次身份，
-  **不刷新**（刷新会改写用户的 `~/.aws/sso/cache`、`~/.aws/login/cache`，还可能和用户自己的 CLI 抢同一个令牌）；
+进入这一步时，App 分两段探测本机已有的 AWS 凭证。
+
+**第一段：只读配置，不执行任何程序（毫秒级）。** 大多数 profile 的账号 ID 就写在配置里：
+- ADA 的 `credential_process` 命令行里的 `--account`、`--role`、`--provider`；
+- SSO profile 的 `sso_account_id`、`sso_role_name`；
+- 登录会话的 `login_session`、assume-role 的 `role_arn` 里的账号 ID；
+- ADA 自己的 profile（`ada profile print`，读 ADA 本地配置，今天的 `_probe_ada_details` 已经这样做）。
+
+第一段一出结果页面就显示，每行标"验证中"。只有静态密钥的 profile 读不出账号 ID，那一行先写"需要验证"。
+
+**第二段：在后台并行验证，结果逐行更新。** 只自动验证不会弹窗、不会写用户文件的几类：
+- 静态密钥：调 STS；
+- 命令就是探测到的那个 ada 的 `credential_process`：和今天的 ADA 探测是同一个程序，Midway 有效时不弹窗；
+- SSO / 登录会话：缓存里的令牌还有效（离过期十分钟以上）才用它取一次身份，**不刷新**（刷新会改写用户的
+  `~/.aws/sso/cache`、`~/.aws/login/cache`，还可能和用户自己的 CLI 抢同一个令牌）；
 - 实例角色（在 EC2 或云桌面上时）。
 
-其余 profile 只**列出来**，每行一个"检测"按钮，由用户点了才跑：`credential_process`（可能弹 Touch ID、YubiKey、
-钥匙串，或者挂住）、带 `mfa_serial` 的 assume-role（要输验证码）、令牌快过期或已过期的 SSO / 登录 profile（点了走
-App 内登录，§6.3、§6.3b）。
+其余 profile 不自动跑，那一行一个按钮由用户点：命令不是 ada 的 `credential_process`（aws-vault、1Password 之类，
+可能弹 Touch ID、YubiKey、钥匙串，或者挂住）和带 `mfa_serial` 的 assume-role → "检测"；令牌过期的 SSO / 登录
+profile → "登录"（走 App 内登录，§6.3、§6.3b）。
 
-每个探测在**自己的子进程**里跑，同时最多几个，到时间上限就连子进程一起杀掉（防挂住，不是业务超时）；要输入的
-地方一律拒绝而不是等待（没有终端时 botocore 默认会用 `getpass` 等输入）。一行出错或超时只影响那一行。环境变量里的
-凭证不探测：daemon 由 launchd 或 App 启动，通常没有用户 shell 里的变量；有的也多是会过期的临时凭证（§6.2 不支持）。
+每个验证在**自己的子进程**里跑，同时最多几个，到时间上限就连子进程一起杀掉（防挂住，不是业务超时）；要输入的
+地方一律拒绝而不是等待（没有终端时 botocore 默认会用 `getpass` 等输入）。一行出错或超时只影响那一行。账号和
+身份都相同的几个 profile 合成一行（"2 个 profile"）。环境变量里的凭证不探测：daemon 由 launchd 或 App 启动，通常
+没有用户 shell 里的变量；有的也多是会过期的临时凭证（§6.2 不支持）。
+
+**在这台机器上实测（2026-10-31）：** `~/.aws/config` 有 7 个 profile、`~/.aws/credentials` 有 1 个静态密钥段。
+- 第一段从配置里直接读出 6 个 profile 的账号和角色（5 个不同的账号，含一个 PowerUser）；
+- 剩下 2 个：一个 `credential_process` 的程序不是 ada → "检测"；静态密钥段经 STS 验证约 3 秒，结果是密钥无效，
+  那一行显示"密钥无效"；
+- 第二段用 ada 验证一个 profile 约 8 秒，并行跑时整页约 8–10 秒验证完；
+- 4 个 SSO 缓存令牌都已过期 → 不自动用。
+
+今天的 `/system/auth-hint` 只给出 ADA 自己 profile 的那一个账号：`_probe_aws_profiles` 只列 SSO profile
+（`routers/system.py:808`，这台机器上返回 `null`），ADA 的路径写死成 `~/.toolbox/bin/ada`（`routers/system.py:771`）。
+所以另外 4 个账号今天的向导看不到，第 4 步要换成上面的两段探测，ADA 的路径按平台查找并记下。
 
 探测结果决定这一页长什么样：
 
 | 探测结果 | 页面 |
 |---|---|
-| 找到能用的凭证 | 列出"找到的 AWS 账号"，每行：账号 ID、身份（如 `Admin` 角色、IAM 用户名）、来源（ADA、profile 名）。默认选中最合适的一个（内部优先 ADA，其次和 ADA 同账号的 profile）。一个按钮"用这个账号" |
+| 找到能用的凭证 | 列出"找到的 AWS 账号"，每行：账号 ID、身份（如 `Admin` 角色、IAM 用户名）、来源（ADA、profile 名）、验证状态（验证中、已验证、密钥无效、要检测、要登录）。默认选中最合适的已验证的一个（内部优先 ADA 自己的 profile，其次和它同账号的 profile）。一个按钮"用这个账号"；还在验证中的行也能选，选了就等它验证完再往下 |
 | 只找到需要登录的 profile | 列出来，每行一个"登录"按钮（SSO profile 走 §6.3 的 App 内登录，读它的起始地址、区域、账号和角色） |
 | 什么都没找到 | 账号 ID 输入框 + 推荐的两种登录方式（内部 ADA、SSO；外部 AWS 登录、SSO） |
 
