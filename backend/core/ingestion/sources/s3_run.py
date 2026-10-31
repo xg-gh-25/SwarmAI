@@ -113,7 +113,7 @@ def enqueue_report(engine: Any) -> list[Any]:
     attempt = api_v2.ExtractionAttempt(
         source="S3", evidence_range={"run_id": engine.run_id, "pass": "main"},
         extractor_version=f"{EXTRACTOR_VERSION}+report", attempt_id=f"attempt:{uuid.uuid4().hex}")
-    outcomes = [api_v2.enqueue_unit(
+    outcomes = [api_v2.enqueue_stored(
         "S3", engine.run_id, unit, session_id=None, run_id=engine.run_id,
         read_root_ids=root_ids, project_snapshot=_snapshot(engine),
         attempt_id=attempt.attempt_id, extraction_pass="main") for unit in units]

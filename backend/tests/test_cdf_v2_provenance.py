@@ -598,3 +598,27 @@ def test_the_session_project_is_a_candidate_only_for_a_project_scoped_unit(
     conn.close()
     assert hint is None
     assert json.loads(candidates) == (["SwarmAI"] if offered else [])
+
+
+# ── a busy store is waited for by background sources, never taken as stored ──────
+
+def test_a_background_source_waits_for_a_busy_store(monkeypatch):
+    from core.ingestion import api_v2
+    from core.ingestion.api import EnqueueResult
+    replies = iter([EnqueueResult("busy", None, "b"), EnqueueResult("busy", None, "b"),
+                    EnqueueResult("queued", "cand-x")])
+    monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k: next(replies))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    assert api_v2.enqueue_stored("S7", "s", object()).status == "queued"
+
+
+def test_a_store_busy_past_the_wait_fails_the_source(monkeypatch):
+    import pytest
+    from core.ingestion import api_v2
+    from core.ingestion.api import EnqueueResult
+    monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k: EnqueueResult("busy", None, "b"))
+    clock = iter(range(0, 10_000, 5))
+    monkeypatch.setattr("time.monotonic", lambda: next(clock))
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(api_v2.EnqueueBusy):
+        api_v2.enqueue_stored("S7", "s", object())

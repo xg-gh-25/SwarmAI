@@ -211,6 +211,34 @@ def enqueue_unit(source: SourceId, source_ref: str, unit: SourceUnit, *, session
                  extraction_pass=extraction_pass)
 
 
+class EnqueueBusy(RuntimeError):
+    """The ingestion store stayed locked for STORE_WAIT_S: the unit is not stored."""
+
+
+# A background source waits this long for the store; past it the store is not merely
+# busy (a writer holds it for good), and the source fails so it runs again later.
+STORE_WAIT_S = 60.0
+
+
+def enqueue_stored(*args: Any, **kwargs: Any) -> EnqueueResult:
+    """``enqueue_unit`` for a background source (S7, S3, S0, the extractor sources): a
+    ``busy`` store is waited for, never taken as done. A source that ignored ``busy``
+    lost the unit while its attempt said it was emitted (design §4.1: the source decides
+    to extract again). Past STORE_WAIT_S it raises EnqueueBusy, so the source's attempt
+    fails and its job runs again; what was stored is not stored twice (idem_key)."""
+    import time
+    deadline = time.monotonic() + STORE_WAIT_S
+    pause = 0.25
+    while True:
+        result = enqueue_unit(*args, **kwargs)
+        if result.status != "busy":
+            return result
+        if time.monotonic() + pause > deadline:
+            raise EnqueueBusy(f"ingestion store busy for {STORE_WAIT_S:.0f} s")
+        time.sleep(pause)
+        pause = min(pause * 2, 4.0)
+
+
 def ingest_link_status(url_root_id: str, status: str, *, http_status: int | None = None) -> None:
     """Scheduled lane, only when the user enabled link checks (off by default). Records a
     HEAD result (no file change): 404/410/NXDOMAIN -> 'dead'; A2-blocked, 401/403/405,

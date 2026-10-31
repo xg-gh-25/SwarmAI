@@ -47,7 +47,7 @@ def extract_and_enqueue(source: str, source_ref: str, source_text: str,
                 else:
                     kept.append(unit)
             extracted.units = kept
-        outcomes = [api_v2.enqueue_unit(
+        outcomes = [api_v2.enqueue_stored(
             source, source_ref, unit, session_id=session_id, run_id=run_id,
             read_root_ids=read_root_ids, project_snapshot=project_snapshot,
             attempt_id=attempt.attempt_id, extraction_pass=extraction_pass,

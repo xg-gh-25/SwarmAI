@@ -218,7 +218,8 @@ def test_enqueue_keeps_only_open_gaps_of_a_landed_run(ws, monkeypatch):
     report = _report([A, B, C])
     calls = []
     monkeypatch.setattr(s3_run, "_roots", lambda e: (("run_event:e1",), ("root:e1",)))
-    monkeypatch.setattr(api_v2_mod(), "enqueue_unit", lambda *a, **k: calls.append(a[2]) or "q")
+    from core.ingestion.api import EnqueueResult
+    monkeypatch.setattr(api_v2_mod(), "enqueue_unit", lambda *a, **k: calls.append(a[2]) or EnqueueResult("queued", "q"))
     monkeypatch.setattr(api_v2_mod(), "record_extraction_attempt", lambda *a, **k: "a")
 
     def engine(landing):

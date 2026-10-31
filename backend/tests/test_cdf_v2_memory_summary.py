@@ -1,6 +1,11 @@
 """CDF v2 summary-lane behavior and scheduling tests."""
 from __future__ import annotations
 
+
+def _queued():
+    from core.ingestion.api import EnqueueResult
+    return EnqueueResult("queued", "cand-x")
+
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -38,7 +43,7 @@ def test_monthly_summary_enqueued_through_v2_api(tmp_path, monkeypatch):
     monkeypatch.setattr(summary_lane, "_month_anchors", lambda *_: [".context/TIMELINE.md#2026-09#cand:e1"])
     monkeypatch.setattr(
         "core.ingestion.api_v2.enqueue_unit",
-        lambda *args, **kwargs: captured.append((args, kwargs)),
+        lambda *args, **kwargs: captured.append((args, kwargs)) or _queued(),
     )
     assert enqueue_month_summary(conn, tmp_path, "2026-09") == "month_summary"
     source, source_ref, unit = captured[0][0]
@@ -83,7 +88,7 @@ def test_late_month_event_enqueues_supplement(tmp_path, monkeypatch):
     captured = []
     monkeypatch.setattr(
         "core.ingestion.api_v2.enqueue_unit",
-        lambda *args, **kwargs: captured.append((args, kwargs)),
+        lambda *args, **kwargs: captured.append((args, kwargs)) or _queued(),
     )
     assert enqueue_month_summary(conn, tmp_path, "2026-09") == "month_supplement"
     _, source_ref, unit = captured[0][0]

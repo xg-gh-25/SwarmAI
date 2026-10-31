@@ -853,7 +853,7 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     written = invalid = 0
     for attempt, units, result in reviewed:
         for unit in units:
-            api_v2.enqueue_unit("S7", session_id, unit, session_id=session_id, run_id=None,
+            api_v2.enqueue_stored("S7", session_id, unit, session_id=session_id, run_id=None,
                                 read_root_ids=read_by_attempt[attempt.attempt_id], project_snapshot=project_snapshot,
                                 attempt_id=attempt.attempt_id, extraction_pass="main")
         api_v2.record_extraction_attempt(attempt, status="ok" if units else "no_unit",

@@ -75,7 +75,7 @@ def enqueue_month_summary(conn: sqlite3.Connection, workspace: Path, month: str)
     )
     from . import api_v2
 
-    api_v2.enqueue_unit(
+    api_v2.enqueue_stored(
         "S0", source_ref, unit, session_id=None, run_id=None,
         read_root_ids=(), project_snapshot={}, extraction_pass="main",
     )
