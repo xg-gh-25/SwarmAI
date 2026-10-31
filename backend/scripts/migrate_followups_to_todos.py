@@ -144,11 +144,15 @@ def window_rows(da_dir: Path, today: date) -> list[tuple[str, dict]]:
 
 
 def da_items(da_dir: Path, today: date) -> tuple[list[Item], list[dict]]:
-    """The open follow-ups of the window, and the older unresolved ones (expired).
+    """The open follow-ups of the window, and a record row for every other follow-up.
 
     Open: in its session's latest row of the window (a newer row carried forward what
     was still open, so it replaces the older list; a row the model did not write never
-    does), and no row of the window resolved it."""
+    does), and no row of the window resolved it. Every other id of the window is
+    ``closed`` (resolved, or not carried forward); an unresolved id found only before
+    the window is ``expired``; a resolved one is ``closed`` too. All are recorded on the
+    first run: once the window is rendered without follow-ups (and without the rows'
+    resolves), its ids can no longer be told apart from older ones."""
     records = window_rows(da_dir, today)
     resolved = {i for _d, r in records for i in r.get("resolves") or [] if isinstance(i, str)}
     latest: dict[str, tuple[str, dict]] = {}
@@ -183,10 +187,16 @@ def da_items(da_dir: Path, today: date) -> tuple[list[Item], list[dict]]:
                                                      "text": str(it.get("text") or "")})
     window_ids = {it.get("next_id") for _d, r in records for it in r.get("next_items") or []
                   if isinstance(it, dict)}
-    expired = [{"key": f"da:{nid}", "source": "da", "decision": "expired", **v}
-               for nid, v in older.items()
-               if nid not in open_ids and nid not in every_resolved and nid not in window_ids]
-    return list(items.values()), expired
+    # every id ever written gets one record line: open (decided), closed (resolved by
+    # some row, or not carried forward in the window) or expired (neither)
+    rest = []
+    for nid, v in older.items():
+        if nid in open_ids:
+            continue
+        gone = nid in every_resolved or nid in window_ids
+        rest.append({"key": f"da:{nid}", "source": "da",
+                     "decision": "closed" if gone else "expired", **v})
+    return list(items.values()), rest
 
 
 def gap_items(workspace: Path) -> list[Item]:

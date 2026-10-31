@@ -62,6 +62,12 @@ def ws(tmp_path, monkeypatch):
                               next_items=[("old000000001", "Rename the old flag"),
                                           ("old000000002", "Drop the old table")]))
     rows[days[1]].append(_row("s-old2", "Old cleanup", "Dropped it.", resolves=["old000000002"]))
+    rows[days[0]].append(_row("s-old3", "Old flag", "Kept the flag.",
+                              next_items=[("old000000003", "Remove the flag later")]))
+    rows[days[3]].append(_row("s-f", "Flag removed", "Removed the flag.", resolves=["old000000003"]))
+    # s-a's earlier row listed it; its later row (days[4]) no longer does: closed
+    rows[days[3]].append(_row("s-a", "Parser start", "Looked at the parser.",
+                              next_items=[("drop00000001", "Try the other parser")]))
     # in the window
     rows[days[4]].append(_row("s-a", "Parser work", "Found the crash.",
                               next_items=[("open00000001", "Write the parser tests"),
@@ -136,7 +142,8 @@ def test_every_item_gets_one_decision_and_open_ones_become_todos(ws):
     created = next(t for t in api.todos if t["title"] == "Write the parser tests")
     assert json.loads(created["linked_context"])["migrated_from"] == "da:open00000001"
     # resolved in the window, or outside it: not migrated; the old unresolved one expired
-    assert "da:done00000001" not in rec and "da:old000000002" not in rec
+    assert rec["da:done00000001"]["decision"] == "closed"
+    assert rec["da:old000000002"]["decision"] == "closed"            # resolved, outside the window
     assert rec["da:old000000001"]["decision"] == "expired"
     # the open gap became a ToDo and leaves the document; the debt gap is untouched
     (gap,) = withdrawn
@@ -153,6 +160,20 @@ def test_a_second_run_changes_nothing(ws):
     before = len(api.todos)
     out = _go(ws, api, withdrawn)
     assert out["left"] == 0 and len(api.todos) == before and len(withdrawn) == 1
+    assert (ws / "record.jsonl").read_text().splitlines() == lines
+
+
+def test_a_run_after_the_window_was_rendered_again_records_nothing_new(ws):
+    """Once the window is rendered without follow-ups, its closed ids look like older
+    ones; they were recorded the first time, so nothing is recorded again."""
+    api = FakeApi([{"id": "t-board", "title": "Clean the ToDo board", "status": "pending"}])
+    _go(ws, api, [])
+    lines = (ws / "record.jsonl").read_text().splitlines()
+    out = _go(ws, api, [])
+    assert out["expired_to_record"] == 0
+    rec = {r["key"]: r for r in M._rows(ws / "record.jsonl")}
+    assert rec["da:old000000003"]["decision"] == "closed"   # resolved in the window
+    assert rec["da:drop00000001"]["decision"] == "closed"   # not carried forward
     assert (ws / "record.jsonl").read_text().splitlines() == lines
 
 
