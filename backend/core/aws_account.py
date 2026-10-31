@@ -10,7 +10,8 @@ What it provides (steps 1-2 of design §9; Hive is step 3):
 - ``derive_from_legacy``: the record an existing install starts with (design §5.6),
   from ``auth_method`` and the credentials the daemon already uses;
 - ``resolve``: short-term credentials for the record's source (``ada``, ``profile``,
-  ``instance_role``; ``sso`` / ``login`` / ``keys`` arrive with the wizard, step 4),
+  ``instance_role``, and the sign-ins SwarmAI runs itself: ``sso``, ``login``, ``keys``,
+  in ``core/aws_signin``),
   **pinned**: every new access key is checked with STS against the record's account,
   and a different account raises ``AccountMismatch`` instead of being used;
 - ``cli_settings``: the CLI's ``awsCredentialExport`` = ``python-backend aws-credentials``,
@@ -27,9 +28,11 @@ What it provides (steps 1-2 of design §9; Hive is step 3):
   explicitly (``AWS_CONFIG_FILE=… AWS_PROFILE=swarmai``); nothing sets it by default;
 - ``write_daemon_endpoint`` / ``token_ok``: how that subcommand reaches this daemon
   (``<data dir>/aws/daemon.json``, port + a per-boot token, 0600);
-- ``run_capability_checks``: Bedrock, Hive, cloud storage, voice (design §7.2). The
-  Hive and storage checks are the read-only ones the Hive account verify already ran;
-  "can it create" (DryRun / policy simulation) is step 5, and the result says so.
+- ``run_capability_checks``: Bedrock, Hive, cloud storage, voice (design §7.2). Hive
+  and storage are "can it create" checks (``core.aws_permissions``: DryRun and policy
+  simulation, nothing created);
+- ``connect``: make a candidate the account only after STS confirms it (the wizard and
+  the account page; a failure keeps the current record).
 
 Never here: writing the user's ``~/.aws`` files, a cost cap. A ``profile`` source is
 resolved by botocore exactly as the daemon's default chain did before this module: that
@@ -66,8 +69,9 @@ HIVE_FLEET_KEY = "hive_fleet"
 PROTECTED_CONFIG_KEYS = frozenset({RECORD_KEY, CHAT_KEY, HIVE_FLEET_KEY})
 
 SOURCES = ("ada", "sso", "login", "profile", "keys", "instance_role")
-#: sources this version can resolve; the others are recorded but answer "unsupported"
-RESOLVABLE_SOURCES = ("ada", "profile", "instance_role")
+#: sources this version can resolve
+RESOLVABLE_SOURCES = SOURCES
+ADA_PROVIDERS = ("isengard", "conduit")
 
 UNCONNECTED, CONNECTED, NEEDS_LOGIN, MISMATCH, UNVERIFIED = (
     "unconnected", "connected", "needs_login", "account_mismatch", "unverified")
@@ -285,8 +289,12 @@ def _ada_creds(rec: dict) -> Creds:
     if not _ACCOUNT_RE.fullmatch(account) or not _ADA_WORD_RE.fullmatch(role) \
             or not _ADA_WORD_RE.fullmatch(provider):
         raise AccountError("bad_record", "the record's ADA account, role or provider is not valid")
+    # --profile names ada's own cache slot. Without it ada uses its default slot and can
+    # print another account's credentials (measured: --account=210347900436 printed the
+    # default slot's 533267412361). `print` writes no AWS file; the slot is SwarmAI's own.
+    slot = f"swarmai-{account}-{role}-{provider}"
     cmd = [ada_bin, "credentials", "print", f"--account={account}", f"--role={role}",
-           f"--provider={provider}", "--format=json"]
+           f"--provider={provider}", f"--profile={slot}", "--format=json"]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=_ADA_TIMEOUT_S,
                              stdin=subprocess.DEVNULL)
@@ -360,7 +368,23 @@ def _instance_role_creds(_rec: dict) -> Creds:
     return _frozen(boto3.Session().get_credentials())
 
 
-_RESOLVERS = {"ada": _ada_creds, "profile": _profile_creds, "instance_role": _instance_role_creds}
+def _sso_creds(rec: dict) -> Creds:
+    from core import aws_signin
+    return aws_signin.sso_creds(rec)
+
+
+def _login_creds(rec: dict) -> Creds:
+    from core import aws_signin
+    return aws_signin.login_creds(rec)
+
+
+def _keys_creds(rec: dict) -> Creds:
+    from core import aws_signin
+    return aws_signin.keys_creds(rec)
+
+
+_RESOLVERS = {"ada": _ada_creds, "profile": _profile_creds, "instance_role": _instance_role_creds,
+              "sso": _sso_creds, "login": _login_creds, "keys": _keys_creds}
 
 
 # ── resolve + pin ──────────────────────────────────────────────────────────────
@@ -376,8 +400,10 @@ def _identity_key(rec: Optional[dict]) -> Optional[tuple]:
     if not rec:
         return None
     ada = rec.get("ada") or {}
+    sso = rec.get("sso") or {}
     return (rec.get("source"), rec.get("account_id"), rec.get("profile"),
-            ada.get("role"), ada.get("provider"), ada.get("bin"))
+            ada.get("role"), ada.get("provider"), ada.get("bin"),
+            sso.get("start_url"), sso.get("role"), rec.get("keys_id"))
 
 
 def _reset_cache() -> None:
@@ -392,8 +418,10 @@ def _sts_identity(creds: Creds, region: str) -> dict:
     sts = boto3.client(
         "sts", region_name=region, aws_access_key_id=creds.access_key_id,
         aws_secret_access_key=creds.secret_access_key, aws_session_token=creds.session_token,
+        # the identity check talks to AWS's own STS endpoint: an ``endpoint_url`` in the
+        # person's ~/.aws/config (or AWS_ENDPOINT_URL_STS) could answer any account
         config=Config(connect_timeout=_STS_TIMEOUT_S, read_timeout=_STS_TIMEOUT_S,
-                      retries={"max_attempts": 2}))
+                      retries={"max_attempts": 2}, ignore_configured_endpoint_urls=True))
     return sts.get_caller_identity()
 
 
@@ -447,6 +475,134 @@ def resolve(force: bool = False) -> Creds:
         _update_record(state=CONNECTED, state_detail=None, error_kind=None)
         _cache = creds
         return creds
+
+
+def _check_candidate(cand: dict) -> dict:
+    """The record a connect request asks for, with only the fields its source uses. Every
+    value that reaches a command or an API is checked here; the ada binary is the one
+    found on this machine, never a path from the request."""
+    source = cand.get("source")
+    if source not in SOURCES:
+        raise AccountError("bad_input", "unknown sign-in method")
+    reg = cand.get("region") or "us-east-1"
+    if not re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", reg):
+        raise AccountError("bad_input", "not an AWS region")
+    rec: dict = {"source": source, "region": reg,
+                 "context": cand.get("context") if cand.get("context") in ("internal", "external")
+                 else ("internal" if find_ada() else "external")}
+    expected = cand.get("account_id")
+    if expected is not None and not _ACCOUNT_RE.fullmatch(str(expected)):
+        raise AccountError("bad_input", "an AWS account ID is 12 digits")
+    if source == "ada":
+        ada = cand.get("ada") or {}
+        ada_bin = find_ada()
+        if not ada_bin:
+            raise AccountError("ada_not_found", "ada is not installed on this machine")
+        role, provider = str(ada.get("role") or "Admin"), str(ada.get("provider") or "isengard").lower()
+        if not expected:
+            raise AccountError("bad_input", "ADA needs the account ID")
+        if not _ADA_WORD_RE.fullmatch(role) or provider not in ADA_PROVIDERS:
+            raise AccountError("bad_input", "not a valid ADA role or provider")
+        rec["ada"] = {"role": role, "provider": provider, "bin": ada_bin}
+    elif source == "profile":
+        name = str(cand.get("profile") or "")
+        found = _from_profile(name, find_ada()) if re.fullmatch(r"[\w.@+-]{1,64}", name) else None
+        if not found or found.get("source") != "profile":
+            raise AccountError("profile_not_found", f"profile {name!r} is not in ~/.aws")
+        rec["profile"] = name
+    elif source == "sso":
+        sso = cand.get("sso") or {}
+        from core import aws_signin
+        try:
+            start_url = aws_signin.check_start_url(sso.get("start_url"))
+            sso_region = aws_signin.check_region(sso.get("sso_region"))
+        except aws_signin.SigninError as exc:
+            raise AccountError("bad_input", exc.message)
+        if not expected or not re.fullmatch(r"[\w+=,.@-]{1,64}", str(sso.get("role") or "")):
+            raise AccountError("bad_input", "AWS SSO needs the account and role")
+        rec["sso"] = {"start_url": start_url, "sso_region": sso_region, "role": str(sso["role"])}
+    elif source == "keys":
+        from core import aws_signin
+        key_id = str(cand.get("keys_id") or "")
+        if not aws_signin.has_keys(key_id):
+            raise AccountError("no_credentials", "store the access keys first")
+        rec["keys_id"] = key_id
+    elif source == "login":
+        from core import aws_signin
+        profile = str((cand.get("login") or {}).get("profile") or aws_signin.LOGIN_PROFILE)
+        if not aws_signin.LOGIN_PROFILE_RE.fullmatch(profile) or \
+                profile not in aws_signin.login_profiles():
+            raise AccountError("bad_input", "sign in with AWS login first")
+        rec["login"] = {"profile": profile}
+    if expected:
+        rec["account_id"] = str(expected)
+    return rec
+
+
+def connect(candidate: dict) -> dict:
+    """Make *candidate* the SwarmAI account: ``verify_candidate`` then ``commit``. A
+    failure leaves the current record exactly as it was (design §6.1 ④: never locked out)."""
+    rec, creds = verify_candidate(candidate)
+    return commit(rec, creds)
+
+
+def verify_candidate(candidate: dict) -> "tuple[dict, Creds]":
+    """Resolve *candidate* and check with STS that it is the account asked for (when one
+    was given). Writes nothing."""
+    rec = _check_candidate(candidate)
+    creds = _RESOLVERS[rec["source"]](rec)
+    try:
+        ident = _sts_identity(creds, rec["region"])
+    except Exception as exc:  # noqa: BLE001 — a key STS will not confirm is not used
+        raise AccountError("verify_failed", f"could not verify: {type(exc).__name__}")
+    actual = str(ident.get("Account"))
+    if rec.get("account_id") and actual != rec["account_id"]:
+        raise AccountMismatch(rec["account_id"], actual)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rec.update({"account_id": actual, "caller_arn": str(ident.get("Arn")), "verified_at": now,
+                "state": CONNECTED, "state_detail": None, "error_kind": None, "derived": False})
+    return rec, creds
+
+
+def commit(rec: dict, creds: Creds) -> dict:
+    """Make a verified candidate the record (and the pin)."""
+    global _cache
+    with _lock, _record_lock:
+        save_record(rec)
+        _reset_cache()
+        _verified[(_identity_key(rec), creds.access_key_id)] = rec["caller_arn"]
+        _cache = creds
+    cfg = _cfg()
+    updates: dict = {"aws_region": rec["region"]}
+    if cfg.get("auth_method") in (None, "", "ada", "sso"):
+        # legacy readers (auth_remediation, the old settings card) follow the new source
+        updates["auth_method"] = "ada" if rec["source"] == "ada" else "sso"
+    cfg.update(updates)
+    try:
+        write_profile_file(rec["region"])
+    except ValueError:
+        logger.warning("aws_account: cannot write the swarmai profile", exc_info=True)
+    logger.info("aws_account: connected %s via %s", rec["account_id"], rec["source"])
+    return rec
+
+
+def creds_for_record(rec: dict) -> Creds:
+    """Credentials for a record that is not the current one (another account's Hives that
+    were kept when the account changed, design §7.5), checked with STS against that
+    record's account. Never cached, never the current pin."""
+    resolver = _RESOLVERS.get(rec.get("source"))
+    if resolver is None:
+        raise AccountError("bad_record", "the kept account's sign-in method is unknown")
+    # the kept record is data from the database: what reaches a command is checked again
+    # exactly as at connect (the ada program found here, a profile that exists, ...)
+    checked = _check_candidate(rec)
+    if not checked.get("account_id"):
+        raise AccountError("bad_record", "the kept record has no account")
+    creds = resolver(checked)
+    actual = str(_sts_identity(creds, rec.get("region") or "us-east-1").get("Account"))
+    if actual != str(rec.get("account_id")):
+        raise AccountMismatch(str(rec.get("account_id")), actual)
+    return creds
 
 
 def session(region: Optional[str] = None):
@@ -623,7 +779,7 @@ def token_ok(presented: Optional[str]) -> bool:
     return hmac.compare_digest(_token.encode("utf-8"), presented.encode("utf-8", "replace"))
 
 
-# ── capability checks (design §7.2; Hive / storage "can create" is step 5) ─────
+# ── capability checks (design §7.2) ─────────────────────────────────────────
 
 def _err(exc: Exception) -> "tuple[str, str]":
     code = ""
@@ -655,9 +811,11 @@ def _bedrock_model_id(config: Any) -> Optional[str]:
     return get_bedrock_model_id(model, config_map=mapping if isinstance(mapping, dict) else None)
 
 
-def run_capability_checks(config: Any) -> dict:
+def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dict:
     """One verdict per capability: ``ok`` | ``missing`` (with what is missing) |
-    ``unknown`` (could not tell) | ``not_applicable``. Stored on the record."""
+    ``unknown`` (could not tell) | ``not_applicable``. Stored on the record. Hive and
+    storage are "can it create" checks in *hive_region* (default the main region):
+    DryRun and policy simulation, nothing is created (``core.aws_permissions``)."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rec = get_record() or {}
     region = rec.get("region") or "us-east-1"
@@ -690,36 +848,17 @@ def run_capability_checks(config: Any) -> dict:
         _update_record(capabilities=out)
         return out
 
-    verdicts: list = []
-    detail_vpc = None
-    for name, call in (
-        ("ec2:DescribeInstances", lambda: sess.client("ec2").describe_instances(MaxResults=5)),
-        ("iam:ListRoles", lambda: sess.client("iam").list_roles(MaxItems=1)),
-        ("cloudfront:ListDistributions", lambda: sess.client("cloudfront").list_distributions(MaxItems="1")),
-    ):
-        try:
-            call()
-        except Exception as exc:  # noqa: BLE001
-            verdicts.append(_verdict(exc, name))
+    from core import aws_permissions
+    hive_region = hive_region or region
     try:
-        vpcs = sess.client("ec2").describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])
-        if not vpcs.get("Vpcs"):
-            detail_vpc = f"no default VPC in {region}"
-    except Exception:  # noqa: BLE001 — already reported through DescribeInstances, or unknowable
-        pass
-    basis = "read-only check; whether it can create is checked in a later version"
-    if verdicts:
-        status = "missing" if any(v["status"] == "missing" for v in verdicts) else "unknown"
-        out["hive"] = {"status": status, "detail": "; ".join(v["detail"] for v in verdicts),
-                       "basis": basis}
-    else:
-        out["hive"] = {"status": "missing" if detail_vpc else "ok",
-                       "detail": detail_vpc or "reads EC2, IAM, CloudFront", "basis": basis}
-    try:
-        sess.client("s3").list_buckets()
-        out["storage"] = {"status": "ok", "detail": "lists buckets", "basis": basis}
-    except Exception as exc:  # noqa: BLE001
-        out["storage"] = {**_verdict(exc, "s3:ListAllMyBuckets"), "basis": basis}
+        out["hive"], out["storage"] = aws_permissions.run_hive_checks(
+            sess if hive_region == region else session(hive_region), hive_region,
+            str(rec.get("account_id") or ""), str(rec.get("caller_arn") or ""))
+        out["hive"]["region"] = hive_region
+    except Exception as exc:  # noqa: BLE001 — a check that breaks reads "could not tell"
+        out["hive"] = {"status": "unknown", "region": hive_region,
+                       "detail": f"{type(exc).__name__}: {_redact(str(exc))}"}
+        out["storage"] = {k: v for k, v in out["hive"].items() if k != "region"}
     try:
         sess.client("polly").describe_voices(LanguageCode="en-US")
         out["voice"] = {"status": "ok", "detail": "Polly; transcription is confirmed on first use"}
@@ -761,6 +900,8 @@ def rederive(config: Any) -> Optional[dict]:
     with no account id (that would re-pin to whatever answers first)."""
     with _record_lock:
         old = get_record()
+        if old is not None and not old.get("derived"):
+            return old  # connected in the account page or the wizard: it owns the record
         want = _METHOD_SOURCE.get(config.get("auth_method"))
         if want is None:
             return old
@@ -857,7 +998,8 @@ def remediation_method(config: Any = None) -> Optional[str]:
     if active() and rec and rec.get("error_kind") in _BROKEN_SETUP:
         return "account_broken"
     if active() and rec:
-        return {"ada": "ada_account", "profile": "profile", "instance_role": "iam_role"}.get(
+        return {"ada": "ada_account", "profile": "profile", "instance_role": "iam_role",
+                "sso": "sso_app", "login": "aws_login", "keys": "access_keys"}.get(
             rec.get("source"), config.get("auth_method"))
     return config.get("auth_method")
 
@@ -933,7 +1075,9 @@ def startup(port: int) -> None:
         logger.warning("aws_account: not verified at startup: %s (%s)", exc.message, exc.kind)
         return
     if not (get_record() or {}).get("capabilities"):
-        run_capability_checks(cfg)
+        # a dozen AWS calls: on a thread of its own, not the pool startup runs on
+        threading.Thread(target=run_capability_checks, args=(cfg,), daemon=True,
+                         name="aws-capability-checks").start()
 
 
 def view() -> dict:
@@ -946,6 +1090,8 @@ def view() -> dict:
                                          "caller_arn", "verified_at", "derived")}
         ada = rec.get("ada") or {}
         public["ada"] = {"role": ada.get("role"), "provider": ada.get("provider")} if ada else None
+        sso = rec.get("sso") or {}
+        public["sso"] = {k: sso.get(k) for k in ("start_url", "sso_region", "role")} if sso else None
     return {
         "state": state,
         "state_detail": (rec or {}).get("state_detail"),

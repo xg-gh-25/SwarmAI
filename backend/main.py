@@ -1442,7 +1442,19 @@ async def lifespan(app: FastAPI):
                     logger.info("hive accounts: %s", outcome)
             except Exception:
                 logger.warning("hive account migration failed", exc_info=True)
-        asyncio.create_task(_aws_account_startup())
+            # the table follows EC2 and replacements finish (design §7.3); every 10 minutes
+            from hive import fleet as _fleet
+            from routers.hive import delete_row as _delete_row
+            while True:
+                try:
+                    await _fleet.reconcile(_hdb.db_path, cleanup=_delete_row)
+                    await _fleet.status(_hdb.db_path)   # what Need-You shows (cached)
+                except Exception:
+                    logger.warning("hive fleet reconcile failed", exc_info=True)
+                await asyncio.sleep(600)
+        # kept referenced: it runs the reconcile loop for the daemon's life (the loop only
+        # holds weak references to tasks)
+        app.state.aws_account_task = asyncio.create_task(_aws_account_startup())
     else:
         # The conflict guard already logged a WARNING with the owner's pid/port.
         logger.info("backend.json NOT written (port=%d, mode=%s) — owned by another live backend",

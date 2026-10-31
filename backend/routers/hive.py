@@ -51,6 +51,20 @@ def _keep(task: asyncio.Task) -> asyncio.Task:
     return task
 
 
+def start_deploy(instance_id: str) -> None:
+    """Start provisioning a ``pending`` row in the background (the fleet's creations)."""
+    _keep(asyncio.create_task(_get_provisioner().deploy(instance_id),
+                              name=f"hive-deploy-{instance_id[:8]}"))
+
+
+async def delete_row(instance_id: str) -> None:
+    """Clean up a Hive's AWS resources and forget it (a finished replacement's old half)."""
+    await _get_provisioner().cleanup(instance_id)
+    async with _conn() as c:
+        await c.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
+        await c.commit()
+
+
 def _log_task_failure(task: asyncio.Task) -> None:
     """Callback for background deploy tasks — log exceptions instead of silently dropping them."""
     if task.cancelled():
@@ -280,8 +294,8 @@ async def create_account(body: HiveAccountCreate):
         raise HTTPException(status_code=409, detail=(
             "Hives use the SwarmAI account. To use another AWS account, change the SwarmAI "
             "account in Settings > SwarmAI account."))
-    if body.auth_method in (hive_accounts.SWARMAI_METHOD, hive_accounts.MERGED_METHOD):
-        raise HTTPException(status_code=422, detail="Invalid auth_method")
+    if body.auth_method not in hive_accounts.CREATABLE_METHODS:   # an allowlist: a new
+        raise HTTPException(status_code=422, detail="Invalid auth_method")  # method fails closed
     row = {
         "id": str(uuid.uuid4()),
         "account_id": body.account_id,
@@ -652,12 +666,18 @@ async def update_instance(instance_id: str, body: Optional[HiveInstanceUpdate] =
 
 @router.delete("/instances/{instance_id}")
 async def delete_instance(instance_id: str):
-    """Delete a Hive and clean up all AWS resources."""
+    """Delete a Hive and clean up all AWS resources. The SwarmAI account's last Hive is
+    replaced, never deleted (design §7.3: at least one)."""
     _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT id FROM hive_instances WHERE id = ?", (instance_id,))
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Instance not found")
+    from hive import fleet
+    if hive_accounts.swarmai_account() is not None and await fleet.is_last(db.db_path, instance_id):
+        raise HTTPException(status_code=409, detail=(
+            "This is your last Hive: replace it instead (a new one is built first, then "
+            "this one is deleted), or stop it to stop paying for the instance."))
 
     provisioner = _get_provisioner()
     try:
@@ -673,6 +693,19 @@ async def delete_instance(instance_id: str):
         await c.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
         await c.commit()
     return {"deleted": True}
+
+
+@router.post("/instances/{instance_id}/replace")
+async def replace_instance(instance_id: str):
+    """Build a new Hive like this one; when it runs, this one is deleted."""
+    _require_desktop()
+    from hive import fleet
+    try:
+        return await fleet.replace(db.db_path, instance_id, start_deploy=start_deploy)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.post("/instances/{instance_id}/reset-password")

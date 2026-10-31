@@ -299,6 +299,12 @@ def _s3(inst: dict[str, Any], purpose: str = "manage"):
     return session.client("s3", region_name=inst["region"])
 
 
+def _owner(bucket: str) -> dict:
+    """``ExpectedBucketOwner`` when the bucket name carries its account."""
+    from hive.provisioner import bucket_owner
+    return bucket_owner(bucket)
+
+
 def new_dispatch_id() -> str:
     """A dispatch's id; also its work order's on the Hive (core/hive_workspace)."""
     return f"so_{uuid.uuid4().hex[:12]}"
@@ -916,7 +922,8 @@ def _read_decisions(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
     whole current list, rewritten each pass it can read its runs), cleaned. None listed:
     an empty list (an older Hive writes no snapshot)."""
     try:
-        raw = s3.get_object(Bucket=bucket, Key=f"bridge/{hive}/{DECISIONS_SNAPSHOT}")["Body"].read(2 * 1024 * 1024)
+        raw = s3.get_object(Bucket=bucket, Key=f"bridge/{hive}/{DECISIONS_SNAPSHOT}",
+                            **_owner(bucket))["Body"].read(2 * 1024 * 1024)
     except s3.exceptions.NoSuchKey:
         return []
     body = json.loads(raw)
@@ -951,7 +958,7 @@ _BODIES_MAX = 4000
 def _keys(s3, bucket: str, prefix: str) -> dict[str, Any]:
     found: dict[str, Any] = {}
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, **_owner(bucket)):
         found.update({o["Key"][len(prefix):]: o.get("LastModified") for o in page.get("Contents", [])})
     return found
 
@@ -968,7 +975,7 @@ def _body(s3, bucket: str, key: str, lm: Any, cap: int, keep: bool) -> Any:
     if keep and ck in _BODIES:
         return _BODIES[ck]
     try:
-        body = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read(cap))
+        body = json.loads(s3.get_object(Bucket=bucket, Key=key, **_owner(bucket))["Body"].read(cap))
     except Exception:  # noqa: BLE001 — unreadable: the caller treats it as absent
         logger.debug("swarm out: bridge object %s unreadable", key, exc_info=True)
         return None
@@ -1678,7 +1685,8 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
 
     def _load(prefix: str) -> Optional[bytes]:
         try:
-            return s3.get_object(Bucket=inst["s3_bucket"], Key=base + prefix + rel)["Body"].read(64 * 1024)
+            return s3.get_object(Bucket=inst["s3_bucket"], Key=base + prefix + rel,
+                                 **_owner(inst["s3_bucket"]))["Body"].read(64 * 1024)
         except s3.exceptions.NoSuchKey:
             return None
 
@@ -1731,7 +1739,7 @@ def _put_once(s3, inst: dict[str, Any], key: str, body: dict[str, Any]) -> None:
     """Write an answer. IfNoneMatch: two answers at once — the second is refused, not
     overwritten."""
     try:
-        s3.put_object(Bucket=inst["s3_bucket"], Key=key,
+        s3.put_object(Bucket=inst["s3_bucket"], Key=key, **_owner(inst["s3_bucket"]),
                       Body=json.dumps(body, ensure_ascii=False).encode(), IfNoneMatch="*",
                       ContentType="application/json", ServerSideEncryption="AES256")
     except Exception as e:

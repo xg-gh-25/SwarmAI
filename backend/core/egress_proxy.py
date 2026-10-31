@@ -121,7 +121,7 @@ def _close(*writers: asyncio.StreamWriter) -> None:
     for w in writers:
         try:
             w.close()
-        except Exception:  # noqa: BLE001 — already closed
+        except (OSError, RuntimeError):  # already closed, or its loop is gone
             pass
 
 

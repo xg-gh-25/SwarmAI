@@ -33,6 +33,16 @@ logger = logging.getLogger(__name__)
 
 SWARMAI_ROW_ID = "swarmai"
 SWARMAI_METHOD = "swarmai"
+#: another account's Hives kept when the SwarmAI account changed (design §7.5): the row
+#: holds that account's previous record (no secret), resolved only to stop / delete / read
+RECORD_METHOD = "record"
+#: sources whose sign-in survives a change of account: every one (SSO sessions, access
+#: keys and AWS login profiles are kept per identity, core/aws_signin; ``prune`` keeps
+#: what a kept row still uses)
+KEEPABLE_SOURCES = frozenset(aws_account.SOURCES)
+#: what ``POST /api/hive/accounts`` may create (legacy rows); the SwarmAI, merged and
+#: kept-record rows are made only by this module
+CREATABLE_METHODS = frozenset({"access_keys", "sso", "iam_role"})
 #: a row whose Hives were moved to the SwarmAI row (kept one version, read-only)
 MERGED_METHOD = "merged"
 #: what another account's credentials may still be used for
@@ -68,6 +78,8 @@ def row_role(row: dict, mode: Optional[dict] = None) -> str:
     method = row.get("auth_method")
     if method == SWARMAI_METHOD:
         return SWARMAI_METHOD if mode is not None else "disconnected"
+    if method == RECORD_METHOD:
+        return "other"
     if method == MERGED_METHOD:
         return MERGED_METHOD
     return "other" if mode is not None else "own"
@@ -107,6 +119,17 @@ def session_for(row: dict, region: str, purpose: str = "manage"):
                 f"This Hive is in AWS account {row.get('account_id')}, not the SwarmAI "
                 f"account {mode['account_id']}.")
         return aws_account.boto_session(region)
+    if method == RECORD_METHOD:
+        if purpose not in OTHER_ACCOUNT_PURPOSES:
+            raise OtherAccountError(
+                f"This Hive is in the previous SwarmAI account ({row.get('account_id')}): it "
+                "can only be stopped or deleted.")
+        import boto3
+        kept = json.loads(row.get("auth_config") or "{}")
+        creds = aws_account.creds_for_record(kept)  # STS-checked against that account
+        return boto3.Session(aws_access_key_id=creds.access_key_id,
+                             aws_secret_access_key=creds.secret_access_key,
+                             aws_session_token=creds.session_token, region_name=region)
     if mode is not None and purpose not in OTHER_ACCOUNT_PURPOSES:
         raise OtherAccountError(
             f"This Hive is in another AWS account ({row.get('account_id')}): it can only be "
@@ -248,7 +271,7 @@ async def check_row(db_path: Path, row: dict) -> "tuple[str, Optional[str]]":
     Nothing moves onto a SwarmAI row that names another account (it still holds Hives
     from before the account changed): those Hives would then be reachable by nobody."""
     mode = swarmai_account()
-    if mode is None or row.get("auth_method") in (SWARMAI_METHOD, MERGED_METHOD):
+    if mode is None or row.get("auth_method") in (SWARMAI_METHOD, MERGED_METHOD, RECORD_METHOD):
         return "other", None
     try:
         actual = await asyncio.wait_for(asyncio.to_thread(_sts_account, row), _STS_TIMEOUT_S)
@@ -297,12 +320,108 @@ async def migrate(db_path: Path) -> dict:
     conn = await _connect(db_path)
     try:
         cur = await conn.execute(
-            "SELECT * FROM hive_accounts WHERE auth_method NOT IN (?, ?)",
-            (SWARMAI_METHOD, MERGED_METHOD))
+            "SELECT * FROM hive_accounts WHERE auth_method NOT IN (?, ?, ?)",
+            (SWARMAI_METHOD, MERGED_METHOD, RECORD_METHOD))
         rows = [dict(r) for r in await cur.fetchall()]
     finally:
         await conn.close()
     return {row["id"]: await merge_row(db_path, row) for row in rows}
+
+
+async def swarmai_hives(db_path: Path) -> list:
+    """The Hives recorded in the SwarmAI account's row (what an account change affects)."""
+    conn = await _connect(db_path)
+    try:
+        cur = await conn.execute(
+            "SELECT id, name, status FROM hive_instances WHERE account_ref = ?", (SWARMAI_ROW_ID,))
+        return [dict(r) for r in await cur.fetchall()]
+    finally:
+        await conn.close()
+
+
+async def keep_old_hives(db_path: Path, old_record: dict) -> Optional[str]:
+    """The SwarmAI account is changing: move the Hives of the old one to a row of their
+    own, holding the old record, so they can still be stopped and deleted (design §7.5).
+    Backed up first; nothing is deleted. Returns the new row's id (None: nothing to move)."""
+    source = old_record.get("source")
+    if source not in KEEPABLE_SOURCES:
+        raise OtherAccountError(
+            f"Hives signed in with {source!r} cannot be kept (an unknown sign-in method): "
+            "delete them first.")
+    kept = {k: v for k, v in old_record.items()
+            if k in ("source", "account_id", "region", "profile", "ada", "sso", "login",
+                     "keys_id", "context")}
+    async with fleet_lock, _merge_lock:
+        conn = await _connect(db_path)
+        try:
+            cur = await conn.execute(
+                "SELECT id FROM hive_instances WHERE account_ref = ?", (SWARMAI_ROW_ID,))
+            moved = [r[0] for r in await cur.fetchall()]
+            if not moved:
+                return None
+            row_id = f"kept-{kept.get('account_id')}-{datetime.now(timezone.utc):%Y%m%d%H%M%S}"
+            _append_backup({"at": _now(), "kept_row": row_id, "account_id": kept.get("account_id"),
+                            "source": source, "instances_moved": moved})
+            await conn.execute(
+                "INSERT INTO hive_accounts (id, account_id, label, auth_method, auth_config, "
+                "default_region, created_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                (row_id, kept.get("account_id"), "Previous SwarmAI account", RECORD_METHOD,
+                 json.dumps(kept), kept.get("region") or "us-east-1", _now()))
+            await conn.execute("UPDATE hive_instances SET account_ref = ? WHERE account_ref = ?",
+                               (row_id, SWARMAI_ROW_ID))
+            await conn.commit()
+            return row_id
+        finally:
+            await conn.close()
+
+
+async def undo_keep(db_path: Path, row_id: Optional[str]) -> None:
+    """The account change failed after ``keep_old_hives``: put the Hives back on the
+    SwarmAI row and remove the kept row (the account did not change)."""
+    if not row_id:
+        return
+    async with fleet_lock, _merge_lock:
+        conn = await _connect(db_path)
+        try:
+            await conn.execute("UPDATE hive_instances SET account_ref = ? WHERE account_ref = ?",
+                               (SWARMAI_ROW_ID, row_id))
+            await conn.execute("DELETE FROM hive_accounts WHERE id = ? AND auth_method = ?",
+                               (row_id, RECORD_METHOD))
+            await conn.commit()
+        finally:
+            await conn.close()
+    _append_backup({"at": _now(), "kept_row_undone": row_id})
+
+
+async def kept_records(db_path: Path) -> list:
+    """The previous-account records of the kept rows (what their Hives sign in with)."""
+    conn = await _connect(db_path)
+    try:
+        cur = await conn.execute("SELECT auth_config FROM hive_accounts WHERE auth_method = ?",
+                                 (RECORD_METHOD,))
+        out = []
+        for (raw,) in await cur.fetchall():
+            try:
+                rec = json.loads(raw or "{}")
+            except ValueError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+        return out
+    finally:
+        await conn.close()
+
+
+async def swarmai_row_account(db_path: Path) -> Optional[str]:
+    """The account the SwarmAI row's Hives are in (it can differ from the record when the
+    record is missing or was never verified)."""
+    conn = await _connect(db_path)
+    try:
+        cur = await conn.execute("SELECT account_id FROM hive_accounts WHERE id = ?", (SWARMAI_ROW_ID,))
+        row = await cur.fetchone()
+        return str(row[0]) if row and row[0] else None
+    finally:
+        await conn.close()
 
 
 # ── how many Hives (design §7.3) ───────────────────────────────────────────────

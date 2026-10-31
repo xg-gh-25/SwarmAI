@@ -110,7 +110,7 @@ def test_unsupported_source_and_no_record_are_named(cfg):
     with pytest.raises(aa.AccountError) as exc:
         aa.resolve()
     assert exc.value.kind == aa.UNCONNECTED
-    _record(cfg, source="sso")
+    _record(cfg, source="bogus")
     with pytest.raises(aa.AccountError) as exc:
         aa.resolve()
     assert exc.value.kind == "unsupported"

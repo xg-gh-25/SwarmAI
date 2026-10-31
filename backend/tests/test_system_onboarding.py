@@ -212,7 +212,10 @@ class TestVerifyAuthBedrock:
             resp = client.post("/api/system/verify-auth")
         data = resp.json()
         assert data["error_type"] == "expired_credentials"
-        assert "ada credentials update" in data["fix_hint"]
+        # Midway is the fix; never a bare `ada credentials update`, which without
+        # --profile overwrites the person's default AWS profile
+        assert "mwinit -f" in data["fix_hint"]
+        assert "ada credentials update" not in data["fix_hint"]
 
     def test_verify_bedrock_expired_bedrock_key_gets_bearer_msg(self, client):
         """method=bedrock_api_key + expired → bearer-token remediation, not ADA."""

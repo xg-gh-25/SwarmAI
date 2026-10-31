@@ -344,7 +344,7 @@ async def test_a_delete_whose_account_cannot_be_reached_keeps_the_row(client, mo
     from routers import hive as hive_router
     monkeypatch.setattr(ha, "swarmai_account", lambda: dict(MODE))
     await client.get("/api/hive/accounts")
-    await _seed(1)
+    await _seed(2)  # not the last one (that one can only be replaced)
     hive_router._provisioner.cleanup = AsyncMock(side_effect=ha.OtherAccountError("elsewhere"))
     r = await client.delete("/api/hive/instances/seed-running-0")
     assert r.status_code == 409 and "Nothing was deleted" in r.json()["detail"]

@@ -66,6 +66,10 @@ SECRET_KEYS: frozenset[str] = frozenset({
     # at spawn by _configure_claude_environment when auth_method=bedrock_api_key.
     "aws_bearer_token_bedrock",
     "anthropic_api_key",
+    # the SwarmAI AWS account's own sign-ins (core/aws_signin): the Identity Center
+    # client + tokens, and access keys for the ``keys`` source
+    "aws_sso_session",
+    "aws_account_keys",
 })
 
 DEFAULT_CONFIG: dict[str, Any] = {

@@ -803,6 +803,50 @@ def _collect_ingestion() -> list[AttentionItem]:
     return items
 
 
+def _collect_aws_account() -> list[AttentionItem]:
+    """The SwarmAI AWS account (design 2026-10-31-swarmai-aws-account §7.1): a sign-in
+    that expired or reaches another account is BLOCKING (chat, Hive and storage stop);
+    fewer Hives than the person asked for is one REVIEW item until they say "later"
+    (``hive_fleet.dismissed``), never more than once at a time. Reads the record and the
+    last Hive status the account page or the reconcile loop computed; a click opens
+    Settings → SwarmAI Account (``context.kind`` aws_account). Read-only; fail-soft."""
+    items: list[AttentionItem] = []
+    try:
+        from core import aws_account
+        if aws_account.is_hive_mode():
+            return []
+        rec = aws_account.get_record()
+        state = (rec or {}).get("state")
+        acct = str((rec or {}).get("account_id") or "")
+        ctx = {"kind": "aws_account", "settings_tab": "aws-account"}
+        if rec is not None and state in (aws_account.NEEDS_LOGIN, aws_account.MISMATCH):
+            fix = (aws_account.view().get("remediation") or {}).get("fix_text") or ""
+            title = ("Sign in to the SwarmAI AWS account again" if state == aws_account.NEEDS_LOGIN
+                     else "The SwarmAI AWS sign-in reaches another account")
+            items.append(AttentionItem(
+                id=f"aws_account:{state}", source="aws_account", tier=TIER_BLOCKING, brain=None,
+                title=title, summary=acct, detail=_one_line(fix, 400),
+                dispatch={"message": _prompt("Open Settings → SwarmAI Account: " + title.lower() + "."),
+                          "context": ctx}))
+        from hive import fleet
+        st = fleet.last_status() or {}
+        if st.get("state") in ("short", "cannot_build") and not st.get("dismissed"):
+            n = int(st.get("short") or 0)
+            title = (f"{n} Hive{'s' if n != 1 else ''} short of what you asked for"
+                     if st["state"] == "short" else "Hives cannot be created in this account")
+            detail = (str((st.get("capability") or {}).get("detail") or "")
+                      if st["state"] == "cannot_build" else
+                      "Create them on the SwarmAI Account page, or choose Later.")
+            items.append(AttentionItem(
+                id="aws_account:hive", source="aws_account", tier=TIER_REVIEW, brain=None,
+                title=title, summary=acct, detail=_one_line(detail, 400),
+                dispatch={"message": _prompt("Open Settings → SwarmAI Account: " + title.lower() + "."),
+                          "context": ctx}))
+    except Exception as exc:
+        logger.warning("attention: aws_account source failed: %s", exc)
+    return items
+
+
 # ── Aggregator ───────────────────────────────────────────────────────────────
 
 
@@ -888,6 +932,7 @@ def collect(
     items += _collect_local_roots()  # a repository a Brain started reading
     items += _collect_swarm_out()    # OS-level summary of what Swarm Out waits on
     items += _collect_stale_todos()  # open ToDos nobody touched for long
+    items += _collect_aws_account()  # the SwarmAI account's sign-in, and the Hive count
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

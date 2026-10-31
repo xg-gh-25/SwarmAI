@@ -13,6 +13,8 @@
  * A Swarm Out item (`dispatch.context.kind` = "swarm_out": a summary of the runs and
  * questions waiting) is not a prompt: either action opens the Swarm Out tab, where each
  * run is handled (design 2026-10-31-swarm-out-run-review §3.7), then `onOpened`.
+ * A SwarmAI account item (`kind` = "aws_account": sign in again, Hives short) opens its
+ * settings page the same way (design 2026-10-31-swarmai-aws-account §7.1).
  *
  * @exports NeedsYouRow, needsYouPrompt
  */
@@ -20,10 +22,18 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AttentionEntry } from '../../services/attention';
 import { getOverlayCtxBridge } from './overlayRegistry';
+import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 
 /** True for an item that opens the Swarm Out tab instead of filling the chat. */
 export function opensSwarmOut(it: AttentionEntry): boolean {
   return it.dispatch?.context?.kind === 'swarm_out';
+}
+
+/** The settings tab an item opens instead of filling the chat (the SwarmAI account's
+ *  sign-in and Hive count: the person acts on the page), else null. */
+export function opensSettingsTab(it: AttentionEntry): string | null {
+  const ctx = it.dispatch?.context;
+  return ctx?.kind === 'aws_account' && typeof ctx.settings_tab === 'string' ? ctx.settings_tab : null;
 }
 
 /** The text a row fills or sends: the backend prompt, else its title. */
@@ -49,7 +59,11 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
   const prompt = needsYouPrompt(item);
   // a Swarm Out item opens the Swarm Out tab; where that tab cannot be reached (no
   // chat page published it) it is an ordinary prompt
-  const show = opensSwarmOut(item) ? getOverlayCtxBridge().showSwarmOut : undefined;
+  const settingsTab = opensSettingsTab(item);
+  const showOut = opensSwarmOut(item) ? getOverlayCtxBridge().showSwarmOut : undefined;
+  const show = settingsTab
+    ? () => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: settingsTab } }))
+    : showOut;
   const swarmOut = !!show;
   const openSwarmOut = () => { show?.(); onOpened?.(); };
   return (
@@ -61,7 +75,7 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
         type="button"
         data-testid={`${testid}-fill`}
         onClick={() => (swarmOut ? openSwarmOut() : onFill(prompt))}
-        title={swarmOut ? t('needYou.openSwarmOut') : t('needYou.fillHint')}
+        title={settingsTab ? t('needYou.openSettings') : swarmOut ? t('needYou.openSwarmOut') : t('needYou.fillHint')}
         className="flex-1 min-w-0 w-full text-left flex items-start gap-2.5 pl-4 pr-2 py-2 hover:bg-[var(--color-hover)] transition-colors cursor-pointer"
       >
         {lead && <span className="mt-[4px] shrink-0">{lead}</span>}

@@ -58,6 +58,34 @@ const mockUseTheme = vi.fn();
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => mockUseTheme(),
 }));
+// The account steps (②–④) and the Hive step (⑤) have their own tests
+// (components/awsAccount/__tests__): here only where the wizard goes from them.
+vi.mock('../../components/awsAccount/ConnectAccount', () => ({
+  default: (p: { onConnected: (v: unknown) => void; onChatOnly?: () => void; onLater?: () => void }) => (
+    <div>
+      <h2>Connect your AWS account</h2>
+      <button onClick={() => p.onConnected({})}>stub: connected</button>
+      <button onClick={() => p.onChatOnly?.()}>stub: chat only</button>
+      <button onClick={() => p.onLater?.()}>Configure later</button>
+    </div>
+  ),
+}));
+vi.mock('../../components/awsAccount/HiveFleet', () => ({
+  HiveSetupStep: ({ onDone }: { onDone: () => void }) => (
+    <div><h2>Hive step</h2><button onClick={onDone}>stub: hive done</button></div>
+  ),
+}));
+
+const HIVE_HINT = { suggestedMethod: 'iam_role', hasAdaDir: false, runMode: 'hive', deploymentContext: 'external' };
+
+/** Desktop: the account step (connected) then the Hive step, which leads to Channels. */
+async function pastAccountAndHive() {
+  await waitFor(() => screen.getByText('stub: connected'));
+  await act(async () => { fireEvent.click(screen.getByText('stub: connected')); });
+  await waitFor(() => screen.getByText('stub: hive done'));
+  await act(async () => { fireEvent.click(screen.getByText('stub: hive done')); });
+}
+
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -77,15 +105,39 @@ beforeEach(() => {
 });
 
 describe('OnboardingPage — no dead-ends', () => {
-  it('step 1 auto-advances to step 2 when system is healthy', async () => {
+  it('step 1 auto-advances to the AWS account step when system is healthy', async () => {
     render(<OnboardingPage onComplete={vi.fn()} />);
-    // Should auto-advance to Auth step
     await waitFor(() => {
-      expect(screen.getByText('LLM Authentication')).toBeInTheDocument();
+      expect(screen.getByText('Connect your AWS account')).toBeInTheDocument();
     });
+    expect(screen.queryByText('LLM Authentication')).not.toBeInTheDocument();
   });
 
-  it('step 2 has a clickable Verify button', async () => {
+  it('desktop order: account → Hive → Channels', async () => {
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await pastAccountAndHive();
+    await waitFor(() => expect(screen.getByText('Connect Channels')).toBeInTheDocument());
+  });
+
+  it('chat only skips the Hive step (Hive needs the AWS account)', async () => {
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => screen.getByText('stub: chat only'));
+    await act(async () => { fireEvent.click(screen.getByText('stub: chat only')); });
+    await waitFor(() => expect(screen.getByText('Connect Channels')).toBeInTheDocument());
+    expect(screen.queryByText('Hive step')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hive')).not.toBeInTheDocument();          // gone from the rail too
+  });
+
+  it('a Hive keeps the LLM Authentication step and has no Hive step', async () => {
+    mockGetAuthHint.mockResolvedValue(HIVE_HINT);
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('LLM Authentication')).toBeInTheDocument());
+    expect(screen.queryByText('Connect your AWS account')).not.toBeInTheDocument();
+    expect(screen.queryByText('AWS Account')).not.toBeInTheDocument();
+  });
+
+  it('Hive: step 2 has a clickable Verify button', async () => {
+    mockGetAuthHint.mockResolvedValue(HIVE_HINT);
     render(<OnboardingPage onComplete={vi.fn()} />);
     await waitFor(() => {
       expect(screen.getByText('Verify Connection')).toBeInTheDocument();
@@ -94,7 +146,8 @@ describe('OnboardingPage — no dead-ends', () => {
     expect(btn).not.toBeDisabled();
   });
 
-  it('step 2 verify success advances to step 3 (Channels)', async () => {
+  it('Hive: verify success advances to Channels', async () => {
+    mockGetAuthHint.mockResolvedValue(HIVE_HINT);
     render(<OnboardingPage onComplete={vi.fn()} />);
     await waitFor(() => {
       expect(screen.getByText('Verify Connection')).toBeInTheDocument();
@@ -111,11 +164,7 @@ describe('OnboardingPage — no dead-ends', () => {
 
   it('step 3 (Channels) always has a Skip button — never trapped', async () => {
     render(<OnboardingPage onComplete={vi.fn()} />);
-    await waitFor(() => screen.getByText('Verify Connection'));
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
-    });
+    await pastAccountAndHive();
 
     await waitFor(() => {
       expect(screen.getByText('Skip for now')).toBeInTheDocument();
@@ -129,11 +178,7 @@ describe('OnboardingPage — no dead-ends', () => {
     const onComplete = vi.fn();
     render(<OnboardingPage onComplete={onComplete} />);
 
-    // Advance to Auth
-    await waitFor(() => screen.getByText('Verify Connection'));
-    await act(async () => {
-      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
-    });
+    await pastAccountAndHive();
 
     // Advance past Channels
     await waitFor(() => screen.getByText('Skip for now'));
@@ -173,11 +218,11 @@ describe('OnboardingPage — no dead-ends', () => {
     }
   });
 
-  it('AC3: desktop Step2 has a "Configure later" control that completes onboarding', async () => {
+  it('AC3: the desktop account step has a "Configure later" control that completes onboarding', async () => {
     mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop', deploymentContext: 'external' });
     const onComplete = vi.fn();
     render(<OnboardingPage onComplete={onComplete} />);
-    await waitFor(() => screen.getByText('LLM Authentication'));
+    await waitFor(() => screen.getByText('Connect your AWS account'));
     // Desktop user who can't reach AWS must have an escape — not just Hive.
     const later = await screen.findByText(/Configure later/i);
     await act(async () => {
@@ -189,7 +234,8 @@ describe('OnboardingPage — no dead-ends', () => {
     });
   });
 
-  it('AC5: a FAILED verify persists NO config (updateAPIConfiguration not called)', async () => {
+  it('AC5 (Hive): a FAILED verify persists NO config (updateAPIConfiguration not called)', async () => {
+    mockGetAuthHint.mockResolvedValue(HIVE_HINT);
     mockVerifyAuth.mockResolvedValue({ success: false, error_type: 'access_denied', fix_hint: 'x' });
     render(<OnboardingPage onComplete={vi.fn()} />);
     await waitFor(() => screen.getByText('Verify Connection'));
@@ -201,7 +247,8 @@ describe('OnboardingPage — no dead-ends', () => {
     expect(mockUpdateAPIConfiguration).not.toHaveBeenCalled();
   });
 
-  it('AC5: a SUCCESSFUL verify persists config AFTER verify', async () => {
+  it('AC5 (Hive): a SUCCESSFUL verify persists config AFTER verify', async () => {
+    mockGetAuthHint.mockResolvedValue(HIVE_HINT);
     mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latency_ms: 100 });
     render(<OnboardingPage onComplete={vi.fn()} />);
     await waitFor(() => screen.getByText('Verify Connection'));
@@ -217,8 +264,7 @@ describe('OnboardingPage — no dead-ends', () => {
     mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'eu-west-1', defaultModel: 'claude-sonnet-4-6' });
     render(<OnboardingPage onComplete={vi.fn()} />);
     // advance to Ready
-    await waitFor(() => screen.getByText('Verify Connection'));
-    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await pastAccountAndHive();
     await waitFor(() => screen.getByText('Skip for now'));
     await act(async () => { fireEvent.click(screen.getByText('Skip for now').closest('button')!); });
     await waitFor(() => screen.getByText("You're All Set!"));
@@ -232,8 +278,7 @@ describe('OnboardingPage — no dead-ends', () => {
   it('F5: Step4 Ready shows the REAL theme and drops the fabricated Language line', async () => {
     mockUseTheme.mockReturnValue({ theme: 'dark' });
     render(<OnboardingPage onComplete={vi.fn()} />);
-    await waitFor(() => screen.getByText('Verify Connection'));
-    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
+    await pastAccountAndHive();
     await waitFor(() => screen.getByText('Skip for now'));
     await act(async () => { fireEvent.click(screen.getByText('Skip for now').closest('button')!); });
     await waitFor(() => screen.getByText("You're All Set!"));
@@ -247,7 +292,7 @@ describe('OnboardingPage — no dead-ends', () => {
   it('double-clicking "Configure later" fires onboarding-complete only ONCE', async () => {
     mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop', deploymentContext: 'external' });
     render(<OnboardingPage onComplete={vi.fn()} />);
-    await waitFor(() => screen.getByText('LLM Authentication'));
+    await waitFor(() => screen.getByText('Connect your AWS account'));
     const later = (await screen.findByText(/Configure later/i)).closest('button')!;
     await act(async () => {
       fireEvent.click(later);
@@ -257,7 +302,7 @@ describe('OnboardingPage — no dead-ends', () => {
     expect(mockSetOnboardingComplete).toHaveBeenCalledTimes(1);
   });
 
-  it('system check interval does NOT reset step after advancing past step 2', async () => {
+  it('system check interval does NOT reset step after advancing past the account step', async () => {
     // Use a slow status that resolves immediately
     let callCount = 0;
     mockGetStatus.mockImplementation(async () => {
@@ -267,13 +312,7 @@ describe('OnboardingPage — no dead-ends', () => {
 
     render(<OnboardingPage onComplete={vi.fn()} />);
 
-    // Advance to Auth
-    await waitFor(() => screen.getByText('LLM Authentication'));
-
-    // Verify and advance to Channels
-    await act(async () => {
-      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
-    });
+    await pastAccountAndHive();
     await waitFor(() => screen.getByText('Connect Channels'));
 
     // Wait for any interval fires (3s+) — should NOT reset to step 2
@@ -285,23 +324,23 @@ describe('OnboardingPage — no dead-ends', () => {
       await new Promise(r => setTimeout(r, 100));
     });
 
-    // Should still show Channels, NOT Auth
-    expect(screen.queryByText('LLM Authentication')).not.toBeInTheDocument();
+    // Should still show Channels, NOT the account step
+    expect(screen.queryByText('Connect your AWS account')).not.toBeInTheDocument();
     expect(screen.getByText('Connect Channels')).toBeInTheDocument();
   });
 
   // ── Restore step (run_da5da0b1): no deadlock during restore ──
 
-  // Drive step1→2→3(Restore). Requires a detected backup (non-hive).
+  // A detected backup (non-hive): Restore comes right after the system check, before
+  // the account (a backup carries the Hive tables and settings the account step writes).
   async function advanceToRestoreStep() {
     mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop', deploymentContext: 'external' });
     mockGetBackupStatus.mockResolvedValue({ repoUrl: 'https://github.com/u/swarm-brain.git', lastBackup: '2026-07-01T00:00:00Z' });
     render(<OnboardingPage onComplete={vi.fn()} />);
-    // step1 → step2 (auth) auto-advances on healthy status
-    await waitFor(() => screen.getByText('Verify Connection'));
-    await act(async () => { fireEvent.click(screen.getByText('Verify Connection').closest('button')!); });
-    // step2 → step3 (Restore) — backup was detected
     await waitFor(() => screen.getByText('Restore from Backup'));
+    expect(screen.queryByText('Connect your AWS account')).not.toBeInTheDocument();
+    // the repository URL is filled in from the backup status (Restore is disabled until then)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Restore$/ })).not.toBeDisabled());
   }
 
   it('AC2: a Skip — start fresh escape is reachable WHILE restoring (no deadlock behind the progress bar)', async () => {
@@ -317,8 +356,9 @@ describe('OnboardingPage — no dead-ends', () => {
     const skip = await screen.findByText('Skip — start fresh');
     expect(skip).toBeInTheDocument();
     await act(async () => { fireEvent.click(skip.closest('button')!); });
-    // onSkip advances past the restore step → Channels (no longer trapped).
+    // onSkip advances past the restore step → the account step (no longer trapped).
     await waitFor(() => expect(screen.queryByText('Restore from Backup')).not.toBeInTheDocument());
+    expect(screen.getByText('Connect your AWS account')).toBeInTheDocument();
   });
 
   it('AC2b: unmounting mid-restore (skip) ABORTS the restore signal (fetch released, no zombie)', async () => {

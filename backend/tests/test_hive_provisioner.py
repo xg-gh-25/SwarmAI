@@ -263,11 +263,9 @@ class TestProvisionerS3:
 
     @pytest.mark.asyncio
     async def test_ensure_bucket_account_suffixed(self):
-        """The LIVE scheme: with an account_id, bucket = swarmai-hive-{acct4}-{region}.
-
-        This is the actual path provision/update use (the -releases- tests above
-        cover only the no-account-id fallback edge). Regression guard for the
-        docstring/fallback drift that cost 2 failed provisions.
+        """The LIVE scheme: with an account_id, bucket = swarmai-hive-{account}-{region}
+        (the whole ID: a 4-digit suffix could collide in S3's global namespace), and
+        every S3 call on it names the expected owner.
         """
         from hive.provisioner import HiveProvisioner
 
@@ -277,7 +275,9 @@ class TestProvisionerS3:
         mock_session.client.return_value = mock_s3
 
         bucket = await p._ensure_s3_bucket(mock_session, "us-east-1", "533267412361")
-        assert bucket == "swarmai-hive-2361-us-east-1"
+        assert bucket == "swarmai-hive-533267412361-us-east-1"
+        kw = mock_s3.put_public_access_block.call_args.kwargs
+        assert kw["ExpectedBucketOwner"] == "533267412361"
 
 
 class TestProvisionerIAM:

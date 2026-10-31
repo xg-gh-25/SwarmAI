@@ -19,6 +19,9 @@ SDKS = ("boto3", "botocore", "aiobotocore", "amazon_transcribe", "awscrt")
 #: module → why it imports an AWS SDK itself
 ALLOWED = {
     "core/aws_account.py": "the entry point",
+    "core/aws_signin.py": "the entry point's own sign-ins (SSO device flow, unsigned OIDC calls)",
+    "core/aws_detect_worker.py":
+        "one detection check of a person's own profile, in its own killable process",
     "core/bedrock_thinking_gateway.py":
         "SigV4 signing (botocore.auth); credentials come from aws_account, and the "
         "default chain only when there is no account",

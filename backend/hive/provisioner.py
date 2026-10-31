@@ -59,6 +59,27 @@ HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 # the API (manual sqlite / migration) must NOT reach AWS unvalidated (Gate-2 security).
 AMI_ID_RE = re.compile(r"^ami-[0-9a-f]{8,}$")
 
+# Every resource a Hive deploy creates carries this tag, set while creating it (the
+# permission template only allows tags in the create call, and only stop / start /
+# terminate / SSM on tagged instances: core/aws_permissions.py).
+MANAGED_TAG = {"Key": "swarmai:managed", "Value": "true"}
+_BUCKET_OWNER_RE = re.compile(r"^swarmai-hive-(\d{12})-")
+
+
+def bucket_owner(bucket: str) -> dict:
+    """``ExpectedBucketOwner`` for a bucket named with its account (empty for the old
+    names, which carry only 4 digits of it)."""
+    m = _BUCKET_OWNER_RE.match(bucket or "")
+    return {"ExpectedBucketOwner": m.group(1)} if m else {}
+
+
+def swarmai_bucket_name(account_id: str, region: str) -> str:
+    """The SwarmAI bucket of an account in a region. With the whole account ID: the old
+    4-digit suffix could collide in S3's global namespace (old buckets keep their name)."""
+    if re.fullmatch(r"\d{12}", account_id or ""):
+        return f"swarmai-hive-{account_id}-{region}"
+    return f"swarmai-hive-releases-{region}"
+
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
     "Version": "2012-10-17",
@@ -139,6 +160,19 @@ EC2_TRUST_POLICY = {
 
 # SSM parameter for latest Amazon Linux 2023 ARM64 AMI
 AL2023_ARM64_SSM_PARAM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+
+
+def _boundary_arn(session, iam) -> Optional[str]:
+    """The account's SwarmAI permissions boundary, when it exists (it is created by the
+    account admin from the permission template; owners without it need none)."""
+    from core.aws_permissions import BOUNDARY_NAME
+    try:
+        account = session.client("sts").get_caller_identity()["Account"]
+        arn = f"arn:aws:iam::{account}:policy/{BOUNDARY_NAME}"
+        iam.get_policy(PolicyArn=arn)
+        return arn
+    except Exception:  # noqa: BLE001 — absent, or cannot be read: create without one
+        return None
 
 
 def _put_hive_role_policy(iam, role_name: str) -> None:
@@ -284,13 +318,9 @@ class HiveProvisioner:
     # ── S3 ─────────────────────────────────────────────────────────
 
     async def _ensure_s3_bucket(self, session, region: str, account_id: str = "") -> str:
-        """Create S3 bucket for hive releases if it doesn't exist.
-
-        Bucket name includes last 4 digits of account ID to prevent collision
-        when multiple users deploy in the same region.
-        """
-        suffix = account_id[-4:] if account_id else ""
-        bucket_name = f"swarmai-hive-{suffix}-{region}" if suffix else f"swarmai-hive-releases-{region}"
+        """Create the account's SwarmAI bucket in *region* if it doesn't exist
+        (``bucket_name``: the whole account ID, so no other account can hold the name)."""
+        bucket_name = swarmai_bucket_name(account_id, region)
 
         def _create():
             s3 = session.client("s3", region_name=region)
@@ -312,7 +342,7 @@ class HiveProvisioner:
                     raise
             # Block public access
             s3.put_public_access_block(
-                Bucket=bucket_name,
+                Bucket=bucket_name, **bucket_owner(bucket_name),
                 PublicAccessBlockConfiguration={
                     "BlockPublicAcls": True,
                     "IgnorePublicAcls": True,
@@ -334,7 +364,7 @@ class HiveProvisioner:
         def _check_exists():
             s3 = session.client("s3", region_name=region)
             try:
-                s3.head_object(Bucket=bucket, Key=s3_key)
+                s3.head_object(Bucket=bucket, Key=s3_key, **bucket_owner(bucket))
                 return True
             except Exception:
                 return False
@@ -379,25 +409,30 @@ class HiveProvisioner:
         # Upload to S3
         def _upload():
             s3 = session.client("s3", region_name=region)
-            s3.put_object(Bucket=bucket, Key=s3_key, Body=data)
+            s3.put_object(Bucket=bucket, Key=s3_key, Body=data, **bucket_owner(bucket))
             logger.info("Uploaded %s to s3://%s/%s (%d bytes)", version, bucket, s3_key, len(data))
 
         await asyncio.to_thread(_upload)
 
     # ── IAM ────────────────────────────────────────────────────────
 
-    async def _create_iam_role(self, session, name: str) -> str:
+    async def _create_iam_role(self, session, name: str) -> str:  # noqa: C901
         """Create IAM role for Hive instance. Returns role ARN."""
         role_name = f"SwarmAI-Hive-{name}"
 
         def _create():
             iam = session.client("iam")
+            kwargs: dict = {}
+            boundary = _boundary_arn(session, iam)
+            if boundary:  # an account set up from the permission template requires it
+                kwargs["PermissionsBoundary"] = boundary
             try:
                 resp = iam.create_role(
                     RoleName=role_name,
                     AssumeRolePolicyDocument=json.dumps(EC2_TRUST_POLICY),
                     Description=f"SwarmAI Hive instance role for {name}",
-                    Tags=[{"Key": "HiveName", "Value": name}],
+                    Tags=[{"Key": "HiveName", "Value": name}, MANAGED_TAG],
+                    **kwargs,
                 )
                 role_arn = resp["Role"]["Arn"]
             except iam.exceptions.EntityAlreadyExistsException:
@@ -474,6 +509,9 @@ class HiveProvisioner:
                 kwargs: dict[str, Any] = {
                     "GroupName": sg_name,
                     "Description": f"SwarmAI Hive {name} - HTTP from CloudFront only",
+                    "TagSpecifications": [{"ResourceType": "security-group", "Tags": [
+                        {"Key": "Name", "Value": sg_name}, {"Key": "HiveName", "Value": name},
+                        MANAGED_TAG]}],
                 }
                 if vpc_id:
                     kwargs["VpcId"] = vpc_id
@@ -525,13 +563,6 @@ class HiveProvisioner:
                         f"CloudFront origin-facing prefix list not found in {region}. "
                         f"Cannot create secure security group — aborting deploy."
                     )
-                ec2.create_tags(
-                    Resources=[sg_id],
-                    Tags=[
-                        {"Key": "Name", "Value": sg_name},
-                        {"Key": "HiveName", "Value": name},
-                    ],
-                )
                 return sg_id
             except Exception as e:
                 if "InvalidGroup.Duplicate" in str(e):
@@ -636,8 +667,15 @@ class HiveProvisioner:
                             {"Key": "HiveName", "Value": name},
                             {"Key": "HiveStatus", "Value": "provisioning"},
                             {"Key": "HiveVersion", "Value": version},
+                            MANAGED_TAG,
                         ],
-                    }
+                    },
+                    {"ResourceType": "volume", "Tags": [{"Key": "HiveName", "Value": name},
+                                                        MANAGED_TAG]},
+                    # the template allows RunInstances only when every created resource
+                    # is tagged (core/aws_permissions RunTaggedInstances)
+                    {"ResourceType": "network-interface", "Tags": [{"Key": "HiveName", "Value": name},
+                                                                   MANAGED_TAG]},
                 ],
                 MetadataOptions={
                     "HttpTokens": "required",  # IMDSv2 only
@@ -669,6 +707,7 @@ class HiveProvisioner:
                         "Tags": [
                             {"Key": "Name", "Value": f"SwarmAI-Hive-{name}"},
                             {"Key": "HiveName", "Value": name},
+                            MANAGED_TAG,
                         ],
                     }
                 ],
@@ -1794,6 +1833,7 @@ fi
                     TagSpecifications=[{"ResourceType": "snapshot", "Tags": [
                         {"Key": "Name", "Value": f"SwarmAI-Hive-{name} {purpose} {stamp}"},
                         {"Key": "HiveName", "Value": name},
+                        MANAGED_TAG,
                     ]}],
                 )
                 ids.append(snap["SnapshotId"])

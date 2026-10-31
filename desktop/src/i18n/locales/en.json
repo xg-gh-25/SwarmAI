@@ -1203,9 +1203,14 @@
       },
       "profileFile": "Profile for child processes",
       "derived": "Set up from your previous settings.",
-      "changeLater": "Changing the account is not available here yet: use AI & Models for sign-in, and Hive Accounts for Hive.",
-      "readOnlyBasis": "Hive and cloud storage are checked read-only for now: whether they can create resources is checked before the first Hive is built.",
-      "actionFailed": "That did not work. Try again in a moment."
+      "actionFailed": "That did not work. Try again in a moment.",
+      "signInAgain": "Sign in again",
+      "change": "Change account",
+      "connect": "Connect an AWS account",
+      "chatNotOnAccount": "Chat uses {{via}}, not this account.",
+      "chatUseAccount": "Use this account for chat",
+      "giveTemplate": "Give the permission template to the account's administrator.",
+      "retry": "Try again"
     }
   },
   "canvas": {
@@ -2077,11 +2082,13 @@
       "ingestion": "Cognitive Distillation",
       "local_root": "Repository",
       "swarm_out": "Swarm Out",
-      "todo": "ToDo"
+      "todo": "ToDo",
+      "aws_account": "Account"
     },
     "fillHint": "Add to the chat input",
     "sendNow": "Send now",
-    "sendNowLabel": "Send now: {{title}}"
+    "sendNowLabel": "Send now: {{title}}",
+    "openSettings": "Open the settings page"
   },
   "cogLevel": {
     "title": "Swarm's cognition",
@@ -2651,5 +2658,238 @@
       "hide": "Hide",
       "meta": "Written {{written}} · withdrawn {{at}} · reason: {{reason}}"
     }
+  },
+  "awsConnect": {
+    "title": "Connect your AWS account",
+    "titleChange": "Change the SwarmAI account",
+    "lead": "Chat (Bedrock), Hive and cloud storage all use this one account.",
+    "ctxInternal": "Amazon internal setup found.",
+    "ctxExternal": "No Amazon internal setup found.",
+    "ctxSwitch": "Switch",
+    "detecting": "Looking for AWS accounts on this computer…",
+    "found": "Accounts found on this computer",
+    "accountIdOptional": "Account ID (optional)",
+    "accountId": "Account ID",
+    "accountIdShape": "An AWS account ID is 12 digits.",
+    "region": "Region",
+    "useAccount": "Use {{account}}",
+    "useHint": "Next, SwarmAI checks the account and what it can do.",
+    "how": "How to sign in",
+    "otherWays": "Other ways to sign in",
+    "more": "More ways",
+    "chatOnly": "Chat only for now",
+    "later": "Configure later",
+    "cancel": "Cancel",
+    "back": "← Back",
+    "another": "Another way",
+    "verifying": "Checking…",
+    "retry": "Try again",
+    "signInTo": "Sign in to {{account}}",
+    "check": "Check",
+    "signIn": "Sign in",
+    "adaOwn": "ADA's own profile",
+    "profileNamed": "profile {{name}}",
+    "nProfiles": "{{n}} profiles ({{names}})",
+    "notAnchor": "not the account you entered",
+    "verifyAndUse": "Check and use",
+    "kind": {
+      "ada": "ADA",
+      "ada_default": "ADA",
+      "sso": "AWS SSO",
+      "login": "AWS login",
+      "process": "runs another program; it may ask you to confirm",
+      "assume_role": "assume-role",
+      "keys": "access keys"
+    },
+    "status": {
+      "pending": "checking…",
+      "verified": "verified",
+      "invalid": "keys not valid",
+      "failed": "could not check",
+      "timeout": "no answer",
+      "check": "",
+      "needs_login": ""
+    },
+    "method": {
+      "ada": {
+        "title": "ADA",
+        "desc": "Isengard or Conduit account. Midway must be valid."
+      },
+      "sso": {
+        "title": "AWS SSO",
+        "desc": "Your company's IAM Identity Center. Sign in in the browser; SwarmAI renews it."
+      },
+      "login": {
+        "title": "AWS login",
+        "desc": "Sign in with your AWS console account in the browser. Good for a personal account. Up to 12 hours each time."
+      }
+    },
+    "ada": {
+      "title": "Sign in with ADA",
+      "lead": "SwarmAI asks ADA for short-term credentials. Nothing is written to your AWS files.",
+      "role": "Role",
+      "provider": "Provider",
+      "go": "Sign in and check",
+      "midwayTitle": "Midway has expired",
+      "midwayRun": "Run",
+      "midwayThen": " in a terminal. This page goes on by itself when it is done.",
+      "retrying": "Trying again every 5 seconds."
+    },
+    "sso": {
+      "title": "Sign in with AWS SSO",
+      "lead": "SwarmAI signs in to IAM Identity Center itself. Your own AWS CLI sign-in is not touched.",
+      "startUrl": "Start URL",
+      "region": "SSO region",
+      "go": "Sign in in the browser",
+      "confirmTitle": "Confirm the sign-in in your browser",
+      "confirmLead": "The AWS sign-in page is open ({{url}}). Allow it when you see this code.",
+      "noBrowser": "No browser?",
+      "openAgain": "Open again",
+      "copyLink": "Copy link",
+      "validFor": "valid for {{minutes}} minutes",
+      "pickTitle": "Choose the account and role",
+      "notVisible": "This SSO sign-in cannot see account {{account}}. Go back and clear the account ID to use one of the accounts below.",
+      "role": "Role",
+      "urlShape": "The start URL begins with https://"
+    },
+    "login": {
+      "title": "Sign in with AWS login",
+      "lead": "Sign in with your AWS console account in the browser. The AWS CLI keeps the sign-in fresh for up to 12 hours.",
+      "noCli": "Needs the AWS CLI 2.32 or later, and it is not installed.",
+      "oldCli": "Needs the AWS CLI 2.32 or later (this computer has {{version}}).",
+      "howUpdate": "How to install",
+      "go": "Sign in in the browser",
+      "waiting": "Waiting for the sign-in in the browser…",
+      "failed": "The sign-in did not finish."
+    },
+    "moreTitle": "More ways to connect",
+    "way": {
+      "profile": {
+        "title": "A profile",
+        "desc": "Use a profile from ~/.aws. Its own program and settings are used as they are.",
+        "name": "Profile name"
+      },
+      "keys": {
+        "title": "Access keys",
+        "desc": "Long-term keys of an IAM user. They are kept in SwarmAI's secret store, never in a file you share.",
+        "id": "Access key ID",
+        "secret": "Secret access key"
+      },
+      "instance_role": {
+        "title": "Instance role",
+        "desc": "Use the role of this EC2 instance or cloud desktop."
+      }
+    },
+    "chat": {
+      "title": "Chat only for now",
+      "lead": "Paste one key and chat works now. Hive, cloud storage and voice need an AWS account; connect one in Settings any time.",
+      "bedrock_api_key": {
+        "title": "Bedrock API key",
+        "desc": "Made on the Bedrock page of the AWS console."
+      },
+      "apikey": {
+        "title": "Anthropic key",
+        "desc": "No AWS: calls Anthropic directly."
+      },
+      "paste": "Paste the key",
+      "go": "Check and start",
+      "stored": "The key is kept in SwarmAI's secret store.",
+      "failed": "The key did not work."
+    },
+    "oldHives": {
+      "title": "Hives are running in {{account}}",
+      "lead": "You are changing to another account. Decide what happens to these Hives first.",
+      "keepMeans": "Keep them: they stay in the old account and can only be stopped, deleted and read. They do not count toward the new account.",
+      "keep": "Keep them and change",
+      "cannotKeep": "SwarmAI has no working sign-in for the account these Hives are in, so they cannot be kept.",
+      "deleteFirst": "Or delete them on the Hive page first, then change.",
+      "openHivePage": "Open the Hive page"
+    },
+    "verified": {
+      "title": "Account connected",
+      "bedrockGap": "Chat cannot use Bedrock in this account yet. Fix the gap and check again, or chat with a key for now.",
+      "continue": "Continue",
+      "continueAnyway": "Continue anyway",
+      "done": "Done",
+      "recheck": "Check again"
+    },
+    "error": {
+      "generic": "That did not work",
+      "account_mismatch": "This sign-in reaches {{actual}}, not {{expected}}",
+      "needs_login": "The sign-in has expired",
+      "bad_input": "Check the fields",
+      "profile_not_found": "That profile was not found",
+      "ada_not_found": "ADA is not installed",
+      "ada_failed": "ADA could not sign in",
+      "ada_timeout": "ADA did not answer",
+      "no_credentials": "No credentials found",
+      "verify_failed": "The account could not be checked",
+      "resolve_failed": "The profile could not sign in",
+      "cannot_keep": "These Hives cannot be kept",
+      "expired": "The sign-in expired",
+      "denied": "The sign-in was not allowed",
+      "sso_failed": "AWS SSO did not sign in",
+      "login_failed": "AWS login did not finish",
+      "no_cli": "The AWS CLI is not installed",
+      "old_cli": "The AWS CLI is too old",
+      "temporary_keys": "Temporary keys cannot be used",
+      "unsupported": "This sign-in method is not supported yet",
+      "bad_record": "The saved sign-in is not valid",
+      "cli_not_found": "The AWS CLI is not installed",
+      "login_timeout": "The AWS CLI did not answer"
+    },
+    "regionShape": "A region looks like us-east-1.",
+    "detectFailed": "Could not read the AWS settings on this computer.",
+    "nothingFound": "No AWS credentials were found on this computer.",
+    "anchorHint": "With an account ID, only that account can be chosen.",
+    "accountIdWhere": "You can see it at the top right of the AWS console.",
+    "checkAgain": "Check again"
+  },
+  "hiveFleet": {
+    "title": "Hive",
+    "lead": "A Hive is a cloud machine that runs work for you while this computer is off. It is created in your AWS account.",
+    "loading": "Loading…",
+    "loadFailed": "Could not load the account.",
+    "connectFirst": "Hives need the AWS account. Connect it in Settings → SwarmAI Account, then create them there.",
+    "count": "How many",
+    "type": "Size",
+    "month": "month",
+    "region": "Region",
+    "max": "1 to {{max}} Hives.",
+    "checking": "Checking whether this account can create a Hive here…",
+    "canCreate": "This account can create a Hive here.",
+    "cannotCreate": "This account cannot create a Hive here yet.",
+    "unknown": "Could not confirm that this account can create a Hive.",
+    "missing": "Missing: {{actions}}",
+    "noDefaultVpc": "There is no default VPC in this region.",
+    "giveTemplate": "Give the permission template to the account's administrator.",
+    "copyTemplate": "Copy template",
+    "templateCopied": "Copied",
+    "templateFailed": "Could not copy",
+    "create_one": "Create {{count}} Hive, about ${{usd}}/month, in account {{account}}",
+    "create_other": "Create {{count}} Hives, about ${{usd}}/month, in account {{account}}",
+    "createLater": "Create them in Settings once permissions are fixed",
+    "continue": "Continue",
+    "skip": "Not now",
+    "notWaiting": "Creating takes up to 20 minutes. You do not have to wait: see progress in Settings and Swarm Out.",
+    "section": "Hives",
+    "summary": "{{counted}} running or being created (you asked for {{desired}}, 1–{{max}})",
+    "monthly": "about ${{usd}}/month",
+    "noHiveYet": "You have no Hive yet.",
+    "later": "Later",
+    "short": "{{n}} short",
+    "createMissing": "Create them",
+    "over": "{{n}} more than you asked for. Delete the ones you do not need on the Hive page.",
+    "lastOnlyReplace": "The last Hive cannot be deleted, only replaced (a new one is built first).",
+    "createNoPrice_one": "Create {{count}} Hive in account {{account}} (price not known)",
+    "createNoPrice_other": "Create {{count}} Hives in account {{account}} (price not known)",
+    "continueWithout": "Continue without creating",
+    "creating": "Creating…",
+    "noRoom": "{{n}} Hives already run (the limit is {{max}}, across all accounts). Lower the count, or delete one first.",
+    "maxElsewhere": "1 to {{max}} Hives in all; {{n}} run in a previous account.",
+    "fewer": "Fewer Hives",
+    "more": "More Hives",
+    "existing_one": "This account already has {{count}} Hive.",
+    "existing_other": "This account already has {{count}} Hives."
   }
 }

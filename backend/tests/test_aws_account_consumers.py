@@ -68,8 +68,8 @@ def test_cli_gets_the_credential_export_only_with_a_resolvable_account_on_bedroc
     assert aa.cli_settings() == {}
     cfg.update({"auth_method": "ada", "use_bedrock": False})
     assert aa.cli_settings() == {}
-    cfg.update({"use_bedrock": True, aa.RECORD_KEY: {"source": "sso", "account_id": ACCT}})
-    assert aa.cli_settings() == {}                      # not resolvable in this version
+    cfg.update({"use_bedrock": True, aa.RECORD_KEY: {"source": "bogus", "account_id": ACCT}})
+    assert aa.cli_settings() == {}                      # not a source this version resolves
     cfg.update({aa.RECORD_KEY: None})
     assert aa.cli_settings() == {}
 
@@ -216,6 +216,12 @@ def test_the_chat_path_follows_the_legacy_settings_exactly_as_before(cfg):
 
 def test_a_legacy_sign_in_change_rederives_the_record(cfg, account, monkeypatch):
     new = {"source": "profile", "profile": "corp", "account_id": OTHER, "region": "us-east-1"}
+    rec = aa.get_record()
+    # a record the person connected (wizard / account page) is never re-derived
+    monkeypatch.setattr(aa, "derive_from_legacy", lambda c: (dict(new), "aws"))
+    cfg.update({"auth_method": "sso"})
+    assert aa.rederive(cfg)["account_id"] == ACCT
+    aa.save_record({**rec, "derived": True})            # one derived from the old settings is
     monkeypatch.setattr(aa, "derive_from_legacy", lambda c: (dict(new), "aws"))
     for method in ("apikey", "bedrock_api_key", "iam_role"):   # not an AWS sign-in: no move
         cfg.update({"auth_method": method})

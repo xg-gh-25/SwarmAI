@@ -33,10 +33,11 @@ _ACCOUNT_TAB = "aws-account"
 _REMEDIATION: dict[str, Remediation] = {
     "ada": {
         "message": "Your AWS credentials aren't working.",
+        # never a bare `ada credentials update`: with no --profile it overwrites the
+        # person's default AWS profile
         "fix_text": (
-            "Refresh your Amazon credentials: run `mwinit -f`, then "
-            "`ada credentials update` in a terminal — or re-verify in "
-            "Settings → AI & Models."
+            "Refresh your Amazon credentials: run `mwinit -f` in a terminal, then "
+            "re-verify in Settings → SwarmAI Account."
         ),
         "settings_tab": _SETTINGS_TAB,
     },
@@ -57,6 +58,32 @@ _REMEDIATION: dict[str, Remediation] = {
             "Sign in again for the AWS profile SwarmAI uses (for an SSO profile: "
             "`aws sso login --profile <name>`; the name is in Settings → SwarmAI "
             "Account), then send your message again."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
+    },
+    # The SwarmAI account signs in to AWS SSO inside the app (core/aws_signin).
+    "sso_app": {
+        "message": "Your AWS SSO sign-in has expired.",
+        "fix_text": (
+            "Sign in again in Settings → SwarmAI Account (Sign in again), then send "
+            "your message again."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
+    },
+    # The SwarmAI account uses AWS login through the AWS CLI (sessions last up to 12 hours).
+    "aws_login": {
+        "message": "Your AWS login session has ended.",
+        "fix_text": (
+            "Sign in again in Settings → SwarmAI Account (AWS login sessions last at "
+            "most 12 hours), then send your message again."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
+    },
+    "access_keys": {
+        "message": "Your AWS access keys aren't working.",
+        "fix_text": (
+            "The access keys were deactivated or deleted. Enter new ones in Settings → "
+            "SwarmAI Account (Change account), then send your message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
     },
@@ -130,8 +157,8 @@ _FALLBACK: Remediation = {
 def remediation_for(auth_method: Optional[str]) -> Remediation:
     """Return the remediation for an auth method.
 
-    Accepts "ada" | "ada_account" | "sso" | "profile" | "account_mismatch" | "apikey" | "iam_role" |
-    "bedrock_api_key"; anything else (None,
+    Accepts "ada" | "ada_account" | "sso" | "sso_app" | "aws_login" | "access_keys" | "profile" |
+    "account_mismatch" | "apikey" | "iam_role" | "bedrock_api_key"; anything else (None,
     unrecognized) returns the safe method-agnostic fallback. Never raises,
     never emits Amazon-internal jargon for a non-ADA method.
     """

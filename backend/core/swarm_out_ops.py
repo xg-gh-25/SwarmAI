@@ -111,18 +111,35 @@ _STATIC: "tuple[Op, ...]" = (
     _op("hive.credentials", "GET", f"{_HV}/instances/{{instance_id}}/credentials", _P,
         "off_machine"),
     _op("hive.retry", "POST", f"{_HV}/instances/{{instance_id}}/retry", _P, "off_machine"),
+    # a new Hive first, then the old one is deleted (§7.3: the last one is only replaced)
+    _op("hive.replace", "POST", f"{_HV}/instances/{{instance_id}}/replace", _P, "irreversible"),
     _op("hive.brain.status", "GET", f"{_HV}/instances/{{instance_id}}/brains", _PO, "read"),
     _op("hive.brain.sync_defaults", "POST", f"{_HV}/instances/{{instance_id}}/brains/sync-defaults",
         _P, "off_machine"),
     _op("hive.brain.sync", "POST", f"{_HV}/instances/{{instance_id}}/brains/{{brain}}/sync", _P,
         "off_machine"),
     # ── the SwarmAI AWS account (routers/aws_account.py; design
-    # 2026-10-31-swarmai-aws-account §7.7). Step 1 is read-only; the credentials route
+    # 2026-10-31-swarmai-aws-account §7.7): reads for the person and the agent; signing
+    # in, connecting, keys and creating Hives for the person only; the credentials route
     # answers only the per-boot token the credential_process subcommand reads. ──
     _op("aws_account.get", "GET", _AA, _PO, "read"),
     _op("aws_account.verify", "POST", f"{_AA}/verify", _PO, "read"),
     _op("aws_account.check", "POST", f"{_AA}/check", _PO, "read"),
     _op("aws_account.credentials", "GET", f"{_AA}/credentials", (OWNER, CREDENTIAL_PROCESS), "read"),
+    _op("aws_account.detect", "GET", f"{_AA}/detect", _PO, "read"),
+    # automatic stage-2 checks: no prompt, no file written (core/aws_detect)
+    _op("aws_account.detect_verify", "POST", f"{_AA}/detect/verify", _PO, "read"),
+    # runs a program from the person's own profile that may prompt (Touch ID, MFA)
+    _op("aws_account.detect_check", "POST", f"{_AA}/detect/check", _P, "change"),
+    _op("aws_account.sso_start", "POST", f"{_AA}/sso/start", _P, "change"),
+    _op("aws_account.sso_poll", "POST", f"{_AA}/sso/poll", _P, "change"),
+    _op("aws_account.login_start", "POST", f"{_AA}/login/start", _P, "change"),
+    _op("aws_account.login_status", "GET", f"{_AA}/login/status", _PO, "read"),
+    _op("aws_account.keys", "POST", f"{_AA}/keys", _P, "change"),
+    _op("aws_account.connect", "POST", f"{_AA}/connect", _P, "change"),
+    _op("aws_account.permission_template", "GET", f"{_AA}/permission-template", _PO, "read"),
+    # raising the count creates Hives (EC2, CloudFront: they cost money)
+    _op("aws_account.hive_fleet", "PUT", f"{_AA}/hive-fleet", _P, "off_machine"),
     # ── served by a Hive, called by the Host's daemon (routers/hive_brains.py; 404 on a
     # desktop). No agent calls them, on either side. ──
     _op("hive.serve.brain_install", "PUT", f"{_HV}/brains/{{brain}}", (HOST,), "change"),

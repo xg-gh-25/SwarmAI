@@ -38,6 +38,25 @@ describe('NeedsYouRow', () => {
     expect(onFill).toHaveBeenCalledWith('Open Swarm Out: 2 swarm out runs to accept or decide.');
   });
 
+  it('a SwarmAI account item opens its settings page and fills nothing', () => {
+    const opened: unknown[] = [];
+    const listen = (e: Event) => opened.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:open-settings', listen);
+    try {
+      const onFill = vi.fn(); const onOpened = vi.fn();
+      render(<NeedsYouRow item={item({ id: 'aws_account:needs_login', source: 'aws_account',
+        dispatch: { message: 'Open Settings', context: { kind: 'aws_account', settings_tab: 'aws-account' } } })}
+        onFill={onFill} onSend={vi.fn()} onOpened={onOpened} />);
+      expect(screen.queryByTestId('needs-you-row-send')).toBeNull();
+      fireEvent.click(screen.getByTestId('needs-you-row-fill'));
+      expect(opened).toEqual([{ tab: 'aws-account' }]);
+      expect(onOpened).toHaveBeenCalledTimes(1);
+      expect(onFill).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('swarm:open-settings', listen);
+    }
+  });
+
   it('any other item fills or sends its prompt', () => {
     const show = vi.fn();
     setOverlayCtxBridge({ showSwarmOut: show });
@@ -70,7 +89,7 @@ describe('NeedsYouRow labels follow the interface language', () => {
     const en = (await import('../../i18n/locales/en.json')).default as { needYou: { source: Record<string, string> } };
     const zh = (await import('../../i18n/locales/zh.json')).default as { needYou: { source: Record<string, string> } };
     const sources: AttentionEntry['source'][] = ['escalation', 'paused_run', 'governance', 'job', 'job_digest',
-      'db_recovery', 'ingestion', 'local_root', 'swarm_out', 'todo'];
+      'db_recovery', 'ingestion', 'local_root', 'swarm_out', 'todo', 'aws_account'];
     for (const s of sources) {
       expect(en.needYou.source[s]).toBeTruthy();
       expect(zh.needYou.source[s]).toBeTruthy();

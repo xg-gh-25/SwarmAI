@@ -57,7 +57,7 @@ function remediation(
     case 'ada':
       return {
         title: 'AWS credentials need refreshing',
-        body: <>Run <code className="px-1 py-0.5 rounded bg-[var(--color-bg)] font-mono">mwinit -f</code> then <code className="px-1 py-0.5 rounded bg-[var(--color-bg)] font-mono">ada credentials update</code>, or re-verify below.</>,
+        body: <>Run <code className="px-1 py-0.5 rounded bg-[var(--color-bg)] font-mono">mwinit -f</code> in a terminal, then re-verify below.</>,
       };
     case 'sso':
       return {

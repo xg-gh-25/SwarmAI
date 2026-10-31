@@ -1192,7 +1192,7 @@
       "checkedAt": "检查于 {{time}}",
       "verify": "重新核实",
       "check": "检查能力",
-      "details": "详细",
+      "details": "详情",
       "callerArn": "登录身份",
       "verifiedAt": "核实时间",
       "chatVia": "对话使用",
@@ -1203,9 +1203,14 @@
       },
       "profileFile": "子进程用的 profile",
       "derived": "从你之前的设置接过来的。",
-      "changeLater": "这里暂时还不能更换账号：登录方式在 AI & Models 里改，Hive 在 Hive Accounts 里管。",
-      "readOnlyBasis": "Hive 和云存储目前只检查能不能读；能不能创建资源，在建第一台 Hive 前检查。",
-      "actionFailed": "没有成功，请稍后再试。"
+      "actionFailed": "没有成功，请稍后再试。",
+      "signInAgain": "重新登录",
+      "change": "更换账号",
+      "connect": "连接 AWS 账号",
+      "chatNotOnAccount": "对话现在用{{via}}，不用这个账号。",
+      "chatUseAccount": "对话改用这个账号",
+      "giveTemplate": "把权限模板交给账号管理员。",
+      "retry": "重试"
     }
   },
   "canvas": {
@@ -2077,11 +2082,13 @@
       "ingestion": "认知沉淀",
       "local_root": "代码仓库",
       "swarm_out": "Swarm Out",
-      "todo": "待办"
+      "todo": "待办",
+      "aws_account": "账号"
     },
     "fillHint": "放进聊天输入框",
     "sendNow": "直接发送",
-    "sendNowLabel": "直接发送：{{title}}"
+    "sendNowLabel": "直接发送：{{title}}",
+    "openSettings": "打开设置页"
   },
   "cogLevel": {
     "title": "Swarm 认知度",
@@ -2651,5 +2658,238 @@
       "hide": "收起",
       "meta": "写入 {{written}} · 撤回 {{at}} · 原因：{{reason}}"
     }
+  },
+  "awsConnect": {
+    "title": "连接 AWS 账号",
+    "titleChange": "更换 SwarmAI 账号",
+    "lead": "SwarmAI 的对话（Bedrock）、Hive 和云存储都用这一个账号。",
+    "ctxInternal": "检测到 Amazon 内部环境。",
+    "ctxExternal": "没有检测到 Amazon 内部环境。",
+    "ctxSwitch": "切换",
+    "detecting": "正在查找这台电脑上的 AWS 账号…",
+    "found": "在这台电脑上找到的账号",
+    "accountIdOptional": "账号 ID（可选）",
+    "accountId": "账号 ID",
+    "accountIdShape": "AWS 账号 ID 是 12 位数字。",
+    "region": "区域",
+    "useAccount": "用 {{account}} 继续",
+    "useHint": "下一步核实账号，并检查它能做什么。",
+    "how": "怎么登录",
+    "otherWays": "用别的方式登录",
+    "more": "更多方式",
+    "chatOnly": "先只用对话",
+    "later": "稍后配置",
+    "cancel": "取消",
+    "back": "← 返回",
+    "another": "换一种方式",
+    "verifying": "核实中…",
+    "retry": "重试",
+    "signInTo": "登录 {{account}}",
+    "check": "检测",
+    "signIn": "登录",
+    "adaOwn": "ADA 自己的 profile",
+    "profileNamed": "profile {{name}}",
+    "nProfiles": "{{n}} 个 profile（{{names}}）",
+    "notAnchor": "不是你填的账号",
+    "verifyAndUse": "核实并使用",
+    "kind": {
+      "ada": "ADA",
+      "ada_default": "ADA",
+      "sso": "AWS SSO",
+      "login": "AWS 登录",
+      "process": "会运行 profile 里的另一个程序，可能弹出确认",
+      "assume_role": "assume-role",
+      "keys": "访问密钥"
+    },
+    "status": {
+      "pending": "验证中…",
+      "verified": "已验证",
+      "invalid": "密钥无效",
+      "failed": "无法验证",
+      "timeout": "没有响应",
+      "check": "",
+      "needs_login": ""
+    },
+    "method": {
+      "ada": {
+        "title": "ADA",
+        "desc": "Isengard 或 Conduit 账号。需要 Midway 有效。"
+      },
+      "sso": {
+        "title": "AWS SSO",
+        "desc": "公司的 IAM Identity Center。在浏览器里登录，App 自己续期。"
+      },
+      "login": {
+        "title": "AWS 登录",
+        "desc": "用 AWS 控制台的账号在浏览器里登录。适合个人账号。每次最长 12 小时。"
+      }
+    },
+    "ada": {
+      "title": "用 ADA 登录",
+      "lead": "SwarmAI 向 ADA 取短期凭证，不写你的 AWS 文件。",
+      "role": "角色",
+      "provider": "提供方",
+      "go": "登录并核实",
+      "midwayTitle": "Midway 已过期",
+      "midwayRun": "在终端运行",
+      "midwayThen": "，完成后这里会自动继续。",
+      "retrying": "每 5 秒重试一次。"
+    },
+    "sso": {
+      "title": "用 AWS SSO 登录",
+      "lead": "SwarmAI 自己登录 IAM Identity Center，不动你自己的 AWS CLI 登录。",
+      "startUrl": "起始地址",
+      "region": "SSO 区域",
+      "go": "在浏览器里登录",
+      "confirmTitle": "在浏览器里确认登录",
+      "confirmLead": "已经打开 AWS 登录页（{{url}}）。看到下面这个验证码就点允许。",
+      "noBrowser": "浏览器没打开？",
+      "openAgain": "再打开一次",
+      "copyLink": "复制链接",
+      "validFor": "{{minutes}} 分钟内有效",
+      "pickTitle": "选账号和角色",
+      "notVisible": "这次 SSO 登录看不到账号 {{account}}。要用下面的账号，请返回并清空账号 ID。",
+      "role": "角色",
+      "urlShape": "起始地址以 https:// 开头"
+    },
+    "login": {
+      "title": "用 AWS 控制台账号登录",
+      "lead": "用 AWS 控制台的账号在浏览器里登录。AWS CLI 负责续期，每次最长 12 小时。",
+      "noCli": "需要 AWS CLI 2.32 或更新，本机没有安装。",
+      "oldCli": "需要 AWS CLI 2.32 或更新（本机 {{version}}）。",
+      "howUpdate": "怎么安装",
+      "go": "在浏览器里登录",
+      "waiting": "等你在浏览器里登录…",
+      "failed": "登录没有完成。"
+    },
+    "moreTitle": "更多连接方式",
+    "way": {
+      "profile": {
+        "title": "已有的 profile",
+        "desc": "用 ~/.aws 里的一个 profile，按它自己的程序和设置取凭证。",
+        "name": "profile 名"
+      },
+      "keys": {
+        "title": "访问密钥",
+        "desc": "IAM 用户的长期密钥，存在 SwarmAI 的密钥存储里。",
+        "id": "Access key ID",
+        "secret": "Secret access key"
+      },
+      "instance_role": {
+        "title": "实例角色",
+        "desc": "用这台 EC2 或云桌面的角色。"
+      }
+    },
+    "chat": {
+      "title": "先只用对话",
+      "lead": "粘贴一把 key 就能开始对话。Hive、云存储和语音要连上 AWS 账号后才能用，以后在设置里随时连。",
+      "bedrock_api_key": {
+        "title": "Bedrock API key",
+        "desc": "在 AWS 控制台的 Bedrock 页面生成。"
+      },
+      "apikey": {
+        "title": "Anthropic key",
+        "desc": "不用 AWS，直接调 Anthropic。"
+      },
+      "paste": "粘贴 key",
+      "go": "检查并开始",
+      "stored": "key 存在 SwarmAI 的密钥存储里。",
+      "failed": "这把 key 用不了。"
+    },
+    "oldHives": {
+      "title": "{{account}} 里还有 Hive",
+      "lead": "你要换到另一个账号。先决定这些 Hive 怎么办。",
+      "keepMeans": "保留：它们留在旧账号里，只能停止、删除和查看，不计入新账号。",
+      "keep": "保留它们，然后更换",
+      "cannotKeep": "SwarmAI 没有这些 Hive 所在账号的可用登录，所以不能保留。",
+      "deleteFirst": "也可以先在 Hive 页删除它们，再更换。",
+      "openHivePage": "打开 Hive 页"
+    },
+    "verified": {
+      "title": "账号已连接",
+      "bedrockGap": "这个账号的 Bedrock 还不能用来对话。补好后重新检查，或者先用 key 对话。",
+      "continue": "继续",
+      "continueAnyway": "仍然继续",
+      "done": "完成",
+      "recheck": "重新检查"
+    },
+    "error": {
+      "generic": "没有成功",
+      "account_mismatch": "这次登录进的是 {{actual}}，不是 {{expected}}",
+      "needs_login": "登录已过期",
+      "bad_input": "请检查填写的内容",
+      "profile_not_found": "找不到这个 profile",
+      "ada_not_found": "没有安装 ADA",
+      "ada_failed": "ADA 没能登录",
+      "ada_timeout": "ADA 没有响应",
+      "no_credentials": "没有找到凭证",
+      "verify_failed": "无法核实账号",
+      "resolve_failed": "这个 profile 没能登录",
+      "cannot_keep": "这些 Hive 不能保留",
+      "expired": "登录已过期",
+      "denied": "登录被拒绝",
+      "sso_failed": "AWS SSO 没能登录",
+      "login_failed": "AWS 登录没有完成",
+      "no_cli": "没有安装 AWS CLI",
+      "old_cli": "AWS CLI 版本太旧",
+      "temporary_keys": "临时密钥不能用",
+      "unsupported": "暂不支持这种登录方式",
+      "bad_record": "保存的登录信息无效",
+      "cli_not_found": "没有安装 AWS CLI",
+      "login_timeout": "AWS CLI 没有响应"
+    },
+    "regionShape": "区域的格式像 us-east-1。",
+    "detectFailed": "读不到这台电脑上的 AWS 设置。",
+    "nothingFound": "这台电脑上没有找到 AWS 凭证。",
+    "anchorHint": "填了就只能选这个账号，其余灰掉。",
+    "accountIdWhere": "在 AWS 控制台右上角能看到。",
+    "checkAgain": "重新检测"
+  },
+  "hiveFleet": {
+    "title": "Hive",
+    "lead": "Hive 是一台云上的机器，这台电脑关着时也能替你干活。它建在你的 AWS 账号里。",
+    "loading": "加载中…",
+    "loadFailed": "账号信息加载失败。",
+    "connectFirst": "Hive 需要 AWS 账号。在 设置 → SwarmAI 账号 连上后，在那里创建。",
+    "count": "数量",
+    "type": "规格",
+    "month": "月",
+    "region": "区域",
+    "max": "1 到 {{max}} 台。",
+    "checking": "正在检查这个账号能不能在这里建 Hive…",
+    "canCreate": "这个账号能在这里建 Hive。",
+    "cannotCreate": "这个账号还不能在这里建 Hive。",
+    "unknown": "无法确认这个账号能不能建 Hive。",
+    "missing": "缺：{{actions}}",
+    "noDefaultVpc": "这个区域没有默认 VPC。",
+    "giveTemplate": "把权限模板交给账号管理员。",
+    "copyTemplate": "复制模板",
+    "templateCopied": "已复制",
+    "templateFailed": "复制失败",
+    "create_one": "创建 {{count}} 台 Hive，约 ${{usd}}/月，建在账号 {{account}} 里",
+    "create_other": "创建 {{count}} 台 Hive，约 ${{usd}}/月，建在账号 {{account}} 里",
+    "createLater": "补好权限后在设置里创建",
+    "continue": "继续",
+    "skip": "以后再建",
+    "notWaiting": "建一台最长要 20 分钟，不用等：进度在设置页和 Swarm Out 里看。",
+    "section": "Hive",
+    "summary": "{{counted}} 台在运行或创建中（期望 {{desired}}，1–{{max}} 台）",
+    "monthly": "约 ${{usd}}/月",
+    "noHiveYet": "你还没有 Hive。",
+    "later": "以后再说",
+    "short": "少 {{n}} 台",
+    "createMissing": "创建",
+    "over": "比期望多 {{n}} 台。不要的在 Hive 页删除。",
+    "lastOnlyReplace": "最后一台不能删除，只能替换（先建好新的）。",
+    "createNoPrice_one": "创建 {{count}} 台 Hive，建在账号 {{account}} 里（价格未知）",
+    "createNoPrice_other": "创建 {{count}} 台 Hive，建在账号 {{account}} 里（价格未知）",
+    "continueWithout": "不创建，继续",
+    "creating": "创建中…",
+    "noRoom": "已经有 {{n}} 台 Hive（所有账号合计最多 {{max}} 台）。调小数量，或先删掉一台。",
+    "maxElsewhere": "合计 1 到 {{max}} 台；其中 {{n}} 台在之前的账号里。",
+    "fewer": "减少 Hive",
+    "more": "增加 Hive",
+    "existing_one": "这个账号里已有 {{count}} 台 Hive。",
+    "existing_other": "这个账号里已有 {{count}} 台 Hive。"
   }
 }

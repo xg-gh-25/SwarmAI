@@ -103,9 +103,12 @@ related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-
 
 ### 5.1 账号记录
 
-`config.json` 里一个对象（非密钥部分）。SSO 的刷新令牌、客户端密钥和访问密钥（`keys` 来源）放**系统密钥库**（macOS Keychain、Windows
-Credential Manager、Linux Secret Service；`backup_manager` 已经这样存它的 token），只有 daemon 读；系统没有密钥库
-时退回 `secrets.json`（0600）并在设置页说明。静态密钥不再进 SQLite。
+`config.json` 里一个对象（非密钥部分）。SSO 的令牌和客户端（`aws_sso_session`）、访问密钥（`keys` 来源，
+`aws_account_keys`）只有 daemon 读，不进 `config.json`、不进备份、不经 `GET /api/settings` 返回。静态密钥不再进 SQLite。
+
+**实现时的偏差（第 4 步）：** 原设计放系统密钥库；App 里没有打包 `keyring`，所以这两项放在 daemon 已有的
+`secrets.json`（0600，`AppConfigManager.SECRET_KEYS`），和 Bedrock、Anthropic key 同一个地方。换成系统密钥库是
+一处存储的替换，读写都只经 `core/aws_signin.py` 的 `_read_secret` / `_write_secret`。
 
 ```
 aws_account: {
@@ -127,7 +130,9 @@ chat: {
 hive_fleet: {
   desired_count: 1,                    # 1..8
   instance_type: "m7g.xlarge",         # 新 Hive 的默认规格
-  region: null                         # null = 用主区域
+  region: null,                        # null = 用主区域
+  dismissed: false,                    # "以后再说"：Need-You 不再提醒，设置页仍显示
+  replacing: {}                        # 替换中的一对：旧 id → 新 id（§7.3）
 }
 ```
 
@@ -522,6 +527,9 @@ Hive      2 台（期望 2，1–8 台）    约 $238/月                [− ] 
 - Hive 数量改小到不能再小（1）时减号置灰；要换掉最后一台用"替换"（先建新的、再删旧的）。
 - Hive 那一行在账号状态旁边单独显示自己的状态（§7.1），不影响右上角的账号状态。
 - **更换账号**：走一遍 ②–④。旧账号里有 Hive 时先说清后果（§7.5），用户选完才换。
+- **重新登录**：SSO 和 AWS 登录在这一页直接重新走 ③（App 内设备授权 / `aws login`）；ADA 是在终端 `mwinit -f`
+  后点"重新核实"；profile 由用户自己的工具重新登录。
+- **对话改回这个账号**：只用 key 对话、账号的 Bedrock 已可用时，一行"对话改用这个账号"。
 
 ## 7. 产品怎么管
 
@@ -555,6 +563,10 @@ Hive      2 台（期望 2，1–8 台）    约 $238/月                [− ] 
 - 账号状态的"需要重新登录""账号不符"进凭证横幅和 Need-You（用户当前的窗口里）。
 - Hive 状态只是一条待办：显示在设置页和 Swarm Out，进 Need-You 一次；用户点"以后再说"后 Need-You 不再提醒，
   设置页仍显示。期望数量仍是至少 1，"以后再说"不改它。
+- **Need-You 的实现：** `core/attention_authority._collect_aws_account` 一个来源：账号"需要重新登录 / 账号不符"
+  是 BLOCKING，Hive "少 N 台 / 不能建"且没点"以后再说"是 REVIEW，各最多一条；点开是设置页"SwarmAI 账号"
+  （`context.kind = aws_account`）。Hive 状态读 `hive/fleet.last_status()`（设置页和每 10 分钟的对齐循环算出的
+  最近一次），attention 的线程里不读数据库。
 
 ### 7.2 能力检查
 
@@ -624,6 +636,13 @@ Center 里把它挂到权限集上。模板和能力检查从同一份动作清�
   桶是共用的。全部完成后再切换；中途失败（CloudFront 可能要 20 分钟或失败）就不切换，保留旧凭证，按"先保留"处理；
 - **先保留**：按 §5.5 的"另一个账号"处理，设置页一直提示。旧凭证的解析路径在代码里只接受停止、终止、清理三种
   操作，且只对记录里的实例 ID。
+
+**实现时的偏差（第 4 步）：** 确认卡上的两个选项实现为"保留"和"先在 Hive 页删除再换"，没有做"一键终止全部再
+切换"的批量路由（删除走现有的逐台删除，最后一台的保护照常）。所有登录方式都能"保留"：登录材料按身份分开存
+（SSO 按起始地址、访问密钥按 key ID、AWS 登录按各自的 profile，`core/aws_signin.py`），换了账号旧的那份还在，提交后
+`prune` 只留当前记录和保留行还在用的。只有当前记录不是那批 Hive 所在账号的记录时（记录缺失或没核实）才不能保留、
+要先删。保留的 Hive 移到一行 `kept-<账号>-<时间>`（`auth_method = record`，存旧记录里不含密钥的部分），
+`creds_for_record` 先按连接时的规则重新检查它，再每次用 STS 核对它仍是旧账号；提交失败时移回 SwarmAI 那一行。
 
 新账号里没有 Hive 时，按 §7.3 显示"少 1 台"，一键创建。
 
@@ -700,6 +719,20 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
    （§6.3b）、更多方式、先只用对话。
 5. Hive 数量：`hive_fleet`、向导 ⑤、设置页数量、对齐（§7.3）、权限模板（§7.4）和 provisioner 建时打标签、
    新桶名、升级确认卡（§6.4）。
+
+**第 4、5 步已实现（2026-10-31）：**
+- 后端：`core/aws_detect.py`（第一段只读配置 + `ada profile print`）+ `core/aws_detect_worker.py`（第二段每行一个子
+  进程，stdin 关闭、新会话、45 秒到时连进程组一起杀）；`core/aws_signin.py`（App 内 SSO 设备授权、经 AWS CLI 的
+  AWS 登录、访问密钥，临时密钥 `ASIA…` 拒收）；`aws_account.connect` = `verify_candidate`（STS 必须是要的账号）+
+  `commit`，失败不动现有记录；`core/aws_permissions.py`（能力检查和权限模板同一份动作清单）；`hive/fleet.py`（期望
+  数量、状态、替换、每 10 分钟对齐）；provisioner 建时打 `swarmai:managed`、新桶名 `swarmai-hive-<12 位>-<区域>`、
+  S3 调用带 `ExpectedBucketOwner`、有边界策略时建角色带边界。
+- 前端：`components/awsAccount/ConnectAccount.tsx`（②–④，向导和设置页共用）、`HiveFleet.tsx`（⑤ 和设置页的数量行、
+  升级确认卡、复制模板）；向导顺序 系统检查 → 恢复备份 → 账号 → Hive → 渠道 → 完成，Hive 模式保留原来的认证步、
+  没有 ⑤，"先只用对话"跳过 ⑤；Need-You 的账号条目打开设置页。
+- **没做、写明：** AWS 登录和真实 SSO 还没有端到端跑过（要 CLI 2.32+ 和一个 Identity Center）；"创建默认 VPC"
+  按钮（§7.2、§7.7）没做，能力检查只说明没有默认 VPC；§6.4 一次性的"SwarmAI 账号已接上"提示没做（设置页的
+  "从你之前的设置接过来的"一行仍在）；设置页的 Hive 行不列每台实例（Hive 页和 Swarm Out 已有）。
 
 **最终测试集（不变量）**
 1. **完整性：** 对 `backend/` 做 AST 检查，import `boto3` / `botocore` / `aiobotocore` / `amazon_transcribe` 的模块只能是
@@ -807,3 +840,37 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 启动前的检查有时间上限、对设置坏了直接拦下；readiness 只读记录状态、不发网络请求；对话的路和以前的判断完全一致；
 没有记录时 job 的区域默认值、设置页的会话和以前一样；botocore 的刷新时间对齐 `resolve` 的缓存；Polly 在账号连上后
 换用钉死账号。未改：上面 §8 第一条（CLI 的退回）。
+
+**第 4、5 步实现后的审查（2026-10-31）：** 第一轮 correctness、security、ux 各一位（correctness 3 HIGH、4 MED、4 LOW；
+security 2 HIGH、5 MED、4 LOW；ux 2 HIGH、14 MED、11 LOW），逐条对照代码核实后按原因归成一份修复一次改完；第二轮
+correctness + security 只看修复，没有 HIGH / MED，几条 LOW 一并改了。主要的改动：
+- **登录材料按身份分开存**：SSO 按起始地址、访问密钥按 key ID、AWS 登录每次一个自己的 profile；新登录（完成或
+  半途放弃）都不会改掉当前账号在用的那份，连接提交后 `prune` 只留当前记录和保留下来的旧 Hive 还在用的。新注册的
+  SSO 客户端先放 `pending_clients`，拿到它发的令牌才成为会话的客户端。由此**所有登录方式都能保留旧 Hive**，原来
+  "SSO、密钥、AWS 登录只能先删"的限制和"最后一台删不掉、账号换不了"的死路一起去掉（§7.5 的偏差说明以此为准）。
+- **连接**：同一时间只有一个连接；"账号是否在变"按 SwarmAI 那一行 Hive 所在的账号判断（记录缺失或没核实时不会被
+  别的账号接管）；移走旧 Hive 之后提交失败就移回来。保留的旧记录在用之前按连接时的规则重新检查（ada 程序、profile）；
+  `POST /api/hive/accounts` 只接受白名单里的方式。
+- **能力检查**：策略模拟带上 SwarmAI 自己调用时的条件值（边界、`PassedToService`、`PolicyARN`、请求标签），缺条件值
+  的结果算"无法确认"而不是"缺"；DryRun 和 provisioner 给实例、卷、网卡都打标签。
+- **权限模板**：`PutRolePolicy`、`AttachRolePolicy` 只对带 SwarmAI 边界的角色；边界里 Hive 的 `CreateTags` 只能打在
+  自己（同 `HiveName`）的资源上，且不能用 `swarmai:managed` 这个键（不分大小写）。
+- **端点**：Identity Center 和 STS 的调用不跟随 `~/.aws/config` 或环境变量里配置的端点（实测 `AWS_ENDPOINT_URL_STS`
+  被忽略）；起始地址和验证链接只认 AWS 访问门户和设备登录的主机。数据面的会话照旧跟随用户配置的端点（VPC 端点是
+  正当用法）。
+- **Hive 数量**：`hive_fleet` 的每次读改写都在机群锁里重新读；默认规格、区域只和被接受的数量一起保存；对齐把 EC2
+  已没有的实例标记出来时只改仍指向那台实例的行。
+- **界面**：AWS 登录后连接失败回到登录页；探测失败有说明、重试和登录方式；ADA 失败打开填好的 ADA 表单；账号行是
+  可用键盘选的单选；价格未知不显示 $0；8 台上限被别的账号占满时说明原因、不创建；区域检查不会卡在"检查中"；
+  每个状态只突出一个操作。
+
+**已知、未在本步处理：**
+- 模板里 `CreateRole` 的信任策略由调用方决定：被劫持的身份能建一个带边界、信任外部账号的角色。可行的修法是给边界
+  每条语句加 `ec2:SourceInstanceARN` 存在的条件，但没有在真实 IAM 上验证过，错了会让模板下的所有 Hive 失去权限，
+  所以先不加。
+- CloudFront 的更新、删除不能按资源限定（模板里写明）；有人抢先建了 `swarmai-hive-<账号>-<区域>` 桶会让创建失败。
+- 被 `prune` 去掉的 AWS 登录 profile，CLI 自己缓存里的令牌没有删（缓存由 CLI 管，删法要在 2.32+ 的 CLI 上核实）；
+  放弃的 SSO 登录留到下一次连接提交才清。
+- 在套用模板之前建的、不带边界的旧 Hive 角色，套用模板后更新会被拒（失败是关闭的，不是放开）。
+- 向导页本身（左侧步骤名等）仍只有英文。
+- AWS 登录、真实 SSO 没有端到端跑过；IAM 条件只用假的模拟器测过。

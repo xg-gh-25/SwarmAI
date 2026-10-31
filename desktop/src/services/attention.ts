@@ -20,7 +20,7 @@ import api from './api';
  *  `dispatch.message` = the prompt in their voice (fill or send). */
 export interface AttentionEntry {
   id: string;
-  source: 'escalation' | 'paused_run' | 'governance' | 'job' | 'job_digest' | 'db_recovery' | 'ingestion' | 'local_root' | 'swarm_out' | 'todo';
+  source: 'escalation' | 'paused_run' | 'governance' | 'job' | 'job_digest' | 'db_recovery' | 'ingestion' | 'local_root' | 'swarm_out' | 'todo' | 'aws_account';
   tier: 'blocking' | 'review';
   /** Owning brain/project, or null for OS-level (governance/job infra). */
   brain: string | null;

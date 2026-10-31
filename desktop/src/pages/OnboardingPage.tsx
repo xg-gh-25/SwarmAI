@@ -1,9 +1,15 @@
 /**
- * First-run onboarding page.
+ * First-run onboarding page (design docs/design/2026-10-31-swarmai-aws-account.md §6.1).
  *
- * 4-or-5-step flow depending on backup detection:
- *   System Check -> LLM Auth (blocking) -> [Restore (if backup)] -> Channels (optional) -> Ready.
- * Shown when onboardingComplete is false in system status.
+ * Desktop: System Check -> [Restore (if backup)] -> SwarmAI AWS account (②–④,
+ *   ConnectAccount) -> Hive (⑤, HiveSetupStep) -> Channels (optional) -> Ready.
+ *   Restore comes before the account: a backup carries the Hive tables and settings,
+ *   restored after the account it would overwrite what was just set up. "Chat only"
+ *   skips the Hive step (Hive needs the AWS account).
+ * Hive (cloud instance): System Check -> LLM Auth -> Channels -> Ready (the account is
+ *   the instance's own role; there are no Hives to create from a Hive).
+ * Every step can be left: "Configure later" completes onboarding, CredentialBanner and
+ * the account page say what is still missing. Shown when onboardingComplete is false.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { systemService, RestoreEvent } from '../services/system';
@@ -12,6 +18,8 @@ import { channelsService } from '../services/channels';
 import type { Channel } from '../types';
 import AuthConfigPanel from '../components/settings/AuthConfigPanel';
 import ChannelConfigForm from '../components/settings/ChannelConfigForm';
+import ConnectAccount from '../components/awsAccount/ConnectAccount';
+import { HiveSetupStep } from '../components/awsAccount/HiveFleet';
 import { useTheme } from '../contexts/ThemeContext';
 
 /**
@@ -38,13 +46,21 @@ interface OnboardingPageProps {
 // stops pretending to spin forever and surfaces a failure card + an escape.
 const SYSTEM_CHECK_FAILURE_THRESHOLD = 20;
 
+type StepId = 'system' | 'restore' | 'auth' | 'account' | 'hive' | 'channels' | 'ready';
+
+const STEP_TITLE: Record<StepId, string> = {
+  system: 'System Check', restore: 'Restore', auth: 'Authentication', account: 'AWS Account',
+  hive: 'Hive', channels: 'Channels', ready: 'Ready',
+};
+
 export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
-  const [step, setStep] = useState(1);
+  const [step, setStep] = useState<StepId>('system');
   const [systemOk, setSystemOk] = useState(false);
   const [systemCheckFailed, setSystemCheckFailed] = useState(false);
-  const [authVerified, setAuthVerified] = useState(false);
   const [hasBackup, setHasBackup] = useState(false);
-  const [restoreSkipped, setRestoreSkipped] = useState(false);
+  const [isHive, setIsHive] = useState(false);
+  const [chatOnly, setChatOnly] = useState(false);
+  const [done, setDone] = useState<Set<StepId>>(new Set());
   const skippingRef = useRef(false);
 
   // Step 1: Auto-check system with retry every 3s until backend is ready.
@@ -68,16 +84,20 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
           setSystemCheckFailed(false);
           // Check if backup exists (fresh install might have a backup to restore)
           // Skip on Hive — cloud instances don't restore from user backups
+          let hive = false;
+          let backup = false;
           try {
             const hint = await systemService.getAuthHint();
-            if (hint.runMode !== 'hive') {
-              const backup = await systemService.getBackupStatus();
-              if (backup.repoUrl && backup.lastBackup) {
-                setHasBackup(true);
-              }
+            hive = hint.runMode === 'hive';
+            if (!hive) {
+              const b = await systemService.getBackupStatus();
+              backup = !!(b.repoUrl && b.lastBackup);
             }
           } catch { /* no backup configured — skip */ }
-          setStep(2); // Auto-advance to Auth
+          if (cancelled) return;
+          setIsHive(hive);
+          setHasBackup(backup);
+          setStep(backup ? 'restore' : hive ? 'auth' : 'account'); // auto-advance
           stop(); // Stop polling — system is confirmed ready, step 1 done
           return;
         }
@@ -118,20 +138,19 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
     void handleComplete();
   }, [handleComplete]);
 
-  // Show restore step only if backup was detected and not skipped
-  const showRestore = hasBackup && !restoreSkipped;
-  const steps = showRestore ? [
-    { num: 1, title: 'System Check', done: systemOk },
-    { num: 2, title: 'Authentication', done: authVerified },
-    { num: 3, title: 'Restore', done: step > 3 },
-    { num: 4, title: 'Channels', done: step > 4 },
-    { num: 5, title: 'Ready', done: false },
-  ] : [
-    { num: 1, title: 'System Check', done: systemOk },
-    { num: 2, title: 'Authentication', done: authVerified },
-    { num: 3, title: 'Channels', done: step > 3 },
-    { num: 4, title: 'Ready', done: false },
+  const order: StepId[] = [
+    'system',
+    ...(hasBackup ? ['restore' as const] : []),
+    ...(isHive ? ['auth' as const] : ['account' as const, ...(chatOnly ? [] : ['hive' as const])]),
+    'channels', 'ready',
   ];
+  const advance = (from: StepId) => {
+    setDone((d) => new Set(d).add(from));
+    const i = order.indexOf(from);
+    setStep(order[Math.min(order.length - 1, i + 1)]);
+  };
+  const steps = order.map((id, i) => ({ id, num: i + 1, title: STEP_TITLE[id],
+    done: id === 'system' ? systemOk : done.has(id) }));
 
   return (
     <div className="min-h-screen bg-[var(--color-bg)] flex">
@@ -143,10 +162,10 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
         </div>
         <div className="space-y-4">
           {steps.map((s) => (
-            <div key={s.num} className="flex items-center gap-3">
+            <div key={s.id} className="flex items-center gap-3">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                 s.done ? 'bg-green-500 text-white' :
-                step === s.num ? 'bg-[var(--color-primary)] text-white' :
+                step === s.id ? 'bg-[var(--color-primary)] text-white' :
                 'bg-[var(--color-card)] text-[var(--color-text-muted)] border border-[var(--color-border)]'
               }`}>
                 {s.done ? (
@@ -154,7 +173,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
                 ) : s.num}
               </div>
               <span className={`text-sm ${
-                step === s.num ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text-muted)]'
+                step === s.id ? 'text-[var(--color-text)] font-medium' : 'text-[var(--color-text-muted)]'
               }`}>{s.title}</span>
             </div>
           ))}
@@ -163,26 +182,41 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
 
       {/* Main content */}
       <div className="flex-1 p-12 max-w-2xl">
-        {step === 1 && <Step1SystemCheck ok={systemOk} failed={systemCheckFailed} onSkip={handleSkipSetup} />}
-        {step === 2 && (
+        {step === 'system' && <Step1SystemCheck ok={systemOk} failed={systemCheckFailed} onSkip={handleSkipSetup} />}
+        {step === 'restore' && (
+          <StepRestore
+            onRestored={() => advance('restore')}
+            onSkip={() => advance('restore')}
+          />
+        )}
+        {step === 'auth' && (
           <Step2Auth
-            onVerified={() => { setAuthVerified(true); setStep(3); }}
+            onVerified={() => advance('auth')}
             onSkip={handleSkipSetup}
           />
         )}
-        {step === 3 && showRestore && (
-          <StepRestore
-            onRestored={() => setStep(4)}
-            onSkip={() => { setRestoreSkipped(true); setStep(3); }}
+        {step === 'account' && (
+          <ConnectAccount
+            mode="onboarding"
+            onConnected={() => advance('account')}
+            onChatOnly={() => {
+              // chat works with a key; Hive needs the AWS account, so its step is
+              // dropped (the account page offers it once an account is connected)
+              setChatOnly(true);
+              setDone((d) => new Set(d).add('account'));
+              setStep('channels');
+            }}
+            onLater={handleSkipSetup}
           />
         )}
-        {step === (showRestore ? 4 : 3) && (
+        {step === 'hive' && <HiveSetupStep onDone={() => advance('hive')} onBack={() => setStep('account')} />}
+        {step === 'channels' && (
           <Step3Channels
-            onContinue={() => setStep(showRestore ? 5 : 4)}
-            onSkip={() => setStep(showRestore ? 5 : 4)}
+            onContinue={() => advance('channels')}
+            onSkip={() => advance('channels')}
           />
         )}
-        {step === (showRestore ? 5 : 4) && <Step4Ready onStart={handleComplete} />}
+        {step === 'ready' && <Step4Ready onStart={handleComplete} />}
       </div>
     </div>
   );

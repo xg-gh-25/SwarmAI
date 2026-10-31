@@ -410,20 +410,23 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                       </div>
                     )}
                   </div>
-                  <p className="text-[var(--color-text-muted)] mt-2 opacity-60">To refresh credentials:</p>
+                  <p className="text-[var(--color-text-muted)] mt-2 opacity-60">To refresh credentials (SwarmAI then fetches them with ADA itself):</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all mt-1">
-                    ada credentials update --account={displayAccount} --role={displayRole} --provider=isengard
+                    mwinit -f
                   </code>
                 </>
               ) : (
                 <>
+                  {/* never a bare `ada credentials update`: without --profile it overwrites
+                      the person's default AWS profile. SwarmAI runs `ada credentials print`
+                      itself (core/aws_account); only Midway has to be valid. */}
                   <p className="text-[var(--color-text-muted)] mb-1">Make sure VPN is connected, then run:</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all">
-                    ada credentials update --account={displayAccount} --role={displayRole} --provider=isengard
+                    mwinit -f
                   </code>
                   {!hasRealValues && (
                     <p className="text-[var(--color-text-muted)] mt-1.5 opacity-50 text-[11px]">
-                      Fill in Account ID and Role above — the command will update automatically.
+                      Fill in Account ID and Role above ({displayAccount} · {displayRole}).
                     </p>
                   )}
                 </>

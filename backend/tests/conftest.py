@@ -978,6 +978,38 @@ def _reroot_frozen_app_data_constants(sandbox, monkeypatch, *, basetemp=None) ->
 
 
 @pytest.fixture(autouse=True)
+def _no_aws_account_startup(request, monkeypatch):
+    """The app's startup resolves the SwarmAI AWS account (it finds the machine's real
+    ada) and runs its capability checks against AWS: never in a test. The tests of the
+    startup itself (test_aws_account.py, "startup" in the name) call it directly."""
+    if "startup" in request.node.name and request.module.__name__.endswith("test_aws_account"):
+        return
+    try:
+        from core import aws_account as _aa
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(_aa, "startup", lambda port: None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_hive_locks(monkeypatch):
+    """The Hive fleet lock, the merge lock and the account connect lock are module-level
+    ``asyncio.Lock`` objects. A lock is bound to the event loop of the first task that
+    waits on it, and every async test runs on its own loop, so a test that contends one
+    would break every later test that contends it ("bound to a different event loop").
+    The daemon has one loop; each test gets fresh locks."""
+    import asyncio as _asyncio
+    try:
+        from hive import accounts as _ha
+        from routers import aws_account as _ra
+    except Exception:  # noqa: BLE001 — a test run without the app modules
+        return
+    monkeypatch.setattr(_ha, "fleet_lock", _asyncio.Lock())
+    monkeypatch.setattr(_ha, "_merge_lock", _asyncio.Lock())
+    monkeypatch.setattr(_ra, "_connect_lock", _asyncio.Lock())
+
+
+@pytest.fixture(autouse=True)
 def _stub_credential_preflight(request, monkeypatch):
     """Force the credential validator's check() to return 'valid' for EVERY test
     (P7: structural CI-env guard, not per-test discipline). session_unit._ensure_spawned
