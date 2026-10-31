@@ -143,3 +143,21 @@ def test_the_review_is_shown_the_general_subjects_one_name_each():
     prompt = s7_review.build_prompt(s7_review.ALLOWED_KINDS, {}, "", "", projects=["SwarmAI"],
                                     general=["Data Agent"])
     assert "Subjects the general knowledge already holds: Data Agent." in prompt
+
+
+def test_a_subject_whose_document_is_gone_is_no_longer_offered(tmp_path, monkeypatch):
+    """A subject whose entries were moved into a project (its document emptied and removed)
+    stops drawing new entries under its old name."""
+    import json
+    from core.ingestion import queries
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE ingestion_units(unit_id TEXT, state TEXT, destination TEXT, updated_at TEXT)")
+    for unit, subject in (("a", "Acme Plan"), ("b", "Old Subsystem")):
+        conn.execute("INSERT INTO ingestion_units VALUES(?,?,?,?)",
+                     (unit, "written", json.dumps({"store": "COMMON_DDD", "project": subject}), "2026-10-30T01"))
+    lib = tmp_path / "Knowledge" / "Library"
+    lib.mkdir(parents=True)
+    (lib / "acme-plan.md").write_text("---\ningestion_candidate: n/a (multi-unit)\n---\n## Decisions\n"
+                                      "- **x** y <!-- cand:cand-a.unit -->\n", encoding="utf-8")
+    monkeypatch.setattr(queries, "connect_ro", lambda: conn)
+    assert queries.read_general_subjects(tmp_path) == ["Acme Plan"]

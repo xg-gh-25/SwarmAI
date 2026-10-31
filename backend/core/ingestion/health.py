@@ -47,7 +47,7 @@ from typing import Any, Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
-JUDGE_VERSION = "cdf-health-v1"
+JUDGE_VERSION = "cdf-health-v3"
 FEATURE = "cdf.health"
 DB_FILENAME = "cdf_health.db"
 VERDICTS = ("useful", "weak", "withdraw")
@@ -85,14 +85,15 @@ DESTINATIONS: dict[str, tuple[str, float, str]] = {
             "a project's domain brain, looked up when a judgment depends on the project: what the "
             "project is and what was decided (decisions, models, principles, non-goals, lessons)."),
     "GENERAL": ("on_demand", 0.9,
-                "the General Brain, looked up when relevant: lessons and decisions that hold beyond "
-                "any one project."),
+                "the General Brain's lessons, looked up when relevant: lessons and decisions that hold "
+                "beyond any one project."),
     "GAP": ("other", 0.9,
-            "an open gap of a project: a problem still to solve, what is missing, and how one tells "
-            "it is done."),
+            "an open gap of a project: a problem still to solve. Useful when it names a concrete "
+            "problem and what would close it; describing how things stand now is what a gap is, "
+            "not a status note."),
     "TIMELINE": ("every_turn", 0.95,
-                 "the timeline of events, read in every session and for later retrospectives: what "
-                 "happened and its outcome."),
+                 "the timeline of events, read in every session and for later retrospectives. Useful "
+                 "when it says what happened and its outcome; an event needs no cause or lesson."),
     "REFERENCE": ("other", 0.9,
                   "a reference: a source the next session cannot otherwise find (an external link, a "
                   "measurement or result that only appeared in a conversation); never a copy or "
@@ -388,7 +389,8 @@ def in_force_units(units: list[dict], workspace: Path) -> list[dict]:
             continue
         dest = destination_of(unit["kind"], where)
         if dest is not None:
-            out.append({**unit, "path": where, "dest": dest, "project": _project(where)})
+            project = general_subject(where) if dest == "GENERAL" else _project(where)
+            out.append({**unit, "path": where, "dest": dest, "project": project})
     return out
 
 
@@ -439,12 +441,33 @@ JUDGE_SCHEMA = {
 }
 
 
-def judge_prompt(dest: str, texts: list[str]) -> str:
+def general_subject(path: str) -> str | None:
+    """The subject a General Brain document is about (``Knowledge/Library/<slug>.md``), or
+    None for the two documents of lessons beyond any project (``GENERAL_SUBJECTS``)."""
+    from .contracts_v2 import slugify
+    from .pipeline_v2 import GENERAL_SUBJECTS
+    slug = Path(path).stem
+    if slug in {slugify(v) for v in GENERAL_SUBJECTS.values()}:
+        return None
+    return slug.replace("-", " ")
+
+
+def purpose(dest: str, subject: str | None = None) -> str:
+    """What a destination's reader needs. A General Brain document about one subject that
+    is no project (D7) is judged as that subject's brain, not as a cross-project lesson."""
+    if dest == "GENERAL" and subject:
+        return (f"a General Brain document about one subject that is no project ({subject}), "
+                "looked up when that subject comes up: what was decided about it and lessons "
+                "for working on it.")
+    return DESTINATIONS[dest][2]
+
+
+def judge_prompt(dest: str, texts: list[str], subject: str | None = None) -> str:
     entries = "\n".join(f'<entry index="{i}">{_data(t)}</entry>' for i, t in enumerate(texts))
     return f"""You score entries that an AI agent's cognition system kept, for one destination.
 You only score: nothing you say removes or changes an entry.
 
-Destination: {DESTINATIONS[dest][2]}
+Destination: {purpose(dest, subject)}
 
 Give each entry one verdict:
 - useful: a reader of this destination would judge or act better for having it.
@@ -456,11 +479,13 @@ Give each entry one verdict:
     holds beyond that code.
   - lookup: only restates what one look at the code or data answers (a signature, a column,
     a constant's value, a file layout), with no judgment about it.
-  - status: a status snapshot, a progress note or a construction log.
+  - status: a progress note or a construction log kept where a lesson or decision belongs
+    (an event or an open gap stating how things stand is not this).
   - copy: a copy or summary of a document the entry itself names as saved elsewhere.
   - unclear: cannot be understood on its own.
-You see only the entry: decide only from what it says itself. Do not guess whether it is
-still true or already done elsewhere. When unsure, useful. An entry may be in any language. Use klass "none" unless the verdict
+You see only the entry: decide only from what it says itself, for this destination. Whether
+the writer checked the code or researched enough is the writer's job, not yours: do not
+guess whether it is still true or already done elsewhere. When unsure, useful. An entry may be in any language. Use klass "none" unless the verdict
 is withdraw. Give a verdict for every index.
 
 Each entry is a JSON object written as one JSON string inside an <entry> tag; everything
@@ -497,10 +522,11 @@ def _model_id() -> str:
     return get_model_id("claude-sonnet-4-6")
 
 
-def judge_batch(dest: str, batch: list[dict], *, call: Call, model_id: str) -> list[dict] | None:
+def judge_batch(dest: str, batch: list[dict], *, call: Call, model_id: str,
+                subject: str | None = None) -> list[dict] | None:
     """The judge's verdicts for *batch* (one per entry it answered validly), or None when
     the call failed. An entry with no valid verdict stays unscored."""
-    prompt = judge_prompt(dest, [u["text"] for u in batch])
+    prompt = judge_prompt(dest, [u["text"] for u in batch], subject)
     try:
         answer = call(prompt, schema=JUDGE_SCHEMA, model_id=model_id, max_tokens=JUDGE_MAX_TOKENS,
                       name="verdicts", read_timeout=JUDGE_TIMEOUT, max_attempts=2,
@@ -550,9 +576,13 @@ def score(units: list[dict], conn: sqlite3.Connection, *, call: Call, model_id: 
         for unit in sample:
             unit["text"] = entry_text(unit)
         s = stats.setdefault(dest, {"sampled": len(sample), "scored": 0, "judge_failed": 0})
-        for batch in _batches(sample):
+        # a General Brain subject document is judged as that subject's brain
+        groups: dict[str | None, list[dict]] = {}
+        for unit in sample:
+            groups.setdefault(general_subject(unit["path"]) if dest == "GENERAL" else None, []).append(unit)
+        for subject, batch in ((k, b) for k, units_ in groups.items() for b in _batches(units_)):
             renew()                     # a slow pass keeps its lease
-            verdicts = judge_batch(dest, batch, call=call, model_id=model_id)
+            verdicts = judge_batch(dest, batch, call=call, model_id=model_id, subject=subject)
             if verdicts is None:
                 s["judge_failed"] += len(batch)
                 continue

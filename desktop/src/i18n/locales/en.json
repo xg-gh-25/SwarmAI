@@ -2082,7 +2082,7 @@
     "perUseful": "≈ {{usd}} per useful entry",
     "value": {
       "clickHint": "Click a row to see the sampled entries and the judge's reasons",
-      "rule": "Each weekday a judge that took no part in writing them scores a sample of new entries in each destination, by what that destination is for: useful, weak or withdraw. The line in each bar is the target. The judge only scores; it removes nothing. It reads the entry alone, not the code, so it cannot tell an entry that went stale.",
+      "rule": "Each weekday a judge that took no part in writing them scores a sample of new entries in each destination, by what that destination is for: useful, weak or withdraw. The line in each bar is the target. The judge only scores; it removes nothing. It judges each entry as written, for where it is: whether the writer checked the code or researched enough is the writer's job, not the judge's.",
       "counts": "{{scored}} scored · {{written}} new",
       "minNote": "A rate needs at least {{n}} scored entries",
       "noSamples": "No entries scored here yet.",

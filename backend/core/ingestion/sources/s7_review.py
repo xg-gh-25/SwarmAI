@@ -223,11 +223,15 @@ _WHERE = """Where a unit goes follows from what you declare and what it rests on
   subject comes up, however reliable it is: declare "project:<the project, or the subject's
   own name>" so it is looked up when it is relevant. Kept in every session only with a
   user_quote, or when it cites a measured result; citing anything else keeps it in the
-  general knowledge, looked up when needed in every project.
+  general knowledge, looked up when needed in every project. So write it as a rule that
+  still holds with every project, document and person name taken out; if it does not, it
+  is about that project or subject: declare that instead.
 - scope "project:<name>" goes to that project's knowledge; a name that is no project goes
   to the general knowledge under that name. The projects that exist are listed below:
-  a subsystem or part of one of them (a module, a feature, a tab) is that project; a
-  topic of its own that none of them is goes under its own name."""
+  a subsystem or part of one of them (a module, a feature, a tab) is that project, also
+  when the general knowledge already holds a subject of that name; a topic of its own
+  that none of them is (a document, a customer, an outside product) goes under its own
+  name."""
 
 
 def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, record: str,
@@ -274,7 +278,9 @@ context may hold only a summary of it).
    pitfall: the fix is an event, and a lesson is only the general rule that would have
    caught it, when that rule holds beyond this one piece of code. What one look at the code
    or the data answers (a signature, a schema, a constant's value, a file's layout) is no
-   lesson. A problem still open is a gap, never a lesson.
+   lesson. A problem still open is a gap, never a lesson. Commit hashes, run ids, version
+   numbers of a document and approval dates are evidence, not knowledge: they stay out of
+   a unit's text.
 7. Per kind of work:
 {_EXAMPLES}
 

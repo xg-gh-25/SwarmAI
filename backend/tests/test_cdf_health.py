@@ -120,6 +120,24 @@ def test_sampling_in_force_once_and_destination_from_where_it_is(env):
     assert run(env, judge)["scored"] == 0             # scored once
 
 
+def test_general_brain_subject_document_is_judged_as_that_subjects_brain(env):
+    ing, ws = env["ing"], env["ws"]
+    add_unit(ing, "cand-g.unit", path="Knowledge/Library/general-knowledge.md", store="COMMON_DDD")
+    add_unit(ing, "cand-s.unit", path="Knowledge/Library/acme-launch-plan.md", store="COMMON_DDD")
+    for name, unit in (("general-knowledge", "cand-g"), ("acme-launch-plan", "cand-s")):
+        write(ws, f"Knowledge/Library/{name}.md", "---\ningestion_candidate: n/a (multi-unit)\n---\n"
+              f"## Decisions\n- **x** y <!-- cand:{unit}.unit -->\n")
+    judge = Judge()
+    run(env, judge)
+    prompts = [p for p in judge.prompts if "<entries>" in p]
+    subject = [p for p in prompts if "about one subject that is no project (acme launch plan)" in p]
+    lessons = [p for p in prompts if "the General Brain's lessons" in p]
+    assert len(subject) == 1 and len(lessons) == 1
+    with health.connect_health() as conn:
+        assert dict(conn.execute("SELECT unit_id, project FROM verdicts").fetchall()) == {
+            "cand-g.unit": None, "cand-s.unit": "acme launch plan"}
+
+
 # ── §9.3 a failed judge call leaves the batch unscored, and it is tried again ──────────
 
 def test_failed_judge_writes_no_verdict_and_retries(env):

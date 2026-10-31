@@ -7,7 +7,8 @@
 - ``brain_changes`` / ``brain_change_summary``: what was added, overridden, withdrawn
   (and the judge's unresolved conflicts) in the main cognition files, from the records.
 - ``general_subjects`` / ``read_general_subjects``: the subjects the General Brain
-  holds, shown to the after-session review so a subject keeps one name.
+  holds, shown to the after-session review so a subject keeps one name (only those whose
+  document still holds entries).
 - ``corrections`` / ``read_corrections``: every correction the after-session review
   recorded, with its session, the skill it names and whether it repeats an earlier one —
   the one source of "the user corrected the agent" (O3, skill health, the repeat rate).
@@ -480,13 +481,23 @@ def general_subjects(conn: sqlite3.Connection) -> list[str]:
     return names
 
 
-def read_general_subjects() -> list[str]:
-    """``general_subjects`` of this instance's store; none without a store."""
+def read_general_subjects(workspace: Path | None = None) -> list[str]:
+    """``general_subjects`` of this instance's store whose document is still a General
+    Brain document (a subject whose entries were moved or withdrawn is no longer offered,
+    so its name stops drawing new entries); none without a store."""
+    from .contracts_v2 import GENERAL_BRAIN_DIR, slugify
+    from .relations_v2 import general_brain_files
+    if workspace is None:
+        from config import get_swarmws
+        workspace = Path(get_swarmws())
+    present = {p.stem for p in general_brain_files(workspace)}
+    root = Path(workspace) / GENERAL_BRAIN_DIR
     try:
         with closing(connect_ro()) as conn:
-            return general_subjects(conn)
+            names = general_subjects(conn)
     except (OSError, sqlite3.Error):
         return []
+    return [n for n in names if slugify(n) in present and (root / f"{slugify(n)}.md").is_file()]
 
 
 REVIEW_TYPES = ("code", "files", "conversation")

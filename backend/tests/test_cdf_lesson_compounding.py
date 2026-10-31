@@ -118,7 +118,10 @@ def test_the_review_is_told_what_is_no_lesson_and_no_reference():
     prompt = " ".join(s7_review.build_prompt(("cognition", "event", "gap", "reference"), {}, "", "r").split())
     for rule in ("A bug found and fixed within this record is not a pitfall",
                  "A problem still open is a gap, never a lesson",
-                 "never a copy or summary of one of its versions"):
+                 "never a copy or summary of one of its versions",
+                 "still holds with every project, document and person name taken out",
+                 "also when the general knowledge already holds a subject of that name",
+                 "Commit hashes, run ids, version numbers of a document and approval dates"):
         assert rule in prompt, rule
     assert "is a reference" not in prompt
 

@@ -3,7 +3,7 @@ title: "CDF health: is what the cognition system keeps worth keeping"
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: implemented (r2)
+status: implemented (r3)
 ---
 
 # CDF health: is what the cognition system keeps worth keeping
@@ -106,6 +106,16 @@ states the destination's purpose (§3 table, one sentence each) and the verdicts
   answers), `status` (a status snapshot, progress or construction log), `copy` (a copy or
   summary of a document the entry itself names as saved), `unclear` (cannot be understood
   alone).
+
+r3 (calibration, XG 2026-10-31): the judge never checks the code or asks whether the writer
+researched enough: that is the writing side's job, and CDF does not re-litigate it. Each
+destination states its own bar: an open gap is useful when it names a concrete problem and
+what would close it (its describing how things stand is what a gap is); an event when it says
+what happened and its outcome (no cause or lesson needed); a General Brain document about one
+subject that is no project is judged as that subject's brain, not as a cross-project lesson.
+A calibration against the agent's own verdicts on 13 live samples found the judge too strict on
+exactly those three (gaps and events judged as lessons, subject documents judged as general
+lessons); with the per-destination bar the disagreements flipped.
 
 The judge sees only the entry and decides only from what it says: it cannot tell an entry
 that went stale or a gap already done elsewhere, and the tab says so. That is why the value
