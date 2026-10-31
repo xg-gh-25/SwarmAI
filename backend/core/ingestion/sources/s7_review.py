@@ -1,8 +1,10 @@
 """S7 after-session review: the session's own agent records what is worth keeping
 (design docs/design/2026-10-30-cdf-agent-decides.md; 2026-10-29-cdf-session-review.md).
 
-- Every session with a user message since its last review is reviewed (no threshold, no
-  unit cap: D3, D10), by the session's own model (D16), in a fork of the session.
+- Every session a person wrote in is reviewed after each quiet hour (no threshold, no
+  unit cap: D3, D10), by the session's own model (D16), in a fork of the session. A
+  stretch with no user message (a long task, a review that came mid-task) is reviewed
+  too, with the person's last message before it listed as the request it follows.
 - The fork alone sees the session as the CLI resumes it: the summary of a compacted
   conversation plus what followed (measured 2026-10-30: a long session's fork held ~10K
   tokens). So each review turn also carries the record of the messages since the last
@@ -150,14 +152,30 @@ def _measured(session_id: str, rows: list[dict[str, Any]],
     return out
 
 
+def _last_user_before(transcript: list[dict[str, Any]], first: dict[str, Any]) -> dict[str, Any] | None:
+    """The last user row of *transcript* before *first* (in send order), or None."""
+    key = _key(first)
+    found = None
+    for item in transcript:
+        if _key(item) >= key:
+            break
+        if item.get("role") == "user":
+            found = item
+    return found
+
+
 def evidence(session_id: str, rows: list[dict[str, Any]],
-             input_rows: list[dict[str, Any]]) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+             input_rows: list[dict[str, Any]],
+             lead: dict[str, Any] | None = None) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     """(index text, citable anchors, read-set root ids) for reviewing *rows*.
 
     Registers the agent and tool content of *rows* (s2_session.window_roots), so the
     read set is everything the review sees after the watermark plus every user root of
     the session; only user messages (in full, the words a ``user_quote`` is copied from,
-    each labelled by its kind) and measured fields are citable (§16)."""
+    each labelled by its kind) and measured fields are citable (§16). *lead*: the last
+    user message before *rows*, listed (and citable) when *rows* hold none: the work in
+    them follows that request, and without it nothing the agent did there could be
+    cited."""
     owned = [r for r in input_rows if not str(r.get("ref") or "").startswith(s2_session._S2_REF)]
     user_events = s2_session._user_events_by_message(owned)
     kinds = {str(r["event_id"]): r.get("kind") for r in owned}
@@ -166,15 +184,17 @@ def evidence(session_id: str, rows: list[dict[str, Any]],
         for ids in s2_session.window_roots(session_id, chunk):
             registered += ids
     lines, anchors = [], []
-    for item in rows:
-        if item.get("role") != "user":
-            continue
+    users = [r for r in rows if r.get("role") == "user"]
+    shown = users or ([lead] if lead else [])
+    for item in shown:
         ids = user_events.get(str(item.get("id")), [])
         primary = [e for e in ids if kinds.get(e) == "user_message"] or ids
         if primary:
             from core import session_inputs
             kind = kinds.get(primary[0]) or "input"
             label = "user message" if kind == "user_message" else kind.replace("_", " ")
+            if not users:
+                label += ", before this record: the request the work below follows"
             said = session_inputs.user_authored_text(primary[0]) if kind == "user_message" else None
             text = (said if said is not None else _text(item)).strip()
             lines.append(f"- event:{primary[0]} ({label}): " + json.dumps(text, ensure_ascii=False))
@@ -713,7 +733,9 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
         return {"status": "nothing_new", "reviewed_to": watermark, "units": 0}
     sig = signals(rows)
     reviewed_to = _key(rows[-1])
-    if not sig["user_messages"]:
+    # a session no person ever wrote in is not reviewed; work after the person's last
+    # message (a long task, a review that came mid-task) is, against that message
+    if not sig["user_messages"] and not any(r.get("role") == "user" for r in transcript):
         return {"status": "reviewed", "reviewed_to": reviewed_to, "units": 0, "reason": "no user message"}
     run = runner or sdk_runner
     from config import get_swarmws
@@ -742,7 +764,8 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
     recorded: list[Any] = []          # this review's units so far, as entries
     for number, window in enumerate(chunks, 1):
         window_rows = [r for r in window if "part_of" not in r] or window
-        index, anchors, read = evidence(session_id, window_rows, input_rows)
+        index, anchors, read = evidence(session_id, window_rows, input_rows,
+                                        _last_user_before(transcript, window_rows[0]))
         record = _record(session_id, window, user_events, anchors)
         prompt = build_prompt(ALLOWED_KINDS, sig, index, record, (number, len(chunks)), projects, general)
         attempt = api_v2.ExtractionAttempt(

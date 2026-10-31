@@ -2,8 +2,9 @@
 Design: docs/design/2026-10-30-cdf-agent-decides.md (D1, D3, D4, D10, D16).
 
 What is tested:
-- no threshold: every session with a user message since the last review is reviewed,
-  one without none is passed over with no model call; the session type is a fact.
+- no threshold: every session a person wrote in is reviewed, one with no user message at
+  all is passed over with no model call; a stretch after the person's last message is
+  reviewed against that message; the session type is a fact.
 - turn one forks the session with its own model and carries the evidence index (user
   messages in full, labelled by kind) and the record since the last review; units citing
   the index are enqueued as S7, others recorded invalid; no unit cap; nothing new, no call.
@@ -380,3 +381,23 @@ def test_review_health_counts_what_the_user_withdrew(cdf_env) -> None:
 
 
 
+
+
+def test_work_after_the_persons_last_message_is_reviewed_against_it(cdf_env, tmp_path, monkeypatch, model) -> None:
+    """A long task, or a review that comes mid-task, leaves a stretch with no user message:
+    it is reviewed, and the person's last message before it is listed and citable."""
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    (asked,) = _record_person_message(cdf_env, "m1", "把 Swarm Out 的 repo spec 安全审一遍")[:1]
+    first = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=Runner([]))
+    for i in range(3):
+        asyncio.run(cdf_env["db"].messages.put({"id": f"w{i}", "session_id": SESSION, "role": "assistant",
+                                                "content": [{"type": "text", "text": f"审查第 {i} 项"}]}))
+    unit = {"kind": "cognition", "type": "pitfall", "scope": "project:SwarmAI",
+            "title": "A missing access field makes every repo writable",
+            "what": "The repo spec parser treats a missing access field as writable.",
+            "applicability": "When parsing a repo spec.", "evidence": [f"event:{asked}"]}
+    run = Runner([unit], {"relations": [{"unit": 1, "relation": "new"}]})
+    out = s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=first["reviewed_to"], runner=run)
+    assert out["units"] == 1 and out["invalid"] == 0
+    line = next(l for l in run.calls[0]["prompt"].splitlines() if l.startswith(f"- event:{asked}"))
+    assert "before this record" in line
