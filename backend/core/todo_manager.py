@@ -238,9 +238,10 @@ class ToDoManager:
 
     @staticmethod
     def gate_ai_detected(data: ToDoCreate) -> ToDoCreate:
-        """The gate for a ToDo a model wrote (``ai_detected``) that is created through
-        this manager (the session summary, the migration, POST /api/todos, a review's
-        re-created copy): credentials redacted, and refused
+        """The gate for a ToDo a model wrote (``ai_detected``): every write of one goes
+        through this manager (the session summary, the migration, POST and PUT
+        /api/todos, a review's re-created copy; the radar skill's CLI writes no
+        ai_detected ToDo): credentials redacted, and refused
         (ValueError) when the injection scanner flags the title or a sentence of the
         description, or cannot load. The text came from a transcript that may hold
         fetched content, and a ToDo is read back into an agent's context."""
@@ -379,6 +380,20 @@ class ToDoManager:
 
         if not updates:
             return self._dict_to_response(existing)
+
+        # an edit that leaves a model-written ToDo (or makes one) passes the same gate
+        # as its creation: otherwise PUT could put back what create refused
+        if (updates.get("source_type") or existing.get("source_type")) == "ai_detected" and (
+                {"title", "description", "source_type"} & updates.keys()):
+            gated = self.gate_ai_detected(ToDoCreate(
+                workspace_id=str(existing.get("workspace_id") or ""),
+                title=updates.get("title", existing.get("title") or "-"),
+                description=updates.get("description", existing.get("description")),
+                source_type="ai_detected"))
+            if "title" in updates:
+                updates["title"] = gated.title
+            if "description" in updates:
+                updates["description"] = gated.description
 
         result = await db.todos.update(todo_id, updates)
         if not result:

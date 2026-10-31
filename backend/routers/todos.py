@@ -151,7 +151,10 @@ async def update_todo(todo_id: str, data: ToDoUpdate):
 
     Requirement 6.4: PUT /api/todos/{id} to update a ToDo.
     """
-    todo = await todo_manager.update(todo_id, data)
+    try:
+        todo = await todo_manager.update(todo_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not todo:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
     return todo

@@ -62,7 +62,7 @@ Every todo's `linked_context` field stores a JSON object with structured context
 "$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py add \
   --title "Implement append-message queue (Phase 1)" \
   --priority high \
-  --source-type ai_detected \
+  --source-type chat \
   --description "Design doc v2 approved. Queue-based append: never stops stream, input always enabled, last message wins." \
   --files backend/core/session_unit.py desktop/src/hooks/useChatStreamingLifecycle.ts desktop/src/pages/ChatPage.tsx \
   --design-docs Knowledge/Designs/2026-03-21-append-message-design.md \
@@ -88,7 +88,8 @@ Every todo's `linked_context` field stores a JSON object with structured context
 - `--title` / `-t` (required): Todo title
 - `--priority` / `-p`: `high` | `medium` | `low` | `none` (default: none)
 - `--description` / `-d`: Why this todo exists + background
-- `--source-type`: `manual` | `chat` | `ai_detected` | `email` | `slack` | `meeting` | `integration`
+- `--source-type`: `manual` | `chat` | `email` | `slack` | `meeting` | `integration`
+  (not `ai_detected`: see below)
 - `--source`: Source reference (e.g. "Slack #general thread", "email from X")
 - `--due-date`: ISO date string
 
@@ -228,20 +229,15 @@ When user says "add a todo for X" during conversation:
 > in the work packet. A chat todo about work-with-a-doc that omits `design_docs`
 > is an incomplete work packet.
 
-### AI-detected todos (source_type=`ai_detected`)
+### AI-detected todos (source_type=`ai_detected`) — not written by this skill
 
-Agent creates these from detected patterns:
-
-| Field | Required | Purpose |
-|-------|----------|---------|
-| `detection_reason` | **YES** | WHY this was flagged — what triggered detection |
-| `next_step` | **YES** | CONCRETE first action — "Read file X line Y" not "investigate" |
-| `files` | **YES** | All files involved (trace actual code path, don't guess) |
-| `acceptance` | Optional | Measurable definition of done |
-| `design_docs` | Optional | Related design documents |
-| `memory_refs` | Optional | MEMORY.md COEs, lessons, or decisions that apply |
-| `blockers` | Optional | What's blocking, if anything |
-| `commits` | Optional | Recent related commits |
+An `ai_detected` ToDo is one a model writes after the fact from a session transcript:
+the session's activity summary records the work the session left open, after the
+session goes quiet. The backend writes it through one gate (credentials redacted;
+refused when the injection scanner flags its text), which this CLI cannot apply, so
+`add` does not accept `--source-type ai_detected`. A ToDo you create during a chat,
+with the user there, is a `chat` ToDo; give it `--description` (why, and what
+triggered it), `--next-step` and `--files`.
 
 ### Meeting todos (source_type=`meeting`)
 
@@ -305,7 +301,7 @@ Every proactive todo MUST have:
 - `--next-step` — concrete first action (not "investigate" — an actual step)
 - `--files` — for code-related todos, all files involved
 - `--description` — WHY this was flagged, what triggered detection
-- `--source-type ai_detected`
+- `--source-type chat`
 
 Should have (when applicable):
 - `--design-docs` — if a design doc exists for this work

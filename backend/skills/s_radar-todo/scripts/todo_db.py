@@ -45,6 +45,11 @@ WORKSPACE_ID = "swarmws"
 VALID_STATUSES = ("pending", "overdue", "in_discussion", "handled", "cancelled", "deleted")
 VALID_PRIORITIES = ("high", "medium", "low", "none")
 VALID_SOURCE_TYPES = ("manual", "email", "slack", "meeting", "integration", "chat", "ai_detected")
+# What this CLI may write. ``ai_detected`` is not one of them: a ToDo a model writes
+# after the fact from a transcript goes through the backend's create gate (injection
+# scan, credential redaction: core.todo_manager), which this direct-SQLite writer
+# cannot apply. A ToDo the agent makes in a chat, with the user there, is ``chat``.
+ADD_SOURCE_TYPES = tuple(t for t in VALID_SOURCE_TYPES if t != "ai_detected")
 
 
 def _connect() -> sqlite3.Connection:
@@ -421,7 +426,8 @@ def main() -> None:
     p_add.add_argument("--description", "-d", default=None, help="Why this todo exists + background")
     p_add.add_argument("--priority", "-p", choices=VALID_PRIORITIES, default="none", help="Priority level")
     p_add.add_argument("--source", default=None, help="Source reference (e.g. Slack thread URL)")
-    p_add.add_argument("--source-type", choices=VALID_SOURCE_TYPES, default="manual", help="Source type")
+    p_add.add_argument("--source-type", choices=ADD_SOURCE_TYPES, default="manual",
+                       help="Source type (ai_detected is written only by the backend)")
     p_add.add_argument("--due-date", default=None, help="Due date (ISO format)")
     _add_context_args(p_add)
 
