@@ -7,8 +7,9 @@
  *     packaged WKWebView, falsified twice, commit 496bbd7c). scripts RUN
  *     (charts/tabs work) but the frame is a null/opaque origin that cannot reach the
  *     parent (never combine allow-scripts WITH allow-same-origin). A bottom-right
- *     "Open in browser" FALLBACK (opens /workspace/file/raw in the system browser)
- *     covers reports needing real same-origin network/fetch (blocked by the sandbox).
+ *     "Open in browser" FALLBACK (opens the file on the daemon's read-only content
+ *     origin in the system browser, contentFileUrl) covers reports that fetch files
+ *     next to them (blocked by the sandbox).
  *   - Source: raw HTML in a syntax-highlighted <pre><code> block.
  *   - Toggle button top-right switches [Source] / [Rendered]. Size via onStatusInfo.
  *
@@ -36,7 +37,7 @@
  */
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { openExternal } from '../../../utils/openExternal';
-import { rawFileUrl } from '../utils/rawFileUrl';
+import { rawFileUrl, contentFileUrl } from '../utils/rawFileUrl';
 
 /** Logical desktop layout width the Fit mode lays the iframe out at, before scaling
  *  down to the panel. 1200 covers the observed report containers (1140/1180/1200). */
@@ -150,10 +151,12 @@ export default function HtmlRenderer({
   // iframe (src=) and the open-in-browser fallback.
   const rawUrl = rawFileUrl(filePath);
 
-  // Open the fully-isolated system browser (escape hatch for anything needing
-  // real same-origin network, which the opaque-origin iframe sandbox blocks).
+  // Open the system browser (escape hatch for a report that fetches files next to
+  // it, which the opaque-origin iframe sandbox blocks). It opens on the read-only
+  // content origin, never the daemon's: a page there reaches its own directory and
+  // no API route (contentFileUrl).
   const openInBrowser = () => {
-    void openExternal(rawUrl);
+    void contentFileUrl(filePath).then(openExternal);
   };
 
   if (!content) {

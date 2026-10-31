@@ -1582,7 +1582,46 @@ async def get_workspace_file_raw(
         raise HTTPException(status_code=413, detail="File too large")
 
     mime_type, _ = mimetypes.guess_type(target.name)
-    return FileResponse(target, media_type=mime_type or "application/octet-stream")
+    mime_type = mime_type or "application/octet-stream"
+    # A file opened from here as a page (the browser, a frame without its own sandbox)
+    # never gets this origin: it is an opaque origin and cannot call the API with the
+    # App's header (ops-registry design §5.5). Every type gets the sandbox except the
+    # ones a browser only shows (a sandboxed top-level PDF does not open); the Canvas
+    # iframe has the same sandbox already, and an <img>/<video> ignores the header.
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if not _inert(mime_type):
+        headers["Content-Security-Policy"] = _SANDBOX_CSP
+    return FileResponse(target, media_type=mime_type, headers=headers)
+
+
+_SANDBOX_CSP = "sandbox allow-scripts allow-popups"
+
+
+def _inert(mime_type: str) -> bool:
+    """A type a browser shows and never runs: PDF, and image / audio / video except the
+    XML-based ones (SVG runs scripts)."""
+    if mime_type == "application/pdf":
+        return True
+    major = mime_type.split("/", 1)[0]
+    return major in ("image", "audio", "video") and not mime_type.endswith("+xml")
+
+
+@router.get("/workspace/content-url")
+async def get_workspace_content_url(
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
+):
+    """The URL the file viewer opens in the system browser: the read-only content
+    origin (``core.content_origin``), which serves the file and its directory and no
+    API. ``{"url": null}`` when that origin is not running (dev, Hive) or the file's
+    directory is too wide to open (the workspace root, a folder directly in the home
+    folder): the viewer keeps the raw URL, which carries the sandbox CSP above."""
+    from core import content_origin
+    expanded_path = await _get_workspace_path()
+    path = await _landed_session_path(path, None)
+    target, _is_ext = _resolve_file_path(path, Path(expanded_path), map_landed=True)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"url": content_origin.url_for(target, refuse=(Path(expanded_path),))}
 
 
 @router.get("/workspace/file/diff")

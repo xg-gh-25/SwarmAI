@@ -25,7 +25,25 @@
  * and `~/Desktop`) — is fully served, which is what this fix restores.
  */
 import { getApiBaseUrl } from '../../../services/tauri';
+import api from '../../../services/api';
 
 export function rawFileUrl(filePath: string): string {
   return `${getApiBaseUrl()}/api/workspace/file/raw?path=${encodeURIComponent(filePath)}`;
+}
+
+/**
+ * The URL to open a file in the SYSTEM BROWSER: the daemon's read-only content origin
+ * (a second port with no API, serving the file and its directory — backend
+ * core/content_origin.py), so a page opened there cannot call the daemon's routes as
+ * the App. Falls back to the raw URL when that origin is off (dev, Hive) or the lookup
+ * fails; the raw route sandboxes HTML/SVG with a CSP, so the fallback is opaque too.
+ */
+export async function contentFileUrl(filePath: string): Promise<string> {
+  try {
+    const r = await api.get<{ url: string | null }>('/workspace/content-url', { params: { path: filePath } });
+    if (r.data?.url) return r.data.url;
+  } catch {
+    /* fall back below */
+  }
+  return rawFileUrl(filePath);
 }

@@ -20,16 +20,21 @@
  *  - default (Rendered) mode renders an iframe whose `src` is the dynamic api base
  *    (NOT hardcoded) + /api/workspace/file/raw + encoded path, NOT srcDoc
  *  - the iframe sandbox has `allow-scripts` but NOT `allow-same-origin` (opaque origin)
- *  - "Open in browser" fallback still calls openExternal with the same URL
+ *  - "Open in browser" opens the content-origin URL the backend returns, and the raw
+ *    URL only when that origin is off or the lookup fails
  *  - the Source toggle shows the raw HTML markup in-app (no iframe)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import HtmlRenderer from '../HtmlRenderer';
 
 const mockOpenExternal = vi.fn();
 vi.mock('../../../../utils/openExternal', () => ({
   openExternal: (...a: unknown[]) => mockOpenExternal(...a),
+}));
+const mockApiGet = vi.fn();
+vi.mock('../../../../services/api', () => ({
+  default: { get: (...a: unknown[]) => mockApiGet(...a) },
 }));
 
 /* ------------------------------------------------------------------ *
@@ -117,17 +122,26 @@ describe('HtmlRenderer renders HTML inline via src=<raw endpoint URL>', () => {
     expect(sandbox).not.toContain('allow-same-origin');
   });
 
-  it('clicking "Open in browser" calls openExternal once with dynamic base + /api/workspace/file/raw + encoded path', () => {
+  it('"Open in browser" opens the content-origin URL the backend returns', async () => {
+    mockApiGet.mockResolvedValue({ data: { url: 'http://127.0.0.1:18322/f/tok/my%20report.html' } });
     render(<HtmlRenderer {...PROPS} />);
     fireEvent.click(screen.getByText('Open in browser'));
-    expect(mockOpenExternal).toHaveBeenCalledTimes(1);
-    expect(mockOpenExternal).toHaveBeenCalledWith(
-      `http://localhost:18321/api/workspace/file/raw?path=${encodeURIComponent(PROPS.filePath)}`,
-    );
-    // encodeURIComponent must have escaped the space (no raw space in the URL)
+    await waitFor(() => expect(mockOpenExternal).toHaveBeenCalledTimes(1));
+    expect(mockApiGet).toHaveBeenCalledWith('/workspace/content-url', { params: { path: PROPS.filePath } });
+    expect(mockOpenExternal).toHaveBeenCalledWith('http://127.0.0.1:18322/f/tok/my%20report.html');
+  });
+
+  it.each([
+    ['the origin is off', () => mockApiGet.mockResolvedValue({ data: { url: null } })],
+    ['the lookup fails', () => mockApiGet.mockRejectedValue(new Error('down'))],
+  ])('"Open in browser" falls back to the raw URL when %s', async (_n, arrange) => {
+    arrange();
+    render(<HtmlRenderer {...PROPS} />);
+    fireEvent.click(screen.getByText('Open in browser'));
+    await waitFor(() => expect(mockOpenExternal).toHaveBeenCalledTimes(1));
     const calledUrl = mockOpenExternal.mock.calls[0][0] as string;
+    expect(calledUrl).toBe(EXPECTED_RAW_URL);
     expect(calledUrl).not.toContain(' ');
-    expect(calledUrl).toContain('my%20report.html');
   });
 
   it('Source toggle shows the raw HTML markup in-app (no iframe path)', () => {

@@ -1540,6 +1540,13 @@ async def lifespan(app: FastAPI):
         from core.swarm_out import run_refresh_loop as _swarm_out_refresh_loop
         _swarm_out_refresh_task = asyncio.create_task(_swarm_out_refresh_loop(), name="swarm-out-refresh")
 
+    # ── Read-only content origin for "Open in browser" (desktop launchers only) ──
+    # docs/design/2026-10-31-swarm-out-ops-registry.md §5.5; core/content_origin.py.
+    _content_origin_on = os.environ.get("SWARMAI_MODE") in ("daemon", "subprocess")
+    if _content_origin_on:
+        from core import content_origin as _content_origin
+        await _content_origin.start(backend_port)
+
     # ── Hive spend into the host's usage ledger (host only) ───────────
     # Pulls each running Hive's new usage rows (core/usage_hive_sync), every 15 min.
     if backend_mode != "hive":
@@ -1684,6 +1691,9 @@ async def lifespan(app: FastAPI):
         _swarm_out_bridge_task.cancel()
     if _swarm_out_refresh_task and not _swarm_out_refresh_task.done():
         _swarm_out_refresh_task.cancel()
+    if _content_origin_on:
+        from core import content_origin as _content_origin
+        await _content_origin.stop()
     if backend_mode != "hive":
         from core.swarm_out import cancel_refresh as _swarm_out_cancel_refresh
         _swarm_out_cancel_refresh()
