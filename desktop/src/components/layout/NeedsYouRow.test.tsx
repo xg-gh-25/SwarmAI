@@ -51,3 +51,29 @@ describe('NeedsYouRow', () => {
     expect(show).not.toHaveBeenCalled();
   });
 });
+
+describe('NeedsYouRow labels follow the interface language', () => {
+  it('the source label and the send button read in Chinese when the interface is Chinese', async () => {
+    const i18n = (await import('../../i18n')).default;
+    await i18n.changeLanguage('zh');
+    try {
+      render(<NeedsYouRow item={item({ id: 'governance:GC1', source: 'governance', dispatch: { message: 'm' } })}
+        onFill={vi.fn()} onSend={vi.fn()} />);
+      expect(screen.getByText('规则提议')).toBeTruthy();
+      expect(screen.getByTestId('needs-you-row-send').getAttribute('title')).toBe('直接发送');
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  it('every backend source has a label in both languages', async () => {
+    const en = (await import('../../i18n/locales/en.json')).default as { needYou: { source: Record<string, string> } };
+    const zh = (await import('../../i18n/locales/zh.json')).default as { needYou: { source: Record<string, string> } };
+    const sources: AttentionEntry['source'][] = ['escalation', 'paused_run', 'governance', 'job', 'job_digest',
+      'db_recovery', 'ingestion', 'local_root', 'swarm_out'];
+    for (const s of sources) {
+      expect(en.needYou.source[s]).toBeTruthy();
+      expect(zh.needYou.source[s]).toBeTruthy();
+    }
+  });
+});

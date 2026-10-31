@@ -18,7 +18,7 @@
  */
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../services/attention';
+import type { AttentionEntry } from '../../services/attention';
 import { getOverlayCtxBridge } from './overlayRegistry';
 
 /** True for an item that opens the Swarm Out tab instead of filling the chat. */
@@ -61,7 +61,7 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
         type="button"
         data-testid={`${testid}-fill`}
         onClick={() => (swarmOut ? openSwarmOut() : onFill(prompt))}
-        title={swarmOut ? t('needYou.openSwarmOut') : 'Add to the chat input'}
+        title={swarmOut ? t('needYou.openSwarmOut') : t('needYou.fillHint')}
         className="flex-1 min-w-0 w-full text-left flex items-start gap-2.5 pl-4 pr-2 py-2 hover:bg-[var(--color-hover)] transition-colors cursor-pointer"
       >
         {lead && <span className="mt-[4px] shrink-0">{lead}</span>}
@@ -72,15 +72,15 @@ export function NeedsYouRow({ item, onFill, onSend, lead, divider = false, testi
           )}
         </span>
         <span className="shrink-0 mt-[2px] text-meta text-[var(--color-text-muted)] px-[7px] py-px rounded-md bg-[var(--color-hover)]">
-          {ATTENTION_SOURCE_LABEL[item.source] ?? item.source}
+          {t(`needYou.source.${item.source}`, { defaultValue: item.source })}
         </span>
       </button>
       {!swarmOut && <button
         type="button"
         data-testid={`${testid}-send`}
         onClick={() => onSend(prompt)}
-        title="Send now"
-        aria-label={`Send now: ${item.title}`}
+        title={t('needYou.sendNow')}
+        aria-label={t('needYou.sendNowLabel', { title: item.title })}
         className="icon-btn-lg shrink-0 grid place-items-center text-[var(--color-text-muted)] hover:text-[var(--color-brand-strong)] hover:bg-[color-mix(in_srgb,var(--color-brand)_16%,transparent)] transition-colors"
       >
         <span className="material-symbols-outlined icon-md">arrow_upward</span>

@@ -141,7 +141,7 @@ export function attentionText(t: TFunction, item: FlowAttention): { main: string
     }
     case 'spelling':
       return { main: t('cdf.att.spelling', { example: item.example ?? '' }), prompt: t('cdf.att.spellingPrompt') };
-    case 'failed': case 'waiting_long': case 'breaker': case 'links_skipped':
+    case 'failed': case 'waiting_long': case 'links_skipped':
     {
       const main = t(`cdf.att.${item.code}`, { n: count });
       return { main, prompt: main };

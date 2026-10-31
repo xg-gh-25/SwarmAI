@@ -37,7 +37,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 import logging
-import math
 import re
 
 from config import get_app_data_dir
@@ -60,42 +59,11 @@ _DIGEST_FRESH_HOURS = 20
 TIER_BLOCKING = "blocking"
 TIER_REVIEW = "review"
 
-# Human-readable phrasing for cognitive source-classes, kept in sync with the
-# frontend CMBrainOverlay CLASS_PHRASE map. A governance proposal's raw class
-# (CLASS_A/B/C/...) is meaningless to the user — this turns it into the failure
-# pattern the rule is meant to prevent, so the "Need You" card reads as a sentence
-# ("inferred without verifying · recurred 3×") instead of a bare type ("governance rule").
-_CLASS_PHRASE = {
-    "CLASS_A": "over-confidence → skipped a step",
-    "CLASS_B": "inferred without verifying",
-    "CLASS_C": "fixed the wrong layer",
-    "SESSION_LOW_QUALITY": "low-quality session signal",
-}
-
-
-def _class_phrase(source_class: str) -> str:
-    if not source_class:
-        return "recurring pattern"
-    return _CLASS_PHRASE.get(source_class, f"recurring pattern ({source_class})")
-
-
 # ── Plain-language writing (design welcome-screen-v2.md "Needs you rows") ──────
 # Everything an item carries is read by the USER first: `title` says what is
 # needed of them, `summary` says which thing it is, `dispatch.message` is written
 # in the user's voice (they may send it as-is) with the facts a person can read,
 # and the ids an agent needs go on one closing "References" line.
-
-#: A governance class as a person would name the mistake (title wording).
-_CLASS_HUMAN = {
-    "CLASS_A": ("steps skipped out of over-confidence",
-                "skipping a step out of over-confidence"),
-    "CLASS_B": ("claims made without checking",
-                "making a claim or a change without checking it first"),
-    "CLASS_C": ("fixes made in the wrong place",
-                "fixing a problem in the wrong place"),
-    "SESSION_LOW_QUALITY": ("sessions missing what was asked",
-                            "a session working on something other than what was asked"),
-}
 
 _SUMMARY_MAX = 160
 _FACT_MAX = 2000
@@ -218,101 +186,50 @@ def _collect_escalations(workspace_root: Path) -> list[AttentionItem]:
 
 
 def _collect_governance() -> list[AttentionItem]:
-    """Workspace-global governance proposals (rule/gate) → REVIEW, brain=None (OS-level).
+    """Pending governance proposals → REVIEW, brain=None (OS-level).
 
-    Governance is NOT per-project: it changes SOUL/AGENT rules for the whole OS,
-    so it has no project field → brain=None. It is excluded from per-brain counts
-    (see brain-card _pending_count) and rendered in the overlay's OS-level group.
+    A proposal is an EVOLUTION.md Governance Candidates row at 3× evidence whose
+    Checked cell says what it was checked against (core/evolution/governance_miner).
+    Governance is NOT per-project: it changes SOUL/AGENT rules for the whole OS, so it
+    has no project field → brain=None, excluded from per-brain counts and rendered in
+    the overlay's OS-level group. The verdict is given on the C&M dashboard; the item's
+    message asks the agent to explain the proposal so the person can decide.
     """
     items: list[AttentionItem] = []
     try:
         from core.eval_service import get_eval_service
 
-        pending = get_eval_service().get_pending_governance()
-        for gp in pending.get("proposals", []):
-            gid = gp.get("id") or gp.get("proposal_id") or ""
-            kind = gp.get("proposal_kind") or gp.get("kind") or "rule"
-
-            # Title: an explicit title/summary wins; otherwise name the MISTAKE in
-            # plain words from the class (the producers' proposed_rule is often a
-            # template such as "Recurring CLASS_B pattern (112x) … propose an L1
-            # rule", which tells a person nothing). proposed_rule still goes into
-            # the prompt as the proposal's own text. Only a STRING proposed_rule is
-            # usable — a list/dict would str() to a Python repr.
-            raw_rule = gp.get("proposed_rule")
-            rule_text = raw_rule.strip() if isinstance(raw_rule, str) else ""
-            explicit = gp.get("title") or gp.get("summary")
-            cls = str(gp.get("source_class") or "")
-            short, long_ = _CLASS_HUMAN.get(cls, (
-                f"a recurring mistake ({cls})" if cls else "a recurring mistake",
-                f"a recurring mistake ({cls})" if cls else "a recurring mistake"))
-            if explicit:
-                title = str(explicit)
-            elif kind == "gate":
-                title = f"A rule isn't working: {short} still happen"
-            elif cls in _CLASS_HUMAN:
-                title = f"The same mistake keeps happening: {short}"
-            else:
-                title = f"SwarmAI suggests a new {kind} for {short}"
-
-            # Detail: the human failure-pattern this rule prevents + how often it
-            # recurred + confidence — the "why you're seeing this" the card lacked.
+        for gp in get_eval_service().get_pending_governance().get("proposals", []):
+            gid = str(gp.get("id") or gp.get("gc_id") or "")
+            # producer fields are untrusted: only a string is shown (a list or dict
+            # would str() to a Python repr)
+            rule, checked, explicit = (v.strip() if isinstance(v, str) else ""
+                                       for v in (gp.get("proposed_rule"), gp.get("checked"),
+                                                 gp.get("title")))
             occ = gp.get("occurrence_count")
-            conf = gp.get("confidence")
-            phrase = _class_phrase(cls)
-            bits = [phrase]
-            occ_n: Optional[int] = None
-            conf_pct: Optional[int] = None
-            # `not isinstance(bool)`: bool is an int subclass — `True` would render
-            # "recurred True×". Accept int OR float (a producer may write 3.0); the
-            # confidence field below already accepts float, so keep them symmetric.
-            # `math.isfinite`: int(inf)→OverflowError, int(nan)→ValueError would
-            # abort the whole proposals loop (one try/except) and silently drop
-            # every remaining governance card.
-            if isinstance(occ, (int, float)) and not isinstance(occ, bool) and math.isfinite(occ):
-                occ_n = int(occ)
-                bits.append(f"recurred {occ_n}×")
-            if isinstance(conf, (int, float)) and not isinstance(conf, bool):
-                # Clamp to [0,1] — an unvalidated producer field of 1.5 or -0.2
-                # would otherwise print "150% confidence" / "-20% confidence".
-                # (max/min also collapses nan→1.0 safely; no int() on conf.)
-                conf = max(0.0, min(1.0, float(conf)))
-                conf_pct = round(conf * 100)
-                bits.append(f"{conf_pct}% confidence")
-            why = " · ".join(bits)
-            rationale = str(gp.get("rationale") or gp.get("description") or "").strip()
-            detail = f"{why} — {rationale}" if rationale else why
-
-            fix = "an automatic check" if kind == "gate" else "a new rule"
-            seen = (f"Still seen {occ_n} times after its rule" if kind == "gate" and occ_n is not None
-                    else f"Seen {occ_n} times" if occ_n is not None else "Seen repeatedly")
+            seen = (f"Seen {occ} times" if isinstance(occ, int) and not isinstance(occ, bool)
+                    else "Seen repeatedly")
+            title = explicit or rule or f"Rule proposal {gid}"
             examples = [_one_line(e) for e in (gp.get("evidence") or [])
                         if isinstance(e, str) and e.strip()][:3]
-            if kind == "gate":
-                ask = (f"A rule against {long_} is already in place, but it keeps happening"
-                       f"{f' ({occ_n} times since)' if occ_n is not None else ''}. SwarmAI suggests "
-                       "turning it into an automatic check. Explain the problem simply, say what the "
-                       "check would block, and let me decide.")
-            else:
-                ask = (f"SwarmAI noticed the same mistake {f'{occ_n} times' if occ_n is not None else 'again and again'}: "
-                       f"{long_}. It suggests adding a rule against it. Explain the problem simply, "
-                       "draft the rule in one or two sentences, and let me decide.")
             items.append(AttentionItem(
                 id=f"governance:{gid}",
                 source="governance",
                 tier=TIER_REVIEW,
                 brain=None,  # OS-level — no owning brain
                 title=title[:120],
-                summary=f"{seen} · SwarmAI suggests {fix}",
-                detail=detail[:400],
+                summary=f"{seen} · SwarmAI suggests a new rule",
+                detail=(checked or rule)[:400],
                 dispatch={
                     "message": _prompt(
-                        ask,
-                        [("Proposal text", rule_text),
-                         ("Examples", "".join(f"\n- {e}" for e in examples))],
-                        [f"proposal {gid}" + (f" ({conf_pct}% confidence)" if conf_pct is not None else "")],
+                        "SwarmAI suggests a new rule for how it works. Explain the problem it "
+                        "prevents in simple words, say how it differs from the rules already "
+                        "in place, and let me decide.",
+                        [("Proposed rule", rule), ("Checked against", checked),
+                         ("Evidence", "".join(f"\n- {e}" for e in examples))],
+                        [f"proposal {gid} (EVOLUTION.md Governance Candidates)"],
                     ),
-                    "context": {"kind": "governance", "proposal_id": gid, "proposal_kind": kind},
+                    "context": {"kind": "governance", "proposal_id": gid},
                 },
             ))
     except Exception as exc:
@@ -817,14 +734,10 @@ def _collect_ingestion() -> list[AttentionItem]:
     import json
     import sqlite3
     from contextlib import closing
-    from datetime import datetime, timezone
 
     titles = {
-        "breaker": "Cognitive Distillation paused a source",
-        "backlog": "Cognitive Distillation has waited over 24 hours",
         "id_collision": "Cognitive Distillation found an ID collision",
         "writer_unknown": "A governed file changed outside Cognitive Distillation",
-        "judge_down": "The Cognitive Distillation judge has been down over an hour",
         "user_race": "A file changed while Cognitive Distillation was writing",
         "poison": "A Cognitive Distillation item repeatedly failed",
         "restored_orphan": "A restored file has no matching audit record",
@@ -832,11 +745,8 @@ def _collect_ingestion() -> list[AttentionItem]:
         "stalled": "Cognitive Distillation has stopped moving",
     }
     prompts = {
-        "breaker": "Check why Cognitive Distillation paused a source and tell me how to restore it safely.",
-        "backlog": "Check why Cognitive Distillation has a backlog older than 24 hours and fix the cause.",
         "id_collision": "Inspect the Cognitive Distillation ID collision and explain which candidate is trustworthy.",
         "writer_unknown": "Inspect the governed file change that bypassed Cognitive Distillation and tell me what changed.",
-        "judge_down": "Check why the Cognitive Distillation judge has been unavailable for over an hour.",
         "user_race": "Inspect the Cognitive Distillation user-race record and preserve the user's version.",
         "poison": "Inspect the repeatedly failing Cognitive Distillation item and fix the root cause; then run `\"$SWARM_BACKEND_BIN\" ingest requeue --reason <its reason>` so those units are processed again.",
         "restored_orphan": "Inspect the restored Cognitive Distillation orphan without changing the restored file.",
@@ -860,7 +770,6 @@ def _collect_ingestion() -> list[AttentionItem]:
 
     items: list[AttentionItem] = []
     seen: set[str] = set()
-    now = datetime.now(timezone.utc)
     if stalled:
         # computed from the store, not an event: it clears by itself once CDF moves
         summary = _one_line("; ".join(stalled))
@@ -879,15 +788,6 @@ def _collect_ingestion() -> list[AttentionItem]:
             detail = json.loads(row["detail"])
         except (TypeError, ValueError):
             detail = {"detail": str(row["detail"] or "")}
-        if kind == "backlog" and int(detail.get("oldest_wait_seconds", 0) or 0) <= 86400:
-            continue
-        if kind == "judge_down":
-            try:
-                started = datetime.fromisoformat(str(detail.get("since") or row["at"]).replace("Z", "+00:00"))
-                if (now - started).total_seconds() <= 3600:
-                    continue
-            except (TypeError, ValueError):
-                continue
         seen.add(kind)
         summary = _one_line(str(detail.get("summary") or detail.get("reason") or kind))
         tier = TIER_BLOCKING if kind in {"user_race", "writer_unknown"} else TIER_REVIEW

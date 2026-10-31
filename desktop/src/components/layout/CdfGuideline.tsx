@@ -177,8 +177,8 @@ export function CdfGuideline() {
       '一条判断：原则、纠正、决定、心智模型、做法、坑或流程。唯一会产生复利的一类。')],
     [say('Gap', '缺口'), say('Something still open: debt, a risk, a deferred finding, a process issue, a follow-up. Closed when an event says it is done.',
       '还没解决的事：技术债、风险、推迟的发现、流程问题、待跟进。等有事件说明做完了才关闭。')],
-    [say('Event', '事件'), say('What happened and what it changed. Only appended, summarised by month, read for retros.',
-      '发生了什么、带来了什么影响。只追加，按月汇总，供复盘用。')],
+    [say('Event', '事件'), say('What happened and what it changed. Kept as history, summarised by month, read for retros; a later review of the same session replaces one it wrote earlier that no longer holds.',
+      '发生了什么、带来了什么影响。作为历史保留，按月汇总，供复盘用；同一会话后来的复盘会替换它自己先前写下、已经不成立的那条。')],
     [say('Reference', '参考资料'), say('A document or a link worth keeping. Recalled, never treated as judgment.',
       '值得留下的文档或链接。可以召回，但不当作判断。')],
   ];

@@ -346,6 +346,7 @@ function ProposalCard({
 }) {
   const id = String(item.id ?? 'unknown');
   const [state, setState] = useState<null | string>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const conf = typeof item.confidence === 'number' ? (item.confidence as number) : null;
 
   // A Governance Candidate (EVOLUTION.md GC row): 3× evidence, already checked
@@ -367,7 +368,14 @@ function ProposalCard({
 
   async function act(decision: 'accept' | 'reject' | 'defer') {
     setState(decision);
-    try { await onDecide(kind, id, decision); } catch { setState(null); }
+    setRefused(null);
+    try { await onDecide(kind, id, decision); } catch (err) {
+      // the backend's reason (e.g. the row quotes a phrase the memory guard blocks) is
+      // shown on the card; without it a refused decision looked like a dead button
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      setRefused(typeof detail === 'string' && detail ? detail : 'The decision could not be saved.');
+      setState(null);
+    }
   }
 
   return (
@@ -384,6 +392,7 @@ function ProposalCard({
         {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-meta text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
       </div>
       {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-small leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
+      {refused && <div data-testid="cm-card-refused" role="alert" className="mt-2 text-small text-[var(--color-status-error)]">{refused}</div>}
       <div className="mt-2.5 flex items-center justify-between">
         <span className="font-mono text-meta text-[var(--color-text-faint)]">{id}</span>
         {state ? (

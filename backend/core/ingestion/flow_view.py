@@ -241,16 +241,12 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
                AND NOT (u.state='deferred' AND COALESCE(u.defer_reason, u.reason, '')
                         IN ({','.join('?' * len(parked))}))""",
             (_iso(_utc_now() - timedelta(hours=24)), *parked)).fetchone()[0])
-        links_skipped = breakers = 0
+        links_skipped = 0
         if _table_exists(conn, "ingestion_events"):
-            for kind, count in conn.execute(
-                    """SELECT kind, COUNT(*) FROM ingestion_events
-                       WHERE resolved=0 AND at >= ? AND kind IN ('relation_skipped','breaker')
-                       GROUP BY kind""", (since,)):
-                if kind == "relation_skipped":
-                    links_skipped = int(count)
-                else:
-                    breakers = int(count)
+            links_skipped = int(conn.execute(
+                """SELECT COUNT(*) FROM ingestion_events
+                   WHERE resolved=0 AND at >= ? AND kind='relation_skipped'""",
+                (since,)).fetchone()[0])
         # the 30-day cleanup is kept when nothing older than its cutoff (plus the day it
         # runs) is left; no timestamp of its run is recorded anywhere
         oldest_row = conn.execute("SELECT MIN(created_at) FROM ingestion_inbox").fetchone()
@@ -305,8 +301,6 @@ def landed_overview(window: str = "24h") -> dict[str, Any]:
         attention.append({"code": "failed", "count": groups["failed"]})
     if waiting_long:
         attention.append({"code": "waiting_long", "count": waiting_long})
-    if breakers:
-        attention.append({"code": "breaker", "count": breakers})
     if overdue:
         attention.append({"code": "cleanup_overdue", "count": overdue, "bytes": db_bytes, "since": oldest})
     if links_skipped:

@@ -664,7 +664,6 @@ def health() -> dict[str, Any]:
     except OSError:
         db_bytes = 0
     return {"lanes": lanes, "events": event_values,
-            "breakers": [event for event in event_values if event["kind"] == "breaker"],
             "last_cleanup_at": cleanup[0] if cleanup else None,
             "inbox_count": inbox_count, "inbox_bytes": db_bytes,
             "memory_bytes": size("MEMORY.md"), "evolution_bytes": size("EVOLUTION.md"),

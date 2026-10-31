@@ -76,7 +76,7 @@ const unit = {
 const dropped = { ...unit, unitId: 'c2.unit', candidateId: 'c2', title: 'Tenets gap', kind: 'gap', type: 'debt',
   scope: 'project:CNTech IVT Tenets', state: 'rejected', reason: 'project_outside_brain', group: 'place',
   store: null, project: null, path: null, section: null, movedFrom: null, relation: null, target: null };
-const healthData = { lanes: {}, events: [], breakers: [], lastCleanupAt: null, inboxCount: 1, inboxBytes: 100,
+const healthData = { lanes: {}, events: [], lastCleanupAt: null, inboxCount: 1, inboxBytes: 100,
   memoryBytes: 88 * 1024, evolutionBytes: 54 * 1024, llmBySource: [], review: { agentSelfWritten: 2, agentSelfWithdrawn: 0,
     agentSelfWithdrawnRate: 0, byType: { code: { reviews: 1, units: 2, invalid: 0 }, files: { reviews: 0, units: 0, invalid: 0 },
       conversation: { reviews: 3, units: 4, invalid: 1 } } } };

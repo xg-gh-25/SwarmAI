@@ -1953,7 +1953,21 @@
     "review": "Review",
     "reviewHint": "Self-advancing — your input confirms or overrides",
     "tabGuide": "How it works",
-    "openSwarmOut": "Open Swarm Out"
+    "openSwarmOut": "Open Swarm Out",
+    "source": {
+      "escalation": "Question",
+      "paused_run": "Pipeline",
+      "governance": "Rule proposal",
+      "job": "Scheduled job",
+      "job_digest": "Digest",
+      "db_recovery": "Data recovery",
+      "ingestion": "Cognitive Distillation",
+      "local_root": "Repository",
+      "swarm_out": "Swarm Out"
+    },
+    "fillHint": "Add to the chat input",
+    "sendNow": "Send now",
+    "sendNowLabel": "Send now: {{title}}"
   },
   "cdf": {
     "w24h": "24 hours",
@@ -1981,7 +1995,6 @@
     "att": {
       "failed": "{{n}} items failed to process",
       "waiting_long": "{{n}} items have waited more than 24 hours",
-      "breaker": "A source was paused {{n}} times after repeated failures",
       "links_skipped": "{{n}} links to earlier entries could not be made — the linked entry was not found",
       "spelling": "One project is written with two spellings: {{example}}",
       "ask": "Ask Swarm to look",

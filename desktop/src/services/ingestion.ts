@@ -174,7 +174,6 @@ export interface ReviewHealth {
 export interface IngestionHealth {
   lanes: Record<string, { backlog: number; oldestWaitSeconds: number | null }>;
   events: Array<Record<string, unknown>>;
-  breakers: Array<Record<string, unknown>>;
   lastCleanupAt: string | null;
   inboxCount: number;
   inboxBytes: number;

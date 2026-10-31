@@ -179,7 +179,6 @@ class BootstrapProgressResponse(StrictResponse):
 class HealthResponse(StrictResponse):
     lanes: dict[str, dict[str, Any]]
     events: list[dict[str, Any]]
-    breakers: list[dict[str, Any]]
     last_cleanup_at: str | None
     inbox_count: int
     inbox_bytes: int

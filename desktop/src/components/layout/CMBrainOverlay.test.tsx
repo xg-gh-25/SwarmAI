@@ -498,6 +498,23 @@ describe('CMBrainOverlay — AC3/4/5 governance cards + actions', () => {
   });
 });
 
+describe('CMBrainOverlay — a refused decision says why', () => {
+  it('shows the backend reason on the card and keeps its buttons', async () => {
+    mockHealth({}, { governancePending: 2 });
+    (api.post as ReturnType<typeof vi.fn>).mockRejectedValue({
+      response: { status: 400, data: { detail: 'GC14 holds a phrase the memory guard blocks; edit the row' } } });
+    renderOverlay();
+    openOverlay();
+    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
+    act(() => { screen.getByTestId('cm-needs-approve').click(); });
+    const card = await screen.findByTestId('cm-proposal-GC14');
+    act(() => { (card.querySelector('[data-testid="cm-card-accept"]') as HTMLElement).click(); });
+    const refused = await screen.findByTestId('cm-card-refused');
+    expect(refused.textContent).toContain('memory guard blocks');
+    expect(card.querySelector('[data-testid="cm-card-accept"]')).toBeTruthy();
+  });
+});
+
 describe('CMBrainOverlay — Gate-2: lazy Approve list shows loading, not a false empty', () => {
   it('shows a loading state (never "nothing to approve") while the governance list is in flight', async () => {
     // governance/pending resolves on a deferred promise so we can observe the in-flight state

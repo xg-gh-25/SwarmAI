@@ -399,7 +399,7 @@ def test_missing_jobresults_dir_returns_empty(tmp_path):
     assert _collect_job_digests(tmp_path) == []
 
 
-# --- governance card readability (the "governance rule" empty-card fix) ---
+# --- governance card: a GC row proposal (core/evolution/governance_miner) ---
 
 def _patch_governance(monkeypatch, proposals):
     """Drive _collect_governance with a fake eval service returning `proposals`."""
@@ -411,118 +411,53 @@ def _patch_governance(monkeypatch, proposals):
     monkeypatch.setattr(es, "get_eval_service", lambda: _FakeEval())
 
 
-def test_governance_title_names_the_mistake_in_plain_words(monkeypatch):
-    """No explicit title → the title names the MISTAKE a person would recognise
-    (from the class), not the producer's rule text or a bare type; the rule text
-    and the examples go into the prompt; the summary says how often."""
+def test_governance_card_carries_the_rule_what_it_was_checked_against_and_evidence(monkeypatch):
     _patch_governance(monkeypatch, [{
-        "id": "g1", "proposal_kind": "rule",
-        "proposed_rule": "always verify a file exists before editing",
-        "source_class": "CLASS_B", "occurrence_count": 3, "confidence": 0.82,
-        "evidence": ["Edited a file without reading it first", "Guessed a path"],
+        "id": "GC14", "gc_id": "GC14", "title": "Grep every consumer before a contract change",
+        "proposed_rule": "Grep every consumer before a contract change. Tests count too.",
+        "evidence": ["C1 missed a test caller", "C2"], "occurrence_count": 3,
+        "checked": "checked against: R27 — new because it names the grep step",
     }])
-    items = aa._collect_governance()
-    assert len(items) == 1
-    it = items[0]
-    assert it.title == "The same mistake keeps happening: claims made without checking"
+    (it,) = aa._collect_governance()
+    assert (it.id, it.source, it.tier, it.brain) == ("governance:GC14", "governance", TIER_REVIEW, None)
+    assert it.title == "Grep every consumer before a contract change"
     assert it.summary == "Seen 3 times · SwarmAI suggests a new rule"
+    assert it.detail == "checked against: R27 — new because it names the grep step"
     msg = it.dispatch["message"]
-    assert "always verify a file exists before editing" in msg
-    assert "- Edited a file without reading it first" in msg
-    assert "CLASS_B" not in it.title and "CLASS_B" not in msg.split("References:")[0]
-    assert msg.rstrip().endswith("References: proposal g1 (82% confidence)")
-    # detail explains WHY: human failure-pattern + recurrence + confidence
-    assert "inferred without verifying" in it.detail
-    assert "recurred 3×" in it.detail
-    assert "82% confidence" in it.detail
+    assert "Tests count too." in msg and "- C1 missed a test caller" in msg
+    assert "new because it names the grep step" in msg
+    assert msg.rstrip().endswith("References: proposal GC14 (EVOLUTION.md Governance Candidates)")
 
 
-def test_governance_gate_title_says_the_rule_is_not_working(monkeypatch):
-    _patch_governance(monkeypatch, [{
-        "id": "CLASS_C:gate", "proposal_kind": "gate", "source_class": "CLASS_C",
-        "occurrence_count": 18, "proposed_rule": "CLASS_C: rule RULE_CLASS_C failed — escalate to a CODE GATE.",
-    }])
-    it = aa._collect_governance()[0]
-    assert it.title == "A rule isn't working: fixes made in the wrong place still happen"
-    assert it.summary == "Still seen 18 times after its rule · SwarmAI suggests an automatic check"
-
-
-def test_governance_explicit_title_wins(monkeypatch):
-    """An explicit title/summary is respected as-is."""
-    _patch_governance(monkeypatch, [{
-        "id": "g2", "proposal_kind": "gate",
-        "title": "Block edits without a prior Read",
-        "proposed_rule": "…", "source_class": "CLASS_A",
-    }])
-    items = aa._collect_governance()
-    assert items[0].title == "Block edits without a prior Read"
-
-
-def test_governance_no_rule_text_is_still_labeled(monkeypatch):
-    """Even with no rule text or class, never fall back to a bare type."""
-    _patch_governance(monkeypatch, [{"id": "g3", "proposal_kind": "rule"}])
-    it = aa._collect_governance()[0]
-    assert it.title == "SwarmAI suggests a new rule for a recurring mistake"
-    assert it.detail  # still carries the class phrase ("recurring pattern")
-
-
-def test_governance_malformed_fields_do_not_leak(monkeypatch):
-    """Adversarial hardening: producer fields are untrusted. bool occurrence_count
-    must NOT render 'recurred True×'; out-of-range confidence must be clamped; a
-    non-string proposed_rule must NOT leak a Python repr into the title."""
-    # bool occurrence_count (bool is an int subclass — the HIGH finding)
-    _patch_governance(monkeypatch, [{
-        "id": "b", "proposal_kind": "rule", "proposed_rule": "x",
-        "source_class": "CLASS_A", "occurrence_count": True, "confidence": True,
-    }])
-    d = aa._collect_governance()[0].detail
-    assert "True×" not in d and "recurred True" not in d
-    assert "100% confidence" not in d  # confidence=True must not become 100%
-
-    # out-of-range confidence is clamped to [0,1]
-    _patch_governance(monkeypatch, [{
-        "id": "c", "proposal_kind": "rule", "proposed_rule": "x",
-        "source_class": "CLASS_A", "confidence": 1.5,
-    }])
-    assert "150%" not in aa._collect_governance()[0].detail
-
-    # float occurrence_count is honored (symmetric with confidence), rendered int
-    _patch_governance(monkeypatch, [{
-        "id": "f", "proposal_kind": "rule", "proposed_rule": "x",
-        "source_class": "CLASS_A", "occurrence_count": 3.0,
-    }])
-    assert "recurred 3×" in aa._collect_governance()[0].detail
-
-    # non-string proposed_rule must not leak a repr — falls back to the safe label
-    _patch_governance(monkeypatch, [{
-        "id": "l", "proposal_kind": "rule", "proposed_rule": ["a", "b"],
-    }])
-    t = aa._collect_governance()[0].title
-    assert "[" not in t and "'" not in t
-    assert t == "SwarmAI suggests a new rule for a recurring mistake"
-    assert "['a'" not in aa._collect_governance()[0].dispatch["message"]
-
-
-def test_governance_nonfinite_occurrence_does_not_abort_loop(monkeypatch):
-    """2nd-round adversarial: int(inf)/int(nan) would throw and, inside the single
-    try/except over the proposals loop, silently drop EVERY remaining card. A
-    poisoned proposal must not take out its siblings."""
+def test_governance_untrusted_fields_never_leak_a_repr(monkeypatch):
+    """Producer fields are untrusted: a list rule, a bool count, a dict title render as
+    nothing, and one bad proposal never drops its siblings."""
     _patch_governance(monkeypatch, [
-        {"id": "bad", "proposal_kind": "rule", "proposed_rule": "x",
-         "source_class": "CLASS_A", "occurrence_count": float("inf")},
-        {"id": "nan", "proposal_kind": "rule", "proposed_rule": "y",
-         "source_class": "CLASS_A", "occurrence_count": float("nan")},
-        {"id": "good", "proposal_kind": "rule", "proposed_rule": "z",
-         "source_class": "CLASS_A", "occurrence_count": 5},
+        {"id": "l", "proposed_rule": ["a", "b"], "occurrence_count": True, "title": {"x": 1}},
+        {"id": "ok", "proposed_rule": "z", "occurrence_count": 5},
     ])
-    items = aa._collect_governance()
-    # all three survive (no exception), and inf/nan just omit the recurred clause
-    ids = {i.id for i in items}
-    assert ids == {"governance:bad", "governance:nan", "governance:good"}
-    bad = next(i for i in items if i.id == "governance:bad")
-    assert "recurred" not in bad.detail  # non-finite → clause dropped, no crash
-    good = next(i for i in items if i.id == "governance:good")
-    assert "recurred 5×" in good.detail
+    bad, good = aa._collect_governance()
+    assert bad.title == "Rule proposal l" and "[" not in bad.dispatch["message"].split("References:")[0]
+    assert bad.summary.startswith("Seen repeatedly")
+    assert good.title == "z" and good.summary.startswith("Seen 5 times")
+
+
+def test_governance_reads_the_real_gc_table(tmp_path, monkeypatch):
+    """End to end through the real eval service: a checked GC row at 3× is an item; an
+    unchecked or decided one is not."""
+    from core import eval_service as es
+    ctx = tmp_path / ".context"
+    ctx.mkdir()
+    (ctx / "EVOLUTION.md").write_text(
+        "## Governance Candidates\n\n"
+        "| ID | Proposed Rule | Evidence | Count | Since | Checked |\n|---|---|---|---|---|---|\n"
+        "| GC1 | \"rule one\" | C1, C2, C3 | 3/3 | 2026-10-01 | checked against: R2 — new because x |\n"
+        "| GC2 | \"rule two\" | C1, C2, C3 | 3/3 | 2026-10-01 | |\n"
+        "| GC3 | \"rule three\" | C1 | ✖ REJECTED 2026-10-02 | 2026-10-01 | checked against: R2 — y |\n",
+        encoding="utf-8")
+    service = es.EvalService(workspace_root=tmp_path)
+    monkeypatch.setattr(es, "get_eval_service", lambda: service)
+    assert [i.id for i in aa._collect_governance()] == ["governance:GC1"]
 
 
 def test_recovery_item_for_a_non_db_store_is_store_specific(tmp_path, monkeypatch):

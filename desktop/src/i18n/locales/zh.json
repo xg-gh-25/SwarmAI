@@ -1953,7 +1953,21 @@
     "review": "待确认",
     "reviewHint": "会自己往前推进，你的意见用来确认或推翻",
     "tabGuide": "工作原理",
-    "openSwarmOut": "打开 Swarm Out"
+    "openSwarmOut": "打开 Swarm Out",
+    "source": {
+      "escalation": "提问",
+      "paused_run": "Pipeline",
+      "governance": "规则提议",
+      "job": "定时任务",
+      "job_digest": "任务结果",
+      "db_recovery": "数据恢复",
+      "ingestion": "认知沉淀",
+      "local_root": "代码仓库",
+      "swarm_out": "Swarm Out"
+    },
+    "fillHint": "放进聊天输入框",
+    "sendNow": "直接发送",
+    "sendNowLabel": "直接发送：{{title}}"
   },
   "cdf": {
     "w24h": "24 小时",
@@ -1981,7 +1995,6 @@
     "att": {
       "failed": "{{n}} 条处理失败",
       "waiting_long": "{{n}} 条等待超过 24 小时",
-      "breaker": "有 source 因反复失败被暂停了 {{n}} 次",
       "links_skipped": "{{n}} 条指向已有条目的关联没连上：找不到被关联的条目",
       "spelling": "同一个项目有两种写法：{{example}}",
       "ask": "让 Swarm 看看",

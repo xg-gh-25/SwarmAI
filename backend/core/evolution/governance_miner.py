@@ -25,14 +25,10 @@ Count cell of undecided GC rows in EVOLUTION.md.
 """
 from __future__ import annotations
 
-import os
 import re
-import shutil
-import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 ACCEPTED = "✔ ACCEPTED"
 REJECTED = "✖ REJECTED"
@@ -101,42 +97,83 @@ def generate_governance_proposals(evolution_md: Path, threshold: int = 3) -> lis
         if not _GC_ROW.match(lines[i]):
             continue
         cells = _cells(lines[i])
-        if len(cells) < 5:
+        if not _pending(cells, threshold):
             continue
         gc_id, rule, evidence_str, count_str = cells[:4]
-        checked = cells[5] if len(cells) > 5 else ""
-        m = _COUNT.match(count_str)          # a verdict does not parse as N/M
-        if not m or int(m.group(1)) < threshold or checked.lower() in _EMPTY_CHECKED:
-            continue
         out.append(GovernanceProposal(
             gc_id=gc_id,
             proposed_rule=rule.strip('"'),
             evidence=[e.strip() for e in evidence_str.split(",") if e.strip()][:5],
-            occurrence_count=int(m.group(1)),
-            checked=checked,
+            occurrence_count=int(_COUNT.match(count_str).group(1)),
+            checked=cells[5] if len(cells) > 5 else "",
         ))
     return out
 
 
-def enqueue_governance_proposals(evolution_md: Path, threshold: int = 3, *,
-                                 llm: Any | None = None) -> int:
-    """Submit eligible cross-run governance measurements through S5."""
-    from core.ingestion.sources.s5_metrics import extract_metrics
-
-    proposals = generate_governance_proposals(evolution_md, threshold)
-    if not proposals:
-        return 0
-    receipts = extract_metrics(
-        "governance-candidates",
-        {"candidate_count": len(proposals),
-         "maximum_occurrences": max(p.occurrence_count for p in proposals),
-         "inferred_candidates": [p.to_proposal_dict() for p in proposals]},
-        run_count=max(p.occurrence_count for p in proposals),
-        llm=llm,
-    )
-    return len(receipts)
+class GovernanceWriteRefused(Exception):
+    """The governed edit path refused a verdict; the message says why."""
 
 
-def mark_gc_decision(evolution_md: Path, gc_id: str, accepted: bool, today: date | None = None) -> bool:
-    """Retired compatibility API; CDF has no human approval mutation phase."""
-    return False
+def _pending(cells: list[str], threshold: int) -> bool:
+    """Whether a GC row's cells make it a pending proposal: an undecided N/M count at
+    the threshold and a Checked cell that says something."""
+    if len(cells) < 5:
+        return False
+    m = _COUNT.match(cells[3])               # a verdict does not parse as N/M
+    checked = cells[5] if len(cells) > 5 else ""
+    return bool(m) and int(m.group(1)) >= threshold and checked.lower() not in _EMPTY_CHECKED
+
+
+def mark_gc_decision(evolution_md: Path, gc_id: str, accepted: bool, today: date | None = None,
+                     threshold: int = 3) -> bool:
+    """Write the human's verdict into the Count cell of every UNDECIDED row with this id.
+
+    EVOLUTION.md is a governed file: the edit goes through the governed path
+    (``apply_user_edit``: archived first, optimistic on the file's revision, the
+    baseline revised with it), so CDF never sees it as a change made outside it. Only a
+    row that is a pending proposal (the filter ``generate_governance_proposals`` uses)
+    is marked, so a decision on one id never gives a verdict to a row nobody was shown.
+    The edit changes those Count cells; like every edit of a governed file, the path
+    also redacts a secret or strips an invisible character found elsewhere in the file.
+
+    Returns True when a row was marked; False when none was, or when the file changed
+    after it was read (nothing is written then). Raises ``GovernanceWriteRefused`` with
+    the reason when the governed path refuses the edit (e.g. the row quotes a phrase
+    the memory guard blocks).
+    """
+    if not evolution_md.is_file():
+        return False
+    import hashlib
+
+    from core.ingestion.governed_edit import StaleRevision, apply_user_edit
+    from core.memory_guard import MemoryGuardError
+
+    verdict = f"{ACCEPTED if accepted else REJECTED} {(today or date.today()).isoformat()}"
+    data = evolution_md.read_bytes()
+    revision = hashlib.sha256(data).hexdigest()    # the revision of the bytes parsed here
+    lines = data.decode("utf-8").split("\n")
+    changed = False
+    for i in _section_lines(lines):
+        m = _GC_ROW.match(lines[i])
+        if not m or m.group(1) != gc_id or not _pending(_cells(lines[i]), threshold):
+            continue
+        spans = [s.start() for s in _CELL_SPLIT.finditer(lines[i])]
+        if len(spans) < 6:
+            continue
+        a, b = spans[3], spans[4]           # the Count cell lies between pipes 4 and 5
+        lines[i] = f"{lines[i][:a + 1]} {verdict} {lines[i][b:]}"
+        changed = True
+    if not changed:
+        return False
+    try:
+        apply_user_edit(evolution_md, "\n".join(lines).encode("utf-8"),
+                        expected_revision=revision, actor="user:governance")
+    except StaleRevision:
+        return False
+    except MemoryGuardError as exc:
+        raise GovernanceWriteRefused(
+            f"{gc_id} holds a phrase the memory guard blocks ({exc}); edit the row's text "
+            "in EVOLUTION.md, then decide again") from exc
+    except (ValueError, PermissionError, RuntimeError) as exc:
+        raise GovernanceWriteRefused(f"{gc_id} could not be written: {exc}") from exc
+    return True

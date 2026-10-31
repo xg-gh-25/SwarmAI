@@ -25,12 +25,13 @@ def _old() -> str:
 def test_collect_ingestion_covers_each_kind_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "ingestion.db"
     conn = sqlite3.connect(path); conn.executescript(SCHEMA_DDL)
-    kinds = ["breaker", "backlog", "id_collision", "writer_unknown", "judge_down", "user_race", "poison", "restored_orphan", "missing_section"]
+    kinds = ["id_collision", "writer_unknown", "user_race", "poison", "restored_orphan", "missing_section"]
+    # kinds of removed mechanisms (the source breaker, the judge, a backlog event no code
+    # writes) are no longer surfaced, even when an old unresolved row is left
+    gone = ["breaker", "backlog", "judge_down"]
     expected_prompt = "在 Projects/Widget/TECH.md 加 `## Runtime Traps`"
-    for kind in kinds:
+    for kind in kinds + gone:
         detail = {"summary": kind}
-        if kind == "backlog": detail["oldest_wait_seconds"] = 90000
-        if kind == "judge_down": detail["since"] = _old()
         if kind == "missing_section": detail["prompt"] = expected_prompt
         conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)", (_old(), kind, json.dumps(detail)))
     conn.execute("INSERT INTO ingestion_events(at,kind,detail,resolved) VALUES(?,?,?,0)", (_old(), "poison", "{}"))

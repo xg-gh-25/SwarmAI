@@ -1464,7 +1464,9 @@ class EvalService:
         drift or go stale. Rows an older version left in .evolution_proposals.json
         are not read (design 2026-10-26-evolution-loop-admission §3.2).
         """
-        return []
+        from core.evolution.governance_miner import generate_governance_proposals
+
+        return [p.to_proposal_dict() for p in generate_governance_proposals(self._evolution_md())]
 
     def get_pending_governance(self) -> dict:
         """List governance proposals awaiting human decision."""
@@ -1492,9 +1494,14 @@ class EvalService:
         if decision == "defer":
             return {"status": "deferred", "proposal_id": proposal_id}
 
-        from core.evolution.governance_miner import mark_gc_decision
+        from core.evolution.governance_miner import GovernanceWriteRefused, mark_gc_decision
 
-        if not mark_gc_decision(self._evolution_md(), target["gc_id"], accepted=(decision == "accept")):
+        try:
+            marked = mark_gc_decision(self._evolution_md(), target["gc_id"],
+                                      accepted=(decision == "accept"))
+        except GovernanceWriteRefused as exc:
+            return {"status": "error", "error": str(exc), "proposal_id": proposal_id}
+        if not marked:
             # The row changed between reading the list and writing the verdict
             # (decided elsewhere, edited or deleted): report it, write nothing.
             return {"status": "not_found", "proposal_id": proposal_id}

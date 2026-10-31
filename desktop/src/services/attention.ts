@@ -30,19 +30,6 @@ export interface AttentionEntry {
   dispatch: { message: string; context?: Record<string, unknown> };
 }
 
-/** Plain label per source, shared by the Need You overlay and the Welcome card. */
-export const ATTENTION_SOURCE_LABEL: Record<AttentionEntry['source'], string> = {
-  escalation: 'Question',
-  paused_run: 'Pipeline',
-  governance: 'Rule proposal',
-  job: 'Scheduled job',
-  job_digest: 'Digest',
-  db_recovery: 'Data recovery',
-  ingestion: 'Cognitive Distillation',
-  local_root: 'Repository',
-  swarm_out: 'Swarm Out',
-};
-
 export interface AttentionResult {
   items: AttentionEntry[];
   counts: { blocking: number; review: number };
