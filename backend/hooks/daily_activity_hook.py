@@ -493,6 +493,7 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
     state moves; no auto-confirm; a person closes it). ``same`` → nothing. One failing
     action does not stop the others. Returns ``{"created", "existing", "to_review"}``
     (ids)."""
+    from core.credential_patterns import redact_credentials
     from core.summarization import TODOS_MAX_NEW
     from core.todo_manager import todo_manager
     from schemas.todo import ToDoCreate, ToDoSourceType
@@ -520,7 +521,8 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
                     done["to_review"].append(action["todo_id"])
             elif action.get("action") == "new":
                 title = action.get("title") or ""
-                if rows is None or not title or _title_key(title) in made:
+                # compared as stored: the create gate redacts credentials in the title
+                if rows is None or not title or _title_key(redact_credentials(title)) in made:
                     continue
                 if allowance <= 0:
                     logger.info("ToDo from %s not written: %d already made that day",
@@ -537,7 +539,7 @@ async def apply_todo_actions(actions: list[dict[str, str]], *, session_id: str, 
                     # any origin (a source narrows it to ToDos with that same source)
                     source=None, source_type=ToDoSourceType.AI_DETECTED,
                     linked_context=json.dumps(context, ensure_ascii=False)))
-                made.add(_title_key(title))
+                made.add(_title_key(todo.title))
                 if todo.id in known:
                     done["existing"].append(todo.id)
                 else:

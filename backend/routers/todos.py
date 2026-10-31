@@ -253,7 +253,23 @@ async def review_todo(todo_id: str, request: ReviewTodoRequest):
         })
         return {"action": "confirm", "todo_id": todo_id, "status": "handled"}
 
-    # reject: close original + spawn a fresh pending todo
+    # reject: close original + spawn a fresh pending todo. A model-written
+    # (ai_detected) copy passes the create gate again: checked BEFORE the original is
+    # closed, so a refusal leaves it as it was, not cancelled with nothing in its place
+    # (the copy itself is made after, or the title dedup would return the original).
+    copy = ToDoCreate(
+        workspace_id=todo.workspace_id,
+        title=todo.title,
+        description=todo.description,
+        source=todo.source,
+        source_type=todo.source_type,
+        priority=todo.priority,
+    )
+    try:
+        if copy.source_type.value == "ai_detected":
+            todo_manager.gate_ai_detected(copy)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     await db.todos.update(todo_id, {
         "review_state": "rejected",
         "review_kind": "manual",
@@ -261,14 +277,7 @@ async def review_todo(todo_id: str, request: ReviewTodoRequest):
         "status": "cancelled",
         "updated_at": now,
     })
-    new_todo = await todo_manager.create(ToDoCreate(
-        workspace_id=todo.workspace_id,
-        title=todo.title,
-        description=todo.description,
-        source=todo.source,
-        source_type=todo.source_type,
-        priority=todo.priority,
-    ))
+    new_todo = await todo_manager.create(copy)
     return {
         "action": "reject",
         "todo_id": todo_id,

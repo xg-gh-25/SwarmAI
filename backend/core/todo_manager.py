@@ -98,7 +98,7 @@ class ToDoManager:
         Validates: Requirements 1.3, 4.1, 6.2
         """
         if data.source_type.value == "ai_detected":
-            data = self._gated_ai_detected(data)
+            data = self.gate_ai_detected(data)
 
         # Default workspace_id to SwarmWS if not provided
         workspace_id = data.workspace_id
@@ -237,9 +237,10 @@ class ToDoManager:
         return sorted(rows, key=lambda r: str(r.get("created_at") or ""))
 
     @staticmethod
-    def _gated_ai_detected(data: ToDoCreate) -> ToDoCreate:
-        """The one gate for a ToDo a model wrote (``ai_detected``, from any producer:
-        the session summary, a migration, the API): credentials redacted, and refused
+    def gate_ai_detected(data: ToDoCreate) -> ToDoCreate:
+        """The gate for a ToDo a model wrote (``ai_detected``) that is created through
+        this manager (the session summary, the migration, POST /api/todos, a review's
+        re-created copy): credentials redacted, and refused
         (ValueError) when the injection scanner flags the title or a sentence of the
         description, or cannot load. The text came from a transcript that may hold
         fetched content, and a ToDo is read back into an agent's context."""
