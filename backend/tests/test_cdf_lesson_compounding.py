@@ -138,3 +138,24 @@ def test_a_repeat_of_this_conversations_own_correction_stays_in_the_general_brai
         raise FileNotFoundError("no store")
     store.connect_ro = unreadable
     assert _repeat(ws, repeats=earlier.shown()).destination.relative_path == GENERAL
+
+
+def test_the_general_brain_is_a_main_cognition_file(tmp_path, monkeypatch):
+    """An automated withdrawal (cleanup, an override, a ticked item) reaches the General
+    Brain documents CDF writes into, and still no other Library document."""
+    from core.ingestion import governed_edit
+    from core.ingestion.gaps import main_cognition_files
+    ws = _ws(tmp_path)
+    _general(ws)
+    files = {p.relative_to(ws).as_posix() for p in main_cognition_files(ws)}
+    assert GENERAL in files
+    assert "Knowledge/Library/org-chart.md" not in files
+    assert not any("style-guide" in f for f in files)
+    monkeypatch.setattr(governed_edit, "get_swarmws", lambda: ws)
+    monkeypatch.setattr(governed_edit, "is_governed", lambda path: True)
+    try:
+        governed_edit.withdraw(_earlier(ws).anchor, "test", actor="cdf:test", status="overridden")
+    except PermissionError as exc:
+        raise AssertionError(f"reach refused a General Brain entry: {exc}")
+    except Exception:
+        pass                     # past the reach check (no store in this fixture)

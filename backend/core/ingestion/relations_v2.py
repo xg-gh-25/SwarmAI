@@ -84,16 +84,16 @@ def _entries_of(path: Path, workspace: Path) -> list[Entry]:
 _GENERAL_CACHE: dict[str, tuple[tuple[int, int], list["Entry"] | None]] = {}
 
 
-def _general_entries(workspace: Path) -> list["Entry"]:
-    """The entries of the General Brain documents CDF writes into (``route_general``):
+def _general_brain(workspace: Path) -> list[tuple[Path, list["Entry"]]]:
+    """The General Brain documents CDF writes into (``route_general``) with their entries:
     the top-level Library documents that hold a CDF entry. A Library document no unit was
     ever written to (an org chart, a standard) and a reference CDF wrote (its header
-    names the one candidate it came from) are not entries a unit is declared against. Parsed once per
-    version of a file (its mtime and size)."""
+    names the one candidate it came from) are not part of it. Parsed once per version of
+    a file (its mtime and size)."""
     lib = Path(workspace) / "Knowledge" / "Library"
     if not lib.is_dir():
         return []
-    out: list[Entry] = []
+    out: list[tuple[Path, list[Entry]]] = []
     seen = set()
     for path in sorted(lib.glob("*.md")):
         try:
@@ -111,11 +111,20 @@ def _general_entries(workspace: Path) -> list["Entry"]:
             brain = "<!-- cand:" in text and _is_brain_document(text)
             hit = (stamp, _entries_of(path, workspace) if brain else None)
             _GENERAL_CACHE[key] = hit
-        if hit[1]:
-            out += hit[1]
+        if hit[1] is not None:
+            out.append((path, hit[1]))
     for key in [k for k in _GENERAL_CACHE if k.startswith(str(lib)) and k not in seen]:
         del _GENERAL_CACHE[key]                       # a file that is gone
     return out
+
+
+def general_brain_files(workspace: Path) -> list[Path]:
+    """The General Brain documents (see ``_general_brain``): a main cognition file."""
+    return [path for path, _ in _general_brain(workspace)]
+
+
+def _general_entries(workspace: Path) -> list["Entry"]:
+    return [entry for _, entries in _general_brain(workspace) for entry in entries]
 
 
 def _is_brain_document(text: str) -> bool:

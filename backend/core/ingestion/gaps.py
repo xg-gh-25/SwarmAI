@@ -213,7 +213,8 @@ def withdraw_ticked(workspace: Path, *, files: "list[Path] | None" = None) -> in
 
 
 def main_cognition_files(workspace: Path) -> list[Path]:
-    """The four DDD documents of every project, plus MEMORY and EVOLUTION."""
+    """The four DDD documents of every project, MEMORY and EVOLUTION, and the General
+    Brain documents CDF writes into (a brain like a project's, read in every project)."""
     from core.project_registry import DDD_CANONICAL_DOCS
     from core.ddd_paths import ddd_path
     out: list[Path] = []
@@ -223,7 +224,8 @@ def main_cognition_files(workspace: Path) -> list[Path]:
             out += [p for doc in DDD_CANONICAL_DOCS
                     if (p := ddd_path(project, "understanding") / doc).is_file()]
     out += [p for n in ("MEMORY.md", "EVOLUTION.md") if (p := workspace / ".context" / n).is_file()]
-    return out
+    from .relations_v2 import general_brain_files
+    return out + general_brain_files(workspace)
 
 
 _DECLARED = """SELECT u.unit_id, i.payload, i.project_snapshot, i.source_ref
