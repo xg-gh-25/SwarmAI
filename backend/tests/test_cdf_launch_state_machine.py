@@ -257,3 +257,39 @@ def test_the_worker_loop_survives_a_pass_that_raises(cdf_env, monkeypatch):
         assert len(passes) == 2
     finally:
         owner.release()
+
+
+def test_machine_errors_back_off_and_error_poisons_get_a_fresh_start_at_startup(cdf_env):
+    """A read-only or locked store is the machine's failure, not the unit's: it backs
+    off like an outage instead of poisoning after three identical errors. A unit an
+    error did poison is queued again at the next startup, when the fix may be in."""
+    import sqlite3
+    _gap_to(True, cdf_env)
+    from core.ingestion import worker as w
+    owner, conn = _owned(cdf_env)
+    try:
+        _worker(cdf_env, owner).run_once(conn)
+        unit_id = conn.execute("SELECT unit_id FROM ingestion_units").fetchone()[0]
+        conn.execute("DELETE FROM ingestion_writes WHERE unit_id=?", (unit_id,))  # no live plan
+
+        def fail(exc, attempts):
+            conn.execute("UPDATE ingestion_units SET state='queued',attempts=?,error_fingerprint=? "
+                         "WHERE unit_id=?", (attempts, w.error_fingerprint(exc), unit_id))
+            w._unit_failed(conn, owner, unit_id, exc)
+            return conn.execute("SELECT state FROM ingestion_units WHERE unit_id=?",
+                                (unit_id,)).fetchone()[0]
+        assert fail(OSError(30, "Read-only file system"), 4) == "deferred"
+        assert fail(sqlite3.OperationalError("database is locked"), 4) == "deferred"
+        assert fail(KeyError("x"), 4) == "failed_poison"      # the code's own error: quick
+
+        _worker(cdf_env, owner)._maintain(conn)                 # the daily pass leaves it
+        assert conn.execute("SELECT state FROM ingestion_units WHERE unit_id=?",
+                            (unit_id,)).fetchone()[0] == "failed_poison"
+        _worker(cdf_env, owner)._maintain(conn, startup=True)
+        state, attempts = conn.execute("SELECT state,attempts FROM ingestion_units WHERE unit_id=?",
+                                       (unit_id,)).fetchone()
+        assert (state, attempts) == ("queued", 0)
+        assert not conn.execute("SELECT 1 FROM ingestion_events WHERE kind='poison' AND resolved=0"
+                                ).fetchone()
+    finally:
+        conn.close(); owner.release()

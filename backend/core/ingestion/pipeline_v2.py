@@ -482,32 +482,47 @@ def requeue_units(reason: str) -> int:
     from .store import connect_rw
     conn = connect_rw()
     try:
-        rows = conn.execute(
+        return _requeue(conn, conn.execute(
             "SELECT unit_id,candidate_id FROM ingestion_units WHERE state IN ('failed_poison','deferred') "
             "AND reason=?",
-            (reason,)).fetchall()
-        if not rows:
-            return 0
-        ids = [str(row[0]) for row in rows]
-        candidates = sorted({str(row[1]) for row in rows})
-        marks = ",".join("?" for _ in ids)
-        cursor = conn.execute(
-            f"""UPDATE ingestion_units SET state='queued',reason=NULL,defer_reason=NULL,attempts=0,
-                       next_attempt_at=NULL,error_class=NULL,error_fingerprint=NULL,
-                       updated_at=?
-                WHERE unit_id IN ({marks}) AND state IN ('failed_poison','deferred')""",
-            (_now_iso(), *ids))
-        conn.execute(
-            f"""UPDATE ingestion_events SET resolved=1 WHERE kind='poison' AND resolved=0
-                  AND json_extract(detail,'$.unit_id') IN ({marks})""", ids)
-        count = cursor.rowcount
-        # recomputed from the units by the one aggregation the worker uses (a candidate
-        # can be done or still in_progress, and the worker selects neither); it commits
-        from .worker import reaggregate_candidates
-        reaggregate_candidates(conn, candidates)
-        return count
+            (reason,)).fetchall())
     finally:
         conn.close()
+
+
+def requeue_error_poisons(conn) -> int:
+    """At startup, give every unit an exception poisoned (it carries the error's
+    fingerprint) a fresh start: the binary may now hold the fix, and without this the
+    unit stays lost until someone names its reason to ``requeue_units``. A cause that is
+    still there poisons it again after its few quick retries; that is the whole cost."""
+    return _requeue(conn, conn.execute(
+        "SELECT unit_id,candidate_id FROM ingestion_units WHERE state='failed_poison' "
+        "AND error_fingerprint IS NOT NULL").fetchall())
+
+
+def _requeue(conn, rows) -> int:
+    """Put *rows* (unit_id, candidate_id) back to queued with no attempts, resolve their
+    poison events and recompute their candidates."""
+    if not rows:
+        return 0
+    ids = [str(row[0]) for row in rows]
+    candidates = sorted({str(row[1]) for row in rows})
+    marks = ",".join("?" for _ in ids)
+    cursor = conn.execute(
+        f"""UPDATE ingestion_units SET state='queued',reason=NULL,defer_reason=NULL,attempts=0,
+                   next_attempt_at=NULL,error_class=NULL,error_fingerprint=NULL,
+                   updated_at=?
+            WHERE unit_id IN ({marks}) AND state IN ('failed_poison','deferred')""",
+        (_now_iso(), *ids))
+    conn.execute(
+        f"""UPDATE ingestion_events SET resolved=1 WHERE kind='poison' AND resolved=0
+              AND json_extract(detail,'$.unit_id') IN ({marks})""", ids)
+    count = cursor.rowcount
+    # recomputed from the units by the one aggregation the worker uses (a candidate
+    # can be done or still in_progress, and the worker selects neither); it commits
+    from .worker import reaggregate_candidates
+    reaggregate_candidates(conn, candidates)
+    return count
 
 
 def requeue_missing_sections(workspace_root: Path | str, target_path: Path | str | None = None) -> int:

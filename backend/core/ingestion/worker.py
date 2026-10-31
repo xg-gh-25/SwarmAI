@@ -152,7 +152,11 @@ def _defer_or_poison(
     *,
     fingerprint: str | None = None,
     destination: Any = None,
+    environment: bool = False,
 ) -> None:
+    """Defer *unit* for a retry, or poison it when its retries are spent. *environment*
+    marks an error from the machine (a file system or a locked database), not from the
+    unit: it backs off like a judge outage instead of counting toward a quick poison."""
     from .contracts_v2 import PARKED_DEFER_REASONS
 
     if reason in PARKED_DEFER_REASONS:
@@ -189,10 +193,14 @@ def _defer_or_poison(
             )
         return
     attempts = int(unit["attempts"]) + 1
-    # The judge (Bedrock) being unavailable says nothing about the unit: back off up to
-    # an hour and give up only after about a day, so an outage does not poison every
-    # unit tried during it. Anything else is the unit's own failure: short, bounded.
-    infra = reason.startswith(("judge_unavailable", "entailment_unavailable")) or reason in OUTAGE_REASONS
+    # The judge (Bedrock) being unavailable, or the machine failing (a read-only or full
+    # disk, a locked database), says nothing about the unit: back off up to an hour and
+    # give up only after about a day, so an outage does not poison every unit tried
+    # during it. Anything else is short and bounded; a unit poisoned by an error is
+    # tried again at the next startup (``requeue_error_poisons``), when the code that
+    # raised may have been fixed.
+    infra = (environment or reason in OUTAGE_REASONS
+             or reason.startswith(("judge_unavailable", "entailment_unavailable")))
     limit = INFRA_ATTEMPTS if infra else 5
     same_errors = not infra and fingerprint is not None and fingerprint == unit["error_fingerprint"]
     poison = attempts >= limit or (same_errors and attempts >= 3)
@@ -272,7 +280,8 @@ def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exce
     """Record *exc* on the unit it happened to. A malformed payload is rejected. A unit
     with a live write plan belongs to ``writer.recover``. Otherwise the unit (queued, or
     ``writing`` with no plan yet) is deferred with the error's fingerprint, so the
-    bounded retries apply and it is poisoned instead of retried forever."""
+    bounded retries apply and it is poisoned instead of retried forever. An OS or
+    sqlite operational error is the machine's, not the unit's (``environment``)."""
     from pydantic import ValidationError
     logger.warning("CDF unit %s failed: %s: %s", unit_id, type(exc).__name__, exc)
     fresh = conn.execute("SELECT * FROM ingestion_units WHERE unit_id=?", (unit_id,)).fetchone()
@@ -293,7 +302,8 @@ def _unit_failed(conn: sqlite3.Connection, owner: Owner, unit_id: str, exc: Exce
         owner.claim_unit_step(conn, unit_id, "queued", "rejected", reason="malformed_payload")
         return
     _defer_or_poison(conn, owner, fresh, f"error:{type(exc).__name__}",
-                     fingerprint=error_fingerprint(exc))
+                     fingerprint=error_fingerprint(exc),
+                     environment=isinstance(exc, (OSError, sqlite3.OperationalError)))
 
 
 def _json_value(value: Any, default: Any) -> Any:
@@ -667,8 +677,8 @@ class IngestionWorker:
 
     def _maintain(self, conn: sqlite3.Connection, *, startup: bool = False) -> None:
         """Recovery and housekeeping: resume write plans, recompute stranded
-        candidates, clean up, requeue parked units whose domain or section now exists,
-        close the gaps a written run event declared and a concurrent edit left open.
+        candidates, clean up, requeue parked units whose domain or section now exists
+        (and, at startup, units an error poisoned: the code may have changed), close the gaps a written run event declared and a concurrent edit left open.
 
         At startup the run lane has not started, so every unit between its claim and
         its plan is stranded; the daily pass leaves alone a unit that moved in the last
@@ -677,8 +687,10 @@ class IngestionWorker:
         recover(conn, requeue_grace=None if startup else REQUEUE_GRACE)
         reaggregate_candidates(conn)
         cleanup_expired(conn, truncate_wal=startup)
-        from .pipeline_v2 import requeue_missing_sections
+        from .pipeline_v2 import requeue_error_poisons, requeue_missing_sections
         requeue_missing_sections(self.workspace_root)
+        if startup:
+            requeue_error_poisons(conn)
         _close_declared_gaps(conn)
         _apply_overrides(conn)
         _withdraw_ticked(self.workspace_root)
