@@ -3,7 +3,7 @@ title: Pipeline 评审到点就收、落地冲突有路可走
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: r2 — 零上下文审查一轮已并入；未实施
+status: r3 — 已实施（本地 main，未 push、未 build）
 ---
 
 # Pipeline：评审到点就收、落地冲突有路可走
@@ -195,7 +195,20 @@ LG-1（`checks.py:340-358`）要求落地的补丁（patch id，`--verbatim`，`
 
 **上线后**：下一个真实 run 里看每次访问的轮数 ≤ 3；用补记命令给 `run_8437ff7e` 记上落地 commit，看它从 Needs You 消失。
 
+## 6. 实施记录（r3）
+
+实施时和 r2 不同、或 r2 没写清的地方：
+
+- **HIGH 的第二次修复可以带上它的 cluster**：plan_fix_handoff 要求 ±10 行内的发现一起修，所以只给 HIGH 的那一遍允许带上同一 cluster 的发现。`review.fixable` 是唯一的规则，`review-address` 的拒绝和 `findings` / `next` 显示的 "residual" 都读它，不会出现"列表说修、命令拒绝"。
+- **一遍修复何时算完**：R2 没回答、有 address 没派 R2、或 R2 用错词正在重问，都算这一遍还没完；只有都没有了才计数。
+- **第一轮什么都没发现**也算这次访问的评审已关闭，之后改代码同样给出恢复命令。
+- **重问**不改解析规则，原样重派同一份评审输入，开头加上解析器的错误原文；评审输入从 handout 的 prompt 反推（`review.review_input_of`），专家的 prompt 文件改过时就带上原 prompt 的正文。
+- **DELIVER 退回后增量评审的输入**：没有用 `range_diff`（它要建快照 commit），改为给出这些文件"现在 run 的补丁"和"上次评审时的补丁"两段 diff，效果相同，只用 git diff。
+- **landed-as 的校验**：commit 在集成分支上，并且是 run 自己分支的 tip，或者它的补丁和最后一次 REVIEW 完成时记录的补丁逐文件相同（不计 `.aidlc/deliverables/<run>/`）。`run_8437ff7e` 的 `827a1e29b` 正是 run 分支的 tip。
+- **已知、本次不改**：main 上 `test_pipeline_v1_cards.py::test_every_option_in_the_cards_exists_and_no_card_names_the_runner`（evaluate.md 的 `knowledge find --query`）和 `test_pipeline_v1_no_prescription.py::test_cards_and_next_name_inputs_and_exits_only`（review.md 原有的 "fix once"）本来就是红的。
+
 ## 修订记录
 
 - r1 2026-10-31：初稿。
 - r2 2026-10-31：零上下文审查后按原因一次修改。前提改准：11:04 时 `next` 的 action 已经是 stage-complete，矛盾在同一份 `next` 里。改动 1 允许只给 HIGH 的第三轮，删掉"兜底增量评审"，访问边界改用 `review_reopen` 的位置。改动 2 不再改解析规则，改为修好已有的重问（顺序、计数、错误原文）。改动 3 用事实触发、不看 TEST 是否新鲜，复用 TEST 的退回路径和已有的 `range_diff`，patch id 用 `--verbatim`，失败另计、`CHECK_CAUSES` 登记，DELIVER 退回上限改为 1。改动 4 要求 commit 的补丁和 run 的补丁相同，并列出所有读者。
+- r3 2026-10-31：实施，记录与 r2 的差异（§6）。
