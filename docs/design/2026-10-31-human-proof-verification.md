@@ -148,7 +148,7 @@ ad-hoc 签名下每次升级都要重新授权的话，就需要 Developer ID �
    - `shell:allow-kill`；
    - `shell:allow-open`。
 
-   这四条前端都没有用到：打开链接和文件走 `plugin-opener`，后端由 Rust 用 `std::process::Command` 启动，终端用 App 自己的 `pty_*` 命令。今天任何一处脚本注入，都能借它们在沙箱外运行任意代码；删掉不影响任何功能。`desktop/src/__tests__/tauriCapabilities.test.ts` 防止它们被加回来。r2 里写的"sidecar 的 `shell:allow-spawn` 不动"是错的。
+   这四条前端都没有用到：打开链接和文件走 `plugin-opener`，后端由 Rust 用 `std::process::Command` 启动，终端用 App 自己的 `pty_*` 命令。今天任何一处脚本注入，都能借它们在沙箱外运行任意代码；删掉不影响任何功能。`desktop/src/__tests__/tauriCapabilities.test.ts` 防止它们被加回来。shell 插件本身（`lib.rs` 的初始化、`tauri.conf.json` 的配置、Cargo 和 npm 依赖）随后也删掉了。r2 里写的"sidecar 的 `shell:allow-spawn` 不动"是错的。
 2. **发布版关掉 devtools。** 代价是线上出问题时没法开检查器。
 
 **要 XG 定：**
