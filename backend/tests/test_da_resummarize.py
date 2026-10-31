@@ -312,15 +312,20 @@ def test_sentences_over_the_limit_are_written_again_and_nothing_else_changes(ws)
     for r in rows:
         if r["session_id"] == "sess-a":
             r["summary_sentence"] = long
+            r["git_commits"] = ["abc1234 Mine: the parser fix"]
         else:                       # model-written and within the limit: must stay as it is
             r["enriched"] = True
             r["summary_sentence"] = "修好了解析器，测试通过。"
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     other = {r["session_id"]: json.dumps(r, sort_keys=True) for r in R._rows(path) if r["session_id"] != "sess-a"}
+    before = next(r for r in R._rows(path) if r["session_id"] == "sess-a")
     with patch.object(SummarizationPipeline, "_shorten_sentence",
                       classmethod(lambda cls, s, d, n, lim: "评估设计并更新到新版本，等你确认。")):
         asyncio.run(R.shorten_sentences(_args(ws, since="2026-10-14", until="2026-10-20")))
     got = {r["session_id"]: r for r in R._rows(path)}
     assert got["sess-a"]["summary_sentence"] == "评估设计并更新到新版本，等你确认。"
+    # the rewritten row keeps every other field, its commits included
+    assert {k: v for k, v in got["sess-a"].items() if k != "summary_sentence"} == {
+        k: v for k, v in before.items() if k not in ("summary_sentence", "next_items", "resolves")}
     assert {k: json.dumps(v, sort_keys=True) for k, v in got.items() if k != "sess-a"} == other
     assert "评估设计并更新到新版本" in (da / "2026-10-20.md").read_text(encoding="utf-8")

@@ -477,7 +477,7 @@ async def repair(args) -> int:
 
 _SUMMARY_FIELDS = ("topics", "decisions", "files_modified", "open_questions", "deliverables",
                    "key_outputs", "validation_status", "coe_signal", "coe_topic",
-                   "summary_sentence")
+                   "summary_sentence", "git_commits")
 
 
 def summary_of(row: dict):
