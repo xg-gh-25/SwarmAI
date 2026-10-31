@@ -209,8 +209,13 @@ _WHERE = """Where a unit goes follows from what you declare and what it rests on
 - scope "user" (the user's own rule, profile or environment) is read in every future
   session: it is kept there only with user_quote, the user's own words copied verbatim
   (same language, same characters) from one of the user messages it cites.
-- scope "agent" or "world" is read in every future session too: kept there only with a
-  user_quote, or when it cites a measured result. Citing anything else keeps it in the
+- scope "agent" or "world" is read in every future session too, whatever the project:
+  declare it only for what changes how you judge in most tasks (a principle, a decision,
+  a model, a correction, a broad lesson). A fact about one tool, library, API or subject
+  (an error message and its cause, a library's behaviour, a price) is needed only when that
+  subject comes up, however reliable it is: declare "project:<the project, or the subject's
+  own name>" so it is looked up when it is relevant. Kept in every session only with a
+  user_quote, or when it cites a measured result; citing anything else keeps it in the
   general knowledge, looked up when needed in every project.
 - scope "project:<name>" goes to that project's knowledge; a name that is no project goes
   to the general knowledge under that name. The projects that exist are listed below:

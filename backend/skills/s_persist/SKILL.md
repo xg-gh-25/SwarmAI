@@ -163,7 +163,7 @@ session. (Never pass `$SWARM_LAST_USER_EVENT_ID`: a reused CLI keeps the id of t
 it was started on, which is stale from the second turn on.)
 
 ```bash
-printf %s '{"kind":"cognition","type":"guideline","scope":"world","title":"<complete title>","what":"<complete claim>","how":"<action when applicable>","why":"<why it matters>","applicability":"<trigger>","evidence":[]}' | \
+printf %s '{"kind":"cognition","type":"guideline","scope":"<scope>","title":"<complete title>","what":"<complete claim>","how":"<action when applicable>","why":"<why it matters>","applicability":"<trigger>","evidence":[]}' | \
   "$SWARM_BACKEND_BIN" ingest submit --source S1 \
   --evidence last-user --payload-json - --wait 10
 ```
@@ -183,6 +183,12 @@ means the candidate is visible in Cognitive Distillation Flow, not that it faile
 - **Current evidence** — pass `--evidence last-user`; never cite an older turn.
 - **No pre-routing** — scope and project context are hints; CDF owns the final destination.
 - **Governance detection** — behavioral governance still follows its explicit promotion path.
+- **Reach decides the scope** — `"agent"` and `"world"` are read in every future session:
+  use them only for what changes how the agent judges in most tasks (a principle, a
+  decision, a model, a correction, a broad lesson). A fact that matters only when one tool,
+  library, API or subject comes up, however reliable, is `"project:<that project or
+  subject>"` (a subject that is no project goes to the General Brain under its name);
+  the user's own rule or preference is `"user"`.
 - **Project context** — a unit about one project says so in its scope: `"scope":"project:<name>"`
   plus `"topic"` (`decision` / `product` / `architecture` / `lesson`); there is no separate
   project field (an unknown field refuses the unit). Do not invent a project.

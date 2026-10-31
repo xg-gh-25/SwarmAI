@@ -67,7 +67,15 @@ GapKind = Literal["debt", "risk", "deferred_finding", "process_issue", "follow_u
 # as a writing rule; nothing refuses a unit for its length (design 2026-10-29-cdf-refactor
 # §3.5: card 0 counted characters and dropped the most complete units)
 MAX_COGNITION_CHARS = 600
-SCOPE_RULE = 'one of "user", "agent", "world", or "project:<project name>"'
+# The reach is part of the definition (design 2026-10-31-memory-chain-audit M1): agent and
+# world are read in every session (EVOLUTION, MEMORY), so reliability alone must not put a
+# fact there; knowledge that matters only when one tool, library, API or subject comes up
+# is recalled when it does (a project's DDD, or the General Brain under that subject).
+SCOPE_RULE = ('one of "user", "agent", "world", or "project:<project name>". "agent" and '
+              '"world" are read in every future session: only what changes how you judge in '
+              'most tasks, whatever the project (principles, decisions, models, corrections, '
+              'broad lessons). Knowledge that matters only when one tool, library, API or '
+              'subject comes up, however reliable, is "project:<that project or subject>"')
 TOPIC_RULE = ('for scope=project:X only, which project document it belongs in: "decision" (a '
               'project decision), "product" (what the product is for, its users, non-goals), '
               '"architecture" (how it is built, conventions, runtime traps), "lesson" (what '
