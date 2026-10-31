@@ -47,23 +47,42 @@ export function SectionLabel({ children, right, testid }: {
   );
 }
 
-export interface TabItem<K extends string> { key: K; label: string; count?: number; testid?: string }
+/** One tab. ``tone: 'alert'`` colours its count as something waiting on the person. */
+export interface TabItem<K extends string> {
+  key: K; label: string; count?: number; testid?: string; tone?: 'alert';
+}
 
-export function Tabs<K extends string>({ items, value, onChange }: {
-  items: TabItem<K>[]; value: K; onChange: (k: K) => void;
+/** The overlay tab bar: a segmented track; the selected tab in the brand colour, the
+ *  others lit on hover, so it reads as a set of switchable views. */
+export function Tabs<K extends string>({ items, value, onChange, label, testid }: {
+  items: TabItem<K>[]; value: K; onChange: (k: K) => void; label?: string; testid?: string;
 }) {
   return (
-    <div role="tablist" className="flex items-center gap-4 border-b border-[var(--color-border)]">
+    <div role="tablist" aria-label={label} data-testid={testid}
+      className="inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg p-[3px]"
+      style={{ background: TINT('--color-text', 6) }}>
       {items.map((t) => {
         const on = t.key === value;
         return (
           <button key={t.key} type="button" role="tab" aria-selected={on} data-testid={t.testid}
             onClick={() => onChange(t.key)}
-            className={clsx('h-9 -mb-px border-b-2 text-body transition-colors',
-              on ? 'border-[var(--color-primary)] text-[var(--color-primary)] font-semibold'
-                 : 'border-transparent text-[var(--color-text-muted)]')}>
+            className={clsx(
+              'inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-body transition-colors',
+              'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]',
+              on ? 'font-semibold text-[var(--color-primary)]'
+                 : 'text-[var(--color-text-muted)] hover:bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)] hover:text-[var(--color-text)]')}
+            style={on ? { background: TINT('--color-primary', 16),
+                          boxShadow: `inset 0 0 0 1px ${TINT('--color-primary', 40)}` } : undefined}>
             {t.label}
-            {t.count != null && <span className="ml-1.5 text-meta text-[var(--color-text-muted)] tabular-nums">{t.count}</span>}
+            {t.count != null && (
+              <span data-testid={t.testid ? `${t.testid}-count` : undefined}
+                className="rounded-full px-1.5 text-[11px] font-semibold leading-[18px] tabular-nums"
+                style={t.tone === 'alert'
+                  ? { background: TINT('--color-status-error', 18), color: 'var(--color-status-error)' }
+                  : { background: TINT('--color-text', 10) }}>
+                {t.count}
+              </span>
+            )}
           </button>
         );
       })}

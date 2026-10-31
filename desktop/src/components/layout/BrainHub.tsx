@@ -30,6 +30,7 @@
  * detail view (default 'overview').
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Tabs } from '../overlay';
 import { useQuery } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useBrainKnowledge, useDistribution,
@@ -245,23 +246,13 @@ function BrainDetailShell(
         onOpenFile={shellOpenFile}
         onResume={summary?.setupState === 'setting-up' ? sendResume : undefined} />
 
-      <div className="flex items-center gap-5 px-4 border-b border-[var(--color-border)] flex-shrink-0" role="tablist" data-testid="brainhub-detail-nav">
-        {TABS.map((t) => {
-          const on = detailView === t.key;
-          // only Needs you carries a count: what the Brain learned asks nothing of the person
-          const count = t.key === 'needs' ? needs : 0;
-          return (
-            <button key={t.key} role="tab" aria-selected={on} data-testid={`brainhub-tab-${t.key}`}
-              onClick={() => onSelectView(t.key)}
-              className={`py-2 -mb-px border-b-2 text-body whitespace-nowrap ${on
-                ? 'border-[var(--color-primary)] text-[var(--color-text)] font-semibold'
-                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
-              {t.label}
-              {count > 0 && <span className="ml-1.5 text-meta font-semibold text-[var(--color-status-error)]"
-                data-testid={`brainhub-tab-count-${t.key}`}>{count}</span>}
-            </button>
-          );
-        })}
+      <div className="px-4 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
+        <Tabs label="Brain views" testid="brainhub-detail-nav" value={detailView} onChange={onSelectView}
+          items={TABS.map((t) => ({
+            key: t.key, label: t.label, testid: `brainhub-tab-${t.key}`,
+            // only Needs you carries a count: what the Brain learned asks nothing of the person
+            ...(t.key === 'needs' && needs > 0 ? { count: needs, tone: 'alert' as const } : {}),
+          }))} />
       </div>
 
       <div className="flex-1 overflow-auto">

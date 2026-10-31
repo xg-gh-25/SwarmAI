@@ -60,7 +60,9 @@ export function NeedYouContent(props: NeedYouContentProps) {
   const [tab, setTab] = useState<NeedYouTab>('attention');
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="needs-you-overlay">
+      <div className="mb-4">
       <Tabs
+        label={t('needYou.title')}
         items={[
           { key: 'attention', label: t('needYou.tabAttention'), testid: 'need-you-tab' },
           { key: 'flow', label: t('needYou.tabFlow'), testid: 'cdf-tab' },
@@ -69,6 +71,7 @@ export function NeedYouContent(props: NeedYouContentProps) {
         value={tab}
         onChange={setTab}
       />
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'attention' && <AttentionQueueContent {...props} />}
         {tab === 'flow' && <CognitiveDistillationFlow onDispatch={props.onDispatch} close={props.close} />}

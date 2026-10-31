@@ -766,7 +766,7 @@ describe('BrainHub — What it learned tab (design 2026-10-30-brain-change-feed)
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-tab-reflect')).toBeTruthy());
     // what it learned asks nothing of the person: no count on its tab
-    expect(screen.queryByTestId('brainhub-tab-count-reflect')).toBeNull();
+    expect(screen.queryByTestId('brainhub-tab-reflect-count')).toBeNull();
     fireEvent.click(screen.getByTestId('brainhub-tab-reflect'));
     await waitFor(() => expect(screen.getByTestId('brainhub-learned')).toBeTruthy());
     expect(screen.getAllByTestId('learned-entry-title').map((e) => e.textContent)).toEqual(['Ship repos as a thin bundle']);
