@@ -49,3 +49,13 @@ class TestRemediation:
         for m in ("ada", "sso", "apikey", "iam_role", "bedrock_api_key", None, "garbage"):
             r = remediation_for(m)
             assert r["message"] and r["fix_text"] and "settings_tab" in r
+
+
+def test_the_account_states_have_their_own_text():
+    """A profile account and another account than the SwarmAI one (core/aws_account)."""
+    a = remediation_for("ada_account")
+    assert "mwinit -f" in a["fix_text"] and "ada credentials update" not in a["fix_text"]
+    p = remediation_for("profile")
+    assert "aws sso login --profile" in p["fix_text"] and p["settings_tab"] == "aws-account"
+    m = remediation_for("account_mismatch")
+    assert "different account" in m["message"] and "mwinit" not in m["fix_text"]

@@ -80,7 +80,12 @@ def set_config_manager(manager: AppConfigManager) -> None:
 
 
 def _probe_aws_credentials() -> bool:
-    """Check if AWS credentials are available via the credential chain."""
+    """Whether AWS credentials are available: the SwarmAI account's verified state when
+    there is one (core/aws_account; no network here), else the default chain."""
+    from core import aws_account
+    if aws_account.active():  # set up, and not known to be failing
+        return (aws_account.get_record() or {}).get("state") not in (
+            aws_account.NEEDS_LOGIN, aws_account.MISMATCH)
     try:
         import boto3
         session = boto3.Session()
@@ -115,8 +120,8 @@ def _bedrock_client(region: str | None = None):
     chain (same chain that already serves live inference — NOT a per-Hive-account
     session). Isolated for test patching.
     """
-    import boto3
-    session = boto3.Session()
+    from core import aws_account
+    session = aws_account.boto_session(region)  # no account: boto3's own default session
     return session.client("bedrock", region_name=region) if region else session.client("bedrock")
 
 

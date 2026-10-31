@@ -5,8 +5,10 @@
  * when `auth === 'expired'` (definitive) — `valid` / `unknown` / undefined →
  * nothing (fail-open on transient/startup ambiguity).
  *
- * METHOD-AWARE (was hardcoded `mwinit -f`): the fix instruction matches the
- * user's actual auth method (fetched once from auth-hint), so an external SSO
+ * METHOD-AWARE (was hardcoded `mwinit -f`): when the SwarmAI AWS account is what
+ * needs the user, its own remediation (GET /api/aws-account `remediation`) is shown
+ * and the button opens Settings → SwarmAI Account. Otherwise the fix instruction
+ * matches the user's auth method (fetched once from auth-hint), so an external SSO
  * user sees `aws sso login`, an Anthropic-direct user is pointed at Settings —
  * never an Amazon-internal command they can't run. Also offers a one-click
  * "Open Settings" deep-link to Settings → AI & Models so the fix is in-app.
@@ -28,6 +30,7 @@
 import { useEffect, useState } from 'react';
 import { useHealth } from '../../contexts/HealthContext';
 import { systemService } from '../../services/system';
+import { awsAccountService } from '../../services/awsAccount';
 
 // Deep-link event: the app shell (ThreeColumnLayoutInner) listens for this and
 // opens Settings on the given tab. Decouples this root-mounted banner from
@@ -89,11 +92,17 @@ export default function CredentialBanner() {
   const [method, setMethod] = useState<Method | undefined>(undefined);
   // undefined until the hint resolves; then true iff ANY credential was detected.
   const [configured, setConfigured] = useState<boolean>(true);
+  // The SwarmAI account's own remediation (backend core/aws_account + auth_remediation)
+  // when it is the account that needs the user; it wins over the environment guess.
+  const [account, setAccount] = useState<{ message: string; fix_text: string; settings_tab: string } | null>(null);
 
   // Fetch the active method once when the banner becomes relevant.
   useEffect(() => {
     if (health.auth !== 'expired') return;
     let cancelled = false;
+    awsAccountService.get()
+      .then((v) => { if (!cancelled) setAccount(v.remediation ?? null); })
+      .catch(() => { /* older backend: the hint below decides */ });
     systemService.getAuthHint()
       .then((h) => {
         if (cancelled) return;
@@ -114,7 +123,10 @@ export default function CredentialBanner() {
   // Render ONLY on a definitive expired signal. valid/unknown/undefined → nothing.
   if (health.auth !== 'expired') return null;
 
-  const { title, body } = remediation(method, configured);
+  const { title, body } = account
+    ? { title: account.message, body: <>{account.fix_text}</> }
+    : remediation(method, configured);
+  const tab = account?.settings_tab ?? 'ai-models';
 
   return (
     <div
@@ -129,7 +141,7 @@ export default function CredentialBanner() {
       <div className="mt-2 flex justify-end">
         <button
           onClick={() => window.dispatchEvent(
-            new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'ai-models' } }),
+            new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab } }),
           )}
           className="btn-sm btn-primary"
         >

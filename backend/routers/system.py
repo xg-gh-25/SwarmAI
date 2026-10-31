@@ -440,6 +440,13 @@ async def set_auth_method(req: SetAuthMethodRequest):
     if req.deployment_context in ("internal", "external"):
         updates["deployment_context"] = req.deployment_context
     AppConfigManager.instance().update(updates)
+    # The SwarmAI account follows the sign-in the user just chose (design
+    # 2026-10-31-swarmai-aws-account §5.6; the wizard owns it from step 4).
+    try:
+        from core import aws_account, executors
+        await executors.run_in("aws_account", aws_account.rederive, AppConfigManager.instance())
+    except Exception:  # noqa: BLE001 — the method is saved; the record catches up at next start
+        logger.warning("aws_account: re-deriving after a sign-in change failed", exc_info=True)
 
     # Eager cleanup on switch AWAY from bedrock_api_key (Meta-review MED,
     # run_9d9f7dff): the spawn-path clear in _configure_claude_environment is

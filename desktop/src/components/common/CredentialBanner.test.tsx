@@ -15,6 +15,10 @@ const mockGetAuthHint = vi.fn();
 vi.mock('../../services/system', () => ({
   systemService: { getAuthHint: (...a: unknown[]) => mockGetAuthHint(...a) },
 }));
+const mockAccountGet = vi.fn();
+vi.mock('../../services/awsAccount', () => ({
+  awsAccountService: { get: (...a: unknown[]) => mockAccountGet(...a) },
+}));
 
 // NOTE: CredentialBanner deliberately does NOT import LayoutContext — it is
 // mounted at the app root (outside LayoutProvider); calling useLayout() there
@@ -33,6 +37,7 @@ function setAuth(auth?: AuthStatus) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetAuthHint.mockResolvedValue({ deploymentContext: 'internal', suggestedMethod: 'ada' });
+  mockAccountGet.mockResolvedValue({ remediation: null });
 });
 
 describe('CredentialBanner', () => {
@@ -148,5 +153,29 @@ describe('CredentialBanner', () => {
     setAuth(undefined);
     const { container } = render(<CredentialBanner />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('CredentialBanner and the SwarmAI account', () => {
+  it("shows the account's own remediation and opens the account page", async () => {
+    mockAccountGet.mockResolvedValue({ remediation: {
+      message: 'Your AWS credentials belong to a different account than your SwarmAI account.',
+      fix_text: 'Fix the sign-in so it reaches the SwarmAI account.', settings_tab: 'aws-account' } });
+    mockGetAuthHint.mockResolvedValue({ deploymentContext: 'internal', suggestedMethod: 'ada', hasAdaDir: true });
+    setAuth('expired');
+    const seen: string[] = [];
+    window.addEventListener('swarm:open-settings', (e) => seen.push((e as CustomEvent).detail.tab));
+    render(<CredentialBanner />);
+    expect(await screen.findByText(/different account/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Open Settings'));
+    expect(seen).toContain('aws-account');
+  });
+
+  it('falls back to the auth hint when the account endpoint fails', async () => {
+    mockAccountGet.mockRejectedValue(new Error('404'));
+    mockGetAuthHint.mockResolvedValue({ deploymentContext: 'external', suggestedMethod: 'sso', hasSsoCache: true });
+    setAuth('expired');
+    render(<CredentialBanner />);
+    await waitFor(() => expect(screen.getByRole('alert').textContent!.toLowerCase()).toContain('aws sso login'));
   });
 });

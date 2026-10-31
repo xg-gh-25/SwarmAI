@@ -512,6 +512,16 @@ def with_app_session_id(session_env: "dict | None", session_context: "dict | Non
     }
 
 
+
+def _aws_account_cli_settings(config: Any) -> dict:
+    """``core.aws_account.cli_settings``, never failing a spawn on its own error."""
+    try:
+        from core import aws_account
+        return aws_account.cli_settings(config) if config is not None else {}
+    except Exception:  # noqa: BLE001 — the CLI then resolves the default chain, as before
+        logger.warning("aws_account cli_settings failed; the CLI uses its own chain", exc_info=True)
+        return {}
+
 class PromptBuilder:
     """System prompt and SDK option construction.
 
@@ -2461,6 +2471,10 @@ class PromptBuilder:
             "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
             # Caps each skill description in the CLI's skill listing (core/skill_listing).
             **listing_settings(),
+            # The CLI's own Bedrock calls use the pinned SwarmAI account (core/aws_account,
+            # design 2026-10-31-swarmai-aws-account §5.3); the agent's shell keeps the
+            # user's AWS configuration. Empty when there is no resolvable account.
+            **_aws_account_cli_settings(self._config),
         }
         # How big that listing is for this session, against its budget. Log only, so
         # it runs in the background and never delays the spawn.

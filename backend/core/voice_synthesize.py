@@ -56,17 +56,21 @@ MAX_TEXT_LENGTH = 3000
 DEFAULT_REGION = os.environ.get("TRANSCRIBE_REGION", "us-east-1")
 
 
-@lru_cache(maxsize=1)
 def _get_polly_client():
-    """Lazy singleton Polly client — created once, cached.
+    """The Polly client (DEFAULT_REGION): on the pinned SwarmAI account (core/aws_account;
+    its credentials refresh themselves) or, without one, the default chain. One cached
+    client per mode, so an account connected after the first call is used from then on."""
+    from core import aws_account
+    return _polly_client_for(aws_account.active())
 
-    Always uses DEFAULT_REGION. The lru_cache(maxsize=1) is safe because
-    there's no region parameter to vary — one client per process lifetime.
 
-    Uses existing AWS SSO credentials (same credential chain as Transcribe).
-    """
-    import boto3
-    return boto3.client("polly", region_name=DEFAULT_REGION)
+@lru_cache(maxsize=2)
+def _polly_client_for(active: bool):
+    from core import aws_account
+    return aws_account.boto_session(DEFAULT_REGION).client("polly")
+
+
+_get_polly_client.cache_clear = _polly_client_for.cache_clear  # the tests' handle
 
 
 def get_voice_for_language(language: str) -> tuple[str, str, str]:

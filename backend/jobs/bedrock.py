@@ -236,7 +236,16 @@ def get_client(*, force_new: bool = False, region: str | None = None) -> Any:
         read_timeout=120,  # Opus 4.6 skill proposals need 60-90s; 60s too tight
     )
 
-    # Pre-resolve credentials (same strategy as executor._get_aws_credentials)
+    from core import aws_account
+    if aws_account.active():
+        # The pinned SwarmAI account; its credentials refresh before they expire, and
+        # an unresolvable account raises instead of falling back to another chain.
+        _client = aws_account.boto_session(region).client("bedrock-runtime", config=boto_config)
+        _client_region = region
+        _client_created_at = time.monotonic()
+        return _client
+
+    # No resolvable account (none found, or a Hive): the default chain, as before.
     creds = _resolve_credentials()
 
     if creds:
@@ -283,8 +292,8 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
     ~30s instead of stalling on the shared 120s client and blowing the eval wall
     — a serial sweep of 89 judges cannot afford a 120s×N tail (run_9fdb8ad5).
 
-    Reuses the same pre-resolved credentials as get_client (the default chain
-    fails under launchd), but does NOT touch the module cache (`_client`) or
+    Uses the same credentials as get_client (the pinned SwarmAI account, or without
+    one the pre-resolved default chain), but does NOT touch the module cache (`_client`) or
     participate in evict_client — it is created, used, and discarded per call
     (a fresh per-call client with shared resolved creds).
 
@@ -306,6 +315,9 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
         connect_timeout=CONNECT_TIMEOUT,
         read_timeout=read_timeout,
     )
+    from core import aws_account
+    if aws_account.active():  # the pinned account; raises instead of another chain
+        return aws_account.boto_session(region).client("bedrock-runtime", config=boto_config)
     creds = _resolve_credentials()
     # its own session: boto3's default one is not thread-safe, and the CDF worker, the
     # session-job thread and the run lane build these clients at the same time

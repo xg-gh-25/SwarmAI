@@ -6332,7 +6332,8 @@ def knowledge_command_denial(command: str) -> "str | None":
 _SWARM_OUT_WORD_RE = re.compile(r"swarm[_-]?out|/api/+hive\b", re.IGNORECASE)
 # the owner's AWS account: who it is, and (with a token) its credentials
 _AWS_ACCOUNT_WORD_RE = re.compile(
-    r"/api/+aws-account\b|(?<![\w-])aws-credentials\b|\bswarm-ai/+aws/|\baws/+daemon\.json\b",
+    r"/api/+aws-account\b|/api/+system/+auth-method\b|(?<![\w-])aws-credentials\b"
+    r"|\bswarm-ai/+aws/|\baws/+daemon\.json\b",
     re.IGNORECASE)
 
 

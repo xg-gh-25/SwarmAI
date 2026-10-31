@@ -548,6 +548,9 @@ class SessionState(Enum):
     DEAD = "dead"
 
 
+#: how long the spawn pre-flight waits for the SwarmAI account check (core/aws_account)
+_ACCOUNT_PREFLIGHT_TIMEOUT_S = 20.0
+
 class SessionUnit:
     """One tab's complete subprocess lifecycle.
 
@@ -3115,21 +3118,51 @@ class SessionUnit:
             from .app_config_manager import AppConfigManager
             from .auth_remediation import remediation_for
 
+            from . import aws_account
+            from . import executors as _executors
+
             _cfg = AppConfigManager.instance()
             _use_bedrock = _cfg.get("use_bedrock", True)
             _auth_method = _cfg.get("auth_method")
+            _chat_via = aws_account.get_chat_via(_cfg)
             # Skip the AWS STS check when the active auth uses NO sigv4 identity:
             #   - Anthropic-direct (API-key) mode: use_bedrock=False, no AWS at all
             #   - Bedrock API-key mode: use_bedrock=True BUT auth is a bearer token
             #     (AWS_BEARER_TOKEN_BEDROCK), which has no STS-resolvable identity —
             #     an STS call would falsely report "expired" and block the spawn.
             # In both cases STS is meaningless; skip it entirely (AC4/AC5).
-            if not _use_bedrock or _auth_method == "bedrock_api_key":
+            if _chat_via != "aws":
                 logger.debug(
                     "session_unit.preflight session_id=%s use_bedrock=%s "
                     "auth_method=%s — skipping AWS STS check (no sigv4 identity)",
                     self.session_id, _use_bedrock, _auth_method,
                 )
+            elif aws_account.active():
+                # The pinned SwarmAI account (core/aws_account): the CLI gets exactly
+                # these credentials through awsCredentialExport.
+                try:
+                    # hang guard: ada can take a minute; past this the spawn goes ahead
+                    # (fail-open, as the old check did on "unknown")
+                    _auth = await asyncio.wait_for(
+                        _executors.run_in("aws_account", aws_account.auth_check),
+                        timeout=_ACCOUNT_PREFLIGHT_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    _auth = "unknown"
+                if _auth in ("expired", "mismatch", "broken"):
+                    _rem = remediation_for(
+                        {"mismatch": "account_mismatch", "broken": "account_broken"}.get(_auth)
+                        or aws_account.remediation_method(_cfg))
+                    logger.warning(
+                        "session_unit.preflight session_id=%s SwarmAI account %s — "
+                        "aborting spawn", self.session_id, _auth,
+                    )
+                    yield _build_error_event(
+                        code="CREDENTIALS_EXPIRED",
+                        message=_rem["message"],
+                        suggested_action=_rem["fix_text"],
+                    )
+                    yield {"_abort": True}
+                    return
             else:
                 _region = _cfg.get("aws_region", "us-east-1")
                 _auth = await session_registry.get_credential_validator().check(_region)

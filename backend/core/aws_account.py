@@ -4,7 +4,7 @@ Design: ``docs/design/2026-10-31-swarmai-aws-account.md`` (§5 mechanism, §9 st
 SwarmAI uses ONE AWS account for Bedrock, Hive, cloud storage and voice. This module
 holds the record of that account and is the place that turns it into credentials.
 
-What step 1 provides (no consumer is migrated yet — design §9 step 2 does that):
+What it provides (steps 1-2 of design §9; Hive is step 3):
 - the record (``config.json`` key ``aws_account``) and the chat path (key ``chat``);
   neither is writable through the generic ``PUT /api/settings`` (``PROTECTED_CONFIG_KEYS``);
 - ``derive_from_legacy``: the record an existing install starts with (design §5.6),
@@ -13,8 +13,18 @@ What step 1 provides (no consumer is migrated yet — design §9 step 2 does tha
   ``instance_role``; ``sso`` / ``login`` / ``keys`` arrive with the wizard, step 4),
   **pinned**: every new access key is checked with STS against the record's account,
   and a different account raises ``AccountMismatch`` instead of being used;
+- ``cli_settings``: the CLI's ``awsCredentialExport`` = ``python-backend aws-credentials``,
+  so the CLI's own Bedrock calls use the pinned account while the agent's shell keeps the
+  user's own AWS configuration (design §5.3);
+- ``boto_session`` / ``auth_check`` / ``region`` / ``credential_resolver``: what the daemon's
+  consumers (jobs, voice, the thinking gateway, settings, the spawn pre-flight, the
+  readiness sampler) use instead of the default chain. While no record can be resolved
+  (no AWS identity found, a source this version cannot resolve, a Hive) ``active()`` is
+  False and each falls back to what it did before: the old path stays until the new one
+  covers the case (design §9);
 - ``write_profile_file``: ``<data dir>/aws/config``, one profile ``swarmai`` whose
-  ``credential_process`` is ``python-backend aws-credentials`` (design §5.3);
+  ``credential_process`` is the same subcommand, for a tool that wants the SwarmAI account
+  explicitly (``AWS_CONFIG_FILE=… AWS_PROFILE=swarmai``); nothing sets it by default;
 - ``write_daemon_endpoint`` / ``token_ok``: how that subcommand reaches this daemon
   (``<data dir>/aws/daemon.json``, port + a per-boot token, 0600);
 - ``run_capability_checks``: Bedrock, Hive, cloud storage, voice (design §7.2). The
@@ -192,10 +202,26 @@ def _update_record(**fields: Any) -> None:
         logger.warning("aws_account: could not save the record's status", exc_info=True)
 
 
-def get_chat_via() -> str:
-    chat = _cfg().get(CHAT_KEY)
-    via = chat.get("via") if isinstance(chat, dict) else None
-    return via if via in ("aws", "bedrock_key", "anthropic") else "aws"
+def get_chat_via(config: Any = None) -> str:
+    """Which path chat takes: ``aws`` (Bedrock on this account), ``bedrock_key`` or
+    ``anthropic``. Until the wizard writes ``chat`` (design §9 step 4) the settings that
+    still choose it are ``use_bedrock`` and ``auth_method``, so it is read from them: one
+    reader, so no consumer can disagree with another."""
+    config = config if config is not None else _cfg()
+    if not config.get("use_bedrock", True):
+        return "anthropic"
+    if config.get("auth_method") == "bedrock_api_key":
+        return "bedrock_key"
+    return "aws"
+
+
+def region(config: Any = None) -> str:
+    """The main region (design §5.1). Settings still writes it as ``aws_region`` until
+    the account page owns it (step 4)."""
+    config = config if config is not None else _cfg()
+    rec = get_record() if config is _cfg() else config.get(RECORD_KEY)
+    value = config.get("aws_region") or (rec or {}).get("region") or "us-east-1"
+    return value if re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", value) else "us-east-1"
 
 
 def is_hive_mode() -> bool:
@@ -410,7 +436,7 @@ def resolve(force: bool = False) -> Creds:
             _cache = None
             state = {"needs_login": NEEDS_LOGIN, "account_mismatch": MISMATCH}.get(
                 exc.kind, UNVERIFIED)
-            _update_record(state=state, state_detail=exc.message)
+            _update_record(state=state, state_detail=exc.message, error_kind=exc.kind)
             raise
         except Exception as exc:  # noqa: BLE001 — STS / network: a key that cannot be pinned is not served
             _cache = None
@@ -418,7 +444,7 @@ def resolve(force: bool = False) -> Creds:
                            state_detail=f"{type(exc).__name__}: {_redact(str(exc))}")
             raise AccountError("verify_failed", f"could not verify: {type(exc).__name__}")
         # every success says so, also when the key was verified before a failed attempt
-        _update_record(state=CONNECTED, state_detail=None)
+        _update_record(state=CONNECTED, state_detail=None, error_kind=None)
         _cache = creds
         return creds
 
@@ -706,18 +732,176 @@ def run_capability_checks(config: Any) -> dict:
 # ── startup + view ─────────────────────────────────────────────────────────────
 
 def ensure_record(config: Any) -> Optional[dict]:
-    """Create the record from the legacy config when there is none (design §5.6)."""
+    """Create the record from the legacy config when there is none (design §5.6). With
+    nothing to derive from, no record is stored and the next start tries again."""
     rec = get_record()
     if rec is not None:
         return rec
-    rec, chat_via = derive_from_legacy(config)
-    updates: dict = {RECORD_KEY: rec}
-    if not isinstance(config.get(CHAT_KEY), dict):
-        updates[CHAT_KEY] = {"via": chat_via or "aws"}
-    _cfg().update(updates)
+    rec, _chat_via = derive_from_legacy(config)
+    if rec is None:
+        return None
+    save_record(rec)
     logger.info("aws_account: record created from the existing config (source=%s)",
-                (rec or {}).get("source"))
+                rec.get("source"))
     return rec
+
+
+#: legacy ``auth_method`` → the record source it should produce
+_METHOD_SOURCE = {"ada": "ada", "sso": "profile"}
+
+
+def rederive(config: Any) -> Optional[dict]:
+    """The sign-in method was changed in the legacy settings (``POST /system/auth-method``):
+    derive the record again so the pinned account follows what the user chose. Until the
+    wizard owns the record (step 4) that endpoint is how a user changes it.
+
+    Only an AWS sign-in method moves the record (an API key changes the chat path, not the
+    account), only to the source that method stands for (a derive that fell back to some
+    other profile is not what the user chose), and never from a pinned account to one
+    with no account id (that would re-pin to whatever answers first)."""
+    with _record_lock:
+        old = get_record()
+        want = _METHOD_SOURCE.get(config.get("auth_method"))
+        if want is None:
+            return old
+        rec, _chat_via = derive_from_legacy(config)
+        if rec is None or rec.get("source") != want or _identity_key(rec) == _identity_key(old):
+            return old
+        if (old or {}).get("account_id") and not rec.get("account_id"):
+            return old
+        save_record(rec)
+    logger.info("aws_account: record re-derived after a sign-in change (source=%s)",
+                rec.get("source"))
+    return rec
+
+
+# ── what the daemon's consumers use (design §5.4) ──────────────────────────────
+
+def active() -> bool:
+    """True when the record can be resolved here: consumers use it, not the default chain."""
+    if is_hive_mode():
+        return False
+    rec = get_record()
+    return rec is not None and rec.get("source") in RESOLVABLE_SOURCES
+
+
+def _refreshable_botocore_session():
+    import botocore.session
+    from botocore.credentials import RefreshableCredentials
+
+    def fetch() -> dict:
+        c = resolve()
+        exp = c.expiration or (datetime.now(timezone.utc) + timedelta(hours=1))
+        return {"access_key": c.access_key_id, "secret_key": c.secret_access_key,
+                "token": c.session_token, "expiry_time": exp.isoformat()}
+
+    bs = botocore.session.get_session()
+    creds = RefreshableCredentials.create_from_metadata(
+        metadata=fetch(), refresh_using=fetch, method="swarmai-account")
+    # botocore asks for new credentials 15 / 10 min before expiry; resolve() keeps them
+    # until 5 min before. Align, or every call in that window goes through resolve().
+    creds._advisory_refresh_timeout = 4 * 60  # noqa: SLF001
+    creds._mandatory_refresh_timeout = 2 * 60  # noqa: SLF001
+    bs._credentials = creds  # noqa: SLF001
+    return bs
+
+
+def boto_session(region_name: Optional[str] = None):
+    """The boto3 session every daemon consumer uses. On the pinned account (credentials
+    refresh through ``resolve`` before they expire) when ``active()``; otherwise the
+    default chain, as before. Raises ``AccountError`` when active and unresolvable:
+    never a silent fall back to the default chain, which could be another account."""
+    import boto3
+    if not active():  # exactly the old default-chain session
+        return boto3.Session(region_name=region_name) if region_name else boto3.Session()
+    return boto3.Session(botocore_session=_refreshable_botocore_session(),
+                         region_name=region_name or region())
+
+
+def auth_check() -> str:
+    """``valid`` | ``expired`` (sign in again) | ``mismatch`` (another account) | ``unknown``,
+    for the spawn pre-flight and the readiness sampler. Only call when ``active()``."""
+    try:
+        resolve()
+        return "valid"
+    except NeedsLogin:
+        return "expired"
+    except AccountMismatch:
+        return "mismatch"
+    except AccountError as exc:
+        return "broken" if exc.kind in _BROKEN_SETUP else "unknown"
+
+
+#: resolution failures retrying will not fix: the record points at something gone or invalid
+_BROKEN_SETUP = {"profile_not_found", "ada_not_found", "bad_record"}
+
+
+def state_check() -> str:
+    """``auth_check``'s answer from the record's last known state, with no network:
+    for the readiness sampler, which must stay instant. Every resolution (a CLI's
+    credential request, a job, the pre-flight) keeps that state current."""
+    rec = get_record() or {}
+    return {CONNECTED: "valid", NEEDS_LOGIN: "expired", MISMATCH: "mismatch"}.get(
+        rec.get("state"), "unknown")
+
+
+def remediation_method(config: Any = None) -> Optional[str]:
+    """The key of ``core.auth_remediation`` that matches how this account signs in."""
+    config = config if config is not None else _cfg()
+    via = get_chat_via(config)
+    if via == "anthropic":
+        return "apikey"
+    if via == "bedrock_key":
+        return "bedrock_api_key"
+    rec = get_record()
+    if active() and rec and rec.get("error_kind") in _BROKEN_SETUP:
+        return "account_broken"
+    if active() and rec:
+        return {"ada": "ada_account", "profile": "profile", "instance_role": "iam_role"}.get(
+            rec.get("source"), config.get("auth_method"))
+    return config.get("auth_method")
+
+
+def credential_export_command() -> str:
+    """The shell command the CLI runs for ``awsCredentialExport``."""
+    return " ".join(_quote(w) for w in backend_command())
+
+
+def cli_settings(config: Any = None, *, bedrock: bool = False) -> dict:
+    """Settings merged into a CLI spawn's ``--settings`` (design §5.3). ``bedrock=True``
+    for a headless run that always uses Bedrock whatever the chat path is (jobs).
+
+    Chat on Bedrock with an active record: ``awsCredentialExport`` makes the CLI ask this
+    daemon (through the subcommand) for the pinned credentials, at start and before
+    they expire, instead of resolving the default chain. Only the CLI's own AWS calls
+    use them; the environment the agent's commands run in keeps the user's AWS
+    configuration, so its own profiles keep working. Otherwise: nothing (as before)."""
+    config = config if config is not None else _cfg()
+    if not active() or (not bedrock and get_chat_via(config) != "aws"):
+        return {}
+    try:
+        return {"awsCredentialExport": credential_export_command()}
+    except ValueError:
+        # the install path holds a character a shell would expand: the CLI then uses its
+        # own default chain (as it does whenever the export fails, design §8)
+        logger.error("aws_account: cannot build the credential export command", exc_info=True)
+        return {}
+
+
+def credential_resolver():
+    """An ``amazon_transcribe`` credential resolver on the pinned account, or None (its
+    own default chain, as before) when not active."""
+    if not active():
+        return None
+    from amazon_transcribe.auth import CredentialResolver, Credentials
+
+    class _Pinned(CredentialResolver):
+        async def get_credentials(self):
+            import asyncio
+            c = await asyncio.to_thread(resolve)
+            return Credentials(c.access_key_id, c.secret_access_key, c.session_token)
+
+    return _Pinned()
 
 
 def startup(port: int) -> None:
@@ -770,4 +954,13 @@ def view() -> dict:
         "capabilities": (rec or {}).get("capabilities"),
         "profile_file": str(profile_file()),
         "supported": rec is None or rec.get("source") in RESOLVABLE_SOURCES,
+        "remediation": _remediation(state),
     }
+
+
+def _remediation(state: str) -> Optional[dict]:
+    """What the credential banner tells the user, for a state that needs them."""
+    if state not in (NEEDS_LOGIN, MISMATCH) or not active():
+        return None
+    from core.auth_remediation import remediation_for
+    return dict(remediation_for("account_mismatch" if state == MISMATCH else remediation_method()))

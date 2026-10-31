@@ -33,6 +33,8 @@ export interface AwsAccountView {
   capabilities: (Record<'bedrock' | 'hive' | 'storage' | 'voice', Capability> & { checked_at?: string }) | null;
   profile_file: string;
   supported: boolean;
+  /** what the credential banner says when this account needs the user (else null) */
+  remediation?: { message: string; fix_text: string; settings_tab: string } | null;
 }
 
 export const awsAccountService = {

@@ -93,7 +93,8 @@ def gateway_env_for_session(
         return {}
     if not config.get("bedrock_thinking_gateway", True):
         return {}
-    if not config.get("use_bedrock", True) or config.get("auth_method") == "bedrock_api_key":
+    from core.aws_account import get_chat_via
+    if get_chat_via(config) != "aws":  # no SigV4 signature to verify (key or Anthropic)
         return {}
     if channel_context is not None or thinking_display != "summarized":
         return {}
@@ -301,20 +302,31 @@ def _credential_expiry(creds: Any) -> Optional[float]:
 _cred_history = _CredentialHistory()
 
 
-def _resolve_credentials(expected_akid: str, refresh: bool = False) -> Any:
-    """CURRENT frozen credentials from the daemon's boto3 chain (the CLI uses the
-    same chain + credential_process cache). Re-resolves once if the CLI's key is
-    neither the current nor a still-valid previous key (a rotation between the two
-    processes). Every resolution is recorded in ``_cred_history``."""
+def _current_credentials(refresh: bool) -> "tuple[Any, Optional[float]]":
+    """(frozen credentials, expiry epoch) the CLI is signing with right now: the pinned
+    SwarmAI account's when there is one (the CLI gets them through awsCredentialExport,
+    core/aws_account), else the daemon's default chain, as before."""
     global _boto_session
+    from core import aws_account
+    if aws_account.active():
+        from botocore.credentials import ReadOnlyCredentials
+        c = aws_account.resolve()
+        exp = c.expiration.timestamp() if c.expiration else None
+        return ReadOnlyCredentials(c.access_key_id, c.secret_access_key, c.session_token), exp
     import boto3
-
-    global _last_refresh
     if _boto_session is None or refresh:
         _boto_session = boto3.Session()
     creds = _boto_session.get_credentials()
-    frozen = creds.get_frozen_credentials() if creds else None
-    _cred_history.note(frozen, expiry=_credential_expiry(creds))
+    return (creds.get_frozen_credentials() if creds else None), _credential_expiry(creds)
+
+
+def _resolve_credentials(expected_akid: str, refresh: bool = False) -> Any:
+    """CURRENT frozen credentials (``_current_credentials``). Re-resolves once if the
+    CLI's key is neither the current nor a still-valid previous key (a rotation between
+    the two processes). Every resolution is recorded in ``_cred_history``."""
+    global _last_refresh
+    frozen, expiry = _current_credentials(refresh)
+    _cred_history.note(frozen, expiry=expiry)
     # Re-resolve on an unknown key at most once per _REFRESH_MIN_S: the key comes
     # from the UNAUTHENTICATED request, so without the limit any local process
     # could make every request re-run the credential chain (credential_process).

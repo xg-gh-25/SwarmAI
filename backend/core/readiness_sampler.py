@@ -94,8 +94,14 @@ async def _sample_once() -> None:
         from core import session_registry
         from core.app_config_manager import AppConfigManager
         _cfg = AppConfigManager.instance()
-        if not _cfg.get("use_bedrock", True) or _cfg.get("auth_method") == "bedrock_api_key":
+        from core import aws_account, executors
+        if aws_account.get_chat_via(_cfg) != "aws":
             auth = "valid"
+        elif aws_account.active():
+            # the record's last known state (no network: this sample must stay instant);
+            # another account is a definitive problem for the user, like an expiry
+            auth = {"valid": "valid", "expired": "expired", "mismatch": "expired"}.get(
+                aws_account.state_check(), "unknown")
         else:
             region = _cfg.get("aws_region", "us-east-1")
             result = await asyncio.wait_for(

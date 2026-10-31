@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "SwarmAI 账号：一个 AWS 账号，产品底层统一管理"
-status: r4.3 — 认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
+status: r4.4 — §5.3 改为 CLI 的 awsCredentialExport（实施第 2 步时发现）；认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
 related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-10-31-swarm-out-ops-registry.md
 ---
 
@@ -153,30 +153,39 @@ hive_fleet: {
   同一时间只有一次解析（锁）。
 - `session(region=None) -> boto3.Session`：用 `credentials()` 的可刷新凭证建会话，每个线程一个；**不在调用方线程里
   发网络请求**，核对在工作线程里做并缓存。默认主区域；Hive 实例的操作显式传实例区域。
-- `child_env() -> dict`：给子进程的环境（见 §5.3）。
+- `cli_settings() -> dict`：给 CLI 的 `awsCredentialExport`（见 §5.3）；`boto_session()`：daemon 自己用的会话。
 - `identity()`：缓存的 STS 结果，凭证检查和就绪采样读它。
 - `capabilities(mode)`：桌面检查 Bedrock、EC2 / SSM / IAM / S3 / CloudFront（Hive 用）、Polly / Transcribe；
   Hive 模式只检查 Bedrock 和它自己那几个 S3 前缀（实例角色本来就只有这些权限）。
 
-### 5.3 交付通道：SwarmAI 自己的 AWS profile
+### 5.3 交付通道：CLI 的 `awsCredentialExport`，agent 的 shell 不动
 
-子进程（CLI、job、脚本、skill）都是长时间运行的，环境变量在启动后改不了，所以不往环境里塞短期凭证。改为：
+子进程（CLI、job）都是长时间运行的，环境变量在启动后改不了，所以不往环境里塞短期凭证。改为：
 
-- daemon 维护一个 SwarmAI 自己的 AWS 配置文件 `~/.swarm-ai/aws/config`，只有一段：
-  `[profile swarmai] credential_process = <python-backend> aws-credentials` 和 `region = <主区域>`。
-- `python-backend aws-credentials` 是一个子命令：**向 daemon 要**凭证（本机回环接口，带 daemon 发的授权 token），
-  daemon 调 §5.2 的 `credentials()`（同样核对账号），子命令按 AWS 的 `credential_process` 格式输出短期凭证和过期
-  时间。CLI 和 boto3 都会在过期前自己再调一次，长会话不断。子命令自己不读令牌、不刷新：刷新令牌只在 daemon
-  里，多个子进程不会互相把对方的刷新令牌作废，也不会同时写密钥库。daemon 不在时子命令返回明确错误。
-- `child_env()` 返回：`AWS_CONFIG_FILE=~/.swarm-ai/aws/config`、`AWS_PROFILE=swarmai`、`AWS_REGION` /
-  `AWS_DEFAULT_REGION=主区域`，并**去掉**进程环境里其余的 `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
-  `AWS_SESSION_TOKEN` / `AWS_DEFAULT_PROFILE` / 凭证 token 变量，免得 CLI 按优先级先用了它们。
-- 对话的路（`chat.via`）只决定模型相关的变量：`aws` → `CLAUDE_CODE_USE_BEDROCK=1`；`bedrock_key` → 再加
-  `AWS_BEARER_TOKEN_BEDROCK`；`anthropic` → `ANTHROPIC_API_KEY`，关掉 `CLAUDE_CODE_USE_BEDROCK`。有 AWS 账号时，
-  profile 照给（job、skill 还要用 S3、Polly）；没有时只清掉 AWS 变量。
-- `instance_role`（Hive）：`child_env()` 只给区域，清掉 profile 和密钥，子进程走实例角色（今天的做法）。
-- 思考网关用 `session()`，和 `child_env()` 同源，签名用的 key 和 CLI 一致。
-- 用户自己的 `~/.aws/config` 一个字都不改。
+- `python-backend aws-credentials` 是一个子命令：**向 daemon 要**凭证（本机回环接口，带 daemon 每次启动生成的
+  token，`<data dir>/aws/daemon.json`，0600），daemon 调 §5.2 的 `credentials()`（同样核对账号），子命令按
+  `credential_process` 格式输出短期凭证和过期时间。子命令自己不读令牌、不刷新：刷新只在 daemon 里，多个子进程
+  不会互相把对方的刷新令牌作废，也不会同时写密钥库。daemon 不在时子命令返回明确错误。
+- **CLI 用 Claude Code 的 `awsCredentialExport` 设置**（每个会话的 `--settings` 里），值就是这个子命令。CLI 在会话
+  开始和凭证过期前五分钟调它，凭证出错时清缓存重取；配了它，CLI 不再走默认凭证链
+  （[Claude Code 文档](https://code.claude.com/docs/en/amazon-bedrock)，本机实测：`AWS_PROFILE` 指向不存在的
+  profile 时 CLI 照样经它调通 Bedrock，`--bare` 的 job 模式也一样）。
+- **只有 CLI 自己的 AWS 调用用 SwarmAI 账号；agent 跑的命令的环境一个变量都不改**，用户自己的 profile 照常可用
+  （例如 `AWS_PROFILE=ivt-beta aws …`）。r4 写的是给所有子进程设 `AWS_CONFIG_FILE` + `AWS_PROFILE=swarmai`，实施时
+  发现它会让 agent 的命令看不到用户的 `~/.aws/config`，用户自己的 profile 全部失效，所以改成这样。agent 代用户
+  做事时用用户自己的 AWS 配置，产品自己的功能（Bedrock、Hive、云存储、语音）用 SwarmAI 账号。
+- 对话的路（`chat.via`）：`aws` 且有可解析的记录时才给 `awsCredentialExport`；`bedrock_key` / `anthropic`
+  照今天的做法给对应的 key。没有可解析的记录（没找到 AWS 身份、本版本不支持的来源、Hive）时什么都不给，CLI 走
+  默认凭证链，和今天一样（旧路径在新路径覆盖之前保留）。
+- 思考网关校验 CLI 的签名时用同一份凭证（`aws_account.resolve`），两边的 key 一致。
+- daemon 自己的 AWS 调用（job 的 Bedrock、语音、设置页的模型列表）用 `boto_session()`：凭证经 `resolve` 自动刷新；
+  有记录但解析不了时报错，**绝不退回默认链**（那可能是另一个账号）。
+- `<data dir>/aws/config` 里的 `swarmai` profile 仍然写着，`credential_process` 是同一个子命令，给明确想用
+  SwarmAI 账号的工具用（`AWS_CONFIG_FILE=… AWS_PROFILE=swarmai`）；默认没有任何东西设它。
+- 非 owner 的渠道会话（Slack 等）同样拿到 `awsCredentialExport`（它们的对话本来就走产品的 Bedrock），但它只在
+  CLI 内部用，不进 agent 的环境变量；命令里写到账号的仍被 `security_hooks.owner_command_denial` 拦下（文字匹配，
+  减速带，不是边界：agent 和 daemon 是同一个系统用户）。
+- 用户自己的 `~/.aws` 一个字都不改。
 
 ### 5.4 消费方改走入口（按风险从低到高）
 
@@ -185,15 +194,15 @@ hive_fleet: {
 | 设置页模型列表、`aws_credentials_configured` | `session()` / `identity()` | 各自的默认链 |
 | 凭证检查、就绪采样、`verify-auth` | `identity()`；检查的就是实际要用的身份 | `verify-auth` 的 `os.environ` 换值 |
 | `jobs/bedrock` 的所有调用方（summarization、scorer、CDF 抽取、eval 判官） | `session()` | SSO 缓存兜底 |
-| `jobs/executor.py`（agent job 和脚本 job） | `child_env()` | 冻结密钥、删 `AWS_PROFILE`、us-west-2、脚本 job 去密钥 |
-| CLI 子进程（`claude_environment.py`） | `child_env()` | 依赖 daemon 环境碰巧对 |
+| `jobs/executor.py`（agent job） | `cli_settings()`（`--settings`），区域取主区域 | 冻结密钥、删 `AWS_PROFILE`、us-west-2 |
+| CLI 子进程（`prompt_builder` 的 `--settings`） | `cli_settings()` | 依赖 daemon 环境碰巧对 |
 | 思考网关 | `session()` | 默认链会话 |
 | Polly | `session().client("polly")` | 裸 client、`TRANSCRIBE_REGION` |
 | Transcribe（awscrt） | 给 `TranscribeStreamingClient` 一个从 `credentials()` 取值并会刷新的凭证解析器 | 它自己的凭证链 |
 | eval | 区域取记录 | 先读环境变量 |
-| 独立脚本、skill（如 pollinate 的 polly） | 不 import 入口，靠 executor 给的 `child_env()` | — |
+| 脚本 job、独立脚本、skill（如 pollinate 的 polly） | 不改：在 agent 的环境里以用户身份运行（§5.3） | — |
 | Hive：`provisioner` 的 `_get_account` / `_get_session`（全部约 10 处）、`swarm_out._s3`、`routers/hive.py` verify | `session(region=实例区域)` | `hive_accounts` 的凭证字段、verify 里重复的会话代码 |
-| Hive 侧：桥、Hive 上的 CLI | 记录自动建（`instance_role`），`session()` / `child_env()` | 默认链 |
+| Hive 侧：桥、Hive 上的 CLI | 记录自动建（`instance_role`），`boto_session()`；CLI 走实例角色 | 默认链 |
 | Hive 侧 shell 里的 `aws s3 cp`（`user_data.py`、SSM 更新脚本） | 不改，实例角色 | —（列入完整性测试的例外，写明原因） |
 
 ### 5.5 Hive 账号表的迁移
@@ -608,6 +617,12 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 
 ## 8. 会让它失败的事
 
+- **`awsCredentialExport` 失败时 CLI 退回它自己的默认凭证链（2026-10-31 实测）：** 导出命令非零退出时，CLI 不报错，
+  改用默认链（`AWS_PROFILE` / `default`）。所以 CLI 上的钉死不是绝对的。补位：会话启动前的检查（`session_unit`）对
+  过期、账号不符、设置坏了直接拦下；桌面会话经思考网关，网关只认钉住的 key；readiness 横幅提示用户。没有补位的是
+  渠道会话和 job 中途凭证失效的那段时间，它们这时用用户自己的默认 profile（多数用户就是同一个账号）。试过让导出
+  命令失败时返回一个无效凭证来强制失败：CLI 会带着它重试一百多秒不返回，比退回默认链更糟，没有采用。
+
 - **CLI 不认 `AWS_CONFIG_FILE` + `credential_process`：** 第 1 步先验证 CLI（Claude Code 用的是 JS 版 AWS SDK）和
   awscrt 都按这个 profile 取凭证、过期自己刷新。不认就退到 daemon 提供的容器凭证端点
   （`AWS_CONTAINER_CREDENTIALS_FULL_URI` + 授权 token），同样可刷新。
@@ -633,9 +648,7 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 1. 先验证 §8 前两条，并在一台装了 AWS CLI 2.32+ 的机器上把 AWS 登录端到端跑一次（§6.3b）。然后 `core/aws_account.py`、记录、§5.6 生成、`aws-credentials` 子命令、
    `~/.swarm-ai/aws/config`、`GET /api/aws-account`（状态 + 能力）、设置页"SwarmAI 账号"（只看）。
 2. 本机消费方改走入口（§5.4 前十行），`auth_method` 的读者改读 `source`，删 `jobs/bedrock` 兜底和 executor 冻结密钥。
-   非 owner 的渠道会话（Slack 等）**不给** `swarmai` profile 的环境变量：第 1 步只靠命令文字拦它们
-   （`security_hooks.owner_command_denial`），绕得过去；一旦子进程默认走这个 profile，`aws --profile swarmai`
-   就不会在命令里出现账号的字样。
+   CLI 经 `awsCredentialExport` 拿凭证，agent 的环境不动（§5.3）；无法解析记录时各消费方走原来的路。
 3. Hive：消费方改走入口，Hive 模式自动建记录，§5.5 迁移，Hive 设置页去掉账号块。
 4. 向导 ②–④ 和设置页的登录、更换账号：探测、ADA（Isengard、Conduit）、App 内 SSO 登录（§6.3）、AWS 登录
    （§6.3b）、更多方式、先只用对话。
@@ -646,7 +659,7 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 1. **完整性：** 对 `backend/` 做 AST 检查，import `boto3` / `botocore` / `aiobotocore` / `amazon_transcribe` 的模块只能是
    `core/aws_account.py` 和一份写明原因的例外清单；区域字面量和 `AWS_REGION` / `TRANSCRIBE_REGION` 的读取同样只在入口里。
 2. **钉死：** 解析出的凭证账号和记录不符时抛错、状态"账号不符"，不退回默认链；access key ID 变了就重新核对。
-3. **交付：** `child_env()` 每种来源给什么、清掉什么；真实冒烟：CLI 实际签名用的 key 属于记录的账号。
+3. **交付：** `cli_settings()` 在哪些情况下给、哪些不给；agent 的环境不变；真实冒烟：CLI 实际签名用的 key 属于记录的账号。
 4. **迁移和升级：** §5.5 每种情况；§6.4 三种情况各显示什么；没有 Hive 的老用户不会被自动建。
 5. **向导：** 输入的账号 ID 和 STS 不符时停在 ④；探测到的凭证一键可用，不是填的账号的灰掉；每个失败页都有
    重试、换方式、先只用对话、稍后配置；自动探测不执行 `credential_process`、不刷新、不写 `~/.aws`；一个挂住的
@@ -654,7 +667,7 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
    对话"进产品；Hive 能力不够时向导仍能完成。
 6. **SSO：** 设备授权、看不到输入账号时的报错、令牌续期、续不了进"需要重新登录"、重新登录后恢复；客户端过期后
    重新注册；令牌不在 `config.json` / `secrets.json` / 备份里（有系统密钥库时）；AWS 登录的缓存目录 0700、不进备份。
-   **对话的路：** `chat.via` 三种值下 `child_env()` 给什么、清什么；只用 key 对话时有账号记录的 Hive 照常。
+   **对话的路：** `chat.via` 三种值下 `cli_settings()` 给什么；只用 key 对话时有账号记录的 Hive 照常。
 7. **Hive 数量：** 不能删到 0，不能超过 8（期望数量、直接创建、重试三条路由都挡；7 台时并发 N 个创建请求只成功
    一个；第 8 台出错后能重试；8 台时能替换；已有 10 台的老用户不被终止，只能减少）；调大直接创建；别的原因少了只提示不创建；最后一台只能替换；表里 `error` 但 EC2 还在
    的计入；同一次调大并发两个请求只建差额；替换期间不报"多了"。
@@ -737,3 +750,14 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 - **对话的路和 AWS 账号分开**（`chat.via`）：只用 key 对话不会丢掉账号；`child_env()` 按 `chat.via` 给变量。
 - 探测到的 SSO / 登录 profile 改记成 App 自己的 `sso` / `login`，避免和用户的 CLI 抢缓存；AWS 登录的缓存目录权限和备份；
   "需要重新登录"补上登录会话和 profile；云桌面的实例角色"看能力检查"；逐行检测算 `change`。
+
+**r4.3 → r4.4（实施第 2 步时）：** §5.3 原来给所有子进程设 `AWS_CONFIG_FILE` + `AWS_PROFILE=swarmai`，会让 agent
+的命令看不到用户自己的 profile。改为 CLI 的 `awsCredentialExport`（只管 CLI 自己的 AWS 调用），agent 的环境不动；
+本机实测 CLI、`--bare` job、经思考网关都能用。
+
+**第 2 步实现后的审查：** security + correctness 各一轮（security 1 HIGH、2 MED、3 LOW；correctness 5 MED、3 LOW）。
+已改：job 的快速失败客户端也走钉死账号；`rederive` 只在 AWS 登录方式变化时、只换成那种来源、不换成没有账号 ID
+的记录；非 owner 渠道会话不能调 `/api/system/auth-method`；job 不管对话走哪条路都给 `awsCredentialExport`；会话
+启动前的检查有时间上限、对设置坏了直接拦下；readiness 只读记录状态、不发网络请求；对话的路和以前的判断完全一致；
+没有记录时 job 的区域默认值、设置页的会话和以前一样；botocore 的刷新时间对齐 `resolve` 的缓存；Polly 在账号连上后
+换用钉死账号。未改：上面 §8 第一条（CLI 的退回）。

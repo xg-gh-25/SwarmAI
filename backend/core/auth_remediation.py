@@ -27,6 +27,8 @@ class Remediation(TypedDict):
 
 # Deep-link target for the in-app auth panel (Settings → AI & Models).
 _SETTINGS_TAB = "ai-models"
+# Settings → SwarmAI Account (the one AWS account, core/aws_account.py).
+_ACCOUNT_TAB = "aws-account"
 
 _REMEDIATION: dict[str, Remediation] = {
     "ada": {
@@ -37,6 +39,46 @@ _REMEDIATION: dict[str, Remediation] = {
             "Settings → AI & Models."
         ),
         "settings_tab": _SETTINGS_TAB,
+    },
+    # The SwarmAI account signs in with ADA (core/aws_account, source=ada): the daemon
+    # runs ada itself, so a valid Midway is all it needs.
+    "ada_account": {
+        "message": "Your Midway sign-in has expired.",
+        "fix_text": (
+            "Run `mwinit -f` in a terminal, then send your message again "
+            "(SwarmAI fetches fresh credentials itself)."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
+    },
+    # The SwarmAI account is a profile from ~/.aws (core/aws_account.py, source=profile).
+    "profile": {
+        "message": "Your AWS profile's sign-in has expired.",
+        "fix_text": (
+            "Sign in again for the AWS profile SwarmAI uses (for an SSO profile: "
+            "`aws sso login --profile <name>`; the name is in Settings → SwarmAI "
+            "Account), then send your message again."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
+    },
+    # The SwarmAI account's record points at something gone or invalid (a deleted
+    # profile, ada no longer installed, an invalid role).
+    "account_broken": {
+        "message": "SwarmAI can't sign in to its AWS account.",
+        "fix_text": (
+            "The sign-in it was set up with no longer works (see Settings → SwarmAI "
+            "Account for the reason). Fix it there or in AI & Models, then send your "
+            "message again."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
+    },
+    # The credentials resolved belong to another AWS account than the SwarmAI one.
+    "account_mismatch": {
+        "message": "Your AWS credentials belong to a different account than your SwarmAI account.",
+        "fix_text": (
+            "Fix the sign-in so it reaches the SwarmAI account, or check the account "
+            "in Settings → SwarmAI Account."
+        ),
+        "settings_tab": _ACCOUNT_TAB,
     },
     "sso": {
         "message": "Your AWS credentials aren't working.",
@@ -88,7 +130,8 @@ _FALLBACK: Remediation = {
 def remediation_for(auth_method: Optional[str]) -> Remediation:
     """Return the remediation for an auth method.
 
-    Accepts "ada" | "sso" | "apikey" | "iam_role"; anything else (None,
+    Accepts "ada" | "ada_account" | "sso" | "profile" | "account_mismatch" | "apikey" | "iam_role" |
+    "bedrock_api_key"; anything else (None,
     unrecognized) returns the safe method-agnostic fallback. Never raises,
     never emits Amazon-internal jargon for a non-ADA method.
     """

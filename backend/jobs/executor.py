@@ -628,6 +628,10 @@ def _check_claude_auth(claude_path: str) -> str | None:
 def _get_aws_credentials() -> dict[str, str]:
     """Try to get temporary AWS credentials via boto3 (credential_process → ada).
 
+    With a SwarmAI AWS account (core/aws_account) this returns nothing: the CLI gets the
+    pinned account through awsCredentialExport instead. The rest of this docstring is
+    the path without one.
+
     Returns a dict of env vars (AWS_ACCESS_KEY_ID, etc.) if boto3 resolves.
     Returns empty dict if boto3 fails — caller falls through to CLI's own auth
     (SSO IdC tokens), which works even when ada/Isengard is unreachable.
@@ -640,6 +644,11 @@ def _get_aws_credentials() -> dict[str, str]:
     If boto3 fails (VPN off, Isengard unreachable), the CLI still works via its
     own SSO IdC tokens. Best of both worlds — no single point of failure.
     """
+    from core import aws_account
+    if aws_account.cli_settings(bedrock=True):
+        # The CLI gets the pinned SwarmAI account through awsCredentialExport
+        # (_aws_settings_args); nothing is frozen into its environment.
+        return {}
     try:
         import boto3
 
@@ -858,6 +867,7 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         f"Time: {start.isoformat()}"
     )
     cmd.extend(["--system-prompt", system])
+    cmd.extend(_aws_settings_args())
     cmd.extend(["-p", prompt])
 
     env = _build_cli_env(aws_creds)
@@ -1569,6 +1579,7 @@ def _send_slack_dm(message: str) -> bool:
             "--mcp-config", mcp_config_file.name,
             "--strict-mcp-config",
             "--allowedTools", "mcp__slack-mcp__post_message,mcp__slack-mcp__open_dm_channel",
+            *_aws_settings_args(),
             "-p", prompt,
         ]
 
@@ -1696,12 +1707,14 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
 
     # Bedrock config
     env["CLAUDE_CODE_USE_BEDROCK"] = "true"
-    env.setdefault("AWS_REGION", "us-west-2")
-    env.setdefault("AWS_DEFAULT_REGION", "us-west-2")
+    from core import aws_account
+    _region = aws_account.region() if aws_account.active() else "us-west-2"
+    env.setdefault("AWS_REGION", _region)
+    env.setdefault("AWS_DEFAULT_REGION", _region)
 
-    # Inject pre-resolved AWS credentials from boto3 (ada → Isengard).
-    # This overrides any SSO IdC or credential_process the CLI would
-    # otherwise try to resolve on its own. Single credential chain.
+    # Without a SwarmAI account: inject pre-resolved AWS credentials from boto3
+    # (ada → Isengard), overriding the chain the CLI would resolve on its own. With one,
+    # aws_creds is empty and the CLI uses awsCredentialExport (_aws_settings_args).
     if aws_creds:
         env.update(aws_creds)
         # Remove credential_process config — we already resolved credentials.
@@ -1735,6 +1748,14 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
     # Disable CLI auto-memory (SwarmAI owns the memory pipeline)
     env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     return env
+
+
+def _aws_settings_args() -> "list[str]":
+    """``--settings`` for a headless CLI run: awsCredentialExport on the pinned SwarmAI
+    account (core/aws_account), or nothing when there is none."""
+    from core import aws_account
+    settings = aws_account.cli_settings(bedrock=True)  # a job always runs on Bedrock
+    return ["--settings", json.dumps(settings)] if settings else []
 
 
 def _build_script_env() -> dict:
