@@ -12,6 +12,7 @@
  * run_b450108e) — R27 dual-entry convergence, shared components (settings/hiveComponents).
  * Supports initialTab prop so sidebar icons can deep-link to a specific tab.
  */
+import { Tabs } from '../overlay';
 import { useState, useEffect, useMemo } from 'react';
 import GeneralTab from './GeneralTab';
 import AIModelsTab from './AIModelsTab';
@@ -79,23 +80,9 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar — pinned at top, gradient hints when overflowing */}
-      <div className="shrink-0 px-6 pt-4 border-b border-[var(--color-border)] overflow-x-auto [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)] [-webkit-mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]">
-        <div className="flex gap-1 justify-center-safe">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-3 py-2.5 text-sm font-medium transition-colors flex items-center gap-1.5 border-b-2 -mb-px whitespace-nowrap ${
-                activeTab === tab.id
-                  ? 'text-[var(--color-primary)] border-[var(--color-primary)]'
-                  : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
-              }`}
-            >
-              <span className="material-symbols-outlined icon-xs">{tab.icon}</span>
-              {tab.label}
-            </button>
-          ))}
-        </div>
+      <div className="shrink-0 px-6 py-3 border-b border-[var(--color-border)] flex justify-center-safe">
+        <Tabs label="Settings" value={activeTab} onChange={setActiveTab}
+          items={TABS.map((tab) => ({ key: tab.id, label: tab.label, icon: tab.icon }))} />
       </div>
 
       {/* Tab content — scrollable, fills remaining space */}

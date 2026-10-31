@@ -14,7 +14,7 @@
  * - `TableHead`     a table header row cell style (`tableHeadClass`)
  * - `ROW_1` / `ROW_2` the two row heights (36 / 48 px)
  */
-import type { ReactNode } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import clsx from 'clsx';
 
 export const ROW_1 = 'min-h-[36px]';
@@ -47,16 +47,33 @@ export function SectionLabel({ children, right, testid }: {
   );
 }
 
-/** One tab. ``tone: 'alert'`` colours its count as something waiting on the person. */
+/** One tab. ``tone: 'alert'`` colours its count as something waiting on the person;
+ *  ``icon`` is a Material Symbols name; ``hint`` is a short faint note after the label. */
 export interface TabItem<K extends string> {
-  key: K; label: string; count?: number; testid?: string; tone?: 'alert';
+  key: K; label: string; count?: number; testid?: string; tone?: 'alert'; icon?: string; hint?: string;
+  /** the button's id, for a panel that names its tab (aria-labelledby) */
+  id?: string;
 }
 
 /** The overlay tab bar: a segmented track; the selected tab in the brand colour, the
- *  others lit on hover, so it reads as a set of switchable views. */
-export function Tabs<K extends string>({ items, value, onChange, label, testid }: {
+ *  others lit on hover, so it reads as a set of switchable views. Arrow keys, Home and
+ *  End move the choice; only the selected tab is in the Tab order. ``controls`` names
+ *  the panel the tabs switch (aria-controls). */
+export function Tabs<K extends string>({ items, value, onChange, label, testid, controls }: {
   items: TabItem<K>[]; value: K; onChange: (k: K) => void; label?: string; testid?: string;
+  controls?: string;
 }) {
+  const keys = items.map((t) => t.key);
+  function onKey(e: ReactKeyboardEvent<HTMLButtonElement>) {
+    const i = Math.max(0, keys.indexOf(value));
+    const n = keys.length;
+    const next = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i - 1 + n) % n
+      : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    onChange(keys[next]);
+    (e.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
+  }
   return (
     <div role="tablist" aria-label={label} data-testid={testid}
       className="inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg p-[3px]"
@@ -64,8 +81,9 @@ export function Tabs<K extends string>({ items, value, onChange, label, testid }
       {items.map((t) => {
         const on = t.key === value;
         return (
-          <button key={t.key} type="button" role="tab" aria-selected={on} data-testid={t.testid}
-            onClick={() => onChange(t.key)}
+          <button key={t.key} type="button" role="tab" aria-selected={on} data-testid={t.testid} id={t.id}
+            aria-controls={controls} tabIndex={on ? 0 : -1}
+            onClick={() => onChange(t.key)} onKeyDown={onKey}
             className={clsx(
               'inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md px-3 text-body transition-colors',
               'focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]',
@@ -73,7 +91,9 @@ export function Tabs<K extends string>({ items, value, onChange, label, testid }
                  : 'text-[var(--color-text-muted)] hover:bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)] hover:text-[var(--color-text)]')}
             style={on ? { background: TINT('--color-primary', 16),
                           boxShadow: `inset 0 0 0 1px ${TINT('--color-primary', 40)}` } : undefined}>
+            {t.icon && <span className="material-symbols-outlined icon-xs" aria-hidden>{t.icon}</span>}
             {t.label}
+            {t.hint && <span className="text-meta font-normal text-[var(--color-text-faint)]">{t.hint}</span>}
             {t.count != null && (
               <span data-testid={t.testid ? `${t.testid}-count` : undefined}
                 className="rounded-full px-1.5 text-[11px] font-semibold leading-[18px] tabular-nums"

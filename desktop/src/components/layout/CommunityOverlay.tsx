@@ -19,6 +19,7 @@
  * empty branches (the 5-overlay fetch pattern). Clone lineage: NeedYouOverlay + BrainHub.
  * Chrome/geometry owned by OverlayHost.
  */
+import { Tabs } from '../overlay';
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, type CommunityPart } from './overlayQueries';
@@ -55,26 +56,9 @@ export function CommunityContent({ close }: CommunityContentProps) {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 px-5 pt-3 border-b border-[var(--color-border)]">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
-            data-testid={`community-tab-${t.id}`}
-            className={[
-              'text-body px-3 py-2 border-b-2 transition-colors ',
-              tab === t.id
-                ? 'text-[var(--color-text)] border-[var(--panel-accent,var(--color-primary))]'
-                : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]',
-            ].join(' ')}
-          >
-            {t.label}
-            <span className="ml-1.5 text-meta font-normal text-[var(--color-text-faint)]">{t.sub}</span>
-          </button>
-        ))}
+      <div className="px-5 py-2.5 border-b border-[var(--color-border)]">
+        <Tabs label="Community" value={tab} onChange={setTab}
+          items={TABS.map((t) => ({ key: t.id, label: t.label, hint: t.sub, testid: `community-tab-${t.id}` }))} />
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-4">

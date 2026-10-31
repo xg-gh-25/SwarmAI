@@ -100,12 +100,12 @@ describe('CommunityOverlay — tabs', () => {
     setup();
     const inboundTab = screen.getByTestId('community-tab-inbound');
     const watchingTab = screen.getByTestId('community-tab-watching');
-    // Inbound active on mount (underline via panel-accent border class)
-    expect(inboundTab.className).toContain('border-[var(--panel-accent');
+    // Inbound selected on mount; a click moves the selection
+    expect(inboundTab.getAttribute('aria-selected')).toBe('true');
     fireEvent.click(watchingTab);
     await waitFor(() => {
-      expect(watchingTab.className).toContain('border-[var(--panel-accent');
-      expect(inboundTab.className).not.toContain('border-[var(--panel-accent');
+      expect(watchingTab.getAttribute('aria-selected')).toBe('true');
+      expect(inboundTab.getAttribute('aria-selected')).toBe('false');
     });
   });
 });

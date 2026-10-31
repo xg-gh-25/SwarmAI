@@ -24,6 +24,7 @@
  * or closes. It closes when you leave it: opening the run's session, opening a file, the
  * Swarm Out panel going off screen, or its run disappearing.
  */
+import { Tabs } from '../overlay';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
@@ -530,13 +531,9 @@ export function RunOverlay({ runs, asks, order, id, onSelect, onSettled, onClose
                 )}
               </div>
             )}
-            <div className="flex flex-wrap gap-x-4 px-4 border-b border-[var(--color-border)] text-[12.5px]" role="tablist">
-              {tabs.map(([k, label]) => (
-                <button key={k} type="button" role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-                  className={`py-2.5 ${tab === k ? 'text-[var(--color-text)]' : muted}`}
-                  style={tab === k ? { boxShadow: 'inset 0 -2px 0 var(--color-text)' } : undefined}
-                  data-testid={`swarm-out-review-tab-${k}`}>{label}</button>
-              ))}
+            <div className="px-4 py-2 border-b border-[var(--color-border)]">
+              <Tabs value={tab} onChange={setTab}
+                items={tabs.map(([k, label]) => ({ key: k, label, testid: `swarm-out-review-tab-${k}` }))} />
             </div>
             <div className="flex-1 md:overflow-auto px-4 py-3.5" role="tabpanel">
               {tab === 'deliverable' && <DeliverableTab r={r} full={full} asks={asks} onAnswered={onReload} onLeave={leaveTo} onDirty={setAskDirty} />}

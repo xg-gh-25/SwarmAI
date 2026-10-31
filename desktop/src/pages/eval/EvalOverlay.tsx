@@ -9,6 +9,7 @@
  * "Let Swarm look" and "open the session" go through the overlay host's bridges
  * (OverlayRenderCtx.dispatchPrompt / resumeSession) and close the overlay.
  */
+import { Tabs } from '../../components/overlay';
 import { useCallback, useMemo, useState } from 'react';
 import { chatService } from '../../services/chat';
 import { useGoldenSet, useSessionQuality } from './api';
@@ -17,7 +18,7 @@ import { CasesTab } from './CasesTab';
 import { MethodTab } from './MethodTab';
 import { OnlineTab } from './OnlineTab';
 import { OverviewTab } from './OverviewTab';
-import { EvalActionsContext, GoContext, rovingKey, useLang, type EvalActions, type TabId } from './ui';
+import { EvalActionsContext, GoContext, useLang, type EvalActions, type TabId } from './ui';
 
 export interface EvalOverlayProps {
   /** Land a prompt in a chat tab (returns false when it could not). */
@@ -83,20 +84,10 @@ export default function EvalOverlay({ dispatchPrompt, resumeSession, close, init
     <EvalActionsContext.Provider value={actions}>
       <GoContext.Provider value={go}>
         <div className="flex flex-col h-full" data-testid="eval-overlay">
-          <div className="shrink-0 px-7 pt-3 border-b border-[var(--color-border)]">
-            <nav className="flex gap-7" role="tablist" aria-label={t('OS Eval', 'OS Eval')}>
-              {tabs.map((x) => (
-                <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} data-testid={`eval-tab-${x.id}`}
-                        id={`eval-tab-${x.id}`} aria-controls="eval-scroll" tabIndex={tab === x.id ? 0 : -1}
-                        onKeyDown={(e) => rovingKey(e, tabs.map((y) => y.id), tab, (id) => go(id))}
-                        onClick={() => go(x.id)}
-                        className={`py-2.5 text-body border-b-2 -mb-px whitespace-nowrap transition-colors ${tab === x.id
-                          ? 'text-[var(--color-text)] border-[var(--color-brand)]'
-                          : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)]'}`}>
-                  {x.label}{x.n ? <span className="ml-1.5 text-meta tabular-nums text-[var(--color-brand)]">{x.n}</span> : null}
-                </button>
-              ))}
-            </nav>
+          <div className="shrink-0 px-7 py-2.5 border-b border-[var(--color-border)]">
+            <Tabs label={t('OS Eval', 'OS Eval')} value={tab} onChange={go} controls="eval-scroll"
+              items={tabs.map((x) => ({ key: x.id, label: x.label, id: `eval-tab-${x.id}`,
+                                        testid: `eval-tab-${x.id}`, count: x.n || undefined }))} />
           </div>
           {notice && (
             <div className="shrink-0 px-7 py-2 text-small text-[var(--color-status-warning)] flex gap-3" role="status">

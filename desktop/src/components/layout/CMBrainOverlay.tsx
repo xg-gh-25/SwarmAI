@@ -23,7 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
 import { OverlayError } from './OverlayState';
-import { SectionLabel, StatusBadge, tableHeadClass, type Tone } from '../overlay';
+import { SectionLabel, StatusBadge, tableHeadClass, type Tone, Tabs } from '../overlay';
 
 // ── Types (mirror the backend context-health token_block, snake_case as served) ──
 type HealthTag = 'fresh' | 'idle' | 'growing' | 'oversized';
@@ -244,11 +244,13 @@ export function CMBrainContent() {
             />
           ) : (
             <>
-              <div role="tablist" className="flex items-center border-b border-[var(--color-border)] px-4 pt-3">
-                <TabBtn testid="cm-tab-context" label="Context" active={tab === 'context'} onClick={() => setTab('context')} badge={block?.per_file.length} />
-                <TabBtn testid="cm-tab-memory" label="Memory" active={tab === 'memory'} onClick={() => setTab('memory')} />
-                <TabBtn testid="cm-tab-evolution" label="Evolution" active={tab === 'evolution'} onClick={() => setTab('evolution')} />
-                <TabBtn testid="cm-tab-guideline" label="Guideline" active={tab === 'guideline'} onClick={() => setTab('guideline')} />
+              <div className="border-b border-[var(--color-border)] px-4 py-2.5">
+                <Tabs label="Context & Memory" value={tab} onChange={setTab} items={[
+                  { key: 'context', label: 'Context', testid: 'cm-tab-context', count: block?.per_file.length },
+                  { key: 'memory', label: 'Memory', testid: 'cm-tab-memory' },
+                  { key: 'evolution', label: 'Evolution', testid: 'cm-tab-evolution' },
+                  { key: 'guideline', label: 'Guideline', testid: 'cm-tab-guideline' },
+                ]} />
               </div>
 
               <div className="flex-1 min-h-0 overflow-y-auto p-4">
@@ -1072,29 +1074,6 @@ function AmColumn({
         ))}
       </div>
     </div>
-  );
-}
-
-function TabBtn({
-  testid, label, active, onClick, badge,
-}: { testid: string; label: string; active: boolean; onClick: () => void; badge?: number }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      data-testid={testid}
-      onClick={onClick}
-      className={
-        'flex items-center h-9 -mb-px px-1 mr-3 text-body border-b-2 transition-colors ' +
-        (active
-          ? 'text-[var(--color-primary)] font-semibold border-[var(--color-primary)]'
-          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-transparent')
-      }
-    >
-      {label}
-      {badge != null && <span className="ml-1.5 text-meta text-[var(--color-text-muted)] tabular-nums">{badge}</span>}
-    </button>
   );
 }
 

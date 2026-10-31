@@ -27,6 +27,7 @@
  *
  * @exports LibraryOverlay
  */
+import { Tabs } from '../overlay';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
@@ -136,11 +137,13 @@ export function LibraryContent() {
 
         {/* ── Main area: tabs + panel ── */}
         <div className="flex-1 min-w-0 flex flex-col">
-          <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 pt-3">
-            {/* Recent first — higher-frequency surface (run_b4120a78). */}
-            <TabBtn testid="library-tab-recent" label="Recent" active={tab === 'recent'} onClick={() => setTab('recent')} badge={recent?.count} />
-            <TabBtn testid="library-tab-browse" label="Browse" active={tab === 'browse'} onClick={() => setTab('browse')} badge={native?.category_count} />
-            <TabBtn testid="library-tab-guide" label="Guide" active={tab === 'guide'} onClick={() => setTab('guide')} />
+          <div className="border-b border-[var(--color-border)] px-4 py-2.5">
+            {/* Recent first — the surface used most. */}
+            <Tabs label="Library" value={tab} onChange={setTab} items={[
+              { key: 'recent', label: 'Recent', testid: 'library-tab-recent', count: recent?.count },
+              { key: 'browse', label: 'Browse', testid: 'library-tab-browse', count: native?.category_count },
+              { key: 'guide', label: 'Guide', testid: 'library-tab-guide' },
+            ]} />
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto p-4">
@@ -534,24 +537,3 @@ function GuideTab() {
   );
 }
 
-function TabBtn({
-  testid, label, active, onClick, badge,
-}: { testid: string; label: string; active: boolean; onClick: () => void; badge?: number }) {
-  return (
-    <button
-      data-testid={testid}
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={
-        'flex items-center gap-1.5 rounded-t-md px-3 py-2 text-body transition-colors ' +
-        (active
-          ? 'text-[var(--color-text)] border-b-2 border-[var(--color-status-success)]'
-          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-b-2 border-transparent')
-      }
-    >
-      {label}
-      {badge != null && <span className="btn-sm btn-secondary rounded-full">{badge}</span>}
-    </button>
-  );
-}
