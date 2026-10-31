@@ -93,7 +93,7 @@ def _upgrade_record(record: dict) -> dict:
     return upgraded
 
 
-def _row(day: date, record: dict, resolved: set[str]) -> str:
+def _row(day: date, record: dict, open_ids: set[str], shown: set[str]) -> str:
     """One session row: date, time, title, what was done, its open follow-ups."""
     title = str(record.get("title") or "Untitled").strip()
     sentence = str(record.get("summary_sentence") or "").strip()
@@ -103,7 +103,11 @@ def _row(day: date, record: dict, resolved: set[str]) -> str:
         if not isinstance(item, dict):
             continue
         next_id, text = item.get("next_id"), item.get("text")
-        if isinstance(next_id, str) and isinstance(text, str) and next_id not in resolved:
+        if isinstance(next_id, str) and isinstance(text, str) and next_id in open_ids:
+            key = " ".join(text.lower().split())
+            if key in shown:
+                continue                    # the same follow-up from another session
+            shown.add(key)
             lines.append(f"  - Next [{next_id}]: {text}")
     return "\n".join(lines)
 
@@ -116,7 +120,8 @@ def select_daily_activity(
     budget: int = DAILY_ACTIVITY_BUDGET,
 ) -> Selection:
     """Session rows of the last 7 days as whole units: days newest first, rows newest
-    first within a day; a follow-up resolved by any row of the window is not shown."""
+    first within a day. A row shows the follow-ups still open by ``open_next_items_in``
+    (its session's latest row, not resolved), each text once."""
     directory = Path(workspace) / "Knowledge" / "DailyActivity"
     days = _recent_days(today)
     records_by_day = {}
@@ -124,15 +129,11 @@ def select_daily_activity(
         records = read_jsonl_sidecar(directory / f"{day.isoformat()}.jsonl")
         raw_records = records or _legacy_records(directory / f"{day.isoformat()}.md")
         records_by_day[day] = [_upgrade_record(record) for record in raw_records]
-    resolved = {
-        next_id
-        for records in records_by_day.values()
-        for record in records
-        for next_id in record.get("resolves", [])
-        if isinstance(next_id, str)
-    }
+    from core.daily_activity_writer import open_next_items_in
+    open_ids = {item["next_id"] for item in open_next_items_in(directory, days=7, until=today)}
+    shown: set[str] = set()
     units = [
-        _row(day, record, resolved)
+        _row(day, record, open_ids, shown)
         for day in days
         for record in sorted(records_by_day[day], key=lambda r: str(r.get("timestamp") or ""),
                              reverse=True)

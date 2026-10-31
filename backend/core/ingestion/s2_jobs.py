@@ -10,7 +10,8 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
   recall uses), read now while the session is alive; a later request without one keeps
   it. The job's passes enqueue with it as ``session_project``. ``delay`` is a
   not-before: the idle hook asks with ``REVIEW_DELAY`` and each new request pushes it
-  later, so a review waits for 10 quiet minutes; the button asks with no delay. A
+  later, so a review waits for 60 quiet minutes (never more than ``MAX_WAIT`` after the
+  first request of the wait); the button asks with no delay. A
   request while the job runs sets ``again`` (with its own not-before) so the session is
   read once more after it finishes.
 - ``set_watermark`` / the claimed job's ``reviewed_to`` keep where the review stopped.
@@ -29,9 +30,15 @@ from typing import Optional, Any, Callable
 
 MAX_ATTEMPTS = 3
 RETRY_DELAY = timedelta(minutes=5)
-# The idle hook fires after 120 s idle (LifecycleManager.IDLE_HOOK_GRACE): 8 more
-# minutes makes the review wait for 10 quiet minutes.
-REVIEW_DELAY = timedelta(minutes=8)
+# The idle hook fires after 120 s idle (LifecycleManager.IDLE_HOOK_GRACE): 58 more
+# minutes makes the review wait for 60 quiet minutes, the end of a task rather than a
+# pause in one (measured 2026-10-31: 10 quiet minutes came 4 times a session-day, a pass
+# each, every one recording the work half done; 60 come about once). Design
+# docs/design/2026-10-31-extraction-at-task-end.md E1.
+REVIEW_DELAY = timedelta(minutes=58)
+# Later activity pushes the review back, but never past this after the first request of
+# the wait: a session that never rests an hour is still reviewed while it is used.
+MAX_WAIT = timedelta(hours=3)
 POSTPONE_DELAY = timedelta(minutes=5)   # a job that waits for memory looks again after this
 _WAKER: Callable[[], None] | None = None
 
@@ -68,7 +75,7 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     try:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            row = conn.execute("SELECT state FROM ingestion_s2_jobs WHERE session_id=?",
+            row = conn.execute("SELECT state, requested_at FROM ingestion_s2_jobs WHERE session_id=?",
                                (session_id,)).fetchone()
             if row is None:
                 conn.execute(
@@ -83,6 +90,7 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
                     (reason, not_before, sdk_session_id, session_id))
                 state = "running"
             elif row[0] == "queued":
+                not_before = _capped(not_before, row[1])
                 # a later request pushes the not-before (more activity); no delay = now.
                 # An explicit save (no delay) is never turned back into a delayed
                 # session-end job by the idle hook that fires after it.
@@ -111,6 +119,21 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
     if _WAKER is not None:
         _WAKER()
     return state
+
+
+def _capped(not_before: str | None, requested_at: str | None) -> str | None:
+    """*not_before*, but no later than ``MAX_WAIT`` after *requested_at*."""
+    if not not_before or not requested_at:
+        return not_before
+    try:
+        limit = datetime.fromisoformat(requested_at) + MAX_WAIT
+        if limit <= datetime.now(timezone.utc):
+            return not_before        # a stale start (a retry, a postpone) caps nothing
+        if datetime.fromisoformat(not_before) > limit:
+            return limit.isoformat()
+    except (TypeError, ValueError):
+        pass
+    return not_before
 
 
 def _bound_project(session_id: str | None) -> str | None:
@@ -192,9 +215,11 @@ def finish(conn: sqlite3.Connection, session_id: str, *, error: str | None = Non
         conn.execute(
             """UPDATE ingestion_s2_jobs SET state=?, finished_at=?, error=?, next_attempt_at=?,
                    again=0, again_after=NULL,
+                   requested_at=CASE WHEN ?='queued' THEN ? ELSE requested_at END,
                    attempts=CASE WHEN ?='queued' AND (? IS NULL OR ?) THEN 0 ELSE attempts END
                WHERE session_id=?""",
-            (state, _now(), error, retry_at, state, error, again, session_id))
+            (state, _now(), error, retry_at, state, _now(),
+             state, error, again, session_id))
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

@@ -77,3 +77,26 @@ def test_v1_landed_commit_is_attributed_to_its_session_only(tmp_path, monkeypatc
     assert _get_session_git_commits(
         repo, since, session_files=[str(repo / "a.py")], session_shas=o_shas,
         session_run_ids=o_ids, call_windows=[]) == []
+
+
+def test_a_commit_is_attributed_by_its_subject_even_outside_the_call_window(tmp_path):
+    import subprocess
+    from datetime import datetime, timedelta
+    from hooks.daily_activity_hook import _get_session_git_commits
+    repo = tmp_path / "r"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.email=a@b", "-c", "user.name=n"]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    for subject in ("Mine: the parser skips blank lines", "Theirs: another session's change"):
+        (repo / f"{subject[:4]}.txt").write_text(subject)
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-qm", subject], check=True)
+    since = datetime.now() - timedelta(hours=1)
+    out = _get_session_git_commits(repo, since, session_files=[], session_shas=set(),
+                                   call_windows=[], session_run_ids=set(),
+                                   subjects=[("Mine: the parser skips", True)])
+    assert len(out) == 1 and "Mine: the parser skips blank lines" in out[0]
+    exact = _get_session_git_commits(repo, since, session_files=[], session_shas=set(),
+                                     call_windows=[], session_run_ids=set(),
+                                     subjects=[("Mine: the parser skips", False)])
+    assert exact == []          # an uncut subject must match the whole subject

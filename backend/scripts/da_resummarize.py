@@ -37,6 +37,7 @@ Usage (from backend/):
     python -m scripts.da_resummarize --apply --jobs 6
     python -m scripts.da_resummarize --apply --until 2026-10-31
     python -m scripts.da_resummarize --restore-archives [--apply]
+    python -m scripts.da_resummarize --commits [--apply]   # commits only, no model
 """
 from __future__ import annotations
 
@@ -326,7 +327,8 @@ def backup(da_dir: Path, root: Path) -> Path:
 def _open_after(base: list[dict], records: list[dict]) -> list[dict]:
     """*base* open follow-ups plus those *records* opened, minus those they resolved."""
     resolved = {i for r in records for i in r.get("resolves") or []}
-    items = list(base) + [i for r in records for i in r.get("next_items") or []
+    items = list(base) + [{**i, "session_id": str(r.get("session_id"))}
+                          for r in records for i in r.get("next_items") or []
                           if isinstance(i, dict)]
     seen: set[str] = set()
     out = []
@@ -392,7 +394,8 @@ async def rebuild_day(plan: DayPlan, conn, info, ws: Path, scope: Scope, jobs: i
         batch = order[k:k + max(jobs, 1)]
         open_items = _open_after(base_open, [new[sid][2] for sid in order[:k] if sid in new])
         results = await asyncio.gather(
-            *(_rebuild_one(pipeline, conn, info, ws, day, sid, open_items, problems)
+            *(_rebuild_one(pipeline, conn, info, ws, day, sid,
+                           [i for i in open_items if i.get("session_id") != sid], problems)
               for sid in batch), return_exceptions=True)
         for sid, result in zip(batch, results):
             if isinstance(result, BaseException):
@@ -490,6 +493,102 @@ async def repair(args) -> int:
     return 0
 
 
+# ── commits only ──────────────────────────────────────────────────────────────
+
+_SUMMARY_FIELDS = ("topics", "decisions", "files_modified", "open_questions", "deliverables",
+                   "key_outputs", "validation_status", "coe_signal", "coe_topic",
+                   "summary_sentence", "next_items", "resolves")
+
+
+def summary_of(row: dict):
+    """The ``StructuredSummary`` a sidecar row was written from."""
+    from core.summarization import StructuredSummary
+    values = {name: row.get(name) for name in _SUMMARY_FIELDS if row.get(name) is not None}
+    return StructuredSummary(**values, session_title=str(row.get("title") or ""),
+                             timestamp=str(row.get("timestamp") or ""),
+                             enriched=bool(row.get("enriched")))
+
+
+async def recount_commits(args) -> int:
+    """Recompute every row's commits by the current attribution (no model call) and
+    re-render the day's block and row when they changed (design
+    2026-10-31-extraction-at-task-end E7)."""
+    from core.daily_activity_writer import (
+        _atomic_write, _day_lock, parse_frontmatter, render_session, write_frontmatter,
+    )
+    from core.session_hooks import HookContext
+    from hooks.daily_activity_hook import (
+        DailyActivityExtractionHook, _bash_call_windows, commit_subjects,
+    )
+
+    ws = Path(args.workspace).expanduser()
+    da_dir = ws / "Knowledge" / "DailyActivity"
+    conn = _connect_ro(Path(args.db).expanduser())
+    days_by_session = session_days(conn)
+    since = args.since or min((min(d) for d in days_by_session.values()), default="9999")
+    until = args.until or date.today().isoformat()
+    plans: dict[str, dict[str, tuple]] = {}
+    for jsonl in sorted(da_dir.glob("20*.jsonl")):
+        day = jsonl.stem
+        if not since <= day <= until:
+            continue
+        for row in _rows(jsonl):
+            sid = str(row.get("session_id") or "")
+            if days_by_session.get(sid, {}).get(day, 0) < 1:
+                continue
+            msgs = day_messages(conn, sid, day)
+            stamps = [m["created_at"] for m in msgs if m.get("created_at")]
+            if not stamps:
+                continue
+            commits = await asyncio.to_thread(
+                DailyActivityExtractionHook._capture_git_activity, min(stamps),
+                list(row.get("files_modified") or []), sid, _bash_call_windows(msgs),
+                datetime.fromisoformat(max(stamps)), ws, commit_subjects(msgs))
+            if commits != list(row.get("git_commits") or []):
+                plans.setdefault(day, {})[sid] = (row, commits)
+    changed = sum(len(v) for v in plans.values())
+    print(f"days {since}..{until}: {changed} rows whose commits change in {len(plans)} day files")
+    if not args.apply or not plans:
+        print("dry run: nothing written (add --apply)" if not args.apply else "nothing to change")
+        return 0
+    dest = backup(da_dir, Path(args.backup_root).expanduser())
+    print(f"backup verified: {dest}")
+    for day, rows in sorted(plans.items()):
+        md, jsonl = da_dir / f"{day}.md", da_dir / f"{day}.jsonl"
+        rendered = {}
+        for sid, (row, commits) in rows.items():
+            summary = summary_of(row)
+            summary.git_commits = commits
+            ctx = HookContext(session_id=sid, agent_id="default",
+                              message_count=int(row.get("message_count") or 0),
+                              session_start_time=str(row.get("session_start") or ""),
+                              session_title=str(row.get("title") or ""))
+            block, record = render_session(summary, ctx)
+            record["enriched"] = bool(row.get("enriched"))
+            rendered[sid] = (block, record)
+        with _day_lock(md):
+            fm, body = parse_frontmatter(md.read_text(encoding="utf-8")) if md.exists() else ({}, "")
+            parts = []
+            for seg in split_day(body):
+                if seg.kind == "summary" and seg.session in rendered:
+                    parts.append(rendered[seg.session][0])
+                else:
+                    parts.append(seg.text)
+            lines = []
+            for raw in jsonl.read_text(encoding="utf-8").splitlines():
+                try:
+                    sid = str(json.loads(raw).get("session_id"))
+                except (ValueError, AttributeError):
+                    lines.append(raw)
+                    continue
+                lines.append(json.dumps(rendered[sid][1], ensure_ascii=False, separators=(",", ":"))
+                             if sid in rendered else raw)
+            _atomic_write(md, write_frontmatter(dict(fm or {}), "\n".join(parts)))
+            _atomic_write(jsonl, "\n".join(lines) + "\n")
+        print(f"  {day}: {len(rows)} rows")
+    return 0
+
+
 # ── archives ──────────────────────────────────────────────────────────────────
 
 def restore_archives(ws: Path, apply: bool) -> int:
@@ -533,7 +632,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--restore-archives", action="store_true")
+    parser.add_argument("--commits", action="store_true",
+                        help="only recompute each row's commits (no model call)")
     args = parser.parse_args(argv)
+    if args.commits:
+        return asyncio.run(recount_commits(args))
     if args.restore_archives:
         return restore_archives(Path(args.workspace).expanduser(), args.apply)
     return asyncio.run(repair(args))

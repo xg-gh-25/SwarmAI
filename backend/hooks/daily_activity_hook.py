@@ -79,6 +79,11 @@ def _touches_session_file(commit_files: list[str], session_files: list[str],
 # allowed in between), or a pipeline landing. `git log | grep commit` is not one.
 _GIT_WRITE_RE = re.compile(
     r"\bgit(?:\s+-[Cc]\s+\S+)*\s+(?:commit|merge|rebase|cherry-pick|revert|am|pull)\b")
+# `git [-C dir] commit <options>` as a command of its own (not `git log | grep commit`)
+_COMMIT_CMD_RE = re.compile(r"\bgit(?:\s+-[Cc]\s+\S+)*\s+commit\b(?P<rest>[^\n]*)")
+_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)(?P<tag>\w+)\1")
+_MESSAGE_RE = re.compile(r"(?:\s-[A-Za-z]*m\s*|\s--message[=\s])(?P<q>['\"])")
+_MIN_SUBJECT = 16   # characters of a subject that must match
 
 
 def _writes_commits(command: str) -> bool:
@@ -93,6 +98,72 @@ def _parse_ts(value: str) -> float | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
     except (ValueError, TypeError):
         return None
+
+
+def _subjects_in(text: str) -> "list[tuple[str, bool]]":
+    """``(subject, cut)`` of every ``git commit`` in one stored command: the message's
+    first line from ``-F - <<EOF``, ``-m "$(cat <<EOF ...)"`` or ``-m "..."``. ``cut``:
+    the stored command ends inside it (the summary is cut short), so only its start is
+    known."""
+    out: list[tuple[str, bool]] = []
+    for match in _COMMIT_CMD_RE.finditer(text):
+        rest, after = match.group("rest"), match.end()
+        subject, end = None, None
+        heredoc = _HEREDOC_RE.search(rest)
+        message = _MESSAGE_RE.search(" " + rest)
+        if message is not None and not (heredoc and heredoc.start() < message.start() - 1
+                                        and "-F" in rest[:heredoc.start()]):
+            value_at = match.start("rest") + message.end() - 1
+            value = text[value_at:]
+            inner = _HEREDOC_RE.search(value.split("\n", 1)[0]) if value.startswith("$(") else None
+            if inner is not None:                       # -m "$(cat <<'EOF' ... EOF )"
+                body = value.split("\n", 1)[1] if "\n" in value else ""
+                subject = body.split("\n", 1)[0]
+                end = value_at + len(value.split("\n", 1)[0]) + 1 + len(subject)
+            else:                                        # -m "subject ..."
+                quote = message.group("q")
+                close = value.find(quote)
+                raw = value if close < 0 else value[:close]
+                subject = raw.split("\n", 1)[0]
+                end = value_at + len(subject)
+        elif heredoc is not None:                       # -F - <<'EOF'
+            body = text[after + 1:] if after < len(text) else ""
+            subject = body.split("\n", 1)[0]
+            end = after + 1 + len(subject)
+        if subject is None:
+            continue
+        subject = subject.strip()
+        cut = end is not None and end >= len(text.rstrip())
+        if len(subject) >= _MIN_SUBJECT:
+            out.append((subject, cut))
+    return out
+
+
+def commit_subjects(messages: list[dict]) -> "list[tuple[str, bool]]":
+    """The commit subjects this session's own ``git commit`` commands wrote, each with
+    whether the stored command was cut inside it (then only its start is known). A
+    commit with exactly that subject (or, when cut, a subject starting with it) was made
+    by this session, whatever its committer time: the time misses a commit whose hooks
+    ran past the call's recorded end, and a commit the worktree land rebased."""
+    import json as _json
+
+    out: list[tuple[str, bool]] = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            try:
+                content = _json.loads(content)
+            except ValueError:
+                continue
+        for b in content if isinstance(content, list) else []:
+            if not (isinstance(b, dict) and b.get("type") == "tool_use"
+                    and (b.get("category") == "bash" or b.get("name") == "Bash")):
+                continue
+            text = str((b.get("input") or {}).get("command") or b.get("summary") or "")
+            for item in _subjects_in(text):
+                if item not in out:
+                    out.append(item)
+    return out
 
 
 def _bash_call_windows(messages: list[dict]) -> "list[tuple[float, float, bool]]":
@@ -138,6 +209,7 @@ def _get_session_git_commits(
     call_windows: "list[tuple[float, float, bool]] | None" = None,
     session_run_ids: "set[str] | None" = None,
     until: "datetime | None" = None,
+    subjects: "list[tuple[str, bool]] | None" = None,
 ) -> list[str]:
     """Get git commits from a repo since a given time (and up to *until*).
 
@@ -151,6 +223,9 @@ def _get_session_git_commits(
         since: Only include commits after this timestamp.
         until: In attribution mode, drop commits made after this time (a row
             covers one day; a run landed later belongs to that later day).
+        subjects: ``(subject, cut)`` this session's git commit commands wrote
+            (``commit_subjects``); a commit with that subject (starting with it when
+            cut) is its own.
         max_commits: Maximum number of commits to return.
         session_files / session_shas / session_run_ids / call_windows: when
             any is given, attribution mode. A commit is this session's when
@@ -180,7 +255,8 @@ def _get_session_git_commits(
     shas = set(session_shas or ())
     run_ids = set(session_run_ids or ())
     windows = [w for w in (call_windows or []) if w[2]]
-    if attributing and not shas and not run_ids and not windows \
+    subjects = [(x, cut) for x, cut in (subjects or []) if len(x) >= _MIN_SUBJECT]
+    if attributing and not shas and not run_ids and not windows and not subjects \
             and not (files and call_windows is None):
         return []  # no evidence that this session made any commit
     try:
@@ -219,6 +295,9 @@ def _get_session_git_commits(
             mine = full in shas or names_run
             if not mine and windows:
                 mine = any(a - _SLACK_S <= ct <= b + _SLACK_S for (a, b, _g) in windows)
+            if not mine and subjects:
+                mine = any(subject.startswith(x) if cut else subject.strip() == x
+                           for x, cut in subjects)
             if not mine and call_windows is None:
                 changed = [ln for ln in parts[2].splitlines() if ln.strip()]
                 mine = _touches_session_file(changed, files, repo_path)
@@ -337,14 +416,28 @@ def current_row(workspace: Path, session_id: str, day: date) -> "dict | None":
 
 def earlier_row(workspace: Path, session_id: str, day: date, *, days: int = 7,
                 ) -> "dict[str, str] | None":
-    """``{"day", "title", "sentence"}`` of this session's latest row in the *days*
-    before *day*, so the summary of *day* records only what is new."""
+    """``{"day", "title", "sentence", "next"}`` of this session's latest row in the *days*
+    before *day*, so the summary of *day* records only what is new and carries forward
+    the follow-ups still open (``next``: their texts)."""
+    from core.daily_activity_writer import read_open_next_items
     for back in range(1, days + 1):
         earlier = day - timedelta(days=back)
         row = current_row(workspace, session_id, earlier)
         if row is not None:
+            # only what is still open (another session may have resolved one since), and
+            # only what passes the injection scanner again: the text goes into a prompt
+            still = {i["next_id"] for i in read_open_next_items(workspace, days=days, until=day)
+                     if i.get("session_id") == session_id}
+            try:
+                from core.injection_patterns import scan_text
+            except Exception:  # noqa: BLE001 — without the scanner nothing is carried
+                return {"day": earlier.isoformat(), "title": str(row.get("title") or ""),
+                        "sentence": str(row.get("summary_sentence") or ""), "next": []}
             return {"day": earlier.isoformat(), "title": str(row.get("title") or ""),
-                    "sentence": str(row.get("summary_sentence") or "")}
+                    "sentence": str(row.get("summary_sentence") or ""),
+                    "next": [str(i.get("text")) for i in row.get("next_items") or []
+                             if isinstance(i, dict) and i.get("text")
+                             and i.get("next_id") in still and not scan_text(str(i["text"]))]}
     return None
 
 
@@ -402,7 +495,7 @@ async def summarize_session_day(
     summary.git_commits = await executors.run_in(
         "subprocess", DailyActivityExtractionHook._capture_git_activity, window_start,
         list(summary.files_modified or []), context.session_id,
-        _bash_call_windows(covered), until, workspace,
+        _bash_call_windows(covered), until, workspace, commit_subjects(covered),
     )
     if not summary.enriched and not summary.summary_sentence and summary.git_commits:
         summary.summary_sentence = "Commits: " + "; ".join(summary.git_commits)
@@ -530,12 +623,10 @@ class DailyActivityExtractionHook:
             logger.debug("DailyActivity of %s unchanged for session %s", day, context.session_id)
             return False
         previous = row if start else None
-        # this session's own follow-ups of the day are not offered for resolving: the
-        # new row replaces them
-        own = {item.get("next_id") for item in (row or {}).get("next_items", [])
-               if isinstance(item, dict)}
+        # this session's own follow-ups are not in the list: its new row carries forward
+        # those still open (the earlier day's are shown with it, earlier_row)
         open_items = [item for item in read_open_next_items(workspace, days=7, until=day)
-                      if item["next_id"] not in own]
+                      if item.get("session_id") != context.session_id]
         written = False
         for part in self._pipeline.parts(day_messages[start:]):
             end = start + len(part)
@@ -633,6 +724,7 @@ class DailyActivityExtractionHook:
                               call_windows: "list[tuple[float, float, bool]] | None" = None,
                               until: "datetime | None" = None,
                               workspace: "Path | None" = None,
+                              subjects: "list[tuple[str, bool]] | None" = None,
                               ) -> list[str]:
         """Capture this session's own git commits from source repos.
 
@@ -697,7 +789,7 @@ class DailyActivityExtractionHook:
                 commits += _get_session_git_commits(
                     repo_path, since, session_files=session_files,
                     session_shas=run_shas, call_windows=call_windows,
-                    session_run_ids=run_ids, until=until)
+                    session_run_ids=run_ids, until=until, subjects=subjects)
                 if len(commits) >= 15:
                     break
         return commits[:15]

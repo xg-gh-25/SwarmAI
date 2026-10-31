@@ -124,18 +124,20 @@ result, not the conversation.
 Record it with the summary tool, in the language the session is held in. Never truncate
 a sentence or add an ellipsis. Use an empty string or array when there is nothing.
 - title: a few words naming the work, as a noun phrase. Not the user's request quoted.
-- summary_sentence: what was done and where it ended, in one or two short sentences
-  (about 40 words, or 80 characters in Chinese). Name the result (built, fixed,
-  decided, answered, dropped, still in progress), not that a discussion took place.
-  The details go in deliverables.
+- summary_sentence: one sentence of about 30 words, or 60 characters in Chinese: what
+  was done and where it ended. Name the result (built, fixed, decided, answered, dropped,
+  still in progress), not that a discussion took place. The details go in deliverables.
+  For example: "修好了 Brain Hub 的加载错误，测试通过，等 build 后生效。"
 - deliverables: results that exist at the end of this transcript, each understandable
   alone: a commit or file and what it does, a decision and its reason, the answer to a
   question. Not plans and not the user's requests.
 - key_outputs: where the results are: file paths, commits, documents, recipients.
 - validation_status: what was verified and how; what is still unverified.
-- next_items: follow-ups agreed or clearly left open and not done in this transcript,
-  each a complete action someone can pick up without the conversation. Empty when the
-  work is finished. Do not assign ids.
+- next_items: at most three: the work the next session most needs, agreed or clearly
+  left open and not done in this transcript, one per workstream, each a complete action
+  someone can pick up without the conversation. Not one already on the open list below
+  (resolve or leave it). Release steps (push, build, restart, deploy) only when the user
+  left one pending. Empty when the work is finished. Do not assign ids.
 - resolves: ids from the open list whose completion is explicit in this transcript.
   Not by similarity, and not plans.
 - coe_signal: "candidate" when the session reports a production problem that is still
@@ -175,7 +177,9 @@ def record_of(row: dict[str, Any]) -> dict[str, Any]:
 _EARLIER_BLOCK = """
 ## Earlier in this session
 Already recorded on {day}: {title}: {sentence}
-Record only what happened on the day of the conversation below.
+Its follow-ups then: {next}
+Record only what happened on the day of the conversation below. Those follow-ups that are
+still open belong in next_items (as one of the three); leave out those done since.
 """
 
 
@@ -579,6 +583,7 @@ class SummarizationPipeline:
             earlier_text = _EARLIER_BLOCK.format(
                 day=earlier.get("day", ""), title=earlier.get("title", ""),
                 sentence=earlier.get("sentence", ""),
+                next="; ".join(earlier.get("next") or []) or "(none)",
             )
         # Dedicated 'llm' pool (run_c8ad52f8), not the default ThreadPoolExecutor:
         # this runs in the post-session hook window — if the user sends a message

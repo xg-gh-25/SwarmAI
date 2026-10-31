@@ -322,7 +322,7 @@ class TestModelWrittenRecord:
         prompt = prompts[0]
         assert "Already recorded on 2026-10-30: DB migration: Half the tables moved." in prompt
         assert "## Conversation on 2026-10-31:" in prompt
-        assert "what was done and where it ended" in prompt
+        assert "where it ended" in prompt and "at most three" in prompt
 
     @pytest.mark.asyncio
     async def test_a_long_day_is_summarized_in_parts_each_message_whole(self, monkeypatch, pipeline):

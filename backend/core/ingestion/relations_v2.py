@@ -97,6 +97,16 @@ def pool(workspace: Path, project: str | None) -> list[Entry]:
     return out
 
 
+TIMELINE_FILE = ".context/TIMELINE.md"
+
+
+def timeline_entries(workspace: Path) -> list[Entry]:
+    """The TIMELINE events: what a new event is declared against (an event is compared
+    with events only; the shared pool stays the every-turn files and the DDD docs)."""
+    path = Path(workspace) / TIMELINE_FILE
+    return _entries_of(path, Path(workspace)) if path.is_file() else []
+
+
 def withdrawn_entries(records) -> list[Entry]:
     """The completed withdrawals (``withdrawn.records``) as entries a unit may be declared
     against: one the user withdrew is refused when declared the same, one closed or done

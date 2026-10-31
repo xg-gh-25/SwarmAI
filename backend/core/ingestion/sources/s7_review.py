@@ -232,8 +232,9 @@ def build_prompt(allowed: tuple[str, ...], sig: dict[str, Any], index: str, reco
                       for kind in allowed if contracts_v2.UNIT_RULES.get(kind))
     window = (f" This is part {part[0]} of {part[1]} of the record since your last review."
               if part[1] > 1 else "")
-    return f"""This conversation is over for now. Review the work since your last review and
-record what is worth keeping, by calling {extract_llm.TOOL_NAME}. Write nothing else.{window}
+    return f"""This conversation has been quiet for an hour; it may go on later, and an earlier
+review of it may already have recorded part of it. Review the work since your last review
+and record what is worth keeping, by calling {extract_llm.TOOL_NAME}. Write nothing else.{window}
 What you record is your own knowledge from now on: you decide what is worth keeping and
 how it is put. The record of the conversation since your last review is below (your own
 context may hold only a summary of it).
@@ -254,9 +255,12 @@ context may hold only a summary of it).
    did the user correct you, which of your ways of working are reliable and which are not.
    Every time the user corrected you is a correction unit; when it was about how a skill
    behaved, name that skill in skill.
-6. Record what stays true. The state of the moment (what is not done yet, what was not
-   verified, a count that will change) is not knowledge: a problem still open is a gap,
-   something that happened is an event.
+6. Record what stays true, as it stands at the end of this record. The state of the
+   moment (not pushed, needs a build, not verified yet, a count that will change) is not
+   knowledge and is not written into any unit. A problem the record leaves open at its
+   end is a gap; one opened and solved within it is not. Something that changed how the
+   work stands is an event, worded as it stands now ("X fixed", not "root cause of X
+   found" when the fix followed).
 7. Per kind of work:
 {_EXAMPLES}
 
@@ -296,9 +300,12 @@ RELATION_SCHEMA: dict[str, Any] = {
 }
 
 
-def relation_prompt(units: list[Any], shown: list[list[Any]]) -> str:
+def relation_prompt(units: list[Any], shown: list[list[Any]],
+                    own: "set[str] | None" = None) -> str:
     """Turn two: for each unit just recorded, the entries it may relate to (retrieval
-    only); the agent declares how it relates."""
+    only); the agent declares how it relates. *own*: the anchors this session's earlier
+    reviews wrote, marked so an event can replace them."""
+    own = own or set()
     blocks = []
     for i, (unit, entries) in enumerate(zip(units, shown), 1):
         what = getattr(unit, "what", None) or getattr(unit, "summary", "") or ""
@@ -307,7 +314,8 @@ def relation_prompt(units: list[Any], shown: list[list[Any]]) -> str:
         if not entries:
             lines.append("(none)")
         for entry in entries:
-            lines.append(f"- {entry.shown()}  ({entry.path})")
+            mark = " (this session)" if entry.anchor in own else ""
+            lines.append(f"- {entry.shown()}  ({entry.path}){mark}")
             # whole: an entry cut short cannot be judged the same, added to or replaced
             lines.append("  " + " ".join(entry.text.split()))
         blocks.append("\n".join(lines))
@@ -328,6 +336,10 @@ answering with the relations schema, one item per unit. For each unit:
   than "adds" beside it: one current entry per thing.
 - repeats (corrections only): the earlier correction of the same mistake, when you made
   it again.
+- An event or a gap an earlier review of this session recorded (marked "(this session)")
+  that this unit finishes, corrects or restates: an event declares it in overrides (a gap
+  it finished then closes); a unit that says the same as an event already recorded is
+  "same".
 Copy "<id> | <first line>" exactly as shown. Leave a field empty when unsure.
 
 {listing}
@@ -563,8 +575,10 @@ def current_sdk_session_id(session_id: str) -> str | None:
 # ── one review ───────────────────────────────────────────────────────────────
 
 def _earlier_units(session_id: str, workspace: Path, project: str | None) -> list[Any]:
-    """The entries this session's earlier reviews wrote (by their ``cand:`` markers)."""
-    from core.ingestion import relations_v2
+    """The entries this session's earlier reviews wrote and that are still live (by
+    their ``cand:`` markers), from the shared pool and TIMELINE: a later pass sees what
+    the earlier ones recorded and may finish or replace it (extraction-at-task-end E2)."""
+    from core.ingestion import pipeline_v2, relations_v2
     from core.ingestion.store import connect_ro
     try:
         conn = connect_ro()
@@ -578,7 +592,9 @@ def _earlier_units(session_id: str, workspace: Path, project: str | None) -> lis
         ids = set()
     finally:
         conn.close()
-    return [e for e in relations_v2.pool(workspace, project) if e.anchor.rsplit("#", 1)[-1] in ids]
+    project = pipeline_v2._resolve_project(workspace, project) or project
+    entries = relations_v2.pool(workspace, project) + relations_v2.timeline_entries(workspace)
+    return [e for e in entries if e.anchor.rsplit("#", 1)[-1] in ids]
 
 
 def _this_review(units: list[Any], window: int) -> list[Any]:
@@ -619,6 +635,7 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
     # the project as the pipeline resolves it, so what is shown is what resolves
     project = pipeline_v2._resolve_project(workspace, project) or project
     pool = relations_v2.pool(workspace, project)
+    timeline = relations_v2.timeline_entries(workspace)
     withdrawn_pool = relations_v2.withdrawn_entries(pipeline_v2._withdrawn_records())
     corrections = relations_v2.corrections(pool)
     out = []
@@ -628,7 +645,9 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
         if getattr(unit, "type", None) == "correction":
             also += corrections
         also += relations_v2.candidates(text, withdrawn_pool, top=2)
-        out.append(relations_v2.candidates(text, pool, also=also))
+        # an event is compared with the events (TIMELINE), the rest with the shared pool
+        searched = timeline if getattr(unit, "kind", "") == "event" else pool
+        out.append(relations_v2.candidates(text, searched, also=also))
     return out
 
 
@@ -700,10 +719,11 @@ def review_session(session_id: str, *, sdk_session_id: str | None, watermark: st
                                                  "reason": "evidence_not_in_index"})
                 units = [u for u in result.units if u not in bad]
                 if units:
-                    earlier = _earlier_units(session_id, workspace, project) + recorded
-                    shown = _candidates(units, workspace, project, earlier)
-                    relations = _relations(run, fork_id, cwd, relation_prompt(units, shown), model,
-                                           attempt, session_id)
+                    own = _earlier_units(session_id, workspace, project)
+                    shown = _candidates(units, workspace, project, own + recorded)
+                    relations = _relations(run, fork_id, cwd,
+                                           relation_prompt(units, shown, {e.anchor for e in own}),
+                                           model, attempt, session_id)
                     units = _without_repeats_of_this_review(apply_relations(units, relations), recorded)
         except Exception as exc:
             api_v2.record_extraction_attempt(attempt, status="failed", error=f"{type(exc).__name__}: {exc}"[:500])

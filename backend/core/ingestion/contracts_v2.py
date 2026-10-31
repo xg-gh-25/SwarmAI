@@ -204,6 +204,12 @@ class EventUnit(_Unit):
     # the open gaps of the run's project this event fixed, by id (a pipeline run's
     # REFLECT report only; design 2026-10-30-cdf-gap-lifecycle §2)
     closes: list[str] | None = Field(default=None, max_length=GAP_LIST_TOP)
+    # declared in the review's relation step (design 2026-10-31-extraction-at-task-end
+    # E3): the event already recorded (``same``: not written again), and the events or
+    # gaps of this same session this one completes or restates (``overrides``: retired,
+    # a gap as closed). overrides.check holds them to this session's own entries.
+    same: OverrideRef | None = None
+    overrides: list[OverrideRef] = Field(default_factory=list, max_length=OVERRIDES_TOP)
 
     @model_validator(mode="after")
     def _impact_or_outcome(self):

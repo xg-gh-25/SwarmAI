@@ -365,10 +365,11 @@ _SUPERSEDES_SOURCES: frozenset[str] = frozenset()
 
 
 def _check_overrides(unit, row, root, destination, corpus_project, resolved, home=None):
-    """``overrides.check`` for a cognition unit that declares overrides, else None. An
-    unreadable store refuses every declaration (logged): nothing is retired on a guess."""
+    """``overrides.check`` for a cognition unit that declares overrides,
+    ``overrides.check_session_own`` for an event, else None. An unreadable store refuses
+    every declaration (logged): nothing is retired on a guess."""
     declared = getattr(unit, "overrides", None)
-    if not isinstance(unit, CognitionUnit) or not declared:
+    if not isinstance(unit, (CognitionUnit, EventUnit)) or not declared:
         return None
     from . import overrides
     from .api import connect_ro
@@ -380,6 +381,11 @@ def _check_overrides(unit, row, root, destination, corpus_project, resolved, hom
         logger.warning("cdf: overrides not checked (store unreadable)", exc_info=True)
         return overrides.Checked(refused=[{"ref": d, "reason": "store_unreadable"} for d in declared])
     try:
+        if isinstance(unit, EventUnit):
+            return overrides.check_session_own(
+                conn, workspace=Path(root), project=project, source=source, declared=declared,
+                session_ref=str(_get(row, "source_ref", "") or "") or None,
+                cited_external=bool(getattr(resolved, "cited_external", True)))
         return overrides.check(conn, workspace=Path(root), project=project, source=source,
                                declared=declared, new_root_ids=getattr(resolved, "root_ids", ()),
                                cited_external=bool(getattr(resolved, "cited_external", True)),
@@ -702,6 +708,11 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
         known = {e.anchor for e in entries}       # the every-turn files are in both pools
         entries += [e for e in relations_v2.pool(root, session_home) if e.anchor not in known]
     entries += relations_v2.withdrawn_entries(withdrawn_all)
+    if isinstance(unit, EventUnit):
+        # an event is the same as an event only (extraction-at-task-end E2): an open gap
+        # it finishes is retired by its overrides, never taken for the same thing
+        entries = relations_v2.timeline_entries(root) + [
+            e for e in entries if e.path == relations_v2.TIMELINE_FILE]
     refused: list[dict[str, str]] = []
     declared_rel: dict[str, Any] = {}
     for name in ("same", "adds", "repeats"):
@@ -758,6 +769,8 @@ def run_unit_v2(row: Any, workspace_root: Path | str) -> UnitDecision:
     result = _decision(unit_id, "write", "add", "adds" if "adds" in declared_rel else "new", **done)
     if checked is not None and checked.targets:
         result.version_vector["overrides"] = checked.targets
+        if checked.closes:
+            result.version_vector["override_closes"] = checked.closes
     if checked is not None and checked.refused:
         result.version_vector["override_refused"] = checked.refused
     _with_relations(result, declared_rel, refused)

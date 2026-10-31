@@ -228,3 +228,59 @@ def test_a_short_session_with_a_model_summary_is_kept(tmp_path):
     _run(tmp_path, msgs, answer=answer)
     (row,) = _rows(tmp_path, date.today())
     assert row["summary_sentence"] == "Checked the build: green."
+
+
+def test_an_earlier_days_followups_are_carried_and_not_offered_to_resolve(tmp_path):
+    today = date.today()
+    now = datetime.combine(today, datetime.min.time()) + timedelta(hours=9)
+    da = tmp_path / "Knowledge" / "DailyActivity"
+    da.mkdir(parents=True)
+    row = {"session_id": "sess-day-0001", "title": "Parser work", "summary_sentence": "Found it.",
+           "next_items": [{"next_id": "carry000001", "text": "Write the parser tests"}],
+           "resolves": [], "enriched": True, "message_count": 2}
+    (da / f"{(today - timedelta(days=1)).isoformat()}.jsonl").write_text(json.dumps(row) + "\n")
+    msgs = [_msg("user", "go on with the parser", now), _msg("assistant", "ok", now)]
+    (prompt,) = _run(tmp_path, msgs, answer=ANSWER)
+    assert "Its follow-ups then: Write the parser tests" in prompt
+    assert "carry000001" not in prompt                  # not in the open list to resolve
+    assert "at most three" in prompt
+
+
+def test_a_commit_is_the_sessions_by_the_subject_its_command_wrote():
+    # the stored command is cut short; the commit's time may be outside the call
+    msgs = [{"role": "assistant", "created_at": "2026-10-30T10:00:00", "content": [
+        {"type": "tool_use", "id": "t1", "name": "Bash", "summary":
+         "Running: git add -A && git commit -q -F - <<'EOF'\nUsage: every token and cost figure reads the le"}]},
+        {"role": "assistant", "created_at": "2026-10-30T10:01:00", "content": [
+        {"type": "tool_use", "id": "t2", "name": "Bash",
+         "input": {"command": 'git commit -m "Docs: the guide says where rows live"'}}]}]
+    assert H.commit_subjects(msgs) == [("Usage: every token and cost figure reads the le", True),
+                                       ("Docs: the guide says where rows live", False)]
+
+
+@pytest.mark.parametrize("command,expect", [
+    ("git add -A && git commit -q -F - <<'EOF'\nDailyActivity: each row says what was done\n\nbody\nEOF",
+     [("DailyActivity: each row says what was done", False)]),
+    ('git commit -m "$(cat <<\'EOF\'\nfix: the review waits an hour\n\nbody\nEOF\n)"',
+     [("fix: the review waits an hour", False)]),
+    ('git commit -am "Docs: the guide says where rows live"', [("Docs: the guide says where rows live", False)]),
+    ('git log --oneline | grep commit; git tag -m "release notes for the tag v2"', []),
+    ('git commit -m "first line of the message here\n\nsecond paragraph"',
+     [("first line of the message here", False)]),
+])
+def test_commit_subjects_from_real_command_forms(command, expect):
+    assert H._subjects_in(command) == expect
+
+
+def test_the_earlier_block_carries_only_followups_still_open(tmp_path):
+    today = date.today()
+    da = tmp_path / "Knowledge" / "DailyActivity"
+    da.mkdir(parents=True)
+    y = (today - timedelta(days=1)).isoformat()
+    rows = [{"session_id": "sess-day-0001", "title": "Parser", "summary_sentence": "s", "enriched": True,
+             "next_items": [{"next_id": "open00000001", "text": "Write the tests"},
+                            {"next_id": "done00000001", "text": "Publish the notes"}], "resolves": []},
+            {"session_id": "other", "enriched": True, "next_items": [], "resolves": ["done00000001"]}]
+    (da / f"{y}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    got = H.earlier_row(tmp_path, "sess-day-0001", today)
+    assert got["next"] == ["Write the tests"]

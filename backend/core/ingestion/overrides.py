@@ -25,7 +25,14 @@ them (``governed_edit.withdraw``, status ``overridden``) after the unit is writt
 (unit, anchor), recorded in ``ingestion_events``; a retirement a concurrent edit made stale
 is retried by the daily maintenance (``apply_declared``).
 
-Public: ``Checked``, ``check``, ``apply``, ``apply_declared``, ``APPLIED_EVENT``.
+An event (S7 only) declares overrides of its own session's earlier events and gaps, held
+by ``check_session_own``; ``apply`` retires the gaps that check approved as ``closed``
+(``override_closes``), anything else as ``overridden``. Like ``check``, it trusts the
+unit's cited evidence (``cited_external``); what the session read but did not cite is
+not looked at, and what it retires is bounded to this session's own CDF entries.
+
+Public: ``Checked``, ``check``, ``check_session_own``, ``apply``, ``apply_declared``,
+``APPLIED_EVENT``.
 """
 from __future__ import annotations
 
@@ -51,6 +58,7 @@ class Checked:
     targets: list[str] = field(default_factory=list)       # CDF anchors to retire
     refused: list[dict] = field(default_factory=list)      # {ref, reason}
     older: bool = False                                     # the unit is older than a target
+    closes: list[str] = field(default_factory=list)        # targets retired as closed (gaps)
 
 
 def _said(conn: sqlite3.Connection, root_ids) -> str | None:
@@ -167,6 +175,57 @@ def check(conn: sqlite3.Connection, *, workspace: Path, project: str | None, sou
     return out
 
 
+def check_session_own(conn: sqlite3.Connection, *, workspace: Path, project: str | None,
+                      source: str, declared, session_ref: str | None,
+                      cited_external: bool = True) -> Checked:
+    """The anchors an event's declared overrides may retire: an event or a gap that this
+    same session's earlier review wrote (design 2026-10-31-extraction-at-task-end E3).
+
+    The later review of a session completes what an earlier one recorded half done
+    ("root cause found" -> "fixed"), so it is the context that may replace it: by id and
+    first line, a live CDF-written TIMELINE event or IMPROVEMENT gap whose candidate's
+    ``source_ref`` is this session. Another session's entry, a person's entry, a
+    cognition entry, or a declaration from any source but S7 retires nothing. A later
+    pass is later by construction (its entry is not written yet), so no time is compared.
+    """
+    from . import relations_v2
+    out = Checked()
+    declared = list(declared or ())
+    if not declared:
+        return out
+    if source != "S7" or not session_ref:
+        out.refused = [{"ref": d, "reason": "source"} for d in declared]
+        return out
+    if cited_external:
+        out.refused = [{"ref": d, "reason": "cited_external"} for d in declared]
+        return out
+    entries = relations_v2.timeline_entries(workspace) + relations_v2.pool(workspace, project)
+    for ref in declared:
+        entry, why = relations_v2.resolve(ref, entries)
+        if entry is None:
+            out.refused.append({"ref": ref, "reason": why})
+            continue
+        cand = _CAND.search(entry.text)
+        if cand is None:
+            out.refused.append({"ref": ref, "reason": "human_written"})
+            continue
+        # the review's own candidate only: an S1 unit the user dictated may carry the
+        # session id as its ref and is never this review's to retire
+        row = conn.execute("SELECT source_ref, unit_kind, COALESCE(source_v2, source) "
+                           "FROM ingestion_inbox WHERE id=?", (cand.group(1),)).fetchone()
+        if row is None or row[0] != session_ref or row[2] != "S7":
+            out.refused.append({"ref": ref, "reason": "other_session"})
+            continue
+        if row[1] not in ("event", "gap"):
+            out.refused.append({"ref": ref, "reason": "kind"})
+            continue
+        if entry.anchor not in out.targets:
+            out.targets.append(entry.anchor)
+            if row[1] == "gap":
+                out.closes.append(entry.anchor)
+    return out
+
+
 _RECORD = """INSERT INTO ingestion_events(at,kind,detail) SELECT ?,?,?
     WHERE NOT EXISTS (SELECT 1 FROM ingestion_events WHERE kind = ?
       AND json_extract(detail, '$.unit_id') = ? AND json_extract(detail, '$.anchor') = ?)"""
@@ -196,16 +255,22 @@ def _apply(conn: sqlite3.Connection, unit_id: str | None) -> int:
     retired = 0
     for uid, decision, payload in rows:
         try:
-            targets = json.loads(decision or "{}").get("version_vector", {}).get("overrides") or []
+            vector = json.loads(decision or "{}").get("version_vector", {})
+            targets = vector.get("overrides") or []
+            closes = set(vector.get("override_closes") or [])
             title = str(json.loads(payload or "{}").get("title") or "")
         except (TypeError, ValueError):
             continue
         for anchor in targets:
             if (str(uid), anchor) in done:
                 continue
+            # a gap its own session finished later (check_session_own) leaves as closed,
+            # history a recurrence may repeat; anything else as overridden
+            gap = anchor in closes
             try:
-                withdraw(anchor, f"overridden by: {title}"[:500] or "overridden",
-                         actor="cdf:override", status="overridden")
+                withdraw(anchor, (f"closed by: {title}" if gap else f"overridden by: {title}")[:500]
+                         or "overridden", actor="cdf:override",
+                         status="closed" if gap else "overridden")
                 result = "withdrawn"
             except StaleRevision:
                 logger.info("CDF override of %s by %s is stale; retried later", anchor, uid)

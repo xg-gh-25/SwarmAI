@@ -252,3 +252,20 @@ def test_restore_archives_puts_back_deleted_days_only(tmp_path):
     assert (arch / "2026-03-05.md").read_text() == "old day"
     assert (arch / "2026-03-06.md").read_text() == "recreated since"   # existing file untouched
     assert not (arch / "notes-draft.md").exists()                      # not a day file
+
+
+def test_commits_recount_rewrites_only_rows_whose_commits_change(ws):
+    import asyncio
+    da = ws / "SwarmWS" / "Knowledge" / "DailyActivity"
+    _run(ws, [])                                            # rows written by the rebuild
+    before_md = (da / "2026-10-19.md").read_text(encoding="utf-8")
+
+    def capture(start, files, sid, windows, until, workspace, subjects):
+        return ["abc1234 Mine: the parser fix"] if sid == "sess-a" else []
+    with patch.object(H.DailyActivityExtractionHook, "_capture_git_activity", staticmethod(capture)):
+        asyncio.run(R.recount_commits(_args(ws, until="2026-10-20")))
+    rows = {r["session_id"]: r for r in R._rows(da / "2026-10-20.jsonl")}
+    assert rows["sess-a"]["git_commits"] == ["abc1234 Mine: the parser fix"]
+    assert rows["sess-a"]["enriched"] is True and rows["sess-a"]["summary_sentence"]
+    assert "commit: abc1234 Mine: the parser fix" in (da / "2026-10-20.md").read_text(encoding="utf-8")
+    assert (da / "2026-10-19.md").read_text(encoding="utf-8") == before_md   # unchanged day

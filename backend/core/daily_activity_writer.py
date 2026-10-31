@@ -520,7 +520,12 @@ def read_open_next_items(workspace_path: Path, *, days: int = 7,
 
 def open_next_items_in(directory: Path, *, days: int = 7,
                        until: date | None = None) -> list[dict[str, str]]:
-    """``read_open_next_items`` for a DailyActivity directory."""
+    """``read_open_next_items`` for a DailyActivity directory.
+
+    A follow-up is open when it is in its session's latest row of the window (a newer
+    row of the session carries forward what is still open and so replaces the older
+    lists) and no row resolved it. Each item carries its ``session_id``. The one rule
+    for every reader: the hook, the injection and the briefing."""
     files = sorted(Path(directory).glob("*.jsonl"), reverse=True)
     if until is not None:
         files = [f for f in files if f.stem[:10] <= until.isoformat()]
@@ -532,9 +537,18 @@ def open_next_items_in(directory: Path, *, days: int = 7,
         for next_id in record.get("resolves", [])
         if isinstance(next_id, str)
     }
+    latest: dict[str, dict] = {}
+    for n, record in enumerate(records):         # oldest first: a later row wins
+        sid = record.get("session_id")
+        if not sid:
+            latest[f"\0{n}"] = record           # no identity: a row of its own
+        elif record.get("enriched") is not False or str(sid) not in latest:
+            # a row the model did not write (no answer) never replaces the session's
+            # earlier list: its empty Next would erase what is still open
+            latest[str(sid)] = record
     seen: set[str] = set()
     open_items: list[dict[str, str]] = []
-    for record in records:
+    for record in latest.values():
         for item in record.get("next_items", []):
             if not isinstance(item, dict):
                 continue
@@ -545,7 +559,8 @@ def open_next_items_in(directory: Path, *, days: int = 7,
             if next_id in resolved or next_id in seen:
                 continue
             seen.add(next_id)
-            open_items.append({"next_id": next_id, "text": text})
+            open_items.append({"next_id": next_id, "text": text,
+                               "session_id": str(record.get("session_id"))})
     return open_items
 
 

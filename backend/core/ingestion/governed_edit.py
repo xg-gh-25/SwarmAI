@@ -558,7 +558,12 @@ def withdraw(anchor: str, reason: str, *, actor: str, status: str) -> str:
         # an automated withdrawal reaches only the main cognition files, and retires as
         # overridden only what CDF wrote (it never removes a person's entry)
         from .gaps import main_cognition_files
-        if target not in {p.resolve(strict=False) for p in main_cognition_files(workspace)}:
+        reach = {p.resolve(strict=False) for p in main_cognition_files(workspace)}
+        if status == "overridden":
+            # a later review replaces its own session's TIMELINE event (overrides.
+            # check_session_own); only CDF-written entries, checked below
+            reach.add((workspace / ".context" / "TIMELINE.md").resolve(strict=False))
+        if target not in reach:
             raise PermissionError("an automated withdrawal reaches only the main cognition files")
         if status == "overridden" and not identity.startswith("cand:"):
             raise PermissionError("only a CDF-written entry is overridden automatically")
