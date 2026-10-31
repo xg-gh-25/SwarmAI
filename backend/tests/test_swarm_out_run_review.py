@@ -383,14 +383,16 @@ def test_the_command_routes_answer_and_validate(world, monkeypatch):
     c = TestClient(app)
     base = f"/api/swarm-out/runs/{DID}"
     assert c.post(f"{base}/rerun", json={"text": ""}).status_code == 422
-    assert c.post(f"{base}/stop").json() == {"stopped": True}
-    assert c.post(f"{base}/discard", json={}).json()["discarded"] is True
-    r = c.post(f"{base}/stop")
+    # the panel's commands are the person's (core/swarm_out_actor)
+    person = {"by": "person"}
+    assert c.post(f"{base}/stop", json=person).json() == {"stopped": True}
+    assert c.post(f"{base}/discard", json=person).json()["discarded"] is True
+    r = c.post(f"{base}/stop", json=person)
     assert r.status_code == 400 and "closed" in r.json()["detail"]
     # what the old card called: no route any more
     assert c.post(f"{base}/abandon").status_code in (404, 405)
     monkeypatch.setenv("SWARMAI_MODE", "hive")
-    assert c.post(f"{base}/discard", json={}).status_code == 403
+    assert c.post(f"{base}/discard", json=person).status_code == 403
 
 
 # ── invariant 6: what the person said in the session ─────────────────────────
@@ -465,5 +467,6 @@ def test_accepting_settles_now_not_at_the_next_look(world, monkeypatch):
     monkeypatch.setattr(st, "set_verdict", lambda *a: {"ok": True})
     app = FastAPI()
     app.include_router(router, prefix="/api/swarm-out")
-    r = TestClient(app).post(f"/api/swarm-out/runs/{DID}/verdict", json={"value": "pass", "note": "", "ended_at": "x"})
+    r = TestClient(app).post(f"/api/swarm-out/runs/{DID}/verdict", json={"value": "pass", "note": "", "ended_at": "x",
+                                                                                  "by": "person"})
     assert r.status_code == 200 and soon == [1]
