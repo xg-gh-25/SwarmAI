@@ -235,3 +235,17 @@ def test_a_carried_report_needs_the_report_on_the_tree_before_the_sync(rig):
     r.commit_on_main({"elsewhere.py": "y = 1\n"})
     out = _land(r)
     assert out.get("ok") is False and r.state().get("landing") is None, out
+
+
+def test_next_names_main_s_commits_that_touch_the_run_before_deliver(rig):
+    """N2: while the run is still in REVIEW / TEST, next says which of the run's files
+    main's new commits changed; nothing when main moved elsewhere."""
+    r = rig
+    r.create()
+    r.drive(until="test")
+    r.commit_on_main({"elsewhere.py": "y = 1\n"})
+    assert "main_overlap" not in r.v1("status")["next"]
+    r.commit_on_main({"backend/core/big.py": _main_big(0)})
+    step = r.v1("status")["next"]
+    assert step["main_overlap"] == {"repo": ["backend/core/big.py"]}, step
+    assert "Main moved since the run's base" in step["why"] and step["action"] == "write_artifact"

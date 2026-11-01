@@ -284,6 +284,7 @@ def next_step(engine, *, previous_stage: str | None = None,
             out["findings"] = still
         if action == "wait":
             out["handouts"] = waiting_handouts(events, "review")
+        _note_main_overlap(engine, out)
         return out
     if stage in _CODE_STAGES or stage == "test":
         # S6-1: the agent tests natively and ends the stage with its validation report
@@ -296,6 +297,7 @@ def next_step(engine, *, previous_stage: str | None = None,
                         if stage in _CODE_STAGES else
                         "run the final verification on this tree yourself (do not change "
                         "code in TEST), then pass the report on stdin in the same shape"))
+        _note_main_overlap(engine, out)
         return out
     if not blocking:
         out.update(action="run", command=_cmd(engine, "stage-complete"),
@@ -304,6 +306,22 @@ def next_step(engine, *, previous_stage: str | None = None,
     out.update(action="fix", command=_cmd(engine, "stage-complete"),
                why=f"{len(blocking)} {stage} check(s) do not pass yet")
     return out
+
+
+def _note_main_overlap(engine, out: dict[str, Any]) -> None:
+    """Main's new commits change files of the run (design 2026-11-01-pipeline-delivery-
+    friction N2): say so now, not first at landing. Information; it blocks nothing."""
+    overlap = engine.main_overlap()
+    if not overlap:
+        return
+    out["main_overlap"] = overlap
+    shown = "; ".join(f"{repo}: {', '.join(paths[:8])}" + (" …" if len(paths) > 8 else "")
+                      for repo, paths in sorted(overlap.items()))
+    out["why"] = (out.get("why") or "") + (
+        f" Main moved since the run's base and its new commits also change the run's "
+        f"files ({shown}): the landing rebases onto them, and a conflict or a changed "
+        "file there means testing again. Look at those commits now if the run's change "
+        "depends on what they changed.")
 
 
 __all__ = ["blocking_checks", "next_step"]

@@ -3686,6 +3686,34 @@ class RunEngine:
                            "report_tree": then["report_tree"], "overlap": overlap}
         return moves
 
+    def main_overlap(self) -> dict[str, list[str]]:
+        """Per repo, the run's own changed files that main's commits since the run's base
+        also changed (design 2026-11-01-pipeline-delivery-friction N2): what the landing's
+        rebase will have to merge. Information for ``next`` before DELIVER, so a long run
+        hears of it early; empty when main has not moved or nothing overlaps. Best effort:
+        a repo whose facts cannot be read is left out."""
+        out: dict[str, list[str]] = {}
+        try:
+            trees = self._current_code(list(self.contract["expected_repos"]))[1]
+        except Exception:  # noqa: BLE001 -- information only
+            return out
+        for name, root in self.effective_repos().items():
+            try:
+                main = self.contract["repo_roots"][name]
+                base, head = self._fork_base(name, root), _git(main, "rev-parse", "HEAD")
+                if base == head or not trees.get(name):
+                    continue
+                main_paths = set(_git(root, "diff", "--name-only", "--no-renames",
+                                      base, head).splitlines())
+                own = set(_git(root, "diff", "--name-only", "--no-renames",
+                               base, trees[name]).splitlines())
+            except Exception:  # noqa: BLE001 -- information only
+                continue
+            hit = sorted(path for path in main_paths & own if path)
+            if hit:
+                out[name] = hit
+        return out
+
     def _carried_test_trees(self, moves: "Mapping[str, Mapping[str, Any]] | None"
                             ) -> dict[str, str]:
         """repo -> the TEST report tree that still stands after the sync (design 2026-11-01-
