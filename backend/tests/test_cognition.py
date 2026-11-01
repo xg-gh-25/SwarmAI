@@ -274,6 +274,7 @@ def test_general_brain_find_get_map(ws, capsys):
     out = capsys.readouterr().out
     m = re.search(r"- `([0-9a-f]{8})` · (\S+general-knowledge\.md):(\d+)", out)
     assert m and "platypus lay eggs" in out
+    assert out.startswith("General Brain — ") and "DDD of General" not in out
     assert knowledge_cli.main(["get", "--project", "general", m.group(1)], prog="cognition") == 0
     assert "Platypus rule" in capsys.readouterr().out
     assert knowledge_cli.main(["find", "--project", "General", "--query", "dingoes"], prog="cognition") == 0
