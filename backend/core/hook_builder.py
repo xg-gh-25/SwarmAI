@@ -726,6 +726,17 @@ async def build_hooks(
             "shared_checkout_pre", matcher="Write|Edit|MultiEdit|NotebookEdit",
         )
 
+    # ── PostToolUse: batch-independent-calls nudge (all tools) ──
+    # Inject-only, never a deny: after a round of tool results, one sentence asks the
+    # model to request every independent item in one response (Anthropic's documented
+    # fix for one-call-per-step coding loops; core/parallel_nudge.py).
+    if session_context is not None:
+        from core.parallel_nudge import create_parallel_nudge_hook
+        registry.register(
+            "PostToolUse", create_parallel_nudge_hook(session_context),
+            "parallel_nudge",
+        )
+
     # ── PostCompact: capture the compaction summary ──────────
     # The SDK's HookEvent Literal lacks PostCompact, but the bundled CLI calls a
     # registered callback with {"trigger", "compact_summary", ...} BEFORE it emits
