@@ -391,7 +391,8 @@ def _approval_key(tool_use_id: "str | None", command: str) -> "tuple[str, str]":
 
 def record_land_approval(tool_use_id: "str | None", command: str, by: str = "person") -> None:
     """dangerous_command_gate: THIS v1 authorization (this tool call) was approved, by
-    the person or (``host``) the agent that dispatched this Hive's run."""
+    the person or (``host``) the agent that answers for the run: on a Hive the agent
+    that dispatched it, on this machine the run's own agent landing it."""
     now = time.monotonic()
     for k, (t, _by) in list(_LAND_APPROVALS.items()):
         if now - t > _LAND_APPROVAL_TTL:
@@ -426,6 +427,40 @@ def _count_required_approval_soon(session_id: "str | None"):
     the session's run files, which must never happen on the event loop."""
     from core import executors
     return executors.get_pool("pipeline_signal").submit(_count_required_approval, session_id)
+
+
+#: v1 authorizations the run's own agent gives itself, like a native commit: landing the
+#: run on this machine's integration branch (local, reversible; the REPORT says how it
+#: landed) and recording a landing made outside the run. Deleting a kept snapshot and
+#: accepting a finding stay the person's.
+AGENT_AUTHORIZED_ACTIONS = frozenset({"land", "land_skip_tests", "confirm_landed"})
+
+
+def _v1_request_action(command: str) -> "str | None":
+    """The action of the logged land_request a v1 authorization command names, or None
+    when it cannot be read or the command is more than that one simple command (a list,
+    a pipe, a command substitution)."""
+    from core.run_owner_gate import AFTER_APPROVAL, parse_cli_calls
+    calls, single = parse_cli_calls(command)
+    call = next((c for c in calls if c.get("tool") == "pipeline_v1"
+                 and c.get("sub") in AFTER_APPROVAL), None)
+    if call is None or len(calls) != 1 or not single:
+        return None
+    from core.run_owner_gate import _opt_all
+    ids = _opt_all(call.get("argv") or [], "--request")   # argparse acts on the LAST one
+    if len(ids) != 1 or not ids[0] or not call.get("run_id"):
+        return None
+    request_id = ids[0]
+    try:
+        from core import pipeline_human
+        from core.run_protocol import landing
+        engine = pipeline_human.load_engine(call["run_id"])
+        if engine is None:
+            return None
+        return landing.request_event(engine.store, request_id)["request"].get("action")
+    except Exception:   # unreadable: the person is asked, as before
+        logger.warning("v1 request action unreadable", exc_info=True)
+        return None
 
 
 def v1_land_card(command: str) -> "str | None":
@@ -1871,6 +1906,70 @@ _PATTERN_WHY = {
 }
 
 
+#: commands that only copy a heredoc's body into a file or a pipe: the body is data
+_HEREDOC_DATA_RECEIVERS = frozenset({"cat", "tee"})
+#: a command line that may run what a heredoc just wrote: a shell (by name or path),
+#: `.`/source/eval/exec, a program run by its path (./x.sh), a command named by a
+#: variable, or any substitution
+_RUNS_A_SHELL_RE = re.compile(
+    r"(?:^|[\s;&|(`/])(?:bash|sh|zsh|dash|ksh|fish|source|eval|exec|\.)(?=[\s)]|$)"
+    r"|\$\{?SHELL\b"
+    r"|(?:^|[;&|(\n])\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:\./|~/|/|\$)"
+    r"|(?<!\\)\$\(|(?<!\\)`|<\(|>\(")       # an escaped \` or \$( is a literal
+_HEREDOC_LINE_RE = re.compile(r"(?<!<)<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+
+
+def _heredoc_receiver(before: str) -> str:
+    """The program a heredoc feeds, from the text of its line before ``<<``."""
+    seg = re.split(r"&&|\|\||[;&|(]", before)[-1]
+    try:
+        toks = shlex.split(seg)
+    except ValueError:
+        return ""
+    toks = [t for t in toks if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t)]
+    return os.path.basename(toks[0]) if toks else ""
+
+
+def _command_as_run(command: str) -> str:
+    """*command* as the danger rules read it: the body of a heredoc that only writes data
+    (a quoted delimiter, fed to ``cat`` / ``tee`` and not piped on: the usual way to write
+    a file) is blanked, so a file whose
+    text mentions a dangerous command is not asked about. Kept whole, fail closed: a
+    heredoc fed to anything else (a shell, an interpreter), an unquoted one (the shell
+    expands its body), and every heredoc of a line that may run what it wrote
+    (``_RUNS_A_SHELL_RE``)."""
+    if "<<" not in command:
+        return command
+    lines = command.split("\n")
+    out: list[str] = []
+    blanked = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        m = _HEREDOC_LINE_RE.search(line)
+        if not m:
+            continue
+        # data only when it goes to a file (not piped on: `cat <<EOF | …`) and the shell
+        # does not expand it: an unquoted delimiter runs $(…) and `…` in the body
+        data = bool(m.group(1)) and "|" not in line \
+            and _heredoc_receiver(line[:m.start()]) in _HEREDOC_DATA_RECEIVERS
+        dash = line[m.start():m.start() + 3] == "<<-"
+        while i < len(lines):
+            body = lines[i]
+            i += 1
+            if (body.lstrip("\t") if dash else body) == m.group(2):
+                out.append(body)
+                break
+            out.append("" if data else body)
+            blanked = blanked or (data and bool(body))
+    if not blanked:
+        return command
+    shown = "\n".join(out)
+    return command if _RUNS_A_SHELL_RE.search(shown) else shown
+
+
 def _danger_match(command: str, patterns: "list[str]", cwd: str = "") -> "dict | None":
     """Which rule of dangerous_command_gate *command* trips (design 2026-10-26 §3.3 C1):
     ``{"rule", "match", "why"}`` (rule id, the part of the command it matched, one
@@ -1998,11 +2097,13 @@ def create_dangerous_command_gate(
             return {"decision": "approve"}
 
         cwd = str(input_data.get("cwd") or "")
+        # what the rules read: a data heredoc's body blanked (``_command_as_run``)
+        text = _command_as_run(command)
         # Which rule the command trips (glob list, dangerous recursive rm — fix #3,
         # allows /tmp & /var/folders and resolves relative / mktemp targets —,
         # irreversible external op (C041), rm/mv of DDD/Library/.context
         # (run_a456640f), a v1 authorization).
-        hit = _danger_match(command, patterns, cwd)
+        hit = _danger_match(text, patterns, cwd)
         # An action the product reserves for a person (core.project_agent.RESERVED_ACTIONS):
         # its class is the person's, so on a dispatched task it is denied at once (below).
         reserved_action = None
@@ -2019,7 +2120,7 @@ def create_dangerous_command_gate(
                 return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                                "permissionDecision": "deny",
                                                "permissionDecisionReason": reason}}
-            reserved_action = _is_reserved_action(command, pin.get("reserved") or [])
+            reserved_action = _is_reserved_action(text, pin.get("reserved") or [])
             if reserved_action and hit is None:
                 hit = {"rule": "reserved_action", "match": _excerpt(command),
                        "why": f"'{reserved_action}' is reserved for the person: a dispatched "
@@ -2033,8 +2134,8 @@ def create_dangerous_command_gate(
         # failing or timing out → asked (the one case the facts cannot clear).
         discard_reason = ""
         if not is_dangerous:
-            dirs = _discard_dirs(command, cwd)
-            if dirs is None and not _discards_work(command):
+            dirs = _discard_dirs(text, cwd)
+            if dirs is None and not _discards_work(text):
                 dirs = []
             if dirs != []:
                 from core import executors
@@ -2057,6 +2158,20 @@ def create_dangerous_command_gate(
         if not is_dangerous or hit is None:
             return {"decision": "approve"}
 
+        # Landing a run on this machine (run-land, landed-as) is the run's own agent's,
+        # like a native commit: nothing leaves the machine, it can be reverted, and the
+        # REPORT records how the run landed. Only when that is ALL the command trips:
+        # one simple command (``_v1_request_action``), no other rule; anything else is
+        # asked, as before. Not a sub-agent's (it shares the session id but does not
+        # answer for the run). Before the dispatched-task and approval-disabled branches
+        # on purpose: like a commit, a landing is never refused or posted for them.
+        if hit["rule"] == "v1_authorization" and not discard_reason \
+                and not input_data.get("agent_id") \
+                and _v1_request_action(command) in AGENT_AUTHORIZED_ACTIONS:
+            record_land_approval(tool_use_id, command, by="host")
+            logger.info("[APPROVED] the run's agent authorized its own landing: %s", command[:80])
+            return {"decision": "approve"}
+
         # A dispatched task (a session pinned to a Project Agent) waits for nobody but the
         # agent that dispatched it (design 2026-11-01-brain-to-hive-zero-touch): a wait of
         # a class that agent answers for (core/approval_class.HOST_CLASSES, decided from the
@@ -2065,7 +2180,7 @@ def create_dangerous_command_gate(
         # (a reserved action included): the session does it another way or reports it.
         if pin and not pin.get("broken"):
             from core import approval_class as _ac
-            if _approval_class_of(command, patterns, cwd, hit, reserved_action) not in _ac.HOST_CLASSES:
+            if _approval_class_of(text, patterns, cwd, hit, reserved_action) not in _ac.HOST_CLASSES:
                 reason = (f"Command denied: {_reason_text(hit)}. This is a dispatched task, so "
                           "nobody is asked; do it another way, or say in your result why it "
                           "could not be done.")
@@ -2143,7 +2258,7 @@ def create_dangerous_command_gate(
             "toolInput": tool_input_data,
             "reason": reason_text,
             "options": ["approve", "deny"],
-            "approval_class": _approval_class_of(command, patterns, cwd, hit, reserved_action),
+            "approval_class": _approval_class_of(text, patterns, cwd, hit, reserved_action),
         })
         decided_by = permission_mgr.pop_decided_by(request_id)
         logger.info("Decision for %s: %s (by %s)", request_id, decision, decided_by)

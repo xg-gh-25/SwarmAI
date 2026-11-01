@@ -207,8 +207,10 @@ def approve_from_event(store: AuditStore, request_id: str, *, now: float,
                        at: str, authorized_by: str = "person") -> dict[str, Any]:
     """Hook-side approval, written by the DAEMON after the command was approved: the
     ``auth`` fact for exactly the request the logged land_request names (C1, C3). An
-    approval the dispatching agent gave on a Hive says ``authorized_by: host`` (design
-    2026-10-31-hive-approvals §2.4); the person's carries no such field, as before."""
+    authorization by the agent that answers for the run says ``authorized_by: host``: on
+    a Hive the dispatching agent (design 2026-10-31-hive-approvals §2.4), on this machine
+    the run's own agent landing it (security_hooks.AGENT_AUTHORIZED_ACTIONS); the
+    person's carries no such field, as before."""
     request = request_event(store, request_id)["request"]
     payload = {"request_id": request["request_id"], "session_id": request["session_id"],
                "run_id": request["run_id"], "action": request["action"],

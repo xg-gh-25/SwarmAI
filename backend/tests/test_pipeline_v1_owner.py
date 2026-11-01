@@ -157,18 +157,18 @@ def test_run_land_request_is_recorded_only_once_approved(tmp_path, monkeypatch):
     assert _passes(gate._decide("session-a", command, {}, phase="check"))
 
     approved = []   # the daemon records the person's approval (C1/C3)
-    monkeypatch.setattr(gate, "_record_approval", lambda rid, req: approved.append((rid, req)))
+    monkeypatch.setattr(gate, "_record_approval", lambda rid, req, by="person": approved.append((rid, req, by)))
     assert not approved, "the check phase records nothing"
     result = gate._decide("session-a", command, {"command": command}, phase="approved")
     assert _passes(result)
-    assert approved == [("run_one", "land_abc")]
+    assert approved == [("run_one", "land_abc", "person")]
 
 
 def test_an_unrecorded_approval_denies_the_command(tmp_path, monkeypatch):
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     command = _cmd("run-land") + " --request land_abc --message land"
-    monkeypatch.setattr(gate, "_record_approval", lambda rid, req: "audit area not writable")
+    monkeypatch.setattr(gate, "_record_approval", lambda rid, req, by="person": "audit area not writable")
     result = gate._decide("session-a", command, {"command": command}, phase="approved")
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 

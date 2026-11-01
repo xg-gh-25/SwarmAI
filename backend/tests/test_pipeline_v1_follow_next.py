@@ -145,6 +145,10 @@ def test_build_exhausted_ends_not_landed_by_next(tmp_path, monkeypatch, case):
             r.v1("stage-complete")          # no report: BX-3 fails each attempt
         state, trail = follow(r)
         assert state["status"] == "completed" and state["landing"] == "not_landed", (trail, state)
+        # `next` says the worktree is closed and names the ways back
+        nxt = r.v1("status")["next"]
+        assert nxt["action"] == "none" and "run-land --prepare" in nxt["recover"]
+        assert "worktree is closed" in nxt["why"] and "new run" in nxt["why"]
     finally:
         r.close()
 

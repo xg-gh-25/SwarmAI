@@ -191,6 +191,16 @@ def next_step(engine, *, previous_stage: str | None = None,
             out["card_text"] = card.read_text(encoding="utf-8")
     if status in lifecycle.TERMINAL:
         out["why"] = f"the run is {status}"
+        if status == "completed" and state.get("landing") == "not_landed":
+            # the run is over: say so, and the ways back, so nobody edits its worktree
+            # (the worktree gate refuses that; a script's writes it cannot see)
+            out["why"] = (f"the run is completed without landing ({state.get('reason') or 'see status'}). "
+                          "Its worktree is closed: do not edit it (its change is kept, and the "
+                          "daemon releases the worktree with a snapshot once this session ends). "
+                          "To land it anyway: `run-land --prepare`, then `run-land --request` "
+                          "(yours, like a native commit; the REPORT says how it landed). To "
+                          "change it, create a new run and apply its change there.")
+            out["recover"] = _cmd(engine, "run-land --prepare")
         return out
     if status == "awaiting_human":
         out.update(action="ask_user", why="ask the pending decision exactly as given "

@@ -29,9 +29,10 @@ For a ``pipeline_v1.py`` command:
   ``scripts.swarm_out`` gets the export too (it is no landing): the Swarm Out CLI records
   the session that dispatches a run and gives commands on it (design
   2026-10-31-swarm-out-agent-owns-its-runs §2.1).
-- **approval**: the person-approved actions (``AFTER_APPROVAL`` with ``--request``)
+- **approval**: the authorized actions (``AFTER_APPROVAL`` with ``--request``)
   are handled in the ``phase="approved"`` registration, after dangerous_command_gate
-  recorded the person's approval for this exact command: the gate takes the run over
+  recorded the approval for this exact command (the person's, or for a landing the
+  run's own agent's): the gate takes the run over
   if needed and writes the ``auth`` event from the run's ``land_request``
   (``_record_approval``).
 - a Bash command that sends an HTTP request (``_makes_http_call``; one that only names a
@@ -461,7 +462,8 @@ def _decide(sid: str, command: str, tool_input: dict,
             approved_by: str = "person") -> "dict | None":
     """The decision for one Bash command (module docstring). S6-3: pipeline commands
     run in the agent's own process; the hook hands them no token, only this session's
-    id (``_with_session``), and records the person's approval of an approved action."""
+    id (``_with_session``), and records the approval of an approved action (the
+    person's, or ``host``: the agent that answers for the run)."""
     user_only = _user_only_deny(command or "")
     if user_only is not None:
         return user_only
