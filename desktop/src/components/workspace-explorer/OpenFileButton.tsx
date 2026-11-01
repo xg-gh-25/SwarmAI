@@ -7,9 +7,11 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 
 export function OpenFileButton() {
+  const { t } = useTranslation();
   const handleClickRef = useRef<(() => void) | undefined>(undefined);
 
   const handleClick = useCallback(async () => {
@@ -18,7 +20,7 @@ export function OpenFileButton() {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const selected = await open({
         multiple: false,
-        title: 'Open File',
+        title: t('explorer.openFileDialogTitle'),
       });
       if (selected && typeof selected === 'string') {
         document.dispatchEvent(
@@ -41,11 +43,11 @@ export function OpenFileButton() {
       };
       input.click();
     }
-  }, []);
+  }, [t]);
 
   handleClickRef.current = handleClick;
 
-  // Listen for Cmd+O keyboard shortcut event from ThreeColumnLayout
+  // Listen for the Cmd/Ctrl+O keyboard shortcut event from ThreeColumnLayout
   useEffect(() => {
     const handler = () => handleClickRef.current?.();
     document.addEventListener('swarm:open-file-dialog', handler);
@@ -56,8 +58,8 @@ export function OpenFileButton() {
     <button
       onClick={handleClick}
       className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-      title="Open file from disk (⌘O)"
-      aria-label="Open file from disk"
+      title={t('explorer.openFileShortcut')}
+      aria-label={t('explorer.openFile')}
       data-testid="open-file-button"
     >
       <span className="material-symbols-outlined icon-sm">folder_open</span>

@@ -55,7 +55,7 @@ def bundled_imports(skills_root: Path | str) -> list[str]:
     """Every python-deps name of the skills that go into the package (shipped_skills.py)."""
     if __package__:  # imported as scripts.skill_python_deps (tests)
         from .shipped_skills import shipped_skill_names
-    else:  # loaded by path (the PyInstaller spec, verify_installer.sh)
+    else:  # loaded by path (the PyInstaller spec)
         from shipped_skills import shipped_skill_names
     shipped = shipped_skill_names(skills_root)
     return sorted({name for skill, (deps, _opt) in declared(skills_root).items()

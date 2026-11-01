@@ -403,3 +403,100 @@ def test_no_battery_probe_without_starvation(monkeypatch):
     heartbeat._last_loop_tick = time.monotonic()
     heartbeat._write_heartbeat_once()
     assert calls == []
+
+
+# ── Channel ack / heartbeat text follows the user's language (R3.4) ──────────
+# channels.heartbeat is the chat-channel "still working" message, a different
+# module from core.heartbeat above; it shares this file because both are the
+# "heartbeat" a user or the daemon sees.
+
+import asyncio as _asyncio
+
+from channels import heartbeat as channel_hb
+
+
+@pytest.mark.parametrize("text, lang", [
+    ("帮我看看这个函数有没有问题", "zh"),
+    ("帮我 review 一下这个 CI log", "zh"),
+    ("在吗", "zh"),
+    ("please check the deploy", "en"),
+    ("¿Puedes revisar esto?", "en"),
+    ("このコードを確認してください", "en"),
+    ("이 코드를 검토해 주세요", "en"),
+    ("ok", "en"),
+    ("", "en"),
+])
+def test_reply_language_from_the_triggering_message(text, lang):
+    assert channel_hb.reply_language(text) == lang
+
+
+def test_templates_exist_for_both_languages():
+    for lang in ("zh", "en"):
+        assert set(channel_hb.ACK_TEMPLATES[lang]) == {"quick", "medium", "heavy"}
+        assert all(channel_hb.ACK_TEMPLATES[lang][level] for level in ("quick", "medium", "heavy"))
+        assert len(channel_hb.HEARTBEAT_PHASES[lang]) == len(channel_hb.HEARTBEAT_PHASES["zh"])
+        assert channel_hb.stop_reply(lang)
+
+
+def _has_han(text: str) -> bool:
+    return any("一" <= ch <= "鿿" for ch in text)
+
+
+def test_english_sets_carry_no_chinese():
+    for level, texts in channel_hb.ACK_TEMPLATES["en"].items():
+        assert not any(_has_han(t) for t in texts), level
+    for _threshold, texts in channel_hb.HEARTBEAT_PHASES["en"]:
+        assert not any(_has_han(t) for t in texts)
+    assert not _has_han(channel_hb.stop_reply("en"))
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_pick_ack_uses_the_language(lang):
+    for level in ("quick", "medium", "heavy"):
+        assert channel_hb.pick_ack(level, lang) in channel_hb.ACK_TEMPLATES[lang][level]
+
+
+def test_pick_ack_unknown_language_falls_back_to_english():
+    assert channel_hb.pick_ack("quick", "ja") in channel_hb.ACK_TEMPLATES["en"]["quick"]
+
+
+def test_stop_reply_per_language():
+    assert _has_han(channel_hb.stop_reply("zh"))
+    assert channel_hb.stop_reply("ko") == channel_hb.stop_reply("en")
+
+
+@pytest.mark.parametrize("lang", ["zh", "en"])
+def test_heartbeat_updates_use_the_managers_language(lang, monkeypatch):
+    updates = []
+
+    async def post(channel, text):
+        return "ts1"
+
+    async def update(channel, ts, text):
+        updates.append(text)
+
+    async def delete(channel, ts):
+        return None
+
+    calls = {"n": 0}
+
+    async def fast_sleep(_seconds):
+        calls["n"] += 1
+        if calls["n"] > 2:
+            raise _asyncio.CancelledError
+
+    monkeypatch.setattr(channel_hb.asyncio, "sleep", fast_sleep)
+    hb = channel_hb.HeartbeatManager(post_fn=post, update_fn=update, delete_fn=delete,
+                                     channel="C1", language=lang)
+
+    async def scenario():
+        await hb.post_ack("x")
+        hb._start_time = time.monotonic() - 10_000  # every phase is due
+        with pytest.raises(_asyncio.CancelledError):
+            await hb.run()
+
+    _asyncio.run(scenario())
+    phases = channel_hb.HEARTBEAT_PHASES[lang]
+    assert len(updates) == 2
+    assert updates[0] in phases[0][1]
+    assert updates[1] in phases[1][1]

@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { overlayQuery, getLastWorkspaceLocation, setLastWorkspaceLocation } from '../layout/overlayQueries';
 import { workspaceLocationsService, type WorkspaceLocation } from '../../services/workspace';
@@ -90,6 +91,7 @@ function TabGlyph({ kind, on }: { kind: WorkspaceLocation['kind']; on: boolean }
 }
 
 export default function WorkspaceOverlay({ close }: { close: () => void }) {
+  const { t } = useTranslation();
   const locs = useQuery(overlayQuery.workspaceLocations());
   const list: WorkspaceLocation[] = locs.data?.length ? locs.data : [SWARMWS];
   const [wanted, setWanted] = useState(() => getLastWorkspaceLocation());
@@ -132,7 +134,7 @@ export default function WorkspaceOverlay({ close }: { close: () => void }) {
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col" data-testid="workspace-overlay">
-      <div role="tablist" aria-label="Workspace locations"
+      <div role="tablist" aria-label={t('ui.WorkspaceOverlay.locations')}
         className="flex items-end gap-1 px-3.5 pt-2.5 bg-[var(--color-bg-chrome)] border-b border-[var(--color-border)]">
         {list.map((l) => {
           const on = l.key === current.key;

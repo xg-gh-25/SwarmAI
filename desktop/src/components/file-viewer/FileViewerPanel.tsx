@@ -21,6 +21,9 @@ import { ChangesCount, ChangesDetail, ChangesNav, ChangesRefresh, type ChangesSe
 import type { GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import type { CanvasCollapse, CanvasTabId } from '../../hooks/useCanvasHost';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import { layoutViewportWidth, clientToCssScale, APP_ZOOM_EVENT } from '../../utils/layoutViewport';
 
 export const PANEL_CONSTANTS = {
@@ -125,9 +128,9 @@ function getStoredWidth(): number {
  */
 export function canvasCountTitle(neu: number, upd: number): string {
   const parts: string[] = [];
-  if (neu > 0) parts.push(`${neu} new`);
-  if (upd > 0) parts.push(`${upd} modified`);
-  return parts.join(', ');
+  if (neu > 0) parts.push(i18n.t('ui.FileViewerPanel.countNew', { count: neu }));
+  if (upd > 0) parts.push(i18n.t('ui.FileViewerPanel.countModified', { count: upd }));
+  return parts.join(i18n.t('ui.FileViewerPanel.listSeparator'));
 }
 
 type FileViewerPanelProps = Omit<FileViewerProps, 'variant'> & {
@@ -192,6 +195,7 @@ function FileViewerPanelImpl({
   // sessionId's undefined flicker, BUG1/run_26981f66) is now dead code and DELETED.
   // A stable key means the rail neither flashes empty on the flicker NOR bleeds.
   const railTabId = props.tabScopeKey;
+  const { t } = useTranslation();
   // Canvas tabs: Artifacts (this session's written files, the existing rail + file
   // viewer) and Changes (each code repo's local state, CanvasChanges). The file
   // viewer stays MOUNTED while Changes shows: it holds open files and unsaved edits.
@@ -596,20 +600,20 @@ function FileViewerPanelImpl({
           type="button"
           onClick={onRevealCanvas}
           className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l border-[var(--canvas-edge)]"
-          title="Open Canvas"
-          aria-label="Open Canvas"
+          title={t('ui.FileViewerPanel.openCanvas')}
+          aria-label={t('ui.FileViewerPanel.openCanvas')}
           data-testid="canvas-resident-rail"
         >
           <span className="material-symbols-outlined icon-md text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
-          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Artifacts</span>
+          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">{t('ui.FileViewerPanel.railTitle')}</span>
           {counts.total > 0 && (
             <span
               className="canvas-rail-text text-[11px] text-[var(--color-text-muted)]"
               title={canvasCountTitle(counts.neu, counts.upd) || undefined}
             >
-              {counts.total} file{counts.total !== 1 ? 's' : ''}
-              {counts.neu > 0 && <span className="text-[var(--color-git-added)]"> · {counts.neu} new</span>}
-              {counts.upd > 0 && <span className="text-[var(--color-git-modified)]"> · {counts.upd} mod</span>}
+              {t('ui.FileViewerPanel.filesCount', { count: counts.total })}
+              {counts.neu > 0 && <span className="text-[var(--color-git-added)]"> · {t('ui.FileViewerPanel.railNew', { count: counts.neu })}</span>}
+              {counts.upd > 0 && <span className="text-[var(--color-git-modified)]"> · {t('ui.FileViewerPanel.railMod', { count: counts.upd })}</span>}
             </span>
           )}
         </button>
@@ -640,12 +644,12 @@ function FileViewerPanelImpl({
           type="button"
           onClick={expandFromRail}
           className="canvas-rail group w-full h-full flex flex-col items-center gap-3 pt-3 cursor-pointer border-l border-[var(--canvas-edge)]"
-          title="Expand Canvas"
-          aria-label="Expand Canvas"
+          title={t('ui.FileViewerPanel.expandCanvas')}
+          aria-label={t('ui.FileViewerPanel.expandCanvas')}
           data-testid="canvas-rail"
         >
           <span className="material-symbols-outlined icon-md text-[var(--color-text-muted)] group-hover:text-[var(--color-text)]">chevron_left</span>
-          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">Canvas · Artifacts</span>
+          <span className="canvas-rail-text text-[11px] font-bold tracking-[0.12em] uppercase text-[var(--color-text)]">{t('ui.FileViewerPanel.railTitle')}</span>
           {counts.total > 0 && (
             // Consistent with the expanded-header count (Gate-1 F1): git-semantic
             // color vars (not literal green/yellow), both new AND mod, shared
@@ -654,9 +658,9 @@ function FileViewerPanelImpl({
               className="canvas-rail-text text-[11px] text-[var(--color-text-muted)]"
               title={canvasCountTitle(counts.neu, counts.upd) || undefined}
             >
-              {counts.total} file{counts.total !== 1 ? 's' : ''}
-              {counts.neu > 0 && <span className="text-[var(--color-git-added)]"> · {counts.neu} new</span>}
-              {counts.upd > 0 && <span className="text-[var(--color-git-modified)]"> · {counts.upd} mod</span>}
+              {t('ui.FileViewerPanel.filesCount', { count: counts.total })}
+              {counts.neu > 0 && <span className="text-[var(--color-git-added)]"> · {t('ui.FileViewerPanel.railNew', { count: counts.neu })}</span>}
+              {counts.upd > 0 && <span className="text-[var(--color-git-modified)]"> · {t('ui.FileViewerPanel.railMod', { count: counts.upd })}</span>}
             </span>
           )}
         </button>
@@ -701,7 +705,7 @@ function FileViewerPanelImpl({
         aria-valuenow={width}
         aria-valuemin={PANEL_CONSTANTS.MIN_WIDTH}
         aria-valuemax={dragCeiling}
-        aria-label="Resize file viewer panel"
+        aria-label={t('ui.FileViewerPanel.resizePanel')}
         data-testid="panel-resize-handle"
       >
         {/* Wider, reliably-grabbable hit area (11px straddling the seam) for
@@ -764,8 +768,8 @@ function FileViewerPanelImpl({
               <button
                 onClick={toggleOutputs}
                 className="icon-btn shrink-0 hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-                title={outputsCollapsed ? 'Show list' : 'Hide list'}
-                aria-label={outputsCollapsed ? 'Show list' : 'Hide list'}
+                title={outputsCollapsed ? t('ui.FileViewerPanel.showList') : t('ui.FileViewerPanel.hideList')}
+                aria-label={outputsCollapsed ? t('ui.FileViewerPanel.showList') : t('ui.FileViewerPanel.hideList')}
                 aria-expanded={!outputsCollapsed}
                 data-testid="canvas-outputs-caret"
               >
@@ -773,10 +777,10 @@ function FileViewerPanelImpl({
               </button>
               {/* Tabs: Artifacts (this session's files) | Changes (code repos' local state). */}
               <div className="flex items-center min-w-0 flex-1">
-                <div role="tablist" aria-label="Canvas" className="inline-flex p-[2px] rounded-lg bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)]">
+                <div role="tablist" aria-label={t('ui.FileViewerPanel.canvasTabs')} className="inline-flex p-[2px] rounded-lg bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)]">
                   {([
-                    ['artifacts', 'Artifacts'],
-                    ['changes', 'Changes'],
+                    ['artifacts', t('ui.FileViewerPanel.tabArtifacts')],
+                    ['changes', t('ui.FileViewerPanel.tabChanges')],
                   ] as const).map(([id, label]) => (
                     <button
                       key={id}
@@ -804,7 +808,7 @@ function FileViewerPanelImpl({
                     <span className="truncate">{props.initialFile.fileName}</span>
                     {fileDirty && (
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] shrink-0"
-                        title="Unsaved changes" aria-label="Unsaved changes" data-testid="canvas-current-dirty" />
+                        title={t('ui.FileViewerPanel.unsavedChanges')} aria-label={t('ui.FileViewerPanel.unsavedChanges')} data-testid="canvas-current-dirty" />
                     )}
                   </span>
                 )}
@@ -822,8 +826,8 @@ function FileViewerPanelImpl({
                   // idle color and the active accent would never show (Gate-2 CRITICAL).
                   // --color-text-muted is the one idle colour of every Canvas header icon.
                   className={`icon-btn hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors ${pinned ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-muted)]'}`}
-                  title={pinned ? 'Pinned — Canvas won’t change by itself (click to unpin)' : 'Pin Canvas — new outputs won’t open or replace what you see (they still list here)'}
-                  aria-label="Toggle pin — Canvas does not change by itself"
+                  title={pinned ? t('ui.FileViewerPanel.pinnedTitle') : t('ui.FileViewerPanel.pinTitle')}
+                  aria-label={t('ui.FileViewerPanel.togglePin')}
                   aria-pressed={!!pinned}
                 >
                   <span className="material-symbols-outlined icon-sm">keep</span>
@@ -846,8 +850,8 @@ function FileViewerPanelImpl({
                 <button
                   onClick={toggleExpand}
                   className="icon-btn hover:bg-[var(--color-hover)] transition-colors"
-                  title={expanded ? 'Restore width' : 'Expand — widen the Canvas for review'}
-                  aria-label={expanded ? 'Restore Canvas width' : 'Expand Canvas for review'}
+                  title={expanded ? t('ui.FileViewerPanel.restoreWidth') : t('ui.FileViewerPanel.expandTitle')}
+                  aria-label={expanded ? t('ui.FileViewerPanel.restoreCanvasWidth') : t('ui.FileViewerPanel.expandForReview')}
                   aria-pressed={expanded}
                 >
                   <span className="material-symbols-outlined icon-sm">{expanded ? 'close_fullscreen' : 'open_in_full'}</span>
@@ -855,8 +859,8 @@ function FileViewerPanelImpl({
                 <button
                   onClick={collapseToRail}
                   className="icon-btn hover:bg-[var(--color-hover)] transition-colors"
-                  title="Collapse Canvas to a side rail"
-                  aria-label="Collapse Canvas to a side rail"
+                  title={t('ui.FileViewerPanel.collapseToRail')}
+                  aria-label={t('ui.FileViewerPanel.collapseToRail')}
                   data-testid="canvas-collapse-rail-btn"
                 >
                   <span className="material-symbols-outlined icon-sm">right_panel_close</span>
@@ -890,13 +894,13 @@ function FileViewerPanelImpl({
           >
             <span className="material-symbols-outlined icon-sm text-[var(--color-warning)] shrink-0" aria-hidden="true">warning</span>
             <span className="min-w-0 flex-1 truncate" title={props.initialFile?.filePath}>
-              Unsaved changes in <b>{props.initialFile?.fileName}</b>
+              {t('ui.FileViewerPanel.unsavedIn')}<b>{props.initialFile?.fileName}</b>
             </span>
             <button type="button" className="btn-sm btn-ghost shrink-0" onClick={() => props.onResolvePending!(false)}
-              data-testid="canvas-pending-keep">Keep editing</button>
+              data-testid="canvas-pending-keep">{t('ui.FileViewerPanel.keepEditing')}</button>
             <button type="button" className="btn-sm btn-warning shrink-0" onClick={() => props.onResolvePending!(true)}
               title={props.pendingOpen.filePath} data-testid="canvas-pending-discard">
-              Discard and open {props.pendingOpen.fileName}
+              {t('ui.FileViewerPanel.discardAndOpen', { name: props.pendingOpen.fileName })}
             </button>
           </div>
         )}

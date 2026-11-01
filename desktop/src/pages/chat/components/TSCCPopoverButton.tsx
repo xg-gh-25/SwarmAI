@@ -22,6 +22,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import type { SystemPromptMetadata } from '../../../types';
 import { SystemPromptModule } from './TSCCModules';
 import { useEscape } from '../../../hooks/useLayer';
@@ -61,6 +62,7 @@ interface PanelBox {
 }
 
 export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProps) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -173,7 +175,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
         type="button"
         aria-haspopup="dialog"
         aria-expanded={isOpen}
-        aria-label="TSCC context"
+        aria-label={t('ui.TSCCPopoverButton.buttonLabel')}
         disabled={isDisabled}
         onClick={isDisabled ? undefined : handleToggle}
         className={`
@@ -194,7 +196,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
         <div
           ref={popoverRef}
           role="dialog"
-          aria-label="TSCC context panel"
+          aria-label={t('ui.TSCCPopoverButton.panelLabel')}
           style={{
             position: 'fixed',
             right: box.right,

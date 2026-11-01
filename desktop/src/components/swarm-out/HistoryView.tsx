@@ -184,7 +184,7 @@ function Breakdown({ runs, dimKey, setDim, selected, onSelect }: {
               <th className={`${th} text-right`}>{t('swarmOut.history.col.unattended')}</th>
               <th className={`${th} text-right`}>{t('swarmOut.history.col.median')}</th>
               <th className={`${th} text-right`}>{t('swarmOut.history.col.spend')}</th>
-              <th className={`${th} text-right`}>Judge</th>
+              <th className={`${th} text-right`}>{t('ui.HistoryView.colJudge')}</th>
               {showLessons && <th className={`${th} text-right`}>{t('swarmOut.history.col.lessons')}</th>}
             </tr>
           </thead>
@@ -236,7 +236,7 @@ function Dimensions({ runs }: { runs: SwarmOutRun[] }) {
           {c.BLOCK > 0 && <b style={{ color: TONE_VAR.error }}>✕{c.BLOCK} </b>}
           {c.WARN > 0 && <b style={{ color: TONE_VAR.attention }}>!{c.WARN} </b>}
           {c.PASS > 0 && <b style={{ color: TONE_VAR.ok }}>✓{c.PASS} </b>}
-          {(c.NA + c.PENDING) > 0 && <span className={dim}>N/A {c.NA + c.PENDING}</span>}
+          {(c.NA + c.PENDING) > 0 && <span className={dim}>{t('ui.HistoryView.naCount', { n: c.NA + c.PENDING })}</span>}
         </span>
       ))}
     </div>

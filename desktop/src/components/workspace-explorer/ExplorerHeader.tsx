@@ -21,15 +21,16 @@
  */
 
 import { useTreeData, useSearch, useSelection, type SortMode } from '../../contexts/ExplorerContext';
+import { useTranslation } from 'react-i18next';
 import { OpenFileButton } from './OpenFileButton';
 
-/** Sort cycle order + the icon/label shown for each mode. */
+/** Sort cycle order + the icon/label (an i18n key) shown for each mode. */
 const SORT_CYCLE: SortMode[] = ['default', 'name-asc', 'name-desc', 'git-first'];
 const SORT_META: Record<SortMode, { icon: string; label: string }> = {
-  'default': { icon: 'sort', label: 'Sort: default (newest-first in Knowledge)' },
-  'name-asc': { icon: 'sort_by_alpha', label: 'Sort: name A→Z' },
-  'name-desc': { icon: 'sort_by_alpha', label: 'Sort: name Z→A' },
-  'git-first': { icon: 'commit', label: 'Sort: changed files first' },
+  'default': { icon: 'sort', label: 'ui.ExplorerHeader.sortDefault' },
+  'name-asc': { icon: 'sort_by_alpha', label: 'ui.ExplorerHeader.sortNameAsc' },
+  'name-desc': { icon: 'sort_by_alpha', label: 'ui.ExplorerHeader.sortNameDesc' },
+  'git-first': { icon: 'commit', label: 'ui.ExplorerHeader.sortGitFirst' },
 };
 
 /** Small icon button matching the existing header action style. */
@@ -60,6 +61,7 @@ function HeaderIconButton({
 }
 
 export default function ExplorerHeader({ embedded = false }: { embedded?: boolean } = {}) {
+  const { t } = useTranslation();
   const { refreshTree, showHidden, setShowHidden } = useTreeData();
   const { searchQuery, setSearchQuery } = useSearch();
   const { collapseAll, expandAll, sortMode, setSortMode } = useSelection();
@@ -82,8 +84,8 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
         type="search"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder={embedded ? 'Filter loaded files' : 'Search files…'}
-        aria-label="Search workspace files"
+        placeholder={embedded ? t('ui.ExplorerHeader.filterLoaded') : t('ui.ExplorerHeader.searchFiles')}
+        aria-label={t('ui.ExplorerHeader.searchWorkspace')}
         data-testid="explorer-search-input"
         data-workspace-filter={embedded ? '' : undefined}
         className="w-full h-7 pl-7 pr-7 text-small rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors [&::-webkit-search-cancel-button]:hidden"
@@ -91,8 +93,8 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
       {searchQuery && (
         <button
           onClick={() => setSearchQuery('')}
-          title="Clear search"
-          aria-label="Clear search"
+          title={t('ui.ExplorerHeader.clearSearch')}
+          aria-label={t('ui.ExplorerHeader.clearSearch')}
           data-testid="explorer-search-clear"
           className="absolute right-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
         >
@@ -108,20 +110,20 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
         {search}
         <HeaderIconButton
           icon={showHidden ? 'visibility' : 'visibility_off'}
-          title={showHidden ? 'Hide hidden items' : 'Show hidden items'}
+          title={showHidden ? t('ui.ExplorerHeader.hideHidden') : t('ui.ExplorerHeader.showHidden')}
           onClick={() => setShowHidden(!showHidden)}
           testId="explorer-show-hidden"
           active={showHidden}
         />
         <HeaderIconButton
           icon={SORT_META[sortMode].icon}
-          title={SORT_META[sortMode].label}
+          title={t(SORT_META[sortMode].label)}
           onClick={cycleSort}
           testId="explorer-sort-toggle"
           active={sortMode !== 'default'}
         />
-        <HeaderIconButton icon="unfold_less" title="Collapse all folders" onClick={collapseAll} testId="explorer-collapse-all" />
-        <HeaderIconButton icon="unfold_more" title="Expand all folders" onClick={expandAll} testId="explorer-expand-all" />
+        <HeaderIconButton icon="unfold_less" title={t('ui.ExplorerHeader.collapseAll')} onClick={collapseAll} testId="explorer-collapse-all" />
+        <HeaderIconButton icon="unfold_more" title={t('ui.ExplorerHeader.expandAll')} onClick={expandAll} testId="explorer-expand-all" />
         <OpenFileButton />
       </div>
     );
@@ -150,27 +152,27 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
         <div className="flex items-center gap-1">
           <HeaderIconButton
             icon={SORT_META[sortMode].icon}
-            title={SORT_META[sortMode].label}
+            title={t(SORT_META[sortMode].label)}
             onClick={cycleSort}
             testId="explorer-sort-toggle"
             active={sortMode !== 'default'}
           />
           <HeaderIconButton
             icon="unfold_less"
-            title="Collapse all folders"
+            title={t('ui.ExplorerHeader.collapseAll')}
             onClick={collapseAll}
             testId="explorer-collapse-all"
           />
           <HeaderIconButton
             icon="unfold_more"
-            title="Expand all folders"
+            title={t('ui.ExplorerHeader.expandAll')}
             onClick={expandAll}
             testId="explorer-expand-all"
           />
           <OpenFileButton />
           <HeaderIconButton
             icon="refresh"
-            title="Refresh workspace tree"
+            title={t('ui.ExplorerHeader.refreshTree')}
             onClick={refreshTree}
             testId="refresh-button"
           />
@@ -190,16 +192,16 @@ export default function ExplorerHeader({ embedded = false }: { embedded?: boolea
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search files…"
-            aria-label="Search workspace files"
+            placeholder={t('ui.ExplorerHeader.searchFiles')}
+            aria-label={t('ui.ExplorerHeader.searchWorkspace')}
             data-testid="explorer-search-input"
             className="w-full pl-7 pr-7 py-1 text-small rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary,var(--color-text-secondary))] transition-colors [&::-webkit-search-cancel-button]:hidden"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              title="Clear search"
-              aria-label="Clear search"
+              title={t('ui.ExplorerHeader.clearSearch')}
+              aria-label={t('ui.ExplorerHeader.clearSearch')}
               data-testid="explorer-search-clear"
               className="absolute right-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
             >

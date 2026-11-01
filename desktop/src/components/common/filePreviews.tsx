@@ -12,6 +12,7 @@
  *   outputs are NOT rendered (untrusted): their text/plain fallback is shown.
  */
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import hljs from 'highlight.js';
 import MarkdownRenderer from './MarkdownRenderer';
 import { HIGHLIGHT_MAX_CHARS, shouldProcessSync } from './editorLimits';
@@ -58,6 +59,7 @@ interface NbOutput {
 interface NbCell { cell_type: string; source: Text; execution_count?: number | null; outputs?: NbOutput[] }
 
 function Output({ o }: { o: NbOutput }) {
+  const { t } = useTranslation();
   if (o.output_type === 'stream') {
     return <pre className={`nb-out ${o.name === 'stderr' ? 'text-[var(--color-git-deleted,#f85149)]' : ''}`}>{join(o.text)}</pre>;
   }
@@ -66,19 +68,20 @@ function Output({ o }: { o: NbOutput }) {
   }
   const d = o.data ?? {};
   for (const mime of ['image/png', 'image/jpeg'] as const) {
-    if (d[mime]) return <img className="nb-img" alt="output" src={`data:${mime};base64,${join(d[mime]).replace(/\s/g, '')}`} data-testid="nb-image" />;
+    if (d[mime]) return <img className="nb-img" alt={t('ui.filePreviews.outputAlt')} src={`data:${mime};base64,${join(d[mime]).replace(/\s/g, '')}`} data-testid="nb-image" />;
   }
   if (d['text/markdown']) return <MarkdownRenderer content={join(d['text/markdown'])} />;
   const unsafe = d['text/html'] || d['application/javascript'];
   return (
     <>
-      {unsafe && <div className="nb-note" data-testid="nb-html-skipped">HTML output (not rendered)</div>}
+      {unsafe && <div className="nb-note" data-testid="nb-html-skipped">{t('ui.filePreviews.htmlSkipped')}</div>}
       {d['text/plain'] && <pre className="nb-out">{join(d['text/plain'])}</pre>}
     </>
   );
 }
 
 export function NotebookView({ content }: { content: string }) {
+  const { t } = useTranslation();
   const nb = useMemo(() => {
     try {
       const j = JSON.parse(content) as { cells?: NbCell[]; metadata?: { kernelspec?: { language?: string }; language_info?: { name?: string } } };
@@ -92,7 +95,7 @@ export function NotebookView({ content }: { content: string }) {
   if ('error' in nb) {
     return (
       <div className="nb-note" data-testid="nb-invalid">
-        This notebook is not valid JSON ({nb.error}). Use Edit to see and fix the source.
+        {t('ui.filePreviews.invalidNotebook', { error: nb.error })}
       </div>
     );
   }
@@ -106,7 +109,7 @@ export function NotebookView({ content }: { content: string }) {
         const html = src.length <= HIGHLIGHT_MAX_CHARS ? hljs.highlight(src, { language: lang }).value : null;
         return (
           <div key={i} className="nb-cell" data-testid="nb-code">
-            <div className="nb-prompt">In [{c.execution_count ?? ' '}]:</div>
+            <div className="nb-prompt">{t('ui.filePreviews.inPrompt', { n: c.execution_count ?? ' ' })}</div>
             {html !== null
               // hljs output is escaped token markup of the cell's own source
               ? <pre className="nb-src hljs" dangerouslySetInnerHTML={{ __html: html }} />
@@ -122,13 +125,14 @@ export function NotebookView({ content }: { content: string }) {
 /* ------------------------------ one body ------------------------------ */
 
 export function PreviewBody({ kind, content, basePath }: { kind: PreviewKind; content: string; basePath: string }) {
+  const { t } = useTranslation();
   if (kind === 'svg') {
     return (
       <div className="flex items-center justify-center h-full">
         <img
           className="max-w-full max-h-full w-auto h-auto"
           src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
-          alt="SVG preview"
+          alt={t('ui.filePreviews.svgPreview')}
           data-testid="svg-preview"
         />
       </div>

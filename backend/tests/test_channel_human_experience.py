@@ -201,10 +201,11 @@ class TestComplexityEstimation:
 
     def test_pick_ack_returns_string(self):
         for level in ("quick", "medium", "heavy"):
-            ack = pick_ack(level)
-            assert isinstance(ack, str)
-            assert len(ack) > 0
-            assert ack in ACK_TEMPLATES[level]
+            for lang in ("zh", "en"):
+                ack = pick_ack(level, lang)
+                assert isinstance(ack, str)
+                assert len(ack) > 0
+                assert ack in ACK_TEMPLATES[lang][level]
 
 
 # ===========================================================================

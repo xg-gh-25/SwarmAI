@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 // Tool category definitions
 export interface ToolCategory {
@@ -110,6 +111,7 @@ interface ToolSelectorProps {
 }
 
 export function ToolSelector({ selectedTools, onChange, className }: ToolSelectorProps) {
+  const { t } = useTranslation();
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
 
   const toggleCategory = (categoryId: string) => {
@@ -158,7 +160,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
 
   return (
     <div className={clsx('space-y-2', className)}>
-      <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">Built-in Tools</label>
+      <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('ui.ToolSelector.builtInTools')}</label>
       <div className="space-y-2">
         {TOOL_CATEGORIES.map((category) => {
           const isExpanded = expandedCategories.includes(category.id);

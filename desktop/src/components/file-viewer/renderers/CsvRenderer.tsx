@@ -11,6 +11,7 @@
 
 import React, { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react';
 import Papa from 'papaparse';
+import { useTranslation } from 'react-i18next';
 
 interface RendererProps {
   filePath: string;
@@ -50,6 +51,7 @@ const CsvRenderer = memo(function CsvRenderer({
   fileName,
   onStatusInfo,
 }: RendererProps) {
+  const { t } = useTranslation();
   const [showRaw, setShowRaw] = useState(false);
   const [sort, setSort] = useState<SortState>({ column: '', direction: 'none' });
   const [scrollTop, setScrollTop] = useState(0);
@@ -182,7 +184,7 @@ const CsvRenderer = memo(function CsvRenderer({
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
         <span className="material-symbols-outlined icon-xl mb-2">table_chart</span>
-        <p className="text-sm">No CSV content available</p>
+        <p className="text-sm">{t('ui.CsvRenderer.noContent')}</p>
       </div>
     );
   }
@@ -195,11 +197,11 @@ const CsvRenderer = memo(function CsvRenderer({
           <div className="flex items-center gap-2 text-red-400">
             <span className="material-symbols-outlined icon-xs">error</span>
             <span className="text-xs font-medium">
-              Failed to parse {fileName.endsWith('.tsv') ? 'TSV' : 'CSV'}
+              {t('ui.CsvRenderer.parseFailed', { format: fileName.endsWith('.tsv') ? 'TSV' : 'CSV' })}
             </span>
           </div>
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
-            {parseResult.errors[0]?.message ?? 'Unknown parse error'}
+            {parseResult.errors[0]?.message ?? t('ui.CsvRenderer.unknownParseError')}
           </p>
         </div>
         {/* Fallback: raw content */}
@@ -215,7 +217,7 @@ const CsvRenderer = memo(function CsvRenderer({
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
         <span className="material-symbols-outlined icon-xl mb-2">table_chart</span>
-        <p className="text-sm">Empty file</p>
+        <p className="text-sm">{t('ui.CsvRenderer.emptyFile')}</p>
         <p className="text-xs mt-1">{fileName}</p>
       </div>
     );
@@ -229,13 +231,13 @@ const CsvRenderer = memo(function CsvRenderer({
           {isTruncated && (
             <span className="flex items-center gap-1 text-xs text-amber-500">
               <span className="material-symbols-outlined icon-xs">warning</span>
-              Showing {MAX_DISPLAY_ROWS.toLocaleString()} of {totalRows.toLocaleString()} rows
+              {t('ui.CsvRenderer.showingRows', { shown: MAX_DISPLAY_ROWS.toLocaleString(), total: totalRows.toLocaleString() })}
             </span>
           )}
           {parseResult && parseResult.errors.length > 0 && headers.length > 0 && (
             <span className="flex items-center gap-1 text-xs text-amber-500" title={parseResult.errors.map(e => e.message).join('; ')}>
               <span className="material-symbols-outlined icon-xs">warning</span>
-              {parseResult.errors.length} parse warning{parseResult.errors.length > 1 ? 's' : ''}
+              {t('ui.CsvRenderer.parseWarning', { count: parseResult.errors.length })}
             </span>
           )}
         </div>
@@ -249,12 +251,12 @@ const CsvRenderer = memo(function CsvRenderer({
                 ? 'bg-[var(--color-border)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'
             }`}
-            title={showRaw ? 'Switch to table view' : 'Switch to raw text'}
+            title={showRaw ? t('ui.CsvRenderer.switchToTable') : t('ui.CsvRenderer.switchToRaw')}
           >
             <span className="material-symbols-outlined icon-xs">
               {showRaw ? 'table_chart' : 'raw_on'}
             </span>
-            {showRaw ? 'Table' : 'Raw'}
+            {showRaw ? t('ui.CsvRenderer.table') : t('ui.CsvRenderer.raw')}
           </button>
         </div>
       </div>

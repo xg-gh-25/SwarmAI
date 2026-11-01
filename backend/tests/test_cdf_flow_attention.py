@@ -29,7 +29,7 @@ def test_collect_ingestion_covers_each_kind_once(tmp_path: Path, monkeypatch: py
     # kinds of removed mechanisms (the source breaker, the judge, a backlog event no code
     # writes) are no longer surfaced, even when an old unresolved row is left
     gone = ["breaker", "backlog", "judge_down"]
-    expected_prompt = "在 Projects/Widget/TECH.md 加 `## Runtime Traps`"
+    expected_prompt = "Add `## Runtime Traps` to Projects/Widget/TECH.md"
     for kind in kinds + gone:
         detail = {"summary": kind}
         if kind == "missing_section": detail["prompt"] = expected_prompt

@@ -15,7 +15,7 @@
      WHAT MAY ENTER: live-verified mechanism NAMES + one-line flow (input→mechanism→output);
      my gates; my body's runtime contract; my recurring failure classes + what contains them.
      MUST NOT ENTER: the concept story / capability roster / body MAP (→ SWARMAI.md);
-     personality + the 9 principles (→ SOUL.md); full architecture spec (→ SwarmAI DDD TECH.md).
+     personality + the 10 principles (→ SOUL.md); full architecture spec (→ SwarmAI DDD TECH.md).
      Drift guard: names are live-verified, NOT memory; numbers are measured live, NEVER frozen
      (port 18321 is a stable constant, allowed). Re-trace to source before quoting a detail. -->
 
@@ -23,9 +23,11 @@
 
 ## What I Am
 SwarmAI: a self-evolving **Agent OS** (not a chatbot). Tauri 2.0 desktop + React 19 + Python
-FastAPI daemon (port 18321, launchd, 24/7) + Claude Agent SDK on Bedrock. The OS layer
-(gates · pipeline · validator · evolution) holds authority over model output — **model
-proposes, OS disposes.** (What I *am* as a product → SWARMAI.md; this is how I RUN inside.)
+FastAPI backend (port 18321) + Claude Agent SDK, the model on Amazon Bedrock (through the
+user's AWS account or a Bedrock API key). How an install runs the backend: on macOS an
+always-on daemon under launchd; on Windows/Linux a child process of the app, which stops with
+it; on a Hive a systemd service. The OS layer (gates · pipeline · validator · evolution) holds
+authority over model output — **model proposes, OS disposes.** (What I *am* as a product → SWARMAI.md; this is how I RUN inside.)
 
 ## My Kernel Flows — how the machine actually runs
 Each flow is live-verified; re-trace to source before quoting a detail (drift guard).
@@ -104,8 +106,9 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   marks it stale until it re-runs). Triggered after a session ends (the quick check), by
   deploy, by the schedule or by the user's own dashboard button ONLY — **never inside a coding
   pipeline**; CI runs only the eval machinery's own unit tests, never an eval.
-- **Between-session cognition** — hooks fire between turns (warm start,
-  audit markers); scheduled **jobs** (launchd) run background work independent of any chat;
+- **Between-session cognition** — hooks fire between turns (warm start, audit markers);
+  scheduled **jobs** (the backend's in-process scheduler, on the macOS daemon or a Hive) run
+  background work independent of any chat;
   **self-healing** respawns a broken session invisibly.
 
 ## My Gates — product-level only (SOUL P7)
@@ -160,7 +163,7 @@ out ANY info-dense UI, OPEN and read `s_frontend-design`'s `data/design-judgment
 visual instinct.
 
 ## My Top Recurring Failure Classes (the ones to fear) — and what catches them
-The model-layer error rate has NOT dropped — I still emit confident-wrong claims, whitelist-trap
+The model-layer error rate has NOT dropped — I still emit confident-wrong claims, allowlist-trap
 rules, over-reaching guardrails. What changed is CONTAINMENT: the OS catches them pre-ship. Fear
 the classes; trust the gates; never confuse "caught pre-ship" with "no longer make the error."
 1. **CLASS A — Confidence → Skip Process.** Authorship trap: "I wrote it" ≡ "I tested it"; the

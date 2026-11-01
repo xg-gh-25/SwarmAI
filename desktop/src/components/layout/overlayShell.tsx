@@ -21,6 +21,7 @@
  */
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 /** Absolute timestamp (XG rule: no relative "1 hour ago"). Tolerates null/invalid → —.
  *  The single source for what were 3 identical per-overlay copies. */
@@ -46,6 +47,7 @@ export function WorkbenchToolbar({
   gap?: 1 | 2;
   testid?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className={clsx(
@@ -55,7 +57,7 @@ export function WorkbenchToolbar({
       data-testid={testid}
     >
       {left}
-      {loading && <span className="ml-2 text-meta text-[var(--color-text-faint)]">Loading…</span>}
+      {loading && <span className="ml-2 text-meta text-[var(--color-text-faint)]">{t('hiveFleet.loading')}</span>}
       <div className="flex-1" />
       {right}
     </div>

@@ -30,9 +30,10 @@ const modelIdToOption = (id: string) => ({
 
 // Signature skills — SwarmAI's two flagship pipelines.
 // Shown first with a ⭐ badge + tagline. Key = folder name, value = tagline.
+// Featured skill folder name → the i18n key of its one-line pitch.
 const FEATURED_SKILLS = new Map<string, string>([
-  ['s_autonomous-pipeline', 'One sentence in → PR-ready code out. The AIDLC delivery engine.'],
-  ['s_pollinate',           'Your message, their attention, the right format. Media value delivery.'],
+  ['s_autonomous-pipeline', 'ui.SkillsPage.featuredPipeline'],
+  ['s_pollinate',           'ui.SkillsPage.featuredPollinate'],
 ]);
 
 // Table column configuration - will be translated via hook
@@ -45,24 +46,24 @@ const getSkillColumns = (t: (key: string) => string) => [
 ];
 
 // Get source display for a skill based on filesystem tier
-function getSourceDisplay(skill: Skill): { label: string; icon: string; color: string } {
+function getSourceDisplay(skill: Skill): { labelKey: string; icon: string; color: string } {
   switch (skill.sourceTier) {
     case 'built-in':
       return {
-        label: 'Built-in',
+        labelKey: 'skills.source.builtIn',
         icon: 'verified',
         color: 'text-cyan-400',
       };
     case 'plugin':
       return {
-        label: 'Plugin',
+        labelKey: 'skills.source.plugin',
         icon: 'extension',
         color: 'text-purple-400',
       };
     case 'user':
     default:
       return {
-        label: 'User',
+        labelKey: 'skills.source.user',
         icon: 'person',
         color: 'text-[var(--color-text-muted)]',
       };
@@ -210,7 +211,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                 <ResizableTableCell>
                   <span className="text-[var(--color-text)] font-medium">
                     {FEATURED_SKILLS.has(skill.folderName) && (
-                      <span className="text-amber-400 mr-1.5" title="Signature skill">⭐</span>
+                      <span className="text-amber-400 mr-1.5" title={t('ui.SkillsPage.signatureSkill')}>⭐</span>
                     )}
                     {skill.name}
                   </span>
@@ -219,7 +220,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                   {FEATURED_SKILLS.has(skill.folderName) ? (
                     <div className="flex flex-col gap-0.5">
                       <span className="text-amber-600 dark:text-amber-300/90 text-xs font-medium italic">
-                        {FEATURED_SKILLS.get(skill.folderName)}
+                        {t(FEATURED_SKILLS.get(skill.folderName) ?? '')}
                       </span>
                       <span className="text-[var(--color-text-muted)] text-[11px] leading-tight">
                         {skill.description}
@@ -239,7 +240,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                         <span className={`material-symbols-outlined icon-xs ${source.color}`}>
                           {source.icon}
                         </span>
-                        <span className={`text-sm ${source.color}`}>{source.label}</span>
+                        <span className={`text-sm ${source.color}`}>{t(source.labelKey)}</span>
                       </div>
                     );
                   })()}
@@ -922,7 +923,7 @@ function GenerateSkillForm({
         {isStreaming && messages[messages.length - 1]?.content.length === 0 && (
           <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
             <Spinner size="sm" />
-            <span className="text-sm">Agent is working...</span>
+            <span className="text-sm">{t('ui.SkillsPage.agentWorking')}</span>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -944,7 +945,7 @@ function GenerateSkillForm({
           <div className="space-y-3">
             <div className="flex items-center gap-2 p-3 bg-status-success/10 border border-status-success/30 rounded-lg">
               <span className="material-symbols-outlined icon-md text-status-success">check_circle</span>
-              <span className="text-status-success text-sm">Skill creation complete! You can iterate or save.</span>
+              <span className="text-status-success text-sm">{t('ui.SkillsPage.creationComplete')}</span>
             </div>
             <div className="flex gap-3">
               <div className="relative flex-1">
@@ -953,7 +954,7 @@ function GenerateSkillForm({
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={isStreaming ? 'Generating...' : 'Request changes or improvements...'}
+                  placeholder={isStreaming ? t('ui.SkillsPage.generating') : t('ui.SkillsPage.requestChanges')}
                   disabled={isStreaming}
                   className="w-full px-4 py-2 pr-10 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary disabled:opacity-50"
                 />
@@ -963,7 +964,7 @@ function GenerateSkillForm({
                   className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 ${
                     isStreaming ? 'bg-red-500 hover:bg-red-600' : 'bg-primary hover:bg-primary-hover'
                   } disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors`}
-                  title={isStreaming ? 'Stop generation' : 'Send message'}
+                  title={isStreaming ? t('ui.SkillsPage.stopGeneration') : t('ui.SkillsPage.sendMessage')}
                 >
                   <span className="material-symbols-outlined icon-xs text-white">
                     {isStreaming ? 'stop' : 'send'}
@@ -982,7 +983,7 @@ function GenerateSkillForm({
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isStreaming ? 'Generating...' : 'Send a message...'}
+              placeholder={isStreaming ? t('ui.SkillsPage.generating') : t('ui.SkillsPage.sendAMessage')}
               disabled={isStreaming}
               className="w-full px-4 py-2 pr-10 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary disabled:opacity-50"
             />
@@ -992,7 +993,7 @@ function GenerateSkillForm({
               className={`absolute right-2 top-1/2 -translate-y-1/2 p-1 ${
                 isStreaming ? 'bg-red-500 hover:bg-red-600' : 'bg-primary hover:bg-primary-hover'
               } disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors`}
-              title={isStreaming ? 'Stop generation' : 'Send message'}
+              title={isStreaming ? t('ui.SkillsPage.stopGeneration') : t('ui.SkillsPage.sendMessage')}
             >
               <span className="material-symbols-outlined icon-xs text-white">
                 {isStreaming ? 'stop' : 'send'}
@@ -1005,7 +1006,7 @@ function GenerateSkillForm({
       {/* Cancel button */}
       <div className="flex justify-end pt-4">
         <Button variant="secondary" onClick={onClose} disabled={isStreaming || isFinalizing}>
-          {isComplete ? 'Close' : 'Cancel'}
+          {isComplete ? t('common.button.close') : t('common.button.cancel')}
         </Button>
       </div>
     </div>
@@ -1021,6 +1022,7 @@ interface ContentBlockRendererProps {
 }
 
 function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStreaming }: ContentBlockRendererProps) {
+  const { t } = useTranslation();
   if (block.type === 'text') {
     return <MarkdownRenderer content={block.text || ''} className="text-sm" />;
   }
@@ -1048,7 +1050,7 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-3 text-sm">
         <div className="flex items-center gap-2 mb-1">
           <span className="material-symbols-outlined icon-xs text-status-success">check_circle</span>
-          <span className="font-medium text-[var(--color-text)]">Result</span>
+          <span className="font-medium text-[var(--color-text)]">{t('chat.turn.result')}</span>
         </div>
         <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
           <code>{block.content}</code>

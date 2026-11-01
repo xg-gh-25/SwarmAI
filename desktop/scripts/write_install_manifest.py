@@ -8,8 +8,9 @@ scripts/verify_installer.sh checks every listed file after a real install.
 
 Lists, with sha256, every file the bundle must carry under Tauri's resource dir:
 - ``python-backend/**`` — the staged PyInstaller onedir (the executable is required);
-- ``<name>`` / ``daemon/<name>`` — desktop/resources top-level files and daemon/ files,
-  mapped exactly as tauri.conf.json ``bundle.resources`` maps them.
+- every desktop/resources file that ``bundle.resources`` maps (tauri.conf.json plus the
+  release overlay tauri.bundle.conf.json), at its mapped target (``<name>``, ``daemon/<name>``). A file left in desktop/resources that the
+  config does not map (a gitignored local file) is not in the bundle, so it is not listed.
 
 Usage: write_install_manifest.py <stage_dir> <resources_dir> <version> <target>
   stage_dir/python-backend must exist; writes stage_dir/install-manifest.json.
@@ -46,12 +47,17 @@ def build(stage: Path, resources: Path, version: str, target: str) -> dict:
                 continue
             files.append({"path": "python-backend/" + p.relative_to(backend).as_posix(),
                           "sha256": _sha(p)})
-    for sub, prefix in ((resources, ""), (resources / "daemon", "daemon/")):
-        if not sub.is_dir():
-            continue
-        for p in sorted(sub.iterdir()):
-            if p.is_file() and not p.name.startswith(".") and not p.name.endswith(".lock"):
-                files.append({"path": prefix + p.name, "sha256": _sha(p)})
+    # the release bundle maps tauri.conf.json's resources plus tauri.bundle.conf.json's
+    # (Tauri deep-merges the overlay per key); seed.db is mapped only in the overlay
+    mapped: dict[str, str] = {}
+    for name in ("tauri.conf.json", "tauri.bundle.conf.json"):
+        conf = resources.parent / "src-tauri" / name
+        if conf.is_file():
+            mapped.update(json.loads(conf.read_text(encoding="utf-8"))["bundle"].get("resources", {}))
+    prefix = "../" + resources.name + "/"
+    for key, dest in sorted(mapped.items()):
+        if key.startswith(prefix):
+            files.append({"path": dest, "sha256": _sha(resources / key[len(prefix):])})
     return {"schema": 1, "version": version, "target": target,
             "executable": f"python-backend/{exe}", "files": files}
 

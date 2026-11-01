@@ -189,7 +189,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
           when the tab is active so the current tab is always closable). */}
       {!pinned && <button
         onClick={handleClose}
-        aria-label={`Close ${tab.title}`}
+        aria-label={t('ui.SessionTab.close', { title: tab.title })}
         className={clsx(
           'w-[18px] h-[18px] inline-flex items-center justify-center rounded transition-all duration-150 flex-shrink-0',
           isActive ? 'opacity-70 hover:opacity-100' : 'opacity-0 group-hover/tab:opacity-100',

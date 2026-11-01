@@ -257,6 +257,7 @@ function useWelcomeBee(rootRef: React.RefObject<HTMLDivElement | null>) {
 // ---------------------------------------------------------------------------
 
 export const WelcomeScreen: React.FC = () => {
+  const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const { beeRef, logoRef, flying, onLogoEnter } = useWelcomeBee(rootRef);
   return (
@@ -289,8 +290,8 @@ export const WelcomeScreen: React.FC = () => {
           Swarm
         </h1>
         <p data-testid="welcome-slogan" className="mt-1 text-heading text-[var(--color-text-secondary)]">
-          Grow your <span className="welcome-brand-text font-semibold">Brain</span>. Deliver{' '}
-          <span className="welcome-brand-text font-semibold">Anything</span>.
+          {t('ui.WelcomeScreen.sloganGrow')}<span className="welcome-brand-text font-semibold">{t('ui.WelcomeScreen.sloganBrain')}</span>{t('ui.WelcomeScreen.sloganDeliver')}
+          <span className="welcome-brand-text font-semibold">{t('ui.WelcomeScreen.sloganAnything')}</span>{t('ui.WelcomeScreen.sloganEnd')}
         </p>
       </div>
       <NeedsYouCard />

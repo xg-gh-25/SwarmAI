@@ -61,6 +61,8 @@ dependencies = [
     "tree-sitter-language-pack>=0.5.0,!=1.6.3",
     # Code Intelligence — FS watcher for auto-refresh (Rust-based, async-native)
     "watchfiles>=1.0.0",
+    # Explorer delete → the OS trash (macOS Trash, Windows Recycle Bin, freedesktop trash)
+    "send2trash>=1.8.3",
 ]
 
 [project.optional-dependencies]

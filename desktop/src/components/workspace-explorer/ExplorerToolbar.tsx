@@ -3,6 +3,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { writeTextFile, mkdir } from '@tauri-apps/plugin-fs';
 import { useLayout } from '../../contexts/LayoutContext';
 import { useDialogLayer } from '../../hooks/useLayer';
+import { useTranslation } from 'react-i18next';
 
 /**
  * ExplorerToolbar component - toolbar with file operation buttons
@@ -38,6 +39,7 @@ export default function ExplorerToolbar({
   disabled = false,
   onFileSystemChange,
 }: ExplorerToolbarProps) {
+  const { t } = useTranslation();
   const { selectedWorkspaceScope } = useLayout();
   
   // Dialog state for new file/folder creation
@@ -101,7 +103,7 @@ export default function ExplorerToolbar({
       const selected = await openDialog({
         multiple: true,
         directory: false,
-        title: 'Select files to upload',
+        title: t('ui.ExplorerToolbar.selectUpload'),
       });
 
       if (selected && selected.length > 0) {
@@ -127,18 +129,18 @@ export default function ExplorerToolbar({
   // Validate file/folder name
   const validateName = (name: string): string | null => {
     if (!name.trim()) {
-      return 'Name cannot be empty';
+      return t('ui.ExplorerToolbar.nameEmpty');
     }
     // Check for invalid characters (including control characters)
     // eslint-disable-next-line no-control-regex
     const invalidChars = /[<>:"/\\|?*\x00-\x1f]/;
     if (invalidChars.test(name)) {
-      return 'Name contains invalid characters';
+      return t('ui.ExplorerToolbar.nameInvalid');
     }
     // Check for reserved names (Windows)
     const reservedNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
     if (reservedNames.test(name)) {
-      return 'This name is reserved by the system';
+      return t('ui.ExplorerToolbar.nameReserved');
     }
     return null;
   };
@@ -156,7 +158,7 @@ export default function ExplorerToolbar({
 
     const targetDir = getTargetDirectory();
     if (!targetDir) {
-      setDialogState(prev => ({ ...prev, error: 'No target directory selected' }));
+      setDialogState(prev => ({ ...prev, error: t('ui.ExplorerToolbar.noTargetDir') }));
       return;
     }
 
@@ -178,7 +180,7 @@ export default function ExplorerToolbar({
       console.error(`Failed to create ${type}:`, error);
       setDialogState(prev => ({
         ...prev,
-        error: `Failed to create ${type}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error: t(type === 'file' ? 'ui.ExplorerToolbar.createFileFailed' : 'ui.ExplorerToolbar.createFolderFailed', { error: error instanceof Error ? error.message : t('ui.ExplorerToolbar.unknownError') }),
       }));
     }
   };
@@ -206,10 +208,10 @@ export default function ExplorerToolbar({
   // Get tooltip text for disabled state
   const getDisabledTooltip = (): string => {
     if (selectedWorkspaceScope === 'all') {
-      return 'Select a specific workspace to enable file operations';
+      return t('ui.ExplorerToolbar.selectSpecificWorkspace');
     }
     if (!selectedWorkspaceId) {
-      return 'Select a workspace to enable file operations';
+      return t('ui.ExplorerToolbar.selectWorkspace');
     }
     return '';
   };
@@ -223,30 +225,30 @@ export default function ExplorerToolbar({
         {/* New File Button */}
         <ToolbarButton
           icon="note_add"
-          label="New File"
+          label={t('ui.ExplorerToolbar.newFile')}
           onClick={handleNewFile}
           disabled={isDisabled}
-          tooltip={isDisabled ? getDisabledTooltip() : 'Create new file'}
+          tooltip={isDisabled ? getDisabledTooltip() : t('ui.ExplorerToolbar.createNewFileTip')}
           testId="new-file-button"
         />
 
         {/* New Folder Button */}
         <ToolbarButton
           icon="create_new_folder"
-          label="New Folder"
+          label={t('ui.ExplorerToolbar.newFolder')}
           onClick={handleNewFolder}
           disabled={isDisabled}
-          tooltip={isDisabled ? getDisabledTooltip() : 'Create new folder'}
+          tooltip={isDisabled ? getDisabledTooltip() : t('ui.ExplorerToolbar.createNewFolderTip')}
           testId="new-folder-button"
         />
 
         {/* Upload Button */}
         <ToolbarButton
           icon="upload_file"
-          label="Upload"
+          label={t('common.button.upload')}
           onClick={handleUpload}
           disabled={isDisabled}
-          tooltip={isDisabled ? getDisabledTooltip() : 'Upload files'}
+          tooltip={isDisabled ? getDisabledTooltip() : t('ui.ExplorerToolbar.uploadFilesTip')}
           testId="upload-button"
         />
       </div>
@@ -269,7 +271,7 @@ export default function ExplorerToolbar({
             data-testid="creation-dialog"
           >
             <h3 id="creation-dialog-title" className="text-body text-[var(--color-text)] mb-3">
-              {dialogState.type === 'file' ? 'Create New File' : 'Create New Folder'}
+              {dialogState.type === 'file' ? t('ui.ExplorerToolbar.createNewFile') : t('ui.ExplorerToolbar.createNewFolder')}
             </h3>
             
             <input
@@ -278,10 +280,10 @@ export default function ExplorerToolbar({
               value={dialogState.name}
               onChange={handleNameChange}
               onKeyDown={handleKeyDown}
-              placeholder={dialogState.type === 'file' ? 'filename.txt' : 'folder-name'}
+              placeholder={dialogState.type === 'file' ? t('ui.ExplorerToolbar.filePlaceholder') : t('ui.ExplorerToolbar.folderPlaceholder')}
               className="w-full px-3 py-2 text-body rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)]"
               data-testid="creation-dialog-input"
-              aria-label={dialogState.type === 'file' ? 'File name' : 'Folder name'}
+              aria-label={dialogState.type === 'file' ? t('ui.ExplorerToolbar.fileName') : t('ui.ExplorerToolbar.folderName')}
             />
             
             {dialogState.error && (
@@ -299,14 +301,14 @@ export default function ExplorerToolbar({
                 className="btn-md btn-secondary transition-colors"
                 data-testid="creation-dialog-cancel"
               >
-                Cancel
+                {t('common.button.cancel')}
               </button>
               <button
                 onClick={handleConfirm}
                 className="btn-md btn-primary hover:opacity-90 transition-opacity"
                 data-testid="creation-dialog-confirm"
               >
-                Create
+                {t('common.button.create')}
               </button>
             </div>
           </div>

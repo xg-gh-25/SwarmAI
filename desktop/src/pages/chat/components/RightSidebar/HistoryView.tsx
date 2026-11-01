@@ -132,7 +132,7 @@ export function HistoryView({
           e.stopPropagation();
           onDeleteSession(session);
         }}
-        aria-label={`Delete session ${session.title}`}
+        aria-label={t('ui.HistoryView.deleteSession', { title: session.title })}
         className="p-1 rounded opacity-0 group-hover:opacity-100
           hover:bg-[var(--color-border)]
           text-[var(--color-text-muted)] hover:text-[var(--color-text)]
@@ -157,14 +157,14 @@ export function HistoryView({
           <button
             onClick={onBack}
             className="p-1 rounded hover:bg-[var(--color-hover)] transition-colors"
-            aria-label="Back"
+            aria-label={t('ui.HistoryView.back')}
           >
             <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
               arrow_back
             </span>
           </button>
           <span className="text-sm font-medium text-[var(--color-text)]">
-            Chat History
+            {t('chat.history')}
           </span>
         </div>
       )}
@@ -183,7 +183,7 @@ export function HistoryView({
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder={isControlled ? 'Search conversations…' : 'Search sessions…'}
+            placeholder={isControlled ? t('ui.HistoryView.searchConversations') : t('ui.HistoryView.searchSessions')}
             className="w-full pl-7 pr-2 py-1.5 text-[12.5px] rounded
               bg-[var(--color-input-bg,var(--color-bg))]
               border border-[var(--color-border)]
@@ -202,19 +202,19 @@ export function HistoryView({
              isSearching so the "Searching…" hint shows. */
           (searchResults?.length ?? 0) === 0 ? (
             <p className="px-3 py-4 text-[11px] text-[var(--color-text-muted)] text-center">
-              {isSearching ? 'Searching…' : 'No matching conversations'}
+              {isSearching ? t('ui.HistoryView.searching') : t('ui.HistoryView.noMatchingConversations')}
             </p>
           ) : (
             <>
               <p className="px-3 py-1.5 text-[11px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
-                {searchResults!.length} result{searchResults!.length === 1 ? '' : 's'}
+                {t('ui.HistoryView.resultCount', { count: searchResults!.length })}
               </p>
               {searchResults!.map(renderSessionRow)}
             </>
           )
         ) : filteredGroups.length === 0 ? (
           <p className="px-3 py-4 text-[11px] text-[var(--color-text-muted)] text-center">
-            {hasQuery ? 'No matching sessions' : t('chat.noHistory')}
+            {hasQuery ? t('ui.HistoryView.noMatchingSessions') : t('chat.noHistory')}
           </p>
         ) : (
           filteredGroups.map((group, groupIndex) => (

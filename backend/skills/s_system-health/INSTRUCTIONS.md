@@ -30,7 +30,7 @@ Additionally: if you are executing this skill, the SwarmAI app IS running. You a
 
 ```bash
 "$SWARM_BACKEND_BIN" py - << 'PYEOF'
-import psutil, json, collections
+import psutil, json, collections, re
 
 # === SYSTEM ===
 vm = psutil.virtual_memory()
@@ -79,11 +79,8 @@ def classify(name, cmd):
     if "microsoft teams" in nl or "teams" in nl: return "Microsoft Teams"
     if "slack" in nl and "mcp" not in cl: return "Slack"
     if "claude" in nl and "mcp" not in cl: return "Claude CLI"
-    if "builder-mcp" in cl: return "MCP: builder"
-    if "sentral-mcp" in cl or "sentral" in cl: return "MCP: sentral"
-    if "slack-mcp" in cl: return "MCP: slack"
-    if "outlook-mcp" in cl: return "MCP: outlook"
-    if "taskei" in cl: return "MCP: taskei"
+    mcp = re.search(r"([\w.-]*-mcp)\b", cl)  # an MCP server named by its own command
+    if mcp: return f"MCP: {mcp.group(1)}"
     if "node" in nl and "mcp" in cl: return "MCP: shim/node"
     if "main.py" in cmd and ("backend" in cmd or "uvicorn" in cl): return "SwarmAI Backend"
     if "docker" in nl: return "Docker"
@@ -118,7 +115,7 @@ for name, info in sorted(apps.items(), key=lambda x: -x[1]["cpu"])[:5]:
 # === SWARM BREAKDOWN ===
 print("=== SWARM_BREAKDOWN ===")
 swarm_labels = ["SwarmAI (Tauri)", "SwarmAI Backend", "Claude CLI",
-                "MCP: builder", "MCP: sentral", "MCP: slack", "MCP: outlook", "MCP: taskei", "MCP: shim/node",
+                *sorted(l for l in apps if l.startswith("MCP: ")),
                 "Swarm Jobs (Scheduler)", "Swarm Jobs (Manager)"]
 swarm_total = 0
 for label in swarm_labels:
@@ -273,8 +270,8 @@ Output a **single structured report** with 4 sections. Use this exact format:
 | Session: tab-1 (claude) | 1002 | 520MB | 3.1% | STREAMING | 5m |
 | Session: tab-2 (claude) | 1003 | 490MB | 0.2% | IDLE | 45m |
 | MCP: slack-mcp | 1004 | 85MB | 0.1% | running | 2h 15m |
-| MCP: builder-mcp | 1005 | 92MB | 0.1% | running | 2h 15m |
-| MCP: aws-outlook-mcp | 1006 | 78MB | 0.0% | running | 2h 15m |
+| MCP: github-mcp | 1005 | 92MB | 0.1% | running | 2h 15m |
+| MCP: email-mcp | 1006 | 78MB | 0.0% | running | 2h 15m |
 | **Total SwarmAI** | | **1,445MB** | **4.7%** | | |
 
 **Session Slots:** 2/4 active (STREAMING: 1, IDLE: 1)
@@ -464,10 +461,10 @@ If healthy — no action prompts, just the verdict.
 | Session: tab-1 | 5678 | 520MB | 2.1% | STREAMING | 8m |
 | Session: tab-2 | 5679 | 490MB | 0.1% | IDLE | 1h 20m |
 | MCP: slack-mcp | 6001 | 82MB | 0.0% | running | 3h 10m |
-| MCP: builder-mcp | 6002 | 88MB | 0.1% | running | 3h 10m |
-| MCP: aws-outlook-mcp | 6003 | 75MB | 0.0% | running | 3h 10m |
-| MCP: aws-sentral-mcp | 6004 | 91MB | 0.0% | running | 3h 10m |
-| MCP: taskei-p-mcp | 6005 | 68MB | 0.0% | running | 3h 10m |
+| MCP: github-mcp | 6002 | 88MB | 0.1% | running | 3h 10m |
+| MCP: email-mcp | 6003 | 75MB | 0.0% | running | 3h 10m |
+| MCP: sqlite-mcp | 6004 | 91MB | 0.0% | running | 3h 10m |
+| MCP: git-mcp | 6005 | 68MB | 0.0% | running | 3h 10m |
 | **Total SwarmAI** | | **1,579MB** | **3.1%** | | |
 
 **Session Slots:** 2/4 active (STREAMING: 1, IDLE: 1)
@@ -523,7 +520,7 @@ No issues found.
 | Backend (FastAPI) | 1001 | 172MB | 0.9% | running | 5h |
 | Session: tab-1 | 5678 | 540MB | 12% | STREAMING | 15m |
 | MCP: slack-mcp | 6001 | 85MB | 0.0% | running | 5h |
-| MCP: builder-mcp | 6002 | 90MB | 0.1% | running | 5h |
+| MCP: github-mcp | 6002 | 90MB | 0.1% | running | 5h |
 | **Orphan: node (MCP?)** | **9999** | **520MB** | **165%** | **PPID=1** | **2h** |
 | **Total SwarmAI** | | **1,407MB** | **13.0%** | | |
 

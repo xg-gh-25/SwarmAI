@@ -241,9 +241,9 @@ export function RunLine({ summary }: { summary: PipelineSummaryContent }) {
           {report && (
             <div className="flex gap-3">
               <span className={K}>{tf(t, 'chat.turn.run.report', 'Full report')}</span>
-              {readOnly ? <span className={V}>REPORT.md</span> : (
+              {readOnly ? <span className={V}>{report.name}</span> : (
                 <button type="button" data-testid="run-report-link" onClick={openReport} title={report.absolutePath ?? undefined}
-                  className="text-[12.5px] text-primary hover:underline">REPORT.md</button>
+                  className="text-[12.5px] text-primary hover:underline">{report.name}</button>
               )}
             </div>
           )}

@@ -18,6 +18,7 @@
 
 import { useState, useCallback } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { useToast } from '../../contexts/ToastContext';
 import type { ToastItem, ToastSeverity } from '../../types';
 
@@ -53,6 +54,7 @@ interface ToastEntryProps {
 }
 
 function ToastEntry({ toast, onDismiss }: ToastEntryProps) {
+  const { t } = useTranslation();
   const [isExiting, setIsExiting] = useState(false);
 
   const handleDismiss = useCallback(() => {
@@ -96,7 +98,7 @@ function ToastEntry({ toast, onDismiss }: ToastEntryProps) {
       <button
         onClick={handleDismiss}
         className="ml-1 p-1 rounded hover:bg-black/10 transition-colors shrink-0"
-        aria-label="Dismiss notification"
+        aria-label={t('ui.ToastStack.dismiss')}
       >
         <span className="material-symbols-outlined icon-sm">close</span>
       </button>
@@ -109,6 +111,7 @@ function ToastEntry({ toast, onDismiss }: ToastEntryProps) {
 // ---------------------------------------------------------------------------
 
 export function ToastStack() {
+  const { t } = useTranslation();
   const { toasts, removeToast } = useToast();
 
   if (toasts.length === 0) return null;
@@ -116,7 +119,7 @@ export function ToastStack() {
   return (
     <div
       className="fixed top-4 right-4 z-50 flex flex-col gap-2"
-      aria-label="Notifications"
+      aria-label={t('ui.ToastStack.notifications')}
     >
       {toasts.map((toast) => (
         <ToastEntry key={toast.id} toast={toast} onDismiss={removeToast} />

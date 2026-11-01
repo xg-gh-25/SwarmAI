@@ -967,9 +967,9 @@ class TestPostCompactInjection:
 
 class TestEnforcementInjector:
     """create_enforcement_injector — a UserPromptSubmit hook that injects a
-    per-turn additionalContext reminder. Signal A = SYMMETRIC input-derived
-    language (CJK ratio → respond-in-that-language, never hardcoded); Signal B
-    = direct-mode triggers → adversarial-still-mandatory. Observe-only.
+    per-turn additionalContext reminder. Signal A = input-derived language
+    (Chinese/Japanese/Korean are named in that language; Latin-script text gets
+    "reply in the same language as the user's message"). Observe-only.
     """
 
     def _hook(self, session_context):
@@ -986,13 +986,14 @@ class TestEnforcementInjector:
         assert "中文" in ac or "Chinese" in ac
 
     @pytest.mark.asyncio
-    async def test_A_english_message_injects_english_reminder(self, session_context):
-        """An English message → additionalContext tells me to respond in English.
-        SYMMETRY: this is the exact half the motivating bug got wrong."""
+    async def test_A_english_message_injects_same_language_reminder(self, session_context):
+        """A Latin-script message → reply in the language of the user's message.
+        It does not name English: Spanish or French text is Latin script too."""
         hook = self._hook(session_context)
         result = await hook({"prompt": "please redesign the layout of this component"}, None, MagicMock())
         ac = result["hookSpecificOutput"]["additionalContext"]
-        assert "English" in ac
+        assert "same language as the user's message" in ac
+        assert "English" not in ac
         assert "Chinese" not in ac and "中文" not in ac
 
     @pytest.mark.asyncio
@@ -1019,21 +1020,21 @@ class TestEnforcementInjector:
         assert "respond in Chinese" not in ac.lower()
 
     @pytest.mark.asyncio
-    async def test_A_english_sentence_with_cjk_quote_stays_english(self, session_context):
+    async def test_A_english_sentence_with_cjk_quote_stays_latin(self, session_context):
         """Gate-2 adversarial dead-zone: a clearly-English sentence quoting a couple
-        CJK terms must classify as English (NOT silent, NOT Chinese). The char-ratio
+        CJK terms must classify as Latin (NOT silent, NOT Chinese). The char-ratio
         approach left this a 5-20% no-man's-land; weighing CJK-chars vs Latin-WORDS
         fixes it."""
         hook = self._hook(session_context)
         for msg in ("Quick reference for the 快速 lookup path please",
                     "fix the code here, there is a bug near 这里 in the parser"):
             ac = (await hook({"prompt": msg}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
-            assert "English" in ac
+            assert "same language as the user's message" in ac
             assert "中文" not in ac
 
     @pytest.mark.asyncio
     async def test_A_chinese_with_english_tech_terms_stays_chinese(self, session_context):
-        """The PROTECTED case (XG's normal style): Chinese sentence structure with
+        """The PROTECTED case (a common way to write): Chinese sentence structure with
         embedded English technical terms must stay Chinese — the exact R19 bug this
         hook exists to prevent. A char-ratio would mis-flip these to English."""
         hook = self._hook(session_context)
@@ -1065,13 +1066,13 @@ class TestEnforcementInjector:
             assert "respond in English" not in ac
 
     @pytest.mark.asyncio
-    async def test_A_english_user_with_ui_prefix_stays_english(self, session_context):
+    async def test_A_english_user_with_ui_prefix_stays_latin(self, session_context):
         """The mirror: a genuinely English user message under the UI block must still
-        classify English (the strip must not over-correct toward Chinese)."""
+        classify Latin (the strip must not over-correct toward Chinese)."""
         hook = self._hook(session_context)
         prompt = f"{self._UI_BLOCK}\n\nfix the language hook bug please"
         ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
-        assert "English" in ac
+        assert "same language as the user's message" in ac
         assert "中文" not in ac
 
 
@@ -1128,12 +1129,13 @@ class TestEnforcementInjector:
 
     @pytest.mark.asyncio
     async def test_A_full_range_kana_and_hangul_are_non_english(self, session_context):
-        """AC3: full-range detector — Kana/Hangul also count as non-English (they
-        must NOT be treated as English)."""
+        """Kana and Hangul are their own languages: Japanese and Korean, never
+        Chinese and never English."""
         hook = self._hook(session_context)
-        for msg in ("こんにちは、これをレビューしてください", "이것을 검토해 주세요 제발"):
+        for msg, name in (("こんにちは、これをレビューしてください", "日本語"), ("이것을 검토해 주세요 제발", "한국어")):
             ac = (await hook({"prompt": msg}, None, MagicMock())).get("hookSpecificOutput", {}).get("additionalContext", "")
-            assert "English" not in ac  # not classified as English
+            assert name in ac
+            assert "English" not in ac and "中文" not in ac
 
 
     @pytest.mark.asyncio
@@ -1631,3 +1633,136 @@ class TestV1StableCompletion:
         assert result == {}
         assert [e["kind"] for e in right.read_events()] == ["handout", "spawn"]
         assert [e["kind"] for e in wrong.read_events()] == ["handout"]
+
+
+# ---------------------------------------------------------------------------
+# is_test_command — one recogniser for "this Bash call ran tests"
+# ---------------------------------------------------------------------------
+
+_TEST_COMMANDS = [
+    "pytest",
+    "pytest tests/test_x.py -q",
+    "python -m pytest tests -q",
+    "python3 -m pytest",
+    ".venv/bin/python -m pytest tests/test_x.py",
+    "cd backend && pytest -q",
+    "perl -e 'alarm 100; exec @ARGV' .venv/bin/python -m pytest t.py -q > /tmp/x.log 2>&1; echo exit=$?",
+    "npx jest",
+    "jest --watchAll=false",
+    "npx vitest run src/a.test.ts",
+    "vitest",
+    "mocha test/",
+    "go test ./...",
+    "cargo test",
+    "cargo test --release",
+    "npm test",
+    "npm run test",
+    "npm run test:unit",
+    "npm --prefix desktop test",
+    "yarn test",
+    "pnpm test",
+    "pnpm run test",
+    "mvn test",
+    "mvn -q clean test",
+    "gradle test",
+    "./gradlew test",
+    "dotnet test",
+    "rspec",
+    "bundle exec rspec spec/x_spec.rb",
+    "phpunit",
+    "vendor/bin/phpunit",
+    "ctest --output-on-failure",
+    "make test",
+    "FOO=1 pytest",
+    "uv run pytest",
+    "timeout 60 go test ./...",
+    "bash -c 'cargo test'",
+    "sudo -u bob pytest",
+    "timeout -s KILL 60 pytest",
+    "timeout --signal=KILL 60 go test ./...",
+    "python -X dev -m pytest",
+    "python -W error -m pytest -q",
+    "uv run --with pytest-xdist pytest",
+]
+
+_NOT_TEST_COMMANDS = [
+    "",
+    "command -v pytest",
+    "command -V go",
+    "ls -la",
+    "pip install pytest",
+    "grep -rn pytest .",
+    "cat pytest.ini",
+    "echo jest",
+    "npm install",
+    "npm install jest",
+    "npm run build",
+    "go build ./...",
+    "cargo build",
+    "git commit -m 'make test pass'",
+    "mvn package",
+    "make",
+    "python script.py",
+    "python -m http.server",
+    "Run the backend tests",
+]
+
+
+class TestIsTestCommand:
+    @pytest.mark.parametrize("command", _TEST_COMMANDS)
+    def test_recognises_common_runners(self, command):
+        from core.runtime_hooks import is_test_command
+        assert is_test_command(command) is True
+
+    @pytest.mark.parametrize("command", _NOT_TEST_COMMANDS)
+    def test_ignores_other_commands(self, command):
+        from core.runtime_hooks import is_test_command
+        assert is_test_command(command) is False
+
+    def test_unbalanced_quotes_do_not_raise(self):
+        from core.runtime_hooks import is_test_command
+        assert is_test_command("echo 'oops && go test ./...") in (True, False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("command, expected", [
+        ("npx vitest run", True),
+        ("go test ./...", True),
+        ("grep pytest file.txt", False),
+    ])
+    async def test_file_tracker_sets_ran_tests(self, session_context, command, expected):
+        from core.runtime_hooks import create_file_tracker
+        hook = create_file_tracker(session_context)
+        await hook({"tool_name": "Bash", "tool_input": {"command": command}}, "tu_1", MagicMock())
+        assert bool(session_context.get("_ran_tests")) is expected
+
+    @pytest.mark.asyncio
+    async def test_session_summary_counts_any_runner(self, tmp_path, session_context):
+        from core.observation_ring import ObservationRing
+        from core.runtime_hooks import create_session_checkpoint
+
+        ring = ObservationRing()
+        runs = [("cargo test", None), ("npm test", "failed"), ("go test ./...", None), ("ls", None)]
+        for i, (cmd, err) in enumerate(runs):
+            ring.record_pre(f"t{i}", "Bash", {"command": cmd})
+            ring.record_post(f"t{i}", err)
+        session_context["_observations"] = ring
+        cp_path = tmp_path / "cp.json"
+        hook = create_session_checkpoint(session_context, checkpoint_path=str(cp_path), interval=1)
+        await hook({"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"}, "tu_x", MagicMock())
+        summary = json.loads(cp_path.read_text())["session_summary"]
+        assert summary["test_runs"] == 3
+        assert summary["test_pass_rate"] == round(2 / 3, 2)
+
+
+@pytest.mark.asyncio
+async def test_session_summary_counts_a_test_run_that_has_a_description(tmp_path, session_context):
+    """Agent Bash calls nearly always carry a description; the count reads the command."""
+    from core.observation_ring import ObservationRing
+    from core.runtime_hooks import _observation_ran_tests
+    ring = ObservationRing()
+    ring.record_pre("t1", "Bash", {"command": "cargo test", "description": "Run the tests"})
+    ring.record_post("t1", None)
+    ring.record_pre("t2", "Bash", {"command": "ls", "description": "Run pytest later"})
+    ring.record_post("t2", None)
+    obs = list(ring._ring)
+    assert [_observation_ran_tests(o) for o in obs] == [True, False]

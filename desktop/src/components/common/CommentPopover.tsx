@@ -14,6 +14,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { useEscape } from '../../hooks/useLayer';
 
 /** Popover shell: wide enough for a sentence or two of feedback per line. */
@@ -70,6 +71,7 @@ export default function CommentPopover({
   topOffset,
   anchorRef,
 }: CommentPopoverProps) {
+  const { t } = useTranslation();
   const [text, setText] = useState(initialText);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -149,12 +151,12 @@ export default function CommentPopover({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-hover)] rounded-t-lg">
         <span className="text-xs text-[var(--color-text-muted)] font-medium">
-          Comment on line {lineNumber}
+          {t('ui.CommentPopover.commentOnLine', { line: lineNumber })}
         </span>
         <button
           onClick={onCancel}
           className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
-          aria-label="Close"
+          aria-label={t('common.button.close')}
         >
           <span className="material-symbols-outlined icon-sm">close</span>
         </button>
@@ -167,7 +169,7 @@ export default function CommentPopover({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type your feedback..."
+          placeholder={t('ui.CommentPopover.placeholder')}
           rows={COMMENT_TEXTAREA_ROWS}
           className={COMMENT_TEXTAREA_CLASS}
           data-testid="comment-input"
@@ -183,7 +185,7 @@ export default function CommentPopover({
               className="px-2 py-1 text-xs rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
               data-testid="comment-delete"
             >
-              Delete
+              {t('common.button.delete')}
             </button>
           )}
         </div>
@@ -192,7 +194,7 @@ export default function CommentPopover({
             onClick={onCancel}
             className="px-2 py-1 text-xs rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           >
-            Cancel
+            {t('common.button.cancel')}
           </button>
           {onSendSingle && (
             <button
@@ -203,10 +205,10 @@ export default function CommentPopover({
               disabled={!text.trim()}
               className="btn-sm btn-soft disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               data-testid="comment-send-single"
-              title="Send this comment to agent immediately"
+              title={t('ui.CommentPopover.sendNowTitle')}
             >
               <span className="material-symbols-outlined icon-xs">send</span>
-              Send
+              {t('common.button.send')}
             </button>
           )}
           <button
@@ -215,14 +217,14 @@ export default function CommentPopover({
             className="btn-sm btn-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             data-testid="comment-submit"
           >
-            {initialText ? 'Update' : 'Add'}
+            {initialText ? t('ui.CommentPopover.update') : t('common.button.add')}
           </button>
         </div>
       </div>
 
       {/* Keyboard hint */}
       <div className="px-3 pb-1.5 text-[11px] text-[var(--color-text-dim)]">
-        ⌘+Enter to save · Esc to cancel
+        {t('ui.CommentPopover.keyHint')}
       </div>
     </div>
   );

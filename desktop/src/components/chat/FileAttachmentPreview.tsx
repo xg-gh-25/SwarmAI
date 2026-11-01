@@ -4,6 +4,7 @@
  * (utils/terminalAttachment) opens its full text in a panel below the row.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { UnifiedAttachment } from '../../types';
 import { AttachmentPreviewCard } from './AttachmentPreviewCard';
 
@@ -23,6 +24,7 @@ const formatTotalSize = (attachments: UnifiedAttachment[]): string => {
 };
 
 export function FileAttachmentPreview({ attachments, onRemove }: FileAttachmentPreviewProps) {
+  const { t } = useTranslation();
   const [openId, setOpenId] = useState<string | null>(null);
   if (attachments.length === 0) {
     return null;
@@ -51,7 +53,7 @@ export function FileAttachmentPreview({ attachments, onRemove }: FileAttachmentP
         >
           <div className="flex items-center gap-2 px-2.5 h-7 border-b border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)]">
             <span className="truncate" title={opened.terminal?.cwd || 'SwarmWS'}>{opened.terminal?.cwd || 'SwarmWS'}</span>
-            {opened.terminal?.truncated && <span className="ml-auto whitespace-nowrap">older output cut (16,000-character limit)</span>}
+            {opened.terminal?.truncated && <span className="ml-auto whitespace-nowrap">{t('ui.FileAttachmentPreview.outputCut')}</span>}
           </div>
           <pre className="max-h-48 overflow-auto px-2.5 py-1.5 font-mono text-[11px] leading-[1.35] text-[var(--color-text)] whitespace-pre">
             {opened.textContent}
@@ -62,10 +64,10 @@ export function FileAttachmentPreview({ attachments, onRemove }: FileAttachmentP
       {/* Total size indicator */}
       <div className="flex items-center justify-between mt-1 px-1">
         <span className="text-xs text-[var(--color-text-muted)]">
-          {attachments.length} attachment{attachments.length !== 1 ? 's' : ''}
+          {t('ui.FileAttachmentPreview.attachmentCount', { count: attachments.length })}
         </span>
         <span className="text-xs text-[var(--color-text-muted)]">
-          Total: {formatTotalSize(attachments)}
+          {t('ui.FileAttachmentPreview.total', { size: formatTotalSize(attachments) })}
         </span>
       </div>
     </div>

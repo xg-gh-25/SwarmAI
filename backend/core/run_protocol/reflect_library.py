@@ -24,6 +24,10 @@ symlink, take a sidecar lock (``utils.file_lock``) and replace the file atomical
   ``repo_guidance``).
 
 Public: ``SUBDIR``, ``LESSONS``, ``PENDING``, ``file_for``, ``find``, ``write``.
+
+``LESSONS`` and ``PENDING`` are the section headings of the lesson files already on
+disk, which the readers (``repo_guidance``, ``run_knowledge``) match exactly; with
+``write`` retired nothing new is written under them, so they keep their original text.
 """
 from __future__ import annotations
 
@@ -36,7 +40,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 SUBDIR = ("Knowledge", "Library", "pipeline-lessons")
-LESSONS, PENDING = "## 经验", "## 待审"
+# headings matched in existing files (see the module docstring), not new text
+LESSONS = "## 经验"
+PENDING = "## 待审"
 _HEADER = "<!-- swarmai pipeline lessons for: {root} -->"
 _HEADER_RE = re.compile(r"^<!-- swarmai pipeline lessons for: (.+) -->$")
 _PLAIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -121,10 +127,11 @@ def find(workspace: "str | Path", root: str) -> "Path | None":
 
 
 def _fresh(root: str) -> str:
-    return (f"{_HEADER.format(root=root)}\n# Pipeline 经验：{Path(root).name}\n\n"
-            f"`{root}` 的 pipeline run 留下的经验（这个仓库没有对应的项目 DDD）。\n\n"
+    return (f"{_HEADER.format(root=root)}\n# Pipeline lessons: {Path(root).name}\n\n"
+            f"Lessons left by pipeline runs in `{root}` (this repository has no project DDD).\n\n"
             f"{LESSONS}\n\n{PENDING}\n\n"
-            "下面的条目改的是 agent 自己的规则，要人看过才生效，这里只是记录。\n")
+            "The entries below change the agent's own rules; they take effect only after a "
+            "person reviews them. They are only recorded here.\n")
 
 
 def _insert(text: str, section: str, statement: str, entry: str, note: str,

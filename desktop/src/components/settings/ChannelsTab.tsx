@@ -5,12 +5,14 @@
  * Uses shared ChannelConfigForm for token input.
  */
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { channelsService } from '../../services/channels';
 import type { Channel } from '../../types';
 import ChannelConfigForm from './ChannelConfigForm';
 import { useToast } from '../../contexts/ToastContext';
 
 export default function ChannelsTab() {
+  const { t } = useTranslation();
   const { addToast } = useToast();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,27 +36,27 @@ export default function ChannelsTab() {
     try {
       await channelsService.stop(channel.id);
       await channelsService.delete(channel.id);
-      addToast({ severity: 'success', message: 'Channel disconnected.' });
+      addToast({ severity: 'success', message: t('ui.ChannelsTab.disconnected') });
       await loadChannels();
     } catch (e) {
-      addToast({ severity: 'error', message: `Failed to disconnect: ${e instanceof Error ? e.message : 'Unknown error'}` });
+      addToast({ severity: 'error', message: t('ui.ChannelsTab.disconnectFailed', { error: e instanceof Error ? e.message : t('ui.ChannelsTab.unknownError') }) });
     }
   };
 
   const handleReconnect = async (channel: Channel) => {
     try {
       await channelsService.restart(channel.id);
-      addToast({ severity: 'success', message: 'Channel reconnecting...' });
+      addToast({ severity: 'success', message: t('ui.ChannelsTab.reconnecting') });
       await loadChannels();
     } catch (e) {
-      addToast({ severity: 'error', message: `Failed to reconnect: ${e instanceof Error ? e.message : 'Unknown error'}` });
+      addToast({ severity: 'error', message: t('ui.ChannelsTab.reconnectFailed', { error: e instanceof Error ? e.message : t('ui.ChannelsTab.unknownError') }) });
     }
   };
 
   const slackChannel = channels.find(c => c.channelType === 'slack');
 
   if (loading) {
-    return <div className="text-[var(--color-text-muted)]">Loading channels...</div>;
+    return <div className="text-[var(--color-text-muted)]">{t('ui.ChannelsTab.loading')}</div>;
   }
 
   const isConnected = slackChannel && slackChannel.status === 'active';
@@ -72,15 +74,15 @@ export default function ChannelsTab() {
               {isConnected ? (
                 <span className="ml-2 text-green-400 text-xs flex items-center gap-1 inline-flex">
                   <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                  Connected
+                  {t('onboarding.channels.connected')}
                 </span>
               ) : isError ? (
                 <span className="ml-2 text-red-400 text-xs flex items-center gap-1 inline-flex">
                   <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
-                  {slackChannel.status === 'error' ? 'Error' : slackChannel.status === 'failed' ? 'Failed' : 'Disconnected'}
+                  {slackChannel.status === 'error' ? t('common.status.error') : slackChannel.status === 'failed' ? t('tasks.status.failed') : t('ui.ChannelsTab.statusDisconnected')}
                 </span>
               ) : (
-                <span className="ml-2 text-[var(--color-text-muted)] text-xs">Not set up</span>
+                <span className="ml-2 text-[var(--color-text-muted)] text-xs">{t('ui.ChannelsTab.notSetUp')}</span>
               )}
             </div>
           </div>
@@ -91,13 +93,13 @@ export default function ChannelsTab() {
                   onClick={() => setEditingId(slackChannel?.id || null)}
                   className="btn-sm btn-secondary transition-colors"
                 >
-                  Edit
+                  {t('common.button.edit')}
                 </button>
                 <button
                   onClick={() => slackChannel && handleDisconnect(slackChannel)}
                   className="px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
                 >
-                  Disconnect
+                  {t('ui.ChannelsTab.disconnect')}
                 </button>
               </>
             )}
@@ -107,19 +109,19 @@ export default function ChannelsTab() {
                   onClick={() => slackChannel && handleReconnect(slackChannel)}
                   className="btn-sm btn-primary transition-colors"
                 >
-                  Reconnect
+                  {t('ui.ChannelsTab.reconnect')}
                 </button>
                 <button
                   onClick={() => setEditingId(slackChannel?.id || null)}
                   className="btn-sm btn-secondary transition-colors"
                 >
-                  Edit
+                  {t('common.button.edit')}
                 </button>
                 <button
                   onClick={() => slackChannel && handleDisconnect(slackChannel)}
                   className="px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
                 >
-                  Remove
+                  {t('ui.ChannelsTab.remove')}
                 </button>
               </>
             )}
@@ -128,7 +130,7 @@ export default function ChannelsTab() {
                 onClick={() => setAddingSlack(true)}
                 className="btn-sm btn-primary transition-colors"
               >
-                Set Up
+                {t('onboarding.channels.setUp')}
               </button>
             )}
           </div>
@@ -166,6 +168,7 @@ function maskToken(token: string | undefined): string {
 }
 
 function ConfigSummary({ channel }: { channel: Channel }) {
+  const { t } = useTranslation();
   const cfg = channel.config as Record<string, string>;
   const fields = [
     { label: 'Bot Token', value: cfg.bot_token },
@@ -174,7 +177,7 @@ function ConfigSummary({ channel }: { channel: Channel }) {
 
   return (
     <div className="space-y-1.5">
-      <p className="text-xs text-[var(--color-text-muted)] font-medium">Configuration</p>
+      <p className="text-xs text-[var(--color-text-muted)] font-medium">{t('channels.form.configuration')}</p>
       {fields.map(({ label, value }) => (
         <div key={label} className="flex items-center gap-3 text-xs">
           <span className="text-[var(--color-text-muted)] shrink-0 w-20">{label}</span>
@@ -185,7 +188,7 @@ function ConfigSummary({ channel }: { channel: Channel }) {
       ))}
       {channel.errorMessage && (
         <div className="text-xs text-red-400 mt-1">
-          Error: {channel.errorMessage}
+          {t('ui.ChannelsTab.errorPrefix', { error: channel.errorMessage })}
         </div>
       )}
     </div>

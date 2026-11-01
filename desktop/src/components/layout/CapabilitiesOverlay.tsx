@@ -51,6 +51,7 @@
  * @exports CapabilitiesContent
  */
 import { useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { OverlayError } from './OverlayState';
@@ -192,6 +193,7 @@ const EMPTY_HEALTH: SkillHealthMap = {};
 const EMPTY_EXPERTS: ExpertsByDomain = {};
 
 export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentProps) {
+  const { t } = useTranslation();
   const [view, setView] = useState<ViewMode>('apps');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Skill | null>(null);
@@ -252,15 +254,15 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           className="mt-auto pt-2 flex items-center gap-1.5 text-meta text-[var(--color-text-faint)] opacity-60"
         >
           <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-border-strong)] shrink-0" />
-          <span>loading health…</span>
+          <span>{t('ui.CapabilitiesOverlay.loadingHealth')}</span>
         </div>
       );
     }
     const dot = HEALTH_DOT[h.status];
     const label = STATUS_LABEL[h.status];
     const parts: string[] = [];
-    if (typeof h.success_rate === 'number') parts.push(`${Math.round(h.success_rate * 100)}% success`);
-    if (h.last_used) parts.push(`last used ${h.last_used}`);
+    if (typeof h.success_rate === 'number') parts.push(t('ui.CapabilitiesOverlay.successPct', { pct: Math.round(h.success_rate * 100) }));
+    if (h.last_used) parts.push(t('ui.CapabilitiesOverlay.lastUsed', { date: h.last_used }));
     return (
       <div
         data-testid={`cap-healthline-${idSuffix}`}
@@ -278,7 +280,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
         </span>
       </div>
     );
-  }, [health, healthSettled]);
+  }, [health, healthSettled, t]);
 
   // Shared ordinary-skill card — rendered by BOTH the Most-Used strip and the category
   // groups (one renderer, no duplication — R25). A skill in the strip ALSO appears in its
@@ -374,10 +376,10 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             value={view}
             onChange={setView}
             options={[
-              { key: 'apps', label: 'Apps', testid: 'cap-view-apps' },
-              { key: 'skills', label: 'Skills', testid: 'cap-view-skills' },
-              { key: 'experts', label: 'Experts', testid: 'cap-view-experts' },
-              { key: 'connections', label: 'Connections', testid: 'cap-view-connections' },
+              { key: 'apps', label: t('ui.CapabilitiesOverlay.viewApps'), testid: 'cap-view-apps' },
+              { key: 'skills', label: t('ui.CapabilitiesOverlay.viewSkills'), testid: 'cap-view-skills' },
+              { key: 'experts', label: t('ui.CapabilitiesOverlay.viewExperts'), testid: 'cap-view-experts' },
+              { key: 'connections', label: t('ui.CapabilitiesOverlay.viewConnections'), testid: 'cap-view-connections' },
             ]}
           />
         }
@@ -387,7 +389,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
               data-testid="cap-search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search abilities…"
+              placeholder={t('ui.CapabilitiesOverlay.searchPlaceholder')}
               className="w-64 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md px-3 py-1 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
             />
           ) : null
@@ -407,7 +409,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
         {!error && view === 'apps' && (
           <div data-testid="cap-apps-view">
             <Hint>
-              Apps are product boundaries. Phase A is catalog-only: lifecycle controls stay hidden until ownership cutover.
+              {t('ui.CapabilitiesOverlay.appsHint')}
             </Hint>
             <div className="grid grid-cols-2 gap-3 mt-4">
               {apps.map((app) => {
@@ -436,11 +438,11 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                         testid={`cap-app-profile-${app.appId}`}
                       >
                         {bindingsMatch
-                          ? `${currentProfile ?? 'unknown profile'} · ${compatible ? 'declared compatible' : 'blocked'}`
-                          : 'compiled bindings mismatch'}
+                          ? `${currentProfile ?? t('ui.CapabilitiesOverlay.unknownProfile')} · ${compatible ? t('ui.CapabilitiesOverlay.declaredCompatible') : t('ui.CapabilitiesOverlay.blocked')}`
+                          : t('ui.CapabilitiesOverlay.bindingsMismatch')}
                       </StatusBadge>
                       <span className="ml-auto text-meta text-[var(--color-text-faint)] tabular-nums">
-                        {app.resourceCount} resources · v{app.version}
+                        {t('ui.CapabilitiesOverlay.resourcesVersion', { count: app.resourceCount, version: app.version })}
                       </span>
                     </div>
                     {/* Upstream source display for external apps */}
@@ -451,7 +453,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                       >
                         <div className="flex items-center gap-1.5 mb-1">
                           <span className="material-symbols-outlined icon-sm">code</span>
-                          <span className="font-semibold">Upstream source</span>
+                          <span className="font-semibold">{t('ui.CapabilitiesOverlay.upstreamSource')}</span>
                         </div>
                         {app.upstreamSource.sources.map((source) => (
                           <div
@@ -472,7 +474,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             </div>
             {!loading && apps.length === 0 && (
               <div className="text-body text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-apps-empty">
-                No Apps found.
+                {t('ui.CapabilitiesOverlay.noApps')}
               </div>
             )}
           </div>
@@ -494,7 +496,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                     style={{ background: 'linear-gradient(135deg, color-mix(in srgb, var(--panel-accent, var(--color-primary)) 12%, transparent), transparent)' }}
                     data-testid={`cap-skill-${h.folderName}`}
                   >
-                    <div className="text-meta tabular-nums tracking-wider text-[var(--color-primary)]">SIGNATURE</div>
+                    <div className="text-meta tabular-nums tracking-wider text-[var(--color-primary)]">{t('ui.CapabilitiesOverlay.signature')}</div>
                     <div className="text-title font-semibold mt-2 flex items-center gap-2">
                       <span className="material-symbols-outlined icon-md text-[var(--color-primary)]">{SIGNATURE[h.folderName]?.icon ?? 'auto_awesome'}</span>{h.name}
                     </div>
@@ -515,7 +517,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             {topUsed.length > 0 && (
               <div className="mb-8" data-testid="cap-most-used">
                 <h2 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-1">
-                  Most used
+                  {t('ui.CapabilitiesOverlay.mostUsed')}
                 </h2>
                 <div className="grid grid-cols-2 gap-3">
                   {topUsed.map((s) => skillCard(s, 'strip'))}
@@ -540,7 +542,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 
             {!loading && groups.length === 0 && heroes.length === 0 && (
               <div className="text-body text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-empty">
-                {query ? 'No abilities match your search.' : 'No abilities found.'}
+                {query ? t('ui.CapabilitiesOverlay.noAbilitiesMatch') : t('ui.CapabilitiesOverlay.noAbilities')}
               </div>
             )}
           </div>
@@ -584,10 +586,10 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                           <span
                             className="inline-block w-2 h-2 rounded-full shrink-0"
                             style={{ background: e.isValid ? 'var(--color-success, #4ade80)' : 'var(--color-danger, #f87171)' }}
-                            title={e.isValid ? 'well-formed' : 'malformed frontmatter'}
+                            title={e.isValid ? t('ui.CapabilitiesOverlay.wellFormed') : t('ui.CapabilitiesOverlay.malformedFrontmatter')}
                           />
                           <span className="truncate">
-                            <span className="">{e.isValid ? 'ready' : 'malformed'}</span>
+                            <span className="">{e.isValid ? t('ui.CapabilitiesOverlay.ready') : t('ui.CapabilitiesOverlay.malformed')}</span>
                           </span>
                         </div>
                       </div>
@@ -597,7 +599,7 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
               ))}
             {expertsSettled && Object.keys(experts).length === 0 && (
               <div className="text-body text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-experts-empty">
-                No experts found.
+                {t('ui.CapabilitiesOverlay.noExperts')}
               </div>
             )}
           </div>
@@ -605,10 +607,10 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 
         {!error && view === 'connections' && (
           <div data-testid="cap-connections-view">
-            <ConnGroup title="Enabled" tag={`${enabledMcps.length} available`} entries={enabledMcps} onToggle={toggleMcp} statusLabel="ENABLED" statusClass="text-[var(--color-primary)]" />
-            <ConnGroup title="Off — one click to enable" tag={`${offMcps.length}`} entries={offMcps} onToggle={toggleMcp} statusLabel="OFF" statusClass="text-[var(--color-text-muted)]" />
+            <ConnGroup title={t('ui.CapabilitiesOverlay.connEnabled')} tag={t('ui.CapabilitiesOverlay.connAvailable', { count: enabledMcps.length })} entries={enabledMcps} onToggle={toggleMcp} statusLabel="ENABLED" statusText={t('ui.CapabilitiesOverlay.statusEnabled')} statusClass="text-[var(--color-primary)]" />
+            <ConnGroup title={t('ui.CapabilitiesOverlay.connOff')} tag={`${offMcps.length}`} entries={offMcps} onToggle={toggleMcp} statusLabel="OFF" statusText={t('ui.CapabilitiesOverlay.statusOff')} statusClass="text-[var(--color-text-muted)]" />
             {!loading && enabledMcps.length === 0 && offMcps.length === 0 && (
-              <div className="text-body text-[var(--color-text-faint)] py-8 text-center">No connections configured.</div>
+              <div className="text-body text-[var(--color-text-faint)] py-8 text-center">{t('ui.CapabilitiesOverlay.noConnections')}</div>
             )}
           </div>
         )}
@@ -622,18 +624,18 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             onClick={teachNewSkill}
             className="btn-lg btn-primary"
           >
-            <span className="material-symbols-outlined icon-md">auto_awesome</span> Teach Swarm a new skill
+            <span className="material-symbols-outlined icon-md">auto_awesome</span> {t('ui.CapabilitiesOverlay.teachSkill')}
           </button>
         ) : view === 'apps' ? (
           <span className="text-meta text-[var(--color-text-faint)]">
-            Catalog-only Apps are visible for inspection but have no install, enable, disable, or uninstall controls.
+            {t('ui.CapabilitiesOverlay.appsFooter')}
           </span>
         ) : view === 'connections' ? (
           <span className="text-meta text-[var(--color-text-faint)]">
-            Enabled = available for a session to use. Bolt: loads at session start · moon: loads on demand · tower: in channel sessions.
+            {t('ui.CapabilitiesOverlay.connectionsFooter')}
           </span>
         ) : (
-          <span className="text-meta text-[var(--color-text-faint)]">Experts are read-only review capabilities.</span>
+          <span className="text-meta text-[var(--color-text-faint)]">{t('ui.CapabilitiesOverlay.expertsFooter')}</span>
         )}
       </div>
 
@@ -648,24 +650,24 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
             <div className="p-4 space-y-4 overflow-y-auto text-body">
               <p className="text-[var(--color-text-muted)]">{selected.description}</p>
               <div>
-                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">How to use</div>
-                <div className="text-body">Say what you want in chat — Swarm invokes it automatically.</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">{t('ui.CapabilitiesOverlay.howToUse')}</div>
+                <div className="text-body">{t('ui.CapabilitiesOverlay.howToUseBody')}</div>
               </div>
               {/* Demoted dev metadata */}
               <div className="pt-3 border-t border-[var(--color-border)] text-small text-[var(--color-text-faint)] tabular-nums space-y-1">
-                <div>source: {selected.sourceTier}</div>
-                <div>version: {selected.version}</div>
-                <div>load: {selected.tier}{selected.tier === 'always' ? ' (at startup)' : ' (on use)'}</div>
+                <div>{t('ui.CapabilitiesOverlay.metaSource', { value: selected.sourceTier })}</div>
+                <div>{t('ui.CapabilitiesOverlay.metaVersion', { value: selected.version })}</div>
+                <div>{selected.tier === 'always' ? t('ui.CapabilitiesOverlay.metaLoadStartup', { value: selected.tier }) : t('ui.CapabilitiesOverlay.metaLoadOnUse', { value: selected.tier })}</div>
                 {health[selected.folderName] && (
-                  <div>health: {health[selected.folderName].status}
+                  <div>{t('ui.CapabilitiesOverlay.metaHealth', { value: health[selected.folderName].status })}
                     {typeof health[selected.folderName].success_rate === 'number'
-                      ? ` · ${Math.round((health[selected.folderName].success_rate as number) * 100)}% success`
+                      ? ` · ${t('ui.CapabilitiesOverlay.successPct', { pct: Math.round((health[selected.folderName].success_rate as number) * 100) })}`
                       : ''}
-                    {health[selected.folderName].last_used ? ` · last used ${health[selected.folderName].last_used}` : ''}
+                    {health[selected.folderName].last_used ? ` · ${t('ui.CapabilitiesOverlay.lastUsed', { date: health[selected.folderName].last_used })}` : ''}
                   </div>
                 )}
-                <div>id: {selected.folderName}</div>
-                {selected.visibility === 'internal' && <div className="text-[var(--color-text-muted)]">internal (owner-only)</div>}
+                <div>{t('ui.CapabilitiesOverlay.metaId', { value: selected.folderName })}</div>
+                {selected.visibility === 'internal' && <div className="text-[var(--color-text-muted)]">{t('ui.CapabilitiesOverlay.internalOwnerOnly')}</div>}
               </div>
             </div>
           </OverlayDrawer>
@@ -676,15 +678,19 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 }
 
 function ConnGroup({
-  title, tag, entries, onToggle, statusLabel, statusClass,
+  title, tag, entries, onToggle, statusLabel, statusText, statusClass,
 }: {
   title: string;
   tag: string;
   entries: ConfigEntry[];
   onToggle: (m: ConfigEntry) => void;
+  /** Stable id for the test id (ENABLED / OFF). */
   statusLabel: string;
+  /** The status word shown to the user. */
+  statusText: string;
   statusClass: string;
 }) {
+  const { t } = useTranslation();
   if (entries.length === 0) return null; // never render an empty group
   return (
     <div className="mb-6" data-testid={`cap-conn-${statusLabel.toLowerCase()}`}>
@@ -701,7 +707,7 @@ function ConnGroup({
           <span
             data-testid={`cap-conn-dot-${m.id}`}
             data-status={m.enabled ? 'enabled' : 'off'}
-            aria-label={m.enabled ? 'enabled' : 'off'}
+            aria-label={m.enabled ? t('ui.CapabilitiesOverlay.dotEnabled') : t('ui.CapabilitiesOverlay.dotOff')}
             className="inline-block w-2 h-2 rounded-full shrink-0"
             style={{ background: m.enabled ? 'var(--color-success, #4ade80)' : 'var(--color-border-strong)' }}
           />
@@ -723,11 +729,11 @@ function ConnGroup({
             {m.description && <div className="text-small text-[var(--color-text-faint)] truncate">{m.description}</div>}
           </div>
           <div className="flex-1" />
-          <span className={`text-meta tabular-nums ${statusClass}`}>{statusLabel}</span>
+          <span className={`text-meta tabular-nums ${statusClass}`}>{statusText}</span>
           <button
             data-testid={`cap-toggle-${m.id}`}
             onClick={() => onToggle(m)}
-            aria-label={`toggle ${m.name}`}
+            aria-label={t('ui.CapabilitiesOverlay.toggleName', { name: m.name })}
             role="switch"
             aria-checked={m.enabled}
             className={

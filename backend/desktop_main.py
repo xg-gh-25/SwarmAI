@@ -390,10 +390,11 @@ def run_ingest(argv: "list[str]") -> int:
                     if isinstance(destination, dict) and destination.get("rerouted_from"):
                         # no user_quote found in the message: kept on demand, not every turn
                         # (design 2026-10-30-cdf-agent-decides §2)
-                        item["hint"] = (f"没有在你的消息里找到 user_quote 的原话，所以记到了 "
-                                        f"{destination.get('relative_path')}（按需召回），而不是每轮都读的 "
-                                        f"{destination['rerouted_from']}；要进 {destination['rerouted_from']}，"
-                                        "请在 user_quote 里逐字引用你的原话。")
+                        item["hint"] = (f"The user_quote was not found word for word in your message, "
+                                        f"so this went to {destination.get('relative_path')} (recalled when "
+                                        f"needed) instead of {destination['rerouted_from']}, which is read "
+                                        f"every turn. To put it in {destination['rerouted_from']}, quote "
+                                        "your own words exactly in user_quote.")
                     rendered_units.append(item)
                 print(json.dumps({
                     "status": "done", "candidate_id": result.candidate_id,
@@ -405,7 +406,7 @@ def run_ingest(argv: "list[str]") -> int:
             pass
         time.sleep(0.3)
     if pending:
-        print("已收到，结果见 Cognitive Distillation Flow")
+        print("Received. See the result in Cognitive Distillation Flow.")
     return 2 if refused else 0
 
 

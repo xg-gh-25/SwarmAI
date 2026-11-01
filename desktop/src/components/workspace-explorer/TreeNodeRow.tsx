@@ -24,6 +24,7 @@
  */
 
 import React, { useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { TreeNode } from '../../types';
 import type { FileTreeItem } from './FileTreeNode';
 import { fileTypeBadge, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
@@ -207,6 +208,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   sectionAccentBg,
   forceDim,
 }) {
+  const { t } = useTranslation();
   const isDirectory = node.type === 'directory';
 
   /* ---- drag handler ---- */
@@ -447,7 +449,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         {node.isSymlink && (
           <span
             className="material-symbols-outlined icon-xs"
-            title="Linked folder"
+            title={t('ui.TreeNodeRow.linkedFolder')}
             style={{
               position: 'absolute',
               bottom: '-2px',
@@ -507,7 +509,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       <span
           className="tree-node-actions"
           data-testid="crud-actions"
-          aria-label="Actions"
+          aria-label={t('common.label.actions')}
           style={{
             display: 'none', /* shown via CSS :hover on parent */
             gap: '2px',
@@ -522,7 +524,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
                 color: 'var(--color-explorer-accent)',
                 cursor: 'pointer',
               }}
-              title="New item"
+              title={t('ui.TreeNodeRow.newItem')}
             >
               add
             </span>
@@ -533,7 +535,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
               color: 'var(--color-explorer-accent)',
               cursor: 'pointer',
             }}
-            title="More actions"
+            title={t('ui.TreeNodeRow.moreActions')}
           >
             more_horiz
           </span>

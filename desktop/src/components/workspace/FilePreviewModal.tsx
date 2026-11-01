@@ -12,6 +12,8 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, lazy, Suspense } from 'react';
+import { useTranslation } from 'react-i18next';
+import { fileManagerName } from '../../utils/platform';
 import Modal from '../common/Modal';
 import CodePreview from './CodePreview';
 import { workspaceService } from '../../services/workspace';
@@ -46,6 +48,7 @@ const formatFileSize = (bytes: number): string => {
 
 
 export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: FilePreviewModalProps) {
+  const { t } = useTranslation();
   // Classify using the unified FileViewer type system
   const viewType: FileViewType = file ? classifyFileForViewer(file.name) : 'unsupported';
   const typeInfo = file ? getFileTypeInfo(file.name) : null;
@@ -102,14 +105,14 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
   const renderContent = () => {
     if (!file) return null;
 
-    // Reveal in Finder button — Hive-aware (hidden when no Tauri)
+    // Reveal in the file manager button — Hive-aware (hidden when no Tauri)
     const RevealButton = () => (
       <button
         onClick={handleRevealInFinder}
         className="btn-lg btn-primary transition-colors"
       >
         <span className="material-symbols-outlined icon-md">folder_open</span>
-        Reveal in Finder
+        {t('ui.FilePreviewModal.reveal', { fileManager: fileManagerName() })}
       </button>
     );
 
@@ -120,7 +123,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     if (!canPreview) {
       return (
         <div className="h-64">
-          <Suspense fallback={<div className="flex items-center justify-center h-full text-[var(--color-text-muted)]">Loading…</div>}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full text-[var(--color-text-muted)]">{t('ui.FilePreviewModal.loading')}</div>}>
             <UnsupportedRenderer
               filePath={file.path}
               fileName={file.name}
@@ -139,17 +142,17 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
       return (
         <div className="flex items-center justify-center h-64 text-[var(--color-text-muted)]">
           <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
-          Loading file...
+          {t('ui.FilePreviewModal.loadingFile')}
         </div>
       );
     }
 
     if (isError) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load file';
+      const errorMessage = error instanceof Error ? error.message : t('ui.FilePreviewModal.loadFailed');
       return (
         <div className="flex flex-col items-center justify-center h-64 text-[var(--color-text-muted)]">
           <span className="material-symbols-outlined icon-xl mb-4">error</span>
-          <span className="text-lg font-medium mb-2">Cannot Load File</span>
+          <span className="text-lg font-medium mb-2">{t('ui.FilePreviewModal.cannotLoad')}</span>
           <span className="text-sm text-center mb-4 text-status-error">{errorMessage}</span>
           <RevealButton />
         </div>
@@ -188,7 +191,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
           <Suspense fallback={
             <div className="flex items-center justify-center h-64 text-[var(--color-text-muted)]">
               <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
-              Loading PDF viewer...
+              {t('ui.FilePreviewModal.loadingPdf')}
             </div>
           }>
             <div className="max-h-[60vh] overflow-auto">
@@ -242,7 +245,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
           <RevealButton />
         </div>
         <CodePreview
-          content={fileContent.encoding === 'utf-8' ? fileContent.content : '[Binary content]'}
+          content={fileContent.encoding === 'utf-8' ? fileContent.content : t('ui.FilePreviewModal.binaryContent')}
           filename={file.name}
           showLineNumbers={true}
           className="max-h-[55vh]"
@@ -255,7 +258,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={file?.name || 'File Preview'}
+      title={file?.name || t('ui.FilePreviewModal.title')}
       size="3xl"
     >
       {renderContent()}

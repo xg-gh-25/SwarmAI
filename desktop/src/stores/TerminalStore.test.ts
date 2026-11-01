@@ -12,7 +12,7 @@
  *
  * We mock the pty service boundary (spawn) — the store is real code.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IPty } from '../services/pty';
 
 // Fake IPty factory — each spawn returns a distinct spy-able handle.
@@ -33,23 +33,97 @@ vi.mock('../services/pty', () => ({
   spawn: (...args: unknown[]) => spawnMock(...(args as [])),
 }));
 
+// The Rust `default_shell` command answers with the user's $SHELL (else /bin/bash).
+const { invokeMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(async (cmd: string): Promise<unknown> => {
+    if (cmd === 'default_shell') return '/bin/zsh';
+    throw new Error(`unexpected invoke ${cmd}`);
+  }),
+}));
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args as never),
+}));
+
 import { terminalStore } from './TerminalStore';
 
+const realUserAgent = Object.getOwnPropertyDescriptor(window.navigator, 'userAgent');
+function setUserAgent(ua: string) {
+  Object.defineProperty(window.navigator, 'userAgent', { value: ua, configurable: true });
+}
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
 describe('TerminalStore', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     spawnCount = 0;
     spawnMock.mockClear();
+    invokeMock.mockClear();
     terminalStore.clear();
+    terminalStore.resetDefaultShell();
+    // Most cases open shells after the default shell is known (the usual case: it is
+    // asked for when the store loads, long before a person opens a terminal).
+    await terminalStore.loadDefaultShell();
   });
 
-  it('AC4: openTerminal spawns the login shell with -l (Unix test env) for profile PATH', () => {
-    // In the jsdom/CI test env navigator is non-Windows → login shell + -l.
-    // This proves the platform-aware defaultShell() picks the login shell so
-    // brazil/swarm PATH loads (the Windows branch uses powershell.exe, no -l).
-    terminalStore.openTerminal({ cwd: '/tmp/proj' });
+  afterEach(() => {
+    if (realUserAgent) Object.defineProperty(window.navigator, 'userAgent', realUserAgent);
+    else delete (window.navigator as unknown as Record<string, unknown>).userAgent;
+  });
+
+  it('macOS/Linux: spawns the shell the Rust side reports ($SHELL) as a login shell (-l)', async () => {
+    invokeMock.mockImplementationOnce(async () => '/opt/homebrew/bin/fish');
+    terminalStore.resetDefaultShell();
+    await terminalStore.loadDefaultShell();
+    const tab = terminalStore.openTerminal({ cwd: '/tmp/proj' });
+    expect(invokeMock).toHaveBeenCalledWith('default_shell', undefined);
     const [file, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
-    expect(file).toBe('/bin/zsh');
+    expect(file).toBe('/opt/homebrew/bin/fish');
     expect(args).toEqual(['-l']);
+    expect(tab.title).toBe('fish');
+  });
+
+  it('a shell opened before the default shell is known spawns once it is, named after it', async () => {
+    invokeMock.mockImplementationOnce(async () => '/bin/bash');
+    terminalStore.resetDefaultShell();
+    const tab = terminalStore.openTerminal({});
+    expect(spawnMock).not.toHaveBeenCalled();
+    tab.pty.write('ls');
+    await flush();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [file, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect([file, args]).toEqual(['/bin/bash', ['-l']]);
+    expect(terminalStore.get(tab.id)?.title).toBe('bash');
+    const real = spawnMock.mock.results[0].value as IPty;
+    expect(real.write).toHaveBeenCalledWith('ls'); // input typed early is not lost
+  });
+
+  it('a shell closed before the default shell is known is never spawned', async () => {
+    terminalStore.resetDefaultShell();
+    const tab = terminalStore.openTerminal({});
+    terminalStore.closeTerminal(tab.id);
+    await flush();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('Windows: spawns powershell.exe with no args and does not ask the Rust side', async () => {
+    setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+    terminalStore.resetDefaultShell();
+    invokeMock.mockClear();
+    await terminalStore.loadDefaultShell();
+    const tab = terminalStore.openTerminal({});
+    const [file, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(file).toBe('powershell.exe');
+    expect(args).toEqual([]);
+    expect(tab.title).toBe('powershell');
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('never falls back to a hardcoded /bin/zsh when the Rust side cannot answer', async () => {
+    invokeMock.mockImplementationOnce(async () => { throw new Error('unknown command'); });
+    terminalStore.resetDefaultShell();
+    await terminalStore.loadDefaultShell();
+    terminalStore.openTerminal({});
+    const [file] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(file).toBe('/bin/bash');
   });
 
   it('openTerminal spawns a pty and registers a tab', () => {

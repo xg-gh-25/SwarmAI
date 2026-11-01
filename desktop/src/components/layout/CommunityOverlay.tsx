@@ -21,6 +21,7 @@
  */
 import { Tabs } from '../overlay';
 import { useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, type CommunityPart } from './overlayQueries';
 import {
@@ -38,27 +39,30 @@ interface CommunityContentProps {
 type TabId = 'inbound' | 'watching';
 
 // Inbound = what we read from the world, Watching = what we watch.
-const TABS: Array<{ id: TabId; label: string; sub: string }> = [
-  { id: 'inbound', label: 'Inbound', sub: 'read the world' },
-  { id: 'watching', label: 'Watching', sub: 'what we watch' },
-];
+const TAB_IDS: TabId[] = ['inbound', 'watching'];
 
 export function CommunityContent({ close }: CommunityContentProps) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<TabId>('inbound');
+  const TABS: Array<{ id: TabId; label: string; sub: string }> = TAB_IDS.map((id) =>
+    id === 'inbound'
+      ? { id, label: t('ui.CommunityOverlay.tabInbound'), sub: t('ui.CommunityOverlay.tabInboundSub') }
+      : { id, label: t('ui.CommunityOverlay.tabWatching'), sub: t('ui.CommunityOverlay.tabWatchingSub') },
+  );
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="community-overlay">
       <div className="px-5 pt-4 pb-0">
-        <h2 className="text-heading font-semibold text-[var(--color-text)]">Community</h2>
+        <h2 className="text-heading font-semibold text-[var(--color-text)]">{t('ui.CommunityOverlay.title')}</h2>
         <p className="mt-0.5 text-meta text-[var(--color-text-dim)]">
-          What you read from the world, and the feeds you watch.
+          {t('ui.CommunityOverlay.subtitle')}
         </p>
       </div>
 
       {/* Tabs */}
       <div className="px-5 py-2.5 border-b border-[var(--color-border)]">
-        <Tabs label="Community" value={tab} onChange={setTab}
-          items={TABS.map((t) => ({ key: t.id, label: t.label, hint: t.sub, testid: `community-tab-${t.id}` }))} />
+        <Tabs label={t('ui.CommunityOverlay.title')} value={tab} onChange={setTab}
+          items={TABS.map((tb) => ({ key: tb.id, label: tb.label, hint: tb.sub, testid: `community-tab-${tb.id}` }))} />
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-4">
@@ -96,13 +100,14 @@ function useFetch<T>(part: CommunityPart): {
 function StateBanner({ loading, error, empty, emptyMsg, onRetry }: {
   loading: boolean; error: boolean; empty: boolean; emptyMsg: string; onRetry?: () => void;
 }) {
+  const { t } = useTranslation();
   if (loading) return <OverlayLoading />;
   if (error) {
     return (
       <OverlayError
         testid="community-load-error"
         retryTestid="community-load-retry"
-        message="Couldn't load."
+        message={t('ui.CommunityOverlay.loadError')}
         onRetry={onRetry ?? (() => {})}
       />
     );
@@ -127,6 +132,7 @@ function SectionLabel({ children, className = '' }: { children: React.ReactNode;
 // De-boxed: no per-row borders — whitespace + hover-highlight (Tufte / Refactoring UI).
 
 function InboundTab({ close }: { close: () => void }) {
+  const { t } = useTranslation();
   const { data, loading, error, reload } = useFetch<CommunityFeed>('feed');
 
   const openFile = useCallback(
@@ -159,7 +165,7 @@ function InboundTab({ close }: { close: () => void }) {
       {/* Latest weekly report — the ONE hero (Von Restorff): accent bar, no tile-wall */}
       {latestReport && (
         <div>
-          <SectionLabel className="mb-2">Latest — read this first</SectionLabel>
+          <SectionLabel className="mb-2">{t('ui.CommunityOverlay.latestLabel')}</SectionLabel>
           <button
             type="button"
             onClick={() => openFile(latestReport.path)}
@@ -170,22 +176,22 @@ function InboundTab({ close }: { close: () => void }) {
             <span className="material-symbols-outlined icon-lg text-[var(--color-text-muted)]">bar_chart</span>
             <span className="flex-1 min-w-0">
               <span className="block text-heading font-semibold text-[var(--color-text)] truncate">{latestReport.name}</span>
-              <span className="block text-meta text-[var(--color-text-dim)]">Weekly report</span>
+              <span className="block text-meta text-[var(--color-text-dim)]">{t('ui.CommunityOverlay.weeklyReport')}</span>
             </span>
             {pastReports.length > 0 && (
-              <span className="text-meta text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
+              <span className="text-meta text-[var(--color-text-faint)] shrink-0">{t('ui.CommunityOverlay.pastReports', { count: pastReports.length })}</span>
             )}
-            <span className="text-small text-[var(--panel-accent,var(--color-primary))] shrink-0">open ↗</span>
+            <span className="text-small text-[var(--panel-accent,var(--color-primary))] shrink-0">{t('ui.CommunityOverlay.open')}</span>
           </button>
         </div>
       )}
 
       {/* Daily signals — Signals only, newest-first, click → Canvas (LOCAL files) */}
       <div>
-        <SectionLabel className="mb-2">Today's signals</SectionLabel>
+        <SectionLabel className="mb-2">{t('ui.CommunityOverlay.todaysSignals')}</SectionLabel>
         {loading || error || signals.length === 0 ? (
           <StateBanner loading={loading} error={error} onRetry={reload} empty={signals.length === 0}
-            emptyMsg="No recent signals." />
+            emptyMsg={t('ui.CommunityOverlay.noSignals')} />
         ) : (
           <div className="flex flex-col gap-0.5">
             {signals.map((it) => (
@@ -207,7 +213,7 @@ function InboundTab({ close }: { close: () => void }) {
                 data-testid="community-feed-truncated"
                 className="px-2 py-1.5 text-meta text-[var(--color-text-faint)]"
               >
-                Showing the newest {fetchedCount} {fetchedCount === 1 ? 'item' : 'items'} — more on disk.
+                {t('ui.CommunityOverlay.feedTruncated', { count: fetchedCount })}
               </div>
             )}
           </div>
@@ -222,6 +228,7 @@ function InboundTab({ close }: { close: () => void }) {
 // a config surface, so it keeps its inline row editor (tier select / toggle / delete).
 
 function SourcesTab() {
+  const { t } = useTranslation();
   const { data, loading, error, reload } = useFetch<CommunitySource[]>('sources');
   const sources = data ?? [];
   const [busy, setBusy] = useState<string | null>(null); // id being mutated
@@ -248,24 +255,24 @@ function SourcesTab() {
         const detail = (e as { response?: { data?: { detail?: unknown } } })
           ?.response?.data?.detail;
         const reason = typeof detail === 'string' && detail.trim() ? detail : null;
-        setActionErr(reason ?? `Couldn't update "${id}". Try again.`);
+        setActionErr(reason ?? t('ui.CommunityOverlay.updateError', { id }));
         // leave confirmDelete as-is on failure — the row keeps its state, user can retry
       } finally {
         setBusy(null);
       }
     },
-    [reload],
+    [reload, t],
   );
 
   const banner = <StateBanner loading={loading} error={error} onRetry={reload} empty={sources.length === 0}
-    emptyMsg="No subscribed sources yet — add one below." />;
+    emptyMsg={t('ui.CommunityOverlay.noSources')} />;
   // Show the banner for loading/error; but on empty still render the add-form (below),
   // so a fresh user can add their first source.
   if (loading || error) return banner;
 
   return (
     <div className="max-w-[760px]">
-      <SectionLabel className="mb-2">Subscribed sources · your edits are never auto-disabled</SectionLabel>
+      <SectionLabel className="mb-2">{t('ui.CommunityOverlay.sourcesLabel')}</SectionLabel>
       {actionErr && (
         <div className="mb-2 text-meta text-[var(--color-status-error)]">{actionErr}</div>
       )}
@@ -283,8 +290,10 @@ function SourcesTab() {
                 onClick={() => setExpanded((e) => (e === s.id ? null : s.id))}
                 className="material-symbols-outlined icon-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 aria-expanded={expanded === s.id}
-                aria-label={`${expanded === s.id ? 'Hide' : 'Show'} members for ${s.name}`}
-                title={expanded === s.id ? 'Hide members' : 'Show members'}
+                aria-label={expanded === s.id
+                  ? t('ui.CommunityOverlay.hideMembersFor', { name: s.name })
+                  : t('ui.CommunityOverlay.showMembersFor', { name: s.name })}
+                title={expanded === s.id ? t('ui.CommunityOverlay.hideMembers') : t('ui.CommunityOverlay.showMembers')}
               >
                 {expanded === s.id ? 'expand_more' : 'chevron_right'}
               </button>
@@ -326,7 +335,7 @@ function SourcesTab() {
                   : 'text-[var(--color-text-faint)] border-[var(--color-border)]',
               ].join(' ')}
             >
-              {s.enabled ? '● on' : '○ off'}
+              {s.enabled ? t('ui.CommunityOverlay.enabledOn') : t('ui.CommunityOverlay.enabledOff')}
             </button>
             {/* delete — 2-step confirm */}
             {confirmDelete === s.id ? (
@@ -335,17 +344,17 @@ function SourcesTab() {
                 data-testid="source-delete-confirm"
                 disabled={busy === s.id}
                 onClick={() => mutate(s.id, () => communityService.deleteSource(s.id))}
-                aria-label={`Confirm delete source ${s.name}`}
+                aria-label={t('ui.CommunityOverlay.confirmDeleteSource', { name: s.name })}
                 className="btn-sm btn-danger"
               >
-                confirm?
+                {t('ui.CommunityOverlay.confirm')}
               </button>
             ) : (
               <button
                 type="button"
                 data-testid="source-delete"
                 onClick={() => setConfirmDelete(s.id)}
-                aria-label={`Delete source ${s.name}`}
+                aria-label={t('ui.CommunityOverlay.deleteSource', { name: s.name })}
                 className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] hover:text-[var(--color-status-error)] focus-visible:text-[var(--color-status-error)]"
               >
                 delete
@@ -362,8 +371,7 @@ function SourcesTab() {
       <AddSourceForm onAdded={reload} busy={!!busy} />
 
       <p className="mt-3 text-meta text-[var(--color-text-faint)] leading-relaxed max-w-[640px]">
-        Your edits are marked <span className="font-mono">user</span>-managed and are never
-        auto-disabled by self-tuning. Changes write safely even while a background tune runs.
+        {t('ui.CommunityOverlay.editsNoteBefore')}<span className="font-mono">user</span>{t('ui.CommunityOverlay.editsNoteAfter')}
       </p>
     </div>
   );
@@ -373,6 +381,7 @@ function SourcesTab() {
 // same busy/confirm/error discipline as the feed rows. Writes go through the shared
 // config lock (managed_by:user); refetch after each so the UI reflects persisted truth.
 function MemberEditor({ source, onChanged }: { source: CommunitySource; onChanged: () => void }) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null); // member value armed for delete
   const [err, setErr] = useState<string | null>(null);
@@ -387,12 +396,12 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
         if (clearConfirm) setConfirm(null);
         onChanged();
       } catch {
-        setErr('Could not save — try again (duplicate or removed?).');
+        setErr(t('ui.CommunityOverlay.memberSaveError'));
       } finally {
         setBusy(false);
       }
     },
-    [onChanged],
+    [onChanged, t],
   );
 
   const submitAdd = () => {
@@ -405,7 +414,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
     <div data-testid="member-editor" className="ml-7 mb-1 pl-3 border-l border-[var(--color-border)] flex flex-col gap-0.5 max-w-[720px]">
       {err && <div className="text-meta text-[var(--color-status-error)] py-1">{err}</div>}
       {source.members.length === 0 && (
-        <div className="text-meta text-[var(--color-text-faint)] py-1">No members yet — add one below.</div>
+        <div className="text-meta text-[var(--color-text-faint)] py-1">{t('ui.CommunityOverlay.noMembers')}</div>
       )}
       {source.members.map((m) => (
         <div key={m} data-testid="member-row" className="flex items-center gap-2 py-0.5 group">
@@ -416,17 +425,17 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
               data-testid="member-delete-confirm"
               disabled={busy}
               onClick={() => run(() => communityService.deleteMember(source.id, m), true)}
-              aria-label={`Confirm remove member ${m}`}
+              aria-label={t('ui.CommunityOverlay.confirmRemoveMember', { member: m })}
               className="btn-sm btn-danger"
             >
-              confirm?
+              {t('ui.CommunityOverlay.confirm')}
             </button>
           ) : (
             <button
               type="button"
               data-testid="member-delete"
               onClick={() => setConfirm(m)}
-              aria-label={`Remove member ${m}`}
+              aria-label={t('ui.CommunityOverlay.removeMember', { member: m })}
               className="material-symbols-outlined icon-xs text-[var(--color-text-faint)] hover:text-[var(--color-status-error)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
             >
               close
@@ -436,7 +445,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
       ))}
       {source.membersTruncated && (
         <div className="text-meta text-[var(--color-text-faint)] py-0.5">
-          Showing first {source.members.length} of {source.memberCount}.
+          {t('ui.CommunityOverlay.membersTruncated', { shown: source.members.length, total: source.memberCount })}
         </div>
       )}
       <div className="flex items-center gap-2 pt-1">
@@ -446,7 +455,9 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
           disabled={busy}
           onChange={(e) => setAdding(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submitAdd(); }}
-          placeholder={`add ${source.memberKind?.replace(/s$/, '') ?? 'member'}…`}
+          placeholder={t('ui.CommunityOverlay.addMemberPlaceholder', {
+            kind: source.memberKind?.replace(/s$/, '') ?? t('ui.CommunityOverlay.memberFallback'),
+          })}
           className="flex-1 text-meta bg-transparent border border-[var(--color-border)] rounded px-2 py-1"
         />
         <button
@@ -456,7 +467,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
           onClick={submitAdd}
           className="btn-sm btn-ghost text-[var(--panel-accent,var(--color-primary))] disabled:opacity-40"
         >
-          add
+          {t('ui.CommunityOverlay.add')}
         </button>
       </div>
     </div>
@@ -465,6 +476,7 @@ function MemberEditor({ source, onChanged }: { source: CommunitySource; onChange
 
 // Add-source form (collapsed to a "+ add" affordance until opened).
 function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [id, setId] = useState('');
   const [name, setName] = useState('');
@@ -475,18 +487,18 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
 
   const submit = useCallback(async () => {
     setErr(null);
-    if (!id.trim() || !name.trim()) { setErr('id and name are required'); return; }
+    if (!id.trim() || !name.trim()) { setErr(t('ui.CommunityOverlay.idNameRequired')); return; }
     setSaving(true);
     try {
       await communityService.addSource({ id: id.trim(), name: name.trim(), type, tier });
       setId(''); setName(''); setOpen(false);
       onAdded();
     } catch {
-      setErr('Could not add (duplicate id or invalid type/tier?)');
+      setErr(t('ui.CommunityOverlay.addSourceError'));
     } finally {
       setSaving(false);
     }
-  }, [id, name, type, tier, onAdded]);
+  }, [id, name, type, tier, onAdded, t]);
 
   if (!open) {
     return (
@@ -496,7 +508,7 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
         onClick={() => setOpen(true)}
         className="mt-3 text-small text-[var(--panel-accent,var(--color-primary))] hover:underline"
       >
-        ＋ Add source
+        {t('ui.CommunityOverlay.addSource')}
       </button>
     );
   }
@@ -505,9 +517,9 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
     <div className="mt-3 rounded-lg border border-[var(--color-border)] p-3 flex flex-col gap-2 max-w-[560px]" data-testid="source-add-form">
       {err && <div className="text-meta text-[var(--color-status-error)]">{err}</div>}
       <div className="flex gap-2">
-        <input data-testid="add-id" value={id} onChange={(e) => setId(e.target.value)} placeholder="id (unique)"
+        <input data-testid="add-id" value={id} onChange={(e) => setId(e.target.value)} placeholder={t('ui.CommunityOverlay.idPlaceholder')}
           className="flex-1 text-small bg-transparent border border-[var(--color-border)] rounded px-2 py-1" />
-        <input data-testid="add-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="name"
+        <input data-testid="add-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('ui.CommunityOverlay.namePlaceholder')}
           className="flex-1 text-small bg-transparent border border-[var(--color-border)] rounded px-2 py-1" />
       </div>
       <div className="flex gap-2 items-center">
@@ -528,10 +540,10 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
           ))}
         </select>
         <span className="flex-1" />
-        <button type="button" onClick={() => setOpen(false)} className="btn-sm btn-ghost">cancel</button>
+        <button type="button" onClick={() => setOpen(false)} className="btn-sm btn-ghost">{t('ui.CommunityOverlay.cancel')}</button>
         <button type="button" data-testid="add-submit" disabled={saving || busy} onClick={submit}
           className="btn-sm btn-secondary disabled:opacity-50">
-          {saving ? 'adding…' : 'add'}
+          {saving ? t('ui.CommunityOverlay.adding') : t('ui.CommunityOverlay.add')}
         </button>
       </div>
     </div>

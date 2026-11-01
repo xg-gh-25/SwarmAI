@@ -6,6 +6,8 @@
  */
 
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { defaultDataDir, joinDir } from './utils/platform';
 import { useZoom } from './hooks/useZoom';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -251,6 +253,7 @@ export function SwarmToastBridge() {
  * Must be inside QueryClientProvider for useQuery.
  */
 function AppRoutes() {
+  const { t } = useTranslation();
   const { data: status, isLoading, isError, refetch } = useQuery({
     queryKey: ['system-status-onboarding'],
     queryFn: systemService.getStatus,
@@ -282,20 +285,19 @@ function AppRoutes() {
           <div className="w-12 h-12 rounded-full bg-red-500/20 flex items-center justify-center">
             <span className="material-symbols-outlined icon-md text-red-400">error</span>
           </div>
-          <p className="text-red-400 font-medium">Couldn’t reach the backend</p>
+          <p className="text-red-400 font-medium">{t('ui.App.backendUnreachable')}</p>
           <p className="text-[var(--color-text-muted)] text-sm">
-            SwarmAI couldn’t load its status. The backend may still be starting or may have
-            stopped.{' '}
+            {t('ui.App.statusLoadFailed')}{' '}
             {isDesktop()
-              ? <>Check the logs at <code className="text-primary">~/.swarm-ai/logs/</code>.</>
-              : <>It may be restarting — retry in a moment, or contact your administrator if this persists.</>}
+              ? <>{t('ui.App.checkLogsBefore')}<code className="text-primary">{joinDir(defaultDataDir(), 'logs')}</code>{t('ui.App.checkLogsAfter')}</>
+              : <>{t('ui.App.mayBeRestarting')}</>}
           </p>
           <button
             onClick={() => refetch()}
             className="btn-lg btn-primary mt-2 transition-colors"
           >
             <span className="material-symbols-outlined icon-md">refresh</span>
-            Retry
+            {t('common.button.retry')}
           </button>
         </div>
       </div>

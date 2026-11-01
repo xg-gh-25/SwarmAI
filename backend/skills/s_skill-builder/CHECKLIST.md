@@ -205,14 +205,14 @@ DATA_DIR = "/Users/specific/path/data"
 - [ ] **9.3** Consistent code block language tags
 - [ ] **9.4** Consistent callout formatting
 - [ ] **9.5** No conflicting instructions
-- [ ] **9.6** Terms match `.context/CONTEXT.md` ubiquitous language (no banned synonyms)
+- [ ] **9.6** Terms match `{SKILL_DIR}/GLOSSARY.md` ubiquitous language (no banned synonyms)
 
 ### Ubiquitous Language Check
 
-Read `.context/CONTEXT.md` and verify:
+Read `{SKILL_DIR}/GLOSSARY.md` and verify:
 - "task" means job-system execution, not todo or ticket
 - "session" means chat conversation, not SDK subprocess
-- "daemon" not "server" or "backend" for the always-on process
+- "daemon" (not "server") for the always-on macOS backend mode
 - "skill" not "tool" or "plugin" for markdown capabilities
 - "todo" not "task" or "ticket" for Radar items
 - "memory" not "context" or "history" for MEMORY.md content

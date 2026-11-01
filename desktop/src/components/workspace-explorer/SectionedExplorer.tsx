@@ -14,6 +14,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AutoSizer } from 'react-virtualized-auto-sizer';
 import { useTreeData } from '../../contexts/ExplorerContext';
 import VirtualizedTree from './VirtualizedTree';
@@ -158,6 +159,7 @@ function WorkingFileItem({
 
 
 export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat, showWorkingFiles = true }: SectionedExplorerProps & { showWorkingFiles?: boolean }) {
+  const { t } = useTranslation();
   const { treeData } = useTreeData();
   const [workingOpen, setWorkingOpen] = useState(true);
 
@@ -172,7 +174,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat, s
         style={{ display: 'flex', flexDirection: 'column', borderLeft: '3px solid color-mix(in srgb, var(--color-status-success) 50%, transparent)' }}
       >
         <SectionHeader
-          title="Working Files"
+          title={t('ui.SectionedExplorer.workingFiles')}
           count={workingFiles.length}
           isOpen={workingOpen}
           onToggle={() => setWorkingOpen(!workingOpen)}
@@ -187,7 +189,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat, s
         )}
         {workingOpen && workingFiles.length === 0 && (
           <div className="px-3.5 py-2 text-meta text-[var(--color-text-dim)] italic">
-            No uncommitted changes
+            {t('ui.SectionedExplorer.noChanges')}
           </div>
         )}
       </div>}

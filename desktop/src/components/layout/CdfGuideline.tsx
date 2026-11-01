@@ -23,6 +23,11 @@ function useSay(): Say {
   return (en, zh_) => (zh ? zh_ : en);
 }
 
+// Names of files, the same in every language (not translated).
+const QUEUE_DB_FILE = 'ingestion.db';
+const CHECKED_FILES = 'Steering · User · Tools';
+const MEASURED_FILES = 'Memory · Evolution';
+
 const CARD = 'var(--color-card)';
 const LINE = 'var(--color-border)';
 const TEXT = 'var(--color-text)';
@@ -101,7 +106,7 @@ function FlowDiagram() {
         <ellipse cx={314} cy={164} rx={70} ry={14} fill={CARD} stroke={LINE} />
         <path d="M244,164 L244,306 A70,14 0 0 0 384,306 L384,164" fill={CARD} stroke={LINE} />
         <ellipse cx={314} cy={164} rx={70} ry={14} fill={CARD} stroke={LINE} />
-        <text x={314} y={206} fill={TEXT} fontSize={13} fontWeight={600} textAnchor="middle">ingestion.db</text>
+        <text x={314} y={206} fill={TEXT} fontSize={13} fontWeight={600} textAnchor="middle">{QUEUE_DB_FILE}</text>
         <text x={314} y={228} fill={MUTED} fontSize={11} textAnchor="middle">{say('a source only enqueues', 'source 只负责入队')}</text>
         <text x={314} y={246} fill={MUTED} fontSize={11} textAnchor="middle">{say('one insert, never waits', '一次插入，不等待')}</text>
         <text x={314} y={264} fill={MUTED} fontSize={11} textAnchor="middle">{say('on chat; kept 30 days', '不阻塞 chat；保留 30 天')}</text>
@@ -234,8 +239,8 @@ export function CdfGuideline() {
               '每轮都读的文件会影响每一次回答，所以只有你说过的话或实测出来的结果才能进去：')}
           </p>
           <ul className="mt-2 space-y-1.5 text-small text-[var(--color-text-muted)]">
-            <li><span className="text-[var(--color-text)]">Steering · User · Tools</span> — {say('a verbatim quote of yours, then checked by a model that sees only your messages', '要有你的逐字原话，再由一个只看得到你消息的模型核对')}</li>
-            <li><span className="text-[var(--color-text)]">Memory · Evolution</span> — {say('your words or a measurement from the session or run', '你的原话，或会话 / run 里的实测数据')}</li>
+            <li><span className="text-[var(--color-text)]">{CHECKED_FILES}</span> — {say('a verbatim quote of yours, then checked by a model that sees only your messages', '要有你的逐字原话，再由一个只看得到你消息的模型核对')}</li>
+            <li><span className="text-[var(--color-text)]">{MEASURED_FILES}</span> — {say('your words or a measurement from the session or run', '你的原话，或会话 / run 里的实测数据')}</li>
             <li><span className="text-[var(--color-text)]">{say('Anything else', '其余的')}</span> — {say('kept in the project brain or the General Brain and recalled when relevant. Moved, never dropped.', '放进项目大脑或公共大脑，相关时召回。只改投，不丢弃。')}</li>
           </ul>
         </Block>

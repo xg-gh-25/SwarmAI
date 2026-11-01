@@ -15,6 +15,7 @@
  *
  * Exports: BrainMap, BrainMapTarget, BrainMapProps, MapTone
  */
+import { useTranslation } from 'react-i18next';
 import type { SectionKey } from '../../services/ddd';
 import { SECTION_ORDER, type RunTone } from './brainMapModel';
 
@@ -53,7 +54,7 @@ const P = {
   need: { x: 70, y: 56 }, eval: { x: 620, y: 56 },
 };
 /** where a Brain's Runs come from: a chat tab on this machine, or a Hive (Swarm Out) */
-const SRC = [{ key: 'chat', name: 'Chat tab' }, { key: 'hive', name: 'Hive' }] as const;
+const SRC = [{ key: 'chat', nameKey: 'ui.BrainMap.srcChat' }, { key: 'hive', nameKey: 'ui.BrainMap.srcHive' }] as const;
 
 function secPos(k: SectionKey) {
   const a = (ANG[k] * Math.PI) / 180;
@@ -140,6 +141,7 @@ function Part({ label, onClick, testid, children }: {
 }
 
 export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect, agentLine, evalLine, tones = {}, onOpen }: BrainMapProps) {
+  const { t } = useTranslation();
   const d = secPos('delivery'), k = secPos('knowledge'), g = secPos('gates');
   // outlines: the muted text colour (the border colour sinks into a dark card), and a
   // fixed width on screen however wide the map is drawn
@@ -147,7 +149,7 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
   const shown = runs.slice(0, 12);
   const cTop = P.conductor.y - 50;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Brain map" data-testid="brain-map"
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label={t('ui.BrainMap.mapAria')} data-testid="brain-map"
       className="block mx-auto max-w-[860px]">
       <defs>
         {(Object.keys(FLOW_VAR) as Flow[]).map((f) => (
@@ -164,22 +166,22 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
       <path d={`M${P.eval.x},${P.eval.y + 26} L${P.evo.x},${P.evo.y - 58}`} fill="none" style={{ stroke: 'var(--color-text-muted)' }}
         strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="1 5" strokeLinecap="round" />
 
-      <Arrow a={{ x: P.agent.x + 72, y: P.agent.y }} b={{ x: d.x - HR + 4, y: d.y }} label="reads" lx={(P.agent.x + 72 + d.x - HR) / 2} ly={P.agent.y - 16} flow="request" />
-      <Arrow a={{ x: P.agent.x, y: P.agent.y + 38 }} b={{ x: P.conductor.x - 132, y: cTop + 6 }} label="drafts, you submit" lx={150} ly={372} flow="request" />
-      <Arrow a={{ x: C.x, y: C.y + HD * 0.87 + HR - 2 }} b={{ x: C.x, y: cTop }} label="each Run uses this version" lx={C.x} ly={(C.y + HD * 0.87 + HR + cTop) / 2} />
-      <Arrow a={{ x: P.conductor.x + 132, y: P.conductor.y - 4 }} b={{ x: P.evo.x - 58, y: P.evo.y + 14 }} label="REPORT" lx={540} ly={474} />
+      <Arrow a={{ x: P.agent.x + 72, y: P.agent.y }} b={{ x: d.x - HR + 4, y: d.y }} label={t('ui.BrainMap.arrowReads')} lx={(P.agent.x + 72 + d.x - HR) / 2} ly={P.agent.y - 16} flow="request" />
+      <Arrow a={{ x: P.agent.x, y: P.agent.y + 38 }} b={{ x: P.conductor.x - 132, y: cTop + 6 }} label={t('ui.BrainMap.arrowDrafts')} lx={150} ly={372} flow="request" />
+      <Arrow a={{ x: C.x, y: C.y + HD * 0.87 + HR - 2 }} b={{ x: C.x, y: cTop }} label={t('ui.BrainMap.arrowUsesVersion')} lx={C.x} ly={(C.y + HD * 0.87 + HR + cTop) / 2} />
+      <Arrow a={{ x: P.conductor.x + 132, y: P.conductor.y - 4 }} b={{ x: P.evo.x - 58, y: P.evo.y + 14 }} label={t('ui.BrainMap.arrowReport')} lx={540} ly={474} />
       {/* around Gates, so it plainly ends at Knowledge (not under the Gates hex) */}
       <Arrow a={{ x: P.evo.x + 26, y: P.evo.y - 61 }} via={[{ x: P.evo.x + 26, y: k.y }]} b={{ x: k.x + HR * 0.87 + 3, y: k.y }}
-        label="writes knowledge" lx={P.evo.x + 26} ly={262} flow="learn" />
-      <Arrow a={{ x: P.evo.x - 40, y: P.evo.y - 42 }} b={toward(g, P.evo, HR * 0.92)} label="writes rules after your OK" dashed lx={552} ly={330} flow="approve" />
+        label={t('ui.BrainMap.arrowWritesKnowledge')} lx={P.evo.x + 26} ly={262} flow="learn" />
+      <Arrow a={{ x: P.evo.x - 40, y: P.evo.y - 42 }} b={toward(g, P.evo, HR * 0.92)} label={t('ui.BrainMap.arrowWritesRules')} dashed lx={552} ly={330} flow="approve" />
       {SRC.map((_, i) => (
         <Arrow key={i} a={{ x: 112, y: 446 + i * 44 }} b={{ x: P.conductor.x - 132, y: P.conductor.y - 6 + i * 14 }} flow="request" />
       ))}
 
       {/* the DDD flower */}
-      <Part label="Brain: open its knowledge" onClick={() => onOpen('browse')} testid="bm-brain">
+      <Part label={t('ui.BrainMap.brainAria')} onClick={() => onOpen('browse')} testid="bm-brain">
         <polygon points={hex(C.x, C.y, HR)} className="fill-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] stroke-[var(--color-primary)]" {...OUTLINE} strokeWidth={2.5} />
-        <text x={C.x} y={C.y - 3} textAnchor="middle" className="text-heading font-semibold fill-[var(--color-text)]">Brain</text>
+        <text x={C.x} y={C.y - 3} textAnchor="middle" className="text-heading font-semibold fill-[var(--color-text)]">{t('ui.BrainMap.brainTitle')}</text>
         <text x={C.x} y={C.y + 15} textAnchor="middle" className="text-small fill-[var(--color-primary)]">{version}</text>
       </Part>
       {SECTION_ORDER.map(({ key, label }) => {
@@ -195,29 +197,29 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
       })}
 
       {/* Project Agent + sources */}
-      <Part label="Project Agent" onClick={() => onOpen('agent')} testid="bm-agent">
+      <Part label={t('ui.BrainMap.agentTitle')} onClick={() => onOpen('agent')} testid="bm-agent">
         <rect x={P.agent.x - 72} y={P.agent.y - 38} width={144} height={76} rx={10} className={box} {...OUTLINE} />
         <Dot x={P.agent.x - 58} y={P.agent.y - 24} tone={tones.agent} />
-        <text x={P.agent.x} y={P.agent.y - 12} textAnchor="middle" className={TITLE}>Project Agent</text>
-        <text x={P.agent.x} y={P.agent.y + 6} textAnchor="middle" className={SUB}>delivers with you</text>
+        <text x={P.agent.x} y={P.agent.y - 12} textAnchor="middle" className={TITLE}>{t('ui.BrainMap.agentTitle')}</text>
+        <text x={P.agent.x} y={P.agent.y + 6} textAnchor="middle" className={SUB}>{t('ui.BrainMap.agentSub')}</text>
         {agentLine && <text x={P.agent.x} y={P.agent.y + 24} textAnchor="middle" className={SUB}>{agentLine}</text>}
       </Part>
       {SRC.map((s, i) => (
-        <Part key={s.key} label={`${s.name}: ${sources[s.key]} Runs in 30 days`} onClick={() => onOpen('runs')} testid={`bm-src-${s.key}`}>
+        <Part key={s.key} label={t('ui.BrainMap.srcAria', { name: t(s.nameKey), n: sources[s.key] })} onClick={() => onOpen('runs')} testid={`bm-src-${s.key}`}>
           <rect x={18} y={432 + i * 44} width={94} height={28} rx={14} className={box} {...OUTLINE} />
           <text x={65} y={450 + i * 44} textAnchor="middle" className="text-small fill-[var(--color-text)]">
-            {s.name} <tspan className="fill-[var(--color-text-muted)]">{sources[s.key]}</tspan>
+            {t(s.nameKey)} <tspan className="fill-[var(--color-text-muted)]">{sources[s.key]}</tspan>
           </text>
         </Part>
       ))}
 
       {/* the one Conductor + this brain's Runs */}
-      <Part label="Run Conductor" onClick={() => onOpen('runs')} testid="bm-conductor">
+      <Part label={t('ui.BrainMap.conductorTitle')} onClick={() => onOpen('runs')} testid="bm-conductor">
         <rect x={P.conductor.x - 132} y={cTop} width={264} height={104} rx={10} className={box} {...OUTLINE} />
         <Dot x={P.conductor.x - 118} y={cTop + 14} tone={tones.conductor} />
-        <text x={P.conductor.x} y={cTop + 22} textAnchor="middle" className={TITLE}>Run Conductor</text>
+        <text x={P.conductor.x} y={cTop + 22} textAnchor="middle" className={TITLE}>{t('ui.BrainMap.conductorTitle')}</text>
         <text x={P.conductor.x} y={cTop + 40} textAnchor="middle" className={SUB}>
-          {lanes.chat + lanes.hive ? `Chat tab ${lanes.chat} · Hive ${lanes.hive} going` : 'nothing going now'}
+          {lanes.chat + lanes.hive ? t('ui.BrainMap.conductorGoing', { chat: lanes.chat, hive: lanes.hive }) : t('ui.BrainMap.conductorIdle')}
         </text>
         {shown.map((r, i) => (
           <circle key={r.id} cx={P.conductor.x - 99 + i * 18} cy={cTop + 80} r={6.5} className={RUN_FILL[r.tone]} data-testid={`bm-run-${r.id}`}>
@@ -225,34 +227,34 @@ export function BrainMap({ version, counts, runs, lanes, sources, needs, reflect
           </circle>
         ))}
         {shown.length === 0 && (
-          <text x={P.conductor.x} y={cTop + 84} textAnchor="middle" className={SUB}>no Runs in 30 days</text>
+          <text x={P.conductor.x} y={cTop + 84} textAnchor="middle" className={SUB}>{t('ui.BrainMap.conductorNoRuns')}</text>
         )}
       </Part>
 
       {/* Reflect / Evolution */}
-      <Part label="Reflect and Evolution" onClick={() => onOpen('reflect')} testid="bm-reflect">
+      <Part label={t('ui.BrainMap.reflectAria')} onClick={() => onOpen('reflect')} testid="bm-reflect">
         <circle cx={P.evo.x} cy={P.evo.y} r={66} className="fill-[color-mix(in_srgb,var(--color-zone-cognitive)_16%,transparent)] stroke-[var(--color-zone-cognitive)] group-hover:stroke-[var(--color-primary)]" {...OUTLINE} strokeWidth={2} />
         <Dot x={P.evo.x} y={P.evo.y - 40} tone={tones.reflect} />
-        <text x={P.evo.x} y={P.evo.y - 14} textAnchor="middle" className={TITLE}>Reflect</text>
-        <text x={P.evo.x} y={P.evo.y + 4} textAnchor="middle" className={SUB}>learns from Runs</text>
+        <text x={P.evo.x} y={P.evo.y - 14} textAnchor="middle" className={TITLE}>{t('ui.BrainMap.reflectTitle')}</text>
+        <text x={P.evo.x} y={P.evo.y + 4} textAnchor="middle" className={SUB}>{t('ui.BrainMap.reflectSub')}</text>
         <text x={P.evo.x} y={P.evo.y + 22} textAnchor="middle"
-          className={SUB}>{reflect.week == null ? '…' : `${reflect.week} learned this week`}</text>
+          className={SUB}>{reflect.week == null ? '…' : t('ui.BrainMap.reflectWeek', { n: reflect.week })}</text>
       </Part>
 
       {/* You, Eval */}
-      <Part label={`You: ${needs} need you`} onClick={() => onOpen('need')} testid="bm-you">
+      <Part label={t('ui.BrainMap.youAria', { n: needs })} onClick={() => onOpen('need')} testid="bm-you">
         <circle cx={P.need.x} cy={P.need.y} r={28} {...OUTLINE} strokeWidth={2}
           className={needs ? 'fill-[color-mix(in_srgb,var(--color-status-error)_14%,transparent)] stroke-[var(--color-status-error)]'
             : 'fill-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)] stroke-[var(--color-status-success)]'} />
         <text x={P.need.x} y={P.need.y + 6} textAnchor="middle"
           className={`text-title font-semibold ${needs ? 'fill-[var(--color-status-error)]' : 'fill-[var(--color-status-success)]'}`}>{needs}</text>
-        <text x={P.need.x + 40} y={P.need.y - 3} className={TITLE}>You</text>
-        <text x={P.need.x + 40} y={P.need.y + 15} className={SUB}>review &amp; judge</text>
+        <text x={P.need.x + 40} y={P.need.y - 3} className={TITLE}>{t('ui.BrainMap.youTitle')}</text>
+        <text x={P.need.x + 40} y={P.need.y + 15} className={SUB}>{t('ui.BrainMap.youSub')}</text>
       </Part>
-      <Part label="Eval" onClick={() => onOpen('eval')} testid="bm-eval">
+      <Part label={t('ui.BrainMap.evalTitle')} onClick={() => onOpen('eval')} testid="bm-eval">
         <rect x={P.eval.x - 80} y={P.eval.y - 26} width={160} height={52} rx={10} className={box} {...OUTLINE} />
-        <text x={P.eval.x} y={P.eval.y - 5} textAnchor="middle" className={TITLE}>Eval</text>
-        <text x={P.eval.x} y={P.eval.y + 13} textAnchor="middle" className={SUB}>{evalLine ?? 'reads offline · 5 dims'}</text>
+        <text x={P.eval.x} y={P.eval.y - 5} textAnchor="middle" className={TITLE}>{t('ui.BrainMap.evalTitle')}</text>
+        <text x={P.eval.x} y={P.eval.y + 13} textAnchor="middle" className={SUB}>{evalLine ?? t('ui.BrainMap.evalDefault')}</text>
       </Part>
     </svg>
   );

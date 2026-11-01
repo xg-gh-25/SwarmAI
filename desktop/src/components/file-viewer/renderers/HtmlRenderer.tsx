@@ -36,6 +36,7 @@
  * never the <iframe> element itself.
  */
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { openExternal } from '../../../utils/openExternal';
 import { rawFileUrl, contentFileUrl } from '../utils/rawFileUrl';
 
@@ -99,6 +100,7 @@ export default function HtmlRenderer({
   fileSize,
   onStatusInfo,
 }: RendererProps) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<'rendered' | 'source'>('rendered');
   // Fit-width: default ON. Fit scales a sizer down to the panel width; Actual = 100%.
   const [fitMode, setFitMode] = useState(true);
@@ -162,7 +164,7 @@ export default function HtmlRenderer({
   if (!content) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-[var(--color-text-muted)]">
-        No HTML content available.
+        {t('ui.HtmlRenderer.noContent')}
       </div>
     );
   }
@@ -190,24 +192,24 @@ export default function HtmlRenderer({
           <button
             onClick={() => setFitMode((f) => !f)}
             className="btn-sm btn-secondary shadow-sm transition-colors"
-            title={fitMode ? 'Actual size (no fit-scaling)' : 'Fit width to panel'}
+            title={fitMode ? t('ui.HtmlRenderer.actualSizeTitle') : t('ui.HtmlRenderer.fitWidthTitle')}
             aria-pressed={fitMode}
           >
             <span className="material-symbols-outlined icon-xs">
               {fitMode ? 'width_normal' : 'fit_screen'}
             </span>
-            {fitMode ? 'Actual' : 'Fit'}
+            {fitMode ? t('ui.HtmlRenderer.actual') : t('ui.HtmlRenderer.fit')}
           </button>
         )}
         <button
           onClick={() => setMode((prev) => (prev === 'rendered' ? 'source' : 'rendered'))}
           className="btn-sm btn-secondary shadow-sm transition-colors"
-          title={mode === 'rendered' ? 'Show HTML source' : 'Show rendered view'}
+          title={mode === 'rendered' ? t('ui.HtmlRenderer.showSourceTitle') : t('ui.HtmlRenderer.showRenderedTitle')}
         >
           <span className="material-symbols-outlined icon-xs">
             {mode === 'rendered' ? 'code' : 'visibility'}
           </span>
-          {mode === 'rendered' ? 'Source' : 'Rendered'}
+          {mode === 'rendered' ? t('ui.HtmlRenderer.source') : t('ui.HtmlRenderer.rendered')}
         </button>
       </div>
 
@@ -266,10 +268,10 @@ export default function HtmlRenderer({
           <button
             onClick={openInBrowser}
             className="absolute bottom-3 right-3 z-10 btn-md btn-secondary transition-colors shadow-sm"
-            title="Open the fully-rendered page in your system browser"
+            title={t('ui.HtmlRenderer.openInBrowserTitle')}
           >
             <span className="material-symbols-outlined icon-sm">open_in_new</span>
-            Open in browser
+            {t('ui.HtmlRenderer.openInBrowser')}
           </button>
         </div>
       ) : (

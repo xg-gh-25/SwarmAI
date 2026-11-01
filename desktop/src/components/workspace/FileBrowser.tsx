@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { workspaceService } from '../../services/workspace';
 import type { WorkspaceFile } from '../../types';
@@ -97,6 +98,7 @@ const getFileIconColor = (file: WorkspaceFile): string => {
 };
 
 export function FileBrowser({ agentId, onFileSelect, className, basePath }: FileBrowserProps) {
+  const { t } = useTranslation();
   const [currentPath, setCurrentPath] = useState<string>('.');
 
   // Reset to root when basePath changes
@@ -160,7 +162,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
           <button
             onClick={() => handleBreadcrumbClick(-1)}
             className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
-            title="Root"
+            title={t('ui.FileBrowser.root')}
           >
             <span className="material-symbols-outlined icon-sm">home</span>
           </button>
@@ -186,7 +188,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
           onClick={() => refetch()}
           disabled={isFetching}
           className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-          title="Refresh"
+          title={t('common.button.refresh')}
         >
           <span
             className={clsx(
@@ -204,25 +206,25 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
         {isLoading ? (
           <div className="flex items-center justify-center h-32 text-[var(--color-text-muted)]">
             <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
-            Loading...
+            {t('common.loading')}
           </div>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center h-32 text-status-error px-4 text-center">
             <span className="material-symbols-outlined icon-md mb-2">error</span>
             <span className="text-sm">
-              {error instanceof Error ? error.message : 'Failed to load files'}
+              {error instanceof Error ? error.message : t('ui.FileBrowser.loadFailed')}
             </span>
             <button
               onClick={() => refetch()}
               className="mt-2 text-xs text-primary hover:underline"
             >
-              Try again
+              {t('awsConnect.retry')}
             </button>
           </div>
         ) : !fileList || fileList.files.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 text-[var(--color-text-muted)]">
             <span className="material-symbols-outlined icon-md mb-2">folder_off</span>
-            <span className="text-sm">Empty directory</span>
+            <span className="text-sm">{t('ui.FileBrowser.empty')}</span>
           </div>
         ) : (
           <div className="divide-y divide-[var(--color-border)]/50">

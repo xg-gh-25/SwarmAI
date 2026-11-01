@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { captureCurrentScreen } from '../../services/tauri';
 
 interface ScreenshotButtonProps {
@@ -35,6 +36,7 @@ export function ScreenshotButton({
   className,
   capture = captureCurrentScreen,
 }: ScreenshotButtonProps) {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   // Guard against setState-after-unmount if the component unmounts (e.g. tab
   // switch) while a capture is still in flight.
@@ -58,12 +60,12 @@ export function ScreenshotButton({
           ? e
           : e instanceof Error
             ? e.message
-            : 'Screenshot failed. Grant Screen Recording permission to SwarmAI in System Settings → Privacy & Security → Screen Recording.'
+            : t('ui.ScreenshotButton.failed')
       );
     } finally {
       if (mountedRef.current) setBusy(false);
     }
-  }, [disabled, canAddMore, busy, capture, onCaptured, onError]);
+  }, [disabled, canAddMore, busy, capture, onCaptured, onError, t]);
 
   const isDisabled = disabled || !canAddMore || busy;
 
@@ -81,10 +83,10 @@ export function ScreenshotButton({
       )}
       title={
         !canAddMore
-          ? 'Maximum attachments reached'
+          ? t('ui.ScreenshotButton.maxReached')
           : busy
-            ? 'Capturing screen…'
-            : 'Capture the screen you’re on and attach it'
+            ? t('ui.ScreenshotButton.capturing')
+            : t('ui.ScreenshotButton.capture')
       }
     >
       <span className="material-symbols-outlined icon-sm">screenshot_monitor</span>

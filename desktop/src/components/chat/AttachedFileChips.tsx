@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 
 /**
@@ -77,6 +78,7 @@ function getFileIcon(fileName: string): string {
  * - 4.5: ARIA attributes for screen reader compatibility
  */
 function FileChip({ file, onRemove, isFocused, onFocus, tabIndex }: FileChipProps) {
+  const { t } = useTranslation();
   const chipRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -149,8 +151,8 @@ function FileChip({ file, onRemove, isFocused, onFocus, tabIndex }: FileChipProp
           'opacity-60 group-hover:opacity-100 focus:opacity-100',
           'focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]/50'
         )}
-        title={`Remove ${displayName}`}
-        aria-label={`Remove ${displayName} from context`}
+        title={t('ui.AttachedFileChips.remove', { name: displayName })}
+        aria-label={t('ui.AttachedFileChips.removeFromContext', { name: displayName })}
         tabIndex={-1}
       >
         <span className="material-symbols-outlined icon-xs">close</span>
@@ -172,6 +174,7 @@ function FileChip({ file, onRemove, isFocused, onFocus, tabIndex }: FileChipProp
  * - 4.5: ARIA attributes for screen reader compatibility
  */
 export function AttachedFileChips({ files, onRemoveFile }: AttachedFileChipsProps): React.ReactElement | null {
+  const { t } = useTranslation();
   const [focusedIndex, setFocusedIndex] = useState<number>(-1);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -235,7 +238,7 @@ export function AttachedFileChips({ files, onRemoveFile }: AttachedFileChipsProp
     <div
       ref={containerRef}
       role="list"
-      aria-label="Attached files"
+      aria-label={t('ui.AttachedFileChips.attachedFiles')}
       className={clsx(
         'flex items-center gap-1.5 mb-3 px-3 py-2',
         'bg-[var(--color-hover)]/30 rounded-lg',

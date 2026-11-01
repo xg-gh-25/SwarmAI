@@ -20,6 +20,9 @@
  *   ChangesSelection, diffLineClass
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import {
   canvasSessionService, refreshCanvasChanges, useCanvasSession,
   type ChangedFile, type SessionChanges, type SessionLanding, type TurnChangeCard,
@@ -75,11 +78,12 @@ export function ChangesCount() {
 }
 
 export function ChangesRefresh() {
+  const { t } = useTranslation();
   const { loading, streaming } = useCanvasSession();
   return (
     <button type="button" onClick={() => void refreshCanvasChanges()}
-      title={streaming ? 'Refreshes when this turn ends' : 'Refresh'} disabled={streaming}
-      aria-label="Refresh changes" data-testid="canvas-changes-refresh"
+      title={streaming ? t('ui.CanvasChanges.refreshesAfterTurn') : t('common.button.refresh')} disabled={streaming}
+      aria-label={t('ui.CanvasChanges.refreshChanges')} data-testid="canvas-changes-refresh"
       className="ml-1 icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40 disabled:pointer-events-none">
       <span className={`material-symbols-outlined icon-sm block ${loading.changes ? 'animate-spin' : ''}`}>refresh</span>
     </button>
@@ -87,12 +91,13 @@ export function ChangesRefresh() {
 }
 
 function Delta({ ins, del }: { ins: number | null; del: number | null }) {
+  const { t } = useTranslation();
   return (
     <span className="shrink-0 text-[11px] tabular-nums whitespace-nowrap">
       {ins !== null && <span className="text-[var(--color-git-added)]">+{ins}</span>}
       {ins !== null && del !== null && ' '}
       {del !== null && <span className="text-[var(--color-git-deleted,#f85149)]">−{del}</span>}
-      {ins === null && del === null && <span className="text-[var(--color-text-dim)]">bin</span>}
+      {ins === null && del === null && <span className="text-[var(--color-text-dim)]">{t('ui.CanvasChanges.binary')}</span>}
     </span>
   );
 }
@@ -129,6 +134,7 @@ function FileRow({ turn, f, multiRepo, on, onSelect }: {
 function TurnBlock({ turn, multiRepo, selected, onSelect }: {
   turn: TurnChangeCard; multiRepo: boolean; selected: ChangesSelection; onSelect: (s: ChangesSelection) => void;
 }) {
+  const { t } = useTranslation();
   const [more, setMore] = useState(false);
   const key = changesKey(selected);
   const files = more ? turn.files : turn.files.slice(0, SHOWN);
@@ -137,7 +143,7 @@ function TurnBlock({ turn, multiRepo, selected, onSelect }: {
     <div data-testid="changes-turn" className="mb-1">
       <div className="flex items-center gap-2 min-w-0 pl-2 pr-2 pt-1 text-[11.5px] text-[var(--color-text-muted)]" title={turn.at}>
         <span className="font-semibold text-[var(--color-text)]">{when(turn.at)}</span>
-        <span>· {count === 1 ? '1 file' : `${count} files`}</span>
+        <span>· {t('ui.CanvasChanges.fileCount', { count })}</span>
       </div>
       {files.map((f) => (
         <FileRow key={`${f.gitRoot}:${f.path}`} turn={turn.id} f={f} multiRepo={multiRepo}
@@ -147,15 +153,16 @@ function TurnBlock({ turn, multiRepo, selected, onSelect }: {
       {turn.files.length > SHOWN && (
         <button type="button" onClick={() => setMore((m) => !m)}
           className={`w-full text-left pl-[18px] pr-2 py-1 rounded-md text-[11.5px] ${HOVER}`}>
-          {more ? '▾ fewer' : `▸ ${turn.files.length - SHOWN} more files`}
+          {more ? t('ui.CanvasChanges.fewer') : t('ui.CanvasChanges.moreFiles', { count: turn.files.length - SHOWN })}
         </button>
       )}
-      {turn.omitted > 0 && <div className={NOTE}>{turn.omitted} more files are not listed on this turn&apos;s card.</div>}
+      {turn.omitted > 0 && <div className={NOTE}>{t('ui.CanvasChanges.omittedOnCard', { count: turn.omitted })}</div>}
     </div>
   );
 }
 
 function LandingRow({ l, on, onSelect }: { l: SessionLanding; on: boolean; onSelect: (s: ChangesSelection) => void }) {
+  const { t } = useTranslation();
   return (
     <button type="button" data-testid="changes-landing"
       onClick={() => onSelect({ kind: 'landing', root: l.gitRoot, sha: l.new })}
@@ -165,9 +172,9 @@ function LandingRow({ l, on, onSelect }: { l: SessionLanding; on: boolean; onSel
       <span className={`flex-1 min-w-0 truncate font-mono text-[11.5px] text-[var(--color-text)] ${on ? 'font-semibold' : ''}`}>
         {l.branch} <span className="text-[var(--color-text-muted)]">→ {l.dest}</span>
       </span>
-      <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{l.count === 1 ? '1 commit' : `${l.count} commits`}</span>
-      <span className={CHIP} title={l.state === 'on' ? `${l.dest} has these commits.` : `${l.dest} was reset or rewound since.`}>
-        {l.state === 'on' ? `on ${l.dest}` : `not on ${l.dest}`}
+      <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{t('ui.CanvasChanges.commitCount', { count: l.count })}</span>
+      <span className={CHIP} title={l.state === 'on' ? t('ui.CanvasChanges.destHasCommits', { dest: l.dest }) : t('ui.CanvasChanges.destRewound', { dest: l.dest })}>
+        {l.state === 'on' ? t('ui.CanvasChanges.onDest', { dest: l.dest }) : t('ui.CanvasChanges.notOnDest', { dest: l.dest })}
       </span>
     </button>
   );
@@ -176,46 +183,47 @@ function LandingRow({ l, on, onSelect }: { l: SessionLanding; on: boolean; onSel
 /** What could not be read about the session's landings, said rather than hidden. */
 function landedNotes(c: SessionChanges): string[] {
   return [
-    ...c.unknown.map((u) => `Could not read landings in ${u.repo} (${u.reason}).`),
-    ...(c.landedTruncated ? ['More landings may exist than are listed.'] : []),
-    ...(c.unverified ? [`${c.unverified} landing record${c.unverified === 1 ? '' : 's'} could not be verified.`] : []),
+    ...c.unknown.map((u) => i18n.t('ui.CanvasChanges.landingsUnreadable', { repo: u.repo, reason: u.reason })),
+    ...(c.landedTruncated ? [i18n.t('ui.CanvasChanges.moreLandings')] : []),
+    ...(c.unverified ? [i18n.t('ui.CanvasChanges.unverified', { count: c.unverified })] : []),
   ];
 }
 
 export function ChangesNav({ selected, onSelect }: {
   selected: ChangesSelection; onSelect: (s: ChangesSelection) => void;
 }) {
+  const { t } = useTranslation();
   const { data, error, loading, sessionId } = useCanvasSession();
   // opening the tab re-reads (a landing made outside a turn shows up)
   useEffect(() => { void refreshCanvasChanges(); }, []);
   const msg = 'px-2 py-2 text-[12px] text-[var(--color-text-muted)]';
-  if (!sessionId) return <div className={msg}>No session yet.</div>;
+  if (!sessionId) return <div className={msg}>{t('ui.CanvasChanges.noSession')}</div>;
   const c = data?.changes;
   if (error && !c) {
     return (
       <div className={msg}>
-        Could not load this session&apos;s changes ({error}).{' '}
-        <button type="button" onClick={() => void refreshCanvasChanges()} className="underline hover:text-[var(--color-text)]">Retry</button>
+        {t('ui.CanvasChanges.loadFailed', { error })}{' '}
+        <button type="button" onClick={() => void refreshCanvasChanges()} className="underline hover:text-[var(--color-text)]">{t('common.button.retry')}</button>
       </div>
     );
   }
-  if (!c) return <div className={msg}>Loading…</div>;
+  if (!c) return <div className={msg}>{t('ui.CanvasChanges.loading')}</div>;
   const notes = landedNotes(c);
   if (!c.turns.length && !c.landed.length && !notes.length) {
-    return <div className={msg}>No code changes in this session yet.{!c.scannedAll && ' (Only recent messages were scanned.)'}</div>;
+    return <div className={msg}>{t('ui.CanvasChanges.noChanges')}{!c.scannedAll && ` ${t('ui.CanvasChanges.onlyRecentScanned')}`}</div>;
   }
   const key = changesKey(selected);
   const multiRepo = new Set(c.turns.flatMap((t) => t.files.map((f) => f.gitRoot))).size > 1;
   return (
     <div data-testid="changes-nav" aria-busy={loading.changes}>
-      {c.turns.length > 0 && <div className={SECTION}>Files changed</div>}
+      {c.turns.length > 0 && <div className={SECTION}>{t('ui.CanvasChanges.filesChanged')}</div>}
       {c.turns.map((t) => <TurnBlock key={t.id} turn={t} multiRepo={multiRepo} selected={selected} onSelect={onSelect} />)}
-      {c.olderTurns > 0 && <div data-testid="changes-older" className={NOTE}>{c.olderTurns} older turns are not listed.</div>}
-      {(c.landed.length > 0 || notes.length > 0) && <div className={`${SECTION} mt-1`}>Landed</div>}
+      {c.olderTurns > 0 && <div data-testid="changes-older" className={NOTE}>{t('ui.CanvasChanges.olderTurns', { count: c.olderTurns })}</div>}
+      {(c.landed.length > 0 || notes.length > 0) && <div className={`${SECTION} mt-1`}>{t('ui.CanvasChanges.landed')}</div>}
       {c.landed.map((l) => <LandingRow key={`${l.gitRoot}@${l.new}`} l={l} on={key === `${l.gitRoot}@${l.new}`} onSelect={onSelect} />)}
       {notes.map((n) => <div key={n} data-testid="changes-landed-note" className={NOTE}>{n}</div>)}
       {!c.scannedAll && (
-        <div data-testid="changes-not-scanned" className={NOTE}>Some earlier messages of this session were not scanned.</div>
+        <div data-testid="changes-not-scanned" className={NOTE}>{t('ui.CanvasChanges.notScanned')}</div>
       )}
     </div>
   );
@@ -233,13 +241,14 @@ export function diffLineClass(line: string): string {
 type PatchState = { diff: string; truncated: boolean } | { error: string } | null;
 
 function PatchView({ state, gone }: { state: PatchState; gone: string }) {
-  if (!state) return <div className="py-2 text-[12px] text-[var(--color-text-muted)]">Loading diff…</div>;
+  const { t } = useTranslation();
+  if (!state) return <div className="py-2 text-[12px] text-[var(--color-text-muted)]">{t('ui.CanvasChanges.loadingDiff')}</div>;
   if ('error' in state) return <div className="py-2 text-[12px] text-[var(--color-text-muted)]">{state.error || gone}</div>;
   const lines = state.diff.split('\n').filter((l) => !l.startsWith('diff --git') && !l.startsWith('index '));
   return (
     <div data-testid="changes-patch" className="mt-2 rounded-lg border border-[var(--color-border)] overflow-auto font-mono text-[11.5px] leading-[1.55]">
       {lines.map((l, i) => <div key={i} className={`px-2.5 whitespace-pre ${diffLineClass(l)}`}>{l || ' '}</div>)}
-      {state.truncated && <div className="px-2.5 py-1 text-[var(--color-text-dim)]">Diff truncated.</div>}
+      {state.truncated && <div className="px-2.5 py-1 text-[var(--color-text-dim)]">{t('ui.CanvasChanges.diffTruncated')}</div>}
     </div>
   );
 }
@@ -251,7 +260,7 @@ function usePatch(load: () => Promise<{ diff: string; truncated: boolean } | nul
     setState(null);
     load()
       .then((d) => { if (live) setState(d ?? { error: '' }); })
-      .catch((e) => { if (live) setState({ error: `Diff unavailable (${e instanceof Error ? e.message : String(e)}).` }); });
+      .catch((e) => { if (live) setState({ error: i18n.t('ui.CanvasChanges.diffUnavailable', { error: e instanceof Error ? e.message : String(e) }) }); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are the caller's keys
   }, deps);
@@ -261,6 +270,7 @@ function usePatch(load: () => Promise<{ diff: string; truncated: boolean } | nul
 /** A turn file's diff: its card row's two trees, read in the row's repo. A binary or
  *  "file only" row (the card's own `binary` / `diffable`) is not requested. */
 function FileDiff({ f }: { f: ChangedFile }) {
+  const { t } = useTranslation();
   const { sessionId } = useCanvasSession();
   const noDiff = f.binary === true || f.diffable === false;
   const state = usePatch(async () => {
@@ -271,14 +281,15 @@ function FileDiff({ f }: { f: ChangedFile }) {
   if (noDiff) {
     return (
       <div data-testid="changes-no-diff" className="py-2 text-[12px] text-[var(--color-text-muted)]">
-        {f.binary ? 'A binary file: no text diff.' : 'Too large to show as a diff.'}
+        {f.binary ? t('ui.CanvasChanges.binaryNoDiff') : t('ui.CanvasChanges.tooLarge')}
       </div>
     );
   }
-  return <PatchView state={state} gone="The diff is no longer available." />;
+  return <PatchView state={state} gone={t('ui.CanvasChanges.diffGone')} />;
 }
 
 function LandingDetail({ landing }: { landing: SessionLanding }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState<string | null>(landing.files.length === 1 ? landing.files[0].path : null);
   useEffect(() => { setOpen(landing.files.length === 1 ? landing.files[0].path : null); }, [landing]);
   return (
@@ -288,7 +299,7 @@ function LandingDetail({ landing }: { landing: SessionLanding }) {
           <li key={s.sha} className="truncate"><span className="font-mono text-[var(--color-text-muted)]">{s.sha}</span> {s.subject}</li>
         ))}
         {landing.count > landing.subjects.length && (
-          <li className="text-[var(--color-text-muted)]">{landing.count - landing.subjects.length} more commits</li>
+          <li className="text-[var(--color-text-muted)]">{t('ui.CanvasChanges.moreCommits', { count: landing.count - landing.subjects.length })}</li>
         )}
       </ul>
       {landing.files.map((f) => (
@@ -303,13 +314,14 @@ function LandingDetail({ landing }: { landing: SessionLanding }) {
         </div>
       ))}
       {!!landing.omitted && (
-        <div className="px-2 py-1 text-[11.5px] text-[var(--color-text-muted)]">{landing.omitted} more files are not listed.</div>
+        <div className="px-2 py-1 text-[11.5px] text-[var(--color-text-muted)]">{t('ui.CanvasChanges.moreFilesNotListed', { count: landing.omitted })}</div>
       )}
     </div>
   );
 }
 
 export function ChangesDetail({ selected }: { selected: ChangesSelection }) {
+  const { t } = useTranslation();
   const c = useChanges();
   const turn = selected?.kind === 'file' ? c?.turns.find((t) => t.id === selected.turn) : undefined;
   const file = selected?.kind === 'file' ? turn?.files.find((f) => f.path === selected.path && f.gitRoot === selected.root)
@@ -319,15 +331,16 @@ export function ChangesDetail({ selected }: { selected: ChangesSelection }) {
   if (!file && !landing) {
     return (
       <div className="h-full flex items-center justify-center text-[12px] text-[var(--color-text-muted)]">
-        Select a file or a landing.
+        {t('ui.CanvasChanges.selectSomething')}
       </div>
     );
   }
   // One title line: what (icon + name, or branch → destination) · repo / state · +/−.
   const name = file ? splitPath(file.path)[0] : '';
   const state = file
-    ? `${file.repo} · turn at ${when(turn!.at)}`
-    : `${landing!.repo} · ${landing!.count === 1 ? '1 commit' : `${landing!.count} commits`} · ${landing!.state === 'on' ? 'on' : 'not on'} ${landing!.dest}`;
+    ? `${file.repo} · ${t('ui.CanvasChanges.turnAt', { when: when(turn!.at) })}`
+    : `${landing!.repo} · ${t('ui.CanvasChanges.commitCount', { count: landing!.count })} · ${landing!.state === 'on'
+      ? t('ui.CanvasChanges.onDest', { dest: landing!.dest }) : t('ui.CanvasChanges.notOnDest', { dest: landing!.dest })}`;
   return (
     <div data-testid="changes-detail" className="h-full flex flex-col">
       <div className="flex items-center gap-2 min-w-0 h-9 px-3 border-b border-[var(--color-border)] text-[11.5px] text-[var(--color-text-muted)]"

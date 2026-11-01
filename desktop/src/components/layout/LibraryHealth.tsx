@@ -16,6 +16,7 @@
  * @exports LibraryHealth
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import api from '../../services/api';
 
@@ -39,6 +40,7 @@ const KIND_TINT: Record<HealthFinding['kind'], string> = {
 };
 
 export function LibraryHealth() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   // Which delete-finding row is currently awaiting confirm (keyed by kind — only
   // one delete finding exists, but keying is explicit + future-proof).
@@ -68,7 +70,7 @@ export function LibraryHealth() {
   if (isLoading || isError || !data) {
     return isError ? (
       <div data-testid="library-health-error" className="text-meta text-[var(--color-text-faint)]">
-        health check unavailable
+        {t('ui.LibraryHealth.unavailable')}
       </div>
     ) : null;
   }
@@ -77,7 +79,7 @@ export function LibraryHealth() {
     return (
       <div data-testid="library-health-clean" className="flex items-center gap-1.5 text-meta text-[var(--color-text-faint)]">
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-status-success)' }} aria-hidden />
-        Healthy — nothing to clean
+        {t('ui.LibraryHealth.healthy')}
       </div>
     );
   }
@@ -85,7 +87,7 @@ export function LibraryHealth() {
   return (
     <div data-testid="library-health" className="flex flex-col gap-2">
       <div className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-        Health
+        {t('ui.LibraryHealth.title')}
       </div>
       {findings.map((f) => {
         const isConfirming = confirming === f.kind;
@@ -116,21 +118,21 @@ export function LibraryHealth() {
                   </button>
                 ) : (
                   <div className="flex items-center gap-1.5">
-                    <span className="text-meta text-[var(--color-text-muted)]">Delete {f.count}?</span>
+                    <span className="text-meta text-[var(--color-text-muted)]">{t('ui.LibraryHealth.deleteCount', { count: f.count })}</span>
                     <button
                       data-testid={`library-health-confirm-${f.kind}`}
                       disabled={busy}
                       onClick={() => action.mutate({ kind: f.kind, paths: f.paths, confirm: true })}
                       className="btn-sm btn-danger disabled:opacity-60"
                     >
-                      {busy ? '…' : 'Yes, delete'}
+                      {busy ? '…' : t('ui.LibraryHealth.yesDelete')}
                     </button>
                     <button
                       data-testid={`library-health-cancel-${f.kind}`}
                       onClick={() => setConfirming(null)}
                       className="text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                     >
-                      cancel
+                      {t('ui.LibraryHealth.cancel')}
                     </button>
                   </div>
                 )}
@@ -140,7 +142,7 @@ export function LibraryHealth() {
         );
       })}
       {action.isError && (
-        <div className="text-meta text-[var(--color-status-error)]">Action failed — see logs.</div>
+        <div className="text-meta text-[var(--color-status-error)]">{t('ui.LibraryHealth.actionFailed')}</div>
       )}
     </div>
   );

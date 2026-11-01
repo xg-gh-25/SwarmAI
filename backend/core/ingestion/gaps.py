@@ -156,7 +156,7 @@ def close_gap(project: str | None, gap_id: str, *, closed_by: str, note: str,
     if data[unit.byte_start:unit.byte_end] != unit.text.encode("utf-8"):
         return "stale"                        # the parse is of another version
     day = on or datetime.now(timezone.utc).date().isoformat()
-    reason = _NOTE_UNSAFE.sub(" ", f"已由 {closed_by} 关闭：{note}，{day}").strip()
+    reason = _NOTE_UNSAFE.sub(" ", f"Closed by {closed_by}: {note}, {day}").strip()
     try:
         withdraw(unit.anchor, reason[:500], actor=f"cdf:{closed_by}", status="closed")
     except WholeDocument:

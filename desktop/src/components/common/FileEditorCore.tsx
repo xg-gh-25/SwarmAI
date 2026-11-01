@@ -20,6 +20,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import hljs from 'highlight.js';
 import Button from './Button';
 import type { GitStatus } from '../../types';
@@ -321,6 +322,7 @@ function SelectionCommentPopover({
   onSubmit: (text: string) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -370,7 +372,7 @@ function SelectionCommentPopover({
     >
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-hover)] rounded-t-lg">
         <span className="text-xs text-[var(--color-text-muted)] font-medium">
-          Comment on selection
+          {t('ui.FileEditorCore.commentOnSelection')}
         </span>
         <button
           onClick={onCancel}
@@ -385,7 +387,7 @@ function SelectionCommentPopover({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type your instruction..."
+          placeholder={t('ui.FileEditorCore.instructionPlaceholder')}
           rows={COMMENT_TEXTAREA_ROWS}
           className={COMMENT_TEXTAREA_CLASS}
           data-testid="selection-comment-input"
@@ -396,7 +398,7 @@ function SelectionCommentPopover({
           onClick={onCancel}
           className="px-2 py-1 text-xs rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
         >
-          Cancel
+          {t('common.button.cancel')}
         </button>
         <button
           onClick={() => { const trimmed = text.trim(); if (trimmed) onSubmit(trimmed); }}
@@ -405,11 +407,11 @@ function SelectionCommentPopover({
           data-testid="selection-comment-send"
         >
           <span className="material-symbols-outlined icon-xs">send</span>
-          Send
+          {t('common.button.send')}
         </button>
       </div>
       <div className="px-3 pb-1.5 text-[11px] text-[var(--color-text-dim)]">
-        ⌘+Enter to send · Esc to cancel
+        {t('ui.FileEditorCore.sendHint')}
       </div>
     </div>,
     document.body,
@@ -460,6 +462,7 @@ function DiffView({
   const maxOld = lines.reduce((m, l) => Math.max(m, l.oldLineNumber ?? 0), 0);
   const maxNew = lines.reduce((m, l) => Math.max(m, l.newLineNumber ?? 0), 0);
   const gutterW = `${Math.max(3, String(Math.max(maxOld, maxNew)).length)}ch`;
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLPreElement>(null);
   const isInteractive = !!onLineClick;
 
@@ -502,7 +505,7 @@ function DiffView({
             )}
             onClick={isInteractive ? () => onLineClick!(i) : undefined}
             role={isInteractive ? 'button' : undefined}
-            aria-label={isInteractive ? `Comment on diff line ${i + 1}` : undefined}
+            aria-label={isInteractive ? t('ui.FileEditorCore.commentOnDiffLine', { line: i + 1 }) : undefined}
           >
             {/* Two distinct gutters — OLD (before) is faint, NEW (after) is
                 normal, separated by a 2px divider, so the columns read as
@@ -515,7 +518,7 @@ function DiffView({
                 line.type === 'removed' && 'bg-[var(--color-git-deleted)]/[0.08]',
               )}
               style={{ width: gutterW }}
-              title="line before"
+              title={t('ui.FileEditorCore.lineBefore')}
             >
               {line.oldLineNumber ?? ''}
             </span>
@@ -525,7 +528,7 @@ function DiffView({
                 line.type === 'added' && 'bg-[var(--color-git-added)]/[0.08]',
               )}
               style={{ width: gutterW }}
-              title="line after"
+              title={t('ui.FileEditorCore.lineAfter')}
             >
               {line.newLineNumber ?? ''}
             </span>
@@ -536,7 +539,7 @@ function DiffView({
               {line.content}
             </span>
             {hasComment && (
-              <span className="shrink-0 pr-2 text-[11px] self-center" title="Has comment">💬</span>
+              <span className="shrink-0 pr-2 text-[11px] self-center" title={t('ui.FileEditorCore.hasComment')}>💬</span>
             )}
           </div>
         );
@@ -599,6 +602,7 @@ function SearchBar({
   /** True when search is unavailable (file too large for sync scan). */
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -619,10 +623,11 @@ function SearchBar({
   };
 
   const matchDisplay = disabled
-    ? 'search disabled (large file)'
-    : totalMatches > 0
-      ? `${currentMatch + 1} of ${totalMatches}`
-      : '0 of 0';
+    ? t('ui.FileEditorCore.searchDisabled')
+    : t('ui.FileEditorCore.matchCount', {
+        current: totalMatches > 0 ? currentMatch + 1 : 0,
+        total: totalMatches,
+      });
 
   return (
     <div
@@ -635,7 +640,7 @@ function SearchBar({
         value={searchQuery}
         onChange={(e) => onSearchChange(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Find..."
+        placeholder={t('ui.FileEditorCore.findPlaceholder')}
         className="w-40 px-2 py-0.5 text-xs rounded bg-[var(--color-background)] text-[var(--color-text)] border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)]"
         data-testid="search-input"
       />
@@ -646,7 +651,7 @@ function SearchBar({
         onClick={onPrevious}
         disabled={totalMatches === 0}
         className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-40"
-        aria-label="Previous match"
+        aria-label={t('ui.FileEditorCore.previousMatch')}
       >
         <span className="material-symbols-outlined icon-sm">keyboard_arrow_up</span>
       </button>
@@ -654,14 +659,14 @@ function SearchBar({
         onClick={onNext}
         disabled={totalMatches === 0}
         className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-40"
-        aria-label="Next match"
+        aria-label={t('ui.FileEditorCore.nextMatch')}
       >
         <span className="material-symbols-outlined icon-sm">keyboard_arrow_down</span>
       </button>
       <button
         onClick={onClose}
         className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]"
-        aria-label="Close search"
+        aria-label={t('ui.FileEditorCore.closeSearch')}
       >
         <span className="material-symbols-outlined icon-sm">close</span>
       </button>
@@ -695,6 +700,7 @@ export default function FileEditorCore({
   closeSignal,
   onViewChange,
 }: FileEditorCoreProps) {
+  const { t } = useTranslation();
   // The file's rendered preview, if it has one — the ONE table in ./filePreviews
   // (md / svg / ipynb / mermaid; canvas-file-types.md P3).
   const previewKind = previewKindOf(fileName);
@@ -1523,10 +1529,10 @@ export default function FileEditorCore({
           : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
       )}
       data-testid="review-mode-toggle"
-      title={review.isReviewMode ? 'Exit review mode' : 'Review — click line numbers to add comments'}
+      title={review.isReviewMode ? t('ui.FileEditorCore.exitReviewModeTitle') : t('ui.FileEditorCore.reviewModeTitle')}
     >
       <span className="material-symbols-outlined icon-sm">rate_review</span>
-      {!iconOnly && (review.isReviewMode ? 'Exit Review' : 'Review')}
+      {!iconOnly && (review.isReviewMode ? t('ui.FileEditorCore.exitReview') : t('ui.FileEditorCore.review'))}
       {review.comments.length > 0 && (
         <span className="ml-0.5 px-1 py-px rounded-full bg-amber-500/30 text-[11px] font-bold">
           {review.comments.length}
@@ -1557,10 +1563,10 @@ export default function FileEditorCore({
         }}
         className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
         data-testid="open-in-browser-btn"
-        title={useBrowser ? 'Open in browser' : 'Open with system app'}
+        title={useBrowser ? t('ui.FileEditorCore.openInBrowser') : t('ui.FileEditorCore.openWithSystemApp')}
       >
         <span className="material-symbols-outlined icon-sm">open_in_browser</span>
-        {!iconOnly && 'Open'}
+        {!iconOnly && t('ui.FileEditorCore.open')}
       </button>
     );
   })();
@@ -1577,7 +1583,7 @@ export default function FileEditorCore({
         await doReload();
       }}
       className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors')}
-      title="Reload file from disk"
+      title={t('ui.FileEditorCore.reloadFromDisk')}
       data-testid="file-editor-reload"
     >
       <span className="material-symbols-outlined icon-sm">refresh</span>
@@ -1586,7 +1592,7 @@ export default function FileEditorCore({
   const copyPathBtn = (
     <CopyPathButton
       path={getAbsolutePath()}
-      label={iconOnly ? undefined : 'Copy Path'}
+      label={iconOnly ? undefined : t('common.copy.path')}
       className={clsx(toolBtn, 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]')}
     />
   );
@@ -1601,12 +1607,12 @@ export default function FileEditorCore({
           : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
       )}
       data-testid="attach-to-chat-btn"
-      title={isAttached || attachFeedback ? 'Attached to chat' : 'Attach to chat'}
+      title={isAttached || attachFeedback ? t('ui.FileEditorCore.attachedToChat') : t('ui.FileEditorCore.attachToChat')}
     >
       <span className="material-symbols-outlined icon-sm">
         {isAttached || attachFeedback ? 'check_circle' : 'attach_file'}
       </span>
-      {!iconOnly && (isAttached || attachFeedback ? 'Attached' : 'Attach')}
+      {!iconOnly && (isAttached || attachFeedback ? t('ui.FileEditorCore.attached') : t('ui.FileEditorCore.attach'))}
     </button>
   ) : null;
 
@@ -1638,17 +1644,17 @@ export default function FileEditorCore({
     if (hasPreview) setPreviewOn(v === 'preview');
   };
   const views = [
-    ...(hasPreview ? [['preview', 'Preview'] as const] : []),
-    ['source', 'Edit'] as const,
-    ['changes', 'Changes'] as const,
+    ...(hasPreview ? [['preview', t('ui.FileEditorCore.preview')] as const] : []),
+    ['source', t('common.button.edit')] as const,
+    ['changes', t('ui.FileEditorCore.changes')] as const,
   ];
   const panelBar = (
     <div
       className="editor-float-ink absolute inset-x-0 bottom-0 z-[3] flex items-end gap-2 px-2.5 pb-2.5 pointer-events-none"
       data-testid="editor-panel-bar"
     >
-      <div className="editor-float-group pointer-events-auto" role="toolbar" aria-label="File view and actions">
-        <div role="radiogroup" aria-label="View" className="flex items-center gap-px">
+      <div className="editor-float-group pointer-events-auto" role="toolbar" aria-label={t('ui.FileEditorCore.fileViewAndActions')}>
+        <div role="radiogroup" aria-label={t('ui.FileEditorCore.view')} className="flex items-center gap-px">
           {views.map(([id, label]) => (
             <button
               key={id}
@@ -1659,7 +1665,7 @@ export default function FileEditorCore({
               onClick={() => pickView(id)}
               data-testid={`editor-view-${id}`}
               title={id === 'changes'
-                ? (baselinePending && !showDiff ? 'Loading the committed version…' : changesOff ? 'No changes against the original' : 'Show changes (diff)')
+                ? (baselinePending && !showDiff ? t('ui.FileEditorCore.loadingCommitted') : changesOff ? t('ui.FileEditorCore.noChanges') : t('ui.FileEditorCore.showChangesTitle'))
                 : undefined}
               className={clsx(
                 'h-6 px-2 rounded-md text-[11.5px] transition-colors',
@@ -1682,15 +1688,15 @@ export default function FileEditorCore({
         {syncDisabled && (
           <span
             className="px-1.5 text-[11px] text-[var(--color-warning,#d97706)] whitespace-nowrap"
-          title="Syntax highlighting, search, and diff are disabled on large files to keep the editor responsive."
+          title={t('ui.FileEditorCore.largeFileTitle')}
             data-testid="large-file-notice"
           >
-            Large file
+            {t('ui.FileEditorCore.largeFile')}
           </span>
         )}
         {showDiff && review.comments.length === 0 && (
           <span className="px-1.5 text-[11px] text-[var(--color-text-muted)] whitespace-nowrap" data-testid="diff-comment-hint">
-            Click a line to comment
+            {t('ui.FileEditorCore.clickLineToComment')}
           </span>
         )}
       </div>
@@ -1702,11 +1708,11 @@ export default function FileEditorCore({
           onClick={handleSave}
           isLoading={isSaving}
           disabled={showDiff}
-          title={showDiff ? 'Back to Source or Preview to save' : 'Save (⌘S)'}
+          title={showDiff ? t('ui.FileEditorCore.backToSave') : t('ui.FileEditorCore.saveShortcut')}
           className="pointer-events-auto shadow-[0_2px_8px_rgba(0,0,0,0.18)]"
           data-testid="file-editor-save"
         >
-          Save
+          {t('common.button.save')}
         </Button>
       )}
     </div>
@@ -1747,7 +1753,7 @@ export default function FileEditorCore({
                 <BreadcrumbBar filePath={filePath} />
                 {hasUnsavedEdits && (
                   <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--color-warning)] bg-opacity-20 text-[var(--color-warning)] shrink-0">
-                    Modified
+                    {t('ui.FileEditorCore.modified')}
                   </span>
                 )}
               </>
@@ -1758,7 +1764,7 @@ export default function FileEditorCore({
             {previewKind && (
               <button
                 onClick={() => { setPreviewOn((p) => !p); if (showDiff) setShowDiff(false); }}
-                title={previewOn ? 'Edit source' : 'Preview'}
+                title={previewOn ? t('ui.FileEditorCore.editSource') : t('ui.FileEditorCore.preview')}
                 className={clsx(
                   toolBtn, 'transition-colors',
                   previewOn
@@ -1770,7 +1776,7 @@ export default function FileEditorCore({
                 <span className="material-symbols-outlined icon-sm">
                   {previewOn ? 'edit' : 'visibility'}
                 </span>
-                {!iconOnly && (previewOn ? 'Edit' : 'Preview')}
+                {!iconOnly && (previewOn ? t('common.button.edit') : t('ui.FileEditorCore.preview'))}
               </button>
             )}
             {reloadBtn}
@@ -1787,12 +1793,12 @@ export default function FileEditorCore({
                 !isDirty && !showDiff && 'opacity-40 cursor-not-allowed'
               )}
               data-testid="show-changes-toggle"
-              title={showDiff ? 'Back to edit' : 'Show changes (diff)'}
+              title={showDiff ? t('ui.FileEditorCore.backToEditTitle') : t('ui.FileEditorCore.showChangesTitle')}
             >
               <span className="material-symbols-outlined icon-sm">
                 {showDiff ? 'edit' : 'difference'}
               </span>
-              {!iconOnly && (showDiff ? 'Back to Edit' : 'Show Changes')}
+              {!iconOnly && (showDiff ? t('ui.FileEditorCore.backToEdit') : t('ui.FileEditorCore.showChanges'))}
             </button>
             {openExternalBtn}
             {copyPathBtn}
@@ -1802,8 +1808,8 @@ export default function FileEditorCore({
               <button
                 onClick={onToggleMode}
                 className="icon-btn text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-                aria-label="Dock as panel"
-                title="Dock as side panel"
+                aria-label={t('ui.FileEditorCore.dockAsPanel')}
+                title={t('ui.FileEditorCore.dockAsSidePanel')}
                 data-testid="mode-toggle"
               >
                 <span className="material-symbols-outlined icon-sm">close_fullscreen</span>
@@ -1812,7 +1818,7 @@ export default function FileEditorCore({
             <button
               onClick={handleCloseAttempt}
               className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-              aria-label="Close"
+              aria-label={t('common.button.close')}
             >
               <span className="material-symbols-outlined icon-md">close</span>
             </button>
@@ -1833,11 +1839,11 @@ export default function FileEditorCore({
           >
             <button className="btn-sm btn-primary" onClick={() => { setCommentMark(lastSelectionRef.current); setShowSelectionComment(true); }} data-testid="selection-comment-btn">
               <span className="material-symbols-outlined icon-xs">comment</span>
-              Comment
+              {t('ui.FileEditorCore.comment')}
             </button>
             <button className="btn-sm btn-ghost" onClick={handleAttachSelection} data-testid="selection-attach-btn">
               <span className="material-symbols-outlined icon-xs">attach_file</span>
-              Attach to chat
+              {t('ui.FileEditorCore.attachToChat')}
             </button>
           </div>,
           document.body,
@@ -1856,7 +1862,7 @@ export default function FileEditorCore({
             className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0"
             data-testid="readonly-banner"
           >
-            <span>System Default — This file is managed by SwarmAI and refreshed on every startup.</span>
+            <span>{t('ui.FileEditorCore.readonlyBanner')}</span>
           </div>
         )}
 
@@ -1918,7 +1924,7 @@ export default function FileEditorCore({
               >
                 <div className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0">
                   <span className="material-symbols-outlined icon-xs">info</span>
-                  <span>Large file — preview disabled to keep the panel responsive. Showing raw source.</span>
+                  <span>{t('ui.FileEditorCore.largePreviewNotice')}</span>
                 </div>
                 <pre className="m-0 p-4 font-mono text-sm leading-6 whitespace-pre-wrap break-words [word-break:break-all]">
                   {content}
@@ -2004,12 +2010,12 @@ export default function FileEditorCore({
                     {/* Confirm/Redo floating bar */}
                     <div className="absolute top-2 right-2 z-[2] flex items-center gap-1 px-2 py-1 rounded-lg bg-green-500/15 border border-green-500/30 backdrop-blur-sm">
                       <span className="text-xs text-green-600 dark:text-green-400 font-medium">
-                        {highlightedLines.size} line{highlightedLines.size > 1 ? 's' : ''} changed
+                        {t('ui.FileEditorCore.linesChanged', { count: highlightedLines.size })}
                       </span>
                       <button
                         onClick={() => setHighlightedLines(new Set())}
                         className="btn-sm btn-success dark:text-green-300 transition-colors"
-                        title="Dismiss highlights"
+                        title={t('ui.FileEditorCore.dismissHighlights')}
                       >
                         ✓
                       </button>
@@ -2031,9 +2037,9 @@ export default function FileEditorCore({
                           setHighlightedLines(new Set());
                         }}
                         className="btn-sm btn-warning dark:text-amber-300 transition-colors"
-                        title="Request changes to these lines"
+                        title={t('ui.FileEditorCore.requestChanges')}
                       >
-                        ↩ Redo
+                        ↩ {t('ui.FileEditorCore.redo')}
                       </button>
                     </div>
                   </>
@@ -2142,7 +2148,7 @@ export default function FileEditorCore({
           <div className="flex items-center gap-2 px-4 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 shrink-0">
             <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">touch_app</span>
             <span className="text-xs text-[var(--color-text-muted)]">
-              Click any line to add review comments
+              {t('ui.FileEditorCore.clickAnyLineToReview')}
             </span>
           </div>
         )}
@@ -2162,10 +2168,10 @@ export default function FileEditorCore({
             {syncDisabled && (
               <span
                 className="px-2 py-1 rounded bg-[var(--color-hover)] text-[var(--color-warning,#d97706)]"
-                title="Syntax highlighting, search, and diff are disabled on large files to keep the editor responsive."
+                title={t('ui.FileEditorCore.largeFileTitle')}
                 data-testid="large-file-notice"
               >
-                Large file — highlighting & search disabled
+                {t('ui.FileEditorCore.largeFileFooter')}
               </span>
             )}
           </div>
@@ -2183,7 +2189,7 @@ export default function FileEditorCore({
                 disabled={isSaving}
                 data-testid="file-editor-cancel"
               >
-                Cancel
+                {t('common.button.cancel')}
               </Button>
             )}
             <Button
@@ -2194,7 +2200,7 @@ export default function FileEditorCore({
               disabled={!hasUnsavedEdits || showDiff || readonly}
               data-testid="file-editor-save"
             >
-              Save
+              {t('common.button.save')}
             </Button>
           </div>
         </div>
@@ -2214,14 +2220,14 @@ export default function FileEditorCore({
                 warning
               </span>
               <h3 id="unsaved-warning-title" className="text-lg font-semibold text-[var(--color-text)]">
-                Unsaved Changes
+                {t('ui.FileEditorCore.unsavedTitle')}
               </h3>
             </div>
             <p className="text-[var(--color-text-muted)] mb-6">
-              You have unsaved changes in <strong>{fileName}</strong>.{' '}
+              {t('ui.FileEditorCore.unsavedBefore')}<strong>{fileName}</strong>{t('ui.FileEditorCore.unsavedAfter')}
               {reloadPending
-                ? 'Discard them and reload the file from disk?'
-                : 'Do you want to discard them?'}
+                ? t('ui.FileEditorCore.unsavedReloadQuestion')
+                : t('ui.FileEditorCore.unsavedDiscardQuestion')}
             </p>
             <div className="flex justify-end gap-2">
               <Button
@@ -2230,7 +2236,7 @@ export default function FileEditorCore({
                 onClick={handleContinueEditing}
                 data-testid="unsaved-warning-continue"
               >
-                Continue Editing
+                {t('ui.FileEditorCore.continueEditing')}
               </Button>
               <Button
                 variant="danger"
@@ -2238,7 +2244,7 @@ export default function FileEditorCore({
                 onClick={reloadPending ? handleDiscardAndReload : handleDiscardChanges}
                 data-testid="unsaved-warning-discard"
               >
-                {reloadPending ? 'Discard & Reload' : 'Discard Changes'}
+                {reloadPending ? t('ui.FileEditorCore.discardAndReload') : t('ui.FileEditorCore.discardChanges')}
               </Button>
             </div>
           </div>

@@ -28,7 +28,8 @@ import { OVERLAY_CHUNK } from './overlayChunks';
 class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }), initReactI18next: { type: '3rdParty', init: () => {} } }));
+// react-i18next is not mocked: the surfaces render with the app's i18n (test-setup),
+// so Trans and every other react-i18next export they use are the real ones.
 
 // Stub every service a registered surface self-fetches, to a benign empty shape.
 vi.mock('../../services/todos', () => ({

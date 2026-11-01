@@ -20,6 +20,7 @@
  * @exports CMBrainOverlay
  */
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
@@ -112,11 +113,12 @@ interface ArchiveSearchResp { results: ArchiveSearchHit[]; q: string; source: Ar
 // The Needs-you queue's intent-bearing label + a one-line explainer stating WHAT it
 // governs and what its `conf` means there. (Knowledge needs no queue: CDF judges and
 // writes it.)
+// The values are i18n keys; render them with t().
 const QUEUE_META: Record<'approve', { label: string; conf_meaning: string; explainer: string }> = {
   approve: {
-    label: 'Governance',
-    conf_meaning: 'recurrence confidence',
-    explainer: 'Proposed rules for how the agent behaves: Governance Candidates with 3× evidence, already checked against the existing rules.',
+    label: 'ui.CMBrainOverlay.queueGovernance',
+    conf_meaning: 'ui.CMBrainOverlay.queueGovernanceConf',
+    explainer: 'ui.CMBrainOverlay.queueGovernanceExplainer',
   },
 };
 
@@ -157,6 +159,7 @@ function useContextHealth(enabled: boolean) {
  * are `enabled: true` because the component only exists while the surface is open.
  */
 export function CMBrainContent() {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<TabKey>('context');
   const qc = useQueryClient();
 
@@ -212,7 +215,7 @@ export function CMBrainContent() {
           <NorthStarRail ns={data?.north_star} failed={healthErr && !data} />
 
           <div>
-            <SectionLabel>Current load</SectionLabel>
+            <SectionLabel>{t('ui.CMBrainOverlay.currentLoad')}</SectionLabel>
             <div className="mt-1 flex items-baseline gap-1.5">
               <span
                 className="text-display font-semibold"
@@ -221,25 +224,25 @@ export function CMBrainContent() {
                 {block ? fmtTokens(block.total_tokens) : '—'}
               </span>
               <span className="text-small text-[var(--color-text-muted)]">
-                / {block ? fmtTokens(block.budget) : '—'} warning line
+                {t('ui.CMBrainOverlay.ofBudget', { budget: block ? fmtTokens(block.budget) : '—' })}
               </span>
             </div>
             {healthErr && !block && (
-              <div className="mt-1 text-meta text-[var(--color-status-warning)]">couldn’t load — not “0”</div>
+              <div className="mt-1 text-meta text-[var(--color-status-warning)]">{t('ui.CMBrainOverlay.couldNotLoadNotZero')}</div>
             )}
             {block?.over_budget && <BudgetAlert block={block} />}
           </div>
 
           {/* 30-day token growth — from the daily snapshot series (collecting until >=2 pts) */}
           <div>
-            <SectionLabel>30-day token growth</SectionLabel>
+            <SectionLabel>{t('ui.CMBrainOverlay.tokenGrowth30d')}</SectionLabel>
             <div className="mt-1.5">
               <RailTrend trend={trend} />
             </div>
           </div>
 
           <div>
-            <SectionLabel>Needs you</SectionLabel>
+            <SectionLabel>{t('ui.CMBrainOverlay.needsYou')}</SectionLabel>
             {needsErr ? (
               // B1: don't show a false "0" — say the fetch failed + offer Retry.
               <OverlayError
@@ -247,12 +250,12 @@ export function CMBrainContent() {
                 className="mt-2"
                 testid="cm-needs-error"
                 retryTestid="cm-needs-retry"
-                message={classifyLoadError(healthError ?? govError, 'the queue', 'Couldn’t load the queue — the backend may be unavailable. This is NOT “nothing to do”.')}
+                message={classifyLoadError(healthError ?? govError, t('ui.CMBrainOverlay.theQueue'), t('ui.CMBrainOverlay.queueLoadError'))}
                 onRetry={() => { void refetchHealth(); void refetchGov(); }}
               />
             ) : (
               <div className="mt-2 flex flex-col gap-1.5">
-                <NeedsBtn testid="cm-needs-approve" label={QUEUE_META.approve.label} count={approveCount} tint="var(--color-status-warning)" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
+                <NeedsBtn testid="cm-needs-approve" label={t(QUEUE_META.approve.label)} count={approveCount} tint="var(--color-status-warning)" active={needsFilter === 'approve'} onClick={() => setNeedsFilter('approve')} />
               </div>
             )}
           </div>
@@ -264,18 +267,18 @@ export function CMBrainContent() {
             <NeedsList
               kind={needsFilter}
               meta={needsMeta[needsFilter]}
-              backLabel={tab === 'context' ? 'Context' : tab === 'memory' ? 'Memory' : tab === 'evolution' ? 'Evolution' : 'Guideline'}
+              backLabel={tab === 'context' ? t('ui.CMBrainOverlay.tabContext') : tab === 'memory' ? t('ui.CMBrainOverlay.tabMemory') : tab === 'evolution' ? t('ui.CMBrainOverlay.tabEvolution') : t('ui.CMBrainOverlay.tabGuideline')}
               onBack={() => setNeedsFilter(null)}
               onDecide={decide}
             />
           ) : (
             <>
               <div className="border-b border-[var(--color-border)] px-4 py-2.5">
-                <Tabs label="Context & Memory" value={tab} onChange={setTab} items={[
-                  { key: 'context', label: 'Context', testid: 'cm-tab-context', count: block?.per_file.length },
-                  { key: 'memory', label: 'Memory', testid: 'cm-tab-memory' },
-                  { key: 'evolution', label: 'Evolution', testid: 'cm-tab-evolution' },
-                  { key: 'guideline', label: 'Guideline', testid: 'cm-tab-guideline' },
+                <Tabs label={t('ui.CMBrainOverlay.tabsLabel')} value={tab} onChange={setTab} items={[
+                  { key: 'context', label: t('ui.CMBrainOverlay.tabContext'), testid: 'cm-tab-context', count: block?.per_file.length },
+                  { key: 'memory', label: t('ui.CMBrainOverlay.tabMemory'), testid: 'cm-tab-memory' },
+                  { key: 'evolution', label: t('ui.CMBrainOverlay.tabEvolution'), testid: 'cm-tab-evolution' },
+                  { key: 'guideline', label: t('ui.CMBrainOverlay.tabGuideline'), testid: 'cm-tab-guideline' },
                 ]} />
               </div>
 
@@ -305,12 +308,13 @@ function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; faile
   const cog = ns?.measures?.cognition;
   const cdf = ns?.measures?.cdf;
   const at = ns?.at ? new Date(ns.at) : null;
+  const { t } = useTranslation();
   return (
     <div data-testid="cm-north-star">
-      <SectionLabel>Getting better?</SectionLabel>
+      <SectionLabel>{t('ui.CMBrainOverlay.nsTitle')}</SectionLabel>
       {!ns || (!cog && !cdf) ? (
         <div data-testid="cm-north-star-empty" className="mt-1 text-meta text-[var(--color-text-faint)]">
-          {failed ? 'couldn’t load — not “0”' : 'not measured yet'}
+          {failed ? t('ui.CMBrainOverlay.nsLoadFailed') : t('ui.CMBrainOverlay.nsNotMeasured')}
         </div>
       ) : (
         <div className="mt-1 flex flex-col gap-1.5">
@@ -318,13 +322,13 @@ function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; faile
             <div data-testid="cm-ns-corrected">
               <div className="flex items-baseline gap-1.5">
                 <span className="text-display font-semibold text-[var(--color-text)]">{pct(cog.corrected_rate)}</span>
-                <span className="text-small text-[var(--color-text-muted)]">of sessions corrected</span>
+                <span className="text-small text-[var(--color-text-muted)]">{t('ui.CMBrainOverlay.nsCorrected')}</span>
               </div>
               <div className="text-meta text-[var(--color-text-muted)]">
-                {cog.week} · {cog.sessions} sessions
+                {t('ui.CMBrainOverlay.nsWeekSessions', { week: cog.week, count: cog.sessions })}
                 {cog.direction && cog.earlier_mean != null && (
                   <span data-testid="cm-ns-direction" style={{ color: DIRECTION_TINT[cog.direction] }}>
-                    {' '}· {cog.direction === 'same' ? 'about the same as' : `${cog.direction} than`} {pct(cog.earlier_mean)} before
+                    {' '}· {t(`ui.CMBrainOverlay.nsDirection_${cog.direction}`, { mean: pct(cog.earlier_mean) })}
                   </span>
                 )}
               </div>
@@ -332,22 +336,22 @@ function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; faile
           )}
           {cog && cog.repeat_rate != null && (
             <div data-testid="cm-ns-repeats" className="text-small text-[var(--color-text-muted)]">
-              Repeats <span className="tabular-nums text-[var(--color-text)]">{pct(cog.repeat_rate)}</span>
-              {cog.corrections != null && <> of {cog.corrections} corrections</>}
+              {t('ui.CMBrainOverlay.nsRepeats')} <span className="tabular-nums text-[var(--color-text)]">{pct(cog.repeat_rate)}</span>
+              {cog.corrections != null && <> {t('ui.CMBrainOverlay.nsOfCorrections', { count: cog.corrections })}</>}
             </div>
           )}
           {cdf && (
             <div data-testid="cm-ns-cdf" className="text-small text-[var(--color-text-muted)]">
-              Knowledge useful{' '}
+              {t('ui.CMBrainOverlay.nsUseful')}{' '}
               <span className="tabular-nums" style={{ color: cdf.useful_rate != null && cdf.target != null && cdf.useful_rate < cdf.target ? 'var(--color-status-warning)' : 'var(--color-text)' }}>
                 {pct(cdf.useful_rate)}
               </span>
-              {cdf.target != null && <> · target {pct(cdf.target)}</>}
+              {cdf.target != null && <> · {t('ui.CMBrainOverlay.nsTarget', { target: pct(cdf.target) })}</>}
             </div>
           )}
           {at && (
             <div className="text-meta text-[var(--color-text-faint)]">
-              as of {at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {t('ui.CMBrainOverlay.nsAsOf', { time: at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}
             </div>
           )}
         </div>
@@ -359,11 +363,12 @@ function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; faile
 // The rail's compact growth-trend — prompt_tokens over time. R30: <2 points →
 // explicit "collecting" text, never a fabricated line.
 function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
+  const { t } = useTranslation();
   const pts = trend?.points ?? [];
   if (pts.length < 2) {
     return (
       <div className="text-meta text-[var(--color-text-faint)]">
-        Collecting since {trend?.launch_date ?? 'launch'}…
+        {t('ui.CMBrainOverlay.collectingSince', { since: trend?.launch_date ?? t('ui.CMBrainOverlay.launch') })}
       </div>
     );
   }
@@ -388,6 +393,7 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
 // injected whole (nothing is truncated), so the alert asks for consolidation. Only
 // rendered when block.over_budget is true.
 function BudgetAlert({ block }: { block: TokenBlock }) {
+  const { t } = useTranslation();
   const over = block.total_tokens - block.budget;
   // The offenders: biggest files that are growing/oversized (the ones worth acting on).
   const offenders = [...block.per_file]
@@ -402,7 +408,7 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
       style={{ borderColor: 'color-mix(in srgb, var(--color-status-error) 45%, var(--color-border))', background: 'color-mix(in srgb, var(--color-status-error) 8%, transparent)' }}
     >
       <div className="text-meta font-semibold" style={{ color: 'var(--color-status-error)' }}>
-        Over the warning line by {fmtTokens(over)} — nothing is cut; consolidate the biggest files
+        {t('ui.CMBrainOverlay.overBudgetBy', { amount: fmtTokens(over) })}
       </div>
       <div className="mt-1 text-meta leading-snug text-[var(--color-text-muted)]">
         {top.map((f) => (
@@ -420,7 +426,7 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
             onClick={() => document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))}
             className="btn-sm btn-danger"
           >
-            Open {f.name}
+            {t('ui.CMBrainOverlay.openFile', { name: f.name })}
           </button>
         ))}
       </div>
@@ -437,6 +443,7 @@ function ProposalCard({
   item: Record<string, unknown>;
   onDecide: (kind: 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   const id = String(item.id ?? 'unknown');
   const [state, setState] = useState<null | string>(null);
   const [refused, setRefused] = useState<string | null>(null);
@@ -446,9 +453,9 @@ function ProposalCard({
   // against the existing rules. The GC id is the tag; the Checked text is the why.
   const gcId = String(item.gc_id ?? id);
   const occ = item.occurrence_count;
-  const what = `Add rule: ${String(item.proposed_rule ?? '(no rule text)')}`;
-  const where: ReactNode = <>governance rule · EVOLUTION.md {gcId}</>;
-  const why = `${String(item.checked ?? '')}${typeof occ === 'number' ? ` · seen ${occ}×` : ''}`;
+  const what = t('ui.CMBrainOverlay.addRule', { rule: String(item.proposed_rule ?? t('ui.CMBrainOverlay.noRuleText')) });
+  const where: ReactNode = <>{t('ui.CMBrainOverlay.governanceRuleWhere', { id: gcId })}</>;
+  const why = `${String(item.checked ?? '')}${typeof occ === 'number' ? t('ui.CMBrainOverlay.seenTimes', { count: occ }) : ''}`;
   const tag: ReactNode = (
     <span
       data-testid="cm-gc-id"
@@ -466,7 +473,7 @@ function ProposalCard({
       // the backend's reason (e.g. the row quotes a phrase the memory guard blocks) is
       // shown on the card; without it a refused decision looked like a dead button
       const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-      setRefused(typeof detail === 'string' && detail ? detail : 'The decision could not be saved.');
+      setRefused(typeof detail === 'string' && detail ? detail : t('ui.CMBrainOverlay.decisionNotSaved'));
       setState(null);
     }
   }
@@ -482,26 +489,33 @@ function ProposalCard({
           <div data-testid="cm-card-what" className="text-body font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
           <div className="mt-0.5 text-meta text-[var(--color-text-muted)]">{where}</div>
         </div>
-        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-meta text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
+        {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.confValue', { value: conf.toFixed(2) })}</span>}
       </div>
       {why && <div className="mt-2 border-l-2 border-[var(--color-border)] pl-2.5 text-small leading-relaxed text-[var(--color-text-muted)]">{why}</div>}
       {refused && <div data-testid="cm-card-refused" role="alert" className="mt-2 text-small text-[var(--color-status-error)]">{refused}</div>}
       <div className="mt-2.5 flex items-center justify-between">
         <span className="font-mono text-meta text-[var(--color-text-faint)]">{id}</span>
         {state ? (
-          <span className="text-meta text-[var(--color-text-muted)]">{state}ed</span>
+          <span className="text-meta text-[var(--color-text-muted)]">{t(DECIDED_KEY[state] ?? 'ui.CMBrainOverlay.decidedAccept')}</span>
         ) : (
           <div className="flex gap-1.5">
             {/* Gate-2 MEDIUM: disabled during an in-flight decision — no double-submit. */}
-            <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="btn-sm btn-success disabled:opacity-50">Accept</button>
-            <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="btn-sm btn-secondary disabled:opacity-50">Reject</button>
-            <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="btn-sm btn-secondary disabled:opacity-50">Defer</button>
+            <button disabled={state != null} data-testid="cm-card-accept" onClick={() => act('accept')} className="btn-sm btn-success disabled:opacity-50">{t('ui.CMBrainOverlay.accept')}</button>
+            <button disabled={state != null} data-testid="cm-card-reject" onClick={() => act('reject')} className="btn-sm btn-secondary disabled:opacity-50">{t('ui.CMBrainOverlay.reject')}</button>
+            <button disabled={state != null} data-testid="cm-card-defer" onClick={() => act('defer')} className="btn-sm btn-secondary disabled:opacity-50">{t('ui.CMBrainOverlay.defer')}</button>
           </div>
         )}
       </div>
     </div>
   );
 }
+
+// The "done" label shown on a card after a decision.
+const DECIDED_KEY: Record<string, string> = {
+  accept: 'ui.CMBrainOverlay.decidedAccept',
+  reject: 'ui.CMBrainOverlay.decidedReject',
+  defer: 'ui.CMBrainOverlay.decidedDefer',
+};
 
 // Needs-you filtered list — swaps into the main area with an explicit Back header +
 // breadcrumb; the rail button stays active (AC6). Items render as ProposalCards.
@@ -514,24 +528,26 @@ function NeedsList({
   onBack: () => void;
   onDecide: (kind: 'approve', id: string, decision: 'accept' | 'reject' | 'defer') => void | Promise<void>;
 }) {
+  const { t } = useTranslation();
   const items = meta.items;
   const qm = QUEUE_META[kind];
+  const queueLabel = t(qm.label);
   return (
     <>
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
-        <button data-testid="cm-needs-back" onClick={onBack} className="btn-sm btn-secondary">← Back to {backLabel}</button>
-        <span className="text-body font-semibold text-[var(--color-text)]">{qm.label} <span className="tabular-nums text-[var(--color-text-faint)]">({meta.count})</span></span>
+        <button data-testid="cm-needs-back" onClick={onBack} className="btn-sm btn-secondary">{t('ui.CMBrainOverlay.backTo', { label: backLabel })}</button>
+        <span className="text-body font-semibold text-[var(--color-text)]">{queueLabel} <span className="tabular-nums text-[var(--color-text-faint)]">({meta.count})</span></span>
       </div>
       {/* AC1: one-line explainer — what this queue governs + what its conf means here. */}
       <div data-testid="cm-needs-explainer" className="border-b border-[var(--color-border)] px-4 py-2 text-meta leading-relaxed text-[var(--color-text-muted)]">
-        {qm.explainer}
+        {t(qm.explainer)}
       </div>
       <div data-testid="cm-needs-list" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-2.5">
         {items === null ? (
           // Gate-2 HIGH-1: loading ≠ empty — never a false "nothing to approve".
-          <div data-testid="cm-needs-loading" className="text-meta text-[var(--color-text-faint)]">Loading {qm.label.toLowerCase()}…</div>
+          <div data-testid="cm-needs-loading" className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.loadingQueue', { label: queueLabel.toLowerCase() })}</div>
         ) : items.length === 0 ? (
-          <div className="text-meta text-[var(--color-text-faint)]">Nothing in {qm.label.toLowerCase()} right now.</div>
+          <div className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.nothingInQueue', { label: queueLabel.toLowerCase() })}</div>
         ) : (
           items.map((it, i) => (
             // key includes kind — a re-appearing same-id in a DIFFERENT queue remounts
@@ -545,16 +561,15 @@ function NeedsList({
 }
 
 function ContextTab({ block }: { block: TokenBlock | null }) {
+  const { t } = useTranslation();
   const rows = block?.per_file ?? [];
   return (
     <div data-testid="cm-panel-context" className="flex flex-col gap-1">
       <div className="mb-2 text-body text-[var(--color-text-muted)]">
-        The always-injected system prompt — {rows.length} files, priority-ordered, each injected in full.
-        Nothing is cut: above the warning line, the files are kept lean by consolidating entries.
+        {t('ui.CMBrainOverlay.contextIntro', { count: rows.length })}
       </div>
       <div className="mb-3 text-meta text-[var(--color-text-faint)]">
-        click a file to open it in Canvas · bar = share of the context (disk size = prompt load) ·
-        lock = system-owned, opens read-only · Health: fresh / idle / growing / oversized
+        {t('ui.CMBrainOverlay.contextLegend')}
       </div>
       {/* Column header — fixed widths so every row's cells line up (AC4 alignment).
           Grid columns match the row grid below exactly. */}
@@ -564,25 +579,25 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           className={`grid items-center gap-3 px-3 pb-1 max-w-3xl ${tableHeadClass}`}
           style={{ gridTemplateColumns: '2rem 0.375rem 1fr 4rem 4rem 6rem 4rem 1.5rem' }}
         >
-          <span>Pri</span>
+          <span>{t('ui.CMBrainOverlay.colPri')}</span>
           <span aria-hidden />
-          <span>File</span>
-          <span className="text-right">Owner</span>
-          <span className="text-right">Tokens</span>
-          <span>Share</span>
-          <span className="text-center">Health</span>
+          <span>{t('ui.CMBrainOverlay.colFile')}</span>
+          <span className="text-right">{t('ui.CMBrainOverlay.colOwner')}</span>
+          <span className="text-right">{t('ui.CMBrainOverlay.colTokens')}</span>
+          <span>{t('ui.CMBrainOverlay.colShare')}</span>
+          <span className="text-center">{t('ui.CMBrainOverlay.colHealth')}</span>
           <span aria-hidden />
         </div>
       )}
       {rows.length === 0 && (
         <div className="py-8 text-center text-body text-[var(--color-text-faint)]">
-          Context budget not available yet.
+          {t('ui.CMBrainOverlay.budgetNotAvailable')}
         </div>
       )}
       {rows.map((f) => {
         // Every file is full-injected (new architecture 2026-08-14): disk size IS the
         // prompt load — no selective mode, no "injected floor below disk".
-        const tokenTitle = `${fmtTokens(f.tokens)} tokens (full-injected — disk == prompt load)`;
+        const tokenTitle = t('ui.CMBrainOverlay.tokenTitle', { tokens: fmtTokens(f.tokens) });
         return (
         // The WHOLE row opens the file in Canvas. Layout is a fixed-column GRID
         // (AC4): every cell aligns across rows — Pri | owner-dot | name(flex) |
@@ -592,7 +607,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           type="button"
           data-testid={`cm-file-row-${f.name}`}
           data-owner={f.owner}
-          title={`Open ${f.name} in Canvas${f.locked ? ' (read-only)' : ''}`}
+          title={f.locked ? t('ui.CMBrainOverlay.openInCanvasReadOnly', { name: f.name }) : t('ui.CMBrainOverlay.openInCanvas', { name: f.name })}
           onClick={() =>
             document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
           }
@@ -615,9 +630,9 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
               <span
                 data-testid={`cm-health-counts-${f.name}`}
                 className="mt-0.5 flex gap-2 text-meta tabular-nums text-[var(--color-text-faint)]"
-                title="Knowledge health — entries that repeat another entry of the same section exactly"
+                title={t('ui.CMBrainOverlay.dupTitle')}
               >
-                {f.health_counts.duplicate > 0 && <span className="text-[var(--color-warning,var(--color-status-error))]">{f.health_counts.duplicate} dup</span>}
+                {f.health_counts.duplicate > 0 && <span className="text-[var(--color-warning,var(--color-status-error))]">{t('ui.CMBrainOverlay.dupCount', { count: f.health_counts.duplicate })}</span>}
               </span>
             )}
           </span>
@@ -629,7 +644,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
           {/* AC4: SHARE — an explicit visible bar + % number (user-requested; this
               intentionally overrides the prior subtle-tint approach). Bar width =
               pct of on-disk total, owner-tinted; the % number is shown to its right. */}
-          <span className="flex items-center gap-1.5" title={`${f.pct}% of the on-disk context`}>
+          <span className="flex items-center gap-1.5" title={t('ui.CMBrainOverlay.pctTitle', { pct: f.pct })}>
             <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-border)]">
               {typeof f.pct === 'number' && f.pct > 0 && (
                 <span
@@ -648,7 +663,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             <StatusBadge testid="cm-health" tone={HEALTH_TONE[f.health]}>{f.health}</StatusBadge>
           ) : <span aria-hidden />}
           {f.locked ? (
-            <span data-testid="cm-lock" className="material-symbols-outlined icon-xs text-center text-[var(--color-text-faint)]" title="System-owned · opens read-only">lock</span>
+            <span data-testid="cm-lock" className="material-symbols-outlined icon-xs text-center text-[var(--color-text-faint)]" title={t('ui.CMBrainOverlay.lockTitle')}>lock</span>
           ) : <span aria-hidden />}
         </button>
         );
@@ -683,6 +698,7 @@ const TYPE_TINT: Record<string, string> = {
  * every entry in a main file is in force. One component, two sources (R25).
  */
 function KnowledgeGraph({ graph, ontology }: { graph: BrainGraph | undefined; ontology: boolean }) {
+  const { t } = useTranslation();
   const [selType, setSelType] = useState<string | null>(null);
   const nodes = graph?.nodes ?? [];
   const maxCount = Math.max(1, ...nodes.map((n) => n.count));
@@ -693,7 +709,7 @@ function KnowledgeGraph({ graph, ontology }: { graph: BrainGraph | undefined; on
       {/* type/kind graph — nodes sized by count, rendered in backend priority order */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          Knowledge graph · {ontology ? '7 types' : 'kinds'} as nodes (click to drill in)
+          {ontology ? t('ui.CMBrainOverlay.graphTitleTypes') : t('ui.CMBrainOverlay.graphTitleKinds')}
         </div>
         <div className="flex flex-wrap gap-3">
           {nodes.map((n) => {
@@ -721,14 +737,14 @@ function KnowledgeGraph({ graph, ontology }: { graph: BrainGraph | undefined; on
           })}
         </div>
         <div className="mt-1.5 text-meta text-[var(--color-text-faint)]">
-          node size = entry count
+          {t('ui.CMBrainOverlay.nodeSizeLegend')}
         </div>
       </section>
 
       {/* by-type distribution bars (also drill) */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          By-{ontology ? 'type' : 'kind'} distribution
+          {ontology ? t('ui.CMBrainOverlay.byTypeDistribution') : t('ui.CMBrainOverlay.byKindDistribution')}
         </div>
         <div className="flex flex-col gap-1">
           {nodes.map((n) => {
@@ -755,12 +771,12 @@ function KnowledgeGraph({ graph, ontology }: { graph: BrainGraph | undefined; on
       <section>
         <div data-testid="cm-drill-list" className="rounded-lg border border-[var(--color-border)] p-3">
           {!selType ? (
-            <div className="text-meta text-[var(--color-text-faint)]">Click a graph node (or a bar) → latest entries of that {ontology ? 'type' : 'kind'}</div>
+            <div className="text-meta text-[var(--color-text-faint)]">{ontology ? t('ui.CMBrainOverlay.drillHintType') : t('ui.CMBrainOverlay.drillHintKind')}</div>
           ) : drill.length === 0 ? (
-            <div className="text-meta text-[var(--color-text-faint)]">No <b>{selType}</b> entries yet.</div>
+            <div className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.noEntriesBefore')}<b>{selType}</b>{t('ui.CMBrainOverlay.noEntriesAfter')}</div>
           ) : (
             <>
-              <div className="mb-1.5 text-meta font-semibold text-[var(--color-text)]">Latest {selType} ({drill.length})</div>
+              <div className="mb-1.5 text-meta font-semibold text-[var(--color-text)]">{t('ui.CMBrainOverlay.latestOfType', { type: selType, count: drill.length })}</div>
               <div className="flex flex-col gap-1">
                 {drill.map((e, i) => (
                   <div key={i} className="flex items-center gap-2 text-small">
@@ -787,6 +803,7 @@ function KnowledgeGraph({ graph, ontology }: { graph: BrainGraph | undefined; on
 //
 // Gate-0 REVISE baked in: date can be null (→ '—'), archived_from can be '' (→ hidden).
 function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boolean }) {
+  const { t } = useTranslation();
   const [q, setQ] = useState('');
   const query = q.trim();
   const searching = query.length > 0;
@@ -813,11 +830,10 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
   return (
     <section data-testid={`cm-archive-${source}`}>
       <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-        Archived {source} · older shards
+        {t('ui.CMBrainOverlay.archivedTitle', { source })}
       </div>
       <div className="mb-2 text-meta leading-relaxed text-[var(--color-text-muted)]">
-        Entries moved out of live {source} by size before that stopped (nothing is moved out
-        now). Open a shard to read it, or search to recall a single entry.
+        {t('ui.CMBrainOverlay.archivedIntro', { source })}
       </div>
 
       {/* Search box — one clear input; results replace the list while a query is active */}
@@ -826,7 +842,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
           data-testid={`cm-archive-search-input-${source}`}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder={`Recall from archived ${source}…`}
+          placeholder={t('ui.CMBrainOverlay.recallPlaceholder', { source })}
           className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] focus:border-[var(--color-status-success)] focus:outline-none"
         />
         {searching && (
@@ -835,7 +851,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
             onClick={() => setQ('')}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-small text-[var(--color-text-faint)] hover:text-[var(--color-text)]"
           >
-            clear
+            {t('ui.CMBrainOverlay.clear')}
           </button>
         )}
       </div>
@@ -843,17 +859,17 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
       {searching ? (
         // ── Recall results ──
         hitErr ? (
-          <ArchiveError what={`recall ${source}`} error={hitError} onRetry={() => void refetchHits()} />
+          <ArchiveError what={t('ui.CMBrainOverlay.recallWhat', { source })} error={hitError} onRetry={() => void refetchHits()} />
         ) : hitFetching && results.length === 0 ? (
-          <div data-testid={`cm-archive-searching-${source}`} className="text-meta text-[var(--color-text-faint)]">Recalling…</div>
+          <div data-testid={`cm-archive-searching-${source}`} className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.recalling')}</div>
         ) : results.length === 0 ? (
-          <div className="text-meta text-[var(--color-text-faint)]">No archived {source} matches “{query}”.</div>
+          <div className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.noArchivedMatches', { source, query })}</div>
         ) : (
           <div data-testid={`cm-archive-results-${source}`} className="flex flex-col gap-2.5">
-            <div className="text-meta text-[var(--color-text-faint)]">{results.length} recall hit{results.length === 1 ? '' : 's'}</div>
+            <div className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.recallHits', { count: results.length })}</div>
             {results.map((r, i) => (
               <div key={`${r.shard}-${i}`} className="border-l-2 border-[var(--color-status-success)] pl-2.5">
-                <div className="text-body leading-snug text-[var(--color-text)]">{r.title || '(untitled)'}</div>
+                <div className="text-body leading-snug text-[var(--color-text)]">{r.title || t('ui.CMBrainOverlay.untitled')}</div>
                 <div className="mt-0.5 text-small leading-relaxed text-[var(--color-text-muted)]">{r.snippet}</div>
                 <div className="mt-0.5 font-mono text-meta text-[var(--color-text-faint)]">{r.shard}</div>
               </div>
@@ -863,12 +879,12 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
       ) : (
         // ── Archived FILE list (default) — one row per shard, click to open ──
         listErr ? (
-          <ArchiveError what={`archived ${source}`} error={listError} onRetry={() => void refetchList()} />
+          <ArchiveError what={t('ui.CMBrainOverlay.archivedWhat', { source })} error={listError} onRetry={() => void refetchList()} />
         ) : list === undefined ? (
-          <div data-testid={`cm-archive-loading-${source}`} className="text-meta text-[var(--color-text-faint)]">Loading archived {source}…</div>
+          <div data-testid={`cm-archive-loading-${source}`} className="text-meta text-[var(--color-text-faint)]">{t('ui.CMBrainOverlay.loadingArchived', { source })}</div>
         ) : files.length === 0 ? (
           <div data-testid={`cm-archive-empty-${source}`} className="text-meta text-[var(--color-text-faint)]">
-            Nothing archived yet — live {source} is fully injected.
+            {t('ui.CMBrainOverlay.nothingArchived', { source })}
           </div>
         ) : (
           <div data-testid={`cm-archive-list-${source}`} className="flex flex-col gap-1">
@@ -878,7 +894,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
                 key={f.name}
                 type="button"
                 data-testid={`cm-archive-file-${source}`}
-                title={`Open ${f.name} in Canvas`}
+                title={t('ui.CMBrainOverlay.openInCanvas', { name: f.name })}
                 onClick={() =>
                   document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `.context/${f.name}` } }))
                 }
@@ -887,7 +903,7 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
                 {/* period is the primary scannable key; filename demoted to mono detail */}
                 <span className="w-16 shrink-0 tabular-nums text-small text-[var(--color-text)]">{f.period}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-meta text-[var(--color-text-muted)]" title={f.name}>{f.name}</span>
-                <span className="shrink-0 text-meta text-[var(--color-text-muted)]">{f.entry_count} entr{f.entry_count === 1 ? 'y' : 'ies'}</span>
+                <span className="shrink-0 text-meta text-[var(--color-text-muted)]">{t('ui.CMBrainOverlay.entryCount', { count: f.entry_count })}</span>
                 <span className="w-14 shrink-0 text-right tabular-nums text-meta text-[var(--color-text-faint)]">{fmtBytes(f.bytes)}</span>
               </button>
             ))}
@@ -907,16 +923,18 @@ function fmtBytes(n: number): string {
 
 // Shared archive error banner — honest "couldn't load, NOT empty" + optional Retry.
 function ArchiveError({ what, error, onRetry }: { what: string; error: unknown; onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <OverlayError
       compact
-      message={classifyLoadError(error, what, `Couldn’t load ${what} — the backend may be unavailable. This is NOT “nothing archived”.`)}
+      message={classifyLoadError(error, what, t('ui.CMBrainOverlay.archiveLoadError', { what }))}
       onRetry={onRetry}
     />
   );
 }
 
 function MemoryTab({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation();
   const { data: graph } = useQuery<BrainGraph>({
     queryKey: ['cm-brain-graph', 'memory'],
     queryFn: async () => (await api.get<BrainGraph>('/eval/brain-graph?source=memory')).data,
@@ -931,8 +949,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
   return (
     <div data-testid="cm-panel-memory" className="flex flex-col gap-5 max-w-4xl">
       <div className="text-body text-[var(--color-text-muted)]">
-        The judgment I've sedimented across all conversations — a 7-type ontology.
-        What is in the file is in force: an entry leaves only when a newer decision overrides it or it is withdrawn.
+        {t('ui.CMBrainOverlay.memoryIntro')}
       </div>
 
       {/* graph + bars + drill (shared component) */}
@@ -941,7 +958,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
       {/* MEMORY.md size trend (from the daily snapshot series) */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          MEMORY.md size trend
+          {t('ui.CMBrainOverlay.memoryTrend')}
         </div>
         <TrendChart trend={trend} field="memory_bytes" />
       </section>
@@ -950,7 +967,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
       <ArchivePanel source="memory" enabled={enabled} />
 
       <div className="text-meta text-[var(--color-text-faint)]">
-        How it works: MEMORY.md is injected whole into every session. New entries come from the review after a session: the session's own agent declares what it learned, and the code checks the evidence before writing. An entry leaves the file only when a newer decision overrides it or it is withdrawn; what was replaced is recorded outside the file. Older archive shards stay readable here.
+        {t('ui.CMBrainOverlay.memoryHowItWorks')}
       </div>
     </div>
   );
@@ -961,6 +978,7 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
 // parity with MemoryTab via the shared KnowledgeGraph — the only differences are
 // honest: source=evolution, and ontology=false (its kinds, not the 7 types).
 function EvolutionTab({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation();
   const { data: graph } = useQuery<BrainGraph>({
     queryKey: ['cm-brain-graph', 'evolution'],
     queryFn: async () => (await api.get<BrainGraph>('/eval/brain-graph?source=evolution')).data,
@@ -975,9 +993,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
   return (
     <div data-testid="cm-panel-evolution" className="flex flex-col gap-5 max-w-4xl">
       <div className="text-body text-[var(--color-text-muted)]">
-        How I evolve — the corrections I've captured and the recurring failure patterns
-        they cluster into (class · correction · data-point · directive · …), ordered by
-        which matters most to my judgment.
+        {t('ui.CMBrainOverlay.evolutionIntro')}
       </div>
 
       {/* graph + bars + drill (shared component; evolution kinds) */}
@@ -986,7 +1002,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
       {/* EVOLUTION.md size trend — real per-file bytes from the daily snapshot series */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          EVOLUTION.md size trend
+          {t('ui.CMBrainOverlay.evolutionTrend')}
         </div>
         <TrendChart trend={trend} field="memory_bytes" />
       </section>
@@ -995,10 +1011,7 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
       <ArchivePanel source="evolution" enabled={enabled} />
 
       <div className="text-meta text-[var(--color-text-faint)]">
-        How it works: each correction is an entry written by the review after a session. A recurring
-        one becomes a governance candidate; a candidate with specific rule text, checked against the
-        existing rules and backed by 3× evidence, is proposed for your approval (Needs you → Governance).
-        EVOLUTION.md is injected whole; nothing is moved out by size. Older archive shards stay readable here.
+        {t('ui.CMBrainOverlay.evolutionHowItWorks')}
       </div>
     </div>
   );
@@ -1007,12 +1020,13 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
 // Trend line chart from the daily size-snapshot series. R30: NEVER fabricates a
 // baseline — <2 real points shows an explicit "collecting since launch" state.
 function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'memory_bytes' | 'prompt_tokens' }) {
+  const { t } = useTranslation();
   const pts = trend?.points ?? [];
   if (pts.length < 2) {
     const since = trend?.launch_date;
     return (
       <div data-testid="cm-trend-collecting" className="rounded-lg border border-dashed border-[var(--color-border)] p-4 text-center text-meta text-[var(--color-text-faint)]">
-        Collecting since {since ?? 'launch'} — the trend appears after 2 daily snapshots.
+        {t('ui.CMBrainOverlay.trendCollecting', { since: since ?? t('ui.CMBrainOverlay.launch') })}
       </div>
     );
   }
@@ -1063,17 +1077,17 @@ const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: strin
 ];
 
 function GuidelineTab() {
+  const { t } = useTranslation();
   return (
     <div data-testid="cm-panel-guideline" className="flex flex-col gap-5 max-w-4xl">
       <div className="text-body text-[var(--color-text-muted)]">
-        How a powerful agent brain works — the lifecycle every message flows through, and what
-        runs itself vs what you steer.
+        {t('ui.CMBrainOverlay.guidelineIntro')}
       </div>
 
       {/* Lifecycle flow */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          Lifecycle — every message flows through this
+          {t('ui.CMBrainOverlay.lifecycleTitle')}
         </div>
         <div data-testid="cm-guideline-lifecycle" className="flex items-stretch gap-2">
           {LIFECYCLE.map((s, i) => (
@@ -1095,11 +1109,11 @@ function GuidelineTab() {
       {/* Automatic vs Manual */}
       <section>
         <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          Automatic vs Manual — what runs itself, what you steer
+          {t('ui.CMBrainOverlay.autoVsManualTitle')}
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <AmColumn testid="cm-guideline-automatic" head="Runs itself" badge="AUTOMATIC" items={AUTO_ITEMS} accent="var(--color-status-success)" />
-          <AmColumn testid="cm-guideline-manual" head="You configure" badge="MANUAL" items={MANUAL_ITEMS} accent="var(--color-primary)" />
+          <AmColumn testid="cm-guideline-automatic" head={t('ui.CMBrainOverlay.runsItself')} badge={t('ui.CMBrainOverlay.badgeAutomatic')} items={AUTO_ITEMS} accent="var(--color-status-success)" />
+          <AmColumn testid="cm-guideline-manual" head={t('ui.CMBrainOverlay.youConfigure')} badge={t('ui.CMBrainOverlay.badgeManual')} items={MANUAL_ITEMS} accent="var(--color-primary)" />
         </div>
       </section>
 

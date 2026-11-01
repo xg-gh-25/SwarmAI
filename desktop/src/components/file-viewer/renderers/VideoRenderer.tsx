@@ -9,6 +9,7 @@
  *   - Reports duration and dimensions via onStatusInfo on loadedmetadata
  */
 import { useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { rawFileUrl } from '../utils/rawFileUrl';
 
 interface RendererProps {
@@ -36,6 +37,7 @@ export default function VideoRenderer({
   fileName,
   onStatusInfo,
 }: RendererProps) {
+  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const handleLoadedMetadata = useCallback(() => {
@@ -65,7 +67,7 @@ export default function VideoRenderer({
       >
         <source src={src} type={filePath.endsWith('.webm') ? 'video/webm' : undefined} />
         <p className="text-sm text-[var(--color-text-muted)]">
-          Your browser does not support this video format.
+          {t('ui.VideoRenderer.unsupported')}
         </p>
       </video>
       <p className="mt-3 text-xs text-[var(--color-text-muted)] truncate max-w-full">

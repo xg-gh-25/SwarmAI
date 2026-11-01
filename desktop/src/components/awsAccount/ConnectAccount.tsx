@@ -436,8 +436,8 @@ export default function ConnectAccount({
           <label className="block">
             <span className="block text-xs text-[var(--color-text-muted)] mb-1">{t('awsConnect.ada.provider')}</span>
             <select value={adaProvider} onChange={(e) => setAdaProvider(e.target.value)} className={inputCls}>
-              <option value="isengard">Isengard</option>
-              <option value="conduit">Conduit</option>
+              <option value="isengard">{t('ui.ConnectAccount.providerIsengard')}</option>
+              <option value="conduit">{t('ui.ConnectAccount.providerConduit')}</option>
             </select>
           </label>
           <div className="col-span-2">{regionField}</div>
@@ -464,7 +464,7 @@ export default function ConnectAccount({
     return (
       <div data-testid="connect-ada-wait">
         <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('awsConnect.signInTo', { account: c.account_id })}</h2>
-        <p className="text-[var(--color-text-muted)] mb-6">ADA · {c.ada?.role} · {c.ada?.provider}</p>
+        <p className="text-[var(--color-text-muted)] mb-6">{t('ui.ConnectAccount.adaSummary', { role: c.ada?.role, provider: c.ada?.provider })}</p>
         <div className="p-4 rounded-lg bg-[var(--color-card)] flex items-start gap-3">
           <span className="material-symbols-outlined icon-sm animate-spin text-[var(--color-text-muted)]">progress_activity</span>
           <div>
@@ -872,7 +872,7 @@ function MoreWays({ rows, busy, errorBox, regionField, onProfile, onKeys, onInst
           <>
             <label className="block">
               <span className="block text-xs text-[var(--color-text-muted)] mb-1">{t('awsConnect.way.keys.id')}</span>
-              <input value={keyId} onChange={(e) => setKeyId(e.target.value)} placeholder="AKIA…" autoComplete="off"
+              <input value={keyId} onChange={(e) => setKeyId(e.target.value)} placeholder={t('ui.ConnectAccount.keyIdPlaceholder')} autoComplete="off"
                 className={inputCls} data-testid="connect-key-id" />
             </label>
             <label className="block">

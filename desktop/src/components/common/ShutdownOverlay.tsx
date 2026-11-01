@@ -11,8 +11,10 @@
 
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { useTranslation } from 'react-i18next';
 
 export default function ShutdownOverlay() {
+  const { t } = useTranslation();
   const [shuttingDown, setShuttingDown] = useState(false);
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export default function ShutdownOverlay() {
       <div className="flex flex-col items-center gap-4">
         <div className="w-8 h-8 border-[3px] border-white border-t-transparent rounded-full animate-spin" />
         <p className="text-white text-lg font-medium select-none">
-          Shutting down…
+          {t('ui.ShutdownOverlay.shuttingDown')}
         </p>
       </div>
     </div>

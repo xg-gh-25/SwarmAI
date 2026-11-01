@@ -1,5 +1,5 @@
 <!-- ⚙️ COMPANION REFERENCE — NOT an injected context file (not in CONTEXT_FILES).
-     Same class as CONTEXT.md: it lives in backend/context/ but is NEVER part of the
+     Same class as SECURITY-BASELINE.md: it lives in backend/context/ but is NEVER part of the
      assembled system prompt. Read this BEFORE editing SWARMAI.md. -->
 
 # SWARMAI.md — Editing Charter

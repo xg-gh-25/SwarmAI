@@ -3,6 +3,9 @@
  * Extends expect with jest-dom matchers
  */
 import '@testing-library/jest-dom/vitest';
+// The app's i18n (English for jsdom's en-US): components render their real text, as in
+// the app. A test that mocks react-i18next still gets its mock.
+import './i18n';
 import { afterEach } from 'vitest';
 import { configure } from '@testing-library/react';
 

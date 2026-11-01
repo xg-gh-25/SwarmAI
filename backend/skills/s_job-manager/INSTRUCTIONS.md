@@ -42,15 +42,17 @@ Returns array of all jobs (system + user) with status, last run, failure count.
   "name": "Morning Inbox Summary",
   "type": "agent_task",
   "schedule": "0 1 * * 1-5",
-  "prompt": "Check my Outlook inbox for unread emails from the last 12 hours. Summarize the top 5 by importance.",
+  "prompt": "Check my inbox for unread emails from the last 12 hours. Summarize the top 5 by importance.",
   "config": {},
   "safety": {
     "max_budget_usd": 0.20,
     "timeout_seconds": 180,
-    "allowed_tools": ["mcp__aws-outlook-mcp__email_inbox", "mcp__aws-outlook-mcp__email_read"]
+    "allowed_tools": ["mcp__email__<list-tool>", "mcp__email__<read-tool>"]
   }
 }'
 ```
+`allowed_tools` takes the real tool names of the MCP servers the user has connected
+(`mcp__<server>__<tool>`; the Capabilities page lists them). The names above are placeholders.
 
 ### Edit a user job
 ```bash
@@ -97,23 +99,25 @@ Returns array of all jobs (system + user) with status, last run, failure count.
 When a user requests a scheduled job, extract these fields:
 
 1. **name** — Short descriptive name (e.g., "Morning Inbox Summary")
-2. **schedule** — Convert natural language to cron:
-   - "every morning at 9am" → `"0 1 * * *"` (9am ICT = 1:00 UTC)
-   - "weekdays at 8am" → `"0 0 * * 1-5"` (8am ICT = 0:00 UTC)
-   - "every Monday at 10am" → `"0 2 * * 1"` (10am ICT = 2:00 UTC)
+2. **schedule** — Convert natural language to cron in UTC (see Timezone Conversion). For a
+   user at UTC+8:
+   - "every morning at 9am" → `"0 1 * * *"` (9:00 UTC+8 = 1:00 UTC)
+   - "weekdays at 8am" → `"0 0 * * 1-5"` (8:00 UTC+8 = 0:00 UTC)
+   - "every Monday at 10am" → `"0 2 * * 1"` (10:00 UTC+8 = 2:00 UTC)
    - "every hour" → `"0 * * * *"`
-   - "twice daily" → `"0 2,14 * * *"` (10am, 10pm ICT)
-   - "every Friday at 5pm" → `"0 9 * * 5"` (5pm ICT = 9:00 UTC)
+   - "twice daily" → `"0 2,14 * * *"` (10am, 10pm UTC+8)
+   - "every Friday at 5pm" → `"0 9 * * 5"` (17:00 UTC+8 = 9:00 UTC)
 3. **type** — Usually `agent_task` for natural-language tasks, `script` for commands
 4. **prompt** — The task description (for `agent_task`)
 5. **safety.allowed_tools** — Which MCP tools the job needs
 
 ### CRITICAL: Timezone Conversion
 
-The user's timezone is **ICT (UTC+8)**. All cron schedules run in **UTC**.
-Always convert: `user_hour - 8 = UTC_hour` (wrap around midnight).
+All cron schedules run in **UTC**. The user's timezone is in USER.md; if it is not there,
+ask once. Always convert: `UTC_hour = user_hour - UTC_offset` (wrap around midnight; a wrap
+also moves the day-of-week field).
 
-Examples:
+Examples for a user at UTC+8:
 - User says "9am" → `1` in cron (hour field)
 - User says "8am" → `0` in cron
 - User says "6pm" → `10` in cron
@@ -123,9 +127,9 @@ Examples:
 
 | User says | allowed_tools |
 |-----------|--------------|
-| "check my email/inbox" | `["mcp__aws-outlook-mcp__email_inbox", "mcp__aws-outlook-mcp__email_read", "mcp__aws-outlook-mcp__email_search"]` |
+| "check my email/inbox" | the connected email MCP's list, read and search tools (e.g. `mcp__email__<tool>`) |
 | "send me a Slack message" | `["mcp__slack-mcp__post_message", "mcp__slack-mcp__open_dm_channel"]` |
-| "check my calendar" | `["mcp__aws-outlook-mcp__calendar_view", "mcp__aws-outlook-mcp__calendar_search"]` |
+| "check my calendar" | the connected calendar MCP's view and search tools |
 | "search the web" | `["WebFetch"]` |
 | "read/write files" | (no restriction needed — CLI has SwarmWS access by default) |
 

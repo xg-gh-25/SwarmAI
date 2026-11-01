@@ -22,12 +22,7 @@ import { ChatInput } from './ChatInput';
 import type { UnifiedAttachment } from '../../../types';
 import { dispatchInjectChatInput } from '../injectChatInput';
 
-// Mock react-i18next
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string) => key,
-  }),
-}));
+// react-i18next is not mocked: the app's i18n (test-setup) renders the real English text.
 
 function createTestQueryClient() {
   return new QueryClient({

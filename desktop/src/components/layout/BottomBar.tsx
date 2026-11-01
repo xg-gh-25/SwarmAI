@@ -10,6 +10,8 @@
  */
 
 import { useContext, useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { useTranslation } from 'react-i18next';
+import { modKeyLabel } from '../../utils/platform';
 import { HealthContext } from '../../contexts/HealthContext';
 import { useSessionMeta } from '../../contexts/LayoutContext';
 import { isDesktop } from '../../services/tauri';
@@ -20,6 +22,8 @@ import { terminalLocation } from '../../stores/terminalLocation';
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function BottomBar() {
+  const { t } = useTranslation();
+  const mod = modKeyLabel();
   // Safe: useContext returns undefined when provider is missing (no throw)
   const healthCtx = useContext(HealthContext);
   const healthStatus = healthCtx?.health?.status;
@@ -87,7 +91,7 @@ export function BottomBar() {
             aria-hidden="true"
           />
           <span>
-            {isConnected ? 'Connected' : isDegraded ? 'Reconnecting' : isStarting ? 'Starting' : 'Offline'}
+            {isConnected ? t('ui.BottomBar.connected') : isDegraded ? t('ui.BottomBar.reconnecting') : isStarting ? t('ui.BottomBar.starting') : t('ui.BottomBar.offline')}
           </span>
         </span>
         <span className="flex items-center gap-1">
@@ -98,7 +102,9 @@ export function BottomBar() {
           type="button"
           data-testid="bottom-bar-terminal-location"
           onClick={gotoTerminal}
-          title={`Open the terminal in ${termLoc.label}${termLoc.cwd ? ` (${termLoc.cwd})` : ''}`}
+          title={termLoc.cwd
+            ? t('ui.BottomBar.openTerminalInCwd', { label: termLoc.label, cwd: termLoc.cwd })
+            : t('ui.BottomBar.openTerminalIn', { label: termLoc.label })}
           className="flex items-center gap-1 h-6 px-2 -mx-1 rounded-md hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] cursor-pointer"
         >
           <span className="material-symbols-outlined icon-xs leading-none">
@@ -109,15 +115,15 @@ export function BottomBar() {
         {appVersion && (
           <span className="opacity-60">v{appVersion}</span>
         )}
-        {/* Integrated terminal toggle + open-count badge (⌘` also toggles). */}
+        {/* Integrated terminal toggle + open-count badge (⌘`/Ctrl-` also toggles). */}
         <button
           onClick={toggleTerminal}
           className="flex items-center gap-1 h-6 px-2 -mx-1 rounded-md hover:bg-[var(--color-hover)] hover:opacity-100 opacity-80 transition-opacity cursor-pointer text-[var(--color-text-muted)]"
-          title="Toggle terminal (⌘`)"
+          title={t('nav.toggleTerminal')}
           data-testid="terminal-toggle"
         >
-          <span className="text-[11px]">⌘</span>
-          <span>Terminal</span>
+          <span className="text-[11px]">{mod}</span>
+          <span>{t('nav.terminal')}</span>
           {terminalCount > 0 && (
             <span
               className="ml-0.5 px-1 rounded-[7px] bg-[var(--color-accent,#2f81f7)] text-white text-[8px] font-semibold leading-[1.4]"
@@ -138,23 +144,19 @@ export function BottomBar() {
       <div className="flex items-center gap-3.5 pr-1.5 tabular-nums text-[11px] overflow-x-hidden">
         <span className="flex items-center gap-1">
           <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">Enter</kbd>
-          <span>send</span>
+          <span>{t('nav.hint.send', 'send')}</span>
         </span>
         <span className="flex items-center gap-1">
           <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">Shift+Enter</kbd>
-          <span>newline</span>
+          <span>{t('nav.hint.newline', 'newline')}</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">&#8984;N</kbd>
-          <span>new</span>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">{mod}1-9</kbd>
+          <span>{t('nav.hint.tab', 'tab')}</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">&#8984;1-9</kbd>
-          <span>tab</span>
-        </span>
-        <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">&#8984;`</kbd>
-          <span>terminal</span>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5 rounded-[4px]">{mod}`</kbd>
+          <span>{t('nav.hint.terminal', 'terminal')}</span>
         </span>
       </div>
     </div>

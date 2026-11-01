@@ -24,6 +24,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { classifyLoadError } from '../../services/api';
 import {
@@ -88,11 +89,12 @@ function isoWeek(iso: string | null): string | null {
  *  file moved, show a neutral placeholder icon instead of the browser's broken
  *  glyph. Used for both the gallery thumbnail and the drawer's big image. */
 function ImgWithFallback({ src, alt, className, lazy }: { src: string; alt: string; className?: string; lazy?: boolean }) {
+  const { t } = useTranslation();
   const [failed, setFailed] = useState(false);
   if (failed) {
     return (
       <div className={`flex items-center justify-center bg-[var(--color-bg)] ${className ?? ''}`} data-testid="pollinate-img-fallback">
-        <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]" title={`Preview unavailable: ${alt}`}>
+        <span className="material-symbols-outlined icon-xl text-[var(--color-text-faint)]" title={t('ui.PollinateOverlay.previewUnavailable', { name: alt })}>
           broken_image
         </span>
       </div>
@@ -110,6 +112,7 @@ function ImgWithFallback({ src, alt, className, lazy }: { src: string; alt: stri
 }
 
 export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
+  const { t } = useTranslation();
   const [view, setView] = useState<View>('gallery');
   const [query, setQuery] = useState('');
   const [platformFilter, setPlatform] = useState<string>('');
@@ -203,7 +206,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
         {/* Sub-header: label + Gallery|Insights toggle (shared WorkbenchToolbar). */}
         <WorkbenchToolbar
           loading={loading}
-          left={<span className="text-small text-[var(--color-text-muted)]">Content Assets</span>}
+          left={<span className="text-small text-[var(--color-text-muted)]">{t('ui.PollinateOverlay.contentAssets')}</span>}
           right={(['gallery', 'insights'] as View[]).map((v) => (
             <button
               key={v}
@@ -215,7 +218,7 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                 view === v ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
               }`}
             >
-              {v === 'gallery' ? 'Gallery' : 'Insights'}
+              {v === 'gallery' ? t('ui.PollinateOverlay.gallery') : t('ui.PollinateOverlay.insights')}
             </button>
           ))}
         />
@@ -223,12 +226,12 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
         {/* Overall strip (both views) */}
         {o && (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 px-4 py-2 border-b border-[var(--color-border)]" data-testid="pollinate-overall">
-            <Stat label="Topics" value={String(o.cardCount)} />
-            <Stat label="Assets" value={String(o.assetCount)} />
-            <Stat label="Ready" value={String(o.ready)} />
-            <Stat label="Published" value={String(o.published)} />
-            <Stat label="In progress" value={String(o.inProgress)} accent={o.inProgress > 0} />
-            <Stat label="Channels" value={String(Object.keys(o.platformDist).length)} />
+            <Stat label={t('ui.PollinateOverlay.statTopics')} value={String(o.cardCount)} />
+            <Stat label={t('ui.PollinateOverlay.statAssets')} value={String(o.assetCount)} />
+            <Stat label={t('ui.PollinateOverlay.statReady')} value={String(o.ready)} />
+            <Stat label={t('ui.PollinateOverlay.statPublished')} value={String(o.published)} />
+            <Stat label={t('ui.PollinateOverlay.statInProgress')} value={String(o.inProgress)} accent={o.inProgress > 0} />
+            <Stat label={t('ui.PollinateOverlay.statChannels')} value={String(Object.keys(o.platformDist).length)} />
           </div>
         )}
 
@@ -239,12 +242,12 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search topic / caption / domain…"
+                placeholder={t('ui.PollinateOverlay.searchPlaceholder')}
                 data-testid="pollinate-search"
                 className="flex-1 min-w-[160px] px-2.5 py-1 text-small rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
               />
-              <Select value={platformFilter} onChange={setPlatform} options={allPlatforms} placeholder="platform" testid="pollinate-filter-platform" />
-              <Select value={formatFilter} onChange={setFormat} options={allFormats} placeholder="format" testid="pollinate-filter-format" />
+              <Select value={platformFilter} onChange={setPlatform} options={allPlatforms} placeholder={t('ui.PollinateOverlay.filterPlatform')} testid="pollinate-filter-platform" />
+              <Select value={formatFilter} onChange={setFormat} options={allFormats} placeholder={t('ui.PollinateOverlay.filterFormat')} testid="pollinate-filter-format" />
               {/* to-publish state chip — surface what still needs posting (design §1.3). */}
               <button
                 onClick={() => setToPublishOnly((v) => !v)}
@@ -255,13 +258,14 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
                     : 'text-[var(--color-text-muted)] border-[var(--color-border)] hover:bg-[var(--color-hover)]'
                 }`}
               >
-                to publish
+                {t('ui.PollinateOverlay.toPublish')}
               </button>
               <Select
                 value={sort}
                 onChange={(v) => setSort(v as Sort)}
                 options={['newest', 'to-publish']}
-                placeholder="sort"
+                labels={{ newest: t('ui.PollinateOverlay.sortNewest'), 'to-publish': t('ui.PollinateOverlay.sortToPublish') }}
+                placeholder={t('ui.PollinateOverlay.sort')}
                 testid="pollinate-sort"
               />
             </div>
@@ -300,8 +304,8 @@ export function PollinateContent({ onDispatch, close }: PollinateContentProps) {
               {!loading && !loadErr && filtered.length === 0 && (
                 <div className="text-center py-10 text-body text-[var(--color-text-faint)]">
                   {cards.length === 0
-                    ? 'No content yet. Ask Swarm in chat to pollinate a topic.'
-                    : 'No assets match your search.'}
+                    ? t('ui.PollinateOverlay.noContent')
+                    : t('ui.PollinateOverlay.noMatch')}
                 </div>
               )}
               {filtered.map((card, idx) => (
@@ -362,9 +366,13 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
-function Select({ value, onChange, options, placeholder, testid }: {
-  value: string; onChange: (v: string) => void; options: string[]; placeholder: string; testid: string;
+function Select({ value, onChange, options, labels, placeholder, testid }: {
+  value: string; onChange: (v: string) => void; options: string[];
+  /** Shown text per option value; the value itself when absent. */
+  labels?: Record<string, string>;
+  placeholder: string; testid: string;
 }) {
+  const { t } = useTranslation();
   return (
     <select
       value={value}
@@ -372,8 +380,8 @@ function Select({ value, onChange, options, placeholder, testid }: {
       data-testid={testid}
       className="px-2 py-1 text-small rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-muted)]"
     >
-      <option value="">{placeholder}: all</option>
-      {options.map((op) => <option key={op} value={op}>{op}</option>)}
+      <option value="">{t('ui.PollinateOverlay.filterAll', { name: placeholder })}</option>
+      {options.map((op) => <option key={op} value={op}>{labels?.[op] ?? op}</option>)}
     </select>
   );
 }
@@ -384,6 +392,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
   onOpenAsset: (a: PollinateAsset) => void;
   onProduce: (platform: string) => void;
 }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <div className="rounded-md border border-[var(--color-border)]" data-testid={`pollinate-card-${card.run}`}>
@@ -398,14 +407,14 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
         {card.domain && <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">[{card.domain}]</span>}
         <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">{fmtDate(card.createdAt)}</span>
         <span className="text-meta tabular-nums text-[var(--color-text-faint)] shrink-0">
-          {card.publishedCount > 0 && <span className="text-[var(--color-status-success)]">{card.publishedCount} published · </span>}
-          {card.readyCount} ready
+          {card.publishedCount > 0 && <span className="text-[var(--color-status-success)]">{t('ui.PollinateOverlay.publishedCount', { count: card.publishedCount })} · </span>}
+          {t('ui.PollinateOverlay.readyCount', { count: card.readyCount })}
         </span>
       </button>
       {expanded && (
         <div className="border-t border-[var(--color-border)] p-3">
           {card.assets.length === 0 ? (
-            <div className="text-meta text-[var(--color-text-faint)]">No assets produced yet.</div>
+            <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.noAssets')}</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
               {card.assets.map((a, i) => (
@@ -446,7 +455,7 @@ function ContentCard({ card, defaultExpanded, onOpenAsset, onProduce }: {
               data-testid={`pollinate-produce-${card.run}`}
               className="mt-2 btn-sm btn-soft"
             >
-              <span className="material-symbols-outlined icon-xs">add</span>Produce more
+              <span className="material-symbols-outlined icon-xs">add</span>{t('ui.PollinateOverlay.produceMore')}
             </button>
           )}
         </div>
@@ -490,6 +499,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   onProduce: (platform: string) => void;
   onMarkPublished: (published: boolean, postedUrl?: string | null) => Promise<boolean>;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [copyErr, setCopyErr] = useState(false); // B7: clipboard-blocked was silent
   const [body, setBody] = useState<string | null>(null);
@@ -568,11 +578,11 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         {(captionPath || bodyLoading) && (
           <div>
             <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">
-              {captionAsset && isPublishKit(captionAsset) ? 'Publish kit'
-                : captionAsset?.format === 'narrative' ? 'Narrative' : 'Caption'}
+              {captionAsset && isPublishKit(captionAsset) ? t('ui.PollinateOverlay.publishKit')
+                : captionAsset?.format === 'narrative' ? t('ui.PollinateOverlay.narrative') : t('ui.PollinateOverlay.caption')}
             </div>
             {bodyLoading ? (
-              <div className="text-meta text-[var(--color-text-faint)]">Loading…</div>
+              <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.loading')}</div>
             ) : body ? (
               <div
                 data-testid="pollinate-caption-body"
@@ -581,7 +591,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
                 {body}
               </div>
             ) : (
-              <div className="text-meta text-[var(--color-text-faint)]">Caption body unavailable.</div>
+              <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.captionUnavailable')}</div>
             )}
           </div>
         )}
@@ -590,9 +600,9 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${stateDot(asset.publishStatus)}`} />
           <span className="text-meta text-[var(--color-text-muted)]">
-            {asset.publishStatus === 'published' ? 'published'
-              : asset.publishStatus === 'ready-to-publish' ? 'ready to publish'
-              : 'ready'}
+            {asset.publishStatus === 'published' ? t('ui.PollinateOverlay.statePublished')
+              : asset.publishStatus === 'ready-to-publish' ? t('ui.PollinateOverlay.stateReadyToPublish')
+              : t('ui.PollinateOverlay.stateReady')}
           </span>
           {asset.publishStatus === 'published' && asset.postedUrl && /^https?:\/\//i.test(asset.postedUrl) && (
             // Defense-in-depth: only render an http(s) href (the backend already rejects
@@ -615,13 +625,13 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             className="self-start btn-sm btn-ghost disabled:opacity-50"
           >
             <span className="material-symbols-outlined icon-xs">undo</span>
-            {markErr ? 'Failed — retry' : 'Mark unpublished'}
+            {markErr ? t('ui.PollinateOverlay.failedRetry') : t('ui.PollinateOverlay.markUnpublished')}
           </button>
         ) : (
           <div className="flex gap-2 items-center flex-wrap">
             <input
               type="url" value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="posted URL (optional)"
+              placeholder={t('ui.PollinateOverlay.postedUrl')}
               data-testid="pollinate-posted-url-input"
               className="flex-1 min-w-[140px] px-2 py-1 text-meta rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)]"
             />
@@ -632,7 +642,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               className="btn-sm btn-success transition-colors disabled:opacity-50"
             >
               <span className="material-symbols-outlined icon-xs">{markErr ? 'error' : 'check_circle'}</span>
-              {marking ? 'Marking…' : markErr ? 'Failed — retry' : 'Mark published'}
+              {marking ? t('ui.PollinateOverlay.marking') : markErr ? t('ui.PollinateOverlay.failedRetry') : t('ui.PollinateOverlay.markPublished')}
             </button>
           </div>
         )}
@@ -643,7 +653,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
             className="btn-sm btn-soft transition-colors"
           >
             <span className="material-symbols-outlined icon-xs">{copyErr ? 'error' : copied ? 'check' : 'content_copy'}</span>
-            {copyErr ? 'Copy blocked' : copied ? 'Copied' : (body ? 'Copy caption' : 'Copy path')}
+            {copyErr ? t('ui.PollinateOverlay.copyBlocked') : copied ? t('ui.PollinateOverlay.copied') : (body ? t('ui.PollinateOverlay.copyCaption') : t('ui.PollinateOverlay.copyPath'))}
           </button>
           {asset.platform && (
             <button
@@ -651,7 +661,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
               data-testid="pollinate-open-account-btn"
               className="btn-md btn-ghost"
             >
-              <span className="material-symbols-outlined icon-sm">open_in_new</span>Open {asset.platform}
+              <span className="material-symbols-outlined icon-sm">open_in_new</span>{t('ui.PollinateOverlay.openPlatform', { platform: asset.platform })}
             </button>
           )}
         </div>
@@ -659,7 +669,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
         {/* Same topic — platforms not yet produced → offer to make (design §4). */}
         {missingPlatforms.length > 0 && (
           <div>
-            <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Not yet produced for</div>
+            <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">{t('ui.PollinateOverlay.notProducedFor')}</div>
             <div className="flex gap-1.5 flex-wrap" data-testid="pollinate-missing-platforms">
               {missingPlatforms.map((p) => (
                 <button
@@ -680,6 +690,7 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
 }
 
 function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null; loading: boolean }) {
+  const { t } = useTranslation();
   const insights = useMemo(() => {
     if (!data) return null;
     const cards = data.cards;
@@ -712,41 +723,41 @@ function InsightsView({ data, loading }: { data: PollinateAssetsResponse | null;
     return { byType, byChannel, byDomain, trendPts, produced, readyToPublish, published };
   }, [data]);
 
-  if (loading && !insights) return <div className="flex-1 px-4 py-6 text-small text-[var(--color-text-faint)]">Loading…</div>;
-  if (!insights) return <div className="flex-1 px-4 py-6 text-small text-[var(--color-text-faint)]">No data.</div>;
+  if (loading && !insights) return <div className="flex-1 px-4 py-6 text-small text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.loading')}</div>;
+  if (!insights) return <div className="flex-1 px-4 py-6 text-small text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.noData')}</div>;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-4" data-testid="pollinate-insights">
       {/* Publish funnel — the most useful panel for a creator */}
-      <Panel title="Publish funnel">
+      <Panel title={t('ui.PollinateOverlay.funnel')}>
         <div className="flex items-end gap-3">
-          <FunnelBar label="Produced" value={insights.produced} max={insights.produced} />
-          <FunnelBar label="Ready to publish" value={insights.readyToPublish} max={insights.produced} />
-          <FunnelBar label="Published" value={insights.published} max={insights.produced} />
+          <FunnelBar label={t('ui.PollinateOverlay.produced')} value={insights.produced} max={insights.produced} />
+          <FunnelBar label={t('ui.PollinateOverlay.readyToPublish')} value={insights.readyToPublish} max={insights.produced} />
+          <FunnelBar label={t('ui.PollinateOverlay.statPublished')} value={insights.published} max={insights.produced} />
         </div>
         {insights.published === 0 && insights.produced > 0 && (
           <div className="text-meta text-[var(--color-status-warning)] mt-2">
-            {insights.produced} assets made, 0 marked published — a posted-URL state exists once auto-distribution ships.
+            {t('ui.PollinateOverlay.noneMarked', { count: insights.produced })}
           </div>
         )}
       </Panel>
 
-      <Panel title="By channel — coverage (published / total)">
+      <Panel title={t('ui.PollinateOverlay.byChannel')}>
         <BarList entries={Object.entries(insights.byChannel).map(([k, v]) => [k, v.total])}
-                 sub={(k) => `${insights.byChannel[k].published}/${insights.byChannel[k].total} published`} />
+                 sub={(k) => t('ui.PollinateOverlay.channelPublished', { published: insights.byChannel[k].published, total: insights.byChannel[k].total })} />
       </Panel>
 
-      <Panel title="By content-type">
+      <Panel title={t('ui.PollinateOverlay.byType')}>
         <BarList entries={Object.entries(insights.byType)} />
       </Panel>
 
-      <Panel title="By domain">
+      <Panel title={t('ui.PollinateOverlay.byDomain')}>
         <BarList entries={Object.entries(insights.byDomain)} />
       </Panel>
 
-      <Panel title="Production trend — topics per week">
+      <Panel title={t('ui.PollinateOverlay.trend')}>
         {insights.trendPts.length === 0 ? (
-          <div className="text-meta text-[var(--color-text-faint)]">No dated topics.</div>
+          <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PollinateOverlay.noDated')}</div>
         ) : (
           <div className="flex items-end gap-1 h-12">
             {insights.trendPts.map(([week, n]) => {

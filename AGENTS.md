@@ -675,6 +675,47 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
 `commit ≠ qualified ≠ deployed`: a build produces a binary; code isn't live until
 rebuild+restart. "Tests green" alone is not "qualified."
 
+## SwarmAI development conventions
+
+These hold for work on this repo. The shipped context files (`backend/context/`) state only
+the generic rule, because they are injected into every user's prompt; the SwarmAI-specific
+form lives here.
+
+- **Commit directly to `main`.** Never auto-branch; branch only when asked (worktree branches
+  as in "Git Commits" above).
+- **A change is live only after rebuild + restart.** `./prod.sh build` makes the binary; the
+  daemon runs the old code until it is rebuilt and restarted (`commit ≠ qualified ≠ deployed`).
+- **Daemon lifecycle (macOS, launchd).** `SIGTERM` = restart (KeepAlive brings it back);
+  `launchctl bootout` = permanent deregister; deploy = SIGKILL + bootout + rsync of the new
+  build + bootstrap. Never from a child process of the daemon. Restart, stop and deploy are
+  destructive: the user's explicit approval first, never "just to verify".
+- **Ports.** Daemon (and subprocess, Hive) health: `GET /health` on :18321. The dev backend
+  (`./dev.sh`) listens on :8000.
+- **Environment.** A macOS GUI app does not get the login shell's PATH: run a command that
+  needs it as `zsh -lic '<command>'`. Never assume the daemon has your shell's environment.
+  With the Claude Code sandbox turned on, `pgrep` / `ps` / `top` can be blocked (it is off by
+  default). CJK keyword matching uses a substring fallback (CJK text has no word boundaries).
+- **Chat smoke check** (the end-to-end smoke of AGENT R16 for this repo): send 1 message → it
+  streams → it persists on tab switch.
+- **Eval only on the deployed binary.** The system eval scores the deployed daemon; run on
+  un-deployed code it tests the old binary and can hang the judge. CI runs only the eval
+  machinery's own unit tests, never an eval.
+
+## Release checklist
+
+Releases run through the SwarmAI DDD's `s_swarm-release` skill (`./prod.sh release`). Before
+tagging:
+
+1. The local quality gate above is green (Build, Tests, Eval check).
+2. **Context strip-test review.** A zero-context reviewer (a sub-agent given no session
+   history) reads `git diff <last-tag>..HEAD -- backend/context` (`<last-tag>` =
+   `git describe --tags --abbrev=0`) and applies the strip test to every added or changed
+   sentence: remove this user, this machine and this repo — is it still true and useful on a
+   stranger's fresh install (any OS, any repo, any user with an AWS account)? It reports its
+   findings (file, sentence, why it fails, where it belongs: this AGENTS.md, a user's own
+   file or a DDD). It does not block the release: fix the findings in a follow-up commit or
+   record them as known issues.
+
 ## Key Design Decisions
 
 1. **Single agent with role-switching** > multi-agent orchestration (zero context-transfer

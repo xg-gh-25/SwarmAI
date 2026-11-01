@@ -61,8 +61,7 @@ ONE_REPO_OR_USER = [
 
 
 def test_no_template_carries_one_repo_or_one_user_facts():
-    texts = list(_templates()) + [("USER.example.md",
-                                   (CTX / "USER.example.md").read_text(encoding="utf-8"))]
+    texts = list(_templates())
     hits = [(name, pat) for name, text in texts for pat in ONE_REPO_OR_USER
             if re.search(pat, text)]
     assert not hits, hits

@@ -9,6 +9,7 @@
  *   - Reports duration via onStatusInfo on loadedmetadata
  */
 import { useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { rawFileUrl } from '../utils/rawFileUrl';
 
 interface RendererProps {
@@ -36,6 +37,7 @@ export default function AudioRenderer({
   fileName,
   onStatusInfo,
 }: RendererProps) {
+  const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const handleLoadedMetadata = useCallback(() => {
@@ -43,8 +45,8 @@ export default function AudioRenderer({
     if (!audio || !isFinite(audio.duration)) return;
 
     const duration = formatDuration(audio.duration);
-    onStatusInfo?.({ customInfo: `Duration: ${duration}` });
-  }, [onStatusInfo]);
+    onStatusInfo?.({ customInfo: t('ui.AudioRenderer.duration', { duration }) });
+  }, [onStatusInfo, t]);
 
   const src = rawFileUrl(filePath);
 
@@ -81,7 +83,7 @@ export default function AudioRenderer({
       >
         <source src={src} />
         <p className="text-sm text-[var(--color-text-muted)]">
-          Your browser does not support this audio format.
+          {t('ui.AudioRenderer.unsupportedFormat')}
         </p>
       </audio>
     </div>

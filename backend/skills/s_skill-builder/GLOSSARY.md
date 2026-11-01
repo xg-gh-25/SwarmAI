@@ -1,5 +1,6 @@
 # SwarmAI — Ubiquitous Language
 
+The skill-builder's glossary (read from this skill's own folder, `{SKILL_DIR}/GLOSSARY.md`).
 Canonical terms for skills, agents, and documentation. When writing a skill,
 use these terms exactly. When a term has "Avoid" entries, never use those
 synonyms — they cause confusion across the skill ecosystem.
@@ -19,15 +20,18 @@ synonyms — they cause confusion across the skill ecosystem.
   _Avoid:_ "agent process", "worker", "subprocess" (too generic — the subprocess
   is one part of the unit).
 
-- **daemon** — The always-on `com.swarmai.backend` launchd process
-  (`SWARMAI_MODE=daemon`). Runs Slack, background jobs, channels, and serves
-  all desktop app connections. Fixed port 18321. Auto-installed by Tauri on
-  first launch. This is THE backend — there is no other mode in production.
+- **daemon** — The macOS backend mode: the always-on `com.swarmai.backend`
+  launchd process (`SWARMAI_MODE=daemon`). Runs channels (Slack), background
+  jobs, and serves the desktop app. Port 18321. Installed by the app on first
+  launch. One of three backend modes (with **subprocess** and **hive**).
   _Avoid:_ "server", "service" (too generic).
 
-- **subprocess** — Windows/Linux backend mode. Python backend spawned by Tauri
-  as a child process that dies when the desktop app closes. No channels/jobs.
-  Contrast with daemon (macOS, 24/7). See `SWARMAI_MODE=subprocess`.
+- **subprocess** — Windows/Linux backend mode. Python backend spawned by the
+  desktop app as a child process that stops when the app closes. No
+  channels/jobs. Contrast with daemon (macOS, 24/7). See `SWARMAI_MODE=subprocess`.
+
+- **hive** — SwarmAI on the user's own AWS EC2 Linux host, run as a systemd
+  service (`SWARMAI_MODE=hive`). Runs channels and jobs like the daemon.
 
 - **sidecar (file)** — A companion file that lives alongside a primary file.
   E.g., `2026-05-08.jsonl` is the JSONL sidecar for `2026-05-08.md`.
@@ -41,7 +45,8 @@ synonyms — they cause confusion across the skill ecosystem.
 
 - **job** — A scheduled entry in `user-jobs.yaml` or `system-jobs.yaml`. Defines
   what task to run, when, and with what parameters.
-  _Avoid:_ "cron" (implementation detail — jobs use launchd, not cron),
+  _Avoid:_ "cron" (schedules use cron syntax, but the backend's in-process
+  scheduler runs them, not cron),
   "scheduled task" (use "job" for the schedule, "task" for the execution).
 
 - **todo** — A left-nav **ToDo card/overlay** work packet managed by `s_radar-todo`
@@ -49,11 +54,11 @@ synonyms — they cause confusion across the skill ecosystem.
   `ToDoOverlay`, NOT a "Radar sidebar"). Self-contained: title, description, linked
   files, commits, acceptance criteria. Dragging into chat gives the agent full context.
   _Avoid:_ "Radar" (retired surface name), "task" (that's the job system),
-  "ticket" (that's Taskei/external), "issue" (that's GitHub/Linear).
+  "ticket" (that's an external tracker), "issue" (that's GitHub/Linear).
 
-- **ticket** — An external work item in Taskei, GitHub Issues, or Linear.
-  Not managed by SwarmAI — queried via MCP tools.
-  _Avoid:_ "issue" (when referring to Taskei), "todo" (that's the ToDo card).
+- **ticket** — An external work item in a tracker such as GitHub Issues, Jira
+  or Linear. Not managed by SwarmAI — queried via MCP tools.
+  _Avoid:_ "issue" (when referring to a non-GitHub tracker), "todo" (that's the ToDo card).
 
 ## Skills & Evolution
 
@@ -87,11 +92,12 @@ synonyms — they cause confusion across the skill ecosystem.
   written by CDF only, one section per type (Principles, Corrections, Decisions,
   Guidelines, Pitfalls, Processes, Models) plus the COE Registry. Open work is not
   memory: it is a gap in its project or a ToDo.
-  _Avoid:_ "context" (that's the 11-file system prompt), "history" (that's raw
+  _Avoid:_ "context" (that's the assembled system prompt), "history" (that's raw
   chat transcript), "knowledge" (that's `KNOWLEDGE.md`).
 
-- **context** — The assembled system prompt built from 11 `.context/*.md` files
-  (P0-P10). Assembled by `ContextDirectoryLoader` + `PromptBuilder`.
+- **context** — The assembled system prompt built from the governed
+  `.context/*.md` files, in priority order. Assembled by `ContextDirectoryLoader`
+  + `PromptBuilder`.
   _Avoid:_ "prompt" (too narrow — context includes memory, knowledge, projects),
   "memory" (that's one file within context).
 

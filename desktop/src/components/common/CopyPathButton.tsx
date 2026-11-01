@@ -17,6 +17,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../../services/api';
 import { copyToClipboard } from '../../utils/clipboard';
 import { isDesktop } from '../../services/tauri';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
+import { useTranslation } from 'react-i18next';
 
 export const COPIED_MS = 1500;
 
@@ -36,9 +39,9 @@ async function absolutePathOf(path: string): Promise<string | null> {
  *  fallbacks such as "open in system app failed → copy the path instead". */
 export async function copyPathNow(path: string): Promise<boolean> {
   const target = await absolutePathOf(path);
-  if (!target) { toast(`Could not resolve the full path of ${path}`); return false; }
+  if (!target) { toast(i18n.t('ui.CopyPathButton.resolveFailed', { path })); return false; }
   if (await copyToClipboard(target)) return true;
-  toast(`Could not copy — ${target}`);
+  toast(i18n.t('ui.CopyPathButton.copyFailed', { path: target }));
   return false;
 }
 
@@ -61,6 +64,7 @@ export function CopyPathButton({
   iconSize?: 'xs' | 'sm';
   testId?: string;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -81,14 +85,14 @@ export function CopyPathButton({
       className={`${className} transition-colors`}
       // inline, so it wins over any text-* colour class the caller passes
       style={copied ? { color: 'var(--color-success)' } : undefined}
-      title={copied ? 'Copied' : 'Copy full path'}
-      aria-label={copied ? 'Copied' : 'Copy full path'}
+      title={copied ? t('ui.CopyPathButton.copied') : t('ui.CopyPathButton.copyFullPath')}
+      aria-label={copied ? t('ui.CopyPathButton.copied') : t('ui.CopyPathButton.copyFullPath')}
       data-testid={testId}
       data-copied={copied || undefined}
     >
       <span className={iconSize === 'xs' ? 'material-symbols-outlined icon-xs leading-none' : 'material-symbols-outlined icon-sm leading-none'} aria-hidden="true">{copied ? 'check' : 'content_copy'}</span>
-      {label && <span>{copied ? 'Copied' : label}</span>}
-      <span className="sr-only" aria-live="polite">{copied ? 'Copied' : ''}</span>
+      {label && <span>{copied ? t('ui.CopyPathButton.copied') : label}</span>}
+      <span className="sr-only" aria-live="polite">{copied ? t('ui.CopyPathButton.copied') : ''}</span>
     </button>
   );
 }

@@ -31,6 +31,7 @@
  *   that stubs this component still gets them)
  */
 import { memo, useCallback, useMemo, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { type ChangeStatus, type ReferencedFile, type GroupedReferencedFiles } from '../../hooks/useReferencedFiles';
 import { orderOutputs, outputRowOpenDetail } from '../../hooks/railSsot';
 
@@ -83,6 +84,7 @@ const OutputRow = memo(function OutputRow({
    *  so the CSS animation plays exactly once and never replays on re-render. */
   fresh: boolean;
 }) {
+  const { t } = useTranslation();
   const handleClick = useCallback(() => {
     // A DELETED row (run_5d9178bf) has no file on disk → opening would 404. The row
     // persists to show WHAT was deleted, but it is not clickable-to-open.
@@ -122,7 +124,7 @@ const OutputRow = memo(function OutputRow({
           : file.deleted ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
       }`}
       onClick={handleClick}
-      title={file.deleted ? `${file.path} (deleted)` : file.path}
+      title={file.deleted ? t('ui.CanvasOutputRail.deletedPath', { path: file.path }) : file.path}
       data-selected={selected || undefined}
       data-deleted={file.deleted || undefined}
       data-testid="canvas-output-row"
@@ -141,7 +143,7 @@ const OutputRow = memo(function OutputRow({
           className="shrink-0 text-[11px] font-semibold leading-none tabular-nums"
           style={{ color: style.color }}
           data-testid="canvas-output-badge"
-          title={badge === 'new' ? 'added' : 'modified'}
+          title={badge === 'new' ? t('ui.CanvasOutputRail.added') : t('ui.CanvasOutputRail.modified')}
         >
           {style.label}
         </span>
@@ -219,6 +221,7 @@ export interface CanvasOutputRailProps {
 }
 
 export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped, onCounts, selectedPath, onStopBrowsing }: CanvasOutputRailProps) {
+  const { t } = useTranslation();
 
   // Mount timestamp — an output whose firstSeen is AFTER this arrived while the
   // user was watching → it gets one land-pulse (§v6 #4). Outputs already present
@@ -295,8 +298,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
           <span className="canvas-bee">🐝</span>
         </div>
         <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed max-w-full">
-          No artifacts yet — keep chatting; whatever I create or edit lands here and
-          flies out to you.
+          {t('ui.CanvasOutputRail.empty')}
         </p>
       </div>
     );
@@ -318,7 +320,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
       className="flex flex-col gap-px py-0.5 list-none m-0 p-0 rounded-md outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-primary)]"
       data-testid="canvas-output-rail"
       tabIndex={0}
-      aria-label="Artifacts (↑/↓ to switch file)"
+      aria-label={t('ui.CanvasOutputRail.listLabel')}
       onKeyDown={onOutputListKey}
     >
       {main.map(renderRow)}
@@ -334,7 +336,7 @@ export const CanvasOutputRail = memo(function CanvasOutputRail({ files: grouped,
             <span className="material-symbols-outlined icon-xs leading-none" aria-hidden="true">
               {activityOpen ? 'expand_more' : 'chevron_right'}
             </span>
-            Activity
+            {t('ui.CanvasOutputRail.activity')}
             <span className="tabular-nums">· {activity.length}</span>
           </button>
         </li>
@@ -366,6 +368,7 @@ const BrowsingRow = memo(function BrowsingRow({
   fileName: string;
   onStop?: () => void;
 }) {
+  const { t } = useTranslation();
   const handleClick = useCallback(() => {
     document.dispatchEvent(
       new CustomEvent(OPEN_FILE_EVENT, { detail: outputRowOpenDetail(path, undefined) }),
@@ -384,7 +387,7 @@ const BrowsingRow = memo(function BrowsingRow({
         className="px-3 pt-1.5 pb-0.5 text-[11px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-faint,var(--color-text-muted))]"
         aria-hidden="true"
       >
-        Browsing
+        {t('ui.CanvasOutputRail.browsing')}
       </div>
       <div
         className="group canvas-row-sel flex h-[26px] items-center gap-1.5 pl-2.5 pr-2 cursor-pointer rounded-md text-[12px] transition-colors"
@@ -409,8 +412,8 @@ const BrowsingRow = memo(function BrowsingRow({
           <button
             onClick={(e) => { e.stopPropagation(); onStop(); }}
             className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-all shrink-0"
-            title="Stop browsing this file"
-            aria-label={`Stop browsing ${fileName}`}
+            title={t('ui.CanvasOutputRail.stopBrowsing')}
+            aria-label={t('ui.CanvasOutputRail.stopBrowsingName', { name: fileName })}
             data-testid="canvas-browsing-close"
           >
             <span className="material-symbols-outlined icon-sm">close</span>

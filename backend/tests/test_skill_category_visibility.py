@@ -2,7 +2,8 @@
 
 Covers the Capabilities-domain backend contract (run_b5d98151):
 - Every skill resolves to a KNOWN category or the Utilities fallback (coverage — no skill vanishes).
-- visibility is "internal" for the internal-prefix set, "public" otherwise.
+- visibility is "internal" only when the SKILL.md frontmatter says so, "public" otherwise
+  (a name never makes a skill internal).
 - Frontmatter `category:`/`visibility:` override the derived values.
 - GET /api/skills is run-mode-keyed (Gate-1 adopted, backend-primary, fail-closed):
   internal skills are served ONLY in local-desktop run modes (daemon/subprocess/dev),
@@ -25,10 +26,11 @@ class TestDeriveCategory:
     def test_unmapped_skill_falls_to_utilities(self):
         assert derive_category("s_some-brand-new-skill-xyz") == "Utilities"
 
-    def test_internal_prefix_maps_to_internal_category(self):
-        assert derive_category("s_cmhk-weekly-report") == "Internal"
-        assert derive_category("s_ivt-seed-users") == "Internal"
-        assert derive_category("s_internal-brazil") == "Internal"
+    def test_internal_visibility_maps_to_internal_category(self):
+        assert derive_category("s_weekly-report", None, "internal") == "Internal"
+        # a name alone groups nothing under Internal
+        assert derive_category("s_cmhk-weekly-report") != "Internal"
+        assert derive_category("s_internal-brazil") != "Internal"
 
     def test_frontmatter_override_wins(self):
         assert derive_category("s_deep-research", frontmatter_category="Content") == "Content"
@@ -41,11 +43,11 @@ class TestDeriveVisibility:
     def test_public_by_default(self):
         assert derive_visibility("s_deep-research") == "public"
 
-    def test_internal_prefixes(self):
-        assert derive_visibility("s_cmhk-account-360") == "internal"
-        assert derive_visibility("s_ivt-oppty-gap-report") == "internal"
-        assert derive_visibility("s_internal-crux-cr") == "internal"
-        assert derive_visibility("s_meddpicc-scorecard") == "internal"
+    def test_a_name_never_makes_a_skill_internal(self):
+        assert derive_visibility("s_cmhk-account-360") == "public"
+        assert derive_visibility("s_ivt-oppty-gap-report") == "public"
+        assert derive_visibility("s_internal-crux-cr") == "public"
+        assert derive_visibility("s_meddpicc-scorecard") == "public"
 
     def test_frontmatter_override_wins(self):
         assert derive_visibility("s_deep-research", frontmatter_visibility="internal") == "internal"
@@ -72,7 +74,7 @@ class TestEndpointContract:
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
             "---\nname: internal-fixture\ndescription: \"Owner-only test skill.\"\n"
-            "tier: lazy\n---\n# Internal fixture\n", encoding="utf-8")
+            "tier: lazy\nvisibility: internal\n---\n# Internal fixture\n", encoding="utf-8")
         monkeypatch.setattr(skill_manager, "plugin_skills_path", plugin)
         monkeypatch.setattr(HiveAuthMiddleware, "_is_authorized", lambda self, scope: True)
         skill_manager.invalidate_cache()
@@ -93,9 +95,8 @@ class TestEndpointContract:
         monkeypatch.setenv("SWARMAI_MODE", "daemon")
         resp = client.get("/api/skills")
         assert resp.status_code == 200
-        names = [i["folder_name"] for i in resp.json()]
-        internal = [n for n in names if n.startswith(("s_cmhk-", "s_ivt-", "s_internal-"))]
-        assert internal, "owner desktop must see internal skills"
+        internal = [i["folder_name"] for i in resp.json() if i["visibility"] == "internal"]
+        assert "s_internal-fixture" in internal, "owner desktop must see internal skills"
 
     def test_hive_mode_omits_internal(self, client, monkeypatch):
         # hive = remote multi-viewer → internal skills MUST be omitted (fail-closed)
@@ -146,31 +147,6 @@ class TestEndpointContract:
         )
 
 
-class TestCreateInternalNameGuard:
-    """Creating a skill with an internal-derived name is rejected uniformly (400),
-    closing the 409-enumeration leak + preventing a self-invisible user skill."""
-
-    def test_create_internal_prefix_rejected_400(self, client):
-        resp = client.post("/api/skills", json={
-            "folder_name": "cmhk-my-custom",
-            "name": "cmhk-my-custom",
-            "description": "x",
-            "content": "# x",
-        })
-        assert resp.status_code == 400, "internal-prefix create must be rejected"
-        assert "already exists" not in resp.text.lower(), "must NOT leak existence (enumeration)"
-
-    def test_public_name_passes_the_internal_guard(self):
-        # Unit-level (no HTTP create → no on-disk side effect): a public name does
-        # NOT trip _reject_internal_folder_name; an internal-prefix name does.
-        from routers.skills import _reject_internal_folder_name
-        from fastapi import HTTPException
-        _reject_internal_folder_name("my-ordinary-skill-xyz")  # no raise
-        with pytest.raises(HTTPException) as exc:
-            _reject_internal_folder_name("cmhk-probe")
-        assert exc.value.status_code == 400
-
-
 class TestFullRegistryCoverage:
     """No skill vanishes — every real skill resolves to a non-empty category."""
 
@@ -183,5 +159,6 @@ class TestFullRegistryCoverage:
         cache = asyncio.run(skill_manager.get_cache())
         assert len(cache) > 0, "expected a non-empty skill cache"
         for folder_name in cache:
-            cat = derive_category(folder_name)
+            cat = derive_category(folder_name, cache[folder_name].category,
+                                  cache[folder_name].visibility)
             assert cat and isinstance(cat, str), f"{folder_name} resolved to empty category"

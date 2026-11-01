@@ -556,7 +556,7 @@ class SelfLoopsHealthEngine:
         agent_md_tokens = 0  # P3: AGENT.md (system-owned, large)
         system_names = {"SWARMAI.md", "IDENTITY.md", "SOUL.md"}
         for f in CONTEXT_DIR.glob("*.md"):
-            if f.name.startswith("L0") or f.name == "USER.example.md":
+            if f.name.startswith("L0"):
                 continue
             tokens = f.stat().st_size // 4
             total_tokens += tokens
@@ -670,7 +670,7 @@ class SelfLoopsHealthEngine:
         total_tokens = sum(
             f.stat().st_size // 4
             for f in CONTEXT_DIR.glob("*.md")
-            if not f.name.startswith("L0") and f.name != "USER.example.md"
+            if not f.name.startswith("L0")
         )
 
         history.append({

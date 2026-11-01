@@ -10,10 +10,12 @@ import {
 } from '../../services/updater';
 import Button from './Button';
 import Modal from './Modal';
+import { useTranslation } from 'react-i18next';
 
 type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error';
 
 export default function UpdateNotification() {
+  const { t } = useTranslation();
   const [state, setState] = useState<UpdateState>('idle');
   const [update, setUpdate] = useState<Update | null>(null);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
@@ -85,7 +87,7 @@ export default function UpdateNotification() {
     <Modal
       isOpen={!dismissed && (state === 'available' || state === 'downloading' || state === 'ready' || state === 'error')}
       onClose={handleDismiss}
-      title="Update Available"
+      title={t('ui.UpdateNotification.title')}
       size="md"
     >
       <div className="space-y-4">
@@ -95,11 +97,11 @@ export default function UpdateNotification() {
             <span className="material-symbols-outlined icon-lg text-primary">system_update</span>
             <div>
               <p className="text-[var(--color-text)] font-medium">
-                Version {updateInfo.version} is available
+                {t('ui.UpdateNotification.versionAvailable', { version: updateInfo.version })}
               </p>
               {updateInfo.date && (
                 <p className="text-sm text-[var(--color-text-muted)]">
-                  Released: {new Date(updateInfo.date).toLocaleDateString()}
+                  {t('ui.UpdateNotification.released', { date: new Date(updateInfo.date).toLocaleDateString() })}
                 </p>
               )}
             </div>
@@ -110,7 +112,7 @@ export default function UpdateNotification() {
         <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]">
           <span className="material-symbols-outlined icon-xs text-status-success mt-0.5">shield</span>
           <p className="text-xs text-[var(--color-text-muted)]">
-            Your conversations, memory, and workspace are safe — only the app binary is updated.
+            {t('ui.UpdateNotification.dataSafe')}
           </p>
         </div>
 
@@ -125,7 +127,7 @@ export default function UpdateNotification() {
         {state === 'downloading' && progress && (
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--color-text-muted)]">Downloading...</span>
+              <span className="text-[var(--color-text-muted)]">{t('ui.UpdateNotification.downloading')}</span>
               <span className="text-[var(--color-text)]">
                 {progress.total
                   ? `${formatBytes(progress.downloaded)} / ${formatBytes(progress.total)}`
@@ -145,7 +147,7 @@ export default function UpdateNotification() {
         {state === 'ready' && (
           <div className="flex items-center gap-2 text-status-success">
             <span className="material-symbols-outlined icon-md">check_circle</span>
-            <span>Update downloaded. Restart to apply.</span>
+            <span>{t('ui.UpdateNotification.downloaded')}</span>
           </div>
         )}
 
@@ -162,27 +164,27 @@ export default function UpdateNotification() {
           {state === 'available' && (
             <>
               <Button variant="ghost" onClick={handleDismiss}>
-                Later
+                {t('ui.UpdateNotification.later')}
               </Button>
               <Button variant="primary" onClick={handleDownload} icon="download">
-                Update Now
+                {t('ui.UpdateNotification.updateNow')}
               </Button>
             </>
           )}
 
           {state === 'downloading' && (
             <Button variant="secondary" disabled>
-              Downloading...
+              {t('ui.UpdateNotification.downloading')}
             </Button>
           )}
 
           {state === 'ready' && (
             <>
               <Button variant="ghost" onClick={handleDismiss}>
-                Later
+                {t('ui.UpdateNotification.later')}
               </Button>
               <Button variant="primary" onClick={handleRestart} icon="restart_alt">
-                Restart Now
+                {t('ui.UpdateNotification.restartNow')}
               </Button>
             </>
           )}
@@ -190,10 +192,10 @@ export default function UpdateNotification() {
           {state === 'error' && (
             <>
               <Button variant="ghost" onClick={handleDismiss}>
-                Close
+                {t('common.button.close')}
               </Button>
               <Button variant="primary" onClick={handleDownload} icon="refresh">
-                Retry
+                {t('common.button.retry')}
               </Button>
             </>
           )}

@@ -100,8 +100,8 @@ a flat ban (cognitive self-evolution IS the point).
 
 | # (slot) | File | What it owns | Owner · change path |
 |---|---|---|---|
-| 0 | **SWARMAI** | Product/system identity, core principles, the cognition-system charter (incl. this map) | system · edit `backend/context` source + rebuild |
-| 1 | **IDENTITY** | Agent name / avatar / one-line identity | system · source + rebuild |
+| 0 | **SWARMAI** | Product/system identity, core principles, the cognition-system charter (incl. this map) | system · edit the `backend/context` source (SwarmAI's own checkout; elsewhere propose upstream) |
+| 1 | **IDENTITY** | Agent name / avatar / one-line identity | system · `backend/context` source, as for SWARMAI |
 | 2 | **SOUL** | Personality + the 10 cognitive principles (P1–P10) | system · **s_self-evolution** (human gate) |
 | 2 | **SELF** | Runtime self-portrait — kernel flows, gates, top failure classes (mechanism, not identity) | runtime-owned · human/distill writes only (auto-cultivation code-blocked) |
 | 3 | **AGENT** | Behavioral rules (R1–R31) + intake gate | system · **s_self-evolution** (human gate) |
@@ -116,12 +116,15 @@ a flat ban (cognitive self-evolution IS the point).
 **Two load-bearing rules this map enforces:** (1) **SwarmAI product/system architecture is NOT
 knowledge for KNOWLEDGE.md.** SwarmAI is itself a DDD (`Projects/SwarmAI/`), so its deep
 technical content — the pipeline, recall internals, CLI defaults, this file-system's assembly
-spec — sediments in **`Projects/SwarmAI/2-understanding/TECH.md`** (the DDD's technical doc);
-charter/identity-level statements ("what SwarmAI IS", the cognition-system principles) live
-*here* in SWARMAI.md; and KNOWLEDGE.md stays a thin `Knowledge/` directory index — never a
+spec — belongs in **`Projects/SwarmAI/2-understanding/TECH.md`** (the DDD's technical doc).
+Outside SwarmAI's own development install, `Projects/SwarmAI/` is a seeded starter brain (a
+short sample on the desktop, a fuller one on a Hive) the user may grow or replace, not an
+authoritative spec. Charter/identity-level statements ("what SwarmAI IS", the cognition-system
+principles) live *here* in SWARMAI.md; and KNOWLEDGE.md stays a thin `Knowledge/` directory index — never a
 prose home for any of the above. (2) **Governance/identity evolves via its approval path, never
 by hand-writing the projection** — SOUL/AGENT/STEERING → s_self-evolution; SWARMAI/IDENTITY →
-source-edit + rebuild.
+an edit of the `backend/context` source when the checkout is SwarmAI's own repo, otherwise a
+proposal upstream (an issue or PR to SwarmAI).
 - **What a DDD is (the paradigm each brain follows).** A universal brain with the same six
   sections — ① Identity ② Knowledge ③ Gates ④ Capabilities ⑤ Delivery ⑥ Refresher — for every
   user and domain. The only thing that varies is its `0..N` governed **assets** (kind:
@@ -159,9 +162,10 @@ source-edit + rebuild.
 The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / each SKILL.md):
 - **Skills** — a large library of invocable capabilities (`s_*`); I build new ones when I hit
   a gap.
-- **MCPs** — tool servers (Sentral · Outlook · Slack · Highspot · builder · …), loaded
+- **MCPs** — tool servers (Email · Slack · Git · Playwright Browser · SQLite · …), loaded
   on-demand by tier; connections + auth in TOOLS.md.
-- **Jobs** — scheduled background work (launchd), running independently of any chat session.
+- **Jobs** — scheduled background work, run by the backend's in-process scheduler (the macOS
+  daemon or a Hive; not the Windows/Linux desktop backend), independently of any chat session.
 - **Coding → native by default, Autonomous Pipeline on request** — I code, test and commit
   natively, and call review experts as the change needs (AGENT.md R1/R2). The pipeline is the
   optional advanced mode: one requirement → documented, expert-reviewed, isolated, landed code
@@ -221,7 +225,7 @@ The desktop app IS my body; I have proprioception over it (sense my live state +
   Library). I never read TECH / IMPROVEMENT whole. There is no injected project list: the
   active project's DDD comes with `[DDD:<project>]`, the others via `knowledge map --projects`.
 
-## FAQ (1 line each — depth in the SwarmAI DDD's TECH.md)
+## FAQ (1 line each)
 - **How does a DDD feed me?** On session start + each message, relevant DDD/Knowledge/Memory
   sections are recalled (keyword/FTS5/BM25) and injected — you see a `[DDD:<project>]` block.
 - **Ontology?** One ontology = 🏷️ classification (7 knowledge types) × 🕸️ relations (3 layers),

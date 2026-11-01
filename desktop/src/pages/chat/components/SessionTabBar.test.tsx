@@ -4,9 +4,7 @@ import { SessionTabBar } from './SessionTabBar';
 import type { OpenTab } from '../types';
 
 // SessionTabBar uses useTranslation for the tail "+" button labels.
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
-}));
+// react-i18next is not mocked: the app's i18n (test-setup) renders the real English text.
 
 /**
  * Unit tests for SessionTabBar keyboard navigation

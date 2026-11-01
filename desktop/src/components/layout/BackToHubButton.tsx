@@ -7,17 +7,20 @@
  *
  * @exports BackToHubButton
  */
+import { useTranslation } from 'react-i18next';
+
 export function BackToHubButton({ onClick, testid }: { onClick: () => void; testid: string }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       onClick={onClick}
       data-testid={testid}
-      aria-label="Back to Brain Hub"
+      aria-label={t('ui.BackToHubButton.backToHub')}
       className="inline-flex items-center gap-1 h-7 pl-1.5 pr-2.5 mb-1 rounded-md border border-[var(--color-border)] text-small font-medium text-[var(--color-text)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] hover:bg-[var(--color-hover)] transition-colors"
     >
       <span className="material-symbols-outlined icon-sm" aria-hidden>arrow_back</span>
-      Brain Hub
+      {t('ui.BackToHubButton.brainHub')}
     </button>
   );
 }

@@ -144,7 +144,7 @@ export function UserMessageView({ message, onCancelQueued, onRetrySend, sessionI
                 className="mt-1 text-xs text-primary hover:text-primary-hover
                            cursor-pointer transition-colors"
               >
-                {isExpanded ? 'Show less' : 'Show more'}
+                {isExpanded ? t('ui.UserMessageView.showLess') : t('ui.UserMessageView.showMore')}
               </button>
             </div>
           )}

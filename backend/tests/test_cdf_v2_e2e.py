@@ -188,7 +188,7 @@ def test_s1_cli_real_chain_echo_reroute_and_defer(cdf_env, monkeypatch, capsys) 
     rows = _drain(cdf_env)
     assert rows[-1]["state"] == "written", [(row["state"], row["reason"]) for row in rows]
     steering = (cdf_env["workspace"] / ".context/STEERING.md").read_text(encoding="utf-8")
-    assert "## 系统追加（自动提取）" in steering
+    assert "## System appendix (auto-extracted)" in steering
     assert "Always answer in complete Chinese sentences." in steering
     queued_output = capsys.readouterr().out
     assert '"status": "queued"' in queued_output

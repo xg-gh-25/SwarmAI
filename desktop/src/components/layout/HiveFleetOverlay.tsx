@@ -26,6 +26,7 @@
  * @exports HiveFleetContent
  */
 import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { HiveAccount, HiveInstance, TRANSITIONAL_STATUSES, MAX_HIVES, countedHives, hiveAccountView } from '../../services/hive';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
@@ -43,6 +44,7 @@ export interface HiveFleetContentProps {
 type ViewMode = 'fleet' | 'accounts';
 
 export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
+  const { t } = useTranslation();
   const [view, setView] = useState<ViewMode>('fleet');
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
@@ -65,8 +67,8 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
   const view_ = hiveAccountView(accounts);
   const deployable = view_.deployable;
   const limitReached = countedHives(instances) >= MAX_HIVES;
-  const deployBlocked = deployable.length === 0 ? 'Add an AWS account first (Accounts tab) to deploy a Hive'
-    : limitReached ? `At most ${MAX_HIVES} Hives: delete one to deploy another` : null;
+  const deployBlocked = deployable.length === 0 ? t('ui.HiveFleetOverlay.addAccountFirst')
+    : limitReached ? t('ui.HiveFleetOverlay.limitReached', { max: MAX_HIVES }) : null;
 
   const myHives = instances.filter((i) => i.hiveType === 'my');
   const sharedHives = instances.filter((i) => i.hiveType !== 'my');
@@ -87,19 +89,19 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
               view === v ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
             }`}
           >
-            {v === 'fleet' ? 'Fleet' : 'Accounts'}
+            {v === 'fleet' ? t('ui.HiveFleetOverlay.tabFleet') : t('ui.HiveFleetOverlay.tabAccounts')}
           </button>
         ))}
         right={view === 'fleet' ? (
           <button
             onClick={() => setShowDeploy(true)}
             disabled={deployBlocked !== null}
-            title={deployBlocked ?? 'Deploy a new Hive'}
-            aria-label={deployBlocked ? `Deploy Hive — disabled: ${deployBlocked}` : 'Deploy Hive'}
+            title={deployBlocked ?? t('ui.HiveFleetOverlay.deployNew')}
+            aria-label={deployBlocked ? t('ui.HiveFleetOverlay.deployDisabled', { reason: deployBlocked }) : t('ui.HiveFleetOverlay.deployHive')}
             data-testid="hive-deploy-btn"
             className="btn-sm btn-soft transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <span className="material-symbols-outlined icon-xs">add</span>Deploy Hive
+            <span className="material-symbols-outlined icon-xs">add</span>{t('ui.HiveFleetOverlay.deployHive')}
           </button>
         ) : view_.canAdd ? (
           <button
@@ -107,7 +109,7 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
             data-testid="hive-add-account-btn"
             className="btn-sm btn-soft transition-colors"
           >
-            <span className="material-symbols-outlined icon-xs">add</span>Add Account
+            <span className="material-symbols-outlined icon-xs">add</span>{t('ui.HiveFleetOverlay.addAccount')}
           </button>
         ) : null}
       />
@@ -165,19 +167,20 @@ export function HiveFleetContent({ close: _close }: HiveFleetContentProps) {
 // ── Overview strip (Fleet) ──────────────────────────────────────────
 
 function OverviewStrip({ instances }: { instances: HiveInstance[] }) {
+  const { t } = useTranslation();
   const count = (s: string) => instances.filter((i) => i.status === s).length;
   const provisioning = instances.filter((i) => TRANSITIONAL_STATUSES.includes(i.status)).length;
-  const cells: { label: string; value: string; danger?: boolean }[] = [
-    { label: 'total', value: String(instances.length) },
-    { label: 'running', value: String(count('running')) },
-    { label: 'provisioning', value: String(provisioning) },
-    { label: 'stopped', value: String(count('stopped')) },
-    { label: 'error', value: String(count('error')), danger: count('error') > 0 },
+  const cells: { id: string; label: string; value: string; danger?: boolean }[] = [
+    { id: 'total', label: t('ui.HiveFleetOverlay.overviewTotal'), value: String(instances.length) },
+    { id: 'running', label: t('ui.HiveFleetOverlay.overviewRunning'), value: String(count('running')) },
+    { id: 'provisioning', label: t('ui.HiveFleetOverlay.overviewProvisioning'), value: String(provisioning) },
+    { id: 'stopped', label: t('ui.HiveFleetOverlay.overviewStopped'), value: String(count('stopped')) },
+    { id: 'error', label: t('ui.HiveFleetOverlay.overviewError'), value: String(count('error')), danger: count('error') > 0 },
   ];
   return (
     <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="hive-overview">
       {cells.map((c) => (
-        <div key={c.label} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
+        <div key={c.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 flex flex-col">
           <span className={`text-heading font-semibold ${c.danger ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text)]'}`}>{c.value}</span>
           <span className="text-meta uppercase tracking-wider text-[var(--color-text-faint)]">{c.label}</span>
         </div>
@@ -197,15 +200,16 @@ function FleetView({ myHives, sharedHives, instances, accounts, limitReached, on
   onAction: () => void;
   onDeploy: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden" data-testid="hive-fleet-view">
       <OverviewStrip instances={instances} />
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {myHives.length > 0 && (
-          <HiveSection title="My Hives" instances={myHives} onAction={onAction} />
+          <HiveSection title={t('ui.HiveFleetOverlay.myHives')} instances={myHives} onAction={onAction} />
         )}
         <HiveSection
-          title={myHives.length > 0 ? 'Shared Hives' : 'Hive Instances'}
+          title={myHives.length > 0 ? t('ui.HiveFleetOverlay.sharedHives') : t('ui.HiveFleetOverlay.hiveInstances')}
           // Always sharedHives — myHives ∪ sharedHives partitions instances, so when
           // there are no My Hives this section (titled "Hive Instances") shows every
           // instance anyway. Passing sharedHives (not `instances`) is partition-robust:
@@ -228,11 +232,12 @@ function FleetView({ myHives, sharedHives, instances, accounts, limitReached, on
 function AccountsView({ accounts, onAction, onAdd }: {
   accounts: HiveAccount[]; onAction: () => void; onAdd?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="hive-accounts-view">
       {accounts.length === 0 ? (
         <div className="text-meta text-[var(--color-text-faint)] text-center py-8" data-testid="hive-accounts-empty">
-          No AWS accounts yet — add one to deploy your first Hive.
+          {t('ui.HiveFleetOverlay.noAccounts')}
         </div>
       ) : (
         <div className="space-y-2">
@@ -247,7 +252,7 @@ function AccountsView({ accounts, onAction, onAdd }: {
           className="mt-3 text-meta text-primary hover:underline"
           data-testid="hive-accounts-add-inline"
         >
-          + Add another AWS account
+          {t('ui.HiveFleetOverlay.addAnother')}
         </button>
       )}
     </div>
@@ -257,6 +262,7 @@ function AccountsView({ accounts, onAction, onAdd }: {
 // ── Guide banner ────────────────────────────────────────────────────
 
 function GuideBanner() {
+  const { t } = useTranslation();
   return (
     <div
       className="shrink-0 mx-4 mt-3 rounded-lg border border-primary/25 bg-primary/[0.06] px-3.5 py-2.5 flex items-start gap-2.5"
@@ -264,10 +270,8 @@ function GuideBanner() {
     >
       <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">cloud</span>
       <div className="flex-1 min-w-0 text-meta leading-relaxed text-[var(--color-text-muted)]">
-        <span className="text-[var(--color-text)] ">Your fleet of remote AI clones.</span> Each Hive
-        deploys the whole Agent OS to your own AWS — 100% data sovereignty, a 24/7 stand-in you can share with a
-        teammate. Add an AWS account, then <span className="text-[var(--color-text)]">Deploy Hive</span>; deploys
-        run in the background (this panel polls while provisioning).
+        <span className="text-[var(--color-text)] ">{t('ui.HiveFleetOverlay.guideLead')}</span>{' '}{t('ui.HiveFleetOverlay.guideBeforeDeploy')}{' '}
+        <span className="text-[var(--color-text)]">{t('ui.HiveFleetOverlay.deployHive')}</span>{t('ui.HiveFleetOverlay.guideAfterDeploy')}
       </div>
     </div>
   );

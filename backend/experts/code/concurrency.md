@@ -54,8 +54,8 @@ Every finding MUST include confidence (1-10):
 - Thread pools (default asyncio pool, named executors)
 - Database connections (sqlite, WAL mode implications)
 - File handles (shared log files, state files, JSONL)
-- Process slots (max_tabs, subprocess limits)
-- Network ports (fixed port 18321)
+- Process slots (a pool size limit, subprocess limits)
+- Network ports (a fixed port)
 - Mutable module-level state (singletons, registries, counters)
 
 **For each shared resource, answer:**

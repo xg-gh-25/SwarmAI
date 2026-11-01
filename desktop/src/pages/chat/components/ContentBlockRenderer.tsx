@@ -135,7 +135,7 @@ function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boole
       <summary className="px-3 py-2 cursor-pointer bg-[var(--color-card)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] select-none flex items-center gap-1.5">
         <span className="text-xs">💭</span>
         <span>{tf(t, 'chat.turn.thinking', 'Thinking')}</span>
-        <span className="ml-auto text-xs opacity-60">{text.length > 200 ? `~${Math.ceil(text.length / 4)} tokens` : ''}</span>
+        <span className="ml-auto text-xs opacity-60">{text.length > 200 ? t('ui.ContentBlockRenderer.approxTokens', { n: Math.ceil(text.length / 4) }) : ''}</span>
       </summary>
       <div className="px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)] italic text-xs leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">
         {text}

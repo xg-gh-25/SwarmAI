@@ -502,7 +502,7 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
         <p className="text-small text-[var(--color-text)]">{tierWhy}</p>
         <H4>{t('Changing these files marks the result stale until it re-runs', '改到这些文件时，这条的结果标成过期、等下次重跑')}</H4>
         <div className="text-small space-y-0.5">{(c.affected_by ?? []).map((f) => <div key={f}><Code>{f}</Code></div>)}</div>
-        <H4>ID</H4><Code>{c.id}</Code>
+        <H4>{t('ID', 'ID')}</H4><Code>{c.id}</Code>
         <p className="text-small text-[var(--color-text-dim)] mt-4">
           {mineCase ? t('Delete removes it from the file; nothing is archived. Add it again if you need it.', '删除就是从文件里删掉，不归档；需要时再加。')
             : t('Product cases are the same for every user: they cannot be edited or deleted here. Changing one is a code change.', '产品 case 每个用户都一样，这里不能改、不能删，要改就是改代码。')}
@@ -527,6 +527,12 @@ const CHECK_LABEL: Record<string, { en: string; zh: string }> = {
   offline: { en: 'Prompt, tool steps and a two-sided rubric', zh: '题面、工具步骤和两面的判定标准' },
   trial: { en: 'Trial run: passes, and the negative fails', zh: '试跑：正例通过，反例失败' },
 };
+
+// Example values shown as form placeholders: a case id, a repo path and tool names.
+// They are identifiers, written the same in every language, so they are not translated.
+const EXAMPLE_CASE_ID = 'MY_ARCHIVE_LOOKUP';
+const EXAMPLE_AFFECTED_FILE = 'backend/core/memory_index.py';
+const EXAMPLE_TOOL_STEPS = 'Grep|Read|Glob';
 
 function CaseForm({ type, from, editing, total, onType, onDone, dirtyRef }: {
   type: 'quick' | 'offline'; from?: CaseDetail; editing: boolean; total: number;
@@ -618,7 +624,7 @@ function CaseForm({ type, from, editing, total, onType, onDone, dirtyRef }: {
                options={[['offline', t('Offline case · the agent answers', '离线考题 · agent 答题')], ['quick', t('Quick check · you write a check script', '快速检查 · 要会写检查脚本')]]} />
         </div>
       )}
-      {field(t('Case id', 'Case ID'), t('letters, digits, _', '字母、数字、下划线'), <input className={`${inputCls} disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-[var(--color-hover)]`} value={f.id} onChange={set('id')} disabled={editing} placeholder="MY_ARCHIVE_LOOKUP" data-testid="form-id" />)}
+      {field(t('Case id', 'Case ID'), t('letters, digits, _', '字母、数字、下划线'), <input className={`${inputCls} disabled:opacity-60 disabled:cursor-not-allowed disabled:bg-[var(--color-hover)]`} value={f.id} onChange={set('id')} disabled={editing} placeholder={EXAMPLE_CASE_ID} data-testid="form-id" />)}
       {field(t('What it protects', '它守住什么'), t('the agent is the subject, one sentence', '主语是 agent，一句话'), <input className={inputCls} value={f.head} onChange={set('head')} data-testid="form-head"
         placeholder={t('e.g. Asked about something only in an archive, the agent looks it up first.', '例：问到只记在归档里的事，agent 先去找。')} />)}
       {field(t('What breaks for you if it fails', '坏了对你意味着什么'), '', <input className={inputCls} value={f.rest} onChange={set('rest')}
@@ -629,7 +635,7 @@ function CaseForm({ type, from, editing, total, onType, onDone, dirtyRef }: {
         {field(t('Category', '分类'), '', <select className={inputCls} value={f.category} onChange={set('category')}>
           {Object.keys(CATEGORY_LABEL).map((k) => <option key={k} value={k}>{categoryName(k, lang)}</option>)}</select>)}
       </div>
-      {field(t('Files that make the result stale', '改到哪些文件会让结果过期'), t('space-separated', '空格分隔'), <input className={inputCls} value={f.affected} onChange={set('affected')} data-testid="form-affected" placeholder="backend/core/memory_index.py" />)}
+      {field(t('Files that make the result stale', '改到哪些文件会让结果过期'), t('space-separated', '空格分隔'), <input className={inputCls} value={f.affected} onChange={set('affected')} data-testid="form-affected" placeholder={EXAMPLE_AFFECTED_FILE} />)}
       {quick ? (
         <>
           {field(t('Check command', '检查命令'), t('runs in a temporary directory', '在临时目录里跑'), <input className={inputCls} value={f.command} onChange={set('command')} data-testid="form-command" />)}
@@ -640,7 +646,7 @@ function CaseForm({ type, from, editing, total, onType, onDone, dirtyRef }: {
       ) : (
         <>
           {field(t('Prompt', '题面'), t('what you would say to the agent', '你会对 agent 说的原话'), <textarea className={`${inputCls} h-20`} value={f.prompt} onChange={set('prompt')} data-testid="form-prompt" />)}
-          {field(t('Tools that must appear', '必须出现的工具'), t('space-separated, A|B = either', '空格分隔，A|B 表示任一'), <input className={inputCls} value={f.steps} onChange={set('steps')} placeholder="Grep|Read|Glob" data-testid="form-steps" />)}
+          {field(t('Tools that must appear', '必须出现的工具'), t('space-separated, A|B = either', '空格分隔，A|B 表示任一'), <input className={inputCls} value={f.steps} onChange={set('steps')} placeholder={EXAMPLE_TOOL_STEPS} data-testid="form-steps" />)}
           {field(t('Rubric for the judge', '判定标准（给 judge）'), t('"PASS only if …; FAIL if …"', '写成"PASS only if …；FAIL if …"'), <textarea className={`${inputCls} h-20`} value={f.rubric} onChange={set('rubric')} data-testid="form-rubric" />)}
         </>
       )}

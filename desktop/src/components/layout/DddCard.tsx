@@ -32,6 +32,9 @@
  * (O023 daemon-skew) so a partial payload degrades the body to nothing WITHOUT
  * blanking the card.
  */
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import type { BrainHealth, DetailHealth, EntryType } from '../../services/ddd';
 import { LAYERS, layerTotals } from './dddLayers';
 
@@ -59,14 +62,14 @@ function _trustBelowHigh(trust: DetailHealth['trust']): { below: number; total: 
 }
 
 function _ageOf(iso: string | null): string {
-  if (!iso) return 'never';
+  if (!iso) return i18n.t('ui.DddCard.ageNever');
   const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return 'unknown';
+  if (Number.isNaN(then)) return i18n.t('ui.DddCard.ageUnknown');
   const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return i18n.t('ui.DddCard.ageMinutes', { n: mins });
   const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  if (hrs < 24) return i18n.t('ui.DddCard.ageHours', { n: hrs });
+  return i18n.t('ui.DddCard.ageDays', { n: Math.round(hrs / 24) });
 }
 
 // ── Props ──────────────────────────────────────────────────────────────────
@@ -132,12 +135,13 @@ function CardHeader({ name, kind, verdict }: { name: string; kind: string; verdi
  *  So it can't reintroduce the refused trust rollup: pending>0 = needs a human
  *  decision; =0 = nothing queued. NOT "healthy/unhealthy". */
 function VerdictDot({ pending }: { pending: number }) {
+  const { t } = useTranslation();
   const needs = pending > 0;
   return (
     <span data-testid="ddd-verdict" className="flex items-center gap-1.5 text-meta "
       style={{ color: needs ? 'var(--color-status-warning)' : 'var(--color-status-success)' }}>
       <span className="w-2 h-2 rounded-full" style={{ background: needs ? 'var(--color-status-warning)' : 'var(--color-status-success)' }} />
-      {needs ? 'Needs decision' : 'Nothing queued'}
+      {needs ? t('ui.DddCard.needsDecision') : t('ui.DddCard.nothingQueued')}
     </span>
   );
 }
@@ -198,6 +202,7 @@ function CardBriefing({ description }: { description?: string }) {
 }
 
 export function DddCard(props: DddCardProps) {
+  const { t } = useTranslation();
   const { name, kind } = props;
 
   if (props.density === 'compact') {
@@ -235,7 +240,7 @@ export function DddCard(props: DddCardProps) {
         {props.isSelf && (
           <span data-testid="dddcard-self-tag"
             className="absolute top-2 right-2 text-meta font-semibold tracking-wider text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] px-1.5 py-0.5 rounded">
-            SELF·OS
+            {t('ui.DddCard.selfTag')}
           </span>
         )}
         <CardHeader name={name} kind={kind} />
@@ -298,6 +303,7 @@ function FullBody(
     // (no separate §②) keeps its needs-you verdict — its FullBody IS the only signal. */
     ontologyOnly?: boolean },
 ) {
+  const { t } = useTranslation();
   const hasMetrics = typeof metrics?.escalationPending === 'number';
   const hasOntology = !!typeCounts;
   // Nothing to show at all (no summary ontology AND no metrics) → body renders nothing.
@@ -320,7 +326,7 @@ function FullBody(
 
   // needs-you: only non-zero actionable items
   const needs: { n: number; label: string }[] = [];
-  if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: 'need you' });
+  if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: t('ui.DddCard.needYouItem') });
 
   const freshText = health?.lastChangeRelative ?? _ageOf(metrics.computedAt);
 
@@ -334,7 +340,7 @@ function FullBody(
         <div data-testid="ddd-needs-you"
           className={`rounded-md border px-2.5 py-2 ${needs.length ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)] border-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)]' : 'bg-[color-mix(in_srgb,var(--color-status-success)_6%,transparent)] border-[color-mix(in_srgb,var(--color-status-success)_25%,transparent)]'}`}>
           <div className={`text-meta uppercase tracking-wide font-semibold mb-1 ${needs.length ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-status-success)]'}`}>
-            {needs.length ? 'Needs you' : '✓ Nothing needs you'}
+            {needs.length ? t('ui.DddCard.needsYou') : t('ui.DddCard.nothingNeedsYou')}
           </div>
           {needs.map((it) => (
             <div key={it.label} className="flex items-center gap-2 text-meta py-0.5">
@@ -348,19 +354,19 @@ function FullBody(
       {/* ── Two fact lines: trust distribution + activity ── */}
       <div className="flex flex-col gap-1 text-meta">
         <div data-testid="ddd-fact-trust" className="flex items-baseline gap-2">
-          <span className="text-[var(--color-text-faint)] w-[52px]">Trust</span>
+          <span className="text-[var(--color-text-faint)] w-[52px]">{t('ui.DddCard.trust')}</span>
           <span className={below > 0 ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text)]'}>
-            {trustStale ? 'not computed' : `${pct}% sections ≥ high`}
+            {trustStale ? t('ui.DddCard.notComputed') : t('ui.DddCard.sectionsHigh', { pct })}
           </span>
           <span className="ml-auto text-meta text-[var(--color-text-faint)]">
-            {trustStale ? 'no scheduled score' : `scored ${_ageOf(metrics.computedAt)}`}
+            {trustStale ? t('ui.DddCard.noScheduledScore') : t('ui.DddCard.scoredAgo', { age: _ageOf(metrics.computedAt) })}
           </span>
         </div>
         <div data-testid="ddd-fact-activity" className="flex items-baseline gap-2">
-          <span className="text-[var(--color-text-faint)] w-[52px]">Activity</span>
-          <span className="text-[var(--color-text)]">edited {freshText}</span>
+          <span className="text-[var(--color-text-faint)] w-[52px]">{t('ui.DddCard.activity')}</span>
+          <span className="text-[var(--color-text)]">{t('ui.DddCard.edited', { age: freshText })}</span>
           <span className="ml-auto text-meta text-[var(--color-text-faint)]">
-            {metrics.recentActivity === undefined ? '—' : metrics.recentActivity} sediments / 30d
+            {t('ui.DddCard.sediments30d', { n: metrics.recentActivity === undefined ? '—' : metrics.recentActivity })}
           </span>
         </div>
       </div>
@@ -398,8 +404,9 @@ function MetricsSkeleton() {
  * label: covers the ② canonical docs, not "the whole brain". Omitted if empty.
  */
 export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number> }) {
-  const t = layerTotals(typeCounts);
-  const total = t.meta + t.cognitive + t.operational;
+  const { t } = useTranslation();
+  const totals = layerTotals(typeCounts);
+  const total = totals.meta + totals.cognitive + totals.operational;
   if (total === 0) return null;
   return (
     <div data-testid="ddd-ontology" className="flex flex-col gap-2">
@@ -407,16 +414,16 @@ export function Ontology({ typeCounts }: { typeCounts: Record<EntryType, number>
           one. The per-layer + per-type counts convey the cognitive SHAPE without a
           headline "size" number (the shape is the signal, not the volume). */}
       <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
-        Knowledge ontology · 3 layers × 7 types
+        {t('ui.DddCard.ontologyTitle')}
       </div>
       {LAYERS.map((l) => (
         <div key={l.key} data-testid={`ddd-layer-${l.key}`} className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-sm" style={{ background: l.color }} />
             <span className="text-meta font-semibold" style={{ color: l.color }}>{l.label}</span>
-            <span className="text-meta text-[var(--color-text-muted)]">{t[l.key]}</span>
+            <span className="text-meta text-[var(--color-text-muted)]">{totals[l.key]}</span>
             <span className="flex-1 h-1.5 rounded-sm bg-[var(--color-bg)] overflow-hidden ml-1">
-              <span className="block h-full" style={{ width: `${(t[l.key] / total) * 100}%`, background: l.color }} />
+              <span className="block h-full" style={{ width: `${(totals[l.key] / total) * 100}%`, background: l.color }} />
             </span>
           </div>
           <div className="flex flex-wrap gap-1 pl-[17px]">

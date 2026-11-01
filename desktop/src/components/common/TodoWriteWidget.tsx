@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { copyToClipboard } from '../../utils/clipboard';
 
@@ -59,6 +60,7 @@ function TodoItemCard({ todo }: { todo: TodoItem }) {
 }
 
 export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
+  const { t } = useTranslation();
   const [showRawJson, setShowRawJson] = useState(false);
 
   if (!todos || todos.length === 0) {
@@ -69,10 +71,10 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
             checklist
           </span>
           <span className="text-sm font-medium text-[var(--color-text)]">
-            Tool Call: TodoWrite
+            {t('ui.TodoWriteWidget.toolCall')}
           </span>
         </div>
-        <p className="text-[var(--color-text-muted)] text-sm mt-2">No tasks to display</p>
+        <p className="text-[var(--color-text-muted)] text-sm mt-2">{t('ui.TodoWriteWidget.noTasks')}</p>
       </div>
     );
   }
@@ -95,11 +97,11 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
             checklist
           </span>
           <span className="text-sm font-medium text-[var(--color-text)]">
-            Tool Call: TodoWrite
+            {t('ui.TodoWriteWidget.toolCall')}
           </span>
         </div>
         <span className="text-xs text-[var(--color-text-muted)]">
-          {completedCount}/{todos.length} completed
+          {t('ui.TodoWriteWidget.completedCount', { done: completedCount, total: todos.length })}
         </span>
       </div>
 
@@ -116,14 +118,14 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
           onClick={() => setShowRawJson(!showRawJson)}
           className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
-          {showRawJson ? 'Hide' : 'View'} Raw JSON
+          {showRawJson ? t('ui.TodoWriteWidget.hideRawJson') : t('ui.TodoWriteWidget.viewRawJson')}
         </button>
         <button
           onClick={handleCopy}
           className="btn-sm btn-secondary transition-colors"
         >
           <span className="material-symbols-outlined icon-xs">content_copy</span>
-          Copy
+          {t('common.copy.copy')}
         </button>
       </div>
 

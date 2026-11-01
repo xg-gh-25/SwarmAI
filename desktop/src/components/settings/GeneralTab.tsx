@@ -5,14 +5,16 @@
  */
 import { useTranslation } from 'react-i18next';
 import { useTheme, ACCENT_PRESETS } from '../../contexts/ThemeContext';
+import { LANGUAGE_STORAGE_KEY } from '../../i18n';
 
 export default function GeneralTab() {
   const { t, i18n } = useTranslation();
   const { theme, setTheme, accentColor, setAccentColor } = useTheme();
 
+  // Stored so the next launch starts in this language (read by i18n/index.ts).
   const handleLanguageChange = (lang: 'zh' | 'en') => {
     i18n.changeLanguage(lang);
-    localStorage.setItem('language', lang);
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
   };
 
   return (
@@ -68,8 +70,8 @@ export default function GeneralTab() {
 
       {/* Accent Color */}
       <section className="bg-[var(--color-card)] rounded-lg p-6 border border-[var(--color-border)]">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">Accent Color</h2>
-        <p className="text-sm text-[var(--color-text-muted)] mb-4">Personalize the primary color used across buttons, links, and highlights.</p>
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">{t('settings.accent.title')}</h2>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">{t('settings.accent.description')}</p>
         <div className="flex gap-3">
           {ACCENT_PRESETS.map((preset) => (
             <button

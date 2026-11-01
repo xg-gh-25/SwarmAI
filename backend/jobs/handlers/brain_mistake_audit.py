@@ -23,7 +23,7 @@ report; the first one compares with the baseline the design was measured on), th
 month's changes to the brain (``ingestion.queries.brain_changes``) and the unresolved
 conflicts. Nothing is changed by what it finds: it is evidence for the person.
 
-Public: ``run_brain_mistake_audit``, ``OUTCOMES``, ``CLASSES``.
+Public: ``run_brain_mistake_audit``, ``OUTCOMES``, ``OUTCOME_LABELS``, ``CLASSES``.
 """
 from __future__ import annotations
 
@@ -39,8 +39,17 @@ from ..paths import SWARMWS
 
 logger = logging.getLogger("swarm.jobs.brain_mistake_audit")
 
-CLASSES = {"A": "写代码的机制坑", "B": "产品事实和决定", "C": "我自己的行为"}
+CLASSES = {"A": "Writing-code mechanism pitfall", "B": "Product fact or decision",
+           "C": "The agent's own behaviour"}
+# The outcome keys of the report JSON. They are data: core/ingestion/cognition_level.py
+# and the Cognition Level panel read them (the panel shows them through i18n), and the
+# reports already written use them, so they keep their text; the report shows the
+# English OUTCOME_LABELS.
 OUTCOMES = ("事先没有", "有但没送到", "送到仍犯", "DDD 内容过时", "无法判断")
+MISSING, NOT_DELIVERED, DELIVERED_STILL_MADE, STALE, UNJUDGED = OUTCOMES
+OUTCOME_LABELS = dict(zip(OUTCOMES, (
+    "Not in the brain beforehand", "There but not delivered", "Delivered, still made",
+    "DDD entry stale", "Cannot tell")))
 REPORT_SUFFIX = "brain-mistake-audit"
 _BATCH = 12
 _DATE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
@@ -212,14 +221,14 @@ def _root_of(path: Path) -> Path:
 
 def _outcome(prior: Optional[str], mistake_day: str, delivered: Optional[bool], stale: bool) -> str:
     if prior is None:
-        return "无法判断"
+        return UNJUDGED
     if prior >= mistake_day:            # written that day is not "before" it
-        return "事先没有"
+        return MISSING
     if stale:
-        return "DDD 内容过时"
+        return STALE
     if delivered is None:
-        return "无法判断"
-    return "送到仍犯" if delivered else "有但没送到"
+        return UNJUDGED
+    return DELIVERED_STILL_MADE if delivered else NOT_DELIVERED
 
 
 # ── model (judgment) ────────────────────────────────────────────────────────
@@ -299,30 +308,33 @@ def _previous(out_dir: Path, month: str) -> tuple[Optional[str], Optional[dict]]
 
 def _render(month: str, rows: list[dict], table: dict, prev_month: Optional[str], prev: Optional[dict],
             changes: dict, conflicts: list[dict], unjudged: int) -> str:
-    lines = [f"# Brain 错误倒查 · {month}", "",
-             f"真实错误 {len(rows)} 条（另有 {unjudged} 条模型未能判断，未计入）。"
-             "「需要的知识」和「内容过时」是模型判断；「事先有没有」「有没有送到」是从记录确定的。", "",
-             "## 1. 错误按需要的知识和结果分", "",
-             "| 需要的知识 | 数 | " + " | ".join(OUTCOMES) + " |",
+    lines = [f"# Brain mistake audit · {month}", "",
+             f"{len(rows)} real mistakes ({unjudged} more the model could not judge are not "
+             "counted). \"Knowledge needed\" and \"stale\" are the model's judgment; \"in the "
+             "brain beforehand\" and \"delivered\" come from the records.", "",
+             "## 1. Mistakes by the knowledge needed and the outcome", "",
+             "| Knowledge needed | Count | " + " | ".join(OUTCOME_LABELS[o] for o in OUTCOMES) + " |",
              "|---|---|" + "---|" * len(OUTCOMES)]
     for c, label in CLASSES.items():
         row = table[c]
         cells = []
         for o in OUTCOMES:
             before = (prev or {}).get(c, {}).get(o) if prev else None
-            cells.append(f"{row[o]}" + (f"（上月 {before}）" if before is not None else ""))
+            cells.append(f"{row[o]}" + (f" (last month {before})" if before is not None else ""))
         lines.append(f"| {label} | {sum(row.values())} | " + " | ".join(cells) + " |")
-    lines += ["", f"对比：{prev_month or '无更早的报告'}。", "",
-              "## 2. 本月 Brain 的变化", "",
-              "| 新增 | 覆盖 | 撤回 | 未决冲突 | 用户编辑 |", "|---|---|---|---|---|",
+    lines += ["", f"Compared with: {prev_month or 'no earlier report'}.", "",
+              "## 2. Changes to the brain this month", "",
+              "| Added | Overridden | Withdrawn | Open conflicts | User edits |", "|---|---|---|---|---|",
               f"| {changes.get('add', 0)} | {changes.get('override', 0)} | {changes.get('withdraw', 0)} | "
               f"{changes.get('conflict', 0)} | {changes.get('user_edit', 0)} |", "",
-              "## 3. 未决冲突", ""]
-    lines += [f"- `{c.get('path')}` {c.get('head')}" for c in conflicts] or ["（无）"]
-    lines += ["", "## 4. 明细", "", "| id | 日期 | 类 | 结果 | 需要的知识 | 对应条目 |", "|---|---|---|---|---|---|"]
+              "## 3. Open conflicts", ""]
+    lines += [f"- `{c.get('path')}` {c.get('head')}" for c in conflicts] or ["(none)"]
+    lines += ["", "## 4. Details", "",
+              "| id | Date | Class | Outcome | Knowledge needed | Matching entry |", "|---|---|---|---|---|---|"]
     for r in rows:
         cell = lambda v: str(v or "").replace("|", "\\|").replace("\n", " ")[:160]  # noqa: E731
-        lines.append(f"| {cell(r['id'])} | {r['date']} | {r['class']} | {r['outcome']} | "
+        lines.append(f"| {cell(r['id'])} | {r['date']} | {r['class']} | "
+                     f"{OUTCOME_LABELS.get(r['outcome'], r['outcome'])} | "
                      f"{cell(r['knowledge'])} | {cell(r.get('entry_head'))} |")
     return "\n".join(lines) + "\n"
 
@@ -377,7 +389,7 @@ def run_brain_mistake_audit(config: dict | None = None, *, ask: Callable[[str, d
                 outcome = _outcome(prior, m["date"], _delivered(conn, item, cand), bool(verdict.get("stale")))
                 head = cand["text"].strip().splitlines()[0][:160]
             else:
-                outcome, head = "事先没有", ""
+                outcome, head = MISSING, ""
             rows.append({**item, "outcome": outcome, "entry_head": head,
                          "judgment": verdict.get("reasoning", "")})
         changes = [c for c in brain_changes(conn, since=start) if str(c.get("at") or "") < end]

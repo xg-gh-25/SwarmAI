@@ -10,9 +10,12 @@
  *   the instance's own role; there are no Hives to create from a Hive).
  * Every step can be left: "Configure later" completes onboarding, CredentialBanner and
  * the account page say what is still missing. Shown when onboardingComplete is false.
+ * System Check also lists each missing machine prerequisite (git; Git Bash on Windows)
+ * from the status `prerequisites` with its install steps and a Recheck; a missing one
+ * warns, it never blocks. Every string goes through i18n (onboarding.*).
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { systemService, RestoreEvent } from '../services/system';
+import { systemService, RestoreEvent, type Prerequisite } from '../services/system';
 import { settingsService } from '../services/settings';
 import { channelsService } from '../services/channels';
 import type { Channel } from '../types';
@@ -22,6 +25,7 @@ import ConnectAccount from '../components/awsAccount/ConnectAccount';
 import { HiveSetupStep } from '../components/awsAccount/HiveFleet';
 import { useTheme } from '../contexts/ThemeContext';
 import { useTranslation } from 'react-i18next';
+import { detectOs } from '../utils/platform';
 
 /**
  * Pre-resolve fallback for the model name shown during onboarding.
@@ -49,6 +53,19 @@ const SYSTEM_CHECK_FAILURE_THRESHOLD = 20;
 
 type StepId = 'system' | 'restore' | 'auth' | 'account' | 'hive' | 'channels' | 'ready';
 
+/** Prerequisites to show: anything not confirmed ok (missing, or the check could not run). */
+export function missingPrerequisites(items: Prerequisite[] | undefined): Prerequisite[] {
+  return (items ?? []).filter((p) => p.ok !== true);
+}
+
+// Commands, links and paths in the install steps: the same in every language.
+const GIT_INSTALL_COMMAND = { mac: 'xcode-select --install', linux: 'sudo apt install git' } as const;
+const GIT_FOR_WINDOWS_URL = 'https://git-scm.com/download/win';
+const GIT_BASH_ENV_LINE = 'CLAUDE_CODE_GIT_BASH_PATH';
+const GIT_BASH_DEFAULT_PATH = 'C:\\Program Files\\Git\\bin\\bash.exe';
+const REPO_URL_PLACEHOLDER = 'https://github.com/user/swarm-brain.git';
+const GITHUB_TOKEN_PLACEHOLDER = 'ghp_...';
+
 
 export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   const { t } = useTranslation();
@@ -56,6 +73,10 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   const [systemOk, setSystemOk] = useState(false);
   const [systemCheckFailed, setSystemCheckFailed] = useState(false);
   const [hasBackup, setHasBackup] = useState(false);
+  const [missing, setMissing] = useState<Prerequisite[]>([]);
+  const [rechecking, setRechecking] = useState(false);
+  // Where "Continue" on the system step goes once the system is ready.
+  const [afterSystem, setAfterSystem] = useState<StepId | null>(null);
   const [isHive, setIsHive] = useState(false);
   const [chatOnly, setChatOnly] = useState(false);
   const [done, setDone] = useState<Set<StepId>>(new Set());
@@ -95,7 +116,13 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
           if (cancelled) return;
           setIsHive(hive);
           setHasBackup(backup);
-          setStep(backup ? 'restore' : hive ? 'auth' : 'account'); // auto-advance
+          const next: StepId = backup ? 'restore' : hive ? 'auth' : 'account';
+          const lacking = missingPrerequisites(status.prerequisites);
+          setMissing(lacking);
+          setAfterSystem(next);
+          // Auto-advance only when nothing is missing; otherwise stay so the person
+          // sees what to install (Continue is always there — it never blocks).
+          if (lacking.length === 0) setStep(next);
           stop(); // Stop polling — system is confirmed ready, step 1 done
           return;
         }
@@ -114,6 +141,18 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
     return () => { cancelled = true; stop(); };
   }, []);
 
+
+  const handleRecheck = useCallback(async () => {
+    setRechecking(true);
+    try {
+      const status = await systemService.getStatus();
+      setMissing(missingPrerequisites(status.prerequisites));
+    } catch {
+      /* backend unreachable: keep showing what we last knew */
+    } finally {
+      setRechecking(false);
+    }
+  }, []);
 
   // Step 4: Complete — always proceed even if backend flag fails to persist
   const handleComplete = useCallback(async () => {
@@ -180,7 +219,17 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
 
       {/* Main content */}
       <div className="flex-1 p-12 max-w-2xl">
-        {step === 'system' && <Step1SystemCheck ok={systemOk} failed={systemCheckFailed} onSkip={handleSkipSetup} />}
+        {step === 'system' && (
+          <Step1SystemCheck
+            ok={systemOk}
+            failed={systemCheckFailed}
+            onSkip={handleSkipSetup}
+            missing={missing}
+            rechecking={rechecking}
+            onRecheck={handleRecheck}
+            onContinue={afterSystem ? () => setStep(afterSystem) : undefined}
+          />
+        )}
         {step === 'restore' && (
           <StepRestore
             onRestored={() => advance('restore')}
@@ -222,48 +271,127 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
 
 // ── Step 1: System Check ──
 
-function Step1SystemCheck({ ok, failed, onSkip }: { ok: boolean; failed: boolean; onSkip: () => void }) {
+function Step1SystemCheck({ ok, failed, onSkip, missing, rechecking, onRecheck, onContinue }: {
+  ok: boolean; failed: boolean; onSkip: () => void;
+  missing: Prerequisite[]; rechecking: boolean; onRecheck: () => void; onContinue?: () => void;
+}) {
+  const { t } = useTranslation();
   return (
     <div>
-      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">System Check</h2>
-      <p className="text-[var(--color-text-muted)] mb-6">Verifying your environment...</p>
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('onboarding.system.title')}</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">{t('onboarding.system.subtitle')}</p>
       {ok ? (
-        <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-3">
-          <span className="material-symbols-outlined icon-md text-green-400">check_circle</span>
-          <span className="text-green-400">Backend, Database, and Workspace are ready.</span>
+        <div className="space-y-4">
+          <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-3">
+            <span className="material-symbols-outlined icon-md text-green-400">check_circle</span>
+            <span className="text-green-400">{t('onboarding.system.ready')}</span>
+          </div>
+          {missing.length > 0 && (
+            <PrerequisiteWarnings missing={missing} rechecking={rechecking} onRecheck={onRecheck} />
+          )}
+          {onContinue && (
+            <button onClick={onContinue} className="btn-lg btn-primary" data-testid="system-check-continue">
+              {t('onboarding.system.continue')}
+            </button>
+          )}
         </div>
       ) : failed ? (
         <div className="space-y-4">
           <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
             <div className="flex items-center gap-3 mb-1">
               <span className="material-symbols-outlined icon-md text-red-400">error</span>
-              <span className="text-red-400 font-medium">System check is taking longer than expected</span>
+              <span className="text-red-400 font-medium">{t('onboarding.system.slowTitle')}</span>
             </div>
-            <p className="text-xs text-[var(--color-text-muted)]">
-              The backend hasn't reported ready. It may still be starting up — this will keep retrying.
-              You can wait, restart the app, or proceed now and finish setup later.
-            </p>
+            <p className="text-xs text-[var(--color-text-muted)]">{t('onboarding.system.slowBody')}</p>
           </div>
           <button
             onClick={onSkip}
             className="btn-lg btn-primary"
           >
-            Continue anyway
+            {t('onboarding.system.continueAnyway')}
           </button>
         </div>
       ) : (
         <div className="p-4 bg-[var(--color-card)] rounded-lg flex items-center gap-3">
           <span className="material-symbols-outlined icon-sm animate-spin text-[var(--color-text-muted)]">progress_activity</span>
-          <span className="text-[var(--color-text-muted)]">Checking system components...</span>
+          <span className="text-[var(--color-text-muted)]">{t('onboarding.system.checking')}</span>
         </div>
       )}
     </div>
   );
 }
 
+/** Each missing prerequisite with its install steps, and a Recheck. Warns, never blocks. */
+function PrerequisiteWarnings({ missing, rechecking, onRecheck }: {
+  missing: Prerequisite[]; rechecking: boolean; onRecheck: () => void;
+}) {
+  const { t } = useTranslation();
+  const codeCls = 'block text-xs font-mono bg-[var(--color-hover)] px-2 py-1 rounded mt-1 break-all';
+  return (
+    <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-4" data-testid="prerequisite-warnings">
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="material-symbols-outlined icon-md text-amber-400">warning</span>
+          <span className="text-[var(--color-text)] font-medium">{t('onboarding.prereq.title')}</span>
+        </div>
+        <p className="text-xs text-[var(--color-text-muted)]">{t('onboarding.prereq.body')}</p>
+      </div>
+      {missing.map((p) => (
+        <div key={p.name} className="text-sm text-[var(--color-text)] space-y-1" data-testid={`prerequisite-${p.name}`}>
+          {p.ok === null ? (
+            <p className="font-medium">
+              {t('onboarding.prereq.unknown', { name: p.name === 'git_bash' ? 'Git Bash' : p.name })}
+            </p>
+          ) : p.name === 'git_bash' ? (
+            <GitBashSteps codeCls={codeCls} />
+          ) : (
+            <GitSteps codeCls={codeCls} />
+          )}
+          {p.hint && <code className="block text-xs text-[var(--color-text-muted)] font-mono break-all">{p.hint}</code>}
+        </div>
+      ))}
+      <button onClick={onRecheck} disabled={rechecking} className="btn-md btn-secondary disabled:opacity-50"
+        data-testid="prerequisite-recheck">
+        {rechecking ? t('onboarding.system.rechecking') : t('onboarding.system.recheck')}
+      </button>
+    </div>
+  );
+}
+
+function GitSteps({ codeCls }: { codeCls: string }) {
+  const { t } = useTranslation();
+  const os = detectOs();
+  return (
+    <>
+      <p className="font-medium">{t('onboarding.prereq.git.missing')}</p>
+      <p className="text-xs text-[var(--color-text-muted)]">{t(`onboarding.prereq.git.${os}`)}</p>
+      <code className={codeCls}>{os === 'windows' ? GIT_FOR_WINDOWS_URL : GIT_INSTALL_COMMAND[os]}</code>
+      <p className="text-xs text-[var(--color-text-muted)]">{t('onboarding.prereq.git.after')}</p>
+    </>
+  );
+}
+
+function GitBashSteps({ codeCls }: { codeCls: string }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <p className="font-medium">{t('settings.gitBashWarning.title')}</p>
+      <p className="text-xs text-[var(--color-text-muted)]">{t('settings.gitBashWarning.message')}</p>
+      <p className="text-xs text-[var(--color-text-muted)]">{t('settings.gitBashWarning.step1')}</p>
+      <code className={codeCls}>{GIT_FOR_WINDOWS_URL}</code>
+      <p className="text-xs text-[var(--color-text-muted)]">{t('settings.gitBashWarning.step2')}</p>
+      <code className={codeCls}>{GIT_BASH_ENV_LINE}</code>
+      <p className="text-xs text-[var(--color-text-muted)]">{t('settings.gitBashWarning.example')}</p>
+      <code className={codeCls}>{`${GIT_BASH_ENV_LINE}=${GIT_BASH_DEFAULT_PATH}`}</code>
+      <p className="text-xs text-[var(--color-text-muted)]">{t('settings.gitBashWarning.afterSetting')}</p>
+    </>
+  );
+}
+
 // ── Step 2: LLM Authentication ──
 
 function Step2Auth({ onVerified, onSkip }: { onVerified: () => void; onSkip: () => void }) {
+  const { t } = useTranslation();
   const [failCount, setFailCount] = useState(0);
   const [isHive, setIsHive] = useState(false);
 
@@ -276,10 +404,8 @@ function Step2Auth({ onVerified, onSkip }: { onVerified: () => void; onSkip: () 
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">LLM Authentication</h2>
-      <p className="text-[var(--color-text-muted)] mb-6">
-        Connect to Claude so Swarm can help you. This is the only required step.
-      </p>
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('onboarding.auth.title')}</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">{t('onboarding.auth.body')}</p>
       <AuthConfigPanel
         mode="onboarding"
         onVerifySuccess={onVerified}
@@ -293,7 +419,7 @@ function Step2Auth({ onVerified, onSkip }: { onVerified: () => void; onSkip: () 
           onClick={onSkip}
           className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
-          {isHive && failCount >= 2 ? 'Skip — fix IAM permissions later' : 'Configure later'}
+          {isHive && failCount >= 2 ? t('onboarding.auth.skipIam') : t('onboarding.auth.later')}
         </button>
       </div>
     </div>
@@ -303,6 +429,7 @@ function Step2Auth({ onVerified, onSkip }: { onVerified: () => void; onSkip: () 
 // ── Step 3: Channels ──
 
 function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) {
+  const { t } = useTranslation();
   const [showSlack, setShowSlack] = useState(false);
   const [slackDone, setSlackDone] = useState(false);
   const [existingSlack, setExistingSlack] = useState<Channel | null>(null);
@@ -323,10 +450,8 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Connect Channels</h2>
-      <p className="text-[var(--color-text-muted)] mb-6">
-        Talk to Swarm from Slack — not just the desktop app. This is optional.
-      </p>
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('onboarding.channels.title')}</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">{t('onboarding.channels.body')}</p>
       <div className="space-y-4 mb-6">
         {/* Slack */}
         <div className="bg-[var(--color-card)] rounded-lg p-4">
@@ -335,7 +460,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
               <span className="text-xl">💬</span>
               <div>
                 <span className="text-[var(--color-text)] font-medium">Slack</span>
-                {slackDone && <span className="ml-2 text-green-400 text-xs">Connected</span>}
+                {slackDone && <span className="ml-2 text-green-400 text-xs">{t('onboarding.channels.connected')}</span>}
               </div>
             </div>
             {!slackDone && (
@@ -343,7 +468,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
                 onClick={() => setShowSlack(!showSlack)}
                 className="btn-md btn-secondary transition-colors"
               >
-                {showSlack ? 'Cancel' : 'Set Up'}
+                {showSlack ? t('onboarding.channels.cancel') : t('onboarding.channels.setUp')}
               </button>
             )}
           </div>
@@ -367,14 +492,14 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
           onClick={onSkip}
           className="px-6 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
-          Skip for now
+          {t('onboarding.channels.skip')}
         </button>
         {slackDone && (
           <button
             onClick={onContinue}
             className="btn-lg btn-primary"
           >
-            Continue
+            {t('onboarding.channels.continue')}
           </button>
         )}
       </div>
@@ -385,6 +510,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
 // ── Step: Restore from Backup ──
 
 function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: () => void }) {
+  const { t } = useTranslation();
   const [repoUrl, setRepoUrl] = useState('');
   const [token, setToken] = useState('');
   const [restoring, setRestoring] = useState(false);
@@ -440,17 +566,20 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
     const last = events[events.length - 1];
     return (
       <div>
-        <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Restore Complete</h2>
+        <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('onboarding.restore.doneTitle')}</h2>
         <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg mb-6">
           <span className="material-symbols-outlined icon-md text-green-400 align-middle mr-2">check_circle</span>
           <span className="text-green-400">
-            {last?.messagesCount ?? 0} conversations, {last?.sessionsCount ?? 0} sessions,
-            {last?.todosCount ?? 0} todos restored.
+            {t('onboarding.restore.doneSummary', {
+              conversations: last?.messagesCount ?? 0,
+              sessions: last?.sessionsCount ?? 0,
+              todos: last?.todosCount ?? 0,
+            })}
           </span>
         </div>
         <button onClick={onRestored}
           className="btn-lg btn-primary hover:opacity-90">
-          Continue
+          {t('onboarding.restore.continue')}
         </button>
       </div>
     );
@@ -458,33 +587,31 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Restore from Backup</h2>
-      <p className="text-[var(--color-text-muted)] mb-6">
-        A backup was detected. Restore your memory, knowledge, and conversation history from your private GitHub repository.
-      </p>
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('onboarding.restore.title')}</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">{t('onboarding.restore.body')}</p>
 
       {!restoring && events.length === 0 && (
         <div className="space-y-4 mb-6">
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Repository URL</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('onboarding.restore.repoUrl')}</label>
             <input type="text" value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
-              placeholder="https://github.com/user/swarm-brain.git"
+              placeholder={REPO_URL_PLACEHOLDER}
               className="w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]" />
           </div>
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">GitHub Token (optional if gh auth configured)</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('onboarding.restore.token')}</label>
             <input type="password" value={token} onChange={e => setToken(e.target.value)}
-              placeholder="ghp_..."
+              placeholder={GITHUB_TOKEN_PLACEHOLDER}
               className="w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]" />
           </div>
           <div className="flex gap-3">
             <button onClick={handleRestore} disabled={!repoUrl}
               className="btn-lg btn-primary hover:opacity-90 disabled:opacity-50">
-              Restore
+              {t('onboarding.restore.restore')}
             </button>
             <button onClick={onSkip}
               className="px-6 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-              Skip — start fresh
+              {t('onboarding.restore.skip')}
             </button>
           </div>
         </div>
@@ -514,7 +641,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
               <div className="pt-1">
                 <button onClick={onSkip}
                   className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-                  Skip — start fresh
+                  {t('onboarding.restore.skip')}
                 </button>
               </div>
             </>
@@ -524,11 +651,11 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
             <div className="flex gap-3 pt-2">
               <button onClick={() => { setEvents([]); }}
                 className="btn-lg btn-primary hover:opacity-90">
-                Try Again
+                {t('onboarding.restore.tryAgain')}
               </button>
               <button onClick={onSkip}
                 className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-                Skip — start fresh
+                {t('onboarding.restore.skip')}
               </button>
             </div>
           )}
@@ -541,6 +668,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
 // ── Step 4: Ready ──
 
 function Step4Ready({ onStart }: { onStart: () => void }) {
+  const { t } = useTranslation();
   const [starting, setStarting] = useState(false);
   const { theme } = useTheme();  // real theme, not a hardcoded "System" string
   // Show the ACTUAL configured model + region (persisted by Step2 on verify),
@@ -562,35 +690,31 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">You're All Set!</h2>
-      <p className="text-[var(--color-text-muted)] mb-6">
-        SwarmAI is ready. Here are your defaults — change anything anytime.
-      </p>
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('onboarding.ready.title')}</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">{t('onboarding.ready.body')}</p>
 
       <div className="bg-[var(--color-card)] rounded-lg p-6 mb-6">
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
-            <span className="text-[var(--color-text-muted)]">Model</span>
+            <span className="text-[var(--color-text-muted)]">{t('onboarding.ready.model')}</span>
             <p className="text-[var(--color-text)] font-mono">{model}</p>
           </div>
           <div>
-            <span className="text-[var(--color-text-muted)]">Region</span>
+            <span className="text-[var(--color-text-muted)]">{t('onboarding.ready.region')}</span>
             <p className="text-[var(--color-text)] font-mono">{region}</p>
           </div>
           <div>
-            <span className="text-[var(--color-text-muted)]">Theme</span>
-            <p className="text-[var(--color-text)] capitalize">{theme}</p>
+            <span className="text-[var(--color-text-muted)]">{t('onboarding.ready.theme')}</span>
+            <p className="text-[var(--color-text)]">{t(`settings.theme.${theme}`)}</p>
           </div>
         </div>
       </div>
 
       <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 mb-8">
         <p className="text-sm text-[var(--color-text)]">
-          <strong>Tip:</strong> After setup, just tell Swarm what you need. All settings can be changed through natural conversation.
+          <strong>{t('onboarding.ready.tipLabel')}</strong> {t('onboarding.ready.tip')}
         </p>
-        <p className="text-xs text-[var(--color-text-muted)] mt-2">
-          "Change model to sonnet" &middot; "Enable Playwright MCP" &middot; "Set timezone to UTC+8"
-        </p>
+        <p className="text-xs text-[var(--color-text-muted)] mt-2">{t('onboarding.ready.examples')}</p>
       </div>
 
       <button
@@ -598,7 +722,7 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
         disabled={starting}
         className="btn-lg btn-primary w-full disabled:opacity-50"
       >
-        {starting ? 'Starting...' : 'Start Using SwarmAI'}
+        {starting ? t('onboarding.ready.starting') : t('onboarding.ready.start')}
       </button>
     </div>
   );

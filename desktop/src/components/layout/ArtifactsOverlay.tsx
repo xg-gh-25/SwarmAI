@@ -25,6 +25,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { overlayQuery, ARTIFACTS_WORKSPACE } from './overlayQueries';
 import { OverlayError } from './OverlayState';
 import { radarService } from '../../services/radar';
@@ -52,12 +53,13 @@ const WINDOW_DAYS = 14;
 
 // ── Role model ──────────────────────────────────────────────────────────────
 const ROLE_ORDER: ProductRole[] = ['Deliverables', 'Knowledge', 'Pipeline', 'Activity'];
-const ROLE_LABEL: Record<ProductRole, string> = {
-  Deliverables: 'Deliverables',
-  Knowledge: 'Knowledge',
-  Pipeline: 'Pipeline',
-  Activity: 'Activity',
-  Other: 'Other',
+/** i18n key of each role's display label (the role value itself stays the backend id). */
+const ROLE_LABEL_KEY: Record<ProductRole, string> = {
+  Deliverables: 'ui.ArtifactsOverlay.roleDeliverables',
+  Knowledge: 'ui.ArtifactsOverlay.roleKnowledge',
+  Pipeline: 'ui.ArtifactsOverlay.rolePipeline',
+  Activity: 'ui.ArtifactsOverlay.roleActivity',
+  Other: 'ui.ArtifactsOverlay.roleOther',
 };
 /** Per-role dot color for the filter chips (tracks the theme). */
 const ROLE_DOT: Record<ProductRole, string> = {
@@ -71,6 +73,12 @@ const ROLE_DOT: Record<ProductRole, string> = {
 // ── Time bucketing ──────────────────────────────────────────────────────────
 export type TimeBucket = 'This week' | 'Last week' | 'Earlier';
 const BUCKET_ORDER: TimeBucket[] = ['This week', 'Last week', 'Earlier'];
+/** i18n key of each bucket's display label (the bucket value stays a stable id). */
+const BUCKET_LABEL_KEY: Record<TimeBucket, string> = {
+  'This week': 'ui.ArtifactsOverlay.bucketThisWeek',
+  'Last week': 'ui.ArtifactsOverlay.bucketLastWeek',
+  Earlier: 'ui.ArtifactsOverlay.bucketEarlier',
+};
 
 export interface TimeGroup {
   bucket: TimeBucket;
@@ -247,6 +255,7 @@ const PRODUCTS_QUERY_KEY = overlayQuery.artifactsProducts().queryKey;
  * The Artifacts retrieval body (the host wraps it in scrim + panel + header chrome).
  */
 export function ArtifactsContent({ close, fetchProducts, now, setStarred }: ArtifactsContentProps) {
+  const { t } = useTranslation();
   const starrer = setStarred ?? radarService.setStarred;
   const nowMs = now ?? Date.now();
   const queryClient = useQueryClient();
@@ -370,7 +379,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
           type="text"
           value={searchRaw}
           onChange={(e) => setSearchRaw(e.target.value)}
-          placeholder="Search all artifacts (ignores the time window)…"
+          placeholder={t('ui.ArtifactsOverlay.searchPlaceholder')}
           data-testid="artifacts-search"
           className="w-full px-3 py-2 rounded-lg bg-[var(--color-input-bg,var(--color-bg-secondary))] border border-[var(--color-border)] text-small text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none focus:border-[var(--color-primary)]"
         />
@@ -388,7 +397,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                 : 'border-[var(--color-git-modified,#d59a26)] text-[var(--color-git-modified,#d59a26)] hover:bg-[color-mix(in_srgb,var(--color-git-modified,#d59a26)_8%,transparent)]'
             }`}
           >
-            <span aria-hidden="true" className="material-symbols-outlined icon-xs" style={{ fontVariationSettings: "'FILL' 1" }}>star</span> Starred · {starredCount}
+            <span aria-hidden="true" className="material-symbols-outlined icon-xs" style={{ fontVariationSettings: "'FILL' 1" }}>star</span> {t('ui.ArtifactsOverlay.starredChip', { n: starredCount })}
           </button>
           {ROLE_ORDER.map((role) => {
             const on = !starredOnly && primaryRole === role;
@@ -412,7 +421,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                   className="w-1.5 h-1.5 rounded-full shrink-0"
                   style={{ backgroundColor: ROLE_DOT[role] }}
                 />
-                {ROLE_LABEL[role]}
+                {t(ROLE_LABEL_KEY[role])}
               </button>
             );
           })}
@@ -423,7 +432,11 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
               ignoreWindow ? 'text-[var(--color-text-faint)] opacity-60' : 'text-[var(--color-text-muted)]'
             }`}
           >
-            {starredOnly ? '时间窗 · 收藏时忽略' : searching ? '时间窗 · 搜索时忽略' : '时间窗 · 过去两周'}
+            {starredOnly
+              ? t('ui.ArtifactsOverlay.windowIgnoredStarred')
+              : searching
+                ? t('ui.ArtifactsOverlay.windowIgnoredSearch')
+                : t('ui.ArtifactsOverlay.windowPastTwoWeeks')}
           </span>
         </div>
       </div>
@@ -441,14 +454,14 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
           <OverlayError
             testid="artifacts-error"
             retryTestid="artifacts-retry"
-            message="Couldn't load products."
+            message={t('ui.ArtifactsOverlay.loadError')}
             onRetry={() => { void refetch(); }}
           />
         ) : totalShown === 0 && starredOnly ? (
           <div className="flex flex-col items-center justify-center gap-2 px-3 py-10 text-center" data-testid="artifacts-starred-empty">
             <span className="material-symbols-outlined icon-xl opacity-40" aria-hidden="true">star</span>
             <p className="text-meta text-[var(--color-text-muted)] max-w-[240px]">
-              No favorites yet. Hover any row and click the star to save the products you reopen often — they show here across all time.
+              {t('ui.ArtifactsOverlay.starredEmpty')}
             </p>
           </div>
         ) : totalShown === 0 ? (
@@ -456,8 +469,8 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             <span className="material-symbols-outlined icon-xl opacity-40" aria-hidden="true">inventory_2</span>
             <p className="text-meta text-[var(--color-text-muted)] max-w-[240px]">
               {all.length === 0
-                ? 'No products yet. Decks, reports, and files you create show up here.'
-                : 'No products match your search.'}
+                ? t('ui.ArtifactsOverlay.empty')
+                : t('ui.ArtifactsOverlay.noMatch')}
             </p>
           </div>
         ) : (
@@ -466,7 +479,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
             {windowGroups.map((g) => (
               <section key={g.bucket} data-testid={`artifacts-timegroup-${g.bucket.replace(/\s/g, '-')}`}>
                 <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
-                  <span>{g.bucket}</span>
+                  <span>{t(BUCKET_LABEL_KEY[g.bucket])}</span>
                   <span className="opacity-70">· {g.products.length}</span>
                   <span className="flex-1 h-px bg-[var(--color-border)] opacity-40" />
                 </div>
@@ -481,7 +494,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
               foldOpen ? (
                 <section data-testid="artifacts-timegroup-Earlier">
                   <div className="flex items-center gap-2 px-1 pt-4 pb-1.5 text-meta uppercase tracking-wide text-[var(--color-text-faint)]">
-                    <span>Earlier</span>
+                    <span>{t(BUCKET_LABEL_KEY.Earlier)}</span>
                     <span className="opacity-70">· {earlierCount}</span>
                     <span className="flex-1 h-px bg-[var(--color-border)] opacity-40" />
                   </div>
@@ -496,7 +509,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                   className="mt-3 mx-1 flex items-center gap-2 px-3 py-2 rounded-lg border border-dashed border-[var(--color-border)] text-small text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors text-left"
                 >
                   <span className="text-[var(--color-text-faint)]">▸</span>
-                  Earlier · <b className="text-[var(--color-text)] ">{earlierCount}</b> more · 点击展开
+                  {t('ui.ArtifactsOverlay.earlierFoldPrefix')} <b className="text-[var(--color-text)] ">{earlierCount}</b> {t('ui.ArtifactsOverlay.earlierFoldSuffix')}
                 </button>
               )
             )}
@@ -522,7 +535,7 @@ export function ArtifactsContent({ close, fetchProducts, now, setStarred }: Arti
                       >
                         expand_more
                       </span>
-                      <span className="text-small">{ROLE_LABEL[role]}</span>
+                      <span className="text-small">{t(ROLE_LABEL_KEY[role])}</span>
                       <span className="ml-auto text-[var(--color-text-faint)] text-meta">{items.length}</span>
                     </button>
                     {open && (
@@ -558,6 +571,7 @@ function ArtifactRow({
   onOpen: (p: Product) => void;
   onStar: (p: Product) => void;
 }) {
+  const { t } = useTranslation();
   const { badge, color } = fileBadge(p.path);
   const label = rowLabel(p);
   const starred = p.starred ?? false;
@@ -590,9 +604,9 @@ function ArtifactRow({
             <span
               data-testid="artifacts-gitignored-badge"
               className="shrink-0 text-meta px-1 py-px rounded bg-[var(--color-git-modified,#d59a26)]/20 text-[var(--color-git-modified,#d59a26)] leading-none"
-              title="Not in git (local-only) — surfaced anyway"
+              title={t('ui.ArtifactsOverlay.gitignoredTitle')}
             >
-              local
+              {t('ui.ArtifactsOverlay.gitignoredBadge')}
             </span>
           )}
         </span>
@@ -613,8 +627,8 @@ function ArtifactRow({
         type="button"
         data-testid="artifacts-row-star"
         aria-pressed={starred}
-        aria-label={starred ? 'Unstar' : 'Star'}
-        title={starred ? 'Starred' : 'Star'}
+        aria-label={starred ? t('ui.ArtifactsOverlay.unstar') : t('ui.ArtifactsOverlay.star')}
+        title={starred ? t('ui.ArtifactsOverlay.starred') : t('ui.ArtifactsOverlay.star')}
         onClick={(e) => {
           e.stopPropagation();
           onStar(p);

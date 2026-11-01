@@ -147,7 +147,7 @@ export default function BackupTab() {
               type="password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              placeholder="ghp_..."
+              placeholder={t('ui.BackupTab.tokenPlaceholder')}
               className="w-full px-3 py-1.5 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
             />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">

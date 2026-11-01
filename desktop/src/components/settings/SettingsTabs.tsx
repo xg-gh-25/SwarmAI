@@ -11,6 +11,7 @@
  */
 import { Tabs } from '../overlay';
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import GeneralTab from './GeneralTab';
 import AIModelsTab from './AIModelsTab';
 import ChannelsTab from './ChannelsTab';
@@ -26,13 +27,13 @@ import BackupTab from './BackupTab';
  *  now that Skills moved to the Capabilities overlay.)
  */
 const ALL_TABS = [
-  { id: 'general', label: 'General', icon: 'settings', width: '4xl' as const },
-  { id: 'aws-account', label: 'Swarm AWS Account', icon: 'account_circle', width: '4xl' as const },
-  { id: 'ai-models', label: 'LLM Models', icon: 'smart_toy', width: '4xl' as const },
-  { id: 'channels', label: 'Channels', icon: 'forum', width: '4xl' as const },
-  { id: 'backup', label: 'Backup', icon: 'cloud_upload', width: '4xl' as const },
-  { id: 'system', label: 'System', icon: 'dns', width: '4xl' as const },
-  { id: 'about', label: 'About', icon: 'info', width: '4xl' as const },
+  { id: 'general', labelKey: 'ui.SettingsTabs.general', icon: 'settings', width: '4xl' as const },
+  { id: 'aws-account', labelKey: 'settings.awsAccount.title', icon: 'account_circle', width: '4xl' as const },
+  { id: 'ai-models', labelKey: 'settings.modelProvider.heading', icon: 'smart_toy', width: '4xl' as const },
+  { id: 'channels', labelKey: 'nav.channels', icon: 'forum', width: '4xl' as const },
+  { id: 'backup', labelKey: 'ui.SettingsTabs.backup', icon: 'cloud_upload', width: '4xl' as const },
+  { id: 'system', labelKey: 'common.label.system', icon: 'dns', width: '4xl' as const },
+  { id: 'about', labelKey: 'settings.about.title', icon: 'info', width: '4xl' as const },
 ] as const;
 
 const WIDTH_CLASSES = {
@@ -55,6 +56,7 @@ interface SettingsTabsProps {
 }
 
 export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
+  const { t } = useTranslation();
   const TABS = ALL_TABS;
 
   const [activeTab, setActiveTab] = useState<TabId>(() => resolveTab(initialTab) ?? 'general');
@@ -69,8 +71,8 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
     <div className="flex flex-col h-full">
       {/* Tab bar — pinned at top, gradient hints when overflowing */}
       <div className="shrink-0 px-6 py-3 border-b border-[var(--color-border)] flex justify-center-safe">
-        <Tabs label="Settings" value={activeTab} onChange={setActiveTab}
-          items={TABS.map((tab) => ({ key: tab.id, label: tab.label, icon: tab.icon }))} />
+        <Tabs label={t('settings.title')} value={activeTab} onChange={setActiveTab}
+          items={TABS.map((tab) => ({ key: tab.id, label: t(tab.labelKey), icon: tab.icon }))} />
       </div>
 
       {/* Tab content — scrollable, fills remaining space */}

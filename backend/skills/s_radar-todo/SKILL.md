@@ -189,12 +189,12 @@ Created by scheduled jobs (morning-inbox). Job agents output structured
 
 | Field | Required | Example |
 |-------|----------|---------|
-| `email_subject` | **YES** | `"Promote Self-Assessment Reminder"` |
-| `email_from` | **YES** | `"hr-no-reply@amazon.com"` |
+| `email_subject` | **YES** | `"Quarterly report due Friday"` |
+| `email_from` | **YES** | `"no-reply@example.com"` |
 | `email_date` | **YES** | `"2026-03-30T08:15:00Z"` |
 | `email_snippet` | **YES** | First 200 chars of email body |
 | `suggested_action` | **YES** | `reply` / `forward` / `delegate` / `read` |
-| `email_message_id` | Optional | For re-fetching via Outlook MCP |
+| `email_message_id` | Optional | For re-fetching via the email MCP |
 | `email_thread_id` | Optional | For thread context |
 
 ### Slack todos (source_type=`slack`)

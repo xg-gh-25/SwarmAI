@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import type { UnifiedAttachment } from '../../types';
 
 interface AttachmentPreviewCardProps {
@@ -37,10 +38,11 @@ const getFileIcon = (type: UnifiedAttachment['type']): string => {
 };
 
 export function AttachmentPreviewCard({ attachment, onRemove, onToggleOpen, open }: AttachmentPreviewCardProps) {
+  const { t } = useTranslation();
   const { id, name, type, size, preview, isLoading, error } = attachment;
 
   if (type === 'terminal') {
-    const t = attachment.terminal;
+    const term = attachment.terminal;
     return (
       <div
         data-testid={`attachment-terminal-${id}`}
@@ -50,14 +52,14 @@ export function AttachmentPreviewCard({ attachment, onRemove, onToggleOpen, open
           'bg-[var(--color-bg)]',
         )}
         onClick={() => onToggleOpen?.(id)}
-        title={open ? 'Hide terminal output' : 'Show terminal output'}
+        title={open ? t('ui.AttachmentPreviewCard.hideTerminal') : t('ui.AttachmentPreviewCard.showTerminal')}
       >
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); onRemove(id); }}
           className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
-          title="Remove terminal output"
-          aria-label="Remove terminal output"
+          title={t('ui.AttachmentPreviewCard.removeTerminal')}
+          aria-label={t('ui.AttachmentPreviewCard.removeTerminal')}
         >
           <span className="material-symbols-outlined icon-xs">close</span>
         </button>
@@ -67,9 +69,11 @@ export function AttachmentPreviewCard({ attachment, onRemove, onToggleOpen, open
           </pre>
           <div className="flex items-center gap-1 px-2 pb-1.5 pt-0.5 bg-[var(--color-card)]">
             <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">terminal</span>
-            <span className="text-xs text-[var(--color-text)] truncate" title={t?.cwd || 'SwarmWS'}>{name.replace(/^Terminal · /, '')}</span>
+            <span className="text-xs text-[var(--color-text)] truncate" title={term?.cwd || 'SwarmWS'}>{name.replace(/^Terminal · /, '')}</span>
             <span className="ml-auto text-[10.5px] text-[var(--color-text-muted)] whitespace-nowrap">
-              {t?.lines ?? 0} lines{t?.truncated ? ' · cut' : ''}
+              {term?.truncated
+                ? t('ui.AttachmentPreviewCard.linesCut', { count: term?.lines ?? 0 })
+                : t('ui.AttachmentPreviewCard.lines', { count: term?.lines ?? 0 })}
             </span>
           </div>
         </div>
@@ -90,7 +94,7 @@ export function AttachmentPreviewCard({ attachment, onRemove, onToggleOpen, open
       <button
         onClick={() => onRemove(id)}
         className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/60 text-[var(--color-text)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
-        title="Remove attachment"
+        title={t('ui.AttachmentPreviewCard.removeAttachment')}
       >
         <span className="material-symbols-outlined icon-sm">close</span>
       </button>
@@ -106,7 +110,7 @@ export function AttachmentPreviewCard({ attachment, onRemove, onToggleOpen, open
           ) : error ? (
             <div className="flex flex-col items-center text-red-400">
               <span className="material-symbols-outlined icon-sm">error</span>
-              <span className="text-xs mt-1">Error</span>
+              <span className="text-xs mt-1">{t('common.status.error')}</span>
             </div>
           ) : type === 'image' && preview ? (
             <img

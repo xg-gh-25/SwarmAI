@@ -11,7 +11,7 @@
  * @exports ContextUsageRingProps  — Props interface
  * @exports getContextRingColor   — Shared color function for external callers
  */
-
+import { useTranslation } from 'react-i18next';
 
 /** Ring colour for a backend context level (null = no data yet). */
 export function getContextRingColor(level: 'ok' | 'warn' | 'critical' | null): string {
@@ -33,6 +33,10 @@ export interface ContextUsageRingProps {
 }
 
 export function ContextUsageRing({ pct, level = null, size = 18, showLabel = false }: ContextUsageRingProps) {
+  const { t } = useTranslation();
+  const ringLabel = pct !== null
+    ? t('ui.ContextUsageRing.used', { pct: Math.round(pct) })
+    : t('ui.ContextUsageRing.noData');
   const strokeWidth = 2.5;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -43,8 +47,8 @@ export function ContextUsageRing({ pct, level = null, size = 18, showLabel = fal
   return (
     <div
       className="relative inline-flex items-center gap-1.5"
-      title={pct !== null ? `${Math.round(pct)}% context used` : 'No context data yet'}
-      aria-label={pct !== null ? `${Math.round(pct)}% context used` : 'No context data yet'}
+      title={ringLabel}
+      aria-label={ringLabel}
     >
       <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
         <svg width={size} height={size} className="transform -rotate-90">

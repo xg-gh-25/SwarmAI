@@ -18,6 +18,7 @@
  * - ``BackendUpgradeBanner`` — default export, the banner React component
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { isDesktop } from '../../services/tauri';
 
@@ -31,6 +32,7 @@ interface UpgradingPayload { from: string; to: string }
 interface UpgradedPayload  { version: string }
 
 export default function BackendUpgradeBanner() {
+  const { t } = useTranslation();
   const [state, setState] = useState<BannerState>({ kind: 'idle' });
 
   useEffect(() => {
@@ -79,18 +81,18 @@ export default function BackendUpgradeBanner() {
       {state.kind === 'upgrading' && (
         <span className="text-[var(--color-text-muted)]">
           {state.from === state.to
-            ? `Updating backend v${state.to} to the new build…`
-            : `Upgrading backend (${state.from} → ${state.to})…`}
+            ? t('ui.BackendUpgradeBanner.updatingBuild', { version: state.to })
+            : t('ui.BackendUpgradeBanner.upgrading', { from: state.from, to: state.to })}
         </span>
       )}
       {state.kind === 'upgraded' && (
         <span className="text-[var(--color-success,#22c55e)]">
-          Backend upgraded to v{state.version}
+          {t('ui.BackendUpgradeBanner.upgraded', { version: state.version })}
         </span>
       )}
       {state.kind === 'failed' && (
         <span className="text-[var(--color-error,#ef4444)]">
-          Backend upgrade failed: {state.error}
+          {t('ui.BackendUpgradeBanner.failed', { error: state.error })}
         </span>
       )}
     </div>

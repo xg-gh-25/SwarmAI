@@ -14,6 +14,7 @@
  * @exports ActFrame, ActOption, ActDone
  */
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export function ActFrame({ icon, title, meta, children, footer, testId }: {
   icon: string; title: ReactNode; meta?: ReactNode; children: ReactNode; footer?: ReactNode; testId?: string;
@@ -40,6 +41,7 @@ export function ActOption({ label, description, selected, recommended, recommend
   label: ReactNode; description?: ReactNode; selected?: boolean; recommended?: boolean; recommendedLabel?: string;
   onClick?: () => void; disabled?: boolean; round?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <button type="button" onClick={onClick} disabled={disabled} data-selected={selected ? 'true' : 'false'}
       className={`w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-[7px] border transition-colors ${
@@ -51,7 +53,7 @@ export function ActOption({ label, description, selected, recommended, recommend
         <span className="text-[13px] text-[var(--color-text)]">{label}</span>
         {description && <span className="block text-[12px] text-[var(--color-text-dim)]">{description}</span>}
       </span>
-      {recommended && <span className="shrink-0 text-[11px] text-primary">{recommendedLabel ?? 'Recommended'}</span>}
+      {recommended && <span className="shrink-0 text-[11px] text-primary">{recommendedLabel ?? t('chat.escalation.recommended')}</span>}
     </button>
   );
 }

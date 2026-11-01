@@ -60,8 +60,9 @@ logger = logging.getLogger(__name__)
 # The OLD values (CJK 0.667, Latin 1.333) under-counted real content ~40-65%.
 
 SYSTEM_APPENDIX_NOTICE = (
-    "以下条目由系统从对话中自动提取，优先级低于产品规则（SWARMAI / IDENTITY / SOUL / AGENT），"
-    "与产品规则冲突时按产品规则执行。"
+    "The entries under \"## System appendix (auto-extracted)\" were extracted from conversations "
+    "by the system. They rank below the product rules (SWARMAI / IDENTITY / SOUL / AGENT); "
+    "where they conflict, follow the product rules."
 )
 _SYSTEM_APPENDIX_FILES = frozenset({"STEERING.md", "USER.md", "TOOLS.md"})
 _L1_LAYOUT_VERSION = 4
@@ -74,9 +75,10 @@ def _utc_day(value: datetime) -> str:
 
 def split_system_appendix(content: str) -> tuple[str, str]:
     """Split owner-authored text from the CDF-managed appendix, preserving bytes."""
-    from core.ingestion.contracts_v2 import SYSTEM_APPENDIX_HEADING
+    from core.ingestion.contracts_v2 import find_system_appendix
 
-    match = re.search(rf"^{re.escape(SYSTEM_APPENDIX_HEADING)}\s*$", content, re.MULTILINE)
+    # the English heading or the legacy one in files written before it changed
+    match = find_system_appendix(content)
     if match is None:
         return content, ""
     return content[:match.start()], content[match.start():]
@@ -713,7 +715,7 @@ class ContextDirectoryLoader:
         # Provision system-owned reference files that live in .context/ but
         # are NOT part of CONTEXT_FILES (not injected into system prompt).
         # Always-overwrite from template, like system-owned context files.
-        _SYSTEM_REFERENCE_FILES = ["CONTEXT.md", "SECURITY-BASELINE.md"]
+        _SYSTEM_REFERENCE_FILES = ["SECURITY-BASELINE.md"]
         for filename in _SYSTEM_REFERENCE_FILES:
             if self.templates_dir is None:
                 break

@@ -17,6 +17,10 @@ file, the token and the exact number of hits: one more hit in an excepted file i
 violation, one fewer means the line must shrink. The scan must also have read the
 product tree (a broken file list would otherwise pass over nothing).
 
+The same instance-term rule (one deployment's customer, internal-tool and sign-in names)
+also runs over the shipped text: backend/context, skills, experts and templates
+(``test_shipped_text_has_no_instance_terms``).
+
 Known limit: a bare ``"SwarmAI"`` literal (the product name, also the seeded default
 project's name) is not a rule; the default-project literals of usable-by-anyone §3.9
 class B are a separate cleanup.
@@ -39,6 +43,10 @@ STRING_RULES = re.compile(
     r"|Projects/SwarmAI"                       # one project's path, written as a literal
     r"|SWARMAI_CODEBASE_DIR|SWARMAI_DIR\b|SWARMAI_PROJECT_ROOT"  # env vars that point at it
     r"|/(?:Users|home)/[A-Za-z][\w.-]*"         # an absolute path naming one account
+    # one deployment's customers, internal tools and sign-in command (the 2026-11-01
+    # all-user audit): text only that deployment can use. mwinit is allowed where the code
+    # runs only for an Amazon-internal (ADA / Midway) sign-in, by a reviewed exception.
+    r"|(?i:\b(?:cmhk|ivt|sentral|highspot|mwinit)\b)"
 )
 #: A home-relative development location written as a string: ``~/Desktop/...``,
 #: ``.../Desktop`` or the exact segment ``"Desktop"``, ``~/swarmai``, ``~/Projects/...``.
@@ -166,7 +174,7 @@ def test_product_code_does_not_look_for_swarmai():
 
 
 def test_every_exception_matches_exactly():
-    counts = _counts(scan(_shipped_files()))
+    counts = _counts(scan(_shipped_files()) + _text_hits(_shipped_text_files()))
     wrong = sorted(f"{p} | {t} | {n} (found {counts.get((p, t), 0)})"
                    for (p, t), n in _exceptions().items() if counts.get((p, t), 0) < n)
     assert not wrong, ("exceptions that allow more hits than exist; lower the count or "
@@ -196,3 +204,41 @@ def test_the_rules_catch_what_they_name():
         "_find_swarmai_root", "/Users/bob", "/Desktop/",
     ])
     assert [t for _p, _n, t in _shell_hits("x.sh", "# prod.sh\n./prod.sh build\n")] == ["prod.sh"]
+
+
+#: Shipped text read by every user's agent or shown to them.
+_TEXT_ROOTS = ("backend/context/", "backend/skills/", "backend/experts/", "backend/templates/")
+_TEXT_SUFFIXES = (".md", ".yaml", ".yml", ".json", ".txt", ".toml")
+INSTANCE_TERMS = re.compile(r"(?i:\b(?:cmhk|ivt|sentral|highspot|mwinit)\b)")
+
+
+def _shipped_text_files() -> list[str]:
+    out = subprocess.run(["git", "-C", str(REPO), "ls-files", "--", *_TEXT_ROOTS],
+                         capture_output=True, text=True, check=True).stdout.split("\n")
+    return [f for f in out if f.endswith(_TEXT_SUFFIXES) and not _TEST_FILE.search(f)]
+
+
+def _text_hits(files: list[str]) -> list[tuple[str, int, str]]:
+    hits = []
+    for rel in files:
+        for no, line in enumerate((REPO / rel).read_text(encoding="utf-8", errors="replace")
+                                  .splitlines(), 1):
+            hits += [(rel, no, m.group(0)) for m in INSTANCE_TERMS.finditer(line)]
+    return hits
+
+
+def test_shipped_text_has_no_instance_terms():
+    files = _shipped_text_files()
+    assert len(files) >= 100 and any(f.startswith("backend/context/") for f in files)
+    allowed = _exceptions()
+    hits = _text_hits(files)
+    counts = _counts(hits)
+    unexplained = sorted(f"{p}:{n}: {t}" for p, n, t in hits
+                         if counts[(p, t)] > allowed.get((p, t), 0))
+    assert not unexplained, ("shipped text names one deployment's customer, internal tool "
+                             "or sign-in command:\n" + "\n".join(unexplained))
+
+
+def test_instance_terms_are_caught():
+    code = 'A = "CMHK report"\nB = "run mwinit -f"\nC = "aws-sentral-mcp"\nD = "native"\n'
+    assert sorted(t for _p, _n, t in _python_hits("x.py", code)) == ["CMHK", "mwinit", "sentral"]

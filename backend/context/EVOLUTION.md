@@ -16,10 +16,9 @@
 2. **Write on impact.** Log immediately when: (a) a mistake is found, (b) a fix is implemented, (c) a reusable pattern emerges.
 3. **No speculation.** Every entry must come from real execution. No placeholders, no "planned".
 4. **Corrections > capabilities.** Preventing repeated mistakes has higher priority than adding new features.
-5. **Standardize entries.** Every log follows Entry Format below (ID → Date → Context → Action → Outcome → Lesson).
-6. **Archive by usage.** Entries unused for 30 days move to "Archived" (summarized, not deleted).
-7. **Failure is mandatory.** Record failed attempts with cause and required condition for success.
-8. **Evolve externally.** New abilities go into skills + registry. Never mutate core system code during evolution.
+5. **Standardize entries.** Every entry follows the Entry Format below (ID → Date → kind → title → body).
+6. **Failure is mandatory.** Record failed attempts with cause and required condition for success.
+7. **Evolve externally.** New abilities go into skills + registry. Never mutate core system code during evolution.
 
 ---
 
@@ -39,15 +38,16 @@ _Only principles proven through repeated experience belong here._
 
 ## Entry Format
 
-All entries follow this structure:
+CDF's writer appends each entry as one block:
 
-- **ID**: `<Type-prefix><NNN>` — `C` (Capability), `X` (Correction), `O` (Optimization), `F` (Failure), `K` (Competence)
-- **Date**: YYYY-MM-DD
-- **Context**: What happened
-- **Action**: What was done
-- **Outcome**: Result
-- **Lesson**: Reusable insight
-- **Usage Count**: Increment when reused (capabilities/optimizations only)
+```
+### <prefix><NNN> | YYYY-MM-DD
+- **<kind>**: **<title>** <body>
+```
+
+- **Prefix and kind**: `C` (Correction) in Corrections Captured, `K` (Competence) in Competence Learned
+- **NNN**: one past the highest number of that prefix in its section
+- Corrections are permanent (AGENT R24)
 
 ---
 

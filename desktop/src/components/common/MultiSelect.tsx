@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 export interface MultiSelectOption {
   id: string;
@@ -24,7 +25,7 @@ interface MultiSelectProps {
 
 export default function MultiSelect({
   label,
-  placeholder = 'Select items...',
+  placeholder,
   options,
   selectedIds,
   onChange,
@@ -35,6 +36,7 @@ export default function MultiSelect({
   disabled = false,
   protectSystemItems = false,
 }: MultiSelectProps) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -100,7 +102,7 @@ export default function MultiSelect({
         )}
       >
         {selectedOptions.length === 0 ? (
-          <span className="text-[var(--color-text-muted)]">{placeholder}</span>
+          <span className="text-[var(--color-text-muted)]">{placeholder ?? t('ui.MultiSelect.selectItems')}</span>
         ) : (
           <div className="flex flex-wrap gap-2">
             {selectedOptions.map((option) => (
@@ -111,7 +113,7 @@ export default function MultiSelect({
                 {option.name}
                 {option.isSystem && (
                   <span className="px-1.5 py-0.5 text-xs bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)] rounded ml-1">
-                    System
+                    {t('common.label.system')}
                   </span>
                 )}
                 {!option.isSystem && (
@@ -151,7 +153,7 @@ export default function MultiSelect({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search..."
+                placeholder={t('common.placeholder.search')}
                 className="w-full pl-10 pr-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
                 onClick={(e) => e.stopPropagation()}
               />
@@ -163,12 +165,12 @@ export default function MultiSelect({
             {loading ? (
               <div className="p-4 text-center text-[var(--color-text-muted)]">
                 <div className="inline-block w-5 h-5 border-2 border-muted border-t-primary rounded-full animate-spin" />
-                <span className="ml-2">Loading...</span>
+                <span className="ml-2">{t('common.status.loading')}</span>
               </div>
             ) : error ? (
               <div className="p-4 text-center text-status-error">{error}</div>
             ) : filteredOptions.length === 0 ? (
-              <div className="p-4 text-center text-[var(--color-text-muted)]">No items found</div>
+              <div className="p-4 text-center text-[var(--color-text-muted)]">{t('ui.MultiSelect.noItems')}</div>
             ) : (
               filteredOptions.map((option) => {
                 const isSelected = selectedIds.includes(option.id);
@@ -204,7 +206,7 @@ export default function MultiSelect({
                           <span className="text-[var(--color-text)] font-medium">{option.name}</span>
                           {option.isSystem && (
                             <span className="px-1.5 py-0.5 text-xs bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)] rounded">
-                              System
+                              {t('common.label.system')}
                             </span>
                           )}
                         </div>
@@ -226,7 +228,7 @@ export default function MultiSelect({
             <div className="p-3 border-t border-[var(--color-border)] bg-[var(--color-bg)]/50">
               <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
                 <span>
-                  {selectedIds.length} of {options.length} selected
+                  {t('ui.MultiSelect.selectedCount', { selected: selectedIds.length, total: options.length })}
                 </span>
                 {selectedIds.length > 0 && (
                   <button
@@ -244,7 +246,7 @@ export default function MultiSelect({
                     }}
                     className="text-primary hover:text-primary/80 transition-colors"
                   >
-                    Clear all
+                    {t('ui.MultiSelect.clearAll')}
                   </button>
                 )}
               </div>

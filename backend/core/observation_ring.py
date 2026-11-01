@@ -30,6 +30,7 @@ class Observation:
     completed: bool = False
     result_status: str = ""  # "success" | "error"
     duration_ms: int = 0
+    command: str = ""  # a Bash call's command (max 500 chars); intent may be its description
 
 
 class ObservationRing:
@@ -55,6 +56,7 @@ class ObservationRing:
             tool_name=tool_name,
             intent=self._extract_intent(tool_name, tool_input),
             files=self._extract_files(tool_name, tool_input),
+            command=str(tool_input.get("command") or "")[:500] if tool_name == "Bash" else "",
         )
         self._ring.append(obs)
         self._pending[tool_use_id] = obs  # Store object ref (survives deque rotation)

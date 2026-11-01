@@ -2968,7 +2968,7 @@ export default function ChatPage() {
                 <div className="chat-gutter py-2">
                   <div className="chat-column text-sm text-yellow-400 flex items-center gap-2">
                     <span className="material-symbols-outlined icon-xs">schedule</span>
-                    Rate limited — resuming in {chatRateLimitCountdown}s
+                    {t('ui.ChatPage.rateLimitedResuming', { seconds: chatRateLimitCountdown })}
                   </div>
                 </div>
               )}

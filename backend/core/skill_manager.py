@@ -86,7 +86,7 @@ class SkillInfo:
     consumes_artifacts: tuple[str, ...] = ()
     produces_artifact: str | None = None
     # Optional frontmatter overrides for the Capabilities domain (run_b5d98151).
-    # When None, the router derives category/visibility from the folder name.
+    # When None, the category comes from the curated map and visibility is public.
     category: str | None = None
     visibility: str | None = None
     # Load tier (run_a85e6641): "always" (full SKILL.md at session start) or "lazy"
@@ -298,7 +298,7 @@ def parse_skill_md(
     visibility = str(visibility_raw).strip().lower() if visibility_raw else None
     if visibility not in (None, "public", "internal"):
         logger.warning(
-            "SKILL.md at %s has unknown visibility '%s'; ignoring (deriving from name)",
+            "SKILL.md at %s has unknown visibility '%s'; ignoring (treated as public)",
             path, visibility,
         )
         visibility = None

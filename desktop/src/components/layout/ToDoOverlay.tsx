@@ -34,6 +34,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation, Trans } from 'react-i18next';
 import { overlayQuery, invalidateOverlay, TODO_DEFAULT_DAYS, TODO_FETCH_CAP } from './overlayQueries';
 import { todosService } from '../../services/todos';
 import { classifyLoadError } from '../../services/api';
@@ -107,6 +108,21 @@ const DEFAULT_RANGE_IDX = 1; // 30d
 type StatusFilter = 'All' | 'Open' | TodoStatusLabel;
 const STATUS_FILTERS: StatusFilter[] = ['All', 'Open', 'In Progress', 'Completed', 'Cancelled'];
 // 'Open' = the actionable set (Pending). 'All' = everything.
+// Display text for each filter / status value (the values themselves stay English ids).
+const STATUS_LABEL_KEY: Record<StatusFilter, string> = {
+  All: 'common.label.all',
+  Open: 'ui.ToDoOverlay.statusOpen',
+  Pending: 'ui.ToDoOverlay.statusPending',
+  'In Progress': 'ui.ToDoOverlay.statusInProgress',
+  Completed: 'ui.ToDoOverlay.statusCompleted',
+  Cancelled: 'ui.ToDoOverlay.statusCancelled',
+};
+const PRIORITY_LABEL_KEY: Record<Priority, string> = {
+  high: 'ui.ToDoOverlay.priorityHigh',
+  medium: 'ui.ToDoOverlay.priorityMedium',
+  low: 'ui.ToDoOverlay.priorityLow',
+  none: 'ui.ToDoOverlay.priorityNone',
+};
 function matchesStatusFilter(t: ToDo, f: StatusFilter): boolean {
   if (f === 'All') return true;
   const s = deriveStatus(t);
@@ -177,6 +193,7 @@ function mergeRows(list: ToDo[], history: ToDo[]): ToDo[] {
 }
 
 export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
+  const { t } = useTranslation();
   const [rangeIdx, setRangeIdx] = useState(DEFAULT_RANGE_IDX);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('Open');
   const [sortKey, setSortKey] = useState<SortKey>('created');
@@ -241,10 +258,10 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
     try {
       await todosService.delete(todo.id);
     } catch {
-      setActionErr('Could not withdraw that ToDo — please try again.');
+      setActionErr(t('ui.ToDoOverlay.errWithdraw'));
       void refresh(); // restore truth on failure
     }
-  }, [selected, refresh, qc, todoQ.queryKey]);
+  }, [selected, refresh, qc, todoQ.queryKey, t]);
 
   const handleSaved = useCallback(() => {
     setCreating(false);
@@ -285,10 +302,10 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       }
       void refresh();
     } catch {
-      setActionErr('Could not change status — please try again.');
+      setActionErr(t('ui.ToDoOverlay.errChangeStatus'));
       void refresh();
     }
-  }, [refresh]);
+  }, [refresh, t]);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col relative" data-testid="todo-overlay">
@@ -304,18 +321,18 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           // bordered containers + kept-visible labels → the two 'All's can't confuse.
           <div className="flex items-center gap-3 flex-wrap">
             <Segmented
-              label="Range"
+              label={t('ui.ToDoOverlay.range')}
               testid="todo-range"
-              options={RANGES.map((r) => ({ value: r.label, label: r.label }))}
+              options={RANGES.map((r) => ({ value: r.label, label: r.days === null ? t('common.label.all') : r.label }))}
               value={RANGES[rangeIdx].label}
               onChange={(v) => setRangeIdx(RANGES.findIndex((r) => r.label === v))}
               optionTestid={(v) => `todo-range-${v}`}
             />
             <span aria-hidden className="h-5 w-px bg-[var(--color-border)] shrink-0" />
             <Segmented
-              label="Status"
+              label={t('common.label.status')}
               testid="todo-status-chips"
-              options={STATUS_FILTERS.map((f) => ({ value: f, label: f }))}
+              options={STATUS_FILTERS.map((f) => ({ value: f, label: t(STATUS_LABEL_KEY[f]) }))}
               value={statusFilter}
               onChange={setStatusFilter}
               optionTestid={(v) => `todo-chip-${v.replace(/\s+/g, '-')}`}
@@ -328,7 +345,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
             data-testid="todo-new-btn"
             className="btn-md btn-primary hover:opacity-90 transition-opacity shrink-0 shadow-sm"
           >
-            <span className="material-symbols-outlined icon-sm">add</span>New ToDo
+            <span className="material-symbols-outlined icon-sm">add</span>{t('ui.ToDoOverlay.newTodo')}
           </button>
         )}
       />
@@ -336,7 +353,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
       <GuideBanner />
 
       {/* KPI row */}
-      <KpiRow kpis={kpis} rangeLabel={RANGES[rangeIdx].label} />
+      <KpiRow kpis={kpis} rangeLabel={RANGES[rangeIdx].days === null ? t('common.label.all') : RANGES[rangeIdx].label} />
 
       {/* Analytics strip — always visible */}
       <AnalyticsStrip weekly={weekly} sources={sources} />
@@ -348,7 +365,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
           className="shrink-0 mx-4 mt-2 text-meta text-[var(--color-text-faint)] flex items-center gap-1.5"
         >
           <span className="material-symbols-outlined icon-xs">info</span>
-          Showing the most recent {TODO_FETCH_CAP} ToDos — narrow the time range to see a focused set.
+          {t('ui.ToDoOverlay.truncated', { cap: TODO_FETCH_CAP })}
         </div>
       )}
 
@@ -370,7 +387,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
         >
           <span className="material-symbols-outlined icon-sm">warning</span>
           <span className="flex-1">{actionErr}</span>
-          <button onClick={() => setActionErr(null)} className="text-meta underline opacity-80 hover:opacity-100">dismiss</button>
+          <button onClick={() => setActionErr(null)} className="text-meta underline opacity-80 hover:opacity-100">{t('ui.ToDoOverlay.dismiss')}</button>
         </div>
       )}
 
@@ -404,6 +421,7 @@ export function ToDoContent({ onDispatch, close }: ToDoContentProps) {
 // ── KPI row ──────────────────────────────────────────────────────────
 
 function KpiRow({ kpis, rangeLabel }: { kpis: ReturnType<typeof computeKpis>; rangeLabel: string }) {
+  const { t } = useTranslation();
   const pct = Math.round(kpis.completionRate * 100);
   // The KPI row is the PRIMARY scannable layer — big numbers, the one thing that
   // stands out (Von Restorff). 'Open' is the actionable headline, emphasized; the
@@ -411,10 +429,10 @@ function KpiRow({ kpis, rangeLabel }: { kpis: ReturnType<typeof computeKpis>; ra
   // column rhythm below → no more misalignment (Gate-1 F4).
   return (
     <div className="shrink-0 grid grid-cols-4 gap-3 px-4 py-3 border-b border-[var(--color-border)]" data-testid="todo-kpis">
-      <Kpi label="Open" value={kpis.open} testid="kpi-open" icon="pending_actions" primary />
-      <Kpi label="In Progress" value={kpis.inProgress} testid="kpi-inprogress" icon="autorenew" />
-      <Kpi label={`Completed · ${rangeLabel}`} value={kpis.completed} testid="kpi-completed" icon="task_alt" />
-      <Kpi label="Completion" value={`${pct}%`} testid="kpi-rate" icon="donut_large" />
+      <Kpi label={t('ui.ToDoOverlay.statusOpen')} value={kpis.open} testid="kpi-open" icon="pending_actions" primary />
+      <Kpi label={t('ui.ToDoOverlay.statusInProgress')} value={kpis.inProgress} testid="kpi-inprogress" icon="autorenew" />
+      <Kpi label={t('ui.ToDoOverlay.kpiCompletedRange', { range: rangeLabel })} value={kpis.completed} testid="kpi-completed" icon="task_alt" />
+      <Kpi label={t('ui.ToDoOverlay.kpiCompletion')} value={`${pct}%`} testid="kpi-rate" icon="donut_large" />
     </div>
   );
 }
@@ -431,6 +449,7 @@ function AnalyticsStrip({ weekly, sources }: {
   weekly: ReturnType<typeof weeklyBuckets>;
   sources: ReturnType<typeof sourceDist>;
 }) {
+  const { t } = useTranslation();
   // Secondary layer: same px-4 + 2-col grid as KpiRow (shared rhythm → aligned,
   // not offset). Headers are deliberately muted/smaller than the KPI numbers so
   // this reads as supporting context, not a competing headline (Von Restorff:
@@ -441,17 +460,17 @@ function AnalyticsStrip({ weekly, sources }: {
           above) so the whole surface reads as one system, not stacked ad-hoc rows. */}
       <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5" data-testid="todo-weekly">
         <div className="flex items-center justify-between">
-          <SectionLabel>Weekly activity</SectionLabel>
+          <SectionLabel>{t('ui.ToDoOverlay.weeklyActivity')}</SectionLabel>
           {/* Legend — was missing entirely; gray vs accent bars were unlabeled. */}
           <div className="flex items-center gap-2.5 text-meta text-[var(--color-text-muted)]">
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-[var(--color-text-faint)]/40" />Created</span>
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary" />Completed</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-[var(--color-text-faint)]/40" />{t('ui.ToDoOverlay.created')}</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary" />{t('ui.ToDoOverlay.completed')}</span>
           </div>
         </div>
         <WeeklyBars data={weekly} />
       </div>
       <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5" data-testid="todo-sources">
-        <SectionLabel>Source distribution</SectionLabel>
+        <SectionLabel>{t('ui.ToDoOverlay.sourceDistribution')}</SectionLabel>
         <SourceBars data={sources} />
       </div>
     </div>
@@ -459,12 +478,13 @@ function AnalyticsStrip({ weekly, sources }: {
 }
 
 function WeeklyBars({ data }: { data: ReturnType<typeof weeklyBuckets> }) {
-  if (data.length === 0) return <div className="text-meta text-[var(--color-text-faint)] py-4 text-center">No activity in range</div>;
+  const { t } = useTranslation();
+  if (data.length === 0) return <div className="text-meta text-[var(--color-text-faint)] py-4 text-center">{t('ui.ToDoOverlay.noActivity')}</div>;
   const max = Math.max(1, ...data.map((d) => Math.max(d.created, d.completed)));
   return (
     <div className="flex items-end gap-1.5 h-16">
       {data.slice(-10).map((d) => (
-        <div key={d.week} className="flex-1 flex flex-col justify-end gap-0.5 group" title={`${d.week}: ${d.created} created / ${d.completed} completed`}>
+        <div key={d.week} className="flex-1 flex flex-col justify-end gap-0.5 group" title={t('ui.ToDoOverlay.weekTooltip', { week: d.week, created: d.created, completed: d.completed })}>
           <div className="flex items-end gap-0.5 h-full">
             <div className="flex-1 bg-[var(--color-text-faint)]/40 rounded-sm self-end transition-opacity group-hover:opacity-80" style={{ height: `${(d.created / max) * 100}%` }} />
             <div className="flex-1 bg-primary rounded-sm self-end transition-opacity group-hover:opacity-80" style={{ height: `${(d.completed / max) * 100}%` }} />
@@ -476,7 +496,8 @@ function WeeklyBars({ data }: { data: ReturnType<typeof weeklyBuckets> }) {
 }
 
 function SourceBars({ data }: { data: ReturnType<typeof sourceDist> }) {
-  if (data.length === 0) return <div className="text-meta text-[var(--color-text-faint)] py-2">No data in range</div>;
+  const { t } = useTranslation();
+  if (data.length === 0) return <div className="text-meta text-[var(--color-text-faint)] py-2">{t('ui.ToDoOverlay.noData')}</div>;
   const total = Math.max(1, data.reduce((s, d) => s + d.count, 0));
   return (
     <div className="flex flex-col gap-1">
@@ -495,14 +516,14 @@ function SourceBars({ data }: { data: ReturnType<typeof sourceDist> }) {
 
 // ── The sortable table ───────────────────────────────────────────────
 
-const COLUMNS: { key: SortKey; label: string }[] = [
-  { key: 'priority', label: 'Priority' },
-  { key: 'title', label: 'Title' },
-  { key: 'source', label: 'Source' },
-  { key: 'status', label: 'Status' },
-  { key: 'created', label: 'Created' },
-  { key: 'updated', label: 'Updated' },
-  { key: 'completed', label: 'Completed' },
+const COLUMNS: { key: SortKey; labelKey: string }[] = [
+  { key: 'priority', labelKey: 'ui.ToDoOverlay.priority' },
+  { key: 'title', labelKey: 'ui.ToDoOverlay.title' },
+  { key: 'source', labelKey: 'ui.ToDoOverlay.source' },
+  { key: 'status', labelKey: 'common.label.status' },
+  { key: 'created', labelKey: 'ui.ToDoOverlay.created' },
+  { key: 'updated', labelKey: 'common.label.updated' },
+  { key: 'completed', labelKey: 'ui.ToDoOverlay.completed' },
 ];
 
 const PRIORITY_TONE: Record<Priority, Tone> = {
@@ -521,6 +542,7 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
   onWithdraw: (t: ToDo) => void;
   onSelect: (t: ToDo) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 overflow-auto min-h-0" data-testid="todo-table">
       {rows.length === 0 ? (
@@ -539,17 +561,17 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
                     aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
                     className={`${tableHeadClass} px-3 py-2 cursor-pointer select-none whitespace-nowrap hover:text-[var(--color-text)]`}
                   >
-                    {c.label}
+                    {t(c.labelKey)}
                     <span className="ml-1 text-meta">{active ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
                   </th>
                 );
               })}
-              <th className={`${tableHeadClass} !text-right px-3 py-2`}>Actions</th>
+              <th className={`${tableHeadClass} !text-right px-3 py-2`}>{t('common.label.actions')}</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((t) => (
-              <TodoRow key={t.id} todo={t} onDispatch={onDispatch} onWithdraw={onWithdraw} onSelect={onSelect} />
+            {rows.map((row) => (
+              <TodoRow key={row.id} todo={row} onDispatch={onDispatch} onWithdraw={onWithdraw} onSelect={onSelect} />
             ))}
           </tbody>
         </table>
@@ -561,6 +583,7 @@ function TodoTable({ rows, sortKey, sortDir, onSort, onDispatch, onWithdraw, onS
 function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
   todo: ToDo; onDispatch: (t: ToDo) => void; onWithdraw: (t: ToDo) => void; onSelect: (t: ToDo) => void;
 }) {
+  const { t } = useTranslation();
   const status = deriveStatus(todo);
   const terminal = status === 'Completed' || status === 'Cancelled';
   return (
@@ -571,7 +594,7 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
     >
       {/* Priority — colored dot + label; the dot doubles as a left status accent. */}
       <td className="px-3 py-2.5">
-        <Badge tone={PRIORITY_TONE[todo.priority]}><span className="capitalize">{todo.priority === 'none' ? '—' : todo.priority}</span></Badge>
+        <Badge tone={PRIORITY_TONE[todo.priority]}><span className="capitalize">{todo.priority === 'none' ? '—' : t(PRIORITY_LABEL_KEY[todo.priority])}</span></Badge>
       </td>
       <td className="px-3 py-2.5 max-w-[320px]">
         <span className="block truncate text-[var(--color-text)]">{todo.title}</span>
@@ -586,9 +609,9 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
       <td className="px-3 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
         <div className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
           {!terminal && (
-            <RowBtn onClick={() => onDispatch(todo)} icon="play_arrow" label="Dispatch" primary testid="todo-action-dispatch" />
+            <RowBtn onClick={() => onDispatch(todo)} icon="play_arrow" label={t('ui.ToDoOverlay.dispatch')} primary testid="todo-action-dispatch" />
           )}
-          <RowBtn onClick={() => onWithdraw(todo)} icon="delete" label="Withdraw" testid="todo-action-withdraw" />
+          <RowBtn onClick={() => onWithdraw(todo)} icon="delete" label={t('ui.ToDoOverlay.withdraw')} testid="todo-action-withdraw" />
         </div>
       </td>
     </tr>
@@ -598,7 +621,8 @@ function TodoRow({ todo, onDispatch, onWithdraw, onSelect }: {
 /** Status badge — colored dot + label so status is legible at a glance and color is
  *  never the SOLE signal (accessibility). Shared by the table AND the detail header. */
 function StatusBadge({ status }: { status: TodoStatusLabel }) {
-  return <Badge tone={STATUS_TONE[status]}>{status}</Badge>;
+  const { t } = useTranslation();
+  return <Badge tone={STATUS_TONE[status]}>{t(STATUS_LABEL_KEY[status])}</Badge>;
 }
 
 const STATUS_TONE: Record<TodoStatusLabel, Tone> = {
@@ -629,6 +653,7 @@ function StatusSelect({ todo, onSetZone }: {
   todo: ToDo;
   onSetZone: (t: ToDo, target: TodoStatusLabel) => void;
 }) {
+  const { t } = useTranslation();
   const status = deriveStatus(todo);
   const targets = ZONE_TARGETS[status];
   // Terminal (or no legal move) → read-only badge, no dropdown affordance.
@@ -643,16 +668,16 @@ function StatusSelect({ todo, onSetZone }: {
           value pinned to the current zone; options are current + legal targets. The
           onChange only fires onSetZone for a DIFFERENT target (handler also guards). */}
       <select
-        aria-label="Change status"
+        aria-label={t('ui.ToDoOverlay.changeStatus')}
         data-testid="todo-status-select-input"
         value={status}
         onChange={(e) => onSetZone(todo, e.target.value as TodoStatusLabel)}
         onClick={(e) => e.stopPropagation()}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
       >
-        <option value={status}>{status}</option>
-        {targets.map((t) => (
-          <option key={t} value={t}>{t}</option>
+        <option value={status}>{t(STATUS_LABEL_KEY[status])}</option>
+        {targets.map((z) => (
+          <option key={z} value={z}>{t(STATUS_LABEL_KEY[z])}</option>
         ))}
       </select>
     </span>
@@ -676,7 +701,7 @@ function RowBtn({ onClick, icon, label, primary, testid }: { onClick: () => void
 function EmptyTodoHint() {
   return (
     <div className="text-small text-[var(--color-text-faint)] leading-relaxed px-4 py-10 text-center" data-testid="todo-empty-hint">
-      No ToDos match this filter — ask Swarm in chat, or <span className="text-primary ">+ New ToDo</span>.
+      <Trans i18nKey="ui.ToDoOverlay.emptyHint" components={{ act: <span className="text-primary " /> }} />
     </div>
   );
 }
@@ -689,13 +714,10 @@ function GuideBanner() {
   return (
     <div className="shrink-0 mx-4 mt-3" data-testid="todo-guide-banner">
       <Hint>
-        <span className="text-[var(--color-text)]">Just ask Swarm in chat</span> — the AI-native way.
-        Say <span className="text-[var(--color-text)]">“add a todo to …”</span> and it captures full context
-        (files, design docs, next step) automatically. Chat also handles{' '}
-        <span className="text-[var(--color-text)]">bulk import</span> (e.g. “import my open tasks from another tool”),{' '}
-        <span className="text-[var(--color-text)]">updates</span> (“mark the auth todo done”), and{' '}
-        <span className="text-[var(--color-text)]">reports</span> (“what’s my throughput this week?”).
-        {' '}Or add one manually with <span className="text-[var(--color-primary)]">+ New ToDo</span>.
+        <Trans
+          i18nKey="ui.ToDoOverlay.guide"
+          components={{ em: <span className="text-[var(--color-text)]" />, act: <span className="text-[var(--color-primary)]" /> }}
+        />
       </Hint>
     </div>
   );
@@ -711,6 +733,7 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
   onWithdraw: (t: ToDo) => void;
   onSetZone: (t: ToDo, target: TodoStatusLabel) => void;
 }) {
+  const { t } = useTranslation();
   const wp = parseWorkPacket(todo.linkedContext);
   const priColor = PRIORITY_COLOR[todo.priority] === 'transparent' ? 'var(--color-text-faint)' : PRIORITY_COLOR[todo.priority];
   const status = deriveStatus(todo);
@@ -731,10 +754,10 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         <div className="flex items-start gap-2.5">
           <span className="mt-0.5 w-1 h-5 rounded-full shrink-0" style={{ background: priColor }} />
           <div className="flex-1 min-w-0 text-heading font-semibold text-[var(--color-text)] leading-snug break-words">{todo.title}</div>
-          <button onClick={onEdit} data-testid="todo-drawer-edit" title="Edit" className="text-[var(--color-text-muted)] hover:text-primary shrink-0">
+          <button onClick={onEdit} data-testid="todo-drawer-edit" title={t('common.button.edit')} className="text-[var(--color-text-muted)] hover:text-primary shrink-0">
             <span className="material-symbols-outlined icon-md">edit</span>
           </button>
-          <button onClick={onClose} data-testid="todo-drawer-close" title="Close" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0">
+          <button onClick={onClose} data-testid="todo-drawer-close" title={t('common.button.close')} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0">
             <span className="material-symbols-outlined icon-md">close</span>
           </button>
         </div>
@@ -751,24 +774,24 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         {wp?.next_step && (
           <div className="rounded-lg border border-primary/25 bg-primary/[0.06] px-3 py-2.5" data-testid="todo-drawer-nextstep">
             <div className="flex items-center gap-1.5 text-meta uppercase tracking-wider text-primary">
-              <span className="material-symbols-outlined icon-xs">arrow_forward</span>Next step
+              <span className="material-symbols-outlined icon-xs">arrow_forward</span>{t('ui.ToDoOverlay.nextStep')}
             </div>
             <p className="mt-1 text-small text-[var(--color-text)] leading-relaxed break-words">{wp.next_step}</p>
           </div>
         )}
 
         {todo.description && (
-          <Section label="Description">
+          <Section label={t('common.label.description')}>
             <p className="text-[var(--color-text)] leading-relaxed whitespace-pre-wrap break-words">{todo.description}</p>
           </Section>
         )}
 
-        <Section label="Timeline">
+        <Section label={t('ui.ToDoOverlay.timeline')}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-meta">
-            <TsRow label="Created" iso={todo.createdAt} />
-            <TsRow label="Dispatched" iso={todo.dispatchedAt} />
-            <TsRow label="Completed" iso={todo.completedAt} />
-            <TsRow label="Reviewed" iso={todo.reviewedAt} />
+            <TsRow label={t('ui.ToDoOverlay.created')} iso={todo.createdAt} />
+            <TsRow label={t('ui.ToDoOverlay.dispatched')} iso={todo.dispatchedAt} />
+            <TsRow label={t('ui.ToDoOverlay.completed')} iso={todo.completedAt} />
+            <TsRow label={t('ui.ToDoOverlay.reviewed')} iso={todo.reviewedAt} />
           </dl>
           {todo.dispatchedTabLabel && (
             <div className="mt-1 text-meta tabular-nums text-[var(--color-text-muted)]">→ {todo.dispatchedTabLabel}</div>
@@ -778,28 +801,28 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
         {wp ? (
           <>
             {/* next_step rendered as the callout above — not repeated here. */}
-            {wp.acceptance && <Section label="Done when"><p className="text-[var(--color-text)] break-words">{wp.acceptance}</p></Section>}
-            <MaterialList label="Files" items={wp.files} mono />
-            <MaterialList label="Design docs" items={wp.design_docs} mono />
-            <MaterialList label="Commits" items={wp.commits} mono />
-            <MaterialList label="Sessions" items={wp.sessions} mono />
-            <MaterialList label="Memory refs" items={wp.memory_refs} mono />
-            <MaterialList label="Blockers" items={wp.blockers} />
-            {wp.notes && <Section label="Notes"><p className="text-[var(--color-text-muted)] break-words whitespace-pre-wrap">{wp.notes}</p></Section>}
+            {wp.acceptance && <Section label={t('ui.ToDoOverlay.doneWhen')}><p className="text-[var(--color-text)] break-words">{wp.acceptance}</p></Section>}
+            <MaterialList label={t('ui.ToDoOverlay.files')} items={wp.files} mono />
+            <MaterialList label={t('ui.ToDoOverlay.designDocs')} items={wp.design_docs} mono />
+            <MaterialList label={t('ui.ToDoOverlay.commits')} items={wp.commits} mono />
+            <MaterialList label={t('ui.ToDoOverlay.sessions')} items={wp.sessions} mono />
+            <MaterialList label={t('ui.ToDoOverlay.memoryRefs')} items={wp.memory_refs} mono />
+            <MaterialList label={t('ui.ToDoOverlay.blockers')} items={wp.blockers} />
+            {wp.notes && <Section label={t('ui.ToDoOverlay.notes')}><p className="text-[var(--color-text-muted)] break-words whitespace-pre-wrap">{wp.notes}</p></Section>}
           </>
         ) : (
-          <div className="text-meta text-[var(--color-text-faint)] italic">No work-packet context attached.</div>
+          <div className="text-meta text-[var(--color-text-faint)] italic">{t('ui.ToDoOverlay.noWorkPacket')}</div>
         )}
 
         {attachments.length > 0 && (
-          <Section label={`Attachments · ${attachments.length}`}>
+          <Section label={t('ui.ToDoOverlay.attachmentsCount', { n: attachments.length })}>
             <ul className="flex flex-col gap-1">
               {attachments.map((a) => (
                 <li key={a.id} data-testid="todo-detail-attachment">
                   <button
                     type="button"
                     onClick={() => openAttachment(a.relPath)}
-                    title={`Open ${a.filename}`}
+                    title={t('ui.ToDoOverlay.openFile', { name: a.filename })}
                     data-testid="todo-detail-attachment-open"
                     className="w-full flex items-center gap-2 text-meta text-[var(--color-text)] hover:text-primary hover:bg-[var(--color-hover)] rounded px-1 py-0.5 -mx-1 transition-colors text-left"
                   >
@@ -825,18 +848,18 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
             data-testid="todo-drawer-dispatch"
             className="btn-md btn-primary flex-1 hover:opacity-90 transition-opacity shadow-sm"
           >
-            <span className="material-symbols-outlined icon-sm">play_arrow</span>Dispatch to chat
+            <span className="material-symbols-outlined icon-sm">play_arrow</span>{t('ui.ToDoOverlay.dispatchToChat')}
           </button>
         ) : (
-          <span className="flex-1 text-meta text-[var(--color-text-faint)]">This ToDo is {status.toLowerCase()} — no action needed.</span>
+          <span className="flex-1 text-meta text-[var(--color-text-faint)]">{t('ui.ToDoOverlay.terminalNote', { status: t(STATUS_LABEL_KEY[status]).toLowerCase() })}</span>
         )}
         <button
           onClick={() => onWithdraw(todo)}
           data-testid="todo-drawer-withdraw"
-          title="Withdraw"
+          title={t('ui.ToDoOverlay.withdraw')}
           className="btn-md btn-ghost hover:!text-[var(--color-status-error)]"
         >
-          <span className="material-symbols-outlined icon-sm">delete</span>Withdraw
+          <span className="material-symbols-outlined icon-sm">delete</span>{t('ui.ToDoOverlay.withdraw')}
         </button>
       </div>
     </OverlayDrawer>
@@ -845,8 +868,9 @@ function DetailDrawer({ todo, onClose, onEdit, onDispatch, onWithdraw, onSetZone
 
 /** Small colored priority pill for the detail header (replaces redundant text). */
 function PriorityPill({ priority }: { priority: Priority }) {
+  const { t } = useTranslation();
   if (priority === 'none') return null;
-  return <Badge tone={PRIORITY_TONE[priority]}><span className="capitalize">{priority}</span></Badge>;
+  return <Badge tone={PRIORITY_TONE[priority]}><span className="capitalize">{t(PRIORITY_LABEL_KEY[priority])}</span></Badge>;
 }
 
 /** Human-readable byte size. */
@@ -917,6 +941,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
   onSaved: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const initialWp = useMemo(() => parseWorkPacket(initial?.linkedContext ?? null), [initial]);
   const [title, setTitle] = useState(initial?.title ?? '');
   const [priority, setPriority] = useState<Priority>(initial?.priority ?? 'none');
@@ -952,7 +977,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
           setAttachments((prev) => [row, ...prev]);
         }
       } catch {
-        setErr('Attachment upload failed.');
+        setErr(t('ui.ToDoOverlay.errUpload'));
       } finally {
         setBusy(false);
       }
@@ -962,7 +987,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
       setStaged((prev) => [...prev, ...add]);
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
-  }, [isEdit, initial, staged.length]);
+  }, [isEdit, initial, staged.length, t]);
 
   const removeExisting = useCallback(async (att: ToDoAttachment) => {
     if (!initial) return;
@@ -970,14 +995,14 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
     try {
       await todosService.deleteAttachment(initial.id, att.id);
     } catch {
-      setErr('Could not remove attachment.');
+      setErr(t('ui.ToDoOverlay.errRemoveAttachment'));
       void todosService.listAttachments(initial.id).then(setAttachments).catch(() => {});
     }
-  }, [initial]);
+  }, [initial, t]);
 
   const submit = useCallback(async () => {
-    const t = title.trim();
-    if (!t) { setErr('Title is required.'); return; }
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) { setErr(t('ui.ToDoOverlay.errTitleRequired')); return; }
     setBusy(true); setErr(null);
     const ns = nextStep.trim();
     try {
@@ -985,7 +1010,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
         // READ-MERGE: overwrite ONLY next_step; preserve all other packet keys.
         const linkedContext = mergeWorkPacket(initial.linkedContext, { next_step: ns });
         await todosService.update(initial.id, {
-          title: t,
+          title: trimmedTitle,
           priority,
           description: description.trim(),
           linkedContext,
@@ -993,7 +1018,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
       } else {
         const created = await todosService.create({
           workspaceId: 'swarmws',
-          title: t,
+          title: trimmedTitle,
           priority,
           sourceType: 'manual',
           description: description.trim() || undefined,
@@ -1007,7 +1032,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
           try { await todosService.uploadAttachment(created.id, s.file); } catch { failed += 1; }
         }
         if (failed > 0) {
-          setErr(`ToDo created, but ${failed} attachment${failed > 1 ? 's' : ''} failed to upload — re-add ${failed > 1 ? 'them' : 'it'} via Edit.`);
+          setErr(t('ui.ToDoOverlay.errPartialUpload', { count: failed }));
           setBusy(false);
           // Refresh the list (the todo exists) but keep the drawer open so the
           // message is seen; the user closes it manually.
@@ -1016,23 +1041,23 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
       }
       onSaved();
     } catch {
-      setErr(isEdit ? 'Failed to save changes.' : 'Failed to create ToDo.');
+      setErr(isEdit ? t('ui.ToDoOverlay.errSave') : t('ui.ToDoOverlay.errCreate'));
       setBusy(false);
     }
-  }, [isEdit, initial, title, priority, description, nextStep, staged, onSaved]);
+  }, [isEdit, initial, title, priority, description, nextStep, staged, onSaved, t]);
 
   const taClass = 'w-full px-2.5 py-2 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none resize-y';
 
   return (
     <OverlayDrawer widthPx={520} maxWidthPct={80} z={20} testid={isEdit ? 'todo-edit-form' : 'todo-new-form'}>
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-        <span className="flex-1 text-body font-semibold text-[var(--color-text)]">{isEdit ? 'Edit ToDo' : 'New ToDo'}</span>
+        <span className="flex-1 text-body font-semibold text-[var(--color-text)]">{isEdit ? t('ui.ToDoOverlay.editTodo') : t('ui.ToDoOverlay.newTodo')}</span>
         <button onClick={onCancel} data-testid="todo-form-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3.5 text-small">
-        <Field label="Title *">
+        <Field label={t('ui.ToDoOverlay.titleRequired')}>
           <textarea
             autoFocus
             value={title}
@@ -1040,10 +1065,10 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
             data-testid="todo-form-title"
             rows={2}
             className={taClass}
-            placeholder="What needs doing?"
+            placeholder={t('ui.ToDoOverlay.titlePlaceholder')}
           />
         </Field>
-        <Field label="Priority">
+        <Field label={t('ui.ToDoOverlay.priority')}>
           <div className="flex gap-1.5">
             {(['high', 'medium', 'low', 'none'] as Priority[]).map((p) => {
               const active = priority === p;
@@ -1058,35 +1083,35 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                   }`}
                 >
                   <span className="w-2 h-2 rounded-full shrink-0" style={{ background: c === 'transparent' ? 'var(--color-border)' : c }} />
-                  {p}
+                  {t(PRIORITY_LABEL_KEY[p])}
                 </button>
               );
             })}
           </div>
         </Field>
-        <Field label="Description — the detailed context">
+        <Field label={t('ui.ToDoOverlay.descriptionField')}>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             data-testid="todo-form-desc"
             rows={8}
             className={taClass}
-            placeholder="Why this exists, background, links, everything the executor needs to start cold…"
+            placeholder={t('ui.ToDoOverlay.descriptionPlaceholder')}
           />
         </Field>
-        <Field label="Next step">
+        <Field label={t('ui.ToDoOverlay.nextStep')}>
           <textarea
             value={nextStep}
             onChange={(e) => setNextStep(e.target.value)}
             data-testid="todo-form-nextstep"
             rows={3}
             className={taClass}
-            placeholder="Concrete first action(s)"
+            placeholder={t('ui.ToDoOverlay.nextStepPlaceholder')}
           />
         </Field>
 
         {/* Attachments — screenshots + any file, no size/type limit */}
-        <Field label="Attachments — screenshots, files, anything">
+        <Field label={t('ui.ToDoOverlay.attachmentsField')}>
           <div className="flex flex-col gap-2" data-testid="todo-form-attachments">
             <input
               ref={fileInputRef}
@@ -1104,7 +1129,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               className="btn-md btn-secondary self-start transition-colors disabled:opacity-50"
             >
               <span className="material-symbols-outlined icon-sm">upload_file</span>
-              Add files
+              {t('ui.ToDoOverlay.addFiles')}
             </button>
             {(attachments.length > 0 || staged.length > 0) && (
               <ul className="flex flex-col gap-1">
@@ -1113,7 +1138,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                     <button
                       type="button"
                       onClick={() => openAttachment(a.relPath)}
-                      title={`Open ${a.filename}`}
+                      title={t('ui.ToDoOverlay.openFile', { name: a.filename })}
                       data-testid="todo-form-attachment-open"
                       className="flex-1 min-w-0 flex items-center gap-2 hover:text-primary transition-colors text-left"
                     >
@@ -1121,7 +1146,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                       <span className="flex-1 truncate text-[var(--color-text)]">{a.filename}</span>
                       <span className=" text-meta text-[var(--color-text-faint)] tabular-nums">{fmtBytes(a.size)}</span>
                     </button>
-                    <button onClick={() => void removeExisting(a)} title="Remove" className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] shrink-0">
+                    <button onClick={() => void removeExisting(a)} title={t('ui.ToDoOverlay.remove')} className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] shrink-0">
                       <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </li>
@@ -1131,7 +1156,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
                     <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)]">schedule</span>
                     <span className="flex-1 truncate text-[var(--color-text-muted)]">{s.file.name}</span>
                     <span className=" text-meta text-[var(--color-text-faint)] tabular-nums">{fmtBytes(s.file.size)}</span>
-                    <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title="Remove" className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)]">
+                    <button onClick={() => setStaged((prev) => prev.filter((x) => x.key !== s.key))} title={t('ui.ToDoOverlay.remove')} className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)]">
                       <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </li>
@@ -1139,7 +1164,7 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
               </ul>
             )}
             {!isEdit && staged.length > 0 && (
-              <span className="text-meta text-[var(--color-text-faint)]">Files upload when you create the ToDo.</span>
+              <span className="text-meta text-[var(--color-text-faint)]">{t('ui.ToDoOverlay.filesUploadOnCreate')}</span>
             )}
           </div>
         </Field>
@@ -1152,11 +1177,11 @@ function TodoForm({ mode, initial, onSaved, onCancel }: {
           disabled={busy}
           data-testid="todo-form-submit"
           className="btn-md btn-soft flex-1 disabled:opacity-50 transition-colors"
-        >{busy ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save changes' : 'Create ToDo')}</button>
+        >{busy ? (isEdit ? t('ui.ToDoOverlay.saving') : t('ui.ToDoOverlay.creating')) : (isEdit ? t('ui.ToDoOverlay.saveChanges') : t('ui.ToDoOverlay.createTodo'))}</button>
         <button
           onClick={onCancel}
           className="btn-md btn-ghost"
-        >Cancel</button>
+        >{t('common.button.cancel')}</button>
       </div>
     </OverlayDrawer>
   );

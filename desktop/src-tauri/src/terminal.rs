@@ -55,36 +55,76 @@ pub type PtyHandler = u32;
 /// When the caller supplies a non-empty `cwd` (e.g. the WorkspaceExplorer
 /// right-click "Open terminal here" passes a project dir), that path always
 /// wins. When it is absent or empty (the default bottom-panel / nav-icon
-/// "new terminal"), default to the daemon workspace `$HOME/.swarm-ai/SwarmWS`
+/// "new terminal"), default to the daemon workspace `<home>/.swarm-ai/SwarmWS`
 /// — the dir the Explorer is rooted at and the #1 use case (manage SwarmWS,
-/// build Swarm projects). Falls back to `.` only if `$HOME` is unset.
+/// build Swarm projects). `<home>` comes from `terminal_home`; falls back to `.`
+/// only if no home directory is known.
 ///
-/// Resolved HERE in Rust (not the frontend) because Rust knows `$HOME`
-/// deterministically (same `env::var("HOME")` pattern the daemon deploy path
-/// uses) and it avoids an async round-trip on the frontend.
+/// Resolved HERE in Rust (not the frontend) because Rust reads the home
+/// directory deterministically and it avoids an async round-trip on the frontend.
 fn resolve_default_cwd(cwd: Option<String>) -> String {
     if let Some(c) = cwd {
         if !c.trim().is_empty() {
             return c;
         }
     }
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() => {
+    match terminal_home(cfg!(windows), |k| std::env::var(k).ok()) {
+        Some(home) => {
             // Prefer the daemon workspace, but only if it EXISTS. portable-pty
             // passes cwd to the child's chdir, which fails (ENOENT) on a missing
             // dir — so a not-yet-created SwarmWS would make every default
-            // terminal fail to spawn. Fall back to $HOME (always present) when
-            // the workspace dir isn't there yet. (Adversarial: multi-specialist
+            // terminal fail to spawn. Fall back to the home dir (always present)
+            // when the workspace dir isn't there yet. (Adversarial: multi-specialist
             // confirmed fresh-install ENOENT risk.)
-            let ws = format!("{home}/.swarm-ai/SwarmWS");
-            if std::path::Path::new(&ws).is_dir() {
-                ws
+            let ws = std::path::Path::new(&home).join(".swarm-ai").join("SwarmWS");
+            if ws.is_dir() {
+                ws.to_string_lossy().to_string()
             } else {
                 home
             }
         }
-        _ => ".".to_string(),
+        None => ".".to_string(),
     }
+}
+
+/// The user's home directory for a new terminal: on Windows `USERPROFILE` first
+/// (`HOME` is usually unset there), then `HOME`; elsewhere `HOME`. Empty values
+/// are skipped. `var` reads one environment variable (injected for tests).
+fn terminal_home(windows: bool, var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let keys: &[&str] = if windows { &["USERPROFILE", "HOME"] } else { &["HOME"] };
+    keys.iter().filter_map(|k| var(k)).find(|v| !v.is_empty())
+}
+
+/// The shell a new terminal starts when the frontend names none: on macOS/Linux
+/// the user's `$SHELL` if it names an existing file, else `/bin/bash`, else
+/// `/bin/sh`; on Windows `powershell.exe`.
+#[tauri::command]
+pub fn default_shell() -> String {
+    #[cfg(windows)]
+    {
+        "powershell.exe".to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        pick_unix_shell(std::env::var("SHELL").ok(), |p| std::path::Path::new(p).is_file())
+    }
+}
+
+/// `$SHELL` when it names an existing file, else the first existing of
+/// `/bin/bash`, `/bin/sh` (`/bin/sh` if neither is found). `exists` is injected
+/// for tests.
+#[cfg_attr(windows, allow(dead_code))]
+fn pick_unix_shell(shell: Option<String>, exists: impl Fn(&str) -> bool) -> String {
+    if let Some(s) = shell {
+        if !s.trim().is_empty() && exists(&s) {
+            return s;
+        }
+    }
+    ["/bin/bash", "/bin/sh"]
+        .into_iter()
+        .find(|c| exists(c))
+        .unwrap_or("/bin/sh")
+        .to_string()
 }
 
 /// Build the environment overlay applied to a new PTY on top of the inherited
@@ -376,7 +416,43 @@ pub async fn reap_all_ptys(state: &TerminalState) {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_default_cwd;
+    use super::{pick_unix_shell, resolve_default_cwd, terminal_home};
+
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn windows_home_prefers_userprofile_then_home() {
+        let both = [("USERPROFILE", r"C:\Users\a"), ("HOME", "/home/a")];
+        assert_eq!(terminal_home(true, env_of(&both)), Some(r"C:\Users\a".to_string()));
+        let home_only = [("HOME", "/home/a")];
+        assert_eq!(terminal_home(true, env_of(&home_only)), Some("/home/a".to_string()));
+        let empty_profile = [("USERPROFILE", ""), ("HOME", "/home/a")];
+        assert_eq!(terminal_home(true, env_of(&empty_profile)), Some("/home/a".to_string()));
+        assert_eq!(terminal_home(true, env_of(&[])), None);
+    }
+
+    #[test]
+    fn unix_home_is_home_only() {
+        let profile_only = [("USERPROFILE", r"C:\Users\a")];
+        assert_eq!(terminal_home(false, env_of(&profile_only)), None);
+        let both = [("USERPROFILE", r"C:\Users\a"), ("HOME", "/home/a")];
+        assert_eq!(terminal_home(false, env_of(&both)), Some("/home/a".to_string()));
+    }
+
+    #[test]
+    fn shell_is_existing_dollar_shell_else_bash_else_sh() {
+        let all = |_: &str| true;
+        assert_eq!(pick_unix_shell(Some("/usr/bin/fish".into()), all), "/usr/bin/fish");
+        let only_bash = |p: &str| p == "/bin/bash";
+        assert_eq!(pick_unix_shell(Some("/opt/gone/zsh".into()), only_bash), "/bin/bash");
+        assert_eq!(pick_unix_shell(None, only_bash), "/bin/bash");
+        assert_eq!(pick_unix_shell(Some("  ".into()), all), "/bin/bash");
+        let only_sh = |p: &str| p == "/bin/sh";
+        assert_eq!(pick_unix_shell(Some("/bin/zsh".into()), only_sh), "/bin/sh");
+        assert_eq!(pick_unix_shell(None, |_: &str| false), "/bin/sh");
+    }
 
     /// A real PTY: the child's exit reaches the pump as EOF after all its output
     /// (macOS reports it as EIO, which the pump maps to EOF) — the exited-shell bar

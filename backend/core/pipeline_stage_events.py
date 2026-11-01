@@ -86,9 +86,11 @@ STAGE_DOCS: dict[str, tuple[str, ...]] = {
     "deliver": ("REVIEW.md", "FIXING_SPEC.md", "REPORT.md"),
 }
 DOC_PURPOSES = {
-    "REQUIREMENTS.md": "需求 · 每条需求和它的验收", "DESIGN_SPEC.md": "设计 · 方案、属性和失败模式",
-    "REVIEW.md": "审查 · 每个专家和每条 finding", "FIXING_SPEC.md": "修复规格 · 每条 finding 的修复与 break test",
-    "REPORT.md": "报告 · 这次 run 做了什么、证据和结论",
+    "REQUIREMENTS.md": "Requirements · each requirement and its acceptance check",
+    "DESIGN_SPEC.md": "Design · the approach, its properties and failure modes",
+    "REVIEW.md": "Review · each expert and each finding",
+    "FIXING_SPEC.md": "Fixing spec · the fix and break test of each finding",
+    "REPORT.md": "Report · what this run did, its evidence and conclusion",
 }
 
 

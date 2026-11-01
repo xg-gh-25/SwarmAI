@@ -29,6 +29,9 @@
  * @exports PipelineOverlay
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
@@ -90,11 +93,11 @@ function continuePrompt(base: string, answered?: string): string {
   return answered ? `${answered} ${base}` : base;
 }
 
-/** What the drawer says about a run that needs the user. */
+/** What the drawer says about a run that needs the user (i18n keys). */
 const PAUSE_NOTE: Partial<Record<NonNullable<PipelinePauseKind>, string>> = {
-  stopped: 'Stopped (Stop pressed or its chat tab closed). Resume, then send the prompt in its chat.',
-  worktree: 'Paused: its worktree could not be created. Resume retries it.',
-  idle: 'No chat session is working on this run right now. Continue it in its chat.',
+  stopped: 'ui.PipelineOverlay.noteStopped',
+  worktree: 'ui.PipelineOverlay.noteWorktree',
+  idle: 'ui.PipelineOverlay.noteIdle',
 };
 
 /** Open a run's REPORT.md in Canvas. Mirrors the swarmws overlay precedent
@@ -109,6 +112,7 @@ function openReportInCanvas(reportPath: string, close: () => void) {
 }
 
 export function PipelineContent({ close, onContinue }: PipelineContentProps) {
+  const { t } = useTranslation();
   const window: Window = '30d';
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<PipelineRunDetail | null>(null);
@@ -239,7 +243,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
           left={
             <span className="text-small text-[var(--color-text-muted)]">
               {/* One window: runs idle for over 30 days carry no meaning (run_index). */}
-              Showing runs from the last 30 days
+              {t('ui.PipelineOverlay.window')}
             </span>
           }
         />
@@ -249,13 +253,13 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
           {/* Overall summary strip */}
           {o && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2" data-testid="pipeline-overall">
-              <Stat label="Runs" value={String(o.totalRuns)} />
-              <Stat label="Completion" value={o.totalRuns ? `${Math.round(o.completionRate * 100)}%` : '—'} />
-              <Stat label="Avg cycle" value={fmtCycle(o.avgCycleMin)} />
-              <Stat label="Tokens" value={fmtTokens(o.tokensActual)} />
+              <Stat label={t('ui.PipelineOverlay.statRuns')} value={String(o.totalRuns)} />
+              <Stat label={t('ui.PipelineOverlay.statCompletion')} value={o.totalRuns ? `${Math.round(o.completionRate * 100)}%` : '—'} />
+              <Stat label={t('ui.PipelineOverlay.statAvgCycle')} value={fmtCycle(o.avgCycleMin)} />
+              <Stat label={t('ui.PipelineOverlay.statTokens')} value={fmtTokens(o.tokensActual)} />
               {/* AC5(A): Needs you is a clickable FILTER — click → focus the view to
                   just needs-you runs; click again to clear. */}
-              <Stat label="Needs you" value={o.abortedCount > 0 ? String(o.abortedCount) : '0'}
+              <Stat label={t('ui.PipelineOverlay.needsYou')} value={o.abortedCount > 0 ? String(o.abortedCount) : '0'}
                     accent={o.abortedCount > 0}
                     onClick={o.abortedCount > 0 ? () => setNeedsYouFocus((f) => !f) : undefined}
                     active={needsYouFocus}
@@ -263,20 +267,20 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
               {/* AC4: replaced the unreadable "Profiles g69 f109…" ciphertext with a
                   useful live metric — how many pipelines are running RIGHT NOW
                   (window-independent, zombie-excluded). */}
-              <Stat label="Running now" value={runningNow == null ? '—' : String(runningNow)} />
+              <Stat label={t('ui.PipelineOverlay.statRunningNow')} value={runningNow == null ? '—' : String(runningNow)} />
             </div>
           )}
 
           {/* Trend sparkline (compact bars — throughput per week) */}
           {analytics && analytics.trend.length > 0 && (
             <div data-testid="pipeline-trend">
-              <div className="mb-1"><SectionLabel>Throughput trend</SectionLabel></div>
+              <div className="mb-1"><SectionLabel>{t('ui.PipelineOverlay.trend')}</SectionLabel></div>
               <div className="flex items-end gap-1 h-12">
-                {analytics.trend.map((t) => {
+                {analytics.trend.map((pt) => {
                   const max = Math.max(...analytics.trend.map((x) => x.runs), 1);
                   return (
-                    <div key={t.week} className="flex-1 flex flex-col items-center justify-end" title={`${t.week}: ${t.runs} runs, ${t.completed} done`}>
-                      <div className="w-full rounded-t bg-primary/40" style={{ height: `${(t.runs / max) * 100}%`, minHeight: 2 }} />
+                    <div key={pt.week} className="flex-1 flex flex-col items-center justify-end" title={t('ui.PipelineOverlay.trendBar', { week: pt.week, runs: pt.runs, done: pt.completed })}>
+                      <div className="w-full rounded-t bg-primary/40" style={{ height: `${(pt.runs / max) * 100}%`, minHeight: 2 }} />
                     </div>
                   );
                 })}
@@ -308,7 +312,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
               <div className="rounded-md border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]" data-testid="pipeline-needsyou-region">
                 <div className="flex items-center gap-2 px-3 py-2 border-b border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
                   <span className="material-symbols-outlined icon-sm text-[var(--color-status-error)]">priority_high</span>
-                  <span className="text-body text-[var(--color-text)]">Needs you</span>
+                  <span className="text-body text-[var(--color-text)]">{t('ui.PipelineOverlay.needsYou')}</span>
                   <span data-testid="pipeline-needsyou-count" className="text-meta tabular-nums text-[var(--color-status-error)]">{needy.length}</span>
                 </div>
                 <div>
@@ -323,7 +327,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
           {/* By-project groups */}
           {analytics && analytics.byProject.length === 0 && !loading && !loadErr && (
             <div className="text-center py-10 text-body text-[var(--color-text-faint)]">
-              No pipeline runs in this window. Start one by asking Swarm in chat to run a pipeline.
+              {t('ui.PipelineOverlay.empty')}
             </div>
           )}
           {analytics?.byProject.map((g, idx) => (
@@ -370,18 +374,18 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
  *  disagree. */
 function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false,
   needsYou = true, landedAs: Record<string, string> | null = null): { label: string; tone: Tone } {
-  if (pauseKind === 'decision') return { label: 'needs your decision', tone: 'error' };
-  if (pauseKind === 'stopped') return { label: 'stopped', tone: 'warning' };
-  if (pauseKind === 'worktree') return { label: 'worktree unavailable', tone: 'warning' };
-  if (pauseKind === 'idle') return { label: 'idle', tone: 'warning' };
-  if (s === 'abandoned' && landedAs) return { label: 'landed outside the pipeline', tone: 'success' };
-  if (s === 'abandoned') return needsYou ? { label: 'needs you', tone: 'error' } : { label: 'abandoned', tone: 'neutral' };
+  if (pauseKind === 'decision') return { label: i18n.t('ui.PipelineOverlay.pillDecision'), tone: 'error' };
+  if (pauseKind === 'stopped') return { label: i18n.t('ui.PipelineOverlay.pillStopped'), tone: 'warning' };
+  if (pauseKind === 'worktree') return { label: i18n.t('ui.PipelineOverlay.pillWorktree'), tone: 'warning' };
+  if (pauseKind === 'idle') return { label: i18n.t('ui.PipelineOverlay.pillIdle'), tone: 'warning' };
+  if (s === 'abandoned' && landedAs) return { label: i18n.t('ui.PipelineOverlay.pillLandedOutside'), tone: 'success' };
+  if (s === 'abandoned') return needsYou ? { label: i18n.t('ui.PipelineOverlay.pillNeedsYou'), tone: 'error' } : { label: i18n.t('ui.PipelineOverlay.pillAbandoned'), tone: 'neutral' };
   // completed but its change is not on main (the pipeline gives no push verdict)
-  if (s === 'completed' && notLanded) return { label: 'not landed', tone: 'warning' };
-  if (s === 'completed') return { label: 'completed', tone: 'success' };
-  if (s === 'running') return { label: 'running', tone: 'primary' };
-  if (s === 'paused') return { label: 'paused', tone: 'warning' };
-  return { label: s || 'unknown', tone: 'neutral' };
+  if (s === 'completed' && notLanded) return { label: i18n.t('ui.PipelineOverlay.pillNotLanded'), tone: 'warning' };
+  if (s === 'completed') return { label: i18n.t('ui.PipelineOverlay.pillCompleted'), tone: 'success' };
+  if (s === 'running') return { label: i18n.t('ui.PipelineOverlay.pillRunning'), tone: 'primary' };
+  if (s === 'paused') return { label: i18n.t('ui.PipelineOverlay.pillPaused'), tone: 'warning' };
+  return { label: s || i18n.t('ui.PipelineOverlay.pillUnknown'), tone: 'neutral' };
 }
 
 /** One run row — shared by the ProjectGroup roster AND the pinned Needs-you region.
@@ -390,6 +394,7 @@ function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false,
 function RunRow({ r, onOpenRun, close, showProject }: {
   r: PipelineRunSummary; onOpenRun: (id: string) => void; close: () => void; showProject?: string;
 }) {
+  const { t } = useTranslation();
   const pill = statusPill(r.status, r.pauseKind, r.notLanded, r.needsYou, r.landedAs);
   return (
     <div
@@ -424,7 +429,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
           type="button"
           onClick={(e) => { e.stopPropagation(); openReportInCanvas(r.reportPath as string, close); }}
           data-testid={`pipeline-run-report-${r.id}`}
-          title="Open report in Canvas"
+          title={t('ui.PipelineOverlay.openReport')}
           className="material-symbols-outlined icon-sm text-primary hover:text-primary/80 shrink-0"
         >
           description
@@ -433,7 +438,7 @@ function RunRow({ r, onOpenRun, close, showProject }: {
         <span className="w-4 shrink-0" aria-hidden />
       )}
       {isResumable(r.pauseKind) && (
-        <span className="material-symbols-outlined icon-xs text-[var(--color-status-error)] shrink-0" title="resumable">play_circle</span>
+        <span className="material-symbols-outlined icon-xs text-[var(--color-status-error)] shrink-0" title={t('ui.PipelineOverlay.resumable')}>play_circle</span>
       )}
     </div>
   );
@@ -451,6 +456,7 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
     : group.runs;
   // In focus mode, force-expand (the point is to SEE the needy runs) and drop
   // groups that have none.
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const isOpen = needsYouOnly ? true : expanded;
   if (needsYouOnly && rows.length === 0) return null;
@@ -466,10 +472,10 @@ function ProjectGroup({ group, onOpenRun, close, defaultExpanded = false, needsY
         </span>
         <span className="text-body text-[var(--color-text)]">{group.project}</span>
         <span className="text-meta text-[var(--color-text-faint)] tabular-nums">
-          {group.runCount} runs · {Math.round(group.completionRate * 100)}% · avg {fmtCycle(group.avgCycleMin)}
+          {t('ui.PipelineOverlay.groupSummary', { runs: group.runCount, rate: Math.round(group.completionRate * 100), avg: fmtCycle(group.avgCycleMin) })}
         </span>
         {group.abortedCount > 0 && (
-          <span className="text-meta tabular-nums text-[var(--color-status-error)]">· {group.abortedCount} need you</span>
+          <span className="text-meta tabular-nums text-[var(--color-status-error)]">· {t('ui.PipelineOverlay.groupNeedYou', { count: group.abortedCount })}</span>
         )}
       </button>
       {isOpen && (
@@ -500,6 +506,7 @@ function RunDetailDrawer({
    *  the drawer) before dispatching swarm:open-file, so Canvas isn't under the host. */
   hostClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [resumeErr, setResumeErr] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [cancelErr, setCancelErr] = useState(false);
@@ -515,8 +522,8 @@ function RunDetailDrawer({
         <button onClick={onClose} className="material-symbols-outlined icon-md text-[var(--color-text-faint)] hover:text-[var(--color-text)]">close</button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-3">
-        {loading && <div className="text-small text-[var(--color-text-faint)]">Loading…</div>}
-        {!loading && !detail && <div className="text-small text-[var(--color-text-faint)]">Run detail not found.</div>}
+        {loading && <div className="text-small text-[var(--color-text-faint)]">{t('hiveFleet.loading')}</div>}
+        {!loading && !detail && <div className="text-small text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.detailNotFound')}</div>}
         {detail && (() => {
           // Conclusion-first header (run_403a5864): the STATUS is the verdict — promote
           // it to a colored pill (reuse statusPill, the SAME one the list row uses, so
@@ -525,7 +532,8 @@ function RunDetailDrawer({
           // FINISH (updatedAt, fallback createdAt) to match the list row for this run —
           // was createdAt/START, a list-vs-drawer inconsistency.
           const pill = statusPill(detail.status, detail.pauseKind, false, detail.needsYou, detail.landedAs);
-          const note = detail.pauseKind ? PAUSE_NOTE[detail.pauseKind] : undefined;
+          const noteKey = detail.pauseKind ? PAUSE_NOTE[detail.pauseKind] : undefined;
+          const note = noteKey ? t(noteKey) : undefined;
           return (
           <>
             <div>
@@ -556,7 +564,7 @@ function RunDetailDrawer({
             {detail.decision && (
               <div data-testid="pipeline-decision"
                    className="rounded-md border border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] px-2.5 py-2 space-y-2">
-                <div className="text-meta uppercase tracking-wide text-[var(--color-status-error)]">Needs your decision</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-status-error)]">{t('ui.PipelineOverlay.needsDecision')}</div>
                 <div className="text-body text-[var(--color-text)]">{detail.decision.question}</div>
                 {detail.decision.whyEvidenceInsufficient && (
                   <div className="text-meta text-[var(--color-text-muted)]">{detail.decision.whyEvidenceInsufficient}</div>
@@ -581,24 +589,24 @@ function RunDetailDrawer({
                     >
                       <div className="text-small text-[var(--color-text)]">
                         {opt.id} — {opt.choice}
-                        {opt.reversible === false && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">irreversible</span>}
-                        {opt.risk === 'high' && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">high risk</span>}
+                        {opt.reversible === false && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">{t('ui.PipelineOverlay.irreversible')}</span>}
+                        {opt.risk === 'high' && <span className="ml-1.5 text-meta text-[var(--color-status-error)]">{t('ui.PipelineOverlay.highRisk')}</span>}
                       </div>
                       {opt.consequence && <div className="text-meta text-[var(--color-text-muted)]">{opt.consequence}</div>}
                     </button>
                   ))}
                 </div>
-                <div className="text-meta text-[var(--color-text-faint)]">You can also answer on the question card in the run's chat.</div>
+                <div className="text-meta text-[var(--color-text-faint)]">{t('ui.PipelineOverlay.answerInChat')}</div>
               </div>
             )}
             {answerErr && (
               <div data-testid="pipeline-answer-error" className="text-meta text-[var(--color-status-error)]">
-                Could not record the answer — the question may already be answered.
+                {t('ui.PipelineOverlay.answerError')}
               </div>
             )}
             {openChatNote && (
               <div data-testid="pipeline-open-chat-note" className="text-meta text-[var(--color-text-muted)]">
-                Done. Open the run's chat session and ask it to continue run {detail.id}.
+                {t('ui.PipelineOverlay.openChatNote', { id: detail.id })}
               </div>
             )}
 
@@ -619,7 +627,7 @@ function RunDetailDrawer({
                   data-testid="pipeline-resume-btn"
                   className="btn-sm btn-soft transition-colors disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined icon-xs">play_arrow</span>{resuming ? 'Resuming…' : 'Resume'}
+                  <span className="material-symbols-outlined icon-xs">play_arrow</span>{resuming ? t('ui.PipelineOverlay.resuming') : t('ui.PipelineOverlay.resume')}
                 </button>
               )}
               {detail.pauseKind === 'idle' && (
@@ -632,7 +640,7 @@ function RunDetailDrawer({
                   data-testid="pipeline-continue-btn"
                   className="btn-sm btn-soft transition-colors"
                 >
-                  <span className="material-symbols-outlined icon-xs">forum</span>Continue in its chat
+                  <span className="material-symbols-outlined icon-xs">forum</span>{t('ui.PipelineOverlay.continueInChat')}
                 </button>
               )}
               {(detail.status === 'running' || detail.status === 'paused') && (
@@ -650,18 +658,18 @@ function RunDetailDrawer({
                   data-testid="pipeline-cancel-btn"
                   className="btn-sm btn-danger disabled:opacity-50"
                 >
-                  <span className="material-symbols-outlined icon-xs">cancel</span>{cancelling ? 'Cancelling…' : 'Cancel'}
+                  <span className="material-symbols-outlined icon-xs">cancel</span>{cancelling ? t('ui.PipelineOverlay.cancelling') : t('common.button.cancel')}
                 </button>
               )}
             </div>
             {resumeErr && (
               <div data-testid="pipeline-resume-error" className="text-meta text-[var(--color-status-error)]">
-                Could not resume this run — its state may have changed.
+                {t('ui.PipelineOverlay.resumeError')}
               </div>
             )}
             {cancelErr && (
               <div data-testid="pipeline-cancel-error" className="text-meta text-[var(--color-status-error)]">
-                Could not cancel this run — please try again.
+                {t('ui.PipelineOverlay.cancelError')}
               </div>
             )}
 
@@ -677,7 +685,7 @@ function RunDetailDrawer({
             {/* Reflect lessons */}
             {detail.reflectLessons.length > 0 && (
               <div>
-                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Reflect</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">{t('ui.PipelineOverlay.reflect')}</div>
                 <ul className="space-y-1">
                   {detail.reflectLessons.map((l, i) => (
                     <li key={i} className="text-meta text-[var(--color-text-muted)] leading-snug">• {l}</li>
@@ -689,7 +697,7 @@ function RunDetailDrawer({
             {/* Related commits */}
             {detail.commits.length > 0 && (
               <div>
-                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">Commits</div>
+                <div className="text-meta uppercase tracking-wide text-[var(--color-text-faint)] mb-1">{t('ui.PipelineOverlay.commits')}</div>
                 {detail.commits.map((c, i) => (
                   <div key={i} className="text-meta font-mono text-[var(--color-text-muted)]">
                     <span className="text-primary">{c.sha}</span> · {c.files.length} file{c.files.length === 1 ? '' : 's'}
@@ -708,7 +716,7 @@ function RunDetailDrawer({
                 data-testid="pipeline-detail-report-btn"
                 className="btn-sm btn-soft transition-colors"
               >
-                <span className="material-symbols-outlined icon-xs">description</span>View report in Canvas
+                <span className="material-symbols-outlined icon-xs">description</span>{t('ui.PipelineOverlay.viewReport')}
               </button>
             )}
           </>

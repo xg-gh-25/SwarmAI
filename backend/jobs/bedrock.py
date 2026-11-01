@@ -5,6 +5,9 @@ All background job handlers that call Bedrock LLMs MUST use this module
 instead of creating raw ``boto3.client("bedrock-runtime")`` inline.
 
 Credential strategy:
+  0. Signed in with a Bedrock API key (``aws_account.get_chat_via() == "bedrock_key"``):
+     the key, sent as a bearer token by a client of its own botocore session, so an
+     old default profile is never used and the key never goes into ``os.environ``.
   1. With a SwarmAI AWS account (core/aws_account): its pinned, refreshing session.
   2. Without one: the boto3 default chain, pre-resolved and injected into the client
      (avoids credential_process resolution at call time). Nothing else is tried: the
@@ -24,6 +27,7 @@ docs/design/2026-10-28-structured-model-output.md)::
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import re
@@ -72,6 +76,7 @@ def _bounded(call: Any, bound: float) -> Any:
 _client: Any | None = None
 _client_region: str | None = None
 _client_created_at: float = 0.0  # monotonic timestamp
+_client_mode: str | None = None  # "bearer:<key fingerprint>" or "aws": a change rebuilds the client
 _CLIENT_TTL: float = 1800.0  # 30 minutes — STS temporary creds have 1-12h TTL
 
 # Substrings (lowercased) that mark a bedrock error as a transient credential/auth
@@ -100,6 +105,62 @@ def _load_config() -> tuple[str, dict]:
         region = "us-east-1"
         model_map = {}
     return region, model_map
+
+
+def _bedrock_key() -> str | None:
+    """The stored Bedrock API key when chat runs on it (``bedrock_key``), else None."""
+    try:
+        from core.app_config_manager import AppConfigManager
+        from core import aws_account
+        cfg = AppConfigManager.instance()
+        if aws_account.get_chat_via(cfg) != "bedrock_key":
+            return None
+        return cfg.get("aws_bearer_token_bedrock") or None
+    except Exception:
+        return None
+
+
+class _KeyTokenProvider:
+    """A botocore token provider that returns the Bedrock API key."""
+
+    METHOD = "swarmai-bedrock-key"
+
+    def __init__(self, key: str):
+        self._key = key
+
+    def load_token(self, **_kwargs: Any) -> Any:
+        from botocore.tokens import FrozenAuthToken
+        return FrozenAuthToken(self._key)
+
+    def __repr__(self) -> str:  # never show the key
+        return "_KeyTokenProvider(<hidden>)"
+
+
+class _NoCredentials:
+    """A credential provider with nothing in it: a bearer client never reads the default
+    chain (an expired profile or a slow credential_process is not touched)."""
+
+    def load_credentials(self) -> None:
+        return None
+
+
+def _bearer_client(key: str, region: str, boto_config: Any) -> Any:
+    """A bedrock-runtime client that sends *key* as ``Authorization: Bearer``.
+
+    Its own botocore session holds the key as that session's token provider and the
+    client config pins ``signature_version="bearer"``: nothing is read from or written
+    to ``os.environ`` (botocore's own ``AWS_BEARER_TOKEN_BEDROCK`` route is process-wide),
+    so it is safe with other threads building other clients at the same time."""
+    import boto3
+    import botocore.session
+    from botocore.config import Config as BotoConfig
+
+    core_session = botocore.session.Session()
+    core_session.register_component("token_provider", _KeyTokenProvider(key))
+    core_session.register_component("credential_provider", _NoCredentials())
+    session = boto3.Session(botocore_session=core_session, region_name=region)
+    config = boto_config.merge(BotoConfig(signature_version="bearer"))
+    return session.client("bedrock-runtime", region_name=region, config=config)
 
 
 def _resolve_credentials() -> dict[str, str]:
@@ -151,16 +212,20 @@ def get_client(*, force_new: bool = False, region: str | None = None) -> Any:
             would have used — no silent region-source switch. The region is part
             of the cache key, so an override participates in cache invalidation.
     """
-    global _client, _client_region, _client_created_at
+    global _client, _client_region, _client_created_at, _client_mode
     import time
 
     if region is None:
         region, _ = _load_config()
 
+    key = _bedrock_key()
+    # a replaced key rebuilds the client: the mode carries a fingerprint of the key
+    mode = ("bearer:" + hashlib.sha256(key.encode()).hexdigest()[:16]) if key else "aws"
     # TTL check — recreate client periodically to pick up refreshed credentials.
     # STS temporary credentials have 1-12h TTL; 30min refresh is conservative.
     expired = (time.monotonic() - _client_created_at) > _CLIENT_TTL
-    if not force_new and not expired and _client is not None and _client_region == region:
+    if (not force_new and not expired and _client is not None and _client_region == region
+            and _client_mode == mode):
         return _client
 
     import boto3
@@ -171,6 +236,14 @@ def get_client(*, force_new: bool = False, region: str | None = None) -> Any:
         connect_timeout=10,
         read_timeout=120,  # Opus 4.6 skill proposals need 60-90s; 60s too tight
     )
+
+    _client_mode = mode
+    if key:
+        _client = _bearer_client(key, region, boto_config)
+        _client_region = region
+        _client_created_at = time.monotonic()
+        logger.debug("Created Bedrock client with the Bedrock API key for region=%s", region)
+        return _client
 
     from core import aws_account
     if aws_account.active():
@@ -213,10 +286,11 @@ def evict_client() -> None:
     Call this when you get a credential/auth error so the next attempt
     picks up refreshed credentials.
     """
-    global _client, _client_region, _client_created_at
+    global _client, _client_region, _client_created_at, _client_mode
     _client = None
     _client_region = None
     _client_created_at = 0.0
+    _client_mode = None
 
 
 def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | None = None) -> Any:
@@ -228,8 +302,8 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
     ~30s instead of stalling on the shared 120s client and blowing the eval wall
     — a serial sweep of 89 judges cannot afford a 120s×N tail (run_9fdb8ad5).
 
-    Uses the same credentials as get_client (the pinned SwarmAI account, or without
-    one the pre-resolved default chain), but does NOT touch the module cache (`_client`) or
+    Uses the same credentials as get_client (the Bedrock API key, the pinned SwarmAI
+    account, or without either the pre-resolved default chain), but does NOT touch the module cache (`_client`) or
     participate in evict_client — it is created, used, and discarded per call
     (a fresh per-call client with shared resolved creds).
 
@@ -251,6 +325,9 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
         connect_timeout=CONNECT_TIMEOUT,
         read_timeout=read_timeout,
     )
+    key = _bedrock_key()
+    if key:
+        return _bearer_client(key, region, boto_config)
     from core import aws_account
     if aws_account.active():  # the pinned account; raises instead of another chain
         return aws_account.boto_session(region).client("bedrock-runtime", config=boto_config)

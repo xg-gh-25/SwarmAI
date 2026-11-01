@@ -30,6 +30,9 @@
  * detail view (default 'overview').
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import { Tabs } from '../overlay';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -78,15 +81,16 @@ const GENERAL_NAME = 'General';
 /** The detail views: the seven tabs (one per part of the Brain map, plus Overview)
  *  and Distribute, the last step of a Brain's lifecycle (ship it out). */
 type DetailView = BrainTab | 'distribute';
-const TABS: { key: DetailView; label: string }[] = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'needs', label: 'Needs you' },
-  { key: 'brain', label: 'Brain (DDD)' },
-  { key: 'agent', label: 'Project Agent' },
-  { key: 'runs', label: 'Conductor · Runs' },
-  { key: 'reflect', label: 'What it learned' },
-  { key: 'eval', label: 'Eval' },
-  { key: 'distribute', label: 'Distribute' },
+/** Each tab's label is the i18n key ui.BrainHub.tab_<key>. */
+const TABS: { key: DetailView }[] = [
+  { key: 'overview' },
+  { key: 'needs' },
+  { key: 'brain' },
+  { key: 'agent' },
+  { key: 'runs' },
+  { key: 'reflect' },
+  { key: 'eval' },
+  { key: 'distribute' },
 ];
 
 /** `onRequestClose` — the host overlay's `ctx.close` (overlaySurfaces passes it).
@@ -102,6 +106,7 @@ export function BrainHub(
     /** switch to the Library overlay (the General Brain's knowledge) */
     onOpenLibrary?: () => void; defaultView?: DetailView } = {},
 ) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
   const [detailView, setDetailView] = useState<DetailView>(defaultView);
@@ -129,11 +134,11 @@ export function BrainHub(
   const openGeneral = useCallback(() => { setMode('general'); }, []);
   const general = bp?.general ?? null;
   /** The Hub home's targets ('map' + a panel, or 'review') → a tab. */
-  const openFromHome = useCallback((n: string, t?: { view?: 'map' | 'review'; panel?: MapPanel }) => {
-    if (t?.view === 'review') return openBrain(n, 'reflect');
-    if (t?.panel === 'need') return openBrain(n, 'needs');
-    if (t?.panel === 'agent') return openBrain(n, 'agent');
-    if (t?.panel === 'add') return openBrain(n, 'brain', true);
+  const openFromHome = useCallback((n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => {
+    if (target?.view === 'review') return openBrain(n, 'reflect');
+    if (target?.panel === 'need') return openBrain(n, 'needs');
+    if (target?.panel === 'agent') return openBrain(n, 'agent');
+    if (target?.panel === 'add') return openBrain(n, 'brain', true);
     return openBrain(n);
   }, [openBrain]);
 
@@ -164,7 +169,7 @@ export function BrainHub(
         <OverlayError
           testid="brainhub-error"
           retryTestid="brainhub-retry"
-          message={<>Failed to load brains: {error}</>}
+          message={<>{t('ui.BrainHub.loadBrainsFailed', { error })}</>}
           onRetry={() => void refetch()}
         />
       </div>
@@ -220,6 +225,7 @@ function BrainDetailShell(
     addOpen?: boolean;
   },
 ) {
+  const { t } = useTranslation();
   const summary = brains?.find((b) => b.name === name);
   const { data: analytics = null } = useQuery<PipelineAnalytics>({
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
@@ -237,7 +243,7 @@ function BrainDetailShell(
     const ok = onDispatch ? onDispatch(buildResumeSetupPrompt(name), { autoSend: true }) : false;
     if (ok) onRequestClose?.();
   };
-  const goTab = (t: BrainTab) => onSelectView(t);
+  const goTab = (tab: BrainTab) => onSelectView(tab);
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
@@ -247,11 +253,11 @@ function BrainDetailShell(
         onResume={summary?.setupState === 'setting-up' ? sendResume : undefined} />
 
       <div className="px-4 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
-        <Tabs label="Brain views" testid="brainhub-detail-nav" value={detailView} onChange={onSelectView}
-          items={TABS.map((t) => ({
-            key: t.key, label: t.label, testid: `brainhub-tab-${t.key}`,
+        <Tabs label={t('ui.BrainHub.brainViews')} testid="brainhub-detail-nav" value={detailView} onChange={onSelectView}
+          items={TABS.map((tab) => ({
+            key: tab.key, label: t(`ui.BrainHub.tab_${tab.key}`), testid: `brainhub-tab-${tab.key}`,
             // only Needs you carries a count: what the Brain learned asks nothing of the person
-            ...(t.key === 'needs' && needs > 0 ? { count: needs, tone: 'alert' as const } : {}),
+            ...(tab.key === 'needs' && needs > 0 ? { count: needs, tone: 'alert' as const } : {}),
           }))} />
       </div>
 
@@ -280,6 +286,7 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
   onBack: () => void; onSwitch: (n: string) => void;
   onOpenFile: (p: string) => void; onResume?: () => void;
 }) {
+  const { t } = useTranslation();
   const [menu, setMenu] = useState<'none' | 'switch' | 'more'>('none');
   const close = () => setMenu('none');
   const born = summary?.setupState === 'setting-up';
@@ -295,12 +302,12 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
             className="flex items-center gap-1 text-title font-semibold hover:text-[var(--color-primary)]">
             {name}<span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">expand_more</span>
           </button>
-          {isSelf && <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]">SELF</span>}
+          {isSelf && <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]">{t('ui.BrainHub.selfBadge')}</span>}
           <span className="flex items-center gap-1.5 text-small text-[var(--color-text-muted)]" data-testid="brainhub-status">
             <span className={`w-2 h-2 rounded-full ${born ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-success)]'}`} />
-            {born ? bornText(summary?.setupProgress) : 'Ready'}
-            {last && last !== '--' && <span>· last landed {last}</span>}
-            {needs > 0 && <span className="text-[var(--color-status-error)]">· {needs} need{needs === 1 ? 's' : ''} you</span>}
+            {born ? bornText(summary?.setupProgress) : t('ui.BrainHub.ready')}
+            {last && last !== '--' && <span>· {t('ui.BrainHub.lastLanded', { when: last })}</span>}
+            {needs > 0 && <span className="text-[var(--color-status-error)]">· {t('ui.BrainHub.needsYou', { count: needs })}</span>}
           </span>
           {menu === 'switch' && (
             <>
@@ -316,11 +323,11 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
           )}
         </div>
         <div className={`text-small ${summary?.description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-faint)]'}`} data-testid="brainhub-desc">
-          {summary?.description || 'No description yet. Add one line to aim.json.'}
+          {summary?.description || t('ui.BrainHub.noDescription')}
         </div>
       </div>
       <div className="relative">
-        <button className="icon-btn" aria-label="More" aria-haspopup="menu" aria-expanded={menu === 'more'} data-testid="brainhub-more"
+        <button className="icon-btn" aria-label={t('ui.BrainHub.more')} aria-haspopup="menu" aria-expanded={menu === 'more'} data-testid="brainhub-more"
           onClick={() => setMenu(menu === 'more' ? 'none' : 'more')}>
           <span className="material-symbols-outlined icon-sm">more_horiz</span>
         </button>
@@ -328,8 +335,8 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
           <>
             <div className="fixed inset-0 z-[9]" onClick={close} aria-hidden="true" />
             <div role="menu" className="absolute right-0 top-full mt-1 z-10 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] py-1">
-              {onResume && <MenuItem testid="brainhub-more-resume" onClick={() => { close(); onResume(); }}>Continue setup in chat</MenuItem>}
-              <MenuItem testid="brainhub-more-aim" onClick={() => { close(); onOpenFile(`Projects/${name}/aim.json`); }}>Edit aim.json</MenuItem>
+              {onResume && <MenuItem testid="brainhub-more-resume" onClick={() => { close(); onResume(); }}>{t('ui.BrainHub.continueSetup')}</MenuItem>}
+              <MenuItem testid="brainhub-more-aim" onClick={() => { close(); onOpenFile(`Projects/${name}/aim.json`); }}>{t('ui.BrainHub.editAimJson')}</MenuItem>
             </div>
           </>
         )}
@@ -354,6 +361,7 @@ function MenuItem({ onClick, testid, children }: { onClick: () => void; testid: 
  * onOpenFile (the shell's close-then-open primitive).
  */
 function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: string) => void }) {
+  const { t } = useTranslation();
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<RecallHit[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -382,11 +390,11 @@ function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: st
           data-testid="brainhub-search-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder={`Search what ${name} knows: its docs, notes and decisions`}
+          placeholder={t('ui.BrainHub.searchPlaceholder', { name })}
           className="flex-1 min-w-0 bg-transparent text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
         />
         {q && (
-          <button data-testid="brainhub-search-clear" onClick={() => setQ('')} aria-label="Clear search"
+          <button data-testid="brainhub-search-clear" onClick={() => setQ('')} aria-label={t('ui.BrainHub.clearSearch')}
             className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]">
             <span className="material-symbols-outlined icon-sm">close</span>
           </button>
@@ -430,8 +438,9 @@ function Gallery(
     onOpen: (n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => void;
     onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean },
 ) {
-  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains</div>;
-  if (brains.length === 0 && !general) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
+  const { t } = useTranslation();
+  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">{t('ui.BrainHub.loadingBrains')}</div>;
+  if (brains.length === 0 && !general) return <div className="p-4 text-[var(--color-text-muted)] text-body">{t('ui.BrainHub.noBrains')}</div>;
   return <BrainHubHome brains={brains} selfName={selfName} general={general} onOpenGeneral={onOpenGeneral}
     onOpenLibrary={onOpenLibrary} onOpen={onOpen} onDispatch={onDispatch} />;
 }
@@ -450,6 +459,7 @@ function BrainView(
   { name: string; onRequestClose?: () => void;
     onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; addOpen?: boolean },
 ) {
+  const { t } = useTranslation();
   const [showWeekly, setShowWeekly] = useState(false);
   const [adding, setAdding] = useState(addOpen);
 
@@ -470,8 +480,8 @@ function BrainView(
     }));
   }, [onRequestClose]);
 
-  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body">Failed to load brain: {error}</div>;
-  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading {name}</div>;
+  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body">{t('ui.BrainHub.loadBrainFailed', { error })}</div>;
+  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-body">{t('ui.BrainHub.loadingName', { name })}</div>;
 
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
   const hasSpecs = detail.hasSpecs === true;           // daemon-skew: undefined → false
@@ -483,16 +493,16 @@ function BrainView(
         {adding ? (
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-small font-semibold">Add knowledge</span>
-              <button className="btn-sm btn-ghost" onClick={() => setAdding(false)} data-testid="bm-add-close">Close</button>
+              <span className="text-small font-semibold">{t('ui.BrainHub.addKnowledge')}</span>
+              <button className="btn-sm btn-ghost" onClick={() => setAdding(false)} data-testid="bm-add-close">{t('common.button.close')}</button>
             </div>
             <BrainAddKnowledge name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />
           </div>
         ) : (
           <div className="flex items-center gap-3 rounded-lg border border-dashed border-[var(--color-border)] px-3 py-2">
-            <span className="text-small text-[var(--color-text-muted)] flex-1">Teach this Brain from files, folders, links or another repo. The agent distills what is worth keeping.</span>
+            <span className="text-small text-[var(--color-text-muted)] flex-1">{t('ui.BrainHub.teachHint')}</span>
             <button className="btn-sm btn-primary" onClick={() => setAdding(true)} data-testid="bm-add-open">
-              <span className="material-symbols-outlined icon-xs">add</span> Add knowledge
+              <span className="material-symbols-outlined icon-xs">add</span> {t('ui.BrainHub.addKnowledge')}
             </button>
           </div>
         )}
@@ -504,7 +514,7 @@ function BrainView(
         showWeekly={showWeekly}
         onToggleWeekly={() => setShowWeekly((v) => !v)}
       />
-      <div className="px-4 pt-1 pb-1.5 text-small font-semibold">Files</div>
+      <div className="px-4 pt-1 pb-1.5 text-small font-semibold">{t('ui.BrainHub.files')}</div>
       <BrainBrowse name={name} hasCodeIntel={hasCodeIntel} hasSpecs={hasSpecs} onOpenFile={openFile} />
     </div>
   );
@@ -519,6 +529,7 @@ function BrainOverview(
     showWeekly: boolean; onToggleWeekly: () => void;
   },
 ) {
+  const { t } = useTranslation();
   const knowledge = detail.sections.find((s) => s.key === 'knowledge');
   const members = knowledge?.members ?? [];
   // Memoize the signal map + weekly model so an unrelated re-render (weekly toggle,
@@ -561,7 +572,7 @@ function BrainOverview(
           </div>
         ) : (
           <div className="text-meta text-[var(--color-text-faint)] rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2">
-            Knowledge ontology not yet computed for this brain.
+            {t('ui.BrainHub.ontologyNotComputed')}
           </div>
         )}
       </div>
@@ -590,6 +601,7 @@ function CoreDocCards(
     showWeekly: boolean; onToggleWeekly: () => void; weekly: WeeklyReportModel;
   },
 ) {
+  const { t } = useTranslation();
   const totalNew = weekly.learnedWeek;
   const totalPending = weekly.pending;
   const hasSignal = totalNew > 0 || totalPending > 0;
@@ -598,10 +610,10 @@ function CoreDocCards(
       {/* group header — the aggregate "what moved this week" + Weekly Report entry */}
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-meta uppercase tracking-wide font-semibold text-[var(--color-text-faint)]">
-          Judgment core · review periodically
+          {t('ui.BrainHub.judgmentCore')}
         </span>
         <span className="text-meta text-[var(--color-text-muted)]" data-testid="coredocs-agg">
-          {hasSignal ? `this week · ${totalNew} new · ${totalPending} pending` : 'nothing new this week'}
+          {hasSignal ? t('ui.BrainHub.weekAggregate', { added: totalNew, pending: totalPending }) : t('ui.BrainHub.nothingNewThisWeek')}
         </span>
         <button
           data-testid="coredocs-weekly"
@@ -609,7 +621,7 @@ function CoreDocCards(
           className="btn-sm btn-soft ml-auto"
         >
           <span className="material-symbols-outlined icon-xs">summarize</span>
-          {showWeekly ? 'Hide report' : 'Weekly Report'}
+          {showWeekly ? t('ui.BrainHub.hideReport') : t('ui.BrainHub.weeklyReport')}
         </button>
       </div>
 
@@ -634,10 +646,10 @@ function CoreDocCards(
                 <span className="text-small font-semibold font-mono">{docName}</span>
                 {marked && <span data-testid={`coredoc-mark-${docName}`} className="ml-auto w-1.5 h-1.5 rounded-full bg-[var(--color-status-warning)]" />}
               </div>
-              <div className="text-meta text-[var(--color-text-muted)] mb-1">{DOC_ROLE[docName] ?? 'DDD document'}</div>
+              <div className="text-meta text-[var(--color-text-muted)] mb-1">{t(DOC_ROLE[docName] ?? 'ui.BrainHub.dddDocument')}</div>
               <div className="flex items-center gap-2 text-meta text-[var(--color-text-faint)]">
-                {sig.newCount > 0 && <span className="text-[var(--color-status-success)]">+{sig.newCount} this week</span>}
-                {!marked && <span>nothing new this week</span>}
+                {sig.newCount > 0 && <span className="text-[var(--color-status-success)]">{t('ui.BrainHub.plusThisWeek', { n: sig.newCount })}</span>}
+                {!marked && <span>{t('ui.BrainHub.nothingNewThisWeek')}</span>}
                 {m.mtime && <span className="ml-auto">{m.mtime}</span>}
               </div>
             </button>
@@ -648,39 +660,40 @@ function CoreDocCards(
   );
 }
 
-/** One-line role of each canonical doc (what the user reviews it FOR). */
+/** One-line role of each canonical doc (what the user reviews it FOR), as an i18n key. */
 const DOC_ROLE: Record<string, string> = {
-  'PRODUCT.md': 'Priorities & non-goals',
-  'TECH.md': 'Architecture & constraints',
-  'IMPROVEMENT.md': 'Failures & lessons',
-  'PROJECT.md': 'Current status & decisions',
+  'PRODUCT.md': 'ui.BrainHub.roleProduct',
+  'TECH.md': 'ui.BrainHub.roleTech',
+  'IMPROVEMENT.md': 'ui.BrainHub.roleImprovement',
+  'PROJECT.md': 'ui.BrainHub.roleProject',
 };
 
 /** Current-DDD-only Weekly Report — an in-overlay panel (NOT Canvas: the Canvas
  *  open-file path resolves a real file, useCanvasHost.ts:328, so inline HTML can't
  *  ride it). Live-rendered from data already loaded — no global one-pot, no file. */
 function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel; projectName: string }) {
-  const t = weekly.trustDistribution;
-  const scored = t.full + t.high + t.moderate + t.low;
+  const { t } = useTranslation();
+  const trust = weekly.trustDistribution;
+  const scored = trust.full + trust.high + trust.moderate + trust.low;
   return (
     <div data-testid="brainhub-weekly-panel" className="rounded-lg border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_6%,transparent)] p-3 mb-2 text-meta">
       <div className="flex items-center gap-1.5 mb-2 font-semibold text-[var(--color-primary)]">
         <span className="material-symbols-outlined icon-sm">summarize</span>
-        {projectName} · this week
+        {projectName} · {t('ui.BrainHub.thisWeek')}
       </div>
       <div className="flex flex-col gap-1 text-[var(--color-text-muted)]">
-        <div><span className="text-[var(--color-status-success)] font-semibold">{weekly.learnedWeek}</span> entr{weekly.learnedWeek === 1 ? 'y' : 'ies'} learned</div>
-        <div><span className="text-[var(--color-status-warning)] font-semibold">{weekly.pending}</span> item{weekly.pending === 1 ? '' : 's'} waiting in Need You</div>
+        <div><span className="text-[var(--color-status-success)] font-semibold">{weekly.learnedWeek}</span> {t('ui.BrainHub.entriesLearned', { count: weekly.learnedWeek })}</div>
+        <div><span className="text-[var(--color-status-warning)] font-semibold">{weekly.pending}</span> {t('ui.BrainHub.itemsWaiting', { count: weekly.pending })}</div>
         <div>
-          docs touched: {weekly.changedDocs.length > 0
+          {t('ui.BrainHub.docsTouched')} {weekly.changedDocs.length > 0
             ? <span className="font-mono text-[var(--color-text)]">{weekly.changedDocs.join(', ')}</span>
-            : <span className="text-[var(--color-text-faint)]">none</span>}
+            : <span className="text-[var(--color-text-faint)]">{t('ui.BrainHub.none')}</span>}
         </div>
         {/* F4: trust DISTRIBUTION, never a collapsed percentage. */}
         <div data-testid="weekly-trust-dist">
-          section trust: {scored === 0
-            ? <span className="text-[var(--color-text-faint)]">not scored yet</span>
-            : <span>{t.full} full · {t.high} high · {t.moderate} moderate · {t.low} low{t.unscored ? ` · ${t.unscored} unscored` : ''}</span>}
+          {t('ui.BrainHub.sectionTrust')} {scored === 0
+            ? <span className="text-[var(--color-text-faint)]">{t('ui.BrainHub.notScored')}</span>
+            : <span>{t('ui.BrainHub.trustDist', { full: trust.full, high: trust.high, moderate: trust.moderate, low: trust.low })}{trust.unscored ? ` · ${t('ui.BrainHub.unscored', { n: trust.unscored })}` : ''}</span>}
         </div>
       </div>
     </div>
@@ -693,6 +706,7 @@ function BrainBrowse(
   { name, hasCodeIntel, hasSpecs, onOpenFile }:
   { name: string; hasCodeIntel: boolean; hasSpecs: boolean; onOpenFile: (p: string) => void },
 ) {
+  const { t } = useTranslation();
   // Code Graph is a SECOND-CLASS, opt-in surface (run_cfb460ac): NOT a peer tab of
   // the tree. It lives in a collapsed disclosure BELOW the tree and only MOUNTS
   // CodeGraph when expanded — so getCodeIntelGraph (an expensive force-graph fetch)
@@ -736,7 +750,7 @@ function BrainBrowse(
       >
         <div className="flex items-center gap-1.5 px-3 py-2 border-b border-[var(--color-border)] text-meta text-[var(--color-text-muted)] flex-shrink-0">
           <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">folder_open</span>
-          <span>Files · Projects/{name}</span>
+          <span>{t('ui.BrainHub.filesIn', { path: `Projects/${name}` })}</span>
         </div>
         <LibraryTree
           key={`tree-${name}`}
@@ -761,15 +775,15 @@ function BrainBrowse(
             className="w-full flex items-center gap-2 px-3 py-2 text-small hover:bg-[var(--color-hover)]"
           >
             <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">hub</span>
-            <span className="">Code Graph</span>
-            {!graphOpen && <span className="text-meta text-[var(--color-text-faint)]">· expand to load the dependency graph</span>}
+            <span className="">{t('ui.BrainHub.codeGraph')}</span>
+            {!graphOpen && <span className="text-meta text-[var(--color-text-faint)]">· {t('ui.BrainHub.expandGraph')}</span>}
             <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
               {graphOpen ? 'expand_less' : 'expand_more'}
             </span>
           </button>
           {graphOpen && repos && repos.length > 1 && (
             <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] text-meta">
-              <span className="text-[var(--color-text-muted)]">Repository</span>
+              <span className="text-[var(--color-text-muted)]">{t('ui.BrainHub.repository')}</span>
               <select data-testid="codegraph-repo" value={repo} onChange={(e) => setRepo(e.target.value)}
                 className="bg-[var(--color-input-bg)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-meta">
                 {repos.map((r) => <option key={r} value={r}>{r}</option>)}
@@ -794,13 +808,15 @@ function BrainBrowse(
 // declared on this machine is read at once; this card says which ones, who declared
 // them, and lets the person take one back. Nothing renders when the Brain has none.
 
+/** Who declared a local repository, as an i18n key. */
 const ROOT_SOURCE: Record<string, string> = {
-  'new-brain': 'added when this Brain was created',
-  agent: 'added by the agent',
-  migrated: "from this Brain's TECH.md",
+  'new-brain': 'ui.BrainHub.rootFromNewBrain',
+  agent: 'ui.BrainHub.rootFromAgent',
+  migrated: 'ui.BrainHub.rootFromTech',
 };
 
 function LocalRootsCard({ name }: { name: string }) {
+  const { t } = useTranslation();
   const [roots, setRoots] = useState<LocalRoot[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -819,7 +835,7 @@ function LocalRootsCard({ name }: { name: string }) {
       .then((r) => setRoots(r))
       .catch((e: unknown) => {
         const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-        setError(typeof detail === 'string' ? detail : 'That did not work');
+        setError(typeof detail === 'string' ? detail : t('ui.BrainHub.didNotWork'));
       })
       .finally(() => setBusy(null));
   };
@@ -827,7 +843,7 @@ function LocalRootsCard({ name }: { name: string }) {
   if (!roots || roots.length === 0) return null;
   return (
     <div className="mb-3 flex-shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2" style={{ maxWidth: 640 }} data-testid="local-roots-card">
-      <div className="text-small mb-1">Local repositories</div>
+      <div className="text-small mb-1">{t('ui.BrainHub.localRepos')}</div>
       {roots.map((r) => (
         <div key={r.path} className="py-1.5" data-testid="local-root">
           <div className="flex items-center gap-2">
@@ -838,7 +854,7 @@ function LocalRootsCard({ name }: { name: string }) {
             </span>
             <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
               <span className="text-meta text-[var(--color-text-faint)]">
-                {r.graphBuilt ? 'read into this Brain' : 'building its code graph…'}
+                {r.graphBuilt ? t('ui.BrainHub.readIntoBrain') : t('ui.BrainHub.buildingGraph')}
               </span>
               <button
                 data-testid="local-root-remove"
@@ -846,14 +862,12 @@ function LocalRootsCard({ name }: { name: string }) {
                 onClick={() => remove(r.path)}
                 className="btn-sm btn-soft disabled:opacity-50"
               >
-                Remove
+                {t('ui.BrainHub.remove')}
               </button>
             </span>
           </div>
           <div className="text-meta text-[var(--color-text-muted)] mt-0.5">
-            {ROOT_SOURCE[r.source ?? ''] ?? 'added on this machine'}. Its code structure (symbols,
-            calls, routes) is read into this Brain; the survey can write what it finds into the
-            Brain&apos;s docs, which travel to a Hive.
+            {t('ui.BrainHub.rootNote', { source: t(ROOT_SOURCE[r.source ?? ''] ?? 'ui.BrainHub.rootFromMachine') })}
           </div>
         </div>
       ))}
@@ -868,16 +882,17 @@ function LocalRootsCard({ name }: { name: string }) {
 // the Code Graph disclosure is opened.
 
 function _indexedAge(iso: string | null): string {
-  if (!iso) return 'never indexed';
+  if (!iso) return i18n.t('ui.BrainHub.neverIndexed');
   // the backend stores UTC without a zone suffix
   const zoned = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`;
   const age = relativeTime(zoned);           // 'now' | '5m' | '3h' | '2d' | 'YYYY-MM-DD' | ''
-  if (!age) return 'indexed —';
-  if (age === 'now') return 'indexed just now';
-  return /^\d+[mhd]$/.test(age) ? `indexed ${age} ago` : `indexed on ${age}`;
+  if (!age) return i18n.t('ui.BrainHub.indexedUnknown');
+  if (age === 'now') return i18n.t('ui.BrainHub.indexedJustNow');
+  return /^\d+[mhd]$/.test(age) ? i18n.t('ui.BrainHub.indexedAgo', { age }) : i18n.t('ui.BrainHub.indexedOn', { date: age });
 }
 
 function CodeIntelStatus({ name, repo }: { name: string; repo?: string }) {
+  const { t } = useTranslation();
   const [summary, setSummary] = useState<CodeIntelSummary | null>(null);
   const [reindexing, setReindexing] = useState(false);
   useEffect(() => {
@@ -904,9 +919,9 @@ function CodeIntelStatus({ name, repo }: { name: string; repo?: string }) {
   const rebuilding = summary.freshnessStatus === 'rebuilding';
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-t border-[var(--color-border)] text-meta" data-testid="codeintel-status">
-      <span className="tabular-nums text-[var(--color-text-muted)]">{summary.symbolCount.toLocaleString()} symbols</span>
+      <span className="tabular-nums text-[var(--color-text-muted)]">{t('ui.BrainHub.symbols', { count: summary.symbolCount, n: summary.symbolCount.toLocaleString() })}</span>
       <span className={stale ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text-faint)]'} data-testid="codeintel-age">
-        · {rebuilding ? 'rebuilding for a new parser' : _indexedAge(summary.lastIndexedAt)}
+        · {rebuilding ? t('ui.BrainHub.rebuilding') : _indexedAge(summary.lastIndexedAt)}
       </span>
       <button
         data-testid="codeintel-reindex"
@@ -914,7 +929,7 @@ function CodeIntelStatus({ name, repo }: { name: string; repo?: string }) {
         disabled={reindexing}
         className="btn-sm btn-soft ml-auto disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {reindexing ? 'Indexing…' : 'Re-index'}
+        {reindexing ? t('ui.BrainHub.indexing') : t('ui.BrainHub.reindex')}
       </button>
     </div>
   );
@@ -927,13 +942,15 @@ function CodeIntelStatus({ name, repo }: { name: string; repo?: string }) {
 // conventions, API contracts and the rest wait behind their own disclosure. A
 // collapsed disclosure like Code Graph: nothing is fetched until it is opened.
 
-const SPEC_GROUPS: { tier: SpecDoc['tier']; label: string }[] = [
-  { tier: 2, label: 'Design records' },
-  { tier: 3, label: 'Conventions and changes' },
-  { tier: 4, label: 'Other documents' },
+/** The later tiers of a repo's documents; labelKey is an i18n key. */
+const SPEC_GROUPS: { tier: SpecDoc['tier']; labelKey: string }[] = [
+  { tier: 2, labelKey: 'ui.BrainHub.specDesign' },
+  { tier: 3, labelKey: 'ui.BrainHub.specConventions' },
+  { tier: 4, labelKey: 'ui.BrainHub.specOther' },
 ];
 
 function RepoDocuments({ name }: { name: string }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<{ repo: string; path: string } | null>(null);
   useEffect(() => { setOpen(false); setSelected(null); }, [name]);
@@ -950,16 +967,16 @@ function RepoDocuments({ name }: { name: string }) {
         className="w-full flex items-center gap-2 px-3 py-2 text-small hover:bg-[var(--color-hover)]"
       >
         <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">description</span>
-        <span>Repo documents</span>
-        {open && specs && <span className="text-meta text-[var(--color-text-faint)]">· {first} to read first</span>}
+        <span>{t('ui.BrainHub.repoDocuments')}</span>
+        {open && specs && <span className="text-meta text-[var(--color-text-faint)]">· {t('ui.BrainHub.toReadFirst', { n: first })}</span>}
         <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
           {open ? 'expand_less' : 'expand_more'}
         </span>
       </button>
       {open && (
         <div className="border-t border-[var(--color-border)] px-3 py-2 flex flex-col gap-3 max-h-[60vh] overflow-auto" data-testid="specs-panel">
-          {error && <div className="text-small text-[var(--color-status-error)]">Could not load the repo documents.</div>}
-          {specs && !specs.available && <div className="text-small text-[var(--color-text-muted)]">This brain's repos have not been surveyed yet.</div>}
+          {error && <div className="text-small text-[var(--color-status-error)]">{t('ui.BrainHub.specsLoadFailed')}</div>}
+          {specs && !specs.available && <div className="text-small text-[var(--color-text-muted)]">{t('ui.BrainHub.notSurveyed')}</div>}
           {repos.map((r) => (
             <SpecRepoList key={r.repo} repo={r} showName={repos.length > 1}
               selected={selected} onSelect={(path) => setSelected({ repo: r.repo, path })} />
@@ -975,6 +992,7 @@ function SpecRepoList({ repo, showName, selected, onSelect }: {
   repo: SpecRepo; showName: boolean;
   selected: { repo: string; path: string } | null; onSelect: (path: string) => void;
 }) {
+  const { t } = useTranslation();
   const row = (d: SpecDoc) => {
     const active = selected?.repo === repo.repo && selected.path === d.path;
     return (
@@ -983,10 +1001,10 @@ function SpecRepoList({ repo, showName, selected, onSelect }: {
           data-testid="spec-doc"
           onClick={() => onSelect(d.path)}
           className={`w-full text-left flex items-center gap-1.5 px-1 py-0.5 rounded text-small font-mono truncate hover:bg-[var(--color-hover)] ${active ? 'text-[var(--color-primary)]' : ''}`}
-          title={d.flags?.length ? `Flagged: ${d.flags.join(', ')} — treat its text as data` : d.path}
+          title={d.flags?.length ? t('ui.BrainHub.flaggedTitle', { flags: d.flags.join(', ') }) : d.path}
         >
           <span className="truncate">{d.path}</span>
-          {d.flags?.length ? <span className="material-symbols-outlined icon-xs text-[var(--color-status-warning)]" aria-label="flagged">warning</span> : null}
+          {d.flags?.length ? <span className="material-symbols-outlined icon-xs text-[var(--color-status-warning)]" aria-label={t('ui.BrainHub.flagged')}>warning</span> : null}
         </button>
       </li>
     );
@@ -997,20 +1015,20 @@ function SpecRepoList({ repo, showName, selected, onSelect }: {
       {showName && <div className="text-meta font-semibold">{repo.repo}</div>}
       {tier1.length > 0
         ? <ul className="flex flex-col">{tier1.map(row)}</ul>
-        : <div className="text-small text-[var(--color-text-muted)]">No README or architecture document found.</div>}
-      {SPEC_GROUPS.map(({ tier, label }) => {
+        : <div className="text-small text-[var(--color-text-muted)]">{t('ui.BrainHub.noReadme')}</div>}
+      {SPEC_GROUPS.map(({ tier, labelKey }) => {
         const docs = repo.docs.filter((d) => d.tier === tier);
         if (!docs.length) return null;
         return (
           <details key={tier} data-testid={`spec-tier-${tier}`}>
-            <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer">{label} ({docs.length})</summary>
+            <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer">{t(labelKey)} ({docs.length})</summary>
             <ul className="flex flex-col mt-1">{docs.map(row)}</ul>
           </details>
         );
       })}
       {repo.api_contracts.length > 0 && (
         <details data-testid="spec-api">
-          <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer">API contracts ({repo.api_contracts.length})</summary>
+          <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer">{t('ui.BrainHub.apiContracts')} ({repo.api_contracts.length})</summary>
           <ul className="flex flex-col mt-1">
             {repo.api_contracts.map((a) => (
               <li key={a.path}>
@@ -1027,16 +1045,17 @@ function SpecRepoList({ repo, showName, selected, onSelect }: {
 }
 
 function SpecDocView({ name, repo, path, onClose }: { name: string; repo: string; path: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const { data: text, error } = useBrainSpecDoc(name, repo, path);
   return (
     <div className="border-t border-[var(--color-border)] pt-2" data-testid="spec-doc-view">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-small font-mono truncate flex-1">{path}</span>
-        <button className="btn-sm btn-ghost" onClick={onClose} data-testid="spec-doc-close">Close</button>
+        <button className="btn-sm btn-ghost" onClick={onClose} data-testid="spec-doc-close">{t('common.button.close')}</button>
       </div>
-      <div className="text-meta text-[var(--color-text-faint)] mb-1">Repository content, shown as plain text.</div>
-      {text === undefined && !error && <div className="text-small text-[var(--color-text-muted)]">Loading</div>}
-      {error && <div className="text-small text-[var(--color-status-error)]">Could not open this document.</div>}
+      <div className="text-meta text-[var(--color-text-faint)] mb-1">{t('ui.BrainHub.plainText')}</div>
+      {text === undefined && !error && <div className="text-small text-[var(--color-text-muted)]">{t('ui.BrainHub.loading')}</div>}
+      {error && <div className="text-small text-[var(--color-status-error)]">{t('ui.BrainHub.docOpenFailed')}</div>}
       {text !== undefined && (
         <pre className="text-small whitespace-pre-wrap break-words max-h-[40vh] overflow-auto">{text}</pre>
       )}
@@ -1055,19 +1074,22 @@ function SpecDocView({ name, repo, path, onClose }: { name: string; repo: string
 // SINGLE SOURCE OF TRUTH for the target→repo mapping. BOTH the per-target row label
 // AND the guideline legend render from this — never restate the mapping in prose (a
 // second copy would drift from this one; Gate-2 meta-review caught exactly that).
-const TARGET_REPO_MAP: Record<string, { label: string; install: string }> = {
-  'aim-capabilities': { label: 'internal git package', install: 'CR → aim plugins install' },
-  'open-plugin': { label: 'external GitHub repo', install: 'git push → install.sh' },
+// labelKey is an i18n key; install is a command, shown as it is.
+const TARGET_REPO_MAP: Record<string, { labelKey: string; install: string }> = {
+  'aim-capabilities': { labelKey: 'ui.BrainHub.targetInternal', install: 'CR → aim plugins install' },
+  'open-plugin': { labelKey: 'ui.BrainHub.targetExternal', install: 'git push → install.sh' },
 };
 function repoForTarget(target: string): { label: string; install: string } {
   // Unknown target (vocab drift) → passthrough: show the raw name, no fabricated repo.
-  return TARGET_REPO_MAP[target] ?? { label: target, install: '' };
+  const known = TARGET_REPO_MAP[target];
+  return known ? { label: i18n.t(known.labelKey), install: known.install } : { label: target, install: '' };
 }
 
 function DistributeView(
   { name, onRequestClose, onDispatch }:
   { name: string; onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean },
 ) {
+  const { t } = useTranslation();
   // Cached query (run_cfb460ac): re-opening Distribute inside the 30s window is
   // served from cache — the old useEffect+then refetched on every mount.
   const { data = null, error: qErr } = useDistribution(name);
@@ -1115,8 +1137,8 @@ function DistributeView(
     });
   }, [distributeCmd, onDispatch, onRequestClose]);
 
-  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="distribute-error">Failed to load distribution: {error}</div>;
-  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading distribution…</div>;
+  if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="distribute-error">{t('ui.BrainHub.distributionLoadFailed', { error })}</div>;
+  if (!data) return <div className="p-4 text-[var(--color-text-muted)] text-body">{t('ui.BrainHub.loadingDistribution')}</div>;
 
   return (
     <div className="p-4" data-testid="brainhub-distribute">
@@ -1124,35 +1146,35 @@ function DistributeView(
       {data.distributable ? (
         <>
           <div className="flex items-center gap-2 mb-1.5 text-meta uppercase tracking-wider font-semibold text-[var(--color-status-success)]" data-testid="distribute-step" data-step="2">
-            Step 2 · confirm targets &amp; freshness
+            {t('ui.BrainHub.step2')}
           </div>
           <div className="flex items-center gap-2 mb-3 text-small">
             <span className="material-symbols-outlined icon-sm text-[var(--color-status-success)]">outbound</span>
-            <span className="font-semibold text-[var(--color-text)]">Distributable</span>
+            <span className="font-semibold text-[var(--color-text)]">{t('ui.BrainHub.distributable')}</span>
             <span className={`text-meta px-1.5 py-0.5 rounded tabular-nums ${data.visibility === 'external' ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_18%,transparent)] text-[var(--color-status-warning)]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'}`}>
               {data.visibility}
             </span>
           </div>
           <div className="flex flex-col gap-1.5 mb-4" data-testid="distribute-targets">
-            {data.declared_targets.map((t) => (
-              <div key={t} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-code-bg)] px-2.5 py-1.5" data-testid="distribute-target-row">
+            {data.declared_targets.map((target) => (
+              <div key={target} className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-code-bg)] px-2.5 py-1.5" data-testid="distribute-target-row">
                 <span className="material-symbols-outlined icon-xs text-[var(--color-primary)]">deployed_code</span>
-                <span className="font-mono text-meta text-[var(--color-text)]">{t}</span>
+                <span className="font-mono text-meta text-[var(--color-text)]">{target}</span>
                 {/* AC1 (run_8d2ec26c): where it lands — derived read-only from target+visibility. */}
-                <span className="text-meta text-[var(--color-text-muted)]" title={repoForTarget(t).install}>
-                  → {repoForTarget(t).label}
+                <span className="text-meta text-[var(--color-text-muted)]" title={repoForTarget(target).install}>
+                  → {repoForTarget(target).label}
                 </span>
                 {/* F2 TRISTATE — three EXPLICIT branches. `null` (freshness unknown,
                     uncommitted output) must NOT fall into "up to date" (the old
                     `!source_changed_since` did exactly that, re-burying staleness). */}
                 {!data.has_output ? (
-                  <span className="ml-auto text-meta text-[var(--color-text-faint)]">never distributed</span>
+                  <span className="ml-auto text-meta text-[var(--color-text-faint)]">{t('ui.BrainHub.neverDistributed')}</span>
                 ) : data.source_changed_since === true ? (
-                  <span className="ml-auto text-meta text-[var(--color-status-warning)]" title="knowledge changed since last distribute">● source changed since last distribute</span>
+                  <span className="ml-auto text-meta text-[var(--color-status-warning)]" title={t('ui.BrainHub.knowledgeChanged')}>● {t('ui.BrainHub.sourceChanged')}</span>
                 ) : data.source_changed_since === false ? (
-                  <span className="ml-auto text-meta text-[var(--color-text-faint)]">up to date</span>
+                  <span className="ml-auto text-meta text-[var(--color-text-faint)]">{t('ui.BrainHub.upToDate')}</span>
                 ) : (
-                  <span className="ml-auto text-meta text-[var(--color-text-muted)]" title="the distribute output isn't git-committed, so there's no stable anchor to compare against — commit the output to enable freshness tracking">freshness unknown</span>
+                  <span className="ml-auto text-meta text-[var(--color-text-muted)]" title={t('ui.BrainHub.freshnessUnknownTitle')}>{t('ui.BrainHub.freshnessUnknown')}</span>
                 )}
               </div>
             ))}
@@ -1170,10 +1192,10 @@ function DistributeView(
             onClick={openAimJson}
             data-testid="distribute-edit-aim"
             className="btn-sm btn-soft mb-4"
-            title="Open aim.json in the Canvas to edit the declared reach (targets / visibility)"
+            title={t('ui.BrainHub.editAimTitle')}
           >
             <span className="material-symbols-outlined icon-xs">edit</span>
-            Edit aim.json
+            {t('ui.BrainHub.editAimJson')}
           </button>
         </>
       ) : (
@@ -1184,26 +1206,26 @@ function DistributeView(
               orphaned → re-declare (a regression state); else → honest Step 1. */}
           {data.has_output ? (
             <div className="flex items-center gap-2 mb-1.5 text-meta uppercase tracking-wider font-semibold text-[var(--color-status-warning)]" data-testid="distribute-redeclare">
-              Reach removed · re-declare to resume distribution
+              {t('ui.BrainHub.reachRemoved')}
             </div>
           ) : (
             <div className="flex items-center gap-2 mb-1.5 text-meta uppercase tracking-wider font-semibold text-[var(--color-status-warning)]" data-testid="distribute-step" data-step="1">
-              Step 1 · declare a reach
+              {t('ui.BrainHub.step1')}
             </div>
           )}
           <div className="flex items-center gap-2 text-small text-[var(--color-status-warning)] mb-1">
             <span className="material-symbols-outlined icon-sm">block</span>
-            Not distributable
+            {t('ui.BrainHub.notDistributable')}
           </div>
           <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">
-            This brain has no <span className="font-mono">distribution</span> block in its <span className="font-mono">aim.json</span>.
-            The owner must declare a reach before it can be distributed — add to <span className="font-mono">aim.json</span>:
+            <Trans i18nKey="ui.BrainHub.noDistributionBlock" components={{ mono: <span className="font-mono" /> }} />
             <code className="block mt-1 px-2 py-1 rounded bg-[var(--color-bg)] text-[var(--color-text-muted)] whitespace-pre">{'"distribution": { "targets": ["open-plugin"], "visibility": "internal" }'}</code>
             {data.warnings.length > 0 && <span className="block mt-1 text-[var(--color-status-error)]">{data.warnings.join('; ')}</span>}
             {/* Gate-2 MED: a stale output with the block since removed — surface it, don't hide it. */}
             {data.has_output && (
               <span className="block mt-1 text-[var(--color-status-warning)]" data-testid="distribute-stale-output">
-                An orphaned distribute output still exists (<span className="font-mono">{data.output_path}</span>) — the reach was declared before, then removed.
+                <Trans i18nKey="ui.BrainHub.orphanedOutput" values={{ path: data.output_path }}
+                  components={{ mono: <span className="font-mono" /> }} />
               </span>
             )}
           </div>
@@ -1215,10 +1237,10 @@ function DistributeView(
             onClick={openAimJson}
             data-testid="distribute-open-aim"
             className="btn-sm btn-soft mt-2.5"
-            title="Open aim.json in the Canvas to declare the distribution block"
+            title={t('ui.BrainHub.openAimTitle')}
           >
             <span className="material-symbols-outlined icon-xs">open_in_new</span>
-            Open aim.json
+            {t('ui.BrainHub.openAimJson')}
           </button>
         </div>
       )}
@@ -1230,7 +1252,7 @@ function DistributeView(
       <div className="flex flex-col gap-1.5">
         {data.distributable && (
           <div className="text-meta uppercase tracking-wider font-semibold text-[var(--color-status-success)]" data-testid="distribute-step" data-step="3">
-            Step 3 · run
+            {t('ui.BrainHub.step3')}
           </div>
         )}
         <div className="flex items-center gap-2">
@@ -1240,16 +1262,16 @@ function DistributeView(
             data-testid="distribute-button"
             className="btn-sm btn-success disabled:opacity-40 disabled:cursor-not-allowed"
             title={
-              !data.distributable ? 'Declare a distribution block first'
-                : onDispatch ? 'Send the distribute command to chat (runs s_ddd-distribute — you confirm targets there)'
-                : 'Copy the chat command to run s_ddd-distribute'
+              !data.distributable ? t('ui.BrainHub.declareFirst')
+                : onDispatch ? t('ui.BrainHub.sendDistributeTitle')
+                : t('ui.BrainHub.copyDistributeTitle')
             }
           >
             <span className="material-symbols-outlined icon-xs">{onDispatch ? 'send' : 'content_copy'}</span>
-            {copied === 'ok' ? 'Copied — paste into a chat tab'
-              : copied === 'failed' ? 'Could not copy — open a chat tab and retry'
-              : onDispatch ? 'Distribute this brain →'
-              : 'Distribute a brain'}
+            {copied === 'ok' ? t('ui.BrainHub.copiedPaste')
+              : copied === 'failed' ? t('ui.BrainHub.copyFailed')
+              : onDispatch ? t('ui.BrainHub.distributeThis')
+              : t('ui.BrainHub.distributeA')}
           </button>
           {data.distributable && (
             <span className="text-meta text-[var(--color-text-faint)] font-mono">→ {distributeCmd}</span>
@@ -1269,7 +1291,7 @@ function DistributeView(
           className="w-full flex items-center gap-2 px-3 py-2 text-small hover:bg-[var(--color-hover)]"
         >
           <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">help</span>
-          <span className="">How distribution works</span>
+          <span className="">{t('ui.BrainHub.howItWorks')}</span>
           <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
             {guidelineOpen ? 'expand_less' : 'expand_more'}
           </span>
@@ -1277,24 +1299,23 @@ function DistributeView(
         {guidelineOpen && (
           <div className="border-t border-[var(--color-border)] px-3 py-2.5 text-meta leading-relaxed text-[var(--color-text-muted)] flex flex-col gap-2" data-testid="distribute-guideline-body">
             <div>
-              <span className="font-semibold text-[var(--color-text)]">The 3-step flow (human-in-the-loop):</span>
-              <div className="mt-0.5">Step 1 · declare a reach in <span className="font-mono">aim.json</span> (targets + visibility — the SSOT, the ceiling).
-              Step 2 · confirm which declared target(s) to emit + check freshness.
-              Step 3 · run — the command lands in chat, where <span className="font-mono">s_ddd-distribute</span> confirms the subset, runs a content-safety scan, and renders the code package.</div>
+              <span className="font-semibold text-[var(--color-text)]">{t('ui.BrainHub.flowTitle')}</span>
+              <div className="mt-0.5"><Trans i18nKey="ui.BrainHub.flowBody" components={{ mono: <span className="font-mono" /> }} /></div>
             </div>
             <div>
-              <span className="font-semibold text-[var(--color-text)]">Target → where it lands (git code-package management):</span>
+              <span className="font-semibold text-[var(--color-text)]">{t('ui.BrainHub.targetLegendTitle')}</span>
               {/* Rendered FROM TARGET_REPO_MAP — the SAME source the per-row label uses,
                   so the legend can never drift from the rows (Gate-2 cross-fix fix). */}
               <div className="mt-0.5 flex flex-col gap-0.5">
-                {Object.entries(TARGET_REPO_MAP).map(([t, { label, install }]) => (
-                  <div key={t}><span className="font-mono">{t}</span> → <b>{label}</b> (<span className="font-mono">{install}</span>).</div>
+                {Object.entries(TARGET_REPO_MAP).map(([target, { labelKey, install }]) => (
+                  <div key={target}><span className="font-mono">{target}</span> → <b>{t(labelKey)}</b> (<span className="font-mono">{install}</span>).</div>
                 ))}
-                <div data-testid="distribute-cloud-unsupported">Cloud storage (e.g. S3) → <b>not supported yet</b>: no packager target writes there.</div>
+                <div data-testid="distribute-cloud-unsupported"><Trans i18nKey="ui.BrainHub.cloudUnsupported" components={{ b: <b /> }} /></div>
               </div>
             </div>
             <div>
-              <span className="font-semibold text-[var(--color-text)]">emit ≠ publish:</span> an <span className="font-mono">internal</span> DDD can EMIT a package for a private install, but public publish is refused until <span className="font-mono">visibility</span> is explicitly <span className="font-mono">external</span> — a deliberate owner edit in <span className="font-mono">aim.json</span>, never a UI toggle.
+              <Trans i18nKey="ui.BrainHub.emitNotPublish"
+                components={{ strong: <span className="font-semibold text-[var(--color-text)]" />, mono: <span className="font-mono" /> }} />
             </div>
           </div>
         )}

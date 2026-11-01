@@ -20,8 +20,15 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": {
-      "../resources/*": "./",
-      "../resources/daemon/*": "daemon/"
+      "../resources/daemon/com.swarmai.backend.plist.template": "daemon/com.swarmai.backend.plist.template",
+      "../resources/daemon/com.swarmai.guardian.plist.template": "daemon/com.swarmai.guardian.plist.template",
+      "../resources/daemon/daemon_guard.py": "daemon/daemon_guard.py",
+      "../resources/daemon/swarmai_backend.sh": "daemon/swarmai_backend.sh",
+      "../resources/daemon/swarmai_guardian.sh": "daemon/swarmai_guardian.sh",
+      "../resources/default-agent.json": "default-agent.json",
+      "../resources/default-mcp-servers.json": "default-mcp-servers.json",
+      "../resources/mcp-catalog.json": "mcp-catalog.json",
+      "../resources/required-cli-tools.json": "required-cli-tools.json"
     },
     "icon": [
       "icons/32x32.png",

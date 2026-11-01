@@ -35,22 +35,22 @@ export function JudgeTag({ judge, title }: { judge: RunJudge; title: string }) {
     <>
       <button
         {...triggerProps}
-        aria-label={`Autonomy Judge: ${symbol}`}
+        aria-label={t('ui.JudgeTag.tagLabel', { symbol })}
         data-testid="judge-tag"
         className="inline-flex items-center gap-1.5 h-[20px] px-2.5 rounded-full border text-[11.5px] whitespace-nowrap bg-[var(--color-card)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:border-[var(--color-primary)] hover:text-[var(--color-text)]"
       >
-        Autonomy Judge <b style={{ color: symbolColor }}>{symbol}</b>
+        {t('ui.JudgeTag.name')} <b style={{ color: symbolColor }}>{symbol}</b>
         {judge.live && <span className="text-[10.5px] text-[var(--color-text-dim)]">{t('swarmOut.judge.soFar')}</span>}
       </button>
       {open && createPortal(
         <div
           {...popoverProps}
-          aria-label={`Autonomy Judge · ${title}`}
+          aria-label={t('ui.JudgeTag.popoverLabel', { title })}
           data-testid="judge-popover"
           className={POPOVER_CLASS}
         >
           <div className="flex items-baseline gap-2">
-            <b className="text-[13.5px]">Autonomy Judge</b>
+            <b className="text-[13.5px]">{t('ui.JudgeTag.name')}</b>
             <span className="text-[12px] text-[var(--color-text-muted)] truncate">{title}</span>
           </div>
           <div className="font-mono text-[11.5px] text-[var(--color-text-muted)] mt-0.5">{judge.outcome}</div>

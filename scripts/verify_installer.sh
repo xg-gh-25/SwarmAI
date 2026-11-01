@@ -18,7 +18,7 @@
 #   C7  deploy the backend the way the app does (src-tauri/src/runtime_deploy.rs): runtime/<version>/
 #       + resources/, pointer file `current`, macOS quarantine cleared on the runtime
 #   C8  the backend starts the way the app starts it (macOS launchd, Linux/Windows a subprocess);
-#       /health answers "healthy"
+#       /health answers "healthy" within the app's own cold-start wait (300s)
 #   C9  the bundled Claude CLI runs (`--version`), started the same way
 #   C10 first-run seed: data.db and SwarmWS/.context/SOUL.md exist
 #   C11 nothing tried to run a system python / pip (shims on PATH log any call)
@@ -113,7 +113,9 @@ MOUNT="$WORK/mnt"
 SHIMS="$WORK/shims"
 SHIM_LOG="$WORK/system-python-calls.log"
 LABEL="com.swarmai.verify.$$.$RANDOM"
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# C8 waits for /health as long as the app does on a cold start (COLD_START_CEILING_SECS in
+# desktop/src-tauri/src/lib.rs); a shorter wait fails a backend the app would start.
+HEALTH_WAIT_SECS=300
 CLI_LABEL="$LABEL.cli"
 UID_GUI="gui/$(id -u)"
 INSTALL_DIR=""
@@ -462,7 +464,8 @@ how="launchd"; [ "$LAUNCHER" = direct ] && how="a child process"
 if [ "$DEPLOYED" = 1 ]; then
     if start_job "$LABEL" "$BACKEND_LOG" "$RT/python-backend$EXE_SUFFIX" --host 127.0.0.1 --port "$PORT"; then
         health=""
-        for _ in $(seq 1 90); do
+        deadline=$((SECONDS + HEALTH_WAIT_SECS))
+        while [ "$SECONDS" -lt "$deadline" ]; do
             health="$(curl -s -m 2 "http://127.0.0.1:$PORT/health" 2>/dev/null)"
             printf '%s' "$health" | grep -q '"status": *"healthy"' && { HEALTHY=1; break; }
             [ -n "$(job_exit_code "$LABEL")" ] && break
@@ -472,7 +475,7 @@ if [ "$DEPLOYED" = 1 ]; then
             result PASS C8 "$how started the backend; /health is healthy"
         else
             code="$(job_exit_code "$LABEL")"
-            result FAIL C8 "backend not healthy (exit code: ${code:-still running}); last log: $(tail -3 "$BACKEND_LOG" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+            result FAIL C8 "backend not healthy within ${HEALTH_WAIT_SECS}s (exit code: ${code:-still running}); last log: $(tail -3 "$BACKEND_LOG" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
         fi
     else
         result FAIL C8 "could not start the backend ($how)"
@@ -509,10 +512,11 @@ PY_LABEL="$LABEL.py"; PYS_LABEL="$LABEL.pys"
 SKILL_SCRIPT="$RT/_internal/skills/s_frontend-design/scripts/search.py"
 if [ "$DEPLOYED" = 1 ]; then
     PY_OUT="$WORK/py.out"; PYS_OUT="$WORK/pys.out"
-    # the declared list is read from the DEPLOYED skills with the same helper the build uses
+    # the declared list is read from the DEPLOYED skills with the same helper the build uses,
+    # imported from the installed backend itself (the verify job has no source checkout)
     start_job "$PY_LABEL" "$PY_OUT" "$RT/python-backend$EXE_SUFFIX" py -c \
-        "import sys, importlib; sys.path.insert(0, sys.argv[1]); from skill_python_deps import bundled_imports; mods = ['json.tool', 'http.server', 'csv', 'sqlite3', 'xml.dom.minidom', 'email.mime.text'] + bundled_imports(sys.argv[2]); [importlib.import_module(m) for m in mods]; print('py-imports-ok', len(mods))" \
-        "$REPO_ROOT/backend/scripts" "$RT/_internal/skills" >/dev/null 2>&1
+        "import sys, importlib; from scripts.skill_python_deps import bundled_imports; mods = ['json.tool', 'http.server', 'csv', 'sqlite3', 'xml.dom.minidom', 'email.mime.text'] + bundled_imports(sys.argv[1]); [importlib.import_module(m) for m in mods]; print('py-imports-ok', len(mods))" \
+        "$RT/_internal/skills" >/dev/null 2>&1
     start_job "$PYS_LABEL" "$PYS_OUT" "$RT/python-backend$EXE_SUFFIX" py "$SKILL_SCRIPT" "fintech banking" --domain color >/dev/null 2>&1
     c1=""; c2=""
     for _ in $(seq 1 60); do

@@ -3,8 +3,8 @@
 Validates the safety-critical functions in session_unit.py that enumerate
 and kill process trees:
 
-- ``_get_children``              — Direct child PID enumeration via pgrep
-- ``_snapshot_process_table``    — Full process table snapshot via ps
+- ``_get_children``              — Direct child PID enumeration via psutil
+- ``_snapshot_process_table``    — Full process table snapshot via psutil
 - ``_snapshot_descendant_tree``  — Tree BFS with bottom-up ordering
 - ``_kill_pids``                 — Batch SIGKILL with error tolerance
 
@@ -13,7 +13,7 @@ Key properties verified:
 - Visited set prevents infinite loops from pid cycles
 - Empty inputs produce empty outputs
 - _kill_pids tolerates already-dead processes
-- _snapshot_process_table parses ps output correctly
+- _snapshot_process_table reads psutil's table correctly
 """
 
 import os
@@ -35,7 +35,7 @@ from core.session_unit import (
 
 
 class TestGetChildren:
-    """Tests for _get_children (pgrep -P wrapper, used as fallback)."""
+    """Tests for _get_children (psutil children, used as fallback)."""
 
     def test_returns_list_for_nonexistent_pid(self):
         result = _get_children(999999999)
@@ -48,27 +48,24 @@ class TestGetChildren:
             assert isinstance(pid, int)
             assert pid > 0
 
-    @patch("core.session_unit.subprocess.run")
-    def test_handles_timeout(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="pgrep", timeout=3)
+    @patch("psutil.Process")
+    def test_handles_access_denied(self, mock_proc):
+        import psutil
+        mock_proc.side_effect = psutil.AccessDenied(12345)
         assert _get_children(12345) == []
 
-    @patch("core.session_unit.subprocess.run")
-    def test_parses_multiline_output(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="100\n200\n300\n", returncode=0)
+    @patch("psutil.Process")
+    def test_returns_child_pids(self, mock_proc):
+        mock_proc.return_value.children.return_value = [
+            MagicMock(pid=100), MagicMock(pid=200), MagicMock(pid=300)]
         assert _get_children(1) == [100, 200, 300]
-
-    @patch("core.session_unit.subprocess.run")
-    def test_skips_non_numeric_lines(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="100\ngarbage\n200\n", returncode=0)
-        assert _get_children(1) == [100, 200]
 
 
 # ── _snapshot_process_table ───────────────────────────────────────
 
 
 class TestSnapshotProcessTable:
-    """Tests for _snapshot_process_table (single ps call)."""
+    """Tests for _snapshot_process_table (one psutil pass)."""
 
     def test_returns_dict_of_pid_ppid(self):
         """Real call returns a non-empty dict with our own PID."""
@@ -78,26 +75,24 @@ class TestSnapshotProcessTable:
         # Our own process should be in the table
         assert os.getpid() in table
 
-    @patch("core.session_unit.subprocess.run")
-    def test_parses_ps_output(self, mock_run):
-        mock_run.return_value = MagicMock(
-            stdout="  PID  PPID\n  100     1\n  200   100\n  300   200\n",
-            returncode=0,
-        )
+    @patch("psutil.process_iter")
+    def test_reads_psutil_table(self, mock_iter):
+        mock_iter.return_value = iter([MagicMock(info={"pid": p, "ppid": pp})
+                                       for p, pp in ((100, 1), (200, 100), (300, 200))])
         table = _snapshot_process_table()
         assert table == {100: 1, 200: 100, 300: 200}
 
-    @patch("core.session_unit.subprocess.run")
-    def test_handles_timeout(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ps", timeout=5)
+    @patch("psutil.process_iter")
+    def test_handles_access_denied(self, mock_iter):
+        import psutil
+        mock_iter.side_effect = psutil.AccessDenied()
         assert _snapshot_process_table() == {}
 
-    @patch("core.session_unit.subprocess.run")
-    def test_handles_malformed_lines(self, mock_run):
-        mock_run.return_value = MagicMock(
-            stdout="  PID  PPID\n  100     1\n  bad line\n  300   200\n",
-            returncode=0,
-        )
+    @patch("psutil.process_iter")
+    def test_skips_unreadable_rows(self, mock_iter):
+        mock_iter.return_value = iter([MagicMock(info={"pid": 100, "ppid": 1}),
+                                       MagicMock(info={"pid": 200, "ppid": None}),
+                                       MagicMock(info={"pid": 300, "ppid": 200})])
         table = _snapshot_process_table()
         assert 100 in table
         assert 300 in table
@@ -165,8 +160,8 @@ class TestSnapshotDescendantTree:
         assert set(result) == {200, 300}
 
     @patch("core.session_unit._snapshot_process_table")
-    def test_fallback_to_pgrep_on_empty_table(self, mock_table):
-        """When ps fails (empty table), falls back to pgrep-based approach."""
+    def test_fallback_to_child_walk_on_empty_table(self, mock_table):
+        """When the table cannot be read (empty), walks each node's children."""
         mock_table.return_value = {}
         with patch("core.session_unit._get_children") as mock_children:
             mock_children.side_effect = lambda pid: [200] if pid == 100 else []

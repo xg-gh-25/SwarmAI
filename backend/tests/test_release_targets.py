@@ -90,6 +90,10 @@ def test_verify_reads_the_manifest_the_build_writes(tmp_path):
     res = tmp_path / "res"
     res.mkdir()
     (res / "seed.db").write_text("db")
+    # the manifest lists the resources the bundle config maps (seed.db: the release overlay)
+    (tmp_path / "src-tauri").mkdir()
+    (tmp_path / "src-tauri" / "tauri.bundle.conf.json").write_text(
+        json.dumps({"bundle": {"resources": {"../res/seed.db": "seed.db"}}}))
     subprocess.run([sys.executable, str(ROOT / "desktop" / "scripts" / "write_install_manifest.py"),
                     str(tmp_path / "stage"), str(res), "1.2.3", "x86_64-unknown-linux-gnu"], check=True)
     manifest = tmp_path / "stage" / "install-manifest.json"

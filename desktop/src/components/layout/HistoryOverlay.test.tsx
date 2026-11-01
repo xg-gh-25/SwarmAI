@@ -19,9 +19,7 @@ class ResizeObserverStub {
 }
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+// react-i18next is not mocked: the app's i18n (test-setup) renders the real English text.
 
 const searchSessions = vi.fn();
 vi.mock('../../services/search', () => ({

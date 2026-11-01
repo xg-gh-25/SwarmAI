@@ -10,6 +10,7 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { overlayQuery } from '../layout/overlayQueries';
 import { CopyPathButton } from '../common/CopyPathButton';
 import type { WorkspaceLocation } from '../../services/workspace';
@@ -49,6 +50,7 @@ export function LocationHeader({ loc, onRefresh, refreshing, refreshFailed }: {
   refreshing: boolean;
   refreshFailed: boolean;
 }) {
+  const { t } = useTranslation();
   const summary = useQuery(overlayQuery.workspaceSummary(loc.key));
   const now = useMinuteTick();
   const s = summary.data;
@@ -60,20 +62,20 @@ export function LocationHeader({ loc, onRefresh, refreshing, refreshFailed }: {
         <div title={loc.path} data-testid="workspace-location-path"
           className="mt-px truncate font-mono text-meta text-[var(--color-text-dim)]">{loc.path}</div>
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <Chip>local main</Chip>
+          <Chip>{t('ui.workspaceParts.localMain')}</Chip>
           {s && s.changed > 0 && (
-            <Chip dot="var(--color-git-modified)" testid="workspace-changed">{s.changed} changed</Chip>
+            <Chip dot="var(--color-git-modified)" testid="workspace-changed">{t('ui.workspaceParts.changed', { count: s.changed })}</Chip>
           )}
-          {lastCommit && <Chip testid="workspace-last-commit">last commit {lastCommit}</Chip>}
+          {lastCommit && <Chip testid="workspace-last-commit">{t('ui.workspaceParts.lastCommit', { ago: lastCommit })}</Chip>}
         </div>
       </div>
       <div className="flex items-center gap-1">
         {refreshFailed && (
-          <span title="Refresh failed — showing the last loaded tree" data-testid="workspace-refresh-failed"
+          <span title={t('ui.workspaceParts.refreshFailed')} data-testid="workspace-refresh-failed"
             className="material-symbols-outlined icon-sm text-[var(--color-warning)]">warning</span>
         )}
         {loc.path && <CopyPathButton path={loc.path} testId="workspace-copy-root" />}
-        <button type="button" onClick={onRefresh} title={`Refresh ${loc.label}`} aria-label={`Refresh ${loc.label}`}
+        <button type="button" onClick={onRefresh} title={t('ui.workspaceParts.refreshLabel', { label: loc.label })} aria-label={t('ui.workspaceParts.refreshLabel', { label: loc.label })}
           data-testid="workspace-refresh"
           className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]">
           <span className={`material-symbols-outlined icon-sm ${refreshing ? 'animate-spin motion-reduce:animate-none' : ''}`}>refresh</span>
@@ -84,11 +86,12 @@ export function LocationHeader({ loc, onRefresh, refreshing, refreshFailed }: {
 }
 
 export function PaneFooter({ left, updatedAt }: { left: string; updatedAt: number | null }) {
+  const { t } = useTranslation();
   const now = useMinuteTick();
   return (
     <div className="flex items-center justify-between px-3.5 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-bg-chrome)] text-meta text-[var(--color-text-muted)]">
       <span className="truncate">{left}</span>
-      {updatedAt ? <span>updated {agoText(updatedAt, now)}</span> : null}
+      {updatedAt ? <span>{t('ui.workspaceParts.updated', { ago: agoText(updatedAt, now) })}</span> : null}
     </div>
   );
 }

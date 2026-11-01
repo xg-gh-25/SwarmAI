@@ -29,6 +29,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { List } from 'react-window';
+import { useTranslation } from 'react-i18next';
 import type { TreeNode } from '../../types';
 import { workspaceService } from '../../services/workspace';
 import TreeNodeRow from '../workspace-explorer/TreeNodeRow';
@@ -216,6 +217,7 @@ interface LibraryTreeProps {
  * hiding infra junk so a project root shows only real browsable content.
  */
 export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFiles = false, maxWidth, minWidth, hugContent = false }: LibraryTreeProps = {}) {
+  const { t } = useTranslation();
   const [roots, setRoots] = useState<TreeNode[] | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -354,19 +356,19 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
         <OverlayError
           testid="library-tree-error"
           retryTestid="library-tree-retry"
-          message={<>Couldn't load the {rootLeaf} tree.</>}
+          message={t('ui.LibraryTree.loadFailed', { name: rootLeaf })}
           onRetry={() => { void loadRoots(); }}
         />
       ) : loading ? (
-        <div className="py-6 text-center text-body text-[var(--color-text-faint)]">Loading tree…</div>
+        <div className="py-6 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryTree.loading')}</div>
       ) : rows.length === 0 ? (
         <div data-testid="library-tree-empty" className="py-6 text-center text-body text-[var(--color-text-faint)]">
           {/* Distinguish genuinely-empty from all-noise-filtered (meta-review LOW):
               a dir that HAS entries but all were infra-filtered isn't "empty" — say so,
               else the user reads "is empty" as a data-loss bug. */}
           {roots && roots.length > 0
-            ? `Only build/infra files here — nothing to browse in ${rootLeaf}/.`
-            : `${rootLeaf}/ is empty.`}
+            ? t('ui.LibraryTree.onlyInfra', { name: rootLeaf })
+            : t('ui.LibraryTree.empty', { name: rootLeaf })}
         </div>
       ) : (
         <List
@@ -376,7 +378,7 @@ export function LibraryTree({ rootPath = KNOWLEDGE_ROOT, onFileOpen, showAllFile
           rowComponent={LibraryRow}
           rowProps={rowProps}
           role="tree"
-          aria-label={`${rootLeaf} file tree`}
+          aria-label={t('ui.LibraryTree.treeLabel', { name: rootLeaf })}
         />
       )}
     </div>

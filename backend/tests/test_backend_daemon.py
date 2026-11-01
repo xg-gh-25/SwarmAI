@@ -268,7 +268,7 @@ GUARD_PY_SOURCE = BACKEND_DIR / "core" / "daemon_guard.py"
 
 class TestGuardianBundling:
     """The guardian watchdog assets must be staged in desktop/resources/daemon/
-    so Tauri bundles them into the .app (tauri.conf ../resources/daemon/* glob)
+    so Tauri bundles them into the .app (each listed in tauri.conf.json bundle.resources)
     and Rust auto_install_daemon can install them for end users."""
 
     def test_guardian_assets_staged_for_bundling(self):

@@ -19,6 +19,7 @@ from database import db
 from core.agent_defaults import build_agent_config, DEFAULT_AGENT_ID
 from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG
 from core.initialization_manager import initialization_manager
+from core.prerequisites import check_prerequisites
 from core.swarm_workspace_manager import swarm_workspace_manager
 from channels.gateway import channel_gateway
 
@@ -61,6 +62,16 @@ class SwarmWorkspaceStatus(BaseModel):
     path: Optional[str] = None
 
 
+class PrerequisiteItem(BaseModel):
+    """One machine prerequisite check (core.prerequisites).
+
+    ``ok`` is ``None`` when the check could not run; ``hint`` then says why.
+    """
+    name: str  # "git" | "git_bash"
+    ok: Optional[bool] = None
+    hint: str = ""
+
+
 class SystemStatusResponse(BaseModel):
     """System initialization status response.
 
@@ -78,6 +89,8 @@ class SystemStatusResponse(BaseModel):
         phase_timings: Per-phase durations (e.g. ``database_ms``,
             ``workspace_ms``), or ``None`` if not yet available.
         timestamp: ISO 8601 UTC timestamp of the response.
+        prerequisites: Machine prerequisite checks (git; Git Bash on Windows).
+        data_dir: The backend's app data directory.
     """
     database: DatabaseStatus
     agent: AgentStatus
@@ -90,6 +103,8 @@ class SystemStatusResponse(BaseModel):
     startup_time_ms: Optional[float] = None
     phase_timings: Optional[dict[str, float]] = None
     timestamp: str
+    prerequisites: list[PrerequisiteItem] = []
+    data_dir: str = ""
 
 
 class ResetToDefaultsResponse(BaseModel):
@@ -155,6 +170,7 @@ async def get_system_status() -> SystemStatusResponse:
     - Channel gateway running status
     - Swarm Workspace initialization status with name and path
     - Overall initialization status (true only if all components ready)
+    - Machine prerequisites (git; Git Bash on Windows) and the app data directory
     """
     # Check database health
     db_healthy = False
@@ -262,6 +278,14 @@ async def get_system_status() -> SystemStatusResponse:
     except Exception:
         pass
 
+    # Machine prerequisites. The checks may run a short subprocess, so they run
+    # off the event loop; they never raise, the guard is only belt and braces.
+    try:
+        prerequisites = await asyncio.to_thread(check_prerequisites)
+    except Exception:
+        logger.exception("Prerequisite checks failed")
+        prerequisites = []
+
     # Lazy import to avoid circular dependency (main -> routers -> system -> main).
     import main as _main_module
 
@@ -276,7 +300,9 @@ async def get_system_status() -> SystemStatusResponse:
         onboarding_complete=onboarding_complete,
         startup_time_ms=_main_module._startup_time_ms,
         phase_timings=_main_module._phase_timings,
-        timestamp=timestamp
+        timestamp=timestamp,
+        prerequisites=prerequisites,
+        data_dir=str(get_app_data_dir()),
     )
 
 

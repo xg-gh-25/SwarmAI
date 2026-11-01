@@ -49,6 +49,7 @@ import { PanelHiddenContext, useOpenRun } from './openSession';
 import { actionsOf, ago, autonomyWord, commandForKey, commandMeta, machineChecks, stageOf, typingIn, waitingSince, waitsOf } from './runReview';
 import { DIMENSIONS, DIMENSION_ROLE } from './shapes';
 import { TONE_VAR } from './tone';
+import { modKeyLabel } from '../../utils/platform';
 
 const muted = 'text-[var(--color-text-muted)]';
 const btn = 'px-3 py-1.5 rounded-md text-[12.5px] border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50';
@@ -89,7 +90,7 @@ function AutonomyTab({ res }: { res: SwarmOutResult | null }) {
                 <td className={`py-1.5 pr-2 border-b border-[var(--color-border)] ${muted}`}>{t(`swarmOut.judge.role.${DIMENSION_ROLE[i]}`)}</td>
                 <td className="py-1.5 pr-2 border-b border-[var(--color-border)] font-semibold"
                   style={{ color: judge.verdicts[i] === 'PASS' ? TONE_VAR.ok : judge.verdicts[i] === 'BLOCK' ? TONE_VAR.error : judge.verdicts[i] === 'WARN' ? TONE_VAR.attention : undefined }}>
-                  {judge.verdicts[i] === 'NA' ? 'N/A' : judge.verdicts[i]}</td>
+                  {judge.verdicts[i] === 'NA' ? t('ui.RunOverlay.notApplicable') : judge.verdicts[i]}</td>
                 <td className={`py-1.5 border-b border-[var(--color-border)] ${muted}`}>{judge.numbers[i]}</td>
               </tr>
             ))}
@@ -498,7 +499,7 @@ export function ConfirmSheet({ title, consequence, children, confirmLabel, onCon
           </button>
           <button type="button" className={`btn-md ${danger || confirmTone ? '' : 'btn-primary'} disabled:opacity-50`} style={solid}
             disabled={busy || confirmDisabled} onClick={onConfirm} data-testid={confirmTestId}>
-            {confirmLabel} <span className="text-[11px] opacity-70">⌘↩</span>
+            {confirmLabel} <span className="text-[11px] opacity-70">{modKeyLabel()}↩</span>
           </button>
         </div>
       </div>

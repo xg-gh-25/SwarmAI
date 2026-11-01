@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import CommentPopover from './CommentPopover';
 import { computeGutterWindow, GUTTER_VIRTUALIZE_MIN_LINES } from './gutterVirtualization';
 import type { ReviewComment } from '../../hooks/useReviewMode';
@@ -55,6 +56,7 @@ export default function ReviewModeGutter({
   isCommentApplied,
   viewportHeight = 0,
 }: ReviewModeGutterProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const gutterWidth = `${Math.max(3, String(lineCount).length) + 1}ch`;
   const virtualize = lineCount > GUTTER_VIRTUALIZE_MIN_LINES;
@@ -132,9 +134,15 @@ export default function ReviewModeGutter({
                       : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
               }`}
               onClick={() => handleLineClick(lineNum)}
-              title={applied && comment ? `Applied: ${comment.text}` : hasComment && comment ? `Comment: ${comment.text}` : `Add comment on line ${lineNum}`}
+              title={
+                applied && comment
+                  ? t('ui.ReviewModeGutter.applied', { text: comment.text })
+                  : hasComment && comment
+                    ? t('ui.ReviewModeGutter.comment', { text: comment.text })
+                    : t('ui.ReviewModeGutter.addComment', { line: lineNum })
+              }
               role="button"
-              aria-label={hasComment ? `Edit comment on line ${lineNum}` : `Add comment on line ${lineNum}`}
+              aria-label={hasComment ? t('ui.ReviewModeGutter.editComment', { line: lineNum }) : t('ui.ReviewModeGutter.addComment', { line: lineNum })}
             >
               {applied ? (
                 <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[11px]">✅</span>

@@ -31,7 +31,17 @@ vi.mock('../../../services/api', () => ({ default: { get: (...a: unknown[]) => a
 const dispatchUiCommand = vi.fn(() => true);
 vi.mock('../../../utils/uiCommands', () => ({ dispatchUiCommand: (...a: unknown[]) => dispatchUiCommand(...a) }));
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+// t() returns the key, except this screen's own ui.WelcomeScreen.* text, which the
+// app's i18n (test-setup) turns into its real English.
+vi.mock('react-i18next', async () => {
+  const { default: i18n } = await import('../../../i18n');
+  return {
+    initReactI18next: { type: '3rdParty', init: () => {} },
+    useTranslation: () => ({
+      t: (k: string, o?: Record<string, unknown>) => (k.startsWith('ui.WelcomeScreen.') ? i18n.t(k, o) : k),
+    }),
+  };
+});
 
 import { WelcomeScreen as WelcomeScreenImpl } from './WelcomeScreen';
 import { useAttentionQueue } from '../../../hooks/useAttentionQueue';
@@ -69,7 +79,10 @@ describe('WelcomeScreen v2', () => {
     renderWelcome();
     expect(screen.getByAltText('SwarmAI')).toBeTruthy();
     expect(screen.getByTestId('welcome-wordmark').textContent).toBe('Swarm');
-    expect(screen.getByTestId('welcome-slogan').textContent).toBe('Grow your Brain. Deliver Anything.');
+    const slogan = screen.getByTestId('welcome-slogan');
+    expect(slogan.textContent).toBe('Grow your Brain. Deliver Anything.');
+    // the two brand words keep their brand colour
+    expect([...slogan.querySelectorAll('.welcome-brand-text')].map((e) => e.textContent)).toEqual(['Brain', 'Anything']);
   });
 
   it('count = blocking + review from the attention query; at most 3 rows', async () => {

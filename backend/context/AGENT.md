@@ -78,8 +78,8 @@ Non-trivial design/architecture → present the alternatives that genuinely exis
 3, never manufactured to hit a count), each with {what, effort, risk, tradeoff}; evaluate
 through the most relevant lenses — **SPEED · QUALITY · SIMPLICITY · FLEXIBILITY · DELETION** —
 and end with a recommendation. DDD enrichment: read PRODUCT.md (priorities/non-goals) +
-IMPROVEMENT.md (What Failed) + `Knowledge/Learned/THESIS.md` first; flag if an approach hits a
-non-goal or failed before.
+IMPROVEMENT.md (What Failed) + `Knowledge/Learned/THESIS.md` (if present) first; flag if an
+approach hits a non-goal or failed before.
 
 ### Iterative Refinement — iterate with the user, verify against the code
 Architecture/specs/designs/complex docs → (1) revised version + (2) only questions that
@@ -180,10 +180,11 @@ patch, not a solution. (R26 strangler-fig is HOW to land it safely, not license 
 
 **R6. Qualified BEFORE push, never on CI after.** Before any push: local **Build** (what
 changed) + **Tests** (affected suites, R9 timeout) both green — RUN them, never infer.
-`commit ≠ qualified ≠ deployed` (build makes a binary; code isn't live until rebuild+restart).
-CI confirms an already-qualified change, it is not where you discover if it qualifies.
-Commit-volume is NOT a push trigger (volume ≠ quality). **Commit direct to `main`** (SwarmAI
-convention) — never auto-branch; branch only when asked. (SOUL P1+P2)
+`commit ≠ qualified ≠ deployed` (a change is live only once whatever runs it is rebuilt or
+redeployed, the way the project does that). CI confirms an already-qualified change, it is not
+where you discover if it qualifies. Commit-volume is NOT a push trigger (volume ≠ quality).
+**Branches and PRs follow the repo's own convention** (its AGENTS.md, CONTRIBUTING, CI); when
+it is unclear, ask once and keep the answer for the session. (SOUL P1+P2)
 
 **R7. Post-task scan** — after code, scan modified files for quality + security issues
 (confidence-gated). **Docstring/comment co-update is MANDATORY:** a comment naming a mechanism
@@ -288,11 +289,10 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   else; a timeout seen mid-task is noted for that final run, not chased. **The exit code and the runner's own failure list decide the result, never
   whether a summary line appeared:** a repo's config or one extra quiet flag can hide the
   summary, so empty output is not a pass. (A habit, not a gate: nothing denies an uncapped run.)
-- **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
-  system; on un-deployed code it tests the old binary and can hang the judge. Triggers = the
-  post-session quick check, deploy, the schedule and the user's own dashboard buttons only; CI
-  runs only the eval machinery's own unit tests, never an eval. Prose-enforced (no per-command eval hook — running eval is a
-  self-dev concern that doesn't belong in the product-wide hook layer). (SOUL P1+P7)
+- **Eval:** NEVER run the system eval (OS Eval) inside a coding pipeline or by hand from a
+  coding task — it scores the DEPLOYED system, not the code in front of me. Triggers = the
+  post-session quick check, deploy, the schedule and the user's own dashboard buttons only.
+  A rule, not a gate: there is no per-command eval hook. (SOUL P1+P7)
 
 ### Pipeline Profile IS the Planning Unit (when the pipeline is used)
 Coding work the user sends to the pipeline is scoped in PIPELINE RUNS, never
@@ -323,13 +323,13 @@ copy. (SOUL P1)
 **R11. Release readiness** — readiness = R6 gate (Build+Tests green), NOT commit count; use
 the project's release skill when it has one (R8). (SOUL P2+P6)
 
-**R12. Daemon lifecycle** — `SIGTERM`=restart (KeepAlive); `bootout`=permanent deregister;
-deploy=SIGKILL+bootout+rsync+bootstrap. Never from a child process. **Restart/stop/deploy is
-destructive → explicit user approval first; never restart "just to verify".** (SOUL P1)
-
-**R13. Environment** — `nc -z` for port checks (never `lsof`); `asyncio.to_thread()` + timeout
-for subprocess in async; never assume daemon shell env; CJK matching uses substring fallback.
+**R12. Long-running services** — restarting, stopping or deploying the app's own backend, or
+any long-running service, is destructive → **explicit user approval first; never from a
+process that service started (my own session is one); never restart "just to verify".**
 (SOUL P1)
+
+**R13. Environment** — check a port with a connect probe (`nc -z`), not a process listing
+(`lsof`); in async code run a subprocess via `asyncio.to_thread()` with a timeout. (SOUL P1)
 
 **R14. Deploy scope = rollback scope** (1:1). One format + multiple writers → unify. (SOUL P1)
 
@@ -343,8 +343,8 @@ query". My visual instinct defaults to a data-dump and does NOT self-catch it. (
 **R16. Deploy topology is a design decision.** Before multi-subsystem work (>1 coupled
 component on a shared critical path): identify shared paths, define deploy order +
 per-subsystem smoke criteria, declare in EVALUATE. Coupled subsystems deploy+smoke EACH
-independently before combining — "build succeeds" ≠ "works in prod" (smoke = send 1 msg →
-stream → persists on tab switch). Exception: pure zero-behavior-change refactors. (SOUL P2)
+independently before combining — "build succeeds" ≠ "works in prod" (smoke = the project's
+own end-to-end smoke check). Exception: pure zero-behavior-change refactors. (SOUL P2)
 
 **R16b. Observe before asserting a cause.** Any causal claim about a failure, runtime/deploy
 state, tool behavior, or user intent MUST carry a same-turn observation, or be tagged
@@ -370,8 +370,7 @@ as “这个/上述/第 4 项”, bare “选 A/B”, or “Run 4”. Use a real
 task when a run must be named. If the action cannot be made self-contained in one short line, omit
 it.** When the task is genuinely closed, stop cleanly — never manufacture next steps for padding
 (push / watch CI / "look into X" is filler = a dead end). Blocked/debugging → surface the
-immediate decision instead. **The trigger is a real next move, not a count.** (SOUL P3+P4;
-STEERING #7)
+immediate decision instead. **The trigger is a real next move, not a count.** (SOUL P3+P4)
 
 **R19. Input language dictates output language** — reply in the language of the user's LAST
 message (CJK in → CJK out), deep in tool loops too; technical terms stay English, no
@@ -440,8 +439,9 @@ warning, not evidence. (2) **Touch-it-fix-it** — a stale value I pass through 
 with a reproducible method, not guessed. (3) **Canonical home — route by SCOPE, then by type.**
 **STRIP-TEST:** remove (a) this user (b) this machine's paths (c) this deployment's projects and
 data — still true and useful on a stranger's fresh install? → **PRODUCT** cognition (what
-SwarmAI is, can do, how it fails: a capability, kernel flow, gate, failure class) → the
-`backend/context/` source, via s_self-evolution + source edit (+rebuild) or a pipeline, **never
+SwarmAI is, can do, how it fails: a capability, kernel flow, gate, failure class) → when the
+current checkout is SwarmAI's own repo, its `backend/context/` source, via s_self-evolution +
+source edit or a pipeline; anywhere else, proposed upstream to SwarmAI (an issue or PR). **Never
 hand-written into the private `.context/` projection** (it reaches nobody else, and system-owned
 files are overwritten). Fails the strip → **INSTANCE** cognition → `.context/{USER,TOOLS,STEERING}`,
 or **DOMAIN** cognition → that project's DDD via `s_persist`. Within scope, by type: knowledge
@@ -509,8 +509,7 @@ failing 3+×, a rule contradicting observed behavior/a directive, or stale conte
 ---
 
 ## Environment Defaults (operational facts)
-- Backend health `GET /health` :18321 (daemon) / :8000 (dev). `nc -z` for ports.
-- macOS GUI PATH → `zsh -lic`. Sandbox: `pgrep`/`ps`/`top` blocked.
+- SwarmAI backend health: `GET /health` on port 18321. `nc -z` for ports.
 - Time: the user's local timezone (USER.md), never UTC.
 
 ## Safety (behavioral invariant)

@@ -5,6 +5,7 @@
  * Handles token input, verify, and save for Slack channels.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { channelsService } from '../../services/channels';
 import { openExternal } from '../../utils/openExternal';
 import type { Channel } from '../../types';
@@ -24,6 +25,7 @@ export default function ChannelConfigForm({
   onSave,
   onCancel,
 }: ChannelConfigFormProps) {
+  const { t } = useTranslation();
   const [botToken, setBotToken] = useState(
     (existingConfig?.config as Record<string, string>)?.bot_token || ''
   );
@@ -69,22 +71,22 @@ export default function ChannelConfigForm({
   return (
     <div className="space-y-3">
       <div>
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1">Bot Token</label>
+        <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.ChannelConfigForm.botToken')}</label>
         <input
           type="password"
           value={botToken}
           onChange={(e) => setBotToken(e.target.value)}
-          placeholder="xoxb-..."
+          placeholder={t('ui.ChannelConfigForm.botTokenPlaceholder')}
           className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
         />
       </div>
       <div>
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1">App Token</label>
+        <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.ChannelConfigForm.appToken')}</label>
         <input
           type="password"
           value={appToken}
           onChange={(e) => setAppToken(e.target.value)}
-          placeholder="xapp-..."
+          placeholder={t('ui.ChannelConfigForm.appTokenPlaceholder')}
           className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
         />
       </div>
@@ -96,7 +98,7 @@ export default function ChannelConfigForm({
           openExternal('https://api.slack.com/apps');
         }}
       >
-        How to create a Slack bot app
+        {t('ui.ChannelConfigForm.howToCreate')}
       </a>
 
       {error && (
@@ -111,13 +113,13 @@ export default function ChannelConfigForm({
           disabled={!isValid || saving}
           className="btn-lg btn-primary disabled:opacity-50"
         >
-          {saving ? 'Verifying...' : 'Verify & Connect'}
+          {saving ? t('ui.ChannelConfigForm.verifying') : t('ui.ChannelConfigForm.verifyConnect')}
         </button>
         <button
           onClick={onCancel}
           className="px-4 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
-          Cancel
+          {t('common.button.cancel')}
         </button>
       </div>
     </div>

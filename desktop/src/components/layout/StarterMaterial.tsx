@@ -11,11 +11,15 @@
  * Exports: MaterialPicker, MaterialRow, ROLES
  */
 import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   classifyStarterItem, detectKind, isLocalPath,
   type StarterItem, type StarterKind, type StarterRole,
 } from '../../utils/newBrainDispatch';
 import { getStarterKind } from '../../services/ddd';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
+import { fileManagerName } from '../../utils/platform';
 
 export interface MaterialRow extends StarterItem {
   id: number;
@@ -26,7 +30,8 @@ export interface MaterialRow extends StarterItem {
   touched?: boolean;
 }
 
-/** The three roles, as a segmented choice on each material row. */
+/** The three roles, as a segmented choice on each material row. label and hint are the
+ *  English text; the row shows ui.StarterMaterial.role<ROLE> / roleHint<ROLE>. */
 export const ROLES: { role: StarterRole; label: string; hint: string; tone: string }[] = [
   { role: 'GOVERN', label: 'Govern', hint: 'An asset it manages: bound, and a repo gets code-intel', tone: 'var(--color-primary)' },
   { role: 'DISTILL', label: 'Distill', hint: 'Read once and distilled into its knowledge', tone: 'var(--color-status-warning)' },
@@ -50,6 +55,7 @@ export function MaterialPicker({
   /** The second line of the empty drop target. */
   emptyText: string;
 }) {
+  const { t } = useTranslation();
   // Guards against a second native dialog while one is pending (rapid double-click).
   const [picking, setPicking] = useState(false);
 
@@ -141,7 +147,7 @@ export function MaterialPicker({
       } catch { /* malformed payload — nothing to add */ }
       return;
     }
-    // 2. A Finder drop: the webview gives only a basename, a path the agent cannot
+    // 2. A file-manager drop: the webview gives only a basename, a path the agent cannot
     //    open. Never add it as if it were a path; say so and point at the picker.
     let added = false;
     let lostPath = false;
@@ -151,7 +157,7 @@ export function MaterialPicker({
     }
     if (lostPath) {
       document.dispatchEvent(new CustomEvent('swarm:toast', {
-        detail: { message: 'Files dropped from Finder arrive without their full path here. Use Choose files or Choose folder instead.' },
+        detail: { message: i18n.t('starter.dropNoPath', { fileManager: fileManagerName() }) },
       }));
       return;
     }
@@ -173,22 +179,22 @@ export function MaterialPicker({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
           onBlur={commitDraft}
-          placeholder="Paste a repo URL, a link or a local path"
+          placeholder={t('ui.StarterMaterial.inputPlaceholder')}
           className="flex-1 min-w-0 h-10 bg-[var(--color-input-bg)] border border-[var(--color-border)] rounded-lg px-3 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
         />
         <button type="button" data-testid={`${p}-material-add`} onClick={commitDraft}
           disabled={!draft.trim()} className="btn-md btn-secondary shrink-0 disabled:opacity-40">
-          Add
+          {t('common.button.add')}
         </button>
       </div>
       <div className="mt-2 flex items-center gap-2">
         <button type="button" data-testid={`${p}-add-files`} onClick={() => pickAndAdd('file')}
           disabled={picking} className="btn-md btn-ghost disabled:opacity-50">
-          <span className="material-symbols-outlined icon-sm">upload_file</span> Choose files
+          <span className="material-symbols-outlined icon-sm">upload_file</span> {t('ui.StarterMaterial.chooseFiles')}
         </button>
         <button type="button" data-testid={`${p}-add-folder`} onClick={() => pickAndAdd('folder')}
           disabled={picking} className="btn-md btn-ghost disabled:opacity-50">
-          <span className="material-symbols-outlined icon-sm">folder_open</span> Choose folder
+          <span className="material-symbols-outlined icon-sm">folder_open</span> {t('ui.StarterMaterial.chooseFolder')}
         </button>
       </div>
 
@@ -198,7 +204,7 @@ export function MaterialPicker({
             data-testid={`${p}-empty`}>
             <div>
               <span className="material-symbols-outlined icon-xl text-[var(--color-text-muted)]" aria-hidden>move_to_inbox</span>
-              <div className="text-body text-[var(--color-text)] mt-1">Drop files or folders here</div>
+              <div className="text-body text-[var(--color-text)] mt-1">{t('ui.StarterMaterial.dropHere')}</div>
               <div className="text-small text-[var(--color-text-muted)] mt-1 max-w-[420px]">{emptyText}</div>
             </div>
           </div>
@@ -210,30 +216,30 @@ export function MaterialPicker({
                 <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{KIND_ICON[it.displayKind] ?? 'description'}</span>
                 <span className="flex-1 min-w-0 text-small break-all" title={it.value}>{it.value}</span>
                 {it.checking && (
-                  <span className="text-meta text-[var(--color-text-muted)] shrink-0" data-testid={`${p}-checking-${it.id}`}>checking…</span>
+                  <span className="text-meta text-[var(--color-text-muted)] shrink-0" data-testid={`${p}-checking-${it.id}`}>{t('ui.StarterMaterial.checking')}</span>
                 )}
-                <div role="radiogroup" aria-label="Role" className="flex shrink-0 rounded-md border border-[var(--color-border)] overflow-hidden">
+                <div role="radiogroup" aria-label={t('ui.StarterMaterial.role')} className="flex shrink-0 rounded-md border border-[var(--color-border)] overflow-hidden">
                   {ROLES.map((r) => {
                     const on = it.role === r.role;
                     return (
-                      <button key={r.role} type="button" role="radio" aria-checked={on} title={r.hint}
+                      <button key={r.role} type="button" role="radio" aria-checked={on} title={t(`ui.StarterMaterial.roleHint${r.role}`)}
                         data-testid={`${p}-role-${it.id}-${r.role}`}
                         onClick={() => setRole(it.id, r.role)}
                         className={`h-7 px-2.5 text-meta ${on ? 'font-semibold' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
                         style={on ? { color: r.tone, background: `color-mix(in srgb, ${r.tone} 14%, transparent)` } : undefined}>
-                        {r.label}
+                        {t(`ui.StarterMaterial.role${r.role}`)}
                       </button>
                     );
                   })}
                 </div>
-                <button aria-label={`Remove ${it.value}`} data-testid={`${p}-remove-${it.id}`}
+                <button aria-label={t('ui.StarterMaterial.remove', { item: it.value })} data-testid={`${p}-remove-${it.id}`}
                   onClick={() => removeItem(it.id)} className="icon-btn shrink-0">
                   <span className="material-symbols-outlined icon-sm">close</span>
                 </button>
               </div>
             ))}
             <div className="text-meta text-[var(--color-text-muted)] mt-1">
-              Each item was sorted by type. Hover a role to see what it means; drop more files here any time.
+              {t('ui.StarterMaterial.sortedHint')}
             </div>
           </div>
         )}

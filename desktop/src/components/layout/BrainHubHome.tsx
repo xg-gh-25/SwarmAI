@@ -20,6 +20,9 @@
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import type { BrainSummary, GeneralBrain, SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import {
@@ -88,10 +91,10 @@ function Dot({ tone }: { tone: BrainSignalTone }) {
 
 /** The attention band's breakdown: one chip per kind of open item. */
 const CHIP: Record<string, { label: (n: number) => string }> = {
-  runs: { label: (n) => `${n} Run${n === 1 ? '' : 's'} waiting` },
-  escalations: { label: (n) => `${n} escalation${n === 1 ? '' : 's'} to decide` },
-  jobs: { label: (n) => `${n} other item${n === 1 ? '' : 's'}` },
-  repos: { label: (n) => `${n} repositor${n === 1 ? 'y' : 'ies'} newly read` },
+  runs: { label: (n) => i18n.t('ui.BrainHubHome.chipRuns', { count: n }) },
+  escalations: { label: (n) => i18n.t('ui.BrainHubHome.chipEscalations', { count: n }) },
+  jobs: { label: (n) => i18n.t('ui.BrainHubHome.chipJobs', { count: n }) },
+  repos: { label: (n) => i18n.t('ui.BrainHubHome.chipRepos', { count: n }) },
 };
 
 function chipsOf(needs: HubNeed[]) {
@@ -109,10 +112,10 @@ function chipsOf(needs: HubNeed[]) {
 
 /** The General Brain card's one status: can a task that belongs to no Brain go out? */
 function generalSignal(g: GeneralBrain): { tone: BrainSignalTone; text: string } {
-  if (g.projectAgentStatus === 'invalid') return { tone: 'review', text: 'Runner Agent has problems' };
+  if (g.projectAgentStatus === 'invalid') return { tone: 'review', text: i18n.t('ui.BrainHubHome.runnerAgentProblems') };
   if (g.projectAgentStatus) return { tone: 'calm', text: '' };
   // no definition: a task that belongs to no Brain cannot go out
-  return { tone: 'review', text: 'No Runner Agent yet' };
+  return { tone: 'review', text: i18n.t('ui.BrainHubHome.noRunnerAgent') };
 }
 
 const entriesOf = (b: BrainSummary) => Object.values(b.typeCounts ?? {}).reduce((s, n) => s + n, 0);
@@ -121,10 +124,10 @@ const entriesOf = (b: BrainSummary) => Object.values(b.typeCounts ?? {}).reduce(
  *  a Run of it last landed. */
 function brainFacts(b: BrainSummary): string {
   const parts: string[] = [];
-  if (b.typeCounts) parts.push(`${entriesOf(b).toLocaleString()} entries`);
-  if (b.learnedWeek) parts.push(`+${b.learnedWeek} this week`);
+  if (b.typeCounts) parts.push(i18n.t('ui.BrainHubHome.factEntries', { count: entriesOf(b), n: entriesOf(b).toLocaleString() }));
+  if (b.learnedWeek) parts.push(i18n.t('ui.BrainHubHome.factThisWeek', { n: b.learnedWeek }));
   const last = b.health.lastChangeRelative;
-  if (last && last !== '--') parts.push(`landed ${last}`);
+  if (last && last !== '--') parts.push(i18n.t('ui.BrainHubHome.factLanded', { when: last }));
   return parts.join(' · ');
 }
 
@@ -133,6 +136,7 @@ function BrainCard({ id, onClick, label, icon, name, tag, tagId, description, fa
   tag?: string; tagId?: string; description?: string | null; facts: string;
   signal: { tone: BrainSignalTone; text: string };
 }) {
+  const { t } = useTranslation();
   return (
     <div className="min-w-0" data-testid={`hub-card-${id}`}>
       <button onClick={onClick} aria-label={label} data-testid={`dddcard-${id}`}
@@ -150,7 +154,7 @@ function BrainCard({ id, onClick, label, icon, name, tag, tagId, description, fa
         </div>
         <p className={`m-0 text-small line-clamp-2 ${description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-faint)]'}`}
           data-testid={`hub-desc-${id}`}>
-          {description || 'No description yet'}
+          {description || t('ui.BrainHubHome.noDescription')}
         </p>
         <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 text-small text-[var(--color-text-muted)]">
           <span data-testid={`hub-facts-${id}`}>{facts}</span>
@@ -188,6 +192,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
   /** kept for the callers; the Runner Agent's card now lives on the General page */
   onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
 }) {
+  const { t } = useTranslation();
   const [queueOpen, setQueueOpen] = useState(false);
   const { data: analytics = null } = useQuery<PipelineAnalytics>({
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
@@ -224,19 +229,20 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
   const shadowed = (b: BrainSummary) => !!general?.shadowed && b.name.toLowerCase() === 'general';
 
   const card = (b: BrainSummary) => (
-    <BrainCard key={b.name} id={b.name} onClick={() => onOpen(b.name)} label={`Open ${b.name}`}
+    <BrainCard key={b.name} id={b.name} onClick={() => onOpen(b.name)} label={t('ui.BrainHubHome.openBrain', { name: b.name })}
       icon={<Flower b={b} size={36} />} name={b.name}
-      tag={b.name === selfName ? 'Self' : undefined} tagId="dddcard-self-tag"
+      tag={b.name === selfName ? t('ui.BrainHubHome.selfTag') : undefined} tagId="dddcard-self-tag"
       description={b.description} facts={brainFacts(b)}
-      signal={shadowed(b) ? { tone: 'review', text: 'Uses the built-in name General: rename it' } : brainSignal(b, analytics)} />
+      signal={shadowed(b) ? { tone: 'review', text: t('ui.BrainHubHome.shadowedName') } : brainSignal(b, analytics)} />
   );
   const generalCard = general && (
-    <BrainCard key="builtin-general" id="builtin-general" onClick={() => onOpenGeneral?.()} label="Open General"
+    <BrainCard key="builtin-general" id="builtin-general" onClick={() => onOpenGeneral?.()} label={t('ui.BrainHubHome.openBrain', { name: 'General' })}
       icon={<span className="material-symbols-outlined icon-lg shrink-0 w-9 h-9 flex items-center justify-center text-[var(--color-primary)]"
         aria-hidden="true">local_library</span>}
-      name="General" tag="Built-in" tagId="dddcard-builtin-tag"
-      description={general.description || 'For tasks that belong to no Brain, with the Markdown in Knowledge/Library.'}
-      facts={`${general.library.files.toLocaleString()} Library file${general.library.files === 1 ? '' : 's'}${general.learnedWeek ? ` · +${general.learnedWeek} this week` : ''}`}
+      name="General" tag={t('skills.source.builtIn')} tagId="dddcard-builtin-tag"
+      description={general.description || t('ui.BrainHubHome.generalDescription')}
+      facts={t('ui.BrainHubHome.libraryFiles', { count: general.library.files, n: general.library.files.toLocaleString() })
+        + (general.learnedWeek ? ` · ${t('ui.BrainHubHome.factThisWeek', { n: general.learnedWeek })}` : '')}
       signal={generalSignal(general)} />
   );
   const builtIn = [self && card(self), generalCard].filter(Boolean);
@@ -246,14 +252,14 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
     <div className="max-w-[1240px] mx-auto px-7 pt-6 pb-5" data-testid="brainhub-gallery">
       <div className="flex items-end gap-4">
         <h2 className="m-0 text-display font-semibold tracking-[-0.01em]" data-testid="hub-count">
-          {total} Brain{total === 1 ? '' : 's'}
+          {t('ui.BrainHubHome.brainCount', { count: total })}
         </h2>
         <span className="pb-0.5 text-body text-[var(--color-text-muted)]" data-testid="hub-ambient">
-          {hasCounts && <><b className="font-semibold text-[var(--color-text-secondary)]">{entries.toLocaleString()}</b> knowledge entries</>}
+          {hasCounts && <><b className="font-semibold text-[var(--color-text-secondary)]">{entries.toLocaleString()}</b>{' '}{t('ui.BrainHubHome.knowledgeEntries', { count: entries })}</>}
           {hasCounts && sum.learned !== null && ' · '}
-          {sum.learned !== null && <><b className="font-semibold text-[var(--color-text-secondary)]">+{sum.learned}</b> learned this week</>}
+          {sum.learned !== null && <><b className="font-semibold text-[var(--color-text-secondary)]">+{sum.learned}</b>{' '}{t('ui.BrainHubHome.learnedThisWeek')}</>}
         </span>
-        <button className="ml-auto btn-sm btn-primary" onClick={openNewBrain} data-testid="hub-new-brain">New Brain</button>
+        <button className="ml-auto btn-sm btn-primary" onClick={openNewBrain} data-testid="hub-new-brain">{t('ui.BrainHubHome.newBrain')}</button>
       </div>
 
       {open > 0 && (
@@ -262,7 +268,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
           data-testid="hub-attention" data-tone={worst}>
           <div className="flex items-center gap-4 px-4 py-3">
             <span className="shrink-0 text-heading font-semibold" data-testid="hub-open-count">
-              {open} open item{open === 1 ? '' : 's'}
+              {t('ui.BrainHubHome.openItems', { count: open })}
             </span>
             <span className="flex flex-wrap gap-x-4 gap-y-1 text-small text-[var(--color-text-secondary)]">
               {chips.map((c) => (
@@ -273,7 +279,7 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
             </span>
             <button className="ml-auto shrink-0 btn-sm btn-secondary" aria-expanded={queueOpen}
               onClick={() => setQueueOpen((v) => !v)} data-testid="hub-needs-toggle">
-              {queueOpen ? 'Hide' : 'Review'}
+              {queueOpen ? t('ui.BrainHubHome.hide') : t('ui.BrainHubHome.review')}
             </button>
           </div>
           {queueOpen && (
@@ -281,11 +287,11 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
               {needs.map((n) => (
                 <div key={n.id} className="flex items-center gap-3 px-4 py-2 border-t border-[var(--color-border)] text-small" data-testid={`hub-need-${n.id}`}>
                   <Dot tone={n.severity} />
-                  <span className="font-semibold shrink-0">{n.builtin ? `${n.brain} (built-in)` : n.brain}</span>
+                  <span className="font-semibold shrink-0">{n.builtin ? t('ui.BrainHubHome.builtInBrain', { name: n.brain }) : n.brain}</span>
                   <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]">{n.text}</span>
                   {n.since && <span className="text-meta text-[var(--color-text-muted)] shrink-0">{waited(n.since)}</span>}
                   <button className="btn-sm btn-secondary shrink-0" data-testid={`hub-need-go-${n.id}`} onClick={() => goNeed(n)}>
-                    {n.kind === 'run' ? 'Answer' : 'Open'}
+                    {n.kind === 'run' ? t('ui.BrainHubHome.answer') : t('ui.BrainHubHome.open')}
                   </button>
                 </div>
               ))}
@@ -296,9 +302,9 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
 
       {builtIn.length > 0 && (
         <>
-          <GroupLabel id="hub-group-builtin">Built-in</GroupLabel>
+          <GroupLabel id="hub-group-builtin">{t('skills.source.builtIn')}</GroupLabel>
           <div className="grid gap-3.5" style={GRID} data-testid="brainhub-builtin-wall">{builtIn}</div>
-          {own.length > 0 && <GroupLabel id="hub-group-own">Your Brains</GroupLabel>}
+          {own.length > 0 && <GroupLabel id="hub-group-own">{t('ui.BrainHubHome.yourBrains')}</GroupLabel>}
         </>
       )}
       <div className={`grid gap-3.5 content-start ${builtIn.length ? '' : 'mt-6'}`} style={GRID} data-testid="brainhub-card-wall">
@@ -306,16 +312,16 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
       </div>
       {total === 0 && (
         <div className="py-10 text-center text-small text-[var(--color-text-muted)]">
-          No Brain yet.
+          {t('ui.BrainHubHome.noBrainYet')}
         </div>
       )}
 
       <div className="mt-9 pt-3 flex items-center justify-between border-t border-[var(--color-border)] text-small text-[var(--color-text-muted)]">
         <button className="hover:text-[var(--color-text)]" onClick={openPipelines} data-testid="hub-conductor">
-          Run Conductor · {sum.liveRuns} running ›
+          {t('ui.BrainHubHome.conductor', { n: sum.liveRuns })}
         </button>
         <span data-testid="hub-eval">
-          Eval · last 30 days: {sum.finished ? `${sum.landed} of ${sum.finished} finished Runs landed` : 'no finished Runs'}
+          {t('ui.BrainHubHome.evalLabel')} {sum.finished ? t('ui.BrainHubHome.evalLanded', { landed: sum.landed, finished: sum.finished }) : t('ui.BrainHubHome.evalNone')}
         </span>
       </div>
     </div>

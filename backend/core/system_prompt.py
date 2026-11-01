@@ -167,7 +167,7 @@ class SystemPromptBuilder:
                 "",
                 "**FULL CAPABILITIES:**",
                 "- All skills (summarize, research, translate, code review, etc.)",
-                "- All enabled MCP tools (Slack, Outlook, GitHub, Sentral, etc.)",
+                "- All enabled MCP tools (for example Slack, email, GitHub)",
                 "- Answer questions using your knowledge (architecture, tech, general topics)",
                 "- Explain concepts, provide analysis, help with research",
                 "- Read/write files within the sender's session directory",

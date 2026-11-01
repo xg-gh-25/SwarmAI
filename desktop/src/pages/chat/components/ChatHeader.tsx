@@ -120,7 +120,7 @@ export function ChatHeader({
             className="self-center w-px h-5 bg-[var(--color-text-muted)] opacity-40"
             data-testid="swarm-out-divider"
           />
-          <div role="tablist" aria-label="Swarm Out" className="flex items-center self-stretch">
+          <div role="tablist" aria-label={t('ui.ChatHeader.swarmOut')} className="flex items-center self-stretch">
             <SwarmOutPinnedTab
               tab={swarmOutTab}
               isActive={swarmOutTab.id === activeTabId}
@@ -159,11 +159,11 @@ export function ChatHeader({
             onClick={onOpenCanvas}
             className="btn-sm btn-soft mr-2 transition-colors"
             title={t('canvas.openOutputs', 'Open Canvas to review outputs')}
-            aria-label={`${outputCount} output${outputCount !== 1 ? 's' : ''} — open Canvas`}
+            aria-label={t('ui.ChatHeader.outputsOpenCanvas', { count: outputCount })}
             data-testid="chat-header-outputs-pill"
           >
             <span className="material-symbols-outlined icon-xs">draft</span>
-            {outputCount} output{outputCount !== 1 ? 's' : ''}
+            {t('ui.ChatHeader.outputs', { count: outputCount })}
           </button>
         )}
         {/* Health warning — only shown for non-connected states (BottomBar handles normal status) */}

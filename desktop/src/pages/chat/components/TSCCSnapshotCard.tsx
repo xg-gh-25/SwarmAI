@@ -11,6 +11,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { TSCCSnapshot } from '../../../types';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,7 @@ function formatTimestamp(iso: string): string {
 // Main export
 // ---------------------------------------------------------------------------
 export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
+  const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
 
   const caps = snapshot.activeCapabilities;
@@ -48,7 +50,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
       className="mx-4 my-2 rounded-lg border border-[var(--color-border)]
         bg-[var(--color-card)] text-sm"
       role="article"
-      aria-label={`Snapshot: ${snapshot.reason}`}
+      aria-label={t('ui.TSCCSnapshotCard.ariaLabel', { reason: snapshot.reason })}
     >
       {/* Collapsed header — always visible */}
       <button
@@ -78,7 +80,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
           {snapshot.activeAgents.length > 0 && (
             <div className="pt-2">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-                Agents
+                {t('ui.TSCCSnapshotCard.agents')}
               </h4>
               <div className="flex flex-wrap gap-1">
                 {snapshot.activeAgents.map((a) => (
@@ -100,21 +102,21 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
             caps.tools.length > 0) && (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-                Capabilities
+                {t('ui.TSCCSnapshotCard.capabilities')}
               </h4>
               {caps.skills.length > 0 && (
                 <div className="text-xs text-[var(--color-text-muted)]">
-                  Skills: {caps.skills.join(', ')}
+                  {t('ui.TSCCSnapshotCard.skills', { list: caps.skills.join(', ') })}
                 </div>
               )}
               {caps.mcps.length > 0 && (
                 <div className="text-xs text-[var(--color-text-muted)]">
-                  MCPs: {caps.mcps.join(', ')}
+                  {t('ui.TSCCSnapshotCard.mcps', { list: caps.mcps.join(', ') })}
                 </div>
               )}
               {caps.tools.length > 0 && (
                 <div className="text-xs text-[var(--color-text-muted)]">
-                  Tools: {caps.tools.join(', ')}
+                  {t('ui.TSCCSnapshotCard.tools', { list: caps.tools.join(', ') })}
                 </div>
               )}
             </div>
@@ -124,7 +126,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
           {snapshot.activeSources.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-                Sources
+                {t('ui.TSCCSnapshotCard.sources')}
               </h4>
               <ul className="text-xs space-y-0.5">
                 {snapshot.activeSources.map((s, i) => (
@@ -143,7 +145,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
           {snapshot.whatAiDoing.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-                Activity
+                {t('ui.TSCCSnapshotCard.activity')}
               </h4>
               <ul className="list-disc list-inside text-xs text-[var(--color-text)] space-y-0.5">
                 {snapshot.whatAiDoing.map((item, i) => (
@@ -157,7 +159,7 @@ export function TSCCSnapshotCard({ snapshot }: TSCCSnapshotCardProps) {
           {snapshot.keySummary.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-                Summary
+                {t('ui.TSCCSnapshotCard.summary')}
               </h4>
               <ul className="list-disc list-inside text-xs text-[var(--color-text)] space-y-0.5">
                 {snapshot.keySummary.map((item, i) => (

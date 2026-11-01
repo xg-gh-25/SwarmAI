@@ -1,8 +1,8 @@
 """The installer carries the backend (design 2026-10-24-swarmai-usable-by-anyone §3.1, G2).
 
 What is tested:
-- write_install_manifest.py lists every staged backend file plus desktop/resources and
-  daemon/ files with sha256, paths relative to Tauri's resource dir, in exactly the
+- write_install_manifest.py lists every staged backend file plus the desktop/resources
+  files the bundle config maps, with sha256, paths relative to Tauri's resource dir, in exactly the
   format scripts/verify_installer.sh C3 checks (``shasum -a 256 -c`` from Resources);
   it refuses a stage without the backend executable;
 - every build path bundles the staged backend: tauri.bundle.conf.json maps it to
@@ -38,6 +38,13 @@ def test_manifest_matches_what_verify_installer_checks(tmp_path):
     (res / "seed.db").write_bytes(b"seed")
     (res / "daemon" / "swarmai_backend.sh").write_text("#!/bin/sh\n")
     (res / ".DS_Store").write_bytes(b"x")
+    (res / "user-mcp-servers.json").write_text("{}")  # gitignored local file: not bundled
+    tauri = tmp_path / "src-tauri"
+    tauri.mkdir()
+    (tauri / "tauri.conf.json").write_text(json.dumps({"bundle": {"resources": {
+        "../resources/daemon/swarmai_backend.sh": "daemon/swarmai_backend.sh"}}}))
+    (tauri / "tauri.bundle.conf.json").write_text(json.dumps({"bundle": {"resources": {
+        "../resources/seed.db": "seed.db", "bundle-backend/python-backend": "python-backend/"}}}))
     assert _run_manifest(stage, res).returncode == 0
     m = json.loads((stage / "install-manifest.json").read_text())
     paths = {f["path"] for f in m["files"]}

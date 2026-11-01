@@ -121,8 +121,8 @@ def test_the_report_compares_with_the_baseline_and_counts_the_month(cdf_env):
         {"baseline": "2026-10-30 基线", "table": base}, ensure_ascii=False), encoding="utf-8")
     res = run_brain_mistake_audit({"workspace": str(ws)}, ask=_ask, now=NOW)
     md = Path(res["output_path"]).read_text(encoding="utf-8")
-    assert "（上月 10）" in md and "对比：2026-10-30 基线" in md
-    assert "## 2. 本月 Brain 的变化" in md and "## 3. 未决冲突" in md
+    assert " (last month 10)" in md and "Compared with: 2026-10-30 基线" in md
+    assert "## 2. Changes to the brain this month" in md and "## 3. Open conflicts" in md
 
 
 def test_a_failed_model_call_is_unjudged_not_a_guess(cdf_env):

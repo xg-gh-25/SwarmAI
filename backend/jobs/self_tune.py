@@ -2,7 +2,7 @@
 """
 Self-Tune Engine — Auto-evolve signal feeds from Swarm's own context.
 
-Reads MEMORY.md, the Projects/ directory, and recent DailyActivity to understand
+Reads USER.md, MEMORY.md, the Projects/ directory, and recent DailyActivity to understand
 what the user cares about NOW, then adjusts config.yaml feeds accordingly.
 (PROJECTS.md in-prompt index was removed 2026-08-14 — projects come from the
 Projects/ directory scan in extract_projects().)
@@ -118,7 +118,7 @@ def extract_recent_topics(days: int = 7) -> Counter:
             r'\b(react|fastapi|tauri|pydantic|typescript|python|rust)\b',
             r'\b(playwright|sqlite|redis|docker|kubernetes)\b',
             # Concepts
-            r'\b(ddd|tdd|aidlc|ci.?cd|deployment|refactor)\b',
+            r'\b(ddd|tdd|ci.?cd|deployment|refactor)\b',
             r'\b(security|performance|optimization|caching)\b',
         ]
 
@@ -132,42 +132,69 @@ def extract_recent_topics(days: int = 7) -> Counter:
     return topics
 
 
+# Generic tech vocabulary (no one person's stack), matched as whole words in project
+# TECH.md files, the person's USER.md and MEMORY.md alike.
+TECH_KEYWORDS: tuple[str, ...] = (
+    # languages
+    "python", "typescript", "javascript", "java", "kotlin", "swift", "rust", "golang",
+    "csharp", "ruby", "php", "scala",
+    # frameworks / runtimes
+    "react", "vue", "angular", "svelte", "nextjs", "node", "django", "flask", "fastapi",
+    "spring", "rails", "tauri", "electron", "flutter", "unity", "pydantic",
+    # data
+    "sqlite", "postgres", "mysql", "mongodb", "redis", "kafka", "spark", "snowflake",
+    # infra / cloud
+    "docker", "kubernetes", "terraform", "aws", "azure", "gcp", "linux",
+    # AI
+    "llm", "rag", "mcp", "bedrock", "claude", "openai", "pytorch", "tensorflow",
+    # tools / testing
+    "playwright", "tailwind", "vite", "pytest", "vitest", "jest", "graphql",
+)
+_TECH_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in TECH_KEYWORDS) + r")\b",
+                      re.IGNORECASE)
+
+
+def _tech_terms(text: str) -> set[str]:
+    """The TECH_KEYWORDS that appear in *text* as whole words, lowercased."""
+    return {m.group(1).lower() for m in _TECH_RE.finditer(text or "")}
+
+
+def _user_focus_text(content: str) -> str:
+    """The parts of USER.md that say what the person works on: the Role / Focus lines
+    and the Work Context section. The file's own template placeholders (``_(...)_``)
+    are not the person's words and are left out."""
+    lines: list[str] = []
+    in_work = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            in_work = stripped.lstrip("#").strip().lower() == "work context"
+            continue
+        if stripped.startswith("_("):
+            continue
+        if in_work or re.match(r"^[-*]\s*\*\*(role|focus)\b", stripped, re.IGNORECASE):
+            lines.append(stripped)
+    return "\n".join(lines)
+
+
 def extract_interests_from_memory() -> list[str]:
-    """Extract user interests from MEMORY.md key decisions and lessons."""
+    """The person's interests: the TECH_KEYWORDS named in their USER.md (Role / Focus
+    lines, Work Context) and in MEMORY.md. Nothing is assumed when neither says."""
+    interests: set[str] = set()
+    user_path = CONTEXT_DIR / "USER.md"
+    if user_path.exists():
+        interests |= _tech_terms(_user_focus_text(user_path.read_text(encoding="utf-8")))
     memory_path = CONTEXT_DIR / "MEMORY.md"
-    if not memory_path.exists():
-        return []
-
-    content = memory_path.read_text(encoding="utf-8")[:5000]
-    interests = set()
-
-    # Look for technology/tool mentions in Key Decisions and Lessons
-    tech_mentions = re.findall(
-        r'\b(Claude|Bedrock|MCP|DDD|AIDLC|Tauri|FastAPI|React|Pydantic|'
-        r'Claude Code|Agent SDK|SSE|SQLite|launchd|psutil|Playwright)\b',
-        content, re.IGNORECASE
-    )
-    for t in tech_mentions:
-        interests.add(t.lower())
-
+    if memory_path.exists():
+        interests |= _tech_terms(memory_path.read_text(encoding="utf-8")[:5000])
     return sorted(interests)
 
 
 def extract_tech_stack_from_projects(projects: list[dict]) -> list[str]:
-    """Extract tech stack keywords from project TECH.md files."""
-    stack = set()
-    tech_keywords = [
-        'python', 'typescript', 'react', 'fastapi', 'tauri', 'rust',
-        'pydantic', 'sqlite', 'bedrock', 'claude', 'playwright',
-        'tailwind', 'vite', 'pytest', 'vitest',
-    ]
-
+    """Extract tech stack keywords (TECH_KEYWORDS) from project TECH.md files."""
+    stack: set[str] = set()
     for proj in projects:
-        content = proj.get("tech_content", "").lower()
-        for kw in tech_keywords:
-            if kw in content:
-                stack.add(kw)
-
+        stack |= _tech_terms(proj.get("tech_content", ""))
     return sorted(stack)
 
 

@@ -205,13 +205,14 @@ export interface SparkSeries {
 export function Spark({ weeks, series, width = 220, height = 34, big = false, empty }: {
   weeks: string[]; series: SparkSeries[]; width?: number; height?: number; big?: boolean; empty?: string;
 }) {
+  const { t } = useLang();
   const pad = 4;
   const n = Math.max(weeks.length, 2);
   const x = (i: number) => pad + (i * (width - 2 * pad)) / (n - 1);
   const H = height + (big ? 16 : 0);
   const sparse = series.every((s) => weeks.filter((w) => s.points[w] != null).length < 2);
   return (
-    <svg width={width} height={H} viewBox={`0 0 ${width} ${H}`} role="img" aria-label="trend">
+    <svg width={width} height={H} viewBox={`0 0 ${width} ${H}`} role="img" aria-label={t('trend', '趋势')}>
       <line x1={pad} x2={width - pad} y1={height - pad} y2={height - pad} stroke="var(--color-border)" />
       {series.map((s, si) => {
         const vals = weeks.map((w) => s.points[w]).filter((v): v is number => v != null);

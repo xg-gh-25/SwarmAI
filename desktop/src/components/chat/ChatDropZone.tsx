@@ -1,5 +1,6 @@
 import { useState, useCallback, ReactNode } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 
 interface ChatDropZoneProps {
@@ -27,6 +28,7 @@ interface ChatDropZoneProps {
  * Requirements: 3.1, 4.1, 4.2, 4.3
  */
 export function ChatDropZone({ children, addFiles, addWorkspaceFiles }: ChatDropZoneProps) {
+  const { t } = useTranslation();
   const [isDragOver, setIsDragOver] = useState(false);
 
   // Handle drag enter - show visual feedback for workspace JSON or native files
@@ -132,10 +134,10 @@ export function ChatDropZone({ children, addFiles, addWorkspaceFiles }: ChatDrop
             </div>
             <div className="text-center">
               <p className="text-lg font-medium text-[var(--color-text)]">
-                Drop to attach
+                {t('ui.ChatDropZone.dropTitle')}
               </p>
               <p className="text-sm text-[var(--color-text-muted)]">
-                File will be added to chat context
+                {t('ui.ChatDropZone.dropHint')}
               </p>
             </div>
           </div>

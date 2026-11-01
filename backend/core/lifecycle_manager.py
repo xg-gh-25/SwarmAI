@@ -1991,13 +1991,10 @@ class LifecycleManager:
     def _get_mcp_server_patterns(self) -> list[str]:
         """Get MCP server process name patterns for orphan reaping.
 
-        Reads mcp-dev.json to extract command basenames dynamically.
-        Falls back to a static list if config read fails.
+        Reads mcp-dev.json to extract command basenames dynamically. When the config
+        cannot be read there is nothing to match: no process is reaped by a guessed name.
         """
-        _FALLBACK_PATTERNS = [
-            "builder-mcp", "aws-sentral-mcp", "aws-outlook-mcp",
-            "slack-mcp", "taskei-p-mcp",
-        ]
+        _FALLBACK_PATTERNS: list[str] = []
         try:
             from core.initialization_manager import initialization_manager
 

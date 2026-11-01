@@ -18,6 +18,8 @@ import { getFileTypeInfo, OFFICE_EXTENSIONS } from '../utils/fileViewTypes';
 import { openInSystemApp, revealInFolder } from '../../../utils/openExternal';
 import { CopyPathButton, copyPathNow } from '../../common/CopyPathButton';
 import { isDesktop } from '../../../services/tauri';
+import { useTranslation } from 'react-i18next';
+import { fileManagerName } from '../../../utils/platform';
 
 interface RendererProps {
   filePath: string;
@@ -54,7 +56,8 @@ function getExtension(fileName: string): string {
 }
 
 /**
- * Returns a per-category helpful hint for unsupported file types.
+ * Returns the i18n key of a per-category helpful hint for unsupported file types
+ * (render it with t(key, { fileManager })).
  */
 function getHelpfulText(ext: string): string {
   // Office set = the shared SSOT (run_a3292e2f) — no local copy to drift.
@@ -73,48 +76,48 @@ function getHelpfulText(ext: string): string {
   const sheetExts = new Set(['xlsx', 'xls', 'ods']);
   const slideExts = new Set(['pptx', 'ppt', 'odp']);
   if (slideExts.has(ext)) {
-    return 'Presentations open in Keynote or PowerPoint. Use “Open in Default App”, or “Reveal in Finder” to locate the file.';
+    return 'ui.UnsupportedRenderer.helpSlides';
   }
   if (sheetExts.has(ext)) {
-    return 'Spreadsheets open in Numbers or Excel. Use “Open in Default App”, or “Reveal in Finder” to locate the file.';
+    return 'ui.UnsupportedRenderer.helpSheets';
   }
   if (wordExts.has(ext)) {
-    return 'Documents open in Pages or Word. Use “Open in Default App”, or “Reveal in Finder” to locate the file.';
+    return 'ui.UnsupportedRenderer.helpDocs';
   }
   if (officeExts.has(ext)) {
-    return 'Office documents open in their native application. Use “Open in Default App”, or attach to a chat session for analysis.';
+    return 'ui.UnsupportedRenderer.helpOffice';
   }
   if (archiveExts.has(ext)) {
-    return 'Archives can be extracted via terminal commands (unzip, tar, etc.) or opened in your system file manager.';
+    return 'ui.UnsupportedRenderer.helpArchive';
   }
   if (diskImageExts.has(ext)) {
-    return 'Disk images can be mounted by double-clicking in your system file manager.';
+    return 'ui.UnsupportedRenderer.helpDiskImage';
   }
   if (fontExts.has(ext)) {
-    return 'Font files can be previewed in Font Book or your system font manager.';
+    return 'ui.UnsupportedRenderer.helpFont';
   }
   if (dbExts.has(ext)) {
-    return 'Database files can be opened with DB Browser, sqlite3 CLI, or attached to chat for query analysis.';
+    return 'ui.UnsupportedRenderer.helpDb';
   }
   if (imageExts.has(ext)) {
-    return 'This image format requires a native viewer. Open it in Preview or your preferred image editor.';
+    return 'ui.UnsupportedRenderer.helpImage';
   }
   if (execExts.has(ext)) {
-    return 'Compiled binaries cannot be previewed. Use a disassembler or hex editor for inspection.';
+    return 'ui.UnsupportedRenderer.helpExec';
   }
   if (compiledExts.has(ext)) {
-    return 'Compiled bytecode cannot be displayed as text. Decompile it or inspect the source file instead.';
+    return 'ui.UnsupportedRenderer.helpCompiled';
   }
   if (['mkv', 'avi', 'wmv', 'flv'].includes(ext)) {
-    return 'This video format cannot play here. Open it in QuickTime, VLC or your default player.';
+    return 'ui.UnsupportedRenderer.helpVideo';
   }
   if (['pages', 'numbers', 'key'].includes(ext)) {
-    return 'iWork documents open in Pages, Numbers or Keynote. Use “Open in Default App”.';
+    return 'ui.UnsupportedRenderer.helpIwork';
   }
   if (['parquet', 'feather', 'arrow', 'npy', 'npz', 'pkl', 'pickle', 'pt', 'pth', 'ckpt', 'safetensors', 'onnx', 'h5', 'hdf5'].includes(ext)) {
-    return 'Data and model files are binary. Load them with their library (pandas, numpy, torch …) or attach to a chat to inspect them.';
+    return 'ui.UnsupportedRenderer.helpData';
   }
-  return 'This file is not text and cannot be shown here. Open it in its default application.';
+  return 'ui.UnsupportedRenderer.helpDefault';
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,13 +131,13 @@ export default function UnsupportedRenderer({
   absolutePath,
   onAttachToChat,
 }: UnsupportedRendererProps) {
-
+  const { t } = useTranslation();
   const ext = getExtension(fileName);
   // A file routed as text that the server found binary (415) has a "text" type
   // info; on this card it is a binary file (canvas-file-types.md P0 B3).
   const routed = getFileTypeInfo(fileName);
-  const typeInfo = routed.category === 'text' ? { label: 'Binary file', icon: 'draft', category: 'binary' as const } : routed;
-  const helpText = getHelpfulText(ext);
+  const typeInfo = routed.category === 'text' ? { label: t('ui.UnsupportedRenderer.binaryFile'), icon: 'draft', category: 'binary' as const } : routed;
+  const helpText = t(getHelpfulText(ext), { fileManager: fileManagerName() });
   // Canonical SSOT (services/tauri) — checks __TAURI_INTERNALS__ (Tauri 2.x) OR
   // __TAURI__ (1.x). A local `'__TAURI__' in window` check was always false in the
   // packaged 2.x app, hiding these OS actions (run_847ed9f9).
@@ -214,7 +217,7 @@ export default function UnsupportedRenderer({
             renders text/image/pdf/html/av/csv; Office/binary open in their native
             app by design). State it plainly + point to the local-app path. */}
         <p className="text-sm text-[var(--color-text-muted)]">
-          Swarm doesn't preview this file type — open it in your local app.
+          {t('ui.UnsupportedRenderer.noPreview')}
         </p>
         <p className="text-xs text-[var(--color-text-dim)] leading-relaxed">
           {helpText}
@@ -228,7 +231,7 @@ export default function UnsupportedRenderer({
               className="btn-md btn-primary transition-opacity"
             >
               <span className="material-symbols-outlined icon-sm">open_in_new</span>
-              Open in Default App
+              {t('ui.UnsupportedRenderer.openDefaultApp')}
             </button>
           )}
 
@@ -236,10 +239,10 @@ export default function UnsupportedRenderer({
             <button
               onClick={handleRevealInFolder}
               className="btn-md btn-secondary transition-colors"
-              title="Reveal this file in Finder"
+              title={t('ui.UnsupportedRenderer.revealTitle', { fileManager: fileManagerName() })}
             >
               <span className="material-symbols-outlined icon-sm">folder_open</span>
-              Reveal in Finder
+              {t('ui.UnsupportedRenderer.reveal', { fileManager: fileManagerName() })}
             </button>
           )}
 
@@ -249,13 +252,13 @@ export default function UnsupportedRenderer({
               className="btn-md btn-secondary transition-colors"
             >
               <span className="material-symbols-outlined icon-sm">attach_file</span>
-              Attach to Chat
+              {t('ui.UnsupportedRenderer.attachToChat')}
             </button>
           )}
 
           <CopyPathButton
             path={copyPath}
-            label="Copy Path"
+            label={t('common.copy.path')}
             className="btn-md btn-ghost"
           />
         </div>

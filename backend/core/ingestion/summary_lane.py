@@ -67,9 +67,9 @@ def enqueue_month_summary(conn: sqlite3.Connection, workspace: Path, month: str)
     evidence = [f"unit:{anchor}" for anchor in anchors]
     unit = EventUnit(
         when=f"{month}-01",
-        title=f"{month} 月度关键事件汇总",
-        what=f"汇总 {month} 的关键事件，覆盖 {len(anchors)} 个可追溯事件锚点。",
-        impact="为 Retro 提供按月的事件入口，并保留到原始事件的完整引用。",
+        title=f"{month} key events",
+        what=f"The key events of {month}: {len(anchors)} traceable event anchors.",
+        impact="A monthly way into the events for Retro, with full references to the original events.",
         event_kind=event_kind,
         evidence=evidence,
     )

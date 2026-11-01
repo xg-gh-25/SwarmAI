@@ -54,15 +54,19 @@ The desktop app isn't a frontend the agent talks *to* — it's a body it **sense
 
 ## Quick Start
 
+**Install the app:** download it from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) — macOS `.dmg` (Apple Silicon or Intel), Windows `-setup.exe`, Linux `.AppImage` (`chmod +x`, then run it).
+
+- You need an **AWS account** with access to Claude models on Amazon Bedrock: chat runs on Bedrock.
+- The installed app needs **git** (on Windows, Git for Windows with Git Bash). It brings its own Python backend and Claude CLI.
+- macOS: the app is not signed by Apple yet — the first time, open System Settings → Privacy & Security and click **Open Anyway**.
+
+**Build from source** (needs git, Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv); on Windows also Git Bash):
+
 ```bash
 git clone https://github.com/xg-gh-25/SwarmAI.git && cd SwarmAI
-cd backend && uv sync && cp .env.example .env   # edit with your API key
+cd backend && uv sync && cp .env.example .env
 cd ../desktop && npm install && npm run tauri:dev
 ```
-
-**macOS (Apple Silicon):** Or download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
-
-Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude Code CLI](https://github.com/anthropics/claude-code)
 
 > 📖 Full setup guide: [QUICK_START.md](./QUICK_START.md)
 
@@ -127,7 +131,7 @@ Coding in this repo? Start with **[`AGENTS.md`](./AGENTS.md)** — data flow, pr
 
 **Tauri 2.0** (Rust) · **React 19** · **FastAPI** · **Claude Agent SDK + Bedrock** · **SQLite** (WAL + FTS5)
 
-Four-platform backend (compile-time isolation): macOS daemon (prebuilt `.dmg`) · Hive (EC2) · Windows · Linux (source-build).
+Four-platform backend (compile-time isolation): macOS daemon (`.dmg`) · Hive (EC2) · Windows (`-setup.exe`) · Linux (`.AppImage`).
 
 ---
 

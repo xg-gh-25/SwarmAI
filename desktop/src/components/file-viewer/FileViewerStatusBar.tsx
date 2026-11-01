@@ -9,6 +9,7 @@
 import type { FileViewType } from './utils/fileViewTypes';
 import { getFileTypeInfo } from './utils/fileViewTypes';
 import { CopyPathButton } from '../common/CopyPathButton';
+import { useTranslation } from 'react-i18next';
 
 export interface FileViewerStatusBarProps {
   fileName: string;
@@ -49,6 +50,7 @@ export default function FileViewerStatusBar({
   onAttach,
   onRefresh,
 }: FileViewerStatusBarProps) {
+  const { t } = useTranslation();
   const info = getFileTypeInfo(fileName);
   const extraEntries = extraInfo ? Object.entries(extraInfo) : [];
 
@@ -101,8 +103,8 @@ export default function FileViewerStatusBar({
               <button
                 onClick={onRefresh}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-                title="Reload this file from disk"
-                aria-label="Refresh file"
+                title={t('ui.FileViewerStatusBar.reloadFromDisk')}
+                aria-label={t('ui.FileViewerStatusBar.refreshFile')}
                 data-testid="statusbar-refresh"
               >
                 <span className="material-symbols-outlined icon-sm leading-none">refresh</span>
@@ -112,8 +114,8 @@ export default function FileViewerStatusBar({
               <button
                 onClick={onAttach}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-                title="Attach to chat"
-                aria-label="Attach to chat"
+                title={t('ui.FileViewerStatusBar.attachToChat')}
+                aria-label={t('ui.FileViewerStatusBar.attachToChat')}
                 data-testid="statusbar-attach"
               >
                 <span className="material-symbols-outlined icon-sm leading-none">attach_file</span>

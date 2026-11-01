@@ -18,7 +18,9 @@
  * Exports: terminalStore, SWARMWS_KEY, keyOfCwd, baseName, sendTerminalTextToChat,
  * ATTACH_TERMINAL_EVENT, types TerminalTab / OpenTerminalOptions.
  */
-import { spawn, type IPty } from '../services/pty';
+import { invoke } from '@tauri-apps/api/core';
+import { spawn, type IPty, type IDisposable, type IPtyForkOptions } from '../services/pty';
+import { isWindows } from '../utils/platform';
 
 /** The grouping key of the SwarmWS location (a shell opened with no cwd). */
 export const SWARMWS_KEY = 'swarmws';
@@ -42,7 +44,7 @@ export interface TerminalTab {
   /** The location this shell was opened at (terminalLocation.keyOfCwd): shells are
    *  grouped by it in the tab strip. */
   locKey: string;
-  /** Number within its location: 1 → "zsh", N → "zsh N". */
+  /** Number within its location: 1 → "zsh", N → "zsh N" (named after the shell). */
   slot: number;
   pty: IPty;
   status: 'running' | 'exited';
@@ -75,40 +77,93 @@ export function sendTerminalTextToChat(text: string, cwd?: string): boolean {
 /** Options for opening a terminal. */
 export interface OpenTerminalOptions {
   cwd?: string;
-  /** Shell program. Defaults to the login shell so profile PATH loads. */
+  /** Shell program. Defaults to the user's shell (see defaultShell). */
   file?: string;
-  /** Shell args. Defaults to ['-l'] (login) for brazil/swarm PATH. */
+  /** Shell args. Defaults to ['-l'] (login, so the profile's PATH loads); none on Windows. */
   args?: string[];
   cols?: number;
   rows?: number;
-  /** Tab title; default "zsh" / "zsh N" by its number within the location. */
+  /** Tab title; default the shell's name ("zsh" / "zsh N") by its number within the location. */
   title?: string;
 }
 
-// Default shell — platform-aware so the terminal works on all desktop targets
-// (macOS/Linux subprocess/Windows subprocess), not just Unix:
-//   - Windows → powershell.exe (no args; there is no `-l` login concept)
-//   - macOS/Linux → the user's login shell (-l) so .zprofile/.zshrc PATH
-//     (brazil/swarm/toolbox) loads — the GUI-app-no-profile-env trap fix.
-// Detected via navigator (zero-dep, works in the Tauri webview) — avoids
-// hardcoding /bin/zsh on Windows (which has no such path → spawn failure).
-function isWindows(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  // userAgentData.platform is the modern signal ("Windows"); userAgent is the
-  // fallback ("... (Windows NT 10.0; ...)"). Match "windows" specifically —
-  // NOT a bare /win/ which also matches "dar​win" (macOS!) and would spawn
-  // powershell on every Mac. (Caught by Gate-2 re-test — the loose regex was a
-  // fix-induced bug.)
-  const uaData = (navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData;
-  const p = uaData?.platform ?? navigator.userAgent ?? '';
-  return /windows|win32|win64/i.test(p);
+// The default shell:
+//   - Windows → powershell.exe, no args (there is no `-l` login concept).
+//   - macOS/Linux → the user's shell as a login shell (-l), so the profile's PATH
+//     loads (a GUI app does not inherit it). Which shell is asked of the Rust side
+//     (`default_shell`: $SHELL, else /bin/bash), never assumed.
+// It is asked for once, when this store loads; a shell opened before the answer
+// arrives spawns as soon as it does (DeferredPty).
+const FALLBACK_SHELL = '/bin/bash'; // what `default_shell` itself falls back to
+let _shell: string | null = null;
+let _shellPromise: Promise<string> | null = null;
+
+function loadShell(): Promise<string> {
+  if (!_shellPromise) {
+    _shellPromise = (isWindows()
+      ? Promise.resolve('powershell.exe')
+      : invoke<string>('default_shell')
+          .then((file) => file || FALLBACK_SHELL)
+          .catch(() => FALLBACK_SHELL)
+    ).then((file) => { _shell = file; return file; });
+  }
+  return _shellPromise;
 }
 
-function defaultShell(): { file: string; args: string[] } {
-  return isWindows()
-    ? { file: 'powershell.exe', args: [] }
-    : { file: '/bin/zsh', args: ['-l'] };
+/** Default shell args: login (-l) on macOS/Linux, none on Windows. */
+function shellArgs(): string[] {
+  return isWindows() ? [] : ['-l'];
 }
+
+/**
+ * An IPty for a shell that is spawned once the default shell is known. Input,
+ * resizes and listeners given before then are passed on to the real pty; a kill
+ * before then means the shell is never spawned.
+ */
+class DeferredPty implements IPty {
+  private real: IPty | null = null;
+  private queued: Array<(p: IPty) => void> = [];
+  private killed = false;
+
+  constructor(ready: Promise<string>, args: string[], opts: IPtyForkOptions,
+    onSpawn: (file: string) => void) {
+    void ready.then((file) => {
+      if (this.killed) return;
+      onSpawn(file);
+      const p = spawn(file, args, opts);
+      this.real = p;
+      for (const f of this.queued) f(p);
+      this.queued = [];
+    });
+  }
+
+  get pid(): number {
+    return this.real?.pid ?? -1;
+  }
+
+  private use(f: (p: IPty) => void): void {
+    if (this.real) f(this.real);
+    else this.queued.push(f);
+  }
+
+  private listen(subscribe: (p: IPty) => IDisposable): IDisposable {
+    let sub: IDisposable | null = null;
+    let disposed = false;
+    this.use((p) => { if (!disposed) sub = subscribe(p); });
+    return { dispose: () => { disposed = true; sub?.dispose(); } };
+  }
+
+  readonly onData = (l: (data: string) => void) => this.listen((p) => p.onData(l));
+  readonly onExit = (l: (e: { exitCode: number }) => void) => this.listen((p) => p.onExit(l));
+  write(data: string): void { this.use((p) => p.write(data)); }
+  resize(cols: number, rows: number): void { this.use((p) => p.resize(cols, rows)); }
+  kill(): void {
+    if (this.real) this.real.kill();
+    else { this.killed = true; this.queued = []; }
+  }
+}
+
+void loadShell();
 
 let _seq = 0;
 function nextId(): string {
@@ -161,13 +216,19 @@ class TerminalStore {
   /** Open a new terminal: spawn a PTY and register the tab. */
   openTerminal(opts: OpenTerminalOptions): TerminalTab {
     const id = nextId();
-    const sh = defaultShell();
-    const file = opts.file ?? sh.file;
-    const pty = spawn(file, opts.args ?? sh.args, {
-      cols: opts.cols ?? 80,
-      rows: opts.rows ?? 24,
-      cwd: opts.cwd,
-    });
+    const forkOpts = { cols: opts.cols ?? 80, rows: opts.rows ?? 24, cwd: opts.cwd };
+    const args = opts.args ?? shellArgs();
+    // The shell, and so the title: known now, or once the default shell is.
+    const file = opts.file ?? _shell;
+    const pty: IPty = file
+      ? spawn(file, args, forkOpts)
+      : new DeferredPty(loadShell(), args, forkOpts, (known) => {
+          const t = this.tabs.get(id);
+          if (t && opts.title === undefined) {
+            t.title = titleOf(known, t.slot);
+            this.notify();
+          }
+        });
     const locKey = keyOfCwd(opts.cwd);
     const slot = Array.from(this.tabs.values()).reduce(
       (mx, t) => (t.locKey === locKey ? Math.max(mx, t.slot) : mx),
@@ -175,7 +236,7 @@ class TerminalStore {
     ) + 1;
     const tab: TerminalTab = {
       id,
-      title: opts.title ?? titleOf(file, slot),
+      title: opts.title ?? titleOf(file ?? '', slot),
       cwd: opts.cwd,
       locKey,
       slot,
@@ -284,6 +345,17 @@ class TerminalStore {
     this.listeners.clear();
     this.snapshot = [];
     _seq = 0;
+  }
+
+  /** Ask for the default shell now (once); resolves when it is known. */
+  loadDefaultShell(): Promise<void> {
+    return loadShell().then(() => undefined);
+  }
+
+  /** Test-only: forget the known default shell so the next open asks again. */
+  resetDefaultShell(): void {
+    _shell = null;
+    _shellPromise = null;
   }
 }
 

@@ -64,9 +64,9 @@ def _skill_info_to_response(
 ) -> SkillResponse:
     """Convert a ``SkillInfo`` to the API ``SkillResponse`` model.
 
-    Category + visibility are derived purely from the folder name (with an
-    optional frontmatter override carried on ``SkillInfo``) — no session
-    context needed (run_b5d98151).
+    Visibility comes only from the SKILL.md frontmatter carried on ``SkillInfo``
+    (default public); category from the frontmatter, else the folder name — no
+    session context needed (run_b5d98151).
     """
     return SkillResponse(
         folder_name=info.folder_name,
@@ -76,7 +76,7 @@ def _skill_info_to_response(
         source_tier=info.source_tier,
         read_only=info.source_tier != "user",
         content=info.content if include_content else None,
-        category=derive_category(info.folder_name, info.category),
+        category=derive_category(info.folder_name, info.category, info.visibility),
         visibility=derive_visibility(info.folder_name, info.visibility),
         tier=info.tier,
     )
@@ -98,25 +98,6 @@ def _is_owner_session() -> bool:
     Fail-closed: an unset/unknown SWARMAI_MODE is treated as NON-owner.
     """
     return os.environ.get("SWARMAI_MODE", "") in _OWNER_RUN_MODES
-
-
-def _reject_internal_folder_name(folder_name: str) -> None:
-    """Refuse to CREATE a skill whose name derives internal visibility.
-
-    Two things at once (Gate-2 security): (1) a user-tier skill named with an
-    internal prefix (s_cmhk-/s_ivt-/s_internal-/meddpicc) would derive
-    visibility=internal and become invisible to the very user who made it; (2) a
-    UNIFORM rejection here — BEFORE any existence check — closes the enumeration
-    leak (an internal name returns the SAME 400 whether or not it already exists,
-    so the create/generate 409 can't be used to probe which internal skills
-    exist). Built-in internal skills ship on disk, never via this API, so this
-    never blocks a legitimate create.
-    """
-    if derive_visibility(folder_name) == "internal":
-        raise HTTPException(
-            status_code=400,
-            detail="Skill name uses a reserved (internal) prefix and cannot be created.",
-        )
 
 
 def _visible_to_caller(response: SkillResponse) -> bool:
@@ -214,9 +195,9 @@ async def create_skill(request: SkillCreateRequest):
 
     Requirements: 5.3, 5.7
     """
-    # Reject internal-prefix names BEFORE the collision check (uniform 400 closes
-    # the 409-enumeration leak + prevents a self-invisible user skill).
-    _reject_internal_folder_name(request.folder_name)
+    # Any name may be created; a name that already exists is the same 409 whether
+    # that skill is internal or public (skill_manager.create_skill), so the answer
+    # says nothing about visibility.
     info = await skill_manager.create_skill(
         folder_name=request.folder_name,
         name=request.name,
@@ -326,13 +307,13 @@ async def generate_skill_with_agent(request: Request):
         # Sanitize skill name for use as folder name
         sanitized_name = re.sub(r"[^a-zA-Z0-9_-]", "-", skill_name.lower())
 
-        # Reject internal-prefix names BEFORE the conflict check — a uniform 400
-        # (same whether or not the skill exists) closes the 409-enumeration leak.
-        _reject_internal_folder_name(sanitized_name)
-
-        # Check for name conflict — 409 if target directory already exists
+        # Check for name conflict — 409 if target directory already exists. A
+        # follow-up (session_id) continues an existing skill, but never one hidden
+        # from this caller: that is the same 409 as any existing name.
         existing = await skill_manager.get_skill(sanitized_name)
-        if existing and not session_id:
+        hidden = existing is not None and not _visible_to_caller(
+            _skill_info_to_response(existing))
+        if existing and (not session_id or hidden):
             raise HTTPException(
                 status_code=409,
                 detail=f"Skill '{sanitized_name}' already exists",

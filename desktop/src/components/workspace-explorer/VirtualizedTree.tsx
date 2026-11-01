@@ -28,6 +28,7 @@
 import React, { useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { List } from 'react-window';
+import { useTranslation } from 'react-i18next';
 import type { TreeNode } from '../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import type { FileTreeItem } from './FileTreeNode';
@@ -694,6 +695,7 @@ function NodeRow({ row, selectedPath, renamingPath, dragOverPath, toggleExpand, 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFileDoubleClick, onAttachToChat }) => {
+  const { t } = useTranslation();
   const { treeData, refreshTree } = useTreeData();
   const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath, sortMode } =
     useSelection();
@@ -1010,7 +1012,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         rowComponent={RowRenderer}
         rowProps={rowProps}
         role="tree"
-        aria-label="Workspace Explorer"
+        aria-label={t('ui.VirtualizedTree.treeLabel')}
       />
       {contextMenu.isOpen && contextMenu.item && createPortal(
         <FileContextMenu

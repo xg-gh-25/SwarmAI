@@ -140,12 +140,12 @@ export function FolderPickerModal({
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined icon-md text-primary">folder_open</span>
-            <h2 id="folder-picker-title" className="font-semibold text-[var(--color-text)]">{t('chat.selectWorkFolder') || 'Select Work Folder'}</h2>
+            <h2 id="folder-picker-title" className="font-semibold text-[var(--color-text)]">{t('chat.selectWorkFolder')}</h2>
           </div>
           <button
             onClick={onClose}
             className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors rounded"
-            aria-label="Close"
+            aria-label={t('common.button.close')}
           >
             <span className="material-symbols-outlined icon-md">close</span>
           </button>
@@ -157,7 +157,7 @@ export function FolderPickerModal({
             <button
               onClick={() => handleBreadcrumbClick(-1)}
               className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
-              title="Home"
+              title={t('ui.FolderPickerModal.home')}
             >
               <span className="material-symbols-outlined icon-sm">home</span>
             </button>
@@ -183,7 +183,7 @@ export function FolderPickerModal({
             onClick={() => refetch()}
             disabled={isFetching}
             className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-            title="Refresh"
+            title={t('common.button.refresh')}
           >
             <span
               className={clsx(
@@ -201,19 +201,19 @@ export function FolderPickerModal({
           {isLoading ? (
             <div className="flex items-center justify-center h-32 text-[var(--color-text-muted)]">
               <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
-              Loading...
+              {t('common.status.loading')}
             </div>
           ) : isError ? (
             <div className="flex flex-col items-center justify-center h-32 text-status-error px-4 text-center">
               <span className="material-symbols-outlined icon-md mb-2">error</span>
               <span className="text-sm">
-                {error instanceof Error ? error.message : 'Failed to load directories'}
+                {error instanceof Error ? error.message : t('ui.FolderPickerModal.loadFailed')}
               </span>
               <button
                 onClick={() => refetch()}
                 className="mt-2 text-xs text-primary hover:underline"
               >
-                Try again
+                {t('ui.FolderPickerModal.tryAgain')}
               </button>
             </div>
           ) : (
@@ -235,7 +235,7 @@ export function FolderPickerModal({
               {directories.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-[var(--color-text-muted)]">
                   <span className="material-symbols-outlined icon-md mb-2">folder_off</span>
-                  <span className="text-sm">No subdirectories</span>
+                  <span className="text-sm">{t('ui.FolderPickerModal.noSubdirectories')}</span>
                 </div>
               ) : (
                 directories.map((dir) => {
@@ -284,7 +284,7 @@ export function FolderPickerModal({
           {/* Selected path display */}
           <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-[var(--color-hover)]/50 rounded-lg">
             <span className="material-symbols-outlined icon-xs text-primary">folder</span>
-            <span className="text-sm text-[var(--color-text-muted)]">{t('chat.selectedFolder') || 'Selected'}:</span>
+            <span className="text-sm text-[var(--color-text-muted)]">{t('chat.selectedFolder')}:</span>
             <span className="text-sm text-[var(--color-text)] font-medium truncate flex-1">
               {getSelectedPath()}
             </span>
@@ -302,7 +302,7 @@ export function FolderPickerModal({
               onClick={handleConfirm}
               className="btn-lg btn-primary transition-colors"
             >
-              {t('chat.selectThisFolder') || 'Select This Folder'}
+              {t('chat.selectThisFolder')}
             </button>
           </div>
         </div>

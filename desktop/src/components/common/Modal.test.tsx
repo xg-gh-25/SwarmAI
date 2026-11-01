@@ -137,7 +137,7 @@ describe('Modal — a layer: focus, Tab, Escape (hooks/useLayer)', () => {
     expect(dialog.contains(document.activeElement)).toBe(true);
     screen.getByText('OK').focus();                       // the last control
     fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'common.button.close' }));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }));
     rerender(<Modal isOpen={false} onClose={noop} title="Rename"><input data-testid="a" /><button>OK</button></Modal>);
     expect(document.activeElement).toBe(opener);           // at once, while the exit plays
     opener.remove();

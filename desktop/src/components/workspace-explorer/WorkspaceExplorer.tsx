@@ -28,6 +28,7 @@
  * Requirements: 9.1, 9.3, 9.4, 9.5, 9.6, 9.7, 10.1, 10.4, 11.1, 15.1
  */
 
+import { useTranslation } from 'react-i18next';
 import { useTreeData } from '../../contexts/ExplorerContext';
 import ExplorerHeader from './ExplorerHeader';
 import SectionedExplorer from './SectionedExplorer';
@@ -67,14 +68,15 @@ function TreeSkeleton() {
  * ChatPage remains fully interactive regardless of this error.
  */
 function TreeErrorState({ onRetry }: { onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="p-4 text-center" data-testid="tree-error-state">
-      <p className="text-body text-[var(--color-text-muted)] mb-2">Failed to load file tree</p>
+      <p className="text-body text-[var(--color-text-muted)] mb-2">{t('ui.WorkspaceExplorer.loadFailed')}</p>
       <button
         onClick={onRetry}
         className="text-small text-primary hover:underline"
       >
-        Retry
+        {t('common.button.retry')}
       </button>
     </div>
   );
@@ -96,6 +98,7 @@ export interface WorkspaceExplorerProps {
 // (workspaceExplorerCollapsed / width / narrow-viewport auto-collapse) was dead
 // and has been deleted (Gate-2 E-3).
 export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat, embedded = false }: WorkspaceExplorerProps) {
+  const { t } = useTranslation();
   const { treeData, isLoading, error, refreshTree } = useTreeData();
 
   return (
@@ -119,7 +122,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat, e
             className="flex items-center justify-center h-full px-4 text-center text-body text-[var(--color-text-muted)]"
             data-testid="explorer-empty"
           >
-            SwarmWS is empty. Initialize your workspace to get started.
+            {t('ui.WorkspaceExplorer.empty')}
           </div>
         )}
 

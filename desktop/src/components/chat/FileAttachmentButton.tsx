@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 interface FileAttachmentButtonProps {
   onFilesSelected: (files: File[]) => void;
@@ -39,6 +40,7 @@ export function FileAttachmentButton({
   canAddMore = true,
   className,
 }: FileAttachmentButtonProps) {
+  const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleClick = useCallback(() => {
@@ -74,8 +76,8 @@ export function FileAttachmentButton({
         )}
         title={
           !canAddMore
-            ? 'Maximum attachments reached'
-            : 'Attach files (images, PDF, TXT, CSV)'
+            ? t('ui.FileAttachmentButton.maxReached')
+            : t('ui.FileAttachmentButton.attachFiles')
         }
       >
         <span className="material-symbols-outlined icon-sm">add</span>

@@ -8,6 +8,7 @@
  * - ``RefreshContextModal`` — Modal component (default export)
  */
 
+import { useTranslation } from 'react-i18next';
 import Modal from '../common/Modal';
 import Button from '../common/Button';
 
@@ -24,60 +25,61 @@ export default function RefreshContextModal({
   onConfirm,
   isLoading = false,
 }: RefreshContextModalProps) {
+  const { t } = useTranslation();
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Refresh Context" size="md">
+    <Modal isOpen={isOpen} onClose={onClose} title={t('ui.RefreshContextModal.title')} size="md">
       <div className="space-y-4">
         {/* Explanation */}
         <p className="text-sm text-[var(--color-text-secondary)]">
-          This will restart the AI's memory in this conversation.
+          {t('ui.RefreshContextModal.intro')}
         </p>
 
         {/* What stays */}
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-[var(--color-text)]">What stays the same:</p>
+          <p className="text-xs font-medium text-[var(--color-text)]">{t('ui.RefreshContextModal.staysTitle')}</p>
           <ul className="text-xs text-[var(--color-text-secondary)] space-y-1 pl-4">
             <li className="flex items-start gap-2">
               <span className="text-green-500 mt-0.5">✓</span>
-              <span>Your chat history stays visible (you can scroll up)</span>
+              <span>{t('ui.RefreshContextModal.staysHistory')}</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-green-500 mt-0.5">✓</span>
-              <span>The AI restarts with a summary of key decisions and context</span>
+              <span>{t('ui.RefreshContextModal.staysSummary')}</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-green-500 mt-0.5">✓</span>
-              <span>Any in-progress pipelines are safe (auto-resumes)</span>
+              <span>{t('ui.RefreshContextModal.staysPipelines')}</span>
             </li>
           </ul>
         </div>
 
         {/* What changes */}
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-[var(--color-text)]">What changes:</p>
+          <p className="text-xs font-medium text-[var(--color-text)]">{t('ui.RefreshContextModal.changesTitle')}</p>
           <ul className="text-xs text-[var(--color-text-secondary)] space-y-1 pl-4">
             <li className="flex items-start gap-2">
               <span className="text-yellow-500 mt-0.5">•</span>
-              <span>The AI won't remember every detail — only the highlights</span>
+              <span>{t('ui.RefreshContextModal.changesDetail')}</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-yellow-500 mt-0.5">•</span>
-              <span>You may need to re-mention specific decisions if needed</span>
+              <span>{t('ui.RefreshContextModal.changesRemention')}</span>
             </li>
           </ul>
         </div>
 
         {/* Analogy */}
         <p className="text-xs text-[var(--color-text-muted)] italic border-l-2 border-[var(--color-border)] pl-3">
-          Think of it like briefing a colleague the next morning — they remember the important stuff, not every word.
+          {t('ui.RefreshContextModal.analogy')}
         </p>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose} disabled={isLoading}>
-            Cancel
+            {t('common.button.cancel')}
           </Button>
           <Button variant="primary" onClick={onConfirm} disabled={isLoading}>
-            {isLoading ? 'Refreshing...' : 'Refresh Context'}
+            {isLoading ? t('ui.RefreshContextModal.refreshing') : t('ui.RefreshContextModal.title')}
           </Button>
         </div>
       </div>

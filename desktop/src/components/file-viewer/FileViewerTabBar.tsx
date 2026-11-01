@@ -7,6 +7,7 @@
  */
 
 import { useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { FileTab } from './hooks/useFileViewerTabs';
 import { getFileTypeInfo } from './utils/fileViewTypes';
 
@@ -23,6 +24,7 @@ export default function FileViewerTabBar({
   onSwitch,
   onClose,
 }: FileViewerTabBarProps) {
+  const { t } = useTranslation();
   /** Middle-click (button === 1) closes the tab. */
   const handleMouseDown = useCallback(
     (e: React.MouseEvent, tabId: string) => {
@@ -82,7 +84,7 @@ export default function FileViewerTabBar({
               {tab.isDirty && (
                 <span
                   className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0"
-                  title="Unsaved changes"
+                  title={t('ui.FileViewerTabBar.unsaved')}
                 />
               )}
 
@@ -104,7 +106,7 @@ export default function FileViewerTabBar({
                   ${tab.isDirty ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
                   transition-opacity duration-100
                 `}
-                aria-label={`Close ${tab.fileName}`}
+                aria-label={t('ui.FileViewerTabBar.close', { name: tab.fileName })}
               >
                 &times;
               </span>

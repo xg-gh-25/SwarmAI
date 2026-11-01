@@ -33,7 +33,20 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 CONTRACT_V2_VERSION = "cdf-contract-r16.5-v1"
-SYSTEM_APPENDIX_HEADING = "## 系统追加（自动提取）"
+# The heading of the CDF-managed appendix of STEERING / USER / TOOLS (writer.py). Files
+# written before it became English carry the legacy heading: both are recognised
+# (``find_system_appendix``), so an existing appendix is reused, never doubled.
+SYSTEM_APPENDIX_HEADING = "## System appendix (auto-extracted)"
+LEGACY_SYSTEM_APPENDIX_HEADING = "## 系统追加（自动提取）"
+SYSTEM_APPENDIX_HEADINGS: tuple[str, ...] = (SYSTEM_APPENDIX_HEADING, LEGACY_SYSTEM_APPENDIX_HEADING)
+_SYSTEM_APPENDIX_RE = re.compile(
+    "^(?:" + "|".join(re.escape(h) for h in SYSTEM_APPENDIX_HEADINGS) + r")\s*$", re.MULTILINE)
+
+
+def find_system_appendix(content: str) -> "re.Match[str] | None":
+    """The first appendix heading line of *content* (the new or the legacy heading)."""
+    return _SYSTEM_APPENDIX_RE.search(content)
+
 
 # ── ontology (§5.3) ───────────────────────────────────────────────────────────
 CognitionType = Literal["principle", "correction", "decision", "model", "guideline", "pitfall", "process"]

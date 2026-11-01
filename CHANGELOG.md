@@ -1,7 +1,12 @@
 # Changelog
 ## [Unreleased]
 
-_Nothing pending._
+### Upgrade notes
+
+- A skill is owner-only (hidden from channel and other non-owner surfaces) only when its
+  SKILL.md frontmatter says `visibility: internal`. Skill names no longer make a skill
+  internal: the old reserved prefixes (`cmhk-`, `ivt-`, `internal-`, `meddpicc`) are gone.
+  Before upgrading, add `visibility: internal` to every skill you kept private by its name.
 
 ## [2.1.0] - 2026-09-07
 

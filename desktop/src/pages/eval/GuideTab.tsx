@@ -43,7 +43,7 @@ export function GuideTab() {
         <li><b>{t('Dependencies drift on their own: ', '依赖会自己漂移：')}</b>{t('a model upgrade or a rebuilt index changes behaviour with nothing deployed, so evaluation runs continuously.', '模型升级、知识库重建，你什么都没部署，行为就变了，所以评估要持续跑。')}</li>
       </ul>
       <P>{t('And these failures raise no error: the error rate stays flat while the agent confidently answers wrong.', '更麻烦的是这些失败都不报错：错误率是平的，agent 只是自信地答错。')}</P>
-      <p className="text-body italic text-[var(--color-text-muted)] mt-3">“Evaluation is the engineering work of building a trustworthy agent, not a QA step at the end.”</p>
+      <p className="text-body italic text-[var(--color-text-muted)] mt-3">{t('“Evaluation is the engineering work of building a trustworthy agent, not a QA step at the end.”', '“评估是构建可信 agent 的工程工作，而不是最后才做的 QA 环节。”')}</p>
     </> },
     { id: 'g-dlc', title: t('Agent-DLC: a six-step flywheel around one centre', 'Agent-DLC：六环飞轮，围着一个圆心转'), body: <>
       <div className="flex gap-8 items-start mt-3">
@@ -184,7 +184,7 @@ export function GuideTab() {
 
   return (
     <div className="max-w-[860px] mx-auto px-7 pt-10 pb-24" data-testid="eval-guide">
-      <div className="text-small text-[var(--color-text-muted)]">Guide</div>
+      <div className="text-small text-[var(--color-text-muted)]">{t('Guide', '指南')}</div>
       <div className="text-display font-semibold text-[var(--color-text)] mt-1">{t('Eval-First: how to know whether an agent is good', 'Eval-First：怎么知道一个 agent 好不好')}</div>
       <p className="text-body text-[var(--color-text-muted)] mt-2">
         {t('This page explains Agent-DLC, an evaluation-driven way to build agents, and marks in each section where it lives in SwarmAI. After reading it you should know what every number in this overlay is worth, and how to evaluate your own agent.',
@@ -212,7 +212,7 @@ function Wheel() {
   // where each step lives in this overlay (Build is the agent's own work: no tab)
   const target: ([TabId, string?] | null)[] = [['cases'], null, ['cases'], ['cases', 'history'], ['online'], ['overview']];
   return (
-    <svg width={300} height={320} viewBox="0 0 300 320" role="img" aria-label="Agent-DLC" className="shrink-0">
+    <svg width={300} height={320} viewBox="0 0 300 320" role="img" aria-label={t('Agent-DLC', 'Agent-DLC')} className="shrink-0">
       <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--color-border)" strokeWidth={1.5} />
       <circle cx={cx} cy={cy} r={58} fill="color-mix(in srgb, var(--color-brand) 8%, transparent)" stroke="color-mix(in srgb, var(--color-brand) 40%, transparent)" />
       <text x={cx} y={cy - 4} fill="var(--color-text)" fontSize={13} fontWeight={600} textAnchor="middle">{t('Golden standard', '黄金标准')}</text>

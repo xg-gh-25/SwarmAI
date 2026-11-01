@@ -42,6 +42,7 @@
 import { Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { QueryClientContext } from '@tanstack/react-query';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { useOverlay } from '../../contexts/OverlayContext';
 import type { OverlayId } from './overlayIds';
 import { getOverlaySpec, getOverlayCtxBridge } from './overlayRegistry';
@@ -66,6 +67,7 @@ const NUB = 20;         // spout square size
 const EXIT_MS = 300;    // exit-transition backstop (> the 280ms card transform)
 
 export function OverlayHost() {
+  const { t } = useTranslation();
   const { activeOverlay, openOverlay, closeOverlay, agentId } = useOverlay();
   // optional: the host also renders without a QueryClientProvider (its own tests)
   const queryClient = useContext(QueryClientContext);
@@ -268,7 +270,7 @@ export function OverlayHost() {
                 type="button"
                 onClick={() => openOverlay(chrome.parent!)}
                 className="flex items-center gap-1 font-semibold text-heading tracking-tight text-[var(--color-text-muted)] hover:text-[var(--panel-accent)] transition-colors"
-                aria-label={`Back to ${parentChrome.navLabel}`}
+                aria-label={t('ui.OverlayHost.backTo', { name: parentChrome.navLabel })}
                 data-testid="overlay-host-parent"
               >
                 <span className="material-symbols-outlined icon-md" aria-hidden>arrow_back</span>
@@ -284,7 +286,7 @@ export function OverlayHost() {
                 // no target: the surface reads it as "go to your home" (BrainHub → gallery)
                 onClick={() => window.dispatchEvent(new CustomEvent(`swarm:show-${renderedId}`))}
                 className="hover:text-[var(--panel-accent)] transition-colors"
-                title={`${chrome.navLabel} home`}
+                title={t('ui.OverlayHost.home', { name: chrome.navLabel })}
                 data-testid="overlay-host-title-home"
               >
                 {chrome.navLabel}
@@ -301,12 +303,12 @@ export function OverlayHost() {
           <div className="ml-auto flex items-center gap-3">
             <span className="hidden sm:flex items-center gap-1.5 tabular-nums text-meta text-[var(--color-text-faint)]">
               <kbd className="border border-[var(--color-border)] rounded px-1.5 py-0.5 bg-[var(--color-bg)]">ESC</kbd>
-              to close
+              {t('ui.OverlayHost.toClose')}
             </span>
             <button
               onClick={closeOverlay}
               className="icon-btn-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-              aria-label="Close"
+              aria-label={t('common.button.close')}
             >
               <span className="material-symbols-outlined icon-md">close</span>
             </button>
@@ -329,7 +331,7 @@ export function OverlayHost() {
                 className="flex-1 flex items-center justify-center text-body text-[var(--color-text-muted)]"
                 data-testid="overlay-loading"
               >
-                Loading…
+                {t('ui.OverlayHost.loading')}
               </div>
             }
           >

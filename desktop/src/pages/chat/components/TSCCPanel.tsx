@@ -18,6 +18,8 @@
  */
 
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import type { TSCCState, ThreadLifecycleState, SystemPromptMetadata } from '../../../types';
 import { SystemPromptModule } from './TSCCModules';
 
@@ -40,32 +42,32 @@ interface TSCCPanelProps {
 // ---------------------------------------------------------------------------
 
 /** Human-readable lifecycle label. */
-function lifecycleLabel(state: ThreadLifecycleState): string {
+function lifecycleLabel(state: ThreadLifecycleState, t: TFunction): string {
   switch (state) {
     case 'new':
-      return 'New thread · Ready';
+      return t('ui.TSCCPanel.lifecycle.newThread');
     case 'active':
-      return 'Updated just now';
+      return t('ui.TSCCPanel.lifecycle.active');
     case 'paused':
-      return 'Paused · Waiting for your input';
+      return t('ui.TSCCPanel.lifecycle.paused');
     case 'failed':
-      return 'Something went wrong — see details below';
+      return t('ui.TSCCPanel.lifecycle.failed');
     case 'cancelled':
-      return 'Execution stopped · Partial progress saved';
+      return t('ui.TSCCPanel.lifecycle.cancelled');
     case 'idle':
-      return 'Idle · Ready for next task';
+      return t('ui.TSCCPanel.lifecycle.idle');
   }
 }
 
 /** Relative freshness string from ISO timestamp. */
-function freshness(iso: string): string {
+function freshness(iso: string, t: TFunction): string {
   const time = new Date(iso).getTime();
   if (Number.isNaN(time)) return '';
   const diff = Date.now() - time;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / 86_400_000)}d ago`;
+  if (diff < 60_000) return t('ui.TSCCPanel.justNow');
+  if (diff < 3_600_000) return t('ui.TSCCPanel.minutesAgo', { count: Math.floor(diff / 60_000) });
+  if (diff < 86_400_000) return t('ui.TSCCPanel.hoursAgo', { count: Math.floor(diff / 3_600_000) });
+  return t('ui.TSCCPanel.daysAgo', { count: Math.floor(diff / 86_400_000) });
 }
 
 // ---------------------------------------------------------------------------
@@ -84,13 +86,14 @@ function CollapsedBar({
   onTogglePin: () => void;
   promptMetadata?: SystemPromptMetadata | null;
 }) {
+  const { t } = useTranslation();
   const fileCount = promptMetadata?.files?.length ?? 0;
   const totalTokens = promptMetadata?.totalTokens ?? 0;
 
   return (
     <div
       role="region"
-      aria-label="Thread cognitive context"
+      aria-label={t('ui.TSCCPanel.regionLabel')}
       aria-expanded={false}
       tabIndex={0}
       onClick={onToggleExpand}
@@ -108,20 +111,20 @@ function CollapsedBar({
         psychology
       </span>
       <span className="text-[var(--color-text)] font-medium truncate">
-        System Prompt
+        {t('agents.form.systemPrompt')}
       </span>
       {fileCount > 0 && (
         <span className="text-[var(--color-text-muted)]">
-          {fileCount} file{fileCount !== 1 ? 's' : ''}
+          {t('ui.TSCCPanel.fileCount', { count: fileCount })}
         </span>
       )}
       {totalTokens > 0 && (
         <span className="text-[var(--color-text-muted)]">
-          {totalTokens.toLocaleString()} tok
+          {t('ui.TSCCPanel.tokens', { value: totalTokens.toLocaleString() })}
         </span>
       )}
       <span className="ml-auto text-xs text-[var(--color-text-muted)]">
-        {freshness(tsccState.lastUpdatedAt)}
+        {freshness(tsccState.lastUpdatedAt, t)}
       </span>
       <button
         onClick={(e) => {
@@ -133,7 +136,7 @@ function CollapsedBar({
             ? 'text-primary'
             : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
         }`}
-        aria-label={isPinned ? 'Unpin panel' : 'Pin panel'}
+        aria-label={isPinned ? t('ui.TSCCPanel.unpin') : t('ui.TSCCPanel.pin')}
         aria-pressed={isPinned}
       >
         <span
@@ -168,10 +171,11 @@ function ExpandedView({
   sessionId?: string | null;
   promptMetadata?: SystemPromptMetadata | null;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       role="region"
-      aria-label="Thread cognitive context"
+      aria-label={t('ui.TSCCPanel.regionLabel')}
       aria-expanded={true}
       className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden"
     >
@@ -191,13 +195,13 @@ function ExpandedView({
           psychology
         </span>
         <span className="text-sm font-medium text-[var(--color-text)]">
-          System Prompt
+          {t('agents.form.systemPrompt')}
         </span>
         <span
           className="ml-1 text-xs text-[var(--color-text-muted)]"
           aria-live="polite"
         >
-          {lifecycleLabel(tsccState.lifecycleState)}
+          {lifecycleLabel(tsccState.lifecycleState, t)}
         </span>
         <div className="ml-auto flex items-center gap-1">
           <button
@@ -210,7 +214,7 @@ function ExpandedView({
                 ? 'text-primary'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
             }`}
-            aria-label={isPinned ? 'Unpin panel' : 'Pin panel'}
+            aria-label={isPinned ? t('ui.TSCCPanel.unpin') : t('ui.TSCCPanel.pin')}
             aria-pressed={isPinned}
           >
             <span

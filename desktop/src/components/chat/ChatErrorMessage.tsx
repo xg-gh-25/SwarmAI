@@ -95,20 +95,20 @@ export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessag
             : 'text-red-400'
         }`}>
           {error.code === 'SDK_SUBPROCESS_TIMEOUT'
-            ? 'AI Service Timeout'
+            ? t('ui.ChatErrorMessage.aiServiceTimeout')
             : error.code === 'AGENT_TIMEOUT'
-              ? 'Response Timeout'
+              ? t('ui.ChatErrorMessage.responseTimeout')
               : error.code === 'RATE_LIMIT_EXCEEDED'
-                ? 'Rate Limited'
+                ? t('ui.ChatErrorMessage.rateLimited')
                 : error.code === 'SERVICE_UNAVAILABLE'
-                  ? 'Service Unavailable'
+                  ? t('ui.ChatErrorMessage.serviceUnavailable')
                   : error.code === 'CREDENTIALS_EXPIRED'
                     ? t('credentialBanner.chat.credentialsExpired')
                     : error.code === 'ACCOUNT_NOT_CONNECTED'
                     ? t('credentialBanner.chat.notConnected')
                     : error.code === 'QUEUE_TIMEOUT'
-                      ? 'Slots Busy'
-                      : error.code ?? 'Interrupted'}
+                      ? t('ui.ChatErrorMessage.slotsBusy')
+                      : error.code ?? t('ui.ChatErrorMessage.interrupted')}
         </span>
       </div>
 
@@ -116,7 +116,7 @@ export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessag
       <p className="text-[var(--color-text)] text-sm mb-1">
         {error.code === 'ACCOUNT_NOT_CONNECTED'
           ? t('credentialBanner.remedy.not_connected.message')
-          : (error.message ?? 'An error occurred')}
+          : (error.message ?? t('ui.ChatErrorMessage.errorOccurred'))}
       </p>
 
       {/* Detail */}
@@ -156,7 +156,7 @@ export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessag
           onClick={onRetry}
           className="mt-3 btn-md btn-primary transition-colors"
         >
-          ↻ Retry when slot opens
+          {t('ui.ChatErrorMessage.retryWhenSlotOpens')}
         </button>
       )}
       {onContinue && !(error.code && OWN_ACTION_CODES.has(error.code)) && (
@@ -177,6 +177,7 @@ export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessag
  * Self-contained timer that decrements every second.
  */
 function RateLimitCountdownInline({ retryAfterSec }: { retryAfterSec: number }) {
+  const { t } = useTranslation();
   const [remaining, setRemaining] = useState(retryAfterSec);
 
   // Reset remaining when retryAfterSec prop changes (e.g. new rate limit)
@@ -201,14 +202,14 @@ function RateLimitCountdownInline({ retryAfterSec }: { retryAfterSec: number }) 
   if (remaining <= 0) {
     return (
       <p className="text-green-400 text-sm mt-2">
-        ✓ Rate limit expired — you may resume.
+        {t('ui.ChatErrorMessage.rateLimitExpired')}
       </p>
     );
   }
 
   return (
     <p className="text-yellow-400 text-sm mt-2">
-      ⏳ Rate limited — resuming in {remaining}s
+      {t('ui.ChatErrorMessage.resumingIn', { seconds: remaining })}
     </p>
   );
 }

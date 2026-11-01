@@ -1,5 +1,6 @@
 import { ReactNode, useState, useCallback, useRef, useEffect, type CSSProperties } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
@@ -144,6 +145,7 @@ function formatTokens(m: number): string {
 }
 
 function TopBar({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
+  const { t } = useTranslation();
   const { data: tokenUsage } = useQuery<TokenUsageData>({
     queryKey: ['token-usage'],
     queryFn: async () => {
@@ -188,15 +190,15 @@ function TopBar({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
         onMouseDown={(e) => e.stopPropagation()}
         onClick={onOpenUsage}
         className="flex items-center gap-2 pr-5 text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] cursor-pointer"
-        aria-label="Token usage — open the usage view"
+        aria-label={t('ui.ThreeColumnLayout.usageLabel')}
         data-testid="top-bar-usage"
-        title={tokenUsage ? `${tokenUsageTitle(tokenUsage)}\n\nClick: the usage view` : 'Loading...'}
+        title={tokenUsage ? t('ui.ThreeColumnLayout.usageTitle', { details: tokenUsageTitle(tokenUsage) }) : t('common.loading')}
       >
         <span className="text-body">&#x1FA99;</span>
-        <span>Today <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong>
+        <span>{t('ui.ThreeColumnLayout.today')} <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong>
           {tokenUsage && <span className="tabular-nums"> · {usd(tokenUsage.today_cost_usd)}</span>}</span>
         <span className="text-[var(--color-border)]">|</span>
-        <span>Total <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong>
+        <span>{t('ui.ThreeColumnLayout.total')} <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong>
           {tokenUsage && <span className="tabular-nums"> · {usd(tokenUsage.total_cost_usd)}</span>}</span>
       </button>
     </div>
@@ -209,6 +211,7 @@ function TopBar({ onOpenUsage }: { onOpenUsage?: () => void } = {}) {
  *  IS the chronological latest. *-weekly.md (same dir) is excluded. null if none. */
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
+  const { t } = useTranslation();
   const { activeModal, closeModal, setSettingsTab } = useLayout();
   // New OverlayHost subsystem (M2+). Migrated surfaces open via openOverlay + read
   // their highlight from newActiveOverlay. The hybrid bridge (OverlayContext) keeps
@@ -296,7 +299,7 @@ function LeftSidebar() {
           onFocus={() => prefetch('history')}
           aria-pressed={newActiveOverlay === 'history'}
           data-nav-id="history"
-          title="History"
+          title={t('ui.ThreeColumnLayout.history')}
           data-testid="history-row"
         >
           <span data-testid="history-row-icon" className="w-4 flex items-center justify-center opacity-85"><NavSvgIcon name="history" /></span>
@@ -314,7 +317,7 @@ function LeftSidebar() {
           onFocus={() => prefetch('artifacts')}
           aria-pressed={newActiveOverlay === 'artifacts'}
           data-nav-id="artifacts"
-          title="Artifacts"
+          title={t('ui.ThreeColumnLayout.artifacts')}
           data-testid="artifacts-row"
         >
           {/* Highlight lives on the icon + label (theme-tracked primary color),
@@ -363,7 +366,7 @@ function LeftSidebar() {
             green panel: cognition's green zone stays the sole differentiated
             surface (P1). "Workspace" is the de-jargoned label for the SwarmWS
             workspace (testid nav-swarmws + explorer brand title keep SwarmWS). */}
-        <A10Group label="Work" tint={ZONE_TINT.work}>
+        <A10Group label={t('ui.ThreeColumnLayout.zoneWork')} tint={ZONE_TINT.work}>
           <A10Card navId="todo" onPrefetch={() => prefetch('todo')} icon="todo" highlight isActive={newActiveOverlay === 'todo'} onClick={() => activateNav('todo')} data-testid="nav-todo" />
           {/* NOTE: no Canvas nav card by design (run_990b0a03). Canvas is
               OUTPUT-TRIGGERED — it auto-surfaces on a `written` event and opens via
@@ -381,7 +384,7 @@ function LeftSidebar() {
           <A10Card navId="community" onPrefetch={() => prefetch('community')} icon="public" isActive={newActiveOverlay === 'community'} onClick={() => activateNav('community')} data-testid="nav-community" />
         </A10Group>
 
-        <A10Group label="System" tint={ZONE_TINT.system} dimCards>
+        <A10Group label={t('ui.ThreeColumnLayout.zoneSystem')} tint={ZONE_TINT.system} dimCards>
           <A10Card navId="jobs" onPrefetch={() => prefetch('jobs')} icon="schedule" highlight isActive={newActiveOverlay === 'jobs'} onClick={() => activateNav('jobs')} data-testid="nav-jobs" />
           {/* Capabilities — "what your AI can do" (skills + connections). Moved to the
               System zone after Jobs & Runs (run_5165013e): it's the ability
@@ -412,7 +415,7 @@ function LeftSidebar() {
         </a>
         <button
           className="a10-fcard w-full flex items-center justify-center gap-1.5 rounded-lg py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-          title="Terminal (⌘`)"
+          title={t('nav.terminalShortcut')}
           onClick={toggleTerminal}
           aria-pressed={terminalPanelOpen}
           data-testid="nav-terminal"
@@ -750,6 +753,7 @@ interface A10CardProps {
  *  the attention flag is a corner badge (never eats the title). An optional live
  *  statusDot sits on the chip's top-right corner (signal-driven only). */
 function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, onPrefetch, 'data-testid': testId }: A10CardProps) {
+  const { t } = useTranslation();
   const { navLabel: label, zone } = NAV[navId];
   const tint = ZONE_TINT[zone];
   // (navSource push removed M5: the OverlayHost re-derives THIS card's live rect from
@@ -781,10 +785,10 @@ function A10Card({ navId, icon, flag, isActive, highlight, statusDot, onClick, o
       </span>
       <span className="flex-1 min-w-0 text-left text-small font-semibold text-[var(--color-text)] leading-tight whitespace-nowrap overflow-hidden text-ellipsis">{label}</span>
       {flag === 'y' && (
-        <span className="a10-flag a10-flag--y" data-testid="flag-y" aria-label="needs attention">Y</span>
+        <span className="a10-flag a10-flag--y" data-testid="flag-y" aria-label={t('ui.ThreeColumnLayout.needsAttention')}>Y</span>
       )}
       {flag === 'r' && (
-        <span className="a10-flag a10-flag--r" data-testid="flag-r" aria-label="action required">R</span>
+        <span className="a10-flag a10-flag--r" data-testid="flag-r" aria-label={t('ui.ThreeColumnLayout.actionRequired')}>R</span>
       )}
     </button>
   );

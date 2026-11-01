@@ -106,7 +106,7 @@ weakest judge.** When a store looks corrupt/inconsistent, the recovery path may 
 (rename to `.corrupt-<ts>`) + back up + surface a pre-action approval — it may NEVER
 `unlink`/overwrite/reseed-over an irreplaceable user store (any DB, memory/knowledge/context
 file, session store) without an explicit human OK reaching the user's CURRENT channel FIRST.
-Data loss is unbounded + irreversible; a crash-loop is bounded (launchd KeepAlive) — never
+Data loss is unbounded + irreversible; a crash-loop is bounded (the supervisor restarts it) — never
 trade the unbounded harm to avoid the bounded one. A single exception (`DatabaseError`) is not
 proof the whole store is corrupt: the heaviest irreversible act must be triggered only by the
 strongest, most specific signal, never the first error that fires. (Earned the hard way:

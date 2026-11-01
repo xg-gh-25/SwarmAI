@@ -29,6 +29,7 @@
  */
 import { Tabs } from '../overlay';
 import { useState } from 'react';
+import { useTranslation, Trans } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api from '../../services/api';
@@ -82,6 +83,7 @@ function fmtWhen(mtime: number): string {
  * are enabled: true because the component only exists while the surface is open.
  */
 export function LibraryContent() {
+  const { t } = useTranslation();
   // Default to Recent: it's the higher-frequency surface (what changed lately),
   // so it opens first (run_b4120a78).
   const [tab, setTab] = useState<TabKey>('recent');
@@ -115,14 +117,14 @@ export function LibraryContent() {
               <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span>
               <span className="text-[var(--color-text)]">{native ? nativeFileTotal : '—'}</span>
               <span className="text-[var(--color-text-faint)]">
-                items in Knowledge/{native ? ` · ${fmtBytes(nativeByteTotal)}` : ''}
+                {t('ui.LibraryOverlay.itemsInKnowledge')}{native ? ` · ${fmtBytes(nativeByteTotal)}` : ''}
               </span>
             </div>
             <div className="flex items-center gap-1.5">
               <span aria-hidden className="material-symbols-outlined icon-sm">link</span>
               <span className="text-[var(--color-text)]">{mountCount}</span>
               <span className="text-[var(--color-text-faint)]">
-                mounted {mountCount === 1 ? 'folder' : 'folders'}
+                {t('ui.LibraryOverlay.mountedFolders', { count: mountCount })}
               </span>
             </div>
           </div>
@@ -139,7 +141,7 @@ export function LibraryContent() {
         <div className="flex-1 min-w-0 flex flex-col">
           <div className="border-b border-[var(--color-border)] px-4 py-2.5">
             {/* Recent first — the surface used most. */}
-            <Tabs label="Library" value={tab} onChange={setTab} items={[
+            <Tabs label={t('ui.LibraryOverlay.tabsLabel')} value={tab} onChange={setTab} items={[
               { key: 'recent', label: 'Recent', testid: 'library-tab-recent', count: recent?.count },
               { key: 'browse', label: 'Browse', testid: 'library-tab-browse', count: native?.category_count },
               { key: 'guide', label: 'Guide', testid: 'library-tab-guide' },
@@ -181,6 +183,7 @@ function FetchError({ testid, retryTestid, message, onRetry }: { testid: string;
 // The tree (LibraryTree) is the browse body — expand to any file, click to open
 // it in Canvas. Search still runs the recall path. Mounted stays visually distinct.
 function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
+  const { t } = useTranslation();
   const mountRows = mounts?.mounts ?? [];
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
@@ -205,24 +208,24 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search the library (keyword / FTS5 — what recall would retrieve)…"
+          placeholder={t('ui.LibraryOverlay.searchPlaceholder')}
           className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
         />
         {submitted && (
           <button type="button" data-testid="library-search-clear"
             onClick={() => { setQuery(''); setSubmitted(''); }}
-            className="text-small text-[var(--color-text-muted)] hover:text-[var(--color-text)]">clear</button>
+            className="text-small text-[var(--color-text-muted)] hover:text-[var(--color-text)]">{t('ui.LibraryOverlay.clearSearch')}</button>
         )}
       </form>
 
       {submitted.trim() ? (
         <section data-testid="library-search-results">
           <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-            {isFetching ? 'Searching…' : `${search?.count ?? 0} recall hits for “${submitted}”`}
+            {isFetching ? t('ui.LibraryOverlay.searching') : t('ui.LibraryOverlay.recallHits', { n: search?.count ?? 0, query: submitted })}
           </div>
           {(search?.hits ?? []).length === 0 && !isFetching ? (
             <div className="py-6 text-center text-body text-[var(--color-text-faint)]">
-              No recall hits — try different keywords, or the knowledge may not be indexed yet.
+              {t('ui.LibraryOverlay.noRecallHits')}
             </div>
           ) : (
             <div className="flex flex-col gap-1">
@@ -240,7 +243,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
                   <span className="shrink-0 rounded px-1.5 py-[1px] text-meta tabular-nums"
                     style={{ background: h.domain === 'codeintel' ? 'color-mix(in srgb,var(--color-primary) 16%,transparent)' : 'color-mix(in srgb,var(--color-status-success) 16%,transparent)',
                              color: h.domain === 'codeintel' ? 'var(--color-primary)' : 'var(--color-status-success)' }}>
-                    {h.domain === 'codeintel' ? 'code' : 'docs'}{h.mount_id ? '·mount' : ''}
+                    {h.domain === 'codeintel' ? t('ui.LibraryOverlay.kindCode') : t('ui.LibraryOverlay.kindDocs')}{h.mount_id ? t('ui.LibraryOverlay.mountSuffix') : ''}
                   </span>
                   <span className="flex-1 min-w-0 truncate text-body text-[var(--color-text)]">{h.title || h.source}</span>
                   <span className="shrink-0 text-meta text-[var(--color-text-faint)] font-mono truncate max-w-[280px]">{h.source}</span>
@@ -257,7 +260,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
       {/* NATIVE — cognition green. Live Knowledge/ tree: expand to any file, click to open in Canvas. */}
       <section data-testid="library-native-section" className="flex flex-col min-h-0 flex-1">
         <div className="mb-2 flex items-center gap-2 text-meta uppercase tracking-wider shrink-0" style={{ color: 'var(--color-status-success)' }}>
-          <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span> Native · Knowledge/
+          <span aria-hidden className="material-symbols-outlined icon-sm">menu_book</span> {t('ui.LibraryOverlay.nativeHeading')}
         </div>
         <LibraryTree />
       </section>
@@ -266,7 +269,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
       <section data-testid="library-mounted-section" className="shrink-0">
         <div className="mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2 text-meta uppercase tracking-wider" style={{ color: 'var(--color-primary)' }}>
-            <span aria-hidden className="material-symbols-outlined icon-sm">link</span> Mounted · external sources
+            <span aria-hidden className="material-symbols-outlined icon-sm">link</span> {t('ui.LibraryOverlay.mountedHeading')}
           </div>
           <AddFolderButton />
         </div>
@@ -275,9 +278,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
             data-testid="library-mounted-empty"
             className="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-primary)_35%,var(--color-border))] px-4 py-3 text-meta text-[var(--color-text-muted)]"
           >
-            No mounted folders yet. <b>+ Add Folder</b> registers a local directory —
-            the agent judges its kind (code / docs) and indexes it <b>in place</b> (never
-            copied), so recall reaches it and reads the live source.
+            <Trans i18nKey="ui.LibraryOverlay.mountedEmpty" components={{ b: <b /> }} />
           </div>
         ) : (
           <div className="flex flex-col gap-1">
@@ -300,6 +301,7 @@ function BrowseTab({ mounts }: { mounts: MountsList | undefined }) {
 // then the UI must NOT imply searchability. We read `last_synced` (served by GET
 // /mounts) — inventing no data (R30).
 function MountRowView({ m }: { m: MountRow }) {
+  const { t } = useTranslation();
   const indexed = !!m.last_synced;
   return (
     <div
@@ -316,19 +318,19 @@ function MountRowView({ m }: { m: MountRow }) {
             mount read as searchable. docs kind needs its cards written in chat. */}
         {indexed ? (
           <div data-testid={`library-mount-indexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-meta" style={{ color: 'var(--color-status-success)' }}>
-            <span aria-hidden>✓</span> indexed — recall reaches it
+            <span aria-hidden>✓</span> {t('ui.LibraryOverlay.mountIndexed')}
           </div>
         ) : (
           <div data-testid={`library-mount-unindexed-${m.id}`} className="mt-0.5 flex items-center gap-1 text-meta" style={{ color: 'var(--color-status-warning)' }}>
             <span aria-hidden className="material-symbols-outlined icon-xs">warning</span>
             {m.kind === 'docs'
-              ? 'no text content found (empty or all-binary) — recall can’t reach it'
-              : 'not indexed yet — recall can’t reach it'}
+              ? t('ui.LibraryOverlay.mountDocsEmpty')
+              : t('ui.LibraryOverlay.mountNotIndexed')}
           </div>
         )}
       </div>
       <span className="shrink-0 rounded px-1.5 py-[1px] text-meta tabular-nums self-start" style={{ background: 'color-mix(in srgb, var(--color-primary) 16%, transparent)', color: 'var(--color-primary)' }}>{m.kind}</span>
-      <span className="shrink-0 text-meta tabular-nums text-[var(--color-text-faint)] self-start">Local</span>
+      <span className="shrink-0 text-meta tabular-nums text-[var(--color-text-faint)] self-start">{t('ui.LibraryOverlay.localBadge')}</span>
     </div>
   );
 }
@@ -337,6 +339,7 @@ function MountRowView({ m }: { m: MountRow }) {
 // /library/mounts (axios baseURL adds /api), which judges kind + registers + indexes (code inline,
 // docs handed to chat). On success the mounts list refreshes so the new row shows.
 function AddFolderButton() {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
   const onClick = async () => {
@@ -382,7 +385,7 @@ function AddFolderButton() {
       disabled={busy}
       className="btn-sm btn-primary disabled:opacity-60"
     >
-      <span className="material-symbols-outlined icon-xs">add</span> Add Folder
+      <span className="material-symbols-outlined icon-xs">add</span> {t('ui.LibraryOverlay.addFolder')}
     </button>
   );
 }
@@ -393,6 +396,7 @@ function RecentTab({
 }: {
   recent: RecentFeed | undefined; loading: boolean; error: boolean; onRetry: () => void;
 }) {
+  const { t } = useTranslation();
   const items = recent?.items ?? [];
   // Client-side substring filter over the already-loaded last-7-days feed (path or
   // category, case-insensitive) — instant, no backend call (run_b4120a78). The
@@ -407,8 +411,7 @@ function RecentTab({
   return (
     <div data-testid="library-panel-recent" className="flex flex-col gap-3 max-w-3xl">
       <div className="text-body text-[var(--color-text-muted)]">
-        Added or edited in the last {recent?.window_days ?? 7} days — session backflow (robot icon),
-        your saves (⬆), and job output (⏱). Nothing to "process"; read what you want.
+        {t('ui.LibraryOverlay.recentIntro', { days: recent?.window_days ?? 7 })}
       </div>
       {/* Search box — filters the loaded feed locally; only shown when there IS a feed. */}
       {!error && !loading && items.length > 0 && (
@@ -417,7 +420,7 @@ function RecentTab({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter recent by name or category (last 7 days, local)…"
+          placeholder={t('ui.LibraryOverlay.recentFilterPlaceholder')}
           className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)]"
         />
       )}
@@ -429,11 +432,11 @@ function RecentTab({
           onRetry={onRetry}
         />
       ) : loading ? (
-        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">Loading…</div>
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryOverlay.loading')}</div>
       ) : items.length === 0 ? (
-        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">Nothing new in the last week.</div>
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryOverlay.nothingNew')}</div>
       ) : filtered.length === 0 ? (
-        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">No matches for “{query}”.</div>
+        <div className="py-8 text-center text-body text-[var(--color-text-faint)]">{t('ui.LibraryOverlay.noMatches', { query })}</div>
       ) : (
         <div className="flex flex-col gap-1">
           {filtered.map((it) => {
@@ -478,29 +481,30 @@ const MANAGE_ROWS: Array<{ want: string; say: string; result: string }> = [
 ];
 
 function GuideTab() {
+  const { t } = useTranslation();
   return (
     <div data-testid="library-panel-guide" className="flex flex-col gap-6 max-w-4xl">
       {/* What the Library IS — the index-not-warehouse framing (folded here from the
           rail so there's ONE explainer, not two — run_139d7652). */}
       <section data-testid="library-guide-what">
         <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-          What the Library is
+          {t('ui.LibraryOverlay.guideWhatTitle')}
         </div>
         <div className="text-body text-[var(--color-text-muted)] leading-relaxed">
-          The Library is an <b>index</b>, not a warehouse. <b>Native</b> is ours
-          (<code className="font-mono text-small">Knowledge/</code> — already in recall).
-          <b> Mounted</b> folders are pointers into your disk, indexed in place and read
-          <b> live</b> on a recall hit — never copied.
+          <Trans
+            i18nKey="ui.LibraryOverlay.guideWhatBody"
+            components={{ b: <b />, code: <code className="font-mono text-small" /> }}
+          />
         </div>
       </section>
 
       {/* How recall uses this */}
       <section>
         <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-          How recall uses your library
+          {t('ui.LibraryOverlay.guideRecallTitle')}
         </div>
         <div className="text-body text-[var(--color-text-muted)] mb-3">
-          Searching Library IS this same recall path, run manually — you see what the agent would retrieve.
+          {t('ui.LibraryOverlay.guideRecallBody')}
         </div>
         <div data-testid="library-recall-steps" className="flex flex-col gap-1.5">
           {RECALL_STEPS.map((s) => (
@@ -518,7 +522,7 @@ function GuideTab() {
       {/* How to manage */}
       <section>
         <div className="mb-2 text-meta uppercase tracking-wider text-[var(--color-text-faint)]">
-          How to manage — chat-native (heavy ops), overlay (light ops)
+          {t('ui.LibraryOverlay.guideManageTitle')}
         </div>
         <div className="flex flex-col gap-1">
           {MANAGE_ROWS.map((r) => (
@@ -530,7 +534,7 @@ function GuideTab() {
           ))}
         </div>
         <div className="mt-2 text-meta text-[var(--color-text-faint)]">
-          Overlay = browse + light ops (open · delete · move · unmount · refresh). Chat = add + heavy semantic ops.
+          {t('ui.LibraryOverlay.guideManageFooter')}
         </div>
       </section>
     </div>

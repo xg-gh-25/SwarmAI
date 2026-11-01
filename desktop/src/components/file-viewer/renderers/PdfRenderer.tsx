@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useMemo, useRef, useEffect, memo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
+import { useTranslation } from 'react-i18next';
 import { rawFileUrl } from '../utils/rawFileUrl';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -47,6 +48,7 @@ const PdfRenderer = memo(function PdfRenderer({
   fileName,
   onStatusInfo,
 }: RendererProps) {
+  const { t } = useTranslation();
   const [numPages, setNumPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoomMode, setZoomMode] = useState<ZoomMode>('fit-width');
@@ -184,7 +186,7 @@ const PdfRenderer = memo(function PdfRenderer({
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
         <span className="material-symbols-outlined icon-xl mb-2">picture_as_pdf</span>
-        <p className="text-sm">No PDF content available</p>
+        <p className="text-sm">{t('ui.PdfRenderer.noContent')}</p>
       </div>
     );
   }
@@ -195,7 +197,7 @@ const PdfRenderer = memo(function PdfRenderer({
       <div className="flex flex-col items-center justify-center h-full p-6 text-center">
         <span className="material-symbols-outlined icon-xl text-red-400 mb-3">error</span>
         <p className="text-sm font-medium text-[var(--color-text)] mb-1">
-          Failed to render PDF
+          {t('ui.PdfRenderer.renderFailed')}
         </p>
         <p className="text-xs text-[var(--color-text-muted)] max-w-md">{error}</p>
         <p className="text-xs text-[var(--color-text-muted)] mt-2">{fileName}</p>
@@ -216,20 +218,20 @@ const PdfRenderer = memo(function PdfRenderer({
             onClick={prevPage}
             disabled={currentPage <= 1}
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            title="Previous page"
+            title={t('ui.PdfRenderer.previousPage')}
           >
             <span className="material-symbols-outlined icon-sm">chevron_left</span>
           </button>
 
           <span className="text-xs text-[var(--color-text-muted)] min-w-[80px] text-center select-none">
-            {loading ? 'Loading...' : `Page ${currentPage} / ${numPages}`}
+            {loading ? t('common.status.loading') : t('ui.PdfRenderer.pageOf', { page: currentPage, total: numPages })}
           </span>
 
           <button
             onClick={nextPage}
             disabled={currentPage >= numPages}
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            title="Next page"
+            title={t('ui.PdfRenderer.nextPage')}
           >
             <span className="material-symbols-outlined icon-sm">chevron_right</span>
           </button>
@@ -244,7 +246,7 @@ const PdfRenderer = memo(function PdfRenderer({
                 ? 'bg-[var(--color-border)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'
             }`}
-            title="Fit width"
+            title={t('ui.PdfRenderer.fitWidth')}
           >
             <span className="material-symbols-outlined icon-xs">width_normal</span>
           </button>
@@ -256,7 +258,7 @@ const PdfRenderer = memo(function PdfRenderer({
                 ? 'bg-[var(--color-border)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'
             }`}
-            title="Fit page"
+            title={t('ui.PdfRenderer.fitPage')}
           >
             <span className="material-symbols-outlined icon-xs">fit_page</span>
           </button>
@@ -266,7 +268,7 @@ const PdfRenderer = memo(function PdfRenderer({
           <button
             onClick={handleZoomOut}
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
-            title="Zoom out"
+            title={t('ui.PdfRenderer.zoomOut')}
           >
             <span className="material-symbols-outlined icon-sm">remove</span>
           </button>
@@ -278,7 +280,7 @@ const PdfRenderer = memo(function PdfRenderer({
           <button
             onClick={handleZoomIn}
             className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
-            title="Zoom in"
+            title={t('ui.PdfRenderer.zoomIn')}
           >
             <span className="material-symbols-outlined icon-sm">add</span>
           </button>
@@ -293,7 +295,7 @@ const PdfRenderer = memo(function PdfRenderer({
         {loading && (
           <div className="flex items-center gap-2 text-[var(--color-text-muted)] py-12">
             <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>
-            <span className="text-sm">Loading PDF...</span>
+            <span className="text-sm">{t('ui.PdfRenderer.loadingPdf')}</span>
           </div>
         )}
 
@@ -313,7 +315,7 @@ const PdfRenderer = memo(function PdfRenderer({
               loading={
                 <div className="flex items-center justify-center p-12 text-[var(--color-text-muted)]">
                   <span className="material-symbols-outlined icon-sm animate-spin mr-2">progress_activity</span>
-                  <span className="text-sm">Rendering page {currentPage}...</span>
+                  <span className="text-sm">{t('ui.PdfRenderer.renderingPage', { page: currentPage })}</span>
                 </div>
               }
             />
@@ -328,7 +330,7 @@ const PdfRenderer = memo(function PdfRenderer({
                 height={getPageHeight()}
                 loading={
                   <div className="flex items-center justify-center p-12 text-[var(--color-text-muted)]">
-                    <span className="text-sm">Rendering page {bufferPage}...</span>
+                    <span className="text-sm">{t('ui.PdfRenderer.renderingPage', { page: bufferPage })}</span>
                   </div>
                 }
               />

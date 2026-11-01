@@ -241,15 +241,15 @@ DO NOT USE: for X (use Y instead)
 
 > [!IMPORTANT]
 > **Before finalizing, verify terminology against the ubiquitous language glossary.**
-> Read `.context/CONTEXT.md` — it defines canonical terms, banned synonyms, and
-> relationships across all 69 skills. Using "task" when you mean "todo", or
-> "backend" when you mean "daemon", causes cross-skill confusion.
+> Read `{SKILL_DIR}/GLOSSARY.md` — it defines canonical terms, banned synonyms, and
+> relationships across the skill library. Using "task" when you mean "todo", or
+> "server" when you mean "daemon", causes cross-skill confusion.
 
 Quick check:
-1. Read `.context/CONTEXT.md`
+1. Read `{SKILL_DIR}/GLOSSARY.md`
 2. Grep your SKILL.md for banned synonyms (the "Avoid" entries)
 3. Replace any matches with the canonical term
-4. If your skill introduces a NEW concept not in the glossary, add it to CONTEXT.md
+4. If your skill introduces a NEW concept not in the glossary, add it to GLOSSARY.md
 
 ### Step 4.6: Write Guardrails Section
 
@@ -414,7 +414,7 @@ Work systematically:
 >   `disable-model-invocation`, `project_scope`, `trigger`, `do_not_use`,
 >   `consumes_artifacts`, `produces_artifact`, `version`, `tags`, `input_type`,
 >   `output_type` (platform filtering, model-invocation gating, artifact routing).
->   **This list is examples, not exhaustive** — treating it as a whitelist and
+>   **This list is examples, not exhaustive** — treating it as an allowlist and
 >   re-typing "the keys that matter" is exactly how keys get dropped. Preserve
 >   whatever is present.
 >

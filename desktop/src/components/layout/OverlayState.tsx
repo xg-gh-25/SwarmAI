@@ -16,11 +16,13 @@
  * Key exports: `OverlayLoading`, `OverlayError`, `OverlayEmpty`.
  */
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
-export function OverlayLoading({ label = 'Loading…', testid }: { label?: string; testid?: string }) {
+export function OverlayLoading({ label, testid }: { label?: string; testid?: string }) {
+  const { t } = useTranslation();
   return (
     <div data-testid={testid} className="py-8 text-center text-small text-[var(--color-text-muted)]">
-      {label}
+      {label ?? t('ui.OverlayState.loading')}
     </div>
   );
 }
@@ -35,6 +37,7 @@ export function OverlayError({ message, onRetry, testid, retryTestid, compact = 
   /** Outer spacing; the box itself is fixed. */
   className?: string;
 }) {
+  const { t } = useTranslation();
   const outer = className ?? (compact ? '' : 'mx-auto my-6 max-w-sm');
   const box = compact ? 'rounded-md px-2.5 py-2 text-meta' : 'rounded-lg px-4 py-4 text-center text-body';
   return (
@@ -50,7 +53,7 @@ export function OverlayError({ message, onRetry, testid, retryTestid, compact = 
         onClick={onRetry}
         className={compact ? 'mt-1.5 btn-sm btn-danger' : 'mt-2 btn-md btn-danger'}
       >
-        Retry
+        {t('common.button.retry')}
       </button>
     </div>
   );

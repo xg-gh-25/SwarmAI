@@ -188,32 +188,16 @@ def section_dir(project_dir, section_key: str) -> Path:
     return ddd_path(project_dir, section_key)
 
 
-def ddd_asset_path(project_dir, kind: str, *, old_rel: str | None = None) -> Path:
-    """Resolve a governed asset dir → assets/<kind>/ (READ, strangler-aware).
+def ddd_asset_path(project_dir, kind: str) -> Path:
+    """Resolve a governed asset dir → ``assets/<kind>/`` (READ).
 
-    A data-agent DDD's moat is the `data-source` asset (the unified SDK). Before
-    migration it lived as a non-skill package under 4-capabilities/ (or the older
-    skills/), e.g. ``4-capabilities/s_cmhk-data-proxy``. Pass that as ``old_rel``
-    so reads fall back to the pre-move location until the package is relocated.
+    A data-agent DDD's moat is the ``data-source`` asset (its data SDK and contract).
 
     Args:
         project_dir: the DDD project root.
         kind: the asset kind subdir under assets/ (e.g. "data-source").
-        old_rel: project-relative path where the asset lived pre-migration. If
-            None, no fallback (new-only).
-
-    Returns:
-        assets/<kind>/ if it exists (or no old_rel given), else the old path if it
-        exists, else the new assets/<kind>/ path (write-forward default).
     """
-    root = Path(project_dir)
-    new_path = root / ASSETS_DIR / kind
-    if old_rel is None:
-        return new_path
-    old_path = root / old_rel
-    if not new_path.exists() and old_path.exists():
-        return old_path
-    return new_path
+    return Path(project_dir) / ASSETS_DIR / kind
 
 
 
@@ -234,15 +218,12 @@ def stale_layout_refs(text: str) -> "list[str]":
     ]
     return [m.group(0) for p in pats for m in p.finditer(text)]
 
-# The data-source asset's legacy home, before governed assets moved under assets/.
-_DATA_SOURCE_OLD_REL = "4-capabilities/s_cmhk-data-proxy"
-
-
 def data_contract_dir(project_dir) -> Path:
-    """The data-source asset's ``data-contract/`` dir (READ, strangler-aware): where a
-    data-agent DDD keeps its data-semantic contract. One place for every reader (the
-    recall leg, the knowledge unit table), so they cannot disagree about where it is."""
-    return ddd_asset_path(project_dir, "data-source", old_rel=_DATA_SOURCE_OLD_REL) / "data-contract"
+    """The data-source asset's ``data-contract/`` dir: where a data-agent DDD keeps its
+    data-semantic contract (``assets/data-source/data-contract``). One place for every
+    reader (the recall leg, the knowledge unit table), so they cannot disagree about
+    where it is."""
+    return ddd_asset_path(project_dir, "data-source") / "data-contract"
 
 def ddd_asset_write_path(project_dir, kind: str) -> Path:
     """Resolve a governed asset dir → assets/<kind>/ (WRITE — always new).

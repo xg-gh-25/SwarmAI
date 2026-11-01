@@ -20,9 +20,7 @@ import { ToastProvider } from '../../../../contexts/ToastContext';
 import { OPEN_FILE_EVENT } from '../../../../components/common/MarkdownRenderer';
 import type { Message, ContentBlock } from '../../../../types';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback: unknown) => fallback }),
-}));
+// react-i18next is not mocked: the app's i18n (test-setup) renders the real English text.
 vi.mock('../../../../contexts/HealthContext', () => ({
   useHealth: () => ({
     health: { status: 'connected', lastCheckedAt: null, consecutiveFailures: 0 },

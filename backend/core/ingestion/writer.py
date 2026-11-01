@@ -23,7 +23,7 @@ from core.ddd_entry_lifecycle import format_memory_entry
 from utils.file_lock import md_lock
 
 from .contracts import UnitDecision
-from .contracts_v2 import ROOT_TRUST_ORDER, SYSTEM_APPENDIX_HEADING
+from .contracts_v2 import ROOT_TRUST_ORDER, SYSTEM_APPENDIX_HEADING, find_system_appendix
 from .materializer import get_materializer, iter_governed_files
 from .units import parse_units
 
@@ -151,11 +151,10 @@ def _append_section(content: str, section: str | None, block: str) -> str:
 
 
 def _append_system_appendix(content: str, store: str, section: str | None, block: str) -> str:
-    """Append one extracted unit under the store's appendix-only subheading."""
+    """Append one extracted unit under the store's appendix-only subheading. An existing
+    appendix under the legacy heading is the appendix (no second one is started)."""
     subsection = section or _SYSTEM_APPENDIX_DEFAULT_SECTIONS[store]
-    appendix = re.search(
-        rf"^{re.escape(SYSTEM_APPENDIX_HEADING)}\s*$", content, re.MULTILINE
-    )
+    appendix = find_system_appendix(content)
     if appendix is None:
         prefix = content.rstrip("\n")
         separator = "\n\n" if prefix else ""

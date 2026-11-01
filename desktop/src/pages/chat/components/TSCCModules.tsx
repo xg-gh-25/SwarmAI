@@ -21,6 +21,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useDialogLayer } from '../../../hooks/useLayer';
 import { createPortal } from 'react-dom';
 import type {
@@ -90,6 +91,7 @@ function fmtK(n: number): string {
 // ---------------------------------------------------------------------------
 
 type ChipTone = 'b' | 'p' | 'g' | 'a' | '';
+/** title and desc are the English text; the Flow tab shows ui.TSCCModules.flow<n>Title / flow<n>Desc. */
 interface FlowStage {
   n: number;
   title: string;
@@ -138,11 +140,12 @@ const ACCENT_BORDER: Record<string, string> = {
 };
 
 function FlowTab() {
+  const { t } = useTranslation();
   return (
     <div>
       <p className="text-[11px] text-[var(--color-text-muted)] mb-3 leading-relaxed">
-        How the system prompt is assembled each turn — <span className="font-mono">build_system_prompt() → load_all()</span>.
-        The read path only assembles; over-budget warns, never truncates.
+        {t('ui.TSCCModules.flowIntro')} <span className="font-mono">build_system_prompt() → load_all()</span>.
+        {t('ui.TSCCModules.flowIntroTail')}
       </p>
       <div className="relative">
         {FLOW_STAGES.map((s, i) => (
@@ -157,10 +160,10 @@ function FlowTab() {
             {/* stage card */}
             <div className={`flex-1 mb-2.5 rounded-lg border p-2.5 bg-[var(--color-hover)]/30 ${s.accent ? ACCENT_BORDER[s.accent] : 'border-[var(--color-border)]'}`}>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[12.5px] font-semibold text-[var(--color-text)]">{s.title}</span>
+                <span className="text-[12.5px] font-semibold text-[var(--color-text)]">{t(`ui.TSCCModules.flow${s.n}Title`)}</span>
                 <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-[#38d9c4]/10 text-[#38d9c4]">{s.fn}</span>
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">{s.desc}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-snug">{t(`ui.TSCCModules.flow${s.n}Desc`)}</div>
               {s.chips.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1.5">
                   {s.chips.map((c, j) => (
@@ -185,6 +188,7 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
   // layer under it), focus moves in, Tab stays in it, and focus goes back on close.
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogLayer(true, dialogRef, onClose);
+  const { t } = useTranslation();
 
   // Rendered via a portal to document.body so `fixed inset-0` resolves against the
   // viewport. The modal is otherwise a DOM descendant of the popover's
@@ -209,25 +213,25 @@ function FullPromptModal({ fullText, onClose }: { fullText: string; onClose: () 
       tabIndex={-1}
       role="dialog"
       aria-modal="true"
-      aria-label="Full system prompt"
+      aria-label={t('ui.TSCCModules.fullPrompt')}
     >
       <div
         className="w-[92vw] max-w-5xl max-h-[90vh] flex flex-col bg-[var(--color-card)] border-2 border-[var(--color-primary)]/70 rounded-lg shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-          <h3 className="text-sm font-semibold text-[var(--color-text)]">System Prompt</h3>
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">{t('ui.TSCCModules.systemPrompt')}</h3>
           <button
             onClick={onClose}
             className="p-1 rounded hover:bg-[var(--color-hover)] text-[var(--color-text-muted)]"
-            aria-label="Close"
+            aria-label={t('common.button.close')}
           >
             <span className="material-symbols-outlined icon-sm">close</span>
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">
           <pre className="text-[13px] text-[var(--color-text)] whitespace-pre-wrap font-mono leading-relaxed">
-            {fullText || '(empty)'}
+            {fullText || t('ui.TSCCModules.empty')}
           </pre>
         </div>
       </div>
@@ -249,6 +253,7 @@ function SummaryStrip({
   recall: RecallSnapshot | null;
   security: SecurityScanResult | null;
 }) {
+  const { t } = useTranslation();
   const fileCount = metadata?.files.length ?? 0;
   const totalTok = metadata?.totalTokens ?? 0;
   // The model's REAL budget tier, not the 100K one. See PromptTab.
@@ -257,19 +262,19 @@ function SummaryStrip({
   const recallHits = recall?.ran ? recall.hits.length : 0;
   const grade = security?.grade ?? '—';
 
-  const stats: { k: string; v: string; cls: string }[] = [
-    { k: 'Files', v: String(fileCount), cls: 'text-[#6ea8fe]' },
-    { k: 'Tokens', v: fmtK(totalTok), cls: 'text-[#fbbf24]' },
-    { k: 'Budget', v: budget > 0 ? fmtK(budget) : '—', cls: 'text-[#4ade80]' },
-    { k: 'Recall', v: recall?.ran ? String(recallHits) : '0', cls: 'text-[#a78bfa]' },
-    { k: 'Security', v: grade, cls: 'text-[#38d9c4]' },
+  const stats: { k: string; label: string; v: string; cls: string }[] = [
+    { k: 'Files', label: t('ui.TSCCModules.statFiles'), v: String(fileCount), cls: 'text-[#6ea8fe]' },
+    { k: 'Tokens', label: t('ui.TSCCModules.statTokens'), v: fmtK(totalTok), cls: 'text-[#fbbf24]' },
+    { k: 'Budget', label: t('ui.TSCCModules.statBudget'), v: budget > 0 ? fmtK(budget) : '—', cls: 'text-[#4ade80]' },
+    { k: 'Recall', label: t('ui.TSCCModules.statRecall'), v: recall?.ran ? String(recallHits) : '0', cls: 'text-[#a78bfa]' },
+    { k: 'Security', label: t('ui.TSCCModules.statSecurity'), v: grade, cls: 'text-[#38d9c4]' },
   ];
 
   return (
     <div className="grid grid-cols-5 gap-1.5 mb-3">
       {stats.map((s) => (
         <div key={s.k} className="bg-[var(--color-hover)]/50 border border-[var(--color-border)] rounded-lg px-2 py-1.5">
-          <div className="text-[8px] uppercase tracking-wide text-[var(--color-text-muted)] truncate">{s.k}</div>
+          <div className="text-[8px] uppercase tracking-wide text-[var(--color-text-muted)] truncate">{s.label}</div>
           <div className={`text-base font-bold font-mono ${s.cls}`}>{s.v}</div>
         </div>
       ))}
@@ -282,12 +287,13 @@ function SummaryStrip({
 // ===========================================================================
 
 function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
+  const { t } = useTranslation();
   const files = metadata?.files ?? [];
   const totalTokens = metadata?.totalTokens ?? 0;
   const maxTok = files.reduce((m, f) => Math.max(m, f.tokens), 1);
 
   if (files.length === 0) {
-    return <p className="text-sm text-[var(--color-text-muted)] italic py-4">No context files loaded</p>;
+    return <p className="text-sm text-[var(--color-text-muted)] italic py-4">{t('ui.TSCCModules.noFiles')}</p>;
   }
 
   return (
@@ -301,7 +307,7 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
             <span
               key={f.filename}
               style={{ width: `${w}%`, background: o.color }}
-              title={`${f.filename}: ${f.tokens.toLocaleString()} tok`}
+              title={t('ui.TSCCModules.fileTokens', { file: f.filename, tokens: f.tokens.toLocaleString() })}
             />
           );
         })}
@@ -341,8 +347,8 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
         })}
       </ul>
       <div className="flex items-center justify-between text-xs text-[var(--color-text-muted)] pt-2 mt-2 border-t border-[var(--color-border)]">
-        <span>Total ({files.length} files)</span>
-        <span className="tabular-nums font-medium">{totalTokens.toLocaleString()} tokens</span>
+        <span>{t('ui.TSCCModules.totalFiles', { count: files.length })}</span>
+        <span className="tabular-nums font-medium">{t('ui.TSCCModules.totalTokens', { tokens: totalTokens.toLocaleString() })}</span>
       </div>
     </div>
   );
@@ -356,24 +362,24 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
  *  this tab issues no request of its own — the summary strip and this tab read
  *  the SAME snapshot instead of fetching one each. */
 function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchState }) {
-  if (state === 'loading' || state === 'idle') return <p className="text-sm text-[var(--color-text-muted)] py-4">Loading…</p>;
-  if (state === 'error') return <p className="text-sm text-[var(--color-text-muted)] italic py-4">Failed to load recall snapshot</p>;
+  const { t } = useTranslation();
+  if (state === 'loading' || state === 'idle') return <p className="text-sm text-[var(--color-text-muted)] py-4">{t('ui.TSCCModules.loading')}</p>;
+  if (state === 'error') return <p className="text-sm text-[var(--color-text-muted)] italic py-4">{t('ui.TSCCModules.recallFailed')}</p>;
   if (!snap || !snap.ran) {
     return (
       <p className="text-sm text-[var(--color-text-muted)] italic py-4">
-        No recall ran this session — recall fires once, on the first substantive
-        message (skipped for channels / short openers).
+        {t('ui.TSCCModules.noRecall')}
       </p>
     );
   }
 
   // Group the REAL structured hits by domain into the mockup's source cards.
   const DOMAIN_META: Record<string, { icon: string; label: string; sub: string }> = {
-    context_files: { icon: '🧩', label: 'Memory', sub: 'MEMORY.md' },
-    library: { icon: '📚', label: 'Library', sub: 'Knowledge/' },
-    ddd: { icon: '🏗️', label: 'DDD', sub: 'Project' },
-    session: { icon: '💬', label: 'Sessions', sub: 'past chats' },
-    codeintel: { icon: '🔣', label: 'Code', sub: 'symbols' },
+    context_files: { icon: '🧩', label: t('ui.TSCCModules.domainMemory'), sub: 'MEMORY.md' },
+    library: { icon: '📚', label: t('ui.TSCCModules.domainLibrary'), sub: 'Knowledge/' },
+    ddd: { icon: '🏗️', label: 'DDD', sub: t('ui.TSCCModules.domainDddSub') },
+    session: { icon: '💬', label: t('ui.TSCCModules.domainSessions'), sub: t('ui.TSCCModules.domainSessionsSub') },
+    codeintel: { icon: '🔣', label: t('ui.TSCCModules.domainCode'), sub: t('ui.TSCCModules.domainCodeSub') },
   };
   const byDomain = new Map<string, typeof snap.hits>();
   for (const h of snap.hits) {
@@ -384,9 +390,9 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
   return (
     <div>
       <div className="flex items-center gap-3 text-xs text-[var(--color-text-muted)] mb-2 pb-2 border-b border-[var(--color-border)]">
-        <span className="tabular-nums">~{snap.tokens.toLocaleString()} tok</span>
+        <span className="tabular-nums">~{t('ui.TSCCModules.tokShort', { tokens: snap.tokens.toLocaleString() })}</span>
         <span className="tabular-nums">{Math.round(snap.latencyMs)} ms</span>
-        <span className="tabular-nums">{snap.hits.length} hits</span>
+        <span className="tabular-nums">{t('ui.TSCCModules.hits', { count: snap.hits.length })}</span>
         <span className="text-[11px] px-1.5 rounded bg-[#6ea8fe]/15 text-[#6ea8fe] font-mono">keyword / FTS5</span>
       </div>
       {snap.keywords.length > 0 && (
@@ -416,7 +422,7 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
                   {hits.map((h, i) => (
                     <div key={i} className="px-2 py-1.5 rounded hover:bg-[var(--color-hover)]/40">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] text-[var(--color-text-muted)] flex-1 truncate">{h.source || '(source)'}</span>
+                        <span className="font-mono text-[11px] text-[var(--color-text-muted)] flex-1 truncate">{h.source || t('ui.TSCCModules.noSource')}</span>
                         {h.hasScore && (
                           <span className="font-mono text-[11px] text-[#4ade80] flex-shrink-0">{h.score.toFixed(2)}</span>
                         )}
@@ -428,8 +434,8 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
                   ))}
                 </div>
                 <div className="px-3 py-1.5 border-t border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)] font-mono flex justify-between">
-                  <span>{hits.length} hits</span>
-                  {hits.some((h) => h.hasScore) && <span>BM25 [0,1]</span>}
+                  <span>{t('ui.TSCCModules.hits', { count: hits.length })}</span>
+                  {hits.some((h) => h.hasScore) && <span>{t('ui.TSCCModules.bm25')}</span>}
                 </div>
               </div>
             );
@@ -444,9 +450,9 @@ function RecallTab({ snap, state }: { snap: RecallSnapshot | null; state: FetchS
         // query's wording missed, which is the load-bearing failure mode now
         // that the vector leg is retired.
         <p className="text-sm text-[var(--color-text-muted)] italic py-2">
-          Recall ran but matched nothing — the agent was prompted to grep
+          {t('ui.TSCCModules.noMatch')}
           <span className="font-mono not-italic"> Knowledge/ </span>
-          with synonyms instead.
+          {t('ui.TSCCModules.noMatchTail')}
         </p>
       )}
     </div>
@@ -470,16 +476,17 @@ const GRADE_COLOR: Record<string, string> = {
  *  must not run for someone who only glances at the Flow tab, and must not run
  *  twice because the strip and this tab each asked for it. */
 function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: FetchState }) {
-  if (state === 'loading' || state === 'idle') return <p className="text-sm text-[var(--color-text-muted)] py-4">Scanning…</p>;
-  if (state === 'error' || !scan) return <p className="text-sm text-[var(--color-text-muted)] italic py-4">Failed to run security scan</p>;
-  if (scan.grade === 'n/a') return <p className="text-sm text-[var(--color-text-muted)] italic py-4">No assembled prompt to scan yet</p>;
+  const { t } = useTranslation();
+  if (state === 'loading' || state === 'idle') return <p className="text-sm text-[var(--color-text-muted)] py-4">{t('ui.TSCCModules.scanning')}</p>;
+  if (state === 'error' || !scan) return <p className="text-sm text-[var(--color-text-muted)] italic py-4">{t('ui.TSCCModules.scanFailed')}</p>;
+  if (scan.grade === 'n/a') return <p className="text-sm text-[var(--color-text-muted)] italic py-4">{t('ui.TSCCModules.nothingToScan')}</p>;
 
   const gc = GRADE_COLOR[scan.grade] ?? '#8b93a7';
   const sevCells: [string, number, string][] = [
-    ['Critical', scan.critical, SEV_COLOR.critical],
-    ['High', scan.high, SEV_COLOR.high],
-    ['Medium', scan.medium, SEV_COLOR.medium],
-    ['Info', scan.info, SEV_COLOR.info],
+    [t('ui.TSCCModules.sevCritical'), scan.critical, SEV_COLOR.critical],
+    [t('ui.TSCCModules.sevHigh'), scan.high, SEV_COLOR.high],
+    [t('ui.TSCCModules.sevMedium'), scan.medium, SEV_COLOR.medium],
+    [t('ui.TSCCModules.sevInfo'), scan.info, SEV_COLOR.info],
   ];
 
   return (
@@ -491,7 +498,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
           {scan.grade}
         </div>
         <div className="text-xs text-[var(--color-text-muted)]">
-          Static scan of the assembled prompt · secrets masked · reuses egress credential detectors.
+          {t('ui.TSCCModules.scanNote')}
         </div>
       </div>
       {/* Severity grid */}
@@ -517,7 +524,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
                 <div className="text-[13px] font-medium text-[var(--color-text)] flex items-center gap-2">
                   {f.detector}
                   <span className="text-[11px] px-1.5 rounded uppercase" style={{ background: `${sc}22`, color: sc }}>
-                    {pass ? 'pass' : f.severity}
+                    {pass ? t('ui.TSCCModules.pass') : f.severity}
                   </span>
                 </div>
                 <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5 break-words">{f.detail}</div>
@@ -527,7 +534,7 @@ function SecurityTab({ scan, state }: { scan: SecurityScanResult | null; state: 
         })}
       </ul>
       <p className="text-[11px] text-[var(--color-text-muted)] italic mt-2 pt-2 border-t border-[var(--color-border)]">
-        Design-time scan of assembled context, not a runtime output filter.
+        {t('ui.TSCCModules.scanFooter')}
       </p>
     </div>
   );
@@ -548,6 +555,7 @@ function PromptTab({
   sessionId: string;
   metadata: SystemPromptMetadata | null;
 }) {
+  const { t } = useTranslation();
   const [showModal, setShowModal] = useState(false);
   const [fullText, setFullText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -557,13 +565,13 @@ function PromptTab({
     setIsLoading(true);
     try {
       const result = await getSystemPromptMetadata(sessionId);
-      setFullText(result ? result.fullText : '(Session not initialized yet)');
+      setFullText(result ? result.fullText : t('ui.TSCCModules.notInitialized'));
       setShowModal(true);
     } catch {
-      setFullText('(Failed to load system prompt)');
+      setFullText(t('ui.TSCCModules.promptFailed'));
       setShowModal(true);
     } finally { setIsLoading(false); }
-  }, [sessionId, metadata?.fullText]);
+  }, [sessionId, metadata?.fullText, t]);
 
   const total = metadata?.totalTokens ?? 0;
   // The REAL budget for this model, from the backend. It is NOT always 100K —
@@ -585,31 +593,31 @@ function PromptTab({
       <div className="flex items-center gap-3 mb-3">
         <div className="min-w-[70px]">
           <div className="text-lg font-bold font-mono" style={{ color: over ? '#fbbf24' : 'var(--color-text)' }}>{fmtK(total)}</div>
-          <div className="text-[11px] text-[var(--color-text-muted)]">assembled</div>
+          <div className="text-[11px] text-[var(--color-text-muted)]">{t('ui.TSCCModules.assembled')}</div>
         </div>
         {hasBudget ? (
           <>
             <div className="flex-1">
               <div className="h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden relative">
                 <div className="h-full rounded-full" style={{ width: `${barPct}%`, background: over ? 'linear-gradient(90deg,#4ade80,#fbbf24)' : '#4ade80' }} />
-                <div className="absolute top-[-2px] w-0.5 h-[14px] bg-[#f87171]" style={{ left: `${BUDGET_MARKER_PCT}%` }} title={`budget ${fmtK(budget)}`} />
+                <div className="absolute top-[-2px] w-0.5 h-[14px] bg-[#f87171]" style={{ left: `${BUDGET_MARKER_PCT}%` }} title={t('ui.TSCCModules.budgetTip', { budget: fmtK(budget) })} />
               </div>
               <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] mt-1 font-mono">
                 <span>0</span>
-                <span className="text-[#f87171]">↑ {fmtK(budget)} budget</span>
+                <span className="text-[#f87171]">↑ {t('ui.TSCCModules.budgetMark', { budget: fmtK(budget) })}</span>
                 <span>{fmtK(budget * GAUGE_HEADROOM)}</span>
               </div>
             </div>
             <div className="text-right min-w-[64px]">
               <div className="text-[12px] font-mono font-semibold" style={{ color: over ? '#f87171' : '#4ade80' }}>{pctOfBudget}%</div>
-              <div className="text-[11px] text-[var(--color-text-muted)]">{over ? 'no cut · warn' : 'in budget'}</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">{over ? t('ui.TSCCModules.overBudget') : t('ui.TSCCModules.inBudget')}</div>
             </div>
           </>
         ) : (
           // No budget reported. Drawing a gauge would mean inventing a ceiling,
           // which is the bug this replaced — say "unknown" instead.
           <div className="flex-1 text-[11px] text-[var(--color-text-muted)] italic">
-            Budget not reported for this session — percentage unavailable.
+            {t('ui.TSCCModules.noBudget')}
           </div>
         )}
       </div>
@@ -619,10 +627,10 @@ function PromptTab({
         disabled={isLoading}
         className="w-full btn-sm btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {isLoading ? 'Loading…' : 'View Full Prompt'}
+        {isLoading ? t('ui.TSCCModules.loading') : t('ui.TSCCModules.viewFull')}
       </button>
       <p className="text-[11px] text-[var(--color-text-muted)] italic mt-2">
-        CJK 1.1 tok/char + Latin 2.2 tok/word (calibrated). Read path never hard-cuts; over-budget warns only.
+        {t('ui.TSCCModules.tokenNote')}
       </p>
       {showModal && fullText !== null && <FullPromptModal fullText={fullText} onClose={() => setShowModal(false)} />}
     </div>
@@ -633,6 +641,7 @@ function PromptTab({
 // SystemPromptModule — tabbed shell (fetches on open)
 // ===========================================================================
 
+/** label is the English text; the tab bar shows ui.TSCCModules.tab_<key>. */
 const TABS: { key: TabKey; label: string; icon: string }[] = [
   { key: 'flow', label: 'Flow', icon: 'account_tree' },
   { key: 'files', label: 'Files', icon: 'description' },
@@ -642,6 +651,7 @@ const TABS: { key: TabKey; label: string; icon: string }[] = [
 ];
 
 export function SystemPromptModule({ sessionId, metadata: metadataProp }: SystemPromptModuleProps) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<TabKey>('flow');
   // Fetch-on-open: the SSE `metadata` prop is only present after a turn streams
   // in THIS tab. On a fresh/idle tab it is null → fetch it so the panel is never
@@ -724,13 +734,13 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
   }, [sessionId, tab]);
 
   if (!sessionId) {
-    return <p className="text-sm text-[var(--color-text-muted)] italic">No active session</p>;
+    return <p className="text-sm text-[var(--color-text-muted)] italic">{t('ui.TSCCModules.noSession')}</p>;
   }
 
   return (
     <div className="flex flex-col h-full">
       <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
-        System Prompt
+        {t('ui.TSCCModules.systemPrompt')}
       </h4>
 
       {/* Fail-loud degradation banner. The backend logs an error when a core
@@ -740,7 +750,7 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
         <div className="flex items-start gap-2 mb-3 px-2.5 py-2 rounded-lg border border-[#f87171]/40 bg-[#f87171]/10">
           <span className="material-symbols-outlined icon-sm text-[#f87171] flex-shrink-0">warning</span>
           <div className="min-w-0">
-            <div className="text-[11px] font-semibold text-[#f87171]">Prompt assembled incomplete</div>
+            <div className="text-[11px] font-semibold text-[#f87171]">{t('ui.TSCCModules.degraded')}</div>
             <div className="text-[11px] font-mono text-[var(--color-text-muted)] break-words">{metadata.degraded}</div>
           </div>
         </div>
@@ -751,21 +761,21 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
 
       {/* Tab bar */}
       <div className="flex gap-0.5 border-b border-[var(--color-border)] mb-3">
-        {TABS.map((t) => (
+        {TABS.map((tb) => (
           <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
+            key={tb.key}
+            onClick={() => setTab(tb.key)}
             className={`flex-1 flex items-center justify-center gap-1 py-1.5 text-[11px] font-medium border-b-2 -mb-px transition-colors whitespace-nowrap overflow-hidden ${
-              tab === t.key
+              tab === tb.key
                 ? 'text-[var(--color-primary)] border-[var(--color-primary)]'
                 : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)]'
             }`}
           >
-            <span className="material-symbols-outlined icon-xs flex-shrink-0">{t.icon}</span>
+            <span className="material-symbols-outlined icon-xs flex-shrink-0">{tb.icon}</span>
             {/* whitespace-nowrap + overflow-hidden on the button (above) prevents any
                 wrap; truncate keeps a long label from pushing siblings — the icon
                 always stays visible so the tab is identifiable even if text clips. */}
-            <span className="truncate">{t.label}</span>
+            <span className="truncate">{t(`ui.TSCCModules.tab_${tb.key}`)}</span>
           </button>
         ))}
       </div>
@@ -774,7 +784,7 @@ export function SystemPromptModule({ sessionId, metadata: metadataProp }: System
       <div className="flex-1 overflow-y-auto min-h-0">
         {tab === 'flow' && <FlowTab />}
         {tab === 'files' && (loading && !metadata
-          ? <p className="text-sm text-[var(--color-text-muted)] py-4">Loading…</p>
+          ? <p className="text-sm text-[var(--color-text-muted)] py-4">{t('ui.TSCCModules.loading')}</p>
           : <FilesTab metadata={metadata} />)}
         {tab === 'recall' && <RecallTab snap={recall} state={recallState} />}
         {tab === 'security' && <SecurityTab scan={security} state={securityState} />}

@@ -19,6 +19,7 @@
  * @exports NewBrainOverlay, NewBrainOverlayProps
  */
 import { useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useOverlayDraft } from '../../hooks/useOverlayDraft';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import {
@@ -40,13 +41,13 @@ export interface NewBrainContentProps {
 }
 
 /** The six sections in Brain-map order, with the hex angle used by the preview. */
-const PREVIEW: { key: PreviewSection; label: string; deg: number }[] = [
-  { key: 'identity', label: 'Identity', deg: -120 },
-  { key: 'knowledge', label: 'Knowledge', deg: -60 },
-  { key: 'gates', label: 'Gates', deg: 0 },
-  { key: 'capabilities', label: 'Capabilities', deg: 60 },
-  { key: 'refresher', label: 'Refresher', deg: 120 },
-  { key: 'delivery', label: 'Delivery', deg: 180 },
+const PREVIEW: { key: PreviewSection; labelKey: string; deg: number }[] = [
+  { key: 'identity', labelKey: 'ui.NewBrainOverlay.section_identity', deg: -120 },
+  { key: 'knowledge', labelKey: 'ui.NewBrainOverlay.section_knowledge', deg: -60 },
+  { key: 'gates', labelKey: 'ui.NewBrainOverlay.section_gates', deg: 0 },
+  { key: 'capabilities', labelKey: 'ui.NewBrainOverlay.section_capabilities', deg: 60 },
+  { key: 'refresher', labelKey: 'ui.NewBrainOverlay.section_refresher', deg: 120 },
+  { key: 'delivery', labelKey: 'ui.NewBrainOverlay.section_delivery', deg: 180 },
 ];
 
 function hexPoints(x: number, y: number, r: number): string {
@@ -61,12 +62,13 @@ function hexPoints(x: number, y: number, r: number): string {
 /** The Brain preview: the six-petal flower of the Brain map. A solid petal is a
  *  section this material fills at creation; a dashed one grows later in use. */
 function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSection, boolean> }) {
+  const { t } = useTranslation();
   const R = 44, D = Math.sqrt(3) * R + 4, cx = 150, cy = 130;
-  const t = name.trim();
-  const label = t ? (t.length > 9 ? t.slice(0, 8) + '…' : t) : 'Brain';
+  const trimmed = name.trim();
+  const label = trimmed ? (trimmed.length > 9 ? trimmed.slice(0, 8) + '…' : trimmed) : t('ui.NewBrainOverlay.brainFallback');
   return (
-    <svg viewBox="0 0 300 260" width="100%" role="img" aria-label="Brain preview" data-testid="new-brain-preview">
-      {PREVIEW.map(({ key, label: l, deg }) => {
+    <svg viewBox="0 0 300 260" width="100%" role="img" aria-label={t('ui.NewBrainOverlay.previewLabel')} data-testid="new-brain-preview">
+      {PREVIEW.map(({ key, labelKey, deg }) => {
         const a = (deg * Math.PI) / 180, x = cx + D * Math.cos(a), y = cy + D * Math.sin(a), on = filled[key];
         return (
           <g key={key} data-testid={`new-brain-preview-${key}`} data-on={on ? 'yes' : 'no'}>
@@ -74,7 +76,7 @@ function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSe
               className={on ? 'fill-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] stroke-[var(--color-primary)]'
                 : 'fill-transparent stroke-[var(--color-text-muted)]'} />
             <text x={x} y={y + 4} textAnchor="middle"
-              className={`text-meta ${on ? 'font-semibold fill-[var(--color-text)]' : 'fill-[var(--color-text-muted)]'}`}>{l}</text>
+              className={`text-meta ${on ? 'font-semibold fill-[var(--color-text)]' : 'fill-[var(--color-text-muted)]'}`}>{t(labelKey)}</text>
           </g>
         );
       })}
@@ -84,10 +86,11 @@ function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSe
   );
 }
 
-const NEXT_STEPS: { n: number; title: string; body: string }[] = [
-  { n: 1, title: 'Set up together in chat', body: 'Assets, knowledge, binding, then the Project Agent the agent drafts from them.' },
-  { n: 2, title: 'Grows in Brain Hub', body: 'It shows on the Brain map as being born; each petal fills as its section is written.' },
-  { n: 3, title: 'Ready', body: 'When the check passes, open its map or describe a first change for a Run.' },
+/** The three steps after Create, as i18n keys (ui.NewBrainOverlay.step<n>Title / step<n>Body). */
+const NEXT_STEPS: { n: number; titleKey: string; bodyKey: string }[] = [
+  { n: 1, titleKey: 'ui.NewBrainOverlay.step1Title', bodyKey: 'ui.NewBrainOverlay.step1Body' },
+  { n: 2, titleKey: 'ui.NewBrainOverlay.step2Title', bodyKey: 'ui.NewBrainOverlay.step2Body' },
+  { n: 3, titleKey: 'ui.NewBrainOverlay.step3Title', bodyKey: 'ui.NewBrainOverlay.step3Body' },
 ];
 
 type RowItem = MaterialRow;
@@ -109,6 +112,7 @@ const EMPTY_FORM: BrainForm = { name: '', items: [], draft: '' };
  * and `open` didn't observably transition on rapid reopen) is no longer needed.
  */
 export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBrainContentProps) {
+  const { t } = useTranslation();
   // Draft memory (run_754fe3e8): the overlay UNMOUNTS on close (OverlayHost
   // renderedId→null), so component-local useState is destroyed — an accidental
   // Esc used to discard everything. useOverlayDraft parks the form in a
@@ -169,13 +173,13 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
         {/* ── Left: who it is ─────────────────────────────────────────────── */}
         <div className="p-6 border-r border-[var(--color-border)] flex flex-col gap-5 overflow-y-auto">
           <div>
-            <label htmlFor="new-brain-name-input" className="block text-small font-semibold text-[var(--color-text)] mb-1.5">Name</label>
+            <label htmlFor="new-brain-name-input" className="block text-small font-semibold text-[var(--color-text)] mb-1.5">{t('common.label.name')}</label>
             <input
               id="new-brain-name-input"
               data-testid="new-brain-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Acme Payments"
+              placeholder={t('ui.NewBrainOverlay.namePlaceholder')}
               aria-invalid={!!nameError}
               aria-describedby="new-brain-name-help"
               className={`w-full h-10 bg-[var(--color-input-bg)] border rounded-lg px-3 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] ${
@@ -183,30 +187,30 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
             />
             <div id="new-brain-name-help" data-testid="new-brain-name-help"
               className={`mt-1.5 text-meta ${nameError ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}>
-              {nameError ?? 'Also its folder name in your workspace.'}
+              {nameError ?? t('ui.NewBrainOverlay.nameHelp')}
             </div>
           </div>
 
           <div>
-            <div className="text-small font-semibold text-[var(--color-text)]">Preview</div>
+            <div className="text-small font-semibold text-[var(--color-text)]">{t('ui.NewBrainOverlay.preview')}</div>
             <BrainPreview name={name} filled={filled} />
             <div className="text-small" data-testid="new-brain-assets">
               {assetCount > 0
-                ? <>Governs <span className="font-semibold">{assetCount}</span> asset{assetCount === 1 ? '' : 's'}. The agent proposes its Project Agent from the repo and CI.</>
-                : <><span className="font-semibold">Pure-knowledge Brain.</span> Nothing to bind, and that is complete.</>}
+                ? <>{t('ui.NewBrainOverlay.governsBefore')}<span className="font-semibold">{assetCount}</span>{t('ui.NewBrainOverlay.governsAfter', { count: assetCount })}</>
+                : <><span className="font-semibold">{t('ui.NewBrainOverlay.pureKnowledge')}</span> {t('ui.NewBrainOverlay.nothingToBind')}</>}
             </div>
-            <div className="text-meta text-[var(--color-text-muted)] mt-1">Solid sections come from this material. Dashed ones grow as you work in it.</div>
+            <div className="text-meta text-[var(--color-text-muted)] mt-1">{t('ui.NewBrainOverlay.solidDashed')}</div>
           </div>
         </div>
 
         {/* ── Right: what it starts from ──────────────────────────────────── */}
         <div className="p-6 flex flex-col min-w-0 min-h-0">
           <div className="flex items-baseline justify-between mb-2">
-            <span className="text-small font-semibold text-[var(--color-text)]">Starter material</span>
-            <span className="text-meta text-[var(--color-text-muted)]">Optional</span>
+            <span className="text-small font-semibold text-[var(--color-text)]">{t('ui.NewBrainOverlay.starterMaterial')}</span>
+            <span className="text-meta text-[var(--color-text-muted)]">{t('common.label.optional')}</span>
           </div>
           <MaterialPicker items={items} setItems={setItems} draft={draft} setDraft={setDraft}
-            emptyText="A repo becomes an asset it governs, documents are distilled into knowledge, folders are kept for reference. With nothing at all it starts as a pure-knowledge Brain." />
+            emptyText={t('ui.NewBrainOverlay.materialEmpty')} />
         </div>
       </div>
 
@@ -217,8 +221,8 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
             <li key={s.n} className="flex gap-2.5 min-w-0">
               <span className="shrink-0 inline-flex w-5 h-5 items-center justify-center rounded-full text-meta font-semibold bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] text-[var(--color-primary)]">{s.n}</span>
               <span className="min-w-0">
-                <span className="block text-small font-semibold">{s.title}</span>
-                <span className="block text-meta text-[var(--color-text-muted)]">{s.body}</span>
+                <span className="block text-small font-semibold">{t(s.titleKey)}</span>
+                <span className="block text-meta text-[var(--color-text-muted)]">{t(s.bodyKey)}</span>
               </span>
             </li>
           ))}
@@ -227,10 +231,10 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
           data-testid="new-brain-create"
           onClick={handleCreate}
           disabled={!canCreate}
-          title={canCreate ? 'Starts the setup in a chat tab' : 'Give it a valid name first'}
+          title={canCreate ? t('ui.NewBrainOverlay.createTitle') : t('ui.NewBrainOverlay.createNeedsName')}
           className="btn-lg btn-primary shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          Create Brain
+          {t('ui.NewBrainOverlay.createBrain')}
         </button>
       </div>
     </div>

@@ -2,6 +2,8 @@ import React, { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import type { ErrorResponse } from '../../types';
 import { ErrorCodes } from '../../types';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 
 interface Props {
   children: ReactNode;
@@ -55,14 +57,14 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex items-center gap-3 p-4 m-4 rounded-lg bg-red-500/10 border border-red-500/20">
             <span className="material-symbols-outlined icon-md text-red-500">error</span>
             <div className="flex-1">
-              <p className="text-sm font-medium text-[var(--color-text)]">This tab encountered an error</p>
+              <p className="text-sm font-medium text-[var(--color-text)]">{i18n.t('ui.ErrorBoundary.tabError')}</p>
               <p className="text-xs text-[var(--color-text-muted)]">{this.state.error?.message}</p>
             </div>
             <button
               onClick={this.handleRetry}
               className="btn-md btn-primary"
             >
-              Reload Tab
+              {i18n.t('ui.ErrorBoundary.reloadTab')}
             </button>
           </div>
         );
@@ -75,10 +77,10 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center" role="alert"
             data-testid="overlay-panel-error">
             <span className="material-symbols-outlined icon-lg text-red-500">error</span>
-            <p className="text-sm font-medium text-[var(--color-text)]">This panel hit an error</p>
+            <p className="text-sm font-medium text-[var(--color-text)]">{i18n.t('ui.ErrorBoundary.panelError')}</p>
             <p className="text-xs text-[var(--color-text-muted)] max-w-md break-words">{this.state.error?.message}</p>
-            <p className="text-xs text-[var(--color-text-faint)]">Close it (Esc) — the rest of the app keeps working.</p>
-            <button onClick={this.handleRetry} className="btn-md btn-primary">Try again</button>
+            <p className="text-xs text-[var(--color-text-faint)]">{i18n.t('ui.ErrorBoundary.panelCloseHint')}</p>
+            <button onClick={this.handleRetry} className="btn-md btn-primary">{i18n.t('ui.ErrorBoundary.tryAgain')}</button>
           </div>
         );
       }
@@ -89,8 +91,8 @@ export class ErrorBoundary extends Component<Props, State> {
           <div role="alert" data-testid="layout-region-error"
             className="flex items-center gap-2 px-2 py-1 text-xs text-[var(--color-text-muted)]">
             <span className="material-symbols-outlined icon-xs text-red-500">error</span>
-            <span className="truncate" title={this.state.error?.message}>This area hit an error</span>
-            <button onClick={this.handleRetry} className="underline hover:text-[var(--color-text)]">Retry</button>
+            <span className="truncate" title={this.state.error?.message}>{i18n.t('ui.ErrorBoundary.regionError')}</span>
+            <button onClick={this.handleRetry} className="underline hover:text-[var(--color-text)]">{i18n.t('common.button.retry')}</button>
           </div>
         );
       }
@@ -101,15 +103,15 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="w-20 h-20 mb-6 rounded-full bg-red-500/10 flex items-center justify-center">
               <span className="material-symbols-outlined icon-xl text-red-500">error</span>
             </div>
-            <h1 className="text-2xl font-bold text-[var(--color-text)] mb-2">Something went wrong</h1>
+            <h1 className="text-2xl font-bold text-[var(--color-text)] mb-2">{i18n.t('ui.ErrorBoundary.somethingWrong')}</h1>
             <p className="text-[var(--color-text-muted)] mb-6 max-w-md">
-              {this.state.error?.message || 'An unexpected error occurred'}
+              {this.state.error?.message || i18n.t('ui.ErrorBoundary.unexpected')}
             </p>
             <button
               onClick={() => window.location.reload()}
               className="btn-lg btn-primary"
             >
-              Reload App
+              {i18n.t('ui.ErrorBoundary.reloadApp')}
             </button>
           </div>
         );
@@ -150,14 +152,14 @@ interface ErrorFallbackProps {
 }
 
 export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.ReactElement {
-  const errorMessage = error?.message || 'An unexpected error occurred';
+  const errorMessage = error?.message || i18n.t('ui.ErrorBoundary.unexpected');
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[400px] p-8 text-center">
       <div className="w-16 h-16 mb-4 rounded-full bg-red-500/10 flex items-center justify-center">
         <span className="material-symbols-outlined icon-lg text-red-500">error</span>
       </div>
-      <h2 className="text-xl font-semibold text-[var(--color-text)] mb-2">Something went wrong</h2>
+      <h2 className="text-xl font-semibold text-[var(--color-text)] mb-2">{i18n.t('ui.ErrorBoundary.somethingWrong')}</h2>
       <p className="text-[var(--color-text-muted)] mb-6 max-w-md">{errorMessage}</p>
       {onRetry && (
         <button
@@ -165,7 +167,7 @@ export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.Rea
           className="btn-lg btn-primary transition-colors"
         >
           <span className="material-symbols-outlined icon-md">refresh</span>
-          Try again
+          {i18n.t('ui.ErrorBoundary.tryAgain')}
         </button>
       )}
     </div>
@@ -240,7 +242,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
                 className="btn-lg btn-primary transition-colors"
               >
                 <span className="material-symbols-outlined icon-md">refresh</span>
-                Try again
+                {i18n.t('ui.ErrorBoundary.tryAgain')}
               </button>
             )}
             {onDismiss && (
@@ -248,7 +250,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
                 onClick={onDismiss}
                 className="px-4 py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors text-sm"
               >
-                Dismiss
+                {i18n.t('ui.ErrorBoundary.dismiss')}
               </button>
             )}
           </div>
@@ -257,7 +259,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
       {error.requestId && (
         <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
           <p className="text-xs text-[var(--color-text-muted)]">
-            Request ID: <code className="bg-[var(--color-bg)] px-2 py-1 rounded">{error.requestId}</code>
+            {i18n.t('ui.ErrorBoundary.requestId')} <code className="bg-[var(--color-bg)] px-2 py-1 rounded">{error.requestId}</code>
           </p>
         </div>
       )}

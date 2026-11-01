@@ -54,15 +54,19 @@ SwarmAI 里的一切，都服务于这四个之一：
 
 ## 快速开始
 
+**安装应用：** 从 [Releases](https://github.com/xg-gh-25/SwarmAI/releases) 下载 —— macOS `.dmg`（Apple Silicon 或 Intel）、Windows `-setup.exe`、Linux `.AppImage`（先 `chmod +x`，再运行）。
+
+- 需要一个 **AWS 账号**，并已开通 Amazon Bedrock 上的 Claude 模型：聊天运行在 Bedrock 上。
+- 安装后的应用需要 **git**（Windows 上需要 Git for Windows，其中包含 Git Bash）。Python 后端和 Claude CLI 已随应用自带。
+- macOS：应用暂未经过 Apple 签名 —— 首次打开时，进入「系统设置 → 隐私与安全性」，点击「仍要打开」（Open Anyway）。
+
+**从源码构建**（需要 git、Node.js 18+、Python 3.11+、Rust、[uv](https://astral.sh/uv)；Windows 上还需要 Git Bash）：
+
 ```bash
 git clone https://github.com/xg-gh-25/SwarmAI.git && cd SwarmAI
-cd backend && uv sync && cp .env.example .env   # 填入 API key
+cd backend && uv sync && cp .env.example .env
 cd ../desktop && npm install && npm run tauri:dev
 ```
-
-**macOS (Apple Silicon)：** 或从 [Releases](https://github.com/xg-gh-25/SwarmAI/releases) 下载 `.dmg`
-
-需要：Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude Code CLI](https://github.com/anthropics/claude-code)
 
 > 📖 完整安装指南：[QUICK_START.md](./QUICK_START.md)
 
@@ -127,7 +131,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 **Tauri 2.0**（Rust）· **React 19** · **FastAPI** · **Claude Agent SDK + Bedrock** · **SQLite**（WAL + FTS5）
 
-四平台后端（编译时隔离）：macOS daemon（预编译 `.dmg`）· Hive (EC2) · Windows · Linux（源码构建）。
+四平台后端（编译时隔离）：macOS daemon（`.dmg`）· Hive (EC2) · Windows（`-setup.exe`）· Linux（`.AppImage`）。
 
 ---
 

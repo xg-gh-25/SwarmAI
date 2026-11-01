@@ -196,6 +196,7 @@ function DevRow({
   onToggle: (enabled: boolean) => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const isPlugin = entry.source === 'plugin';
 
   return (
@@ -211,7 +212,7 @@ function DevRow({
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-[var(--color-text)]">{entry.name}</span>
             {isPlugin && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">Plugin</span>
+              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">{t('skills.source.plugin')}</span>
             )}
           </div>
           {entry.description && (
@@ -275,6 +276,7 @@ function EnvFields({
   currentEnv: Record<string, string>;
   onSave: (env: Record<string, string>) => void;
 }) {
+  const { t } = useTranslation();
   const [values, setValues] = useState<Record<string, string>>({ ...currentEnv });
 
   const update = (key: string, val: string) => setValues((prev) => ({ ...prev, [key]: val }));
@@ -296,7 +298,7 @@ function EnvFields({
       {optionalEnv.map((field) => (
         <div key={field.key}>
           <label className="block text-xs text-[var(--color-text-muted)] mb-1">
-            {field.label} {field.default && <span className="opacity-50">(default: {field.default})</span>}
+            {field.label} {field.default && <span className="opacity-50">{t('ui.MCPSettingsPanel.defaultValue', { value: field.default })}</span>}
           </label>
           <input
             type="text"
@@ -308,7 +310,7 @@ function EnvFields({
         </div>
       ))}
       <Button variant="secondary" onClick={() => onSave(values)} className="mt-2">
-        Save Env
+        {t('ui.MCPSettingsPanel.saveEnv')}
       </Button>
     </div>
   );
@@ -394,13 +396,13 @@ function AddDevForm({
           </div>
         )}
         <div>
-          <label className="block text-sm text-[var(--color-text-muted)] mb-1">Description</label>
+          <label className="block text-sm text-[var(--color-text-muted)] mb-1">{t('mcp.form.description')}</label>
           <input type="text" value={description} onChange={(e) => setDescription(e.target.value)}
             className="w-full px-3 py-2 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]" />
         </div>
         <div className="flex gap-3 pt-2">
-          <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
-          <Button type="submit" className="flex-1" isLoading={isLoading}>Add MCP</Button>
+          <Button type="button" variant="secondary" onClick={onCancel}>{t('common.button.cancel')}</Button>
+          <Button type="submit" className="flex-1" isLoading={isLoading}>{t('mcp.addMcp')}</Button>
         </div>
       </form>
     </div>

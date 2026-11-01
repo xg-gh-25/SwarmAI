@@ -10,6 +10,9 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import { getCodeIntelGraph, type GraphNode } from '../../services/codeIntel';
 
 // ── Module color palette (deterministic hash → color) ─────────────────────────
@@ -76,6 +79,7 @@ interface ForceGraphLink {
 }
 
 export function CodeGraph({ project, repo, limit = 300, onClose, inline = false }: CodeGraphProps) {
+  const { t } = useTranslation();
   // Outer container: fullscreen overlay by default; parent-filling when embedded.
   // The `bg-[#0d1117]` is shared; only the positioning differs (Gate-1 B1: the
   // inline parent — BrainHub's flex-1 content pane — has a definite height, so
@@ -102,7 +106,7 @@ export function CodeGraph({ project, repo, limit = 300, onClose, inline = false 
       .then((data) => {
         if (cancelled) return;
         if (!data) {
-          setError('No code intelligence data found');
+          setError(i18n.t('ui.CodeGraph.noData'));
           return;
         }
         // Transform to force-graph format (edges → links)
@@ -112,7 +116,7 @@ export function CodeGraph({ project, repo, limit = 300, onClose, inline = false 
         });
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message || 'Failed to load graph');
+        if (!cancelled) setError(err.message || i18n.t('ui.CodeGraph.loadFailed'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -188,7 +192,7 @@ export function CodeGraph({ project, repo, limit = 300, onClose, inline = false 
   if (loading) {
     return (
       <div className={centerCls}>
-        <div className="text-[var(--color-text-muted)] text-sm">Loading code graph...</div>
+        <div className="text-[var(--color-text-muted)] text-sm">{t('ui.CodeGraph.loading')}</div>
       </div>
     );
   }
@@ -197,7 +201,7 @@ export function CodeGraph({ project, repo, limit = 300, onClose, inline = false 
     return (
       <div className={centerCls}>
         <div className="text-red-400 text-sm">{error}</div>
-        {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">Close</button>}
+        {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">{t('common.button.close')}</button>}
       </div>
     );
   }
@@ -205,8 +209,8 @@ export function CodeGraph({ project, repo, limit = 300, onClose, inline = false 
   if (!graphData || graphData.nodes.length === 0) {
     return (
       <div className={centerCls}>
-        <div className="text-gray-400 text-sm">No code symbols indexed yet. Run a re-index first.</div>
-        {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white text-sm">Close</button>}
+        <div className="text-gray-400 text-sm">{t('ui.CodeGraph.empty')}</div>
+        {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white text-sm">{t('common.button.close')}</button>}
       </div>
     );
   }
@@ -216,23 +220,23 @@ export function CodeGraph({ project, repo, limit = 300, onClose, inline = false 
       {/* Header */}
       <div className="absolute top-0 left-0 right-0 h-10 flex items-center justify-between px-4 bg-[#0d1117]/80 backdrop-blur-sm border-b border-gray-800 z-10">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-gray-200">Code Intelligence Graph</span>
+          <span className="text-sm font-medium text-gray-200">{t('ui.CodeGraph.title')}</span>
           <span className="text-xs text-gray-500">{project}</span>
-          <span className="text-xs text-gray-600">{graphData.nodes.length} nodes / {graphData.links.length} edges</span>
+          <span className="text-xs text-gray-600">{t('ui.CodeGraph.counts', { nodes: graphData.nodes.length, edges: graphData.links.length })}</span>
         </div>
         {onClose && (
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-white text-sm px-2 py-1 rounded hover:bg-gray-800"
           >
-            ESC
+            {t('ui.CodeGraph.escKey')}
           </button>
         )}
       </div>
 
       {/* Legend */}
       <div className="absolute bottom-4 left-4 bg-[#161b22] border border-gray-800 rounded-lg p-3 z-10 max-w-[200px]">
-        <div className="text-[11px] text-gray-400 mb-2 font-medium">Modules</div>
+        <div className="text-[11px] text-gray-400 mb-2 font-medium">{t('ui.CodeGraph.modules')}</div>
         {modules.map(([mod, count]) => (
           <div key={mod} className="flex items-center gap-2 text-[11px] text-gray-300 py-0.5">
             <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: getModuleColor(mod) }} />

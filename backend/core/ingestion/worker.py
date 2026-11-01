@@ -183,7 +183,7 @@ def _defer_or_poison(
                 destination_value = json.loads(unit["destination"] or "{}")
             target_path = str(destination_value.get("relative_path") or "")
             section = str(destination_value.get("section") or "")
-            prompt = f"在 {target_path} 加 `## {section}`"
+            prompt = f"Add `## {section}` to {target_path}"
             conn.execute(
                 "INSERT INTO ingestion_events(at,kind,detail) VALUES(?,'missing_section',?)",
                 (_utcnow().isoformat(), json.dumps({

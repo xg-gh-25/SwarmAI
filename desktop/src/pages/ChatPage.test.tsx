@@ -22,12 +22,7 @@ import { LayoutProvider } from '../contexts/LayoutContext';
 import { ChatInput } from './chat/components/ChatInput';
 import type { UnifiedAttachment } from '../types';
 
-// Mock react-i18next
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, fallback?: string) => fallback || key,
-  }),
-}));
+// react-i18next is not mocked: the app's i18n (test-setup) renders the real English text.
 
 function createTestQueryClient() {
   return new QueryClient({

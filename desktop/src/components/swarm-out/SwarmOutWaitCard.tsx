@@ -27,6 +27,7 @@ import AskUserQuestion from '../common/AskUserQuestion';
 import { ActDone, ActFrame, ActOption } from '../common/ActCard';
 import { swarmOutService, type SwarmOutAsk } from '../../services/swarmOut';
 import { when } from './live';
+import { modKeyLabel } from '../../utils/platform';
 
 type Body = { answers?: Record<string, string>; decision?: 'approve' | 'deny'; option_id?: string };
 
@@ -175,7 +176,7 @@ export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, sou
         footer={!wait.truncated && (
           <button type="button" className="btn-sm btn-primary" disabled={busy || pick === null} onClick={submit}
             data-testid="swarm-out-wait-submit">
-            {t('swarmOut.wait.submit')} <span className="opacity-70 text-[11px]">⌘↩</span>
+            {t('swarmOut.wait.submit')} <span className="opacity-70 text-[11px]">{modKeyLabel()}↩</span>
           </button>
         )}>
         <div className="whitespace-pre-wrap">{wait.question}</div>

@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { useTranslation } from 'react-i18next';
 import '@xterm/xterm/css/xterm.css';
 import { sendTerminalTextToChat, type TerminalTab as TerminalTabModel } from '../../stores/TerminalStore';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -121,6 +122,8 @@ function useThemeKey(): string {
 }
 
 export default function TerminalTab({ tab, active }: TerminalTabProps) {
+  // `tr`, not `t`: this component names its xterm Terminal instances `t`.
+  const { t: tr } = useTranslation();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -428,7 +431,7 @@ export default function TerminalTab({ tab, active }: TerminalTabProps) {
           className="btn-sm btn-secondary absolute top-1.5 right-3 shadow-sm bg-[var(--color-bg-chrome)]"
         >
           <span className="material-symbols-outlined icon-xs">{sent ? 'check' : 'add_comment'}</span>
-          {sent ? 'Added to chat' : 'Add to chat'}
+          {sent ? tr('ui.TerminalTab.addedToChat') : tr('ui.TerminalTab.addToChat')}
           {!sent && <span className="text-[var(--color-text-muted)] font-normal">⌘↵</span>}
         </button>
       )}
@@ -458,6 +461,7 @@ function TerminalMenu({ x, y, hasSelection, onClose, onCopy, onAdd, onSelectAll,
   x: number; y: number; hasSelection: boolean; onClose: () => void;
   onCopy: () => void; onAdd: () => void; onSelectAll: () => void; onClear: () => void;
 }) {
+  const { t } = useTranslation();
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
@@ -502,11 +506,11 @@ function TerminalMenu({ x, y, hasSelection, onClose, onCopy, onAdd, onSelectAll,
       style={{ left: x, top: y }}
       className="absolute z-50 w-48 p-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg"
     >
-      {item('copy', 'content_copy', 'Copy', '⌘C', onCopy, !hasSelection)}
-      {item('add', 'add_comment', hasSelection ? 'Add selection to chat' : 'Add last 200 lines to chat', '⌘↵', onAdd)}
+      {item('copy', 'content_copy', t('common.copy.copy'), '⌘C', onCopy, !hasSelection)}
+      {item('add', 'add_comment', hasSelection ? t('ui.TerminalTab.addSelection') : t('ui.TerminalTab.addLastLines', { count: 200 }), '⌘↵', onAdd)}
       <div className="h-px my-1 bg-[var(--color-border)]" />
-      {item('select-all', 'select_all', 'Select all', '⌘A', onSelectAll)}
-      {item('clear', 'mop', 'Clear', '⌘K', onClear)}
+      {item('select-all', 'select_all', t('ui.TerminalTab.selectAll'), '⌘A', onSelectAll)}
+      {item('clear', 'mop', t('common.button.clear'), '⌘K', onClear)}
     </div>
   );
 }

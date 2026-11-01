@@ -12,6 +12,7 @@
  *   - Reports natural dimensions via onStatusInfo on load
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { rawFileUrl } from '../utils/rawFileUrl';
 
 interface RendererProps {
@@ -38,6 +39,7 @@ export default function ImageRenderer({
   onStatusInfo,
   onUnsupported,
 }: RendererProps) {
+  const { t } = useTranslation();
   const [scale, setScale] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -149,15 +151,15 @@ export default function ImageRenderer({
         <button
           onClick={resetToFit}
           className="btn-sm btn-ghost transition-colors"
-          title="Fit to panel"
+          title={t('ui.ImageRenderer.fitTitle')}
         >
           <span className="material-symbols-outlined icon-xs">fit_screen</span>
-          Fit
+          {t('ui.HtmlRenderer.fit')}
         </button>
         <button
           onClick={resetTo100}
           className="btn-sm btn-ghost transition-colors"
-          title="Actual size (100%)"
+          title={t('ui.ImageRenderer.actualSizeTitle')}
         >
           100%
         </button>
@@ -167,7 +169,7 @@ export default function ImageRenderer({
         <button
           onClick={zoomOut}
           className="flex items-center justify-center w-6 h-6 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-          title="Zoom out"
+          title={t('ui.ImageRenderer.zoomOut')}
         >
           <span className="material-symbols-outlined icon-sm">remove</span>
         </button>
@@ -177,7 +179,7 @@ export default function ImageRenderer({
         <button
           onClick={zoomIn}
           className="flex items-center justify-center w-6 h-6 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-          title="Zoom in"
+          title={t('ui.ImageRenderer.zoomIn')}
         >
           <span className="material-symbols-outlined icon-sm">add</span>
         </button>

@@ -14,11 +14,12 @@
  * Keys: ↑ ↓ select, ← → collapse / expand, ↵ open (folder: toggle). Right-click:
  * Open in Canvas / Copy path. No write action exists here.
  *
- * Exports: `RepoPane`, `flattenRows` (pure, tested), `REPO_FOOT`.
+ * Exports: `RepoPane`, `flattenRows` (pure, tested), `REPO_FOOT` (the footer text i18n key).
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { overlayQuery } from '../layout/overlayQueries';
 import { OverlayEmpty, OverlayError } from '../layout/OverlayState';
 import { FileTypeIcon } from '../common/FileTypeIcon';
@@ -27,7 +28,8 @@ import { workspaceLocationsService, type WorkspaceLocation } from '../../service
 import type { TreeNode, GitStatus } from '../../types';
 import { LocationHeader, PaneFooter, TreeSkeleton3 } from './workspaceParts';
 
-export const REPO_FOOT = 'local main · read-only';
+/** i18n key of the pane footer text ("local main · read-only"). */
+export const REPO_FOOT = 'ui.RepoPane.footer';
 
 const MARK: Partial<Record<GitStatus, [string, string]>> = {
   modified: ['M', 'var(--color-git-modified)'],
@@ -71,6 +73,7 @@ function openInCanvas(abs: string, gitStatus: GitStatus | undefined, close: () =
 }
 
 export function RepoPane({ loc, active, close }: { loc: WorkspaceLocation; active: boolean; close: () => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const treeQ = useQuery(overlayQuery.workspaceRepoTree(loc.key));
   const [kids, setKids] = useState<Map<string, TreeNode[]>>(() => new Map());
@@ -172,16 +175,16 @@ export function RepoPane({ loc, active, close }: { loc: WorkspaceLocation; activ
       <div className="relative flex flex-1 items-center">
         <span aria-hidden="true" className="material-symbols-outlined icon-xs absolute left-2 text-[var(--color-text-dim)] pointer-events-none">search</span>
         <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter loaded files" aria-label={`Filter ${loc.label}`}
+          placeholder={t('ui.RepoPane.filterLoaded')} aria-label={t('ui.RepoPane.filterLabel', { label: loc.label })}
           data-workspace-filter="" data-testid="repo-filter"
           className="w-full h-7 pl-7 pr-2 text-small rounded-md bg-[var(--color-bg-chrome)] border border-[var(--color-border)] text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-primary)] [&::-webkit-search-cancel-button]:hidden" />
       </div>
       <button type="button" onClick={() => setShowHidden((v) => !v)} data-testid="repo-show-hidden"
-        title={showHidden ? 'Hide hidden items' : 'Show hidden items'} aria-pressed={showHidden}
+        title={showHidden ? t('ui.RepoPane.hideHidden') : t('ui.RepoPane.showHidden')} aria-pressed={showHidden}
         className={clsx('icon-btn hover:bg-[var(--color-hover)]', showHidden ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-muted)]')}>
         <span className="material-symbols-outlined icon-sm">{showHidden ? 'visibility' : 'visibility_off'}</span>
       </button>
-      <button type="button" onClick={() => setOpen(new Set())} title="Collapse all folders" data-testid="repo-collapse-all"
+      <button type="button" onClick={() => setOpen(new Set())} title={t('ui.RepoPane.collapseAll')} data-testid="repo-collapse-all"
         className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]">
         <span className="material-symbols-outlined icon-sm">unfold_less</span>
       </button>
@@ -190,14 +193,14 @@ export function RepoPane({ loc, active, close }: { loc: WorkspaceLocation; activ
 
   let body;
   if (!treeQ.data && treeQ.isError) {
-    body = <OverlayError message={`Couldn't load ${loc.label}`} onRetry={() => void treeQ.refetch()}
+    body = <OverlayError message={t('ui.RepoPane.loadError', { label: loc.label })} onRetry={() => void treeQ.refetch()}
       testid="repo-load-error" retryTestid="repo-retry" />;
   } else if (!treeQ.data) {
     body = <TreeSkeleton3 />;
   } else if (rows.length === 0) {
     body = query
-      ? <OverlayEmpty testid="repo-no-match">No loaded file matches “{query}”. Open a folder to search inside it.</OverlayEmpty>
-      : <OverlayEmpty testid="repo-empty">This folder is empty.</OverlayEmpty>;
+      ? <OverlayEmpty testid="repo-no-match">{t('ui.RepoPane.noMatch', { query })}</OverlayEmpty>
+      : <OverlayEmpty testid="repo-empty">{t('ui.RepoPane.emptyFolder')}</OverlayEmpty>;
   } else {
     body = (
       <div role="tree" aria-label={loc.label} tabIndex={0} onKeyDown={onKey} className="py-1 outline-none">
@@ -226,14 +229,14 @@ export function RepoPane({ loc, active, close }: { loc: WorkspaceLocation; activ
               <span className={clsx('flex-1 truncate', n.hidden ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text)]')}>{n.name}</span>
               {r.loading && <span className="material-symbols-outlined icon-xs animate-spin motion-reduce:animate-none text-[var(--color-text-dim)]">progress_activity</span>}
               <span className={clsx('flex items-center', !dir && 'group-hover:hidden')}>
-                {dir && n.changedCount ? <span className="text-meta tabular-nums text-[var(--color-text-muted)]" data-testid="repo-changed-count">{n.changedCount} changed</span> : null}
+                {dir && n.changedCount ? <span className="text-meta tabular-nums text-[var(--color-text-muted)]" data-testid="repo-changed-count">{t('ui.RepoPane.changedCount', { count: n.changedCount })}</span> : null}
                 {!dir && mark ? <span className="font-mono text-meta font-semibold w-3.5 text-center" style={{ color: mark[1] }}>{mark[0]}</span> : null}
               </span>
               {!dir && (
                 <span className="hidden group-hover:flex items-center gap-1">
                   <button type="button" className="btn-sm btn-secondary" data-testid="repo-row-open"
-                    onClick={(e) => { e.stopPropagation(); openInCanvas(abs(n.path), n.gitStatus, close); }}>Open</button>
-                  <button type="button" className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]" title="Copy path"
+                    onClick={(e) => { e.stopPropagation(); openInCanvas(abs(n.path), n.gitStatus, close); }}>{t('ui.RepoPane.open')}</button>
+                  <button type="button" className="icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]" title={t('ui.RepoPane.copyPath')}
                     onClick={(e) => { e.stopPropagation(); void copyPathNow(abs(n.path)); }}>
                     <span className="material-symbols-outlined icon-sm">content_copy</span>
                   </button>
@@ -252,16 +255,16 @@ export function RepoPane({ loc, active, close }: { loc: WorkspaceLocation; activ
       {toolbar}
       <div ref={scrollRef} onScroll={(e) => { scrollTop.current = e.currentTarget.scrollTop; }}
         className="flex-1 min-h-0 overflow-auto border-t border-[var(--color-border)]">{body}</div>
-      <PaneFooter left={REPO_FOOT} updatedAt={treeQ.dataUpdatedAt || null} />
+      <PaneFooter left={t(REPO_FOOT)} updatedAt={treeQ.dataUpdatedAt || null} />
       {menu && (
         <div role="menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}
           className="fixed z-50 min-w-[160px] py-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg text-small">
           {menu.node.type === 'file' && (
             <button type="button" role="menuitem" className="w-full text-left px-3 py-1.5 hover:bg-[var(--color-hover)]"
-              onClick={() => { const n = menu.node; setMenu(null); openInCanvas(abs(n.path), n.gitStatus, close); }}>Open in Canvas</button>
+              onClick={() => { const n = menu.node; setMenu(null); openInCanvas(abs(n.path), n.gitStatus, close); }}>{t('ui.RepoPane.openInCanvas')}</button>
           )}
           <button type="button" role="menuitem" className="w-full text-left px-3 py-1.5 hover:bg-[var(--color-hover)]"
-            onClick={() => { const n = menu.node; setMenu(null); void copyPathNow(abs(n.path)); }}>Copy path</button>
+            onClick={() => { const n = menu.node; setMenu(null); void copyPathNow(abs(n.path)); }}>{t('ui.RepoPane.copyPath')}</button>
         </div>
       )}
     </div>

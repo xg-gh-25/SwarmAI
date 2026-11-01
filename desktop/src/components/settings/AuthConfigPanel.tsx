@@ -7,6 +7,7 @@
  * keys are no longer supported (design 2026-11-01-settings-account-merge §3).
  */
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../services/system';
 import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
@@ -22,6 +23,7 @@ interface AuthConfigPanelProps {
 
 
 export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }: AuthConfigPanelProps) {
+  const { t } = useTranslation();
   const [method, setMethod] = useState<AuthMethod>('sso');
   const [region, setRegion] = useState('us-east-1');
   const [accountId, setAccountId] = useState('');
@@ -126,7 +128,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         success: false,
         error: String(e),
         errorType: 'unknown',
-        fixHint: 'Check your network connection and try again.',
+        fixHint: t('ui.AuthConfigPanel.networkHint'),
       });
       setVerifyState('error');
       if (onVerifyFail) onVerifyFail();
@@ -184,12 +186,12 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         {verifyState === 'verifying' ? (
           <>
             <span className="material-symbols-outlined icon-md animate-spin">progress_activity</span>
-            Verifying...
+            {t('ui.AuthConfigPanel.verifying')}
           </>
         ) : (
           <>
             <span className="material-symbols-outlined icon-md">play_arrow</span>
-            Verify Connection
+            {t('ui.AuthConfigPanel.verify')}
           </>
         )}
       </button>
@@ -198,7 +200,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-2">
           <span className="material-symbols-outlined icon-md text-green-400">check_circle</span>
           <span className="text-green-400 text-sm">
-            {verifyResult.model} responded in {verifyResult.latencyMs}ms
+            {t('ui.AuthConfigPanel.responded', { model: verifyResult.model, ms: verifyResult.latencyMs })}
           </span>
         </div>
       )}
@@ -208,11 +210,11 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
           <div className="flex items-center gap-2 mb-1">
             <span className="material-symbols-outlined icon-xs text-red-400">error</span>
             <span className="text-red-400 text-sm font-medium">
-              {verifyResult.errorType === 'expired_credentials' ? 'Credentials Expired' :
-               verifyResult.errorType === 'missing_key' ? 'API Key Not Found' :
-               verifyResult.errorType === 'invalid_key' ? 'Invalid API Key' :
-               verifyResult.errorType === 'access_denied' ? 'Access Denied' :
-               'Connection Failed'}
+              {verifyResult.errorType === 'expired_credentials' ? t('ui.AuthConfigPanel.errExpired') :
+               verifyResult.errorType === 'missing_key' ? t('ui.AuthConfigPanel.errMissingKey') :
+               verifyResult.errorType === 'invalid_key' ? t('ui.AuthConfigPanel.errInvalidKey') :
+               verifyResult.errorType === 'access_denied' ? t('ui.AuthConfigPanel.errAccessDenied') :
+               t('ui.AuthConfigPanel.errFailed')}
             </span>
           </div>
           {verifyResult.fixHint && (
@@ -223,7 +225,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
 
       {mode === 'onboarding' && verifyState !== 'success' && (
         <p className="text-xs text-[var(--color-text-muted)] text-center">
-          Must verify before proceeding.
+          {t('ui.AuthConfigPanel.mustVerify')}
         </p>
       )}
     </>
@@ -236,38 +238,38 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         <div className="p-4 bg-[var(--color-card)] rounded-lg space-y-3">
           <div className="flex items-center gap-2 mb-1">
             <span className="w-2 h-2 bg-green-400 rounded-full" />
-            <span className="text-sm font-medium text-green-400">EC2 IAM Instance Role</span>
+            <span className="text-sm font-medium text-green-400">{t('ui.AuthConfigPanel.ec2Role')}</span>
           </div>
 
           <div className="space-y-2 text-xs">
             {iam?.accountId && (
               <div className="flex justify-between">
-                <span className="text-[var(--color-text-muted)]">Account</span>
+                <span className="text-[var(--color-text-muted)]">{t('ui.AuthConfigPanel.account')}</span>
                 <code className="text-[var(--color-text)]">{iam.accountId}</code>
               </div>
             )}
             {iam?.region && (
               <div className="flex justify-between">
-                <span className="text-[var(--color-text-muted)]">Region</span>
+                <span className="text-[var(--color-text-muted)]">{t('ui.AuthConfigPanel.region')}</span>
                 <code className="text-[var(--color-text)]">{iam.region}</code>
               </div>
             )}
             {iam?.roleName && (
               <div className="flex justify-between">
-                <span className="text-[var(--color-text-muted)]">Role</span>
+                <span className="text-[var(--color-text-muted)]">{t('ui.AuthConfigPanel.role')}</span>
                 <code className="text-[var(--color-text)]">{iam.roleName}</code>
               </div>
             )}
             {iam?.instanceId && (
               <div className="flex justify-between">
-                <span className="text-[var(--color-text-muted)]">Instance</span>
+                <span className="text-[var(--color-text-muted)]">{t('ui.AuthConfigPanel.instance')}</span>
                 <code className="text-[var(--color-text)]">{iam.instanceId}</code>
               </div>
             )}
           </div>
 
           <p className="text-xs text-[var(--color-text-muted)] pt-1">
-            Credentials are managed by the EC2 instance role — no configuration needed.
+            {t('ui.AuthConfigPanel.ec2Managed')}
           </p>
         </div>
 
@@ -283,7 +285,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       {/* Section title */}
       {mode === 'onboarding' && (
         <p className="text-xs text-[var(--color-text-muted)]">
-          SwarmAI uses your AWS account for Claude AI, cloud deployment, and other services.
+          {t('ui.AuthConfigPanel.intro')}
         </p>
       )}
 
@@ -318,42 +320,42 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                 context, not a dead input. Hidden entirely if nothing was probed. */}
           {method === 'ada' ? (
             <div>
-              <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
+              <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.AuthConfigPanel.accountId')}</label>
               <input
                 type="text"
                 value={accountId}
                 onChange={(e) => { setAccountId(e.target.value); setAdaAccount(e.target.value); }}
-                placeholder="Enter your 12-digit AWS account ID"
+                placeholder={t('ui.AuthConfigPanel.accountIdPlaceholder')}
                 className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
               />
             </div>
           ) : accountId ? (
             <div>
-              <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
+              <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.AuthConfigPanel.accountId')}</label>
               <div className="w-full px-3 py-2 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-muted)] flex items-center justify-between">
                 <code className="text-[var(--color-text)]">{accountId}</code>
-                <span className="text-[11px] uppercase tracking-wide opacity-60">from AWS profile</span>
+                <span className="text-[11px] uppercase tracking-wide opacity-60">{t('ui.AuthConfigPanel.fromProfile')}</span>
               </div>
             </div>
           ) : null}
 
           <Dropdown
-            label="AWS Region"
+            label={t('ui.AuthConfigPanel.awsRegion')}
             options={AWS_REGION_OPTIONS}
             selectedId={region}
             onChange={setRegion}
-            placeholder="Select region..."
+            placeholder={t('ui.AuthConfigPanel.selectRegion')}
           />
 
           {/* ADA-specific fields */}
           {method === 'ada' && (
             <div>
-              <label className="block text-xs text-[var(--color-text-muted)] mb-1">ADA Role</label>
+              <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.AuthConfigPanel.adaRole')}</label>
               <input
                 type="text"
                 value={adaRole}
                 onChange={(e) => setAdaRole(e.target.value)}
-                placeholder="e.g. Admin"
+                placeholder={t('ui.AuthConfigPanel.adaRolePlaceholder')}
                 className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
               />
             </div>
@@ -370,29 +372,29 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                 <>
                   <div className="flex items-center gap-1.5 mb-2">
                     <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                    <span className="text-green-400 font-medium">ADA credentials active</span>
+                    <span className="text-green-400 font-medium">{t('ui.AuthConfigPanel.adaActive')}</span>
                   </div>
                   <div className="space-y-1 text-[var(--color-text-muted)]">
                     {authHint.adaDetails?.accountId && (
                       <div className="flex justify-between">
-                        <span>Account</span>
+                        <span>{t('ui.AuthConfigPanel.account')}</span>
                         <code className="text-[var(--color-text)]">{authHint.adaDetails.accountId}</code>
                       </div>
                     )}
                     {authHint.adaDetails?.roleName && (
                       <div className="flex justify-between">
-                        <span>Role</span>
+                        <span>{t('ui.AuthConfigPanel.role')}</span>
                         <code className="text-[var(--color-text)]">{authHint.adaDetails.roleName}</code>
                       </div>
                     )}
                     {authHint.adaDetails?.keyPrefix && (
                       <div className="flex justify-between">
-                        <span>Access Key</span>
+                        <span>{t('ui.AuthConfigPanel.accessKey')}</span>
                         <code className="text-[var(--color-text)]">{authHint.adaDetails.keyPrefix}</code>
                       </div>
                     )}
                   </div>
-                  <p className="text-[var(--color-text-muted)] mt-2 opacity-60">To refresh credentials (SwarmAI then fetches them with ADA itself):</p>
+                  <p className="text-[var(--color-text-muted)] mt-2 opacity-60">{t('ui.AuthConfigPanel.adaRefresh')}</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all mt-1">
                     mwinit -f
                   </code>
@@ -402,13 +404,13 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                   {/* never a bare `ada credentials update`: without --profile it overwrites
                       the person's default AWS profile. SwarmAI runs `ada credentials print`
                       itself (core/aws_account); only Midway has to be valid. */}
-                  <p className="text-[var(--color-text-muted)] mb-1">Make sure VPN is connected, then run:</p>
+                  <p className="text-[var(--color-text-muted)] mb-1">{t('ui.AuthConfigPanel.vpnRun')}</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all">
                     mwinit -f
                   </code>
                   {!hasRealValues && (
                     <p className="text-[var(--color-text-muted)] mt-1.5 opacity-50 text-[11px]">
-                      Fill in Account ID and Role above ({displayAccount} · {displayRole}).
+                      {t('ui.AuthConfigPanel.fillIn', { account: displayAccount, role: displayRole })}
                     </p>
                   )}
                 </>
@@ -418,14 +420,14 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                 <>
                   <div className="flex items-center gap-1.5 mb-2">
                     <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                    <span className="text-green-400 font-medium">SSO profiles detected</span>
+                    <span className="text-green-400 font-medium">{t('ui.AuthConfigPanel.ssoDetected')}</span>
                   </div>
                   <div className="text-[var(--color-text-muted)] mb-2">
-                    Profiles: {authHint.awsProfiles.map(p => (
+                    {t('ui.AuthConfigPanel.profiles')} {authHint.awsProfiles.map(p => (
                       <code key={p} className="text-[var(--color-text)] bg-[var(--color-bg)] px-1.5 py-0.5 rounded mr-1">{p}</code>
                     ))}
                   </div>
-                  <p className="text-[var(--color-text-muted)] opacity-60">To refresh session:</p>
+                  <p className="text-[var(--color-text-muted)] opacity-60">{t('ui.AuthConfigPanel.ssoRefresh')}</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded mt-1">
                     aws sso login --profile {authHint.awsProfiles[0]}
                   </code>
@@ -433,7 +435,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
               ) : (
                 <>
                   <p className="text-[var(--color-text-muted)] mb-1">
-                    No AWS SSO profile found. Set one up first (one time), then sign in:
+                    {t('ui.AuthConfigPanel.noSso')}
                   </p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded">
                     aws configure sso
@@ -442,7 +444,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
                     aws sso login --profile &lt;your-profile&gt;
                   </code>
                   <p className="text-[var(--color-text-muted)] mt-1.5 opacity-60 text-[11px]">
-                    `aws configure sso` walks you through your Identity Center start URL + region.
+                    {t('ui.AuthConfigPanel.ssoConfigHint')}
                   </p>
                 </>
               )
@@ -454,37 +456,34 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       {method === 'bedrock_api_key' && (
         <div className="space-y-2">
           <Dropdown
-            label="AWS Region"
+            label={t('ui.AuthConfigPanel.awsRegion')}
             options={AWS_REGION_OPTIONS}
             selectedId={region}
             onChange={setRegion}
-            placeholder="Select region..."
+            placeholder={t('ui.AuthConfigPanel.selectRegion')}
           />
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Bedrock API Key (bearer token)</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.AuthConfigPanel.bearerLabel')}</label>
             <input
               type="password"
               value={bearerToken}
               onChange={(e) => { setBearerToken(e.target.value); setVerifyState('idle'); setVerifyResult(null); }}
-              placeholder="ABSKQmVkcm9jk..."
+              placeholder={t('ui.AuthConfigPanel.bearerPlaceholder')}
               autoComplete="off"
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
             />
           </div>
           <p className="text-[11px] text-[var(--color-text-muted)] opacity-70">
-            Use a <strong>short-term key</strong> (max 12h — it inherits the permissions of the IAM
-            principal that generated it). Generate one with{' '}
-            <code className="text-[var(--color-primary)]">aws bedrock create-api-key</code> or the Bedrock console.
+            {t('ui.AuthConfigPanel.shortKeyBefore')}<strong>{t('ui.AuthConfigPanel.shortKey')}</strong>{t('ui.AuthConfigPanel.shortKeyAfter')}{' '}
+            <code className="text-[var(--color-primary)]">aws bedrock create-api-key</code>{t('ui.AuthConfigPanel.shortKeyEnd')}
           </p>
           <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
             <p className="text-[11px] text-amber-500/90 leading-relaxed">
-              ⚠️ Avoid <strong>long-term keys</strong> in production: generating one in the console
-              auto-creates an IAM User, and a leaked token carries a high blast radius. Prefer
-              short-term keys and rotate them.
+              ⚠️ {t('ui.AuthConfigPanel.longKeyBefore')}<strong>{t('ui.AuthConfigPanel.longKey')}</strong>{t('ui.AuthConfigPanel.longKeyAfter')}
             </p>
           </div>
           <p className="text-[11px] text-[var(--color-text-muted)] opacity-60">
-            Stored securely on this device (not synced, not in config backups).
+            {t('ui.AuthConfigPanel.storedSecurely')}
           </p>
         </div>
       )}
@@ -502,13 +501,13 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         authHint?.detectionConfidence === 'low' ? (
           <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
             <span className="text-[var(--color-text)]">
-              We couldn't detect your environment — which are you?
+              {t('ui.AuthConfigPanel.detectQuestion')}
             </span>{' '}
             <button
               onClick={toggleContext}
               className="text-[var(--color-primary)] hover:underline font-medium"
             >
-              {context === 'external' ? 'I\'m an Amazon employee (internal)' : 'I\'m external'}
+              {context === 'external' ? t('ui.AuthConfigPanel.iAmInternal') : t('ui.AuthConfigPanel.iAmExternal')}
             </button>
           </div>
         ) : (
@@ -516,7 +515,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
             onClick={toggleContext}
             className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors underline decoration-dotted"
           >
-            {context === 'external' ? 'Amazon employee? Switch to internal options' : 'Not internal? Switch to external options'}
+            {context === 'external' ? t('ui.AuthConfigPanel.switchInternal') : t('ui.AuthConfigPanel.switchExternal')}
           </button>
         )
       )}

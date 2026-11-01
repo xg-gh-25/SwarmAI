@@ -7,6 +7,7 @@
  * @module VoiceConversationIndicator
  */
 
+import { useTranslation } from 'react-i18next';
 import type { VoiceConversationState } from '../../hooks/useVoiceConversation';
 
 interface VoiceConversationIndicatorProps {
@@ -16,34 +17,34 @@ interface VoiceConversationIndicatorProps {
 
 const STATE_CONFIG: Record<
   Exclude<VoiceConversationState, 'off'>,
-  { label: string; icon: string; color: string; animate: boolean }
+  { labelKey: string; icon: string; color: string; animate: boolean }
 > = {
   listening: {
-    label: 'Listening...',
+    labelKey: 'ui.VoiceConversationIndicator.listening',
     icon: 'radio_button_checked',
     color: 'text-red-500',
     animate: true,
   },
   processing: {
-    label: 'Transcribing...',
+    labelKey: 'ui.VoiceConversationIndicator.transcribing',
     icon: 'hourglass_top',
     color: 'text-yellow-500',
     animate: false,
   },
   thinking: {
-    label: 'Thinking...',
+    labelKey: 'ui.VoiceConversationIndicator.thinking',
     icon: 'psychology',
     color: 'text-blue-500',
     animate: true,
   },
   speaking: {
-    label: 'Speaking...',
+    labelKey: 'ui.VoiceConversationIndicator.speaking',
     icon: 'volume_up',
     color: 'text-green-500',
     animate: true,
   },
   interrupted: {
-    label: 'Interrupted',
+    labelKey: 'ui.VoiceConversationIndicator.interrupted',
     icon: 'mic',
     color: 'text-orange-500',
     animate: false,
@@ -54,6 +55,7 @@ export function VoiceConversationIndicator({
   state,
   onInterrupt,
 }: VoiceConversationIndicatorProps) {
+  const { t } = useTranslation();
   if (state === 'off') return null;
 
   const config = STATE_CONFIG[state];
@@ -71,7 +73,7 @@ export function VoiceConversationIndicator({
         state === 'speaking' ? 'cursor-pointer hover:opacity-80' : ''
       }`}
       onClick={handleClick}
-      title={state === 'speaking' ? 'Click to interrupt' : undefined}
+      title={state === 'speaking' ? t('ui.VoiceConversationIndicator.clickToInterrupt') : undefined}
     >
       <span
         className={`material-symbols-outlined icon-xs ${
@@ -80,9 +82,9 @@ export function VoiceConversationIndicator({
       >
         {config.icon}
       </span>
-      <span>{config.label}</span>
+      <span>{t(config.labelKey)}</span>
       {state === 'speaking' && (
-        <span className="text-[11px] opacity-60 ml-1">(click to interrupt)</span>
+        <span className="text-[11px] opacity-60 ml-1">{t('ui.VoiceConversationIndicator.clickToInterruptHint')}</span>
       )}
     </div>
   );

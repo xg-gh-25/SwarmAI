@@ -141,7 +141,7 @@ def test_a_written_event_withdraws_its_gap_into_the_records(ws):
     assert {u.identity for u in units_of(path)} == {f"cand:{B}.unit", f"cand:{C}.unit"}
     closed = [r for r in withdrawn.records(conn) if A in r.text]
     assert [r.status for r in closed] == ["closed"]
-    assert "已由 run_fix 关闭：Tab refresh fixed" in closed[0].reason
+    assert "Closed by run_fix: Tab refresh fixed" in closed[0].reason
     assert gaps.close_declared(conn) == 0                                  # recorded once
     assert _results(conn) == [("u1", A, "closed")]
     assert gaps.close_gap("P", A, closed_by="run_fix", note="again") == "already_closed"

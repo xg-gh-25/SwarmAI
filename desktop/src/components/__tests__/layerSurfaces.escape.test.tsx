@@ -13,7 +13,7 @@ import FileContextMenu from '../workspace-explorer/FileContextMenu';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import { useEscape } from '../../hooks/useLayer';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+// react-i18next is not mocked: the app's i18n (test-setup) renders the real English text.
 vi.mock('../../services/api', () => ({
   default: { get: vi.fn().mockResolvedValue({ data: {} }), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
 }));
@@ -40,7 +40,7 @@ describe('DeployHiveDialog', () => {
     const onClose = vi.fn();
     const overlay = vi.fn();
     openOver(overlay, <DeployHiveDialog accounts={[]} onClose={onClose} onDeployed={vi.fn()} />);
-    const name = screen.getByPlaceholderText('e.g. xg-hive, dev-01');
+    const name = screen.getByPlaceholderText('e.g. my-hive, dev-01');
     expect(document.activeElement).toBe(name);
     fireEvent.keyDown(name, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledTimes(1);

@@ -25,6 +25,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
+import { useTranslation } from 'react-i18next';
 import { useEscape } from '../../hooks/useLayer';
 import hljs from 'highlight.js';
 import { getApiBaseUrl } from '../../services/tauri';
@@ -106,6 +107,7 @@ const MermaidModal = memo(function MermaidModal({
   isOpen: boolean;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const [scale, setScale] = useState(1);
   const [scaledSvg, setScaledSvg] = useState(svg);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -193,7 +195,7 @@ const MermaidModal = memo(function MermaidModal({
       <div className="flex items-center justify-between px-4 py-3 bg-[var(--color-card)] border-b border-[var(--color-border)]">
         <span className="text-sm text-[var(--color-text)] font-medium flex items-center gap-2">
           <span className="material-symbols-outlined icon-md text-primary">schema</span>
-          Mermaid Diagram
+          {t('ui.MarkdownRenderer.mermaidDiagram')}
         </span>
         <div className="flex items-center gap-2">
           {/* Zoom controls */}
@@ -201,21 +203,21 @@ const MermaidModal = memo(function MermaidModal({
             <button
               onClick={handleZoomOut}
               className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-              title="Zoom out"
+              title={t('ui.MarkdownRenderer.zoomOut')}
             >
               <span className="material-symbols-outlined icon-sm">remove</span>
             </button>
             <button
               onClick={handleResetZoom}
               className="px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] min-w-[50px] text-center"
-              title="Reset zoom (100% = fit to screen)"
+              title={t('ui.MarkdownRenderer.resetZoom')}
             >
               {Math.round(scale * 100)}%
             </button>
             <button
               onClick={handleZoomIn}
               className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-              title="Zoom in"
+              title={t('ui.MarkdownRenderer.zoomIn')}
             >
               <span className="material-symbols-outlined icon-sm">add</span>
             </button>
@@ -224,7 +226,7 @@ const MermaidModal = memo(function MermaidModal({
           <button
             onClick={onClose}
             className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] hover:bg-[var(--color-border)] rounded-lg transition-colors"
-            title="Close (Esc)"
+            title={t('chat.input.closeEsc')}
           >
             <span className="material-symbols-outlined icon-md">close</span>
           </button>
@@ -247,7 +249,7 @@ const MermaidModal = memo(function MermaidModal({
       {/* Bottom hint */}
       <div className="px-4 py-2 bg-[var(--color-card)] border-t border-[var(--color-border)] text-center">
         <span className="text-xs text-[var(--color-text-muted)]">
-          Ctrl + Scroll to zoom | Click outside to close | Esc to close
+          {t('ui.MarkdownRenderer.modalHint')}
         </span>
       </div>
     </div>
@@ -280,6 +282,7 @@ function cacheMermaidSvg(key: string, svg: string): void {
 
 // Mermaid diagram component
 const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const { resolvedTheme } = useTheme();
   const cacheKey = `${resolvedTheme}|${chart}`;
@@ -467,11 +470,11 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
       <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-4 my-4">
         <div className="flex items-center gap-2 text-status-error mb-2">
           <span className="material-symbols-outlined icon-xs">error</span>
-          <span className="text-sm font-medium">Mermaid Diagram Error</span>
+          <span className="text-sm font-medium">{t('ui.MarkdownRenderer.mermaidError')}</span>
         </div>
         <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto">{error}</pre>
         <details className="mt-2">
-          <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer hover:text-[var(--color-text)]">Show source</summary>
+          <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer hover:text-[var(--color-text)]">{t('ui.MarkdownRenderer.showSource')}</summary>
           <pre className="text-xs text-[var(--color-text-muted)] mt-2 overflow-x-auto">{chart}</pre>
         </details>
       </div>
@@ -481,7 +484,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
   if (!svg) {
     return (
       <div className="flex items-center justify-center p-4 my-4 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg">
-        <span className="text-[var(--color-text-muted)] text-sm">Loading diagram...</span>
+        <span className="text-[var(--color-text-muted)] text-sm">{t('ui.MarkdownRenderer.loadingDiagram')}</span>
       </div>
     );
   }
@@ -493,38 +496,38 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
           <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider flex items-center gap-1.5">
             <span className="material-symbols-outlined icon-xs">schema</span>
-            Mermaid Diagram
+            {t('ui.MarkdownRenderer.mermaidDiagram')}
           </span>
           <div className="flex items-center gap-1">
             {/* Zoom button */}
             <button
               onClick={() => setIsModalOpen(true)}
               className="btn-sm btn-secondary transition-colors"
-              title="View fullscreen"
+              title={t('ui.MarkdownRenderer.viewFullscreen')}
             >
               <span className="material-symbols-outlined icon-xs">fullscreen</span>
-              Zoom
+              {t('ui.MarkdownRenderer.zoom')}
             </button>
             {/* Download SVG button */}
             <button
               onClick={handleDownloadSvg}
               className="btn-sm btn-secondary transition-colors"
-              title="Download as SVG"
+              title={t('ui.MarkdownRenderer.downloadSvg')}
             >
               <span className="material-symbols-outlined icon-xs">download</span>
-              SVG
+              {t('ui.MarkdownRenderer.svg')}
             </button>
             {/* Download PNG button */}
             <button
               onClick={handleDownloadPng}
               disabled={isDownloading}
               className="btn-sm btn-secondary transition-colors disabled:opacity-50"
-              title="Download as PNG"
+              title={t('ui.MarkdownRenderer.downloadPng')}
             >
               <span className="material-symbols-outlined icon-xs">
                 {isDownloading ? 'hourglass_empty' : 'image'}
               </span>
-              PNG
+              {t('ui.MarkdownRenderer.png')}
             </button>
           </div>
         </div>
@@ -575,6 +578,7 @@ const CodeBlock = memo(function CodeBlock({
   language?: string;
   children: string;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
   const isMermaid = language === 'mermaid';
@@ -656,7 +660,7 @@ const CodeBlock = memo(function CodeBlock({
           <span className="material-symbols-outlined icon-xs">
             {copied ? 'check' : 'content_copy'}
           </span>
-          {copied ? 'Copied!' : 'Copy'}
+          {copied ? t('common.copy.copied') : t('common.copy.copy')}
         </button>
       </div>
       {/* Code content with syntax highlighting */}
@@ -802,6 +806,7 @@ export function buildOpenFileDetail(
 // When content looks like a workspace file path, renders as a clickable link
 // that dispatches OPEN_FILE_EVENT for ThreeColumnLayout to handle.
 const InlineCode = memo(function InlineCode({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const content = String(children);
   const hasNewlines = content.includes('\n');
   // A Hive session's paths name files on the Hive: plain code there, never a link.
@@ -836,7 +841,7 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
         // Drawn as a link (design 2026-10-26-session-products.md §3.4): a file the
         // answer names is clicked to open, so it must not look like plain code.
         className="px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary font-mono cursor-pointer transition-colors inline-flex items-center gap-1"
-        title="Open in Canvas"
+        title={t('ui.MarkdownRenderer.openInCanvas')}
       >
         {/* One file, one look: the same type icon as the Canvas OUTPUTS rail and
             the chat's FileChip, desaturated so a type never reads as a status. */}

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { fileManagerName } from '../../utils/platform';
 import type { FileTreeItem } from './FileTreeNode';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -71,6 +73,7 @@ export default function FileContextMenu({
   onNewFolder,
   returnFocusRef,
 }: FileContextMenuProps) {
+  const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
   const wsRootRef = useRef<string>('');
   const [isDeleting, setIsDeleting] = useState(false);
@@ -360,12 +363,12 @@ export default function FileContextMenu({
           <span className="material-symbols-outlined icon-md text-[var(--color-warning, var(--color-error))]">delete</span>
           <div>
             <h4 className="text-body text-[var(--color-text)] mb-1">
-              Move to Trash?
+              {t('ui.FileContextMenu.trashTitle')}
             </h4>
             <p className="text-small text-[var(--color-text-muted)]">
-              "{item.name}" will be moved to the Trash.
-              {item.type === 'directory' && ' This includes all contents.'}
-              {' '}You can recover it from Finder.
+              {t('explorer.trash.willMove', { name: item.name })}
+              {item.type === 'directory' && ` ${t('explorer.trash.withContents')}`}
+              {' '}{t('explorer.trash.recover', { fileManager: fileManagerName() })}
             </p>
             {deleteError && (
               <p className="text-small text-[var(--color-error)] mt-1">{deleteError}</p>
@@ -379,7 +382,7 @@ export default function FileContextMenu({
             className="btn-md btn-secondary transition-colors disabled:opacity-50"
             data-testid="delete-cancel-button"
           >
-            Cancel
+            {t('common.button.cancel')}
           </button>
           <button
             onClick={handleDeleteConfirm}
@@ -390,7 +393,7 @@ export default function FileContextMenu({
             {isDeleting && (
               <div className="w-3 h-3 border-2 border-[var(--color-on-accent)] border-t-transparent rounded-full animate-spin" />
             )}
-            Move to Trash
+            {t('ui.FileContextMenu.trashConfirm')}
           </button>
         </div>
       </div>
@@ -416,7 +419,7 @@ export default function FileContextMenu({
       className="fixed z-50 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-lg py-1 min-w-[160px]"
       style={{ left: x, top: y }}
       role="menu"
-      aria-label="File context menu"
+      aria-label={t('ui.FileContextMenu.menuLabel')}
       data-testid="file-context-menu"
     >
       {menuItems.map((menuItem, index) => (

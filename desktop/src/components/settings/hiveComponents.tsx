@@ -21,6 +21,9 @@
  * the SAME dialog pins to the viewport as before — behavior there is unchanged.
  */
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
 import { hiveService, HiveAccount, HiveInstance, VerifyResult, TRANSITIONAL_STATUSES, getDeploySteps, isNewerVersion, MAX_HIVES } from '../../services/hive';
 import { openExternal } from '../../utils/openExternal';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -79,6 +82,7 @@ export function HiveSection({
   /** MAX_HIVES already counted: deploying is disabled */
   limitReached?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <section className="bg-[var(--color-card)] rounded-lg p-6">
       <div className="flex items-center justify-between mb-4">
@@ -87,11 +91,11 @@ export function HiveSection({
           <button
             onClick={onDeploy}
             disabled={!accounts || accounts.length === 0 || limitReached}
-            title={limitReached ? `At most ${MAX_HIVES} Hives` : undefined}
+            title={limitReached ? t('ui.hiveComponents.atMost', { max: MAX_HIVES }) : undefined}
             className="btn-md btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span className="material-symbols-outlined icon-sm">add</span>
-            Deploy New Hive
+            {t('ui.hiveComponents.deployNew')}
           </button>
         )}
       </div>
@@ -101,8 +105,8 @@ export function HiveSection({
           <span className="text-4xl">{'\u{1F41D}'}</span>
           <p className="text-sm text-[var(--color-text-muted)] mt-2">
             {!accounts || accounts.length === 0
-              ? 'Add an AWS account to deploy your first Hive.'
-              : 'No Hives deployed yet. Click "Deploy New Hive" to get started.'}
+              ? t('ui.hiveComponents.emptyNoAccount')
+              : t('ui.hiveComponents.emptyNoHive')}
           </p>
         </div>
       ) : (
@@ -150,16 +154,15 @@ export function useLatestHiveVersion(): string | null {
  *  point to Start. Without an instance it only cleans up a failed deploy. */
 export function retryPrompt(inst: HiveInstance): string {
   if (inst.ec2InstanceId) {
-    return `Retry deletes ${inst.name}'s instance and everything on it (workspace, memory, chat history), then deploys a new Hive.\n\n`
-      + 'Its disks are first saved as EBS snapshots in your AWS account (named "SwarmAI-Hive-'
-      + `${inst.name} before retry"); if that fails, nothing is deleted.\n\nTo keep this Hive, cancel and use Start instead.`;
+    return i18n.t('ui.hiveComponents.retryDeletes', { name: inst.name });
   }
-  return `Retry cleans up what the failed deploy of ${inst.name} left and deploys it again.`;
+  return i18n.t('ui.hiveComponents.retryCleans', { name: inst.name });
 }
 
 // ── Instance Card ─────────────────────────────────────────────────
 
 export function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; onAction: () => void }) {
+  const { t } = useTranslation();
   const latest = useLatestHiveVersion();
   // set once the update request is accepted, until the list shows the Hive 'updating'
   const [updateSent, setUpdateSent] = useState(false);
@@ -197,24 +200,24 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
           <button
             onClick={() => url && openExternal(url)}
             disabled={!url}
-            title={url || 'URL not available yet — CloudFront still provisioning'}
+            title={url || t('ui.hiveComponents.noUrl')}
             className="btn-sm btn-soft disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            Open {'↗'}
+            {t('ui.hiveComponents.open')} {'↗'}
           </button>
           {canUpdate && latest && (
             <button
               onClick={() => {
-                if (confirm(`Update ${inst.name} from v${inst.version} to v${latest}? The Hive restarts: a task running on it stops.`)) {
+                if (confirm(t('ui.hiveComponents.confirmUpdate', { name: inst.name, from: inst.version, to: latest }))) {
                   doAction(async () => { await hiveService.updateInstance(inst.id, latest); setUpdateSent(true); });
                 }
               }}
               disabled={acting}
-              title={`v${latest} is the latest release`}
+              title={t('ui.hiveComponents.latestRelease', { version: latest })}
               className="btn-sm btn-primary disabled:opacity-50"
               data-testid="hive-update"
             >
-              Update to v{latest}
+              {t('ui.hiveComponents.updateTo', { version: latest })}
             </button>
           )}
           {inst.status === 'running' && (
@@ -223,7 +226,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
               disabled={acting}
               className="btn-sm btn-warning disabled:opacity-50"
             >
-              Stop
+              {t('ui.hiveComponents.stop')}
             </button>
           )}
           {(inst.status === 'stopped' || (inst.status === 'error' && !!inst.ec2InstanceId)) && (
@@ -232,7 +235,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
               disabled={acting}
               className="btn-sm btn-success disabled:opacity-50"
             >
-              Start
+              {t('ui.hiveComponents.start')}
             </button>
           )}
           {inst.status === 'error' && (
@@ -244,20 +247,20 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
               disabled={acting}
               className="btn-sm btn-secondary disabled:opacity-50"
             >
-              Retry
+              {t('common.button.retry')}
             </button>
           )}
           {!isTransitional && (
             <button
               onClick={() => {
-                if (confirm(`Delete ${inst.name}? Its instance and everything on it (workspace, memory, chat history) are deleted. This cannot be undone.`)) {
+                if (confirm(t('ui.hiveComponents.confirmDelete', { name: inst.name }))) {
                   doAction(() => hiveService.deleteInstance(inst.id));
                 }
               }}
               disabled={acting}
               className="btn-sm btn-danger disabled:opacity-50"
             >
-              Delete
+              {t('common.button.delete')}
             </button>
           )}
         </div>
@@ -266,7 +269,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
       {/* Owner name for shared Hives */}
       {inst.ownerName && (
         <div className="text-xs text-[var(--color-text-muted)] mb-2">
-          Owner: {inst.ownerName}
+          {t('ui.hiveComponents.owner', { name: inst.ownerName })}
         </div>
       )}
 
@@ -281,7 +284,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
       {/* Deploy progress for transitional states (an update has its own line) */}
       {inst.status === 'updating' ? (
         <p className="text-xs text-[var(--color-text-muted)] mt-2" data-testid="hive-updating">
-          Updating: installing the new version and checking its health (a few minutes).
+          {t('ui.hiveComponents.updating')}
         </p>
       ) : isTransitional && <DeployProgress instance={inst} />}
 
@@ -336,6 +339,7 @@ export function DeployProgress({ instance }: { instance: HiveInstance }) {
 // ── Auth Display + Share ──────────────────────────────────────────
 
 export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
+  const { t } = useTranslation();
   const [showPass, setShowPass] = useState(false);
   const [password, setPassword] = useState<string | null>(inst.authPassword);
   const [loadingPass, setLoadingPass] = useState(false);
@@ -369,7 +373,7 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
         setPassword(creds.authPassword);
       } catch (e) {
         console.error('Failed to fetch credentials:', e);
-        setFetchError('Failed to load password');
+        setFetchError(t('ui.hiveComponents.passwordFailed'));
         setLoadingPass(false);
         return;
       }
@@ -412,14 +416,7 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
         setPassword(pass);
       } catch { return; }
     }
-    const shareText = [
-      `Your SwarmAI Hive is ready:`,
-      `URL: ${url}`,
-      `User: ${inst.authUser}`,
-      `Password: ${pass}`,
-      ``,
-      `Open the URL and sign in. It works exactly like the desktop app.`,
-    ].join('\n');
+    const shareText = t('ui.hiveComponents.shareText', { url, user: inst.authUser, password: pass });
     await doCopy(shareText, 'share');
   };
 
@@ -429,17 +426,17 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
   return (
     <div className="mt-2 p-2 bg-[var(--color-card)] rounded text-xs space-y-1.5">
       <div className="flex items-center gap-2">
-        <span className="text-[var(--color-text-muted)] w-12">Auth:</span>
+        <span className="text-[var(--color-text-muted)] w-12">{t('ui.hiveComponents.auth')}</span>
         <code className="text-[var(--color-text)]">{inst.authUser}</code>
         <span className="text-[var(--color-text-muted)]">/</span>
         <code className="text-[var(--color-text)] select-all">{passDisplay}</code>
         <button onClick={togglePass} disabled={loadingPass}
           className="btn-sm btn-secondary disabled:opacity-50">
-          {loadingPass ? '...' : showPass ? 'Hide' : 'Show'}
+          {loadingPass ? '...' : showPass ? t('ui.hiveComponents.hide') : t('ui.hiveComponents.show')}
         </button>
         <button onClick={handleCopyPassword}
           className="btn-sm btn-secondary">
-          {copied === 'password' ? 'Copied!' : 'Copy'}
+          {copied === 'password' ? t('common.copy.copied') : t('common.copy.copy')}
         </button>
       </div>
       {fetchError && (
@@ -451,9 +448,9 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
           className="btn-md btn-soft"
         >
           <span className="material-symbols-outlined icon-sm">share</span>
-          {copied === 'share' ? 'Copied!' : 'Share'}
+          {copied === 'share' ? t('common.copy.copied') : t('ui.hiveComponents.share')}
         </button>
-        <span className="text-[var(--color-text-muted)]">Copy URL + credentials for the Hive user</span>
+        <span className="text-[var(--color-text-muted)]">{t('ui.hiveComponents.shareHint')}</span>
       </div>
     </div>
   );
@@ -462,6 +459,7 @@ export function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
 // ── Account Card ───────────────────────────────────────────────────
 
 export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelete: () => void }) {
+  const { t } = useTranslation();
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -481,7 +479,7 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
   };
 
   const handleDelete = async () => {
-    if (!confirm('Delete this account and all its Hives? Each Hive\'s instance and everything on it (workspace, memory, chat history) are deleted. This cannot be undone.')) return;
+    if (!confirm(t('ui.hiveComponents.confirmDeleteAccount'))) return;
     setDeleting(true);
     setError(null);
     try {
@@ -508,13 +506,13 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
             </div>
             <div className="text-xs text-[var(--color-text-muted)]" data-testid="hive-account-detail">
               {acc.role === 'swarmai'
-                ? <>New Hives are created here {'·'} change it in Settings {'>'} SwarmAI account</>
+                ? <>{t('ui.hiveComponents.roleSwarmai')}</>
                 : acc.role === 'disconnected'
-                  ? <>The SwarmAI account is not connected {'·'} connect it in Settings {'>'} SwarmAI account to manage these Hives</>
+                  ? <>{t('ui.hiveComponents.roleDisconnected')}</>
                 : acc.role === 'other'
-                  ? <>Another AWS account: its {acc.hiveCount} Hive{acc.hiveCount === 1 ? '' : 's'} can only be stopped or deleted. Verify if it is the SwarmAI account.</>
+                  ? <>{t('ui.hiveComponents.roleOther', { count: acc.hiveCount })}</>
                   : <>{acc.authMethod} {'·'} {acc.defaultRegion}</>}
-              {acc.verifiedAt && <span className="text-green-400 ml-2">{'✓'} verified</span>}
+              {acc.verifiedAt && <span className="text-green-400 ml-2">{'✓'} {t('ui.hiveComponents.verified')}</span>}
             </div>
           </div>
         </div>
@@ -524,13 +522,13 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
             disabled={verifying}
             className="btn-sm btn-secondary disabled:opacity-50"
           >
-            {verifying ? '...' : 'Verify'}
+            {verifying ? '...' : t('ui.hiveComponents.verify')}
           </button>
           {acc.role !== 'swarmai' && acc.role !== 'disconnected' && (
             <button
               onClick={handleDelete}
               disabled={deleting}
-              aria-label="Delete this account and its Hives"
+              aria-label={t('ui.hiveComponents.deleteAccount')}
               className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded disabled:opacity-50"
             >
               {deleting ? '...' : '✕'}
@@ -542,9 +540,9 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
         <div className={`mt-2 text-xs ${verifyResult.success ? 'text-green-400' : 'text-red-400'}`}>
           {verifyResult.success
             ? (verifyResult.checks?.sts as { merged?: boolean } | undefined)?.merged
-              ? '✓ This is the SwarmAI account: its Hives were moved there'
-              : '✓ All checks passed'
-            : `✗ ${verifyResult.error || 'Failed'}`}
+              ? t('ui.hiveComponents.merged')
+              : t('ui.hiveComponents.allPassed')
+            : `✗ ${verifyResult.error || t('ui.hiveComponents.failed')}`}
         </div>
       )}
       {error && (
@@ -560,6 +558,7 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
 // ── Add Account Dialog ─────────────────────────────────────────────
 
 export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation();
   const [accountId, setAccountId] = useState('');
   const [label, setLabel] = useState('');
   const [region, setRegion] = useState('us-east-1');
@@ -576,7 +575,7 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
   useDialogLayer(true, dialogRef, () => { if (!saving) onClose(); }, { first: true });
 
   const handleSave = async () => {
-    if (!accountId.match(/^\d{12}$/)) { setError('Account ID must be 12 digits'); return; }
+    if (!accountId.match(/^\d{12}$/)) { setError(t('ui.hiveComponents.accountIdInvalid')); return; }
     setSaving(true);
     setError('');
     try {
@@ -598,17 +597,17 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={saving ? undefined : onClose}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hive-add-account-title" tabIndex={-1}
         className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto outline-none" onClick={e => e.stopPropagation()}>
-        <h3 id="hive-add-account-title" className="text-lg font-semibold text-[var(--color-text)] mb-4">Add AWS Account</h3>
+        <h3 id="hive-add-account-title" className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('ui.hiveComponents.addAccountTitle')}</h3>
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
-            <input value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="Enter 12-digit account ID"
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.accountId')}</label>
+            <input value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder={t('ui.hiveComponents.accountIdPlaceholder')}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
           </div>
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Label (optional)</label>
-            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. personal, team-shared"
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.labelOptional')}</label>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t('ui.hiveComponents.labelPlaceholder')}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
           </div>
 
@@ -616,32 +615,32 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
             {(['access_keys', 'sso'] as const).map((m) => (
               <button key={m} onClick={() => setAuthMethod(m)}
                 className={`p-2 rounded-lg text-left text-xs ${authMethod === m ? 'bg-[var(--color-primary)]/20 border-2 border-[var(--color-primary)]' : 'bg-[var(--color-bg)] border border-[var(--color-border)]'}`}>
-                <div className="font-medium text-[var(--color-text)]">{m === 'access_keys' ? 'Access Keys' : 'SSO Profile'}</div>
+                <div className="font-medium text-[var(--color-text)]">{m === 'access_keys' ? t('ui.hiveComponents.accessKeys') : t('ui.hiveComponents.ssoProfile')}</div>
               </button>
             ))}
           </div>
 
           {authMethod === 'access_keys' && (
             <>
-              <input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder="Access Key ID (AKIA...)"
+              <input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder={t('ui.hiveComponents.accessKeyId')}
                 className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
-              <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder="Secret Access Key"
+              <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder={t('ui.hiveComponents.secretKey')}
                 className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
             </>
           )}
           {authMethod === 'sso' && (
-            <input value={ssoProfile} onChange={(e) => setSsoProfile(e.target.value)} placeholder="SSO profile name"
+            <input value={ssoProfile} onChange={(e) => setSsoProfile(e.target.value)} placeholder={t('ui.hiveComponents.ssoProfileName')}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
           )}
 
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Region</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.region')}</label>
             <select value={region} onChange={(e) => setRegion(e.target.value)}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)]">
-              <option value="us-east-1">US East (Virginia)</option>
-              <option value="us-west-2">US West (Oregon)</option>
-              <option value="eu-west-1">EU (Ireland)</option>
-              <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+              <option value="us-east-1">{t('ui.hiveComponents.regionUsEast1')}</option>
+              <option value="us-west-2">{t('ui.hiveComponents.regionUsWest2')}</option>
+              <option value="eu-west-1">{t('ui.hiveComponents.regionEuWest1')}</option>
+              <option value="ap-northeast-1">{t('ui.hiveComponents.regionApNortheast1')}</option>
             </select>
           </div>
 
@@ -649,10 +648,10 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Cancel</button>
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">{t('common.button.cancel')}</button>
           <button onClick={handleSave} disabled={saving || !accountId}
             className="btn-lg btn-primary disabled:opacity-50">
-            {saving ? 'Saving...' : 'Add Account'}
+            {saving ? t('common.button.saving') : t('ui.hiveComponents.addAccount')}
           </button>
         </div>
       </div>
@@ -663,6 +662,7 @@ export function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; on
 // ── Deploy Hive Dialog ─────────────────────────────────────────────
 
 export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAccount[]; onClose: () => void; onDeployed: () => void }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [accountRef, setAccountRef] = useState(accounts[0]?.id ?? '');
@@ -676,7 +676,7 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
 
   const handleDeploy = async () => {
     if (!name.match(/^[a-z][a-z0-9]([a-z0-9-]{0,60}[a-z0-9])?$/)) {
-      setError('Name: 2-63 chars, lowercase letters/numbers/hyphens, must start and end with a letter or number');
+      setError(t('ui.hiveComponents.nameInvalid'));
       return;
     }
     setDeploying(true);
@@ -703,28 +703,28 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={deploying ? undefined : onClose}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="hive-deploy-title" tabIndex={-1}
         className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] outline-none" onClick={e => e.stopPropagation()}>
-        <h3 id="hive-deploy-title" className="text-lg font-semibold text-[var(--color-text)] mb-4">Deploy New Hive</h3>
+        <h3 id="hive-deploy-title" className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('ui.hiveComponents.deployNew')}</h3>
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Hive Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. xg-hive, dev-01"
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.hiveName')}</label>
+            <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder={t('ui.hiveComponents.hiveNamePlaceholder')}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
           </div>
 
           {/* Owner name field */}
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Owner (optional — leave blank if this is for you)</label>
-            <input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="e.g. teammate name"
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.ownerOptional')}</label>
+            <input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder={t('ui.hiveComponents.ownerPlaceholder')}
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
           </div>
 
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.awsAccount')}</label>
             {accounts.length === 1 && accounts[0].role === 'swarmai' ? (
               <div className="px-3 py-2 text-sm text-[var(--color-text)]" data-testid="hive-deploy-account">
                 <code>{accounts[0].accountId}</code>
-                <span className="text-[var(--color-text-muted)] ml-2">(SwarmAI account)</span>
+                <span className="text-[var(--color-text-muted)] ml-2">{t('ui.hiveComponents.swarmaiAccount')}</span>
               </div>
             ) : (
               <select value={accountRef} onChange={(e) => setAccountRef(e.target.value)}
@@ -737,7 +737,7 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
           </div>
 
           <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Instance Size</label>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">{t('ui.hiveComponents.instanceSize')}</label>
             <div className="space-y-1.5">
               {INSTANCE_SIZES.map((s) => (
                 <button key={s.id} onClick={() => setInstanceType(s.id)}
@@ -753,10 +753,10 @@ export function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: 
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} disabled={deploying} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Cancel</button>
+          <button onClick={onClose} disabled={deploying} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">{t('common.button.cancel')}</button>
           <button onClick={handleDeploy} disabled={deploying || !name || !accountRef}
             className="btn-lg btn-primary disabled:opacity-50">
-            {deploying ? 'Deploying...' : 'Deploy'}
+            {deploying ? t('ui.hiveComponents.deploying') : t('ui.hiveComponents.deploy')}
           </button>
         </div>
       </div>

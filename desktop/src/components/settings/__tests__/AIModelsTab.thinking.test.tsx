@@ -24,7 +24,8 @@ vi.mock('../../../services/settings', () => ({
 }));
 vi.mock('../AuthConfigPanel', () => ({ default: () => <div /> }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+// react-i18next is not mocked: the app's i18n (test-setup) gives the real English
+// labels, which the Dropdown stub below turns into test ids and button text.
 vi.mock('../../common', () => ({
   Dropdown: ({ label, options, selectedId, onChange, disabled }: {
     label: string; options: { id: string }[]; selectedId: string | null;
@@ -78,7 +79,7 @@ describe('AIModelsTab thinking controls', () => {
     });
     render(<AIModelsTab />);
     await waitFor(() => expect(modeDropdown().dataset.options).toBe('adaptive'));
-    fireEvent.click(screen.getByText('settings.modelConfig.defaultModel:claude-opus-4-8'));
+    fireEvent.click(screen.getByText('Default Model:claude-opus-4-8'));
     await waitFor(() => expect(modeDropdown().dataset.options).toBe('adaptive,enabled,disabled'));
     expect(modeDropdown().dataset.selected).toBe('disabled');
     expect(screen.queryByTestId('thinking-mode-not-in-effect')).toBeNull();
@@ -118,7 +119,7 @@ describe('AIModelsTab thinking controls', () => {
     await waitFor(() => expect(modeDropdown().dataset.options).toBe('adaptive,enabled,disabled'));
     fireEvent.click(screen.getByText('Refresh from Bedrock'));
     await waitFor(() => screen.getByText('claude-sonnet-5'));
-    const addButtons = screen.getAllByText('settings.modelConfig.addModel');
+    const addButtons = screen.getAllByText('Add');
     fireEvent.click(addButtons[addButtons.length - 1]);
     await waitFor(() => expect(modeDropdown().dataset.options).toBe('adaptive'));
   });

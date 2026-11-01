@@ -11,3 +11,9 @@ backend/core/ddd_packager.py | SwarmAI-Workspace | 1 | the redaction pattern tha
 backend/core/swarm_workspace_manager.py | Projects/SwarmAI | 4 | the seeded default project every workspace has (usable-by-anyone §3.9 A')
 backend/hive/user_data.py | /home/swarm | 1 | the Hive EC2 instance's own service account, not a user's machine
 backend/scripts/newuser_smoke_e2e.sh | prod.sh | 1 | SwarmAI's own packaging smoke script, run inside a SwarmAI checkout
+backend/core/auth_remediation.py | mwinit | 4 | the fix shown only to an ADA / Midway sign-in (remediation by auth_method)
+backend/core/aws_account.py | mwinit | 2 | recognises and reports an expired Midway sign-in on the ADA path only
+backend/core/session_unit.py | mwinit | 1 | MCP auth hint, used only when the account signs in with ADA (_mcp_failure_hint)
+backend/jobs/cli_result.py | mwinit | 1 | matches auth-error text a CLI prints; a pattern over output, not an instruction
+backend/scripts/golden_case_validator.py | cmhk | 2 | temporary: the golden-case privacy word list; generalising it to the owner's own terms is a ToDo
+backend/scripts/memory_relocate.py | IVT | 1 | temporary: a one-time move of the owner's own entries; delete the script after it ran (ToDo)

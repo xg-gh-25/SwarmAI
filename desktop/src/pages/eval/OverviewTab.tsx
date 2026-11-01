@@ -159,11 +159,11 @@ export function ReleaseChecks({ checks, lang, onHistory }: { checks: ReleaseChec
             </span>
           );
         })}
-        {onHistory && <LinkBtn className="ml-auto underline underline-offset-2 hover:text-[var(--color-text)]" onClick={onHistory}>{zh ? '运行记录' : 'Run history'}</LinkBtn>}
+        {onHistory && <LinkBtn className="ml-auto underline underline-offset-2 hover:text-[var(--color-text)]" onClick={onHistory}>{pick({ en: 'Run history', zh: '运行记录' }, lang)}</LinkBtn>}
       </div>
       {failing.map(([id, c]) => (
         <div key={id} className="text-small text-[var(--color-status-error)] mt-1" data-testid={`release-check-${id}-detail`}>
-          {CHECK_TEXT[id][lang]}: {!c ? (zh ? '没有检查' : 'not checked')
+          {CHECK_TEXT[id][lang]}: {!c ? pick({ en: 'not checked', zh: '没有检查' }, lang)
             : id === 'denominator' ? <>{`${c.with_result ?? '—'}/${c.selected ?? '—'} ${zh ? '有结果' : 'with a result'} · `}{names(c.cases ?? [], true)}</>
               : names(c.cases ?? [], false)}
         </div>
@@ -194,7 +194,7 @@ function FollowUpRow({ f, lang, evolution, onLook }: { f: FollowUp; lang: Lang; 
     <Row testId={evolution ? 'evolution-item' : 'needs-item'} onOpen={onLook}
          dot={f.severity === 'high' ? 'var(--color-status-error)' : undefined}
          what={pick(f.headline ?? f.what, lang)} sub={names || pick(f.action, lang)}
-         right={<Btn onClick={onLook} tabIndex={-1}>{zh ? '看一下' : 'Look'} ›</Btn>} />
+         right={<Btn onClick={onLook} tabIndex={-1}>{pick({ en: 'Look', zh: '看一下' }, lang)} ›</Btn>} />
   );
 }
 
@@ -202,18 +202,17 @@ function FollowUpDetail({ f, lang, onDone }: { f: FollowUp; lang: Lang; onDone: 
   const { askSwarm } = useEvalActions();
   const go = useGo();
   const gs = useGoldenSet();
-  const zh = lang === 'zh';
   const evolution = f.kind === 'evolution';
   const online = f.rule === 4 || f.rule === 8;
   const byId = new Map((gs.data?.cases ?? []).map((c) => [c.id, c]));
   return (
     <div data-testid="follow-up-detail">
-      <div className="text-small text-[var(--color-text-muted)]">{evolution ? (zh ? 'agent 的行为' : 'The agent’s behaviour') : (zh ? '评测本身' : 'The evaluation itself')}</div>
+      <div className="text-small text-[var(--color-text-muted)]">{evolution ? pick({ en: 'The agent’s behaviour', zh: 'agent 的行为' }, lang) : pick({ en: 'The evaluation itself', zh: '评测本身' }, lang)}</div>
       <h3 className="text-title font-semibold text-[var(--color-text)] mt-1">{pick(f.headline ?? f.what, lang)}</h3>
-      {f.why && <><H4>{zh ? '证据' : 'Evidence'}</H4><p className="text-small text-[var(--color-text)] whitespace-pre-wrap break-words">{f.why}</p></>}
-      {pick(f.action, lang) && <><H4>{zh ? '该做什么' : 'What to do'}</H4><p className="text-small text-[var(--color-text)]">{pick(f.action, lang)}</p></>}
+      {f.why && <><H4>{pick({ en: 'Evidence', zh: '证据' }, lang)}</H4><p className="text-small text-[var(--color-text)] whitespace-pre-wrap break-words">{f.why}</p></>}
+      {pick(f.action, lang) && <><H4>{pick({ en: 'What to do', zh: '该做什么' }, lang)}</H4><p className="text-small text-[var(--color-text)]">{pick(f.action, lang)}</p></>}
       {f.case_ids.length > 0 && <>
-        <H4>{zh ? '涉及的 case' : 'Cases'}</H4>
+        <H4>{pick({ en: 'Cases', zh: '涉及的 case' }, lang)}</H4>
         <div className="space-y-1">
           {f.case_ids.map((id) => (
             <LinkBtn key={id} className="block text-small text-[var(--color-text)]" onClick={() => { onDone(); go('cases', `case:${id}`); }}>
@@ -222,12 +221,13 @@ function FollowUpDetail({ f, lang, onDone }: { f: FollowUp; lang: Lang; onDone: 
           ))}
         </div>
       </>}
-      {evolution && <p className="text-small text-[var(--color-text-dim)] mt-6">{zh
-        ? '行为信号由确定性规则产出，不调模型；现在只展示，不会自动改规则或加 case。'
-        : 'A behaviour signal comes from fixed rules, no model call. It is shown only; nothing changes a rule or adds a case on its own.'}</p>}
+      {evolution && <p className="text-small text-[var(--color-text-dim)] mt-6">{pick({
+        en: 'A behaviour signal comes from fixed rules, no model call. It is shown only; nothing changes a rule or adds a case on its own.',
+        zh: '行为信号由确定性规则产出，不调模型；现在只展示，不会自动改规则或加 case。',
+      }, lang)}</p>}
       <div className="flex gap-2 mt-6">
-        <Btn kind="primary" onClick={() => askSwarm(askPrompt(f, lang, evolution))}>{zh ? '让 Swarm 处理' : 'Ask Swarm'}</Btn>
-        {online && <Btn onClick={() => { onDone(); go('online'); }}>{zh ? '看真实会话' : 'Open live sessions'}</Btn>}
+        <Btn kind="primary" onClick={() => askSwarm(askPrompt(f, lang, evolution))}>{pick({ en: 'Ask Swarm', zh: '让 Swarm 处理' }, lang)}</Btn>
+        {online && <Btn onClick={() => { onDone(); go('online'); }}>{pick({ en: 'Open live sessions', zh: '看真实会话' }, lang)}</Btn>}
       </div>
     </div>
   );

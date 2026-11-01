@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import stat
 import subprocess
 import time
@@ -40,13 +41,14 @@ _FAILURE_HINT_THRESHOLD = 2
 
 # ── Enforcement injector (run_e57b7554) — per-turn UserPromptSubmit reminders ──
 # CJK share of SEMANTIC UNITS (cjk_chars / (cjk_chars + latin_words)) at/above which
-# a message that contains CJK is treated as Chinese. Weighing CJK-chars against
-# Latin-WORDS (not a raw char ratio) is deliberate: it keeps XG's normal
-# Chinese-with-English-tech-terms style ("帮我 review 这个 CI log") classified as
-# Chinese, while a lone CJK quote inside a many-word English sentence stays English.
-# 0.30 = a message needs meaningfully more CJK structure than English words to flip
-# to Chinese, but a handful of English terms can't drag real Chinese to English.
-# Boundary-tested in test_runtime_hooks.py.
+# a message that contains CJK is treated as CJK (then Chinese, Japanese or Korean by
+# script). Weighing CJK-chars against Latin-WORDS (not a raw char ratio) is
+# deliberate: it keeps the common Chinese-with-English-tech-terms way of writing
+# ("帮我 review 这个 CI log") classified as Chinese, while a lone CJK quote inside a
+# many-word English sentence stays Latin.
+# 0.30 = a message needs meaningfully more CJK structure than Latin words to flip
+# to CJK, but a handful of English terms can't drag real Chinese to Latin.
+# Boundary-tested in test_runtime_hooks.py and test_language_reminder.py.
 _LANG_CJK_WEIGHT_THRESHOLD = 0.30
 
 def _extract_field(data: Any, field: str, default: Any = "") -> Any:
@@ -128,6 +130,168 @@ def create_failure_tracker_reset(
 
 
 # ---------------------------------------------------------------------------
+# is_test_command — did this Bash command run a test suite?
+# ---------------------------------------------------------------------------
+
+_SEGMENT_SEPARATORS = {";", "&", "&&", "||", "|", "|&", "(", ")", ";;"}
+# Runners that are the test command on their own.
+_SINGLE_RUNNERS = {"pytest", "py.test", "jest", "vitest", "mocha", "rspec", "phpunit", "ctest"}
+# `<tool> test`: the first argument is the subcommand.
+_SUBCOMMAND_RUNNERS = {"go", "cargo", "dotnet"}
+# `<tool> [goals...] test`: test may be one goal among several.
+_GOAL_RUNNERS = {"mvn", "mvnw", "gradle", "gradlew", "make"}
+_PACKAGE_MANAGERS = {"npm", "yarn", "pnpm", "bun"}
+_PACKAGE_MANAGER_VALUE_OPTIONS = {"--prefix", "-C", "--dir", "--cwd", "--filter", "-F", "--workspace", "-w"}
+# Words that run the command after them (options skipped).
+_PLAIN_WRAPPERS = {"sudo", "time", "env", "nice", "nohup", "exec", "command", "npx", "bunx", "pnpx", "xvfb-run"}
+# `<tool> run|exec <command>`.
+_RUN_WRAPPERS = {"uv": "run", "poetry": "run", "pipenv": "run", "pdm": "run",
+                 "hatch": "run", "rye": "run", "bundle": "exec"}
+#: Wrapper options whose value is the next token (`sudo -u bob`, `timeout -s KILL`).
+_WRAPPER_VALUE_OPTIONS = {"sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"),
+                          "timeout": ("-s", "-k", "--signal", "--kill-after"),
+                          "env": ("-u", "-C", "-S", "--unset", "--chdir"),
+                          "nice": ("-n",)}
+#: `uv run` / `poetry run` ... options whose value is the next token.
+_RUN_VALUE_OPTIONS = ("--with", "--from", "--python", "-p", "--project", "--directory",
+                      "--package", "--extra", "--env-file", "--group")
+_SHELLS = {"bash", "sh", "zsh"}
+_ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_PYTHON_RE = re.compile(r"^(python[0-9.]*|py)$")
+
+
+def _command_word(token: str) -> str:
+    word = re.split(r"[\\/]", token)[-1].lower()
+    for suffix in (".exe", ".cmd", ".bat"):
+        if word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+def _command_segments(command: str):
+    """Token lists of each simple command in ``command`` (split on ; && || | ...)."""
+    for line in command.splitlines():
+        try:
+            lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            tokens = list(lexer)
+        except ValueError:  # unbalanced quotes: fall back to plain words
+            tokens = line.split()
+        segment: list[str] = []
+        for tok in tokens:
+            if tok in _SEGMENT_SEPARATORS:
+                yield segment
+                segment = []
+            else:
+                segment.append(tok)
+        yield segment
+
+
+def _runner_runs_tests(word: str, rest: list[str]) -> bool:
+    if word in _SINGLE_RUNNERS:
+        return True
+    if word in _SUBCOMMAND_RUNNERS:
+        positionals = [t for t in rest if not t.startswith(("-", "+"))]
+        return bool(positionals) and positionals[0] == "test"
+    if word in _GOAL_RUNNERS:
+        return any(t == "test" or t.endswith(":test") for t in rest if not t.startswith("-"))
+    if word in _PACKAGE_MANAGERS:
+        args: list[str] = []
+        j = 0
+        while j < len(rest):
+            tok = rest[j]
+            if tok in _PACKAGE_MANAGER_VALUE_OPTIONS:
+                j += 2
+                continue
+            if not tok.startswith("-"):
+                args.append(tok)
+            j += 1
+        if args and args[0] in ("run", "run-script", "exec"):
+            args = args[1:]
+        if not args:
+            return False
+        first = args[0]
+        return first in ("test", "t") or first.startswith("test:") or _command_word(first) in _SINGLE_RUNNERS
+    return False
+
+
+def _segment_runs_tests(tokens: list[str], depth: int) -> bool:
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if _ENV_ASSIGNMENT_RE.match(tok):
+            i += 1
+            continue
+        word = _command_word(tok)
+        rest = tokens[i + 1:]
+        if word == "command" and rest[:1] and rest[0] in ("-v", "-V"):
+            return False  # `command -v x` looks a command up, it runs nothing
+        if word in _PLAIN_WRAPPERS or word == "timeout":
+            i += 1
+            while i < n and tokens[i].startswith("-"):
+                # an option that takes its value as the next token: `sudo -u bob`
+                i += 2 if tokens[i] in _WRAPPER_VALUE_OPTIONS.get(word, ()) else 1
+            if word == "timeout":
+                i += 1  # the duration
+            continue
+        if word in _RUN_WRAPPERS and rest[:1] == [_RUN_WRAPPERS[word]]:
+            i += 2
+            while i < n and tokens[i].startswith("-"):  # `uv run --with x pytest`
+                i += 2 if tokens[i] in _RUN_VALUE_OPTIONS and "=" not in tokens[i] else 1
+            continue
+        if word == "perl":  # perl -e '... exec @ARGV' <command ...>
+            i += 1
+            while i < n and tokens[i].startswith("-"):
+                i += 2 if tokens[i] in ("-e", "-E") else 1
+            continue
+        if word in _SHELLS:
+            if "-c" in rest and depth < 3:
+                idx = rest.index("-c")
+                return idx + 1 < len(rest) and is_test_command(rest[idx + 1], _depth=depth + 1)
+            return False
+        if _PYTHON_RE.match(word):
+            j = 0
+            while j < len(rest):
+                arg = rest[j]
+                if arg == "-m":
+                    return j + 1 < len(rest) and rest[j + 1] in ("pytest", "py.test")
+                if not arg.startswith("-"):
+                    return False  # a script, not a module
+                j += 2 if arg in ("-X", "-W") else 1  # options that take a value
+            return False
+        return _runner_runs_tests(word, rest)
+    return False
+
+
+def is_test_command(command: str, _depth: int = 0) -> bool:
+    """True when a shell command runs a test suite.
+
+    Recognises common runners as a command word (after ``cd x &&``, env
+    assignments and wrappers such as ``npx`` / ``uv run`` / ``bundle exec`` /
+    ``timeout``): pytest and ``python -m pytest``, jest, vitest, mocha, rspec,
+    phpunit, ctest, ``go test``, ``cargo test``, ``dotnet test``, ``npm/yarn/pnpm
+    test`` (and ``run test``), ``mvn test``, ``gradle test`` / ``./gradlew test``
+    and ``make test``. A runner named only as an argument (``pip install pytest``,
+    ``grep pytest``) does not count. Never raises.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    try:
+        return any(seg and _segment_runs_tests(seg, _depth) for seg in _command_segments(command))
+    except Exception:
+        logger.debug("is_test_command: parse failed", exc_info=True)
+        return False
+
+
+def _observation_ran_tests(obs: Any) -> bool:
+    """An ObservationRing entry for a Bash call that ran tests, judged on the command
+    it ran (``Observation.command``), never on its intent: the intent is the tool's
+    description whenever one was given, and a description is prose."""
+    return obs.tool_name == "Bash" and is_test_command(getattr(obs, "command", "") or "")
+
+
+# ---------------------------------------------------------------------------
 # PostToolUse: file tracker — records Read/Edit/Write file paths
 # ---------------------------------------------------------------------------
 
@@ -179,7 +343,7 @@ def create_file_tracker(
             tool_input = _extract_field(input_data, "tool_input", {})
             command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
             # Detect test/scan execution (Self-Monitoring evidence)
-            if "pytest" in command or "python -m pytest" in command:
+            if is_test_command(command):
                 ctx["_ran_tests"] = True
             # DoD2: record Bash write targets (`>`/`>>`/tee/cp/mv DEST) so a
             # Bash-written file lands in _files_touched (reuses the SSOT parser —
@@ -278,8 +442,9 @@ def create_session_checkpoint(
                     from collections import Counter
                     tool_counts = Counter(o.tool_name for o in all_obs)
                     dominant = tool_counts.most_common(1)[0] if tool_counts else ("", 0)
-                    test_runs = sum(1 for o in all_obs if o.tool_name == "Bash" and "pytest" in o.intent)
-                    test_passes = sum(1 for o in all_obs if o.tool_name == "Bash" and "pytest" in o.intent and o.result_status == "success")
+                    test_obs = [o for o in all_obs if _observation_ran_tests(o)]
+                    test_runs = len(test_obs)
+                    test_passes = sum(1 for o in test_obs if o.result_status == "success")
                     session_summary = {
                         "dominant_tool": dominant[0],
                         "dominant_count": dominant[1],
@@ -1133,49 +1298,84 @@ def _strip_injected_prefix(prompt: str) -> str:
     return strip_injected_blocks(prompt)
 
 
+# Per-script character classes for the language classifier. These answer "which
+# script", a different question from ContextDirectoryLoader._CJK_RE (one CJK-like
+# class for token estimation, punctuation included), so they are not a copy of it.
+_HANGUL_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]")
+_HAN_RE = re.compile(
+    r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+    r"\U00020000-\U0002a6df\U0002a700-\U0002b73f]"
+)
+# Latin words, accented letters included (Spanish, French, German ...).
+_LATIN_WORD_RE = re.compile(r"[A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f]{2,}")
+
+
+def _script_counts(text: str) -> dict:
+    """Hangul, Kana and Han characters and Latin words in ``text``."""
+    return {
+        "hangul": len(_HANGUL_RE.findall(text)),
+        "kana": len(_KANA_RE.findall(text)),
+        "han": len(_HAN_RE.findall(text)),
+        "latin": len(_LATIN_WORD_RE.findall(text)),
+    }
+
+
 def _classify_message_language(prompt: str) -> Optional[str]:
-    """Return "zh" if the message is CJK-majority, "en" if it is clearly Latin
-    text, or None when ambiguous (too short / symbol-only) — in which case NO
-    language reminder is injected (silence beats a wrong flip).
+    """Classify the user's message by script.
+
+    Returns ``"ko"`` (Hangul dominant), ``"ja"`` (CJK dominant with any Kana),
+    ``"zh"`` (Han only), ``"latin"`` (Latin-script words dominant), or ``None``
+    when the message is too short or no script decides it -- then NO language
+    reminder is injected (silence beats a wrong flip).
 
     Strips every system-injected block FIRST (see _strip_injected_prefix /
     core.injected_blocks): R19 must reflect the USER's language, not the English
     resume / recall / UI-state / terminal blocks the session router prepends.
-
-    REUSES the single canonical full-range CJK detector
-    ``ContextDirectoryLoader._CJK_RE`` (the ONE object, imported — NOT copied:
-    context_directory_loader.py documents that the way to avoid detector
-    divergence, run_3f25a73a, is to import the single source, never re-declare a
-    parallel regex). "zh" here is shorthand for "a CJK-like language" — the full
-    range includes Kana/Hangul, all of which are correctly NOT-English.
     """
     prompt = _strip_injected_prefix(prompt)
     stripped = "".join(prompt.split())
     if len(stripped) < 3:
         return None  # too short to classify — stay silent
-    from core.context_directory_loader import ContextDirectoryLoader
-    cjk = len(ContextDirectoryLoader._CJK_RE.findall(prompt))
-    latin_words = len(re.findall(r"[A-Za-z]{2,}", prompt))
+    counts = _script_counts(prompt)
+    cjk = counts["hangul"] + counts["kana"] + counts["han"]
+    latin_words = counts["latin"]
 
     # Compare SEMANTIC UNITS, not a char ratio: 1 CJK char ≈ 1 word of meaning
     # (the tokenizer weights them similarly — CJK ~1.1 tok/char vs Latin ~1 tok/word).
     # A char-ratio is the WRONG tool here — it can't separate "English + a CJK quote"
-    # from "Chinese + English technical terms" (the latter is XG's normal style:
-    # "帮我 review 这个 CI log"), and mis-flipping THAT to English is the exact R19
+    # from "Chinese + English technical terms" (a common way to write:
+    # "帮我 review 这个 CI log"), and mis-flipping THAT to Latin is the exact R19
     # bug this hook exists to prevent. Weighing CJK-chars vs Latin-WORDS protects it:
     # a few English tech terms can't outvote CJK sentence structure, and a lone CJK
     # quote in an English sentence can't outvote many English words.
     if cjk == 0:
-        return "en" if latin_words >= 1 else None  # pure Latin (or symbols → silent)
-    # CJK present. It's Chinese UNLESS the CJK is a tiny embedded fraction of a
-    # clearly-Latin-dominant message (a quoted term), i.e. Latin words vastly
-    # outnumber CJK chars.
+        return "latin" if latin_words >= 1 else None  # pure Latin (or symbols → silent)
     weight = cjk / (cjk + latin_words)          # CJK share of semantic units
-    if weight >= _LANG_CJK_WEIGHT_THRESHOLD:
+    if weight < _LANG_CJK_WEIGHT_THRESHOLD:
+        return "latin"                           # Latin-dominant, CJK is incidental
+    # CJK dominant: which script decides it.
+    if counts["hangul"] > counts["kana"] + counts["han"]:
+        return "ko"
+    if counts["kana"] > 0:
+        return "ja"
+    if counts["hangul"] == 0:
         return "zh"
-    if latin_words >= 1:
-        return "en"                              # Latin-dominant, CJK is incidental
-    return None
+    return None  # Han with some Hangul: no script decides it
+
+
+# One reminder per classified language. CJK languages are named in that language;
+# Latin-script text gets "the same language as the user's message" because the
+# script does not tell English from Spanish, French and the rest.
+_LANGUAGE_REMINDERS = {
+    "zh": "⚠️ 用户这条消息是中文 → 本轮必须用中文回复(R19:匹配用户输入语言)。",
+    "ja": "⚠️ ユーザーのメッセージは日本語です → このターンは日本語で返答してください(R19)。",
+    "ko": "⚠️ 사용자의 메시지는 한국어입니다 → 이번 턴은 한국어로 답변해 주세요(R19).",
+    "latin": (
+        "⚠️ Reply in the same language as the user's message this turn "
+        "(R19: match the user's input language)."
+    ),
+}
 
 
 def create_enforcement_injector(session_context: Optional[dict] = None):
@@ -1185,11 +1385,11 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
     generate (O003 + P7). One signal:
 
     - **A — symmetric language (R19).** Detect THIS message's language and remind
-      me to reply in the SAME language. SYMMETRIC + input-derived — a CJK message
-      injects "respond in Chinese", an English message injects "respond in
-      English". NEVER hardcoded to one language (hardcoding rebuilds the exact bug
-      that motivated the hook: R19 is *match the input language*, not "reply in
-      Chinese").
+      me to reply in the SAME language. Input-derived — a Chinese, Japanese or
+      Korean message injects a reminder in that language; a Latin-script message
+      injects "reply in the same language as the user's message". NEVER hardcoded
+      to one language (hardcoding rebuilds the exact bug that motivated the hook:
+      R19 is *match the input language*, not "reply in Chinese").
     (Signal B, "adversarial review is still mandatory in direct mode", was removed:
     native coding is the default and the agent decides which reviews a change needs,
     design 2026-10-24-swarmai-usable-by-anyone §3.4 / P6.)
@@ -1215,15 +1415,9 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
             # Signal A — symmetric language reminder (classifier re-strips defensively,
             # but pass the already-stripped text so the two signals agree on the input).
             lang = _classify_message_language(user_text)
-            if lang == "zh":
-                parts.append(
-                    "⚠️ 用户这条消息是中文 → 本轮必须用中文回复(R19:匹配用户输入语言)。"
-                )
-            elif lang == "en":
-                parts.append(
-                    "⚠️ The user's message is in English → respond in English this "
-                    "turn (R19: match the user's input language)."
-                )
+            reminder = _LANGUAGE_REMINDERS.get(lang) if lang else None
+            if reminder:
+                parts.append(reminder)
 
             if not parts:
                 return {}

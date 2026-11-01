@@ -12,9 +12,8 @@ trigger:
   - context health
   - brain health
 do_not_use:
-  - post-build verification (use health-check)
-  - runtime system health CPU/RAM (use system-health)
-  - SwarmAI backend process health (use health-check)
+  - post-change test runs and regressions (use qa)
+  - machine or SwarmAI process health, CPU/RAM (use system-health)
 tier: lazy
 platform: all
 ---

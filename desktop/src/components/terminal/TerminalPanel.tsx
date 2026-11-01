@@ -16,6 +16,10 @@
  * mounted and hidden with display:none when collapsed, so scrollback + PTYs survive.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useTranslation } from 'react-i18next';
+// the app's i18next instance (initialised in src/i18n, imported by main.tsx)
+import i18n from 'i18next';
+import { defaultDataDir, joinDir } from '../../utils/platform';
 import { useTerminal, TERMINAL_GOTO_EVENT } from '../../contexts/TerminalContext';
 import {
   terminalStore,
@@ -58,10 +62,11 @@ function parentName(path: string): string {
  *  segments with one name get their parent folder appended. */
 function buildSegments(repo: { path: string; name: string } | null, current: { kind: string; key: string },
                        tabs: TerminalTabModel[]): Segment[] {
-  const segs: Segment[] = [{ key: SWARMWS_KEY, kind: 'swarmws', label: 'SwarmWS', title: 'SwarmWS (~/.swarm-ai/SwarmWS)' }];
+  const wsDir = joinDir(defaultDataDir(), 'SwarmWS').replace(/[\\/]+$/, '');
+  const segs: Segment[] = [{ key: SWARMWS_KEY, kind: 'swarmws', label: 'SwarmWS', title: `SwarmWS (${wsDir})` }];
   if (repo) {
     segs.push({ key: keyOfCwd(repo.path), kind: 'repo', label: repo.name, cwd: repo.path,
-                title: `${repo.path} — this chat's working repo` });
+                title: i18n.t('ui.TerminalPanel.repoTitle', { path: repo.path }) });
   }
   const add = (key: string) => {
     if (segs.some((s) => s.key === key)) return;
@@ -88,7 +93,7 @@ function choiceOf(seg: Segment): LocationChoice {
 async function browseFolder(): Promise<string | null> {
   try {
     const { open } = await import('@tauri-apps/plugin-dialog');
-    const picked = await open({ directory: true, multiple: false, title: 'Open terminal in folder' });
+    const picked = await open({ directory: true, multiple: false, title: i18n.t('ui.TerminalPanel.dialogTitle') });
     return typeof picked === 'string' && picked ? picked : null;
   } catch (e) {
     console.error('terminal: folder dialog failed', e);
@@ -109,13 +114,14 @@ function RecentsMenu({ recents, onPick, onClose }: {
   // Escape closes the menu first, before the terminal (which keeps focus) sends it to
   // the shell: a layer without a ref takes Escape in the capture phase.
   useEscape(true, onClose);
+  const { t } = useTranslation();
   return (
     <div
       ref={ref}
       data-testid="terminal-recents-menu"
       className="absolute left-0 top-full mt-1.5 z-50 w-72 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] shadow-lg p-1.5 text-[12.5px]"
     >
-      <div className="px-2 pt-0.5 pb-1 text-[11px] text-[var(--color-text-muted)]">Recent folders</div>
+      <div className="px-2 pt-0.5 pb-1 text-[11px] text-[var(--color-text-muted)]">{t('ui.TerminalPanel.recentFolders')}</div>
       {recents.map((p) => (
         <button
           key={p}
@@ -138,6 +144,7 @@ const ICON_BTN =
   'icon-btn text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] disabled:opacity-40 disabled:pointer-events-none';
 
 export default function TerminalPanel() {
+  const { t } = useTranslation();
   const {
     tabs,
     activeTabId,
@@ -326,7 +333,7 @@ export default function TerminalPanel() {
         <div className="relative flex items-center">
           <div
             role="tablist"
-            aria-label="Terminal location"
+            aria-label={t('ui.TerminalPanel.locationLabel')}
             data-testid="terminal-locations"
             className="flex items-center gap-0.5 p-[3px] rounded-lg bg-[color-mix(in_srgb,var(--color-bg)_45%,var(--color-card))]"
           >
@@ -366,8 +373,8 @@ export default function TerminalPanel() {
           <button
             type="button"
             data-testid="terminal-browse"
-            aria-label="Open a terminal in a folder"
-            title="Open a terminal in a folder…"
+            aria-label={t('ui.TerminalPanel.browseLabel')}
+            title={t('ui.TerminalPanel.browseTitle')}
             onClick={() => void browseFolder().then((p) => { if (p) pickFolder(p); })}
             className={`${ICON_BTN} ml-1`}
           >
@@ -377,8 +384,8 @@ export default function TerminalPanel() {
             <button
               type="button"
               data-testid="terminal-more-locations"
-              aria-label="Recent folders"
-              title="Recent folders"
+              aria-label={t('ui.TerminalPanel.recentFolders')}
+              title={t('ui.TerminalPanel.recentFolders')}
               onClick={() => setMenuOpen((v) => !v)}
               className={`${ICON_BTN} !w-5 -ml-0.5`}
             >
@@ -418,7 +425,7 @@ export default function TerminalPanel() {
                 <button
                   type="button"
                   data-testid={`terminal-close-${tab.id}`}
-                  aria-label={`Close terminal ${tab.title}`}
+                  aria-label={t('ui.TerminalPanel.closeTab', { title: tab.title })}
                   onClick={(e) => {
                     e.stopPropagation();
                     closeHere(tab.id);
@@ -434,8 +441,8 @@ export default function TerminalPanel() {
         <button
           type="button"
           data-testid="terminal-new"
-          aria-label="New terminal"
-          title={`New terminal in ${currentSeg.label}`}
+          aria-label={t('ui.TerminalPanel.newTerminal')}
+          title={t('ui.TerminalPanel.newTerminalIn', { label: currentSeg.label })}
           onClick={() => openTerminal({ cwd: current.cwd })}
           className={ICON_BTN}
         >
@@ -446,8 +453,8 @@ export default function TerminalPanel() {
         <button
           type="button"
           data-testid="terminal-attach"
-          aria-label="Add terminal output to chat"
-          title="Add the selection (or the last 200 lines) to the chat input"
+          aria-label={t('ui.TerminalPanel.attachLabel')}
+          title={t('ui.TerminalPanel.attachTitle')}
           disabled={!shown}
           onClick={sendToChat}
           className={`${ICON_BTN} ${sentFrom && sentFrom === shown?.id ? '!text-green-500' : ''}`}
@@ -459,8 +466,8 @@ export default function TerminalPanel() {
         <button
           type="button"
           data-testid="terminal-collapse"
-          aria-label="Hide terminal panel"
-          title="Hide (⌘`)"
+          aria-label={t('ui.TerminalPanel.hideLabel')}
+          title={t('ui.TerminalPanel.hideTitle')}
           onClick={() => setPanelOpen(false)}
           className={ICON_BTN}
         >
@@ -485,7 +492,7 @@ export default function TerminalPanel() {
       >
         {!shown && (
           <div className="h-full flex flex-col items-center justify-center gap-2 text-[12px] text-[var(--color-text-muted)]">
-            <span>No terminal in {currentSeg.label}</span>
+            <span>{t('ui.TerminalPanel.noTerminalIn', { label: currentSeg.label })}</span>
             <button
               type="button"
               data-testid="terminal-empty-open"
@@ -493,7 +500,7 @@ export default function TerminalPanel() {
               className="btn-md btn-secondary"
             >
               <span className="material-symbols-outlined icon-sm">add</span>
-              Open terminal
+              {t('ui.TerminalPanel.openTerminal')}
             </button>
           </div>
         )}
@@ -527,21 +534,23 @@ export default function TerminalPanel() {
                   data-testid={`terminal-exited-${tab.id}`}
                   className="absolute left-0 right-0 bottom-0 flex items-center gap-3 px-3 h-7 text-[11.5px] bg-[var(--color-bg-chrome)] border-t border-[var(--color-border)] text-[var(--color-text-muted)]"
                 >
-                  <span>Process exited{typeof tab.exitCode === 'number' && tab.exitCode >= 0 ? ` (code ${tab.exitCode})` : ''}</span>
+                  <span>{typeof tab.exitCode === 'number' && tab.exitCode >= 0
+                    ? t('ui.TerminalPanel.exitedCode', { code: tab.exitCode })
+                    : t('ui.TerminalPanel.exited')}</span>
                   <button
                     type="button"
                     data-testid={`terminal-restart-${tab.id}`}
                     onClick={() => restartTerminal(tab.id)}
                     className="btn-sm btn-ghost text-[var(--color-primary)]"
                   >
-                    ↵ Restart
+                    ↵ {t('ui.TerminalPanel.restart')}
                   </button>
                   <button
                     type="button"
                     onClick={() => closeHere(tab.id)}
                     className="btn-sm btn-ghost"
                   >
-                    Close
+                    {t('common.button.close')}
                   </button>
                 </div>
               )}

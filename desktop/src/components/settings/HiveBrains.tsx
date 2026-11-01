@@ -16,6 +16,8 @@
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { hiveService, type HiveBrainRow } from '../../services/hive';
 import { friendlyError } from './hiveComponents';
 
@@ -29,10 +31,10 @@ export function resetHiveBrainsAutoSync(): void {
 
 const needsSync = (b: HiveBrainRow) => b.syncable && !b.synced && !b.localError;
 
-function verdict(b: HiveBrainRow): { text: string; tone: 'ok' | 'warn' | 'muted' } {
-  if (b.dispatchable) return { text: 'Can be sent here', tone: 'ok' };
+function verdict(b: HiveBrainRow, t: TFunction): { text: string; tone: 'ok' | 'warn' | 'muted' } {
+  if (b.dispatchable) return { text: t('ui.HiveBrains.canBeSent'), tone: 'ok' };
   if (needsSync(b) && b.reasons.every((r) => r === 'not synced' || r === 'out of date')) {
-    return { text: b.hiveDigest ? 'Out of date' : 'Not on this Hive yet', tone: 'warn' };
+    return { text: b.hiveDigest ? t('ui.HiveBrains.outOfDate') : t('ui.HiveBrains.notOnHiveYet'), tone: 'warn' };
   }
   return { text: b.localError ?? b.reasons.join(' · '), tone: 'muted' };
 }
@@ -44,6 +46,7 @@ const TONE = {
 };
 
 export function HiveBrains({ instanceId }: { instanceId: string }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const key = ['hive', 'brains', instanceId];
   const q = useQuery({ queryKey: key, queryFn: () => hiveService.brainStatus(instanceId), staleTime: 30_000 });
@@ -81,18 +84,18 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
   let summary: ReactNode;
   let stale: HiveBrainRow[] = [];
   if (q.isPending) {
-    summary = <span className="text-[var(--color-text-muted)]">checking…</span>;
+    summary = <span className="text-[var(--color-text-muted)]">{t('ui.HiveBrains.checking')}</span>;
   } else if (q.isError || !data) {
     summary = (
       <span className="text-[var(--color-text-muted)]" data-testid="hive-brains-error">
-        could not be read ({friendlyError(q.error)}){' '}
-        <button className="text-primary hover:underline" onClick={() => { void q.refetch(); }}>Retry</button>
+        {t('ui.HiveBrains.couldNotRead', { error: friendlyError(q.error) })}{' '}
+        <button className="text-primary hover:underline" onClick={() => { void q.refetch(); }}>{t('common.button.retry')}</button>
       </span>
     );
   } else if (!data.supported) {
     summary = (
       <span className="text-[var(--color-text-muted)]" data-testid="hive-brains-unsupported">
-        this Hive's version cannot receive Brains; update it once
+        {t('ui.HiveBrains.unsupported')}
       </span>
     );
   } else {
@@ -101,10 +104,10 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
     summary = (
       <span data-testid="hive-brains-summary">
         <span className="text-[var(--color-text)] font-medium">
-          {ready} of {data.brains.length} can be sent here
+          {t('ui.HiveBrains.readyCount', { ready, total: data.brains.length })}
         </span>
         {stale.length > 0 && (
-          <span className={TONE.warn}> · {stale.length} need a sync</span>
+          <span className={TONE.warn}> · {t('ui.HiveBrains.needSync', { count: stale.length })}</span>
         )}
       </span>
     );
@@ -113,10 +116,10 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
   return (
     <div className="mt-2 text-xs" data-testid="hive-brains">
       <div className="flex items-center gap-2">
-        <span className="text-[var(--color-text-muted)]">Brains:</span>
+        <span className="text-[var(--color-text-muted)]">{t('ui.HiveBrains.brainsLabel')}</span>
         {summary}
         <span className="flex-1" />
-        {busy === '*' && <span className="text-[var(--color-text-muted)]">syncing SwarmAI and General…</span>}
+        {busy === '*' && <span className="text-[var(--color-text-muted)]">{t('ui.HiveBrains.syncingDefaults')}</span>}
         {stale.length > 0 && (
           <button
             className="btn-sm btn-soft disabled:opacity-50"
@@ -124,7 +127,11 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
             onClick={() => void sync(stale.map((b) => b.brain), 'all')}
             data-testid="hive-brains-sync-all"
           >
-            {busy === 'all' ? 'Syncing…' : stale.length === 1 ? `Sync ${stale[0].brain}` : `Sync ${stale.length}`}
+            {busy === 'all'
+              ? t('ui.HiveBrains.syncing')
+              : stale.length === 1
+                ? t('ui.HiveBrains.syncOne', { brain: stale[0].brain })
+                : t('ui.HiveBrains.syncMany', { count: stale.length })}
           </button>
         )}
         {data?.supported && data.brains.length > 0 && (
@@ -134,7 +141,7 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
             aria-expanded={open}
             data-testid="hive-brains-toggle"
           >
-            {open ? 'Hide' : 'Details'}
+            {open ? t('ui.HiveBrains.hide') : t('ui.HiveBrains.details')}
           </button>
         )}
       </div>
@@ -142,16 +149,21 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
       {open && data?.supported && (
         <ul className="mt-2 space-y-1.5 pl-1" data-testid="hive-brains-rows">
           {data.brains.map((b) => {
-            const v = verdict(b);
+            const v = verdict(b, t);
             const notes = [
-              b.hiveChangedFiles ? `the Hive changed ${b.hiveChangedFiles} file${b.hiveChangedFiles === 1 ? '' : 's'}` : null,
-              b.running ? `${b.running} running` : null,
+              b.hiveChangedFiles ? t('ui.HiveBrains.hiveChangedFiles', { count: b.hiveChangedFiles }) : null,
+              b.running ? t('ui.HiveBrains.running', { count: b.running }) : null,
             ].filter(Boolean);
             return (
               <li key={b.brain} className="flex items-baseline gap-2" data-testid={`hive-brain-${b.brain}`}>
                 <span
                   className="w-36 shrink-0 truncate text-[var(--color-text)]"
-                  title={`this machine ${b.localDigest?.slice(0, 8) ?? '—'} · Hive ${b.hiveDigest?.slice(0, 8) ?? '—'}${b.installedAt ? ` · synced ${b.installedAt}` : ''}`}
+                  title={
+                    t('ui.HiveBrains.digestTitle', {
+                      local: b.localDigest?.slice(0, 8) ?? '—',
+                      hive: b.hiveDigest?.slice(0, 8) ?? '—',
+                    }) + (b.installedAt ? t('ui.HiveBrains.syncedAt', { time: b.installedAt }) : '')
+                  }
                 >
                   {b.brain}
                 </span>
@@ -165,7 +177,7 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
                     onClick={() => void sync([b.brain], b.brain)}
                     data-testid={`hive-brain-sync-${b.brain}`}
                   >
-                    {busy === b.brain ? 'Syncing…' : 'Sync'}
+                    {busy === b.brain ? t('ui.HiveBrains.syncing') : t('common.button.sync')}
                   </button>
                 )}
               </li>

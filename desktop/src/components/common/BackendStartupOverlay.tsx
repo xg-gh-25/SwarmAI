@@ -20,6 +20,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 // getApiBaseUrl: health checks; getBackendPort/initializeBackend: Tauri daemon port negotiation
 import { getApiBaseUrl, getBackendPort, initializeBackend, isDesktop } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
+import { defaultDataDir, joinDir } from '../../utils/platform';
 import logo from '../../assets/swarm-avatar.svg';
 
 // ============================================================================
@@ -159,9 +160,10 @@ export function checkReadiness(systemStatus: SystemStatus): ReadinessCheckResult
   return { agentReady, workspaceReady, allReady, error };
 }
 
-/** Get the log directory path — same for all platforms. */
-function getLogPath(): string {
-  return '~/.swarm-ai/logs/';
+/** The log directory as shown: under the backend's data dir once a status reported
+ *  it, else under the OS default data dir (the backend may not have answered yet). */
+export function logDirLabel(dataDir: string | undefined): string {
+  return joinDir(dataDir || defaultDataDir(), 'logs');
 }
 
 /**
@@ -252,7 +254,8 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   const [retryCount, setRetryCount] = useState(0);
   const [daemonProgress, setDaemonProgress] = useState<{ elapsed: number; total: number } | null>(null);
 
-  const logPath = useMemo(() => getLogPath(), []);
+  const [dataDir, setDataDir] = useState('');
+  const logPath = useMemo(() => logDirLabel(dataDir), [dataDir]);
 
   /** Retry handler — resets all state and restarts initialization. */
   const handleRetry = useCallback(() => {
@@ -387,6 +390,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       console.log('[System Status] Fetching system status...');
       const systemStatus = await systemService.getStatus();
       console.log('[System Status] Response:', systemStatus);
+      if (systemStatus.dataDir) setDataDir(systemStatus.dataDir);
       return systemStatus;
     } catch (error) {
       console.warn('[System Status] Failed to fetch (graceful degradation):', error);
@@ -518,7 +522,8 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
           const apiBase = getApiBaseUrl();
           console.error(`[Health Check] Exhausted ${noResponseStreak} consecutive no-response attempts. apiBase=${apiBase || '(same-origin)'}, isDesktop=${isDesktop()}, port=${getBackendPort()}`);
           setStatus('error');
-          setErrorMessage(`Backend service is not responding (${apiBase || 'same-origin'}, ${noResponseStreak} attempts with no reply). Check logs at ~/.swarm-ai/logs/`);
+          // The log folder is shown below the message (logPath).
+          setErrorMessage(t('startup.notResponding', { base: apiBase || 'same-origin', attempts: noResponseStreak }));
         } else {
           timeoutId = setTimeout(pollHealth, TIMING.pollInterval);
         }
@@ -624,7 +629,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
               <Spinner size="md" />
               <span className="text-[var(--color-text-muted)]">
                 {daemonProgress
-                  ? `Starting backend... ${daemonProgress.elapsed}s`
+                  ? t('ui.BackendStartupOverlay.startingBackend', { seconds: daemonProgress.elapsed })
                   : t('startup.connectingToBackend')
                 }
               </span>
@@ -681,11 +686,11 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
               </span>
             </div>
             <div className="text-center">
-              <p className="text-red-400 font-medium mb-2">Failed to start</p>
+              <p className="text-red-400 font-medium mb-2">{t('ui.BackendStartupOverlay.failedToStart')}</p>
               <p className="text-[var(--color-text-muted)] text-sm">{errorMessage}</p>
             </div>
             <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4 mt-2">
-              <p className="text-sm text-[var(--color-text-muted)] mb-2">Please check the logs at:</p>
+              <p className="text-sm text-[var(--color-text-muted)] mb-2">{t('startup.checkLogsAt')}</p>
               <code className="text-xs text-primary bg-[var(--color-hover)] px-2 py-1 rounded block">
                 {logPath}
               </code>
@@ -695,7 +700,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
               className="btn-lg btn-primary mt-4 transition-colors"
             >
               <span className="material-symbols-outlined icon-md">refresh</span>
-              Retry
+              {t('common.button.retry')}
             </button>
           </div>
         )}

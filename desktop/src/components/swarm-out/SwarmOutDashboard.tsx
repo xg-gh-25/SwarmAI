@@ -78,7 +78,7 @@ export function SwarmOutDashboard({ hidden = false, onOpenHive, onOpenSession, n
       data-compact={compact || undefined}
     >
       <div className={`flex items-center gap-3 ${padX} ${compact ? 'pt-3' : 'pt-4'} flex-shrink-0 min-w-0`}>
-        <h2 className={`m-0 ${compact ? 'text-[15px]' : 'text-[17px]'} font-semibold whitespace-nowrap`}>Swarm Out</h2>
+        <h2 className={`m-0 ${compact ? 'text-[15px]' : 'text-[17px]'} font-semibold whitespace-nowrap`}>{t('ui.SwarmOutDashboard.title')}</h2>
         <div className="inline-flex rounded-lg p-[2px] bg-[var(--color-bg-chrome)] flex-shrink-0">{seg('run', t('swarmOut.view.run'))}{seg('history', t('swarmOut.view.history'))}</div>
         {fleet !== null && (
           <span className={`ml-auto text-[12px] truncate min-w-0 ${muted}`} data-testid="swarm-out-hive-count">

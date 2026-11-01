@@ -74,7 +74,7 @@ export function SwarmOutWelcome({ hidden = false, onOpenHive }: { hidden?: boole
           style={{ background: 'color-mix(in srgb, var(--color-brand) 16%, transparent)' }} aria-hidden>
           <span className="material-symbols-outlined text-[22px]">hive</span>
         </div>
-        <h2 className="m-0 text-[22px] font-semibold tracking-[-0.01em] text-[var(--color-text)]">Swarm Out</h2>
+        <h2 className="m-0 text-[22px] font-semibold tracking-[-0.01em] text-[var(--color-text)]">{t('needYou.source.swarm_out')}</h2>
         <p className="mt-1 mb-[22px] text-[14px] text-[var(--color-text-secondary)]">{t('swarmOut.welcome.why')}</p>
         <div className="grid gap-2">
           {can === false ? (

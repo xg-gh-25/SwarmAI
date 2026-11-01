@@ -730,11 +730,48 @@ def _collect_swarm_out() -> list[AttentionItem]:
     return items
 
 
+NEEDS_ACCOUNT_TITLE = "Background cognition needs the SwarmAI AWS account"
+
+
+def _needs_account(conn: Any) -> str:
+    """The recorded credentials failure of background cognition when it is the latest
+    word: the last finished extraction attempt failed with it, or, with no later
+    success, a session job still carries it (``core.ingestion.llm.AWS_CREDENTIALS_REASON``).
+    A later successful attempt means the credentials work again: empty, even while an
+    old job that ran out of attempts keeps its error until its session is reopened."""
+    import sqlite3
+    from core.ingestion.llm import AWS_CREDENTIALS_REASON
+    pattern = f"%{AWS_CREDENTIALS_REASON}%"
+    found = ""
+    try:
+        last = conn.execute(
+            "SELECT status,error FROM extraction_attempts WHERE status<>'running' "
+            "ORDER BY COALESCE(finished_at, started_at) DESC, rowid DESC LIMIT 1").fetchone()
+        if last is not None and last[0] == "failed" and AWS_CREDENTIALS_REASON in str(last[1] or ""):
+            found = str(last[1])
+        elif last is not None and last[0] != "failed":
+            return ""  # the latest attempt worked: the credentials are fine now
+    except sqlite3.Error:
+        pass
+    if not found:
+        try:
+            job = conn.execute(
+                "SELECT error FROM ingestion_s2_jobs WHERE state IN ('queued','failed') "
+                "AND error LIKE ? LIMIT 1", (pattern,)).fetchone()
+            found = str(job[0]) if job is not None else ""
+        except sqlite3.Error:
+            pass
+    return found
+
+
 def _collect_ingestion() -> list[AttentionItem]:
-    """Unresolved CDF anomalies, one item per kind; a missing DB is silent."""
+    """Unresolved CDF anomalies, one item per kind; a missing DB is silent. A model call
+    that failed for lack of AWS credentials is ONE item that opens Settings → SwarmAI
+    AWS Account, and a poison of the same cause is not shown again as a generic one."""
     import json
     import sqlite3
     from contextlib import closing
+    from core.ingestion.llm import AWS_CREDENTIALS_REASON
 
     titles = {
         "id_collision": "Cognitive Distillation found an ID collision",
@@ -763,6 +800,7 @@ def _collect_ingestion() -> list[AttentionItem]:
             ).fetchall()
             from core.ingestion.status import stalls
             stalled = stalls(conn)
+            account_failure = _needs_account(conn)
     except (OSError, sqlite3.Error):
         return []
     except Exception as exc:
@@ -771,6 +809,19 @@ def _collect_ingestion() -> list[AttentionItem]:
 
     items: list[AttentionItem] = []
     seen: set[str] = set()
+    if account_failure:
+        summary = _one_line(account_failure)
+        items.append(AttentionItem(
+            id="ingestion:needs_account", source="ingestion", tier=TIER_REVIEW, brain=None,
+            title=NEEDS_ACCOUNT_TITLE, summary=summary,
+            detail=_one_line("Background cognition (Cognitive Distillation, background jobs) "
+                             "calls Bedrock with the SwarmAI AWS account, and no working "
+                             "AWS credentials were found. " + account_failure, 400),
+            dispatch={"message": _prompt("Open Settings → SwarmAI AWS Account and connect or "
+                                         "sign in to the account, so background cognition "
+                                         "can run again.", [("Last error", summary)]),
+                      "context": {"kind": "aws_account", "settings_tab": "aws-account"}},
+        ))
     if stalled:
         # computed from the store, not an event: it clears by itself once CDF moves
         summary = _one_line("; ".join(stalled))
@@ -789,6 +840,9 @@ def _collect_ingestion() -> list[AttentionItem]:
             detail = json.loads(row["detail"])
         except (TypeError, ValueError):
             detail = {"detail": str(row["detail"] or "")}
+        if kind == "poison" and AWS_CREDENTIALS_REASON in str(detail.get("reason") or ""):
+            if account_failure:
+                continue        # the same cause, already the one "needs the account" item
         seen.add(kind)
         summary = _one_line(str(detail.get("summary") or detail.get("reason") or kind))
         tier = TIER_BLOCKING if kind in {"user_race", "writer_unknown"} else TIER_REVIEW

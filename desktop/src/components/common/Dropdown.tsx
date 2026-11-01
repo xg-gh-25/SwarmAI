@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 
 export interface DropdownOption {
   id: string;
@@ -21,7 +22,7 @@ interface DropdownProps {
 
 export default function Dropdown({
   label,
-  placeholder = 'Select an option...',
+  placeholder,
   options,
   selectedId,
   onChange,
@@ -30,6 +31,7 @@ export default function Dropdown({
   disabled = false,
   className,
 }: DropdownProps) {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -88,7 +90,7 @@ export default function Dropdown({
             )}
           </div>
         ) : (
-          <span className="text-[var(--color-text-muted)]">{placeholder}</span>
+          <span className="text-[var(--color-text-muted)]">{placeholder ?? t('ui.Dropdown.selectOption')}</span>
         )}
 
         {/* Dropdown Icon */}
@@ -116,7 +118,7 @@ export default function Dropdown({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search..."
+                  placeholder={t('common.placeholder.search')}
                   className="w-full pl-10 pr-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
                   onClick={(e) => e.stopPropagation()}
                 />
@@ -129,12 +131,12 @@ export default function Dropdown({
             {loading ? (
               <div className="p-4 text-center text-[var(--color-text-muted)]">
                 <div className="inline-block w-5 h-5 border-2 border-muted border-t-primary rounded-full animate-spin" />
-                <span className="ml-2">Loading...</span>
+                <span className="ml-2">{t('common.status.loading')}</span>
               </div>
             ) : error ? (
               <div className="p-4 text-center text-status-error">{error}</div>
             ) : filteredOptions.length === 0 ? (
-              <div className="p-4 text-center text-[var(--color-text-muted)]">No options found</div>
+              <div className="p-4 text-center text-[var(--color-text-muted)]">{t('ui.Dropdown.noOptions')}</div>
             ) : (
               filteredOptions.map((option) => {
                 const isSelected = selectedId === option.id;

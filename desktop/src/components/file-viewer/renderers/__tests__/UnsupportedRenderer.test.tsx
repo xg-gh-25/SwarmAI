@@ -12,7 +12,8 @@
  *
  * Invariants under test (all assert against a Tauri-2.x window, i.e. only
  * `__TAURI_INTERNALS__` present — the exact prod shape the old check missed):
- *  - Open in Default App + Reveal in Finder buttons ARE rendered
+ *  - Open in Default App + Reveal in Finder buttons ARE rendered (macOS; the
+ *    reveal label names the OS file manager, e.g. File Explorer on Windows)
  *  - Copy Path copies the ABSOLUTE absolutePath (not the relative filePath)
  *  - Open in Default App invokes the opener with the absolute path
  *
@@ -49,6 +50,10 @@ const PROPS = {
   absolutePath: ABS_PATH,
 };
 
+function setPlatform(platform: string) {
+  Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
+}
+
 describe('UnsupportedRenderer — Tauri 2.x desktop detection (run_847ed9f9)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -56,10 +61,14 @@ describe('UnsupportedRenderer — Tauri 2.x desktop detection (run_847ed9f9)', (
     // the old `'__TAURI__' in window` check failed to recognize.
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
     delete (window as unknown as Record<string, unknown>).__TAURI__;
+    // The reveal button names the OS file manager (utils/platform); run as macOS.
+    setPlatform('MacIntel');
   });
 
   afterEach(() => {
     delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    // Drop the own property so navigator.platform reads jsdom's value again.
+    delete (window.navigator as unknown as Record<string, unknown>).platform;
     cleanup();
   });
 
@@ -68,6 +77,13 @@ describe('UnsupportedRenderer — Tauri 2.x desktop detection (run_847ed9f9)', (
     expect(screen.getByText('Open in Default App')).toBeTruthy();
     expect(screen.getByText('Reveal in Finder')).toBeTruthy();
     expect(screen.getByText('Copy Path')).toBeTruthy();
+  });
+
+  it('names the file manager of the OS it runs on (File Explorer on Windows)', () => {
+    setPlatform('Win32');
+    render(<UnsupportedRenderer {...PROPS} />);
+    expect(screen.getByText('Reveal in File Explorer')).toBeTruthy();
+    expect(screen.queryByText('Reveal in Finder')).toBeNull();
   });
 
   it('Copy Path copies the ABSOLUTE path (not the workspace-relative filePath)', async () => {

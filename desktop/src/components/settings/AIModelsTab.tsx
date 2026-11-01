@@ -205,10 +205,10 @@ export default function AIModelsTab() {
 
       {/* Thinking */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Thinking</h2>
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('ui.AIModelsTab.thinking')}</h2>
         <div className="space-y-4">
           <Dropdown
-            label="Thinking Mode"
+            label={t('ui.AIModelsTab.thinkingMode')}
             options={thinkingModeOptions}
             selectedId={shownThinkingMode}
             onChange={async (id) => {
@@ -223,12 +223,11 @@ export default function AIModelsTab() {
           />
           {storedModeIsKnown && effectiveThinkingMode && effectiveThinkingMode !== thinkingMode && (
             <p data-testid="thinking-mode-not-in-effect" className="text-xs text-[var(--color-text-muted)] -mt-2">
-              Your saved setting "{storedModeName}" is not supported by the default model, so it runs as {shownModeName}.
-              It applies again if you switch to a model that supports it — or select {shownModeName} to save that instead.
+              {t('ui.AIModelsTab.modeNotInEffect', { stored: storedModeName, shown: shownModeName })}
             </p>
           )}
           <Dropdown
-            label="Thinking Effort"
+            label={t('ui.AIModelsTab.thinkingEffort')}
             disabled={shownThinkingMode === 'disabled'}
             options={[
               { id: 'low', name: 'Low', description: 'Minimal thinking — fastest responses' },
@@ -273,12 +272,12 @@ export default function AIModelsTab() {
                 onClick={handleRefreshFromBedrock}
                 disabled={discovering}
                 className="btn-md btn-secondary disabled:opacity-50"
-                title="List Claude models available on your Bedrock account"
+                title={t('ui.AIModelsTab.refreshTitle')}
               >
                 <span className={`material-symbols-outlined icon-sm ${discovering ? 'animate-spin' : ''}`}>
                   {discovering ? 'progress_activity' : 'cloud_sync'}
                 </span>
-                {discovering ? 'Refreshing…' : 'Refresh from Bedrock'}
+                {discovering ? t('ui.AIModelsTab.refreshing') : t('ui.AIModelsTab.refreshFromBedrock')}
               </button>
             </div>
             <div className="flex gap-2">
@@ -303,7 +302,7 @@ export default function AIModelsTab() {
           {discovered && discovered.length > 0 && (
             <div className="border border-[var(--color-border)] rounded-lg p-3 space-y-2">
               <div className="text-xs text-[var(--color-text-muted)] mb-1">
-                Available on your Bedrock account:
+                {t('ui.AIModelsTab.availableOnBedrock')}
               </div>
               {discovered.map((m) => {
                 const already = availableModels.includes(m.shortName);
@@ -312,12 +311,12 @@ export default function AIModelsTab() {
                     <span className="flex items-center gap-2 min-w-0">
                       <span className="text-[var(--color-text)] font-mono text-sm truncate">{m.shortName}</span>
                       {m.isNew && !already && (
-                        <span className="px-1.5 py-0.5 text-[11px] font-semibold bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded">NEW</span>
+                        <span className="px-1.5 py-0.5 text-[11px] font-semibold bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded">{t('ui.AIModelsTab.newBadge')}</span>
                       )}
                     </span>
                     {already ? (
                       <span className="text-[var(--color-text-muted)] text-xs flex items-center gap-1">
-                        <span className="material-symbols-outlined icon-xs">check</span>added
+                        <span className="material-symbols-outlined icon-xs">check</span>{t('ui.AIModelsTab.added')}
                       </span>
                     ) : (
                       <button

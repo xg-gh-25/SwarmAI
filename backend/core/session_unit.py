@@ -76,8 +76,7 @@ logger = logging.getLogger(__name__)
 # Strong refs for fire-and-forget decision records (a bare task can be GC'd).
 _BACKGROUND_RECORDS: "set[asyncio.Task]" = set()
 
-# Dedicated executor for subprocess operations (process tree snapshots,
-# pgrep, ps). Isolated from the default asyncio thread pool so that
+# Dedicated executor for subprocess operations (process tree snapshots). Isolated from the default asyncio thread pool so that
 # blocking waitpid/subprocess.run calls can NEVER starve health checks,
 # aiosqlite, or other IO tasks that share the default executor.
 # 8 workers = generous ceiling (max 4 sessions × 1 snapshot each + margin).
@@ -323,75 +322,36 @@ DUMB_SPAWN_TIMEOUT_SECONDS: float = 120.0
 
 
 def _get_children(pid: int) -> list[int]:
-    """Get direct child PIDs via ``pgrep -P``. Best-effort."""
+    """Direct child PIDs of *pid* (psutil, on every platform). Best-effort: [] when
+    the process is gone or cannot be read."""
     try:
-        result = subprocess.run(
-            ["pgrep", "-P", str(pid)],
-            capture_output=True, text=True, timeout=3,
-        )
-        children = []
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if line:
-                try:
-                    children.append(int(line))
-                except ValueError:
-                    pass
-        return children
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        import psutil
+        return [child.pid for child in psutil.Process(pid).children()]
+    except Exception:  # noqa: BLE001 -- psutil.Error, ImportError, OSError: nothing to report
         return []
 
 
 def _snapshot_process_table() -> dict[int, int]:
-    """Snapshot the entire process table as {pid: ppid} in one call.
+    """Snapshot the entire process table as {pid: ppid} in one pass.
 
-    Uses ``ps -eo pid,ppid`` which is a single fork — O(1) subprocess
-    invocations regardless of tree depth.  Falls back to empty dict
-    on failure.
-
-    Parsing is defensive: skips any line that doesn't contain exactly
-    two integer fields, handling header variations across macOS/Linux.
+    Reads it through psutil (``process_iter``), which works on macOS, Linux and
+    Windows and needs no ``ps`` binary (a sandboxed macOS runtime can deny /bin/ps).
+    A process whose parent cannot be read is left out. Empty on failure.
     """
-    def _via_psutil() -> dict[int, int]:
-        table: dict[int, int] = {}
-        try:
-            import psutil
-
-            for proc in psutil.process_iter(attrs=["pid", "ppid"]):
-                info = proc.info
-                table[int(info["pid"])] = int(info["ppid"])
-        except (ImportError, OSError):
-            return {}
-        except psutil.Error:
-            pass
-        return table
-
     try:
-        result = subprocess.run(
-            ["ps", "-eo", "pid,ppid"],
-            capture_output=True, text=True, timeout=5,
-        )
-        table: dict[int, int] = {}
-        for line in result.stdout.strip().split("\n"):
-            parts = line.split()
-            if len(parts) != 2:
-                continue
-            try:
-                pid, ppid = int(parts[0]), int(parts[1])
-                table[pid] = ppid
-            except ValueError:
-                continue  # header line or malformed — skip
-        if table:
-            return table
-        if result.returncode != 0:
-            # Sandboxed macOS runtimes can deny /bin/ps while still allowing the
-            # native process APIs used by psutil. Keep cleanup functional there.
-            return _via_psutil()
-        return table
-    except subprocess.TimeoutExpired:
+        import psutil
+    except ImportError:
         return {}
-    except (FileNotFoundError, OSError):
-        return _via_psutil()
+    table: dict[int, int] = {}
+    try:
+        for proc in psutil.process_iter(attrs=["pid", "ppid"]):
+            info = proc.info
+            if info.get("pid") is None or info.get("ppid") is None:
+                continue
+            table[int(info["pid"])] = int(info["ppid"])
+    except (psutil.Error, OSError):
+        return {}
+    return table
 
 
 def _snapshot_descendant_tree(parent_pid: int) -> list[int]:
@@ -400,15 +360,13 @@ def _snapshot_descendant_tree(parent_pid: int) -> list[int]:
     Returns PIDs in bottom-up order (deepest leaves first) so the caller
     can kill them in one atomic sweep — no reparenting race.
 
-    Uses a single ``ps -eo pid,ppid`` call to snapshot the entire process
-    table, then builds the tree in-memory.  This is O(1) subprocess
-    invocations regardless of tree depth (previous approach was O(N)
-    pgrep calls for N nodes).
+    Snapshots the entire process table once (``_snapshot_process_table``),
+    then builds the tree in memory, so the tree is read at one moment.
     """
     table = _snapshot_process_table()
     if not table:
-        # Fallback to pgrep-based approach if ps fails
-        return _snapshot_descendant_tree_pgrep(parent_pid)
+        # the table could not be read: walk the children of each node instead
+        return _snapshot_descendant_tree_walk(parent_pid)
 
     # Build children map from the process table
     children_map: dict[int, list[int]] = {}
@@ -432,10 +390,10 @@ def _snapshot_descendant_tree(parent_pid: int) -> list[int]:
     return to_kill
 
 
-def _snapshot_descendant_tree_pgrep(parent_pid: int) -> list[int]:
-    """Fallback: snapshot tree via per-node pgrep -P calls.
+def _snapshot_descendant_tree_walk(parent_pid: int) -> list[int]:
+    """Fallback: snapshot the tree by asking each node for its children.
 
-    Used when ``ps -eo pid,ppid`` fails (shouldn't happen on macOS/Linux).
+    Used when the whole process table cannot be read.
     """
     to_kill: list[int] = []
     stack = _get_children(parent_pid)
@@ -452,15 +410,47 @@ def _snapshot_descendant_tree_pgrep(parent_pid: int) -> list[int]:
     return to_kill
 
 
+def _signs_in_with_ada() -> bool:
+    """Whether the SwarmAI AWS account signs in with ADA / Midway (core.aws_account)."""
+    try:
+        from core import aws_account
+        return aws_account.remediation_method() in ("ada_account", "ada")
+    except Exception:  # noqa: BLE001 -- unknown sign-in: give the generic hint
+        return False
+
+
+def _mcp_failure_hints(failed_servers: list[dict], missing: set[str]) -> set[str]:
+    """Remediation hints from the errors of the MCP servers in *missing*. An auth
+    failure suggests ``mwinit -s`` only when the account signs in with ADA / Midway;
+    otherwise the server itself needs signing in again."""
+    hints: set[str] = set()
+    ada: bool | None = None
+    for server in failed_servers:
+        if server.get("name") not in missing:
+            continue
+        error = str(server.get("error") or "").lower()
+        if "midway" in error or "auth" in error:
+            if ada is None:
+                ada = _signs_in_with_ada()
+            hints.add("mwinit -s" if ada else "re-authenticate this MCP server")
+        elif "enoent" in error or "not found" in error:
+            hints.add("check MCP binary path")
+        elif "timeout" in error or "connect" in error:
+            hints.add("check network connectivity")
+    return hints
+
+
 def _kill_pids(pids: list[int], reason: str = "tree") -> int:
     """SIGKILL a list of PIDs (recorded in core/kill_audit first). Returns count
     successfully killed."""
     from core import kill_audit
     kill_audit.record(pids, reason)
+    # Windows has no SIGKILL; there os.kill with SIGTERM ends the process outright
+    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
     killed = 0
     for pid in pids:
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, kill_signal)
             killed += 1
         except (ProcessLookupError, PermissionError):
             pass
@@ -3883,17 +3873,7 @@ class SessionUnit:
         missing_names = sorted(missing)
         names_str = ", ".join(missing_names)
 
-        # Try to identify a remediation hint from error messages
-        hints: set[str] = set()
-        for server in failed_servers:
-            if server.get("name") in missing:
-                error = server.get("error", "")
-                if "midway" in error.lower() or "auth" in error.lower():
-                    hints.add("mwinit -s")
-                elif "enoent" in error.lower() or "not found" in error.lower():
-                    hints.add("check MCP binary path")
-                elif "timeout" in error.lower() or "connect" in error.lower():
-                    hints.add("check network connectivity")
+        hints = _mcp_failure_hints(failed_servers, missing)
 
         msg = f"⚠️ MCP servers failed to load: {names_str}. These tools are unavailable this session."
         if hints:
@@ -5159,8 +5139,8 @@ class SessionUnit:
                     # middle node (zsh) orphans its children (pytest/workers).
                     #
                     # Offload to dedicated subprocess executor:
-                    # _snapshot_descendant_tree calls subprocess.run which
-                    # blocks. Using _subprocess_executor (not default pool)
+                    # _snapshot_descendant_tree walks the whole process table,
+                    # which blocks. Using _subprocess_executor (not default pool)
                     # prevents priority inversion with health/aiosqlite.
                     loop = asyncio.get_running_loop()
                     tree = await loop.run_in_executor(

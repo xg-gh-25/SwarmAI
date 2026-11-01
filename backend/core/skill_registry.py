@@ -51,9 +51,10 @@ for _cat, _skills in SKILL_CATEGORIES.items():
 
 # ---------------------------------------------------------------------------
 # Capabilities-domain: user-facing category + visibility derivation
-# (run_b5d98151). PURE functions of the folder name (no session/request
-# context) so they compute once at list-build time and cache with the skill
-# list. Consumed by routers/skills.py::_skill_info_to_response.
+# (run_b5d98151). PURE functions of the folder name and the SKILL.md
+# frontmatter (no session/request context) so they compute once at list-build
+# time and cache with the skill list. Consumed by
+# routers/skills.py::_skill_info_to_response.
 # ---------------------------------------------------------------------------
 
 # Valid load tiers: `always` (SKILL.md is the full body) or `lazy` (SKILL.md is a stub
@@ -95,18 +96,6 @@ def resolve_tier(
 # The fallback category — a skill with no mapping never vanishes from the UI.
 DEFAULT_CATEGORY = "Utilities"
 
-# Name-prefix rules for Amazon-internal / customer-specific skills. These form
-# the owner-only "Internal" group AND are visibility=internal (hidden from
-# non-owner surfaces via the run-mode filter in routers/skills.py). Matched
-# against the STRIPPED name (s_ removed).
-_INTERNAL_NAME_PREFIXES: tuple[str, ...] = (
-    "cmhk-",       # CMHK sales intelligence (internal customer)
-    "ivt-",        # IVTHub (internal customer)
-    "internal-",   # s_internal-* (brazil, crux-cr, crux-review)
-    "meddpicc",    # MEDDPICC scorecard (internal sales methodology)
-)
-
-
 def _strip_prefix(folder_name: str) -> str:
     """Strip the ``s_`` folder prefix to get the mapping key. Safe on empty."""
     if folder_name.startswith("s_"):
@@ -120,33 +109,34 @@ def derive_visibility(
 ) -> str:
     """Return ``"internal"`` or ``"public"`` for a skill.
 
-    Priority: explicit frontmatter ``visibility:`` > internal-prefix rule >
-    ``"public"`` default. Pure function of the name — no session context. A
-    malformed frontmatter value is ignored (falls through to the rule).
+    Only the SKILL.md frontmatter ``visibility:`` decides; without it (or with a
+    value other than ``public`` / ``internal``) a skill is ``"public"``. The name
+    never makes a skill internal: an owner-only skill says so in its frontmatter
+    (non-owner surfaces then hide it, routers/skills.py). *folder_name* is kept
+    for the callers' symmetry with ``derive_category``.
     """
     if frontmatter_visibility in ("public", "internal"):
         return frontmatter_visibility
-    name = _strip_prefix(folder_name)
-    if any(name.startswith(p) for p in _INTERNAL_NAME_PREFIXES):
-        return "internal"
     return "public"
 
 
 def derive_category(
     folder_name: str,
     frontmatter_category: Optional[str] = None,
+    frontmatter_visibility: Optional[str] = None,
 ) -> str:
     """Return the user-facing category group name for a skill.
 
-    Priority: explicit frontmatter ``category:`` > internal-prefix ("Internal")
-    > curated ``SKILL_CATEGORIES`` map > ``DEFAULT_CATEGORY`` fallback. Pure
-    function of the name — an unmapped skill lands in Utilities, never vanishes.
+    Priority: explicit frontmatter ``category:`` > an internal skill (frontmatter
+    ``visibility: internal``) is "Internal" > curated ``SKILL_CATEGORIES`` map >
+    ``DEFAULT_CATEGORY`` fallback. An unmapped skill lands in Utilities, never
+    vanishes.
     """
     if frontmatter_category:
         return frontmatter_category
     # Internal skills group under a single owner-only "Internal" group,
     # regardless of what functional bucket they'd otherwise map to.
-    if derive_visibility(folder_name) == "internal":
+    if derive_visibility(folder_name, frontmatter_visibility) == "internal":
         return "Internal"
     name = _strip_prefix(folder_name)
     return _SKILL_TO_CATEGORY.get(name, DEFAULT_CATEGORY)

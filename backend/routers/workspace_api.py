@@ -53,6 +53,7 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
+from send2trash import send2trash
 
 from core import executors
 from core import workspace_locations as wl
@@ -2078,7 +2079,7 @@ async def delete_folder(request: FolderDeleteRequest):
 
 @router.post("/workspace/trash")
 async def trash_item(request: FolderDeleteRequest):
-    """Move a file or folder to the macOS Trash (recoverable via Finder).
+    """Move a file or folder to the OS trash (recoverable from the Trash / Recycle Bin).
 
     Never falls back to permanent delete — if trashing fails, the error is
     surfaced to the user so they can decide what to do.
@@ -2096,7 +2097,7 @@ async def trash_item(request: FolderDeleteRequest):
 
     # Build the unresolved path BEFORE _validate_relative_path (which resolves
     # symlinks).  We need the unresolved path to detect symlinks and to pass
-    # the correct filesystem entry to shutil.move / unlink.
+    # the correct filesystem entry to send2trash / unlink.
     stripped = request.path.replace("\\", "/").strip("/")
     unresolved_path = workspace_root / stripped
 
@@ -2153,25 +2154,12 @@ async def trash_item(request: FolderDeleteRequest):
         logger.info("Removed symlink (target preserved): %s", request.path)
         return {"path": request.path, "trashed": True, "was_symlink": True}
 
-    # Move to macOS Trash via direct filesystem operation (recoverable).
-    # Uses shutil.move to ~/.Trash/ — no osascript, no Apple Events, no TCC
-    # popup. Uses a UUID suffix to guarantee uniqueness (avoids TOCTOU race
-    # between exists() check and shutil.move in the old counter approach).
-    trash_dir = Path.home() / ".Trash"
-    trash_dir.mkdir(exist_ok=True)  # May not exist on network home dirs
-    dest = trash_dir / target.name
-
-    if dest.exists():
-        # UUID suffix guarantees no collision without a TOCTOU window
-        import uuid
-        unique_id = uuid.uuid4().hex[:8]
-        stem = target.stem
-        suffix = target.suffix
-        dest = trash_dir / f"{stem} {unique_id}{suffix}"
-
+    # Move to the OS trash (recoverable): the macOS Trash, the Windows Recycle Bin,
+    # or the freedesktop trash on Linux. send2trash picks the platform's own way and
+    # names a duplicate itself; no osascript, no Apple Events, no TCC popup.
     try:
-        await asyncio.to_thread(shutil.move, str(target), str(dest))
-    except OSError as exc:
+        await asyncio.to_thread(send2trash, str(target))
+    except OSError as exc:  # TrashPermissionError is a PermissionError
         logger.error("Trash failed for %s: %s", request.path, exc)
         raise HTTPException(
             status_code=500,

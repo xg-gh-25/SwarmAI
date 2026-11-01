@@ -823,7 +823,7 @@ export function ChatInput({
                     <>
                       <div className="px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-card)] sticky top-0 z-10">
                         <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
-                          Commands
+                          {t('ui.ChatInput.commands')}
                         </span>
                       </div>
                       {systemCmds.map((cmd) => {
@@ -862,7 +862,7 @@ export function ChatInput({
                     <>
                       <div className="px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-card)] sticky top-0 z-10">
                         <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
-                          Skills ({skillCmds.length})
+                          {t('ui.ChatInput.skillsCount', { count: skillCmds.length })}
                         </span>
                       </div>
                       {skillCmds.map((cmd) => {
@@ -929,8 +929,8 @@ export function ChatInput({
                 disabled
                   ? t('chat.disconnectedPlaceholder', 'Backend offline...')
                   : isStreaming
-                    ? 'Type to add to the running turn...'
-                    : (placeholder ?? 'Ask Swarm anything...')
+                    ? t('ui.ChatInput.placeholderStreaming')
+                    : (placeholder ?? t('ui.ChatInput.placeholder'))
               }
               rows={DEFAULT_ROWS}
               disabled={disabled}
@@ -968,9 +968,9 @@ export function ChatInput({
             {(lineCount > 3 || isExpanded) && (
               <button
                 onClick={toggleExpanded}
-                aria-label={isExpanded ? 'Collapse input' : 'Expand input'}
+                aria-label={isExpanded ? t('chat.input.collapse') : t('chat.input.expand')}
                 aria-expanded={isExpanded}
-                title={`${isExpanded ? 'Collapse' : 'Expand'} input (${/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Shift+E)`}
+                title={isExpanded ? t('chat.input.collapseShortcut') : t('chat.input.expandShortcut')}
                 className="icon-btn text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
               >
                 <span className="material-symbols-outlined icon-sm">
@@ -998,7 +998,7 @@ export function ChatInput({
                   onClick={onVoiceConversationToggle}
                   disabled={disabled}
                   aria-pressed={voiceConversationState !== 'off'}
-                  aria-label={voiceConversationState !== 'off' ? 'Exit voice conversation' : 'Start voice conversation'}
+                  aria-label={voiceConversationState !== 'off' ? t('ui.ChatInput.exitVoiceConversation') : t('ui.ChatInput.startVoiceConversation')}
                   className={clsx(
                     'icon-btn transition-all',
                     voiceConversationState !== 'off'
@@ -1006,7 +1006,7 @@ export function ChatInput({
                       : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]',
                     disabled && 'opacity-50 cursor-not-allowed',
                   )}
-                  title={voiceConversationState !== 'off' ? 'Exit voice conversation' : 'Start voice conversation'}
+                  title={voiceConversationState !== 'off' ? t('ui.ChatInput.exitVoiceConversation') : t('ui.ChatInput.startVoiceConversation')}
                 >
                   <span className="material-symbols-outlined icon-sm">
                     {voiceConversationState !== 'off' ? 'hearing' : 'headset_mic'}
@@ -1019,7 +1019,7 @@ export function ChatInput({
                   onClick={toggleRecording}
                   disabled={voiceState === 'processing' || disabled}
                   aria-pressed={voiceState === 'recording'}
-                  aria-label={voiceState === 'recording' ? 'Stop recording' : 'Start voice input'}
+                  aria-label={voiceState === 'recording' ? t('ui.ChatInput.stopRecording') : t('ui.ChatInput.startVoiceInput')}
                   className={clsx(
                     'icon-btn transition-all',
                     voiceState === 'recording'
@@ -1031,10 +1031,10 @@ export function ChatInput({
                   )}
                   title={
                     voiceState === 'recording'
-                      ? 'Stop recording'
+                      ? t('ui.ChatInput.stopRecording')
                       : voiceState === 'processing'
-                        ? 'Transcribing...'
-                        : 'Start voice input'
+                        ? t('ui.ChatInput.transcribing')
+                        : t('ui.ChatInput.startVoiceInput')
                   }
                 >
                   <span className="material-symbols-outlined icon-sm">
@@ -1056,7 +1056,7 @@ export function ChatInput({
               )}
               {lineCount > 5 && (
                 <span className="text-xs text-[var(--color-text-muted)]">
-                  {lineCount} lines
+                  {t('ui.ChatInput.lineCount', { count: lineCount })}
                 </span>
               )}
             </div>
@@ -1105,10 +1105,10 @@ export function ChatInput({
                   )}
                   title={
                     isStreaming
-                      ? 'Queue message'
+                      ? t('ui.ChatInput.queueMessage')
                       : attachments.length > 0
-                          ? 'Send with attachments'
-                          : 'Send message'
+                          ? t('ui.ChatInput.sendWithAttachments')
+                          : t('ui.ChatInput.sendMessage')
                   }
                 >
                   <span className="material-symbols-outlined icon-md">arrow_upward</span>

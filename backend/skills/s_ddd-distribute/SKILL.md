@@ -1,12 +1,14 @@
 ---
 name: ddd-distribute
-description: "Package a DDD into a distributable capability package (AIM package and/or Open-Plugins plugin) within its declared reach. TRIGGER: \"distribute this ddd\", \"package ddd\", \"make a plugin from this ddd\". NOT FOR: creating a DDD (s_project-manager)."
+description: "Package a DDD as an Open-Plugins plugin and/or an internal package (e.g. AIM) within its declared reach. TRIGGER: \"distribute this ddd\", \"package ddd\", \"make a plugin from this ddd\". NOT FOR: creating a DDD (s_project-manager)."
 tier: lazy
 ---
 # DDD Distribute (s_ddd-distribute) — the distribution step of the DDD lifecycle
 
 Render a **grown DDD** into a **distributable capability package** so another agent
-host (Kiro / Quick / Claude Code / a public consumer) can install and use it.
+host (Claude Code, Kiro, a public consumer, ...) can install and use it: an **Open-Plugins
+plugin** (target `open-plugin`) and/or a package for an internal package manager (e.g. AIM)
+(target `aim-capabilities`).
 
 This skill is a **thin human-in-the-loop wrapper** — all packaging logic lives in
 `core/ddd_packager.py` and the reach policy in `core/ddd_distribution_policy.py`.
@@ -19,7 +21,7 @@ A DDD declares its own reach in its `aim.json`:
 
 ```json
 "distribution": {
-  "targets": ["aim-capabilities", "open-plugin"],   // the CEILING (0..2)
+  "targets": ["open-plugin", "aim-capabilities"],   // the CEILING (0..2)
   "visibility": "internal"                            // internal | external
 }
 ```
@@ -48,8 +50,10 @@ A DDD declares its own reach in its `aim.json`:
 5. **Return the path(s)** — report the built package dir(s) + any scan warnings +
    which skills were included (class-B domain) vs excluded (class-A enablement /
    unclassified). Point the human at the install command:
-   - internal → build + `cr`/PR into the internal package, then `aim plugins install <Pkg>`
-   - external → push to the public code host, then `aim plugins install` / `bash install.sh`
+   - external → push to the public code host, then `bash install.sh` (or the agent host's
+     plugin install command)
+   - internal → a code review / PR into the internal package, then the internal package
+     manager's install command (e.g. `aim plugins install <Pkg>`)
 
 ## Invocation
 
@@ -59,7 +63,7 @@ A DDD declares its own reach in its `aim.json`:
 
 # Emit:
 "$SWARM_BACKEND_BIN" py scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> \
-  [--targets aim-capabilities,open-plugin] [--publish]
+  [--targets open-plugin,aim-capabilities] [--publish]
 ```
 
 - `--targets` omitted → emit the full DECLARED set (subset-only still enforced).
@@ -74,7 +78,7 @@ A DDD declares its own reach in its `aim.json`:
 
 ## What this skill does NOT do
 
-- It does not run `aim`, `git`, or `gh` — building/committing/pushing the emitted
+- It does not run the package manager, `git`, or `gh` — building/committing/pushing the emitted
   package is the human's step (crosses auth + build-duration walls).
 - It does not backfill a DDD's `distribution` block — that is the owner's declaration.
 - It does not widen reach, ever.

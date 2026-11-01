@@ -14,6 +14,7 @@
  *
  * @exports GeneralBrainView
  */
+import { useTranslation } from 'react-i18next';
 import { useRunnerAgent, type GeneralBrain, type ProjectAgent } from '../../services/ddd';
 import { ProjectAgentView } from './ProjectAgentView';
 import { BackToHubButton } from './BackToHubButton';
@@ -27,6 +28,7 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
   /** sends a prompt to chat (the Runner Agent's "Revise in chat") */
   onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
 }) {
+  const { t } = useTranslation();
   const { data: raw, isLoading, isError, refetch } = useRunnerAgent();
   const agent = raw && typeof raw === 'object' && 'problems' in raw ? raw as ProjectAgent : null;
   const files = general?.library.files ?? null;
@@ -37,50 +39,47 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
         <BackToHubButton testid="general-back" onClick={onBack} />
         <div className="mt-1 flex items-center gap-2">
           <span className="material-symbols-outlined text-[var(--color-primary)]" aria-hidden="true">local_library</span>
-          <h2 className="text-title font-semibold">General</h2>
+          <h2 className="text-title font-semibold">{t('ui.GeneralBrainView.title')}</h2>
           <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-text-muted)] bg-[var(--color-hover)]"
-            data-testid="general-builtin-tag">BUILT-IN</span>
+            data-testid="general-builtin-tag">{t('ui.GeneralBrainView.builtinTag')}</span>
         </div>
         <div className="mt-0.5 text-small text-[var(--color-text-muted)]">
-          {general?.description || agent?.summary || 'For tasks that belong to no Brain.'}
+          {general?.description || agent?.summary || t('ui.GeneralBrainView.defaultDescription')}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-5 space-y-8 max-w-[1180px]">
         <section data-testid="general-what">
-          <h3 className="text-heading font-semibold">What it is</h3>
-          <p className="mt-1 text-body">
-            Research, reports and answers that belong to no Brain, with the general knowledge in
-            the Library. It is built in: it cannot be deleted or renamed.
-          </p>
+          <h3 className="text-heading font-semibold">{t('ui.GeneralBrainView.whatTitle')}</h3>
+          <p className="mt-1 text-body">{t('ui.GeneralBrainView.whatBody')}</p>
         </section>
 
         <section data-testid="general-knowledge">
-          <h3 className="text-heading font-semibold">Knowledge</h3>
+          <h3 className="text-heading font-semibold">{t('ui.GeneralBrainView.knowledgeTitle')}</h3>
           <div className="mt-1 flex items-center gap-3">
             <span className="text-body" data-testid="general-library-count">
-              Knowledge/Library{files === null ? '' : ` · ${files} Markdown ${files === 1 ? 'document' : 'documents'} taken to a Hive`}
+              {files === null ? t('ui.GeneralBrainView.libraryPath') : t('ui.GeneralBrainView.libraryCount', { count: files })}
             </span>
             <button className="btn-sm btn-secondary" data-testid="general-open-library"
-              onClick={() => onOpenLibrary?.()}>Open Library</button>
+              onClick={() => onOpenLibrary?.()}>{t('ui.GeneralBrainView.openLibrary')}</button>
           </div>
         </section>
 
         <section data-testid="general-agent">
-          <h3 className="text-heading font-semibold">Project Agent · Runner Agent</h3>
+          <h3 className="text-heading font-semibold">{t('ui.GeneralBrainView.agentTitle')}</h3>
           <div className="mt-2">
             {isLoading
-              ? <div className="text-small text-[var(--color-text-muted)]" data-testid="general-agent-loading">Loading the Runner Agent…</div>
+              ? <div className="text-small text-[var(--color-text-muted)]" data-testid="general-agent-loading">{t('ui.GeneralBrainView.agentLoading')}</div>
               : isError
               ? <div className="flex items-center gap-3 text-small text-[var(--color-status-error)]" data-testid="general-agent-error">
-                  The Runner Agent could not be read.
-                  <button className="btn-sm btn-secondary" onClick={() => void refetch()} data-testid="general-agent-retry">Retry</button>
+                  {t('ui.GeneralBrainView.agentError')}
+                  <button className="btn-sm btn-secondary" onClick={() => void refetch()} data-testid="general-agent-retry">{t('common.button.retry')}</button>
                 </div>
               : agent
               ? <ProjectAgentView key="runner" brain={null} agent={agent}
                   onRevise={(note) => { onDispatch?.(`Change the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nEdit it, check it with project_agent.validate, and tell me what you changed.`, { autoSend: true }); }} />
               : <div className="text-small text-[var(--color-text-muted)]" data-testid="general-no-agent">
-                  No Runner Agent definition here yet: it is written when the workspace starts.
+                  {t('ui.GeneralBrainView.noAgent')}
                 </div>}
           </div>
         </section>

@@ -28,6 +28,15 @@ export interface SwarmWorkspaceStatus {
   error?: string;
 }
 
+/** One machine prerequisite check from /api/system/status (backend core/prerequisites.py). */
+export interface Prerequisite {
+  /** 'git' everywhere; 'git_bash' on Windows only. */
+  name: 'git' | 'git_bash' | string;
+  /** null when the check itself could not run (hint says why). */
+  ok: boolean | null;
+  hint: string;
+}
+
 export interface SystemStatus {
   database: DatabaseStatus;
   agent: AgentStatus;
@@ -40,6 +49,8 @@ export interface SystemStatus {
   startupTimeMs: number | null;                    // Total backend startup duration in ms
   phaseTimings: Record<string, number> | null;     // Per-phase durations (database_ms, workspace_ms, etc.)
   timestamp: string;
+  prerequisites: Prerequisite[];  // Machine checks; missing ones warn in onboarding, never block
+  dataDir: string;                // The backend's app data directory ('' from an older backend)
 }
 
 // ============== Case Conversion ==============
@@ -69,6 +80,7 @@ function deepSnakeToCamel(obj: unknown): unknown {
  * - mcp_servers_count -> mcpServersCount
  * - channel_gateway -> channelGateway
  * - swarm_workspace -> swarmWorkspace
+ * - data_dir -> dataDir
  */
 const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
   const database = data.database as Record<string, unknown>;
@@ -105,8 +117,21 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
     startupTimeMs: (data.startup_time_ms as number) ?? null,
     phaseTimings: (data.phase_timings as Record<string, number>) ?? null,
     timestamp: data.timestamp as string,
+    prerequisites: toPrerequisites(data.prerequisites),
+    dataDir: typeof data.data_dir === 'string' ? data.data_dir : '',
   };
 };
+
+function toPrerequisites(raw: unknown): Prerequisite[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === 'object' && typeof (p as Record<string, unknown>).name === 'string')
+    .map((p) => ({
+      name: p.name as string,
+      ok: p.ok === true ? true : p.ok === false ? false : null,
+      hint: typeof p.hint === 'string' ? p.hint : '',
+    }));
+}
 
 // ============== Service ==============
 

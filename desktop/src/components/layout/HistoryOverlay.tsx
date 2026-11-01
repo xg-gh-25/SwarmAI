@@ -21,6 +21,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { overlayQuery } from './overlayQueries';
 import { HistoryView } from '../../pages/chat/components/RightSidebar/HistoryView';
 import { MessageBubble } from '../../pages/chat/components/MessageBubble';
@@ -57,6 +58,7 @@ export interface HistoryContentProps {
  * mount per open (so the former reset-on-close effect is gone).
  */
 export function HistoryContent({ agentId, onDeleteSession, onResume, close }: HistoryContentProps) {
+  const { t } = useTranslation();
   // Self-fetch, same query keys ChatPage uses → shares the cache, stays reactive.
   const { data: sessions = [] } = useQuery({ ...overlayQuery.historySessions(agentId), enabled: !!agentId });
   const { data: agents = [] } = useQuery(overlayQuery.agents());
@@ -175,14 +177,14 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
         <div className="flex-1 flex flex-col min-h-0 min-w-[280px]" data-testid="history-preview">
           {!previewSession ? (
             <div className="flex-1 flex items-center justify-center text-small text-[var(--color-text-muted)]">
-              Select a conversation to preview
+              {t('ui.HistoryOverlay.selectToPreview')}
             </div>
           ) : (
             <>
               <div className="flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)]">
                 <div className="flex-1 min-w-0">
                   <p className="text-body truncate text-[var(--color-text)]">{previewSession.title}</p>
-                  <p className="text-meta text-[var(--color-text-muted)]">Read-only preview</p>
+                  <p className="text-meta text-[var(--color-text-muted)]">{t('ui.HistoryOverlay.readOnlyPreview')}</p>
                 </div>
                 <button
                   onClick={handleResume}
@@ -190,14 +192,14 @@ export function HistoryContent({ agentId, onDeleteSession, onResume, close }: Hi
                   className="btn-md btn-soft transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <span className="material-symbols-outlined icon-sm">open_in_new</span>
-                  Resume in tab
+                  {t('ui.HistoryOverlay.resumeInTab')}
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto px-4 py-3">
                 {previewLoading ? (
-                  <p className="text-meta text-[var(--color-text-muted)] text-center py-6">Loading…</p>
+                  <p className="text-meta text-[var(--color-text-muted)] text-center py-6">{t('ui.HistoryOverlay.loading')}</p>
                 ) : previewMessages.length === 0 ? (
-                  <p className="text-meta text-[var(--color-text-muted)] text-center py-6">No messages</p>
+                  <p className="text-meta text-[var(--color-text-muted)] text-center py-6">{t('ui.HistoryOverlay.noMessages')}</p>
                 ) : (
                   previewMessages.map((m) => <MessageBubble key={m.id} message={m} readOnly />)
                 )}

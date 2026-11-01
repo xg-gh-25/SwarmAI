@@ -114,7 +114,7 @@ export function SessionTabBar({
         scrollbarWidth: 'thin',
       }}
     >
-      <div role="tablist" aria-label="Session tabs" className="flex items-center gap-1">
+      <div role="tablist" aria-label={t('ui.SessionTabBar.tabsLabel')} className="flex items-center gap-1">
         {tabs.map((tab, index) => (
           <SessionTab
             key={tab.id}
@@ -152,7 +152,7 @@ export function SessionTabBar({
               : t('chat.newSession', 'New Session')}
             title={isNewTabDisabled
               ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
-              : t('chat.newSession', 'New Session (⌘N)')}
+              : t('chat.newSession', 'New Session')}
             className={`icon-btn-lg border transition-colors ${
               isNewTabDisabled
                 ? 'border-transparent text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'

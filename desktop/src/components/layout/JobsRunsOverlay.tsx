@@ -33,6 +33,7 @@
  * @exports JobsRunsOverlay
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery, invalidateOverlay } from './overlayQueries';
 import { OverlayError } from './OverlayState';
@@ -61,6 +62,7 @@ function healthColor(j: JobRosterRow): string {
 }
 
 export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
+  const { t } = useTranslation();
   const [view, setView] = useState<ViewMode>('jobs');
   // Roster + overview through the shared overlay queries (overlayQueries): a reopen
   // inside the freshness window or after a nav hover shows the cached roster at once.
@@ -118,7 +120,7 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
                 view === v ? 'bg-primary/15 text-primary' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
               }`}
             >
-              {v === 'jobs' ? 'Jobs' : 'Runs'}
+              {v === 'jobs' ? t('ui.JobsRunsOverlay.viewJobs') : t('ui.JobsRunsOverlay.viewRuns')}
             </button>
           ))}
           right={(
@@ -127,7 +129,7 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
               data-testid="jobs-new-btn"
               className="btn-sm btn-soft transition-colors"
             >
-              <span className="material-symbols-outlined icon-xs">add</span>New Job
+              <span className="material-symbols-outlined icon-xs">add</span>{t('ui.JobsRunsOverlay.newJob')}
             </button>
           )}
         />
@@ -168,6 +170,7 @@ export function JobsRunsContent({ onDispatch, close }: JobsRunsContentProps) {
 // ── Guide banner ────────────────────────────────────────────────────
 
 function GuideBanner() {
+  const { t } = useTranslation();
   return (
     <div
       className="shrink-0 mx-4 mt-3 rounded-lg border border-primary/25 bg-primary/[0.06] px-3.5 py-2.5 flex items-start gap-2.5"
@@ -175,12 +178,11 @@ function GuideBanner() {
     >
       <span className="material-symbols-outlined icon-sm text-primary mt-0.5 shrink-0">auto_awesome</span>
       <div className="flex-1 min-w-0 text-meta leading-relaxed text-[var(--color-text-muted)]">
-        <span className="text-[var(--color-text)] ">Just ask Swarm in chat</span> — the AI-native way.
-        Say <span className="tabular-nums text-[var(--color-text)]">“schedule a job to … every weekday 9am”</span> and it
-        sets up the cron, prompt, tools, and budget for you (via the job-manager skill). Chat also handles{' '}
-        <span className="text-[var(--color-text)]">edits</span> (“pause the stock-analysis job”) and{' '}
-        <span className="text-[var(--color-text)]">deletes</span>.
-        <span className="text-[var(--color-text-faint)]"> Or add one manually with <span className="text-primary ">+ New Job</span>.</span>
+        <span className="text-[var(--color-text)] ">{t('ui.JobsRunsOverlay.bannerAsk')}</span>{' '}{t('ui.JobsRunsOverlay.bannerAiNative')}{' '}
+        <span className="tabular-nums text-[var(--color-text)]">{t('ui.JobsRunsOverlay.bannerExample')}</span>{' '}{t('ui.JobsRunsOverlay.bannerSetsUp')}{' '}
+        <span className="text-[var(--color-text)]">{t('ui.JobsRunsOverlay.bannerEdits')}</span>{' '}{t('ui.JobsRunsOverlay.bannerEditsExample')}{' '}
+        <span className="text-[var(--color-text)]">{t('ui.JobsRunsOverlay.bannerDeletes')}</span>{t('ui.JobsRunsOverlay.sentenceEnd')}
+        <span className="text-[var(--color-text-faint)]">{' '}{t('ui.JobsRunsOverlay.bannerManual')}{' '}<span className="text-primary ">{t('ui.JobsRunsOverlay.newJobPlus')}</span>{t('ui.JobsRunsOverlay.sentenceEnd')}</span>
       </div>
     </div>
   );
@@ -191,13 +193,14 @@ function GuideBanner() {
 function JobsView({ roster, overview, onSelect }: {
   roster: JobRosterRow[]; overview: JobsOverview | null; onSelect: (j: JobRosterRow) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden" data-testid="jobs-jobs-view">
       {overview && <OverviewStrip o={overview} />}
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-1.5" data-testid="jobs-roster">
         {roster.length === 0 ? (
           <div className="text-meta text-[var(--color-text-faint)] text-center py-8" data-testid="jobs-empty">
-            No jobs yet — ask Swarm in chat to schedule one, or <span className="text-primary ">+ New Job</span>.
+            {t('ui.JobsRunsOverlay.emptyJobs')}{' '}<span className="text-primary ">{t('ui.JobsRunsOverlay.newJobPlus')}</span>{t('ui.JobsRunsOverlay.sentenceEnd')}
           </div>
         ) : (
           roster.map((j) => <JobCard key={j.id} job={j} onSelect={onSelect} />)
@@ -208,12 +211,13 @@ function JobsView({ roster, overview, onSelect }: {
 }
 
 function OverviewStrip({ o }: { o: JobsOverview }) {
+  const { t } = useTranslation();
   const cells: { label: string; value: string; danger?: boolean }[] = [
-    { label: 'total', value: String(o.total) },
-    { label: 'healthy', value: String(o.healthy) },
-    { label: 'failing', value: String(o.failing), danger: o.failing > 0 },
-    { label: 'never-run', value: String(o.neverRun) },
-    { label: 'monthly spend', value: o.monthlySpendUsd == null ? '—' : `${o.monthlySpendPartial ? '≥ ' : ''}$${o.monthlySpendUsd.toFixed(2)}` },
+    { label: t('ui.JobsRunsOverlay.statTotal'), value: String(o.total) },
+    { label: t('ui.JobsRunsOverlay.statHealthy'), value: String(o.healthy) },
+    { label: t('ui.JobsRunsOverlay.statFailing'), value: String(o.failing), danger: o.failing > 0 },
+    { label: t('ui.JobsRunsOverlay.statNeverRun'), value: String(o.neverRun) },
+    { label: t('ui.JobsRunsOverlay.statMonthlySpend'), value: o.monthlySpendUsd == null ? '—' : `${o.monthlySpendPartial ? '≥ ' : ''}$${o.monthlySpendUsd.toFixed(2)}` },
   ];
   return (
     <div className="shrink-0 mx-4 mt-3 grid grid-cols-3 sm:grid-cols-5 gap-2" data-testid="jobs-overview">
@@ -248,6 +252,7 @@ function JobCard({ job, onSelect }: { job: JobRosterRow; onSelect: (j: JobRoster
 // ── Runs view: PURE job-run timeline (no pipeline — XG: pipeline 别揉进来) ──
 
 function RunsView({ roster }: { roster: JobRosterRow[] }) {
+  const { t } = useTranslation();
   // Each scheduled job's latest run (from roster lastRun), newest-first. Jobs only.
   type Row = { key: string; name: string; status: string; detail: string; ts: string };
   const rows: Row[] = roster
@@ -262,7 +267,7 @@ function RunsView({ roster }: { roster: JobRosterRow[] }) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3" data-testid="jobs-runs-view">
       {rows.length === 0 ? (
-        <div className="text-meta text-[var(--color-text-faint)] text-center py-8">No runs yet.</div>
+        <div className="text-meta text-[var(--color-text-faint)] text-center py-8">{t('ui.JobsRunsOverlay.noRuns')}</div>
       ) : (
         <div className="flex flex-col gap-1">
           {rows.map((r) => (
@@ -294,6 +299,7 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
   onRunNow: (j: JobRosterRow) => Promise<boolean>;
   onDispatch: (prompt: string) => void;
 }) {
+  const { t } = useTranslation();
   const [runs, setRuns] = useState<JobRunsResult | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [runState, setRunState] = useState<'idle' | 'running' | 'error'>('idle');
@@ -327,39 +333,39 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-4 text-small">
-        <Section label="Schedule">
+        <Section label={t('ui.JobsRunsOverlay.schedule')}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 tabular-nums text-meta">
-            <dt className="text-[var(--color-text-faint)]">Cron</dt><dd className="font-mono text-[var(--color-text)] break-all">{job.schedule || '—'}</dd>
-            <dt className="text-[var(--color-text-faint)]">Total runs</dt><dd className="text-[var(--color-text)]">{job.totalRuns}</dd>
-            <dt className="text-[var(--color-text-faint)]">Last run</dt><dd className="text-[var(--color-text)]">{fmtTs(job.lastRun)}</dd>
+            <dt className="text-[var(--color-text-faint)]">{t('ui.JobsRunsOverlay.cron')}</dt><dd className="font-mono text-[var(--color-text)] break-all">{job.schedule || '—'}</dd>
+            <dt className="text-[var(--color-text-faint)]">{t('ui.JobsRunsOverlay.totalRuns')}</dt><dd className="text-[var(--color-text)]">{job.totalRuns}</dd>
+            <dt className="text-[var(--color-text-faint)]">{t('ui.JobsRunsOverlay.lastRun')}</dt><dd className="text-[var(--color-text)]">{fmtTs(job.lastRun)}</dd>
           </dl>
           {job.lastError && <div className="mt-1 text-meta text-[var(--color-status-error)] break-words">{job.lastError}</div>}
         </Section>
 
-        <Section label="Last output">
+        <Section label={t('ui.JobsRunsOverlay.lastOutput')}>
           {loadingRuns ? (
-            <div className="text-meta text-[var(--color-text-faint)]">Loading…</div>
+            <div className="text-meta text-[var(--color-text-faint)]">{t('ui.JobsRunsOverlay.loading')}</div>
           ) : runs?.lastOutput ? (
             <pre className="text-meta text-[var(--color-text)] whitespace-pre-wrap break-words max-h-64 overflow-y-auto bg-[var(--color-bg)] rounded p-2 border border-[var(--color-border)]">{runs.lastOutput}</pre>
           ) : (
-            <div className="text-meta text-[var(--color-text-faint)] italic">No output captured.</div>
+            <div className="text-meta text-[var(--color-text-faint)] italic">{t('ui.JobsRunsOverlay.noOutput')}</div>
           )}
         </Section>
 
-        <Section label="Recent runs">
+        <Section label={t('ui.JobsRunsOverlay.recentRuns')}>
           {runs && runs.recent.length > 0 ? (
             <ul className="flex flex-col gap-0.5">
               {runs.recent.map((r, i) => (
                 <li key={i} className="flex items-center gap-2 text-meta tabular-nums">
                   <span className="text-[var(--color-text-faint)] w-[80px]">{r.date}</span>
                   <StatusBadge status={r.status} />
-                  <span className="text-[var(--color-text-muted)]">{r.tokens ?? 0} tok</span>
+                  <span className="text-[var(--color-text-muted)]">{t('ui.JobsRunsOverlay.tokens', { n: r.tokens ?? 0 })}</span>
                   <span className="text-[var(--color-text-faint)]">{(r.duration ?? 0).toFixed(1)}s</span>
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="text-meta text-[var(--color-text-faint)] italic">No run history.</div>
+            <div className="text-meta text-[var(--color-text-faint)] italic">{t('ui.JobsRunsOverlay.noRunHistory')}</div>
           )}
         </Section>
       </div>
@@ -367,11 +373,11 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
       {/* Action row */}
       {runState === 'error' && (
         <div className="px-4 pt-2 text-meta text-[var(--color-status-error)] shrink-0" data-testid="job-run-error">
-          Run-now failed — check the job's config or logs.
+          {t('ui.JobsRunsOverlay.runNowFailed')}
         </div>
       )}
       <div className="flex items-center gap-1.5 px-4 py-3 border-t border-[var(--color-border)] shrink-0 flex-wrap">
-        <DrawerBtn icon="play_arrow" label="Run now" primary disabled={!job.enabled || runState === 'running'}
+        <DrawerBtn icon="play_arrow" action="run-now" label={t('ui.JobsRunsOverlay.runNow')} primary disabled={!job.enabled || runState === 'running'}
           onClick={async () => {
             setRunState('running');
             const ok = await onRunNow(job);
@@ -379,11 +385,12 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
           }} />
         {!isSystem && (
           <>
-            <DrawerBtn icon={job.enabled ? 'pause' : 'play_circle'} label={job.enabled ? 'Pause' : 'Resume'}
+            <DrawerBtn icon={job.enabled ? 'pause' : 'play_circle'} action={job.enabled ? 'pause' : 'resume'}
+              label={job.enabled ? t('ui.JobsRunsOverlay.pause') : t('ui.JobsRunsOverlay.resume')}
               onClick={() => onDispatch(`${pauseVerb} the "${job.name}" job (id: ${job.id})`)} />
-            <DrawerBtn icon="edit" label="Edit"
+            <DrawerBtn icon="edit" action="edit" label={t('common.button.edit')}
               onClick={() => onDispatch(`edit the "${job.name}" job (id: ${job.id}) — `)} />
-            <DrawerBtn icon="delete" label="Delete"
+            <DrawerBtn icon="delete" action="delete" label={t('common.button.delete')}
               onClick={() => onDispatch(`delete the "${job.name}" job (id: ${job.id}) — confirm first`)} />
           </>
         )}
@@ -392,14 +399,15 @@ function JobDetailDrawer({ job, onClose, onRunNow, onDispatch }: {
   );
 }
 
-function DrawerBtn({ icon, label, primary, disabled, onClick }: {
-  icon: string; label: string; primary?: boolean; disabled?: boolean; onClick: () => void;
+function DrawerBtn({ icon, action, label, primary, disabled, onClick }: {
+  /** Stable, language-independent id for the test hook (the label is translated). */
+  icon: string; action: string; label: string; primary?: boolean; disabled?: boolean; onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      data-testid={`job-action-${label.toLowerCase().replace(/\s/g, '-')}`}
+      data-testid={`job-action-${action}`}
       className={`btn-sm disabled:opacity-40 ${primary ? 'btn-soft' : 'btn-ghost'}`}
     >
       <span className="material-symbols-outlined icon-xs">{icon}</span>{label}
@@ -424,6 +432,7 @@ type JobType = (typeof CRON_TYPES)[number];
 function NewJobForm({ onDispatch, onCreated, onCancel }: {
   onDispatch: (prompt: string) => void; onCreated: () => void; onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [schedule, setSchedule] = useState('');
   const [type, setType] = useState<JobType>('agent_task');
@@ -434,7 +443,7 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
     const n = name.trim();
     const s = schedule.trim();
     const p = prompt.trim();
-    if (!n || !s || !p) { setErr('Name, schedule, and prompt/command are required.'); return; }
+    if (!n || !s || !p) { setErr(t('ui.JobsRunsOverlay.requiredErr')); return; }
     // Hand inline Swarm the FULL context in one structured message + name the create
     // path explicitly, so it creates the job via s_job-manager in one step rather
     // than inferring intent (mirror of ToDo dispatch handing full context to chat).
@@ -462,54 +471,53 @@ function NewJobForm({ onDispatch, onCreated, onCancel }: {
       ].join('\n'),
     );
     onCreated();
-  }, [name, schedule, type, prompt, onDispatch, onCreated]);
+  }, [name, schedule, type, prompt, onDispatch, onCreated, t]);
 
   return (
     <OverlayDrawer widthPx={420} maxWidthPct={75} z={20} testid="jobs-new-form">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)] shrink-0">
-        <span className="flex-1 text-body font-semibold text-[var(--color-text)]">New Job</span>
+        <span className="flex-1 text-body font-semibold text-[var(--color-text)]">{t('ui.JobsRunsOverlay.newJob')}</span>
         <button onClick={onCancel} data-testid="jobs-new-cancel" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <span className="material-symbols-outlined icon-md">close</span>
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 text-small">
         <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">
-          Fills a chat prompt for Swarm to create the job (cron/type/prompt validated by the job-manager skill).
-          For tool allowlists, budgets, or dependency schedules, just describe them in chat.
+          {t('ui.JobsRunsOverlay.formHint')}
         </div>
-        <FormField label="Name *">
+        <FormField label={t('ui.JobsRunsOverlay.nameLabel')}>
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} data-testid="jobs-new-name"
             className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none"
-            placeholder="e.g. Weekly deps audit" />
+            placeholder={t('ui.JobsRunsOverlay.namePlaceholder')} />
         </FormField>
-        <FormField label="Schedule (cron) *">
+        <FormField label={t('ui.JobsRunsOverlay.scheduleLabel')}>
           <input value={schedule} onChange={(e) => setSchedule(e.target.value)} data-testid="jobs-new-schedule"
             className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] font-mono focus:border-primary/50 outline-none"
             placeholder="0 9 * * 1-5" />
         </FormField>
-        <FormField label="Type">
+        <FormField label={t('common.label.type')}>
           <div className="flex gap-1">
-            {CRON_TYPES.map((t) => (
-              <button key={t} onClick={() => setType(t)} data-testid={`jobs-new-type-${t}`}
+            {CRON_TYPES.map((ct) => (
+              <button key={ct} onClick={() => setType(ct)} data-testid={`jobs-new-type-${ct}`}
                 className={`btn-sm btn-secondary transition-colors ${
-                  type === t ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                }`}>{t}</button>
+                  type === ct ? 'border-primary/50 bg-primary/10 text-primary' : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
+                }`}>{ct}</button>
             ))}
           </div>
         </FormField>
-        <FormField label={type === 'agent_task' ? 'Prompt *' : 'Command *'}>
+        <FormField label={type === 'agent_task' ? t('ui.JobsRunsOverlay.promptLabel') : t('ui.JobsRunsOverlay.commandLabel')}>
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} data-testid="jobs-new-prompt" rows={3}
             className="w-full px-2 py-1.5 rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text)] focus:border-primary/50 outline-none resize-none"
-            placeholder={type === 'agent_task' ? 'What should Swarm do each run?' : 'Shell command to run'} />
+            placeholder={type === 'agent_task' ? t('ui.JobsRunsOverlay.promptPlaceholder') : t('ui.JobsRunsOverlay.commandPlaceholder')} />
         </FormField>
         {err && <div className="text-meta text-[var(--color-status-error)]" data-testid="jobs-new-err">{err}</div>}
       </div>
       <div className="flex items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] shrink-0">
         <button onClick={submit} data-testid="jobs-new-submit"
           className="btn-md btn-soft flex-1 transition-colors">
-          Create in chat
+          {t('ui.JobsRunsOverlay.createInChat')}
         </button>
-        <button onClick={onCancel} className="btn-md btn-ghost">Cancel</button>
+        <button onClick={onCancel} className="btn-md btn-ghost">{t('common.button.cancel')}</button>
       </div>
     </OverlayDrawer>
   );

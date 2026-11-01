@@ -1,3 +1,4 @@
 # Timeline
 
-关键事件按月份放在 `## YYYY-MM` 分节中。月度汇总和补充汇总只追加，不改写已有事件。
+Key events go under one `## YYYY-MM` section per month. Monthly summaries and later
+additions are appended only; an event already written is never rewritten.

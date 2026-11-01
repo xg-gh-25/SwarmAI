@@ -1,5 +1,6 @@
 /**
- * SCOPED lint config: the URL path contract ONLY — nothing else.
+ * SCOPED lint config: the contract rules ONLY — the URL path contract and the
+ * no-hardcoded-ui-text rule (last block below), nothing else.
  *
  * WHY THIS FILE EXISTS (run_a1f4c2d8)
  * ----------------------------------
@@ -18,10 +19,10 @@
  * THE FIX, WITHOUT A 30-ERROR CLEANUP FIRST
  * ----------------------------------------
  * This config inherits NOTHING (no `js.configs.recommended`, no
- * `tseslint.configs.recommended`) — it carries the single contract rule and the TS
- * parser needed to read `.ts`/`.tsx`. So `npm run lint:contract` is green TODAY and can
- * go into CI immediately, while the full `npm run lint` cleanup stays a separate,
- * unblocked task. The rule is duplicated here rather than imported from
+ * `tseslint.configs.recommended`) — it carries only the contract rules and the TS
+ * parser needed to read `.ts`/`.tsx`. So `npm run lint:contract` could go into CI
+ * without the full `npm run lint` cleanup, which stays a separate, unblocked task.
+ * The URL rule is duplicated here rather than imported from
  * eslint.config.js because that file's flat-config array cannot be sliced without
  * dragging its `extends` presets along — and a drift guard is cheaper than the
  * refactor: `urlContract.test.ts` asserts BOTH files carry the same contract.
@@ -43,6 +44,7 @@
  */
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
+import noHardcodedUiText from './eslint-rules/no-hardcoded-ui-text.js'
 
 // The ONE contract. Kept as a named export so a drift test can assert that
 // eslint.config.js carries the same selectors (see urlContract.test.ts).
@@ -87,6 +89,18 @@ export default defineConfig([
     },
     rules: {
       'no-restricted-syntax': ['error', ...URL_CONTRACT_RULES],
+    },
+  },
+  // UI text contract: every word a person reads goes through i18n, so the app can
+  // be used in English and Chinese. The rule, its scope and its reviewed exceptions
+  // are in eslint-rules/no-hardcoded-ui-text.js; it skips test and story files.
+  // Like the URL rule above, noInlineConfig means it cannot be disabled per line.
+  {
+    files: ['src/**/*.tsx'],
+    ignores: ['**/__tests__/**', '**/*.test.*', '**/*.stories.*'],
+    plugins: { local: { rules: { 'no-hardcoded-ui-text': noHardcodedUiText } } },
+    rules: {
+      'local/no-hardcoded-ui-text': 'error',
     },
   },
 ])

@@ -51,6 +51,8 @@ from channels.heartbeat import (
     HeartbeatManager,
     estimate_complexity,
     pick_ack,
+    reply_language,
+    stop_reply,
 )
 from channels.message_queue import (
     ChannelMessageQueue,
@@ -1856,7 +1858,10 @@ class ChannelGateway:
         heartbeat_mgr: Optional[HeartbeatManager] = None
         if human_mode and adapter:
             complexity = estimate_complexity(final_text)
-            ack_text = pick_ack(complexity)
+            # Ack/heartbeat language follows the user's own message (not the
+            # history preamble or staged-file lines added to final_text).
+            ack_language = reply_language(msg.text or "")
+            ack_text = pick_ack(complexity, ack_language)
 
             # Build adapter-specific callables for heartbeat
             _chat_id = msg.external_chat_id
@@ -1900,6 +1905,7 @@ class ChannelGateway:
                 delete_fn=_delete_ack,
                 channel=_chat_id,
                 thread_ts=_thread_ts,
+                language=ack_language,
             )
             await heartbeat_mgr.post_ack(ack_text)
             heartbeat_task = asyncio.create_task(heartbeat_mgr.run())
@@ -2355,7 +2361,7 @@ class ChannelGateway:
         if human_mode and adapter and heartbeat_mgr:
             # Check if cancelled (user sent "stop" during processing)
             if queue and queue.cancelled:
-                await heartbeat_mgr.update_final("好的，停了。有什么新问题随时说。")
+                await heartbeat_mgr.update_final(stop_reply(heartbeat_mgr.language))
                 logger.info("Channel %s: response cancelled by user", channel_id)
                 # Skip response posting — go to message logging
                 external_message_id = heartbeat_mgr.ack_ts

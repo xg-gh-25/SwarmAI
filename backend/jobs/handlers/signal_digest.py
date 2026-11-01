@@ -262,6 +262,12 @@ _SCORES_SCHEMA = {
 }
 
 
+# What the model is told when nothing is known about the person (no USER.md / project
+# context yet): a neutral ranking, never someone else's interests.
+NO_USER_CONTEXT = ("No user context is known yet. Rank by general relevance to software and AI "
+                   "practitioners.")
+
+
 def _llm_digest(
     signals: list[RawSignal], user_context: str
 ) -> tuple[str, list[dict], int]:
@@ -292,10 +298,7 @@ def _llm_digest(
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    _default_ctx = ("Building SwarmAI (AI desktop app), interested in AI agents, "
-                     "Claude SDK, LLM frameworks, context engineering, "
-                     "Chinese AI industry, Physical AI, 大模型应用.")
-    ctx = user_context or _default_ctx
+    ctx = user_context or NO_USER_CONTEXT
 
     _tier_guide = """- 🔵 FRONTIER LAB: Official AI lab announcements. Highest authority.
 - 👤 LEADERS: AI thought leaders & founders. High-signal opinion.
@@ -361,7 +364,7 @@ Rules:
 - relevance_score: 0.0–1.0 based on relevance to user context
 - urgency: "high" / "medium" / "low"
 - Skip completely irrelevant signals (don't include idx)
-- Include Chinese signals if they match user interests (中文AI, 具身智能, 大模型)"""
+- Include signals in any language if they match the user's interests"""
 
     js_usage: dict = {"input_tokens": 0, "output_tokens": 0}
     scored_items: list[dict] = []
@@ -399,12 +402,12 @@ Rules:
                 })
     except StructuredOutputError as e:
         logger.warning("LLM scores reply %s (%s); scoring by keyword", e.kind, e.detail)
-        scored_items = _keyword_scored_items(signals, ctx)
+        scored_items = _keyword_scored_items(signals, user_context)
     total_tokens = (md_usage["input_tokens"] + md_usage["output_tokens"]
                     + js_usage["input_tokens"] + js_usage["output_tokens"])
 
     if not scored_items:
-        scored_items = _keyword_scored_items(signals, ctx)
+        scored_items = _keyword_scored_items(signals, user_context)
 
     return markdown_part, scored_items, total_tokens
 
@@ -717,7 +720,7 @@ def _llm_rollup(combined_digests: str, user_context: str, window_days: int) -> t
     prompt = f"""You are Swarm's signal intelligence system. Create a WEEKLY ROLLUP from {window_days} days of daily signal digests.
 
 ## User Context
-{user_context or "Building SwarmAI (AI desktop app), interested in AI agents, Claude SDK, LLM frameworks, context engineering."}
+{user_context or NO_USER_CONTEXT}
 
 ## Daily Digests (last {window_days} days)
 {truncated}

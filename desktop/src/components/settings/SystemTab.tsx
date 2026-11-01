@@ -4,26 +4,22 @@
  * Backend status, system dependencies, storage paths, MCP link.
  */
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 // getApiBaseUrl: health fetch URL; getBackendPort: status display (Desktop only)
 import { tauriService, BackendStatus, getApiBaseUrl, getBackendPort, isDesktop } from '../../services/tauri';
+import { systemService } from '../../services/system';
+import { defaultDataDir, joinDir } from '../../utils/platform';
 
 const isDev = import.meta.env.DEV;
 
-function getPlatformInfo() {
-  const userAgent = navigator.userAgent.toLowerCase();
-  const platform = userAgent.includes('win') ? 'Windows' :
-                   userAgent.includes('mac') ? 'macOS' : 'Linux';
-  return {
-    platform,
-    dataDir: '~/.swarm-ai/',
-    skillsDir: '~/.swarm-ai/skills/',
-    logsDir: '~/.swarm-ai/logs/',
-  };
-}
-
-const platformInfo = getPlatformInfo();
-
 export default function SystemTab() {
+  const { t } = useTranslation();
+  // The real data dir, from the backend; the OS default until it answers.
+  const [dataDir, setDataDir] = useState('');
+  useEffect(() => {
+    systemService.getStatus().then((s) => setDataDir(s.dataDir)).catch(() => {});
+  }, []);
+  const shownDataDir = dataDir ? joinDir(dataDir, '') : defaultDataDir();
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [nodejsVersion, setNodejsVersion] = useState<string | null>(null);
   const [pythonVersion, setPythonVersion] = useState<string | null>(null);
@@ -76,28 +72,28 @@ export default function SystemTab() {
     <div className="space-y-6">
       {/* Backend */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Backend Service</h2>
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('settings.backendService.title')}</h2>
         {backendStatus ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-[var(--color-text-muted)]">Status</span>
+              <span className="text-[var(--color-text-muted)]">{t('settings.backendService.status')}</span>
               <span className={backendStatus.running ? 'text-green-400' : 'text-red-400'}>
-                {backendStatus.running ? 'Running' : 'Stopped'}
+                {backendStatus.running ? t('settings.backendService.running') : t('settings.backendService.stopped')}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[var(--color-text-muted)]">Port</span>
+              <span className="text-[var(--color-text-muted)]">{t('settings.backendService.port')}</span>
               <span className="text-[var(--color-text)]">{backendStatus.port}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[var(--color-text-muted)]">Mode</span>
+              <span className="text-[var(--color-text-muted)]">{t('ui.SystemTab.mode')}</span>
               <span className={backendStatus.is_daemon_mode ? 'text-green-400' : 'text-[var(--color-text)]'}>
-                {backendStatus.is_daemon_mode ? 'Daemon (24/7)' : 'Subprocess'}
+                {backendStatus.is_daemon_mode ? t('ui.SystemTab.daemon') : t('ui.SystemTab.subprocess')}
               </span>
             </div>
           </div>
         ) : (
-          <p className="text-[var(--color-text-muted)]">Loading...</p>
+          <p className="text-[var(--color-text-muted)]">{t('common.status.loading')}</p>
         )}
       </section>
 
@@ -105,26 +101,26 @@ export default function SystemTab() {
       {!isDev && isDesktop() && (
         <section className="bg-[var(--color-card)] rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-[var(--color-text)]">System Dependencies</h2>
+            <h2 className="text-lg font-semibold text-[var(--color-text)]">{t('settings.systemDependencies.title')}</h2>
             <button
               onClick={checkDeps}
               disabled={checking}
               className="btn-sm btn-secondary transition-colors disabled:opacity-50"
             >
-              {checking ? 'Checking...' : 'Refresh'}
+              {checking ? t('settings.systemDependencies.checking') : t('common.button.refresh')}
             </button>
           </div>
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-[var(--color-text-muted)]">Node.js</span>
               <span className={nodejsVersion === 'Not installed' ? 'text-red-400' : 'text-green-400'}>
-                {nodejsVersion || 'Checking...'}
+                {nodejsVersion || t('settings.systemDependencies.checking')}
               </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[var(--color-text-muted)]">Python</span>
               <span className={pythonVersion === 'Not installed' ? 'text-red-400' : 'text-green-400'}>
-                {pythonVersion || 'Checking...'}
+                {pythonVersion || t('settings.systemDependencies.checking')}
               </span>
             </div>
           </div>
@@ -133,12 +129,12 @@ export default function SystemTab() {
 
       {/* Storage */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Storage</h2>
-        <div className="space-y-3 text-sm">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('settings.storage.title')}</h2>
+        <div className="space-y-3 text-sm" data-testid="system-storage">
           {[
-            ['Data Directory', platformInfo.dataDir],
-            ['Database', 'data.db (SQLite)'],
-            ['Logs', platformInfo.logsDir],
+            [t('settings.storage.dataDirectory'), shownDataDir],
+            [t('settings.storage.database'), 'data.db (SQLite)'],
+            [t('settings.storage.logs'), joinDir(shownDataDir, 'logs')],
           ].map(([label, value]) => (
             <div key={label} className="flex items-center justify-between">
               <span className="text-[var(--color-text-muted)]">{label}</span>

@@ -5,10 +5,9 @@ import { ChatHeader } from './ChatHeader';
 import { HealthContext, type HealthContextValue } from '../../../contexts/HealthContext';
 import type { OpenTab } from '../types';
 
-// ChatHeader uses useTranslation (tail "+" labels + health warnings).
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback?: string) => fallback ?? _key }),
-}));
+// ChatHeader uses useTranslation (tail "+" labels, health warnings, the outputs pill's
+// plural). react-i18next is not mocked: the app's i18n (test-setup) renders the real
+// English text, plurals and interpolation included.
 
 // The pinned Swarm Out tab polls the Hives' activity; by default there is none.
 vi.mock('../../../services/swarmOut', () => ({
@@ -225,14 +224,14 @@ describe('ChatHeader — Swarm Out tab shows the Hives\' activity', () => {
 
   it('runs running: a quiet count and a breathing icon', async () => {
     await renderWith({ runs: [run('a', true), run('b', true), run('c', null), run('d', false)], asks: [], errors: [] });
-    await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('2 在跑'));
+    await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('2 running'));
     expect(screen.getByTestId('swarm-out-badge').className).not.toContain('swarm-out-badge--ask');
     expect(screen.getByTestId('swarm-out-icon').className).toContain('swarm-out-icon--busy');
   });
 
   it('a question waiting: the amber count wins, and a waiting run is not running', async () => {
     await renderWith({ runs: [run('a', true), run('b', false, true)], asks: [ask('b')], errors: [] });
-    await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('1 等你'));
+    await waitFor(() => expect(screen.getByTestId('swarm-out-badge').textContent).toBe('1 waiting for you'));
     expect(screen.getByTestId('swarm-out-badge').className).toContain('swarm-out-badge--ask');
     expect(screen.getByTestId('swarm-out-icon').className).toContain('swarm-out-icon--busy');
   });

@@ -27,6 +27,7 @@ import {
   lazy,
   Suspense,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { GitStatus } from '../../types';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import { isEditableType, isBinaryType } from './utils/fileViewTypes';
@@ -124,10 +125,11 @@ interface FileResponse {
 /* ------------------------------------------------------------------ */
 
 function LoadingFallback() {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 flex items-center justify-center text-[var(--color-text-secondary)]">
       <span className="material-symbols-outlined icon-md animate-spin mr-2">progress_activity</span>
-      <span className="text-sm">Loading...</span>
+      <span className="text-sm">{t('common.loading')}</span>
     </div>
   );
 }
@@ -149,6 +151,7 @@ function FileViewerImpl({
   onDirtyChange,
   onViewChange,
 }: FileViewerProps) {
+  const { t } = useTranslation();
   const {
     tabs,
     activeTab,
@@ -716,7 +719,7 @@ function FileViewerImpl({
     if (!activeTab) {
       return (
         <div className="flex-1 flex items-center justify-center text-[var(--color-text-secondary)] text-sm">
-          No file open
+          {t('ui.FileViewer.noFileOpen')}
         </div>
       );
     }
