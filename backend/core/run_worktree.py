@@ -729,7 +729,7 @@ def sync(run_id: str, entry: dict, main: "str | Path") -> dict:
         left = _unmerged(wt)
         if left:
             raise WorktreeError("conflict", "rebase conflicts are not resolved yet",
-                                unmerged=left, worktree=str(wt))
+                                unmerged=left, worktree=str(wt), unresolved=True)
         p = git(wt, "rebase", "--continue", timeout=300)
         if p.returncode != 0:
             left = _unmerged(wt)
@@ -741,6 +741,7 @@ def sync(run_id: str, entry: dict, main: "str | Path") -> dict:
     target = _rev(main, entry["integration_branch"])
     if target == old_base:
         return {"status": "noop", "base": old_base, "patch_changed": False}
+    folded = _fold_hand_commits(run_id, wt, old_base)
     if _symbolic_head(wt) != branch_ref(run_id) or _rev(wt, "HEAD") != old_base:
         raise WorktreeError("worktree_invalid", "worktree HEAD is not the run's base "
                             "(was something committed by hand?)")
@@ -768,7 +769,30 @@ def sync(run_id: str, entry: dict, main: "str | Path") -> dict:
                                 "integration branch added — git add or delete them",
                                 files=_overwritten_list(err))
         raise WorktreeError("git_failed", err.strip()[:300])
-    return _finish_rebase(run_id, entry, wt, target, old_base)
+    result = _finish_rebase(run_id, entry, wt, target, old_base)
+    if folded:
+        result["folded_commits"] = folded
+    return result
+
+
+def _fold_hand_commits(run_id: str, wt: Path, base: str) -> int:
+    """Commits made by hand on the run branch on top of its base: fold them back into
+    the run's change (``reset --soft base``: the index and every file keep their
+    content; the commits stay in the reflog), so the sync rebases the change as usual
+    instead of refusing (design 2026-11-01-pipeline-delivery-friction N3). Returns how
+    many commits were folded; 0 when HEAD is the base, not on the run branch, or not a
+    descendant of the base (then the sync refuses as before)."""
+    try:
+        head = _rev(wt, "HEAD")
+    except WorktreeError:
+        return 0
+    if head == base or _symbolic_head(wt) != branch_ref(run_id):
+        return 0
+    if git(wt, "merge-base", "--is-ancestor", base, head).returncode != 0:
+        return 0
+    count = _out(wt, "rev-list", "--count", f"{base}..{head}").strip()
+    _out(wt, "reset", "-q", "--soft", base)
+    return int(count or 0)
 
 
 def restore_invariant(run_id: str, entry: dict, wt: Path) -> bool:

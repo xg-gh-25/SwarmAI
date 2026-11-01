@@ -259,16 +259,6 @@ def next_step(engine, *, previous_stage: str | None = None,
                            why="the change differs from the one REVIEW completed on: land "
                                "sends the run back to REVIEW for an incremental review of "
                                "that difference (then TEST, then land)")
-            elif not passed and not engine._patch_reviewed(context) \
-                    and state.get("deliver_reopens", 0) >= lifecycle.DELIVER_REOPEN_CAP:
-                # a test run cannot fix an unreviewed change, and DELIVER already went
-                # back to REVIEW once (design 2026-10-31 §3 change 3)
-                out.update(action="fix", command=_cmd(engine,
-                                                      'land --message "<commit message>"'),
-                           why="the change is not the one REVIEW completed on and the "
-                               "landing already went back to REVIEW once: restore the "
-                               "reviewed code to land it; land as it is fails (after three "
-                               "failures the run ends not landed)")
             elif not passed:
                 out.update(action="write_artifact",
                            command=_cmd(engine, "report-tests --artifact -"),

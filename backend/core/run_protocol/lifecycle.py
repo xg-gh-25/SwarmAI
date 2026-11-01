@@ -51,12 +51,13 @@ BASE_MOVED_PREFIX = "base_moved:"
 # event without ``cause`` is classified by its detail's prefix, which works only when
 # the detail stayed inline (``_cause_of``).
 CHECK_CAUSES = frozenset({"not_evaluated", "base_moved", "merge_conflict",
-                          "review_reopened", "interrupted"})
+                          "conflict_unresolved", "review_reopened", "interrupted"})
 # how often TEST may send the run back to REVIEW (S6-2)
 REVIEW_REOPEN_CAP = 2
 # how often a landing may send the run back to REVIEW because the change at landing is
 # not the reviewed one (a conflict resolution, an edit in DELIVER: design 2026-10-31
-# §3 change 3). A second time, main kept conflicting with the run: a person looks.
+# §3 change 3). After that, a later conflict resolution lands without another review
+# and the REPORT says no review saw it (design 2026-11-01-pipeline-delivery-friction N1).
 DELIVER_REOPEN_CAP = 1
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
 # the not-landed reasons that ARE a count cap being hit
@@ -346,8 +347,12 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
         run["last_land_intent"], run["last_report_render"] = None, None
         if failed & {"LG-3", "DV-1"}:
             _set_pending(run, "report_mismatch")
-        elif failed == {"LG-1"} and cause["LG-1"] == "base_moved":
-            # failed only because the sync moved the tree: counts apart (§5.2 point 2)
+        elif (failed == {"LG-1"} and cause["LG-1"] == "base_moved") or (
+                "LG-4" in failed and failed <= {"LG-1", "LG-4"}
+                and cause["LG-4"] == "merge_conflict"):
+            # failed only because the sync moved the tree (§5.2 point 2), or main moved
+            # into a new conflict with the run (N1; one left unresolved is the run's
+            # own): counts apart from the run's 3, up to BASE_MOVED_CAP
             run["base_moved_failures"] = run.get("base_moved_failures", 0) + 1
             if run["base_moved_failures"] >= BASE_MOVED_CAP:
                 _set_pending(run, "base_kept_moving")
@@ -360,7 +365,7 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
         elif failed & {"LG-1", "LG-4"}:
             if number - run.get("base_moved_failures", 0) \
                     - run.get("review_reopened_failures", 0) - lost >= 3:
-                conflict = cause.get("LG-4") == "merge_conflict"
+                conflict = cause.get("LG-4") in ("merge_conflict", "conflict_unresolved")
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
         return
     if number - run["attempt_base"].get(stage, 0) - lost >= 3:

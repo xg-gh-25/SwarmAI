@@ -55,8 +55,6 @@ class IntegrationRequired(EngineError):
         self.code = code
 
 
-# files whose change never needs an expert (review_start, RV-4)
-
 
 def _patch_paths_changed(root: str, then_base: str, then_tree: str, now_base: str,
                          now_tree: str) -> list[str]:
@@ -3605,7 +3603,9 @@ class RunEngine:
         """Main moved past a repo's run base: rebase that worktree onto it (S6-1). The
         code tree then changes, so LG-1 asks for a TEST report on the new tree
         (``report-tests``). A sync that changed the run's own patch (a conflict
-        resolution) is new code no review saw: LG-4 fails with ``patch_changed``."""
+        resolution) is new code no review saw: LG-4 fails with ``patch_changed``.
+        ``_synced_repos``: the repos this call rebased onto a moved main."""
+        self._synced_repos: set[str] = set()
         for entry in self._active_entries():
             name = entry["repo_name"]
             main = self.contract["repo_roots"][name]
@@ -3624,9 +3624,14 @@ class RunEngine:
             try:
                 sync = run_worktree.sync(self.run_id, entry, main)
             except run_worktree.WorktreeError as exc:
-                code = "merge_conflict" if exc.code == "conflict" else "sync_failed"
+                # a conflict left unresolved is the run's own failure; a new one (main
+                # moved into the run's lines) counts with main's moves (N1)
+                code = ("conflict_unresolved" if exc.data.get("unresolved") else
+                        "merge_conflict") if exc.code == "conflict" else "sync_failed"
                 raise IntegrationRequired(code, f"{name}: base sync failed: {exc.message}") from exc
             self._code_facts, self._bases = None, (None,)   # the tree and base moved
+            if sync.get("status") == "rebased":
+                self._synced_repos.add(name)    # this landing moved the run onto main
             if sync.get("patch_changed"):
                 raise IntegrationRequired(
                     "patch_changed", f"{name}: rebasing onto the moved main changed the run's "
@@ -3797,6 +3802,14 @@ class RunEngine:
                 self._sync_moved_bases()
             except IntegrationRequired as exc:
                 carry_error = exc
+            # the run already went back to REVIEW once from DELIVER: a later conflict
+            # resolution lands without another review, and the REPORT says no review saw
+            # that difference (design 2026-11-01-pipeline-delivery-friction N1; SOUL P5:
+            # a review that did not run is noted, never what stops the landing)
+            past_reopen = (state.get("deliver_reopens", 0) >= lifecycle.DELIVER_REOPEN_CAP
+                           and "review" in lifecycle.PROFILE_STAGES[self.contract["profile"]])
+            if carry_error is not None and carry_error.code == "patch_changed" and past_reopen:
+                carry_error = None      # LG-1 lets that difference land, and says so
             repos = self.effective_repos()
             code_trees = tree.build_code_trees(
                 repos, self.run_id, git_tree.write_tree, git_tree.list_reserved)
@@ -3828,6 +3841,18 @@ class RunEngine:
                 if moved:
                     lg1_detail = f"{lifecycle.BASE_MOVED_PREFIX} {moved} | {lg1_detail}"[:1500]
                     lg1_cause = "base_moved"
+                elif self._synced_repos and all(
+                        (before_sync.get(name) or {}).get("report_tree")
+                        for name in self._synced_repos):
+                    # (a TEST report with a failed command is not main's doing: no prefix)
+                    # this landing rebased the run onto a moved main (a resolved merge
+                    # conflict, or a report already stale): the synced tree needs its
+                    # tests. Main moved, so it counts with main's moves (N1), never as
+                    # one of the run's own landing failures
+                    lg1_detail = (f"{lifecycle.BASE_MOVED_PREFIX} main moved and the run "
+                                  f"was rebased onto it ({', '.join(sorted(self._synced_repos))}"
+                                  f"); test the synced tree again | {lg1_detail}")[:1500]
+                    lg1_cause = "base_moved"
             if lg1_passed and carried:
                 lg1_detail = (f"{lg1_detail}; {checks.CARRIED_MARK} " + ", ".join(
                     f"{name} (main {str(moves[name]['from'])[:12]}->{str(moves[name]['to'])[:12]})"
@@ -3835,9 +3860,9 @@ class RunEngine:
                     "the run's files, so the TEST report from before the sync stands")[:1500]
             record("LG-1", lg1_passed, lg1_detail, lg1_cause)
             if carry_error is not None:
-                conflict = carry_error.code == "merge_conflict"
+                conflict = carry_error.code in ("merge_conflict", "conflict_unresolved")
                 record("LG-4", False, ("merge_conflict: " if conflict else "") + str(carry_error),
-                       "merge_conflict" if conflict else None)
+                       carry_error.code if conflict else None)
             if not all(passed for passed, _ in results.values()):
                 close("an earlier landing guard failed")
                 return self._land_failed(results)

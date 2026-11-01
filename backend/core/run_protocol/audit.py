@@ -233,6 +233,19 @@ def _tests_carried(event_rows) -> "str | None":
     return found
 
 
+def _landed_unreviewed(event_rows) -> "str | None":
+    """The latest passed LG-1 detail that let a change no review saw land (N1)."""
+    from core.run_protocol.checks import UNREVIEWED_MARK
+    found = None
+    for event in event_rows:
+        payload = event.get("payload") or {}
+        detail = payload.get("detail")
+        if event.get("kind") == "check" and payload.get("check_id") == "LG-1" \
+                and payload.get("passed") and isinstance(detail, str) and UNREVIEWED_MARK in detail:
+            found = detail[detail.index(UNREVIEWED_MARK):]
+    return found
+
+
 def _review_coverage(event_rows) -> list[dict[str, Any]]:
     from core.run_protocol.review import coverage_rows
     return coverage_rows(list(event_rows))
@@ -530,6 +543,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "review_coverage": _review_coverage(event_rows),
                # a TEST report that stood across a main move at landing (E2)
                "tests_carried": _tests_carried(event_rows),
+               # a change no review saw that landed after the DELIVER reopen (N1)
+               "landed_unreviewed": _landed_unreviewed(event_rows),
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows),
@@ -791,6 +806,9 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                       for cmd in commands[:10]]
             if len(commands) > 10:
                 lines.append(f"- {len(commands) - 10} more in run_audit.json")
+    if details.get("landed_unreviewed"):
+        lines += ["", "Landed with a difference no review saw: "
+                  + _text(details["landed_unreviewed"], 600)]
     if details.get("tests_carried"):
         lines += ["", "Tests were not run again after main moved: "
                   + _text(details["tests_carried"], 600)]

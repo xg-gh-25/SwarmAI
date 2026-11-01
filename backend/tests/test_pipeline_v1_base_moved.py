@@ -54,10 +54,20 @@ def test_a_long_base_moved_detail_counts_apart_by_its_recorded_cause():
 
 
 def test_a_long_merge_conflict_detail_ends_land_conflict_by_its_recorded_cause():
+    """A conflict left unresolved is the run's own failure: three end land_conflict."""
     run = _run()
     for n in (1, 2, 3):
-        _fail_land(run, n, {"LG-1": BLOB, "LG-4": BLOB}, {"LG-4": "merge_conflict"})
+        _fail_land(run, n, {"LG-1": BLOB, "LG-4": BLOB}, {"LG-4": "conflict_unresolved"})
     assert run["pending_landing"]["reason"] == "land_conflict", run
+
+
+def test_a_new_merge_conflict_counts_with_main_moves():
+    """design 2026-11-01-pipeline-delivery-friction N1: main moving into a conflict with
+    the run is not one of the run's three landing failures."""
+    run = _run()
+    for n in (1, 2, 3, 4):
+        _fail_land(run, n, {"LG-1": BLOB, "LG-4": BLOB}, {"LG-4": "merge_conflict"})
+    assert run["pending_landing"] is None and run["base_moved_failures"] == 4, run
 
 
 def test_an_older_event_without_a_cause_is_classified_by_its_inline_prefix():
@@ -82,7 +92,7 @@ def test_own_failures_still_end_at_three_not_counting_base_moves():
     for n in (1, 2):
         _fail_land(run, n, {"LG-1": "base_moved: main moved"})
     _fail_land(run, 3, {"LG-1": "no TEST report on the final tree"})
-    _fail_land(run, 4, {"LG-4": "merge_conflict: x"})
+    _fail_land(run, 4, {"LG-4": "merge_conflict: x"}, {"LG-4": "conflict_unresolved"})
     assert run["pending_landing"] is None, run
     _fail_land(run, 5, {"LG-1": "no TEST report on the final tree"})
     assert run["pending_landing"]["reason"] == "final_stale"

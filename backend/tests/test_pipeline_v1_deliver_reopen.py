@@ -9,7 +9,10 @@ What is tested, through real runs (``tests/pipeline_v1_rig.py``: CLI + hooks):
 - the incremental review then shows the run's own patch of the resolved file, not the
   file main changed without a conflict; after it, TEST and the landing go through (T9,
   T10);
-- only once: a second unreviewed change at landing fails LG-1 as before (T7);
+- only once: a second unreviewed change at landing lands, and the REPORT says no review
+  saw it (design 2026-11-01-pipeline-delivery-friction N1);
+- a second merge conflict after that reopen: the resolution is tested again and lands
+  (N1), and a fresh conflict is not one of the run's three landing failures;
 - only doc-class files differ: the engine completes REVIEW itself and the run is back
   in TEST (T8);
 - an edit in DELIVER takes the same route (T7).
@@ -106,12 +109,14 @@ def test_deliver_sends_the_run_back_once(rig):
     r.drive(until="deliver")
     r.edit({"backend/core/mod.py": "def add(a, b):\n    return b + a  # two\n"})
     r.v1("report-tests", "--artifact", r.artifact("report", r.report()))
-    step = r.v1("status")["next"]
-    assert "landing already went back to REVIEW once" in step["why"], step
+    # past the one reopen, the difference lands and the REPORT says no review saw it
+    # (design 2026-11-01-pipeline-delivery-friction N1; SOUL P5)
     out = r.v1("land", "--message", MESSAGE)
-    assert out.get("ok") is False and "reopened" not in out, out
-    assert "never reviewed" in str(out.get("failed")), out
-    assert r.state()["stage"] == "deliver"
+    assert "reopened" not in out and r.state().get("landing") == "landed", out
+    report = (r.engine().run_dir / "REPORT.md").read_text()
+    assert "Landed with a difference no review saw" in report
+    quality = next(line for line in report.splitlines() if line.startswith("| Quality |"))
+    assert quality.startswith("| Quality | WARN |"), quality
 
 
 def test_only_doc_files_differ_review_completes_itself(rig):
@@ -171,3 +176,44 @@ def test_the_patch_comparison_counts_only_the_run_s_own_edits(tmp_path):
     odd = tree({"my b/f.py": "x\n", "é.py": "y\n"})
     assert _patch_paths_changed(str(repo), base1, reviewed, base2, odd) == sorted(
         ["d.py", "my b/f.py", "é.py"])
+
+
+def test_a_second_conflict_after_the_reopen_is_tested_and_lands(rig):
+    """N1: main conflicts with the run twice. The first resolution goes back to REVIEW;
+    the second is tested again (a base-moved failure, not one of the run's three) and
+    lands, the REPORT saying no review saw it."""
+    r = rig()
+    _at_deliver(r)
+    _conflict_resolved(r)
+    assert r.v1("land", "--message", MESSAGE).get("reopened") == "review"
+    r.drive(until="deliver")
+    r.commit_on_main({"backend/core/mod.py": "def add(a, b):\n    return a + b + 0 + 0\n"})
+    second = r.v1("land", "--message", MESSAGE)
+    assert "merge_conflict" in str(second.get("failed")), second
+    write(r.worktree, {"backend/core/mod.py": "def add(a, b):\n    return b + a + 0 + 0\n"})
+    _git(r.worktree, "add", "backend/core/mod.py")
+    retest = r.v1("land", "--message", MESSAGE)
+    lg1 = [c for c in _land_checks(r) if c["check_id"] == "LG-1"][-1]
+    assert lg1.get("cause") == "base_moved" and "rebased onto it" in str(lg1["detail"]), (retest, lg1, _land_checks(r)[-8:])
+    r.v1("report-tests", "--artifact", r.artifact("report2", r.report()))
+    out = r.v1("land", "--message", MESSAGE)
+    state = r.state()
+    assert state.get("landing") == "landed", (out, state)
+    own = state.get("stage_attempts", {}).get("land", 0) - state.get("base_moved_failures", 0) \
+        - state.get("review_reopened_failures", 0)
+    assert own <= 2, state         # only the landing that went through is the run's own
+    assert "Landed with a difference no review saw" in (r.engine().run_dir / "REPORT.md").read_text()
+
+
+def test_a_hand_commit_in_the_worktree_is_folded_in_at_landing(rig):
+    """N3: a commit made by hand on the run branch is folded back into the change when
+    the landing syncs (its content unchanged), instead of failing LG-4."""
+    r = rig()
+    _at_deliver(r)
+    _git(r.worktree, "add", "backend/core/mod.py")
+    _git(r.worktree, "commit", "-qm", "by hand")
+    r.commit_on_main({"docs/notes.md": "unrelated\n"})
+    out = r.v1("land", "--message", MESSAGE)
+    assert r.state().get("landing") == "landed", out
+    landed = _git(r.repo, "show", "main:backend/core/mod.py")
+    assert "return b + a" in landed

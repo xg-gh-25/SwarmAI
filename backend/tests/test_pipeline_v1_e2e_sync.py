@@ -64,7 +64,9 @@ def test_merge_conflict_three_times_ends_land_conflict(rig):
     r.create()
     r.drive(until="deliver")
     head = r.commit_on_main({"backend/core/mod.py": "def add(a, b):\n    return a + b + 0\n"})
-    for _ in range(3):
+    # the first is main moving into a conflict (N1: counts with main's moves); the next
+    # three find it still unresolved: the run's own failures
+    for _ in range(4):
         r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     state = r.drive()
     assert state["status"] == "completed", state

@@ -313,6 +313,9 @@ def _document_check(check_id: str, context: CheckContext) -> Result:
 # LG-1's detail when a TEST report stood across a main move (design 2026-11-01-
 # pipeline-delivery-friction E2); the audit lists those landings in the REPORT
 CARRIED_MARK = "tests carried over a main move:"
+# LG-1's detail when the change at landing differs from the reviewed one after the run's
+# one DELIVER reopen (design 2026-11-01-pipeline-delivery-friction N1)
+UNREVIEWED_MARK = "landed without review of:"
 
 
 def _report_check(check_id: str, context: CheckContext) -> Result:
@@ -350,7 +353,17 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
             problems.append(f"{repo}: the TEST report has {payload['n_fail']} failed "
                             "command(s); fix them and report again")
     if check_id == "LG-1" and not problems:
-        problems += _unreviewed_landing(context, expected)
+        unreviewed = _unreviewed_landing(context, expected)
+        from core.run_protocol.lifecycle import DELIVER_REOPEN_CAP
+        if unreviewed and unreviewed[0].startswith(NEVER_REVIEWED) \
+                and int(context.run.get("deliver_reopens") or 0) >= DELIVER_REOPEN_CAP:
+            # the run already went back to REVIEW once from DELIVER: what differs since
+            # lands, said in the REPORT (design 2026-11-01-pipeline-delivery-friction N1;
+            # SOUL P5: a review that did not run is noted, never what stops the landing)
+            return True, (f"{stage} reports bind the current code; {UNREVIEWED_MARK} the "
+                          "change differs from the reviewed one (changed in DELIVER after "
+                          "the run's one incremental review from DELIVER)")
+        problems += unreviewed
     return _result(not problems, f"{stage} reports bind the current code" if not problems
                    else "; ".join(problems))
 
@@ -365,8 +378,11 @@ def _unreviewed_landing(context: CheckContext, expected: list[str]) -> list[str]
     if any(all(row.get(repo) == current[repo] for repo in expected)
            for row in reviewed if isinstance(row, Mapping)):
         return []
-    return ["this change was never reviewed: REVIEW completed on other code (the code "
-            "changed after REVIEW); it cannot land"]
+    return [NEVER_REVIEWED + ": REVIEW completed on other code (the code changed after "
+            "REVIEW); it cannot land"]
+
+
+NEVER_REVIEWED = "this change was never reviewed"
 
 
 def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[str, Any]]:
