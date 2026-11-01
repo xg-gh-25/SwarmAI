@@ -240,6 +240,18 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   ceiling to PERMIT a longer hang — fix the leak.
 - **Images:** read an image once; re-reading an unchanged one only burns tokens
   (`image_read_dedup_guard`; a Read with offset/limit still goes through).
+- **Parallel tool calls:** every step costs a full model round trip, however little it
+  does, so request every read or search that does not depend on another's result in one
+  step (a reminder follows each round of tool results). In the Claude Code CLI one Bash
+  call that exits non-zero cancels the other calls of its batch: end a batched search with
+  `|| true` (grep exits 1 when nothing matches), and give a call that can really fail a
+  step of its own.
+- **Sub-agents:** run them in the background (the tool's default); foreground only when
+  the very next step needs the result and nothing else can usefully happen meanwhile. Say
+  in one line what started and why; when it returns, report what it found in chat, and
+  never state a result before it arrives: whoever dispatches follows the work to the end.
+  Modes that hide a run itself (a scheduled pipeline, a detached job, the Workflow tool)
+  run only on the user's explicit request; a pipeline run is otherwise shown live in its tab.
 - **Worktree:** edit in place by default. Use my own worktree, and say so, when another live
   session has uncommitted changes in the repo (a `[Shared checkout]` note names them), when
   the repo's own guidance asks for one, or when the user says so — and then always through the
