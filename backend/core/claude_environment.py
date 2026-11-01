@@ -184,7 +184,7 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
 
     - ``CLAUDE_CODE_USE_BEDROCK`` — always ``"true"``: chat runs on Bedrock (Anthropic-direct
       keys are no longer supported, design 2026-11-01-settings-account-merge §3)
-    - ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — from cached config
+    - ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — the main region (``aws_account.region``)
     - ``ANTHROPIC_BASE_URL`` — optional custom endpoint from cached config
     - ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` — always ``"1"``; SwarmAI owns its
       memory pipeline (DailyActivity → distillation → MEMORY.md)
@@ -204,7 +204,15 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # 1. Bedrock + region (from cached config, zero IO). An old use_bedrock=false
     # (Anthropic direct) is ignored here; aws_account.retire_anthropic_direct rewrites it.
     os.environ["CLAUDE_CODE_USE_BEDROCK"] = "true"
-    region = config.get("aws_region", "us-east-1") or "us-east-1"
+    # The one reader of the main region (aws_account.region): the model id's profile
+    # geography is derived from the same value (config.get_bedrock_model_id), so the
+    # region the CLI calls from and the id it calls can never disagree.
+    try:
+        from core import aws_account
+        region = aws_account.region(config)
+    except Exception as exc:  # noqa: BLE001 — a config object region() cannot read
+        logger.warning("main region unreadable (%s); using aws_region as stored", exc)
+        region = config.get("aws_region", "us-east-1") or "us-east-1"
     os.environ["AWS_REGION"] = region
     os.environ["AWS_DEFAULT_REGION"] = region
     # Clear a stale key that WE injected in a prior API-key-mode spawn — the

@@ -256,11 +256,15 @@ def test_jobs_get_the_settings_flag_and_no_frozen_keys(cfg, account, monkeypatch
 
 def test_without_an_account_jobs_keep_their_old_path(cfg, monkeypatch):
     from jobs import executor
+    from core import aws_account
     assert executor._aws_settings_args() == []
     monkeypatch.delenv("AWS_REGION", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
     monkeypatch.setattr(executor, "_get_aws_credentials", lambda: {})
-    assert executor._build_cli_env({})["AWS_REGION"] == "us-west-2"
+    # the job runs in the main region, account or not: its model id takes its profile
+    # geography from the same reader (design 2026-11-01-bedrock-id-follows-region §3);
+    # the old fixed us-west-2 would call an eu. id from a US region
+    assert executor._build_cli_env({})["AWS_REGION"] == aws_account.region()
 
 
 def test_the_fail_fast_client_uses_the_pinned_key_too(cfg, account, monkeypatch):

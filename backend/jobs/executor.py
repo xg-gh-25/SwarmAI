@@ -608,8 +608,8 @@ def _check_claude_auth(claude_path: str) -> str | None:
                 del env[key]
         env["CLAUDE_CODE_USE_BEDROCK"] = "true"
         from core import aws_account
-        # the region the job itself runs in (_build_cli_env): the account's main region
-        env.setdefault("AWS_REGION", aws_account.region() if aws_account.active() else "us-west-2")
+        # the region the job itself runs in (_build_cli_env): the main region
+        env.setdefault("AWS_REGION", aws_account.region())
 
         result = subprocess.run(
             [claude_path, "auth", "status"],
@@ -1712,7 +1712,9 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
     # Bedrock config
     env["CLAUDE_CODE_USE_BEDROCK"] = "true"
     from core import aws_account
-    _region = aws_account.region() if aws_account.active() else "us-west-2"
+    # the main region, whether or not an account is connected: the job's model id takes
+    # its profile geography from the same reader (config.get_bedrock_model_id)
+    _region = aws_account.region()
     env.setdefault("AWS_REGION", _region)
     env.setdefault("AWS_DEFAULT_REGION", _region)
 

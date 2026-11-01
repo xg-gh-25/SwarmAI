@@ -23,6 +23,8 @@ from model_registry import (
     DEFAULT_JUDGE_MODEL,
     MODEL_NAMES,
     effective_thinking_mode,
+    geo_for_region,
+    is_full_bedrock_id,
     resolve_bedrock_id,
     supported_thinking_modes,
 )
@@ -104,8 +106,8 @@ def _probe_aws_credentials() -> bool:
 # ---------------------------------------------------------------------------
 
 # Prefix on a SYSTEM_DEFINED inference-profile id that the SDK/CLI resolves to
-# a callable model. We prefer the ``us.`` cross-region profile over ``global.``
-# (matches the existing bedrock_model_map convention).
+# a callable model (``_short_name`` strips any other geography too). Discovery
+# prefers the main region's geography, then ``global.`` (``_list_bedrock_inference_profiles``).
 _BEDROCK_PROFILE_PREFIXES = ("us.anthropic.", "global.anthropic.")
 
 
@@ -170,13 +172,27 @@ def _list_bedrock_inference_profiles(available_models: list[str]) -> list[dict]:
     Paginated (never truncates a newer model onto a dropped page). Filters to
     SYSTEM_DEFINED Claude models of the opus/sonnet family at version >= 4.8
     (``_family_ge_48`` — excludes fable/haiku/gen-3 and any opus/sonnet < 4.8),
-    dedups by short_name preferring ``us.`` over ``global.``. Returns
+    dedups by short_name preferring the main region's geography, then ``global.``. Returns
     ``[{short_name, bedrock_id, is_new}]`` sorted by name.
     """
     client = _bedrock_client()
     paginator = client.get_paginator("list_inference_profiles")
 
-    # short_name -> bedrock_id (us. wins over global.)
+    # The geography a call from the main region uses ("eu." from eu-west-1) is preferred,
+    # then "global.", then any other: the id is callable from where SwarmAI calls it
+    # (design docs/design/2026-11-01-bedrock-id-follows-region.md).
+    try:
+        from core import aws_account
+        home = geo_for_region(aws_account.region()) or "us"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("model discovery: main region unreadable (%s); preferring us.", exc)
+        home = "us"
+
+    def _rank(pid: str) -> int:
+        geo = pid.split(".", 1)[0]
+        return 0 if geo == home else (1 if geo == "global" else 2)
+
+    # short_name -> bedrock_id (the home geography wins, then global.)
     discovered: dict[str, str] = {}
     for page in paginator.paginate():
         for summary in page.get("inferenceProfileSummaries", []):
@@ -193,10 +209,8 @@ def _list_bedrock_inference_profiles(available_models: list[str]) -> list[dict]:
             if not _family_ge_48(short):
                 continue
             existing = discovered.get(short)
-            # Prefer us. over global.; first-seen us. wins.
-            if existing is None or (
-                not existing.startswith("us.") and pid.startswith("us.")
-            ):
+            # the better-ranked geography wins; between equals, the first seen
+            if existing is None or _rank(pid) < _rank(existing):
                 discovered[short] = pid
 
     have = set(available_models or [])
@@ -395,9 +409,7 @@ async def update_app_configuration(request: Request):
         # ARN is passed through unchanged by get_bedrock_model_id (config.py
         # documents that ARN passthrough), so those must NOT be rejected here —
         # a narrower check would 400 a legitimate existing deployment.
-        is_full_id = effective_judge.startswith(
-            ("us.", "global.", "anthropic.", "arn:")
-        )
+        is_full_id = is_full_bedrock_id(effective_judge)  # any geography, or an ARN
         resolvable = (
             is_full_id
             or effective_judge in effective_map
@@ -410,7 +422,7 @@ async def update_app_configuration(request: Request):
                     detail=(
                         f"eval_judge_model {effective_judge!r} would not be resolvable "
                         f"to a Bedrock model ID after this update — use a full "
-                        f"us.anthropic.*/arn: ID, a key of bedrock_model_map, or one "
+                        f"<geo>.anthropic.*/arn: ID, a key of bedrock_model_map, or one "
                         f"of {sorted(MODEL_NAMES)}"
                     ),
                 )

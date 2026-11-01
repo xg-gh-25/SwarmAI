@@ -28,6 +28,8 @@ import threading
 import time
 from typing import Any, Mapping, Optional, Sequence
 
+from model_registry import normalize_short_name
+
 KINDS = ("input", "output", "cache_read", "cache_write")
 MIN_ROWS = 8
 MAX_ERROR = 0.05
@@ -39,6 +41,9 @@ REFRESH_S = 3600.0
 #: (cost matched to the cent: 3 / 15 / 0.30 / 6.00 with a 1-hour cache write)
 FALLBACK: dict[str, dict[str, float]] = {
     "us.anthropic.claude-sonnet-4-6": {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 6.0},
+}
+_FALLBACK_BY_SHORT: dict[str, dict[str, float]] = {
+    normalize_short_name(k): v for k, v in FALLBACK.items()
 }
 
 
@@ -103,8 +108,12 @@ def price(prices: Mapping[str, Mapping[str, float]], model: Optional[str], row: 
     """A row's cost at ``model``'s prices (learned, else ``FALLBACK``); None when the model
     has none, or the row used a kind it has no price for."""
     p = prices.get(model or "") if model else None
-    if p is None and model in FALLBACK:
-        p = {k: v / 1e6 for k, v in FALLBACK[model].items()}
+    if p is None and model:
+        # the fallback price is per model, whatever the id's geography ("us.", "eu.",
+        # "apac.": the id follows the main region, docs/design/2026-11-01-bedrock-id-follows-region.md)
+        fb = FALLBACK.get(model) or _FALLBACK_BY_SHORT.get(normalize_short_name(model))
+        if fb is not None:
+            p = {k: v / 1e6 for k, v in fb.items()}
     if p is None:
         return None
     total = 0.0

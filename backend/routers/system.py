@@ -484,7 +484,8 @@ async def _verify_bedrock(config: dict) -> dict:
     """
     region = config.get("aws_region", "us-east-1")
     model = config.get("default_model", DEFAULT_CONFIG["default_model"])
-    bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"))
+    # the id's profile geography follows the region this verify calls from
+    bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"), region=region)
     # Only inject a bearer token when THIS verify is for the bedrock_api_key
     # method (else a stray persisted token could shadow a legit sigv4 verify).
     bearer_token = (

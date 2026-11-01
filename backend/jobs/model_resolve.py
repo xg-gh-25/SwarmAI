@@ -203,14 +203,14 @@ def _is_usable_model(model: str) -> bool:
     Fail-OPEN on an unimportable registry: refusing a possibly-valid configured
     model is worse than skipping an advisory check.
     """
-    if model.startswith(("us.", "global.", "anthropic.", "arn:")):
-        return True  # fully-qualified Bedrock id / ARN — never second-guess it
     try:
         from model_registry import (
-            MODEL_NAMES, is_large_context_model, normalize_short_name,
+            MODEL_NAMES, is_full_bedrock_id, is_large_context_model, normalize_short_name,
         )
     except Exception:  # noqa: BLE001
         return True
+    if is_full_bedrock_id(model):
+        return True  # fully-qualified Bedrock id (any geography) / ARN — never second-guess it
     # normalize_short_name is the CANONICAL stripper (prefixes, :0, -v1, and the
     # [1m] suffix). Hand-rolling that logic here is exactly what missed [1m].
     bare = normalize_short_name(model)

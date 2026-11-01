@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from model_registry import MODEL_REGISTRY
+from model_registry import MODEL_REGISTRY, regional_id
 
 # Calculate project root directory (backend's parent directory)
 _BACKEND_DIR = Path(__file__).resolve().parent
@@ -128,7 +128,17 @@ def get_log_file_path() -> Path:
 ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = dict(MODEL_REGISTRY)
 
 
-def get_bedrock_model_id(anthropic_model_id: str, config_map: dict[str, str] | None = None) -> str:
+def _main_region() -> str | None:
+    """The main region (``aws_account.region()``), or None when it cannot be read."""
+    try:
+        from core import aws_account
+        return aws_account.region()
+    except Exception:  # noqa: BLE001 — no region means the id is left as mapped
+        return None
+
+
+def get_bedrock_model_id(anthropic_model_id: str, config_map: dict[str, str] | None = None,
+                         region: str | None = None) -> str:
     """Convert Anthropic model ID to AWS Bedrock model ID.
 
     Checks ``config_map`` (from config.json ``bedrock_model_map``) first,
@@ -138,16 +148,23 @@ def get_bedrock_model_id(anthropic_model_id: str, config_map: dict[str, str] | N
     valid for a real ARN. Keeping the registry current is what prevents a
     legitimate short name from taking that path.
 
+    The result's profile geography follows *region* (default: the main region): a
+    ``us.`` id can be called only from a US region (``model_registry.regional_id``,
+    design docs/design/2026-11-01-bedrock-id-follows-region.md).
+
     Args:
         anthropic_model_id: The Anthropic API model identifier
         config_map: Optional override map from config.json (checked first)
+        region: The region the call is made from; None reads the main region
 
     Returns:
         The corresponding AWS Bedrock model identifier, or the original ID if no mapping exists
     """
     if config_map and anthropic_model_id in config_map:
-        return config_map[anthropic_model_id]
-    return ANTHROPIC_TO_BEDROCK_MODEL_MAP.get(anthropic_model_id, anthropic_model_id)
+        mapped = config_map[anthropic_model_id]
+    else:
+        mapped = ANTHROPIC_TO_BEDROCK_MODEL_MAP.get(anthropic_model_id, anthropic_model_id)
+    return regional_id(mapped, region if region is not None else _main_region())
 
 
 # ``Settings`` / ``get_settings`` / ``settings`` live in ``config_settings`` and load on

@@ -51,6 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from model_registry import (  # noqa: E402 — needs the path insert above
     DEFAULT_JUDGE_MODEL,
+    is_full_bedrock_id,
     resolve_bedrock_id,
 )
 
@@ -1956,7 +1957,7 @@ def _get_judge_model() -> str:
     # that settings.py deliberately ALLOWS fell through to the substitute here —
     # re-creating the original defect (configured judge silently not used)
     # through the sanctioned path.
-    if short_name.startswith(("us.", "global.", "anthropic.", "arn:")):
+    if is_full_bedrock_id(short_name):  # any geography ("us.", "eu.", "apac.", "global.")
         return short_name
     if short_name in model_map:
         return model_map[short_name]

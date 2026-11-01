@@ -796,20 +796,26 @@ class PromptBuilder:
                 if self._config is not None
                 else None
             )
-            model = get_bedrock_model_id(model, config_map=config_map)
+            # the region the CLI is given (claude_environment reads the same reader), so
+            # the id's profile geography matches where the call is made from
+            region = None
+            if self._config is not None:
+                try:
+                    from core import aws_account
+                    region = aws_account.region(self._config)
+                except Exception as exc:  # noqa: BLE001 — fall back to the main region
+                    logger.warning("session config region unreadable (%s); using the main region", exc)
+                    region = None
+            model = get_bedrock_model_id(model, config_map=config_map, region=region)
             logger.info(f"Using Bedrock model: {model}")
 
         # Append [1m] for 1M-capable models so the CLI uses full context window.
         # The CLI strips [1m] before sending to the API — Bedrock never sees it.
         if model and not model.endswith("[1m]"):
-            base = model.replace("us.anthropic.", "").replace("global.anthropic.", "")
-            # Strip the literal version suffixes — NOT rstrip(":0"), which is a
-            # character-class strip that would eat a trailing "0" of a date-suffixed
-            # id (e.g. claude-sonnet-4-20250510 → ...2025051) or mangle "-10" → "-1".
-            if base.endswith(":0"):
-                base = base[:-2]
-            if base.endswith("-v1"):
-                base = base[:-3]
+            # every geography ("us.", "eu.", "apac.", "global.") and the literal
+            # version suffixes, the registry's one normaliser
+            from model_registry import normalize_short_name
+            base = normalize_short_name(model)
             if self._is_1m_model(base):
                 model = model + "[1m]"
 

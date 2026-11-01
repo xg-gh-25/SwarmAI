@@ -1406,7 +1406,7 @@ class TestChannelModelOverride:
 
         # Mock config module
         mock_config = MagicMock()
-        mock_config.get_bedrock_model_id = lambda m, config_map=None: f"us.anthropic.{m}-v1"
+        mock_config.get_bedrock_model_id = lambda m, config_map=None, region=None: f"us.anthropic.{m}-v1"
         with patch.dict(sys.modules, {"config": mock_config}):
             from core.prompt_builder import PromptBuilder
 
@@ -1426,7 +1426,7 @@ class TestChannelModelOverride:
         import sys
 
         mock_config = MagicMock()
-        mock_config.get_bedrock_model_id = lambda m, config_map=None: f"us.anthropic.{m}-v1"
+        mock_config.get_bedrock_model_id = lambda m, config_map=None, region=None: f"us.anthropic.{m}-v1"
         with patch.dict(sys.modules, {"config": mock_config}):
             from core.prompt_builder import PromptBuilder
 

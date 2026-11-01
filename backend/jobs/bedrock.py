@@ -33,6 +33,8 @@ import math
 import re
 from typing import Any
 
+from model_registry import regional_id, resolve_bedrock_id
+
 logger = logging.getLogger("swarm.jobs.bedrock")
 
 CONNECT_TIMEOUT = 10
@@ -98,8 +100,8 @@ def _load_config() -> tuple[str, dict]:
         from core.app_config_manager import AppConfigManager
         from core import aws_account
         cfg = AppConfigManager.instance()
-        # the account's main region when connected (one reader); else the old default
-        region = aws_account.region(cfg) if aws_account.active() else (cfg.get("aws_region") or "us-east-1")
+        # the main region (one reader), whether or not an account is connected
+        region = aws_account.region(cfg)
         model_map = cfg.get("bedrock_model_map") or {}
     except Exception:
         region = "us-east-1"
@@ -343,10 +345,14 @@ def build_timeout_client(*, read_timeout: int, max_attempts: int, region: str | 
 def get_model_id(model_key: str = "claude-sonnet-4-6") -> str:
     """Resolve a model key to its Bedrock model ID via AppConfigManager.
 
-    Falls back to the cross-region inference ID if no mapping is found.
+    Falls back to the model registry's id, then to the key itself (an id is never
+    synthesized from a short name). The geography is set where the call is made
+    (``converse_with_retry``), from that call's region.
     """
     _, model_map = _load_config()
-    return model_map.get(model_key, f"us.anthropic.{model_key}")
+    if model_key in model_map:
+        return model_map[model_key]
+    return resolve_bedrock_id(model_key) or model_key
 
 
 def _converse_kwargs(model_id: str, messages: list, system: list,
@@ -430,6 +436,13 @@ def converse_with_retry(
     Raises:
         Exception: if both attempts fail, or on the first non-auth error.
     """
+    # The model id's profile geography follows the region this call is made from (the
+    # same region the client below resolves): a "us." id is callable only from a US
+    # region (design docs/design/2026-11-01-bedrock-id-follows-region.md).
+    if region is None:
+        region, _ = _load_config()
+    model_id = regional_id(model_id, region)
+
     # FAIL-FAST path: throwaway tight-timeout client (bounds the hang window
     # without touching the shared 120s client skill-proposals depend on). It
     # KEEPS the same one auth-evict-retry discipline as the cached path — but

@@ -802,15 +802,17 @@ def _verdict(exc: Exception, action: str) -> dict:
             "detail": f"{action} ({code})" if code in _DENIED else f"{action}: {code}: {msg}"}
 
 
-def _bedrock_model_id(config: Any) -> Optional[str]:
+def _bedrock_model_id(config: Any, call_region: Optional[str] = None) -> Optional[str]:
     """The default model's Bedrock id, resolved the way a session resolves it
-    (``config.get_bedrock_model_id``, as ``prompt_builder`` does)."""
+    (``config.get_bedrock_model_id``, as ``prompt_builder`` does), with the profile
+    geography of *call_region* (default: the main region)."""
     model = config.get("default_model")
     if not model:
         return None
     from config import get_bedrock_model_id
     mapping = config.get("bedrock_model_map")
-    return get_bedrock_model_id(model, config_map=mapping if isinstance(mapping, dict) else None)
+    return get_bedrock_model_id(model, config_map=mapping if isinstance(mapping, dict) else None,
+                                region=call_region or region(config))
 
 
 def create_default_vpc(region: str) -> dict:
@@ -876,7 +878,7 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
         _update_record(capabilities=out)
         return out
 
-    model_id = _bedrock_model_id(config)
+    model_id = _bedrock_model_id(config, region)
     if get_chat_via() != "aws":
         out["bedrock"] = {"status": "not_applicable", "detail": "chat uses a key, not this account"}
     elif not model_id:

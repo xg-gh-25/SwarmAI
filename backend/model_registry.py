@@ -11,6 +11,9 @@ Key public symbols:
   - ``DEFAULT_CONTEXT_WINDOW`` / ``LARGE_CONTEXT_WINDOW`` — the two window tiers
   - ``resolve_bedrock_id`` — short name -> Bedrock ID, or ``None`` if unknown
   - ``is_large_context_model`` — family predicate for 1M-context capability
+  - ``geo_for_region`` / ``regional_id`` — the profile geography a region calls, and an
+    id rewritten to it (``us.`` ids are valid only from US regions)
+  - ``is_full_bedrock_id`` — an ARN / foundation id / profile id of any geography
 
 ⚠️ STDLIB-ONLY — DO NOT ADD A THIRD-PARTY IMPORT TO THIS MODULE.
 
@@ -142,7 +145,53 @@ _LARGE_CONTEXT_FAMILIES: tuple[str, ...] = ("claude-opus-", "claude-sonnet-")
 # a geography ("us.", "global.", "eu.", "apac.", ...). A deployment's bedrock_model_map
 # may name any geography, and jobs.bedrock decides temperature and tool choice from
 # the full ID, so every geography has to reduce to the same short name.
-_ID_PREFIX = re.compile(r"^(?:[a-z]{2,8}\.)?anthropic\.")
+_ID_PREFIX = re.compile(r"^(?:[a-z]{2,8}(?:-[a-z]+)?\.)?anthropic\.")
+
+# A cross-region inference-profile id: "<geo>.anthropic.<model>". The geo decides which
+# source regions may call it ("us." only from US regions), so it follows the main region
+# (design docs/design/2026-11-01-bedrock-id-follows-region.md).
+_GEO_ID = re.compile(r"^([a-z]{2,8}(?:-[a-z]+)?)\.(anthropic\..+)$")
+_REGION = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-\d+$")
+
+
+def geo_for_region(region: str | None) -> str | None:
+    """The inference-profile geography a call from *region* uses, or None for no region.
+
+    us-gov-* -> "us-gov", us-* -> "us", eu-* -> "eu", ap-* -> "apac", any other valid
+    region -> "global". An empty or malformed region gives None (callers then leave the
+    id as it is rather than guess).
+    """
+    if not region or not _REGION.match(region):
+        return None
+    if region.startswith("us-gov-"):
+        return "us-gov"
+    for prefix, geo in (("us-", "us"), ("eu-", "eu"), ("ap-", "apac")):
+        if region.startswith(prefix):
+            return geo
+    return "global"
+
+
+def regional_id(model_id: str | None, region: str | None) -> str | None:
+    """*model_id* with its geography replaced by the one *region* calls.
+
+    Only a geography-scoped profile id ("us.anthropic.x", "eu.anthropic.x", ...) changes;
+    "global.anthropic.x" (callable from most regions), a foundation id ("anthropic.x"), an
+    ARN, a short name and anything else come back unchanged, as does every id when the
+    region gives no geography. Suffixes ("-v1", "[1m]", ":0") are kept.
+    """
+    if not model_id:
+        return model_id
+    geo = geo_for_region(region)
+    m = _GEO_ID.match(model_id)
+    if geo is None or m is None or m.group(1) == "global":
+        return model_id
+    return f"{geo}.{m.group(2)}"
+
+
+def is_full_bedrock_id(model: str | None) -> bool:
+    """True for an id Bedrock takes as it is: an ARN, a foundation id, or a profile id of
+    any geography. A short name ("claude-opus-5") is not one."""
+    return bool(model) and (model.startswith("arn:") or bool(_ID_PREFIX.match(model)))
 
 
 def normalize_short_name(model: str | None) -> str:
