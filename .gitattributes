@@ -1,0 +1,5 @@
+# App packages are verified byte for byte: PROVENANCE.json and the generated App index
+# record a sha256 of each packaged file. A Windows checkout with core.autocrlf would
+# rewrite LF to CRLF and every digest would stop matching, so git leaves these files
+# exactly as committed.
+backend/apps/** -text
