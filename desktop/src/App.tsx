@@ -5,7 +5,7 @@
  * Uses a three-column layout (Left Sidebar, Workspace Explorer, Main Chat Panel).
  */
 
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useZoom } from './hooks/useZoom';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -20,7 +20,9 @@ import { ToastStack } from './components/common/ToastStack';
 import { AudioKeepAlive } from './components/AudioKeepAlive';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
 import ChatPage from './pages/ChatPage';
-import OnboardingPage from './pages/OnboardingPage';
+// shown on first run only: its own chunk, so the account wizard it carries is not in the
+// bundle every start loads (scripts/check-bundle-size.mjs)
+const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 import { systemService, type SystemStatus } from './services/system';
 
 /**
@@ -303,7 +305,11 @@ function AppRoutes() {
     );
   }
   if (decision === 'onboarding') {
-    return <OnboardingPage onComplete={() => refetch()} />;
+    return (
+      <Suspense fallback={<div className="min-h-screen bg-[var(--color-bg)]" data-testid="onboarding-loading" />}>
+        <OnboardingPage onComplete={() => refetch()} />
+      </Suspense>
+    );
   }
 
   return (
