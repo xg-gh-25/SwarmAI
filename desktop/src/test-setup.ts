@@ -20,6 +20,7 @@ import { configure } from '@testing-library/react';
 configure({ asyncUtilTimeout: 5000 });
 import { messageStoreRegistry } from './stores/MessageStore';
 import { resetZoneMemory } from './pages/chat/components/TurnZones';
+import { sessionEvents } from './services/sessionEvents';
 
 /**
  * Global teardown — destroy all MessageStores after every test.
@@ -39,6 +40,12 @@ afterEach(() => {
   // The chat view's per-message memory (durations, merges) is module-level and keyed
   // by message id; test cases reuse ids, so each case starts from an empty memory.
   resetZoneMemory();
+  // The window's session subscription is a module singleton the app never stops
+  // (useChatStreamingLifecycle). A test that mounts it leaves a reconnect timer that
+  // fires after the test environment is torn down ("window is not defined" in
+  // getApiBaseUrl, an unhandled error that fails the run). Files that mock the
+  // module may not provide stop().
+  sessionEvents.stop?.();
 });
 
 /**

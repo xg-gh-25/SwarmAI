@@ -1,8 +1,7 @@
-# App packages are verified byte for byte: PROVENANCE.json and the generated App index
-# record a sha256 of each packaged file. A Windows checkout with core.autocrlf would
-# rewrite LF to CRLF and every digest would stop matching, so git leaves these files
-# exactly as committed.
-backend/apps/** -text
-# The generated App index is compared byte for byte with a fresh render on every build
-# (generate_app_registry --check); a CRLF checkout made it read as stale on Windows.
-backend/generated/** -text
+# Every file is checked out exactly as committed, on every platform. App packages and
+# the generated App index are verified byte for byte (PROVENANCE.json, the index's
+# sha256 of each packaged file, generate_app_registry --check), and their sources span
+# backend/apps, backend/skills, backend/routers and desktop/src. A Windows checkout with
+# core.autocrlf rewrote LF to CRLF and broke those checks. -text only turns off line-end
+# conversion; diff and merge still treat the files as text.
+* -text
