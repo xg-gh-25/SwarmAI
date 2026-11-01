@@ -624,11 +624,17 @@ class RunEngine:
     @_one_operation
     def transfer_owner(self, to_session: str, *, reason: str) -> bool:
         """Record that *to_session* now drives the run (daemon-written). False when it
-        already owns it or the run is terminal; the caller decides liveness first."""
+        already owns it or the run is over with nothing left to do on it; the caller
+        decides liveness first. An abandoned or completed-not-landed run still takes the
+        person's recovery commands (restore, run-land, discard-snapshot, landed-as), so
+        another session may take it over, as it may an active one."""
         from core.session_ids import valid_session_id
         if not valid_session_id(to_session):
             raise EngineError("owner transfer needs a valid session id")
-        if self.projection()["status"] in lifecycle.TERMINAL:
+        state = self.projection()
+        recoverable = state["status"] == "abandoned" or (
+            state["status"] == "completed" and state.get("landing") == "not_landed")
+        if state["status"] in lifecycle.TERMINAL and not recoverable:
             return False
         current = self.owner_session()
         if current == to_session:

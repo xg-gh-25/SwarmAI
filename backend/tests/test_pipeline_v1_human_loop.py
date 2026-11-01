@@ -210,6 +210,14 @@ def test_chat_stop_endpoint_pauses_the_owned_run(run):
 
 # ── ownership ───────────────────────────────────────────────────────────────
 
+def test_an_abandoned_run_can_be_taken_over_for_its_recovery_commands(run):
+    """restore / run-land / landed-as still act on an abandoned run, so another session
+    may take it over; a run that landed has nothing left to take over."""
+    run.abandon(reason="stopped")
+    assert run.transfer_owner(OTHER, reason="takeover") is True
+    assert run.owner_session() == OTHER
+
+
 def test_owner_transfer_moves_projection_and_authorizations(run):
     assert run.transfer_owner(OTHER, reason="takeover") is True
     assert run.owner_session() == OTHER and _state(run)["session_id"] == OTHER
