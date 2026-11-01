@@ -6197,9 +6197,10 @@ class SessionRouter:
             yield event
 
     async def continue_with_cmd_permission(
-        self, session_id: str, request_id: str, allowed: bool,
+        self, session_id: str, request_id: str, allowed: bool, by: str = "person",
     ) -> AsyncIterator[dict]:
         """Continue a turn after a permission decision, published to the session hub.
+        *by*: who decided (``host`` from the Swarm Out bridge, else the person).
 
         No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
         row_key = self._continuation_client_id(session_id)
@@ -6207,11 +6208,11 @@ class SessionRouter:
                             label="permission")
         if self.get_unit(session_id) is None:
             async for ev in self._continue_with_cmd_permission_impl(session_id, request_id, allowed,
-                                                                    writer=writer):
+                                                                    writer=writer, by=by):
                 yield ev
             return
         async with aclosing(self._published_turn(
-            self._continue_with_cmd_permission_impl(session_id, request_id, allowed, writer=writer),
+            self._continue_with_cmd_permission_impl(session_id, request_id, allowed, writer=writer, by=by),
             session_id=session_id,
             turn_client_id=row_key,
             source="permission", start_on_session_start=False, writer=writer,
@@ -6221,7 +6222,7 @@ class SessionRouter:
 
     async def _continue_with_cmd_permission_impl(
         self, session_id: str, request_id: str, allowed: bool,
-        *, writer: TurnWriter,
+        *, writer: TurnWriter, by: str = "person",
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_permission().
 
@@ -6239,7 +6240,8 @@ class SessionRouter:
         # The unit records the decision on the stored prompt once the hook has
         # it (core/permission_prompt) -- never for a decision that went nowhere.
         # Row key: the originating turn's client_id, as in continue_with_answer.
-        async for event in unit.continue_with_permission(request_id, allowed):
+        async for event in unit.continue_with_permission(
+                request_id, allowed, **({"by": "host"} if by == "host" else {})):
             for _extra in await writer.write(
                 event, files=self._turn_files_of(unit), changes=getattr(unit, "_turn_changes", None),
             ):

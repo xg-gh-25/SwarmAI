@@ -451,7 +451,8 @@ def _user_only_deny(command: str) -> "dict | None":
 
 
 def _decide(sid: str, command: str, tool_input: dict,
-            phase: str = "check", cwd: "str | None" = None) -> "dict | None":
+            phase: str = "check", cwd: "str | None" = None,
+            approved_by: str = "person") -> "dict | None":
     """The decision for one Bash command (module docstring). S6-3: pipeline commands
     run in the agent's own process; the hook hands them no token, only this session's
     id (``_with_session``), and records the person's approval of an approved action."""
@@ -501,7 +502,7 @@ def _decide(sid: str, command: str, tool_input: dict,
             if reason:
                 return _deny(reason)
         if approved:
-            why = _record_approval(rid, request_ids[0])
+            why = _record_approval(rid, request_ids[0], approved_by)
             if why:
                 return _deny(why)
     rewrite = _with_session(command, sid)
@@ -577,9 +578,10 @@ def _session_worktree_export(command: str, sid: str, turn_id: "str | None",
 _TURN_ENV = "SWARM_TURN_ID"
 
 
-def _record_approval(run_id: str, request_id: str) -> "str | None":
-    """The person approved this command: the daemon records the ``auth`` fact for the
-    logged land_request it names (fixing spec C1/C3: no CLI process can write it).
+def _record_approval(run_id: str, request_id: str, by: str = "person") -> "str | None":
+    """This command was approved (by the person, or ``host``: on a Hive, the agent that
+    dispatched the run): the daemon records the ``auth`` fact for the logged land_request
+    it names (fixing spec C1/C3: no CLI process can write it), with who authorized it.
     Returns a denial reason, or None."""
     import time
     try:
@@ -590,7 +592,7 @@ def _record_approval(run_id: str, request_id: str) -> "str | None":
         if engine is None:
             return f"run {run_id} could not be loaded to record the approval"
         landing.approve_from_event(
-            engine.store, request_id, now=time.time(), at=_now())
+            engine.store, request_id, now=time.time(), at=_now(), authorized_by=by)
     except Exception as exc:   # an unrecorded approval must never run the command
         logger.warning("run_owner_gate: approval for %s %s not recorded: %s",
                        run_id, request_id, exc)
@@ -668,13 +670,16 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
     async def _pipeline_decision(command, tool_input, input_data, tool_use_id):
         if phase == "approved" and not any(c in command for c in AFTER_APPROVAL):
             return {"decision": "approve"}  # nothing of this phase in the command
+        approved_by = "person"
         if phase == "approved":
             from core.security_hooks import _is_v1_land_request, consume_land_approval
-            if _is_v1_land_request(command) \
-                    and not consume_land_approval(tool_use_id, command):
-                return _deny("this request was not approved by the user (no approval was "
-                             "recorded for this command); rerun it as ONE command so the "
-                             "user is asked")
+            if _is_v1_land_request(command):
+                who = consume_land_approval(tool_use_id, command)
+                if not who:
+                    return _deny("this request was not approved by the user (no approval was "
+                                 "recorded for this command); rerun it as ONE command so the "
+                                 "user is asked")
+                approved_by = "host" if who == "host" else "person"
         sid = str(session_context.get("sdk_session_id") or "")
         from core.app_session_id import valid_app_session_id
         if not valid_app_session_id(sid):
@@ -682,7 +687,7 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         try:
             res = await asyncio.wait_for(
                 executors.run_in("gate", _decide, sid, command, dict(tool_input),
-                                 phase, input_data.get("cwd") or None),
+                                 phase, input_data.get("cwd") or None, approved_by),
                 timeout=_DECIDE_TIMEOUT)
         except Exception:  # incl. TimeoutError — fail-open, never block a command
             logger.warning("run_owner_gate: decision failed — failing open", exc_info=True)

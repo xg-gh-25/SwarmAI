@@ -12,7 +12,7 @@ import os
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from core import swarm_out
 
@@ -414,6 +414,58 @@ async def refresh_result(dispatch_id: str) -> dict[str, Any]:
     """Check one run's Hive now."""
     _require_desktop()
     return await _call(swarm_out.refresh_result(dispatch_id))
+
+
+class HostAnswerBody(BaseModel):
+    """The dispatching agent's own answer to one of its run's waits (the CLI's
+    ``answer``; design 2026-10-31-hive-approvals): the card's question text → one of its
+    option labels, and why."""
+    session: Optional[str] = Field(default=None, max_length=80)
+    why: str = Field(min_length=1, max_length=1000)
+    # a card with one question: the label picked; with more, card question → label
+    pick: Optional[str] = Field(default=None, max_length=600)
+    answers: Optional[dict[str, str]] = Field(default=None, max_length=4)
+
+    @model_validator(mode="after")
+    def _one_answer(self) -> "HostAnswerBody":
+        if (self.pick is None) == (self.answers is None):
+            raise ValueError("give exactly one of pick and answers")
+        return self
+
+
+class EscalateBody(BaseModel):
+    session: Optional[str] = Field(default=None, max_length=80)
+    why: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/runs/{dispatch_id}/waits/{request_id}/answer-host")
+async def wait_answer_host(dispatch_id: str, request_id: str, body: HostAnswerBody) -> dict[str, Any]:
+    """The dispatching agent answers a wait it answers for (core/swarm_out_wait_card
+    ``answer_as_host``); recorded on the Hive as the host's answer, never the person's."""
+    _require_desktop()
+    from core import swarm_out_wait_card
+    try:
+        return await swarm_out_wait_card.answer_as_host(body.session, dispatch_id, request_id,
+                                                        body.answers, body.why, pick=body.pick)
+    except swarm_out_wait_card.CardError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    except Exception:
+        logger.exception("swarm_out host answer failed")
+        raise HTTPException(status_code=500, detail="Swarm Out request failed")
+
+
+@router.post("/runs/{dispatch_id}/waits/{request_id}/escalate")
+async def wait_escalate(dispatch_id: str, request_id: str, body: EscalateBody) -> dict[str, Any]:
+    """The dispatching agent hands a wait to the person (Needs You, with its reason)."""
+    _require_desktop()
+    from core import swarm_out_wait_card
+    try:
+        return await swarm_out_wait_card.escalate(body.session, dispatch_id, request_id, body.why)
+    except swarm_out_wait_card.CardError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    except Exception:
+        logger.exception("swarm_out escalate failed")
+        raise HTTPException(status_code=500, detail="Swarm Out request failed")
 
 
 @router.post("/asks/{hive_id}/{session_id}/{request_id}/answer")

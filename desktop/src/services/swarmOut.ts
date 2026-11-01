@@ -171,6 +171,8 @@ export interface SwarmOutResult {
      *  the task (a re-run with a correction, or anything typed in the Hive tab; absent
      *  on a record kept before it was counted) */
     human: { approved: number; denied: number; unanswered: number; answered_questions: number; said?: number };
+    /** waits the dispatching agent answered itself: its own decisions, not the person stepping in */
+    host_handled?: number;
   };
   pipeline: { run_id: string | null; profile: string | null; status: string | null; landing: string | null;
     landed_sha: string | null; audit: SwarmOutAuditRow[] } | null;
@@ -228,7 +230,8 @@ export interface SwarmOutDecisionOption {
 }
 
 export type SwarmOutWaitPhase = 'waiting' | 'sent' | 'taken' | 'refused' | 'gone';
-export type SwarmOutRefusalReason = 'no_option' | 'changed' | 'too_long' | 'run_refused' | 'not_recorded' | 'other';
+export type SwarmOutRefusalReason = 'no_option' | 'changed' | 'too_long' | 'run_refused' | 'not_recorded'
+  | 'not_host_class' | 'other';
 
 export interface SwarmOutAsk {
   /** decision: a pipeline run on the Hive waits on a person's pick (open while the run waits) */
@@ -252,6 +255,12 @@ export interface SwarmOutAsk {
   possible_dispatch_title?: string | null;
   /** the Hive refused the answer given (it did not match what was waiting): not delivered */
   refused?: boolean;
+  /** what the wait is about, as the Hive's gate said (design 2026-10-31-hive-approvals):
+   *  the agent that dispatched the run answers question / decision / hive_local /
+   *  run_authorization itself; null from a Hive too old to say (the person's) */
+  approval_class?: string | null;
+  /** answered: by the person, or by the agent that dispatched the run (its own decision) */
+  answered_by?: 'person' | 'host';
   /** where the wait is (design 2026-10-31-swarm-out-single-loop-fixes §2.1): ``asks``
    *  holds waiting and refused, ``answered`` holds sent, taken and gone */
   phase?: SwarmOutWaitPhase;

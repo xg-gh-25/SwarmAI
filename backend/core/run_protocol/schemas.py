@@ -270,8 +270,9 @@ def _clarifications(value: Any, out: list[SchemaIssue]) -> None:
                 out, "RQ-6", path)
         for key in ("qid", "question", "answer"):
             _text(obj, key, out, "RQ-6", path)
-        if obj.get("answered_by") not in ("user", "evidence"):
-            _issue(out, "RQ-6", f"{path}.answered_by", "must be user or evidence")
+        # host: on a Hive, the agent that dispatched the run answered it
+        if obj.get("answered_by") not in ("user", "evidence", "host"):
+            _issue(out, "RQ-6", f"{path}.answered_by", "must be user, evidence or host")
         if "decided_by" in obj and (obj["decided_by"] != "agent_after_cap"
                                     or obj.get("answered_by") != "evidence"):
             # the agent's own choice after the decision cap (DC-2, conformance F12)

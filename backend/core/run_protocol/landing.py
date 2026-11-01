@@ -204,16 +204,20 @@ def request_event(store: AuditStore, request_id: str) -> dict[str, Any]:
 
 
 def approve_from_event(store: AuditStore, request_id: str, *, now: float,
-                       at: str) -> dict[str, Any]:
-    """Hook-side approval, written by the DAEMON after the person approved the command:
-    the ``auth`` fact for exactly the request the logged land_request names (C1, C3)."""
+                       at: str, authorized_by: str = "person") -> dict[str, Any]:
+    """Hook-side approval, written by the DAEMON after the command was approved: the
+    ``auth`` fact for exactly the request the logged land_request names (C1, C3). An
+    approval the dispatching agent gave on a Hive says ``authorized_by: host`` (design
+    2026-10-31-hive-approvals §2.4); the person's carries no such field, as before."""
     request = request_event(store, request_id)["request"]
+    payload = {"request_id": request["request_id"], "session_id": request["session_id"],
+               "run_id": request["run_id"], "action": request["action"],
+               "binding_digest": request["binding_digest"],
+               "expires_at": now + AUTH_TTL_SECONDS}
+    if authorized_by == "host":
+        payload["authorized_by"] = "host"
     event, _ = store.append_new(
-        writer=store.authority.writer("hook"), kind="auth", at=at,
-        payload={"request_id": request["request_id"], "session_id": request["session_id"],
-                 "run_id": request["run_id"], "action": request["action"],
-                 "binding_digest": request["binding_digest"],
-                 "expires_at": now + AUTH_TTL_SECONDS},
+        writer=store.authority.writer("hook"), kind="auth", at=at, payload=payload,
     )
     return event
 

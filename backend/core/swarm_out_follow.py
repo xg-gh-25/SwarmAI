@@ -108,8 +108,16 @@ def summary(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     for w in list(data.get("asks") or []) + list(data.get("answered") or []):
         if isinstance(w, dict) and row.get("session_id") and w.get("session_id") == row.get("session_id"):
             card = _card(row, w.get("request_id"))
+            from core import swarm_out_wait_card
+            cls = w.get("approval_class")
+            escalated = bool(swarm_out_wait_card.escalation(str(row.get("dispatch_id") or ""),
+                                                            str(w.get("request_id") or "")))
             waits.append({"request_id": w.get("request_id"), "kind": w.get("kind"), "phase": w.get("phase"),
                           "refused_reason": w.get("refused_reason"),
+                          # who answers it (design 2026-10-31-hive-approvals): "you" (this
+                          # agent: `swarm_out answer`) or "person" (ask them, or escalate)
+                          "approval_class": cls,
+                          "who": swarm_out_wait_card._who(cls, escalated),
                           # the chat card's outcome; its reason is this daemon's own text
                           "card": card})
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else {}
@@ -283,7 +291,9 @@ def digest(session: Optional[str]) -> tuple[Optional[str], dict[str, str]]:
             bits.append(f"stage {s['stage']}")
         if s.get("result_status") == "fetched":
             bits.append(f"result {s.get('ended') or 'in'}")
-        waits = [f"{w['kind']} {w['phase']}" for w in s["waits"] if w.get("kind")]
+        waits = [f"{w['kind']} {w['phase']}"
+                 + (f" ({w['approval_class'] or 'unknown'}, answered by {w['who']})" if w.get("phase") == "waiting" else "")
+                 for w in s["waits"] if w.get("kind")]
         if waits:
             bits.append("waits: " + ", ".join(waits))
         title = " ".join(str(s.get("title") or "").split())[:80]

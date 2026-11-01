@@ -169,8 +169,13 @@ def approval_view(tool_name: str, tool_input: dict[str, Any]) -> str:
 
 
 def _ask_record(hive: str, session_id: str, key: str, item: dict[str, Any]) -> dict[str, Any]:
+    from . import approval_class
     base = {"hive": hive, "session_id": session_id, "request_id": key,
-            "asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            "asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            # what the wait is about, as the gate that made it wait said (design
+            # 2026-10-31-hive-approvals §2.2): the Host shows it, and only a class in
+            # HOST_CLASSES takes the dispatching agent's answer (``_valid``)
+            "approval_class": approval_class.clean(item.get("approval_class")) or approval_class.UNKNOWN}
     if item.get("kind") == "ask_user_question":
         questions = []
         all_qs = item.get("questions") if isinstance(item.get("questions"), list) else []
@@ -284,6 +289,18 @@ class Bridge:
             return None, "no_option"
         if not isinstance(ans, dict) or ans.get("request_id") != key:
             return None, "no_option"
+        by = ans.get("answered_by", "person")
+        if by not in ("person", "host"):
+            return None, "no_option"
+        if by == "host":
+            # the dispatching agent answers only what stays inside the work it manages
+            # for this run; anything else is the person's (design §2.4, H3). Checked
+            # here, on the Hive, whatever the Host checked
+            from . import approval_class
+            if (waiting or {}).get("approval_class") not in approval_class.HOST_CLASSES:
+                logger.warning("swarm_out_bridge: a host answer for %s refused: the wait is "
+                               "%s, the person's to answer", key, (waiting or {}).get("approval_class"))
+                return None, "not_host_class"
         if mirrored.kind == "question":
             answers = ans.get("answers")
             ok = (isinstance(answers, dict) and 0 < len(answers) <= MAX_ANSWERS
@@ -298,12 +315,18 @@ class Bridge:
                 logger.warning("swarm_out_bridge: answer for %s does not match the waiting "
                                "questions; not delivered", key)
                 return None, "changed"
-            return {"answers": answers}, ""
+            if by == "host":
+                # the host picks options, never free text (design §4 layer 2)
+                labels = {q.get("question"): {o.get("label") for o in q.get("options") or []}
+                          for q in (waiting or {}).get("questions") or []}
+                if any(v not in labels.get(k, set()) for k, v in answers.items()):
+                    return None, "no_option"
+            return {"answers": answers, "by": by}, ""
         decision = ans.get("decision")
         if decision not in DECISIONS:
             return None, "no_option"
         if decision == "deny":   # always safe: no content check (an older Host sends none)
-            return {"decision": decision}, ""
+            return {"decision": decision, "by": by}, ""
         if waiting is None or ans.get("shown_sha256") != approval_digest(
                 waiting.get("tool_name", ""), waiting.get("command", ""), waiting.get("reason", "")):
             logger.warning("swarm_out_bridge: approval for %s does not match the waiting "
@@ -313,16 +336,19 @@ class Bridge:
             logger.warning("swarm_out_bridge: approval for %s refused: the command was too "
                            "long to be shown whole", key)
             return None, "too_long"
-        return {"decision": decision}, ""
+        return {"decision": decision, "by": by}, ""
 
     def _deliver(self, key: str, mirrored: _Mirrored, answer: dict[str, Any]) -> None:
+        by = "host" if answer.get("by") == "host" else "person"
         if mirrored.kind == "question":
             gen = self.router.continue_with_answer(
                 mirrored.session_id, json.dumps(answer["answers"], ensure_ascii=False),
-                tool_use_id=key, answered_by="person")
+                tool_use_id=key, answered_by=by)
         else:
+            # who decided travels with the decision to the gate that waits
+            # (permission_manager.set_permission_decision / pop_decided_by)
             gen = self.router.continue_with_cmd_permission(
-                mirrored.session_id, key, answer["decision"] == "approve")
+                mirrored.session_id, key, answer["decision"] == "approve", by=by)
         task = asyncio.create_task(self._drain(key, gen), name=f"swarm-out-answer-{key}")
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)

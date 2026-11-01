@@ -35,6 +35,9 @@ class _FakePM:
     def is_command_approved(self, session_key, command):
         return False
 
+    def pop_decided_by(self, request_id):
+        return "person"
+
     def is_resolved(self, session_id, tool_call_id):
         return False
 

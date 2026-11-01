@@ -1223,7 +1223,7 @@ class RunEngine:
         longer decides the run."""
         events = self.store.read_events()
         last = max((index for index, event in enumerate(events)
-                    if event.get("kind") == "human_answer"), default=-1)
+                    if event.get("kind") in ("human_answer", "host_answer")), default=-1)
         return events[last + 1:]
 
     def _gate0_ended_at_cap(self) -> bool:
@@ -1746,7 +1746,7 @@ class RunEngine:
         value = dict(value)
         after_cap = value.pop("after_cap", None)
         event = record_decision(self.store, value, known_refs=refs, document=document,
-                                at=_now(), decisions_answered=state["human_decisions"],
+                                at=_now(), decisions_answered=lifecycle.answered(state),
                                 cap=state["decision_cap"], after_cap=after_cap)
         self._settle()
         if after_cap is not None:
@@ -1770,6 +1770,8 @@ class RunEngine:
             payload = event.get("payload") or {}
             if event.get("kind") == "human_answer":
                 picks.append((payload["request_id"], payload["option_id"], {"answered_by": "user"}))
+            elif event.get("kind") == "host_answer":
+                picks.append((payload["request_id"], payload["option_id"], {"answered_by": "host"}))
             elif event.get("kind") == "decision" and payload.get("decided_by"):
                 picks.append((payload["request_id"], payload["option_id"],
                               {"answered_by": "evidence", "decided_by": payload["decided_by"],
@@ -1851,9 +1853,13 @@ class RunEngine:
                     blocking=set())
 
     @_one_operation
-    def answer_decision(self, *, request_id: str, option_id: str) -> dict[str, Any]:
-        """Record a HUMAN's answer. Called only from the daemon (the chat question card
-        or the dashboard decision card); the agent's CLI has no answer command."""
+    def answer_decision(self, *, request_id: str, option_id: str,
+                        by: str = "person") -> dict[str, Any]:
+        """Record the answer to the pending decision. Called only from the daemon (the
+        chat question card or the dashboard decision card); the agent's CLI has no answer
+        command. ``by="host"``: on a Hive, the agent that dispatched this run answered it
+        through the bridge (design 2026-10-31-hive-approvals §2.4): logged as
+        ``host_answer``, never as the person's."""
         from core.run_protocol import decision
         state = self.projection()
         if state["status"] != "awaiting_human" or state.get("pending_decision") != request_id:
@@ -1861,9 +1867,11 @@ class RunEngine:
         value = self.decision_value(request_id)
         if not isinstance(value, Mapping):
             raise EngineError("pending decision document is missing")
-        answer = decision.answer(value, request_id=request_id, option_id=option_id)
+        answer = decision.answer(value, request_id=request_id, option_id=option_id,
+                                 answered_by="host" if by == "host" else "user")
         event, _ = self.store.append_new(
-            writer=self.authority.writer("hook"), kind="human_answer", at=_now(),
+            writer=self.authority.writer("hook"),
+            kind="host_answer" if by == "host" else "human_answer", at=_now(),
             payload={"request_id": request_id, "option_id": option_id})
         self._settle()
         # the answer goes into its source document at the same place (conformance F13)

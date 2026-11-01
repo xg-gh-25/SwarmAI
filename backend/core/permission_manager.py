@@ -74,6 +74,11 @@ class PermissionManager:
         self._approved_commands: dict[str, set[str]] = {}
         self._permission_events: dict[str, asyncio.Event] = {}
         self._permission_results: dict[str, str] = {}
+        # request id → who made its decision when it was not the person on this
+        # machine (the Hive bridge delivering the dispatching agent's answer: "host").
+        # Read once by the gate that waited (pop_decided_by); a decision with no entry
+        # is the person's.
+        self._decided_by: dict[str, str] = {}
         # The prompt board: session id → prompt key (requestId, or tool_use_id
         # for an AskUserQuestion) → the prompt as streamed to the frontend.
         self._prompts: dict[str, dict[str, dict[str, Any]]] = {}
@@ -333,14 +338,26 @@ class PermissionManager:
             self._pending_requests.pop(request_id, None)
             self._drop_prompt(request_id)
 
-    def set_permission_decision(self, request_id: str, decision: str) -> None:
-        """Set the user's permission decision and signal waiting tasks."""
+    def pop_decided_by(self, request_id: str) -> str:
+        """Who made the decision the gate just received: ``host`` or ``person``."""
+        return self._decided_by.pop(request_id, None) or "person"
+
+    def set_permission_decision(self, request_id: str, decision: str, by: str = "person") -> None:
+        """Set the permission decision and signal waiting tasks. *by*: who decided
+        (``host``: on a Hive, the agent that dispatched the run, design
+        2026-10-31-hive-approvals §2.4), kept with the decision for the gate that waits
+        (``pop_decided_by``), so it never outlives the decision it belongs to."""
         self._permission_results[request_id] = decision
         if request_id in self._permission_events:
+            if by == "host":
+                self._decided_by[request_id] = "host"
+            else:
+                self._decided_by.pop(request_id, None)
             self._permission_events[request_id].set()
         else:
             # No waiter — clean up immediately to prevent memory leak
             self._permission_results.pop(request_id, None)
+            self._decided_by.pop(request_id, None)
         # Decided: off the board now, not when the waiter's finally runs.
         self._drop_prompt(request_id)
 

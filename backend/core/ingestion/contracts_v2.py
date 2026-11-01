@@ -446,6 +446,8 @@ EvidenceRootKind = Literal[
     "user_message", "human_answer", "measured_field", "corpus_unit", "agent_document",
     "run_finding", "run_validation", "commit", "file_revision", "tool_text", "web_document",
     "metric_window", "channel_message",
+    # on a Hive, the answer of the agent that dispatched the run (never the person's)
+    "host_answer",
 ]
 
 # ── sources (§5.2) ────────────────────────────────────────────────────────────

@@ -4596,7 +4596,7 @@ class SessionUnit:
         async for event in self.read_with_recovery():
             yield event
 
-    def _deliver_permission_decision(self, request_id: str, allowed: bool) -> bool:
+    def _deliver_permission_decision(self, request_id: str, allowed: bool, by: str = "person") -> bool:
         """Hand the decision to the hook blocked on *request_id*; False (nothing
         changed) when no hook waits on it. Synchronous on purpose: the caller
         switches state right after, with no await in between, so a cancelled
@@ -4608,7 +4608,7 @@ class SessionUnit:
         # Status out of "pending" BEFORE signalling, so a streaming-state read in
         # between never re-offers a decided prompt.
         _pm.update_pending_request(request_id, {"status": decision})
-        _pm.set_permission_decision(request_id, decision)
+        _pm.set_permission_decision(request_id, decision, **({"by": "host"} if by == "host" else {}))
         logger.info(
             "session_unit.permission_decision session_id=%s request_id=%s decision=%s",
             self.session_id, request_id, decision,
@@ -4617,13 +4617,15 @@ class SessionUnit:
         # critical path (a display aid; it must not hold the state switch).
         from core.permission_prompt import note_decision, record_decision
         note_decision(request_id, decision)   # a reload before the record reads it decided
-        _t = asyncio.ensure_future(record_decision(self.session_id, request_id, decision))
+        # who decided: on a Hive, "host" when the dispatching agent did (the bridge said so)
+        _t = asyncio.ensure_future(record_decision(self.session_id, request_id, decision,
+                                                   **({"by": "host"} if by == "host" else {})))
         _BACKGROUND_RECORDS.add(_t)
         _t.add_done_callback(_BACKGROUND_RECORDS.discard)
         return True
 
     async def continue_with_permission(
-        self, request_id: str, allowed: bool,
+        self, request_id: str, allowed: bool, by: str = "person",
     ) -> AsyncIterator[dict]:
         """Continue after cmd_permission_request.
 
@@ -4651,7 +4653,7 @@ class SessionUnit:
                 f"No client for continue_with_permission "
                 f"(session_id={self.session_id})"
             )
-        if not self._deliver_permission_decision(request_id, allowed):
+        if not self._deliver_permission_decision(request_id, allowed, by):
             raise RuntimeError(
                 f"Cannot continue_with_permission: no hook is waiting on {request_id} "
                 f"(state {self.state.value}, session_id={self.session_id})"

@@ -379,8 +379,9 @@ _IRREVERSIBLE_FALLBACK_RE = re.compile(
 )
 
 
-# the person approved THIS v1 authorization command for THIS tool call (one use)
-_LAND_APPROVALS: "dict[tuple[str, str], float]" = {}
+# THIS v1 authorization command was approved for THIS tool call (one use): when, and
+# by whom ("person", or "host": the agent that dispatched this Hive's run)
+_LAND_APPROVALS: "dict[tuple[str, str], tuple[float, str]]" = {}
 _LAND_APPROVAL_TTL = 120.0
 
 
@@ -388,22 +389,25 @@ def _approval_key(tool_use_id: "str | None", command: str) -> "tuple[str, str]":
     return (str(tool_use_id or ""), hashlib.sha256(command.encode()).hexdigest())
 
 
-def record_land_approval(tool_use_id: "str | None", command: str) -> None:
-    """dangerous_command_gate: the user approved THIS v1 authorization (this tool call)."""
+def record_land_approval(tool_use_id: "str | None", command: str, by: str = "person") -> None:
+    """dangerous_command_gate: THIS v1 authorization (this tool call) was approved, by
+    the person or (``host``) the agent that dispatched this Hive's run."""
     now = time.monotonic()
-    for k, t in list(_LAND_APPROVALS.items()):
+    for k, (t, _by) in list(_LAND_APPROVALS.items()):
         if now - t > _LAND_APPROVAL_TTL:
             _LAND_APPROVALS.pop(k, None)
-    _LAND_APPROVALS[_approval_key(tool_use_id, command)] = now
+    _LAND_APPROVALS[_approval_key(tool_use_id, command)] = (now, "host" if by == "host" else "person")
 
 
-def consume_land_approval(tool_use_id: "str | None", command: str) -> bool:
-    """run_owner_gate (phase approved): was this exact command approved by the user for
-    this tool call? One use. Position after the approval gate is not proof: a hook that
-    raises is skipped by the chain, so without this record a crash in the approval gate
-    would hand the request its token unapproved."""
-    t = _LAND_APPROVALS.pop(_approval_key(tool_use_id, command), None)
-    return t is not None and time.monotonic() - t <= _LAND_APPROVAL_TTL
+def consume_land_approval(tool_use_id: "str | None", command: str) -> "str | None":
+    """run_owner_gate (phase approved): who approved this exact command for this tool
+    call (``person`` / ``host``), or None when no one did. One use. Position after the
+    approval gate is not proof: a hook that raises is skipped by the chain, so without
+    this record a crash in the approval gate would hand the request its token unapproved."""
+    got = _LAND_APPROVALS.pop(_approval_key(tool_use_id, command), None)
+    if got is None or time.monotonic() - got[0] > _LAND_APPROVAL_TTL:
+        return None
+    return got[1]
 
 
 def _count_required_approval(session_id: "str | None") -> None:
@@ -1763,11 +1767,13 @@ def create_ask_question_gate(
         # answer-into-void). wait_for_answer's own finally covers the post-entry
         # case; this try only covers the enqueue/cancel window before it.
         try:
+            from core import approval_class as _ac
             _pm.publish_prompt(actual_session_id, {
                 "kind": "ask_user_question",
                 "sessionId": actual_session_id,
                 "tool_use_id": tool_use_id,
                 "questions": questions,
+                "approval_class": _ac.for_ask(),
             })
         except BaseException:
             ask_question_mgr.discard_waiter(tool_use_id)
@@ -1813,22 +1819,28 @@ def create_ask_question_gate(
         # because the agent has no answer command; an unattended channel pick
         # (answered_by="auto") or free text records nothing, so the run keeps
         # waiting and the agent re-asks.
+        # On a Hive, "host" instead of "person": the agent that dispatched the run picked
+        # it through the bridge; recorded as host_answer, never the person's.
         # A PERSON's answer on a Hive card (a dispatched run's wait, asked in the chat
-        # that dispatched it) is forwarded to the Hive here, in the daemon, for the
-        # same reason: the agent has no answer command (core/swarm_out_wait_card, design
-        # 2026-10-31-swarm-out-agent-owns-its-runs §2.5). It never raises. A Hive card is
-        # never also a local pipeline decision: its text is the Hive's, which could end
-        # in a local decision's marker.
+        # that dispatched it) is forwarded to the Hive here, in the daemon: the person's
+        # pick is not the agent's to relay (the agent's own answers, for the waits it
+        # answers for, go through `swarm_out answer`; core/swarm_out_wait_card, designs
+        # 2026-10-31-swarm-out-agent-owns-its-runs §2.5, 2026-10-31-hive-approvals). It
+        # never raises. A Hive card is never also a local pipeline decision: its text is
+        # the Hive's, which could end in a local decision's marker.
         from . import swarm_out_wait_card
         hive_card = any(isinstance(q, dict) and str(q.get("question", "")).startswith(
             swarm_out_wait_card.MARKER_PREFIX) for q in questions)
         if answered_by == "person" and isinstance(answer, dict) and hive_card:
             await swarm_out_wait_card.forward(actual_session_id, questions, answer)
-        elif answered_by == "person" and isinstance(answer, dict) and any(
+        elif answered_by in ("person", "host") and isinstance(answer, dict) and any(
                 isinstance(q, dict) and "[" in str(q.get("question", "")) for q in questions):
+            # "host": on a Hive, the agent that dispatched this run picked it (design
+            # 2026-10-31-hive-approvals §2.4): recorded as the host's answer, never the
+            # person's
             from . import pipeline_human
-            await asyncio.to_thread(pipeline_human.record_card_answer,
-                                    actual_session_id, answer)
+            await asyncio.to_thread(pipeline_human.record_card_answer, actual_session_id, answer,
+                                    **({"by": "host"} if answered_by == "host" else {}))
 
         # answer is the user's answers dict.
         return {
@@ -1883,6 +1895,55 @@ def _danger_match(command: str, patterns: "list[str]", cwd: str = "") -> "dict |
         return {"rule": "v1_authorization", "match": _excerpt(command),
                 "why": "consumes one Pipeline v1 human authorization"}
     return None
+
+
+#: programs whose dangerous use stays on the Hive (design 2026-10-31-hive-approvals
+#: §2.2): only these, run as one simple command, may be answered by the dispatching agent
+_HIVE_LOCAL_PROGRAMS = frozenset({"chmod", "chown", "kill", "dd", "rm", "git"})
+#: anything that composes or wraps commands: a list, a pipe, a background job, command
+#: or process substitution, a newline
+_COMPOSED_RE = re.compile(r"[;&|\n`]|\$\(|<\(|>\(")
+
+
+def _host_answerable_shape(cls: str, command: str) -> bool:
+    """Whether a dangerous command of host class *cls* has a shape the dispatching
+    agent may answer: one simple command (nothing composed or substituted) and, for
+    ``hive_local``, a program on ``_HIVE_LOCAL_PROGRAMS`` (or a write to a device or
+    /etc). Fail closed: a wrapper (sudo, sh -c, env, xargs, …) or any composition can
+    carry an action the rule-by-rule checks do not see, so it is the person's."""
+    c = command.strip()
+    if not c or _COMPOSED_RE.search(c):
+        return False
+    if cls == "run_authorization":
+        return True
+    if c.startswith(">"):
+        return True
+    word = c.split()[0].rsplit("/", 1)[-1]
+    return word in _HIVE_LOCAL_PROGRAMS or word.startswith("mkfs")
+
+
+def _approval_class_of(command: str, patterns: "list[str]", cwd: str, hit: dict,
+                       reserved_action: Optional[str]) -> str:
+    """The wait's approval_class (core/approval_class) from every rule *command* trips,
+    not only the first one ``_danger_match`` reports (a command that also force-pushes
+    is the person's), and a host class only for a shape the dispatching agent may
+    answer (``_host_answerable_shape``); otherwise ``unknown``, the person's."""
+    from core import approval_class as _ac
+    rules = [hit["rule"]] + [f"pattern:{p}" for p in patterns if fnmatch.fnmatch(command, p)]
+    if _dangerous_rm_segment(command, cwd=cwd) is not None:
+        rules.append("rm_unresolved_target")
+    if _is_irreversible_external_op(command):
+        rules.append("irreversible_external")
+    if _targets_irreplaceable_store(command):
+        rules.append("irreplaceable_store")
+    if _is_v1_land_request(command):
+        rules.append("v1_authorization")
+    if reserved_action:
+        rules.append("reserved_action")
+    cls = _ac.for_rules(rules, command)
+    if cls in _ac.HOST_CLASSES and not _host_answerable_shape(cls, command):
+        return _ac.UNKNOWN
+    return cls
 
 
 def _reason_text(hit: dict) -> str:
@@ -2064,8 +2125,10 @@ def create_dangerous_command_gate(
             "toolInput": tool_input_data,
             "reason": reason_text,
             "options": ["approve", "deny"],
+            "approval_class": _approval_class_of(command, patterns, cwd, hit, reserved_action),
         })
-        logger.info("User decision for %s: %s", request_id, decision)
+        decided_by = permission_mgr.pop_decided_by(request_id)
+        logger.info("Decision for %s: %s (by %s)", request_id, decision, decided_by)
         permission_mgr.remove_pending_request(request_id)
         _log_prompt(hit, decision if decision in ("approve", "timeout") else "deny",
                     input_data, actual_session_id, reason_text)
@@ -2074,8 +2137,10 @@ def create_dangerous_command_gate(
             if not discard_reason and not reserved_action:
                 permission_mgr.approve_command(session_key, command)
             if _is_v1_land_request(command):
-                record_land_approval(tool_use_id, command)
-            else:   # a v1 authorization is a human decision, not a required approval
+                record_land_approval(tool_use_id, command, by=decided_by)
+            elif decided_by == "person":
+                # a v1 authorization is a decision, not a required approval; an approval
+                # the dispatching agent gave is the host's, not the person's
                 _count_required_approval_soon(actual_session_id)
             return {"decision": "approve"}
 
@@ -2213,6 +2278,7 @@ def create_external_approval_gate(
             tool_name, request_id,
         )
 
+        from core import approval_class as _ac
         decision = await permission_mgr.request_decision(actual_session_id, {
             "sessionId": actual_session_id,
             "requestId": request_id,
@@ -2221,11 +2287,14 @@ def create_external_approval_gate(
             "toolInput": tool_input_data,
             "reason": reason,
             "options": ["approve", "deny"],
+            "approval_class": _ac.for_external_tool(),
         })
         permission_mgr.remove_pending_request(request_id)
+        decided_by = permission_mgr.pop_decided_by(request_id)
 
         if decision == "approve":
-            _count_required_approval_soon(actual_session_id)
+            if decided_by == "person":
+                _count_required_approval_soon(actual_session_id)
             return {"decision": "approve"}
 
         if decision == "timeout":

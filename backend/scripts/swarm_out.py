@@ -14,6 +14,9 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out watch <dispatch_id> [...] [--since <token>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out card <dispatch_id> <request_id>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out answer <dispatch_id> <request_id> --pick <option label> --why <w>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out answer <dispatch_id> <request_id> --answers-file <json: card question → label> --why <w>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out escalate <dispatch_id> <request_id> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out read <dispatch_id>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop|discard <dispatch_id> --why <one sentence>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
@@ -34,8 +37,16 @@ Every task goes under a Brain's Project Agent (``General`` = the Runner Agent, f
 task that belongs to no Brain); its repositories come from the definition. How it runs
 (``--execution``) is chosen here for this request, not by the Project Agent.
 
-There is deliberately no answer command: an agent that reads Hive-written text must not
-be one command away from approving what that text asks for. A Hive's questions,
+Who answers a Hive's wait follows the responsibility chain (design
+2026-10-31-hive-approvals-person-and-host): the agent that dispatched the run answers the
+waits that stay inside the work it manages (``card`` says ``who: you``: a question or a
+decision about the task, a command that only touches the Hive's own workspace, the run's
+own authorization) with ``answer``: one of the options of the card it built, and why;
+the Hive records it as the host's, never the person's, and refuses it for any other
+class. Text a Hive wrote never chooses for it: the answer is an option id bound to the
+card's digest, and the class is decided by the Hive's gate, not by the text. The rest
+(``who: person``), and anything the agent is not sure of, goes to the person: ``escalate``
+puts it in Needs You, and a Hive's questions,
 decisions and approvals are answered by the person: in the Swarm Out panel, or in the
 chat that dispatched the run, on the card ``card`` builds (AskUserQuestion with that
 input, unchanged); the daemon forwards the person's pick (core/swarm_out_wait_card).
@@ -154,6 +165,14 @@ def _dispatch_id(v: str) -> str:
     return v
 
 
+def _request_id(v: str) -> str:
+    """A wait's request id as the Hive writes it (it goes into a URL path)."""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", v or ""):
+        raise argparse.ArgumentTypeError(f"not a request id: {v!r}")
+    return v
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="swarm_out")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -189,6 +208,17 @@ def _parser() -> argparse.ArgumentParser:
     cd = sub.add_parser("card", help="the question card that asks the person one of a run's waits")
     cd.add_argument("dispatch_id", type=_dispatch_id)
     cd.add_argument("request_id")
+    an = sub.add_parser("answer", help="answer one of your run's waits yourself (card says who: you)")
+    an.add_argument("dispatch_id", type=_dispatch_id)
+    an.add_argument("request_id", type=_request_id)
+    pick = an.add_mutually_exclusive_group(required=True)
+    pick.add_argument("--pick", help="the option label you pick (a card with one question)")
+    pick.add_argument("--answers-file", help="JSON: each card question → the option label you pick")
+    an.add_argument("--why", required=True, help="one sentence the person sees: why this answer")
+    es = sub.add_parser("escalate", help="hand one of your run's waits to the person (Needs You)")
+    es.add_argument("dispatch_id", type=_dispatch_id)
+    es.add_argument("request_id", type=_request_id)
+    es.add_argument("--why", required=True, help="one sentence the person reads: why they decide it")
     rd = sub.add_parser("read", help="one run's whole result with the Hive's reply, framed as data")
     rd.add_argument("dispatch_id", type=_dispatch_id)
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
@@ -273,6 +303,20 @@ def main(argv: list[str] | None = None) -> int:
         return _call("POST", f"/runs/{args.dispatch_id}/card", {"request_id": args.request_id}, framed=True)
     if args.cmd == "read":
         return _call("GET", f"/runs/{args.dispatch_id}/result", framed=True)
+    if args.cmd == "answer":
+        body = {"session": _session(), "why": args.why}
+        if args.answers_file:
+            try:
+                body["answers"] = json.loads(open(args.answers_file, encoding="utf-8").read())
+            except (OSError, ValueError) as e:
+                print(json.dumps({"ok": False, "detail": f"could not read --answers-file: {e}"}))
+                return 1
+        else:
+            body["pick"] = args.pick
+        return _call("POST", f"/runs/{args.dispatch_id}/waits/{args.request_id}/answer-host", body)
+    if args.cmd == "escalate":
+        return _call("POST", f"/runs/{args.dispatch_id}/waits/{args.request_id}/escalate",
+                     {"session": _session(), "why": args.why})
     if args.cmd in ("spec", "dispatch"):
         body = {"brain": args.brain, "task": _task(args), "acceptance": args.acceptance,
                 "mode": args.mode, "execution": args.execution, "why": args.why,

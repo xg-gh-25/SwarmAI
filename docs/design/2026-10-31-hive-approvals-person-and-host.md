@@ -1,9 +1,9 @@
 ---
 title: Hive 审批 —— 按责任链：谁派的单，谁负责、谁审批
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 project: SwarmAI
-status: r2 design only（无代码）；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
+status: r2 implemented（2026-11-01，见 2026-11-01-hive-approvals-impl.md）；§6 的 SOUL P5 补充 XG 已批（2026-10-31）
 tags: [swarm-out, hive, approval, host, governance, accountability]
 related:
   - docs/design/2026-10-31-swarm-out-hive-decisions.md（pipeline 决定的快照和回答）
@@ -67,7 +67,7 @@ related:
 |---|---|---|---|
 | `question` | AskUserQuestion | 任务本身 | host 处理 |
 | `decision` | pipeline 的 DC-1 决定 | 任务本身 | host 处理 |
-| `hive_local` | `pattern:` 里的 `sudo`、`chmod`、`chown`、`kill`、`dd`、`mkfs`、写设备、写 `/etc`；`rm_unresolved_target`；`discard_*` | 这台 Hive 和它的工作区 | host 处理（等 §6） |
+| `hive_local` | `pattern:` 里的 `chmod`、`chown`、`kill`、`dd`、`mkfs`、写设备、写 `/etc`；`rm_unresolved_target`；`discard_*`。只限一条简单命令；`sudo`、`sh -c` 和任何组合命令归人（实现文档 2026-11-01 §2） | 这台 Hive 和它的工作区 | host 处理（等 §6） |
 | `run_authorization` | `v1_authorization` | Hive 上那个 run 的 clone，不碰 host 的 main | host 处理（等 §6） |
 | `remote_code` | `pattern:` 里的 `curl … \| sh`、`wget … \| bash` | 执行外面来的代码，能碰到 Hive 上人的 Brain 副本和 bridge 凭证 | 交给人 |
 | `off_machine` | 外部工具 gate；`reserved_action`（push、开 PR、发布、对外发消息） | 外面的世界 | 交给人 |
@@ -98,7 +98,7 @@ related:
 | 类别 | Hive 上怎么记 |
 |---|---|
 | `question` | `continue_with_answer(answered_by="host")`；ask gate 只在 `person` 时记 `human_answer` |
-| `decision` | 引擎新增 `host_answer` 事件，和 `human_answer` 分开；`decision_cap` 只限人的决定次数，host 的单独计数；Autonomy Judge 不把它算成人工介入 |
+| `decision` | 引擎新增 `host_answer` 事件，和 `human_answer` 分开；人和 host 的回答各自计数，但共用这一单的一个 `decision_cap`（到上限由这一单的 agent 凭证据决定，DC-2；实现文档 2026-11-01 §2）；Autonomy Judge 不把它算成人工介入 |
 | `hive_local` | `continue_with_cmd_permission`；记下批的是 host；`required_approval` 计数只算人批的 |
 | `run_authorization` | 引擎的一次性授权多一个 `authorized_by: host`；只有 `dispatched_by = host` 的 run 才接受 host 授权 |
 

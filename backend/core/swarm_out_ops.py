@@ -98,6 +98,13 @@ _STATIC: "tuple[Op, ...]" = (
     # internal call, swarm-run §5.8)
     _op("ask.answer", "POST", f"{_SO}/asks/{{hive_id}}/{{session_id}}/{{request_id}}/answer",
         _P, "off_machine"),
+    # the dispatching agent's own answer to a wait whose class it answers for, and its
+    # hand-over of a wait to the person (design 2026-10-31-hive-approvals §2.3): the
+    # session the route checks comes from the CLI, so an agent gives them only through it
+    _op("ask.answer_host", "POST", f"{_SO}/runs/{{dispatch_id}}/waits/{{request_id}}/answer-host",
+        (OWNER,), "off_machine"),
+    _op("ask.escalate", "POST", f"{_SO}/runs/{{dispatch_id}}/waits/{{request_id}}/escalate",
+        (OWNER,), "change"),
     # ── the Host proxy to a run's Hive session (routers/swarm_out_remote.py) ──
     _op("remote.relay_open", "POST", f"{_SO}/remote/{{sid}}/relay", _P, "change"),
     _op("remote.relay_close", "DELETE", f"{_SO}/remote/{{sid}}/relay", _P, "change"),
@@ -232,7 +239,8 @@ def person_only_match(text: str) -> "Op | None":
 #: them only through the Swarm Out CLI and core/run_owner_gate refuses a direct HTTP call
 #: to any of them from a command
 AGENT_LIMITED = frozenset({"run.accept", "run.return_prepare", "run.return_land",
-                           "run.rerun", "run.stop", "run.discard"})
+                           "run.rerun", "run.stop", "run.discard",
+                           "ask.answer_host", "ask.escalate"})
 
 
 @lru_cache(maxsize=1)

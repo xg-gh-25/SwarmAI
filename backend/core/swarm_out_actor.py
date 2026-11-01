@@ -29,10 +29,13 @@ mistakes, not a boundary (ops-registry design §2.4): the agent and the daemon s
 OS user.
 
 Public: ``Actor``, ``actor``, ``MAX_AGENT_RERUNS``, ``check``, ``row_blocker``,
-``record``, ``reserve_rerun``, ``release_rerun``, ``agent_reruns``, ``discard_blocker``.
+``record``, ``record_wait_answer``, ``reserve_rerun``, ``release_rerun``, ``agent_reruns``,
+``discard_blocker``.
 """
 from __future__ import annotations
 
+import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -136,6 +139,27 @@ def record(dispatch_id: str, a: Actor, command: str) -> None:
                      "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         rec["commands"] = cmds[-MAX_COMMANDS:]
     swarm_out_settle._update(dispatch_id, change)
+
+
+def record_wait_answer(dispatch_id: str, session: Optional[str], request_id: str,
+                       cls: Optional[str], pick: Any, why: str) -> None:
+    """Keep one line for a wait the dispatching agent answered itself (design
+    2026-10-31-hive-approvals §2.3 H8): which wait, its class, what it picked and why. The
+    panel shows it with the agent's other commands, and the run's summary counts it as
+    handled by the host, never as the person stepping in."""
+    from core import swarm_out_settle
+    shown = pick if isinstance(pick, str) else json.dumps(pick, ensure_ascii=False)[:400]
+
+    def change(rec: dict[str, Any]):
+        cmds = rec.get("commands") if isinstance(rec.get("commands"), list) else []
+        cmds.append({"by": "agent", "session": session, "command": "answer_wait",
+                     "request_id": request_id, "class": cls, "pick": shown, "why": why,
+                     "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        rec["commands"] = cmds[-MAX_COMMANDS:]
+    try:
+        swarm_out_settle._update(dispatch_id, change)
+    except swarm_out_settle.SettleError:
+        logging.getLogger(__name__).warning("swarm_out_actor: the answer on %s was not kept", dispatch_id)
 
 
 def _counted(cmds: list) -> int:

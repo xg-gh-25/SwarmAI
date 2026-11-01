@@ -52,6 +52,7 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "auth_consumed": ("payload.auth_event_id",),
     "decision": ("payload.request_id",),
     "human_answer": ("payload.request_id",),
+    "host_answer": ("payload.request_id",),
     "land": ("ordinal",),
     "partial_land": ("ordinal",),
     "abandon": ("ordinal",),
@@ -212,7 +213,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
                            "report_sha": str, "bases": dict, "push_reasons": int}),
     "auth": _spec("hook", ("payload.request_id",), "payload.request_id",
                   {"request_id": str, "session_id": str, "run_id": str,
-                   "action": str, "binding_digest": str, "expires_at": (int, float)}),
+                   "action": str, "binding_digest": str, "expires_at": (int, float)},
+                  # "host": on a Hive, the agent that dispatched the run approved it
+                  {"authorized_by": str}),
     "auth_consumed": _spec("cli", ("payload.auth_event_id",), "payload.request_id",
                            {"auth_event_id": str, "request_id": str, "session_id": str,
                             "run_id": str, "action": str, "binding_digest": str},
@@ -229,6 +232,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                        "decided_by": str, "option_id": str, "evidence_refs": list}),
     "human_answer": _spec("hook", ("payload.request_id",), "payload.request_id",
                           {"request_id": str, "option_id": str}),
+    # on a Hive: the agent that dispatched this run answered the decision (design
+    # 2026-10-31-hive-approvals §2.4). Ends the wait like human_answer, but it is the
+    # host's decision and never counts as the person's
+    "host_answer": _spec("hook", ("payload.request_id",), "payload.request_id",
+                         {"request_id": str, "option_id": str}),
     "land": _spec("cli", ("ordinal",), None,
                   {"landing": str, "commit": (str, type(None))},
                   {"reason": str, "stage_attempt_event_id": str,

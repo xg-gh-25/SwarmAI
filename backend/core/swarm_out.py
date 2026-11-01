@@ -873,8 +873,13 @@ def _clean_ask(rec: Any, hive: str) -> Optional[dict[str, Any]]:
     sid, rid = str(rec.get("session_id", "")), str(rec.get("request_id", ""))
     if not KEY_RE.match(sid) or not KEY_RE.match(rid):
         return None
+    from core import approval_class
     out: dict[str, Any] = {"kind": rec["kind"], "hive": hive, "session_id": sid,
-                           "request_id": rid, "asked_at": str(rec.get("asked_at", ""))[:40]}
+                           "request_id": rid, "asked_at": str(rec.get("asked_at", ""))[:40],
+                           # what the wait is about (design 2026-10-31-hive-approvals §2.2):
+                           # None from a Hive too old to say, which the dispatching agent
+                           # may not answer (its answer would be recorded as the person's)
+                           "approval_class": approval_class.clean(rec.get("approval_class"))}
     if rec["kind"] == "approval":
         raw_cmd = str(rec.get("command", ""))
         tool, command = str(rec.get("tool_name", ""))[:100], raw_cmd[:MAX_COMMAND_CHARS]
@@ -953,6 +958,8 @@ def _clean_decision(rec: Any, hive: str) -> Optional[dict[str, Any]]:
                            **{k: v[:DECISION_CAPS[k]] for k, v in fields.items()}}
     out["truncated"] = rec.get("truncated") is not False or cut
     out["shown_sha256"] = decision_digest(out)
+    from core import approval_class
+    out["approval_class"] = approval_class.clean(rec.get("approval_class"))
     if rec.get("refused") is True:
         # a Hive from before decision closes says so in its snapshot (no reason given)
         out["snapshot_refused"] = True
@@ -987,7 +994,8 @@ def _too_old(asked_at: str, now: float) -> bool:
 
 
 #: why a Hive did not use an answer (``closed/`` ``reason``); anything else is "other"
-REFUSAL_REASONS = ("no_option", "changed", "too_long", "run_refused", "not_recorded")
+REFUSAL_REASONS = ("no_option", "changed", "too_long", "run_refused", "not_recorded",
+                   "not_host_class")
 #: a wait's phase on the Host (design 2026-10-31-swarm-out-single-loop-fixes §2.1)
 WAIT_PHASES = ("waiting", "sent", "taken", "refused", "gone")
 MAX_CHOSEN_CHARS = 1000
@@ -1105,7 +1113,12 @@ def _open_asks(s3, bucket: str, hive: str,
                 "request_id": rec["request_id"], "asked_at": rec.get("asked_at", ""),
                 "phase": phase, "chosen": _chosen(rec["kind"], answer),
                 "question_text": str(question)[:MAX_CHOSEN_CHARS],
-                "answered_at": str(answer.get("answered_at", ""))[:40] if isinstance(answer, dict) else ""}
+                "answered_at": str(answer.get("answered_at", ""))[:40] if isinstance(answer, dict) else "",
+                # who answered (the Host wrote it): the dispatching agent's own answer is
+                # the host's, shown and counted apart from the person's
+                "answered_by": "host" if isinstance(answer, dict) and answer.get("answered_by") == "host"
+                               else "person",
+                "approval_class": rec.get("approval_class")}
 
     out = []
     for rel in sorted(asks):
@@ -1326,6 +1339,9 @@ def _release_done(task: "asyncio.Task") -> None:
 #: passes for one made after it. ``task`` is the computation running, ``task_gen`` the
 #: generation it started at.
 _SNAPSHOT: dict[str, Any] = {"at": None, "data": None, "task": None, "task_gen": 0, "gen": 0}
+#: (hive, session, request id) -> when this Host first saw the wait open (its own clock,
+#: never the Hive's asked_at): how long a wait has gone unhandled (attention_authority)
+_FIRST_SEEN: dict[tuple, float] = {}
 SNAPSHOT_FRESH_S = 20
 REFRESH_EVERY_S = 60
 
@@ -1443,6 +1459,15 @@ async def _compute_runs() -> dict[str, Any]:
             (answered if a.get("phase") in ("sent", "taken", "gone") else asks).append(a)
         sessions_of[hive_id] = sessions
         errors.extend(errs)
+    now, seen = time.time(), set()
+    for a in asks:
+        key = (a.get("hive_id"), a.get("session_id"), a.get("request_id"))
+        seen.add(key)
+        a["seen_at"] = _FIRST_SEEN.setdefault(key, now)
+    read_ok = {h for h, (_a, _s, errs) in zip(targets, results) if not errs}
+    for key in [k for k in _FIRST_SEEN if k not in seen and (
+            k[0] in read_ok or status_of.get(k[0], "gone") not in ("running", None))]:
+        del _FIRST_SEEN[key]                       # gone from a Hive that was read
     open_asks = {(a["hive_id"], a.get("session_id")) for a in asks if not a.get("refused")}
     open_decisions = {(a["hive_id"], a.get("session_id")) for a in asks
                       if not a.get("refused") and a.get("kind") == "decision"}
@@ -1734,16 +1759,27 @@ def _check_answer(rec: dict[str, Any], answers: Any, decision: Any,
 async def answer(hive_ref: str, session_id: str, request_id: str,
                  answers: Any = None, decision: Any = None,
                  shown_sha256: Any = None, option_id: Any = None,
-                 via: Optional[str] = None) -> dict[str, Any]:
-    """Write the person's answer for an open question to the bridge. ``via="chat"``: the
-    person answered it on a chat card in the session that dispatched the run, and the
-    daemon forwarded it (core/swarm_out_wait_card); kept on the answer. An approval names
-    what the card showed (``shown_sha256``); it is refused when the ask changed since,
-    or when the command was too long to be shown whole. A pipeline decision (a
-    ``dc-`` request the Hive lists in ``decisions.json``) is answered with one of its
-    option ids and what its card showed."""
+                 via: Optional[str] = None, answered_by: str = "person") -> dict[str, Any]:
+    """Write an answer for an open question to the bridge, the person's or
+    (``answered_by="host"``) the dispatching agent's (core/swarm_out_wait_card
+    ``answer_as_host``; design 2026-10-31-hive-approvals §2.3), which the Hive records as
+    the host's and takes only for a class in ``approval_class.HOST_CLASSES``. ``via="chat"``:
+    the person answered it on a chat card in the session that dispatched the run, and
+    the daemon forwarded it; kept on the answer. An approval names what the card showed
+    (``shown_sha256``); it is refused when the ask changed since, or when the command was
+    too long to be shown whole. A pipeline decision (a ``dc-`` request the Hive lists in
+    ``decisions.json``) is answered with one of its option ids and what its card showed."""
+    from core import approval_class
     if not KEY_RE.match(session_id or "") or not KEY_RE.match(request_id or ""):
         raise SwarmOutError("unknown question")
+    if answered_by not in ("person", "host"):
+        raise SwarmOutError("unknown answerer")
+
+    def _host_may(rec: dict[str, Any]) -> None:
+        if answered_by == "host" and rec.get("approval_class") not in approval_class.HOST_CLASSES:
+            raise SwarmOutError(
+                f"this wait is the person's to answer ({rec.get('approval_class') or 'its Hive does not say what it is about'}): "
+                "ask them with `swarm_out card`, or `swarm_out escalate`")
     inst = await _instance(hive_ref)
     s3 = await asyncio.to_thread(_s3, inst)
     base = f"bridge/{inst['name']}/"
@@ -1762,10 +1798,12 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
                     and d["request_id"] == request_id), None)
         if rec is None or await asyncio.to_thread(_load, "closed/") is not None:
             raise SwarmOutError("this decision is no longer waiting on the Hive")
+        _host_may(rec)
         if await asyncio.to_thread(_load, "answer/") is not None:
             raise SwarmOutError("this question was already answered")
         body = {"request_id": request_id, **_check_answer(rec, None, None, option_id),
-                "answered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                "answered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "answered_by": answered_by}
         if shown_sha256 != rec["shown_sha256"]:
             raise SwarmOutError("the decision changed on the Hive since it was shown; reload")
         body["shown_sha256"] = shown_sha256
@@ -1788,8 +1826,15 @@ async def answer(hive_ref: str, session_id: str, request_id: str,
     rec = _clean_ask(json.loads(raw), inst["name"])
     if rec is None or _too_old(rec["asked_at"], time.time()):
         raise SwarmOutError("this question is no longer open on the Hive")
+    _host_may(rec)
     body = {"request_id": request_id, **_check_answer(rec, answers, decision),
-            "answered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+            "answered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "answered_by": answered_by}
+    if answered_by == "host" and rec["kind"] == "question":
+        # the host picks one of the options, never free text (design §4 layer 2)
+        labels = {q["question"]: {o["label"] for o in q.get("options") or []} for q in rec["questions"]}
+        if any(v not in labels.get(q, set()) for q, v in body["answers"].items()):
+            raise SwarmOutError("answer with one of the options")
     if rec["kind"] == "approval" and decision == "approve":   # a deny is always safe
         if shown_sha256 != rec["shown_sha256"]:
             raise SwarmOutError("the command changed on the Hive since it was shown; reload")

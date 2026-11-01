@@ -80,7 +80,10 @@ def test_names_are_unique_and_rows_well_formed():
 
 #: the irreversible ops an owner agent may call, and only these
 _AGENT_IRREVERSIBLE = {"task.dispatch", "run.accept", "run.return_land",
-                       "run.discard"}
+                       "run.discard",
+                       # the dispatching agent's own answer to a wait it answers for (design
+                       # 2026-10-31-hive-approvals): the Hive takes it only for those classes
+                       "ask.answer_host"}
 
 
 def test_the_agents_irreversible_ops_are_exactly_the_listed_ones():
@@ -243,6 +246,8 @@ _CLI_ARGS = {
     "read": ["so_0123456789ab"],
     "watch": ["so_0123456789ab", "--since", "e30="],
     "card": ["so_0123456789ab", "req1"],
+    "answer": ["so_0123456789ab", "req1", "--pick", "A", "--why", "w"],
+    "escalate": ["so_0123456789ab", "req1", "--why", "w"],
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
     "stop": ["so_0123456789ab", "--why", "w"],
     "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],

@@ -123,6 +123,8 @@ CASES.update({
     "decision": ({"payload": {"request_id": "q1"}}, "payload.request_id", "q2"),
     "human_answer": ({"payload": {"request_id": "q1"}, "producer": "hook"},
                      "payload.request_id", "q2"),
+    "host_answer": ({"payload": {"request_id": "q1"}, "producer": "hook"},
+                    "payload.request_id", "q2"),
     "land": ({"ordinal": 1}, "ordinal", 2),
     "abandon": ({"ordinal": 1}, "ordinal", 2),
     "landed_as": ({"ordinal": 1}, "ordinal", 2),

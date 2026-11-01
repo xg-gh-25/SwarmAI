@@ -103,6 +103,8 @@ function AutonomyTab({ res }: { res: SwarmOutResult | null }) {
   const cells: [string, number][] = [
     ['approved', h.approved], ['denied', h.denied], ['answered', h.answered_questions],
     ['said', h.said ?? 0], ['unanswered', h.unanswered],
+    // what the dispatching agent answered itself: shown, never counted as the person's
+    ...((res.work.host_handled ?? 0) > 0 ? [['host', res.work.host_handled ?? 0] as [string, number]] : []),
   ];
   return (
     <div data-testid="swarm-out-review-autonomy" data-kind="human">

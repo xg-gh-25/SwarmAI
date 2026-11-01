@@ -477,6 +477,7 @@ async def guard_destructive(
         "toolInput": {"action": action, "target": str(target), "reason": reason},
         "reason": reason,
         "options": ["approve", "deny"],
+        "approval_class": __import__("core.approval_class", fromlist=["x"]).for_destructive_data(),
     })
     permission_manager.remove_pending_request(request_id)
 

@@ -1,9 +1,15 @@
-"""A Hive's wait, asked in the chat that dispatched the run, answered by the person there.
+"""A Hive's wait, seen and answered from the chat that dispatched the run.
 
-Design docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md §2.5. The agent never
-answers a Hive's wait: it asks the person with a question card the Host builds, and the
-daemon forwards the person's pick, the way a pipeline decision card is recorded
-(core/security_hooks ask_question_gate):
+Design docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md §2.5, and who answers
+which wait: docs/design/2026-10-31-hive-approvals-person-and-host.md (implementation
+2026-11-01-hive-approvals-impl). The agent that dispatched the run answers for it: a wait
+whose class is in ``approval_class.HOST_CLASSES`` (a question or decision about the task,
+a command that only touches the Hive's own workspace, the run's own authorization) it
+answers itself, from the card it built (``answer_as_host``: one of the card's options and
+a reason, recorded as the host's, never the person's). It asks the person for the rest,
+and whenever it is not sure (``escalate``, or the card in the chat). Asking the person:
+the Host builds a question card and the daemon forwards the person's pick, the way a
+pipeline decision card is recorded (core/security_hooks ask_question_gate):
 
 1. ``card(dispatch_id, request_id)`` builds the AskUserQuestion input from the wait the
    Hive lists (a question, a pipeline decision, or a command approval), each question
@@ -21,12 +27,15 @@ daemon forwards the person's pick, the way a pipeline decision card is recorded
    the outcome on the card (``forward``), which the run's follow fingerprint carries: a
    card not forwarded is news to the agent following the run.
 
-No model decides anything here (SOUL P5): a hash, a lookup, the person's recorded pick.
+No model decides anything here (SOUL P5): a hash, a lookup, the person's recorded pick,
+or the dispatching agent's pick among the card's options for a class it answers for.
 
-Public: ``MARKER_PREFIX``, ``card``, ``forward``, ``status``.
+Public: ``MARKER_PREFIX``, ``card``, ``forward``, ``answer_as_host``, ``escalate``,
+``escalation``, ``status``.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -49,7 +58,20 @@ APPROVE, DENY = "Approve", "Deny"
 
 
 class CardError(ValueError):
-    """No card can be built for this wait; the message is safe to show."""
+    """No card can be built for this wait, or the agent may not answer it; the message
+    is safe to show. ``status``: the HTTP status a route returns for it (400 bad input or
+    a Hive that refused, 403 not this session's or not its class, 409 already settled)."""
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
+
+
+def _who(cls: Any, escalated: bool) -> str:
+    """Who answers a wait: ``you`` (the agent that dispatched the run) for a class it
+    answers for that it has not escalated, else ``person``."""
+    from core import approval_class
+    return "you" if cls in approval_class.HOST_CLASSES and not escalated else "person"
 
 
 def _now() -> str:
@@ -128,6 +150,7 @@ async def card(dispatch_id: str, request_id: str) -> dict[str, Any]:
     marker = _marker(dispatch_id, request_id, row.get("title") or "", row.get("hive") or "the Hive")
     qmap: dict[str, str] = {}
     omap: dict[str, str] = {}
+    labels: dict[str, list[str]] = {}
     kind = wait.get("kind")
     if kind == "question":
         hive_qs = [q for q in wait.get("questions") or [] if isinstance(q, dict)]
@@ -139,6 +162,7 @@ async def card(dispatch_id: str, request_id: str) -> dict[str, Any]:
         for q in hive_qs:
             text = f"{marker}\n{q['question']}"
             qmap[text] = q["question"]
+            labels[text] = [o["label"] for o in q["options"]]
             questions.append({"question": text, "header": (str(q.get("header") or "Hive"))[:MAX_HEADER],
                               "multiSelect": bool(q.get("multiSelect")),
                               "options": [{"label": o["label"], "description": o.get("description", "")}
@@ -173,16 +197,20 @@ async def card(dispatch_id: str, request_id: str) -> dict[str, Any]:
                                   {"label": DENY, "description": "the Hive does not run it"}]}]
     else:
         raise CardError("unknown kind of wait")
+    cls = wait.get("approval_class")
     rec = {"dispatch_id": dispatch_id, "request_id": request_id, "kind": kind,
            "hive_id": row.get("hive_id"), "session_id": row["session_id"],
            "dispatched_from": row.get("dispatched_from"), "shape": _shape(questions),
            "questions": qmap, "options": omap, "hive_shown_sha256": wait.get("shown_sha256"),
-           "created_at": _now(), "forward": None}
+           "approval_class": cls, "created_at": _now(), "forward": None,
+           "labels": labels}
     old = _load(dispatch_id, request_id)
     if ((old or {}).get("forward") or {}).get("status") == "forwarded":
-        raise CardError("the person's answer to this wait was already forwarded to the Hive")
+        raise CardError("an answer to this wait was already forwarded to the Hive")
     _save(rec)
-    return {"questions": questions}
+    # who answers it: the dispatching agent for a class it answers for, else the person
+    return {"questions": questions, "approval_class": cls,
+            "who": _who(cls, bool(escalation(dispatch_id, request_id)))}
 
 
 def _not(rec: Optional[dict[str, Any]], why: str) -> dict[str, Any]:
@@ -210,23 +238,33 @@ async def forward(session: Optional[str], questions: Any, answers: Any) -> Optio
         return {"status": "not_forwarded", "reason": "forwarding failed", "at": _now()}
 
 
-_LOCKS: dict[tuple, "asyncio.Lock"] = {}
+#: one lock per card while anyone holds or waits on it: [lock, holders and waiters]
+_LOCKS: dict[tuple, list] = {}
+
+
+@contextlib.asynccontextmanager
+async def _card_lock(key: tuple):
+    """One answer at a time per card (the person's forward and the host's answer
+    alike): two answers at once cannot both pass the "already forwarded" check. The
+    entry goes when the last holder or waiter leaves, so the map does not grow."""
+    import asyncio
+    entry = _LOCKS.setdefault(key, [asyncio.Lock(), 0])
+    entry[1] += 1
+    try:
+        async with entry[0]:
+            yield
+    finally:
+        entry[1] -= 1
+        if entry[1] == 0 and _LOCKS.get(key) is entry:
+            _LOCKS.pop(key, None)
 
 
 async def _forward_once(session, questions, answers):
-    """One forward at a time per card: two answers at once cannot both pass the
-    "already forwarded" check."""
-    import asyncio
     keys = {m.groups() for q in (questions if isinstance(questions, list) else []) if isinstance(q, dict)
             for m in [_MARKER_RE.match(str(q.get("question", "")))] if m}
     key = next(iter(keys)) if len(keys) == 1 else ("", "")
-    lock = _LOCKS.setdefault(key, asyncio.Lock())
-    try:
-        async with lock:
-            return await _forward(session, questions, answers)
-    finally:
-        if not lock.locked() and _LOCKS.get(key) is lock:
-            _LOCKS.pop(key, None)          # no one waits on it: the map does not grow
+    async with _card_lock(key):
+        return await _forward(session, questions, answers)
 
 
 async def _forward(session, questions, answers):
@@ -251,25 +289,9 @@ async def _forward(session, questions, answers):
     if not isinstance(answers, dict):
         return _not(rec, "no answer")
     from core import swarm_out
-    kwargs: dict[str, Any] = {}
-    if rec["kind"] == "question":
-        mapped = {}
-        for text, hive_q in (rec.get("questions") or {}).items():
-            v = answers.get(text)
-            if not isinstance(v, str) or not v.strip():
-                return _not(rec, "a question has no answer")
-            mapped[hive_q] = v.strip()
-        kwargs["answers"] = mapped
-    else:
-        values = [v for v in answers.values() if isinstance(v, str)]
-        picked = (rec.get("options") or {}).get(values[0].strip()) if len(values) == 1 else None
-        if picked is None:
-            return _not(rec, "the answer is not one of the options (free text is not forwarded)")
-        if rec["kind"] == "decision":
-            kwargs["option_id"] = picked
-        else:
-            kwargs["decision"] = picked
-        kwargs["shown_sha256"] = rec.get("hive_shown_sha256")
+    kwargs = _mapped(rec, answers, options_only=False)
+    if isinstance(kwargs, str):
+        return _not(rec, kwargs)
     try:
         await swarm_out.answer(rec["hive_id"], rec["session_id"], rec["request_id"], via="chat", **kwargs)
     except swarm_out.SwarmOutError as e:
@@ -278,6 +300,140 @@ async def _forward(session, questions, answers):
     _save(rec)
     logger.info("swarm_out_wait_card: forwarded the person's answer on %s %s", dispatch_id, request_id)
     return rec["forward"]
+
+
+def _mapped(rec: dict[str, Any], answers: Any, *, options_only: bool) -> "dict[str, Any] | str":
+    """The ``swarm_out.answer`` arguments for *answers* given on the card *rec*, or why
+    they do not map. *options_only*: every question's answer is one of its options'
+    labels (the host never answers in free text, design §4 layer 2)."""
+    if not isinstance(answers, dict):
+        return "no answer"
+    kwargs: dict[str, Any] = {}
+    if rec["kind"] == "question":
+        mapped = {}
+        labels = rec.get("labels") or {}
+        for text, hive_q in (rec.get("questions") or {}).items():
+            v = answers.get(text)
+            if not isinstance(v, str) or not v.strip():
+                return "a question has no answer"
+            if options_only and v.strip() not in (labels.get(text) or []):
+                return "answer each question with one of its options"
+            mapped[hive_q] = v.strip()
+        kwargs["answers"] = mapped
+        return kwargs
+    values = [v for v in answers.values() if isinstance(v, str)]
+    picked = (rec.get("options") or {}).get(values[0].strip()) if len(values) == 1 else None
+    if picked is None:
+        return "the answer is not one of the options (free text is not forwarded)"
+    if rec["kind"] == "decision":
+        kwargs["option_id"] = picked
+    else:
+        kwargs["decision"] = picked
+    kwargs["shown_sha256"] = rec.get("hive_shown_sha256")
+    return kwargs
+
+
+async def answer_as_host(session: Optional[str], dispatch_id: str, request_id: str,
+                         answers: Any, why: str, pick: Optional[str] = None) -> dict[str, Any]:
+    """The dispatching agent answers one of its run's waits itself (module docstring):
+    from the card this session built for it (what it saw: the Hive's ``shown_sha256`` and
+    the option maps), only for a class it answers for, with one of the card's options and
+    a reason. Written as the host's answer; kept on the card and in the run's commands,
+    which the panel and the run's summary show. Raises CardError with a safe message."""
+    from core import approval_class, swarm_out, swarm_out_actor
+    why = " ".join(str(why or "").split())[:swarm_out_actor.MAX_WHY_CHARS]
+    if not why:
+        raise CardError("say why (--why): the person sees the reason for each wait you answer")
+    rec = _load(dispatch_id, request_id)
+    if rec is None:
+        raise CardError("build the card first (`swarm_out card`): you answer what it shows")
+    if (rec.get("forward") or {}).get("status") == "forwarded":
+        raise CardError("this wait was already answered", 409)
+    if not session or rec.get("dispatched_from") != session:
+        raise CardError("only the session that dispatched this run answers its waits", 403)
+    cls = rec.get("approval_class")
+    if cls not in approval_class.HOST_CLASSES:
+        raise CardError(f"this wait is the person's to answer ({cls or 'its Hive does not say what it is about'}): "
+                        "ask them with the card, or `swarm_out escalate`", 403)
+    if escalation(dispatch_id, request_id):
+        raise CardError("you escalated this wait: the person answers it", 409)
+    if pick is not None:
+        texts = list((rec.get("questions") or {}).keys())
+        if len(texts) != 1:
+            raise CardError("this card asks more than one question: give --answers-file")
+        answers = {texts[0]: pick}
+    kwargs = _mapped(rec, answers, options_only=True)
+    if isinstance(kwargs, str):
+        raise CardError(kwargs)
+    async with _card_lock((dispatch_id, request_id)):
+        rec = _load(dispatch_id, request_id) or rec
+        if (rec.get("forward") or {}).get("status") == "forwarded":
+            raise CardError("this wait was already answered", 409)
+        try:
+            await swarm_out.answer(rec["hive_id"], rec["session_id"], rec["request_id"],
+                                   answered_by="host", **kwargs)
+        except swarm_out.SwarmOutError as e:
+            raise CardError(str(e)) from None
+        pick = kwargs.get("option_id") or kwargs.get("decision") or kwargs.get("answers")
+        rec["forward"] = {"status": "forwarded", "by": "host", "why": why, "at": _now()}
+        _save(rec)
+    swarm_out_actor.record_wait_answer(dispatch_id, session, request_id, cls, pick, why)
+    logger.info("swarm_out_wait_card: the host answered %s %s (%s)", dispatch_id, request_id, cls)
+    return rec["forward"]
+
+
+def _esc_path(dispatch_id: str, request_id: str) -> Optional[Path]:
+    p = _path(dispatch_id, request_id)
+    return None if p is None else p.parent.parent.parent / "escalations" / dispatch_id / p.name
+
+
+async def escalate(session: Optional[str], dispatch_id: str, request_id: str, why: str) -> dict[str, Any]:
+    """The dispatching agent hands one of its run's waits to the person: it shows in
+    Needs You as that session's, with the reason. Only that session may; once escalated,
+    the agent no longer answers it (the person does)."""
+    from core import swarm_out, swarm_out_actor
+    why = " ".join(str(why or "").split())[:swarm_out_actor.MAX_WHY_CHARS]
+    if not why:
+        raise CardError("say why (--why): the person reads it in Needs You")
+    p = _esc_path(dispatch_id, request_id)
+    if p is None:
+        raise CardError("not a dispatch or a request id")
+    try:
+        row = await swarm_out.run_row(dispatch_id)
+    except swarm_out.SwarmOutError as e:
+        raise CardError(str(e)) from None
+    if not isinstance(row, dict):
+        raise CardError("no such run")
+    if not session or row.get("dispatched_from") != session:
+        raise CardError("only the session that dispatched this run escalates its waits", 403)
+    try:
+        data = await swarm_out.list_runs(swarm_out.SNAPSHOT_FRESH_S)
+    except swarm_out.SwarmOutError as e:
+        raise CardError(str(e)) from None
+    if not any(isinstance(a, dict) and a.get("hive_id") == row.get("hive_id")
+               and a.get("session_id") == row.get("session_id")
+               and a.get("request_id") == request_id for a in data.get("asks") or []):
+        raise CardError("this run has no open wait with that request id (`swarm_out watch`)")
+    out = {"dispatch_id": dispatch_id, "request_id": request_id, "session": session,
+           "why": why, "at": _now()}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.parent / f".{p.name}.{secrets.token_hex(6)}.tmp"
+    tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)
+    logger.info("swarm_out_wait_card: %s %s escalated to the person", dispatch_id, request_id)
+    return out
+
+
+def escalation(dispatch_id: str, request_id: str) -> Optional[dict[str, Any]]:
+    """The escalation of this wait (session, why, at), or None."""
+    p = _esc_path(dispatch_id, request_id)
+    if p is None:
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
 
 
 def status(dispatch_id: str, request_id: str) -> Optional[dict[str, Any]]:

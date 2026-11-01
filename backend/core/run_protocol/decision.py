@@ -123,8 +123,9 @@ def answer(decision: Mapping[str, Any], *, request_id: str,
                      and row.get("id") == option_id), None)
     if selected is None:
         raise DecisionError("answer does not select a declared option")
-    if answered_by not in ("user", "evidence"):
-        raise DecisionError("answered_by must be user or evidence")
+    # "host": on a Hive, the agent that dispatched the run (design 2026-10-31-hive-approvals)
+    if answered_by not in ("user", "evidence", "host"):
+        raise DecisionError("answered_by must be user, evidence or host")
     return {
         "request_id": request_id, "option_id": option_id,
         "choice": selected.get("choice"), "answered_by": answered_by,

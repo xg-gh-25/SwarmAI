@@ -685,14 +685,109 @@ def _collect_local_roots() -> list[AttentionItem]:
     return items
 
 
+#: a wait the dispatching agent answers for that it has not handled in this long goes
+#: to the person (design 2026-11-01-hive-approvals-impl §1.2): there is no event that
+#: wakes the agent's session, so this is where "it should have been handled by now"
+#: becomes the person's. Not a timeout on work: the run keeps waiting either way.
+HOST_WAIT_UNHANDLED_S = 600
+
+
+def _session_title(session_id: str) -> "tuple[bool, str]":
+    """(whether the app session still exists, its title). Read only; a missing or
+    unreadable database reads as existing (never hands a wait to the person on a read
+    error alone)."""
+    import sqlite3
+    try:
+        db_path = Path(get_app_data_dir()) / "data.db"
+        if not db_path.exists():
+            return True, ""
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        try:
+            row = conn.execute("SELECT title FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return True, ""
+    return (row is not None), (str(row[0] or "") if row else "")
+
+
+def _host_wait_items(runs: list, asks: list) -> "tuple[list[AttentionItem], list]":
+    """Split the open waits of runs an agent dispatched (design 2026-10-31-hive-approvals
+    §2.3): one item each for those the person must answer, naming the session that
+    answers for the run (a class the agent may not answer, one it escalated, one whose
+    session is gone, one not handled within HOST_WAIT_UNHANDLED_S); the agent's own are
+    left to it. Returns (items, the waits of runs no agent dispatched)."""
+    import time as _time
+    from datetime import datetime, timezone
+    from core import approval_class, swarm_out_wait_card
+    # a run's Hive session id names its waits (as core/swarm_out_wait_card.card joins them)
+    by_session = {r.get("session_id"): r for r in runs if r.get("session_id")}
+    items, plain = [], []
+    titles: dict[str, tuple[bool, str]] = {}
+    for a in asks:
+        row = by_session.get(a.get("session_id"))
+        owner = (row or {}).get("dispatched_from")
+        if not row or not owner:
+            plain.append(a)
+            continue
+        dispatch_id, request_id = str(row.get("dispatch_id") or ""), str(a.get("request_id") or "")
+        cls = a.get("approval_class")
+        if owner not in titles:
+            titles[owner] = _session_title(owner)
+        alive, owner_title = titles[owner]
+        esc = swarm_out_wait_card.escalation(dispatch_id, request_id)
+        # how long it waits: from the earlier of when this Host first saw it (its own
+        # clock) and the Hive's asked_at when that is not in the future; neither → old
+        now = _time.time()
+        starts = [float(a["seen_at"])] if isinstance(a.get("seen_at"), (int, float)) else []
+        try:
+            hive_at = datetime.strptime(str(a.get("asked_at") or ""), "%Y-%m-%dT%H:%M:%SZ") \
+                .replace(tzinfo=timezone.utc).timestamp()
+            if hive_at <= now:
+                starts.append(hive_at)
+        except ValueError:
+            pass
+        asked = min(starts) if starts else 0.0
+        kind = str(a.get("kind") or "question")
+        if esc:
+            title, why = f"A Hive {kind} the agent handed to you", str(esc.get("why") or "")
+        elif cls not in approval_class.HOST_CLASSES:
+            title = f"A Hive {kind} only you can answer"
+            why = (f"It is about {cls}." if cls and cls != "unknown"
+                   else "Its Hive does not say what it is about.")
+        elif not alive:
+            title, why = f"A Hive {kind} whose session is gone", "The session that dispatched the run no longer exists."
+        elif now - asked >= HOST_WAIT_UNHANDLED_S:
+            title, why = (f"A Hive {kind} the agent has not handled",
+                          f"Waiting for {int(min(now - asked, 86400 * 30) // 60)} minutes.")
+        else:
+            continue                       # the dispatching agent's to answer
+        run_title = " ".join(str(row.get("title") or "").split())[:80]
+        session_name = owner_title or owner[:8]
+        items.append(AttentionItem(
+            id=f"swarm_out:wait:{dispatch_id}:{request_id}", source="swarm_out", tier=TIER_BLOCKING,
+            brain=None, title=title, summary=f"「{run_title}」 · from session 「{session_name}」",
+            detail=why,
+            # the agent's escalation reason is shown (detail), never put in the message a
+            # click sends in the person's voice: it may echo what the Hive wrote
+            dispatch={"message": _prompt("Open Swarm Out: " + title.lower() + ".",
+                                         [("Run", run_title),
+                                          ("Why", "the agent's reason is shown in Swarm Out" if esc else why)],
+                                         [f"run {dispatch_id}", f"its chat session {owner}"]),
+                      "context": {"kind": "swarm_out", "focus": dispatch_id,
+                                  "owner_session_id": owner}}))
+    return items, plain
+
+
 def _collect_swarm_out() -> list[AttentionItem]:
-    """What Swarm Out waits on the person for, as at most three summary items (design
-    2026-10-31-swarm-out-run-review §3.7): the Hives' open questions (BLOCKING: an
-    agent is waiting), the runs to accept or decide (REVIEW), the runs whose records go
-    within days (REVIEW). Read from the runs snapshot the refresh loop keeps
-    (core/swarm_out.snapshot); never refreshes it: this authority holds no state. A
-    click opens the Swarm Out tab (``context.kind`` swarm_out), where each run is
-    handled; it is never a chat prompt about one run. Read-only; fail-soft."""
+    """What Swarm Out waits on the person for (design 2026-10-31-swarm-out-run-review §3.7,
+    2026-10-31-hive-approvals §2.3): the open waits of runs an agent dispatched that are
+    the person's (one BLOCKING item each, naming the session that answers for the run),
+    the open questions of any other run (one BLOCKING summary item), the runs to accept or
+    decide (REVIEW), the runs whose records go within days (REVIEW). Read from the runs
+    snapshot the refresh loop keeps (core/swarm_out.snapshot); never refreshes it: this
+    authority holds no state. A click opens the Swarm Out tab (``context.kind``
+    swarm_out). Read-only; fail-soft."""
     items: list[AttentionItem] = []
     try:
         from core import swarm_out
@@ -701,6 +796,11 @@ def _collect_swarm_out() -> list[AttentionItem]:
             return []
         runs = [r for r in snap.get("runs") or [] if isinstance(r, dict)]
         asks = [a for a in snap.get("asks") or [] if isinstance(a, dict) and not a.get("refused")]
+        try:
+            host_items, asks = _host_wait_items(runs, asks)
+            items += host_items
+        except Exception as exc:   # the split failed: every wait stays the person's
+            logger.warning("attention: swarm_out wait split failed: %s", exc)
         decide = [r for r in runs if r.get("stage") in ("awaiting", "stopped")]
         soon = [r for r in runs if r.get("cleanup_soon")]
 

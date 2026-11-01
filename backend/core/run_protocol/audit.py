@@ -303,8 +303,8 @@ def active_seconds(event_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if event.get("kind") in {"decision", "land_request"}:
             opens[("decision" if event["kind"] == "decision" else "auth",
                    event["payload"]["request_id"])] = (when, event.get("at"))
-        elif event.get("kind") in {"human_answer", "auth"}:
-            key = ("decision" if event["kind"] == "human_answer" else "auth",
+        elif event.get("kind") in {"human_answer", "host_answer", "auth"}:
+            key = ("decision" if event["kind"] in ("human_answer", "host_answer") else "auth",
                    event["payload"]["request_id"])
             if key in opens:
                 opened, opened_at = opens.pop(key)
@@ -416,17 +416,24 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "open": _open_lines(open_checks, [row["canonical_id"] for row in findings
                                                  if push_effect(row)])}
 
-    # answered decisions + run-land (both in the projection) + accept_finding (§E9.3, D4)
+    # answered decisions + run-land (both in the projection) + accept_finding (§E9.3, D4);
+    # on a Hive the dispatching agent's answers and authorizations are its own, counted
+    # apart (design 2026-10-31-hive-approvals §2.4): they are not the person stepping in
+    host_auth = {event.get("event_id") for event in event_rows if event.get("kind") == "auth"
+                 and event.get("payload", {}).get("authorized_by") == "host"}
+    accepted = [event for event in event_rows if event.get("kind") == "auth_consumed"
+                and event.get("payload", {}).get("action") == "accept_finding"]
     human_decisions = int(projection.get("human_decisions") or 0) + sum(
-        1 for event in event_rows if event.get("kind") == "auth_consumed"
-        and event.get("payload", {}).get("action") == "accept_finding")
+        1 for event in accepted if event.get("payload", {}).get("auth_event_id") not in host_auth)
+    host_decisions = int(projection.get("host_decisions") or 0) + sum(
+        1 for event in accepted if event.get("payload", {}).get("auth_event_id") in host_auth)
     approvals = sum(1 for event in event_rows if event.get("kind") == "metric"
                     and event.get("payload", {}).get("name") == "required_approval")
     # manual rescues have no producer: the count is not measured, so it is null and
     # never decides the verdict (§E9.2 "what cannot be measured is null"; spec §5)
     autonomy = {"verdict": "WARN" if human_decisions else "PASS",
-                "human_decisions": human_decisions, "manual_rescues": None,
-                "required_approvals": approvals}
+                "human_decisions": human_decisions, "host_decisions": host_decisions,
+                "manual_rescues": None, "required_approvals": approvals}
 
     # Token accounting (D3). A transcript measurement (cli; the daemon takes it when
     # REFLECT ends, r6 §2.3) covers the
@@ -686,7 +693,10 @@ def card_rows(audit: Mapping[str, Any]) -> list[dict[str, str]]:
         ("Speed", summary["speed"], _speed_text(summary["speed"])),
         ("Quality", summary["quality"], _quality_text(summary["quality"], outcome.get("reason"))),
         ("Autonomy", summary["autonomy"],
-         f"{summary['autonomy']['human_decisions']} decisions · rescues not measured · "
+         f"{summary['autonomy']['human_decisions']} decisions"
+         + (f" (+{summary['autonomy']['host_decisions']} by the dispatching agent)"
+            if summary['autonomy'].get('host_decisions') else "")
+         + " · rescues not measured · "
          f"{approvals} required approval" + ("s" if approvals != 1 else "")),
         ("Token Cost", summary["token_cost"], _token_text(summary["token_cost"])),
     ]

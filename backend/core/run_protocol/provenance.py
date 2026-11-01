@@ -92,10 +92,13 @@ def sync_run_evidence(store: Any, run_dir: str | Path | None = None) -> dict[str
                 "measured_field", f"{run_id}:{finding_id}:verdict", verdict, "measured",
                 observed_at=event.get("at"))
             roots[f"run_event:{run_id}:{finding_id}:verdict"] = verdict_root
-        elif kind == "human_answer":
+        elif kind in ("human_answer", "host_answer"):
+            # the host's answer (on a Hive, the agent that dispatched the run) has its own
+            # root kind and is not the user's: it never enters the trusted pass as theirs
             answer = {"request_id": payload.get("request_id"), "option_id": payload.get("option_id")}
             root = register_root(
-                "human_answer", f"{run_id}:{event_id}", _canonical(answer), "user",
+                kind, f"{run_id}:{event_id}", _canonical(answer),
+                "user" if kind == "human_answer" else "external",
                 observed_at=event.get("at"))
             roots[f"run_event:{run_id}:{event_id}"] = root
             option = _selected_option(
@@ -163,7 +166,7 @@ def run_roots(run_id: str) -> dict[str, str]:
         suffix = str(locator)[len(prefix):]
         if kind == "run_finding":
             out[f"finding:{run_id}:{suffix}"] = str(root_id)
-        elif kind in {"run_validation", "human_answer"}:
+        elif kind in {"run_validation", "human_answer", "host_answer"}:
             out[f"run_event:{run_id}:{suffix}"] = str(root_id)
         elif kind == "commit":
             out[f"commit:{suffix}"] = str(root_id)

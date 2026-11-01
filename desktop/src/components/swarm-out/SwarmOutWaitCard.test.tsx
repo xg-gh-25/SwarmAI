@@ -105,3 +105,21 @@ describe('SwarmOutWaitCard', () => {
     expect(src).toMatch(/SwarmOutWaitCard/);
   });
 });
+
+describe('SwarmOutWaitCard — who answers (design 2026-10-31-hive-approvals)', () => {
+  it('a wait the dispatching agent answers says so, and the person can still answer it', () => {
+    render(<SwarmOutWaitCard wait={{ ...decision, approval_class: 'decision' }} onAnswered={vi.fn()} />);
+    expect(screen.getByTestId('swarm-out-wait-agent').textContent).toContain('agent that dispatched');
+    expect(screen.getByTestId('swarm-out-wait-submit')).toBeTruthy();
+  });
+
+  it.each([['off_machine'], [null]])('a wait of class %s is the person\'s: no agent line', (cls) => {
+    render(<SwarmOutWaitCard wait={{ ...decision, approval_class: cls }} onAnswered={vi.fn()} />);
+    expect(screen.queryByTestId('swarm-out-wait-agent')).toBeNull();
+  });
+
+  it('a wait the agent answered reads as the agent\'s answer', () => {
+    render(<SwarmOutWaitCard wait={{ ...decision, phase: 'taken', chosen: 'A — One deadline', answered_by: 'host' }} onAnswered={vi.fn()} />);
+    expect(screen.getByTestId('swarm-out-wait-done').textContent).toContain('Answered by the agent');
+  });
+});

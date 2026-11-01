@@ -862,10 +862,12 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         await self._report(row_id)
         return True
 
-    async def update_permission_decision(self, session_id: str, request_id: str, decision: str) -> bool:
+    async def update_permission_decision(self, session_id: str, request_id: str, decision: str,
+                                         decided_by: Optional[str] = None) -> bool:
         """Set ``decision`` on the stored ``cmd_permission_request`` block
-        ``request_id`` of a session (core/permission_prompt). True when a row was
-        updated; a block that already has a decision is left as it is."""
+        ``request_id`` of a session (core/permission_prompt), and ``decided_by: host``
+        when the dispatching agent of a Hive run made it. True when a row was updated; a
+        block that already has a decision is left as it is."""
         import json as _json
         needle = f'%"requestId": "{request_id}"%'
         async with self._get_connection() as conn:
@@ -887,6 +889,8 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                     if isinstance(blk, dict) and blk.get("type") == "cmd_permission_request" \
                             and blk.get("requestId") == request_id and not blk.get("decision"):
                         blk["decision"] = decision
+                        if decided_by == "host":
+                            blk["decided_by"] = "host"
                         hit = True
                 if hit:
                     await conn.execute(

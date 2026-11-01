@@ -36,6 +36,9 @@ function errText(e: unknown, fallback: string): string {
   return m && m.length < 300 ? m : fallback;
 }
 
+/** the classes the agent that dispatched the run answers itself (backend core/approval_class) */
+const HOST_CLASSES = new Set(['question', 'decision', 'hive_local', 'run_authorization']);
+
 export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, source }: {
   wait: SwarmOutAsk;
   /** an answer was written: reload the runs */
@@ -97,7 +100,7 @@ export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, sou
       : phase === 'taken' ? t('swarmOut.wait.taken') : t('swarmOut.wait.gone');
     return wrap(
       <ActDone testId="swarm-out-wait-done" icon={phase === 'sent' ? 'schedule' : phase === 'taken' ? 'check' : 'remove'}
-        label={t('swarmOut.wait.done')}>
+        label={wait.answered_by === 'host' ? t('swarmOut.wait.doneByAgent') : t('swarmOut.wait.done')}>
         <span className="whitespace-pre-wrap">{asked}</span> → <span className="text-[var(--color-text)]">{chosen}</span>{' '}
         <span data-testid="swarm-out-wait-phase" className={phase === 'sent' ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}>· {tail}</span>
       </ActDone>,
@@ -121,13 +124,18 @@ export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, sou
   }
 
   // ── waiting ─────────────────────────────────────────────────────────────────────
+  // a wait the dispatching agent answers for: it is handling it; the person may answer first
+  const agentNote = HOST_CLASSES.has(wait.approval_class ?? '') && (
+    <div className="mb-1 text-[12px] text-[var(--color-text-muted)]" data-testid="swarm-out-wait-agent">{t('swarmOut.wait.agentAnswers')}</div>
+  );
+  const wrapWaiting = (node: React.ReactNode) => wrap(<>{agentNote}{node}</>);
   if (wait.kind === 'question') {
     const questions = (wait.questions ?? []).map((q) => ({
       question: q.question, header: q.header, multiSelect: q.multiSelect,
       options: q.options.map((o) => ({ label: o.label, description: o.description })),
     }));
     const omitted = (wait.omitted?.questions ?? 0) + (wait.omitted?.options ?? 0);
-    return wrap(
+    return wrapWaiting(
       <>
         <AskUserQuestion questions={questions} toolUseId={wait.request_id} disabled={busy} onDirty={onDirty}
           onSubmit={(_id, answers) => { void send({ answers }, Object.values(answers).join(' · ')); }} />
@@ -139,7 +147,7 @@ export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, sou
   }
 
   if (wait.kind === 'approval') {
-    return wrap(
+    return wrapWaiting(
       <ActFrame testId="swarm-out-wait-approval" icon="shield" title={titleOf(wait, t)}
         meta={`${t('swarmOut.wait.approvalMeta')} · ${when(wait.asked_at)}`}
         footer={(
@@ -169,7 +177,7 @@ export function SwarmOutWaitCard({ wait, onAnswered, onDirty, onOpenSession, sou
     if (!o || busy || wait.truncated) return;
     void send({ option_id: o.id }, `${o.id} — ${o.choice}`);
   };
-  return wrap(
+  return wrapWaiting(
     <div onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}>
       <ActFrame testId="swarm-out-wait-decision" icon="help" title={t('swarmOut.ask.decisionTitle')}
         meta={`${t('swarmOut.wait.decisionMeta')} · ${when(wait.asked_at)}`}

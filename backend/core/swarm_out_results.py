@@ -247,6 +247,36 @@ def _checks(blocks: list[dict], agent: Optional[dict],
     return out
 
 
+
+def _interventions(all_blocks: list) -> "tuple[int, int, int, int, int, int]":
+    """(approved, denied, permission prompts not answered, questions answered, questions
+    not answered, handled by the host) over a run's blocks. The first five are the
+    person's; what the dispatching agent answered itself (design
+    2026-10-31-hive-approvals §2.4: ``decided_by`` / ``answered_by`` host) is the host's,
+    counted apart, never as the person stepping in."""
+    approved = denied = unanswered_perm = answered_q = unanswered_q = host_handled = 0
+    for b in all_blocks:
+        if b.get("type") == "cmd_permission_request":
+            dec = b.get("decision")
+            if dec in ("approve", "deny") and b.get("decided_by") == "host":
+                host_handled += 1
+            elif dec == "approve":
+                approved += 1
+            elif dec == "deny":
+                denied += 1
+            else:
+                unanswered_perm += 1
+        elif b.get("type") == "ask_user_question":
+            if isinstance(b.get("answers"), dict) and b["answers"]:
+                if b.get("answered_by") == "host":
+                    host_handled += 1
+                else:
+                    answered_q += 1
+            else:
+                unanswered_q += 1
+    return approved, denied, unanswered_perm, answered_q, unanswered_q, host_handled
+
+
 def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = None) -> dict[str, Any]:
     """The result of one run from its session's rows (chronological, as the
     messages API returns them). Pure; never raises on malformed input. ``agent``: the
@@ -398,21 +428,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
             failed += 1
     top = dict(sorted(tools.items(), key=lambda kv: -kv[1])[:MAX_TOOL_NAMES])
 
-    approved = denied = unanswered_perm = answered_q = unanswered_q = 0
-    for b in all_blocks:
-        if b.get("type") == "cmd_permission_request":
-            dec = b.get("decision")
-            if dec == "approve":
-                approved += 1
-            elif dec == "deny":
-                denied += 1
-            else:
-                unanswered_perm += 1
-        elif b.get("type") == "ask_user_question":
-            if isinstance(b.get("answers"), dict) and b["answers"]:
-                answered_q += 1
-            else:
-                unanswered_q += 1
+    approved, denied, unanswered_perm, answered_q, unanswered_q, host_handled = _interventions(all_blocks)
 
     pipeline = None
     summaries = [b for b in all_blocks if b.get("type") == "pipeline_summary"]
@@ -494,6 +510,7 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
             "steps": {"total": steps_total, "failed": failed, "agents": agents, "by_tool": top},
             "human": {"approved": approved, "denied": denied, "unanswered": unanswered_perm + unanswered_q,
                       "answered_questions": answered_q, "said": said},
+            "host_handled": host_handled,
         },
         "pipeline": pipeline,
         "pipeline_runs": runs_seen[:10],
@@ -1072,6 +1089,7 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None,
             "steps": {"total": _int(steps.get("total")), "failed": _int(steps.get("failed")),
                       "agents": _int(steps.get("agents")), "by_tool": {}},
             "human": {k: _int(human.get(k)) for k in ("approved", "denied", "unanswered", "answered_questions", "said")},
+            "host_handled": _int(work.get("host_handled")),
         },
         "pipeline": pipeline,
         "dropped": _int(res.get("dropped")),

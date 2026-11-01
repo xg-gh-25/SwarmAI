@@ -121,7 +121,10 @@ def _entry(key: str, d: dict[str, Any]) -> dict[str, Any]:
                          "consequence": str(o.get("consequence") or "")[:caps["consequence"]],
                          "reversible": o.get("reversible") is not False,
                          "risk": "high" if o.get("risk") == "high" else "low"} for o in opts],
-            "truncated": cut}
+            "truncated": cut,
+            # a decision about the task itself: the dispatching agent may answer it
+            # (design 2026-10-31-hive-approvals §2.2); not part of the digest
+            "approval_class": "decision"}
 
 
 def _answerable(d: dict[str, Any], key_re) -> bool:
@@ -156,14 +159,15 @@ class DecisionMirror:
         self._key_re = key_re
         self._decisions = decisions or pipeline_human.pending_decisions
         self._record = record_decision or (
-            lambda run_id, request_id, option_id: pipeline_human.answer_from_dashboard(
-                run_id, request_id, option_id, source="swarm_out"))
+            lambda run_id, request_id, option_id, by="person": pipeline_human.answer_from_dashboard(
+                run_id, request_id, option_id, source="swarm_out", by=by))
         self.prefix = f"bridge/{hive}/"
         self._items: dict[str, dict[str, Any]] = {}   # key -> the run's pending decision
         self._cards: dict[str, tuple[str, str]] = {}  # key -> (board key, card question)
         self._written: Optional[bytes] = None          # the snapshot last written
         self._delivered: set[str] = set()
         self._refused: set[str] = set()
+        self._by: dict[str, str] = {}                  # key -> who answered (person / host)
         self._on_card: dict[str, int] = {}             # answered on the card: passes since
         self._no_card: set[str] = set()                # a card answer not taken: record here
         self._record_failures: dict[str, int] = {}
@@ -212,6 +216,7 @@ class DecisionMirror:
             self._record_failures.pop(gone, None)
         # what is kept per key lives as long as the key waits (a gone key is closed above)
         self._session_of = {k: v for k, v in self._session_of.items() if k in self._items}
+        self._by = {k: v for k, v in self._by.items() if k in self._items}
         self._closed = {k: v for k, v in self._closed.items() if k in self._items}
         await self._deliver_answers()
         await self._write_snapshot()
@@ -280,13 +285,16 @@ class DecisionMirror:
         except ValueError:
             ans = None
         option = ans.get("option_id") if isinstance(ans, dict) and ans.get("request_id") == key else None
-        if not isinstance(option, str) or option not in {o["id"] for o in entry["options"]}:
+        by = ans.get("answered_by", "person") if isinstance(ans, dict) else None
+        if not isinstance(option, str) or option not in {o["id"] for o in entry["options"]} \
+                or by not in ("person", "host"):
             why, code = "names no option of the waiting decision", "no_option"
         elif ans.get("shown_sha256") != decision_digest(entry):
             why, code = "was given for a card that does not show this decision", "changed"
         elif entry["truncated"]:
             why, code = "is for a decision too long to be shown whole", "too_long"
         else:
+            self._by[key] = by
             return option, ""
         logger.warning("swarm_out_decisions: answer for %s %s; not delivered", key, why)
         return None, code
@@ -369,19 +377,20 @@ class DecisionMirror:
         sid = str(d["session_id"])
         option = next(o for o in d["decision"]["options"] if o.get("id") == option_id)
         card = None if key in self._no_card else self._cards.get(key)
+        by = self._by.get(key, "person")
         if card:
             card_key, asked = card
             ok = await self._drain(self._router().continue_with_answer(
                 sid, json.dumps({asked: decision_protocol._label(option)}, ensure_ascii=False),
-                tool_use_id=card_key, answered_by="person"))
+                tool_use_id=card_key, answered_by=by))
             if ok:
                 self._on_card[key] = 0
             else:
                 self._card_failed.add(key)          # next pass: tried again if still waiting
             return
         try:
-            await asyncio.to_thread(self._record, str(d.get("run_id")),
-                                    str(d["decision"].get("request_id")), option_id)
+            args = (str(d.get("run_id")), str(d["decision"].get("request_id")), option_id)
+            await asyncio.to_thread(self._record, *args, *(("host",) if by == "host" else ()))
         except EngineError as e:
             # the run refuses it: it moved on, or another answer came first
             logger.warning("swarm_out_decisions: the run refused %s (%s)", key, e)

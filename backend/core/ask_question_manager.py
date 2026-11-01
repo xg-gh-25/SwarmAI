@@ -168,7 +168,10 @@ class AskQuestionManager:
         self._answer_results[tool_use_id] = answers
         event = self._answer_events.get(tool_use_id)
         if event is not None:
-            self._answered_by[tool_use_id] = "auto" if answered_by == "auto" else "person"
+            # "host": the agent that dispatched this Hive's run answered it (its own
+            # decision, never recorded as the person's); anything else is the person's
+            self._answered_by[tool_use_id] = (answered_by if answered_by in ("auto", "host")
+                                              else "person")
             event.set()
         else:
             # No waiter — clean up immediately to prevent a leak (mirrors

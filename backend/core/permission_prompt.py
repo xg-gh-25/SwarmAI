@@ -50,13 +50,17 @@ def permission_block(event: dict) -> Optional[dict]:
     }
 
 
-async def record_decision(session_id: str, request_id: str, decision: str) -> bool:
-    """Write the user's decision onto the stored prompt. True when a row changed."""
+async def record_decision(session_id: str, request_id: str, decision: str,
+                          by: str = "person") -> bool:
+    """Write the decision onto the stored prompt, and who made it when it was not the
+    person (``by="host"``: on a Hive, the agent that dispatched the run). True when a row
+    changed."""
     if decision not in DECISIONS or not request_id:
         return False
     try:
         from database import db
-        ok = await db.messages.update_permission_decision(session_id, request_id, decision)
+        extra = {"decided_by": "host"} if by == "host" else {}
+        ok = await db.messages.update_permission_decision(session_id, request_id, decision, **extra)
         _IN_FLIGHT.pop(str(request_id), None)   # the block carries it now
         return ok
     except Exception as exc:  # noqa: BLE001 — the decision itself already went to the hook

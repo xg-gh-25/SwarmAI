@@ -54,7 +54,7 @@ class FakeRouter:
         self.calls.append(("answer", session_id, json.loads(answer), tool_use_id, answered_by))
         return self._gen(tool_use_id)
 
-    def continue_with_cmd_permission(self, session_id, request_id, allowed):
+    def continue_with_cmd_permission(self, session_id, request_id, allowed, by="person"):
         self.calls.append(("permission", session_id, request_id, allowed))
         return self._gen(request_id)
 

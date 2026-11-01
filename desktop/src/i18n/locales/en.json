@@ -1820,7 +1820,8 @@
         "answered": "Questions answered",
         "said": "Said in the session",
         "unanswered": "Left unanswered",
-        "steps": "Failed steps {{failed}} / {{total}} · the Judge scores pipeline runs only; a native run shows who stepped in here"
+        "steps": "Failed steps {{failed}} / {{total}} · the Judge scores pipeline runs only; a native run shows who stepped in here",
+        "host": "answered by the agent"
       },
       "tag": {
         "answer": "Answer the question",
@@ -2018,8 +2019,11 @@
         "too_long": "it is too long to show whole here",
         "run_refused": "the run already moved on, or another answer came first",
         "not_recorded": "the Hive could not record it",
-        "other": "the Hive did not say why"
-      }
+        "other": "the Hive did not say why",
+        "not_host_class": "only a person can answer this (it reaches beyond the Hive)"
+      },
+      "doneByAgent": "Answered by the agent that dispatched it",
+      "agentAnswers": "The agent that dispatched this run answers this itself; you can answer first."
     }
   },
   "usage": {

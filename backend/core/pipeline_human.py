@@ -126,9 +126,10 @@ def record_required_approval(session_id: str) -> list[str]:
     return counted
 
 
-def record_card_answer(session_id: str, answers: Any) -> list[dict[str, str]]:
-    """A person answered an AskUserQuestion card in *session_id*: record the pick
-    for each run this session owns whose pending decision that card asked."""
+def record_card_answer(session_id: str, answers: Any, by: str = "person") -> list[dict[str, str]]:
+    """An AskUserQuestion card in *session_id* was answered: record the pick for each
+    run this session owns whose pending decision that card asked. ``by="host"``: on a
+    Hive, the agent that dispatched the run picked it (recorded as ``host_answer``)."""
     from core.run_protocol import decision as decision_protocol
     recorded = []
     try:
@@ -140,7 +141,7 @@ def record_card_answer(session_id: str, answers: Any) -> list[dict[str, str]]:
             option_id = decision_protocol.option_from_answer(value or {}, answers)
             if option_id is None:
                 continue
-            engine.answer_decision(request_id=pending["request_id"], option_id=option_id)
+            engine.answer_decision(request_id=pending["request_id"], option_id=option_id, by=by)
             recorded.append({"run_id": engine.run_id, "request_id": pending["request_id"],
                              "option_id": option_id})
             logger.info("pipeline_human: decision %s of %s answered on the chat card: %s",
@@ -152,14 +153,14 @@ def record_card_answer(session_id: str, answers: Any) -> list[dict[str, str]]:
 
 def answer_from_dashboard(run_id: str, request_id: str, option_id: str,
                           workspace: Optional[Path] = None,
-                          source: str = "dashboard") -> dict[str, Any]:
-    """Record a person's decision pick made off the chat card: a dashboard click, or
-    (``source="swarm_out"``) a pick on the Host for this Hive's run. Raises on a stale
-    or unknown request."""
+                          source: str = "dashboard", by: str = "person") -> dict[str, Any]:
+    """Record a decision pick made off the chat card: a dashboard click, or
+    (``source="swarm_out"``) a pick on the Host for this Hive's run, the person's or
+    (``by="host"``) the dispatching agent's. Raises on a stale or unknown request."""
     engine = load_engine(run_id, workspace)
     if engine is None:
         raise LookupError(run_id)
-    result = engine.answer_decision(request_id=request_id, option_id=option_id)
+    result = engine.answer_decision(request_id=request_id, option_id=option_id, by=by)
     logger.info("pipeline_human: decision %s of %s answered on the %s: %s",
                 request_id, run_id, source, option_id)
     return {"state": result["state"], "answer": result["answer"],

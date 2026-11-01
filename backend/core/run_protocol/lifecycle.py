@@ -218,7 +218,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "run_id": payload["run_id"], "profile": profile, "status": "active",
         "stage": sequence[0], "stages": stages, "landing": None, "reason": None,
-        "reflect": None, "decision_cap": cap, "human_decisions": 0,
+        "reflect": None, "decision_cap": cap, "human_decisions": 0, "host_decisions": 0,
         "pending_decision": None, "pending_landing": None, "agent_after_cap": False,
         "stage_attempts": {}, "attempt_base": {}, "open_attempt": None,
         "last_land_intent": None, "last_report_render": None,
@@ -466,6 +466,13 @@ def _review_reopen(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     _schedule(run, event, "active")
 
 
+def answered(run: Mapping[str, Any]) -> int:
+    """How many times the run's wait for a decision was answered from outside: by the
+    person or, on a Hive, by the agent that dispatched the run. One budget for both, the
+    run's ``decision_cap``: past it the run's own agent decides, with evidence (DC-2)."""
+    return int(run.get("human_decisions") or 0) + int(run.get("host_decisions") or 0)
+
+
 def _decision(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     if run["status"] != "active" or run["stage"] not in ("evaluate", "think", "plan"):
         raise LifecycleError("decision is legal only in active EVALUATE/THINK/PLAN")
@@ -473,7 +480,7 @@ def _decision(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     if "decided_by" in payload:
         # the agent's choice after the cap (DC-2): legal only at the cap, asks nobody
         if payload["decided_by"] != "agent_after_cap" \
-                or run["human_decisions"] < run["decision_cap"] \
+                or answered(run) < run["decision_cap"] \
                 or not isinstance(payload.get("option_id"), str) \
                 or not isinstance(payload.get("evidence_refs"), list) \
                 or not payload["evidence_refs"]:
@@ -481,18 +488,27 @@ def _decision(run: dict[str, Any], event: Mapping[str, Any]) -> None:
                                  "option and evidence refs")
         run["agent_after_cap"] = True
         return
-    if run["human_decisions"] >= run["decision_cap"]:
+    if answered(run) >= run["decision_cap"]:
         raise LifecycleError("decision cap reached")
     run["pending_decision"] = event["payload"]["request_id"]
     _schedule(run, event, "awaiting_human")
 
 
 def _human_answer(run: dict[str, Any], event: Mapping[str, Any]) -> None:
+    """``human_answer`` (the person) or ``host_answer`` (on a Hive, the agent that
+    dispatched the run, design 2026-10-31-hive-approvals §2.4): either ends the wait;
+    each is counted on its own, and both count against the one ``decision_cap`` the
+    decision was asked under (``answered``; SOUL P5, every model loop has a counted
+    budget), so an answer to an asked decision is never refused for the cap."""
+    kind = event["kind"]
     if run["status"] != "awaiting_human" \
             or event["payload"]["request_id"] != run["pending_decision"]:
-        raise LifecycleError("human_answer is not for the current decision")
+        raise LifecycleError(f"{kind} is not for the current decision")
+    if kind == "host_answer":
+        run["host_decisions"] = run.get("host_decisions", 0) + 1
+    else:
+        run["human_decisions"] += 1
     run["pending_decision"] = None
-    run["human_decisions"] += 1
     # attempt numbers only grow (they are part of event identity); the stage cap
     # counts the attempts made since the person answered
     run["attempt_base"][run["stage"]] = run["stage_attempts"].get(run["stage"], 0)
@@ -581,7 +597,13 @@ def _land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
                                  "landed again")
         old = run["status"]
         run["landing"], run["reason"] = "human_override", None
-        run["human_decisions"] += 1
+        # who authorized the landing: the host's (a Hive run's dispatching agent) is not
+        # the person's decision
+        auth = run["auth_grants"].get(grant.get("auth_event_id")) or {}
+        if auth.get("authorized_by") == "host":
+            run["host_decisions"] = run.get("host_decisions", 0) + 1
+        else:
+            run["human_decisions"] += 1
         if old == "completed":
             _schedule(run, event, "completed")
         elif old == "reflecting":
@@ -745,7 +767,7 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         _complete(run, event)
     elif kind == "decision":
         _decision(run, event)
-    elif kind == "human_answer":
+    elif kind in ("human_answer", "host_answer"):
         _human_answer(run, event)
     elif kind in ("session_lost", "user_stop", "worktree_unavailable"):
         _pause(run, event)
