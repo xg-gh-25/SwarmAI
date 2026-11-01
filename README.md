@@ -32,6 +32,8 @@ SwarmAI is built for one purpose: **compounding.** Every task should leave the s
 2. **Autonomous, in parallel, in the cloud.** Work runs to the end on its own, on your machine or on several **Hives** (your SwarmAI on AWS) at once, and the agent that dispatched it follows it to the end. You are asked only for what only a person can decide.
 3. **Cognitive self-evolution.** Every run and every session sends its lessons back, and SwarmAI keeps what is true and useful. A mistake you corrected once should not need correcting again.
 
+Put together, **SwarmAI turns every task into lasting cognition, and lasting cognition into increasingly autonomous delivery.**
+
 ---
 
 ## One brain, many hands
@@ -45,7 +47,7 @@ SwarmAI has **one brain**. This is a deliberate choice against "many brains", th
 - **Hives and reviewers are hands, not brains.** A worker Hive gets a copy of the Brain, does the work, writes no cognition of its own and sends every lesson home. Review experts start with fresh context and keep no memory, which is what keeps them honest critics.
 - **Why one brain.** Compounding needs one place where value adds up. With many brains, knowledge splits and drifts, every hand-off loses context, and you end up as the integrator. With one brain, a lesson learned on any Hive improves the next task everywhere, there is one place where things wait for you (**Needs You**), and one set of numbers says whether it is getting better.
 
-**How we measure it.** Not by how much is stored or how many agents run, but by your attention: the share of sessions in which you had to correct SwarmAI should fall, and the share of corrections that repeat an earlier one should reach zero. These north-star numbers are in every prompt and on the cognition panel.
+**How we measure it: less correction, less repetition, more verified delivery.** Not by how much is stored or how many agents run, but by your attention: the share of sessions in which you had to correct SwarmAI should fall, the share of corrections that repeat an earlier one should reach zero, and the share of work delivered and verified without you should rise. Having nothing to correct is not the same as being right, so delivery has to be verified, not just uncorrected. These north-star numbers are in every prompt and on the cognition panel.
 
 ---
 
@@ -61,7 +63,7 @@ The **Autonomous Pipeline** is the optional delivery mode for code. It owns the 
 
 ### 2 · Autonomous, in parallel, in the cloud: Swarm Out
 
-**Swarm Out** sends one sentence of work to a Hive and brings everything home. The task runs on your machine's commit of every repository in its Brain; commits come back as a bundle that is reviewed, then landed; files go into the run's Brain; every lesson goes into your machine's CDF. The dispatching agent owns each run to the end: it watches, answers the waits it is allowed to answer, and leaves anything off-machine, irreversible or touching your data to you.
+**Swarm Out** sends one sentence of work to a Hive and brings everything home. The task runs on your machine's commit of every repository in its Brain; commits come back as a bundle that is reviewed, then landed; files go into the run's Brain; every lesson goes into your machine's CDF. The dispatching agent owns each run to the end: it watches, answers the waits it is allowed to answer, and leaves anything off-machine, irreversible or touching your data to you. Every Hive run knows which version of the Brain it worked from, and its lessons are judged against that version when they come home, so runs in parallel add to the brain instead of overwriting each other.
 
 ![Swarm Out](./assets/readme/swarm-out.png)
 
