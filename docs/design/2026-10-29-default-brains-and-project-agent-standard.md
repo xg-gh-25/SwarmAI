@@ -2,8 +2,8 @@
 title: 两个自带 Brain（SwarmAI、General）和 Project Agent 标准
 date: 2026-10-29
 created: 2026-10-29
-updated: 2026-10-29
-status: r3，已实现；代码评审（correctness、ux）后按原因改完
+updated: 2026-11-01
+status: r3 已实现；§3.1 与 General 页面仍有效；§4 标准（deviations、DEFAULTS、profile、确认）和 §3.2 的草稿/确认/Need You 已被 2026-11-01-project-agent-simple.md 取代
 related:
   - docs/design/2026-10-28-project-agent-flow.md（schema v2 §4、草稿生成 §5、决策 D2/D4）
   - docs/design/2026-10-29-hive-run-record-and-worker-role.md（第 5 步的端到端被 General 卡住）
@@ -33,7 +33,7 @@ related:
 
 每个安装都自带两个删不掉的 Brain：SwarmAI（产品对自己的认知）和 General（不属于任何项目的活，知识就是 `Knowledge/Library`）。两个 Brain 都排在 Brain Hub 卡片墙的最前面。
 
-它们的 Project Agent 是**标准范本**。自建 Brain 生成的草稿、两份自带定义、审查卡片上"和标准不同"的提示，读的是同一份标准（`core/project_agent_standard.py`），说明文档是 `templates/project-agents/STANDARD.md`。
+它们的 Project Agent 是**标准范本**。自建 Brain 生成的草稿、两份自带定义，读的是同一份标准（`core/project_agent_standard.py`），说明文档是 `templates/project-agents/STANDARD.md`。
 
 ## 1. 现在的样子（2026-10-29 读代码核实）
 
@@ -80,7 +80,7 @@ related:
   ```json
   {"name": "General", "description": "<Runner Agent 的 identity.summary>",
    "library": {"files": 52, "bytes": 812345},
-   "projectAgentStatus": "draft|reviewed|invalid|null", "shadowed": false}
+   "projectAgentStatus": "ready|invalid|null", "shadowed": false}
   ```
   - **为什么单独一个字段：** `brains` 数组的每一个消费方都把元素当成 `Projects/` 下的 DDD：画六段的花（`Flower`）、算 `hubSummary` 的计数、给"加知识"挑 Brain、六段的 `sectionsPresent`。General 没有六段，混进数组，每个消费方都要加一个判断，漏一个就是 bug。单独一个字段，只有要显示它的三处去读。
   - **`library` 怎么算：** 数的是同步到 Hive 时，General 真正带过去的知识：`brain_sync._walk(general_brain_dir(ws), True)` 走出来的文件里的 `.md`。白名单在 `brain_sync.allowlisted` 的 `general` 分支（`brain_sync.py:88-89`）：`.md` 去掉 `*-archive*`，外加定义文件本身。`/api/library/native` 数的是 Library 里的所有文件（`library_api.py:66-84`），口径不同，两边都不改。页面上写明"Library 里会带到 Hive 的 Markdown"。
@@ -97,22 +97,24 @@ related:
 
 - **卡片墙：** SwarmAI 第一张，General 第二张，其余照旧。
   - **卡片布局：** 和其他卡片同一套（名字、一句描述、一行状态），不画六段的花，换成 Library 图标。
-  - **唯一突出的状态：** Runner Agent 的状态。草稿时显示"Runner Agent 待确认"，用 error 色。已审时显示"Runner Agent 已确认"。
+  - **唯一突出的状态：** Runner Agent 的状态。有问题时显示"Runner Agent 有问题"；没问题时不显示状态。
   - **次要信息：** "Library 52 篇"，用 muted 色。
 - **General 页面：** 有自己的打开方式，不借名字 `General`。`BrainHub` 的选中状态现在只是一个名字字符串（`BrainHub.tsx:147-152`）：
   - **问题：** 借用名字的话，一个已经存在的 `Projects/General` 就再也打不开了（D3 偏偏要人去打开它改名），而且所有 `/brains/General/*` 的 tab 都会 404。
   - **做法：** 选中状态加一种 `general`，由 `openGeneral()` 打开，渲染 `GeneralBrainView`，完全不走 `BrainDetailShell`。名字恰好是 `General` 的深链目标（`swarm:show-brain-hub` 的 `brain`，或挂载前记下的目标）也打开它。名字的其他大小写写法，打开的是同名项目自己的详情页。
-  - **页面内容：** 三块，从上到下。
-  1. **它是什么：** Runner Agent 的 `identity.summary` 和 `out_of_scope`，加一句"自带，不能删除"。
+  - **页面内容：** 四块，从上到下（第四块是 CDF 写入的条目）。
+  1. **它是什么：** Runner Agent 的 `identity.summary`，加一句"自带，不能删除"。
   2. **知识：** "Knowledge/Library · 52 篇 Markdown"，一个按钮"打开 Library"（`swarm:show-library`）。
-  3. **Project Agent：** 现有的 `ProjectAgentCard brain={null}`，确认、改、提示和其他 Brain 一样。
+  3. **Project Agent：** 只读的 `ProjectAgentView brain={null}`；要改就点"让 agent 修改"。
   - **没有的东西：** 没有六段、Runs、Reflect、Eval 这些 tab，因为 General 没有这些数据；也没有删除和改名。
-- **Need You：** `hubNeeds` 和 `hubSummary`（`brainMapModel.ts:203-219`）都多读 `general`，列表和计数保持一致。Runner Agent 是 draft 或 invalid 时加一条，`id` 是 `builtin-general-agent`，不和同名项目的 `General-agent` 撞，点"Open"调 `openGeneral()`。
+- **Need You：**（已被 2026-11-01-project-agent-simple.md §2 取代）`hubNeeds` 和 `hubSummary`（`brainMapModel.ts:203-219`）都多读 `general`，列表和计数保持一致。Runner Agent 是 draft 或 invalid 时加一条，`id` 是 `builtin-general-agent`，不和同名项目的 `General-agent` 撞，点"Open"调 `openGeneral()`。
 - **数据进前端：** `services/ddd.ts` 的列表 mapper（`:310`、`:318`）目前只返回 `brains` 和 `pinned`，要把 `general` 带出来。New Brain 对话框的 `existingNames`（`overlaySurfaces.tsx:118`）要加上 `General`，提交前就能提示这个名字不能用。
 - **"加知识到哪个 Brain"：** 列表里加 General，选它打开 Library 的加知识入口。
 - **删掉：** 首页最底下那一行 "Runner Agent · …" 和它展开的卡片（`BrainHubHome.tsx:227-243`）。入口只留卡片墙这一个。
 
 ## 4. 设计 B：Project Agent 标准
+
+> 已被 2026-11-01-project-agent-simple.md 取代（0bc3c67b5）：现行标准只写 Hive Run 读的字段，见 core/project_agent_standard.py。
 
 ### 4.1 一份标准，代码只有一处
 

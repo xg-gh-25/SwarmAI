@@ -1,8 +1,8 @@
 ---
 title: "全平台用量账本：一个口径、一本账，钱花在哪一眼可查"
 created: 2026-10-29
-updated: 2026-10-29
-status: draft r2（r1 经一轮零上下文对抗审查，15 条 finding 按原因并入本版，见 §12；待确认）
+updated: 2026-11-01
+status: 已实现（v2.4.0 发布；实现中的改动与"没有预算"见 §11b/§11c）
 ---
 
 # 全平台用量账本
@@ -67,12 +67,12 @@ usage_ledger(
 
 | 入口 | 改成 |
 |---|---|
-| CLI result（8 条路径） | 收成一个 `usage_accounting.record_cli_result(message, session, pid, surface)`：读 `model_usage`，每个模型的四种 token 和 `costUSD` 都对上一行（同一 pid、同一模型）取增量；没有 `model_usage` 的老 CLI 退回到 `usage` + `total_cost_usd`。channel 的 turn 标 `surface=channel` |
-| 所有 Bedrock 调用 | `jobs/bedrock.py` 每次都记（删掉 `record_usage` 开关），四种 token 都取；归属沿用 `llm_usage.attribute()` 的 contextvar 做法，推广成 `usage_accounting.attribute(feature=...)`，CDF 的现有 source 直接映射成 `cdf.s2/s3/s7`；`ingestion_llm_usage` 停止写入，历史导入后保留只读。现在没有一个调用用 `cachePoint`，缓存字段暂时都是 0 |
-| 其他 CLI 进程（s7 评审、ddd_self_audit、Slack DM、agent job） | 共用一个 `record_cli_json(output, surface, feature/job_id)`，读 `--output-format json` 里的 `modelUsage` / `total_cost_usd`，**包括非零退出**（有输出就记）；job 的模型用量按各模型相加，不取 max |
+| CLI result（8 条路径） | 收成 `usage_accounting.cli_results.rows(...)`，经 `record_sync` 交给写线程：读 `model_usage`，每个模型的四种 token 和 `costUSD` 都对上一行（同一 pid、同一模型）取增量；没有 `model_usage` 的老 CLI 退回到 `usage` + `total_cost_usd`。channel 的 turn 标 `surface=channel` |
+| 所有 Bedrock 调用 | `jobs/bedrock.py` 每次都记（删掉 `record_usage` 开关），四种 token 都取；归属沿用 `llm_usage.attribute()` 的 contextvar 做法，推广成 `usage_accounting.attribute(feature=...)`，CDF 的现有 source 直接映射成 `cdf.s2/s3/s7`；`ingestion_llm_usage` 照写（CDF 预算回放在读，见 §11b），平台总数只算账本。现在没有一个调用用 `cachePoint`，缓存字段暂时都是 0 |
+| 其他 CLI 进程（s7 评审、ddd_self_audit、Slack DM、agent job） | 共用 `usage_accounting.rows_from_cli_json(...)` + `record_sync`，读 `--output-format json` 里的 `modelUsage` / `total_cost_usd`，**包括非零退出**（有输出就记）；job 的模型用量按各模型相加，不取 max |
 | 调度器预算 | 删掉（2026-10-30，见 §11c）：没有月度预算设置，调度器不按花费停 job |
 | Pipeline run | run 结束时由 `usage.measure` 写 attribution 行（run 一行、每 stage 一行），按 transcript 里每条响应的 `message.model` 分模型，再按 token 占比分摊对应 spend 行的花费；`run_audit` 的判定继续用可比 token，报告另列计费 token 和账面花费 |
-| Hive | Hive 跑的是同一个产品，它自己也写 `usage_ledger`；Host 通过一个新的只读接口，按 Hive 那边的 `id` 增量拉取（`dedup_key = Hive 名 + Hive 行 id`），所以 Hive 上的 CDF、job、Bedrock 花费都能拉回来。老版本的 Hive 退回到导入 `turn_outcome` |
+| Hive | Hive 跑的是同一个产品，它自己也写 `usage_ledger`；Host 通过一个新的只读接口，按 Hive 那边的 `id` 增量拉取（`dedup_key = Hive 名 + Hive 行 id`），所以 Hive 上的 CDF、job、Bedrock 花费都能拉回来。不提供该接口的老版本 Hive 先跳过，升级后再拉 |
 
 ## 5. 读的一侧（先设计，再写写入方）
 
@@ -87,6 +87,8 @@ usage_ledger(
 
 ## 6. 单价表（只给没有 CLI 花费的 Bedrock 直接调用用）
 
+> 实现时改了（d8e66ae14）：没有单价表配置，单价按模型从 CLI 账本行学出（core/usage_prices.py）。
+
 - 一个产品配置文件，按模型 × 区域 × 四种 token；用户可以改
 - **校准**：每个 CLI result 的 `model_usage` 每个模型都带四种 token 和 `costUSD`，一个模型、一组数，可以直接验证单价表算出来对不对（不用再拿混了多个模型的行去做回归）。偏差超过阈值，用量视图上标"单价表可能过时"
 - 表里没有的模型：`cost_source=none`，花费显示"—"，不猜
@@ -95,8 +97,8 @@ usage_ledger(
 
 - `sqlite.py` 新增 v18 迁移块（建表、建索引，可重复执行）
 - 旧数据导入放在 daemon 启动后的后台任务里，分块提交（和现有大迁移一样），不和写入池抢锁；导入前先备份 `data.db` 和 `ingestion.db`，并核对备份能打开、行数一致
-- `token_usage` 的旧行按 `session_id` 算增量导入（旧表没有 pid，进程重启后的第一行可能少算），标 `imported=1`；`ingestion_llm_usage` 按天导入成 `surface=cdf` 的行；Host 上已有的 Swarm Out records 也导入
-- 旧表都保留，只是不再写入；回退到旧版本时顶栏仍能读旧表
+- `token_usage` 的旧行按 `session_id` 算增量导入（旧表没有 pid，进程重启后的第一行可能少算），标 `imported=1`；`ingestion_llm_usage` 按天导入成 `surface=cdf` 的行（Swarm Out records 没有导入）
+- 旧表都保留；`token_usage` 已停写，`ingestion_llm_usage` 照写
 - 历史上没记的（job、大部分 Bedrock 调用、其他 CLI 进程、pipeline 的花费）补不回来；用量视图写清"某天以前这几类没有记录"，导入的行显示"估算"
 
 ## 8. 方案对比
@@ -138,9 +140,9 @@ usage_ledger(
 
 ## 11. 需要你定的
 
-1. **Hive 的花费算不算进平台总账？** 推荐算，钱是同一个人付的
+1. **Hive 的花费算不算进平台总账？** **已定：算（8583a207c）。** 推荐算，钱是同一个人付的
 2. **调度器月度预算要不要扩大到全平台？** 已定（2026-10-30）：不要预算，删掉，见 §11c
-3. **走 pipeline 还是直接做？** 跨 6 个模块、新表、迁移，属于高风险改动
+3. **走 pipeline 还是直接做？** **已做完：分 7 步直接提交。** 跨 6 个模块、新表、迁移，属于高风险改动
 
 ## 11b. 实现时改了的决定（2026-10-29）
 

@@ -1,6 +1,6 @@
 ---
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 title: "Swarm Out 能力登记表：一张操作表、从表生成的门、写清楚它挡不住什么"
 status: r4 — 第一阶段已实现（§10 记录和设计的出入）；devtools 已默认关（human-proof §8）；第二阶段未排期，方向待重定（见 human-proof 的 status）
 related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.6 Conductor、§5.8 代答、P0-c）
@@ -136,7 +136,7 @@ class Op:
 | `hive.brain.sync_defaults` `hive.brain.sync`（Brain 送出本机；派单自带的同步不经这两条） | person | off_machine |
 | `hive.serve.*`（`routers/hive_brains.py`，Hive 上才有，桌面上 404） | internal:host（Host 的 daemon 经网络调） | 逐条 |
 
-（实现时从 `app.routes` 逐条定下，完整清单以 `core/swarm_out_ops.py` 为准。）
+（实现时从 `app.routes` 逐条定下，完整清单以 `core/swarm_out_ops.py` 为准。）2026-11-01 起与上表不同：run 的 accept/return_*/rerun/stop/discard 开给 owner_agent（agent-owns §2.1），manual_landed 仍只给人；hive.start 开给 owner_agent（zero-touch）；新增 run.watch、ask.card、ask.answer_host、ask.escalate、hive.replace，范围扩到 /api/aws-account。
 
 ### 5.2 门从表生成
 
@@ -234,7 +234,7 @@ Host。能同时关掉 ①–④ 的形态是：**人专用的动作由人签名
 ## 7. 和 Swarm Run 的关系
 
 Swarm Run 的新操作直接进表：`internal:conductor` 能调 `task.route / task.spec / task.dispatch`；按 work id 查
-状态是新的 read op；代答提问是内部调用 `internal:wp_answer`，审批永远只有 person。swarm-run §9 写的"把审批
+状态是新的 read op；代答提问是内部调用 `internal:wp_answer`，审批永远只有 person（已被 hive-approvals 取代：派单 agent 用 ask.answer_host 回答 host 类的问题、决定和审批；internal:wp_answer 未建）。swarm-run §9 写的"把审批
 路由加进门"由 §5.2 得到；它的 P0-c（更强的人类证明）就是本文第二阶段。
 
 ## 8. 分步和验证计划
@@ -268,7 +268,7 @@ correctness，每类最多两轮。
 
 **待定**
 3. 第二阶段（人签名）要不要现在排期做验证：平台级，影响所有"只有人能做"的操作，也是 Swarm Run P0-c 的前提。
-4. 发布版的 devtools 是否关掉（和第二阶段相关，也独立于它）。
+4. ~~发布版的 devtools 是否关掉~~ 已定：devtools 特性保留，检查器只在 SWARMAI_DEBUG 时开（920c3cec2，human-proof §8）。
 
 ## 10. 实现记录（r4）
 

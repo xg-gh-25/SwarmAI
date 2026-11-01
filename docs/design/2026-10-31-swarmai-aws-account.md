@@ -1,8 +1,8 @@
 ---
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 title: "SwarmAI 账号：一个 AWS 账号，产品底层统一管理"
-status: r4.4 — §5.3 改为 CLI 的 awsCredentialExport（实施第 2 步时发现）；认证方式按真实场景重排（§6.2），向导"先探测、永不挡在外面"（§6.1），Hive 最多 8 台；r4 已过审查（§11）；待 XG 定（§10）
+status: 已实现（v2.4.0）：§9 第 1–5 步全部落地；§10 按推荐实现；Anthropic key 已去掉，设置页改为 Swarm AWS Account + LLM Models（见 2026-11-01-settings-account-merge.md）；AWS 登录、真实 SSO 尚未端到端跑过
 related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-10-31-swarm-out-ops-registry.md
 ---
 
@@ -30,7 +30,7 @@ related: docs/design/2026-10-31-human-proof-verification.md · docs/design/2026-
 |---|---|---|
 | **第一次安装** | 先探测本机已有的凭证；有就一键用，没有就 ADA 或 SSO 登录 → 核实 → Hive | 先探测；有就一键用，没有就 AWS 登录或 SSO → 核实 → Hive |
 | **升级到这个版本** | 老配置自动生成账号记录；一致就不打扰；不一致才问（§6.4） | 同左 |
-| **之后（设置页）** | 一页"SwarmAI 账号"：状态、能力、Hive 数量（§6.5） | 同左 |
+| **之后（设置页）** | 一页"Swarm AWS Account"：状态、能力、Hive 数量（§6.5） | 同左 |
 
 还有一种运行方式是 **Hive 本身**。今天 Hive 也走同一个向导（`OnboardingPage.tsx` 的 `isHive` 分支）；r4 里 Hive
 模式（`SWARMAI_MODE=hive`）跳过 ②–⑤：daemon 启动时用实例角色自动建记录（§5.1），不做 Hive 数量对齐（§7.3）。
@@ -125,7 +125,7 @@ aws_account: {
   state: 见 §7.1
 }
 chat: {
-  via: "aws" | "bedrock_key" | "anthropic"   # 对话走哪条路；默认 aws（用上面的账号调 Bedrock）
+  via: "aws" | "bedrock_key"   # 对话走哪条路；默认 aws（用上面的账号调 Bedrock）
 }
 hive_fleet: {
   desired_count: 1,                    # 1..8
@@ -137,10 +137,10 @@ hive_fleet: {
 ```
 
 - **实现时的决定（2026-11-01）：不另存 `chat`，不删 `auth_method`。** 对话的路仍由 `use_bedrock` 和 `auth_method`
-  决定，只经 `aws_account.get_chat_via()` 一个函数读出 `aws` / `bedrock_key` / `anthropic`，所有消费方都调它，不会
+  决定，只经 `aws_account.get_chat_via()` 一个函数读出 `aws` / `bedrock_key`，所有消费方都调它，不会
   互相不一致；AWS 账号只看 `aws_account` 记录的 `source`。另存一个 `chat` 键再删 `auth_method`，要迁移它的全部旧读者，
   对用户没有新的好处，迁移出错的风险却不小，所以不做。下面"`chat.via`"指这个函数的结果。
-- **对话的路和 AWS 账号分开记**：`chat.via` 是 `bedrock_key` 或 `anthropic` 时，对话用那把 key（存系统密钥库），
+- **对话的路和 AWS 账号分开记**：`chat.via` 是 `bedrock_key` 时，对话用那把 key（存系统密钥库），
   AWS 账号记录可以有也可以没有。没有时 Hive、云存储和语音标为"需要连接 AWS 账号"，一个按钮回到 ②；有时它们照常
   用账号。这样"Bedrock 暂时不通、先用 key 对话"不会丢掉已经连好的账号。r3 的 `bedrock_key` / `none` 来源改成这里。
 - `instance_role`：Hive 上（`SWARMAI_MODE=hive`）由 daemon 启动时用 STS 和 IMDS 区域**自动建**。
@@ -347,7 +347,7 @@ profile → "登录"（走 App 内登录，§6.3、§6.3b）。
 
 不管哪种，下面都有两行：
 - "更多方式"（展开）：用已有的 profile（手选）、粘贴访问密钥、实例角色；
-- "先只用对话"：粘贴 Bedrock API key 或 Anthropic key，马上能用对话，Hive、云存储、语音以后连上 AWS 账号再开。
+- "先只用对话"：粘贴 Bedrock API key，马上能用对话，Hive、云存储、语音以后连上 AWS 账号再开。
 
 选中一个**探测到的 SSO profile** 时，记录不记成 `profile`，而是读出它的起始地址、区域、账号和角色，记成 `sso`，
 之后由 App 自己的令牌续期（§6.3），不再和用户的 CLI 共用 `~/.aws/sso/cache`。选中探测到的**登录会话** profile 时
@@ -376,7 +376,7 @@ profile → "登录"（走 App 内登录，§6.3、§6.3b）。
 - STS `GetCallerIdentity` 的账号必须等于输入的账号 ID，否则停在这一步，说明两边各是哪个账号。
 - 通过后记录写入，状态"已连接"，然后跑能力检查（§7.2），一行一个能力：Bedrock、Hive、云存储、语音。
 - Bedrock 不可用时说明缺什么（模型访问没开、区域里没有该模型、权限缺哪个动作），给两条路：补好后"重新检查"，
-  或者"先只用对话"（`chat.via` 换成 Bedrock API key 或 Anthropic key；账号记录保留，Hive、云存储照常用它；补好后
+  或者"先只用对话"（`chat.via` 换成 Bedrock API key；账号记录保留，Hive、云存储照常用它；补好后
   在设置页切回）。其余能力缺权限只标出来，
   不挡。
 
@@ -394,7 +394,7 @@ profile → "登录"（走 App 内登录，§6.3、§6.3b）。
 对话"的用户 ⑤ 显示"连接 AWS 账号后再建"，跳过。
 
 **为什么这样不会把人挡在外面：** 最常见的情况（本机已经有能用的 AWS 凭证）一键就过；真没有凭证的人至少能用
-Bedrock API key 或 Anthropic key 先用起来；所有失败都有出路；会挂住的调用都有时间上限。
+Bedrock API key 先用起来；所有失败都有出路；会挂住的调用都有时间上限。
 
 ### 6.2 真实场景和认证方式
 
@@ -412,7 +412,7 @@ Bedrock API key 或 Anthropic key 先用起来；所有失败都有出路；会�
 | 手上只有访问密钥，本机还没配 | 个人 | `keys` | 更多 | 能 |
 | 在 EC2、云桌面上运行 | 工程师 | `instance_role` | 探测 | 看能力检查 |
 | 只有 Bedrock API key | 想先试试的人 | `chat.via = bedrock_key` | 对话 | 不能（要再连 AWS 账号） |
-| 只有 Anthropic key，没有 AWS | 不用 AWS 的人 | `chat.via = anthropic` | 对话 | 不能（要再连 AWS 账号） |
+| 只有 Anthropic key，没有 AWS | 不用 AWS 的人 | 不支持（2026-11-01 去掉，settings-account-merge §3.1） | 对话 | 不能（要再连 AWS 账号） |
 
 **内部用户（Amazon）**
 
@@ -508,6 +508,8 @@ AWS 给控制台账号（IAM 用户或根用户）提供了浏览器登录拿短
 
 ### 6.5 设置页"SwarmAI 账号"
 
+> 已被 2026-11-01-settings-account-merge.md（§3、§5）取代。
+
 一页，替代 AI & Models 里的认证块和 Hive 页的账号块。用户来这里做的决定只有三个：**要不要重新登录**、**缺的
 能力怎么补**、**要几台 Hive**。页面按这三个排，其余放进展开。
 
@@ -566,7 +568,7 @@ Hive      2 台（期望 2，1–8 台）    约 $238/月                [− ] 
 - Hive 状态只是一条待办：显示在设置页和 Swarm Out，进 Need-You 一次；用户点"以后再说"后 Need-You 不再提醒，
   设置页仍显示。期望数量仍是至少 1，"以后再说"不改它。
 - **Need-You 的实现：** `core/attention_authority._collect_aws_account` 一个来源：账号"需要重新登录 / 账号不符"
-  是 BLOCKING，Hive "少 N 台 / 不能建"且没点"以后再说"是 REVIEW，各最多一条；点开是设置页"SwarmAI 账号"
+  是 BLOCKING，Hive "少 N 台 / 不能建"且没点"以后再说"是 REVIEW，各最多一条；点开是设置页"Swarm AWS Account"
   （`context.kind = aws_account`）。Hive 状态读 `hive/fleet.last_status()`（设置页和每 10 分钟的对齐循环算出的
   最近一次），attention 的线程里不读数据库。
 
@@ -765,7 +767,7 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
    对话"进产品；Hive 能力不够时向导仍能完成。
 6. **SSO：** 设备授权、看不到输入账号时的报错、令牌续期、续不了进"需要重新登录"、重新登录后恢复；客户端过期后
    重新注册；令牌不在 `config.json` / `secrets.json` / 备份里（有系统密钥库时）；AWS 登录的缓存目录 0700、不进备份。
-   **对话的路：** `chat.via` 三种值下 `cli_settings()` 给什么；只用 key 对话时有账号记录的 Hive 照常。
+   **对话的路：** `chat.via` 两种值（aws、bedrock_key）下 `cli_settings()` 给什么；只用 key 对话时有账号记录的 Hive 照常。
 7. **Hive 数量：** 不能删到 0，不能超过 8（期望数量、直接创建、重试三条路由都挡；7 台时并发 N 个创建请求只成功
    一个；第 8 台出错后能重试；8 台时能替换；已有 10 台的老用户不被终止，只能减少）；调大直接创建；别的原因少了只提示不创建；最后一台只能替换；表里 `error` 但 EC2 还在
    的计入；同一次调大并发两个请求只建差额；替换期间不报"多了"。
@@ -783,6 +785,8 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 2 LOW；correctness 1 MED（新装时一次性提示可能弹在向导上，改成只在向导走完后挂载）、6 LOW，一并改完。
 
 ## 10. 要 XG 定
+
+> v2.4.0 已按各条推荐实现（31945a43c、0a44e2fd1）；第 1 条的 Anthropic key 已去掉。
 
 1. **界面分层**（§6.1 ②、§6.2）：探测到的凭证优先一键用；推荐内部 ADA、SSO，外部 AWS 登录、SSO；访问密钥、手选
    profile、实例角色收在"更多方式"；Bedrock API key、Anthropic key 放在"先只用对话"。推荐这样。

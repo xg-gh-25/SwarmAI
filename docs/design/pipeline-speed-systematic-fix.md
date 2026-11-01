@@ -2,9 +2,9 @@
 title: Autonomous Pipeline 提速 — 系统化修复方案
 date: 2026-10-17
 created: 2026-10-17
-updated: 2026-10-17
+updated: 2026-11-01
 project: SwarmAI
-status: DESIGN — XG 已确认方向，含 A-G 七个工作流，按 §6 顺序实施；并行 session 提交隔离已拆到 parallel-session-commit-isolation.md 单独讨论
+status: 已实施后退役 — A–G 于 2026-10-17/18 在旧 pipeline 落地（§6）；stage-start/stage-complete、pipeline_test.py、pipeline_run_profile.py 等随 v1 切换和 S6 删除（f5b8b455e、6ba4726f6、20129f043），仍在的只有执行卡大小 lint 和 CI BVT 清单；并行 session 提交隔离已拆到 parallel-session-commit-isolation.md 单独讨论
 related: Opus 5.5 后 pipeline run 变慢（e4fc6ad4 / 2cb579ce / b3dd7ed9 / bfd8b9d3 / 48d377ec / ba1c8a22）
 author: Kiro（CLI transcript 取证 + 代码调研）
 ---
@@ -12,6 +12,8 @@ author: Kiro（CLI transcript 取证 + 代码调研）
 
 > 依据：2026-10-17 切到 Opus 5.5 之后的 5 个 run（`e4fc6ad4`、`2cb579ce`、`b3dd7ed9`、`bfd8b9d3`、`48d377ec`），数据来自 CLI transcript；当前 run `ba1c8a22` 和一次没走 pipeline 的直接修复作为补充。
 > 范围外：autocompact 阈值（另一个 session 在做）、模型选择、validator 规则本身的松紧（一条都不放宽）。
+
+> 2026-11-01：本文的命令和工具属于已退役的旧 pipeline；v1 不选、不跑测试（usable-by-anyone §3.3.3，20129f043）。
 
 ## 0. 一页摘要
 
@@ -128,7 +130,7 @@ python backend/scripts/artifact_cli.py stage-start --project <P> --run-id <R> --
 
 ### B. 测试：范围由工具算，归类由工具判
 
-> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、按耗时截断、`skipped_for_budget` 溢出都已不再适用，以 §6 末尾「B 的修订」为准。每次调用仍是 `alarm 110` + 95 秒截止，但选中的测试一个不砍：一次跑不完，输出 `continue: true`，再跑同一条命令只补跑没跑完的。现在 L3 = 本地跑 CI 的 BVT 清单 + import smoke。
+> **已部分废弃（2026-10-19）**：本节里 L2 的 40 个文件上限、按耗时截断、`skipped_for_budget` 溢出都已不再适用，以 §6 末尾「B 的修订」为准。每次调用仍是 `alarm 110` + 95 秒截止，但选中的测试一个不砍：一次跑不完，输出 `continue: true`，再跑同一条命令只补跑没跑完的。当时 L3 = 本地跑 CI 的 BVT 清单 + import smoke（runner 已删，20129f043）。
 
 **实测：测试问题有两种，碎片化比范围过大更普遍**
 
@@ -474,7 +476,7 @@ E 的改动面：`artifact_cli.py`（run-create 记录 session 和意图、完�
 
 每个 phase 走一次 pipeline run（full profile）。run ① 和 run ② 可以在两个 tab 里并行，改的文件不重叠。C 最后做，同时把执行卡里的命令换成新命令。run ① 要等 `ba1c8a22` 把它在 `artifact_cli.py` 上的改动提交之后再开始；run ② 改 `security_hooks.py`，开始前也要确认没有其他 session 正在改这个文件（目前只能人工确认，见 `parallel-session-commit-isolation.md`）。
 
-**B 的修订（2026-10-19，XG 确认）**：上文 B 节里 L2 的「40 个文件上限、溢出进 `skipped_for_budget`」和固定约 95 秒的截止时间已经废弃，现行规则如下：
+**B 的修订（2026-10-19，XG 确认）**：上文 B 节里 L2 的「40 个文件上限、溢出进 `skipped_for_budget`」和固定约 95 秒的截止时间已经废弃，当时的规则如下（runner 2026-10-24 已删除，20129f043）：
 
 - L2 选**全部直接 import 改动模块的测试**，加上提到被改 `backend/scripts/*.py` 的测试，不设上限，也不按耗时裁剪。
 - 每次调用不超过 Bash 默认的 120 秒（`alarm 110`，95 秒截止）。一次跑不完就输出 `continue: true` 和没跑完的数量，再跑同一条命令只补跑那部分（`_auto_recheck`），直到不再出现 `continue`。曾短暂试过 `--deadline auto` 把单次调用拉到 590 秒，但这要靠一个解析 shell 命令的 Bash timeout 门禁兜底，三轮评审都没收敛，已经撤掉。

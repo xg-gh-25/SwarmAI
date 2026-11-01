@@ -35,6 +35,8 @@ related:
 
 ## 1. 现状（对照代码）
 
+> 2026-10-31 写本文时的代码；之后的改动见 2026-11-01-hive-approvals-impl.md。
+
 | 事实 | 出处 |
 |---|---|
 | Hive 上 session 停下来等的东西都在 prompt board 上：AskUserQuestion，以及四个 gate 的审批：危险命令、外部工具、销毁数据存储、v1 授权 | `core/security_hooks.py:1893-2070`、`:2102-2215`；`core/data_safety.py:460-480` |
@@ -52,6 +54,8 @@ related:
 
 ### 2.1 谁派的单：派发记录写明，由调用方推出，不另设开关
 
+> 实现：App 没有派发入口，`dispatched_by` 不另存，由 `dispatched_from` 推出（impl §1.1）。
+
 - 派发记录加 `dispatched_by: person | host`，以及 `host` 时的 `owner_session`（派单的 host session）。
   - 由调用路径定：Swarm Out 界面的派发路由是 `person`；`scripts.swarm_out dispatch`（agent 的 CLI，命令前带着 `SWARM_APP_SESSION_ID`）是 `host`，`owner_session` 取那个
     session；lead run 经引擎派子单是 `host`，`owner_session` 是 lead run 的会话。
@@ -68,8 +72,8 @@ related:
 |---|---|---|---|
 | `question` | AskUserQuestion | 任务本身 | host 处理 |
 | `decision` | pipeline 的 DC-1 决定 | 任务本身 | host 处理 |
-| `hive_local` | `pattern:` 里的 `chmod`、`chown`、`kill`、`dd`、`mkfs`、写设备、写 `/etc`；`rm_unresolved_target`；`discard_*`。只限一条简单命令；`sudo`、`sh -c` 和任何组合命令归人（实现文档 2026-11-01 §2） | 这台 Hive 和它的工作区 | host 处理（等 §6） |
-| `run_authorization` | `v1_authorization` | Hive 上那个 run 的 clone，不碰 host 的 main | host 处理（等 §6） |
+| `hive_local` | `pattern:` 里的 `chmod`、`chown`、`kill`、`dd`、`mkfs`、写设备、写 `/etc`；`rm_unresolved_target`；`discard_*`。只限一条简单命令；`sudo`、`sh -c` 和任何组合命令归人（实现文档 2026-11-01 §2） | 这台 Hive 和它的工作区 | host 处理 |
+| `run_authorization` | `v1_authorization` | Hive 上那个 run 的 clone，不碰 host 的 main | host 处理 |
 | `remote_code` | `pattern:` 里的 `curl … \| sh`、`wget … \| bash` | 执行外面来的代码，能碰到 Hive 上人的 Brain 副本和 bridge 凭证 | 交给人 |
 | `off_machine` | 外部工具 gate；`reserved_action`（push、开 PR、发布、对外发消息） | 外面的世界 | 交给人 |
 | `irreversible_external` | `irreversible_external` | 外面的世界，不可逆 | 交给人 |
@@ -81,13 +85,15 @@ related:
 
 ### 2.3 host 怎么管：owner session 负责到底
 
+> 实现与此不同：没有叫醒，靠 watch 和接续块，10 分钟没人处理进 Needs You（impl §1.2、§5）；派出去的会话上归人的类别当场拒绝，不进 Needs You（zero-touch r3）。
+
 - **送到谁手里：** `owner_session`。和 Swarm Run 的叫醒同一套：`run_conversation`、`system` 来源、按事件的 `client_id`、只在会话空闲时发
   （Swarm Run §5.5）。内容是结构化字段和位置，Hive 写的问题文字按数据给出。
 - **怎么回答：** owner agent 用 CLI 回答，op 记为 `ask.answer_host`，调用方 `owner_agent`（lead run 经 `internal:conductor`）。只能答 `owner_session` 是自己的单子，
   只能答 host 处理的类别。审批和决定照旧要带它看到的内容的 `shown_sha256`。
 - **搞不定才往上：** owner agent 觉得这其实是在问人的意图、或者没把握、或者已经超出它这一单的授权，就 `escalate`，进 Needs You，标明"host <session 标题> 交上来的"。
   超出授权的类别（"交给人"那几类）不经过 owner agent，直接进 Needs You，同样标明是哪个 host session 的单子，因为人问责的对象仍然是那个 host session。
-- **owner session 不在了**（tab 关了、被丢弃）：Conductor 把它的等待交给人，标明原来归谁。接管以后归新的 owner。
+- **owner session 不在了**（tab 关了、被丢弃）：它的等待进 Needs You，标明原来归谁（没有 Conductor，也没有接管，impl §5）。
 - **向人交代：** host 在 worker 上处理过的每一件事都记下（谁、什么类别、问了什么、答了什么、为什么），进 owner session 的交付总结；Swarm Run 里进 lead run 的 REPORT。人问责 host，
   host 拿得出账。实现：每次回答记进这一单的结算记录，单子详情的"自主"页逐条列出（`swarm_out_actor.host_answers`）。
 

@@ -1,6 +1,6 @@
 ---
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 title: "第二阶段验证：'只有人能做'在什么前提下能成为边界"
 status: r2 — 验证方案，已过一次零上下文审查（§9）；§8 两件都已做；S0–S4 未开始。注意：XG 2026-10-31 定了方向，安全工作要保留 agent 代表他的完整权限，只防危险/不可逆动作和外部内容劫持；本文 S1 里"把 agent 和自己的配置、凭证、工作区隔开"的部分与此冲突，开工前要按这个方向重写
 related: docs/design/2026-10-31-swarm-out-ops-registry.md（§2.4 绕过路径、§6 第二阶段）· docs/design/2026-10-31-swarm-run.md（P0-c）
@@ -69,7 +69,7 @@ related: docs/design/2026-10-31-swarm-out-ops-registry.md（§2.4 绕过路径�
 | 2 | 文件工具、MCP 工具 | 不受沙箱管，读写所有用户文件 | owner session 也要有拒绝规则或路径检查 | `bypassPermissions` 下，CLI 的拒绝规则还对文件工具生效吗？ |
 | 3 | 下个 session 会执行的配置 | 往 SwarmWS 写 MCP 配置或 hooks，下个 session 在沙箱外跑 | 这些配置移出 agent 可写的目录，或禁止写 | CLI 从哪些路径读 MCP、hooks、settings？能不能指到别处？ |
 | 4 | daemon 当副手 | 经本机 HTTP 改沙箱设置、加 MCP、装插件、做人专用的 Swarm Out 动作 | 所有改变 agent 能力的路由和所有人专用路由都要求"人的证明"（§5） | 这类路由一共有多少？（用第一阶段登记表的办法，枚举 `app.routes`） |
-| 5 | webview | 一处脚本注入就能以任意参数运行 python / node（在沙箱外，以 App 身份）、开终端、开检查器 | 删掉没用的 shell 权限（已做，§8）；发布版关掉 devtools；限 `script-src`；终端和签名都要原生手势 | 现有渲染有没有可执行脚本的注入点？ |
+| 5 | webview | 一处脚本注入就能以任意参数运行 python / node（在沙箱外，以 App 身份）、开终端、开检查器 | 删掉没用的 shell 权限（已做，§8）；发布版检查器默认关（已做，§8）；限 `script-src`；终端和签名都要原生手势 | 现有渲染有没有可执行脚本的注入点？ |
 | 6 | 系统和界面 | `osascript`、`screencapture`、剪贴板（`pbpaste`）、`docker -v $HOME` | 沙箱外命令清单清空；剪贴板和截屏列为读的通道 | 逐个命令在沙箱里试 |
 | 7 | Hive 侧 | Hive 自己的 agent 和 Hive daemon 同用户；Host 用户的凭证有 Hive root | Hive 账户用专用凭证、放 agent 读不到的地方，泄露过的都要轮换；Hive 侧同样需要沙箱；Hive 拒绝转发它不认识的人专用路径 | agent 能用的凭证真的碰不到 Hive 吗？（用 dry-run 实测，不只看策略模拟） |
 
@@ -152,7 +152,7 @@ ad-hoc 签名下每次升级都要重新授权的话，就需要 Developer ID �
 2. **发布版的检查器默认关、按需开（已做）。** `devtools` 特性保留，主窗口只在 debug 构建或带 `SWARMAI_DEBUG`（非空、非 `0`）启动时打开检查器（`desktop/src-tauri/src/lib.rs` `devtools_wanted`）。要排查时退出 App，再 `open --env SWARMAI_DEBUG=1 -a SwarmAI`；线上诊断（如 `diagFlags.ts` 的开关）照常可用。第二阶段做人签名时，签名命令还要求原生手势，不依赖检查器关着。
 
 **要 XG 定：**
-- 这两件事现在做吗？
+- ~~这两件事现在做吗？~~ 已做（§8）。
 - 第二阶段要不要开始 S0？
 - 如果 S0 显示 Hive 要用单独的账户，你自己的 Hive 账户愿意换吗？
 

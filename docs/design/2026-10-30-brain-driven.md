@@ -1,16 +1,16 @@
 ---
 title: Brain-driven：主文件就是最新的有效全集
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-11-01
 project: SwarmAI
-status: 待确认
+status: 已实现（除 §2.1 adds 合并：判官已删，不做；§2.5 ref/last/decay 未删；§2.6 清理未执行）
 supersedes: 2026-10-30-recall-that-measures-itself.md
 follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026-10-30-brain-change-feed.md
 ---
 
 # Brain-driven：主文件就是最新的有效全集
 
-状态：设计 v5，待 XG 确认执行方式。本版是 XG 和我讨论后（2026-10-30）收敛的结果，取代 v1–v4。
+状态：设计 v5，已按 §4 执行（2026-10-30）；未做的见 status 行。本版是 XG 和我讨论后（2026-10-30）收敛的结果，取代 v1–v4。
 早期版本中被推翻的部分见 §9。
 
 ## 0. 原则
@@ -65,6 +65,8 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 
 ### 2.1 覆盖
 
+> 注：verify 判官已删（91519b0d1），关系由 agent 声明（cdf-agent-decides D1）；adds 只挂 derived_from，不合并。
+
 - **合并**：判官对同一文件里的现存条目给出 `adds` 时，writer 把旧条目的完整内容和新内容合成一条，原位覆盖。
   - 类型取两者中衰减豁免的那个；
   - 不会丢内容，也不会重复。
@@ -89,9 +91,9 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 - **防写回**：
   - 撤回记录带内容指纹，即去掉注释、空白归一化后正文的 sha256；
   - 指纹相同的单元，在判官之前就拒收；
-  - 相似的撤回原文作为命中交给判官，判官给出 `same` 就拒收。
+  - 相似的撤回原文作为候选给声明关系的 agent，声明 `same` 或 `adds` 就拒收。
   
-  今天这道拦截不存在，已经发生过一次写回。
+  这道拦截原先不存在，已经发生过一次写回（def6bbaa4 已补上）。
 
 ### 2.3 去掉"挂起"
 
@@ -100,7 +102,7 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 - Brain Hub 的计数（`brain_graph`、`context_brain`）改为只统计"有效"。
 - **现有约 190 条 dormant**：dormant 只是按时间打上的，恢复成有效是它的机械逆操作，所以全部恢复为有效，去掉这个标签。
   其中如果有过时的，按原则 5 在新判断进入时处理。
-- MEMORY 在预算内按分数挑选整条注入（AGENT R22），这是排序，不是删除，不变。
+- MEMORY、EVOLUTION 整份注入，不再按预算和分数挑选（cdf-agent-decides D11）。
 
 ### 2.4 统计
 
@@ -111,12 +113,16 @@ follows: 2026-10-29-cdf-session-review.md, 2026-10-30-cdf-gap-lifecycle.md, 2026
 
 ### 2.5 删掉死字段
 
+> 注：maturity 写入方已删（9e9f316fc）；ref:/last:/decay: 仍在写（core/ingestion/writer.py）。
+
 - 删掉 `maturity` 注释，以及 `ref:` 计数、`decay:`、`last:` 这几个字段（衰减取消后，后两个也没有读取方了）。
 - 元数据注释里保留 `source:` 和 `taint:`。
 - 删之前逐个确认读取方：`ddd_maturity.py`、`memory_decay.py` 的 `ref_count` 参数来源、`ddd_format.py`、`archive_browse.py` 等。
   有生产读取方的字段先迁移读取方，再删。
 
 ### 2.6 一次性清理（先出清单给 XG 看）
+
+> 注：工具 backend/scripts/brain_cleanup.py 已就绪（1ee1b7dce），尚未在线上执行。
 
 - 残留的旧条目：撤回。只撤回"同一文件，且新条目包含旧条目完整内容"的那些，其余列出来，不动。
 - 墓碑：删除，并给 `redactions` 补上指纹。

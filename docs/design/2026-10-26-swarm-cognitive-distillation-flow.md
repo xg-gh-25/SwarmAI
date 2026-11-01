@@ -1,9 +1,9 @@
 ---
 title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎：提取与 ingestion 解耦，Memory、DDD、Knowledge 统一的 Inbox、答题卡、写入与 Flow 视图
 created: 2026-10-26
-updated: 2026-10-27
+updated: 2026-11-01
 project: SwarmAI
-status: r16.7 — 设计（source 与提取重写；吸收多轮独立评审，待用户审），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
+status: 已实施（2026-10-29 切换上线，v2.4.0）；判断层已被 2026-10-30-cdf-agent-decides.md、2026-10-30-brain-driven.md 取代（判官、S2、配额、注入预算、熔断、unknown_domain 已删）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -146,7 +146,7 @@ daemon 和 dev/subprocess 两种 backend 可以同时运行（见 `main.py:1474-
 
 **术语**：
 - **唯一的自主写入者**是 ingestion worker。
-- **唯一的落盘接口**是 `core/corpus_materializer.py`，writer 和 `governed_edit` 共用它。
+- **唯一的落盘接口**是 `core/ingestion/materializer.py`，writer 和 `governed_edit` 共用它。
 
 受控语料的所有文件操作（写、追加、替换、归档、删除、移动、复制）都只能经过 materializer。materializer 在运行时判断路径是否受控：只要解析后的真实路径落在受控根目录下，就必须带上写入计划或编辑操作的 id，否则拒绝执行。
 
@@ -445,6 +445,8 @@ Flow 视图除了写入率，还要显示每个 source 的**提取覆盖率**：
 - Save to Memory 按钮已删除（2026-11-01）：每个会话结束后 CDF 都会读一遍，按钮只是让它早一点开始，记录到的点击为 0。
 - 像"记住周五看牙医"这种只有 what 的单元，作为 Cognition 时会因为缺 why 而拒绝（如果用户这句话本身就是一个事件，则按 Event 提交）。不允许为了凑字段而编造 why。
 
+> 已删除（2026-10-30）：会话由 S7 会后复盘处理（cdf-agent-decides D4）。
+
 **S2 会话**（成本见 §12）：按页读取**完整**的对话记录，不设"最近 500 条"或"最近 2.5 万字符"之类的上限。每个单元都要引用它所依据的消息 id。重点提取：
 - 用户的决定和取舍，以及被否掉的方案和原因；
 - 用户的纠正，包括叙述式的纠正；
@@ -548,6 +550,8 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
 **只强化合格的认知**：新单元必须先通过卡 1 的质量题，被强化的条目本身也必须合格。Event、Gap、Reference（包括外部链接）不参与强化。
 
 **卡 0 不挡强化**：卡 0 的 `already_exists` 只拒绝**证据根集合也相同**的完全重复。用户换一个场合原样重申一条认知，证据根不同，会进到卡 3，再由上面的判定流程记为 `reinforced`。
+
+> 已删除：MEMORY/EVOLUTION 整份注入（cdf-agent-decides D11）。
 
 **读取侧的分数**（阶段 C 实施）：`score = base(layer) × decay(age, last_used) × support(Σ 独立根的权重，有上限) × trust − refute_penalty`。
 
@@ -653,6 +657,8 @@ flowchart LR
 | `TIMELINE` | 关键事件 | Event | S1、S2、S3 第 1 段、S4 | 注入近期事件和月摘要（§5.6） |
 | 项目 DDD | 只属于这个项目的决定、取舍、架构、约定、陷阱、经验、改进点 | Cognition / project:X（DDD 存在）、Gap | S3（主要）、S2 | 按项目注入 section 指针（不变，§12） |
 | `Knowledge/`（公共 DDD） | Reference 文档；**没有专属 DDD 的项目认知和改进点**；属于某个领域的认知；目的地是注入文件但被污染的规则（§9.1） | Reference；Cognition / project:X（DDD 不存在）或 world 非全局；Gap（DDD 不存在） | S2、S3、S4、S6 | 只走 recall，被污染的内容放在不可信数据边界里 |
+
+> 已被取代：写进 General Brain（contracts_v2.route_general），不再挂起 unknown_domain。
 
 **没有项目归属的认知，分三种情况**：
 1. **项目确定，但没有 DDD** → 公共 DDD `Knowledge/Learned/repos/<slug>.md`；
@@ -763,6 +769,8 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 
 ### 5.13 会后复盘为主，事后重读兜底（r16.15）
 
+> 2026-10-30 起每个有用户消息的会话都复盘；安静 60 分钟触发，最多等 3 小时；S2 两遍已删。
+
 **完整设计在 `2026-10-29-cdf-session-review.md`，以那份为准**；这里只是摘要。
 - 有实质内容的会话（至少 3 条用户消息、10 次工具调用、写过任何文件，或者用户立规矩、纠正过），空闲 10 分钟或关闭后，后台用 SDK 的 `resume` 加 `fork_session` 打开同一个会话的分叉，无工具、结构化输出，按事后回顾四问复盘，产出 S7 单元。
 - 用户回合里不加任何东西；不做针对编程的触发；research、文档、deck、mockup、brainstorm 同等对待。
@@ -837,6 +845,8 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 三者都确定不了，就 `DEFER ambiguous_project`。卡 1 只能从项目快照里选项目，不能自己编造。
 
 ### 7.1 标准答题卡（沿用 r12，r14 修正了改投和"更新"两处）
+
+> 已被取代：卡 1、卡 3 判官已删，关系由产出单元的 agent 声明，见 2026-10-30-cdf-agent-decides.md §2–§3。
 
 #### 卡 0：规则（不调 LLM）
 
@@ -991,7 +1001,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 **用户 context 文件（STEERING / USER / TOOLS）**
 - **C1 只写用户自己的文件**：目标必须是 `auto_write_eligible` 文件，路径落在用户的 live `.context/` 下，不能在 `templates_dir` 下，且没有被 git 跟踪（§11）。
 - **C2 证据**：证据强度必须是 `user_explicit`，也就是依据的输入事件全部来自用户本人发出的消息。
-- **C3 只写系统追加段**（r16.7）：CDF 写进 STEERING / USER / TOOLS 的条目，一律只追加到文件里单独的 `## 系统追加（自动提取）` 段（契约常量 `SYSTEM_APPENDIX_HEADING`；段不存在时 writer 在文件末尾新建），永远不和用户亲手写的内容混在一起，也不改用户写的部分。和用户写的内容冲突时 `REJECT conflicts_user_text`，由用户自己去改。用户把系统追加段里的条目挪到自己写的部分，就是用户亲手确认了这条规则，按 §13 修订基线。
+- **C3 只写系统追加段**（r16.7）：CDF 写进 STEERING / USER / TOOLS 的条目，一律只追加到文件里单独的 `## System appendix (auto-extracted)` 段（旧名仍识别；契约常量 `SYSTEM_APPENDIX_HEADING`；段不存在时 writer 在文件末尾新建），永远不和用户亲手写的内容混在一起，也不改用户写的部分。和用户写的内容冲突时 `REJECT conflicts_user_text`，由用户自己去改。用户把系统追加段里的条目挪到自己写的部分，就是用户亲手确认了这条规则，按 §13 修订基线。
 
 **Library（Notes / Library / Learned）**
 - **L1 独立可读**：必须有标题，正文至少 200 字，离开原会话也能读懂。
@@ -1161,6 +1171,8 @@ S1 单元的内容由 agent 组装，服务端原来只校验 `--evidence` 是�
 
 ## 10. 统一 dashboard：扩展 Need You overlay
 
+> Flow 页见 2026-10-30-cdf-flow-view.md，健康页见 2026-10-31-cdf-health.md；source 熔断已删。
+
 Need You 现在是"需要你处理"的统一入口：它从 `AttentionAuthority`（`GET /api/attention`）取数据，按 tier 加 brain 分组展示。
 ingestion 是认知系统的核心流程，所以放在这里，不另开新页面。overlay 用共享的 `Tabs` 组件分成两页。
 
@@ -1229,6 +1241,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - §5.7 的 7 天 DailyActivity 注入：现在 `prompt_builder` 只在非频道会话里加载 DailyActivity（`not is_channel`），一周注入沿用这个条件，并加一条测试固定它。
 
 ## 12. 读取侧和容量
+
+> 已被取代：注入预算、写入容量、熔断已删，整份注入（D11）；TIMELINE 仍有 1500 token 预算。
 
 - **每轮注入文件的确定性预算**（本次改变 AGENTS.md 里"读取侧永不截断"的规则）：
   - MEMORY、EVOLUTION 各有一个注入上限，默认 MEMORY 24K tokens、EVOLUTION 8K tokens，可配置。源文件一个字节都不改。
@@ -1394,6 +1408,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   某个 source 不达标时，只修这个 source 的提取或规则，然后重新观察这一个 source，不回退整个阶段。
 
 **阶段 C：注入预算（读取侧）**
+
+> 曾实现（cdf-launch C2），2026-10-30 删除（600356740）。
 
 MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按惯例要单独做成对回放和盲评，所以单独列为一个阶段。
 
@@ -1642,4 +1658,4 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 
 ## 19. 验收结果
 
-（实施后填写。）
+2026-10-29 切换上线，记录见 2026-10-29-cdf-launch.md §7。

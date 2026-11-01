@@ -2,9 +2,9 @@
 title: 回合进行中追加消息 —— steer 进正在跑的 turn
 date: 2026-10-24
 created: 2026-10-24
-updated: 2026-10-25
+updated: 2026-11-01
 project: SwarmAI
-status: draft v1.10（§9 已拍板；E1–E14 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 复审取消，下一步写失败测试（P1a 先行）；D7 未设计）
+status: 已实现（v2.4.0 发布；P1a、D1–D6、D8 与 P2 均已合入，D7 见 2026-10-25-chat-steer-frontend.md；steer_busy_send 默认开，P3 删开关未做）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -98,7 +98,7 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 - 不在 Stop 回收中（`unit._stopping`），不在中断中（`_interrupted`、tool-hang 看门狗的
   `_tool_hang_interrupt_at`），不在 API 错误重试中（`_retrying`），没有待执行的 self-heal 收尾
   （`_graceful_wrap_pending`）。`_client_io` 由 D2 写入时持有，不单独判断；
-- 配置开关 `steer_busy_send`（app config）为真（P1 期间默认关，P2 前端上线后打开，§8）。开关关时回执、
+- 配置开关 `steer_busy_send`（app config）为真（默认开，a3f433a1b；P1 期间曾默认关，§8）。开关关时回执、
   快照逐字节不变：`queuedReason`、`steer`、`steering`、`segments` 只在开关开或确有 steer 时出现。
 
 **判断和登记之间不能有 await（H4）。** 顺序：`mark_steer_inflight`（异步 DB 写）→ 同一段同步代码里
@@ -110,9 +110,9 @@ CLI 没收到消息之前不会有回显。
 任一不满足 → 走现在的 `_queue_admitted_send`，回执多带 `queued_reason`（`question` / `permission` / `busy`，D7 标签用），其余行为不变。写入时 CLI 恰好在写最终回复，
 它会把消息当下一轮（X7），由 D6 接着读，不需要再判断一次。
 
-### D2 写入：`write_steer_message`
+### D2 写入：`SessionRouter._try_steer`
 
-新函数，和 `write_user_message` 放在一起，不改后者的行为：
+实现在 `session_router.py`（`_try_steer`），不改 `write_user_message`；文中 `release_steer_to_pending` 即 `session_pending.release_steer` + `_release_steer_row`：
 
 - 持有 `_client_io` 写（短暂，和 `send` 一样获取后释放）；
 - 按 D1 的顺序：先把 user 行转成 **steer 在途**状态（见下），再同步重判、
@@ -165,7 +165,7 @@ tab 要到下一次 resync 才看见。所以 `confirm_steer` 写完调一次 `_
 `pending_seq = NULL` 的排队行：`claim_pending_batch` 会取走它，`mark_sent_batch`（`pending_seq IN`）
 却永远翻不了它。依据 E7：进程在回显前死掉，`--resume` 时 CLI 不执行它、历史里也没有它，所以转回
 排队不会重复。剩余风险：回显已到、回显时的那一次 DB 写还没完成时 daemon 崩溃，这条行会在重启后再发一次。
-窗口就是一次 UPDATE；写失败时记 ERROR 并重试一次，不转 pending。
+窗口就是一次 UPDATE；写失败时记 ERROR 并退避重试 5 次，不转 pending。
 
 **消息组装。** D1 的判断点在 `_run_conversation_impl` 里 `opener.open` 失败处，这时 content 还是
 用户原话加附件：正常发送要拼的前缀都在后面（`session_router.py` 发送路径），排队的消息则存下
@@ -303,7 +303,7 @@ steer 不会混进重试的请求。
    否则它们会被挂到 steer 之后的那一行，和 tool_use 分开；
 2. user 行的确认不在这里：回显那一刻 `on_steer_echo` 已经 `confirm_steer`（D2）。writer 只处理 assistant 行；
 3. 之后的 assistant 行改用 row_key `"{steer_client_id}-asst"`，也就是"这条 steer 消息的回复"。
-   row_key 现在固定在 writer 上（`TurnWriter._row_key`），所以 writer 加 `switch_row_key(new)`；
+   writer 在 `_steer_segment` 里把 `TurnWriter._row_key` 换成新段的 key；
    同时把 `unit._turn_row_key` 改成 `steer_client_id`（新字段，见下），让这一 turn 里之后的
    `continue_with_answer` / `continue_with_cmd_permission` 和 Stop 回执（`_persist_stop_receipt`）
    都写到新段，而不是写回 steer 之前那段（F5）；
@@ -337,6 +337,8 @@ client_id。
 之后才到、落进新段。实测不会：子 agent（E2）和同一条消息里的并行调用（E9）都是整批 result 回来
 之后才回显。所以 `append_to_turn_row` 不改。只加一个不变量检查：tool result 对应的 tool_use 在
 更早的段里时记 ERROR（观察 CLI 行为是否变了，不做恢复）。
+
+> 已被 2026-10-25-chat-steer-frontend.md §8 取代：重放读到 steer 时复用该段，不按 segments 删段。
 
 **前端重放（F5、M3）。** `beginSubscriptionTurn` 重放时只清 `metadata.client_id === cid` 的行
 （`useChatStreamingLifecycle.ts`），中途重新订阅的 tab 会把 steer 之后那段显示两次。改成清掉
@@ -710,9 +712,9 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T29 用 fake 帧序列驱�
 |---|---|---|
 | P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7–E9），结论在 §5，已改 D1–D8 | — |
 | P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。E12、E13 已完成（§5）。~~D6 复审~~ 取消（XG，2026-10-25）：设计已审四轮，按 AGENT § Iterative Refinement 接下来由测试验证；D6 的三个重点（判断位置、兜底先回收再收尾、TurnAbandoned 路径）由 T7、T24–T28 覆盖。写测试时发现设计和代码对不上，直接改设计，不再起审查轮次 | — |
-| P1 | 先写失败测试，再实现。后端 D1–D6、D8，开关默认关；P1a（D2 行状态，T14）不依赖 D6，先做 | T1–T9、T12a–T16、T18–T29 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
-| P2 | 前端 D7；打开开关 | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
-| P3 | 观察一周后删开关 | 日志里 `steer_folded` / `steer_opened` / `steer_never_read` 计数无异常（最后一个应为 0） |
+| P1 | 先写失败测试，再实现（已完成：8f0a8b72a…17f5b121a）。后端 D1–D6、D8，开关默认关；P1a（D2 行状态，T14）不依赖 D6，先做 | T1–T9、T12a–T16、T18–T29 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
+| P2 | 前端 D7；打开开关（已完成：b5d96b0de…2d790bc74、a3f433a1b） | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
+| P3 | 观察一周后删开关 | 日志里 `session_router.steer_read`（按 outcome）/ `steer_never_read` 计数无异常（后者应为 0） |
 
 ## 9. 已拍板（XG，2026-10-24）
 

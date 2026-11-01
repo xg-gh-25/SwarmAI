@@ -2,16 +2,18 @@
 title: Pipeline 评审收敛：修复循环的系统化方案
 date: 2026-10-19
 created: 2026-10-19
-updated: 2026-10-19
+updated: 2026-11-01
 project: SwarmAI
-status: v2 已确认（XG 2026-10-19 05:32「正好泡一下 Run 1：N2 + N4」）；N3 于 16:06 修订为全自动（不收敛 → 根因复盘，不交给人）。Run 1 = run_925edb0e 实施中；N3 提到 Run 2（XG 2026-10-19 14:23）
+status: 已退役 — N2+N4（65f46b2ee）、N3（e320f5a6d、c247dca3）曾在旧 pipeline 实现，N1、N5 未见实现提交；随 2026-10-22 Pipeline v1 切换全部删除（f5b8b455e）。v1 的评审收敛见 2026-10-31-pipeline-review-close-and-landing-route.md
 related: pipeline-speed-systematic-fix.md（A–G，大部分已落地）；parallel-session-commit-isolation.md（worktree 隔离，单独决定）
 ---
 # Pipeline 评审收敛：修复循环的系统化方案
 
 > **范围**：REVIEW 和 DELIVER Gate-2 中「发现 → 修复 → 再审」这个循环。不改评审标准，不减首轮 reviewer，不放宽任何 gate。
 >
-> **不在范围**：并行 session 的提交隔离（worktree 模式已实现，默认关闭）、单步模型延迟、测试机负载。
+> **不在范围**：并行 session 的提交隔离（worktree 模式已实现，2026-10-25 起每个 run 都有 worktree）、单步模型延迟、测试机负载。
+
+> 2026-11-01：本文描述的是已退役的旧 pipeline（gate2-recheck、artifact_cli、pipeline_validator），机制已随 f5b8b455e 删除；Pipeline v1 的轮数规则见 2026-10-31-pipeline-review-close-and-landing-route.md 改动 1。
 
 ## 0. 一页摘要
 
@@ -165,7 +167,7 @@ v1 认为根因是「修复只对着触发它的那一处验证，没检查其�
 
 > 实现方案、关键决定和风险见 `pipeline-review-n3-implementation.md`。
 
-> **已先落地（c247dca3）：轮数上限本身。** `core/review_round_gate.py` 在派 sub-agent 之前数这个 expert 在当前 stage 已完成的轮数，第 4 轮直接拒绝。拒绝文本要改成「去做根因复盘」，原来是「交给 XG」，这部分随 Run 2 一起改。
+> **已先落地（c247dca3；该文件 2026-10-22 随 f5b8b455e 删除）：轮数上限本身。** `core/review_round_gate.py` 当时在派 sub-agent 之前数这个 expert 在当前 stage 已完成的轮数，第 4 轮直接拒绝。拒绝文本要改成「去做根因复盘」，原来是「交给 XG」，这部分随 Run 2 一起改。
 
 - AC1 `gate2-recheck`：第 3 轮复核完仍有阻断项时，不输出复核 prompt，改为输出 root-cause expert 的 prompt（需求、PLAN、三轮发现、每轮修复引出的新发现），返回 `root_cause: true`；`--force` 无效。
 - AC2 某一轮所有派出的 reviewer 都没有新的阻断项 → `converged: true`，下一步就是 meta-review，不再派复核。

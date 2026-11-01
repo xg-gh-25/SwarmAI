@@ -1,9 +1,9 @@
 ---
 title: Pipeline 只管两头 — 合并 native-execution 草稿、现行 spec 和 10-26 发现的问题
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-11-01
 project: SwarmAI
-status: r3 — 已实施（§8 第 1–7 步）；自动续跑、spec profile 另议
+status: r3 — 已实施（§8 第 1–7 步）；自动续跑（NE-6）、spec profile 未做；§4.1"大任务拆成一串 run"已被 2026-10-29-pipeline-retro-fixes.md F2 取代
 ---
 
 # Pipeline 只管两头
@@ -108,7 +108,7 @@ r7 定稿（"pipeline 不观察、不执行测试，用 agent 自己的结果"�
 | direct | 无文档，需求是 `--requirement` 原话 | build, review, test, deliver, reflect | 代码 |
 | research | REQUIREMENTS | evaluate, think, deliver, reflect | 报告，不落地 |
 
-大任务（goal 原本的用途）拆成一串按顺序执行的普通 run。是否加 `spec` profile 见 §7 决定 2。
+大任务（goal 原本的用途）是一个 full run，PLAN 把每一部分列成 task；只有互不依赖的需求才分成多个 run（2026-10-29-pipeline-retro-fixes.md F2）。是否加 `spec` profile 见 §7 决定 2。
 
 ### 4.2 能力表
 
@@ -118,7 +118,7 @@ r7 定稿（"pipeline 不观察、不执行测试，用 agent 自己的结果"�
 |---|---|
 | `lands_code` | 落不落地代码（research 为 False） |
 | `gate0` | `always`（bugfix）/ `readings`（full：两种以上理解时）/ `never` |
-| `requirements` | `full` / `lite`（direct）/ `None` |
+| `requirements` | `full` / `words`（direct：只有用户原话）|
 | `design` | `full` / `lite`（trivial）/ `None`（research、direct） |
 
 engine、lifecycle、next_step、checks、schemas、cli_commands 里按名字比较的地方全部改为读这张表。`checks.py` 的豁免表保留，因为它记录每条检查为什么不适用。

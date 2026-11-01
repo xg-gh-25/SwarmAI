@@ -1,6 +1,6 @@
 ---
 title: 从新建 Brain 到 Hive 单落地，不等人
-status: r4 implemented (r4, XG 2026-11-01: the two dispatch questions, which Brain and which mode, become defaults; merged with 2026-10-31-hive-approvals: who answers a wait comes from its approval class)
+status: r4 已实现（005fb9930、e259288f2）：派单前的"哪个 Brain、哪种 mode"改为默认值；与 2026-10-31-hive-approvals 合并，等待由 approval class 决定谁答。未做（005fb9930 记下的）：继续建 Brain 的会话有完整 owner 权限；start-hive 的"没有在跑的 Hive 才启动"只在 CLI 里查，start 路由不查；Hive 要装下一版包
 created: 2026-11-01
 updated: 2026-11-01
 owner: XG

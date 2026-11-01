@@ -1,6 +1,7 @@
 ---
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-11-01
+status: implemented (r2 + r3); §0.3 ownership superseded by 2026-10-29-code-intel-auto.md D1; refresh triggers extended by code-intel-auto D3 and code-intel-e2e §2.C
 ---
 
 # Code intel: one way in, one way to build, one way to update
@@ -30,12 +31,16 @@ Method, reproducible: the last 14 days of session transcripts (`~/.claude/projec
 
 ### 0.2 Rules
 
+> Rule 3 extended: Brain Hub /summary requests an update when a graph is stale or from an older parser; a pipeline run's start builds each run repo (code-intel-auto D3, code-intel-e2e §2.C).
+
 1. **The daemon never parses or writes a repo's graph.** It reads: Brain Hub, its recall, the Library search. Every build and update runs in a separate process. The one parse left in the daemon is the build-verification probe (`main.py:2031`, one snippet, `verify_build` only), and the grammar pre-warm (`main.py:995`) stays for it.
 2. **A graph is built for every local repo a Brain owns** when the Brain is created or updated, and ownership has one declaration (§0.3).
 3. **A graph is refreshed when it is read out of the daemon** (`impact`, `analysis`, the survey, the recall CLI's `codeintel` leg). Nothing refreshes in the background, so a repo nobody reads costs nothing.
 4. **Code symbols leave the per-turn auto-recall.** They stay on demand.
 
 ### 0.3 Build and ownership
+
+> Superseded by code-intel-auto.md D1: bind --local owns a root at once; pending, the Confirm card and endpoint are deleted.
 
 - **Today:** only `bind_repo` creates a graph (`ddd_bindings.py:563`), plus `index_code_mount` for a Library mount (`library_mounts.py:553`). `load_project_graphs` opens only dbs that already exist (`code_intel_dbs`, `__init__.py:50`). So, as measured above:
   - an internal or Brazil binding raises `NotImplementedError`;
@@ -153,8 +158,8 @@ Left as they are:
 - **One commit for steps 1–3.** Their tests interleave (every graph writer's test needs the new ownership), so they land together; step 4 (auto-recall, the eval case) lands on its own.
 - **The children are `subprocess.Popen` with `start_new_session`,** started from `asyncio.to_thread` (`build.spawn_child`), not `asyncio.create_subprocess_exec`: the same launcher serves the daemon endpoints, the job and `ensure_fresh`, and the endpoint keeps the `Popen` to answer "already indexing".
 - **`bind_repo` and the Library mount index take the graph's write lock** (bind waits, a second mount index answers `already_indexing`), and the rebuild child skips a clone while a bind holds it. The plan named the lock for `build` only; without it a child started before a bind raced the bind's rebuild.
-- **The eval case** `CI_IMPACT_FRESH` (`scripts/probe_code_intel.py`) fits the cap: the product set was at 49 when it was added.
-- **Tests:** the §0.6 invariants are in `tests/test_code_intel_r3_invariants.py` (a second process reads mid-rebuild; a SIGKILLed writer; every `ensure_fresh` state; Confirm as the only writer of `confirmed`; an AST scan that no daemon module references a graph writer) and `tests/test_code_intel_local_roots.py`; each was checked by reverting what it guards (`scripts.mutation_check`).
+- **The eval case** `CI_IMPACT_FRESH` (since replaced by `CI_IMPACT`, code-intel-auto D6) (`scripts/probe_code_intel.py`) fits the cap: the product set was at 49 when it was added.
+- **Tests:** the §0.6 invariants are in `tests/test_code_intel_r3_invariants.py` (a second process reads mid-rebuild; a SIGKILLed writer; every `ensure_fresh` state; only `bind --local` and the job's one-time migration add a local root (r4); an AST scan that no daemon module references a graph writer) and `tests/test_code_intel_local_roots.py`; each was checked by reverting what it guards (`scripts.mutation_check`).
 
 ### 0.10 Receiver types and references (after r3, 2026-10-29)
 
@@ -166,7 +171,7 @@ Measured first: on a real diff, the callers report listed 34 callers of `Session
 - **Also fixed on the way:** `scan_imports` dropped `import a.b as m` aliases; a resolved edge colliding with an existing one raised, and that failure made the cleanup delete every still-unresolved edge (half the real graph). A failed resolution now skips the cleanup, and colliding edges are merged.
 - **Measured on SwarmAI (temp db, same commit):** edges 84.5K → 91.2K; 11.7K calls marked name-only; 7.0K typed; 12K references; dead-code symbols 1,271 → 1,091; module edges 152 → 131 (guesses left out).
 - **Review:** correctness, one round (1 HIGH, 3 MED, 3 LOW, 3 test gaps), all fixed; every guard mutation-checked (`tests/test_code_intel_receivers.py`).
-- **A graph built before this keeps its old edges** until it is rebuilt (Brain Hub Re-index).
+- **A graph built before this keeps its old edges** until it is rebuilt; since r4 a graph from an older `PARSER_VERSION` rebuilds itself (code-intel-auto D3).
 
 ## 1. What the graph is for: the readers that reach someone
 

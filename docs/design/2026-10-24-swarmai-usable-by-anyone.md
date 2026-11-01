@@ -1,9 +1,9 @@
 ---
 title: SwarmAI 让别人装上就能用 — 产品原则、安装包、通用 pipeline（Sev-1）
 created: 2026-10-24
-updated: 2026-10-25
+updated: 2026-11-01
 project: SwarmAI
-status: final r18 — XG 2026-10-24 定稿；r1–r18 的演进见末尾"修订记录"
+status: 已实施（v2.4.0 发布）— S1–S6 全部落地；REFLECT 去向已由 CDF 取代，LG-1 已由 2026-11-01-pipeline-delivery-friction 放宽；修订记录见末尾
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -94,7 +94,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - `daemon`（默认，现行为）；
   - `pipeline-v1 <args>`；
   - `py <script.py> [args]`：用包里自带的解释器和已打包的模块执行一个 Python 脚本（`runpy.run_path`）。MCP 脚本、自升级脚本、skill 脚本都改用它。只能用包里有的模块；需要别的第三方包的 skill 在 frontmatter 里声明依赖，缺依赖时 agent 告诉用户。
-- `get_python_executable()` 在打包版里返回 `[python-backend, "py"]`，不再找系统 Python。
+- `get_python_executable()` 已删除（S3a）：打包版一律用 `"$SWARM_BACKEND_BIN" py`。
 - S3 实施前先列一份清单：打包版里每一个会起 Python 子进程的地方，逐个改成子命令；G1 在没有系统 Python 的环境里覆盖 MCP、自升级和有代表性的 skill 脚本。
 - 每个 agent 会话注入 `SWARM_BACKEND_BIN` = daemon 自己的 `sys.executable`（指向 `runtime/<version>/` 里确定版本的那份，不指向会变的 `current`；升级后 daemon 重启，新会话拿到新值）。打包版和 dev 版的 pipeline 命令形式相同（P7）：`"$SWARM_BACKEND_BIN" pipeline-v1 …`；dev 版里 `SWARM_BACKEND_BIN` 指向 `backend/bin/python-backend` shim，用 venv 运行同一个入口。`source_repo.json` 和 `utils/source_repo.py` 在 S6 删除（r14：runner 还在时，`_is_our_script` 和 runner 的 `test` token 靠它认脚本，`run_owner_gate.py:158-161,519-541`）。
 - gate 识别 pipeline 命令最终只有一种形式："确切可执行文件路径 + 子命令"：`argv[0]` 解析后必须等于 `SWARM_BACKEND_BIN` 的真实路径，`argv[1]` 必须是 `pipeline-v1`。r14：S3 加入新形式，旧的"python + 确切脚本路径"形式保留到 S6，和 runner 在同一个 commit 里删，中间任何一个 commit 上 pipeline 都能完整走到落地。
@@ -120,6 +120,8 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 - **阶段全部保留**：evaluate、think、plan、build、review、test、deliver、reflect（`goal_cycle` 随 goal 删除）。
 - **文档规范保留**：REQUIREMENTS（结构化 EARS、R 编号）、DESIGN_SPEC（P/F/T/X 编号、properties、failure_modes、trace 矩阵）、fixing-spec、REFLECT 的 lessons。这是质量收敛的骨架，本身和编程语言无关。
 - **两道审查保留**：Gate-0（EVALUATE 的问题定义审查）、Gate-2（REVIEW 的专家审查：R1 全量 + R2 只复查已处理的 finding，finding 账本、聚类、fixing-spec、修复、复审、轮数上限）。原来的 Gate-1 已在 10 月的简化里删除，本设计不恢复。
+> 2026-10-28 起被取代：REFLECT 把报告入队 CDF S3，由 CDF worker 处理（见 2026-10-26-swarm-cognitive-distillation-flow.md §5.5）。
+
 - **REFLECT 保留**：daemon 后台判断并沉淀 lessons 到项目 DDD（产品能力，每个用户的项目都有 DDD）。r8：project 在 SwarmWS 里不存在或没有 DDD 文档时，lessons 写进 run 自己的 REFLECT 记录并在 REPORT 里列出，不再静默丢弃（今天 `reflect_job.py:56-70,168-209` 会拒收未知项目）。
   - 后续（2026-10-25，`docs/design/2026-10-25-knowledge-delivery-gaps.md` §3.1）：这类经验改写进公共 Library 的 `Knowledge/Library/pipeline-lessons/<仓库名>.md`（outcome `library`），只有多仓库 run 没写 `repo`、或写不进 Library 时才是 `kept_in_run`。
   - 已实施（S6-4d，2026-10-25）：lesson 的目标项目不存在、或项目没有对应的 DDD 文档时，结果是 `kept_in_run`：留在 `artifacts/reflect.json`，REFLECT 不算降级，run 目录的 REPORT 列在"没有写进项目 DDD 的经验"一节。走出 `Projects/` 的目标照旧拒绝。原来项目目录不存在时 `_queue` 会抛 `FileNotFoundError`，重试两次后 REFLECT 降级，也一起修掉了。
@@ -171,7 +173,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
   - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW，做一次**增量审查**，再回到 TEST。
   - **审查记录审过的 tree（r14）**：今天的 R2 只审已处理 finding 对应的 hunk（`review.py:238-240,428`），审查事件也不记 tree，所以 TEST 退回时那段新改动对应不到任何 finding，R2 派不出去；硬派的话新 hunk 也没人审。改法：每次 R1、R2 和增量审查的完成事件都写入它审过的 `code_tree`；新增"增量审查"，对象是 `diff(上一次审过的 tree, 当前 tree)` 的全部内容，不限于 finding 的 hunk，由 correctness 加上原 R1 里命中这些路径的专家来审。R2 仍然只复查已处理的 finding。
-  - 落地时 LG-1 要求 TEST 验证报告的 `code_tree` 等于落地的 tree，并且这个 tree 等于某一次审查（R1、R2 或增量审查）事件里记下的 `code_tree`。这样每一次进入落地的代码都被审查过，最终验证报告也对应同一份代码。
+  - 落地时 LG-1 要求 TEST 验证报告的 `code_tree` 等于落地的 tree，并且这个 tree 等于某一次审查（R1、R2 或增量审查）事件里记下的 `code_tree`。这样每一次进入落地的代码都被审查过，最终验证报告也对应同一份代码。（2026-11-01 放宽：见 2026-11-01-pipeline-delivery-friction.md E2、N1。）
 - REPORT 里分开写：agent 报告的测试，和审查员核实过的部分。不再有机器打的 verified / unverified 标签。
   - 已实施（2026-10-25）：没有 REVIEW 专家回答过的 run（例如小改动不派专家），结论行写"测试结果仅由 agent 报告，没有审查专家核实"，测试一节的标题也这样写；有专家回答过，标题写"审查专家审阅过这些报告"。
   - r31（2026-10-26）：REPORT 是提交进用户仓库的文件，所有固定文案统一为英文（上面两句现在是 "Test results are reported by the agent only; no review expert checked them" 和 "review experts read these reports"）；用户内容（需求原文）照原样引用。删除结尾固定的"push 前还需要：构建 + 部署验证"：那是 SwarmAI 自己发版的要求，对没有部署步骤的仓库是错的；SwarmAI 仓库的 push 要求写在它自己的 AGENTS.md。`tests/test_report_language.py` 守着这两条。
@@ -242,7 +244,7 @@ trailer = ""                  # 例如 SwarmAI 仓库写 "Co-Authored-By: Swarm 
 link = []                     # 例如 ["desktop/node_modules"]
 ```
 
-只有这两项，都只影响 pipeline 的落地和 worktree。没有测试命令字段（pipeline 不执行测试），也没有触发和审查字段（r9：由 session 里的选择和 agent 的判断决定）。仓库想告诉 agent 怎么测、要不要多审，写在 README、AGENTS.md 或 `.swarmai/review.md` 里，agent 自己读。
+pipeline 用的只有这两项，都只影响 pipeline 的落地和 worktree；另有 `[hive_return] protected`（2026-10-28-project-agent-flow.md §7）。没有测试命令字段（pipeline 不执行测试），也没有触发和审查字段（r9：由 session 里的选择和 agent 的判断决定）。仓库想告诉 agent 怎么测、要不要多审，写在 README、AGENTS.md 或 `.swarmai/review.md` 里，agent 自己读。
 
 ### 3.6 认知文件和 gate 一起改（r11）
 
@@ -572,7 +574,7 @@ S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时
 | S6-5b（已做） | 删 shared 模式：`run_worktree.mode_enabled` 和 `$SWARM_WORKTREE_MODE`、`RunEngine.create` 的 `mode` 参数和 shared run 的仓库预留（`_live_shared_holder`）、engine 里的 shared 分支、`landing` 的 `in_place` 落地（`_land_in_place`、`_IndexLock` 等）、`worktree_write_gate` 和 `prompt_builder` 里只在开关关闭时走的路径；contract 的 `mode` 恒为 `isolated`（MD-1 等读者保留，旧 shared run 仍过不了）；代码 profile 必须带 repo；测试套件不再整体钉 shared，全部按隔离 worktree 跑 | S6-5a |
 | S6-5c（已做） | `run_worktree.code_repos` 删除：没有调用方了（run 的仓库来自 `create --repo`），它自带的 bindings 读取和按名字猜自托管仓库随之消失；项目仓库只由 `ddd_bindings.governed_repo_roots` 读。skill 卡片复查：无 S6 已删概念残留；REFLECT 仍由 SwarmAI 会话的 PostToolUse hook / daemon 启动处理（卡片如实写明）。pipeline E2E 已在 S6-5b 全部按隔离 worktree 跑通 | S6-5b |
 | 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
-| 验收（部分已做） | `tests/test_pipeline_v1_acceptance_matrix.py`，CLI 进程的每个 socket 连接都失败（`Rig.go_offline`），direct 和 full 各一个 run：**Node**（无 Python、无 `pipeline.toml`）：BUILD 的 `node --test` 先红后绿，报告是真实运行结果，落地，REPORT 写着报告的命令，push_ready；**无测试**（只有文档）：报告是 `not_run` 加理由，full 的 DESIGN_SPEC 只有 `manual` 出口，落地，REPORT 写着没跑的命令和理由，Quality 是 WARN（0/1 verification）。变异：命令先连 daemon 时 Node 两个都红；不接受 `not_run` 时无测试两个都红。unborn 不支持（r29）：`create` 拒绝并提示先做初始 commit，不再建出一个立刻暂停的 run。仍缺：**Go / Rust** 不做（XG 2026-10-25：不再加其他语言的样例仓库）；monorepo；SwarmAI 会话之外 owner 从哪来（今天调用方要自己设 `SWARM_APP_SESSION_ID`）；daemon 离线时 REFLECT 不收尾、worktree 留到 daemon 启动 | S6-5 |
+| 验收（部分已做） | `tests/test_pipeline_v1_acceptance_matrix.py`，CLI 进程的每个 socket 连接都失败（`Rig.go_offline`），direct 和 full 各一个 run：**Node**（无 Python、无 `pipeline.toml`）：BUILD 的 `node --test` 先红后绿，报告是真实运行结果，落地，REPORT 写着报告的命令；**无测试**（只有文档）：报告是 `not_run` 加理由，full 的 DESIGN_SPEC 只有 `manual` 出口，落地，REPORT 写着没跑的命令和理由，Quality 是 WARN（0/1 verification）。变异：命令先连 daemon 时 Node 两个都红；不接受 `not_run` 时无测试两个都红。unborn 不支持（r29）：`create` 拒绝并提示先做初始 commit，不再建出一个立刻暂停的 run。仍缺：**Go / Rust** 不做（XG 2026-10-25：不再加其他语言的样例仓库）；monorepo；SwarmAI 会话之外 owner 从哪来（今天调用方要自己设 `SWARM_APP_SESSION_ID`）；daemon 离线时 REFLECT 不收尾、worktree 留到 daemon 启动（已由 2026-10-25-pipeline-standalone.md T6、T1 解决） | S6-5 |
 
 
 S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"挡 native 测试命令"的部分，runner 自己的调用约束随 S6 和 runner 一起删除。

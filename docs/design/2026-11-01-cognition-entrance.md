@@ -3,7 +3,7 @@ title: 认知统一入口 `cognition` —— 一条命令读整个脑
 date: 2026-11-01
 created: 2026-11-01
 updated: 2026-11-01
-status: implemented (r4, native；代码 4fa048665 + 文字提交，见 §11)
+status: implemented (r4, native；代码 e062f514d、f04f190b2，文字 d441613b1，修正 f38429d9b；见 §11)
 owner: SwarmAI backend (knowledge_cli / addressing / prompt_builder)
 related:
   - docs/design/2026-10-28-knowledge-addressing.md      # knowledge map|find|get 的来源，本设计在它上面扩
@@ -35,7 +35,7 @@ SwarmAI 的认知分在八个库里：Brain（每个项目的 DDD，和通用 Br
 回答"我的系统哪里有问题、这类错以前怎么判过"时要查 SELF / EVOLUTION 归档 / TIMELINE 事件，
 SELF.md 自己写着这条读法最容易漏（Recall 一节的 trigger (b)）。今天它要靠记住几条 ⚠️ 才走得通。
 
-## 1. 现状（2026-11-01 读代码 + 实测，经一轮零上下文审查核对）
+## 1. 现状（2026-11-01 实施前；读代码 + 实测，经一轮零上下文审查核对）
 
 ### 1.1 三条命令
 
@@ -291,11 +291,11 @@ XG（2026-11-01）："Knowledge/Library 是我们的通用 DDD，你不能把它
 
 1. 名字用 `cognition`，`knowledge` 永久保留为同义命令：**按设计**。
 2. channel 里除 owner 私聊外一律不能主动查（和推送式 recall 一致）：**按设计**。通用 Brain 和项目 DDD 同等对待，能查的地方都能查。
-3. 实施方式：跨 CLI、prompt_builder 的子进程环境和安全 hook，属于有风险的改动。直接做（native，代码一个提交、文字一个提交），还是走 pipeline？
+3. 实施方式：跨 CLI、prompt_builder 的子进程环境和安全 hook，属于有风险的改动。直接做（native，代码一个提交、文字一个提交），还是走 pipeline？**已定：native，见 §11。**
 
 ## 11. 实施记录（2026-11-01，native）
 
-- **提交**：代码 `4fa048665`（cognition 入口、addressing 的通用 Brain、spawn 环境、prewarm 只进 owner 私聊、
+- **提交**：代码 `e062f514d`（cognition 入口、addressing 的通用 Brain、spawn 环境、prewarm 只进 owner 私聊、
   拒绝正则、用量报告的命令名、打包清单）；文字一个提交（SWARMAI.md / SELF.md 源文件、技能、阶段文档、
   `[DDD:]` 提示、`repo_guidance`、`addressing` 的用法行）。
 - **与设计不同的地方**：

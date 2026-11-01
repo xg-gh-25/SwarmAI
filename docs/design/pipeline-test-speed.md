@@ -2,13 +2,15 @@
 title: Pipeline 测试提速 — 选得准、跑得快、续跑一定有进展
 date: 2026-10-20
 created: 2026-10-20
-updated: 2026-10-24
+updated: 2026-11-01
 project: SwarmAI
-status: IMPLEMENTED + FROZEN (§11) — T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查；§10 熔断误判已修
+status: 已实施后退役 — runner（pipeline_test.py）2026-10-24 删除（20129f043），§11 冻结随之失效；选测逻辑留作 backend/scripts/swarm_select_tests.py；红在 base 上改由验证报告的 pre_existing 记录（5fddd4929）。原状态：T1 66431d66；T2 由 f88dce48、T6 由 42a4aae8 + d8cbcddd 覆盖（key 不收窄到 import 闭包，见 §3）；T3-T5 d8cbcddd（§8）；§9 worker 调查；§10 熔断误判已修
 related: pipeline-speed-systematic-fix.md, Knowledge/Designs/2026-10-19-pipeline-deterministic-convergence.md
 author: Kiro（回放 10 个 run 的 verify 证据 + pipeline_test.py 调研）
 ---
 # Pipeline 测试提速
+
+> 2026-11-01：下文的 pipeline_test.py、main_red、artifact_cli.py main-red、test_test_selection_frozen.py 都已删除（20129f043）；Pipeline v1 不选、不跑测试。
 
 ## 1. 问题
 

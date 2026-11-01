@@ -1,9 +1,9 @@
 ---
 title: Swarm Out —— 派出的单由派单的 agent 跟到底：在对话里报进展、自己收尾，以及第二次单路 E2E 发现的问题
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 project: SwarmAI
-status: r2 — §5 第 1–6 步已实现（2026-10-31，提交 d9b9dc0de … dc15a7703），第 7 步 E2E 未做
+status: r2 — §5 第 1–6 步已实现（d9b9dc0de … c35c38490）；第 7 步真机 E2E 未见记录；§2.1 的 ask.answer / hive.start 两行、§2.4 的受保护路径、第 3 次重发、收尾丢弃、Hive 停了，已被 2026-11-01-hive-approvals-impl.md 和 2026-11-01-brain-to-hive-zero-touch.md 改掉
 tags: [swarm-out, hive, ownership, autonomy, gate, ci]
 related:
   - docs/design/2026-10-31-swarm-out-ops-registry.md（谁能调哪个操作；本设计改它的 §5 表）
@@ -64,13 +64,13 @@ related:
 | `run.rerun`（修正重发） | person, owner_agent | 由 agent 发起的重发每单最多 2 次，计数器在 settle 记录里（§2.4） |
 | `run.stop` | person, owner_agent | |
 | `run.return_prepare` | person, owner_agent | |
-| `run.return_land` | person, owner_agent；**`approve_protected=true` 只给人** | 受保护路径（仓库 `.swarmai/pipeline.toml` `[hive_return] protected`、`GIT_PROTECTED`，`core/hive_return.py:20-30`、`:312`）是仓库自己声明"要人批准"的。agent 落地遇到受保护文件就停下问人 |
+| `run.return_land` | person, owner_agent；**`approve_protected=true` 只给人** | 受保护路径（仓库 `.swarmai/pipeline.toml` `[hive_return] protected`、`GIT_PROTECTED`，`core/hive_return.py:20-30`、`:312`）是仓库自己声明"要人批准"的。agent 不落地受保护路径：让 Hive 去掉它们重做，或自己在本机改；人仍可在面板批准（zero-touch §1） |
 | `run.manual_landed` | person, owner_agent | |
 | `run.discard` | person, owner_agent；**agent 只能在什么都不会丢的时候丢弃** | 丢弃让 Hive 删掉 `work/<id>` 和 `Outputs/<id>`（`core/swarm_out_settle.py:34-38`），会停掉还活着的会话（`core/swarm_out.py:1531-1538`），并把经验当作已处理（`settle.py:358`）。agent 调用时后端用 `derive()` 现成的判断（`settle.py:405-411`）：`why_not` 里没有 `code`、`files`、`lessons`，单子不在跑也不在等，结果是最终的（`_final`，`settle.py:230`）。不满足就拒绝，说缺哪一项；这时 agent 问人 |
-| `ask.answer` | 不变（只给人） | 由 agent 替人回答是 hive-approvals 设计的事；人在对话里答的，由 daemon 转交（§2.5），没有 agent 命令 |
+| `ask.answer` | 不变（只给人） | 由 agent 替人回答是 hive-approvals 设计的事；人在对话里答的，由 daemon 转交（§2.5），没有 agent 命令（2026-11-01 起：host 类等待由派单 agent 用 `answer` 回答，op `ask.answer_host`，见 hive-approvals-impl §2） |
 | `hive.update` | 不变（person, owner_agent） | |
 | `hive.list`（`/api/swarm-out/hives`） | 不变，每项加 `id` | id 是数据库主键，不是秘密（P4）。CLI 加 `update-hive --hive <name> [--version v]`，按名字找 id 再调 `hive.update` |
-| `hive.create` `delete` `start` `retry` `stop` `credentials` `reset_password` `brain.sync*` `account.*` `instance.list/get`、`remote.write` | 不变（只给人） | 花钱、删机器、拿密码、把 Brain 送出本机、往 Hive 会话里直接写 |
+| `hive.create` `delete` `retry`（`start` 2026-11-01 开给 owner_agent，zero-touch §1） `stop` `credentials` `reset_password` `brain.sync*` `account.*` `instance.list/get`、`remote.write` | 不变（只给人） | 花钱、删机器、拿密码、把 Brain 送出本机、往 Hive 会话里直接写 |
 
 - **后端区分谁在调：** 今天路由不分调用方，gate 只看命令文本。run 命令的请求体加 `by: "agent" | "person"`，CLI 发 `agent`，App 发 `person`；`by=agent` 时后端执行上表的限制（丢弃前提、`approve_protected`、重发次数）。和 ops-registry §2.4 一样，这是减速带，不是边界（agent 和 daemon 同一个 OS 用户），真正的边界是那份设计的第二阶段"人签名"。它管的是 agent 自己的失误，不是恶意绕过。
 - **派单记录记下派单的会话：** `_log_row` 加 `dispatched_from`。CLI 进程里的 `SWARM_APP_SESSION_ID` 不总有：接手预热进程的会话故意不设它（`core/prompt_builder.py:486-491`），`run_owner_gate` 只在 `pipeline_v1` 和 `session_worktree` 调用前补上真 id（`run_owner_gate.py:498-549`）。所以 **`run_owner_gate` 对 `scripts.swarm_out` 的调用也补上真 id**，同一个机制；CLI 读不到时 `dispatch` 拒绝并说原因（不派一单"没有主人"的单）。旧记录没有这个字段：照样能下命令，只是不进 §2.3 的接续。
@@ -127,21 +127,21 @@ dispatch → 回复"开始跑了，我盯着" → watch
 
 | 状态（`state` · `state_reason`） | agent 做什么 | 什么时候问人 |
 |---|---|---|
-| `waiting` · question / decision / approval / `waiting_input` | 用 Host 给的卡在这个对话里问人（§2.5），人答了 daemon 自动转交 | 总是问人 |
+| `waiting` · question / decision / approval / `waiting_input` | host 类（who: you）：agent `card` 后 `answer`；归人的类别新 Hive 当场拒绝，只有旧 Hive 会问人 | 只有旧 Hive |
 | `waiting` · `answer_refused` | 说原因（按 `refused_reason` 代码的文案），给 Hive 会话链接 | 告诉人 |
 | `running` · `answer_sent` / streaming / 活动中 | 不写字，继续 watch | — |
 | `stopped` · `idle` 或 `not_held`，结果已取回且是最终的 | 见下面"跑完以后" | 见下面 |
-| `stopped` · `hive_stopped` / `hive_gone` | 告诉人 Hive 停了 / 没了；不重派 | 告诉人（开机花钱，是人的） |
+| `stopped` · `hive_stopped` / `hive_gone` | 停了：agent `start-hive` 接着盯；没了：派到别的 Hive | — |
 | `unknown` · `hive_silent` 连着两次 | 告诉人"Hive 暂时没回应，可能在跑重负载"，继续 watch | 超过 15 分钟仍是 unknown：告诉人 |
 | `unknown` · `no_session_id`（`session_unknown`） | 告诉人"派单没收到会话 id，可能还在跑"，不重派 | 告诉人 |
 
 **跑完以后：**
 
 1. **核对**只用 Host 自己的字段：`/runs` 的公开副本（`ended`、`checks`、`work` 的计数和提交 sha、`pipeline` 状态、`human` 计数），加上验收条件（`project_agent.acceptance`，agent 自己写的）。要读 Hive 的回复或交回的文件时，用 `swarm_out read <dispatch_id>`（§2.6），按数据读。
-2. **返回提交的单：** `return-prepare` → 看改动的文件列表和 diff（`hive_return` 准备好的，在本机检出）、跑受影响的测试 → `return-land` → 判 pass。遇到受保护文件，停下问人。
+2. **返回提交的单：** `return-prepare` → 看改动的文件列表和 diff（`hive_return` 准备好的，在本机检出）、跑受影响的测试 → `return-land` → 判 pass。遇到受保护文件，不落地：rerun 让 Hive 去掉它们，或自己改。
 3. **返回答案或文档的单：** 判 pass，写一句原因。
-4. **不合格：** 写修正 `rerun`（最多 2 次）；第 3 次停下问人。
-5. **结束：** 满足 §2.1 的丢弃前提就丢弃，不满足就留着，并说为什么留。
+4. **不合格：** 写修正 `rerun`（最多 2 次）；第 3 次被拒，agent 自己接管或丢弃并说原因。
+5. **结束：** 验收后单子自己了结，不要求丢弃；停下或没结果的单子才丢弃并说原因。
 6. `stopped` 但结束原因是 error / turn_limit / stopped：能接着做的写修正 `rerun`；不能的告诉人原因。
 
 - agent 的验收是判断，不是 gate：它只决定这一单算不算交付（`VERDICTS = ("pass",)`，`settle.py:67`），不放行任何出本机的动作。落地只到本机 main（STEERING #5：本机提交自动），push 仍然要人说"push"；build 和重启仍然要人批准（AGENT R12）。
@@ -165,7 +165,7 @@ dispatch → 回复"开始跑了，我盯着" → watch
 5. 之后的阶段（已送出 → Hive 已收到）和面板上一样；Swarm Out 面板上那张卡同时变成"已送出"。人也可以照旧在面板里答，两边哪边先写，另一边被 `answer()` 的一次写入（`IfNoneMatch`，`core/swarm_out.py:1730-1741`）拒绝。
 
 - 转交依据的是记录里人的回答、一个哈希比较和一个对照表，不是模型的判断（SOUL P5）。agent 改了问题或选项，哈希就对不上。
-- 新 op `task.card`（读，生成卡参数），callers owner_agent，weight read。没有新的写入 op。
+- 新 op `ask.card`（生成卡参数，只写本机的卡记录），callers person、owner_agent，weight change。没有新的写入 op。
 
 ### 2.6 Hive 写的文字进 agent 上下文时，按数据读
 

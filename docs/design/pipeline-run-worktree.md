@@ -2,9 +2,9 @@
 title: 每个 pipeline run 一个 worktree — 隔离、集成、清理
 date: 2026-10-18
 created: 2026-10-18
-updated: 2026-10-19
+updated: 2026-11-01
 project: SwarmAI
-status: FINAL r4，P0–P2 已实现；任意 repo、owner gate 范围、开关持久化见 §16.9（开关 2026-10-21 起默认 on）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
+status: FINAL r4，P0–P2 已实现，2026-10-22 起由 Pipeline v1 沿用（core/run_worktree.py）；开关、shared 模式、一次性 hook token、pipeline_test 集成已删除（见 §3 下的注）；任意 repo、owner gate 范围、开关持久化见 §16.9（开关 2026-10-21 起默认 on）— §11 三个决定 XG 2026-10-18 已确认；对抗审查（r1→r2 单人，r2→r3 四路并行，两轮外部审查，r4 XG 审查）见 §16
 related: parallel-session-commit-isolation.md（本文是其中"方案二"的完整设计，取代该草稿）; pipeline-run-budget.md; pipeline-speed-systematic-fix.md
 author: Kiro
 ---
@@ -54,6 +54,8 @@ deliver 的 stage-complete ──► push_ready 成立就直接落地（run-comm
 
 > 2026-10-24（usable-by-anyone P7、S4b）：这个开关已删除，不再是设置项；`config.json` 里残留的 `pipeline.worktree_mode` 被忽略，新 run 一律建 worktree。`$SWARM_WORKTREE_MODE=off` 只留给测试，S6 随 shared 模式一起删。
 > 2026-10-25（usable-by-anyone S6-5b）：shared 模式和 `$SWARM_WORKTREE_MODE` 已删除。下文关于 shared run、开关和 `in_place` 落地的内容只是历史。
+
+> 2026-10-22 起（Pipeline v1，f5b8b455e）：artifact_cli 的 stage-start / stage-complete / run-commit / run-diff、Gate-2 / meta-review、goal_cycle 都已不存在；v1 在 plan/build/review/test/deliver 的每条改动命令后建 worktree，落地时同步。pipeline_test.py 已删（20129f043）。依赖目录软链改由各 repo 的 `.swarmai/pipeline.toml [worktree] link` 声明，默认无（4e1f3e1ee）。手工在 run 分支上的 commit 在同步时折回（b005ee2d5）；main 与 run 冲突不再让 run 终止（2026-11-01-pipeline-delivery-friction.md N1）。
 按它自己 run.json 里的模式处理（§9）。P0–P2 验收期间默认 `off`；2026-10-21 起默认 `on`，只有显式写 `off` 才关闭。
 
 ## 4. 前置（P0）：run 锁与归属
@@ -73,6 +75,8 @@ worktree 的创建、同步、落地、释放都要知道"谁在改这个 run、
   （例如已被取消就停）。
 
 ### 4.2 归属与接管
+
+> 2026-10-25（S6-3，5aa04971c）：一次性 hook token 和 core/hook_token.py 已删除；现在由 SWARM_APP_SESSION_ID 加 owner 检查把关，下文 token 部分只是历史。
 
 `run.session_id` 是 owner。今天 `run-resume` 只接受 `paused`，而崩溃的 run 一直停在 `running`，新 session
 直接接着调 `stage-start` / `run-update`；stamper 又从不覆盖已有的 `session_id`。于是新 session 不是 owner：

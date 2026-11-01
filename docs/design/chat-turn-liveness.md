@@ -2,9 +2,9 @@
 title: 回合进行中只有一个事实 — 结束"中途没反应、蜜蜂没了、追问卡在队列"
 date: 2026-10-23
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-11-01
 project: SwarmAI
-status: P1 DONE（后端，v4）；P2a DONE（蜜蜂只看活动）；P2b DONE（未受理的消息可重试）；P2c DONE（排队只在后端）；P3 DONE（一个失败策略）；P4 DONE（收尾）
+status: P1–P4 DONE（v2.4.0 已发布）；忙时发送默认先 steer，见 2026-10-24-chat-steer.md
 related: chat-transcript-single-source.md（S3 会话状态唯一来源，本文是它没覆盖到的那一半）, streaming-spinner-ssot.md（2026-06-30，同类，未按设计落地）
 ---
 
@@ -113,7 +113,7 @@ S3 都写过"转圈只看后端状态"，但落地的 S3 只是把同一份 `uni
    上一个），跨 daemon 重启和 `drop_session` 也只增不减。推送（`session_activity` 增量、`session_state`
    快照）和轮询都带它，tab 只接受更大的。
 4. **新会话的第一条**：`accepted` 已带 `sessionId`。前端收到就绑定 tab 的 session，并立即订阅
-   （`watchOpenTabs`），不再等 `session_start`（现在只在 `session_start` 绑定，
+   （`watchOpenTabs`），不再等 `session_start`（改前只在 `session_start` 绑定，
    `useChatStreamingLifecycle.ts:2943-2979`）。之后 `session_start` 的 id 必须相同，不同就记 ERROR
    并以 `session_start` 为准（会话身份规则不变）。
 
@@ -140,6 +140,8 @@ S3 都写过"转圈只看后端状态"，但落地的 S3 只是把同一份 `uni
 
 ### S2 回合失败：一个策略，按入口传参数（解 RC2）
 
+> 实现（P3）：没有 turn_failure_policy 函数；续接和注入回合共用 SessionUnit.read_with_recovery()。
+
 一个函数 `turn_failure_policy(origin, error, persisted_prefix)` 决定所有入口怎么处理失败：
 
 | 参数 | 用户发送 | 续接（提问 / 审批） | 注入回合 |
@@ -162,24 +164,24 @@ S3 都写过"转圈只看后端状态"，但落地的 S3 只是把同一份 `uni
 | | 回合活动（蜜蜂、阶段文字） | 本地请求（输入框、Send / Stop 按钮） |
 |---|---|---|
 | 来源 | 后端 `activity` + `activitySeq`（推送为主，订阅流断开时用轮询） | 这个 tab 自己发出的请求 |
-| 取值 | `idle … stopping`（S1） | `building`（拼附件）→ `posting` → `accepted`；或 `failed`（未受理，后端连不上等） |
+| 取值 | `idle … stopping`（S1） | `localSending`（这个 tab 有 POST 开着）；未受理的气泡标 `sendState: 'failed'` |
 | 谁写 | 一个 reducer，唯一写 `tab.isStreaming`（`isStreaming = activity ∉ {idle}`） | 发送和 Stop 的代码 |
 
 - **蜜蜂只看活动**。POST 生命周期、订阅流 `turn_start`、ChatPage 各路径不再写 `isStreaming`。阶段文字
   ("Starting session · Ns")也读 activity，不再靠 POST 的 `turn_phase` 事件。
 - **Send / Stop 按钮看两者**：本地请求在 `building / posting` 时，或活动不是 idle 时，显示 Stop
-  （`ChatInput.tsx:1070-1108` 现在只看 `isStreaming`）。
+  （`ChatInput.tsx:1070-1108` 改前只看 `isStreaming`）。
 - **未受理的消息不丢**：`failed`（后端连不上、`accepted` 没到）时，用户气泡标"未发送 · 重试"，输入
   内容保留。同一个 `client_id` 重试，后端账本保证只算一次。
 - **消息存进 MessageStore 的阶段保护**（`useChatStreamingLifecycle.ts:2494-2503`）跟着 handler 创建，
   属于本地渲染，不变，不参与"回合在不在"的判断。
-- **排队只在后端**：回合进行中发的消息照常 POST，后端 `try_open_turn` 失败就转 pending，回执
+- **排队只在后端**：回合进行中发的消息照常 POST，后端 `TurnOpener.open`（`try_claim_turn`）占不到时，能 steer 就写进正在跑的回合（`steer_busy_send` 默认开），否则转 pending，回执
   `queued: true`。
   - 完整快照带排队列表（`client_id`、预览文字、时间），读 `session_pending` 里未认领的行（现在只有
     内部的 `peek_pending_batch`，`session_pending.py:438`）。
   - 取消：新增 `DELETE /sessions/{id}/pending/{client_id}`。只删未被认领的行，并释放
     `send_requests` 的占位；已被 drain 认领的返回 409，界面显示"已在发送"。
-  - 附件在点 Send 时就生成内容（现在是送出时才读），这是一处行为变化：排队期间改了的文件，送出的是
+  - 附件在点 Send 时就生成内容（改前是送出时才读），这是一处行为变化：排队期间改了的文件，送出的是
     点 Send 时的版本。
   - 连发几条不再拼成一条；drain 会把它们作为几条消息一起送出（10-22 19:21:20 日志
     `pending_delivered count=2`）。

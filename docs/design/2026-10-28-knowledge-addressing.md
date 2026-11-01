@@ -2,8 +2,8 @@
 title: 知识寻址（Knowledge Addressing）—— "什么知识在哪、怎么取、怎么引用" 做成一项标准产品能力
 date: 2026-10-28
 created: 2026-10-28
-updated: 2026-10-28
-status: implemented (r5) — XG approved 2026-10-28; implemented 2026-10-29
+updated: 2026-11-01
+status: implemented (r5) — XG approved 2026-10-28; implemented 2026-10-29; entrance extended and renamed to cognition by 2026-11-01-cognition-entrance.md; citation-fed decay removed (9e9f316fc)
 project: SwarmAI
 supersedes-scope-of: docs/design/2026-10-28-ddd-map-and-on-demand-knowledge.md
 ---
@@ -97,6 +97,8 @@ SwarmAI worktree 里加载 run 正在改的代码；`--domains ddd` 返回小节
 
 ### 2.2 结构说明：改正 SWARMAI.md § My Workspace，用测试钉住
 
+> 注：已发布的那段现在写 `cognition find`（d441613b1），见 2026-11-01-cognition-entrance.md。
+
 SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启动覆盖，所以只能写对每个用户都成立的结构。
 用下面这段**替换**现有的 § My Workspace，并删掉 FAQ 里 "What projects do I have?" 那一条（"There is no injected index" 仍然成立，并入下文）：
 
@@ -142,6 +144,8 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
 
 ### 2.4 按需入口 `"$SWARM_BACKEND_BIN" knowledge map | find | get`
 
+> 注：已扩为 `cognition`（`knowledge` 为同义命令），覆盖 MEMORY/EVOLUTION/TIMELINE 等，见 2026-11-01-cognition-entrance.md。
+
 - 顶层子命令，和 `pipeline-v1` 一样在 `desktop_main.main` 分派，**不走 `py -m`**，不受 cwd 影响、不加载 cwd 里的代码。
 - `map --project P [--brief] | --projects`；`find --project P --query "<词>" [--doc TECH.md] [--in ddd|library]`；`get <unit_id>|<path>:<line>`：一条全文 + 身份。
 - **`find --in ddd` 的范围 = 和引用校验同一个单元表**（`ddd_units(project)`）：四份文档 + 各自 `*-archive.md` + `2-understanding/knowledge/` +
@@ -149,8 +153,8 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
   （`_load_ddd_docs_text`），查不到归档和语料，和"引用含归档"自相矛盾。排序复用 `recall_ddd` 的按文档 BM25 和整条取舍；
   `ddd_units` 在切分时记下每个单元的起始行号（`recall_ddd` 的命中今天不带行号，`_parse_docs_sections` 只返回文本）。
   返回**整条**单元 + `绝对路径:行号` + `unit_id`，放不下的用 `not_shown_note`。`--in library` 包 `recall_all(library)`，同样整条 + 路径 + 身份。
-- 只读，只到 DDD 根和 Library；MEMORY / EVOLUTION 仍走带隐私门的 `context_recall_cli`。
-- 会话类型：必填 `--session-type`、默认拒绝；渠道类型只放行 shareable 项目。run 1 第一步先核实非 owner 渠道会话是否有 Bash、
+- 只读，只到 DDD 根和 Library；MEMORY / EVOLUTION 现在也经 `cognition --in memory|evolution` 读（cognition-entrance §3.2）。
+- 会话类型（实施时改为：非 owner 渠道一律不可用，见 §8；现按 `_channel_recall_allowed` 设 `SWARM_COGNITION_OFF`）。run 1 第一步先核实非 owner 渠道会话是否有 Bash、
   daemon 是否给子进程设了可信的会话类型环境变量；有就用它，不靠 Agent 自报。
 
 ### 2.5 引用入口
@@ -160,7 +164,7 @@ SWARMAI.md 由产品源码（`backend/context/SWARMAI.md`）提供、每次启�
   `hook_bridge._occ` 的 `carried` 换成已知集合，未知仍丢弃、finding 照样算。
 - R27 全部读者：`schemas` 文案、`_check_knowledge_refs`、engine.py:2807 计数（拆"推送 / 主动查"）、`audit.py`、`events.py:137`、
   `stages/evaluate.md`、`test_pipeline_v1_expert_knowledge.py:95-112`。REPORT 只出计数。
-- 被引用的单元调 `ddd_usage.record_ddd_hit`（anchor 仍由 `entry_anchor_text` 算，`.ddd-usage.json` 不迁移）；聊天门只在内容真的展示时才记用量。
+- （已删，9e9f316fc：衰减与用量记账整体移除）被引用的单元曾调 `ddd_usage.record_ddd_hit`（anchor 仍由 `entry_anchor_text` 算，`.ddd-usage.json` 不迁移）；聊天门只在内容真的展示时才记用量。
 
 ### 2.6 推送保留，粒度改对
 

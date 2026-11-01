@@ -2,9 +2,9 @@
 title: Super Canvas — one surface, list over a raised content card
 date: 2026-10-23
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-11-01
 project: SwarmAI
-status: implemented 2026-10-23 (3 commits, agreed with XG from chat mockups)
+status: implemented 2026-10-23; commits 2–3 partly revised by super-canvas-fixing.md and 8ab741730
 ---
 
 # Super Canvas
@@ -44,7 +44,7 @@ As built:
   light shadow; the old 2px primary top border is gone (the selected row carries the
   accent now).
 - `.canvas-row-sel` (index.css) is the ONE selected-row style for both lists:
-  card-coloured background, border ring, 3px primary bar. Other rows are muted text
+  primary-tinted fill, a primary-mixed 1px ring, 3px primary bar (super-canvas-fixing.md C4). Other rows are muted text
   with a hover shade; the selected name is bold. Supersedes run_02c5e32a's
   accent-free list.
 - Artifacts row: type icon, name, A/M, folder (dim, truncated), copy (hover),
@@ -61,13 +61,15 @@ As built:
 
 ## Commit 3 — file chrome and icons
 
+> Revised by super-canvas-fixing.md (C1–C6) and 8ab741730.
+
 As built (panel variant only; `FileEditorModal` and the modal FileViewer unchanged):
 
 - `FileViewer`'s file header row is gone for every type; so is `crumbOf`.
 - `FileEditorCore` (text / md / svg) has no header and no footer in the panel.
   `panelBar` FLOATS over the bottom of the content (absolutely positioned,
-  `pointer-events: none` except its buttons): a raised group
-  (`.editor-float-group`) with ONE Preview / Source / Changes control (radiogroup;
+  `pointer-events: none` except its buttons): an inverted solid group (theme ink fill, super-canvas-fixing.md C4)
+  (`.editor-float-group`) with ONE Preview / Edit / Changes control (radiogroup;
   Preview only for md / svg; Changes disabled with nothing to compare), Review,
   Open externally (html / svg / pdf / xml only), Attach, and inline notes ("Large
   file"; "Click a line to comment" in Changes, which replaces the modal's hint row);
@@ -81,11 +83,11 @@ As built (panel variant only; `FileEditorModal` and the modal FileViewer unchang
     scroll clear of the bar; mid-scroll, content passes under it.
   - (First landed as a 40px strip below the content in e6802e60e; changed to float
     at XG's request the same day.)
-  - Reload: dropped for editor types (they reload on an agent write via
+  - (Superseded, super-canvas-fixing.md C2: Refresh is back in the floating group; window focus refetches.) Originally: Reload: dropped for editor types (they reload on an agent write via
     swarm:file-changed and on window focus). Non-editor renderers (html, image,
     pdf, csv, media) reload on an agent write but not on an outside edit, so their
     status bar gains Refresh (`onRefresh`).
-  - Copy path: dropped in the panel (editor bar and status bar, `showCopyPath`);
+  - (Superseded by 8ab741730: CopyPathButton is back in the floating group and status bar.) Originally: Copy path: dropped in the panel (editor bar and status bar, `showCopyPath`);
     each list row has it on hover.
   - Close: no button. The Browsing row's × (`onStopBrowsing`) opens the first
     output, the same open a row click sends; with no output it bumps FileViewer's

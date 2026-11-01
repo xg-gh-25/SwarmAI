@@ -1,9 +1,9 @@
 ---
 title: CDF 和 chat 共处 —— 不抢 chat 的资源，也不被 chat 饿死
 created: 2026-10-29
-updated: 2026-10-29
+updated: 2026-11-01
 project: SwarmAI
-status: 待确认
+status: 已实现方案 A（65c8e3ded，v2.4.0）；方案 B 未做（后备）；§4 真机测量未核实
 follows: 2026-10-29-cdf-post-launch.md §1（上线当天发现）
 ---
 
@@ -49,7 +49,7 @@ CDF 在 daemon 进程里跑三条线程：调度、run lane、会话任务。为
 - **测试**：对线上 TECH / IMPROVEMENT / MEMORY / EVOLUTION / TIMELINE 的副本，以及含中文、emoji 的构造文本，新旧实现给出的（byte_start, byte_end, identity）完全一致。再加一条耗时上限的测试：1 MB 文本在 200 ms 内解析完（现在约 1 秒）。撤掉修复，这条必须变红。
 
 ### 3.2 解析缓存
-- `parse_units` 按（解析后的路径, `st_mtime_ns`, `st_size`, baseline 版本）缓存，有界 LRU，写法和 `usage._unit_spans` 一样。
+- `parse_units` 在无 baseline 时按（路径, root, resolve 后路径, inode, dev, mtime_ns, ctime_ns, size）缓存，有界 LRU（64），写法和 `usage._unit_spans` 一样。
 - `Unit` 是 frozen dataclass（已核实，`units.py:26`），缓存时返回 list 的副本，调用方改不到缓存内容。
 - **测试**：文件改了，下一次解析拿到新内容；没改，第二次解析不再读文件。
 
@@ -83,5 +83,7 @@ chat 和 CDF 同时调模型会不会互相影响，现在没有数据，不预�
 - 关闭：子进程要装 SIGTERM 处理（默认的 SIGTERM 不会运行 `stop_and_join`）；按进程组结束，带上 S7 fork 出来的 CLI 孙进程；等待时间不短于三个组件 join 的总时长。Windows 上 terminate 是硬杀，只能靠 `writer.recover`。
 
 ## 6. 现在怎么办
+
+> 已过时：A 已落地（65c8e3ded），streaming 不再挡任何 lane。
 
 A 落地之前，会话任务只在所有 tab 都不 streaming 时跑。今天的 4 个任务会在你停下来的空档里跑完，不会丢，只是会晚。

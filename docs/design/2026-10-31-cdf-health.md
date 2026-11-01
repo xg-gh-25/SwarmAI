@@ -1,14 +1,14 @@
 ---
 title: "CDF health: is what the cognition system keeps worth keeping"
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 project: SwarmAI
 status: implemented (r3)
 ---
 
 # CDF health: is what the cognition system keeps worth keeping
 
-Status: r2, 2026-10-31 (r1 + one zero-context premise review: checks rebuilt on the existing
+Status: r3, implemented 2026-10-31 (r1 + one zero-context premise review: checks rebuilt on the existing
 CDF definitions, cost read as the usage view reads it, marker-only locating, text-only judge
 classes). Mockup: `Knowledge/Mockups/2026-10-31-cdf-health.html` (r2, approved).
 
@@ -97,7 +97,7 @@ batches are packed by size (at most 20 entries or 60 000 characters, an entry la
 alone).
 
 **Call.** One `structured()` call per destination batch of at most 20, Sonnet (the
-`BedrockJudge` default), `feature="cdf.health"`, read timeout 60 s, 2 attempts. The prompt
+`BedrockJudge` default), `feature="cdf.health"`, read timeout 180 s, 2 attempts. The prompt
 states the destination's purpose (§3 table, one sentence each) and the verdicts:
 
 - `useful` — would change or inform a later judgment for its destination's reader.
@@ -122,7 +122,7 @@ lessons); with the per-destination bar the disagreements flipped.
 The judge sees only the entry and decides only from what it says: it cannot tell an entry
 that went stale or a gap already done elsewhere, and the tab says so. That is why the value
 indicator also shows the outcome CDF already measures (`status.north_star`: of the entries
-written long enough ago, the share read or cited after their write). When unsure, `useful`. Each verdict carries a reason in English and Chinese (≤ 200
+written long enough ago, the share read or cited after their write). When unsure, `useful`. Each verdict carries a reason in English and Chinese (≤ 400
 characters each). A batch whose call fails is left unscored and tried at the next run; the
 run records `judge_failed` per destination. A failed judge is never a zero.
 
@@ -180,7 +180,7 @@ failure.
 ## 8. Snapshot and API shape
 
 Each run stores one snapshot: `{at, checks: [...], reading, reading_input_hash,
-judge_failed, sampled}`. `GET /api/ingestion/health?window=` returns:
+judge_failed, sampled}`. `GET /api/ingestion/cognition-health?window=` returns:
 
 ```
 { window, generated_at, running,
