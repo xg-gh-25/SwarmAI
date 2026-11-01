@@ -474,6 +474,23 @@ def test_skill_matches_the_code():
     assert "you do not land" in skill                                # protected paths: not the agent's
 
 
+def test_z11_dispatch_asks_only_for_acceptance():
+    """Z11: before a dispatch the one question left is acceptance; which Brain and which
+    mode are the agent's defaults (s_swarm-out "When to ask the person")."""
+    skill = (ROOT / "skills" / "s_swarm-out" / "SKILL.md").read_text()
+    table = skill.split("## When to ask the person", 1)[1].split("## Steps", 1)[0]
+    rows = [r for r in table.splitlines() if r.startswith("| ") and "| What you do |" not in r]
+    asking = [r for r in rows if r.rsplit("|", 2)[-2].strip().startswith("ask")]
+    assert len(asking) == 1 and "acceptance" in asking[0], asking
+    brain = next(r for r in rows if "`route` is not `certain`" in r)
+    assert "do not ask" in brain and "`General`" in brain
+    mode = next(r for r in rows if "fits two modes" in r)
+    assert "do not ask" in mode and "lighter" in mode
+    # no step sends either choice back to the person
+    assert "Never pick a Brain for the person" not in skill
+    assert "ask the mode question" not in skill and "Two modes that fit with different results: ask" not in skill
+
+
 def test_a_backup_that_does_not_read_back_whole_stops_the_migration(tmp_path, monkeypatch):
     """The copy is checked byte for byte before anything is rewritten (AGENT Safety: a
     destructive step in shipped code takes a backup and checks it)."""

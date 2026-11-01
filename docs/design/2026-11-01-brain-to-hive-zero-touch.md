@@ -1,6 +1,6 @@
 ---
 title: 从新建 Brain 到 Hive 单落地，不等人
-status: r3 implemented (merged with 2026-10-31-hive-approvals: who answers a wait comes from its approval class)
+status: r4 implemented (r4, XG 2026-11-01: the two dispatch questions, which Brain and which mode, become defaults; merged with 2026-10-31-hive-approvals: who answers a wait comes from its approval class)
 created: 2026-11-01
 updated: 2026-11-01
 owner: XG
@@ -27,6 +27,8 @@ related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its
 | 启动已停的 Hive | 先挑在跑的 Hive；一台都没有时，agent 自己启动一台（`hive.start` 对派单 agent 开放） | 启动只是恢复已有机器；新建、删除、拿密码仍然只给人 |
 | 第三次重跑 | 不再问人。两次修正都不行，agent 自己接管来做；做不了就丢弃，并记下原因（Swarm Run §0"常事自己解决"） | 丢弃前照样检查代码、文件、经验都已取回 |
 | P0"确认要管的资产"（新建提示词） | 不问。表单上每项资料的角色就是资产清单；P3 绑定后由 P6 对照这份清单检查（§2 第 13 条） | 清单来自人已经做过的选择 |
+| 派单时 `route` 认不准 Brain（r4） | 不问。agent 从 `route` 的 `choices` 里挑 summary 和 handles 对得上的那个，都对不上就用 General；派出后用一句话说选了哪个、为什么，人可以改 | 选错只是放在了另一个 Brain 下，经验回到那个 Brain；人一句话就能改派 |
+| 一个任务两种 mode 都合适、结果不同（r4） | 不问。选更轻的：结果不改任何仓库的那个（`--returns answer` / `document`），不选返回 commits 的；派出后用一句话说选了哪个、另一个会产出什么。只有一个能在 Hive 上跑时，选能跑的那个 | 报告不改代码，想要代码再说一句；选错的代价是多跑一次，不是改错东西 |
 | 建 Brain 中途会话断了，要人点"继续建" | 自动接着做：已有的 job 机制每隔一段时间找出停在 `setting-up`、且已经一段时间没有进展的 Brain，用"继续建"提示词跑一个 agent 任务，做完 P6 --record | 只补缺的阶段，不重写已写的 |
 | Hive 的提交封不成 bundle，只能人点"手动已落地" | agent 写一条修正让 Hive 先提交再重交（算一次重跑）；还不行就自己接管。"手动已落地"仍只给人，但不在这条路上 | 不会把没落地的提交连同 Hive 工作区一起丢掉 |
 
@@ -79,6 +81,7 @@ related: 2026-11-01-project-agent-simple.md, 2026-10-31-swarm-out-agent-owns-its
 - **Z8** 建 Brain 的会话中断后，不用人点也能接着建完；新建中途出错的 Brain 也一样。
 - **Z9** 一台 Hive 在更新时，它上面的单子不会在经验拉回之前了结。
 - **Z10** 绑定仓库后重新生成定义，agent 写过的字段（退役字段除外）一个不丢。
+- **Z11** 派单前只剩一个问人的地方：说不清"做完是什么样"时问验收。Brain 认不准、两种 mode 都合适，都由 agent 按默认值选，不问（s_swarm-out 的"When to ask the person"表）。
 
 ## 4. 审查与落地
 

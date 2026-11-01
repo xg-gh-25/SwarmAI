@@ -54,13 +54,15 @@ a session with someone else the commands refuse. Do not try another way.
 
 Ask only when the request cannot be turned into one run spec. Everything else you decide
 and carry out (the autonomy principle): the person sees the result on the dispatch card.
-**Once the Brain is known, check whether the task can be taken before the other
-questions** (step 4): a task a Hive cannot do is refused at once, not after three questions.
+The one question left is what done looks like, when it cannot be read from what was
+said. Which Brain and which mode you choose yourself, on the safe side (the table), and
+say what you chose. **Once the Brain is known, check whether the task can be taken
+before asking** (step 4): a task a Hive cannot do is refused at once, not after a question.
 
 | Situation | What you do |
 |---|---|
-| `route` is not `certain` of the Brain | ask: the likely Brains (best first) plus "not part of any Brain" (= `General`) |
-| the task fits two modes whose results differ (a report vs commits) | ask: each mode with what it will produce, the one you recommend first |
+| `route` is not `certain` of the Brain | do not ask: pick from its `choices` the Brain whose `summary` and `handles` fit the task; none clearly fits → `General` (its last choice). After dispatching, say in one line which Brain you chose and why, and that the person can tell you another |
+| the task fits two modes whose results differ (a report vs commits) | do not ask: take the lighter, the one whose result changes no repository (`--returns answer` or `document`) over the one that returns commits. After dispatching, say in one line which you chose and what the other would have produced, and that the person can ask for it |
 | you cannot write a checkable acceptance from what was said | ask what done looks like |
 | which Hive | do not ask: leave out `--hive` (the daemon picks the least busy running Hive whose version can take the task) unless the person named one |
 | no Hive can take it: "no running Hive has this version yet" | do not ask: `update-hive` one (it refuses a Hive that holds open runs, and waits until the Hive runs again), then dispatch |
@@ -72,15 +74,15 @@ questions** (step 4): a task a Hive cannot do is refused at once, not after thre
 | the task needs something a Hive cannot reach that the checks do not see (an internal service or site, a corporate-only tool) | do not ask: pass `--needs-private "<what, in one sentence>"`; it refuses the task (it can add a refusal, never remove one) |
 
 On the desktop ask with AskUserQuestion; in a channel session ask the same question as
-numbered text options ("reply with a number"). One question at a time, and only these.
+numbered text options ("reply with a number"). Only this question.
 
 ## Steps
 
 1. **Find the Brain.** Write the task to a file and run `route` (add `--brain` when the
    person named one, `--file` for a file the task is about, `--bound-project` for the
    project this conversation's `[DDD:<P>]` block names). `certain: true` → use its
-   `brain`; otherwise ask (above). Never pick a Brain for the person when `route` is not
-   certain.
+   `brain`; otherwise pick one from its `choices` (the table above): the Brain whose
+   `summary` and `handles` fit the task, else `General`.
 2. **Write the task so it stands alone.** The Hive sees only this text, the Brain and
    its own workspace: not this conversation, not files on this machine. Include the
    goal, every input it needs (links, pasted content) and where to leave results. The
@@ -94,7 +96,8 @@ numbered text options ("reply with a number"). One question at a time, and only 
    `project-agent.yaml` (its directory: `Projects/<B>/`, or `Knowledge/Library/` for
    General). Pick the mode whose `when` fits; none fits → leave `--mode` out (the default
    mode). A task whose cause or scope is unclear goes to the research mode first, not to
-   an implementation mode. Two modes that fit with different results: ask (above).
+   an implementation mode. Two modes that fit with different results: take the lighter
+   (the table above).
    Then choose how it runs, the same way for every Brain (a Project Agent does not set
    it), and pass it as `--execution` with one sentence in `--why`:
 
@@ -120,7 +123,7 @@ numbered text options ("reply with a number"). One question at a time, and only 
    code graph, `"$SWARM_BACKEND_BIN" py -m core.code_intel.impact <file|symbol> --project
    <B>` lists the callers. The Hive does not change this choice.
 4. **Check, then dispatch.** Run `spec` as soon as the Brain is known, before the mode
-   and acceptance questions: with the mode you would pick and an acceptance that says
+   and acceptance choices: with the mode you would pick and an acceptance that says
    only what was asked (a placeholder like "the person's request is answered" is fine
    for this check; never invent a criterion). When two modes fit, run it for each.
    `refusals` not empty for every mode that fits (for example: the Brain binds an
@@ -128,8 +131,9 @@ numbered text options ("reply with a number"). One question at a time, and only 
    network): run `dispatch` once with the same arguments plus `--title`, `--revision`
    and `--brief`, which records the refusal and shows the refusal card, and stop; tell
    the person it can be done on this machine in a chat tab. Refused for one mode only:
-   ask the mode question, naming that one as not possible on a Hive. Otherwise ask
-   what the table says to ask, run `spec` again if an answer changed it, then run
+   take the mode that can run, and say after dispatching that the other cannot run on a
+   Hive. Otherwise ask what the table says to ask, run `spec` again if an answer changed
+   it, then run
    `dispatch` with the same arguments plus `--revision` = the spec's `revision` and
    `--brief`; no confirmation is asked. Run it
    in the foreground with a Bash `timeout` of 590000 ms, alone in its command (no
