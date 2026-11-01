@@ -134,6 +134,16 @@ function LoadingFallback() {
   );
 }
 
+/** HTTP status of a failed api call. The api-service interceptor throws an
+ *  ApiError carrying `.statusCode`; a raw axios error carries `.response.status`. */
+function errorStatus(err: unknown): number | undefined {
+  return (err as { statusCode?: number })?.statusCode ??
+    (err as { response?: { status?: number } })?.response?.status;
+}
+
+/** Shown when the file is gone from its path (404): moved or deleted on disk. */
+const FILE_GONE_MESSAGE = 'This file is no longer available — it may have been moved or deleted.';
+
 /* ------------------------------------------------------------------ */
 /*  FileViewer                                                         */
 /* ------------------------------------------------------------------ */
@@ -332,10 +342,18 @@ function FileViewerImpl({
             // /meta 413s an oversized file (>50 MB) — preserve the friendly
             // "too large, open locally" message the base64 path used to show,
             // instead of silently mounting a renderer that fails to stream.
-            const status = (err as { response?: { status?: number; data?: { detail?: string } } })?.response?.status;
+            const status = errorStatus(err);
             if (status === 413) {
-              const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+              const detail = (err as { detail?: string })?.detail ??
+                (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
               setContentError(detail || 'File too large to preview here. Open it in a local app instead.');
+              return;
+            }
+            // 404: the file is gone. Mounting the renderer would only fail to stream,
+            // and an image's onError then shows the "type not supported" card — a
+            // wrong reason for a file that was moved or deleted.
+            if (status === 404) {
+              setContentError(FILE_GONE_MESSAGE);
               return;
             }
             // Other metadata errors are best-effort — the renderer still streams via raw URL.
@@ -357,9 +375,14 @@ function FileViewerImpl({
               absolutePath: resp.data.absolute_path,
             };
             setStatusBarInfo({ fileSize: resp.data.size ?? 0 });
-          } catch {
-            // Metadata fetch is best-effort for unsupported files
+          } catch (err) {
+            // Metadata fetch is best-effort for unsupported files, except a 404:
+            // the file is gone, so the card's "open it in its app" would mislead.
             if (cancelled) return;
+            if (errorStatus(err) === 404) {
+              setContentError(FILE_GONE_MESSAGE);
+              return;
+            }
             contentCache.current[tab.filePath] = { content: '', size: 0 };
             setStatusBarInfo({ fileSize: 0 });
           }
@@ -429,9 +452,7 @@ function FileViewerImpl({
         // reaches here). Read statusCode so status-specific handling actually
         // fires (the old `.response?.status` was always undefined for an
         // ApiError → the 413 branch below was dead, run_7f6539b5).
-        const status =
-          (err as { statusCode?: number })?.statusCode ??
-          (err as { response?: { status?: number } })?.response?.status;
+        const status = errorStatus(err);
         // #4: the backend stat-gates at 50 MB and returns HTTP 413 BEFORE reading
         // the file (workspace_api.get_workspace_file) — so an oversized binary never
         // streams a huge base64 into memory. Surface that as a helpful "open locally"
@@ -452,7 +473,7 @@ function FileViewerImpl({
         // the user. Show a friendly, actionable notice locally (NOT by editing the
         // shared api.ts 404 interceptor, which 9 other callers depend on).
         if (status === 404) {
-          setContentError('This file is no longer available — it may have been moved or deleted.');
+          setContentError(FILE_GONE_MESSAGE);
           return;
         }
         // 415: not text (an unlisted binary). Show the info card, never the editor:
