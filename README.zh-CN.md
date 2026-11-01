@@ -57,6 +57,8 @@ SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团
 
 每个 Brain 都是同一套六段结构（Identity · Knowledge · Gates · Capabilities · Delivery · Refresher），适用于任何领域，管理 `0..N` 个资产：一个代码仓库、一个数据源、一个文档集，或者什么都没有。Brain Hub 显示每个 Brain 知道什么、这周学到了什么。每个 Brain 带一个 **Project Agent**，是它关于"工作怎么跑"的标准定义。Brain 一旦绑定了仓库，代码图谱会自动建好。
 
+**底下是一套轻量 ontology，不是知识图谱。** 每个 Brain 都建在同一套很小的 ontology（本体）上：**分类 × 关系**，全部是 agent 能直接读的纯文本，不用图数据库，也不用查询语言。*分类*：每条知识属于 7 种类型之一，分在三层——元认知（原则、纠正）、认知（决策、模型）、操作（指南、坑、流程），类型决定它放在哪里、分量多重。*关系*：新知识进来时，由掌握上下文的 agent 声明它和已有知识的关系（全新、相同、补充、替代，或者重复了以前的某次纠正），所以每次改动都是新增、覆盖或撤回。代码图谱把同样的思路用在代码上（符号和调用边），一次改动会波及哪些地方，查一次就知道。这套 ontology 的目的不是存得更多，而是帮 agent 做判断：分类和关系让它找到对的那条知识，gate、审批和审计记录再把判断变成有人负责的行动。详细版：[Ontology 不是知识图谱，是决策层](https://github.com/xg-gh-25/SwarmAI/discussions/99)。
+
 **Autonomous Pipeline** 是可选的代码交付方式。它只管两头：前端理解需求（EVALUATE 和 Gate-0、THINK、PLAN），后端守质量（REVIEW 和 Gate-2、TEST、DELIVER、REFLECT）。代码怎么写由 agent 决定；写没写完、能不能交，由确定性的检查决定。每一环都有自己的检查：意图由需求文档和 Gate-0 把关，改动由一个在缺陷上失败、修好后通过的测试把关，结果由专家审查把关，这次 run 学到的东西由 REFLECT 变成一条经验或一个关闭的缺口。
 
 ![Autonomous Pipeline v1](./assets/readme/autonomous-pipeline.png)
