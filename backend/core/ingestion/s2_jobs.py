@@ -1,4 +1,4 @@
-"""Session jobs: the session-end hook and Save to Memory ask, a worker thread does.
+"""Session jobs: the session-end hook asks, a worker thread does.
 
 Design §12 r16.13 B and 2026-10-29-cdf-session-review.md. One job per session runs the
 S2 user-utterance pass and the after-session review (S2 main pass when the session
@@ -11,8 +11,7 @@ cannot be resumed), never inside the 180 s session-end hook or an HTTP request.
   it. The job's passes enqueue with it as ``session_project``. ``delay`` is a
   not-before: the idle hook asks with ``REVIEW_DELAY`` and each new request pushes it
   later, so a review waits for 60 quiet minutes (never more than ``MAX_WAIT`` after the
-  first request of the wait); the button asks with no delay. A
-  request while the job runs sets ``again`` (with its own not-before) so the session is
+  first request of the wait); no delay means now. A request while the job runs sets ``again`` (with its own not-before) so the session is
   read once more after it finishes.
 - ``set_watermark`` / the claimed job's ``reviewed_to`` keep where the review stopped.
 - ``claim(conn)`` / ``finish(conn, ...)`` move a job queued -> running -> done/failed.
@@ -91,13 +90,9 @@ def request(session_id: str, reason: str, *, sdk_session_id: str | None = None,
                 state = "running"
             elif row[0] == "queued":
                 not_before = _capped(not_before, row[1])
-                # a later request pushes the not-before (more activity); no delay = now.
-                # An explicit save (no delay) is never turned back into a delayed
-                # session-end job by the idle hook that fires after it.
+                # a later request pushes the not-before (more activity); no delay = now
                 conn.execute(
-                    """UPDATE ingestion_s2_jobs SET
-                       reason=CASE WHEN reason='save_button' THEN reason ELSE ? END,
-                       next_attempt_at=CASE WHEN reason='save_button' THEN next_attempt_at ELSE ? END,
+                    """UPDATE ingestion_s2_jobs SET reason=?, next_attempt_at=?,
                        sdk_session_id=COALESCE(?, sdk_session_id) WHERE session_id=?""",
                     (reason, not_before, sdk_session_id, session_id))
                 state = "queued"

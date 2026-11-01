@@ -848,7 +848,7 @@ def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
     snapshot = {"session_project": job["project"]} if job.get("project") else None
     outcome = s7_review.review_session(
         session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),
-        force=job.get("reason") == "save_button", project_snapshot=snapshot, runner=runner)
+        project_snapshot=snapshot, runner=runner)
     if outcome["status"] == "reviewed":
         s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
     logger.info("CDF session job %s: %s", session_id, outcome)

@@ -222,7 +222,7 @@ def test_the_job_runs_the_review_only_and_moves_the_watermark(cdf_env, tmp_path,
     from core.ingestion.api import connect_rw
     _conversation(cdf_env)
     monkeypatch.setattr(s2_jobs, "_WAKER", None)
-    s2_jobs.request(SESSION, "save_button")
+    s2_jobs.request(SESSION, "session_end")
     conn = connect_rw()
     try:
         job = s2_jobs.claim(conn)

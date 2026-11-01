@@ -45,7 +45,7 @@ def test_request_records_the_sessions_bound_project(store, monkeypatch):
                                                         "bound_project": "Wrong"})
     s2_jobs.request("app-1", "session_end", sdk_session_id="sdk-1")
     repo_guidance._STATE.pop("app-1")
-    s2_jobs.request("app-1", "save_button", sdk_session_id="sdk-1")   # state gone: kept
+    s2_jobs.request("app-1", "session_end", sdk_session_id="sdk-1")   # state gone: kept
     s2_jobs.request("app-2", "session_end", sdk_session_id="sdk-2")   # never bound
     rows = dict(store.execute("SELECT session_id, project FROM ingestion_s2_jobs"))
     assert rows == {"app-1": "SwarmAI", "app-2": None}

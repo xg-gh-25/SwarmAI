@@ -75,7 +75,7 @@ def test_a_rerun_after_again_starts_a_new_wait(cdf_env, monkeypatch):
     monkeypatch.setattr(s2_jobs, "_WAKER", None)
     conn = connect_rw()
     try:
-        s2_jobs.request("s1", "save_button")
+        s2_jobs.request("s1", "session_end")
         conn.execute("UPDATE ingestion_s2_jobs SET requested_at='2020-01-01T00:00:00+00:00'")
         conn.commit()
         s2_jobs.claim(conn)

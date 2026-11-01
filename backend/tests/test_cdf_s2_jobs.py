@@ -7,7 +7,7 @@ What is tested:
   an interrupted running job back in the queue.
 - The executor runs jobs in order, records failures on the job, and claims nothing
   while the session lane's admission says the host is loaded.
-- The session-end hook and Save to Memory only queue: neither runs S2 inline.
+- The session-end hook only queues: it never runs S2 inline.
 - The sync transcript reader returns sent rows in order with JSON content decoded.
 """
 from __future__ import annotations
@@ -41,16 +41,16 @@ def _state(conn, sid):
 def test_request_lifecycle(conn) -> None:
     from core.ingestion import s2_jobs
     assert s2_jobs.request("s1", "session_end") == "queued"
-    assert s2_jobs.request("s1", "save_button") == "queued"
+    assert s2_jobs.request("s1", "session_end") == "queued"
     assert conn.execute("SELECT COUNT(*) FROM ingestion_s2_jobs").fetchone()[0] == 1
     job = s2_jobs.claim(conn)
     assert job["session_id"] == "s1" and job["attempts"] == 1
-    assert s2_jobs.request("s1", "save_button") == "running"
+    assert s2_jobs.request("s1", "session_end") == "running"
     assert s2_jobs.finish(conn, "s1") == "queued"          # again: read once more
     assert _state(conn, "s1")[:3] == ("queued", 0, 0)
     s2_jobs.claim(conn)
     assert s2_jobs.finish(conn, "s1") == "done"
-    assert s2_jobs.request("s1", "save_button") == "queued"  # done re-arms
+    assert s2_jobs.request("s1", "session_end") == "queued"  # done re-arms
 
 
 def test_retry_then_fail_and_recover(conn, monkeypatch) -> None:
@@ -150,22 +150,22 @@ def test_a_v6_database_gains_the_job_table(tmp_path, monkeypatch) -> None:
 
 
 def test_review_waits_for_quiet_time_and_keeps_the_sdk_id(conn) -> None:
-    """The idle hook asks with a not-before; more activity pushes it; the button asks
-    with none. The sdk id and the watermark travel with the job."""
+    """The idle hook asks with a not-before; more activity pushes it; a request with
+    none is now. The sdk id and the watermark travel with the job."""
     from datetime import timedelta
     from core.ingestion import s2_jobs
     s2_jobs.request("s1", "session_end", sdk_session_id="sdk-1", delay=timedelta(minutes=8))
     assert s2_jobs.claim(conn) is None                       # not yet quiet long enough
     s2_jobs.request("s1", "session_end", delay=timedelta(minutes=8))
     assert s2_jobs.claim(conn) is None                       # pushed, sdk id kept
-    s2_jobs.request("s1", "save_button")                     # no delay: now
+    s2_jobs.request("s1", "session_end")                     # no delay: now
     job = s2_jobs.claim(conn)
     assert job["sdk_session_id"] == "sdk-1" and job["reviewed_to"] is None
     s2_jobs.set_watermark(conn, "s1", "2026-10-29T00:00:00|m9")
     s2_jobs.request("s1", "session_end", delay=timedelta(minutes=8))   # during the run
     assert s2_jobs.finish(conn, "s1") == "queued"
     assert s2_jobs.claim(conn) is None                       # the extra run waits too
-    s2_jobs.request("s1", "save_button")
+    s2_jobs.request("s1", "session_end")
     assert s2_jobs.claim(conn)["reviewed_to"] == "2026-10-29T00:00:00|m9"
 
 

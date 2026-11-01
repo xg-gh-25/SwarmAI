@@ -199,16 +199,6 @@ def test_judge_outages_back_off_for_hours_and_do_not_poison_quickly(cdf_env):
         conn.close(); owner.release()
 
 
-def test_an_explicit_save_is_not_downgraded_by_the_idle_hook(cdf_env):
-    from core.ingestion import api, s2_jobs
-    s2_jobs.request("s-1", "save_button")
-    s2_jobs.request("s-1", "session_end", delay=timedelta(minutes=8))
-    conn = api.connect_rw()
-    row = conn.execute("SELECT reason,next_attempt_at FROM ingestion_s2_jobs").fetchone()
-    assert (row[0], row[1]) == ("save_button", None)
-    conn.close()
-
-
 def test_a_request_during_a_failed_last_attempt_is_kept(cdf_env):
     from core.ingestion import api, s2_jobs
     s2_jobs.request("s-2", "session_end")
@@ -217,7 +207,7 @@ def test_a_request_during_a_failed_last_attempt_is_kept(cdf_env):
     conn.commit()
     job = s2_jobs.claim(conn)
     assert job["attempts"] == s2_jobs.MAX_ATTEMPTS
-    s2_jobs.request("s-2", "save_button")                     # arrives while running
+    s2_jobs.request("s-2", "session_end")                     # arrives while running
     assert s2_jobs.finish(conn, "s-2", error="boom") == "queued"
     assert conn.execute("SELECT attempts FROM ingestion_s2_jobs").fetchone()[0] == 0
     conn.close()

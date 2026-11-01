@@ -762,12 +762,11 @@ def _candidates(units: list[Any], workspace: Path, project: str | None,
 
 
 def review_session(session_id: str, *, sdk_session_id: str | None, watermark: str | None,
-                   force: bool = False, project_snapshot: dict[str, Any] | None = None,
+                   project_snapshot: dict[str, Any] | None = None,
                    runner: Runner | None = None) -> dict[str, Any]:
     """Review the session after *watermark*. Returns ``{status, reviewed_to, units, ...}``;
-    status is ``reviewed`` or ``nothing_new``. *force* (the save button) is kept for the
-    caller; every session a person wrote in is reviewed."""
-    del force
+    status is ``reviewed`` or ``nothing_new``. Every session a person wrote in is
+    reviewed."""
     transcript = s2_session._transcript_sync(session_id)
     rows = after_watermark(transcript, watermark)
     if not rows:
