@@ -34,7 +34,7 @@ import type { PipelineAnalytics } from '../../services/pipelines';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import { Tabs } from '../overlay';
 import { OverlayError } from './OverlayState';
-import { takeOverlayTarget } from '../../utils/overlayTarget';
+import { BRAIN_TARGET, takeOverlayTarget } from '../../utils/overlayTarget';
 import { useRuns } from '../swarm-out/live';
 import { Dot } from '../swarm-out/LiveDispatches';
 import { RunOverlay } from '../swarm-out/RunOverlay';
@@ -155,9 +155,12 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
     setOpen({ key: row.key, order: s.you.filter((r) => r.where === row.where).map((r) => r.key) });
   }, [rows, s.you]);
 
-  // opened AT a run (Brain Hub, Need You): its card, once the rows have it
+  // opened AT a run (Brain Hub, Need You): its card, once the rows have it; opened at a
+  // Brain ("brain:<name>", the Brain map's Runs): the list filtered to that Brain
   const [target] = useState(() => takeOverlayTarget('pipeline'));
-  useEffect(() => { if (target && rows.length && !open) openKey(target); },
+  useEffect(() => { if (target?.startsWith(BRAIN_TARGET)) setFilter({ where: 'all', brain: target.slice(BRAIN_TARGET.length) }); },
+    [target]);
+  useEffect(() => { if (target && !target.startsWith(BRAIN_TARGET) && rows.length && !open) openKey(target); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [target, rows.length]);
 

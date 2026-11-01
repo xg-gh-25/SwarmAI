@@ -46,7 +46,7 @@ vi.mock('../swarm-out/RunOverlay', () => ({
   RunOverlay: ({ id }: { id: string }) => <div data-testid="hive-card">{id}</div>,
 }));
 let TARGET: string | null = null;
-vi.mock('../../utils/overlayTarget', () => ({ takeOverlayTarget: () => { const t = TARGET; TARGET = null; return t; } }));
+vi.mock('../../utils/overlayTarget', () => ({ BRAIN_TARGET: 'brain:', takeOverlayTarget: () => { const t = TARGET; TARGET = null; return t; } }));
 
 import { PipelineContent } from './PipelineOverlay';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
@@ -213,6 +213,16 @@ describe('PipelineOverlay', () => {
     fireEvent.click(screen.getByTestId('pipeline-section-done'));
     fireEvent.click(screen.getByTestId('pipeline-run-d1'));
     expect(screen.getByTestId('hive-card').textContent).toBe('d1');
+  });
+
+  it('opened at a Brain (the Brain map\'s Runs), the list is filtered to that Brain', async () => {
+    TARGET = 'brain:AIDLC';
+    open();
+    await waitFor(() => expect((screen.getByTestId('pipeline-brain-filter') as HTMLSelectElement).value).toBe('AIDLC'));
+    fireEvent.click(screen.getByTestId('pipeline-section-done'));
+    expect(screen.getByTestId('pipeline-run-run_aidlc')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-run-run_done')).toBeNull();
+    expect(screen.queryByTestId('pipeline-card')).toBeNull();            // a Brain is not a run to open
   });
 
   it('Metrics: the distribution, and the five measures each with its chart', async () => {

@@ -13,7 +13,10 @@
  *  - ``filterRows`` / ``brainChips``: the shared filter (everywhere / this machine / Hive,
  *    and a Brain made from the rows, with counts);
  *  - ``distribution`` and the five measures (``delivery``, ``autonomy``, ``quality``,
- *    ``speed``, ``cost``) with the series their charts draw.
+ *    ``speed``, ``cost``) with the series their charts draw;
+ *  - ``brainLanes``: the runs of one Brain going now, one lane each, for the Brain map's
+ *    loop (design 2026-11-01-brain-eval-and-runs §2.4: the map reads these same rows,
+ *    never a second reading of the runs).
  * A value a run did not record is null and is left out of a measure (with the count it
  * covers), never counted as 0. Tokens are shown in M only (``tokenM``).
  */
@@ -164,6 +167,43 @@ export function sections(rows: PipelineRow[]): RowSections {
   running.sort((a, b) => ms(b.createdAt) - ms(a.createdAt));
   done.sort((a, b) => (ms(b.endedAt ?? b.since) || 0) - (ms(a.endedAt ?? a.since) || 0));
   return { you, running, done };
+}
+
+export interface Lane {
+  key: string;
+  runId: string | null;
+  where: Where;
+  /** local: "local"; Hive: the Hive's name */
+  place: string;
+  title: string;
+  /** waits on the person (it asks something), else going */
+  waiting: boolean;
+  /** stage progress of a local run ("5/8" from the engine); null for a Hive run, whose
+   *  stage the Hive does not report until it ends: no dots are drawn for it */
+  progress: { done: number; total: number } | null;
+  row: PipelineRow;
+}
+
+export interface BrainLanes { lanes: Lane[]; more: number; total: number }
+
+function progressOf(r: PipelineRow): Lane['progress'] {
+  const m = /^(\d+)\s*\/\s*(\d+)$/.exec(r.local?.progress ?? '');
+  if (!m) return null;
+  const done = Number(m[1]), total = Number(m[2]);
+  return total > 0 && done >= 0 && done <= total ? { done, total } : null;
+}
+
+/** The runs of *brain* going now (waiting on you first, then the newest running), at
+ *  most *max* lanes; ``more`` counts the rest, ``total`` all of them. A done run is not
+ *  a lane: the loop shows what is under way. */
+export function brainLanes(rows: PipelineRow[], brain: string, max = 3): BrainLanes {
+  const s = sections(rows.filter((r) => r.brain === brain));
+  const live = [...s.you, ...s.running];
+  const lanes = live.slice(0, max).map((r): Lane => ({
+    key: r.key, runId: r.runId, where: r.where, place: r.where === 'hive' ? (r.hive || 'Hive') : 'local',
+    title: r.title, waiting: s.you.includes(r), progress: progressOf(r), row: r,
+  }));
+  return { lanes, more: Math.max(0, live.length - lanes.length), total: live.length };
 }
 
 /** One word on a row: nobody stepped in, or how often; null when not known yet. */

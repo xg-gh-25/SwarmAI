@@ -7,7 +7,7 @@
  * here first; the overlay takes it once on mount. One slot per overlay, consumed on
  * read, so a later plain open lands on the overlay's default view.
  *
- * Exports: setOverlayTarget, takeOverlayTarget, openOverlayAt
+ * Exports: setOverlayTarget, takeOverlayTarget, openOverlayAt, openPipelinesFor, BRAIN_TARGET
  */
 
 const slots = new Map<string, string>();
@@ -30,3 +30,9 @@ export function openOverlayAt(overlay: 'brain-hub' | 'pipeline', target: string)
   const detail = overlay === 'brain-hub' ? { brain: target } : { runId: target };
   window.dispatchEvent(new CustomEvent(`swarm:show-${overlay}`, { detail }));
 }
+
+/** A Pipelines target that opens the list filtered to one Brain (the Brain map's Runs). */
+export const BRAIN_TARGET = 'brain:';
+
+/** Open Pipelines on the runs of one Brain. */
+export function openPipelinesFor(brain: string): void { openOverlayAt('pipeline', `${BRAIN_TARGET}${brain}`); }

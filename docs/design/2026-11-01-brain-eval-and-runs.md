@@ -3,7 +3,7 @@ title: Brain 只管知识；run 归执行它的地方 — Brain Eval 两个问�
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: design r6（XG：Runs 和 Metrics 分两个 tab；XG 2026-11-01：大卡片用 B；Pipelines 列所有 pipeline run 并标本机 / Hive；统计区可视化，含 run 分布；token 单位 M）
+status: design r7（XG 2026-11-01：地图在六边形外加闭环，Runs 用车道显示并行；XG：Runs 和 Metrics 分两个 tab；XG 2026-11-01：大卡片用 B；Pipelines 列所有 pipeline run 并标本机 / Hive；统计区可视化，含 run 分布；token 单位 M）
 mockup: Knowledge/Designs/mockups/2026-11-01-brain-eval-and-runs.html（工作区内，r5）
 follows: 2026-10-30-brain-runs-one-card.md, 2026-10-31-swarm-out-run-review.md, 2026-10-31-cdf-health.md
 ---
@@ -38,7 +38,7 @@ Pipelines，Hive run 在 Swarm Out。
 ### 2.1 删掉
 
 - Conductor · Runs tab；Eval 里的 run 统计和 Project Agent 一节；Overview 地图上的 Conductor
-  节点和 run 点。
+  节点和 run 点（地图上正在跑的 run 改成 §2.4 的车道）。
 - Brain 的 Needs you 只放这个 Brain 自己的事（提案、上报、新读进来的仓库）。run 等你的，在全局
   Need You 和 Pipelines / Swarm Out 里。
 - 留下：Project Agent tab（"用这个 Brain 去跑时怎么做"是大脑的一部分，不是 run 记录）。
@@ -87,6 +87,22 @@ Pipelines，Hive run 在 Swarm Out。
 - 点"要处理"的条目在 Canvas 打开它的文件；Canvas 没有跳到行的接口，行号写在行里（`TECH.md:7`）。
 - Brain Hub 首页也按这条规则改：等你的队列、卡片状态只放 Brain 自己的事（上报、job、仓库），去掉
   底部的 Conductor / Eval 落地数。Brain 头部的数 = Need You 减去等你的 run（`brainPending`）。
+
+### 2.4 地图：Brain 外面的一圈闭环（r7，XG 2026-11-01）
+
+XG："更 prefer Domain Knowledge driven，有 loop，有 eval，有 Project Agent 指挥 run"，六边形不变；
+"Runs 可以体现下并发的效果"。地图在六边形外加一圈顺时针的环：
+
+- **Knowledge → Project Agent**（知识驱动决策）→ **Runs**（并行派出，一个 run 一条车道）→ **Reflect**
+  （每个 run 回报）→ **Eval**（提出 lesson，过 Eval 才算数）→ **写回 Knowledge**；规则类改动走虚线到
+  Gates，等你同意。You 只在 Project Agent 问你的地方接进环里。
+- **车道读的就是 Pipelines 的行**：`pipelineRows.brainLanes(allRows(...), brain)`，数据是 Pipelines
+  overlay 已经在读的两份（analytics 和 Swarm Out runs，同一个缓存查询），不另读一遍 run——§1 里
+  "两份读法一不一样就出事"的问题不会回来。只放正在跑和等你的 run（等你的在前），最多 3 条，多的
+  写"还有 N 个"。本机 run 画引擎报的阶段点（`progress` "N/M"）；Hive run 不报阶段，只写状态，不画点。
+- **点车道**：在 Pipelines 里打开那个 run（`openOverlayAt('pipeline', key)`）；**点 Runs**：Pipelines
+  只看这个 Brain（目标 `brain:<名字>`）。
+- 仍然不放：run 的统计（落地数、时长、token、自主度）、Runs tab。它们在 Pipelines / Swarm Out。
 
 ## 3. 自主度：一个口径，放在 run 待的地方
 

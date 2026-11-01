@@ -1,7 +1,10 @@
 /**
  * BrainMapView + BrainHubHome tests — the Map view of one Brain and the Hub home.
- * Services are mocked at the boundary (ddd hooks). Checks: the map shows real counts
- * and no Run (a Brain holds knowledge only: no Conductor, no run dots, no sources);
+ * Services are mocked at the boundary (ddd hooks, the analytics query, Swarm Out runs).
+ * Checks: the map shows real counts and no run statistics (a Brain holds knowledge only:
+ * no Conductor, no sources); its loop shows this Brain's runs under way as lanes, read as
+ * the rows Pipelines shows (design 2026-11-01-brain-eval-and-runs §2.4), a lane opens
+ * its run, the Runs title opens Pipelines on this Brain;
  * clicking map parts opens the matching panel or the Browse view; Needs you lists the
  * Brain's own items and never a Run; the Project Agent submits to chat through
  * onDispatch; the needs count is one count; Eval shows two numbers and two sections,
@@ -11,9 +14,37 @@
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// this machine's runs (Pipelines' analytics): two of Brain P going, one waiting, one of Q
+const ANALYTICS = { byProject: [
+  { project: 'P', runs: [
+    { id: 'run_go', requirement: 'Fix the cap', status: 'running', profile: 'full', progress: '5/8', cycleTimeMin: null,
+      tokensActual: null, createdAt: '2026-11-01T09:00:00Z', updatedAt: '2026-11-01T09:30:00Z', pauseKind: null,
+      needsYou: false, landedAs: null, checkpointReason: null, ownerSessionId: 's1', notLanded: false, reportPath: null,
+      auditCard: null, finishedAt: null, activeS: null, billedTokens: null, costUsd: null, humanDecisions: null,
+      interventions: null, landing: null, notLandedReason: null, rework: null, audit: [] },
+    { id: 'run_ask', requirement: 'Ask me', status: 'paused', profile: 'full', progress: '3/8', cycleTimeMin: null,
+      tokensActual: null, createdAt: '2026-11-01T08:00:00Z', updatedAt: '2026-11-01T08:30:00Z', pauseKind: 'decision',
+      needsYou: true, landedAs: null, checkpointReason: null, ownerSessionId: 's1', notLanded: false, reportPath: null,
+      auditCard: null, finishedAt: null, activeS: null, billedTokens: null, costUsd: null, humanDecisions: null,
+      interventions: null, landing: null, notLandedReason: null, rework: null, audit: [] },
+  ] },
+  { project: 'Q', runs: [
+    { id: 'run_q', requirement: 'Other', status: 'running', profile: 'full', progress: '1/8', cycleTimeMin: null,
+      tokensActual: null, createdAt: '2026-11-01T10:00:00Z', updatedAt: '2026-11-01T10:00:00Z', pauseKind: null,
+      needsYou: false, landedAs: null, checkpointReason: null, ownerSessionId: 's1', notLanded: false, reportPath: null,
+      auditCard: null, finishedAt: null, activeS: null, billedTokens: null, costUsd: null, humanDecisions: null,
+      interventions: null, landing: null, notLandedReason: null, rework: null, audit: [] },
+  ] },
+] };
+let analyticsData: unknown = ANALYTICS;
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({ data: undefined }),
+  useQuery: (q: { queryKey?: readonly unknown[] }) => ({
+    data: q?.queryKey?.[1] === 'pipeline' && q?.queryKey?.[2] === 'analytics' ? analyticsData : undefined }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+vi.mock('../swarm-out/live', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  useRuns: () => ({ data: { runs: [], asks: [] }, failed: false, reload: () => {} }),
 }));
 const DETAIL = {
   name: 'P', kind: 'knowledge',
@@ -59,11 +90,12 @@ import { BrainHubHome } from './BrainHubHome';
 
 beforeEach(() => {
   evalData = EVAL;
+  analyticsData = ANALYTICS;
   (DETAIL as Record<string, unknown>).pendingBySource = { paused_run: 1, escalation: 1 };
 });
 
 describe('BrainMapView', () => {
-  it('draws the map with real counts and no Run: no Conductor, no sources, no run dots', () => {
+  it('draws the map with real counts and no run statistics: no Conductor, no sources', () => {
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
     expect(screen.getByTestId('brain-map')).toBeTruthy();
     expect(screen.getByTestId('bm-sec-knowledge').textContent).toContain('2 entries');
@@ -71,10 +103,36 @@ describe('BrainMapView', () => {
     expect(screen.queryByTestId('bm-conductor')).toBeNull();
     expect(screen.queryByTestId('bm-src-chat')).toBeNull();
     expect(screen.queryByTestId('bm-src-hive')).toBeNull();
-    expect(document.querySelector('[data-testid^="bm-run-"]')).toBeNull();
     // the escalation is the Brain's; the waiting Run is not
     expect(screen.getByTestId('bm-you').textContent).toContain('1');
     expect(screen.getByTestId('bm-you').getAttribute('aria-label')).toBe('You: 1 need you');
+  });
+
+  it('the loop shows this Brain\'s runs under way as lanes, waiting first, from the Pipelines rows', () => {
+    const opened: unknown[] = [];
+    const listen = (e: Event) => opened.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:show-pipeline', listen);
+    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
+    const lanes = [...document.querySelectorAll('[data-testid^="bm-lane-run_"]')].map((n) => n.getAttribute('data-testid'));
+    expect(lanes).toEqual(['bm-lane-run_ask', 'bm-lane-run_go']);           // Q's run is not P's
+    expect(screen.getByTestId('bm-runs').textContent).toContain('2 in parallel');
+    expect(screen.getByTestId('bm-lane-run_ask').textContent).toContain('waits for you');
+    expect(screen.getAllByTestId('bm-lane-dot-run_go')).toHaveLength(8);
+    fireEvent.click(screen.getByTestId('bm-lane-run_go'));
+    fireEvent.click(screen.getByTestId('bm-runs'));
+    expect(opened).toEqual([{ runId: 'run_go' }, { runId: 'brain:P' }]);
+    window.removeEventListener('swarm:show-pipeline', listen);
+  });
+
+  it('with nothing under way the loop says so, and before the runs load it shows no count', () => {
+    analyticsData = { byProject: [] };
+    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
+    expect(screen.getByTestId('bm-runs').textContent).toContain('nothing under way');
+    expect(document.querySelector('[data-testid^="bm-lane-run_"]')).toBeNull();
+    cleanup();
+    analyticsData = undefined;
+    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
+    expect(screen.getByTestId('bm-runs').textContent).toContain('…');
   });
 
   it('Needs you sits beside the map with the Brain\'s own items, and the Needs you tab lists the same', () => {
@@ -123,7 +181,9 @@ describe('BrainMapView', () => {
   it('the map shows status dots, its arrows say what they mean, and Eval its health', () => {
     render(<BrainMapView name="P" onGoTo={vi.fn()} />);
     const map = screen.getByTestId('brain-map');
-    for (const label of ['reads', 'writes rules after your OK', 'writes knowledge']) expect(map.textContent).toContain(label);
+    // the loop, clockwise: each arrow names what it carries
+    for (const label of ['knowledge drives it', 'dispatches in parallel', 'each run reports back', 'proposes lessons',
+      'kept: written back', 'rule: after your OK']) expect(map.textContent).toContain(label);
     expect(map.textContent).not.toContain('each Run uses this version');
     expect(screen.getByTestId('bm-sec-gates').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('attention');
     expect(screen.getByTestId('bm-reflect').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('ok');

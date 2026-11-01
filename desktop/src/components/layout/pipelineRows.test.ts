@@ -11,12 +11,14 @@
  * - are the distribution's bars per day until the data spans 14 days, then per week?
  * - does each measure leave out what a run did not record (never a 0), and are tokens
  *   always in M?
+ * - are a Brain's lanes its live runs only (waiting first, then newest), at most three
+ *   with the rest counted, with stage dots only where the engine reported progress?
  */
 import { describe, it, expect } from 'vitest';
 import type { PipelineRunSummary } from '../../services/pipelines';
 import type { SwarmOutRun } from '../../services/swarmOut';
 import {
-  allRows, autonomy, brainChips, cost, delivery, distribution, filterRows, fromHive, fromLocal, quality, sections, speed, tokenM,
+  allRows, autonomy, brainChips, brainLanes, cost, delivery, distribution, filterRows, fromHive, fromLocal, quality, sections, speed, tokenM,
 } from './pipelineRows';
 
 const NOW = Date.parse('2026-11-01T12:00:00Z');
@@ -127,5 +129,45 @@ describe('pipelineRows', () => {
     expect([c.tokensKnown, c.usd, c.usdKnown, c.top]).toEqual([3, 2, 1, 'a']);   // b recorded none: left out
     expect(tokenM(c.perDelivery)).toBe('367M');                    // every run's tokens (684M + 0.4M + 50M) over 2 deliveries
     expect([tokenM(684_000_000), tokenM(400_000), tokenM(12_400_000), tokenM(null)]).toEqual(['684M', '0.4M', '12M', '—']);
+  });
+});
+
+
+describe('brainLanes', () => {
+  const live = (id: string, created: string, o: Partial<PipelineRunSummary> = {}, brain = 'P') =>
+    fromLocal(run({ id, status: 'running', progress: '5/8', createdAt: created, finishedAt: null, ...o }), brain);
+
+  it('lists the Brain\'s live runs, waiting first, newest running next, at most three', () => {
+    const rows = [
+      live('run_old', '2026-11-01T08:00:00Z'),
+      live('run_new', '2026-11-01T10:00:00Z'),
+      live('run_ask', '2026-11-01T07:00:00Z', { status: 'paused', pauseKind: 'decision', needsYou: true }),
+      live('run_mid', '2026-11-01T09:00:00Z'),
+      live('run_other', '2026-11-01T11:00:00Z', {}, 'Q'),
+      fromLocal(run({ id: 'run_done' }), 'P'),
+    ];
+    const out = brainLanes(rows, 'P');
+    expect(out.lanes.map((l) => l.runId)).toEqual(['run_ask', 'run_new', 'run_mid']);
+    expect(out.lanes[0].waiting).toBe(true);
+    expect(out.lanes[1].waiting).toBe(false);
+    expect(out.more).toBe(1);
+    expect(out.total).toBe(4);
+  });
+
+  it('draws stage dots only from a reported N/M, never for a Hive run', () => {
+    const local = live('run_a', '2026-11-01T08:00:00Z');
+    const remote = { ...live('run_h', '2026-11-01T09:00:00Z'), where: 'hive' as const, hive: 'us-east', local: undefined };
+    const odd = live('run_x', '2026-11-01T07:00:00Z', { progress: 'review' });
+    const out = brainLanes([local, remote, odd], 'P');
+    const byId = Object.fromEntries(out.lanes.map((l) => [l.runId, l]));
+    expect(byId.run_a.progress).toEqual({ done: 5, total: 8 });
+    expect(byId.run_a.place).toBe('local');
+    expect(byId.run_h.progress).toBeNull();
+    expect(byId.run_h.place).toBe('us-east');
+    expect(byId.run_x.progress).toBeNull();
+  });
+
+  it('is empty when nothing of the Brain is under way', () => {
+    expect(brainLanes([fromLocal(run({}), 'P')], 'P')).toEqual({ lanes: [], more: 0, total: 0 });
   });
 });

@@ -10,8 +10,10 @@
  * The tab bar, header and the Brain (DDD) / Reflect bodies live in BrainHub.
  *
  * A Brain holds knowledge only (design docs/design/2026-11-01-brain-eval-and-runs.md §2):
- * the Runs that use it, their waits, autonomy and cost are in Pipelines and Swarm Out,
- * so nothing here reads a Run. Eval reads GET /ddd/brains/{name}/eval (core/brain_eval):
+ * the Runs that use it, their waits, autonomy and cost are in Pipelines and Swarm Out.
+ * The map shows the Brain's runs under way as lanes on its loop (§2.4), read as the very
+ * rows Pipelines shows (``pipelineRows``, same cached queries); a lane opens its run in
+ * Pipelines, the Runs title opens Pipelines on this Brain. No run statistics here. Eval reads GET /ddd/brains/{name}/eval (core/brain_eval):
  * what nobody measured says "not measured", a sample too small says "too few (n)",
  * never 0. The Project Agent definition is real: project-agent.yaml, a skeleton at
  * creation and drafted from the DDD, kept current by the agent. ProjectAgentView shows it
@@ -22,6 +24,7 @@
  *          BrainAddKnowledge, BrainTab, MapPanel
  */
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -32,9 +35,12 @@ import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from 
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import { ProjectAgentView } from './ProjectAgentView';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
-import { openOverlayAt } from '../../utils/overlayTarget';
+import { openOverlayAt, openPipelinesFor } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
 import { sectionCounts, needsYouItems, needsCount } from './brainMapModel';
+import { allRows, brainLanes } from './pipelineRows';
+import { overlayQuery } from './overlayQueries';
+import { useRuns } from '../swarm-out/live';
 
 /** The detail tabs of a Brain: one per part of the Brain map, plus Overview. */
 export type BrainTab = 'overview' | 'needs' | 'brain' | 'agent' | 'reflect' | 'eval';
@@ -63,6 +69,19 @@ function useBrainData(name: string) {
   const { data: knowledge = null } = useBrainKnowledge(name, 'week');
   const needs = useMemo(() => needsYouItems(detail?.pendingBySource), [detail]);
   return { detail, needs, learnedWeek: knowledge ? knowledge.counts.week : null };
+}
+
+/** The Brain's runs under way, as the rows Pipelines shows (design §2.4). undefined
+ *  until this machine's runs are loaded. */
+function useBrainLanes(name: string) {
+  const { data: analytics } = useQuery(overlayQuery.pipelineAnalytics('30d'));
+  const hive = useRuns(false);
+  return useMemo(() => {
+    if (!analytics) return undefined;
+    const out = brainLanes(allRows(analytics.byProject, hive.data?.runs, hive.data?.asks ?? []), name);
+    return { lanes: out.lanes.map(({ key, place, title, waiting, progress }) => ({ key, place, title, waiting, progress })),
+      more: out.more, total: out.total };
+  }, [analytics, hive.data, name]);
 }
 
 /** Status dots on the map, from the same records as the numbers. */
@@ -103,7 +122,9 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
   const needN = needsCount(needs);
   const send = useSend(onDispatch, onRequestClose);
 
+  const runs = useBrainLanes(name);
   const open = (target: BrainMapTarget) => {
+    if (target === 'runs') { openPipelinesFor(name); return; }
     onGoTo(target === 'need' ? 'needs' : target === 'browse' ? 'brain' : target);
   };
 
@@ -136,7 +157,9 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
           agentLine={agentLine(detail?.projectAgent, t)}
           evalLine={ev ? healthLine(ev, t) : undefined}
           tones={mapTones(detail, learnedWeek)}
+          runs={runs}
           onOpen={open}
+          onOpenRun={openRun}
         />
         <div className="flex flex-wrap items-center justify-center gap-4 pt-1 text-meta text-[var(--color-text-muted)]">
           <StatusBadge tone="success">{t('ui.BrainMapView.legendHealthy')}</StatusBadge>
