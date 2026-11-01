@@ -3,7 +3,7 @@ title: 认知统一入口 `cognition` —— 一条命令读整个脑
 date: 2026-11-01
 created: 2026-11-01
 updated: 2026-11-01
-status: proposed (r2, 待 XG 审)
+status: proposed (r3, 1、2 已定，3 待 XG 定)
 owner: SwarmAI backend (knowledge_cli / addressing / prompt_builder)
 related:
   - docs/design/2026-10-28-knowledge-addressing.md      # knowledge map|find|get 的来源，本设计在它上面扩
@@ -15,7 +15,7 @@ related:
 
 ## 0. 结论
 
-SwarmAI 的认知分在八个库里：项目 DDD、Library（整个 `Knowledge/`）、MEMORY、EVOLUTION、TIMELINE、
+SwarmAI 的认知分在八个库里：Brain（每个项目的 DDD，和通用 Brain `General` = `Knowledge/Library`）、`Knowledge/` 的全文检索、MEMORY、EVOLUTION、TIMELINE、
 其余上下文文件（SOUL / AGENT / SELF / USER / TOOLS …）、过去的会话、代码图谱。今天 Agent 主动去读，
 要用两条形状不同的命令（`knowledge` 和 `context_recall_cli`），后者按 `## ` 小节返回 JSON、没有 id、
 到不了 EVOLUTION 的归档、TIMELINE 的事件也切不开，隐私靠 Agent 自报（§1）。
@@ -24,6 +24,7 @@ SwarmAI 的认知分在八个库里：项目 DDD、Library（整个 `Knowledge/`
 （`knowledge` 保留为同义命令，单库输出与今天逐字相同）：
 
 - **一种单元**：每个库切成整条单元，每条带 `绝对路径:行号` 和 8 位 id，不丢内容；
+- **通用 Brain 和项目 DDD 一样对待**：`--project General` 有自己的单元表，能 find、get、引用，`map --projects` 里排第一；
 - **一种输出**：所有库同一个文本格式、同一个 `--json` 形状；
 - **一个隐私判断**：和推送式 recall 用同一个判断（`session_router._channel_recall_allowed`），由 daemon 在子进程环境里给出；
 - **用量照旧记**：CDF 管的文件，读到的条目记进用量。
@@ -78,6 +79,11 @@ Brain Hub 本身不存知识，是所有 DDD 的投影，已由 `knowledge map -
    channel 里只有 owner 的私聊能召回，"别处的回复别人能看到"（session_router.py:1252-1261）。主动查没有用它。
 5. **s_self-evolution 的重叠检查**（SKILL.md:57、INSTRUCTIONS.md:51）用 `--file SOUL.md` 按小节查，
    得到整节，而不是能逐条对照的那一条。
+6. **通用 Brain 查不到。** `Knowledge/Library` 是自带的通用 Brain（`project_agent.GENERAL_BRAIN`、`general_brain_dir`，
+   project_agent.py:58、:123）：CDF 把跨项目的经验写进它的顶层文档（`brain_knowledge.brain_files`，brain_knowledge.py:51-58），
+   派单、同步、教训范围也都把它当一个 Brain。但 `knowledge find --project General` 今天报 "no project named 'General'"
+   （本次实跑），因为 `addressing.project_root` 只认 `Projects/<名字>`（addressing.py:76-91）。它只能经 `--in library`
+   的全文检索读到：按 FTS 分块，没有单元表，不能 get，也不能被 run 引用。64 个 Markdown 文件、约 0.9 MB。
 
 ## 2. 名字：`cognition`
 
@@ -102,8 +108,10 @@ Brain Hub 本身不存知识，是所有 DDD 的投影，已由 `knowledge map -
 "$SWARM_BACKEND_BIN" cognition get <id>|<path>:<line> [--project P] [--json]
 ```
 
+- `--project P` 里的 P 可以是任何项目，也可以是 `General`（通用 Brain，大小写按 `project_agent.is_general_name`）。
 - `--in` 默认：给了 `--project` 是 `ddd`（和今天一样）；没给是 `all`。
-- `all` = 全部库。没给 `--project` 时 `ddd` 和 `code` 不查，输出里写一行"没查：要 `--project`"。
+- `all` = 全部库。通用 Brain 总在里面（它不属于某个项目）；没给 `--project` 时项目 DDD 和 `code` 不查，
+  输出里写一行"没查：要 `--project`"。
 - `--doc` 只对文件类的库有意义（`TECH.md`、`MEMORY-archive-2026-10.md`、`SOUL.md`）。
 
 ### 3.2 库表
@@ -112,8 +120,8 @@ Brain Hub 本身不存知识，是所有 DDD 的投影，已由 `knowledge map -
 
 | 库 | 文件 / 来源 | 单元怎么切 | 对应 `recall_multi.DOMAINS` |
 |---|---|---|---|
-| `ddd` | `addressing.ddd_units(project)`，不变 | `addressing._file_units` | `ddd` |
-| `library` | `run_knowledge._library_leg`（FTS5，整个 `Knowledge/`，含 DailyActivity），不变 | 原样 | `library` |
+| `ddd` | 项目 DDD：`addressing.ddd_units(project)`，不变。通用 Brain：`Knowledge/Library` 的顶层 `*.md` 为正文（`doc`，和 CDF 的 `brain_files` 同一集合），子目录的 `**/*.md` 为语料（`corpus`），同样的读取规则（不读隐藏文件、锁文件、符号链接，大小上限照旧） | `addressing._file_units` | `ddd` |
+| `library` | `run_knowledge._library_leg`（FTS5，整个 `Knowledge/`，含 DailyActivity），不变。多库查询时，落在 `Knowledge/Library/` 里的命中不再列出（通用 Brain 已按整条单元给出），单查 `--in library` 时照旧 | 原样 | `library` |
 | `memory` | `.context/MEMORY.md` + `MEMORY-archive-*.md` | `addressing._file_units` | `context_files` |
 | `evolution` | `EVOLUTION.md` + `EVOLUTION-archive*.md` | 正文：`parse_units`（`### ` 块）；归档：`addressing._file_units` | — |
 | `timeline` | `TIMELINE.md`（含 `## Not injected`） | `parse_units`（`### ` 事件） | — |
@@ -152,7 +160,7 @@ Brain Hub 本身不存知识，是所有 DDD 的投影，已由 `knowledge map -
   非 owner 会话里两个变量都会设上。
 - **为什么不是"群里只拒私人库"**（r1 的做法）：审查发现两处漏。r1 只按 `GROUP_CHANNEL_EXCLUDE` 拒，
   漏了只能分节注入的 STEERING.md（`CHANNEL_SECTION_FILTERED`，context_directory_loader.py:247），会让群里读到整份；
-  Library 又含 DailyActivity、Meetings、Handoffs，正是 MEMORY 的原料。逐库划线划不干净，推送那边已经得出同样的结论。
+  `Knowledge/` 的全文检索又含 DailyActivity、Meetings、Handoffs，正是 MEMORY 的原料。逐库划线划不干净，推送那边已经得出同样的结论。
 - **子进程环境在 spawn 时固定**：群聊的 `is_group`、私聊的发送人都是会话级的，所以 spawn 时的判断就是整个会话的判断。
   实施第一步核实 channel 子进程不会被私聊和群聊共用；若会，这条和今天的 `RESTRICTED_ENV` 一样需要改到按消息判断。
 - 这是可用性保护，不是保密边界（与 `knowledge_cli` 文档同一说法）：Agent 控制自己的命令行。它比今天好在
@@ -189,7 +197,9 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 | 位置 | 改法 |
 |---|---|
 | `desktop_main.py:483` | 加 `cognition`，`knowledge` 同指一个 `main`，`main` 收到被调用的名字 |
-| `core/knowledge_cli.py` | 两个名字共用的入口；`prog` 和所有提示里的名字用被调用的名字；新的库读取放进 `core/cognition.py`，`addressing` 不动 |
+| `core/knowledge_cli.py` | 两个名字共用的入口；`prog` 和所有提示里的名字用被调用的名字；新的库读取放进 `core/cognition.py` |
+| `core/addressing.py` | `project_root` 认 `General` → `general_brain_dir`；`_all_files` 对通用 Brain 用 §3.2 的文件集合；`projects()` 把 `General` 排第一。其余函数不变 |
+| 因此行为会变的 `addressing` 调用方 | `ingestion/overrides.py:140`：CDF 的"替换某条"声明今天点不中通用 Brain 里的条目，之后能点中（这正是 R22 要的，加测试）；`jobs/handlers/brain_mistake_audit.py:150`：通用 Brain 的经验之后也能被找到；`run_knowledge.ddd_map`、`engine` / `hook_bridge` 的 `unit_ids`：run 的项目都在 `Projects/` 下，不受影响 |
 | `prompt_builder.py`（spawn 环境，`RESTRICTED_ENV` 旁边） | 按 `_channel_recall_allowed` 设 `SWARM_COGNITION_OFF` |
 | `security_hooks._KNOWLEDGE_WORD_RE`（:6423） | 加 `cognition` |
 | `scripts/knowledge_usage_report.py` | 匹配两个名字，按库统计；加一列 Bash 直接读上下文文件 |
@@ -217,8 +227,8 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 - 不改推送式 recall，不改 CDF 解析器，不加写能力（写仍走 s_persist / CDF）。
 - 不新建索引，不加向量检索，不把清单放进 system prompt，不合并跨库排序。
 - 不加"必须先查"的 gate，不拦直接 Read / Grep。
-- `get` 不支持 `library`、`session`、`code`：Library 是约 1100 个文件的 FTS 分块，没有单元表，按 id 找位置要全量扫；
-  会话和符号没有稳定单元。
+- `get` 不支持 `library`（`Knowledge/` 其余目录的 FTS 分块，约 1100 个文件，没有单元表）、`session`、`code`（没有稳定单元）。
+  通用 Brain 不在此列：它有单元表，能 get、能引用。
 
 ## 6. 考虑过的其他方案
 
@@ -251,6 +261,11 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 7. `recall_multi.DOMAINS` 里每个域在 `STORES` 里都有对应；往 `DOMAINS` 加一个假域（monkeypatch），测试红。
 8. `find --in memory` 命中一条 MEMORY 条目后，`record_usage` 收到这条的 anchor（spy 断言调用和参数，不在源码里搜函数名）。
 9. 多库时，一个只在小库里命中的词出现在那个库的分组下，没有被大库挤掉。
+10. **通用 Brain**：fixture 工作区里 `Knowledge/Library/` 有两份顶层文档和一份子目录文档。`find --project General` 返回整条单元、
+    带路径和 id；`get <id>` 取回同一条；`map --projects` 第一行是 `General`；`find --project general`（小写）也指它。
+    多库查询时，同一段文字不会既以通用 Brain 单元、又以 `library` 分块出现两次。
+11. `ingestion/overrides` 用 `<id> | <首行>` 声明替换通用 Brain 顶层文档里的一条，能找到并且只找到那一条
+    （改动前在 main 上是 `not_found`）。
 
 提交前另跑改动直接碰到的已有测试：`test_knowledge_cli*`、`test_addressing*`、`test_reversible_context_recall.py`、
 `security_hooks` 里 owner 命令拒绝的测试、prompt_builder 的 channel 环境测试。
@@ -272,14 +287,21 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 
 ## 9. 要 XG 定的
 
-1. 名字用 `cognition`，`knowledge` 永久保留为同义命令：同意吗？
-2. channel 里除 owner 私聊外一律不能主动查（和推送式 recall 一致），代价是 owner 在群里也不能再用 `knowledge find` 查 DDD：同意吗？
+XG（2026-11-01）："Knowledge/Library 是我们的通用 DDD，你不能把它给拿掉，按你的设计来。"据此：
+
+1. 名字用 `cognition`，`knowledge` 永久保留为同义命令：**按设计**。
+2. channel 里除 owner 私聊外一律不能主动查（和推送式 recall 一致）：**按设计**。通用 Brain 和项目 DDD 同等对待，能查的地方都能查。
 3. 实施方式：跨 CLI、prompt_builder 的子进程环境和安全 hook，属于有风险的改动。直接做（native，代码一个提交、文字一个提交），还是走 pipeline？
 
 ## 10. 修订
 
+- **r3（2026-11-01，XG 指正）**
+  - 通用 Brain（`Knowledge/Library`）是一个 Brain，不是一个检索索引：`--project General` 有单元表，能 find / get / 引用，
+    和项目 DDD 同等对待。r2 只把它当 `Knowledge/` 全文检索的一部分，等于把它从 Brain 里拿掉了；今天的 `knowledge` 也查不到它（§1.3 第 6 条）。
+  - 多库查询时 `library` 不再重复列出 `Knowledge/Library/` 里的命中；单查 `--in library` 输出不变。
+  - 补上 `addressing` 调用方里行为会变的两处（overrides、brain_mistake_audit）和两条测试。
 - **r2（2026-11-01，零上下文审查后一次修完）**
-  - 隐私改为和推送式 recall 同一个判断，整条拒绝：r1 的"群里只拒私人库"会漏整份 STEERING 和 Library 里的 DailyActivity。
+  - 隐私改为和推送式 recall 同一个判断，整条拒绝：r1 的"群里只拒私人库"会漏整份 STEERING 和 `Knowledge/` 全文检索里的 DailyActivity。
   - 新增 `SWARM_COGNITION_OFF`，不复用 `RESTRICTED_ENV`：后者还挡着 Swarm Out。
   - 不改 `parse_units`：它的缓存键不含布局。归档改用 `addressing._file_units`，用"不丢内容"测试代替"边界和 CDF 一致"的说法。
     老分片经 `parse_units` 只剩 6/18 块，已实测。
