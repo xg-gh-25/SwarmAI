@@ -10,7 +10,7 @@
  * - gone out: the live state of the run (Swarm Out's runs poll, shared by every card on
  *   screen), "View in Swarm Out" and "Open Hive session";
  * - refused: why, and that nothing was sent; "Open <Brain>" when it names one;
- * - not sure (the Hive did not name the session in time): it may be running there.
+ * - not sure (the Hive may have taken it but named no session): it may be running there.
  *
  * Text a Hive or the backend wrote (title, brief, error, acceptance) is data and is
  * never translated; the labels come from chat.swarmOut.dispatch.* in the locales.

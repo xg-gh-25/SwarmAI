@@ -503,7 +503,7 @@ export interface SwarmOutDispatchContent {
   type: 'swarm_out_dispatch';
   /** false: refused, nothing was sent (`error` says why) */
   ok: boolean;
-  /** not ok, but the Hive may have taken it: it did not name the session in time */
+  /** not ok, but the Hive may have taken it: it named no session (no answer in time, or the connection ended) */
   maybeSent?: boolean;
   dispatchId: string | null;
   sessionId: string | null;

@@ -40,7 +40,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -130,9 +130,16 @@ def refusal_counts() -> dict[str, int]:
 
 
 class SwarmOutMaybeSent(SwarmOutError):
-    """A dispatch the Hive may have taken: it did not name the session in time. Its row
-    is recorded without a session; it is neither "sent" nor "nothing was sent"
-    (the router answers 504, the dispatch card says so)."""
+    """A dispatch the Hive may have taken: the request reached it but no session was
+    named (a wait that ran out, a connection reset, a stream that ended first). Its row
+    is recorded without a session and its work order is kept; it is neither "sent" nor
+    "nothing was sent" (the router answers 504, the dispatch card says so)."""
+
+
+#: Errors on the session request that come after the request was written: the Hive may
+#: be running the task (a reply cut off, or a wait for it that ran out). An error before
+#: that (no connection, a write that failed) means nothing was sent.
+_MAYBE_TAKEN = (asyncio.TimeoutError, httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError)
 
 
 #: One deadline for a whole dispatch (``dispatch_spec`` and the ``dispatch`` it calls).
@@ -452,9 +459,11 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
     kept on the row; never over the row's own fields (core/swarm_out_card).
     ``dispatch_id``: the id ``dispatch_spec`` chose (its pipeline run is named after it);
     a new one otherwise. The Hive prepares the task's workspace under it first (a work
-    order, core/hive_workspace); every failure after that releases it, except a session
-    that may have started. ``deadline``: the dispatch's (``dispatch_spec``'s); a new
-    DISPATCH_DEADLINE_S otherwise. Every step runs within it, the session's window
+    order, core/hive_workspace); every failure after that releases it, except one where
+    the Hive may have taken the task (it answered the session request, or the reply was
+    cut off or did not come in time) but named no session: that one is recorded without a
+    session, keeps the work order and raises SwarmOutMaybeSent. ``deadline``: the
+    dispatch's (``dispatch_spec``'s); a new DISPATCH_DEADLINE_S otherwise. Every step runs within it, the session's window
     (SESSION_ID_WAIT_S) held back until the session is started."""
     from core import task_repos
     title = " ".join((title or "").split())[:MAX_TITLE_CHARS]
@@ -506,33 +515,50 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             raise
         from core import hive_workspace
         declared = hive_workspace.task_repos_of(order)
+        taken: list = []                  # set once the Hive answered the request with 200
         try:
             # the window held back for it, or what is left when that is less
             wait = deadline.budget(f"starting the session on Hive {name}", SESSION_ID_WAIT_S)
             session_id = await asyncio.wait_for(
                 _start_session(client, task_message(segment + task, order), dispatch_id,
-                               _pin_request(agent, task)), wait)
-        except (asyncio.TimeoutError, httpx.ReadTimeout):
-            # The task may have been sent and taken: the Hive may be running it. Record
-            # the dispatch without a session so this Hive's questions are still listed,
-            # and say so instead of a generic failure (fixing spec J1).
-            row = {**(extra or {}), **_log_row(inst, None, title, origin, declared, agent, dispatch_id)}
-            await asyncio.to_thread(_append, json.dumps(row, ensure_ascii=False) + "\n")
+                               _pin_request(agent, task), on_accepted=lambda: taken.append(True)),
+                wait)
+        except BaseException as e:
+            if not (taken or isinstance(e, _MAYBE_TAKEN)):
+                await _release_work(client, dispatch_id)     # the request never reached the Hive
+                raise
+            # The Hive may be running the task (fixing spec J1, e2e-fixes #3): record the
+            # dispatch without a session so it is listed and this Hive's questions still
+            # are, keep the work order, and say so instead of a generic failure
+            _record_maybe_sent(extra, inst, title, origin, declared, agent, dispatch_id)
+            if not isinstance(e, Exception):
+                raise                                        # a cancel stays a cancel
+            waited = isinstance(e, (asyncio.TimeoutError, httpx.ReadTimeout))
             raise SwarmOutMaybeSent(
-                f"Hive {inst['name']} did not name the session within {wait:.0f}s; "
-                "the task may be running there. Check the Hive's own page before sending "
-                "it again.") from None
-        except BaseException:
-            await _release_work(client, dispatch_id)     # the session never started
-            raise
+                f"Hive {name} " + (f"did not name the session within {wait:.0f}s" if waited
+                                   else "took the task, but the connection ended before it "
+                                        "named the session")
+                + "; the task may be running there. Check the Hive's own page before "
+                "sending it again.") from None
         if not session_id or not KEY_RE.match(session_id):
-            await _release_work(client, dispatch_id)
-            raise SwarmOutError("the Hive did not name a session")
+            # answered with 200 (the only way to get here) but named no usable session
+            _record_maybe_sent(extra, inst, title, origin, declared, agent, dispatch_id)
+            raise SwarmOutMaybeSent(
+                f"Hive {name} took the task but did not name the session; the task may be "
+                "running there. Check the Hive's own page before sending it again.")
     row = {**(extra or {}), **_log_row(inst, session_id, title, origin, declared, agent, dispatch_id)}
     line = json.dumps(row, ensure_ascii=False) + "\n"
     await asyncio.to_thread(_append, line)
     logger.info("swarm_out: dispatched %s to %s (session %s)", row["dispatch_id"], inst["name"], session_id)
     return row
+
+
+def _record_maybe_sent(extra: Optional[dict], inst: dict[str, Any], title: str, origin: str,
+                       declared: Any, agent: Optional[dict], dispatch_id: str) -> None:
+    """The dispatch's row without a session. Written in place (one short line), so a
+    cancelled dispatch still leaves it."""
+    row = {**(extra or {}), **_log_row(inst, None, title, origin, declared, agent, dispatch_id)}
+    _append(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _append(line: str) -> None:
@@ -830,12 +856,15 @@ async def _put_repo(inst: dict[str, Any], r: dict[str, Any], path: Path, size: i
 async def _start_session(client: httpx.AsyncClient, message: str,
                          work_id: Optional[str] = None,
                          project_agent: Optional[dict] = None,
-                         session_id: Optional[str] = None) -> Optional[str]:
+                         session_id: Optional[str] = None,
+                         on_accepted: Optional[Callable[[], None]] = None) -> Optional[str]:
     """POST the message and read SSE only until the Hive names the session, then drop
     the connection: the Hive keeps running the turn (it detaches a gone client). The
     session works on the work order ``work_id`` the Hive prepared (its repositories are
     the order's, routers/chat.py). With ``session_id`` the message goes into that
-    session (a re-run with a correction) instead of a new one."""
+    session (a re-run with a correction) instead of a new one. ``on_accepted`` is called
+    once the Hive answers 200: from then on it has the task, whatever happens to the
+    stream."""
     body: dict[str, Any] = {"agent_id": "default", "message": message}
     if session_id:
         body["session_id"] = session_id
@@ -855,6 +884,8 @@ async def _start_session(client: httpx.AsyncClient, message: str,
                                     "host (its version differs): update the Hive; the task was not "
                                     "sent")
             raise SwarmOutError(f"the Hive refused the task (HTTP {r.status_code})")
+        if on_accepted:
+            on_accepted()
         async for line in r.aiter_lines():
             if not line.startswith("data:"):
                 continue

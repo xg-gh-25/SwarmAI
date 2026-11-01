@@ -108,13 +108,6 @@ def test_dispatch_refuses_a_busy_hive(patched, monkeypatch):
     assert not (patched / "dispatches.jsonl").exists()
 
 
-def test_dispatch_without_a_session_id_fails_and_records_nothing(patched, monkeypatch):
-    _use(monkeypatch, _fake_hive(events=[{"type": "assistant", "content": "hi"}]))
-    with pytest.raises(swarm_out.SwarmOutError):
-        asyncio.run(swarm_out.dispatch("worker-1", "t", "x"))
-    assert not (patched / "dispatches.jsonl").exists()
-
-
 # ── answers are checked against the question the Hive wrote ──
 
 Q = {"kind": "question", "questions": [{"question": "Which DB?"}, {"question": "Which port?"}]}
@@ -226,7 +219,7 @@ def test_dropped_questions_and_options_are_counted():
 
 
 def test_a_dispatch_that_timed_out_is_recorded_without_a_session(patched, monkeypatch):
-    async def never(client, message, repos=None, project_agent=None):
+    async def never(client, message, repos=None, project_agent=None, **k):
         await asyncio.sleep(10)
     monkeypatch.setattr(swarm_out, "_start_session", never)
     monkeypatch.setattr(swarm_out, "SESSION_ID_WAIT_S", 0.05)

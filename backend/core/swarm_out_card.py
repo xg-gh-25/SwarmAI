@@ -7,7 +7,7 @@ out is shown from **this machine's dispatch log row** with the ``dispatch_id`` t
 printed (``from_row``), never from the printed text: what the card says is what was
 sent. A refused dispatch (``{"ok": false, "detail": ...}``) is a failure card with the
 detail and the Brain / title the command named; it says nothing was sent. A dispatch the
-Hive may have taken without naming the session (``"maybe_sent": true``, the router's 504
+Hive may have taken without naming a session (``"maybe_sent": true``, the router's 504
 or the CLI's own timeout) says it may be running there instead.
 
 The block carries ``text``, the same card as plain lines with no channel markup, for a

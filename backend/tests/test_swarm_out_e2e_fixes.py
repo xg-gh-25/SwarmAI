@@ -7,12 +7,18 @@ Each test answers one question:
   re-run, once that has lasted INTERRUPTED_AFTER_S, and the time is kept per fetch;
 - #6 a discarded run settles though a wait stays open, and its waits leave Needs You;
 - #4 an answer the Hive refused is a Needs You item;
-- #7 commits landed here make the run accepted.
+- #7 commits landed here make the run accepted;
+- #3 a dispatch the Hive took (it answered 200, or the reply was cut off) but that named
+  no session is recorded as "may be running" with its work order kept; one that never
+  reached the Hive is an ordinary failure that releases the work order.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from core import hive_return, swarm_out, swarm_out_results, swarm_out_settle as st
@@ -201,3 +207,105 @@ def test_an_older_kept_record_without_the_time_counts_from_its_last_check():
     kept.pop("no_record_since")
     kept["checked_at"] = _iso(datetime.now(timezone.utc) - timedelta(seconds=st.INTERRUPTED_AFTER_S + 60))
     assert st.derive(row, kept)["stage"] == "stopped"
+
+
+# ── #3 ──────────────────────────────────────────────────────────────────────
+
+class _CutStream(httpx.AsyncByteStream):
+    """A 200 reply whose connection breaks after a first event that names no session."""
+    def __init__(self, exc):
+        self.exc = exc
+
+    async def __aiter__(self):
+        yield b'data: {"type": "heartbeat"}\n\n'
+        raise self.exc("connection reset by peer")
+
+
+def _hive(monkeypatch, tmp_path, stream):
+    """A fake Hive whose session request is answered by *stream(request)*; returns the
+    paths asked."""
+    from tests import _hive_work_fake as work
+    from tests.test_swarm_out_host import INST
+    seen = []
+
+    async def instance(ref):
+        return swarm_out._validate_instance(INST, {"id": "a1"})
+
+    def handler(request):
+        seen.append(request.url.path)
+        if request.url.path == "/api/chat/sessions/admission-state":
+            return httpx.Response(200, json=work.ADMISSION)
+        if work.answer(request) is not None:
+            return work.answer(request)
+        if request.url.path == "/api/chat/stream":
+            return stream(request)
+        return httpx.Response(404)
+
+    monkeypatch.setattr(swarm_out, "_instance", instance)
+    monkeypatch.setattr(swarm_out, "_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(swarm_out, "_client", lambda inst, timeout=None: httpx.AsyncClient(
+        base_url=swarm_out._base(inst), transport=httpx.MockTransport(handler)))
+    return seen
+
+
+def _rows(tmp_path):
+    p = tmp_path / "dispatches.jsonl"
+    return [json.loads(ln) for ln in p.read_text().splitlines()] if p.exists() else []
+
+
+def _raise(exc):
+    def stream(request):
+        raise exc("Server disconnected without sending a response", request=request)
+    return stream
+
+
+@pytest.mark.parametrize("stream", [
+    pytest.param(lambda r: httpx.Response(200, stream=_CutStream(httpx.ReadError)), id="reset-after-200"),
+    pytest.param(lambda r: httpx.Response(200, stream=_CutStream(httpx.RemoteProtocolError)), id="protocol-cut-after-200"),
+    pytest.param(lambda r: httpx.Response(200, stream=_CutStream(httpx.DecodingError)), id="other-error-after-200"),
+    pytest.param(lambda r: httpx.Response(200, text='data: {"type": "heartbeat"}\n\n'), id="stream-ended-no-session"),
+    pytest.param(lambda r: httpx.Response(200, text='data: {"session_id": "../bad"}\n\n'), id="unusable-session-id"),
+    pytest.param(_raise(httpx.RemoteProtocolError), id="cut-before-the-reply"),
+])
+def test_a_dispatch_the_hive_took_without_naming_a_session_may_be_running(monkeypatch, tmp_path, stream):
+    seen = _hive(monkeypatch, tmp_path, stream)
+    with pytest.raises(swarm_out.SwarmOutMaybeSent, match="may be running there"):
+        asyncio.run(swarm_out.dispatch("worker-1", "Fix it", "do X"))
+    (row,) = _rows(tmp_path)
+    assert row["session_id"] is None and row["title"] == "Fix it" and row["dispatch_id"]
+    assert not any(p.endswith("/release") for p in seen)
+
+
+@pytest.mark.parametrize("stream", [
+    pytest.param(_raise(httpx.ConnectError), id="cannot-connect"),
+    pytest.param(lambda r: httpx.Response(503), id="hive-refused"),
+])
+def test_a_dispatch_that_never_reached_the_hive_fails_and_releases(monkeypatch, tmp_path, stream):
+    seen = _hive(monkeypatch, tmp_path, stream)
+    with pytest.raises(Exception) as e:
+        asyncio.run(swarm_out.dispatch("worker-1", "Fix it", "do X"))
+    assert not isinstance(e.value, swarm_out.SwarmOutMaybeSent)
+    assert seen[-1].endswith("/release") and _rows(tmp_path) == []
+
+
+class _HangStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b'data: {"type": "heartbeat"}\n\n'
+        await asyncio.sleep(30)
+
+
+def test_a_dispatch_cancelled_after_the_hive_took_it_keeps_the_row_and_the_work_order(monkeypatch, tmp_path):
+    seen = _hive(monkeypatch, tmp_path, lambda r: httpx.Response(200, stream=_HangStream()))
+
+    async def go():
+        t = asyncio.create_task(swarm_out.dispatch("worker-1", "Fix it", "do X"))
+        while "/api/chat/stream" not in seen:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+    asyncio.run(go())
+    (row,) = _rows(tmp_path)
+    assert row["session_id"] is None
+    assert not any(p.endswith("/release") for p in seen)

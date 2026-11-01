@@ -2,7 +2,7 @@
 created: 2026-11-01
 updated: 2026-11-01
 title: "Swarm Out E2E 审查：会卡住、没有出路的七处，一次修完"
-status: implemented（#3 未做，见文末）
+status: implemented
 related: docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-30-swarm-out-dispatch-card.md · docs/design/2026-10-31-hive-approvals-person-and-host.md
 ---
 
@@ -35,6 +35,10 @@ related: docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-3
 - **改法：** 一条规则：**Hive 收下请求以后**（回了 200，或者请求已发出、在等回应时读超时/读断开），会话没报出来一律是"可能已发出"，
   记日志行、不释放，和超时一样。请求没发出去（连不上、Hive 拒绝）照旧是"没发出"。
 - **测试：** 200 之后流断开 → `SwarmOutMaybeSent`、有日志行、没调释放；200 之后流结束没报会话 → 同上；连不上 → 照旧释放、普通错误。
+- **做法（已实现）：** `_start_session` 在 Hive 回 200 时调用 `on_accepted`，`dispatch` 记下"已收下"。之后任何错误、流结束没报会话、
+  会话 id 不合格，以及回 200 之前的读超时、读断开、服务端断开（`_MAYBE_TAKEN`），都记一条没有会话的日志行、不释放工作区、抛
+  `SwarmOutMaybeSent`。派发在"已收下"之后被取消，也照样记行、不释放，再把取消抛出去。连不上、写失败、Hive 回非 200 照旧释放、普通错误。
+  测试在 `test_swarm_out_e2e_fixes.py`（#3 一节，经过真的 `_start_session` 和模拟 Hive）；5 个变异全部被抓到。
 
 ## 4. Hive 拒收了回答，等待从 Needs You 消失
 
@@ -76,10 +80,6 @@ correctness + state-machine 一轮：没有 HIGH。三个 MED 按原因修了：
 
 测试：`test_swarm_out_e2e_fixes.py` 和改到的套件（settle、hive_return、attention、results、swarm_out 各套件）全绿；变更点 21 个变异
 （后端 18、前端 3）全部被抓到；`tsc` 通过。
-
-## #3 为什么没做
-
-改 #3 的那次代码编辑在模型服务端被安全检查停掉（不是 SwarmAI 自己的 gate），没有执行。另起处理。
 
 ## 不在这次
 
