@@ -72,7 +72,8 @@ _TAKEOVER = frozenset({
 _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 # The daemon's human-only pipeline endpoints: a decision's answer
 # (docs/design/pipeline-v1-human-loop.md) and a person's "it landed as these commits"
-# (design 2026-11-01-brain-eval-and-runs §4.2; an agent asks through landed-as --request).
+# (design 2026-11-01-brain-eval-and-runs §4.2; the run's agent records it itself with
+# landed-as --prepare / --request).
 _HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/(?:decision|confirm-landed)\b")
 # The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
 _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
@@ -425,9 +426,9 @@ def _user_only_deny(command: str) -> "dict | None":
         return None
     if _HUMAN_ONLY_API_RE.search(command):
         if re.search(r"/confirm-landed\b", command):
-            return _deny("only a person confirms from the dashboard that a run landed. Ask "
-                         "them: landed-as --prepare with the commits, then landed-as "
-                         "--request <request id>.")
+            return _deny("the dashboard's confirm-landed is the person's button. Record it "
+                         "yourself: landed-as --prepare with the commits, then landed-as "
+                         "--request <request id>, as one command.")
         return _deny("a pipeline decision is answered by a person (the chat question card "
                      "or the dashboard), never by a command. Ask with AskUserQuestion using "
                      "the run's ask_user_question payload, then wait for the answer.")

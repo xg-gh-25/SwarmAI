@@ -127,6 +127,8 @@ def test_a_command_cannot_confirm_a_landing():
     from core.run_owner_gate import _user_only_deny
     deny = _user_only_deny("curl -X POST http://localhost:18321/api/pipelines/run_ab12/confirm-landed -d '{}'")
     assert deny is not None and "person" in json.dumps(deny)
+    # the way that is left is the agent's own: landed-as, not asking the person
+    assert "yourself" in json.dumps(deny) and "landed-as --prepare" in json.dumps(deny)
     assert _user_only_deny("grep -rn confirm-landed backend/routers") is None
 
 
