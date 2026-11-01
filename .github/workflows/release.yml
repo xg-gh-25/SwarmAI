@@ -126,13 +126,6 @@ jobs:
       - name: Update version
         run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
 
-      # build-backend.sh's install manifest hashes desktop/resources/seed.db (mapped by
-      # tauri.bundle.conf.json), so the seed is generated first, the order npm run
-      # build:all uses (its prebuild runs generate-seed-db before build.sh).
-      - name: Generate seed DB
-        working-directory: ./desktop
-        run: npm run generate-seed-db
-
       - name: Build Python backend
         working-directory: ./desktop
         run: bash scripts/build-backend.sh
@@ -195,8 +188,8 @@ jobs:
       - name: Update version
         run: bash scripts/sync-version.sh "$VERSION"
 
-      # npm run build's prebuild generates the seed DB with the backend's own code, so
-      # the backend's dependencies are installed first (the same lock a Hive installs).
+      # The Hive package is built with the backend's own code, so its dependencies are
+      # installed first (the same lock a Hive installs).
       - name: Install backend Python dependencies
         working-directory: ./backend
         run: |

@@ -71,8 +71,16 @@ def test_mapped_resources_equal_git_tracked_files():
 
 
 def test_generated_resources_are_written_by_the_build():
+    """The seed DB is generated once, by the backend build, before the install manifest hashes
+    it. `npm run build` (run again by Tauri's pre-build.sh, after the manifest) must not
+    regenerate it, or the installer ships a seed.db whose sha256 the manifest does not list."""
+    build = (ROOT / "desktop" / "scripts" / "build-backend.sh").read_text()
+    seed_at = build.find('generate_seed_db.py" "$PROJECT_ROOT/resources/seed.db"')
+    manifest_at = build.find("write_install_manifest.py")
+    assert 0 <= seed_at < manifest_at, "build-backend.sh must generate seed.db before the manifest"
     pkg = json.loads((ROOT / "desktop" / "package.json").read_text())["scripts"]
-    assert "generate-seed-db" in pkg["prebuild"] and "generate_seed_db.py" in pkg["generate-seed-db"]
+    for hook in ("prebuild", "build", "postbuild"):
+        assert "seed" not in pkg.get(hook, ""), f"npm run build's {hook} regenerates the seed"
     gen = (ROOT / "backend" / "scripts" / "generate_seed_db.py").read_text()
     assert '"desktop" / "resources" / "seed.db"' in gen
 

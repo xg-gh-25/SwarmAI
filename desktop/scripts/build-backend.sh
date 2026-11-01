@@ -238,6 +238,11 @@ SKILL_PY_DEPS = _skill_deps('skills')
 for _m in SKILL_PY_DEPS:
     hiddenimports += collect_submodules(_m)
 hiddenimports += collect_submodules('tree_sitter_language_pack')  # Language grammars for tree-sitter
+# A package compiled with mypyc (charset_normalizer, and so requests / markitdown through it)
+# imports a top-level '<hash>__mypyc' module from its compiled extensions, which PyInstaller's
+# analysis cannot see; without it the package fails to import in the bundle.
+import pkgutil as _pkgutil
+hiddenimports += sorted(_m.name for _m in _pkgutil.iter_modules() if _m.name.endswith('__mypyc'))
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
@@ -429,6 +434,11 @@ STAGE_DIR="$PROJECT_ROOT/src-tauri/bundle-backend"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 cp -R "$SOURCE_DIR" "$STAGE_DIR/python-backend"
+# The seed DB is a bundle resource the manifest hashes, so it is generated here, once, just
+# before the manifest: a later regeneration (it was a prebuild hook of `npm run build`, which
+# Tauri's pre-build.sh runs) would ship bytes the manifest does not list. `python` is the
+# build venv's interpreter, activated above.
+python "$BACKEND_DIR/scripts/generate_seed_db.py" "$PROJECT_ROOT/resources/seed.db"
 # Windows runners have `python`, and often only a Store stub named python3
 PY=python3; python3 -c '' >/dev/null 2>&1 || PY=python
 APP_VERSION="$($PY -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$PROJECT_ROOT/src-tauri/tauri.conf.json")"

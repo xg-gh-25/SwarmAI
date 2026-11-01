@@ -165,7 +165,8 @@ mark_downloaded() {  # mark_downloaded <path> [-r]: what a browser / Finder copy
 }
 
 sha256_check() {  # stdin "sha256  path" lines, run in the resources dir; prints mismatches
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum -c --quiet 2>&1
+    # GNU sha256sum only: macOS ships a /sbin/sha256sum without --quiet
+    if sha256sum --version 2>/dev/null | grep -q GNU; then sha256sum -c --quiet 2>&1
     else shasum -a 256 -c --quiet 2>&1; fi
 }
 
@@ -248,7 +249,8 @@ job_exit_code() {
     fi
     info="$(launchctl print "$UID_GUI/$1" 2>/dev/null)" || return 0
     if printf '%s' "$info" | grep -q 'state = running'; then return 0; fi
-    printf '%s' "$info" | sed -n 's/.*last exit code = \(.*\)$/\1/p' | head -1
+    # right after bootstrap launchd may not have spawned the job yet: "(never exited)"
+    printf '%s' "$info" | sed -n 's/.*last exit code = \(.*\)$/\1/p' | head -1 | { grep -v 'never exited' || true; }
 }
 
 # ---------------------------------------------------------------------------
