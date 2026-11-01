@@ -17,6 +17,7 @@ import { BackendStartupOverlay, BackendUpgradeBanner, CredentialBanner, UpdateNo
 import { getApiBaseUrl, isDesktop } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
+import AccountConnectedNotice from './components/common/AccountConnectedNotice';
 import { AudioKeepAlive } from './components/AudioKeepAlive';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
 import ChatPage from './pages/ChatPage';
@@ -314,6 +315,9 @@ function AppRoutes() {
 
   return (
     <BrowserRouter>
+      {/* one line when an upgrade connected the SwarmAI account from the old settings;
+          only once onboarding is done, never over the wizard */}
+      {isDesktop() && <AccountConnectedNotice />}
       <Routes>
         <Route path="/" element={
           <ThreeColumnLayout>

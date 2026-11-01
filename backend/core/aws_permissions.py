@@ -40,6 +40,8 @@ ACTIONS: dict[str, list[str]] = {
                 "bedrock:ListFoundationModels", "bedrock:ListInferenceProfiles"],
     "voice": ["polly:SynthesizeSpeech", "polly:DescribeVoices",
               "transcribe:StartStreamTranscription", "transcribe:StartStreamTranscriptionWebSocket"],
+    # done by the person from the capability line, only when the region has none
+    "account_setup": ["ec2:CreateDefaultVpc"],
     "storage": ["s3:CreateBucket", "s3:PutBucketPublicAccessBlock", "s3:ListBucket",
                 "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"],
     "hive_ec2": ["ec2:RunInstances", "ec2:CreateSecurityGroup", "ec2:AuthorizeSecurityGroupIngress",
@@ -124,6 +126,7 @@ def template(account_id: Optional[str] = None) -> dict:
         {"Sid": "SwarmAIBuckets", "Effect": "Allow",
          "Action": [a for a in ACTIONS["storage"] if a != "s3:ListAllMyBuckets"],
          "Resource": [f"arn:aws:s3:::{BUCKET_PREFIX}*", f"arn:aws:s3:::{BUCKET_PREFIX}*/*"]},
+        {"Sid": "DefaultVpc", "Effect": "Allow", "Action": ACTIONS["account_setup"], "Resource": "*"},
         {"Sid": "Ec2Read", "Effect": "Allow", "Resource": "*",
          "Action": [a for a in ACTIONS["hive_ec2"] if ":Describe" in a]},
         {"Sid": "RunTaggedInstances", "Effect": "Allow", "Action": ["ec2:RunInstances"],

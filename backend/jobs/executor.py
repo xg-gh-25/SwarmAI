@@ -597,7 +597,9 @@ def _check_claude_auth(claude_path: str) -> str | None:
             if "proxy" in key.lower():
                 del env[key]
         env["CLAUDE_CODE_USE_BEDROCK"] = "true"
-        env.setdefault("AWS_REGION", "us-west-2")
+        from core import aws_account
+        # the region the job itself runs in (_build_cli_env): the account's main region
+        env.setdefault("AWS_REGION", aws_account.region() if aws_account.active() else "us-west-2")
 
         result = subprocess.run(
             [claude_path, "auth", "status"],

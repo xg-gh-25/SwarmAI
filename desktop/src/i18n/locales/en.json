@@ -1415,7 +1415,11 @@
       "full": "Memory tight · {{count}} running, a new task queues",
       "used": "{{count}} running",
       "busy": "Busy · {{count}} running, a new task queues",
-      "memory": "Memory in use {{percent}}%"
+      "memory": "Memory in use {{percent}}%",
+      "short_one": "{{count}} Hive short of what you asked for",
+      "short_other": "{{count}} Hives short of what you asked for",
+      "cannotBuild": "Hives cannot be created in this account yet",
+      "openAccount": "Open the account page"
     },
     "detail": {
       "failed": "Can't read the details, try again later",
@@ -2844,7 +2848,9 @@
     "nothingFound": "No AWS credentials were found on this computer.",
     "anchorHint": "With an account ID, only that account can be chosen.",
     "accountIdWhere": "You can see it at the top right of the AWS console.",
-    "checkAgain": "Check again"
+    "checkAgain": "Check again",
+    "connectedNotice": "SwarmAI account connected: {{account}}",
+    "connectedNoticeOpen": "Open"
   },
   "hiveFleet": {
     "title": "Hive",
@@ -2891,6 +2897,30 @@
     "fewer": "Fewer Hives",
     "more": "More Hives",
     "existing_one": "This account already has {{count}} Hive.",
-    "existing_other": "This account already has {{count}} Hives."
+    "existing_other": "This account already has {{count}} Hives.",
+    "createDefaultVpc": "Create a default VPC in {{region}}",
+    "status": {
+      "pending": "waiting to build",
+      "provisioning": "being built",
+      "running": "running",
+      "starting": "starting",
+      "stopping": "stopping",
+      "stopped": "stopped",
+      "updating": "updating",
+      "deleting": "being deleted",
+      "error": "error"
+    }
+  },
+  "onboarding": {
+    "step": {
+      "system": "System Check",
+      "restore": "Restore",
+      "auth": "Authentication",
+      "account": "AWS Account",
+      "hive": "Hive",
+      "channels": "Channels",
+      "ready": "Ready"
+    },
+    "wizard": "Setup Wizard"
   }
 }

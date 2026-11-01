@@ -139,9 +139,10 @@ async def _status(db_path: Path) -> dict:
         counted = await _counted_in_swarmai(conn)
         counted_all = await ha.counted(conn)
         cur = await conn.execute(
-            "SELECT instance_type FROM hive_instances WHERE account_ref = ? AND "
-            f"{ha.COUNTED_SQL}", (ha.SWARMAI_ROW_ID,))
-        types = [r[0] for r in await cur.fetchall()]
+            "SELECT id, name, instance_type, region, status, created_at FROM hive_instances "
+            f"WHERE account_ref = ? AND {ha.COUNTED_SQL} ORDER BY created_at", (ha.SWARMAI_ROW_ID,))
+        hives = [dict(r) for r in await cur.fetchall()]
+        types = [h["instance_type"] for h in hives]
     finally:
         await conn.close()
     counted_now = counted
@@ -156,7 +157,11 @@ async def _status(db_path: Path) -> dict:
            "monthly_usd": sum(MONTHLY_USD.get(t, 0) for t in types),
            "dismissed": bool(fleet.get("dismissed")),
            # per instance type, so the page can name the monthly cost of what a raise creates
-           "prices": dict(MONTHLY_USD)}
+           "prices": dict(MONTHLY_USD),
+           # the Hives that count, one line each on the account page (design §6.5)
+           "hives": [{"id": h["id"], "name": h["name"], "instance_type": h["instance_type"],
+                      "region": h["region"], "status": h["status"],
+                      "created_at": h["created_at"]} for h in hives]}
     if counted_now < desired:
         out.update(state="cannot_build" if hive_cap.get("status") == "missing" else "short",
                    short=desired - counted_now, capability=hive_cap)

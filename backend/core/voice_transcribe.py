@@ -142,7 +142,8 @@ async def _transcribe_with_streaming(
     """
     from core import aws_account
     # the pinned SwarmAI account's credentials; None → amazon_transcribe's own chain
-    client = TranscribeStreamingClient(region=region or DEFAULT_REGION,
+    from core.voice_synthesize import voice_region
+    client = TranscribeStreamingClient(region=region or voice_region(),
                                        credential_resolver=aws_account.credential_resolver())
 
     stream = await client.start_stream_transcription(

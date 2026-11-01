@@ -324,6 +324,27 @@ async def set_fleet(body: Fleet, user_action: str | None = _UA):
     return await _view()
 
 
+class DefaultVpc(BaseModel):
+    region: str
+
+
+@router.post("/default-vpc")
+async def default_vpc(body: DefaultVpc, user_action: str | None = _UA):
+    """Create the default VPC a Hive needs in *region* (the person clicked it on the
+    capability line; off-machine, so the person's), then check that region again."""
+    _require_app(user_action)
+    if aws_account.is_hive_mode():
+        raise HTTPException(status_code=403, detail="Only available from the desktop app.")
+    try:
+        await executors.run_in("aws_account", aws_account.create_default_vpc, body.region)
+    except aws_account.AccountError as exc:
+        raise HTTPException(status_code=403 if exc.kind == "missing" else _STATUS.get(exc.kind, 422),
+                            detail={"kind": exc.kind, "message": exc.message})
+    await executors.run_in("aws_account", aws_account.run_capability_checks,
+                           AppConfigManager.instance(), body.region)
+    return await _view()
+
+
 _STATUS = {"unconnected": 404, "needs_login": 401, "account_mismatch": 409}
 
 

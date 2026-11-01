@@ -136,8 +136,10 @@ hive_fleet: {
 }
 ```
 
-- `source` 替代 `auth_method`。过渡期由 `source` 推出 `auth_method` 给旧读者（`auth_remediation`、凭证横幅、
-  会话启动前检查），第二步把这些读者改读 `source`，然后删掉 `auth_method`。
+- **实现时的决定（2026-11-01）：不另存 `chat`，不删 `auth_method`。** 对话的路仍由 `use_bedrock` 和 `auth_method`
+  决定，只经 `aws_account.get_chat_via()` 一个函数读出 `aws` / `bedrock_key` / `anthropic`，所有消费方都调它，不会
+  互相不一致；AWS 账号只看 `aws_account` 记录的 `source`。另存一个 `chat` 键再删 `auth_method`，要迁移它的全部旧读者，
+  对用户没有新的好处，迁移出错的风险却不小，所以不做。下面"`chat.via`"指这个函数的结果。
 - **对话的路和 AWS 账号分开记**：`chat.via` 是 `bedrock_key` 或 `anthropic` 时，对话用那把 key（存系统密钥库），
   AWS 账号记录可以有也可以没有。没有时 Hive、云存储和语音标为"需要连接 AWS 账号"，一个按钮回到 ②；有时它们照常
   用账号。这样"Bedrock 暂时不通、先用 key 对话"不会丢掉已经连好的账号。r3 的 `bedrock_key` / `none` 来源改成这里。
@@ -577,7 +579,7 @@ Hive      2 台（期望 2，1–8 台）    约 $238/月                [− ] 
 | Bedrock | 用默认模型发一个最小请求 | 模型访问没开 → 给控制台链接；区域里没有 → 建议区域；权限 → 缺的动作 |
 | Hive | 能不能**建**，不是能不能读：`RunInstances`、`CreateSecurityGroup` 用 `DryRun=True`；IAM、S3、CloudFront 的创建动作用 `iam:SimulatePrincipalPolicy`（模拟本身被拒时标"无法确认"，不标通过）。今天的 verify 只调只读 API（`routers/hive.py:353-389`），只读权限也能通过，然后在创建到一半时失败。默认 VPC 今天已查（警告），改为在所选区域查、没有就算缺 | 缺的动作；没有默认 VPC → 说明，并提供"创建默认 VPC"（用户点了才做） |
 | 云存储 | 能建或能读写 SwarmAI 的桶（还没有 Hive 时桶不存在，查"能建"）。今天桶名只用账号 ID 后 4 位（`swarmai-hive-<后4位>-<区域>`，`provisioner.py:281-282`），在全局命名空间里会撞；新桶改用完整账号 ID，老桶照旧，S3 调用都带 `ExpectedBucketOwner` | 缺的动作 |
-| 语音 | Polly、Transcribe 各一个最小调用 | 缺的动作；不挡任何东西 |
+| 语音 | Polly 一个最小调用（`DescribeVoices`）；Transcribe 流式没有便宜的只读调用，`polly:SynthesizeSpeech` 和 `transcribe:StartStreamTranscription` 用策略模拟查（模拟本身被拒时标"无法确认"） | 缺的动作；不挡任何东西 |
 
 Hive 模式（`SWARMAI_MODE=hive`）只检查 Bedrock 和它自己那几个 S3 前缀。要检查的动作和 §7.4 的权限模板从同一份
 动作清单生成。
@@ -730,9 +732,26 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
 - 前端：`components/awsAccount/ConnectAccount.tsx`（②–④，向导和设置页共用）、`HiveFleet.tsx`（⑤ 和设置页的数量行、
   升级确认卡、复制模板）；向导顺序 系统检查 → 恢复备份 → 账号 → Hive → 渠道 → 完成，Hive 模式保留原来的认证步、
   没有 ⑤，"先只用对话"跳过 ⑤；Need-You 的账号条目打开设置页。
-- **没做、写明：** AWS 登录和真实 SSO 还没有端到端跑过（要 CLI 2.32+ 和一个 Identity Center）；"创建默认 VPC"
-  按钮（§7.2、§7.7）没做，能力检查只说明没有默认 VPC；§6.4 一次性的"SwarmAI 账号已接上"提示没做（设置页的
-  "从你之前的设置接过来的"一行仍在）；设置页的 Hive 行不列每台实例（Hive 页和 Swarm Out 已有）。
+- **没做、写明：** AWS 登录和真实 SSO 还没有端到端跑过（要 CLI 2.32+ 和一个 Identity Center）。
+
+**对照设计补齐（2026-11-01）：** 逐节对过代码，下面这些原来缺或和设计不一致，已补：
+- **主区域只有一个读法：** `aws_account.region()`（`aws_region`，没设时用记录里的区域）。账号的会话、能力检查、语音
+  （Polly 按区域缓存客户端，Transcribe 流式）、eval 判官、job 的登录预检都改读它；没有账号时各自保持原来的默认值。
+- **job 不再从 `~/.aws/sso/cache` 猜凭证：** `jobs/bedrock.py` 去掉了这条兜底（它取最长寿的令牌和第一个带账号的
+  profile，可能登进别的账号）；没有账号时只走默认链，失败时提示去连 SwarmAI 账号。
+- **语音检查** 补上 Transcribe（§7.2 表）。
+- **"创建默认 VPC"按钮**（§7.2、§7.7）：Hive 能力缺默认 VPC 时，在向导 ⑤ 和设置页出现；先查该区域有没有，没有才建，
+  建完重跑能力检查。路由 `POST /api/aws-account/default-vpc` 只给本人（`_P`，分量 `off_machine`）；权限模板加了
+  `ec2:CreateDefaultVpc`。
+- **桶名被别的账号占了**：provisioner 报"这个桶名被另一个 AWS 账号占用"，不把 Hive 建进不属于本账号的桶。
+- **设置页列出每台 Hive**（名字、状态、区域）；Swarm Out 的 Hive 区在台数不够或建不了时多一行，一键打开设置页。
+- **§6.4 一次性提示**：从旧设置接过来、且已核实的账号，第一次打开时弹一次"SwarmAI 账号已接上：<账号>"，带打开
+  设置页的按钮；同一账号不再弹，向导连的账号不弹，向导没走完时也不弹（新装时启动也可能从 `~/.aws` 推出一条记录）；
+  启动时的核实还没跑完就稍后再看。
+- **向导页的步骤名** 加了中英文。
+- **§9 第 11 条（权限模板挡提权）在真实 IAM 上验过：** `backend/scripts/verify_permission_template.py` 用
+  `SimulateCustomPolicy`（只读，不建不挂任何东西）跑 27 种情况（SwarmAI 要做的 9 种允许，§7.4 列的提权 18 种拒绝），
+  2026-11-01 实跑 27/27 符合。它要网络和一个能调模拟的身份，不进 CI；改模板后手动跑一次。
 
 **最终测试集（不变量）**
 1. **完整性：** 对 `backend/` 做 AST 检查，import `boto3` / `botocore` / `aiobotocore` / `amazon_transcribe` 的模块只能是
@@ -760,7 +779,8 @@ agent 照常按"代我做事"的授权工作，读得到这些状态，需要时
    的权限。
 9. **权限模板和能力检查同源：** 从同一份动作清单生成，改一边另一边的测试变红。
 
-**审查：** r3 已过一次零上下文审查（§11）。实现后每步 security + correctness 各一轮。
+**审查：** r3 已过一次零上下文审查（§11）。实现后每步 security + correctness 各一轮。补齐这一轮：security 0 HIGH / 0 MED、
+2 LOW；correctness 1 MED（新装时一次性提示可能弹在向导上，改成只在向导走完后挂载）、6 LOW，一并改完。
 
 ## 10. 要 XG 定
 
@@ -868,9 +888,9 @@ correctness + security 只看修复，没有 HIGH / MED，几条 LOW 一并改�
 - 模板里 `CreateRole` 的信任策略由调用方决定：被劫持的身份能建一个带边界、信任外部账号的角色。可行的修法是给边界
   每条语句加 `ec2:SourceInstanceARN` 存在的条件，但没有在真实 IAM 上验证过，错了会让模板下的所有 Hive 失去权限，
   所以先不加。
-- CloudFront 的更新、删除不能按资源限定（模板里写明）；有人抢先建了 `swarmai-hive-<账号>-<区域>` 桶会让创建失败。
+- CloudFront 的更新、删除不能按资源限定（模板里写明）；有人抢先建了 `swarmai-hive-<账号>-<区域>` 桶时，创建仍然
+  失败（现在会说明是桶名被占），要换区域或找 AWS Support。
 - 被 `prune` 去掉的 AWS 登录 profile，CLI 自己缓存里的令牌没有删（缓存由 CLI 管，删法要在 2.32+ 的 CLI 上核实）；
   放弃的 SSO 登录留到下一次连接提交才清。
 - 在套用模板之前建的、不带边界的旧 Hive 角色，套用模板后更新会被拒（失败是关闭的，不是放开）。
-- 向导页本身（左侧步骤名等）仍只有英文。
-- AWS 登录、真实 SSO 没有端到端跑过；IAM 条件只用假的模拟器测过。
+- AWS 登录、真实 SSO 没有端到端跑过。（IAM 条件已在真实 IAM 上验过，见 §9。）

@@ -208,9 +208,9 @@ def _update_record(**fields: Any) -> None:
 
 def get_chat_via(config: Any = None) -> str:
     """Which path chat takes: ``aws`` (Bedrock on this account), ``bedrock_key`` or
-    ``anthropic``. Until the wizard writes ``chat`` (design §9 step 4) the settings that
-    still choose it are ``use_bedrock`` and ``auth_method``, so it is read from them: one
-    reader, so no consumer can disagree with another."""
+    ``anthropic``. The settings that choose it are ``use_bedrock`` and ``auth_method``
+    (the wizard's "chat only", AI & Models): it is read from them here, the one reader,
+    so no consumer can disagree with another (design §5.1: no separate ``chat`` key)."""
     config = config if config is not None else _cfg()
     if not config.get("use_bedrock", True):
         return "anthropic"
@@ -220,12 +220,18 @@ def get_chat_via(config: Any = None) -> str:
 
 
 def region(config: Any = None) -> str:
-    """The main region (design §5.1). Settings still writes it as ``aws_region`` until
-    the account page owns it (step 4)."""
+    """The main region (design §5.1): Bedrock, cloud storage, voice, eval judges, the
+    default for new Hives. Written as ``aws_region`` (a connect writes it from the record,
+    AI & Models changes it), with the record's ``region`` only as the fall-back when it
+    is unset; every consumer reads it here, never either value itself, so no two can
+    disagree."""
     config = config if config is not None else _cfg()
     rec = get_record() if config is _cfg() else config.get(RECORD_KEY)
     value = config.get("aws_region") or (rec or {}).get("region") or "us-east-1"
     return value if re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", value) else "us-east-1"
+
+
+_main_region = region   # for functions whose ``region`` parameter shadows it
 
 
 def is_hive_mode() -> bool:
@@ -609,10 +615,9 @@ def session(region: Optional[str] = None):
     """A boto3 session on the pinned credentials (static for their lifetime)."""
     import boto3
     creds = resolve()
-    rec = get_record() or {}
     return boto3.Session(
         aws_access_key_id=creds.access_key_id, aws_secret_access_key=creds.secret_access_key,
-        aws_session_token=creds.session_token, region_name=region or rec.get("region") or "us-east-1")
+        aws_session_token=creds.session_token, region_name=region or _main_region())
 
 
 # ── legacy → record (design §5.6) ──────────────────────────────────────────────
@@ -811,6 +816,52 @@ def _bedrock_model_id(config: Any) -> Optional[str]:
     return get_bedrock_model_id(model, config_map=mapping if isinstance(mapping, dict) else None)
 
 
+def create_default_vpc(region: str) -> dict:
+    """Create the default VPC in *region* (the Hive check found none; design §7.2). Only
+    when the person clicks it; AWS refuses when one already exists. Returns its id."""
+    if not re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", region or ""):
+        raise AccountError("bad_input", "not an AWS region")
+    ec2 = session(region).client("ec2", region_name=region)
+    try:
+        vpcs = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}]).get("Vpcs", [])
+    except Exception as exc:  # noqa: BLE001
+        code, msg = _err(exc)
+        raise AccountError("missing" if code in _DENIED else "create_failed",
+                           f"ec2:DescribeVpcs ({code}): {msg}")
+    if vpcs:
+        return {"vpc_id": vpcs[0]["VpcId"], "created": False}
+    try:
+        vpc = ec2.create_default_vpc()["Vpc"]
+    except Exception as exc:  # noqa: BLE001
+        code, msg = _err(exc)
+        if code == "DefaultVpcAlreadyExists":   # made meanwhile (console, another click)
+            again = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}]).get("Vpcs", [])
+            return {"vpc_id": again[0]["VpcId"] if again else None, "created": False}
+        raise AccountError("missing" if code in _DENIED else "create_failed",
+                           f"ec2:CreateDefaultVpc ({code}): {msg}")
+    logger.info("aws_account: created the default VPC %s in %s", vpc.get("VpcId"), region)
+    return {"vpc_id": vpc.get("VpcId"), "created": True}
+
+
+def _voice_check(sess: Any, rec: dict) -> dict:
+    """Voice: one Polly call, and whether speech can be transcribed (Transcribe streaming
+    has no cheap read call: its action is simulated against this identity's policy, as
+    the Hive checks do; a simulation that cannot run reads "could not confirm")."""
+    try:
+        sess.client("polly").describe_voices(LanguageCode="en-US")
+    except Exception as exc:  # noqa: BLE001
+        return _verdict(exc, "polly:DescribeVoices")
+    from core import aws_permissions
+    principal = aws_permissions.principal_arn(sess, str(rec.get("caller_arn") or ""))
+    denied, problem = aws_permissions._simulate(  # noqa: SLF001 — the one simulator
+        sess, principal, ["polly:SynthesizeSpeech", "transcribe:StartStreamTranscription"])
+    if denied:
+        return {"status": "missing", "detail": f"missing {', '.join(denied)}", "missing": denied}
+    if problem:
+        return {"status": "unknown", "detail": f"Polly works; could not confirm transcription: {problem}"}
+    return {"status": "ok", "detail": "Polly and Transcribe"}
+
+
 def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dict:
     """One verdict per capability: ``ok`` | ``missing`` (with what is missing) |
     ``unknown`` (could not tell) | ``not_applicable``. Stored on the record. Hive and
@@ -818,7 +869,7 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
     DryRun and policy simulation, nothing is created (``core.aws_permissions``)."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rec = get_record() or {}
-    region = rec.get("region") or "us-east-1"
+    region = _main_region()
     out: dict = {"checked_at": now}
     try:
         sess = session(region)
@@ -859,11 +910,7 @@ def run_capability_checks(config: Any, hive_region: Optional[str] = None) -> dic
         out["hive"] = {"status": "unknown", "region": hive_region,
                        "detail": f"{type(exc).__name__}: {_redact(str(exc))}"}
         out["storage"] = {k: v for k, v in out["hive"].items() if k != "region"}
-    try:
-        sess.client("polly").describe_voices(LanguageCode="en-US")
-        out["voice"] = {"status": "ok", "detail": "Polly; transcription is confirmed on first use"}
-    except Exception as exc:  # noqa: BLE001
-        out["voice"] = _verdict(exc, "polly:DescribeVoices")
+    out["voice"] = _voice_check(sess, rec)
     _update_record(capabilities=out)
     return out
 

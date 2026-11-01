@@ -151,6 +151,7 @@ _STATIC: "tuple[Op, ...]" = (
     _op("aws_account.permission_template", "GET", f"{_AA}/permission-template", _PO, "read"),
     # raising the count creates Hives (EC2, CloudFront: they cost money)
     _op("aws_account.hive_fleet", "PUT", f"{_AA}/hive-fleet", _P, "off_machine"),
+    _op("aws_account.default_vpc", "POST", f"{_AA}/default-vpc", _P, "off_machine"),
     # ── served by a Hive, called by the Host's daemon (routers/hive_brains.py; 404 on a
     # desktop). No agent calls them, on either side. ──
     _op("hive.serve.brain_install", "PUT", f"{_HV}/brains/{{brain}}", (HOST,), "change"),

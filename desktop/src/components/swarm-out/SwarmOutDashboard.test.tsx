@@ -27,6 +27,8 @@ afterAll(async () => { await i18n.changeLanguage('en'); });
 vi.mock('../../services/swarmOut', () => ({
   swarmOutService: { runs: vi.fn(), fleet: vi.fn(), answer: vi.fn(), hives: vi.fn() },
 }));
+const mockAccount = vi.fn();
+vi.mock('../../services/awsAccount', () => ({ awsAccountService: { get: (...a: unknown[]) => mockAccount(...a) } }));
 
 const NOW = new Date(2026, 9, 28, 12, 0).getTime();   // local time
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -64,6 +66,8 @@ const RUNS: SwarmOutRuns = {
 beforeEach(() => {
   vi.mocked(swarmOutService.runs).mockResolvedValue(RUNS);
   vi.mocked(swarmOutService.fleet).mockResolvedValue(FLEET);
+  mockAccount.mockReset();
+  mockAccount.mockRejectedValue(new Error('no account page here'));
 });
 
 describe('the panel numbers', () => {
@@ -153,6 +157,29 @@ describe('the run view', () => {
     render(<SwarmOutDashboard now={NOW} />);
     const rows = await screen.findAllByTestId('swarm-out-fleet-status');
     expect(rows.map((r) => r.textContent)).toEqual(['1 个在跑', '内存吃紧 · 4 个在跑，新任务会排队', '连不上', '已关机']);
+  });
+
+  it('Hives short of what the person asked for: one line and the way to the account page', async () => {
+    mockAccount.mockResolvedValue({ hive: { state: 'short', short: 2, desired: 3, counted: 1 } });
+    const opened: unknown[] = [];
+    const listen = (e: Event) => opened.push((e as CustomEvent).detail);
+    window.addEventListener('swarm:open-settings', listen);
+    try {
+      render(<SwarmOutDashboard now={NOW} />);
+      const line = await screen.findByTestId('swarm-out-fleet-short');
+      expect(line.textContent).toContain('少 2 台');
+      fireEvent.click(within(line).getByRole('button'));
+      expect(opened).toEqual([{ tab: 'aws-account' }]);
+    } finally {
+      window.removeEventListener('swarm:open-settings', listen);
+    }
+  });
+
+  it('a ready fleet, or an unknown one, adds no line', async () => {
+    mockAccount.mockResolvedValue({ hive: { state: 'ready', desired: 1, counted: 1 } });
+    render(<SwarmOutDashboard now={NOW} />);
+    await screen.findAllByTestId('swarm-out-fleet-status');
+    expect(screen.queryByTestId('swarm-out-fleet-short')).toBeNull();
   });
 
   it('a failed fleet read says so instead of loading forever', async () => {

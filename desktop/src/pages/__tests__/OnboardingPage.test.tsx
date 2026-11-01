@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import '../../i18n';   // the real strings: the rail's step names are asserted
 import OnboardingPage from '../OnboardingPage';
 
 // ── Mocks ──

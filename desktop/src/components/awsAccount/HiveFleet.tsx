@@ -61,7 +61,31 @@ export function CopyTemplate() {
   );
 }
 
-function CapabilityLine({ cap, checking }: { cap: Capability | null | undefined; checking: boolean }) {
+/** "Create a default VPC in <region>": the Hive check found none; the person's click is
+ *  the consent (it changes their AWS account), then the region is checked again. */
+function DefaultVpcButton({ region, onView }: { region: string; onView: (v: AwsAccountView) => void }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  return (
+    <span className="block mt-1">
+      <button type="button" className={smallBtn} disabled={busy} data-testid="create-default-vpc"
+        onClick={async () => {
+          setBusy(true); setFailed(null);
+          try { onView(await awsAccountService.createDefaultVpc(region)); } catch (e) {
+            setFailed(problemOf(e).message);
+          } finally { setBusy(false); }
+        }}>
+        {busy ? t('hiveFleet.creating') : t('hiveFleet.createDefaultVpc', { region })}
+      </button>
+      {failed && <span className="block text-xs text-[var(--color-error)]" data-testid="create-default-vpc-failed">{failed}</span>}
+    </span>
+  );
+}
+
+function CapabilityLine({ cap, checking, onView }: {
+  cap: Capability | null | undefined; checking: boolean; onView?: (v: AwsAccountView) => void;
+}) {
   const { t } = useTranslation();
   if (checking) return <p className="text-sm text-[var(--color-text-muted)]" data-testid="hive-cap">{t('hiveFleet.checking')}</p>;
   if (!cap) return null;
@@ -74,7 +98,12 @@ function CapabilityLine({ cap, checking }: { cap: Capability | null | undefined;
       {cap.missing && cap.missing.length > 0 && (
         <p className="text-xs text-[var(--color-text-muted)] break-words">{t('hiveFleet.missing', { actions: cap.missing.join(', ') })}</p>
       )}
-      {cap.no_default_vpc && <p className="text-xs text-[var(--color-text-muted)]">{t('hiveFleet.noDefaultVpc')}</p>}
+      {cap.no_default_vpc && (
+        <div className="text-xs text-[var(--color-text-muted)]">
+          {t('hiveFleet.noDefaultVpc')}
+          {onView && cap.region && <DefaultVpcButton region={cap.region} onView={onView} />}
+        </div>
+      )}
       {!cap.missing?.length && cap.detail && <p className="text-xs text-[var(--color-text-muted)] break-words">{cap.detail}</p>}
       <p className="mt-1 text-xs text-[var(--color-text-secondary)]">{t('hiveFleet.giveTemplate')} <CopyTemplate /></p>
     </div>
@@ -201,7 +230,7 @@ export function HiveSetupStep({ onDone, onBack }: { onDone: () => void; onBack?:
       <p className="mt-1 text-xs text-[var(--color-text-muted)]" data-testid="hive-limit">
         {elsewhere > 0 ? t('hiveFleet.maxElsewhere', { max: MAX, n: elsewhere }) : t('hiveFleet.max', { max: MAX })}
       </p>
-      <div className="mt-4"><CapabilityLine cap={cap?.region === region ? cap : null} checking={checking} /></div>
+      <div className="mt-4"><CapabilityLine cap={cap?.region === region ? cap : null} checking={checking} onView={setView} /></div>
       {error && <p className="mt-3 text-sm text-[var(--color-error)]" data-testid="hive-error">{error}</p>}
       <div className="mt-6 flex flex-wrap items-center gap-4">
         {onBack && (
@@ -313,7 +342,7 @@ export function HiveFleetSection({ view, onView }: { view: AwsAccountView; onVie
           <button type="button" className={smallBtn} disabled={busy} onClick={() => setPending(desired)}>{t('hiveFleet.createMissing')}</button>
         </div>
       ) : h.state === 'cannot_build' ? (
-        <div className="mt-2" data-testid="hive-cannot"><CapabilityLine cap={h.capability} checking={false} /></div>
+        <div className="mt-2" data-testid="hive-cannot"><CapabilityLine cap={h.capability} checking={false} onView={onView} /></div>
       ) : h.state === 'over' ? (
         <p className="mt-2 text-sm text-[var(--color-text-secondary)]" data-testid="hive-over">{t('hiveFleet.over', { n: h.over })}</p>
       ) : null}
@@ -327,6 +356,18 @@ export function HiveFleetSection({ view, onView }: { view: AwsAccountView; onVie
         </div>
       )}
       {error && <p className="mt-2 text-sm text-[var(--color-error)]" data-testid="hive-error">{error}</p>}
+      {(h.hives ?? []).length > 0 && (
+        <ul className="mt-3 space-y-1 text-sm" data-testid="hive-list">
+          {(h.hives ?? []).map((x) => (
+            <li key={x.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-4 text-[var(--color-text-secondary)]">
+              <span className="truncate text-[var(--color-text)]">{x.name}</span>
+              <span className="font-mono text-xs">{x.instance_type}</span>
+              <span className="font-mono text-xs">{x.region}</span>
+              <span>{t(`hiveFleet.status.${x.status}`, { defaultValue: x.status })}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="mt-2 text-xs text-[var(--color-text-muted)]">{t('hiveFleet.lastOnlyReplace')}</p>
     </section>
   );

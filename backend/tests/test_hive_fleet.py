@@ -148,7 +148,11 @@ async def test_status_and_the_upgrade_default(client, monkeypatch):
     st = await fleet.status(_db())
     assert (st["state"], st["desired"], st["monthly_usd"]) == ("ready", 2, 238)
     await _seed(1, status="error", ec2=None, prefix="f")           # a failed create: not counted
-    assert (await fleet.status(_db()))["counted"] == 2
+    st = await fleet.status(_db())
+    assert st["counted"] == 2
+    # one line per counted Hive on the account page; the failed create is not one
+    assert [(h["name"], h["status"], h["region"]) for h in st["hives"]] == [
+        ("s-running-0", "running", "us-east-1"), ("s-running-1", "running", "us-east-1")]
     from core import aws_account
     await fleet.set_defaults()
     aws_account._cfg().update({"hive_fleet": {"desired_count": 4}})

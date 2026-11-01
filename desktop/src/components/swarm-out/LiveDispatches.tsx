@@ -30,7 +30,9 @@
  * it but the reply is shown as plain text. Polls /api/swarm-out/runs every 30 s while shown;
  * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { awsAccountService, type FleetStatus } from '../../services/awsAccount';
+import { OPEN_SETTINGS_EVENT } from '../common/CredentialBanner';
 import { useOpenRun } from './openSession';
 import { useTranslation } from 'react-i18next';
 import { type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';
@@ -82,10 +84,24 @@ function Num({ value, label, tone, testId }: { value: React.ReactNode; label: st
 /** The top card: the three numbers in its header, each Hive's memory under them (a
  *  Hive queues a new task only when its memory is under critical pressure). What the
  *  count and the bar mean is explained on hover (the title and every status). */
+/** The SwarmAI account's Hive count, when it is short of what the person asked for
+ *  (design 2026-10-31-swarmai-aws-account §7.3): one line and a button to the account
+ *  page, where the count is raised with its cost named. Silent when ready or unknown. */
+function useHiveShortfall(): FleetStatus | null {
+  const [st, setSt] = useState<FleetStatus | null>(null);
+  useEffect(() => {
+    let stop = false;
+    awsAccountService.get().then((v) => { if (!stop) setSt(v.hive ?? null); }).catch(() => { /* unknown: say nothing */ });
+    return () => { stop = true; };
+  }, []);
+  return st && (st.state === 'short' || st.state === 'cannot_build') ? st : null;
+}
+
 function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed?: boolean; numbers: React.ReactNode }) {
   const { t } = useTranslation();
   const hives = fleet?.hives ?? [];
   const note = t('swarmOut.fleet.note');
+  const short = useHiveShortfall();
   return (
     <section className={card} data-testid="swarm-out-fleet">
       <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1.5 px-4 pt-3 pb-2">
@@ -93,6 +109,17 @@ function Fleet({ fleet, failed, numbers }: { fleet: SwarmOutFleet | null; failed
         <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 min-w-0" data-testid="kpi-grid">{numbers}</div>
       </div>
       {failed && <div className={`px-4 text-[12px] ${muted}`} data-testid="swarm-out-fleet-failed">{t('swarmOut.fleet.failed')}</div>}
+      {short && (
+        <div className="px-4 pb-2 text-[12px] flex items-center gap-3" data-testid="swarm-out-fleet-short">
+          <span style={{ color: TONE_VAR.attention }}>
+            {short.state === 'cannot_build' ? t('swarmOut.fleet.cannotBuild') : t('swarmOut.fleet.short', { count: short.short ?? 0 })}
+          </span>
+          <button type="button" className="underline"
+            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab: 'aws-account' } }))}>
+            {t('swarmOut.fleet.openAccount')}
+          </button>
+        </div>
+      )}
       {fleet === null ? (!failed && <div className={`px-4 pb-3 text-[12px] ${muted}`}>{t('swarmOut.loading')}</div>) : (
         <div className="grid grid-cols-[minmax(80px,220px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-2.5 pb-3 border-t border-[var(--color-border)]">
           {hives.map((h) => {

@@ -4,12 +4,13 @@ Shared Bedrock client for job handlers.
 All background job handlers that call Bedrock LLMs MUST use this module
 instead of creating raw ``boto3.client("bedrock-runtime")`` inline.
 
-Credential strategy (same as the main SwarmAI app):
-  1. Try boto3 default chain (credential_process → ada → Isengard)
-  2. If that fails (launchd context, VPN off, mwinit expired), fall back
-     to AWS SSO IdC tokens from ``~/.aws/sso/cache/``
-  3. Pre-resolve credentials and inject them explicitly into the boto3
-     client — avoids credential_process resolution at call time.
+Credential strategy:
+  1. With a SwarmAI AWS account (core/aws_account): its pinned, refreshing session.
+  2. Without one: the boto3 default chain, pre-resolved and injected into the client
+     (avoids credential_process resolution at call time). Nothing else is tried: the
+     old guess from ``~/.aws/sso/cache`` (the longest-lived token of any start URL, the
+     first profile with an account) could sign in to another account than the token's
+     (design 2026-10-31-swarmai-aws-account §3, §5.4); connect the account instead.
 
 A model's answer goes through ``structured()`` (an object shaped by a JSON schema,
 the format guaranteed by the API) or ``text()`` (plain text); both report a reply cut
@@ -90,8 +91,10 @@ def _load_config() -> tuple[str, dict]:
     """
     try:
         from core.app_config_manager import AppConfigManager
+        from core import aws_account
         cfg = AppConfigManager.instance()
-        region = cfg.get("aws_region") or "us-east-1"
+        # the account's main region when connected (one reader); else the old default
+        region = aws_account.region(cfg) if aws_account.active() else (cfg.get("aws_region") or "us-east-1")
         model_map = cfg.get("bedrock_model_map") or {}
     except Exception:
         region = "us-east-1"
@@ -100,16 +103,13 @@ def _load_config() -> tuple[str, dict]:
 
 
 def _resolve_credentials() -> dict[str, str]:
-    """Pre-resolve AWS credentials using the same strategy as executor.py.
+    """Pre-resolve AWS credentials from the boto3 default chain (as executor.py does).
 
-    Tries boto3 default chain first (credential_process → ada → Isengard).
-    If that fails (launchd context, VPN off, mwinit expired), tries to
-    find SSO IdC cached credentials from ``~/.aws/sso/cache/``.
-
-    Returns dict with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and
-    optionally AWS_SESSION_TOKEN. Returns empty dict if all methods fail.
+    The path without a SwarmAI account: the boto3 default chain (credential_process →
+    ada → Isengard, a profile, ...). Returns dict with AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY, and optionally AWS_SESSION_TOKEN; empty when it fails.
     """
-    # Method 1: boto3 default chain (same as executor._get_aws_credentials)
+    # the boto3 default chain (same as executor._get_aws_credentials)
     try:
         import boto3
 
@@ -129,72 +129,8 @@ def _resolve_credentials() -> dict[str, str]:
     except Exception as e:
         logger.debug("boto3 credential resolution failed: %s", e)
 
-    # Method 2: SSO IdC cached credentials (same tokens Claude CLI uses)
-    try:
-        import json
-        from pathlib import Path
-
-        sso_cache_dir = Path.home() / ".aws" / "sso" / "cache"
-        if sso_cache_dir.is_dir():
-            # Find the newest non-expired SSO token
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            best_token = None
-            best_expiry = None
-
-            for f in sso_cache_dir.glob("*.json"):
-                try:
-                    data = json.loads(f.read_text())
-                    # SSO token files have accessToken + expiresAt
-                    if "accessToken" not in data:
-                        continue
-                    expires = datetime.fromisoformat(
-                        data["expiresAt"].replace("Z", "+00:00")
-                    )
-                    if expires > now and (best_expiry is None or expires > best_expiry):
-                        best_token = data
-                        best_expiry = expires
-                except Exception:
-                    continue
-
-            if best_token:
-                # Use STS to exchange SSO token for temporary credentials
-                import boto3
-                sso_client = boto3.client(
-                    "sso",
-                    region_name=best_token.get("region", "us-east-1"),
-                )
-                # We need accountId and roleName from the SSO config
-                # Read from ~/.aws/config
-                import configparser
-                aws_config = configparser.ConfigParser()
-                aws_config.read(str(Path.home() / ".aws" / "config"))
-
-                # Prefer [default] profile, then first match with sso_account_id.
-                # Without this, multi-profile configs could pick the wrong account.
-                sections = aws_config.sections()
-                # Sort so 'default' (or 'profile default') comes first
-                sections.sort(key=lambda s: (0 if 'default' in s.lower() else 1, s))
-                for section in sections:
-                    acct = aws_config.get(section, "sso_account_id", fallback=None)
-                    role = aws_config.get(section, "sso_role_name", fallback=None)
-                    if acct and role:
-                        resp = sso_client.get_role_credentials(
-                            roleName=role,
-                            accountId=acct,
-                            accessToken=best_token["accessToken"],
-                        )
-                        role_creds = resp["roleCredentials"]
-                        logger.info("Credentials resolved via SSO IdC cache")
-                        return {
-                            "aws_access_key_id": role_creds["accessKeyId"],
-                            "aws_secret_access_key": role_creds["secretAccessKey"],
-                            "aws_session_token": role_creds["sessionToken"],
-                        }
-    except Exception as e:
-        logger.debug("SSO IdC credential resolution failed: %s", e)
-
-    logger.warning("All credential resolution methods failed")
+    logger.warning("No AWS credentials from the default chain (connect the SwarmAI account "
+                   "in Settings → SwarmAI Account)")
     return {}
 
 
@@ -210,7 +146,7 @@ def get_client(*, force_new: bool = False, region: str | None = None) -> Any:
             credential eviction on auth errors).
         region: Optional explicit region override. When None, resolves region
             from AppConfigManager (the job default). Callers that have their own
-            region precedence (e.g. the eval judge honors AWS_REGION env first)
+            region precedence (e.g. the eval judge: the account's main region, else AWS_REGION)
             pass it explicitly so this client uses the SAME region the caller
             would have used — no silent region-source switch. The region is part
             of the cache key, so an override participates in cache invalidation.

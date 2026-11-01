@@ -1415,7 +1415,11 @@
       "full": "内存吃紧 · {{count}} 个在跑，新任务会排队",
       "used": "{{count}} 个在跑",
       "busy": "忙 · {{count}} 个在跑，新任务会排队",
-      "memory": "内存占用 {{percent}}%"
+      "memory": "内存占用 {{percent}}%",
+      "short_one": "比你要的少 {{count}} 台 Hive",
+      "short_other": "比你要的少 {{count}} 台 Hive",
+      "cannotBuild": "这个账号还不能建 Hive",
+      "openAccount": "打开账号页"
     },
     "detail": {
       "failed": "读不到详情，稍后再试",
@@ -2844,7 +2848,9 @@
     "nothingFound": "这台电脑上没有找到 AWS 凭证。",
     "anchorHint": "填了就只能选这个账号，其余灰掉。",
     "accountIdWhere": "在 AWS 控制台右上角能看到。",
-    "checkAgain": "重新检测"
+    "checkAgain": "重新检测",
+    "connectedNotice": "SwarmAI 账号已接上：{{account}}",
+    "connectedNoticeOpen": "查看"
   },
   "hiveFleet": {
     "title": "Hive",
@@ -2891,6 +2897,30 @@
     "fewer": "减少 Hive",
     "more": "增加 Hive",
     "existing_one": "这个账号里已有 {{count}} 台 Hive。",
-    "existing_other": "这个账号里已有 {{count}} 台 Hive。"
+    "existing_other": "这个账号里已有 {{count}} 台 Hive。",
+    "createDefaultVpc": "在 {{region}} 创建默认 VPC",
+    "status": {
+      "pending": "等待创建",
+      "provisioning": "创建中",
+      "running": "运行中",
+      "starting": "启动中",
+      "stopping": "停止中",
+      "stopped": "已停止",
+      "updating": "更新中",
+      "deleting": "删除中",
+      "error": "出错"
+    }
+  },
+  "onboarding": {
+    "step": {
+      "system": "系统检查",
+      "restore": "恢复备份",
+      "auth": "认证",
+      "account": "AWS 账号",
+      "hive": "Hive",
+      "channels": "渠道",
+      "ready": "完成"
+    },
+    "wizard": "安装向导"
   }
 }

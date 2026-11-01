@@ -37,6 +37,8 @@ export interface FleetStatus {
   capability?: Capability;
   /** monthly estimate per instance type (shown, never a cap) */
   prices?: Record<string, number>;
+  /** the Hives that count, oldest first */
+  hives?: { id: string; name: string; instance_type: string; region: string; status: string; created_at: string }[];
 }
 
 export interface AwsAccountView {
@@ -170,6 +172,10 @@ export const awsAccountService = {
   },
   async permissionTemplate(): Promise<Record<string, unknown>> {
     return (await api.get('/aws-account/permission-template')).data;
+  },
+  /** create the region's default VPC (the Hive check found none), then check it again */
+  async createDefaultVpc(region: string): Promise<AwsAccountView> {
+    return (await api.post<AwsAccountView>('/aws-account/default-vpc', { region }, USER_ACTION)).data;
   },
   async setFleet(body: { desired_count?: number; instance_type?: string; region?: string; dismissed?: boolean }): Promise<AwsAccountView> {
     return (await api.put<AwsAccountView>('/aws-account/hive-fleet', body, USER_ACTION)).data;

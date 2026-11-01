@@ -52,22 +52,30 @@ DEFAULT_VOICE = ("Ruth", "generative", "en-US")
 # Polly neural engine limit
 MAX_TEXT_LENGTH = 3000
 
-# Default AWS region — reuse TRANSCRIBE_REGION or fall back to us-east-1
+# The region without a SwarmAI account (TRANSCRIBE_REGION, else us-east-1); with one,
+# voice uses the account's main region (design §5.4)
 DEFAULT_REGION = os.environ.get("TRANSCRIBE_REGION", "us-east-1")
 
 
+def voice_region() -> str:
+    """The region voice runs in: the SwarmAI account's main region when connected."""
+    from core import aws_account
+    return aws_account.region() if aws_account.active() else DEFAULT_REGION
+
+
 def _get_polly_client():
-    """The Polly client (DEFAULT_REGION): on the pinned SwarmAI account (core/aws_account;
-    its credentials refresh themselves) or, without one, the default chain. One cached
-    client per mode, so an account connected after the first call is used from then on."""
+    """The Polly client: on the pinned SwarmAI account in its main region (its
+    credentials refresh themselves) or, without one, the default chain. One cached
+    client per mode and region, so an account connected (or a region changed) after the
+    first call is used from then on."""
     from core import aws_account
-    return _polly_client_for(aws_account.active())
+    return _polly_client_for(aws_account.active(), voice_region())
 
 
-@lru_cache(maxsize=2)
-def _polly_client_for(active: bool):
+@lru_cache(maxsize=8)
+def _polly_client_for(active: bool, region: str):
     from core import aws_account
-    return aws_account.boto_session(DEFAULT_REGION).client("polly")
+    return aws_account.boto_session(region).client("polly")
 
 
 _get_polly_client.cache_clear = _polly_client_for.cache_clear  # the tests' handle
@@ -474,7 +482,7 @@ async def synthesize_speech(
 
     logger.info(
         "Polly TTS: %d chars → %d bytes MP3 (voice=%s, lang=%s, engine=%s, type=%s, region=%s)",
-        len(clean_text), len(audio_stream), vid, language, engine, text_type, DEFAULT_REGION,
+        len(clean_text), len(audio_stream), vid, language, engine, text_type, voice_region(),
     )
 
     return audio_stream

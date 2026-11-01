@@ -34,6 +34,9 @@ ALLOWED = {
     "hive/accounts.py":
         "a Hive row's own credentials: legacy mode, or another account's Hives (stop and "
         "delete only); the SwarmAI account goes through aws_account",
+    "scripts/verify_permission_template.py":
+        "a developer check run by hand: IAM simulates the template under any identity "
+        "the person names (--profile), not necessarily the SwarmAI account",
     "skills/s_pollinate/scripts/tts/backends/polly.py":
         "a skill script run in the agent's shell, as the user",
 }

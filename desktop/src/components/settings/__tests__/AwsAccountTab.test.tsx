@@ -19,6 +19,7 @@ const mockVerify = vi.fn();
 const mockCheck = vi.fn();
 const mockSetFleet = vi.fn();
 const mockTemplate = vi.fn();
+const mockCreateVpc = vi.fn();
 vi.mock('../../../services/awsAccount', () => ({
   awsAccountService: {
     get: (...a: unknown[]) => mockGet(...a),
@@ -26,6 +27,7 @@ vi.mock('../../../services/awsAccount', () => ({
     check: (...a: unknown[]) => mockCheck(...a),
     setFleet: (...a: unknown[]) => mockSetFleet(...a),
     permissionTemplate: (...a: unknown[]) => mockTemplate(...a),
+    createDefaultVpc: (...a: unknown[]) => mockCreateVpc(...a),
   },
   problemOf: (e: unknown) => ({ kind: 'error', message: String(e) }),
 }));
@@ -74,7 +76,7 @@ const fleet = (over = {}) => ({
 });
 
 beforeEach(() => {
-  for (const m of [mockGet, mockVerify, mockCheck, mockSetFleet, mockTemplate, mockUpdateConfig, mockSetAuthMethod]) m.mockReset();
+  for (const m of [mockGet, mockVerify, mockCheck, mockSetFleet, mockTemplate, mockUpdateConfig, mockSetAuthMethod, mockCreateVpc]) m.mockReset();
   connectProps.current = null;
 });
 
@@ -239,6 +241,18 @@ describe('AwsAccountTab', () => {
     render(<AwsAccountTab />);
     fireEvent.click(await screen.findByTestId('hive-plus'));
     expect(screen.getByTestId('hive-count')).toHaveTextContent('3');
+  });
+
+  it('lists each Hive, and a missing default VPC can be created in its region', async () => {
+    mockGet.mockResolvedValue(view({ hive: fleet({ state: 'cannot_build', desired: 2, counted: 1, short: 1,
+      hives: [{ id: 'h1', name: 'hive-a', instance_type: 'm7g.xlarge', region: 'eu-west-1', status: 'running', created_at: 't' }],
+      capability: { status: 'missing', no_default_vpc: true, region: 'eu-west-1', detail: 'no default VPC in eu-west-1' } }) }));
+    mockCreateVpc.mockResolvedValue(view({ hive: fleet() }));
+    render(<AwsAccountTab />);
+    expect(await screen.findByTestId('hive-list')).toHaveTextContent('hive-a');
+    fireEvent.click(screen.getByTestId('create-default-vpc'));
+    await waitFor(() => expect(mockCreateVpc).toHaveBeenCalledWith('eu-west-1'));
+    await waitFor(() => expect(screen.queryByTestId('hive-cannot')).toBeNull());
   });
 });
 

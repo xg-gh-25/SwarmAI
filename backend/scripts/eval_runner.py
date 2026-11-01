@@ -1322,7 +1322,14 @@ BEHAVIOR_EVALUATORS = {"trajectory_capture"}
 
 
 def _judge_region() -> str:
-    """The judges' region: AWS_REGION, then AWS_DEFAULT_REGION, else us-east-1."""
+    """The judges' region: the SwarmAI account's main region when connected (design
+    §5.4); without one AWS_REGION, then AWS_DEFAULT_REGION, else us-east-1."""
+    try:
+        from core import aws_account
+        if aws_account.active():
+            return aws_account.region()
+    except Exception as exc:  # noqa: BLE001 — eval also runs outside the app (CI, scripts)
+        logging.getLogger(__name__).debug("eval: no SwarmAI account region (%s)", type(exc).__name__)
     return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
 

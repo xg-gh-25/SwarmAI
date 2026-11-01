@@ -21,6 +21,7 @@ import ChannelConfigForm from '../components/settings/ChannelConfigForm';
 import ConnectAccount from '../components/awsAccount/ConnectAccount';
 import { HiveSetupStep } from '../components/awsAccount/HiveFleet';
 import { useTheme } from '../contexts/ThemeContext';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Pre-resolve fallback for the model name shown during onboarding.
@@ -48,12 +49,9 @@ const SYSTEM_CHECK_FAILURE_THRESHOLD = 20;
 
 type StepId = 'system' | 'restore' | 'auth' | 'account' | 'hive' | 'channels' | 'ready';
 
-const STEP_TITLE: Record<StepId, string> = {
-  system: 'System Check', restore: 'Restore', auth: 'Authentication', account: 'AWS Account',
-  hive: 'Hive', channels: 'Channels', ready: 'Ready',
-};
 
 export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<StepId>('system');
   const [systemOk, setSystemOk] = useState(false);
   const [systemCheckFailed, setSystemCheckFailed] = useState(false);
@@ -149,7 +147,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
     const i = order.indexOf(from);
     setStep(order[Math.min(order.length - 1, i + 1)]);
   };
-  const steps = order.map((id, i) => ({ id, num: i + 1, title: STEP_TITLE[id],
+  const steps = order.map((id, i) => ({ id, num: i + 1, title: t(`onboarding.step.${id}`),
     done: id === 'system' ? systemOk : done.has(id) }));
 
   return (
@@ -158,7 +156,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
       <div className="w-64 border-r border-[var(--color-border)] p-8 flex flex-col">
         <div className="mb-8">
           <h1 className="text-xl font-bold text-[var(--color-text)]">SwarmAI</h1>
-          <p className="text-sm text-[var(--color-text-muted)] mt-1">Setup Wizard</p>
+          <p className="text-sm text-[var(--color-text-muted)] mt-1">{t('onboarding.wizard')}</p>
         </div>
         <div className="space-y-4">
           {steps.map((s) => (

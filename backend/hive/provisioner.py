@@ -318,8 +318,11 @@ class HiveProvisioner:
     # ── S3 ─────────────────────────────────────────────────────────
 
     async def _ensure_s3_bucket(self, session, region: str, account_id: str = "") -> str:
-        """Create the account's SwarmAI bucket in *region* if it doesn't exist
-        (``bucket_name``: the whole account ID, so no other account can hold the name)."""
+        """Create the account's SwarmAI bucket in *region* if it doesn't exist. The name
+        carries the whole account ID, so it does not collide by accident; S3 names are
+        global, though, so another account can still take it first: that is reported as
+        such (the Hive is not built into a bucket this account does not own), and every
+        S3 call passes ``ExpectedBucketOwner``."""
         bucket_name = swarmai_bucket_name(account_id, region)
 
         def _create():
@@ -338,6 +341,11 @@ class HiveProvisioner:
             except Exception as e:
                 if "BucketAlreadyOwnedByYou" in str(e):
                     pass
+                elif "BucketAlreadyExists" in str(e):
+                    raise RuntimeError(
+                        f"The S3 bucket name {bucket_name} is taken by another AWS account. "
+                        "SwarmAI only uses a bucket this account owns; ask AWS Support or "
+                        "use another region for the Hive.") from e
                 else:
                     raise
             # Block public access
