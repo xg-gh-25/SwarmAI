@@ -63,7 +63,7 @@ export function parseCommits(text: string): Record<string, string> | null {
   return out;
 }
 
-export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onReload, onLeave }: {
+export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onReload, onLeave, onSettled }: {
   id: string;
   /** the runs J / K walk (waiting for you), frozen when the card opened */
   order: string[];
@@ -75,6 +75,8 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
   onReload: () => void;
   /** the person left for the Canvas or a chat tab: the overlay steps aside too */
   onLeave: () => void;
+  /** a command settled the run (it no longer waits on the person): drop it from the order */
+  onSettled?: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const [view, setView] = useState<PipelineRunView | null>(null);
@@ -83,6 +85,8 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
   const [fetchKey, setFetchKey] = useState(0);
   const [tab, setTab] = useState<Tab>('deliverable');
   const [mode, setMode] = useState<'list' | 'confirm'>('list');
+  // where to continue, when no chat tab could take the run: kept while the commands refresh
+  const [note, setNote] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -92,7 +96,7 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
       .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; };
   }, [id, fetchKey]);
-  useEffect(() => { setTab('deliverable'); setMode('list'); setView(null); }, [id]);
+  useEffect(() => { setTab('deliverable'); setMode('list'); setView(null); setNote(null); }, [id]);
 
   const pos = order.indexOf(id);
   const step = useCallback((d: number) => {
@@ -235,7 +239,10 @@ export function PipelineRunCard({ id, order, onSelect, onClose, onContinue, onRe
               </div>
             </div>
             <div className="p-3.5 bg-[var(--color-bg-chrome)] md:overflow-auto border-t md:border-t-0 border-[var(--color-border)]">
-              <Commands view={view} mode={mode} setMode={setMode} onContinue={onContinue}
+              {/* keyed by the run and its commands: a step to another run, or the commands
+                  the refetch brings, start it fresh (no late note, no stale button) */}
+              <Commands key={`${view.detail.id}:${view.actions.map((a) => a.key).join()}`} view={view} mode={mode} setMode={setMode}
+                onContinue={onContinue} onSettled={() => onSettled?.(view.detail.id)} note={note} setNote={setNote}
                 onChanged={() => { onReload(); setFetchKey((k) => k + 1); }} onLeave={() => { onClose(); onLeave(); }} />
             </div>
           </div>
@@ -281,19 +288,20 @@ function Deliverable({ view }: { view: PipelineRunView }) {
 
 /** The commands the backend gave, in its order: the primary one solid, the rest under
  *  "Also". A decision's options are the answer; confirm landed opens a big box. */
-function Commands({ view, mode, setMode, onContinue, onChanged, onLeave }: {
+function Commands({ view, mode, setMode, onContinue, onChanged, onLeave, onSettled, note, setNote }: {
   view: PipelineRunView; mode: 'list' | 'confirm'; setMode: (m: 'list' | 'confirm') => void;
   onContinue?: (sessionId: string, prompt: string) => Promise<boolean>;
-  onChanged: () => void; onLeave: () => void;
+  onChanged: () => void; onLeave: () => void; onSettled: () => void;
+  note: string | null; setNote: (n: string | null) => void;
 }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState<string | null>(null);
+  // a command went through: every button stays off until the refetched commands replace these
+  const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
   const [commits, setCommits] = useState('');
   const d = view.detail;
   const owner = d.ownerSessionId;
-  useEffect(() => { setError(null); setNote(null); setCommits(''); }, [d.id]);
 
   /** hand the run to its session; when no tab could take it, say where */
   const handOver = async (prompt: string, sessionId: string | null) => {
@@ -310,22 +318,27 @@ function Commands({ view, mode, setMode, onContinue, onChanged, onLeave }: {
     } finally { setBusy(null); }
   };
   const act = (key: PipelineCommand) => {
-    if (key === 'resume') return run(key, async () => { const { ownerSessionId } = await pipelinesService.resumeRun(d.id); await handOver(d.continuePrompt, ownerSessionId); });
+    if (key === 'resume') return run(key, async () => {
+      const { ownerSessionId } = await pipelinesService.resumeRun(d.id); setDone(true); onSettled(); await handOver(d.continuePrompt, ownerSessionId);
+    });
     if (key === 'continue' || key === 'open_session') return run(key, () => handOver(key === 'continue' ? d.continuePrompt : '', null));
-    if (key === 'cancel') return run(key, async () => { await api.patch(`/pipelines/${d.id}/cancel`); onChanged(); });
+    if (key === 'cancel') return run(key, async () => { await api.patch(`/pipelines/${d.id}/cancel`); setDone(true); onSettled(); onChanged(); });
     if (key === 'confirm_landed') { setMode('confirm'); return undefined; }
     return undefined;
   };
   const answer = (optionId: string) => run(`answer:${optionId}`, async () => {
     const decision = d.decision!;
     const { ownerSessionId } = await pipelinesService.answerDecision(d.id, decision.requestId, optionId);
+    setDone(true); onSettled();
     const choice = decision.options.find((o) => o.id === optionId)?.choice ?? optionId;
     await handOver(`I answered decision ${decision.requestId} on the dashboard: ${optionId} — ${choice}. ${d.continuePrompt}`, ownerSessionId);
   });
   const parsed = parseCommits(commits);
   const submitConfirm = async () => {
     if (!parsed) return;
-    await run('confirm_landed', async () => { await pipelinesService.confirmLanded(d.id, parsed); setMode('list'); onChanged(); });
+    await run('confirm_landed', async () => {
+      await pipelinesService.confirmLanded(d.id, parsed); setDone(true); setMode('list'); onSettled(); onChanged();
+    });
   };
 
   if (mode === 'confirm') {
@@ -340,7 +353,7 @@ function Commands({ view, mode, setMode, onContinue, onChanged, onLeave }: {
         {commits.trim() && !parsed && <div className="text-small" style={{ color: TONE_VAR.error }}>{t('ui.PipelineOverlay.confirmBad')}</div>}
         {error && <div className="text-small break-words" role="alert" style={{ color: TONE_VAR.error }} data-testid="pipeline-card-error">{error}</div>}
         <div className="flex gap-2">
-          <button type="button" className="btn-sm btn-primary" disabled={!parsed || busy !== null} onClick={() => { void submitConfirm(); }}
+          <button type="button" className="btn-sm btn-primary" disabled={!parsed || busy !== null || done} onClick={() => { void submitConfirm(); }}
             data-testid="pipeline-card-confirm-submit">{t('ui.PipelineOverlay.confirmSubmit')}</button>
           <button type="button" className="btn-sm btn-secondary" onClick={() => setMode('list')}>{t('swarmOut.review.cancel')}</button>
         </div>
@@ -352,7 +365,7 @@ function Commands({ view, mode, setMode, onContinue, onChanged, onLeave }: {
   const primary = actions.find((a) => a.primary);
   const rest = actions.filter((a) => a !== primary);
   const button = (key: PipelineCommand, solid: boolean) => key === 'answer' ? null : (
-    <button key={key} type="button" disabled={busy !== null} onClick={() => { void act(key); }} data-testid={`pipeline-card-cmd-${key}`}
+    <button key={key} type="button" disabled={busy !== null || done} onClick={() => { void act(key); }} data-testid={`pipeline-card-cmd-${key}`}
       className={`w-full text-left rounded-md border px-2.5 py-2 disabled:opacity-50 ${solid ? 'border-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_14%,transparent)]' : 'border-[var(--color-border)] hover:bg-[var(--color-hover)]'}`}
       style={key === 'cancel' ? { color: TONE_VAR.error } : undefined}>
       <div className="flex items-center gap-2 text-body font-semibold">
@@ -369,7 +382,7 @@ function Commands({ view, mode, setMode, onContinue, onChanged, onLeave }: {
           <div className="text-body">{d.decision.question}</div>
           {d.decision.whyEvidenceInsufficient && <div className={`text-small ${muted}`}>{d.decision.whyEvidenceInsufficient}</div>}
           {d.decision.options.map((o) => (
-            <button key={o.id} type="button" disabled={busy !== null} onClick={() => { void answer(o.id); }} data-testid={`pipeline-card-option-${o.id}`}
+            <button key={o.id} type="button" disabled={busy !== null || done} onClick={() => { void answer(o.id); }} data-testid={`pipeline-card-option-${o.id}`}
               className="w-full text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 py-1.5 hover:border-[var(--color-primary)] disabled:opacity-50">
               <div className="text-small">{o.id} — {o.choice}
                 {o.reversible === false && <span className="ml-1.5 text-meta" style={{ color: TONE_VAR.error }}>{t('ui.PipelineOverlay.irreversible')}</span>}

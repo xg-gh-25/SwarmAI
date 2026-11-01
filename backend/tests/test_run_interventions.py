@@ -55,17 +55,35 @@ def test_messages_in_each_owner_window_count_and_the_rest_do_not(tmp_path):
 def test_a_person_landing_is_a_rescue_not_an_answer():
     raw = {**RAW, "landing": "human_override", "human_decisions": 2}     # one answer + the run-land
     assert RI.count(raw, corrections=0) == {"answers": 1, "corrections": 0, "rescues": 1, "total": 2}
-    host = {**raw, "human_decisions": 1,
-            "auth_grants": {"a1": {"authorized_by": "host"}}}            # the Hive's agent landed it
+    host = {**raw, "human_decisions": 1, "landed_by": "host"}            # the Hive's agent landed it
     assert RI.count(host, corrections=0) == {"answers": 1, "corrections": 0, "rescues": 0, "total": 1}
+    # the fold says who landed it (run.json has no auth grants): a host grant for another
+    # action does not make the person's landing the host's
+    person = {**raw, "landed_by": "person", "auth_grants": {"other": {"authorized_by": "host"}}}
+    assert RI.count(person, corrections=0)["rescues"] == 1
 
 
 def test_a_confirmed_landed_as_is_a_rescue():
     raw = {**RAW, "status": "abandoned", "human_decisions": 0, "landed_as": {"repo": "a" * 40},
-           "land_requests": {"r1": {"action": "confirm_landed"}}}
+           "landed_as_request": "r1", "land_requests": {"r1": {"action": "confirm_landed"}}}
     assert RI.count(raw, corrections=0)["rescues"] == 1
-    agent = {**raw, "land_requests": {}}                                   # recorded by the agent
+    # the engine showed it landed (no request bound), though an unapproved request exists
+    agent = {**raw, "landed_as_request": None}
     assert RI.count(agent, corrections=0)["rescues"] == 0
+    events = [{"kind": "landed_as", "at": "t", "payload": {"commits": {"repo": "a" * 40}}}]
+    assert RI.details(agent, events, db_path=None)["rescues"] == []
+    # an older projection without the field: a consumed confirm_landed authorization
+    old = {k: v for k, v in raw.items() if k != "landed_as_request"}
+    assert RI.count({**old, "auth_consumed": {"c": {"action": "confirm_landed"}}}, corrections=0)["rescues"] == 1
+    assert RI.count(old, corrections=0)["rescues"] == 0
+
+
+def test_the_dashboards_notes_are_not_corrections(tmp_path):
+    db = _db(tmp_path, [
+        ("s-b", "user", RI.ANSWER_PREFIX + "q1 on the dashboard: a — files. Continue pipeline run run_x", _min(T1, 10)),
+        ("s-b", "user", "and keep it small", _min(T1, 20)),
+    ])
+    assert RI.messages(RAW, db_path=db) == 1
 
 
 def test_an_unreadable_chat_store_is_unknown_never_zero(tmp_path):

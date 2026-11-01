@@ -29,7 +29,7 @@ const result = (over: Partial<SwarmOutResult> = {}, work: Partial<SwarmOutResult
   report_chars: 12, kinds: ['answer'], pipeline: null, dropped: 0, ...over,
   work: { repos: null, changes: [], files: [], files_omitted: 0,
     steps: { total: 3, failed: 1, agents: 0, by_tool: { Bash: 2, Read: 1 } },
-    human: { approved: 1, denied: 0, unanswered: 0, answered_questions: 1 }, ...work },
+    human: { approved: 1, denied: 0, unanswered: 0, answered_questions: 1, said: 0 }, ...work },
 });
 
 const repo = (over = {}) => ({
@@ -121,13 +121,15 @@ describe('what a run did, for every kind of run', () => {
 
   it('facts: time, times a person stepped in, the total cost; failed steps only when some failed', () => {
     const by = (res: SwarmOutResult) => Object.fromEntries(runStats(res).map((x) => [x.key, x]));
-    const unknown = by(result({ cost_usd: null, active_s: null, tokens: null, ended_at: null }, { human: { approved: 1, denied: 0, unanswered: 2, answered_questions: 1 } }));
+    const unknown = by(result({ cost_usd: null, active_s: null, tokens: null, ended_at: null }, { human: { approved: 1, denied: 0, unanswered: 2, answered_questions: 1, said: 0 } }));
     expect(Object.keys(unknown)).toEqual(['time', 'human', 'cost', 'failed']);
     expect([unknown.time.value, unknown.cost.value]).toEqual(['—', '—']);
     expect(unknown.cost.title).toBe('花费没有记录');
     // one answer; the approval is oversight and the two unanswered are the run waiting
     expect(unknown.human).toMatchObject({ value: '1', sub: '2 个没回答', tone: 'attention' });
     expect(unknown.human.title).toBe('回答 1 · 会话里说的话 0（批准 1 / 拒绝 0 是把关，不算）');
+    // a record kept before what the person said was counted: not known, never a smaller number
+    expect(by(result({}, { human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 1 } } as never)).human.value).toBe('—');
     const known = by(result({ cost_partial: true, cost_usd: 3.7 }, { steps: { total: 3, failed: 0, agents: 0, by_tool: {} } }));
     expect(Object.keys(known)).toEqual(['time', 'human', 'cost']);
     expect(known.cost).toMatchObject({ value: '≥ $3.70', strong: true, title: '花费至少这么多：有的轮次没有记录' });

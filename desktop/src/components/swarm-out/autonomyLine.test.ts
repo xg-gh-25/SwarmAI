@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { SwarmOutRun } from '../../services/swarmOut';
-import { autonomyLine } from './live';
+import { autonomyLine, interventionsOf } from './live';
 
 const NOW = Date.parse('2026-11-01T12:00:00Z');
 const r = (id: string, human: Record<string, unknown> | null, o: Record<string, unknown> = {}): SwarmOutRun => ({
@@ -31,5 +31,8 @@ describe('autonomyLine', () => {
     ], NOW);
     expect(got).toEqual({ finished: 4, known: 3, unattended: 1, avg: 1 });
     expect(autonomyLine([], NOW)).toEqual({ finished: 0, known: 0, unattended: 0, avg: null });
+    // a record that cannot tell what the person said is not known, never a smaller number
+    expect(interventionsOf(r('x', { answered_questions: 2 }).result!)).toBeNull();
+    expect(interventionsOf(r('x', { answered_questions: 2, said: 1 }).result!)).toBe(3);
   });
 });

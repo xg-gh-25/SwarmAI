@@ -605,7 +605,10 @@ def _land(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         # who authorized the landing: the host's (a Hive run's dispatching agent) is not
         # the person's decision
         auth = run["auth_grants"].get(grant.get("auth_event_id")) or {}
-        if auth.get("authorized_by") == "host":
+        # who landed it, kept for the readers that see run.json (it has no auth_grants):
+        # a person's landing is a rescue (core.run_interventions)
+        run["landed_by"] = "host" if auth.get("authorized_by") == "host" else "person"
+        if run["landed_by"] == "host":
             run["host_decisions"] = run.get("host_decisions", 0) + 1
         else:
             run["human_decisions"] += 1
@@ -840,6 +843,7 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             if request.get("action") != "confirm_landed" or bound != commits or not consumed:
                 raise LifecycleError("landed_as by a person needs its consumed confirm_landed "
                                      "authorization for the same commits")
+            run["landed_as_request"] = request_id     # confirmed by a person: a rescue
         run["landed_as"] = dict(commits)
     elif kind == "restore":
         if run.get("landed_as"):

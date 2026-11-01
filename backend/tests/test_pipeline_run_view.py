@@ -46,6 +46,9 @@ def test_each_state_offers_its_commands():
     # cancelled by the person (needs_you False) or landed as: nothing to confirm
     assert keys(run_actions(_s(status="abandoned", needs_you=False, owner_session_id=None), None)) == []
     assert keys(run_actions(_s(status="completed", owner_session_id=None), None)) == []
+    # a question that could not be read: its chat card answers it
+    assert keys(run_actions(_s(status="paused", pause_kind="decision", needs_you=True), None)) == [
+        ("open_session", True), ("cancel", False)]
 
 
 @pytest.fixture
@@ -125,3 +128,17 @@ def test_a_command_cannot_confirm_a_landing():
     deny = _user_only_deny("curl -X POST http://localhost:18321/api/pipelines/run_ab12/confirm-landed -d '{}'")
     assert deny is not None and "person" in json.dumps(deny)
     assert _user_only_deny("grep -rn confirm-landed backend/routers") is None
+
+
+def test_the_earlier_owners_survive_the_projection(rig):
+    """run.json is rebuilt from the log on every write: the owner windows the person's
+    corrections are read in come from the logged transfers, not a field a hook wrote."""
+    from core import run_interventions
+    rig.create()
+    engine = rig.engine()
+    first = engine.owner_session()
+    assert engine.transfer_owner("0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", reason="takeover")
+    engine.write_projection()
+    raw = json.loads((engine.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert [h["session_id"] for h in raw["session_history"]] == [first]
+    assert [w[0] for w in run_interventions.windows(raw)] == [first, "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"]

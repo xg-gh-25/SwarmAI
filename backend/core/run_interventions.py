@@ -34,6 +34,10 @@ from typing import Any, Mapping
 #: the prompt the Pipelines view puts in the owner session to continue a run
 #: (core/pipeline_human.continue_prompt): sending it is not the person steering
 CONTINUE_PREFIX = "Continue pipeline run "
+#: the note the Pipelines view puts in front of it after a decision was answered there
+#: (desktop PipelineRunCard): the answer is already counted, as an answer
+ANSWER_PREFIX = "I answered decision "
+_NOT_STEERING = (CONTINUE_PREFIX, ANSWER_PREFIX)
 
 
 def _utc(value: Any) -> datetime | None:
@@ -85,9 +89,9 @@ def _is_steer(content: Any) -> bool:
         blocks = None
     if blocks is None:
         text = content if isinstance(content, str) else ""
-        return bool(text.strip()) and not text.startswith(CONTINUE_PREFIX)
+        return bool(text.strip()) and not text.startswith(_NOT_STEERING)
     texts = [b.get("text", "") for b in blocks if isinstance(b, Mapping) and b.get("type") == "text"]
-    return any(t.strip() and not t.startswith(CONTINUE_PREFIX) for t in texts)
+    return any(t.strip() and not t.startswith(_NOT_STEERING) for t in texts)
 
 
 def _db_path() -> Path:
@@ -146,20 +150,30 @@ def messages(raw: Mapping[str, Any], *, db_path: Path | None = None,
     return None if rows is None else len(rows)
 
 
+def _landed_by_person(raw: Mapping[str, Any]) -> bool:
+    """The run's override landing (``human_override``) was the person's, not the
+    dispatching agent's: the fold's ``landed_by``. A projection written before it was kept
+    has none: a local run has no dispatching agent, so it was the person's."""
+    return raw.get("landing") == "human_override" and raw.get("landed_by", "person") == "person"
+
+
+def _confirmed_by_person(raw: Mapping[str, Any]) -> bool:
+    """The run's ``landed_as`` was a person's confirmation: the fold's
+    ``landed_as_request``; on an older projection, a consumed ``confirm_landed``
+    authorization (a request nobody approved is not one)."""
+    if not raw.get("landed_as"):
+        return False
+    if raw.get("landed_as_request"):
+        return True
+    consumed = raw.get("auth_consumed") if isinstance(raw.get("auth_consumed"), Mapping) else {}
+    return "landed_as_request" not in raw and any(
+        isinstance(c, Mapping) and c.get("action") == "confirm_landed" for c in consumed.values())
+
+
 def _rescues(raw: Mapping[str, Any]) -> int:
-    """A person landed the run (``human_override`` authorized by the person, not the
-    dispatching agent) or confirmed it had landed (``landed_as`` with a person's
-    ``confirm_landed`` request)."""
-    n = 0
-    if raw.get("landing") == "human_override":
-        grants = raw.get("auth_grants") if isinstance(raw.get("auth_grants"), Mapping) else {}
-        by_host = any(isinstance(g, Mapping) and g.get("authorized_by") == "host" for g in grants.values())
-        n += 0 if by_host else 1
-    if raw.get("landed_as"):
-        requests = raw.get("land_requests") if isinstance(raw.get("land_requests"), Mapping) else {}
-        if any(isinstance(r, Mapping) and r.get("action") == "confirm_landed" for r in requests.values()):
-            n += 1
-    return n
+    """A person landed the run (``_landed_by_person``) or confirmed it had landed
+    (``_confirmed_by_person``)."""
+    return int(_landed_by_person(raw)) + int(_confirmed_by_person(raw))
 
 
 def count(raw: Mapping[str, Any], *, corrections: int | None = None) -> dict[str, int | None]:
@@ -169,9 +183,7 @@ def count(raw: Mapping[str, Any], *, corrections: int | None = None) -> dict[str
     makes ``total`` None: an unknown is never shown as a smaller number."""
     human = raw.get("human_decisions")
     human = human if isinstance(human, int) and not isinstance(human, bool) else 0
-    landed_by_person = 1 if raw.get("landing") == "human_override" and _rescues(
-        {"landing": "human_override", "auth_grants": raw.get("auth_grants")}) else 0
-    answers = max(0, human - landed_by_person)
+    answers = max(0, human - int(_landed_by_person(raw)))
     rescues = _rescues(raw)
     total = None if corrections is None else answers + corrections + rescues
     return {"answers": answers, "corrections": corrections, "rescues": rescues, "total": total}
@@ -205,10 +217,10 @@ def details(raw: Mapping[str, Any], events: list[Mapping[str, Any]], *,
             answers.append({"at": e.get("at"), "request_id": rid, "option_id": payload.get("option_id"),
                             "question": q})
         elif payload.get("landing") == "human_override":
-            # the person's landing, as ``_rescues`` decides it (not the dispatching agent's)
-            if _rescues({"landing": "human_override", "auth_grants": raw.get("auth_grants")}):
+            # the same predicates as ``count``: the list and the counts never disagree
+            if _landed_by_person(raw):
                 rescues.append({"at": e.get("at"), "kind": "run_land"})
-        elif kind == "landed_as" and payload.get("request_id"):
+        elif kind == "landed_as" and payload.get("request_id") and _confirmed_by_person(raw):
             rescues.append({"at": e.get("at"), "kind": "confirm_landed"})
     return {"answers": answers, "corrections": corrections(raw, db_path=db_path, now=now),
             "rescues": rescues}

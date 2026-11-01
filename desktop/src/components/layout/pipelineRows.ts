@@ -20,7 +20,7 @@
 import type { PipelineRunSummary } from '../../services/pipelines';
 import type { SwarmOutAsk, SwarmOutRun } from '../../services/swarmOut';
 import { brainLabel, interventionsOf, tokenTotal } from '../swarm-out/live';
-import { stageOf, waitingSince as hiveWaitingSince } from '../swarm-out/runReview';
+import { actionsOf, stageOf, waitingSince as hiveWaitingSince } from '../swarm-out/runReview';
 
 export type Where = 'local' | 'hive';
 export type RowStage = 'needs_answer' | 'awaiting' | 'stopped' | 'running' | 'done';
@@ -96,7 +96,11 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
   if (!runId) return null;
   const s = stageOf(r);
   const stage: RowStage = s === 'needs_answer' || s === 'awaiting' || s === 'stopped' || s === 'running' ? s : 'done';
-  const task: RowTask | null = s === 'needs_answer' ? 'answer' : s === 'awaiting' ? 'accept' : s === 'stopped' ? 'stopped' : null;
+  // waiting for you only when it asks something (Swarm Out's rule, runReview.sections): a
+  // stopped or awaiting run that only opens its session is done
+  const asksYou = s === 'needs_answer' || actionsOf(r).some((a) => a.key !== 'open_session');
+  const task: RowTask | null = !asksYou ? null
+    : s === 'needs_answer' ? 'answer' : s === 'awaiting' ? 'accept' : s === 'stopped' ? 'stopped' : null;
   const settled = r.settle?.settled?.outcome;
   const outcome: Outcome = s === 'running' ? 'running'
     : settled === 'passed' ? 'landed' : settled === 'abandoned' ? 'discarded' : settled ? 'other'
@@ -112,7 +116,7 @@ export function fromHive(r: SwarmOutRun, asks: SwarmOutAsk[] = []): PipelineRow 
     tokens: res ? tokenTotal(res) : null, costUsd: res?.cost_usd ?? null,
     interventions: res && human ? {
       answers: human.answered_questions, corrections: human.said ?? null, rescues: 0,
-      total: human.said == null ? null : interventionsOf(res),
+      total: interventionsOf(res),
     } : null,
     audit: (res?.pipeline?.audit ?? []).map((a) => ({ dim: a.dim, verdict: a.verdict ?? '' })),
     ownerSessionId: r.session_id, hive_run: r,

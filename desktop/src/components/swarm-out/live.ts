@@ -358,9 +358,10 @@ export function modelLabel(name: string): string {
  *  product keeps for the person, and a question nobody answered is the run waiting, so
  *  neither counts (design 2026-11-01-brain-eval-and-runs §3; the local twin is
  *  backend core/run_interventions). */
-export function interventionsOf(res: SwarmOutResult): number {
+export function interventionsOf(res: SwarmOutResult): number | null {
   const h = res.work.human;
-  return h.answered_questions + (h.said ?? 0);
+  // a record kept before what the person said was counted: not known, never a smaller number
+  return h.said == null ? null : h.answered_questions + h.said;
 }
 
 /** The card's facts: how long it ran (and when it ended), how often a person stepped in
@@ -376,7 +377,7 @@ export function autonomyLine(runs: SwarmOutRun[], now: number, days = 30):
   { finished: number; known: number; unattended: number; avg: number | null } {
   const finished = inWindow(runs, now, days).filter((r) => r.result && stateOf(r) !== 'running' && !r.result.provisional);
   const known = finished.filter((r) => r.result!.work.human.said != null);
-  const total = known.reduce((s, r) => s + interventionsOf(r.result!), 0);
+  const total = known.reduce((s, r) => s + (interventionsOf(r.result!) ?? 0), 0);
   return { finished: finished.length, known: known.length,
     unattended: known.filter((r) => interventionsOf(r.result!) === 0).length,
     avg: known.length ? total / known.length : null };
@@ -390,7 +391,7 @@ export function runStats(res: SwarmOutResult): RunStat[] {
   const out: RunStat[] = [
     { key: 'time', label: i18n.t('swarmOut.stats.time'), value: res.active_s == null ? dash : minutes(res.active_s),
       sub: ended ? i18n.t('swarmOut.stats.endedAt', { when: ended }) : undefined },
-    { key: 'human', label: i18n.t('swarmOut.stats.human'), value: String(loops),
+    { key: 'human', label: i18n.t('swarmOut.stats.human'), value: loops == null ? dash : String(loops),
       sub: h.unanswered ? i18n.t('swarmOut.stats.unanswered', { count: h.unanswered }) : undefined,
       title: i18n.t('swarmOut.stats.humanTitle', { approved: h.approved, denied: h.denied, answered: h.answered_questions, said: h.said ?? 0 }),
       tone: h.unanswered ? 'attention' : undefined },
@@ -577,7 +578,7 @@ export function tallyRuns(runs: SwarmOutRun[]): RunTally {
     if (!res) { t.costMissing += 1; t.tokensMissing += 1; continue; }
     const loops = loopsOf(res);
     if (o === 'completed' && loops === 0) t.unattended += 1;
-    t.loops += loops;
+    t.loops += loops ?? 0;     // a record that cannot tell adds nothing (and is not unattended)
     t.unanswered += res.work.human.unanswered;
     if (o !== 'running' && res.active_s != null) active.push(res.active_s);
     if (res.cost_usd == null) t.costMissing += 1;
@@ -648,7 +649,7 @@ export function matchesFilter(r: SwarmOutRun, f: RecordFilter): boolean {
   if (f === 'error') return o === 'error';
   if (f === 'stopped') return o === 'stopped';
   if (f === 'unknown') return o === 'other' || o === 'running';
-  return !!r.result && loopsOf(r.result) > 0;
+  return !!r.result && (loopsOf(r.result) ?? 0) > 0;
 }
 
 /** A spend as the cards write it: "4.8M token · $3.70", "≥" on what is only partly

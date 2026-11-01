@@ -1034,7 +1034,8 @@ class RunEngine:
     @staticmethod
     def _read_model(events: list[Mapping[str, Any]]) -> dict[str, Any]:
         """Dashboard facts the fold does not keep (R1b): when the run finished (the
-        terminal transition's time) and its token usage, by the audit's one rule
+        terminal transition's time), the earlier owners (``session_history``, from the
+        logged ``owner_transfer`` events) and its token usage, by the audit's one rule
         (``audit.token_totals``). Absent when never recorded."""
         from core.run_protocol.audit import token_totals
         out: dict[str, Any] = {}
@@ -1042,6 +1043,16 @@ class RunEngine:
             if event.get("kind") == "transition" \
                     and (event.get("payload") or {}).get("to") in lifecycle.TERMINAL:
                 out["finished_at"] = event.get("at")
+        # each earlier owner and until when it drove the run, from the logged transfers
+        # (the person's messages into a run are read per owner window, core.run_interventions)
+        history = []
+        for event in events:
+            payload = event.get("payload") or {}
+            if event.get("kind") == "owner_transfer" and payload.get("from_session"):
+                history.append({"session_id": payload["from_session"], "until": event.get("at"),
+                                "reason": payload.get("reason")})
+        if history:
+            out["session_history"] = history
         tokens_in, tokens_out = token_totals(events)
         if isinstance(tokens_in, (int, float)) and isinstance(tokens_out, (int, float)):
             out["usage"] = {"input_tokens": int(tokens_in), "output_tokens": int(tokens_out)}

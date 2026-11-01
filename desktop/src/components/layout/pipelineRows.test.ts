@@ -58,6 +58,13 @@ describe('pipelineRows', () => {
     const h = fromHive(hive())!;
     expect([h.where, h.hive, h.runId, h.outcome, h.brain, h.durationMin]).toEqual(['hive', 'demo', 'run_h', 'landed', 'SwarmAI', 30]);
     expect(h.interventions).toEqual({ answers: 1, corrections: 1, rescues: 0, total: 2 });     // approvals are not interventions
+    // a stopped Hive run that only opens its session waits on nobody (Swarm Out's rule)
+    const opensOnly = fromHive(hive({ stage: 'stopped', settle: null, actions: [{ key: 'open_session', primary: false }] }))!;
+    expect([opensOnly.stage, opensOnly.task]).toEqual(['stopped', null]);
+    expect(sections([opensOnly]).done.map((x) => x.key)).toEqual(['d1']);
+    const asks = fromHive(hive({ stage: 'stopped', settle: null, actions: [{ key: 'rerun', primary: true }] }))!;
+    expect(asks.task).toBe('stopped');
+    expect(fromHive(hive({}, { work: { human: { approved: 0, denied: 0, unanswered: 0, answered_questions: 1 } } }))!.interventions?.total).toBeNull();
     expect(fromHive(hive({}, { pipeline: null }))).toBeNull();                                  // a native Hive run
     expect(fromHive(hive({}, null))).toBeNull();
   });

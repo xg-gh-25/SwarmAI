@@ -174,12 +174,20 @@ describe('PipelineOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('pipeline-run-run_ask')).toBeInTheDocument());
     fetchRunView.mockResolvedValue(VIEW({ actions: [{ key: 'resume', primary: true }, { key: 'cancel', primary: false }] }));
     fireEvent.click(screen.getByTestId('pipeline-run-run_ask'));
+    await waitFor(() => expect(screen.getByTestId('pipeline-card-cmd-cancel')).toBeInTheDocument());
+    expect(screen.getByTestId('pipeline-card-position').textContent).toContain('1 / 2');
+    fireEvent.click(screen.getByTestId('pipeline-card-cmd-cancel'));
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/pipelines/run_ask/cancel'));
+    // settled: it leaves the J / K order, and its commands stay off until fresh ones come
+    await waitFor(() => expect(screen.queryByTestId('pipeline-card-position')).toBeNull());
+    expect((screen.getByTestId('pipeline-card-cmd-resume') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('pipeline-card-close'));
+
+    fireEvent.click(screen.getByTestId('pipeline-run-run_ask'));
     await waitFor(() => expect(screen.getByTestId('pipeline-card-cmd-resume')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('pipeline-card-cmd-resume'));
     await waitFor(() => expect(resumeRun).toHaveBeenCalledWith('run_ask'));
     await waitFor(() => expect(screen.getByTestId('pipeline-card-note')).toBeInTheDocument());   // no tab took it: says where
-    fireEvent.click(screen.getByTestId('pipeline-card-cmd-cancel'));
-    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/pipelines/run_ask/cancel'));
     fireEvent.click(screen.getByTestId('pipeline-card-close'));
 
     fetchRunView.mockResolvedValue(VIEW({ actions: [{ key: 'confirm_landed', primary: true }],

@@ -115,11 +115,11 @@ def _texts(root: Path) -> list[tuple[str, str]]:
 
 def _where(unit_id: str, texts: list[tuple[str, str]]) -> tuple[str, int] | None:
     """Where an entry is in force now: the file and line carrying its ``cand:`` marker."""
-    marker = f"cand:{unit_id}"
+    marker = re.compile(rf"cand:{re.escape(unit_id)}(?![\w.-])")
     for rel, text in texts:
-        at = text.find(marker)
-        if at >= 0:
-            return rel, text.count("\n", 0, at) + 1
+        found = marker.search(text)
+        if found:
+            return rel, text.count("\n", 0, found.start()) + 1
     return None
 
 
@@ -254,7 +254,8 @@ def used(project: str, root: Path | None, workspace: Path, now: datetime) -> dic
     in_force: dict[str, Any] = {}
     if root is not None:
         from core.addressing import ddd_units
-        in_force = {u.id: u for u in ddd_units(project).units if u.store == "doc"}
+        in_force = {u.id: u for u in ddd_units(project).units
+                    if u.store == "doc" and u.kind == "entry" and u.doc in MAIN_DOCS}
     runs = []
     for r in run_index.recent(workspace, days=WINDOW.days):
         if r.path.parents[3].name != (root.name if root is not None else project):

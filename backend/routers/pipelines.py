@@ -538,6 +538,9 @@ def run_actions(summary: PipelineRunSummary, decision: Optional[PipelineDecision
     out: list[dict] = []
     if decision is not None:
         out.append({"key": "answer", "primary": True})
+    elif summary.pause_kind == "decision" and summary.owner_session_id:
+        # the question could not be read here: its chat card can still answer it
+        out.append({"key": "open_session", "primary": True})
     if summary.pause_kind in _RESUMABLE:
         out.append({"key": "resume", "primary": not out})
     if summary.pause_kind == "idle":
@@ -546,7 +549,7 @@ def run_actions(summary: PipelineRunSummary, decision: Optional[PipelineDecision
         out.append({"key": "confirm_landed", "primary": not out})
     if summary.status in ("running", "paused"):
         out.append({"key": "cancel", "primary": False})
-    if summary.owner_session_id:
+    if summary.owner_session_id and not any(a["key"] == "open_session" for a in out):
         out.append({"key": "open_session", "primary": False})
     return out
 

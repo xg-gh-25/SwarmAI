@@ -27,7 +27,7 @@ vi.mock('../../services/swarmOut', () => ({
 
 const NOW = new Date(2026, 9, 29, 22, 0).getTime();
 const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
-const human = (o: Partial<SwarmOutResult['work']['human']> = {}) => ({ approved: 0, denied: 0, unanswered: 0, answered_questions: 0, ...o });
+const human = (o: Partial<SwarmOutResult['work']['human']> = {}) => ({ approved: 0, denied: 0, unanswered: 0, answered_questions: 0, said: 0, ...o });
 const result = (o: Partial<SwarmOutResult> = {}, h = human()): SwarmOutResult => ({
   ended: 'completed', provisional: false, outcome_recorded: true, hive_records_outcomes: true, error: null,
   ended_at: ago(0.5), turns: 1, older_turns_not_read: false, active_s: 60,

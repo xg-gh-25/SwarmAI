@@ -155,6 +155,7 @@ export function autonomyWord(res: SwarmOutResult | null | undefined): AutonomyWo
     return { kind: 'judge', state, text: i18n.t('swarmOut.review.autonomy.judge', { state }) };
   }
   const n = interventions(res);
+  if (n == null) return null;          // an older record cannot tell
   return n === 0 ? { kind: 'full', text: i18n.t('swarmOut.review.autonomy.full') }
     : { kind: 'interventions', text: i18n.t('swarmOut.review.autonomy.steppedIn', { count: n }) };
 }

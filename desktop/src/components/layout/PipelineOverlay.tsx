@@ -236,7 +236,8 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
 
       {open && openRow?.where === 'local' && (
         <PipelineRunCard id={open.key} order={open.order} onSelect={(key) => setOpen((o) => (o ? { ...o, key } : o))}
-          onClose={() => setOpen(null)} onContinue={onContinue} onReload={reload} onLeave={close} />
+          onClose={() => setOpen(null)} onContinue={onContinue} onReload={reload} onLeave={close}
+          onSettled={(key) => setOpen((o) => (o ? { ...o, order: o.order.filter((x) => x !== key) } : o))} />
       )}
       {open && openRow?.where === 'hive' && hive.data && (
         <RunOverlay runs={hive.data.runs} asks={hive.data.asks ?? []} order={open.order} id={open.key} now={now}
