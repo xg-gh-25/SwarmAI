@@ -48,8 +48,8 @@ Layer 3 — GATES (PreToolUse hooks, pipeline validator, the CDF writer)
    - Tier 3 (Regulatory): skill INSTRUCTIONS.md, MEMORY Key Decisions → check on touch
 3. Classify layer: `principle` / `rule` / `gate`
 4. Link to its parent principle in SOUL.md (read the live list; don't copy a range here)
-5. Overlap: `context_recall_cli.py --file <F> --query "<proposed text>"` over SOUL / AGENT /
-   STEERING / SELF — conflicts and duplicates; an overlap means fold, not add
+5. Overlap: `"$SWARM_BACKEND_BIN" cognition find --in context,evolution --query "<proposed text>"` (SOUL / AGENT /
+   STEERING / SELF are context files) — conflicts and duplicates, entry by entry; an overlap means fold, not add
 6. Fix type: would a clearer skill, a better tool result, a mechanism or an edit to an
    existing rule fix it? A new sentence is the last resort (AGENT.md § Intake Gate)
 7. Delta: what the change removes, and the target file's size before → after

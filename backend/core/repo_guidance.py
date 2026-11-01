@@ -265,7 +265,7 @@ def _ddd_block(project: str, docs: list) -> str:
     root = os.path.join(str(get_swarmws()), "Projects", project)
     return (f"\n[Project DDD] This repository is bound to project {project}; its DDD is at "
             f"{root} (layout: SWARMAI.md, My Workspace). Before a change that depends on the "
-            f"domain, look it up: \"$SWARM_BACKEND_BIN\" knowledge find --project {project} "
+            f"domain, look it up: \"$SWARM_BACKEND_BIN\" cognition find --project {project} "
             "--query \"<words of your change>\".")
 
 

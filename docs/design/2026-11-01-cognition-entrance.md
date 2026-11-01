@@ -3,7 +3,7 @@ title: 认知统一入口 `cognition` —— 一条命令读整个脑
 date: 2026-11-01
 created: 2026-11-01
 updated: 2026-11-01
-status: proposed (r3, 1、2 已定，3 待 XG 定)
+status: implemented (r4, native；代码 4fa048665 + 文字提交，见 §11)
 owner: SwarmAI backend (knowledge_cli / addressing / prompt_builder)
 related:
   - docs/design/2026-10-28-knowledge-addressing.md      # knowledge map|find|get 的来源，本设计在它上面扩
@@ -135,9 +135,10 @@ Brain Hub 本身不存知识，是所有 DDD 的投影，已由 `knowledge map -
 
 ### 3.3 单元和身份
 
-- **切法只有两种，按一条规则选：** 文件的结构是 `### ` 块（EVOLUTION 正文、TIMELINE）→ CDF 的 `parse_units`；
-  其余（MEMORY、所有归档、其余上下文文件）→ `addressing._file_units`，和 DDD 文档、DDD 归档同一种切法：
-  小节、条目、段落，空行之间的内容一个不落。
+- **切法只有两种，按一条规则选：** 单元是 `### ` 块的文件（EVOLUTION 及其归档、TIMELINE）→ 在每个 `### ` 标题处切，
+  标题和它下面直到下一个 `### ` 或 `## ` 的每一行是一条（`cognition._h3_units`；边界和 CDF 的 `### ` 块相同，
+  但不丢块与块之间的散文，`parse_units` 会丢）；其余（MEMORY 及其归档、其余上下文文件）→ `addressing._file_units`，
+  和 DDD 文档同一种切法。空行之间的内容一个不落；文件末尾仍未闭合的代码围栏不算围栏（与 addressing 同一规则）。
 - **不改 `parse_units`。** r1 想给它加一个 `layout` 参数，但它的缓存键不含布局（units.py:196-205），会把两种结果混着返回，
   而且 CDF 自己的读者（usage、writer、health、gaps）读归档时都用 bullet 布局。归档换成 `_file_units` 就不需要碰它。
 - 每条单元：`store · path · line · section · title · text · id`。`id = ddd_entry_lifecycle.unit_id(text)`，和 DDD、
@@ -199,7 +200,7 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 | `desktop_main.py:483` | 加 `cognition`，`knowledge` 同指一个 `main`，`main` 收到被调用的名字 |
 | `core/knowledge_cli.py` | 两个名字共用的入口；`prog` 和所有提示里的名字用被调用的名字；新的库读取放进 `core/cognition.py` |
 | `core/addressing.py` | `project_root` 认 `General` → `general_brain_dir`；`_all_files` 对通用 Brain 用 §3.2 的文件集合；`projects()` 把 `General` 排第一。其余函数不变 |
-| 因此行为会变的 `addressing` 调用方 | `ingestion/overrides.py:140`：CDF 的"替换某条"声明今天点不中通用 Brain 里的条目，之后能点中（这正是 R22 要的，加测试）；`jobs/handlers/brain_mistake_audit.py:150`：通用 Brain 的经验之后也能被找到；`run_knowledge.ddd_map`、`engine` / `hook_bridge` 的 `unit_ids`：run 的项目都在 `Projects/` 下，不受影响 |
+| 因此行为会变的 `addressing` 调用方 | `jobs/handlers/brain_mistake_audit.py:150`：通用 Brain 的经验之后也能被找到。`ingestion/overrides.py` 不受影响：它的项目来自来源（会话或 run 的项目，overrides.py:121-128），从不是 `General`，所以 r3 写的"之后能点中通用 Brain 的条目"不成立，已删；通用 Brain 的替换声明是另一件事。`run_knowledge.ddd_map`、`engine` / `hook_bridge` 的 `unit_ids`、`brain_eval`：项目都在 `Projects/` 下，不受影响 |
 | `prompt_builder.py`（spawn 环境，`RESTRICTED_ENV` 旁边） | 按 `_channel_recall_allowed` 设 `SWARM_COGNITION_OFF` |
 | `security_hooks._KNOWLEDGE_WORD_RE`（:6423） | 加 `cognition` |
 | `scripts/knowledge_usage_report.py` | 匹配两个名字，按库统计；加一列 Bash 直接读上下文文件 |
@@ -264,8 +265,7 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 10. **通用 Brain**：fixture 工作区里 `Knowledge/Library/` 有两份顶层文档和一份子目录文档。`find --project General` 返回整条单元、
     带路径和 id；`get <id>` 取回同一条；`map --projects` 第一行是 `General`；`find --project general`（小写）也指它。
     多库查询时，同一段文字不会既以通用 Brain 单元、又以 `library` 分块出现两次。
-11. `ingestion/overrides` 用 `<id> | <首行>` 声明替换通用 Brain 顶层文档里的一条，能找到并且只找到那一条
-    （改动前在 main 上是 `not_found`）。
+11. （删：见 §4，overrides 不经过通用 Brain。）
 
 提交前另跑改动直接碰到的已有测试：`test_knowledge_cli*`、`test_addressing*`、`test_reversible_context_recall.py`、
 `security_hooks` 里 owner 命令拒绝的测试、prompt_builder 的 channel 环境测试。
@@ -292,6 +292,24 @@ XG（2026-11-01）："Knowledge/Library 是我们的通用 DDD，你不能把它
 1. 名字用 `cognition`，`knowledge` 永久保留为同义命令：**按设计**。
 2. channel 里除 owner 私聊外一律不能主动查（和推送式 recall 一致）：**按设计**。通用 Brain 和项目 DDD 同等对待，能查的地方都能查。
 3. 实施方式：跨 CLI、prompt_builder 的子进程环境和安全 hook，属于有风险的改动。直接做（native，代码一个提交、文字一个提交），还是走 pipeline？
+
+## 11. 实施记录（2026-11-01，native）
+
+- **提交**：代码 `4fa048665`（cognition 入口、addressing 的通用 Brain、spawn 环境、prewarm 只进 owner 私聊、
+  拒绝正则、用量报告的命令名、打包清单）；文字一个提交（SWARMAI.md / SELF.md 源文件、技能、阶段文档、
+  `[DDD:]` 提示、`repo_guidance`、`addressing` 的用法行）。
+- **与设计不同的地方**：
+  - `### ` 块不用 `parse_units` 切（§3.3），因为它丢块与块之间的散文；实测真实文件上正文零丢失。
+  - worker Hive：`library` 不整库拒绝，只返回 `Knowledge/Library/` 里的命中（同步过去的通用 Brain）。
+    派给 Hive 的通用 Brain 任务提示写的是 `--in library`，旧版 Hive 也只认这个写法。
+  - `task_spec` 给 Hive 的提示保留 `knowledge`：它在 Hive 上执行，Hive 的版本可能还不认识 `cognition`。
+  - `run_protocol/engine.py` 等运行内部的提示文字没改名：另一个会话在 main 上有 engine.py 的未提交改动；同义命令保证能用。
+  - `knowledge_usage_report` 只加了命令名，没加"按库统计"和"直接 grep"两列。
+- **审查**：correctness + security 各一轮，无 CRITICAL / HIGH；两个 MEDIUM（worker 规则漏了 `get`、多库时误删 Library 命中）和
+  七个 LOW 已修，每条有测试并做了变异检查。仍开着：拒绝正则在受限会话里也会挡带 `cognition` 字样的无害命令
+  （与 `knowledge`、`addressing` 同样）；会话命中没有 `(external)` 标记；gateway 里 `_adopts_prewarm` 的调用处没有测试。
+- **上线前不要做的**：本机 `.context/TOOLS.md` 和 `.context/SELF.md` 的新写法要等 build + 重启之后再换上
+  （运行中的程序还不认识 `cognition`）。
 
 ## 10. 修订
 

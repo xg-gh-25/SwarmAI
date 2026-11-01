@@ -51,8 +51,8 @@ One sub-agent per expert, in parallel, with the Agent tool:
   the checkout has no code graph the output says so; paste that too, so the expert knows
   to grep the callers itself.
 - When the repository is bound to a project with a DDD, paste the output of
-  `"$SWARM_BACKEND_BIN" knowledge map --project <P> --brief` into the prompt and say it may
-  look things up there with `knowledge find --project <P> --query "<words>"` when a finding
+  `"$SWARM_BACKEND_BIN" cognition map --project <P> --brief` into the prompt and say it may
+  look things up there with `cognition find --project <P> --query "<words>"` when a finding
   needs it. An expert is a sub-agent: it does not get your system prompt, so this is its
   only way to know the project's domain knowledge exists.
 

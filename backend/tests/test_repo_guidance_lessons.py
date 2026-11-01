@@ -96,7 +96,7 @@ def test_first_touch_brings_lessons_and_ddd_paths_then_only_after_a_change(
     assert str(lessons) in text
     # the bound DDD is one line: where it is and how to look things up (knowledge
     # addressing §3), ahead of the lessons so the lessons block cannot crowd it out
-    assert f"its DDD is at {proj}" in text and "knowledge find --project P" in text
+    assert f"its DDD is at {proj}" in text and "cognition find --project P" in text
     assert text.index("[Project DDD]") < text.index("always run the migration check")
 
     assert _read(repo / "src.py") == ""                       # once

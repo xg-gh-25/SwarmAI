@@ -1844,7 +1844,7 @@ def _best_entry_of_section(hit: dict, base, docs_text: dict, keywords: str) -> d
     so the chat pointer names an entry and its line, not a section heading (knowledge
     addressing §2.6: SwarmAI's TECH.md "Architecture" is ~100K characters). The units
     are split exactly as ``core.addressing`` splits them, so the line and the id agree
-    with ``knowledge get``. Unchanged when the doc is not known or nothing matches."""
+    with ``cognition get``. Unchanged when the doc is not known or nothing matches."""
     doc, sec = str(hit.get("doc") or ""), str(hit.get("section") or "")
     text = (docs_text or {}).get(doc)
     if base is None or text is None or sec.startswith("("):
@@ -1980,7 +1980,7 @@ def _inject_ddd_for_active_project(
             f"> **[DDD:{project}]** You are working in project {project} "
             f"(detected via {signal}). Its DDD is at `{root}` (layout: SWARMAI.md, My "
             f"Workspace); before a project-specific decision, look it up: "
-            f"`\"$SWARM_BACKEND_BIN\" knowledge find --project {project} --query \"<words>\"`.\n"))
+            f"`\"$SWARM_BACKEND_BIN\" cognition find --project {project} --query \"<words>\"`.\n"))
         _record_ddd_inject("injected_pointer_only")
         logger.info("DDD detected project=%s (%s): no section matched the message "
                     "-- injected the project pointer only", project, signal)
@@ -1996,7 +1996,7 @@ def _inject_ddd_for_active_project(
         f"\n\n## Project DDD — [DDD:{project}]\n"
         f"> **[DDD:{project}]** Retrieved from this project's DDD docs "
         f"(detected via {signal}). Read the ones that bear on this before acting "
-        f"(at that line, or `\"$SWARM_BACKEND_BIN\" knowledge get --project {project} <path:line>`).\n\n"
+        f"(at that line, or `\"$SWARM_BACKEND_BIN\" cognition get --project {project} <path:line>`).\n\n"
         + "\n".join(lines)
     )
     deliver(block)

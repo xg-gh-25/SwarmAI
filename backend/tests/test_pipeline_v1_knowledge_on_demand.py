@@ -50,7 +50,7 @@ def test_knowledge_md_carries_the_map_only_with_a_ddd(tmp_path, monkeypatch):
     r.create()
     text = (r.engine().run_dir / "artifacts" / "knowledge.md").read_text(encoding="utf-8")
     assert "What the project's DDD holds" in text and "TECH-archive.md" in text
-    assert f"knowledge find --project {PROJECT}" in text
+    assert f"cognition find --project {PROJECT}" in text
     plain = Rig(tmp_path / "b", monkeypatch, profile="full")
     plain.create()
     assert "What the project's DDD holds" not in (
@@ -66,7 +66,7 @@ def test_handouts_carry_a_map_and_the_project(tmp_path, monkeypatch):
     assert started["handouts"], started
     for h in started["handouts"]:
         prompt = _prompt(h)
-        assert "PROJECT DDD MAP" in prompt and f"knowledge find --project {PROJECT}" in prompt
+        assert "PROJECT DDD MAP" in prompt and f"cognition find --project {PROJECT}" in prompt
     for e in _handouts(r):
         assert e["payload"].get("knowledge_project") == PROJECT
     correctness = [e for e in _handouts(r) if e["payload"]["expert_id"] == "correctness"]

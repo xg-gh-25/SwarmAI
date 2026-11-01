@@ -14,7 +14,7 @@
 >
 > **Project counterparts:** this is the universal craft (canonical home). How it maps onto
 > one product's own surfaces belongs in that project's DDD (`2-understanding/knowledge/`);
-> look for it with `knowledge find --project <P> --query "design judgment"`.
+> look for it with `cognition find --project <P> --query "design judgment"`.
 > The WHEN-reflex ("read this before producing info-dense UI") is governed by AGENT.md R15.
 
 ## The one-line thesis (memorize)

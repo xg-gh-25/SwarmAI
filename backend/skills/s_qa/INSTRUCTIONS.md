@@ -38,13 +38,13 @@ ls pyproject.toml package.json Cargo.toml go.mod Makefile 2>/dev/null
 
 **L2 (with DDD docs) — read these BEFORE auto-detection:**
 
-From the project's TECH.md (look each up with `"$SWARM_BACKEND_BIN" knowledge find --project <project> --doc TECH.md --query "<section words>"`, or `knowledge map --project <project>` to see its sections; never read the whole file):
+From the project's TECH.md (look each up with `"$SWARM_BACKEND_BIN" cognition find --project <project> --doc TECH.md --query "<section words>"`, or `cognition map --project <project>` to see its sections; never read the whole file):
 - **Dev Commands section** — use the explicit test command instead of auto-detecting. If TECH.md says `pytest -x --tb=short`, use that, not bare `pytest`.
 - **Conventions section** — understand naming patterns, file structure, commit format.
 - **Key Files section** — know which domains map to which files for targeted testing.
 - **Environment Notes** — port randomization, credential chains, sandbox restrictions that affect test execution.
 
-From the project's IMPROVEMENT.md (`knowledge find --project <project> --doc IMPROVEMENT.md --query "<module or failure words>"`):
+From the project's IMPROVEMENT.md (`cognition find --project <project> --doc IMPROVEMENT.md --query "<module or failure words>"`):
 - **What Failed section** — identify historically buggy areas. If a module has failed before, test it more thoroughly even if it's not in the changeset.
 - **Known Issues section** — skip known-flaky tests that are pre-existing, not caused by the changeset. Report them as "skipped (known issue)" not "failed".
 - **What Worked section** — reuse testing patterns that previously caught real bugs.

@@ -60,7 +60,10 @@ def test_no_old_layout_path_anywhere_in_swarmai_md():
 def test_no_instance_facts_in_the_section():
     section = _section()
     from core.addressing import projects
+    from core.project_agent import GENERAL_BRAIN
     for name, _root, _has in projects():
+        if name == GENERAL_BRAIN:      # built in on every install: a product fact, not this one's
+            continue
         assert f"`{name}`" not in section and f" {name} " not in section, name
     assert not re.search(r"\b\d+\s+(projects|DDDs|entries|files)\b", section)
 

@@ -40,19 +40,20 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   Desktop path = fresh assembly (L1 cache bypassed).
 - **Recall — two triggers, and I INVOKE it, not just receive it.** (1) AUTO: session start + the
   first keyword-bearing message inject a `[RECALLED]` block (retrieved prior context, not this-turn
-  reasoning). (2) ON-DEMAND: for a project's DDD or the Library, `"$SWARM_BACKEND_BIN" knowledge
-  find --project <P> --query "<words of the solution>"` (whole units, `path:line`, an id to cite;
-  `map` / `get`; SWARMAI.md § My Workspace). For the context files, `context_recall_cli.py` runs `recall_all` (`core/recall_multi.py`) —
-  `--domains <d>` fans out over whatever stores THIS instance has (read the live `DOMAINS` set), or
-  `--file <F>` reads one context file. **Reach for it before saying "I don't recall / not in context",
+  reasoning). (2) ON-DEMAND: `"$SWARM_BACKEND_BIN" cognition find --query "<words of the solution>"` reads every
+  store in one command — the Brains (a project's DDD with `--project <P>`, the General Brain
+  `Knowledge/Library`), `Knowledge/`, MEMORY and EVOLUTION with their archives, TIMELINE (the events
+  not injected too), SELF and the other context files, past sessions, the code graph; `--in <store>`
+  narrows it (whole units, `path:line`, an id to cite; `get` / `map`; SWARMAI.md § My Workspace).
+  **Reach for it before saying "I don't recall / not in context",
   AND before judging anything about my own system** ("is it broken / why does this class keep
   failing / did the model get worse"). The second trigger slips: it feels like investigation, not a
   memory gap, so I read execution history (runs, commits, counters) — which records what I DID,
-  never what is TRUE. ⚠️ `--domains` does NOT reach SELF/EVOLUTION (`context_files` = MEMORY.md
-  only): a self-model question needs `--file SELF.md` / `--file EVOLUTION.md`. Recall first, then
+  never what is TRUE. A self-model question searches `--in evolution,context` (SELF is a context
+  file). Recall first, then
   measure only what it did not answer (a stored verdict is still a claim, R30#1). Context-file
   recall is pure keyword / FTS5 / BM25 — **no vector, no graph; never call it hybrid**; the fan-out
-  adds a code-graph leg. Command reference: `context_recall_cli.py --help`; domain→store map: `core/recall_multi.py`.
+  adds a code-graph leg. Every store and how to search it: `cognition map`.
 - **Memory management** (`core/ingestion` + `core/memory_injection`) — CDF is the one writer of
   MEMORY / EVOLUTION / TIMELINE / DDD: its sources submit candidates to an Inbox, each
   unit declared by the agent that produced it (type, scope, relation to what exists); code
@@ -72,11 +73,10 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   FTS5 `library` domain — the only one needing no shard name (a desktop session's first
   keyword-bearing recall passes every non-`ddd` domain), ⚠️ but it early-returns unless the
   workspace `Knowledge/` dir exists (a SIBLING dir) and a channel session skips recall entirely;
-  an explicit `context_recall_cli.py --file <shard>` BM25 pass — index-free, ⚠️ but it needs `## `
-  sections in that shard (`EVOLUTION-archive-<YYYY-MM>` shards are `### ` blocks → "no sections
-  parsed") and a BODY-vocabulary query (no section-name boost, so `--query Pitfalls` finds
-  nothing); and a direct shard read via `core/archive_browse.list_archive_files`
-  (`GET /api/eval/archive-list`), which parses the shapes the `--file` route can't. Per-route
+  `cognition find --in memory|evolution` — every shard, cut into whole units (`### ` blocks
+  included), index-free; ⚠️ it ranks by BODY vocabulary (a section name such as `Pitfalls` is not
+  a query); and a direct shard read via `core/archive_browse.list_archive_files`
+  (`GET /api/eval/archive-list`), which lists them. Per-route
   detail: `core/memory_index`'s header. Memory is sovereign (local-first, portable, never platform-locked).
 - **Self-evolution** (`core/evolution/governance_miner`) — a
   correction becomes a C-entry in EVOLUTION.md; a recurring pattern with specific rule text

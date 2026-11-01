@@ -54,8 +54,8 @@ that would dilute the set must REPLACE an existing rule or not land.
 Before writing to SOUL/AGENT/STEERING:
 1. **Layer:** principle / rule / gate / knowledge?
 2. **Parent:** which SOUL principle?
-3. **Overlap:** `context_recall_cli.py --file <F> --query "<proposed text>"` over SOUL / AGENT /
-   STEERING / SELF; list the top matches and say fold-into or new-axis.
+3. **Overlap:** `"$SWARM_BACKEND_BIN" cognition find --in context,evolution --query "<proposed text>"` (SOUL / AGENT /
+   STEERING / SELF are context files), entry by entry; list the top matches and say fold-into or new-axis.
 4. **Delta:** what the change removes, and the file's size before → after.
 5. **Source:** user / correction / pipeline / self-detect
 

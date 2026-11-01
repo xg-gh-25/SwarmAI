@@ -109,19 +109,19 @@ def test_map_lists_layout_lines_and_subsections(ws):
     assert f"L{line} ## Runtime Traps" in m
     assert "### A subsection" in m             # Runtime Traps is over SUBHEAD_OVER
     assert "deep.md" in m and "data-source" in m and "s_thing" in m and "bindings.yaml" in m
-    assert "knowledge find --project P" in m
+    assert "cognition find --project P" in m
     assert "kangaroo" not in m and "link.md" not in m and ".artifacts" not in m
 
 
 def test_map_budget_takes_whole_lines_and_says_where_the_rest_is(ws):
     m = a.ddd_map("P", budget=900)
     assert len(m) <= 900
-    assert "more lines not shown" in m and "knowledge map --project P" in m
+    assert "more lines not shown" in m and "cognition map --project P" in m
 
 
 def test_brief_map_is_small(ws):
     m = a.ddd_map("P", size="brief")
-    assert "## " not in m and len(m) < 1200 and "knowledge find" in m
+    assert "## " not in m and len(m) < 1200 and "cognition find" in m
 
 
 def test_no_ddd_and_unknown_project_never_raise(ws, tmp_path):

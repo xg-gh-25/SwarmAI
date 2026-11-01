@@ -295,9 +295,9 @@ def _sections(text: str) -> list[tuple[int, str, int, list[tuple[int, str, int]]
 def _how_to(project: str) -> list[str]:
     return [
         "How to read it: the knowledge you were given is a starting set, not everything.",
-        f'- find: "$SWARM_BACKEND_BIN" knowledge find --project {project} --query "<words of your solution>"',
+        f'- find: "$SWARM_BACKEND_BIN" cognition find --project {project} --query "<words of your solution>"',
         "  (whole entries with path:line and an id; add --doc TECH.md to search one doc)",
-        f'- get: "$SWARM_BACKEND_BIN" knowledge get --project {project} <id>|<path>:<line>',
+        f'- get: "$SWARM_BACKEND_BIN" cognition get --project {project} <id>|<path>:<line>',
         "- or Grep -n a word in one of the files above, then Read it at that line.",
         "Never read TECH / IMPROVEMENT whole. Cite what you used by its id.",
     ]
@@ -392,7 +392,7 @@ def _map(project: str, root: Path, size: str, budget: Optional[int]) -> str:
         return "\n".join(head + rows + tail)
     def trailer(n: int) -> str:
         return (f"... {n} more lines not shown; the whole map: "
-                f'"$SWARM_BACKEND_BIN" knowledge map --project {project}')
+                f'"$SWARM_BACKEND_BIN" cognition map --project {project}')
     fixed = sum(len(x) + 1 for x in head + tail)
     if fixed + sum(len(r) + 1 for r in rows) <= limit:
         return "\n".join(head + rows + tail)
@@ -540,5 +540,5 @@ def render_unit(u: Unit, others: int = 0) -> str:
     """One unit as an agent reads it: its id and location, then its section and whole
     text inside the fence (a heading is DDD text too)."""
     sec = f"§ {u.section}\n" if u.section else ""
-    more = f" (+{others} more with this id: `knowledge get` lists them)" if others else ""
+    more = f" (+{others} more with this id: `cognition get` lists them)" if others else ""
     return f"- `{u.id}` · {u.path}:{u.line}{more}\n" + fence(sec + u.text)
