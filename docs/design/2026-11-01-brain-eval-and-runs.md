@@ -3,7 +3,7 @@ title: Brain 的 Eval 和 Runs — 三个问题一个结论；run 用 Swarm Out 
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: design r2（零上下文评审已折入，§8；待 XG 定 §7）
+status: design r3（XG 2026-11-01：上 3 个大数、下 3 节竖排；插手不含 review / approve / judge）
 mockup: Knowledge/Designs/mockups/2026-11-01-brain-eval-and-runs.html（工作区内）
 follows: 2026-10-30-brain-runs-one-card.md, 2026-10-31-swarm-out-run-review.md, 2026-10-31-cdf-health.md
 ---
@@ -27,6 +27,9 @@ run 记录参考 Swarm Out 的 run 列表 + 点开大卡片。
   Hive run 打开 Swarm Out 的大卡片：同一个 Brain 的 run 有两种看法。
 
 ## 2. Eval：三个问题，每个一个结论
+
+**排版（r3，XG）**：最上面一行三个大数（每个问题的结论数 + 和什么比），下面三节从上往下，
+每节占满宽度：结论的说明、辅助数、要处理的东西。不分列（三列挤在一起没法看）。
 
 每一节回答一个问题：一个最显眼的数，旁边写和什么比（目标 / 上一期），下面是要处理的东西
 （点了打开）。没测到的写"没测"，样本太少写"样本不足（n）"，不写 0。
@@ -68,16 +71,19 @@ run 记录参考 Swarm Out 的 run 列表 + 点开大卡片。
 ### 2.3 run 自主吗
 
 - **结论数**：近 30 天结束的 run 里，人一次都没插手的比例，对比前 30 天（没有前一期就不比）。
-- **插手怎么数（一个函数，卡片、Eval、`humanPerRun` 都用它）**：今天本机 8 个 run 的
-  `human_decisions` 全是 0，连 run_8437ff7e 也是 0，可它的 reason 写着 "landed natively as
-  827a1e29b on XG's call"：现在的数看不见真实的插手。改成：
-  - 本机：audit 的 `human_decisions`（含 `accept_finding`，`audit.py:420`；卡片今天读的
-    `run.json` 字段不含它，`routers/pipelines.py:354`），加上 run 从开始到结束期间你在它的会话里
-    发的消息数（和 Hive 的 `said` 同一个口径，`swarm_out_results.py:496`），run 被丢下后由人
-    手工落地再算 1 次。
-  - Hive：批准 + 拒绝 + 回答 + 会话里说的话（`humanPerRun` 现在漏了 `said`，
-    `brainMapModel.ts:130-132`）。
-  - `manual_rescues` 一直是 null（`audit.py:425-428`），不进这个数。
+- **插手怎么数（r3，XG：review、approve、judge 不算）**：插手 = run 需要你才能走下去或走对。
+  一个函数，卡片、Eval、`humanPerRun`、Swarm Out 的自主度一词、audit 的 Autonomy 一维都用它。
+  - **算**：回答 run 问你的问题（`AskUserQuestion`、pipeline 的 decision）；纠偏（修正重跑；
+    run 跑着时你往它会话里发的消息，和 Hive 的 `said` 同口径，`swarm_out_results.py:496`）；
+    救场（run 被丢下后由人手工落地；卡住后你手动恢复）。
+  - **不算**：产品有意留给人的把关：批准或拒绝一个危险 / 不可逆的操作（权限请求、run-land、push）；
+    验收交付物（通过、退回、丢弃）；接受一个 finding（`accept_finding`）；Judge 和评审专家的结论
+    （机器给的）。
+  - 今天和这个口径不一致的地方，一起改：audit 的 Autonomy 一维把 run-land 和 `accept_finding`
+    算进了插手（`audit.py:419-428`）；Swarm Out 的自主度把权限的批准 / 拒绝算进了插手
+    （`runReview.ts:136-140`）；本机 run 只记了 decision，没记会话里的消息和手工落地（今天 8 个 run
+    全是 0，run_8437ff7e 是你手工合进 main 的，`reason` 写着 "on XG's call"）。
+  - `manual_rescues` 一直是 null（`audit.py:425-428`）：手工落地就是第一个有来源的救场。
 - **辅助**：每个 run 平均插手几次；Autonomy Judge 五维各自 PASS / WARN / BLOCK 几次（点一格
   列出是哪些 run）；"要过你"的 run 列表，一行一句为什么，点开是它的大卡片。
 - **不放**：落地数、平均时长、token —— 这是 run 的统计，放到 Runs tab 的标题行。
@@ -157,9 +163,8 @@ run 记录参考 Swarm Out 的 run 列表 + 点开大卡片。
 ## 7. 要 XG 定的
 
 1. 大卡片用 B（先抽外壳 + RunView 接口，本机 run 先接，Swarm Out 以后迁）？
-2. "插手"按 §2.3 的口径算：本机把你在 run 会话里发的每条消息都算一次（和 Hive 的"会话里说的话"
-   一样），包括只是问一句"进行到哪了"。还是只算改变了 run 走向的消息？前者能直接数，后者要判断。
-   我倾向前者：口径和 Hive 一致，也和 Judge 的 Autonomy 一维同向。
+2. ~~插手口径~~ 已定（r3）：见 §2.3。run 跑着时发进会话的消息都算纠偏，只问一句"进行到哪了"
+   也会被算一次；分不出来就宁可多算，不靠模型判断。
 
 ## 8. 零上下文评审（2026-11-01）怎么折进来的
 
