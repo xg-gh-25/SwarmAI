@@ -94,6 +94,7 @@
 | 108 | [外界怎么解读 AI-Native？—— Transformation 是演进，不是一步到位（#106 的对外解读）](108-外界怎么解读-ai-native-transformation-是演进-不是一步到位-106-的对外解读.md) | Show and tell | 2026-09-07 |
 | 110 | [AI-Native Transformation V13 —— 一条主线,五个 Theme (23 页)](110-ai-native-transformation-v13-一条主线-五个-theme-23-页.md) | Show and tell | 2026-10-08 |
 | 111 | [SwarmAI Autonomous Pipeline — the whole thing on one page](111-swarmai-autonomous-pipeline-one-page-panorama.md) | Show and tell | 2026-10-14 |
+| 116 | [SwarmAI v2.4 — One brain, many hands: autonomy that compounds, so it needs less of your attention](116-swarmai-v2-4-one-brain-many-hands-autonomy-that-compounds.md) | Announcements | 2026-11-01 |
 
 ---
 
