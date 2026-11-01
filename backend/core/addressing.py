@@ -456,9 +456,10 @@ def _ranked(units: list[Unit]) -> list[Unit]:
 def matches(project: str, ref: str) -> list[Unit]:
     """Every unit *ref* names, best first. An id can name several units: the same lesson
     written twice, or an entry and its archived copy (``unit_id`` reduces both to the same
-    text). A ``path:line`` (absolute, relative to the project dir, or a bare canonical doc
-    name such as ``TECH.md:12``) names the unit whose lines include that line; a ``## ``
-    heading line names the first unit of its section; a line between units names none."""
+    text). A ``path:line`` (absolute, relative to the project dir, relative to the
+    workspace, or a bare canonical doc name such as ``TECH.md:12``) names the unit whose
+    lines include that line; a ``## `` heading line names the first unit of its section; a
+    line between units names none. Only a unit of this Brain is ever returned."""
     table = ddd_units(project)
     ref = (ref or "").strip()
     if re.fullmatch(r"[0-9a-f]{8}", ref):
@@ -473,6 +474,9 @@ def matches(project: str, ref: str) -> list[Unit]:
         from core.ddd_paths import ddd_path
         from core.project_registry import DDD_CANONICAL_DOCS
         path = ddd_path(table.root, raw.name) if str(raw) in DDD_CANONICAL_DOCS else table.root / raw
+        if not path.exists():        # relative to the workspace, as a listing prints it
+            from core.project_registry import get_swarmws
+            path = get_swarmws() / raw
     try:
         path = path.resolve()
     except OSError:

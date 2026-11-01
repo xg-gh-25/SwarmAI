@@ -1524,16 +1524,29 @@ def _project_name_forms(project_name: str) -> set[str]:
 
 def _knowledge_hit_shape(source_file: str, heading: str, fallback: str) -> dict[str, str]:
     """Return a whole Knowledge section plus its parent and document metadata."""
-    from core.knowledge_store import is_cdf_multi_unit
+    return _knowledge_shape_text(source_file, heading, fallback, _knowledge_text(source_file))
+
+
+def _knowledge_text(source_file: str) -> Optional[str]:
+    """The text of ``Knowledge/<source_file>``, or None when it is not a file inside
+    ``Knowledge/`` or cannot be read."""
     try:
         from config import get_swarmws
         knowledge = (Path(get_swarmws()) / "Knowledge").resolve(strict=False)
         target = (knowledge / source_file).resolve(strict=False)
         if not target.is_relative_to(knowledge) or not target.is_file():
-            return {"content": fallback, "summary": "", "parent_heading": "",
-                    "reference_kind": ""}
-        text = target.read_text(encoding="utf-8")
+            return None
+        return target.read_text(encoding="utf-8")
     except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def _knowledge_shape_text(source_file: str, heading: str, fallback: str,
+                          text: Optional[str]) -> dict[str, str]:
+    """``_knowledge_hit_shape`` of a file whose *text* was read by ``_knowledge_text``
+    (None: unreadable, the hit is *fallback*)."""
+    from core.knowledge_store import is_cdf_multi_unit
+    if text is None:
         return {"content": fallback, "summary": "", "parent_heading": "",
                 "reference_kind": ""}
     multi = is_cdf_multi_unit(source_file, text)        # the hit is one entry, whole

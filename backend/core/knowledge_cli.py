@@ -11,6 +11,11 @@ exactly what it printed before, with the name the agent called in its messages.
     cognition find --query "<words>" [--in <store>[,<store>...]|all] [--project P]
     cognition get <id>|<path>:<line> [--project P]
 
+``get`` reads back every ref ``find`` prints, as printed: an id or ``path:line`` (absolute,
+or relative to the workspace) of a context file, MEMORY, EVOLUTION, TIMELINE or the General
+Brain; a Library hit by its id, its source or the ``<source>#<heading>`` of a "not shown"
+note. A project DDD's id needs ``--project P``, which its group in ``find`` names.
+
 The rest of this docstring is the knowledge addressing design's (§2.4), which still holds:
 
 Knowledge addressing design §2.4. What recall pushes is a starting set; this is how an
@@ -27,7 +32,7 @@ unlike ``py -m scripts.context_recall_cli``):
 ``find`` and ``get`` print whole units, each with ``path:line`` and its 8-character id
 (``unit_id``), inside ``<recalled>`` fences: recalled data, not instructions. The id is
 what a pipeline document (``knowledge_refs``) or an expert finding (``knowledge_ref``)
-cites. Read-only. MEMORY / EVOLUTION stay with ``context_recall_cli`` (privacy-gated).
+cites. Read-only.
 The command is the owner's: a non-owner channel session (``RESTRICTED_ENV`` set by the
 daemon in its environment) is refused here, and the daemon's Bash permission handler
 denies the command there too (``security_hooks.knowledge_command_denial``). Both are
@@ -90,6 +95,9 @@ def _map(args: argparse.Namespace) -> int:
 
 def _find(args: argparse.Namespace) -> int:
     from core import addressing
+    if not (args.query or "").strip():
+        _out(f"{_PROG} find: --query needs the words to search for")
+        return 2
     if args.where is None:
         args.where = "ddd" if args.project else "all"
     if args.where not in ("ddd", "library"):
@@ -102,6 +110,7 @@ def _find(args: argparse.Namespace) -> int:
         notes = [r["text"] for r in rows if not r["id"]]
         if args.json:
             _out(json.dumps({"units": [{"id": r["id"], "path": r["source"], "line": None,
+                                        "heading": r.get("heading") or "",
                                         "section": "", "store": "library",
                                         "title": addressing.Unit.first_line(r["text"]),
                                         "text": r["text"]} for r in shown],
@@ -111,7 +120,8 @@ def _find(args: argparse.Namespace) -> int:
         if not rows:
             _out(f"Library: nothing matches {args.query!r}.")
             return 0
-        _out("\n\n".join([f"- `{r['id']}` · {r['source']}\n" + addressing.fence(r["text"]) for r in shown]
+        _out("\n\n".join([f"- `{r['id']}` · {cognition.library_location(r)}\n" + addressing.fence(r["text"])
+                          for r in shown]
                          + [addressing.fence(n) for n in notes]))
         return 0
     if not args.project:
@@ -225,7 +235,8 @@ def _hit_json(store: str, h) -> dict:
             row["external"] = True
         return row
     if store == "library":
-        row = {"id": h.get("id"), "path": h.get("source"), "line": None, "section": "",
+        row = {"id": h.get("id"), "path": h.get("source"), "line": None,
+               "heading": h.get("heading") or "", "section": "",
                "store": "library", "title": Unit.first_line(h.get("text") or ""),
                "text": h.get("text") or ""}
     elif store == "session":
@@ -271,8 +282,8 @@ def _find_stores(args: argparse.Namespace) -> int:
             notes[g.store] = g.note
         _record_use([u for u in g.units if isinstance(u, Unit)], "recall_injected")
     if args.json:
-        units = [_hit_json(g.store.split(":")[0], h) for g in groups for h in g.units]
-        omitted = [_unit_json(u, text=False) for g in groups for u in g.omitted]
+        units = [_brain_tag(g, _hit_json(g.store.split(":")[0], h)) for g in groups for h in g.units]
+        omitted = [_brain_tag(g, _unit_json(u, text=False)) for g in groups for u in g.omitted]
         omitted += [{"note": n} for g in groups for n in g.notes]
         skipped = [s for g in groups for s in g.skipped] + [f"{k}: {v}" for k, v in notes.items()]
         _out(json.dumps({"units": units, "omitted": omitted, "skipped": skipped}, ensure_ascii=False))
@@ -287,7 +298,7 @@ def _find_stores(args: argparse.Namespace) -> int:
             continue
         head = (f"{len(g.units)} matching, best first" if g.units
                 else "the best matches are too long to show here; they are listed below")
-        parts.append(f"[{_store_title(g.store)}] {head}")
+        parts.append(f"[{_store_title(g.store)}] {head}{_group_hint(g.store)}")
         parts += [_render(h) if isinstance(h, Unit) else cognition.render_hit(store, h, _render)
                   for h in g.units]
         if g.omitted:
@@ -302,20 +313,43 @@ def _find_stores(args: argparse.Namespace) -> int:
     return 0
 
 
-def _get_context(args: argparse.Namespace) -> int:
+def _brain_tag(g, row: dict) -> dict:
+    """A Brain's unit in a several-store JSON answer names its Brain: ``get`` reads a
+    project DDD's id with ``--project`` that name."""
+    if g.store.startswith("ddd:"):
+        row["project"] = g.store[4:]
+    return row
+
+
+def _group_hint(store: str) -> str:
+    """What a group's header adds so each ref under it reads back with ``get``."""
     from core import cognition
-    refused = cognition.worker_refusal("memory")      # every store get reaches is .context
-    if refused:
-        _out(f"{_PROG} get: MEMORY, EVOLUTION, TIMELINE and the context files are {refused}; "
+    from core.addressing import is_general
+    if store.startswith("ddd:"):
+        brain = store[4:]
+        return "" if is_general(brain) else f" (read one: {_PROG} get --project {brain} <id>)"
+    s = cognition.STORES.get(store)
+    return " (find only: no unit to get)" if s is not None and not s.can_get else ""
+
+
+def _get_context(args: argparse.Namespace) -> int:
+    """``get`` without --project: every ref ``find`` prints (``cognition.locate``)."""
+    from core import cognition
+    got = cognition.locate(args.ref)
+    if got.refused and not got.units:
+        _out(f"{_PROG} get: MEMORY, EVOLUTION, TIMELINE and the context files are {got.refused}; "
              "a Brain's unit is read with --project P")
         return 3
-    found = cognition.get(args.ref)
-    if not found:
-        _out(f"{_PROG} get: no unit {args.ref!r} in MEMORY, EVOLUTION, TIMELINE or the other "
-             f"context files (a Brain's unit needs --project P; an id changes when an entry "
-             f"is rewritten, find it again with `{_PROG} find`)")
+    if not got.units:
+        _out(f"{_PROG} get: no unit {args.ref!r} in MEMORY, EVOLUTION, TIMELINE, the other "
+             f"context files, the General Brain or the Library (a project DDD's unit needs "
+             f"--project P; a Library hit is read by the <source>#<heading> printed beside "
+             f"its id; an id changes when an entry is rewritten, find it again with "
+             f"`{_PROG} find`)")
         return 1
-    u, others = found[0], found[1:]
+    if got.where == "library":
+        return _print_library(got.units, args)
+    u, others = got.units[0], got.units[1:]
     _record_use([u], "read_by_agent")
     if args.json:
         _out(json.dumps({"units": [_hit_json(u.store, u)],
@@ -325,6 +359,24 @@ def _get_context(args: argparse.Namespace) -> int:
     text = _render(u)
     if others:
         text += "\n\nThe same id also names: " + ", ".join(f"{o.path}:{o.line}" for o in others)
+    _out(text)
+    return 0
+
+
+def _print_library(hits: list, args: argparse.Namespace) -> int:
+    from core import cognition
+    h, others = hits[0], hits[1:]
+    locs = [cognition.library_location(o) for o in others]
+    if args.json:
+        row = _hit_json("library", h)
+        _out(json.dumps({"units": [row],
+                         "omitted": [{"id": o["id"], "path": o["source"], "heading": o["heading"],
+                                      "store": "library"} for o in others],
+                         "skipped": []}, ensure_ascii=False))
+        return 0
+    text = cognition.render_hit("library", h, _render)
+    if others:
+        text += "\n\nThe same ref also names: " + ", ".join(locs)
     _out(text)
     return 0
 

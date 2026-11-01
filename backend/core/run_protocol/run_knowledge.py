@@ -130,7 +130,10 @@ def _library_leg(query: str) -> list[dict]:
             continue
         whole = full.get((h.get("source"), h.get("heading"))) or h.get("content") or ""
         out.append({"kind": "library", "source": str(h.get("source") or ""),
+                    "heading": str(h.get("heading") or ""),
                     "id": item_id(whole), "text": str(h.get("content") or "")})
+    from core.cognition import record_library_refs
+    record_library_refs(out)          # so `cognition get <id>` reads only its source
     return out
 
 

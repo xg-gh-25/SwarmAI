@@ -228,8 +228,9 @@ Agent 不需要记住任何门，一条 `map` 就知道整个脑有什么。
 - 不改推送式 recall，不改 CDF 解析器，不加写能力（写仍走 s_persist / CDF）。
 - 不新建索引，不加向量检索，不把清单放进 system prompt，不合并跨库排序。
 - 不加"必须先查"的 gate，不拦直接 Read / Grep。
-- `get` 不支持 `library`（`Knowledge/` 其余目录的 FTS 分块，约 1100 个文件，没有单元表）、`session`、`code`（没有稳定单元）。
-  通用 Brain 不在此列：它有单元表，能 get、能引用。
+- `get` 不支持 `session`、`code`（没有稳定单元）；`find` 在多库输出里给这两组的标题写明"find only"。
+  `library` 没有单元表，但它的命中能 get（r5，见 §10）：按 id、按来源文件、按"没列出"一行里的 `<来源>#<标题>`，
+  从同一个索引、用同一个整节取法读回。通用 Brain 有单元表，能 get、能引用。
 
 ## 6. 考虑过的其他方案
 
@@ -312,6 +313,30 @@ XG（2026-11-01）："Knowledge/Library 是我们的通用 DDD，你不能把它
   （运行中的程序还不认识 `cognition`）。
 
 ## 10. 修订
+
+- **r5（2026-11-01，bugfix：find 打出的引用 get 读不回）**
+  - 契约：`find` 打出的每个引用（文本和 `--json`），原样交给 `get` 就能读回那一条；只有项目 DDD 的 id 要加
+    `--project P`，多库输出里那一组的标题写明这条命令，`--json` 里那组的单元多一个 `"project"` 字段。
+  - 不带 `--project` 的 `get`（`cognition.locate`）：id 依次查 `.context` 各库、通用 Brain、Library 索引；
+    `<来源>.md` 或 `<来源>.md#<标题>`（`find` 的 Library 命中和"没列出"一行的写法）查 Library 索引；
+    `<path>:<line>` 认绝对路径、相对工作区的路径（`.context/AGENT.md:237`、`Projects/P/…`、`Knowledge/Library/…`），
+    以及相对 `.context` 的路径（只认 `.context` 的文件，和以前一样）；落在通用 Brain 或 `Projects/<P>/` 里的，经
+    `addressing.matches` 读。这些文件以外什么都不读。不在其他项目的 DDD 里按 id 找：那会越过一个会话只看一个项目 DDD 的召回边界。
+  - Library 的 id：id 是整节文字的哈希，没法在索引里查，所以 `get` 从不为一个 id 扫索引。`find`（经 Library 腿
+    `run_knowledge._library_leg`，pipeline 的 knowledge.md 也走它）打出命中时，把 `{id, 来源, 标题}` 追加进
+    `<app data>/state/cognition_library_refs.jsonl`；`get <id>` 只查这份记录，再按 `WHERE source_file = ? AND heading = ?`
+    （表的唯一索引前缀）读那一个文件的块，用 `recall_multi._knowledge_hit_shape` 同一取法（拆成 `_knowledge_text` +
+    `_knowledge_shape_text`，文件只读一次）和 `run_knowledge.item_id` 重算 id 核对。记录超过 1 MB 时原子重写，只留最新的、
+    占一半大小的那些 id；写到一半断掉的行单独跳过，不影响其他 id，也不让 `find` 失败。记录里没有的 id（别的机器上打出的、记录丢了）读不到，但 `find` 在 id 旁边打的位置
+    `<来源>#<标题>` 照样读得回；不可信来源（Signals、仓库文档）的标题就是外部文字，位置行在围栏外，只打来源；标题带换行或首尾空白时也只打来源（照打读不回）。仓库文档（`bind:`）的行任何路径都不经 Library 读出。
+    没有索引就什么都不返回，也不新建。worker Hive 上只读 `Knowledge/Library/` 的行。
+  - 实测（合成索引 50,064 块、2,064 个文件，外加 64 份通用 Brain 文档）：改前每次按 id 全扫，`get <不存在的 id>`
+    4.09 秒、`get <Library id>` 4.04 秒（主人机器上 51,349 块时 41 秒）；改后都是 0.11 秒（主要是读通用 Brain），
+    记录文件涨到 1.5 MB 时也一样；`get <来源>#<标题>` 0.00 秒。测试按 `_knowledge_shape_text` 的调用次数断言，不看墙钟。
+  - `addressing.matches`：相对路径在 Brain 目录下不存在时，再按相对工作区解释，仍要求落在这个 Brain 里。
+  - 空查询或只有空白的 `--query` 是用法错误，退出码 2。
+  - 测试：`backend/tests/test_cognition_refs.py`，在临时工作区（含真实 FTS 索引）里对每类引用做 find→get 往返；
+    每条修复都做了变异检查（撤掉修复，测试变红）。
 
 - **r3（2026-11-01，XG 指正）**
   - 通用 Brain（`Knowledge/Library`）是一个 Brain，不是一个检索索引：`--project General` 有单元表，能 find / get / 引用，

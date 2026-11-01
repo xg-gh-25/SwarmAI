@@ -9,7 +9,8 @@ command) reads every store below, each cut into whole units with ``path:line`` a
 
 - ``ddd`` — a Brain: a project's DDD, or the General Brain (``Knowledge/Library``),
   through ``addressing`` (its unit table, map and ids);
-- ``library`` — the full-text index of ``Knowledge/`` (``run_knowledge._library_leg``);
+- ``library`` — the full-text index of ``Knowledge/`` (``run_knowledge._library_leg``); a hit
+  reads back by its id or its location from the same index (``library_get``);
 - ``memory`` / ``evolution`` / ``timeline`` / ``context`` — the workspace's ``.context/``
   files: MEMORY and its archives, EVOLUTION and its archives, TIMELINE, and the other
   governed files (SWARMAI, IDENTITY, SOUL, SELF, AGENT, USER, STEERING, TOOLS, KNOWLEDGE);
@@ -22,6 +23,10 @@ up to the next ``### `` or ``## `` being one unit; the text of a section before 
 ``### `` is cut like any other file. Every other file is cut as ``addressing`` cuts a DDD
 document (entries, paragraphs, tables). Nothing between two units is left out, so every
 line of a file can be read back by ``path:line``.
+
+``locate`` reads back every ref ``find`` prints, without ``--project``: an id, a
+``path:line`` (absolute or relative to the workspace) or a Library location. Only a
+project DDD's id needs ``--project P``; ``find`` names it on that group.
 
 Each store is ranked on its own (BM25 over its own units, as ``addressing.find``); scores
 of two stores are never compared, so a big store cannot push a small one out.
@@ -36,6 +41,7 @@ told to search with ``--in library``, and a Hive of an older release knows no ot
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -65,7 +71,7 @@ STORES: dict[str, Store] = {s.name: s for s in (
     Store("ddd", "a Brain: a project's DDD (--project P), or the General Brain (--project General, "
                  "Knowledge/Library)", "ddd", needs_project=True, on_worker=True),
     Store("library", "full-text search of Knowledge/ (Notes, Reports, Designs, Meetings, "
-                     "DailyActivity, Library ...)", "library", can_get=False, on_worker=True),
+                     "DailyActivity, Library ...)", "library", on_worker=True),
     Store("memory", "MEMORY.md and its archives: cross-session principles, decisions, corrections",
           "context_files"),
     Store("evolution", "EVOLUTION.md and its archives: corrections and their data points", None),
@@ -330,21 +336,34 @@ def find(where: str, query: str, *, project: Optional[str] = None, doc: Optional
     return out, notes
 
 
-# ── get ────────────────────────────────────────────────────────────────────
+# ── get ──────────────────────────────────────────────────────────────────
 
 _STORE_RANK = {"memory": 0, "evolution": 1, "timeline": 2, "context": 3}
+_ID_RE = re.compile(r"[0-9a-f]{8}")
+_LOC_RE = re.compile(r"^(?P<path>.+):(?P<line>\d+)$")
+# a Library location as find prints it: "<source>.md", or "<source>.md#<heading>" in a
+# "not shown" note (recall_filter._pointer), with the note's " (N characters)" tail allowed
+_LIB_RE = re.compile(r"^(?:Knowledge/)?(?P<src>[^#]+?\.md)(?:#(?P<heading>.*?))?"
+                     r"(?:\s+\(\d+ characters\))?$")
+
+
+def _unit_at(store: str, path: Path, line: int) -> list[Unit]:
+    for u in sorted(file_units(store, path), key=lambda u: u.line):
+        if u.line <= line < u.line + len(u.text.splitlines()):
+            return [u]
+    return []
 
 
 def get(ref: str) -> list[Unit]:
-    """Every ``.context`` unit *ref* names (an id, or ``path:line``), main files first and
-    archives after. A Brain's units are read through ``addressing.matches``."""
-    import re
+    """Every ``.context`` unit *ref* names (an id, or ``path:line``: absolute, or relative
+    to ``.context``), main files first and archives after. ``locate`` reads every ref
+    ``find`` prints; this is its ``.context`` part."""
     ref = (ref or "").strip()
     stores = ("memory", "evolution", "timeline", "context")
-    if re.fullmatch(r"[0-9a-f]{8}", ref):
+    if _ID_RE.fullmatch(ref):
         found = [u for s in stores for u in store_units(s) if u.id == ref]
         return sorted(found, key=lambda u: ("archive" in u.doc, _STORE_RANK[u.store], u.doc, u.line))
-    m = re.match(r"^(?P<path>.+):(?P<line>\d+)$", ref)
+    m = _LOC_RE.match(ref)
     if not m:
         return []
     raw = Path(m.group("path")).expanduser()
@@ -354,13 +373,247 @@ def get(ref: str) -> list[Unit]:
     except OSError:
         return []
     store = _store_of(path)
-    if store is None:
-        return []
+    return _unit_at(store, path, int(m.group("line"))) if store else []
+
+
+@dataclass
+class Got:
+    """What ``locate`` found: ``where`` is ``context``, a Brain's name or ``library``;
+    ``units`` are ``Unit`` (context, Brain) or Library hit dicts; ``refused`` says why a
+    store the ref names is not read here (a worker Hive)."""
+    where: str = ""
+    units: list = field(default_factory=list)
+    refused: str = ""
+
+
+def _brain_of(path: Path) -> Optional[str]:
+    """The Brain whose dir holds *path* (resolved): the General Brain, or ``Projects/<P>``."""
+    from core import addressing
+    from core.project_agent import GENERAL_BRAIN
+    lib = addressing.brain_root(GENERAL_BRAIN)
+    if lib is not None and path.is_relative_to(lib.resolve()):
+        return GENERAL_BRAIN
+    from core.project_registry import get_projects_dir
+    try:
+        rel = path.relative_to(get_projects_dir().resolve())
+    except (OSError, ValueError):
+        return None
+    name = rel.parts[0] if len(rel.parts) > 1 else ""
+    if not name or addressing.is_general(name) or addressing.project_root(name) is None:
+        return None
+    return name
+
+
+def locate(ref: str) -> Got:
+    """The unit(s) any ref ``find`` prints names, read without ``--project``:
+
+    - an id: the ``.context`` stores, then the General Brain, then the Library index
+      (a project's DDD is not searched: its group in ``find`` names ``--project P``);
+    - ``<source>.md`` or ``<source>.md#<heading>``: the Library index (``library_get``);
+    - ``<path>:<line>``: absolute, relative to the workspace, or relative to ``.context``
+      (for a ``.context`` file only): a ``.context`` store file, or a file of a Brain
+      (the General Brain, ``Projects/<P>``) read through ``addressing.matches``.
+
+    Nothing outside those files is read. On a worker Hive the ``.context`` stores are
+    refused (``refused``), the Brains and the Library inside ``Knowledge/Library`` are
+    read, as ``find`` there does."""
+    from core import addressing
+    from core.project_agent import GENERAL_BRAIN
+    ref = (ref or "").strip()
+    refused = worker_refusal("memory") or ""
+    if _ID_RE.fullmatch(ref):
+        found = [] if refused else get(ref)
+        if found:
+            return Got("context", found)
+        found = addressing.matches(GENERAL_BRAIN, ref)
+        if found:
+            return Got(GENERAL_BRAIN, found)
+        found = library_get(unit_id=ref)
+        return Got("library", found) if found else Got(refused=refused)
+    lib = _LIB_RE.match(ref)
+    if lib and (lib.group("heading") is not None or not _LOC_RE.match(ref)):
+        found = library_get(source=lib.group("src"), heading=lib.group("heading"))
+        return Got("library", found) if found else Got()
+    m = _LOC_RE.match(ref)
+    if not m:
+        return Got()
+    from core.project_registry import get_swarmws
+    raw = Path(m.group("path")).expanduser()
     line = int(m.group("line"))
-    for u in sorted(file_units(store, path), key=lambda u: u.line):
-        if u.line <= line < u.line + len(u.text.splitlines()):
-            return [u]
-    return []
+    tries = [(raw, True)] if raw.is_absolute() else [(context_dir() / raw, False),
+                                                     (get_swarmws() / raw, True)]
+    for cand, any_store in tries:
+        try:
+            path = cand.resolve()
+        except OSError:
+            continue
+        if not path.is_file():
+            continue
+        store = _store_of(path)
+        if store:
+            return Got(refused=refused) if refused else Got("context", _unit_at(store, path, line))
+        brain = _brain_of(path) if any_store else None
+        if brain:
+            return Got(brain, addressing.matches(brain, f"{path}:{line}"))
+    return Got()
+
+
+def library_get(*, unit_id: Optional[str] = None, source: Optional[str] = None,
+                heading: Optional[str] = None) -> list[dict]:
+    """Library hits from the Knowledge index, as ``find`` returned them: by *source*
+    (relative to ``Knowledge/``) and, when given, *heading* -- one indexed query over that
+    source's chunks -- or by *unit_id*, the id ``find`` printed. An id is looked up only in
+    what ``find`` recorded when it printed the hit (``record_library_refs``: its source and
+    heading), then read as above: the index is never scanned for an id, since an id is a
+    hash of the shaped section and cannot be searched for. An id ``find`` never recorded
+    here (printed on another machine, or the record was lost) is not found; its location
+    ``<source>#<heading>``, printed beside it, still is.
+
+    Each hit is shaped by the same ``recall_multi._knowledge_hit_shape`` steps and named
+    by the same ``run_knowledge.item_id`` as the Library leg, over the same rows (the
+    index's Knowledge namespaces; a project's repo documents never), so an id ``find``
+    printed names the same text here. On a worker Hive only rows inside
+    ``Knowledge/Library``. No index on this machine: nothing (one is never created).
+    Each hit: ``{id, source, heading, text, external?}``."""
+    if unit_id is not None:
+        where = recorded_library_ref(unit_id)
+        if where is None:
+            return []
+        source, heading = where
+        return [h for h in library_get(source=source, heading=heading) if h["id"] == unit_id]
+    if not source:
+        return []
+    import sqlite3
+    from jobs.paths import DB_PATH
+    if not DB_PATH.is_file():
+        return []
+    from core.knowledge_store import BIND_KEY_PREFIX
+    from core.recall_multi import _knowledge_shape_text, _knowledge_text, is_external_source
+    from core.run_protocol.run_knowledge import item_id
+    from core.app_role import is_worker
+    from core.vec_db import open_vec_db
+    if source.startswith(BIND_KEY_PREFIX) or (is_worker() and not source.startswith("Library/")):
+        return []
+    # (source_file, chunk_index) is the table's unique index: one source is a range read
+    sql = "SELECT source_file, heading, content FROM knowledge_chunks WHERE source_file = ?"
+    args: list = [source]
+    if heading is not None:
+        sql += " AND COALESCE(heading, '') = ?"
+        args.append(heading)
+    sql += " ORDER BY chunk_index"
+    try:
+        with open_vec_db() as conn:
+            rows = conn.execute(sql, args).fetchall()
+    except sqlite3.Error:
+        logger.warning("cognition: the Knowledge index could not be read", exc_info=True)
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    text = _knowledge_text(source) if rows else None       # the one file, read once
+    for src, head, content in rows:
+        whole = _knowledge_shape_text(src, head or "", content, text)["content"] or content
+        uid = item_id(whole)
+        if uid in seen:
+            continue
+        seen.add(uid)
+        hit = {"id": uid, "source": src, "heading": head or "", "text": whole}
+        if is_external_source(src):
+            hit["external"] = True
+        out.append(hit)
+    return out
+
+
+# ── where find saw each Library hit (so get reads an id without scanning) ────
+
+LIBRARY_REFS_MAX_BYTES = 1_000_000    # past this the record is rewritten with its newest ids,
+                                      # half this size, so the next rewrite is far off
+
+
+def library_refs_path() -> Path:
+    from config import get_app_data_dir
+    return get_app_data_dir() / "state" / "cognition_library_refs.jsonl"
+
+
+def record_library_refs(rows: list) -> None:
+    """Record ``{id, source, heading}`` of each Library hit with an id in *rows* (the
+    Library leg's rows: ``find`` and a run's knowledge files print these ids), so
+    ``get <id>`` reads its source's chunks only. Append-only JSON lines, one write per
+    call; past ``LIBRARY_REFS_MAX_BYTES`` the file is rewritten (atomically) with the
+    newest ids that fit half of it (an id found again counts as new). A derived cache of the index's own locations: never
+    fails the search that records it."""
+    import json
+    import os
+    lines = [json.dumps({"id": r["id"], "source": r.get("source") or "",
+                         "heading": r.get("heading") or ""}, ensure_ascii=False)
+             for r in rows if r.get("id") and r.get("source")]
+    if not lines:
+        return
+    path = library_refs_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        if path.stat().st_size > LIBRARY_REFS_MAX_BYTES:
+            newest: dict[str, str] = {}               # id -> its last line, oldest first
+            for line in _read_refs(path):
+                try:
+                    uid = json.loads(line)["id"]
+                except (ValueError, KeyError, TypeError):
+                    continue
+                newest.pop(uid, None)
+                newest[uid] = line
+            keep: list[str] = []
+            room = LIBRARY_REFS_MAX_BYTES // 2
+            for line in reversed(list(newest.values())):
+                room -= len(line.encode("utf-8")) + 1
+                if room < 0:
+                    break
+                keep.append(line)
+            keep.reverse()
+            tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+            tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+    except (OSError, ValueError):
+        logger.warning("cognition: Library hit locations not recorded", exc_info=True)
+
+
+def _read_refs(path: Path) -> list[str]:
+    """The record's lines. A line cut short (a crash mid-append) is replaced, so it fails
+    to parse and is skipped alone; split on newlines only, the one separator written."""
+    return path.read_bytes().decode("utf-8", errors="replace").split("\n")
+
+
+def recorded_library_ref(unit_id: str) -> Optional[tuple[str, str]]:
+    """(source, heading) ``find`` last recorded for *unit_id*, or None."""
+    import json
+    try:
+        lines = _read_refs(library_refs_path())
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if unit_id not in line:                 # cheap test before parsing
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get("id") == unit_id and row.get("source"):
+            return str(row["source"]), str(row.get("heading") or "")
+    return None
+
+
+def library_location(hit: dict) -> str:
+    """Where a Library hit is, as ``get`` reads it back: ``<source>#<heading>``. Only the
+    source for an untrusted source (its heading is its text, printed outside the fence),
+    a heading ``recall_filter._pointer`` leaves out (one starting with ``(``), or one that
+    would not match the stored heading as printed (a newline, outer spaces)."""
+    src = str(hit.get("source") or "")
+    head = str(hit.get("heading") or "")
+    from core.recall_multi import is_external_source, is_repo_doc_source
+    if (not head or head.startswith("(") or head != head.strip() or "\n" in head
+            or is_external_source(src) or is_repo_doc_source(src)):
+        return src          # (a heading that would not read back as printed: the source)
+    return f"{src}#{head}"
 
 
 # ── map ────────────────────────────────────────────────────────────────────
@@ -382,7 +635,9 @@ def store_map() -> str:
             line += " (find only)"
         rows.append(line)
     rows += ["Brains: cognition map --projects; one Brain: cognition map --project P.",
-             "One unit: cognition get <id>|<path>:<line> [--project P]. Cite what you use by its id."]
+             "One unit: cognition get <id>|<path>:<line>|<Library source>[#<heading>]: every ref "
+             "find prints, as printed; a project DDD's id needs --project P (its group says so). "
+             "Cite what you use by its id."]
     return "\n".join(rows)
 
 
@@ -393,7 +648,7 @@ def render_hit(store: str, h, render_unit: Callable) -> str:
         return render_unit(h)
     if store == "library":
         ext = " (external)" if h.get("external") else ""
-        return f"- `{h.get('id')}` · {h.get('source')}{ext}\n" + addressing.fence(h.get("text") or "")
+        return f"- `{h.get('id')}` · {library_location(h)}{ext}\n" + addressing.fence(h.get("text") or "")
     if store == "session":
         return f"- session {str(h.get('session_id') or '')[:8]} · {h.get('date') or ''}\n" + \
             addressing.fence(h.get("text") or "")
