@@ -18,3 +18,5 @@ If an expert's first-round answer could not be read, `next` says `review-start` 
 RV-4: REVIEW completes only on code a review round saw. RV-5: every addressed finding reached an R2; `review-address` with `"items": []` dispatches a missing R2 or re-asks a wrong R2 word once. `pipeline-v1 findings` (same `--project`/`--run-id`) lists each finding's id, status and `close_with`; `next` lists the open ones. Audit checks: RV-1a, RV-2: an unresolved HIGH/CRITICAL finding is one line in the audit's Quality cell and does not block landing; MEDIUM/LOW are residual risks. No extra experts, no third round.
 
 Complete with `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R>` and continue.
+
+A valid example of this stage's document, with placeholders for your own values: `"$SWARM_BACKEND_BIN" pipeline-v1 template review_address`.

@@ -226,9 +226,13 @@ def next_step(engine, *, previous_stage: str | None = None,
                            "`spawn_prompt` again if it was never spawned")
                 out["handouts"] = waiting_handouts(engine._since_last_answer(), "evaluate")
                 return out
+        kind = "requirements" if stage == "evaluate" else (
+            "design_spec-lite" if lifecycle.caps(state["profile"]).design == "lite"
+            else "design_spec")
         out.update(action="write_artifact",
                    command=_cmd(engine, "stage-complete --artifact -"),
-                   why=f"write the {stage} artifact the card describes and pass it on stdin")
+                   why=f"write the {stage} artifact the card describes and pass it on stdin "
+                       f"(a valid example: `pipeline-v1 template {kind}`)")
         return out
     if stage == "deliver":
         if not _reflect_prepared(engine.store.read_events(), state):

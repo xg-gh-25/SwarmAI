@@ -482,7 +482,10 @@ class RunEngine:
             raise EngineError(lifecycle.REMOVED_PROFILES.get(profile, "unknown profile"))
         if requirement is not None and (not isinstance(requirement, str)
                                         or len(requirement) > REQUIREMENT_MAX):
-            raise EngineError(f"requirement must be text of at most {REQUIREMENT_MAX} chars")
+            raise EngineError(
+                f"requirement must be text of at most {REQUIREMENT_MAX} characters: write the "
+                "full list into a document (a design file in the project) and give a short "
+                "requirement that names its path")
         requirement = requirement.strip() if requirement else ""
         if lifecycle.caps(profile).requirements == "words" and not requirement:
             # direct has no REQUIREMENTS document: the user's own words ARE the requirement

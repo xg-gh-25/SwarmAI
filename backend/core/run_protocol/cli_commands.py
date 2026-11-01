@@ -132,6 +132,11 @@ def _not_owner(engine: RunEngine, run_id: str) -> "dict | None":
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="pipeline-v1")
     sub = root.add_subparsers(dest="command", required=True)
+    # the smallest valid example of a run document (friction design D7); needs no run
+    template = sub.add_parser("template")
+    template.add_argument("kind")
+    template.add_argument("--project", default=None)   # accepted like every command's,
+    template.add_argument("--run-id", default=None)    # not needed: a template is generic
     create = sub.add_parser("create")
     create.add_argument("--project", required=True,
                         help="the run's project; it must be the one a bound --repo names")
@@ -267,6 +272,9 @@ def create_run(*, project: str, profile: str, session_id: str, repos: dict[str, 
 
 
 def execute(args) -> dict[str, Any]:
+    if args.command == "template":
+        from core.run_protocol import templates
+        return {"ok": True, **templates.template(args.kind)}
     if args.command == "create":
         # the owner is the calling session: a different --session-id is refused
         owner, owner_source = _request().session_id, _request().session_source
@@ -347,7 +355,8 @@ def execute(args) -> dict[str, Any]:
 
 
 # read the run, never write it: no operation lock (r6 §2.2)
-_READ_ONLY = frozenset({"status", "events", "findings"})
+# base-tree writes only a copy of the base under the temp dir, never the run's state
+_READ_ONLY = frozenset({"status", "events", "findings", "base-tree"})
 
 
 def _missing_worktrees(engine: RunEngine) -> bool:
@@ -538,8 +547,18 @@ def run(args) -> "tuple[dict[str, Any], int]":
 
 
 def _refused(exc: Exception) -> dict[str, Any]:
-    """A refused command, always as one JSON object (C5)."""
+    """A refused command, always as one JSON object (C5). A refused document names the
+    template of its shape (friction design D7)."""
     payload: dict[str, Any] = {"ok": False, "error": str(exc)}
+    from core.run_protocol.reflect import ReflectError
+    from core.run_protocol.validation_report import ReportError
+    shape, seen = None, exc
+    while seen is not None and shape is None:     # the engine wraps them (raise ... from)
+        shape = ("validation_report" if isinstance(seen, ReportError) else
+                 "reflect" if isinstance(seen, ReflectError) else None)
+        seen = seen.__cause__
+    if shape:
+        payload["shape"] = f"pipeline-v1 template {shape}"
     code = getattr(exc, "code", None)
     if isinstance(code, str) and code:
         payload["code"] = code
