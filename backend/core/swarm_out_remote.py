@@ -321,7 +321,8 @@ def closed_for(row: dict[str, Any], write: bool) -> Optional[RemoteError]:
     change it (409); reads pass. Decided by core/swarm_out_settle.closed_state, the rule
     the person's commands use too."""
     from core import swarm_out_settle
-    state = swarm_out_settle.closed_state(swarm_out_settle.load(str(row.get("dispatch_id") or "")))
+    did = str(row.get("dispatch_id") or "")
+    state = swarm_out_settle.closed_state(swarm_out_settle.load(did), did or None)
     if state == "closed":
         return RemoteError(410, CLOSED)
     if state == "accepted" and write:

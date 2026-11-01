@@ -182,7 +182,10 @@ numbered text options ("reply with a number"). One question at a time, and only 
      machine only: pushing stays the person's, and is not part of the run. When prepare
      lists protected paths (they guard the agent or run code here), you do not land
      them: `rerun` asking the Hive to leave those files out; when the task needs them
-     changed, make that change yourself in this session, with its own tests and review;
+     changed, make that change yourself in this session, with its own tests and review.
+     When `return-land` is refused (a conflict, rewritten commits): take the change over
+     yourself, or tell the person why; they can land it by hand and say so with "I
+     landed them by hand" on the run's card;
    - `accept` with variant `manual` (the Hive could not seal its commits into a
      bundle): `rerun` with a correction that asks it to commit its work and end the
      turn; still `manual` after that: take the change over yourself;

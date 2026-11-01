@@ -604,7 +604,8 @@ async def _fetch(row: dict) -> dict:
            "fetched_at": prev.get("fetched_at"), "checked_at": _now(),
            "fetch_error": None, "result": prev.get("result"),
            "summary_version": prev.get("summary_version"), "lessons": prev.get("lessons"),
-           "records": prev.get("records")}
+           "records": prev.get("records"), "no_record_since": prev.get("no_record_since"),
+           "no_record_of": prev.get("no_record_of")}
     if not isinstance(sid, str) or not swarm_out.KEY_RE.fullmatch(sid):
         rec["fetch_error"] = "no session"
         return rec
@@ -664,7 +665,36 @@ async def _fetch(row: dict) -> dict:
     return await _keep(rec)
 
 
+def _note_no_record(rec: dict) -> None:
+    """Since when the kept result has said ``no_record`` (the last turn has no end
+    record) for the same turn (``no_record_of``: the result's ``ended_at``): the earlier
+    check's time while it still does (``_fetch`` carries both over), this check's on
+    the first or once the turn changed, None once there is an ending. A new turn sent
+    from here clears it (``turn_started``). Read by core/swarm_out_settle.interrupted."""
+    res = rec.get("result") if isinstance(rec.get("result"), dict) else {}
+    if res.get("ended") == "no_record":
+        same = rec.get("no_record_since") and rec.get("no_record_of") == res.get("ended_at")
+        rec["no_record_since"] = rec["no_record_since"] if same else rec.get("checked_at")
+        rec["no_record_of"] = res.get("ended_at")
+    else:
+        rec["no_record_since"] = rec["no_record_of"] = None
+
+
+def turn_started(dispatch_id: str) -> None:
+    """A new turn was sent into the run's session (a re-run): the kept result's
+    "no ending recorded" belongs to the turn before, so its time starts again."""
+    rec = load(dispatch_id)
+    if not isinstance(rec, dict) or not rec.get("no_record_since"):
+        return
+    rec["no_record_since"] = rec["no_record_of"] = None
+    try:
+        save(rec)
+    except (OSError, ValueError) as e:
+        logger.warning("swarm_out_results: %s: %s", dispatch_id, e)
+
+
 async def _keep(rec: dict) -> dict:
+    _note_no_record(rec)
     try:
         await asyncio.to_thread(save, rec)
     except Exception as e:  # noqa: BLE001 — the next check writes again

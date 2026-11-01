@@ -795,7 +795,16 @@ def _collect_swarm_out() -> list[AttentionItem]:
         if not snap:
             return []
         runs = [r for r in snap.get("runs") or [] if isinstance(r, dict)]
-        asks = [a for a in snap.get("asks") or [] if isinstance(a, dict) and not a.get("refused")]
+        # a discarded or expired run's waits are no one's to answer (its Hive may keep a
+        # pipeline decision open after the chat stopped)
+        closed = {r.get("session_id") for r in runs
+                  if r.get("stage") in ("discarded", "expired") and r.get("session_id")}
+        asks = [a for a in snap.get("asks") or [] if isinstance(a, dict) and not a.get("refused")
+                and a.get("session_id") not in closed]
+        # an answer the Hive did not use: the Host cannot answer again; the person
+        # answers on the Hive's own page (the run's "open session")
+        refused = [r for r in runs if r.get("stage") == "needs_answer"
+                   and r.get("state_reason") == "answer_refused"]
         try:
             host_items, asks = _host_wait_items(runs, asks)
             items += host_items
@@ -815,6 +824,11 @@ def _collect_swarm_out() -> list[AttentionItem]:
             items.append(item("questions", TIER_BLOCKING, n,
                               f"{n} Hive question{'s' if n != 1 else ''} waiting for you",
                               "An agent on a Hive is waiting for your answer."))
+        if refused:
+            n = len(refused)
+            items.append(item("refused", TIER_BLOCKING, n,
+                              f"{n} Hive wait{'s' if n != 1 else ''} did not take your answer",
+                              "Answer it on the Hive's own page: open the run's session from Swarm Out."))
         if decide:
             n = len(decide)
             items.append(item("decide", TIER_REVIEW, n,

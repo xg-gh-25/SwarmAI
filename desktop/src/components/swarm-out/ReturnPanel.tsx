@@ -26,11 +26,14 @@ function errText(e: unknown): string {
   return typeof d === 'string' ? d : e instanceof Error ? e.message : String(e);
 }
 
-export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded }: {
+export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded, onByHand }: {
   dispatchId: string; url: string;
   /** fetch and check at once (the command panel: the person already chose to accept) */
   autoPrepare?: boolean;
   onLanded?: () => void;
+  /** taking them back or landing them was refused (a conflict, rewritten commits, more
+   *  files than the review shows): the person may land them by hand instead */
+  onByHand?: () => void;
 }) {
   const { t } = useTranslation();
   const [rev, setRev] = useState<SwarmOutReturn | null>(null);
@@ -113,6 +116,10 @@ export function ReturnPanel({ dispatchId, url, autoPrepare = false, onLanded }: 
           {rev && (
             <button type="button" className={`ml-2 ${btn}`} disabled={busy} onClick={() => { setRev(null); void prepare(); }}
               data-testid="swarm-out-return-retake">{t('swarmOut.return.retake')}</button>
+          )}
+          {onByHand && (
+            <button type="button" className={`ml-2 ${btn}`} disabled={busy} onClick={onByHand}
+              data-testid="swarm-out-return-by-hand">{t('swarmOut.return.byHand')}</button>
           )}
         </div>
       )}

@@ -507,6 +507,8 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     state.update({"status": "landed", "landed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                   "landed": new, "landed_tip": tip})
     _save(dispatch_id, key, state)
+    from core import swarm_out_settle
+    swarm_out_settle.mark_code_landed(dispatch_id)     # accepted: no turn adds commits now
     return {"landed": True, "head": new[:12], "into": branch.replace("refs/heads/", ""),
             "protected_files": state["protected_files"][:20]}
 

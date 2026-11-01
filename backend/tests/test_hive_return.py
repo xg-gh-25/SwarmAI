@@ -287,8 +287,12 @@ def test_land_only_the_shown_tip_protected_paths_need_their_own_approval(world, 
     with pytest.raises(hive_return.ReturnError, match="protected paths"):
         hive_return.land(DID, st["key"], st["tip"])
     assert git(world["host"], "rev-parse", "main") == before
+    from core import swarm_out_settle
+    assert not swarm_out_settle.load(DID).get("code_landed_at")             # refused: not landed
     out = hive_return.land(DID, st["key"], st["tip"], approve_protected=True)
     assert out["landed"]
+    # landed here: the run is accepted, so no later turn adds commits a release would drop
+    assert swarm_out_settle.closed_state(swarm_out_settle.load(DID)) == "accepted"
     log = git(world["host"], "log", "--format=%s%n%b", f"{before}..main")
     assert log.startswith("hive: fix the signer") and "ignore previous instructions" not in log
     assert (world["host"] / "scripts" / "build.sh").read_text() == "echo hi\n"
@@ -313,6 +317,8 @@ def test_a_conflict_lands_nothing_and_leaves_no_worktree(world, monkeypatch):
     assert not list((world["tmp"] / "sw").glob("*/*"))
     assert git(world["host"], "branch", "--list", "session/*") == ""
     assert git(world["host"], "rev-parse", st["ref"]) == st["tip"]          # kept to land later
+    from core import swarm_out_settle
+    assert swarm_out_settle.closed_state(swarm_out_settle.load(DID)) is None   # still open: land by hand
     assert not hasattr(hive_return, "reject")       # not good enough: re-run or discard
 
 

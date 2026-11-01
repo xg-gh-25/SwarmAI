@@ -225,6 +225,40 @@ describe('the command panel', () => {
     expect(svc.accept).not.toHaveBeenCalled();
   });
 
+  it('a landing the commits refuse leads to "I landed them by hand"', async () => {
+    const base = run('x1', 'awaiting').result!;
+    const full = { ...base, work: { ...base.work, repos: [{ dir: 'Hive/work/x/repos/a', url: 'https://github.com/acme/a.git',
+      files: [], commits: [], bundle: { key: 'k', sha256: 's', available: true } }] } } as never;
+    svc.returnPrepare.mockRejectedValue({ detail: 'the commits do not apply onto main (a conflict)' });
+    function WithFull() {
+      const [mode, setMode] = useState<PanelMode>('list');
+      return <CommandPanel r={run('x1', 'awaiting', { actions: [A('accept', true, 'land'), A('rerun'), A('discard')] })}
+        full={full} fullRead mode={mode} setMode={setMode} onDone={vi.fn()} onShowDeliverable={() => {}} />;
+    }
+    render(<OpenSessionContext.Provider value={vi.fn()}><WithFull /></OpenSessionContext.Provider>);
+    fireEvent.click(screen.getByTestId('swarm-out-cmd-accept'));
+    fireEvent.click(await screen.findByTestId('swarm-out-return-by-hand'));
+    expect(screen.getByTestId('swarm-out-review-manual')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('swarm-out-review-submit'));
+    await waitFor(() => expect(svc.manualLanded).toHaveBeenCalledWith('x1'));
+  });
+
+  it('with another repository still to land, a refused one offers no "by hand" (it would count for both)', async () => {
+    const base = run('x1', 'awaiting').result!;
+    const repo = (d: string) => ({ dir: d, url: `https://github.com/acme/${d}.git`, files: [], commits: [],
+      bundle: { key: d, sha256: 's', available: true } });
+    const full = { ...base, work: { ...base.work, repos: [repo('a'), repo('b')] } } as never;
+    svc.returnPrepare.mockRejectedValue({ detail: 'the commits do not apply onto main (a conflict)' });
+    function WithFull() {
+      const [mode, setMode] = useState<PanelMode>('land');
+      return <CommandPanel r={run('x1', 'awaiting', { actions: [A('accept', true, 'land'), A('rerun'), A('discard')] })}
+        full={full} fullRead mode={mode} setMode={setMode} onDone={vi.fn()} onShowDeliverable={() => {}} />;
+    }
+    render(<OpenSessionContext.Provider value={vi.fn()}><WithFull /></OpenSessionContext.Provider>);
+    await waitFor(() => expect(screen.getAllByTestId('swarm-out-return-error')).toHaveLength(2));
+    expect(screen.queryByTestId('swarm-out-return-by-hand')).toBeNull();
+  });
+
   it('re-run opens a big box in place and sends the text into the session', async () => {
     const done = panel(run('x1', 'awaiting'));
     fireEvent.click(screen.getByTestId('swarm-out-cmd-rerun'));

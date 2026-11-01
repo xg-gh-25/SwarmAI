@@ -433,7 +433,10 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
           {repos.map((x) => (
             <div key={x.dir!} className="min-w-0">
               <div className={`text-[11.5px] truncate ${muted}`}>{x.dir}</div>
-              {x.url ? <ReturnPanel dispatchId={id} url={x.url} autoPrepare onLanded={() => { setLanded((l) => [...l, x.dir!]); onReload?.(); }} />
+              {x.url ? <ReturnPanel dispatchId={id} url={x.url} autoPrepare onLanded={() => { setLanded((l) => [...l, x.dir!]); onReload?.(); }}
+                // landed by hand counts for the whole run: offered only when every other
+                // repository has landed (or there is none)
+                onByHand={repos.every((o) => o.dir === x.dir || landed.includes(o.dir!)) ? () => setMode('manual') : undefined} />
                 : <div className={`text-[12px] ${muted}`} data-testid="swarm-out-review-land-no-url">{t('swarmOut.review.landNoUrl')}</div>}
             </div>
           ))}

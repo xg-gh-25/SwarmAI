@@ -1534,6 +1534,7 @@
       "commitsNote": "commit（Hive 写的说明，只作参考）",
       "fullDiff": "看完整 diff：",
       "land": "批准落地",
+      "byHand": "我已手动落地",
       "retake": "重新取回"
     },
     "resize": {
@@ -1867,7 +1868,7 @@
         "no_terminal": "没记下怎么结束",
         "restarted": "重启过",
         "superseded": "被替换",
-        "no_record": "没有记录"
+        "no_record": "中途停了，没留下结束记录"
       },
       "cmd": {
         "accept": {
@@ -1987,7 +1988,7 @@
       "answerElsewhere": "它的问题在 Swarm Out tab 里回答。",
       "openSwarmOut": "打开 Swarm Out",
       "cleanupSoonLong": "3 天内清理这一单的记录，之后提交就落不了地了。",
-      "manualWhy": "提交没封进 bundle，没法从这里落地。你自己合进去后再确认。",
+      "manualWhy": "提交没封进 bundle，或者合不进当前分支，没法从这里落地。你自己合进去后再确认。",
       "manualConfirm": "我已手工合进去：通过",
       "retry": "再试一次",
       "landNoUrl": "没有可以取回这些提交的地址：请手工合并。",

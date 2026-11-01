@@ -150,12 +150,46 @@ def set_verdict(dispatch_id: str, value: str, note: str, ended_at: Optional[str]
         raise SettleError("this task has no session, so no result to judge: discard it instead")
     if not isinstance(ended_at, str) or not ended_at:
         raise SettleError("say which result the verdict is on (its ended_at)")
+    current = _current_result(dispatch_id)
+    if not _final(current) or current.get("ended_at") != ended_at:
+        # a panel or a CLI read before the run moved on (a re-run, a new turn): a
+        # verdict on an old result would hold every command back (closed_state)
+        raise SettleError("the run's result changed since it was shown: reload it and judge the "
+                          "result there is now")
 
     def change(rec):
         _not_settled(rec)
         rec["verdict"] = {"value": value, "note": " ".join((note or "").split())[:MAX_NOTE_CHARS],
                           "ended_at": ended_at, "at": _now()}
     return _update(dispatch_id, change)
+
+
+def _current_result(dispatch_id: str) -> dict[str, Any]:
+    """The run's kept result now (core/swarm_out_results), or {}."""
+    from core import swarm_out_results
+    res = (swarm_out_results.load(dispatch_id) or {}).get("result")
+    return res if isinstance(res, dict) else {}
+
+
+def mark_code_landed(dispatch_id: str) -> bool:
+    """A repository's commits landed on this machine (core/hive_return.land). Once every
+    repository that brought commits back is landed or rejected (``_code``), the run is
+    accepted from now on (``closed_state``), so no re-run or session write can add
+    commits a release would then remove unlanded. While one still waits, nothing is
+    written: re-run and discard stay open for it. True when the run is now accepted."""
+    try:
+        row = _row(dispatch_id)
+    except SettleError:
+        return False
+    if _code(row, _current_result(dispatch_id), load(dispatch_id)) != "landed":
+        return False
+
+    def change(rec):
+        if rec.get("code_landed_at"):
+            return False
+        rec["code_landed_at"] = _now()
+    _update(dispatch_id, change)
+    return True
 
 
 def _brought_commits(dispatch_id: str) -> bool:
@@ -210,7 +244,8 @@ def _code(row: dict, res: dict, rec: dict) -> str:
         if not isinstance(r, dict):
             continue
         b = r.get("bundle")
-        if isinstance(b, dict) and b.get("available") and isinstance(r.get("dir"), str):
+        # the panel's result says ``available``; the kept one has the bundle's sha256
+        if isinstance(b, dict) and (b.get("available") or b.get("sha256")) and isinstance(r.get("dir"), str):
             try:
                 st = hive_return.load(row["dispatch_id"], hive_bundle.key(r["dir"])) or {}
             except hive_return.ReturnError:
@@ -258,16 +293,22 @@ def _files_here(dispatch_id: str, kept_result: dict) -> bool:
     return True
 
 
-def closed_state(rec: dict) -> Optional[str]:
+def closed_state(rec: dict, dispatch_id: Optional[str] = None) -> Optional[str]:
     """``closed`` (discarded, expired, its Hive gone), ``accepted`` (settled as passed,
-    a pass verdict, or landed by hand: files or lessons may still be coming), or None.
-    One rule for everything that refuses a command or a write on a run: the Host proxy
-    (core/swarm_out_remote.closed_for) and the person's commands (core/swarm_out)."""
+    its commits landed here or by hand, or a pass verdict on the result there is now:
+    files or lessons may still be coming), or None. One rule for everything that
+    refuses a command or a write on a run: the Host proxy
+    (core/swarm_out_remote.closed_for) and the person's commands (core/swarm_out). With
+    *dispatch_id*, a pass verdict counts only on the run's current result (``derive``
+    voids one a newer turn replaced); without it, any pass verdict counts."""
     settled = rec.get("settled") if isinstance(rec.get("settled"), dict) else None
     if rec.get("abandoned_at") or (settled and settled.get("outcome") in ("abandoned", "gone", "expired")):
         return "closed"
+    if settled or rec.get("manual_landed_at") or rec.get("code_landed_at"):
+        return "accepted"
     verdict = rec.get("verdict") if isinstance(rec.get("verdict"), dict) else None
-    if settled or rec.get("manual_landed_at") or (verdict and verdict.get("value") == "pass"):
+    if verdict and verdict.get("value") == "pass" and (
+            dispatch_id is None or verdict.get("ended_at") == _current_result(dispatch_id).get("ended_at")):
         return "accepted"
     return None
 
@@ -316,6 +357,25 @@ def _actions(stage: str, alive: bool, accept: Optional[str],
     if stage == "accepted":
         return [_act("open_session", variant="read_only")] if alive else []
     return []
+
+
+#: how long a stopped run's result may say "no ending recorded" before the turn counts
+#: as cut off (a Hive restart): the turn's end record can lag the session's stop by a
+#: check or two
+INTERRUPTED_AFTER_S = 300
+
+
+def interrupted(row: dict, res: Optional[dict], kept: Optional[dict]) -> bool:
+    """The run stopped mid-turn: its session is not running, and its result has said
+    ``no_record`` (no end record for the last turn) for INTERRUPTED_AFTER_S
+    (core/swarm_out_results records since when)."""
+    if row.get("running") is not False or row.get("state") != "stopped":
+        return False
+    if not isinstance(res, dict) or res.get("ended") != "no_record":
+        return False
+    # a record kept before the time was recorded: from its last check
+    since = _iso((kept or {}).get("no_record_since") or (kept or {}).get("checked_at"))
+    return since is not None and (datetime.now(timezone.utc) - since).total_seconds() >= INTERRUPTED_AFTER_S
 
 
 def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
@@ -385,6 +445,8 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
         stage, why = "stopped", "no_session"
     elif stopped_without_result:
         stage, why = "stopped", "no_result"
+    elif interrupted(row, res, kept):
+        stage, why = "stopped", "no_record"                # cut off: re-run it
     elif row.get("running") or res is None or not _final(res):
         stage = "running"
     elif verdict == "pass":
@@ -409,7 +471,9 @@ def derive(row: dict, kept: Optional[dict]) -> dict[str, Any]:
                                ("lessons", lessons_done)) if not ok]
     return {"stage": stage, "actions": _actions(stage, alive, accept, row.get("state_reason")), "why": why,
             "verdict": verdict, "code": code,
-            "settles": not why_not and not row.get("waiting") and not row.get("running"),
+            # a discarded run settles though a wait stays open on its Hive (a pipeline
+            # decision outlives the stopped chat): nothing will answer it
+            "settles": not why_not and (abandoned or not row.get("waiting")) and not row.get("running"),
             "why_not": why_not, "settled": settled}
 
 

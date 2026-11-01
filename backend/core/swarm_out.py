@@ -1684,7 +1684,7 @@ async def _not_closed(dispatch_id: str) -> None:
     same rule the Host proxy applies to its session (swarm_out_settle.closed_state)."""
     from core import swarm_out_settle
     rec = await asyncio.to_thread(swarm_out_settle.load, dispatch_id)
-    state = swarm_out_settle.closed_state(rec)
+    state = await asyncio.to_thread(swarm_out_settle.closed_state, rec, dispatch_id)
     if state == "closed":
         raise SwarmOutError("this run is closed")
     if state == "accepted":
@@ -1725,6 +1725,7 @@ async def rerun(dispatch_id: str, text: str) -> dict[str, Any]:
         sid = await _start_session(client, text, session_id=row["session_id"])
     if sid != row["session_id"]:
         raise SwarmOutError("the Hive did not take the correction into the run's session")
+    await asyncio.to_thread(swarm_out_results.turn_started, dispatch_id)
     _refresh_soon()
     return {"sent": True}
 

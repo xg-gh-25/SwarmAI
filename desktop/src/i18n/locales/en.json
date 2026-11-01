@@ -1534,6 +1534,7 @@
       "commitsNote": "Commits (the Hive's own descriptions, for reference only)",
       "fullDiff": "Full diff: ",
       "land": "Approve landing",
+      "byHand": "I landed them by hand",
       "retake": "Fetch again"
     },
     "resize": {
@@ -1867,7 +1868,7 @@
         "no_terminal": "no ending recorded",
         "restarted": "restarted",
         "superseded": "superseded",
-        "no_record": "no record"
+        "no_record": "it stopped mid-turn, no ending recorded"
       },
       "cmd": {
         "accept": {
@@ -1987,7 +1988,7 @@
       "answerElsewhere": "Its question is answered in the Swarm Out tab.",
       "openSwarmOut": "Open Swarm Out",
       "cleanupSoonLong": "Its records are cleared within 3 days: after that its commits can no longer land.",
-      "manualWhy": "Its commits were not sealed into a bundle, so they cannot be landed from here. Merge them yourself, then confirm.",
+      "manualWhy": "Its commits were not sealed into a bundle, or they do not merge as they are, so they cannot be landed from here. Merge them yourself, then confirm.",
       "manualConfirm": "I merged it by hand: accept",
       "retry": "Try again",
       "landNoUrl": "No address to fetch these commits from: merge them by hand.",

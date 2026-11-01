@@ -85,4 +85,25 @@ describe('ReturnPanel', () => {
     await screen.findByTestId('swarm-out-return-review');
     expect(returnPrepare).toHaveBeenCalledTimes(2);
   });
+
+  it('a land that cannot merge offers to say they were landed by hand', async () => {
+    returnPrepare.mockResolvedValue({ ...REV, protected_files: [] });
+    returnLand.mockRejectedValue({ detail: 'the commits do not apply onto main (a conflict); land them by hand' });
+    const byHand = vi.fn();
+    render(<ReturnPanel dispatchId="so_1" url="u" onByHand={byHand} />);
+    fireEvent.click(screen.getByTestId('swarm-out-return-prepare'));
+    fireEvent.click(await screen.findByTestId('swarm-out-return-land'));
+    const btn = await screen.findByTestId('swarm-out-return-by-hand');
+    expect(btn.textContent).toBe('我已手动落地');
+    fireEvent.click(btn);
+    expect(byHand).toHaveBeenCalledTimes(1);
+  });
+
+  it('no by-hand offer where the panel has none to give, nor before anything failed', async () => {
+    returnPrepare.mockResolvedValue({ ...REV, protected_files: [] });
+    render(<ReturnPanel dispatchId="so_1" url="u" onByHand={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('swarm-out-return-prepare'));
+    await screen.findByTestId('swarm-out-return-review');
+    expect(screen.queryByTestId('swarm-out-return-by-hand')).toBeNull();
+  });
 });

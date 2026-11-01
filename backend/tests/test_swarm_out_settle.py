@@ -39,7 +39,11 @@ def env(tmp_path, monkeypatch):
         return rows[dispatch_id]
     monkeypatch.setattr(swarm_out, "_log_row_of", log_row)
     monkeypatch.setattr(hive_return, "load", lambda d, k: returns.get((d, k)))
-    monkeypatch.setattr(swarm_out_results, "load", lambda d: {"records": {"closed": True}})
+    # the kept record: its records, and the result a verdict is taken on (set_verdict
+    # takes one only on the run's current final result)
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {
+        "records": {"closed": True},
+        "result": {"ended": "completed", "provisional": False, "ended_at": ENDED}})
     return rows, returns
 
 
