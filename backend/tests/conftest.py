@@ -31,7 +31,9 @@ import sys as _sys
 import os as _os
 
 _VENV_DIR = _os.path.join(_os.path.dirname(__file__), "..", ".venv")
-if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
+# both sides resolved: a worktree's .venv is a symlink to the main checkout's, and the
+# python started through it reports the link's path as sys.prefix
+if _os.path.isdir(_VENV_DIR) and not _os.path.realpath(_sys.prefix).startswith(
     _os.path.realpath(_VENV_DIR)
 ):
     print(
