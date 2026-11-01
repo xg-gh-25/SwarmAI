@@ -2,7 +2,7 @@
 created: 2026-10-31
 updated: 2026-10-31
 title: "Swarm Out 能力登记表：一张操作表、从表生成的门、写清楚它挡不住什么"
-status: r4 — 第一阶段已实现（§10 记录和设计的出入）；第二阶段排期、devtools 待定（§9）
+status: r4 — 第一阶段已实现（§10 记录和设计的出入）；devtools 已默认关（human-proof §8）；第二阶段未排期，方向待重定（见 human-proof 的 status）
 related: docs/design/2026-10-30-dispatch-center.md · docs/design/2026-10-31-swarm-out-run-review.md · docs/design/2026-10-31-swarm-run.md（§5.6 Conductor、§5.8 代答、P0-c）
 ---
 

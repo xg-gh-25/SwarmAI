@@ -3,7 +3,7 @@ title: Swarm Out —— 派出的单由派单的 agent 跟到底：在对话里�
 created: 2026-10-31
 updated: 2026-10-31
 project: SwarmAI
-status: r2 design-spec（无代码）
+status: r2 — §5 第 1–6 步已实现（2026-10-31，提交 d9b9dc0de … dc15a7703），第 7 步 E2E 未做
 tags: [swarm-out, hive, ownership, autonomy, gate, ci]
 related:
   - docs/design/2026-10-31-swarm-out-ops-registry.md（谁能调哪个操作；本设计改它的 §5 表）
