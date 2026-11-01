@@ -97,6 +97,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev patchelf file build-essential
+          # xcap (the display screenshot) links PipeWire, XCB, D-Bus and Wayland on Linux
+          sudo apt-get install -y pkg-config libclang-dev libxcb1-dev libxrandr-dev \
+            libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev
 
       - name: Install frontend dependencies
         working-directory: ./desktop
@@ -144,8 +147,11 @@ jobs:
       # Installer + updater bundle + its minisign .sig, under names unique across targets
       # (both macOS builds would otherwise ship a SwarmAI.app.tar.gz).
       - name: Collect installer
-        run: bash .github/scripts/collect-installer.sh "${{ matrix.name }}" "${{ needs.prepare.outputs.version }}" \
-               "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" out
+        # A block scalar: in a plain scalar the line break folds to a space, so the "\"
+        # escaped that space and the bundle dir reached the script as " desktop/...".
+        run: |
+          bash .github/scripts/collect-installer.sh "${{ matrix.name }}" "${{ needs.prepare.outputs.version }}" \
+            "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" out
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

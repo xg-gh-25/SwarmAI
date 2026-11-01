@@ -3,3 +3,6 @@
 # rewrite LF to CRLF and every digest would stop matching, so git leaves these files
 # exactly as committed.
 backend/apps/** -text
+# The generated App index is compared byte for byte with a fresh render on every build
+# (generate_app_registry --check); a CRLF checkout made it read as stale on Windows.
+backend/generated/** -text
