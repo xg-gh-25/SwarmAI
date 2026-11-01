@@ -409,25 +409,50 @@ async def _settle_test_loop():
 # Auto-mark tests for tiered execution
 # ---------------------------------------------------------------------------
 
+#: a run wider than this is not "the tests of what the change touched" (AGENTS.md, the
+#: test command form): more files, or more tests, than any one change's own tests
+WIDE_SCOPE_FILES = 25
+WIDE_SCOPE_TESTS = 800                # the largest single test file holds ~250
+
+
+def wide_scope_refusal(items, environ=None) -> "str | None":
+    """Why a run of *items* is refused on a dev box, or None.
+
+    A wide run on a shared machine gives timeouts, not findings, and a list built from a
+    glob, a directory or ``ls`` is not a scope: the scope comes from the change
+    (``scripts/swarm_select_tests.py``). Refused when the run collects more than
+    ``WIDE_SCOPE_FILES`` files or ``WIDE_SCOPE_TESTS`` tests, counted after ``-k`` /
+    ``-m`` / ``--deselect``. Allowed: CI (``CI``), and a wide run asked for on purpose
+    (``SWARMAI_SUITE=1``: the full suite the user asked for, ``scripts/run_bvt.sh``)."""
+    env = os.environ if environ is None else environ
+    if env.get("CI") or env.get("SWARMAI_SUITE") == "1":
+        return None
+    files = {item.nodeid.split("::", 1)[0] for item in items}
+    if len(files) <= WIDE_SCOPE_FILES and len(items) <= WIDE_SCOPE_TESTS:
+        return None
+    return (f"this run collects {len(items)} tests in {len(files)} files, wider than one "
+            f"change's own tests (over {WIDE_SCOPE_FILES} files or {WIDE_SCOPE_TESTS} tests). "
+            "Run the tests of what the change touched: the test files of the changed "
+            "functions and of their direct callers (`python scripts/swarm_select_tests.py "
+            "--base main`, from backend/, lists candidates by import; pick from it). A wider "
+            "run asked for on purpose (the "
+            "full suite the user asked for, a design's final set): put SWARMAI_SUITE=1 in "
+            "front of the command.")
+
+
+def pytest_collection_finish(session):
+    """Refuse a run wider than one change's tests (``wide_scope_refusal``), before any
+    test runs. Under xdist the controller collects nothing and each worker collects the
+    whole run, so each worker refuses it. Listing tests (``--collect-only``) runs none."""
+    if session.config.option.collectonly:
+        return
+    why = wide_scope_refusal(session.items)
+    if why:
+        pytest.exit(why, returncode=pytest.ExitCode.USAGE_ERROR)
+
+
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark tests: ``pbt`` for Hypothesis, ``slow`` for heavy tests.
-
-    Also warns (not errors) when >300 tests are collected without a -m
-    marker filter. This nudges human developers running pytest directly
-    to use marker filters for faster feedback loops. The PreToolUse hook
-    only protects Claude Code sessions; this covers manual runs.
-    """
-    _LARGE_COLLECTION_THRESHOLD = 300
-    if len(items) > _LARGE_COLLECTION_THRESHOLD:
-        marker_expr = config.getoption("-m", default="")
-        if not marker_expr:
-            import warnings
-            warnings.warn(
-                f"Collected {len(items)} tests without a -m marker filter. "
-                f"Consider using '-m \"not slow\"' or '-m \"not pbt\"' for faster runs.",
-                stacklevel=1,
-            )
-
+    """Auto-mark tests: ``pbt`` for Hypothesis, ``slow`` for heavy tests."""
     pbt_marker = pytest.mark.pbt
     slow_marker = pytest.mark.slow
     _SLOW_PATTERNS = {"stress", "e2e"}

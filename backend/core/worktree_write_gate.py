@@ -61,6 +61,15 @@ _GIT_WRITES_MAIN = frozenset({
     "reset", "clean", "merge", "pull", "rebase", "cherry-pick", "revert", "update-index"})
 _REF_CMDS = frozenset({"update-ref", "symbolic-ref", "branch", "tag"})
 _SHARED_STATE = frozenset({"replace", "notes"})
+#: git commands that make a commit on the current branch
+_COMMIT_CMDS = frozenset({"commit", "cherry-pick", "revert", "am", "merge"})
+#: their forms that make no new commit
+_NO_NEW_COMMIT = frozenset({"--abort", "--quit", "--skip", "--show-current-patch"})
+HAND_COMMIT_DENY = (
+    "a run's code is never committed by hand in its worktree: its landing (`land` in "
+    "DELIVER) makes the one commit, from the worktree as it is, and needs the worktree's "
+    "HEAD to stay on the run's base. Leave the change uncommitted (staged or not): BUILD, "
+    "REVIEW and TEST already read it from the worktree.")
 _CONFIG_READ = frozenset({"--get", "--get-all", "--get-regexp", "-l", "--list",
                           "--get-urlmatch", "--show-origin", "--show-scope", "--name-only"})
 
@@ -434,6 +443,8 @@ def _git_verdict(g: dict, own: "_Own | None") -> "dict | None":
     # `stash list` / `stash show` only read refs/stash (denied 10-20 and 10-21)
     if sub == "stash" and in_wt is not None and not (args and args[0] in ("list", "show")):
         return _deny(STASH_DENY)
+    if sub in _COMMIT_CMDS and in_wt is not None and not _NO_NEW_COMMIT.intersection(args):
+        return _deny(HAND_COMMIT_DENY)
     if sub == "worktree" and args and args[0] in ("add", "remove", "move", "prune"):
         if strict or any(_under(_real(a, d), root) for a in args[1:] if not a.startswith("-")):
             return _deny("run worktrees are created and removed by the pipeline tools only")

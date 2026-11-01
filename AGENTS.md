@@ -666,7 +666,12 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
    scope with `--maxfail=1000` (2026-10-22: a findings file showed 3 failures; all 33 of
    its tests were red, and a 40-file "233 passed" was really 597). Full suite (`SWARMAI_SUITE=1`, cap ≥120s per
    test) only on explicit request or when the blast radius clearly warrants it — never as a
-   reflex.
+   reflex. **Scope comes from the change:** the test files of the changed functions and of
+   their direct callers; `python scripts/swarm_select_tests.py --base main` (from `backend/`)
+   lists candidates by import, to pick from. `tests/conftest.py` refuses a dev-box
+   run wider than one change's tests (over 25 files or 800 tests, counted after `-k`/`-m`)
+   before any test runs, so a list built from a glob, a directory or `ls` stops there; CI and
+   `SWARMAI_SUITE=1` (a wide run asked for on purpose, `scripts/run_bvt.sh`) pass.
 3. **Eval** — `cd backend && python scripts/ci_eval_gate.py`. This is a *pure check* (zero
    Bedrock cost): it verifies the latest committed eval report is FRESH (its code_digest
    matches current eval-relevant code) and GREEN. Never *run* the eval judge inside a coding

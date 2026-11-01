@@ -493,3 +493,30 @@ def test_gate_judges_while_the_slow_writer_pool_is_full(r4):
     assert took < 1.0
 
 
+
+
+# ── a run's code is never committed by hand in its worktree ─────────────────────
+@pytest.mark.parametrize("cmd", [
+    "git commit -m x", "git add -A && git commit -qm wip", "git cherry-pick abc123",
+    "git revert HEAD", "git merge feature", "git am p.patch",
+])
+def test_a_commit_by_hand_inside_a_run_worktree_is_refused(env, cmd):
+    """Owner or not: the landing makes the one commit and needs HEAD on the run's base
+    (a hand commit there made the first landing fail: worktree HEAD is not the base)."""
+    for own in (env["own"], None):
+        v = wg.judge(_call("Bash", cwd=str(env["wt"]), command=cmd), own)
+        assert _denied(v), (cmd, own)
+        assert "land" in v["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("cmd", ["git merge --abort", "git cherry-pick --quit", "git add -A",
+                                 "git status", "git diff HEAD"])
+def test_git_that_makes_no_commit_still_runs_inside_a_run_worktree(env, cmd):
+    assert not _denied(wg.judge(_call("Bash", cwd=str(env["wt"]), command=cmd), env["own"]))
+
+
+def test_a_commit_outside_run_worktrees_is_not_judged_by_this_rule(env, tmp_path):
+    scratch = Path(os.path.realpath(tmp_path)) / "scratch"
+    scratch.mkdir()
+    _g(scratch, "init", "-q")
+    assert not _denied(wg.judge(_call("Bash", cwd=str(scratch), command="git commit -m x"), None))
