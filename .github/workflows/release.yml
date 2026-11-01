@@ -232,6 +232,9 @@ jobs:
     # G1/G2 on a fresh runner: no checkout of the build job, no build tools on the PATH the
     # product sees (verify_installer.sh runs it under a test HOME with a stripped PATH).
     needs: [prepare, build]
+    # a hang guard: a verify takes minutes; a stuck installer would otherwise hold the job
+    # for the 6-hour default
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

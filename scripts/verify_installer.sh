@@ -138,7 +138,7 @@ cleanup() {
         if mount | grep -q " on $MOUNT "; then hdiutil detach -quiet -force "$MOUNT" >/dev/null 2>&1 || true; fi
     fi
     if [ "$OS" = windows ] && [ -n "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/uninstall.exe" ]; then
-        "$INSTALL_DIR/uninstall.exe" /S >/dev/null 2>&1 || true
+        MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$INSTALL_DIR/uninstall.exe" /S >/dev/null 2>&1 || true
     fi
     # the backend may still be writing into the test HOME for a moment after its stop
     for pid in "${DIRECT_PIDS[@]:-}"; do [ -n "$pid" ] && wait "$pid" 2>/dev/null; done
@@ -328,11 +328,32 @@ elif [ "$INSTALLER_KIND" = setup ]; then
     # NSIS silent install into a test dir. SmartScreen only judges launches from Explorer, so
     # the Mark-of-the-Web here is carried for what the installed files inherit, not for a prompt.
     INSTALL_DIR="$WORK/install"
-    if "$INSTALLER" /S "/D=$(cygpath -w "$INSTALL_DIR")" && [ -d "$INSTALL_DIR" ]; then
+    # Git Bash rewrites an argument that looks like a POSIX path ("/S" -> "S:/"), so the
+    # installer would not see /S and would wait in its GUI; the two variables turn that off.
+    MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "$INSTALLER" /S "/D=$(cygpath -w "$INSTALL_DIR")" &
+    inst_pid=$!
+    # It is slow, not stuck, while files keep arriving; ten minutes with no new file and the
+    # installer still running is a hang (it waits for a click no one can give).
+    last=-1; still=0
+    while kill -0 "$inst_pid" 2>/dev/null; do
+        sleep 30
+        n="$(find "$INSTALL_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
+        echo "  C2 installing: $n files"
+        if [ "$n" = "$last" ]; then still=$((still + 30)); else still=0; last="$n"; fi
+        if [ "$still" -ge 600 ]; then
+            tasklist.exe 2>/dev/null | grep -iE 'setup|swarm|msiexec|webview' || true
+            kill "$inst_pid" 2>/dev/null || true
+            break
+        fi
+    done
+    inst_rc=0; wait "$inst_pid" || inst_rc=$?
+    if [ "$still" -lt 600 ] && [ "$inst_rc" = 0 ] && [ -d "$INSTALL_DIR" ]; then
         RES="$INSTALL_DIR"
         result PASS C2 "installer ran silently into a test dir$Q"
+    elif [ "$still" -ge 600 ]; then
+        result FAIL C2 "the installer stopped making progress at $last files and did not exit"
     else
-        result FAIL C2 "the installer failed or installed nothing"
+        result FAIL C2 "the installer failed (exit $inst_rc) or installed nothing"
     fi
 fi
 [ -n "$APP" ] && RES="$APP/Contents/Resources"
