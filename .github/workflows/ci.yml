@@ -140,10 +140,13 @@ jobs:
         working-directory: ./desktop
         run: npm run lint:contract
 
+      # A hang guard, not a speed target: the suite took ~2.7 min at 247 test files and
+      # passed 5 min at 438 (no stall in the log, every file still printing), so the cap
+      # sits well above the suite's real length.
       - name: Run frontend tests
         working-directory: ./desktop
         run: npx vitest run --reporter=verbose
-        timeout-minutes: 5
+        timeout-minutes: 12
 
       - name: Build frontend
         working-directory: ./desktop

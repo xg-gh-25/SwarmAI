@@ -60,7 +60,9 @@ describe('FileViewer — disk reload does not mark the tab dirty', () => {
 
     disk = 'second version';
     fireFileChanged('/ws/notes.txt');
-    await waitFor(() => expect(screen.getByDisplayValue('second version')).toBeTruthy());
+    // the reload is throttled (FILE_CHANGE_COALESCE_MS) and then fetched: on a loaded
+    // CI runner that takes longer than waitFor's 1 s default
+    await waitFor(() => expect(screen.getByDisplayValue('second version')).toBeTruthy(), { timeout: 4000 });
     await new Promise((r) => setTimeout(r, 30));
 
     expect(onDirtyChange).not.toHaveBeenLastCalledWith(true);
