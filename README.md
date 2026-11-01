@@ -2,7 +2,7 @@
 
 # SwarmAI
 
-### A self-evolving, brain-first Agent OS — cognition that compounds every session.
+### One brain, many hands — an Agent OS whose work compounds, so it needs less of your attention.
 
 #### Human directs. AI delivers.
 
@@ -14,41 +14,86 @@ English | [中文](./README.zh-CN.md)
 
 </div>
 
-![SwarmAI](./assets/swarm-demo.gif)
+> **SwarmAI in one sentence:** it does the work by itself, in parallel on your own cloud machines, driven by one brain of domain knowledge that pulls the judgment out of every session automatically, so each task compounds into the next and needs less of your attention than the last.
 
-<div align="center"><sub>▶ <a href="./assets/swarm-demo.mp4">Watch the full 60-second demo</a></sub></div>
+![The Brain-driven loop](./assets/readme/brain-driven-loop.png)
 
----
-
-**SwarmAI is a self-evolving Agent OS** — every interaction sharpens how the system judges, not just what it knows.
+<div align="center"><sub>The loop around a Brain: knowledge drives the work, runs go out in parallel, lessons come back, and the next task starts from a better Brain. (Brain map design, illustrative numbers.) · <a href="./assets/swarm-demo.mp4">60-second demo</a> (v2.0 UI)</sub></div>
 
 ---
 
-## Why an Agent OS
+## Why SwarmAI
 
-Every other AI tool starts each session from zero. SwarmAI doesn't — **value compounds.** A model answers; **a mind persists**: continuous across sessions, self-correcting, forgetting what stopped mattering, sharpening its judgment with use. Not a bigger model — the **operating system around one.**
+**The scarce resource in agent work is no longer what an agent can do. It is your attention.** Agents can write code, research and work for hours on their own. What breaks is the person around them: one more chat tab to watch, one more approval to click, one more result to check, one more agent that forgot what the last one learned. A team of agents often makes this worse, because you become its dispatcher, reviewer and memory.
+
+SwarmAI is built for one purpose: **compounding.** Every task should leave the system sharper than it found it, so the next task needs less of you. Three moves get there, and they only compound together:
+
+1. **Brain-driven.** Domain knowledge decides the work: what to build, how to review it and how a task should run. The agent stops asking you what the Brain already knows.
+2. **Autonomous, in parallel, in the cloud.** Work runs to the end on its own, on your machine or on several **Hives** (your SwarmAI on AWS) at once, and the agent that dispatched it follows it to the end. You are asked only for what only a person can decide.
+3. **Cognitive self-evolution.** Every run and every session sends its lessons back, and SwarmAI keeps what is true and useful. A mistake you corrected once should not need correcting again.
 
 ---
 
-## The Four Ideas
+## One brain, many hands
 
-Everything in SwarmAI serves one of four:
+![One brain, many hands](./assets/readme/one-brain-many-hands.png)
 
-### 🧬 Self-Evolution — it upgrades its own judgment
+SwarmAI has **one brain**. This is a deliberate choice against "many brains", the common design where every agent in a team carries its own memory and its own role.
 
-Most agent-memory projects pile up entries. SwarmAI separates **cognition** (the OS) from **knowledge** (the disk): one edited line in `SOUL.md` shifts judgment more than a thousand memory rows — and every change is a `git diff`. A recurring mistake doesn't become one more logged lesson; it becomes a **gate** — a path where the wrong move can't happen. Not aspirational: a dozen-plus live guards sit in [`security_hooks.py`](./backend/core/security_hooks.py) (commit gate, pytest guard, dangerous-command gate). Read the file — the wrong move is blocked in code, not in a guideline. Progress isn't a growing correction count; it's an error class that **stops recurring**.
+- **Many Brains, one mind.** Each project has a **Brain** (a DDD: the project's domain knowledge kept as one standard set of documents), and a built-in **General Brain** holds what belongs to no single project. They are the knowledge of one mind, not separate agents. Chat, the pipeline, content, Eval and every remote run read the same Brain.
+- **The brain learns from every session by itself.** When a session ends, the agent that did the work reads back its own record and declares what changed its judgment: a correction you made, a decision, a lesson, a pitfall. **CDF** (the Cognitive Distillation Flow, SwarmAI's learning pipeline) checks the facts behind each one and files it in the right place. Nobody has to say "remember this".
+- **Hives and reviewers are hands, not brains.** A worker Hive gets a copy of the Brain, does the work, writes no cognition of its own and sends every lesson home. Review experts start with fresh context and keep no memory, which is what keeps them honest critics.
+- **Why one brain.** Compounding needs one place where value adds up. With many brains, knowledge splits and drifts, every hand-off loses context, and you end up as the integrator. With one brain, a lesson learned on any Hive improves the next task everywhere, there is one place where things wait for you (**Needs You**), and one set of numbers says whether it is getting better.
 
-### 🧠 Brain-first — every project is a domain brain
+**How we measure it.** Not by how much is stored or how many agents run, but by your attention: the share of sessions in which you had to correct SwarmAI should fall, and the share of corrections that repeat an earlier one should reach zero. These north-star numbers are in every prompt and on the cognition panel.
 
-A project isn't a folder of files — it's a **brain** with one six-section structure (Identity · Knowledge · Gates · Capabilities · Delivery · Refresher), the same for every user and domain. Only what it governs varies: `0..N` assets of any kind — a code repo, a data source, a document corpus, a process, or nothing at all. A codebase, a research topic, a consultant's client, even "my wedding" get the *same* brain. Knowledge sediments in as you work; knowledge that stops mattering **decays and dies**. Accumulation without elimination is how every memory system rots.
+---
 
-### ⚙️ Agent OS — the cognition lives between sessions, not in them
+## How it works
 
-Sessions are discontinuous; intelligence shouldn't be. Hooks fire *between* sessions so the next one starts warm. The system self-heals when a session breaks, cultivates and decays its knowledge on a schedule, and rebuilds each system prompt fresh from governed context files.
+### 1 · Brain-driven: the Brain decides the work
 
-### 🖐️ Proprioception — it inhabits its body, not just answers through it
+A Brain has one six-section structure (Identity · Knowledge · Gates · Capabilities · Delivery · Refresher), the same for every domain, governing `0..N` assets: a code repo, a data source, a document corpus, or nothing at all. Brain Hub shows every Brain, what it knows and what it learned this week. Each Brain carries a **Project Agent**, its standard definition of how work runs. Code intelligence builds itself once a Brain has a repo.
 
-The desktop app isn't a frontend the agent talks *to* — it's a body it **senses and drives.** SwarmAI reads its own live UI state (which overlay is open, which tab is active, what's on the Canvas) and acts on it: opens its own Brain Hub, pushes a report onto the Canvas, flags a decision to your attention channel. It's inspectable in return — **TSCC** (Thread-Scoped Cognitive Context) shows the real cognition behind a turn: which files loaded, the token budget, every recall hit and its score, the security scan, the full prompt. Most agents are black boxes you send text to; this one has a body you watch move — and inspect while it does.
+The **Autonomous Pipeline** is the optional delivery mode for code. It owns the two ends: the front end understands the need (EVALUATE with Gate-0, THINK, PLAN), and the back end guards quality (REVIEW with Gate-2, TEST, DELIVER, REFLECT). How the code is written is the agent's call; whether it is done is decided by deterministic checks.
+
+![Autonomous Pipeline v1](./assets/readme/autonomous-pipeline.png)
+
+### 2 · Autonomous, in parallel, in the cloud: Swarm Out
+
+**Swarm Out** sends one sentence of work to a Hive and brings everything home. The task runs on your machine's commit of every repository in its Brain; commits come back as a bundle that is reviewed, then landed; files go into the run's Brain; every lesson goes into your machine's CDF. The dispatching agent owns each run to the end: it watches, answers the waits it is allowed to answer, and leaves anything off-machine, irreversible or touching your data to you.
+
+![Swarm Out](./assets/readme/swarm-out.png)
+
+### 3 · Cognitive self-evolution: the write side and the read side
+
+**Write side.** Every source (sessions, pipeline runs, Hive runs, outside signals, code changes) enqueues into one inbox, and one worker decides each item in five steps. The agent with the context decides the meaning; code checks only facts. A Brain's main files hold only what is in force: every change is an add, an override or a withdrawal, and history is kept outside the main files. Nothing decays on a timer. Only your own words or a measurement may enter the files read in every session.
+
+![Cognitive Distillation Flow](./assets/readme/cdf-flow.png)
+
+**Read side.** Writing knowledge down is half of it; the other half is putting the right piece in front of the agent when it decides:
+
+| Door | What arrives |
+|---|---|
+| **Every-turn context** | Principles, rules, your profile, Memory and Evolution in full, recent activity and the north-star headline, assembled fresh each session. |
+| **Automatic recall** | Relevant Library knowledge and past sessions (keyword / FTS5 / BM25, no vector store), at session start and on new messages. |
+| **DDD recall** | When the project is detected, pointers (`file:line`) to the Brain entries that bear on the task, so the agent reads the source. |
+| **`cognition` CLI** | The agent searches every store itself (Brains, Knowledge, Memory, Evolution, Timeline, past sessions, the code graph) with the words of the solution. |
+| **Repository guidance** | The first time a session touches a repo: its own `AGENTS.md`, review patterns and lessons from earlier runs. |
+| **A pipeline run's knowledge** | Files the run writes for its stages (product and decisions for EVALUATE; tech, improvement and lessons for THINK and PLAN; project knowledge for the reviewer), with ids its documents must cite. |
+
+Every unit arrives whole: recall decides which entries to show, never how much of one.
+
+---
+
+## See it
+
+| | |
+|---|---|
+| ![Welcome](./assets/readme/ui-1-welcome.png) **Welcome:** one brand, one **Needs You** queue of what really waits on you. | ![A Brain's page](./assets/readme/ui-3-brain-page.png) **A Brain's page:** the loop drawn live, with runs under way in parallel. |
+| ![Swarm Out](./assets/readme/ui-5-swarm-out.png) **Swarm Out:** the fleet, what is running and what came back, and the dispatching chat. | ![Swarm's cognition](./assets/readme/ui-7-cognition-level.png) **Swarm's cognition:** is it needing you less, and where its mistakes come from. |
+
+<sub>Screenshots from a real install; private Brain names, local paths and account totals are blurred.</sub>
 
 ---
 
@@ -56,7 +101,7 @@ The desktop app isn't a frontend the agent talks *to* — it's a body it **sense
 
 **Install the app:** download it from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) — macOS `.dmg` (Apple Silicon or Intel), Windows `-setup.exe`, Linux `.AppImage` (`chmod +x`, then run it).
 
-- You need an **AWS account** with access to Claude models on Amazon Bedrock: chat runs on Bedrock.
+- You need an **AWS account** with access to Claude models on Amazon Bedrock: chat always runs on Bedrock. The setup wizard connects one SwarmAI AWS account (or a Bedrock API key), and the app, Bedrock and your Hives all use it.
 - The installed app needs **git** (on Windows, Git for Windows with Git Bash). It brings its own Python backend and Claude CLI.
 - macOS: the app is not signed by Apple yet — the first time, open System Settings → Privacy & Security and click **Open Anyway**.
 
@@ -74,56 +119,55 @@ cd ../desktop && npm install && npm run tauri:dev
 
 ## Architecture
 
-<img src="./assets/platform-architecture.svg" alt="Platform Architecture" width="100%"/>
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  DELIVERY ENGINES        Pipeline · Pollinate · Eval        │
-├─────────────────────────────────────────────────────────────┤
-│  KNOWLEDGE LAYER         DDD (brains) · Memory · Evolution  │
-├─────────────────────────────────────────────────────────────┤
-│  AGENT HARNESS           Context · Sessions · Hooks · Jobs  │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  HANDS        Native agent · Autonomous Pipeline · Hives (Swarm Out)   │
+│               Review experts · Pollinate · Eval                        │
+├──────────────────────────────────────────────────────────────────────┤
+│  ONE BRAIN    Context & Memory · Brains (DDDs) + General Brain         │
+│               Write side (CDF) · Read side (recall, cognition)         │
+├──────────────────────────────────────────────────────────────────────┤
+│  HARNESS      Sessions & tabs · Hooks · Product gates · Jobs           │
+│               Desktop body · Authorization & operations registry       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-Each engine is independently useful; together they form the loop that makes the system sharper with use. (Click `code` to read the engine itself — the implementation is the documentation.)
-
-| Engine | What It Does | Read |
-|--------|-------------|------|
-| **Context Management** | Governed-file prompt architecture, tiered ownership, live-measured budget | [docs](./docs/DDD-Platform-Overview.md) |
-| **Memory** | Tiered persistence: DailyActivity → distillation → compound recall (pure-filesystem FTS/BM25) | [docs](./docs/Memory-Management-Design.md) |
-| **DDD Cultivation** | Self-growing domain brains, 7-type × 3-layer ontology, Darwinian decay | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
-| **Self-Evolution** | Cognitive L0→L3 patching — recurring error classes get structural fixes | [docs](./docs/Self-Evolution-Harness-Design.md) |
-| **Autonomous Pipeline** | One requirement → push-ready code. 9 stages · 3 gates · 2 modes | [docs](./docs/Autonomous-Pipeline-Design.md) |
-| **Pollinate** | One message → multi-format content. Same DDD-driven pattern, for media | [docs](./docs/Pollinate-Content-Engine.md) |
-| **Self-Healing** | Invisible recovery: sensors, auto-respawn, the user sees nothing | [code](./backend/core/session_healing.py) |
-| **Multi-Tab + MessageStore** | Concurrent sessions, phase-gated single-writer, cross-tab isolation | [code](./desktop/src/stores/MessageStore.ts) |
-| **Hooks + Jobs** | Between-session hooks + background intelligence. Sessions never cold-start | [code](./backend/core/hook_builder.py) |
-| **Eval** | Decoupled, system-level: golden set + git-bound regression gate | [docs](./docs/OS-Eval-Function-Design.md) |
-
-**The compound loop:** Memory → Pipeline judgment → DDD brains → Evolution → Gates → Memory. Remove one, the rest weaken.
-
-<img src="./assets/aidlc-autonomous-pipeline-v4.svg" alt="Autonomous Pipeline — 9 Stages · 3 Gates · 2 Modes" width="100%"/>
+| Part | What it does | Read |
+|------|-------------|------|
+| **Context & Memory** | The governed files assembled into every prompt, what each one owns and how it changes | [SWARMAI.md](./backend/context/SWARMAI.md) |
+| **CDF (write side)** | One flow from every session and run into the brain; the agent with the context decides, code checks facts | [design](./docs/design/2026-10-26-swarm-cognitive-distillation-flow.md) · [agent decides](./docs/design/2026-10-30-cdf-agent-decides.md) |
+| **Brains (DDD)** | Domain brains whose main files hold only what is in force: add, override, withdraw | [design](./docs/design/2026-10-30-brain-driven.md) |
+| **Read side** | Recall, DDD recall, the `cognition` CLI, repository guidance, a run's knowledge files | [cognition](./docs/design/2026-11-01-cognition-entrance.md) · [run knowledge](./docs/design/2026-10-26-run-knowledge.md) |
+| **Autonomous Pipeline** | Intent to a landed commit; the pipeline owns the two ends, deterministic checks decide | [design](./docs/design/2026-10-26-pipeline-two-ends.md) |
+| **Swarm Out & Hives** | Dispatch to your Hives in parallel; everything comes home; the dispatching agent owns the run | [design](./docs/design/2026-11-01-brain-to-hive-zero-touch.md) · [agent owns its runs](./docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md) |
+| **Authorization** | Whoever dispatches answers for the work; one registry of every Swarm Out and Hive operation | [approvals](./docs/design/2026-10-31-hive-approvals-person-and-host.md) · [registry](./docs/design/2026-10-31-swarm-out-ops-registry.md) |
+| **Code intelligence** | A code graph per repo, built automatically; reviews see which callers a change can break | [design](./docs/design/2026-10-29-code-intel-unification.md) |
+| **Product gates** | Dangerous or off-machine actions and person-only questions; a gate never blocks normal coding | [code](./backend/core/security_hooks.py) |
+| **Sessions & hooks** | Concurrent isolated tabs, steer into a running turn, between-session hooks so no session starts cold | [code](./backend/core/hook_builder.py) · [store](./desktop/src/stores/MessageStore.ts) |
+| **Eval** | System-level self-evaluation of the deployed system: golden set plus scoring of real sessions | [design](./docs/design/2026-10-26-eval-as-product.md) |
+| **Pollinate** | One message to a multi-format media package, driven by the same Brain | [docs](./docs/Pollinate-Content-Engine.md) |
 
 ---
 
 ## 🤖 For AI Agents
 
-Coding in this repo? Start with **[`AGENTS.md`](./AGENTS.md)** — data flow, process topology, conventions, and invariants. It's the agent-facing entry point; this README is the human one.
+Coding in this repo? Start with **[`AGENTS.md`](./AGENTS.md)** — data flow, process topology, conventions and invariants. It is the agent-facing entry point; this README is the human one.
 
 ---
 
 ## Design Philosophy
 
-1. **One-shot qualified delivery is the real token optimization.** Cheap models iterate 5×, costing more than one correct pass. Code and content are a black box: input → qualified output.
-2. **Division of labor is a workaround for limited human bandwidth, not good design.** One agent, many roles, one knowledge layer. (Sub-agents for adversarial checks ≠ division of labor.)
-3. **Knowledge must eliminate itself.** Darwinian decay: unreferenced knowledge retires. A system that can forget beats one that can only remember.
-4. **Evolution is cognitive patching, not data accumulation.** We change rules you can `git diff`. "Thinks differently" ≠ "knows more."
-5. **Quality converges, not just improves.** Error classes decrease monotonically. Carefulness doesn't scale; gates do.
-6. **Sessions are discontinuous. Intelligence shouldn't be.** Hooks fire between sessions. It gets better through use, not updates.
-7. **If you can't measure it, you didn't build it.** Eval + golden set + change-triggered regression, proven in git.
+1. **One brain, many hands.** One mind holds the knowledge and the judgment; agents, pipelines, Hives and reviewers are hands. Division of labor between minds is a workaround for limited human bandwidth, not good design.
+2. **Attention is the scarce resource; compounding is the goal.** Every task should leave the system needing less of you, and the north star measures exactly that.
+3. **The model proposes, the OS disposes.** The agent with the context decides the meaning; code checks facts; a gate decides from a test, an exit code, a diff or a person's decision, never from a model's opinion of its own work.
+4. **Evolution is cognitive, not data.** One edited line in `SOUL.md` shifts judgment more than a thousand memory rows, and every change is a `git diff`. A recurring error class gets a structural fix, not one more logged lesson.
+5. **The brain holds only what is in force.** Knowledge changes by add, override or withdrawal, decided when the new knowledge arrives. Nothing leaves on a timer, and nothing is cut to fit a budget.
+6. **Quality converges through deterministic checks.** Carefulness does not scale; checks do. Reviews find, tests decide, and review rounds stop at a cap.
+7. **If you can't measure it, you didn't build it.** Eval, a golden set and the north star, all tied to git.
 
-> 📖 Full thesis + case study: [docs/THESIS.md](./docs/THESIS.md)
+**The thesis behind it:** one builder + AI + a self-evolving system can deliver at team scale, in code and in everything else. SwarmAI is that experiment, and this repository is its evidence.
+
+> 📖 Full thesis: [docs/THESIS.md](./docs/THESIS.md) · Latest release notes: [v2.4.0](./docs/releases/v2.4.0.md)
 
 ---
 
@@ -139,7 +183,9 @@ Four-platform backend (compile-time isolation): macOS daemon (`.dmg`) · Hive (E
 
 | What | Link |
 |------|------|
-| **Design Docs** | [Platform](./docs/DDD-Platform-Overview.md) · [Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Memory](./docs/Memory-Management-Design.md) · [Evolution](./docs/Self-Evolution-Harness-Design.md) · [Pollinate](./docs/Pollinate-Content-Engine.md) |
+| **Release notes** | [v2.4.0](./docs/releases/v2.4.0.md) · [all releases](https://github.com/xg-gh-25/SwarmAI/releases) |
+| **Design docs** | [docs/design/](./docs/design/) |
+| **Thesis** | [THESIS.md](./docs/THESIS.md) |
 | **AI Agent Pitfall Guide** | [EN PDF](./docs/ai-agent-pitfall-guide-en.pdf) · [中文 PDF](./docs/ai-agent-pitfall-guide.pdf) |
 | **For AI Agents** | [AGENTS.md](./AGENTS.md) |
 | **Contributing** | [CONTRIBUTING.md](./CONTRIBUTING.md) |

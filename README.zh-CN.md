@@ -2,9 +2,9 @@
 
 # SwarmAI
 
-### 自进化、以大脑为核心的 Agent OS —— 认知随每次会话复利。
+### 一个大脑，多双手 —— 工作会产生复利的 Agent OS，越用越少占用你的注意力。
 
-#### 人来决策。AI 来交付。
+#### Human directs. AI delivers.
 
 [English](./README.md) | 中文
 
@@ -14,51 +14,96 @@
 
 </div>
 
-![SwarmAI](./assets/swarm-demo.gif)
+> **一句话介绍 SwarmAI：** 它自己把活干完，在你自己的云端机器上并行地跑；驱动它的是一个装着领域知识的大脑，这个大脑会自动从每个 session 里提取判断力。于是每个任务都为下一个任务积累复利，一个比一个更少占用你的注意力。
 
-<div align="center"><sub>▶ <a href="./assets/swarm-demo.mp4">观看完整 60 秒演示</a></sub></div>
+![Brain 驱动的闭环](./assets/readme/brain-driven-loop.png)
 
----
-
-**SwarmAI 是一个自进化的 Agent OS** —— 每次交互磨快的是系统怎么判断，不只是它知道什么。
+<div align="center"><sub>围绕一个 Brain 的闭环：知识驱动工作，run 并行派出去，经验带回来，下一个任务从更好的 Brain 开始。（Brain map 设计稿，数字为示意。）· <a href="./assets/swarm-demo.mp4">60 秒演示</a>（v2.0 界面）</sub></div>
 
 ---
 
-## 为什么需要一个 Agent OS
+## 为什么是 SwarmAI
 
-别的 AI 工具每个会话都从零开始，SwarmAI 不是——**价值会复利。** 模型只是回答；**心智会持续**：跨会话连续、自我纠错、遗忘掉不再重要的、判断力随使用变敏锐。不是更大的模型，而是**它周围的操作系统。**
+**做 agent 的工作，稀缺的已经不是 agent 能做什么，而是你的注意力。** agent 已经能写代码、做调研、自己连续干几个小时。真正撑不住的是旁边的人：多一个 chat tab 要盯，多一个审批要点，多一个结果要查，多一个 agent 忘了上一个学到的东西。一队 agent 往往更糟，因为你成了它们的调度员、审核员和记忆。
+
+SwarmAI 只为一个目的而做：**复利。** 每个任务都要让系统比接手时更强，下一个任务就更少需要你。做到这一点靠三个动作，三者缺一不可：
+
+1. **Brain 驱动。** 领域知识决定怎么干：做什么、怎么审、任务怎么跑。agent 不再问你 Brain 已经知道的事。
+2. **自主执行，云端并行。** 工作自己跑到底，可以在你的电脑上，也可以同时派到多台 **Hive**（你在 AWS 上的 SwarmAI），由派单的 agent 一直跟到结束。只有必须由人决定的事才会来问你。
+3. **认知自进化。** 每个 run、每个 session 都把经验送回来，SwarmAI 只留下真实、有用的。你纠正过一次的错，不该再纠正第二次。
 
 ---
 
-## 四个核心理念
+## 一个大脑，多双手
 
-SwarmAI 里的一切，都服务于这四个之一：
+![一个大脑，多双手](./assets/readme/one-brain-many-hands.png)
 
-### 🧬 自进化 —— 它升级自己的判断力
+SwarmAI 只有**一个大脑**。这是有意为之，拒绝的是"多脑"：团队里每个 agent 各带自己的记忆、各演一个角色的常见做法。
 
-大多数 agent memory 项目都在堆条目。SwarmAI 把**认知**（OS）和**知识**（硬盘）分开：改 `SOUL.md` 一行，比加一千条 memory 更能改变判断——而且每次改动都是一个 `git diff`。一个复发的错误，不会变成又一条 lesson，而是变成一道**门控**——一条让错误动作无法发生的路径。不是空话：`security_hooks.py` 里有十几道实时 guard（commit 门、pytest 守卫、危险命令门）。点进去读——错误动作是代码里挡的，不是写在 guideline 里。衡量进步的不是纠正数量的增长，而是某一类错误**停止复发**。
+- **多个 Brain，同一个心智。** 每个项目有一个 **Brain**（一个 DDD：用一套标准文档保存的项目领域知识），自带的 **General Brain** 保存不属于任何单个项目的知识。它们是同一个心智的知识，不是各自独立的 agent。chat、pipeline、内容、Eval 和每一个远端 run 读的都是同一个 Brain。
+- **大脑自己从每个 session 里学。** session 结束时，干活的那个 agent 会回读自己的记录，说明哪些东西改变了它的判断：你的一次纠正、一个决定、一条经验、一个坑。**CDF**（Cognitive Distillation Flow，SwarmAI 的学习管道）核对每条背后的事实，写进该放的位置。不需要任何人说"记住这个"。
+- **Hive 和审查专家是手，不是脑。** worker Hive 拿到 Brain 的副本去干活，不写自己的认知，经验全部送回本机。审查专家每次都用全新的上下文、不留记忆，所以能一直挑刺。
+- **为什么只要一个脑。** 复利需要一个能把价值累加起来的地方。多脑的话，知识会分裂、漂移，每次交接都丢上下文，最后你成了整合者。一个脑的话，任何一台 Hive 上学到的经验，都会让下一个任务在所有地方变好；等你处理的事只在一个地方（**Needs You**）；也只有一套数字说明它是不是在变好。
 
-### 🧠 Brain-first —— 每个项目都是一个领域脑
+**怎么度量。** 不看存了多少，也不看跑了多少 agent，而看你的注意力：你需要纠正 SwarmAI 的 session 占比要下降，重复犯错的纠正占比要降到零。这几个 north star 指标在每个 prompt 里，也在 cognition 面板上。
 
-项目不是一堆文件——它是一个**脑**，有一套六段结构（身份 · 知识 · 门控 · 能力 · 交付 · 刷新），对所有用户、所有领域都一样。唯一变化的是它管理什么：`0..N` 个任意类别的资产——一个代码库、一个数据源、一个文档语料、一个流程，或者什么都不管。一个代码库、一个研究课题、一个顾问的客户，甚至"我的婚礼"，拿到的都是**同一个脑**。知识随你工作沉淀进去，不再重要的知识会**衰减、死亡**。只积累不淘汰，是所有 memory 系统腐烂的根因。
+---
 
-### ⚙️ Agent OS —— 认知活在会话之间，不在会话之内
+## 怎么运作
 
-会话是离散的，智能不该是。Hooks 在会话*之间*触发，让下一个会话热启动。会话崩了系统自愈，知识按节奏自动培育与衰减，每个系统提示都从受治理的上下文文件里重新组装。
+### 1 · Brain 驱动：由 Brain 决定怎么干
 
-### 🖐️ 本体感 —— 它栖居在自己的身体里，不只是透过它回答
+每个 Brain 都是同一套六段结构（Identity · Knowledge · Gates · Capabilities · Delivery · Refresher），适用于任何领域，管理 `0..N` 个资产：一个代码仓库、一个数据源、一个文档集，或者什么都没有。Brain Hub 显示每个 Brain 知道什么、这周学到了什么。每个 Brain 带一个 **Project Agent**，是它关于"工作怎么跑"的标准定义。Brain 一旦绑定了仓库，代码图谱会自动建好。
 
-桌面 app 不是 agent 对话的*前端*——是它能**感知并驱动**的身体。SwarmAI 读自己的实时 UI 状态（哪个 overlay 开着、哪个标签页活跃、Canvas 上是什么），并直接作用于它：打开自己的 Brain Hub、把报告推到 Canvas、把一个待决策项推到你的 attention channel。反过来它也可被审视——**TSCC**（Thread-Scoped Cognitive Context）展示一轮对话背后真正注入的认知：加载了哪些文件、token 预算、每条 recall 命中及其分数、安全扫描、完整 prompt。别的 agent 是你发文字进去的黑盒；这个有一具身体，你看着它动——还能一边看一边查。
+**Autonomous Pipeline** 是可选的代码交付方式。它只管两头：前端理解需求（EVALUATE 和 Gate-0、THINK、PLAN），后端守质量（REVIEW 和 Gate-2、TEST、DELIVER、REFLECT）。代码怎么写由 agent 决定；写没写完、能不能交，由确定性的检查决定。
+
+![Autonomous Pipeline v1](./assets/readme/autonomous-pipeline.png)
+
+### 2 · 自主执行，云端并行：Swarm Out
+
+**Swarm Out** 把一句话的任务派到一台 Hive，再把产出全部带回来。任务在你本机的 commit 上跑，覆盖它 Brain 里的每个仓库；commit 以 bundle 的形式带回，审过后再落地；文件写进这个 run 的 Brain；每条经验进本机的 CDF。派单的 agent 对每个 run 负责到底：它盯着进度，回答它有权回答的等待；凡是出机器、不可逆、碰到你的数据的事，都留给你。
+
+![Swarm Out](./assets/readme/swarm-out.png)
+
+### 3 · 认知自进化：写入侧和读取侧
+
+**写入侧。** 所有来源（session、pipeline run、Hive run、外部信号、代码变更）都进同一个 inbox，由一个 worker 分五步逐条判断。含义由带着上下文的 agent 决定，代码只核对事实。Brain 的主文件只保留当前有效的内容：每次改动是新增、覆盖或撤回，历史记录在主文件之外。没有任何东西会按时间自动淘汰。每轮都会读的文件，只接受你的原话或实测数据。
+
+![认知蒸馏流程](./assets/readme/cdf-flow.png)
+
+**读取侧。** 把知识写下来只是一半，另一半是在 agent 做判断的那一刻，把对的那条放到它面前：
+
+| 入口 | 送来什么 |
+|---|---|
+| **每轮 context** | 原则、规则、你的画像，Memory 和 Evolution 全文，最近的活动和 north star 指标；每个 session 重新组装。 |
+| **自动 recall** | 相关的 Library 知识和过去的 session（关键词 / FTS5 / BM25，没有向量库），在 session 开始和新消息时召回。 |
+| **DDD recall** | 识别出项目后，给出与任务相关的 Brain 条目的位置（`file:line`），让 agent 去读原文。 |
+| **`cognition` CLI** | agent 自己用"解法的词"搜所有存储：Brain、Knowledge、Memory、Evolution、Timeline、过去的 session、代码图谱。 |
+| **仓库规则** | 第一次碰到一个仓库时，注入它自己的 `AGENTS.md`、review 规则和以往 run 的经验。 |
+| **pipeline run 的知识** | run 为各阶段写好的知识文件（EVALUATE 读产品和决定，THINK 和 PLAN 读技术、改进和经验，审查专家读项目知识），文档里引用的条目都要能对上编号。 |
+
+每条知识都整条送到：recall 只决定显示哪些条目，从不截断某一条。
+
+---
+
+## 看一看
+
+| | |
+|---|---|
+| ![欢迎页](./assets/readme/ui-1-welcome.png) **欢迎页：** 一个品牌，一个 **Needs You** 队列，只放真正在等你的事。 | ![Brain 页面](./assets/readme/ui-3-brain-page.png) **Brain 页面：** 闭环用实时数据画出来，正在并行跑的 run 一目了然。 |
+| ![Swarm Out](./assets/readme/ui-5-swarm-out.png) **Swarm Out：** 机群、在跑的和已带回的 run，以及派单的对话。 | ![Swarm 的认知水平](./assets/readme/ui-7-cognition-level.png) **Swarm 的认知水平：** 它是不是越来越少需要你，错误都出在哪一环。 |
+
+<sub>截图来自真实安装；私有的 Brain 名称、本机路径和账户累计数据已打码。</sub>
 
 ---
 
 ## 快速开始
 
-**安装应用：** 从 [Releases](https://github.com/xg-gh-25/SwarmAI/releases) 下载 —— macOS `.dmg`（Apple Silicon 或 Intel）、Windows `-setup.exe`、Linux `.AppImage`（先 `chmod +x`，再运行）。
+**安装应用：** 从 [Releases](https://github.com/xg-gh-25/SwarmAI/releases) 下载 —— macOS `.dmg`（Apple Silicon 或 Intel）、Windows `-setup.exe`、Linux `.AppImage`（先 `chmod +x` 再运行）。
 
-- 需要一个 **AWS 账号**，并已开通 Amazon Bedrock 上的 Claude 模型：聊天运行在 Bedrock 上。
-- 安装后的应用需要 **git**（Windows 上需要 Git for Windows，其中包含 Git Bash）。Python 后端和 Claude CLI 已随应用自带。
-- macOS：应用暂未经过 Apple 签名 —— 首次打开时，进入「系统设置 → 隐私与安全性」，点击「仍要打开」（Open Anyway）。
+- 需要一个能在 Amazon Bedrock 上使用 Claude 模型的 **AWS 账号**：对话始终跑在 Bedrock 上。设置向导会连接一个 SwarmAI AWS 账号（或一个 Bedrock API key），应用、Bedrock 和你的 Hive 都用它。
+- 安装后的应用需要 **git**（Windows 上需要 Git for Windows，自带 Git Bash）。Python 后端和 Claude CLI 由应用自带。
+- macOS：应用还没有经过 Apple 签名，第一次打开时去「系统设置 → 隐私与安全性」点 **仍要打开**。
 
 **从源码构建**（需要 git、Node.js 18+、Python 3.11+、Rust、[uv](https://astral.sh/uv)；Windows 上还需要 Git Bash）：
 
@@ -74,56 +119,55 @@ cd ../desktop && npm install && npm run tauri:dev
 
 ## 架构
 
-<img src="./assets/platform-architecture.svg" alt="平台架构" width="100%"/>
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  交付引擎           Pipeline · Pollinate · Eval              │
-├─────────────────────────────────────────────────────────────┤
-│  知识层             DDD（脑）· Memory · Evolution            │
-├─────────────────────────────────────────────────────────────┤
-│  Agent Harness      Context · Sessions · Hooks · Jobs        │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  手          Native agent · Autonomous Pipeline · Hive（Swarm Out）    │
+│              审查专家 · Pollinate · Eval                               │
+├──────────────────────────────────────────────────────────────────────┤
+│  一个大脑    Context & Memory · Brain（DDD）+ General Brain            │
+│              写入侧（CDF）· 读取侧（recall、cognition）                 │
+├──────────────────────────────────────────────────────────────────────┤
+│  底座        Session 与 tab · Hook · 产品级 gate · Job                  │
+│              桌面端身体 · 授权模型与操作登记表                           │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-每个引擎独立有用；组合起来才是那条让系统越用越聪明的闭环。（点 `code` 直接读引擎本身 —— 实现即文档。）
-
-| 引擎 | 做什么 | 阅读 |
-|------|--------|------|
-| **上下文管理** | 受治理文件的 Prompt 架构，分层所有权，实时测量的预算 | [docs](./docs/DDD-Platform-Overview.md) |
-| **记忆** | 分层持久化：DailyActivity → 蒸馏 → 复利召回（纯文件系统 FTS/BM25） | [docs](./docs/Memory-Management-Design.md) |
-| **DDD 知识培育** | 自生长的领域脑，7 类 × 3 层本体，达尔文式衰减 | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
-| **自进化** | 认知 L0→L3 补丁 —— 复发的错误类别转化为结构性门控 | [docs](./docs/Self-Evolution-Harness-Design.md) |
-| **自主流水线** | 一句需求 → 可推送代码。9 阶段 · 3 门控 · 2 模式 | [docs](./docs/Autonomous-Pipeline-Design.md) |
-| **Pollinate** | 一条消息 → 多格式内容。同一套 DDD 驱动模式，用于媒体 | [docs](./docs/Pollinate-Content-Engine.md) |
-| **自愈合** | 不可见恢复：传感器、自动重生，用户无感知 | [code](./backend/core/session_healing.py) |
-| **多标签页 + MessageStore** | 并发会话，阶段门控单写者，跨标签页隔离 | [code](./desktop/src/stores/MessageStore.ts) |
-| **Hooks + Jobs** | 会话间 hooks + 后台智能。会话永不冷启动 | [code](./backend/core/hook_builder.py) |
-| **Eval** | 解耦、系统级：Golden Set + git 绑定回归门控 | [docs](./docs/OS-Eval-Function-Design.md) |
-
-**复利闭环：** 记忆 → Pipeline 判断 → DDD 脑 → 进化 → 门控 → 记忆。去掉一个，其余变弱。
-
-<img src="./assets/aidlc-autonomous-pipeline-v4.svg" alt="自主流水线 — 9 阶段 · 3 道门 · 2 模式" width="100%"/>
+| 部分 | 做什么 | 阅读 |
+|------|-------|------|
+| **Context & Memory** | 每个 prompt 都会组装进去的受管文件：每个文件管什么、怎么改 | [SWARMAI.md](./backend/context/SWARMAI.md) |
+| **CDF（写入侧）** | 从每个 session 和 run 进入大脑的唯一通道；带着上下文的 agent 判断，代码核对事实 | [设计](./docs/design/2026-10-26-swarm-cognitive-distillation-flow.md) · [agent 判断](./docs/design/2026-10-30-cdf-agent-decides.md) |
+| **Brain（DDD）** | 领域大脑，主文件只保留当前有效的内容：新增、覆盖、撤回 | [设计](./docs/design/2026-10-30-brain-driven.md) |
+| **读取侧** | recall、DDD recall、`cognition` CLI、仓库规则、run 的知识文件 | [cognition](./docs/design/2026-11-01-cognition-entrance.md) · [run 的知识](./docs/design/2026-10-26-run-knowledge.md) |
+| **Autonomous Pipeline** | 从意图到落地的 commit；pipeline 只管两头，由确定性检查判定 | [设计](./docs/design/2026-10-26-pipeline-two-ends.md) |
+| **Swarm Out 与 Hive** | 并行派到你的 Hive，产出全部带回，派单的 agent 对 run 负责到底 | [设计](./docs/design/2026-11-01-brain-to-hive-zero-touch.md) · [agent 跟到底](./docs/design/2026-10-31-swarm-out-agent-owns-its-runs.md) |
+| **授权** | 谁派的单谁负责；Swarm Out 和 Hive 的每个操作都登记在一张表里 | [审批](./docs/design/2026-10-31-hive-approvals-person-and-host.md) · [登记表](./docs/design/2026-10-31-swarm-out-ops-registry.md) |
+| **代码智能** | 每个仓库一份代码图谱，自动构建；审查时能看到改动会影响哪些调用方 | [设计](./docs/design/2026-10-29-code-intel-unification.md) |
+| **产品级 gate** | 危险或出机器的操作、只有人能回答的问题；gate 从不阻挡正常的写代码 | [代码](./backend/core/security_hooks.py) |
+| **Session 与 hook** | 并发且互相隔离的 tab，可以往正在跑的回合里追加消息（steer），session 之间的 hook 让每个 session 都不冷启动 | [代码](./backend/core/hook_builder.py) · [store](./desktop/src/stores/MessageStore.ts) |
+| **Eval** | 对已部署系统做系统级自评：golden set，加上对真实 session 的评分 | [设计](./docs/design/2026-10-26-eval-as-product.md) |
+| **Pollinate** | 一条消息生成多格式的媒体内容包，由同一个 Brain 驱动 | [文档](./docs/Pollinate-Content-Engine.md) |
 
 ---
 
 ## 🤖 给 AI Agent
 
-在这个 repo 里写代码？从 **[`AGENTS.md`](./AGENTS.md)** 开始 —— 数据流、进程拓扑、约定与不变量。它是面向 agent 的入口；这份 README 是面向人的。
+要在这个仓库里写代码？先读 **[`AGENTS.md`](./AGENTS.md)** —— 数据流、进程拓扑、约定和不变量。它是给 agent 的入口；这份 README 是给人的。
 
 ---
 
 ## 设计哲学
 
-1. **一次做对是真正的 token 优化。** 便宜模型迭代 5 次，成本比一次做对还高。编码和内容都是黑盒：输入 → 有质量保证的输出。
-2. **分工是人类带宽有限的权宜之计，不是好设计。** 一个 Agent，多角色，一层知识。（对抗性审查 spawn 子 Agent ≠ 分工。）
-3. **知识必须自己淘汰自己。** 达尔文式衰减：不再被引用的知识退场。能遗忘的系统 > 只能记住的系统。
-4. **进化是认知补丁，不是数据积累。** 我们改的规则你能 `git diff`。"思考方式变了" ≠ "知道更多"。
-5. **质量收敛，不是改善。** 错误类别单调递减。小心不能规模化，门控可以。
-6. **会话是离散的。智能不应该是。** Hooks 在会话间触发。通过使用变好，不是通过更新。
-7. **测量不了的，等于没造。** Eval + Golden Set + 变更触发回归，用 git 证明。
+1. **一个大脑，多双手。** 知识和判断力集中在一个心智里；agent、pipeline、Hive、审查专家都是手。在多个心智之间分工，是为了弥补人的带宽有限，不是好的设计。
+2. **注意力是稀缺资源，复利是目标。** 每个任务都要让系统更少需要你，north star 量的就是这件事。
+3. **模型提议，OS 裁决。** 含义由带着上下文的 agent 决定；代码核对事实；gate 依据测试、退出码、diff 或人的决定来判，从不依据模型对自己工作的看法。
+4. **进化是认知层面的，不是数据层面的。** 改 `SOUL.md` 里的一行，对判断力的影响胜过一千条记忆，而且每次改动都能 `git diff`。同一类错误反复出现，就做结构性修复，而不是再记一条教训。
+5. **大脑只保留当前有效的内容。** 知识通过新增、覆盖或撤回来改变，在新知识进来时就定下。没有东西会按时间淘汰，也没有东西为了塞进预算被截断。
+6. **质量靠确定性检查收敛。** 小心翼翼不能规模化，检查可以。审查负责发现问题，测试负责判定，审查轮数有上限。
+7. **量不出来，就等于没做出来。** Eval、golden set 和 north star，都和 git 绑定。
 
-> 📖 完整论点 + 案例：[docs/THESIS.md](./docs/THESIS.md)
+**背后的 thesis：** 一个 builder + AI + 一个会自进化的系统，能交付团队级的产出，代码如此，其他工作也一样。SwarmAI 就是这个实验，这个仓库就是它的证据。
+
+> 📖 完整 thesis：[docs/THESIS.md](./docs/THESIS.md) · 最新版本说明：[v2.4.0](./docs/releases/v2.4.0.md)
 
 ---
 
@@ -131,7 +175,7 @@ cd ../desktop && npm install && npm run tauri:dev
 
 **Tauri 2.0**（Rust）· **React 19** · **FastAPI** · **Claude Agent SDK + Bedrock** · **SQLite**（WAL + FTS5）
 
-四平台后端（编译时隔离）：macOS daemon（`.dmg`）· Hive (EC2) · Windows（`-setup.exe`）· Linux（`.AppImage`）。
+四平台后端（编译期隔离）：macOS daemon（`.dmg`）· Hive（EC2）· Windows（`-setup.exe`）· Linux（`.AppImage`）。
 
 ---
 
@@ -139,10 +183,12 @@ cd ../desktop && npm install && npm run tauri:dev
 
 | 内容 | 链接 |
 |------|------|
-| **设计文档** | [平台](./docs/DDD-Platform-Overview.md) · [流水线](./docs/Autonomous-Pipeline-Design.md) · [记忆](./docs/Memory-Management-Design.md) · [进化](./docs/Self-Evolution-Harness-Design.md) · [Pollinate](./docs/Pollinate-Content-Engine.md) |
+| **版本说明** | [v2.4.0](./docs/releases/v2.4.0.md) · [全部版本](https://github.com/xg-gh-25/SwarmAI/releases) |
+| **设计文档** | [docs/design/](./docs/design/) |
+| **Thesis** | [THESIS.md](./docs/THESIS.md) |
 | **AI Agent 避坑指南** | [EN PDF](./docs/ai-agent-pitfall-guide-en.pdf) · [中文 PDF](./docs/ai-agent-pitfall-guide.pdf) |
 | **给 AI Agent** | [AGENTS.md](./AGENTS.md) |
-| **贡献** | [CONTRIBUTING.md](./CONTRIBUTING.md) |
+| **参与贡献** | [CONTRIBUTING.md](./CONTRIBUTING.md) |
 
 ---
 
@@ -152,6 +198,6 @@ cd ../desktop && npm install && npm run tauri:dev
 
 <div align="center">
 
-**SwarmAI — 人来决策。AI 来交付。**
+**SwarmAI — Human directs. AI delivers.**
 
 </div>
