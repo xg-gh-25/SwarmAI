@@ -563,3 +563,17 @@ def test_inv8b_tracked_file_is_scanned_even_when_an_ignore_rule_matches(scan_tre
     assert r.returncode == 1, f"a tracked file must still be scanned. stdout={r.stdout}"
     for kind in ("[bandit", "[secret", "[cors"):
         assert kind in r.stdout, (kind, r.stdout)
+
+
+def test_the_generated_app_index_is_not_secret_scanned_but_its_siblings_are():
+    """apps_index.json holds a sha256 per packaged file; each regeneration made new
+    'Hex High Entropy' findings and blocked CI. Only that generated file is skipped."""
+    import importlib.util
+    import re
+    spec = importlib.util.spec_from_file_location("security_scan_mod", SCAN_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    pattern = re.compile(mod.SECRETS_EXCLUDE_RE)
+    assert pattern.search("backend/generated/apps_index.json")
+    assert not pattern.search("backend/generated/app_bindings.py")
+    assert not pattern.search("backend/apps/pollinate/app.json")

@@ -93,8 +93,12 @@ SCAN_SUBDIR = "backend"
 # depend on which tests ran on this machine, and bakes local paths into the baseline.
 BANDIT_EXCLUDES = "tests,.venv,node_modules,s_cmhk-*,s_internal-*,_shared,.pytest_cache,__pycache__"
 # detect-secrets `--exclude-files` regex counterpart (same private-skill + cache scope).
+# Also the generated App index: generate_app_registry.py writes it from the App
+# manifests (scanned themselves) plus a sha256 of every packaged file, so each source
+# edit produces new 64-hex digests that read as "Hex High Entropy" secrets; baselining
+# them only adds two stale entries per regeneration.
 SECRETS_EXCLUDE_RE = (r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/s_internal-[^/]*/|/_shared/"
-                      r"|/\.pytest_cache/|/__pycache__/")
+                      r"|/\.pytest_cache/|/__pycache__/|backend/generated/apps_index\.json$")
 
 # The single severity/confidence policy — used identically for baseline generation
 # AND compare, so they can never drift (Gate-1 MUST-FIX-5).
