@@ -174,5 +174,16 @@ else
             --prefer-offline --no-audit --no-fund 2>/dev/null) && \
             echo -e "${GREEN}✅${NC} package-lock.json updated" || true
     fi
+    # backend/uv.lock records the backend package's own version; CI installs with
+    # `uv sync --locked`, which fails when it differs from pyproject.toml. Rewrite only
+    # the version line of the swarmai-backend entry: `uv lock` could re-resolve other
+    # packages, which is outside this script's scope (see above).
+    uv_lock="$PROJECT_ROOT/backend/uv.lock"
+    if [ -f "$uv_lock" ]; then
+        perl -0pi -e 's/(\[\[package\]\]\nname = "swarmai-backend"\nversion = ")[^"]*(")/${1}'"$VERSION"'${2}/' "$uv_lock" && \
+            grep -A1 '^name = "swarmai-backend"$' "$uv_lock" | grep -q "^version = \"$VERSION\"$" && \
+            echo -e "${GREEN}✅${NC} backend/uv.lock updated" || \
+            echo -e "${RED}❌ backend/uv.lock: swarmai-backend version not updated${NC}"
+    fi
     echo -e "${GREEN}All versions synced to $VERSION${NC}"
 fi
