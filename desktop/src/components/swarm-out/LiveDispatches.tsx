@@ -38,7 +38,7 @@ import { useTranslation } from 'react-i18next';
 import { type SwarmOutAsk, type SwarmOutFleet, type SwarmOutRun } from '../../services/swarmOut';
 import { SwarmOutWaitCard } from './SwarmOutWaitCard';
 import { JudgeTag } from './JudgeTag';
-import { agentFacts, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
+import { agentFacts, autonomyLine, checksIncomplete, checksLine, endedLabel, errorLabel, executionLine, gateLine, hiveStatusLabel, lessonsLine, panelNumbers, resultErrorLabel, runJudge, runStats, stateLabel, tokenStats, useRuns, when, workLines, type RunStat } from './live';
 import { RunList } from './RunList';
 import { RunOverlay } from './RunOverlay';
 import { actionsOf, stageOf } from './runReview';
@@ -350,8 +350,15 @@ export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = fal
   const n = panelNumbers(data, fleet);
   const noRuns = !!data && runs.length === 0;
   const dash = '—';
+  const auto = autonomyLine(runs, at);
   return (
     <div data-testid="swarm-out-live">
+      {data && auto.finished > 0 && (
+        <div className={`text-[12px] mb-2 ${muted}`} data-testid="swarm-out-autonomy-line">
+          {t('swarmOut.header.autonomy', { finished: auto.finished, unattended: auto.unattended, known: auto.known,
+            avg: auto.avg == null ? '—' : auto.avg.toFixed(1) })}
+        </div>
+      )}
       {failed && <div className={`text-[12px] mb-2 ${muted}`}>{t('swarmOut.runsUnreadable')}</div>}
       {(data?.errors ?? []).map((e) => <div key={e} className="text-[12px] mb-1" style={{ color: TONE_VAR.attention }}>{errorLabel(e)}</div>)}
       <Fleet fleet={fleet} failed={fleetFailed} numbers={<>

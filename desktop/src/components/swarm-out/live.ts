@@ -367,6 +367,21 @@ export function interventionsOf(res: SwarmOutResult): number {
  *  (interventionsOf), the total cost (the CLI's own, per-turn increases) and, when
  *  any failed, the failed steps. The tokens are a row of their own (tokenStats). A value
  *  not known is "—" with the reason on hover, never a zero. */
+/** The header's one autonomy line over the last *days* days (design
+ *  2026-11-01-brain-eval-and-runs §3, §5): how many runs finished, how many of those
+ *  nobody stepped into (``interventionsOf`` = 0), and how often a person stepped in on
+ *  average. A run whose record predates counting what the person said is not known and
+ *  is left out (``known``), never counted as 0. */
+export function autonomyLine(runs: SwarmOutRun[], now: number, days = 30):
+  { finished: number; known: number; unattended: number; avg: number | null } {
+  const finished = inWindow(runs, now, days).filter((r) => r.result && stateOf(r) !== 'running' && !r.result.provisional);
+  const known = finished.filter((r) => r.result!.work.human.said != null);
+  const total = known.reduce((s, r) => s + interventionsOf(r.result!), 0);
+  return { finished: finished.length, known: known.length,
+    unattended: known.filter((r) => interventionsOf(r.result!) === 0).length,
+    avg: known.length ? total / known.length : null };
+}
+
 export function runStats(res: SwarmOutResult): RunStat[] {
   const h = res.work.human;
   const loops = interventionsOf(res);

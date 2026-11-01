@@ -1307,7 +1307,8 @@
       "keepsGoing": "，合上 Mac 也会继续",
       "noneRunning_one": "{{count}} 台 Hive，都没在运行",
       "noneRunning_other": "{{count}} 台 Hive，都没在运行",
-      "noHive": "还没有 Hive"
+      "noHive": "还没有 Hive",
+      "autonomy": "30 天 · 结束 {{finished}} 个 · 没人插手 {{unattended}} / {{known}} · 平均插手 {{avg}} 次"
     },
     "daily": {
       "day": "{{day}} · 派出 {{count}} 个",

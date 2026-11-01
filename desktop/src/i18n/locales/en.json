@@ -1307,7 +1307,8 @@
       "keepsGoing": ", keeps going with the Mac closed",
       "noneRunning_one": "{{count}} Hive, not running",
       "noneRunning_other": "{{count}} Hives, none running",
-      "noHive": "No Hive yet"
+      "noHive": "No Hive yet",
+      "autonomy": "30 days · {{finished}} finished · nobody stepped in {{unattended}} / {{known}} · {{avg}} times on average"
     },
     "daily": {
       "day": "{{day}} · {{count}} sent",
