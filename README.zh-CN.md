@@ -18,7 +18,7 @@
 
 ![Brain 驱动的闭环](./assets/readme/brain-driven-loop.png)
 
-<div align="center"><sub>围绕一个 Brain 的闭环：知识驱动工作，run 并行派出去，经验带回来，下一个任务从更好的 Brain 开始。（Brain map 设计稿，数字为示意。）· <a href="./assets/swarm-demo.mp4">60 秒演示</a>（v2.0 界面）</sub></div>
+<div align="center"><sub>围绕一个 Brain 的闭环：知识驱动工作，run 并行派出去，经验带回来，下一个任务从更好的 Brain 开始。（Brain map 设计稿，数字为示意。）</sub></div>
 
 ---
 

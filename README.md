@@ -18,7 +18,7 @@ English | [中文](./README.zh-CN.md)
 
 ![The Brain-driven loop](./assets/readme/brain-driven-loop.png)
 
-<div align="center"><sub>The loop around a Brain: knowledge drives the work, runs go out in parallel, lessons come back, and the next task starts from a better Brain. (Brain map design, illustrative numbers.) · <a href="./assets/swarm-demo.mp4">60-second demo</a> (v2.0 UI)</sub></div>
+<div align="center"><sub>The loop around a Brain: knowledge drives the work, runs go out in parallel, lessons come back, and the next task starts from a better Brain. (Brain map design, illustrative numbers.)</sub></div>
 
 ---
 
