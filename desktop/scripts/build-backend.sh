@@ -410,6 +410,13 @@ if [[ ! -d "$SOURCE_DIR" ]]; then
     exit 1
 fi
 
+# Linux: give every ELF file the RUNPATH the AppImage bundler (linuxdeploy) would set, before
+# the install manifest hashes the files, so linuxdeploy neither fails on a dependency it cannot
+# find nor changes a file the manifest lists (see the script's docstring).
+if [[ "$OSTYPE" == "linux"* ]]; then
+    python3 "$SCRIPT_DIR/normalize_bundle_rpaths.py" "$SOURCE_DIR"
+fi
+
 # Clean previous output and copy fresh
 rm -rf "$OUTPUT_BINARY_DIR"
 cp -r "$SOURCE_DIR" "$OUTPUT_BINARY_DIR"
