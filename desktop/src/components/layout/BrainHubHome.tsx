@@ -9,7 +9,7 @@
  *      person's own, alphabetical so a card never moves. A card: the flower, the name,
  *      what the Brain is, and one quiet footer — its size and recency, plus its one
  *      status when there is one. Color is a small dot, warm only for what blocks on the
- *      person or waits for a review; setup (a Project Agent that waits for you) stays grey.
+ *      person or waits for a review; setup stays grey.
  * Adding knowledge is an action of one Brain: it lives on that Brain's page (and the
  * Library, on General's), not here. Design: s_frontend-design's design-judgment.md
  * (one thing stands out, color only for what needs action, separate with whitespace).
@@ -91,15 +91,13 @@ const CHIP: Record<string, { label: (n: number) => string }> = {
   runs: { label: (n) => `${n} Run${n === 1 ? '' : 's'} waiting` },
   escalations: { label: (n) => `${n} escalation${n === 1 ? '' : 's'} to decide` },
   jobs: { label: (n) => `${n} other item${n === 1 ? '' : 's'}` },
-  'agent-fix': { label: (n) => `${n} agent file${n === 1 ? '' : 's'} to fix` },
-  agent: { label: (n) => `${n} agent${n === 1 ? '' : 's'} to confirm` },
   repos: { label: (n) => `${n} repositor${n === 1 ? 'y' : 'ies'} newly read` },
 };
 
 function chipsOf(needs: HubNeed[]) {
   const by = new Map<string, { severity: Severity; count: number }>();
   for (const n of needs) {
-    const key = n.kind === 'run' ? 'runs' : n.kind === 'agent' && n.severity === 'review' ? 'agent-fix' : n.kind;
+    const key = n.kind === 'run' ? 'runs' : n.kind;
     const got = by.get(key);
     if (got) got.count += n.count;
     else by.set(key, { severity: n.severity, count: n.count });
@@ -111,9 +109,7 @@ function chipsOf(needs: HubNeed[]) {
 
 /** The General Brain card's one status: can a task that belongs to no Brain go out? */
 function generalSignal(g: GeneralBrain): { tone: BrainSignalTone; text: string } {
-  if (g.projectAgentStatus === 'widened') return { tone: 'setup', text: 'Runner Agent waits for you' };
   if (g.projectAgentStatus === 'invalid') return { tone: 'review', text: 'Runner Agent has problems' };
-  // a draft or a changed one the agent confirms itself (2026-11-01-project-agent-owned-by-agent)
   if (g.projectAgentStatus) return { tone: 'calm', text: '' };
   // no definition: a task that belongs to no Brain cannot go out
   return { tone: 'review', text: 'No Runner Agent yet' };
@@ -213,14 +209,12 @@ export function BrainHubHome({ brains, selfName, general = null, onOpenGeneral, 
   const hasCounts = brains.some((b) => b.typeCounts);
 
   const openNewBrain = () => window.dispatchEvent(new CustomEvent('swarm:show-new-brain'));
-  /** Each open item opens where it is handled: a Run on its Pipelines drawer, a
-   *  draft in its Project Agent tab, a newly read
+  /** Each open item opens where it is handled: a Run on its Pipelines drawer, a newly read
    *  repository on the Brain's map, the rest (escalations, failing jobs, Runs the
    *  analytics did not list) in Need You. */
   const goNeed = (n: HubNeed) => {
     if (n.builtin) onOpenGeneral?.();
     else if (n.kind === 'run') openOverlayAt('pipeline', n.id);
-    else if (n.kind === 'agent') onOpen(n.brain, { view: 'map', panel: 'agent' });
     else if (n.kind === 'repos') onOpen(n.brain, { view: 'map' });
     else window.dispatchEvent(new CustomEvent('swarm:show-needs-you'));
   };

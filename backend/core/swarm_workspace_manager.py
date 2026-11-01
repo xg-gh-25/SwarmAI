@@ -1221,7 +1221,7 @@ class SwarmWorkspaceManager:
                     json.dumps(meta, indent=2), encoding="utf-8"
                 )
 
-            # The shipped Project Agent drafts (SwarmAI's and the Runner Agent's),
+            # The shipped Project Agent definitions (SwarmAI's and the Runner Agent's),
             # updated only while the user has not changed them (design
             # 2026-10-28-project-agent-flow §5). Never blocks workspace init.
             try:

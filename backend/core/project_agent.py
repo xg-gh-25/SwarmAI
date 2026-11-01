@@ -2,16 +2,19 @@
 
 Design: docs/design/2026-10-28-project-agent-flow.md §4.
 
-The Project Agent is the delivery face of one Brain: how its work is taken in, done
-and delivered. A Brain has ONE definition; the kinds of work inside it are **modes**
-(when, placements, repos, setup, validations, skills, delivery). A mode can
-only NARROW the shared part (placements a subset; reserved actions and gates only
-added), so the safety baseline is reviewed once.
+The Project Agent tells a Hive run how to do one Brain's work (design
+docs/design/2026-11-01-project-agent-simple.md). A Brain has ONE definition; the kinds
+of work inside it are **modes** (when, repos, setup, validations, skills). Shared:
+``identity.summary``, ``watches``, ``gates.enforce`` (a mode only adds gates),
+``intake.repos``, ``default_mode``.
 
-It lives next to bindings.yaml as ``project-agent.yaml``. A draft is generated at Brain
-creation (core/project_agent_draft) from the Brain's own knowledge; the person reviews
-it in Brain Hub. A v1 file (``validations`` at the top) reads as a v2 definition with
-one mode.
+It lives next to bindings.yaml as ``project-agent.yaml``. The standard one is written
+when the Brain is created and drafted from its knowledge (core/project_agent_draft);
+the agent keeps it current. Nothing is confirmed: a dispatch uses the latest, and the
+agent fixes what admission finds wrong. The actions kept for the person are the
+product's (``RESERVED_ACTIONS``, the same for every Brain); ``status``, ``placements``,
+``delivery`` and ``reserved_for_human`` an older file carries are not read. A v1 file
+(``validations`` at the top) reads as a v2 definition with one mode.
 
 How a task runs (native, or a pipeline profile) is not part of the definition: each
 dispatch picks it from the request (design 2026-10-30-run-spec §3). ``profile`` /
@@ -20,22 +23,17 @@ read; ``notes`` says they can be removed.
 
 Key public symbols:
 - ``PROJECT_AGENT_FILE``   the file name (project-root relative)
-- ``PROFILES`` / ``PLACEMENTS`` / ``DELIVERIES`` / ``RESERVED_ACTIONS``
+- ``RESERVED_ACTIONS``     what a Project Agent session always asks the person
 - ``normalize(doc)``       any schema -> the v2 shape (shared part + modes)
 - ``validate(doc, project_dir=None)`` problems ([] = valid); reference checks when a
                            project dir is given
-- ``notes(doc, project_dir)`` advisory remarks that are not problems (where it leaves
-                           the standard, core/project_agent_standard; a desktop-only
-                           skill in a mode that may run on a Hive)
 - ``is_general_name(name)`` the General Brain's name, in any case
 - ``revision(project_dir)`` sha256 of the definition + the skill dirs it uses + 3-gates/
 - ``gate_files(project_dir)`` / ``gates_digest(project_dir)`` the gate scripts and the
                            digest a Hive checks before running them
-- ``check_sources`` / ``source_check_current`` the host-only check that each command's
-                           source file exists in the bound repo, stored per revision
+- ``source_problems``      host only: each command's source must be in the bound repo
 - ``load_project_agent``   parse + validate -> dict for the Brain Hub, or None if absent
-- ``confirmation`` draft / reviewed / changed: whether the person's confirmation holds (every reader)
-- ``project_agent_status`` draft / changed / widened / reviewed / invalid / None, for the Hub home
+- ``project_agent_status`` ready / invalid / None, for the Hub home
 """
 from __future__ import annotations
 
@@ -47,19 +45,12 @@ from typing import Any, Iterable, Optional
 
 import yaml
 
-from core.run_protocol.lifecycle import PROFILE_STAGES
-
 logger = logging.getLogger(__name__)
 
 PROJECT_AGENT_FILE = "project-agent.yaml"
-PROFILES: frozenset[str] = frozenset(PROFILE_STAGES)
-#: where a Project Agent's work may run (a Slack channel is not one yet)
-PLACEMENTS: frozenset[str] = frozenset({"chat-tab", "hive"})
-STATUSES: frozenset[str] = frozenset({"draft", "reviewed"})
-DELIVERIES: frozenset[str] = frozenset({"bundle", "branch-pr"})
-PR_REMOTES: frozenset[str] = frozenset({"fork", "origin"})
-#: the actions a definition may reserve for a person; each maps to a product gate
-#: predicate (core/security_hooks._is_reserved_action)
+#: the actions a Project Agent session asks the person for every time, the same for
+#: every Brain and mode; each maps to a product gate predicate
+#: (core/security_hooks._is_reserved_action)
 RESERVED_ACTIONS: frozenset[str] = frozenset(
     {"push", "open_pr", "publish_release", "send_external_message"})
 #: the Brain of tasks that belong to no project: its knowledge is Knowledge/Library and
@@ -98,36 +89,20 @@ def normalize(doc: dict[str, Any]) -> dict[str, Any]:
     ``summary`` / ``review_focus`` become ``identity.summary`` / ``watches``."""
     if doc.get("schema") == 2:
         return doc
-    mode = {
-        "id": "default",
-        "when": "any change",
-        "placements": doc.get("placements") or [],
-        "validations": doc.get("validations") or [],
-        "delivery": "bundle",
-    }
+    mode = {"id": "default", "when": "any change", "validations": doc.get("validations") or []}
     return {
         "schema": 2,
-        "status": doc.get("status", "draft"),
-        "reviewed_at": doc.get("reviewed_at"),
-        "reviewed_by": doc.get("reviewed_by"),
         "identity": {"summary": doc.get("summary") or ""},
         "intake": {},
         "watches": doc.get("review_focus") or [],
         "gates": {"enforce": []},
-        "reserved_for_human": sorted(RESERVED_ACTIONS),
-        "placements": doc.get("placements") or [],
         "modes": [mode],
         "default_mode": "default",
-        "sources": doc.get("sources") or [],
     }
 
 
 def _modes(doc: dict[str, Any]) -> list[dict[str, Any]]:
     return _list_of_dicts(doc.get("modes"))
-
-
-def _mode_value(mode: dict[str, Any], shared: dict[str, Any], key: str) -> Any:
-    return mode[key] if key in mode else shared.get(key)
 
 
 # ── reference sources on disk ────────────────────────────────────────────────
@@ -288,32 +263,20 @@ def _check_names(where: str, values: Any, allowed: Iterable[str], label: str, ou
 
 
 def validate(doc: Any, project_dir: Optional[Path] = None) -> list[str]:
-    """Problems in a parsed definition (any schema). Unknown keys are ignored. With
-    ``project_dir``, also check every name the definition uses against the Brain on
-    disk (skills, gates, repos)."""
+    """Problems in a parsed definition (any schema). Unknown keys, and the keys an
+    older file carries that are no longer read, are ignored. With ``project_dir``, also
+    check every name the definition uses against the Brain on disk (skills, gates,
+    repos)."""
     if not isinstance(doc, dict):
         return ["not a mapping"]
     d = normalize(doc)
     out: list[str] = []
-    if d.get("status", "draft") not in STATUSES:
-        out.append(f"status {d.get('status')!r} is not draft or reviewed")
-
-    shared_places = d.get("placements") or []
-    if not isinstance(shared_places, list) or not shared_places:
-        out.append("placements is empty")
-        shared_places = []
-    elif [p for p in shared_places if p not in PLACEMENTS]:
-        out.append(f"placements has unknown values {[p for p in shared_places if p not in PLACEMENTS]}")
-    shared_reserved = set(_str_list(d.get("reserved_for_human")))
-    unknown = sorted(shared_reserved - RESERVED_ACTIONS)
-    if unknown:
-        out.append(f"reserved_for_human has unknown actions {unknown}")
     shared_gates = set(_str_list((d.get("gates") or {}).get("enforce")))
-
     modes = _modes(d)
     if not modes:
         out.append("modes is empty")
     ids: set[str] = set()
+    intake_repos = _str_list((d.get("intake") or {}).get("repos"))
     for i, m in enumerate(modes):
         mid = str(m.get("id") or "")
         where = f"modes[{mid or i}]"
@@ -324,29 +287,10 @@ def validate(doc: Any, project_dir: Optional[Path] = None) -> list[str]:
         ids.add(mid)
         if not str(m.get("when") or "").strip():
             out.append(f"{where}.when is empty")
-        places = _mode_value(m, d, "placements") or []
-        if not isinstance(places, list) or not places:
-            out.append(f"{where}.placements is empty")
-        else:
-            wider = [p for p in places if p not in shared_places]
-            if wider:
-                out.append(f"{where}.placements {wider} are not in the shared placements (a mode only narrows)")
-        if "reserved_for_human" in m:
-            mine = set(_str_list(m.get("reserved_for_human")))
-            if mine - RESERVED_ACTIONS:
-                out.append(f"{where}.reserved_for_human has unknown actions {sorted(mine - RESERVED_ACTIONS)}")
-            if shared_reserved - mine:
-                out.append(f"{where}.reserved_for_human drops {sorted(shared_reserved - mine)} (a mode only adds)")
         if isinstance(m.get("gates"), dict) and "enforce" in m["gates"]:
             mine_g = set(_str_list(m["gates"].get("enforce")))
             if shared_gates - mine_g:
                 out.append(f"{where}.gates.enforce drops {sorted(shared_gates - mine_g)} (a mode only adds)")
-        delivery = m.get("delivery", "bundle")
-        if delivery not in DELIVERIES:
-            out.append(f"{where}.delivery {delivery!r} is not bundle or branch-pr")
-        if delivery == "branch-pr" and m.get("pr_remote", "fork") not in PR_REMOTES:
-            out.append(f"{where}.pr_remote {m.get('pr_remote')!r} is not fork or origin")
-        intake_repos = _str_list((d.get("intake") or {}).get("repos"))
         if intake_repos:
             outside = [r for r in _str_list(m.get("repos")) if r not in intake_repos]
             if outside:
@@ -365,8 +309,7 @@ def _in_v1_terms(problems: list[str]) -> list[str]:
     """A v1 file's problems named by its own keys (its one mode is internal)."""
     seen: list[str] = []
     for msg in problems:
-        msg = (msg.replace("modes[default].placements", "placements")
-               .replace("modes[default].", ""))
+        msg = msg.replace("modes[default].", "")
         if msg not in seen:
             seen.append(msg)
     return seen
@@ -407,37 +350,6 @@ def _reference_problems(d: dict[str, Any], project_dir: Path) -> list[str]:
         if isinstance(m.get("gates"), dict):
             _check_names(f"{where}.gates.enforce", m["gates"].get("enforce"), gates, "gates", out)
         _check_names(f"{where}.repos", m.get("repos"), bindings, "repos", out)
-        if m.get("delivery") == "branch-pr":
-            for r in _str_list(m.get("repos")):
-                b = bindings.get(r)
-                if b is None:
-                    continue
-                if b.kind == "internal":
-                    out.append(f"{where}: repo {r} is internal; only delivery bundle is allowed")
-                elif "github.com" not in (b.clone or ""):
-                    out.append(f"{where}: repo {r} is not on GitHub; branch-pr needs a GitHub remote")
-    return out
-
-
-def notes(doc: Any, project_dir: Path) -> list[str]:
-    """Advisory remarks, not problems: where the definition leaves the Project Agent
-    standard (core/project_agent_standard.deviations: a missing summary or handles, fewer
-    reserved actions, a bound repo without a code-change mode), and a desktop/macos-only
-    skill in a mode that may run on a Hive (the Hive does not project it). Shown on the
-    review card; never a reason to refuse a confirm or a dispatch."""
-    if not isinstance(doc, dict):
-        return []
-    from core.project_agent_standard import deviations
-    d = normalize(doc)
-    skills, _err = _skills(Path(project_dir))
-    out: list[str] = deviations(d, bool(_bindings(Path(project_dir))))
-    for m in _modes(d):
-        places = _mode_value(m, d, "placements") or []
-        if "hive" not in places or skills is None:
-            continue
-        for s in _str_list(m.get("skills")):
-            if skills.get(s) in ("desktop", "macos"):
-                out.append(f"modes[{m.get('id')}]: skill {s} is {skills[s]}-only and is not available on a Hive")
     return out
 
 
@@ -469,37 +381,22 @@ def revision(project_dir: Path) -> Optional[str]:
     return h.hexdigest()
 
 
-# ── source check (host only, at review time) ─────────────────────────────────
+# ── source check (host only, before a dispatch) ──────────────────────────────
 
-SOURCE_CHECK_FILE = ".project-agent-check.json"
-
-
-def check_sources(project_dir: Path) -> dict[str, Any]:
-    """Check that every ``setup`` / ``validations`` row's ``source`` exists in the
-    bound repo of its mode, and keep the result next to the definition. The sources
-    live in the repository, not the Brain, so this runs on the host when the person
-    reviews; a Hive reads the stored result and never re-checks. The result names the
-    revision it was made for: a later edit makes it stale."""
-    import json
-    import time
-    project_dir = Path(project_dir)
-    missing = source_problems(project_dir)
-    result = {"revision": revision(project_dir), "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-              "ok": not missing, "missing": missing}
-    (project_dir / SOURCE_CHECK_FILE).write_text(json.dumps(result, indent=2), encoding="utf-8")
-    return result
-
-
-def source_problems(project_dir: Path) -> list[str]:
-    """The rows whose ``source`` is in neither the mode's bound repo nor the Brain; the
-    check ``check_sources`` keeps, without keeping it (an agent checks before it
-    confirms: a stored record would read as a confirmation, ``confirmation``)."""
+def source_problems(project_dir: Path, mode: Optional[str] = None) -> list[str]:
+    """The ``setup`` / ``validations`` rows whose ``source`` is in neither the mode's
+    bound repo nor the Brain; with *mode*, only that mode's rows (a dispatch runs one
+    mode, so another mode's stale row does not refuse it). The sources live in the
+    repositories, so this runs on the host before a dispatch (core/task_spec.admit); a
+    Hive never checks it."""
     project_dir = Path(project_dir)
     raw = (project_dir / PROJECT_AGENT_FILE).read_text(encoding="utf-8")
     d = normalize(yaml.safe_load(raw) or {})
     checkouts = repo_roots(project_dir)
     missing: list[str] = []
     for m in _modes(d):
+        if mode is not None and m.get("id") != mode:
+            continue
         roots = [checkouts[r] for r in _str_list(m.get("repos")) if r in checkouts]
         for key in ("setup", "validations"):
             for row in _list_of_dicts(m.get(key)):
@@ -511,32 +408,17 @@ def source_problems(project_dir: Path) -> list[str]:
     return missing
 
 
-def source_check_current(project_dir: Path) -> Optional[dict[str, Any]]:
-    """The stored source check when it was made for the current revision, else None."""
-    import json
-    p = Path(project_dir) / SOURCE_CHECK_FILE
-    try:
-        rec = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return rec if isinstance(rec, dict) and rec.get("revision") == revision(Path(project_dir)) else None
-
-
 # ── load for the Brain Hub ───────────────────────────────────────────────────
 
 def _mode_view(m: dict[str, Any], d: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(m.get("id") or ""),
         "when": str(m.get("when") or ""),
-        "placements": _str_list(_mode_value(m, d, "placements")),
         "repos": _str_list(m.get("repos")),
         "setup": _rows(m.get("setup"), ("command", "source", "repo", "cwd")),
         "validations": _rows(m.get("validations"), ("id", "command", "source", "repo", "cwd")),
         "skills": _str_list(m.get("skills")),
-        "delivery": str(m.get("delivery") or "bundle"),
-        "prRemote": str(m.get("pr_remote") or "fork") if m.get("delivery") == "branch-pr" else None,
-        "reservedForHuman": _str_list(m["reserved_for_human"]) if "reserved_for_human" in m
-        else _str_list(d.get("reserved_for_human")),
+        "reservedForHuman": sorted(RESERVED_ACTIONS),
         "gates": _str_list(m["gates"].get("enforce")) if isinstance(m.get("gates"), dict)
         and "enforce" in m["gates"] else _str_list((d.get("gates") or {}).get("enforce")),
     }
@@ -571,62 +453,18 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
     return {
         "path": PROJECT_AGENT_FILE,
         "schema": doc.get("schema", 1),
-        "status": d.get("status", "draft"),
-        "reviewedAt": d.get("reviewed_at"),
-        "reviewedBy": d.get("reviewed_by"),
         "summary": str(identity.get("summary") or ""),
-        "identity": {"summary": str(identity.get("summary") or ""),
-                     "inScope": _str_list(identity.get("in_scope")),
-                     "outOfScope": _str_list(identity.get("out_of_scope")),
-                     "source": str(identity.get("source") or "")},
-        "intake": {"handles": _str_list(intake.get("handles")), "repos": _str_list(intake.get("repos")),
-                   "proposedAliases": _rows(intake.get("proposed_aliases"), ("name", "source"))},
-        "confidence": str(d.get("confidence") or ""),
         "reviewFocus": _rows(d.get("watches"), ("area", "why", "source")),
-        "reservedForHuman": _str_list(d.get("reserved_for_human")),
+        "reservedForHuman": sorted(RESERVED_ACTIONS),
         "gates": _str_list((d.get("gates") or {}).get("enforce")),
-        "placements": _str_list(d.get("placements")),
+        "repos": _str_list(intake.get("repos")),
         "modes": modes,
         "defaultMode": d.get("default_mode"),
         "validations": default["validations"] if default else [],
-        "sources": _str_list(d.get("sources")),
         "revision": revision(project_dir),
         "problems": validate(doc, project_dir),
-        "notes": notes(doc, project_dir),
-        "sourceCheck": (check := source_check_current(project_dir)),
-        "confirmation": confirmation(d.get("status", "draft"), check),
         "sourcePaths": _source_paths(d, project_dir),
-        "form": _form(d, project_dir),
-        **_ownership(doc, project_dir, confirmation(d.get("status", "draft"), check) == "reviewed"),
     }
-
-
-def _ownership(doc: dict[str, Any], project_dir: Path, reviewed: bool) -> dict[str, Any]:
-    """Who stands behind the confirmation (design 2026-11-01-project-agent-owned-by-agent
-    §5): ``floorSetBy`` (the person whose confirmation is the floor, None = the product
-    default), ``agentConfirms`` (the agent's confirmations since, newest last) and
-    ``widened`` (what the current definition gives the agent beyond the floor: only
-    the person confirms those). A view: nothing is written."""
-    try:
-        from core import project_agent_floor as fl
-        rec = fl.peek(project_dir, doc, reviewed)
-        return {"floorSetBy": rec.get("set_by"),
-                "agentConfirms": [e for e in rec.get("agent") or [] if isinstance(e, dict)][-5:],
-                "widened": [] if reviewed else fl.widened(fl.authority(doc, project_dir), rec["floor"])}
-    except Exception as exc:  # noqa: BLE001 — a view; its failure must not hide the definition
-        logger.warning("project_agent: the floor of %s could not be read: %s", project_dir, exc)
-        return {"floorSetBy": None, "agentConfirms": [], "widened": []}
-
-
-def _form(d: dict[str, Any], project_dir: Path) -> dict[str, Any] | None:
-    """The Brain Hub form (core/project_agent_form); None when it cannot be built, so
-    the rest of the definition still shows."""
-    try:
-        from core.project_agent_form import build_form
-        return build_form(d, project_dir)
-    except Exception as exc:  # noqa: BLE001 — the form is a view; its failure must not hide the definition
-        logger.warning("project_agent: the form of %s could not be built: %s", project_dir, exc)
-        return None
 
 
 def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:
@@ -660,11 +498,6 @@ def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:
     add(ident.get("source"))
     for w in _list_of_dicts(d.get("watches")):
         add(w.get("source"))
-    intake = d.get("intake") if isinstance(d.get("intake"), dict) else {}
-    for a in _list_of_dicts(intake.get("proposed_aliases")):
-        add(a.get("source"))
-    for s in _str_list(d.get("sources")):
-        add(s)
     for m in _modes(d):
         add(m.get("source"))
         for key in ("setup", "validations"):
@@ -673,31 +506,10 @@ def _source_paths(d: dict[str, Any], project_dir: Path) -> dict[str, str]:
     return out
 
 
-def confirmation(status: Any, source_check: Any) -> str:
-    """Whether the person's confirmation holds, the one rule every reader uses (the
-    dispatch admission, the Brain Hub home, the Brain map, the form): ``draft`` not
-    confirmed; ``reviewed`` confirmed and the revision then checked is the current one;
-    ``changed`` confirmed, then the definition, a skill one of its modes uses or its
-    gates changed (an edit in chat, by an agent or by hand; a save on the form makes
-    it a draft itself). The agent confirms a draft or a changed one itself when it gives
-    the agent no more than the person last confirmed (project_agent_review.agent_confirm)."""
-    if status != "reviewed":
-        return "draft"
-    return "reviewed" if source_check is not None else "changed"
-
-
 def project_agent_status(project_dir: Path) -> str | None:
-    """The one word the Brain Hub home needs: ``reviewed``; ``draft`` / ``changed``
-    (not confirmed for the current revision: the agent confirms it before its next
-    dispatch, nothing for the person); ``widened`` (it gives the agent more than the
-    person last confirmed: waits for the person); ``invalid`` (the file has problems,
-    the agent fixes them); or None (no file)."""
+    """The one word the Brain Hub home needs: ``ready``, ``invalid`` (the file has
+    problems; the agent fixes them), or None (no file)."""
     pa = load_project_agent(project_dir)
     if pa is None:
         return None
-    if pa.get("problems"):
-        return "invalid"
-    state = pa.get("confirmation") or confirmation(pa.get("status"), pa.get("sourceCheck"))
-    if state != "reviewed" and pa.get("widened"):
-        return "widened"
-    return state
+    return "invalid" if pa.get("problems") else "ready"

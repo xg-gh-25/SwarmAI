@@ -15,7 +15,7 @@
  * @exports GeneralBrainView
  */
 import { useRunnerAgent, type GeneralBrain, type ProjectAgent } from '../../services/ddd';
-import { ProjectAgentForm } from './ProjectAgentForm';
+import { ProjectAgentView } from './ProjectAgentView';
 import { BackToHubButton } from './BackToHubButton';
 import { BrainLearnedView } from './BrainLearnedView';
 
@@ -30,7 +30,6 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
   const { data: raw, isLoading, isError, refetch } = useRunnerAgent();
   const agent = raw && typeof raw === 'object' && 'problems' in raw ? raw as ProjectAgent : null;
   const files = general?.library.files ?? null;
-  const notFor = agent?.identity?.outOfScope ?? [];
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="general-brain">
@@ -54,9 +53,6 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
             Research, reports and answers that belong to no Brain, with the general knowledge in
             the Library. It is built in: it cannot be deleted or renamed.
           </p>
-          {notFor.length > 0 && (
-            <p className="mt-1 text-small text-[var(--color-text-muted)]">Not for: {notFor.join(' · ')}</p>
-          )}
         </section>
 
         <section data-testid="general-knowledge">
@@ -81,8 +77,8 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
                   <button className="btn-sm btn-secondary" onClick={() => void refetch()} data-testid="general-agent-retry">Retry</button>
                 </div>
               : agent
-              ? <ProjectAgentForm key="runner" brain={null} agent={agent}
-                  onRevise={(note) => { onDispatch?.(`Revise the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nKeep it a draft and tell me when it is on the Brain Hub form.`, { autoSend: true }); }} />
+              ? <ProjectAgentView key="runner" brain={null} agent={agent}
+                  onRevise={(note) => { onDispatch?.(`Change the Runner Agent (Knowledge/Library/project-agent.yaml): ${note}\nEdit it, check it with project_agent.validate, and tell me what you changed.`, { autoSend: true }); }} />
               : <div className="text-small text-[var(--color-text-muted)]" data-testid="general-no-agent">
                   No Runner Agent definition here yet: it is written when the workspace starts.
                 </div>}

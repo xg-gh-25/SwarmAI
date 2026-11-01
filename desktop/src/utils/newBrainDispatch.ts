@@ -232,7 +232,7 @@ export function buildAddKnowledgePrompt(name: string, items: StarterItem[]): str
       'overwrite existing judgment), s_learn-content for a link before distilling it, s_library to ' +
       'shelve a folder, and s_project-manager P3/P4 for a new asset. A change to Gates or to how the ' +
       'Brain delivers is a proposal for me to review, not a direct write; if a new asset changes the ' +
-      'Project Agent, show me the revised project-agent.yaml to confirm. Tell me what you added, ' +
+      'Project Agent, update project-agent.yaml and tell me what changed in it. Tell me what you added, ' +
       'what you skipped and why, and anything you could not reach. Finish with P6 (--record).',
   );
   return lines.join('\n');

@@ -941,6 +941,10 @@ async def get_admission_state_endpoint():
         # this daemon prepares a dispatched task's workspace (POST /api/hive/work,
         # core/hive_workspace): a Host sends a task only to a daemon that says so
         "work_orders": True,
+        # this daemon asks the person for the product's fixed reserved actions whatever a
+        # synced project-agent.yaml says (core/project_agent.RESERVED_ACTIONS); an older
+        # one read them from the file, so a Host sends a Brain's task only when this is set
+        "fixed_reserved": True,
     }
 
 

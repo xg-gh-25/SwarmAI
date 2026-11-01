@@ -1058,10 +1058,10 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
 // ── the built-in General Brain (design 2026-10-29-default-brains-and-project-agent-standard) ──
 
 const GENERAL = { name: 'General', description: 'General research, reports and answers that belong to no project',
-  library: { files: 52, bytes: 812345 }, projectAgentStatus: 'widened', shadowed: false };
+  library: { files: 52, bytes: 812345 }, projectAgentStatus: 'invalid', shadowed: false };
 
 describe('BrainHub — the built-in General Brain', () => {
-  it('is the second card, after SwarmAI, and says whether its Runner Agent is confirmed (F1)', async () => {
+  it('is the second card, after SwarmAI, and says when its Runner Agent has problems (F1)', async () => {
     mockGetPinned.mockReturnValue(['SwarmAI']);
     mockGetGeneral.mockReturnValue(GENERAL);
     render(<BrainHub defaultView="brain" />);
@@ -1071,8 +1071,8 @@ describe('BrainHub — the built-in General Brain', () => {
     expect(builtIn).toEqual(['hub-card-SwarmAI', 'hub-card-builtin-general']);
     const own = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
     expect(own).toEqual(['hub-card-AIDLC']);
-    expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent waits for you');
-    expect(screen.getByTestId('hub-signal-builtin-general').getAttribute('data-tone')).toBe('setup');
+    expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent has problems');
+    expect(screen.getByTestId('hub-signal-builtin-general').getAttribute('data-tone')).toBe('review');
     expect(screen.queryByTestId('hub-runner')).toBeNull();             // the old footer entry is gone
   });
 
@@ -1153,16 +1153,12 @@ describe('BrainHub — the built-in General Brain', () => {
     expect(screen.getByTestId('hub-signal-AIDLC').textContent).not.toContain('built-in name');
   });
 
-  it('its Runner Agent draft is one Need You row that opens its page (F2)', async () => {
+  it('its Runner Agent is never a Need You row: the agent fixes it (F2)', async () => {
     mockGetGeneral.mockReturnValue(GENERAL);
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
-    expect(screen.getByTestId('hub-chip-agent').textContent).toBe('1 agent to confirm');
-    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
-    await waitFor(() => expect(screen.getByTestId('hub-need-builtin-general-agent')).toBeTruthy());
-    expect(screen.getByTestId('hub-need-builtin-general-agent').textContent).toContain('General (built-in)');
-    fireEvent.click(screen.getByTestId('hub-need-go-builtin-general-agent'));
-    await waitFor(() => expect(screen.getByTestId('general-brain')).toBeTruthy());
+    expect(screen.queryByTestId('hub-chip-agent')).toBeNull();
+    expect(screen.queryByTestId('hub-need-builtin-general-agent')).toBeNull();
   });
 
   it('without a Runner Agent the card warns: a task that belongs to no Brain cannot go out', async () => {
@@ -1173,7 +1169,7 @@ describe('BrainHub — the built-in General Brain', () => {
   });
 
   it('a confirmed Runner Agent waits on nobody: no status on its card, no open item', async () => {
-    mockGetGeneral.mockReturnValue({ ...GENERAL, projectAgentStatus: 'reviewed' });
+    mockGetGeneral.mockReturnValue({ ...GENERAL, projectAgentStatus: 'ready' });
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-builtin-general')).toBeTruthy());
     expect(screen.queryByTestId('hub-signal-builtin-general')).toBeNull();

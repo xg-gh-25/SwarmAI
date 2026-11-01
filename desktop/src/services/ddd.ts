@@ -5,8 +5,7 @@
  * The backend already emits camelCase, so this is a thin typed client — no
  * snake→camel conversion needed (unlike workspace.ts).
  *
- * Everything here is a live read projection, except confirming a Project Agent from
- * its review card (confirmProjectAgent). No external actions.
+ * Everything here is a live read projection. No external actions.
  */
 import { useQuery } from '@tanstack/react-query';
 import api from './api';
@@ -80,10 +79,9 @@ export interface BrainSummary {
   /** While setting up: checks done (PASS + N/A) of all, from the last P6 --record.
    *  null/absent = no P6 run recorded yet, or not setting up. */
   setupProgress?: { done: number; total: number; next?: string | null } | null;
-  /** project-agent.yaml: 'widened' waits for the person (it gives the agent more than
-   *  they last confirmed); 'draft' / 'changed' the agent confirms itself; 'invalid' has
-   *  problems; null/absent = no file (or an old daemon). */
-  projectAgentStatus?: 'draft' | 'changed' | 'widened' | 'reviewed' | 'invalid' | null;
+  /** project-agent.yaml: 'ready', or 'invalid' (it has problems; the agent fixes
+   *  them); null/absent = no file (or an old daemon). */
+  projectAgentStatus?: 'ready' | 'invalid' | null;
   /** health.pending split by source: escalation | paused_run | job | …. */
   pendingBySource?: Record<string, number>;
   health: BrainHealth;
@@ -161,8 +159,8 @@ export interface BrainDetail {
    *  (`detail.health` undefined → render nothing), same as hasCodeIntel. */
   health?: DetailHealth;
   /** ⑤ Project Agent definition (project-agent.yaml), generated at Brain creation
-   *  from the DDD and reviewed by the person. null = none yet; undefined = an old
-   *  daemon that does not send it. `problems` lists unsupported values. */
+   *  from the DDD and kept current by the agent; nothing in it is confirmed. null =
+   *  none yet; undefined = an old daemon that does not send it. */
   projectAgent?: ProjectAgent | null;
   /** Need You items split by source (same as BrainSummary.pendingBySource). */
   pendingBySource?: Record<string, number>;
@@ -174,114 +172,39 @@ export interface BrainDetail {
  *  (repo-relative; empty = the repo root) of `repo`. */
 export interface AgentCommand { id?: string; command: string; source: string; repo?: string; cwd?: string }
 
-/** One work mode of a Project Agent (schema 2). A mode only narrows the shared part. */
+/** One work mode of a Project Agent (schema 2). */
 export interface AgentMode {
   id: string;
   when: string;
-  placements: string[];
   repos: string[];
   setup: AgentCommand[];
   validations: AgentCommand[];
   skills: string[];
-  delivery: string;
-  prRemote?: string | null;
+  /** the product's: the same for every Brain and mode */
   reservedForHuman: string[];
   gates: string[];
 }
 
+/** A Brain's Project Agent as the Brain Hub shows it (core/project_agent.load_project_agent):
+ *  what a Hive run reads (design 2026-11-01-project-agent-simple). */
 export interface ProjectAgent {
   path: string;
   schema?: number;
-  status?: 'draft' | 'reviewed';
-  /** whether the confirmation holds (core/project_agent.confirmation): ``changed`` =
-   *  confirmed, then the definition, a skill of its modes or its gates changed */
-  confirmation?: 'draft' | 'reviewed' | 'changed';
-  reviewedAt?: string | null;
-  /** who confirmed it: a login, or ``agent`` (the agent confirmed it itself) */
-  reviewedBy?: string | null;
-  /** design 2026-11-01-project-agent-owned-by-agent §5: the person whose confirmation is
-   *  the floor (null = the product default), the agent's confirmations since, and what
-   *  the current definition gives the agent beyond the floor (only the person confirms) */
-  floorSetBy?: string | null;
-  agentConfirms?: { at: string; why: string; changed: string[]; revision: string }[];
-  widened?: string[];
   summary?: string;
-  identity?: { summary: string; inScope: string[]; outOfScope: string[]; source: string };
-  intake?: { handles: string[]; repos: string[]; proposedAliases?: { name: string; source: string }[] };
-  confidence?: string;
   reviewFocus?: { area: string; why: string; source: string }[];
-  validations?: AgentCommand[];
+  /** the product's: what a Project Agent session always asks the person for */
   reservedForHuman?: string[];
   gates?: string[];
-  placements?: string[];
+  repos?: string[];
   modes?: AgentMode[];
   defaultMode?: string;
-  sources?: string[];
-  /** sha256 over the definition, the skills its modes use and the Brain's gates;
-   *  a confirm names the revision the person saw. */
+  validations?: AgentCommand[];
+  /** sha256 over the definition, the skills its modes use and the Brain's gates: what
+   *  a dispatch records */
   revision?: string | null;
   problems: string[];
-  /** not problems: e.g. a desktop-only skill in a mode that may run on a Hive */
-  notes?: string[];
-  /** the host check that every setup / validations source exists, for this revision */
-  sourceCheck?: { ok: boolean; checked_at: string; missing: string[] } | null;
   /** {source as written: absolute path} for the sources that resolve to a file */
   sourcePaths?: Record<string, string>;
-  /** the Brain Hub form; null when it could not be built, undefined from an old daemon */
-  form?: AgentForm | null;
-}
-
-/** How a form field may change (core/project_agent_standard.KINDS). */
-export type AgentFieldKind = 'edit' | 'brain' | 'you' | 'fixed';
-
-/** A choice of a names / choice field: a plain value, or one with its label. */
-export type AgentChoice = string | { value: string; label: string; where?: string; help?: string; available?: boolean; fixed?: boolean };
-
-/** One field of the Project Agent form (core/project_agent_form). A mode's own field
- *  carries `values` / `paths` keyed by mode id; a shared one `value` / `path`. */
-export interface AgentFormField {
-  key: string;
-  label: string;
-  help: string;
-  kind: AgentFieldKind;
-  kindLabel: string;
-  shape: 'text' | 'list' | 'rows' | 'names' | 'choice' | 'view';
-  required: boolean;
-  removable: boolean;
-  editable: boolean;
-  example: string;
-  columns: string[];
-  scope: 'shared' | 'mode';
-  value?: unknown;
-  path?: string;
-  values?: Record<string, unknown>;
-  paths?: Record<string, string>;
-  choices?: AgentChoice[] | null;
-  hive?: { local_modes: { mode: string; why: string }[] };
-}
-
-export interface AgentForm {
-  sections: { id: string; title: string; purpose: string; fields: AgentFormField[] }[];
-  modes: { id: string; standard: boolean; isDefault: boolean; placements: string[]; ownPlacements: boolean }[];
-  /** required fields still empty (a finished draft has them) */
-  missing: string[];
-  /** written by code at Brain creation; the drafting step has not run */
-  skeleton: boolean;
-  /** where the definition's own guardrails are enforced */
-  enforced: string;
-  /** on a Hive: it runs what the desktop sends, so the form is read-only */
-  readOnly?: boolean;
-}
-
-/** One change the form sends: a new value, or a row to drop. */
-export type AgentChange = { path: string; value: unknown } | { path: string; remove: number };
-
-export interface AgentConfirmResult {
-  revision: string;
-  reviewedAt: string;
-  reviewedBy: string;
-  aliasesAdded: string[];
-  sourceCheck: { ok: boolean; missing: string[] };
 }
 
 // ── What the Brain learned (design 2026-10-30-brain-change-feed) ─────────────
@@ -368,7 +291,7 @@ export interface GeneralBrain {
   name: string;
   description: string | null;
   library: { files: number; bytes: number };
-  projectAgentStatus: 'draft' | 'changed' | 'widened' | 'reviewed' | 'invalid' | null;
+  projectAgentStatus: 'ready' | 'invalid' | null;
   shadowed: boolean;
   /** entries CDF wrote into Knowledge/Library in the last 7 days (absent: old daemon) */
   learnedWeek?: number;
@@ -388,27 +311,6 @@ export async function getBrainsWithPinned(): Promise<BrainsList> {
 /** GET /api/ddd/brains/{name} — Brain view: six-section breakdown. */
 export async function getBrainDetail(name: string): Promise<BrainDetail> {
   const resp = await api.get<BrainDetail>(`/ddd/brains/${encodeURIComponent(name)}`);
-  return resp.data;
-}
-
-const AGENT_WRITE = { headers: { 'Content-Type': 'application/json', 'X-Swarm-User-Action': 'project-agent' } };
-
-function agentUrl(brain: string | null): string {
-  return brain === null ? '/ddd/runner-agent' : `/ddd/brains/${encodeURIComponent(brain)}/project-agent`;
-}
-
-/** POST …/project-agent/confirm — confirm the revision the form showed; `brain` null =
- *  the Runner Agent (the General Brain). 409 when it changed since it was shown. */
-export async function confirmProjectAgent(brain: string | null, revision: string): Promise<AgentConfirmResult> {
-  const resp = await api.post<AgentConfirmResult>(`${agentUrl(brain)}/confirm`, { revision }, AGENT_WRITE);
-  return resp.data;
-}
-
-/** PATCH …/project-agent — the form's changes on the revision it showed; the result is
- *  a draft. 400 a change the form may not make, 409 changed since, 422 not valid. */
-export async function editProjectAgent(brain: string | null, revision: string,
-  changes: AgentChange[]): Promise<{ revision: string; status: 'draft' }> {
-  const resp = await api.patch<{ revision: string; status: 'draft' }>(agentUrl(brain), { revision, changes }, AGENT_WRITE);
   return resp.data;
 }
 

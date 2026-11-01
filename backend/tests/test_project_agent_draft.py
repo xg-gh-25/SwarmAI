@@ -6,9 +6,10 @@ writes one its cited file declares verbatim, and is a command the file does not
 declare (or declares under another working directory) dropped; is a judged row whose
 source does not exist left out; are the deterministic fields decided by code
 (the standard modes: research always, code-change only with a bound repo, write only
-without one; skills placed, gates, reserved actions, placements); does a draft validate, replace an earlier draft and never a
-reviewed definition; does a shipped definition update only while the user has not
-changed it; does the CLI print facts and write the draft.
+without one; skills placed, gates); does it write none of the keys a definition no
+longer has (design 2026-11-01-project-agent-simple); does a draft validate and replace
+whatever definition is there (nothing is confirmed); does a shipped definition update
+only while the user has not changed it; does the CLI print facts and write the draft.
 """
 from __future__ import annotations
 
@@ -124,15 +125,16 @@ def test_defaults_are_decided_by_code_and_validate(brain):
     modes = {m["id"]: m for m in doc["modes"]}
     assert list(modes) == ["code-change", "research"] and doc["default_mode"] == "code-change"
     code = modes["code-change"]
-    assert code["delivery"] == "bundle" and code["repos"] == ["lib"] and doc["intake"]["repos"] == ["lib"]
+    assert code["repos"] == ["lib"] and doc["intake"]["repos"] == ["lib"]
     assert [r["command"] for r in code["setup"]] == ["pip install uv\nuv sync"]
     # validations.json wins over the CI checks when the repo has one
     assert [(r["id"], r["command"], r.get("cwd")) for r in code["validations"]] == [
         ("unit", "python -m pytest -q", None), ("types", "mypy .", "lib")]
     assert code["skills"] == ["s_lib-check", "s_lib-release"]      # unassigned → default mode
     assert doc["gates"] == {"enforce": ["no_git_push", "scan"]}
-    assert doc["reserved_for_human"] == ["open_pr", "publish_release", "push", "send_external_message"]
-    assert doc["placements"] == ["chat-tab"] and doc["status"] == "draft"
+    from core.project_agent_standard import RETIRED_KEYS
+    assert not set(doc) & set(RETIRED_KEYS)
+    assert all("delivery" not in m and "placements" not in m for m in doc["modes"])
     # a Project Agent names no pipeline profile (a dispatch picks how work runs)
     assert all("profile" not in m and "profile_rules" not in m for m in doc["modes"])
 
@@ -324,11 +326,10 @@ def test_judged_rows_without_an_existing_source_are_not_written(brain):
     (brain.parent / "outside.md").write_text("not the Brain's\n")
     doc, dropped = pad.build(brain, proposal)
     assert validate(doc, brain) == []
-    assert doc["identity"] == {"summary": "A signing library", "source": "PRODUCT.md", "in_scope": ["bugs"]}
-    assert doc["intake"]["handles"] == ["fix a signer bug"]
-    assert doc["intake"]["proposed_aliases"] == [{"name": "signer", "source": "TECH.md"}]
+    assert doc["identity"] == {"summary": "A signing library", "source": "PRODUCT.md"}
+    assert doc["intake"]["handles"] == ["fix a signer bug"] and "proposed_aliases" not in doc["intake"]
     assert doc["watches"] == [{"area": "security", "why": "constant time", "source": "lib:README.md"}]
-    assert doc["confidence"] == "research first"
+    assert "confidence" not in doc
     assert doc["gates"]["enforce"] == ["no_git_push"]
     modes = {m["id"]: m for m in doc["modes"]}
     assert set(modes) == {"code-change", "research", "release"}
@@ -336,11 +337,11 @@ def test_judged_rows_without_an_existing_source_are_not_written(brain):
     assert modes["code-change"]["skills"] == ["s_lib-check"]          # the one release did not take
     # a proposed profile or profile rule is not written: the mode's `when` and the rest are
     assert all("profile" not in m and "profile_rules" not in m for m in doc["modes"])
-    for needle in ("NOPE.md", "handles[2]: no source", "lib:missing.md", "../outside.md", "GHOST.md", "modes[orphan]",
+    for needle in ("NOPE.md", "handles[2]: no source", "lib:missing.md", "../outside.md", "modes[orphan]",
                    "modes[Bad Id]", "s_missing", "modes[code-change].profile_rules: a Project Agent no longer",
-                   "not_a_gate", "surprise: unknown key"):
+                   "not_a_gate", "surprise: unknown key", "confidence: unknown key", "aliases: unknown key"):
         assert any(needle in d for d in dropped), needle
-    assert "PRODUCT.md" in doc["sources"] and "NOPE.md" not in doc["sources"]
+    assert "sources" not in doc
 
 
 def test_a_brain_without_a_repo_gets_research_and_write(tmp_path):
@@ -355,7 +356,7 @@ def test_a_brain_without_a_repo_gets_research_and_write(tmp_path):
     assert any("changes no code" in d for d in dropped)
 
 
-def test_apply_replaces_a_draft_and_never_a_reviewed_definition(brain):
+def test_apply_replaces_whatever_definition_is_there(brain):
     target = brain / "project-agent.yaml"
     target.write_text("schema: 1\nstatus: draft\ndefault_profile: bugfix\nplacements: [chat-tab]\n")
     r = pad.apply(brain, {})
@@ -364,11 +365,11 @@ def test_apply_replaces_a_draft_and_never_a_reviewed_definition(brain):
     assert len(kept) == 1 and kept[0].read_text().startswith("schema: 1")
     written = yaml.safe_load(target.read_text())
     assert written["schema"] == 2 and validate(written, brain) == []
-    reviewed = target.read_text().replace("status: draft", "status: reviewed")
-    target.write_text(reviewed)
+    # a definition an older version marked confirmed is the Brain's like any other:
+    # the next draft merges with it and drops the marks (nothing is confirmed)
+    target.write_text(target.read_text() + "status: reviewed\nreviewed_by: someone\n")
     r = pad.apply(brain, {})
-    assert not r["written"] and "reviewed" in r["problems"][0]
-    assert target.read_text() == reviewed
+    assert r["written"] and "status" not in yaml.safe_load(target.read_text())
     target.unlink()
     r = pad.apply(brain, {}, dry_run=True)
     assert not r["written"] and not target.exists() and r["definition"]["schema"] == 2
@@ -413,12 +414,12 @@ def test_shipped_definitions_validate_on_a_fresh_install(tmp_path):
     for name, where in SHIPPED.items():
         doc = yaml.safe_load((SHIPPED_DIR / name).read_text())
         brain_dir = where(tmp_path)
-        assert doc["status"] == "draft" and validate(doc, brain_dir) == [], name
-        for src in doc.get("sources") or []:
-            assert pad._brain_file(brain_dir, src), (name, src)
+        assert "status" not in doc and validate(doc, brain_dir) == [], name
+        src = (doc.get("identity") or {}).get("source")
+        assert src is None or pad._brain_file(brain_dir, src), (name, src)
     runner = yaml.safe_load((SHIPPED_DIR / "runner.yaml").read_text())
     assert [m["id"] for m in runner["modes"]] == ["research", "write"]
-    assert runner["placements"] == ["chat-tab", "hive"] and "repos" not in runner["intake"]
+    assert "repos" not in runner["intake"]
 
 
 def test_a_shipped_definition_updates_only_while_unchanged(tmp_path):
@@ -507,25 +508,11 @@ def test_cli_general_brain(tmp_path, monkeypatch, capsys):
     assert [m["id"] for m in doc["modes"]] == ["research", "write"]
 
 
-def test_a_mode_may_narrow_where_it_runs_and_never_widen(brain):
-    """A mode whose checks need a tool only one place has (a Rust toolchain on the
-    desktop) says so with its own placements; a placement outside the shared ones, or
-    one without a source, is dropped and the mode inherits the shared placements."""
-    proposal = {"modes": [
+def test_a_proposed_placement_is_not_written(brain):
+    """Every Brain may run on a Hive (design 2026-11-01-project-agent-simple): a mode
+    names no placements."""
+    doc, dropped = pad.build(brain, {"modes": [
         {"id": "shell", "when": "a change to the native shell", "source": "TECH.md",
-         "profile": "bugfix", "repos": ["lib"], "placements": ["chat-tab"]},
-        {"id": "wide", "when": "anything", "source": "TECH.md", "profile": "direct",
-         "placements": ["chat-tab", "hive"]},
-        {"id": "code-change", "placements": ["chat-tab"]},
-    ]}
-    doc, dropped = pad.build(brain, proposal)
+         "repos": ["lib"], "placements": ["chat-tab"]}]})
     assert validate(doc, brain) == []
-    modes = {m["id"]: m for m in doc["modes"]}
-    assert modes["shell"]["placements"] == ["chat-tab"]
-    assert "placements" not in modes["wide"]
-    assert "placements" not in modes["code-change"]
-    assert any("modes[wide].placements" in d for d in dropped)
-    assert any("modes[code-change].placements" in d and "no source" in d for d in dropped)
-    # the person adds hive on the card: the narrowed mode stays where it can run
-    doc["placements"] = ["chat-tab", "hive"]
-    assert validate(doc, brain) == []
+    assert all("placements" not in m for m in doc["modes"])

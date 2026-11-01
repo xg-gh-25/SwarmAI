@@ -224,7 +224,7 @@ function BrainDetailShell(
   const { data: analytics = null } = useQuery<PipelineAnalytics>({
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
-  // same count as the map's You: each Run waiting, each Need-You item, a Project Agent draft
+  // same count as the map's You: each Run waiting, each Need-You item
   const needs = summary ? hubSummary([summary], analytics).needsYou : 0;
 
   // close THIS overlay BEFORE dispatching swarm:open-file so the Canvas isn't

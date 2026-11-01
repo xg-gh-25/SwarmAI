@@ -376,8 +376,7 @@ def cmd_bind(args, reg) -> None:
         except Exception as e:  # noqa: BLE001
             learned = {"error": f"{type(e).__name__}: {e}"}
     # ... and its Project Agent draft gains the repo's code-change mode and checks
-    # (design 2026-10-29-project-agent-standard-template §6.4); a reviewed definition
-    # is left for the person
+    # (design 2026-10-29-project-agent-standard-template §6.4), merged with what is there
     agent = None
     if any(o.status == "bound" for o in outcomes):
         from core.project_agent_draft import refresh_draft
@@ -557,10 +556,9 @@ def cmd_project_agent_draft(args, reg) -> None:
     ids, docs) and the proposal format. With ``--apply <proposal.json>`` (``-`` = an
     empty proposal): build the ``schema: 2`` draft, drop each judged row whose source
     does not exist and each command its source does not declare, validate it and write
-    ``project-agent.yaml`` (``--dry-run``: print, write nothing). A reviewed definition
-    is never replaced. ``--general`` targets the General Brain (the Runner Agent).
-    Exit 1 when the draft has problems or a reviewed definition is there; 2 when
-    nothing could run.
+    ``project-agent.yaml`` (``--dry-run``: print, write nothing), merged with the
+    definition there unless ``--fresh``. ``--general`` targets the General Brain (the
+    Runner Agent). Exit 1 when the draft has problems; 2 when nothing could run.
     """
     from core.project_agent import GENERAL_BRAIN, general_brain_dir
     if args.general:

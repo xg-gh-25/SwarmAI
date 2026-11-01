@@ -340,28 +340,31 @@ def test_the_hive_checks_size_and_digest_before_reading(hive_app, monkeypatch):
     assert asyncio.run(go({"X-Brain-Digest": bs.content_digest(files)})) == 200
 
 
-def test_a_draft_stays_on_the_host_but_the_default_brains_sync(tmp_path, monkeypatch):
+def test_any_valid_brain_syncs_and_an_invalid_one_stays_on_the_host(tmp_path, monkeypatch):
+    """Nothing is confirmed (design 2026-11-01-project-agent-simple): a draft, or one that
+    names only the chat tab, goes like any other; a definition with problems does not."""
     from core import brain_sync_host as host
     local = tmp_path / "host"
     _brain(local, doc={**DEF, "status": "draft"})
-    with pytest.raises(host.SyncRefused, match="confirmed"):
-        host._package(local, "Lib", default=False)
+    assert host._package(local, "Lib", default=False)[2]
     _brain(local, "Other", doc={**DEF, "placements": ["chat-tab"]})
-    with pytest.raises(host.SyncRefused):
-        host._package(local, "Other", default=False)
-    _brain(local, "SwarmAI", doc={**DEF, "status": "draft"})
+    assert host._package(local, "Other", default=False)[2]
+    _brain(local, "Broken", doc={**DEF, "default_mode": "nope"})
+    with pytest.raises(host.SyncRefused, match="no valid Project Agent"):
+        host._package(local, "Broken", default=False)
+    _brain(local, "SwarmAI", doc={**DEF, "default_mode": "nope"})
     data, digest, n = host._package(local, "SwarmAI", default=True)
     assert n and len(digest) == 64
 
 
 def test_console_rows_say_why_a_brain_cannot_be_sent():
     from core import brain_sync_host as host
-    local = {"brain": "Lib", "status": "draft", "hive": True, "digest": "a" * 64, "error": None}
+    local = {"brain": "Lib", "status": "invalid", "digest": "a" * 64, "error": None}
     row = host._row(local, None, True)
-    assert not row["dispatchable"] and "its Project Agent is a draft" in row["reasons"] and "not synced" in row["reasons"]
-    row = host._row({**local, "status": "reviewed", "hive": False}, {"digest": "a" * 64}, True)
-    assert row["reasons"] == ["its Project Agent does not allow the Hive"] and row["synced"]
-    row = host._row({**local, "status": "reviewed"}, None, False)
+    assert not row["dispatchable"] and "it has no valid Project Agent" in row["reasons"] and "not synced" in row["reasons"]
+    row = host._row({**local, "status": "ready"}, {"digest": "a" * 64}, True)
+    assert row["reasons"] == [] and row["synced"] and row["dispatchable"] and row["syncable"]
+    row = host._row({**local, "status": "ready"}, None, False)
     assert "this Hive's version is too old to receive Brains" in row["reasons"] and not row["syncable"]
     assert not row["default"] and host._row({**local, "brain": "SwarmAI"}, None, True)["default"]
     assert host._row({**local, "brain": "General"}, None, True)["default"]

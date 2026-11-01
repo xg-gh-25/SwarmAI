@@ -25,7 +25,7 @@ vi.mock('../../services/hive', async () => {
 import { HiveBrains, resetHiveBrainsAutoSync } from './HiveBrains';
 
 const row = (o: Partial<HiveBrainRow>): HiveBrainRow => ({
-  brain: 'Lib', agent: 'reviewed', localDigest: 'a'.repeat(64), localError: null,
+  brain: 'Lib', agent: 'ready', localDigest: 'a'.repeat(64), localError: null,
   hiveDigest: 'a'.repeat(64), installedAt: '2026-10-29T01:00:00Z', synced: true,
   hiveChangedFiles: 0, running: 0, dispatchable: true, reasons: [], syncable: true,
   isDefault: false, ...o,
@@ -51,8 +51,8 @@ describe('HiveBrains', () => {
     brainStatus.mockResolvedValue(status([
       row({ brain: 'SwarmAI', isDefault: true }),
       row({ brain: 'Lib', synced: false, hiveDigest: 'b'.repeat(64), dispatchable: false, reasons: ['out of date'] }),
-      row({ brain: 'Draft', agent: 'draft', synced: false, hiveDigest: null, dispatchable: false,
-            syncable: false, reasons: ['its Project Agent is a draft', 'not synced'] }),
+      row({ brain: 'Draft', agent: 'invalid', synced: false, hiveDigest: null, dispatchable: false,
+            syncable: false, reasons: ['it has no valid Project Agent', 'not synced'] }),
     ]));
     renderQ();
     const summary = await screen.findByTestId('hive-brains-summary');
@@ -61,8 +61,8 @@ describe('HiveBrains', () => {
     expect(screen.queryByTestId('hive-brains-rows')).toBeNull();
     fireEvent.click(screen.getByTestId('hive-brains-toggle'));
     expect(screen.getByTestId('hive-brain-Lib').textContent).toContain('Out of date');
-    expect(screen.getByTestId('hive-brain-Draft').textContent).toContain('its Project Agent is a draft');
-    expect(screen.queryByTestId('hive-brain-sync-Draft')).toBeNull();   // a draft does not leave the host
+    expect(screen.getByTestId('hive-brain-Draft').textContent).toContain('it has no valid Project Agent');
+    expect(screen.queryByTestId('hive-brain-sync-Draft')).toBeNull();   // an invalid one does not leave the host
     expect(syncDefaultBrains).not.toHaveBeenCalled();                    // the defaults are synced
   });
 

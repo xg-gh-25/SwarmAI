@@ -176,8 +176,7 @@ utils/file_lock.py:md_lock  # exempt: the .lock sidecar
 scripts/probe_ddd.py:_bootstrap_holds  # exempt: eval probe fixture in a temp workspace
 scripts/cdf_rehearsal_replay.py:_drain  # exempt: drives CDF's own worker and writer, only on a workspace copy (guard_paths refuses ~/.swarm-ai)
 scripts/cdf_rehearsal_replay.py:main  # exempt: writes the JSON report to --report; governed writes go through _drain
-core/project_agent.py:check_sources  # exempt: project-agent source-check JSON (.project-agent-check.json), not a governed knowledge file
-core/project_agent_draft.py:apply  # exempt: project-agent definition draft (YAML) awaiting the Brain Hub review card, not governed knowledge
+core/project_agent_draft.py:apply  # exempt: the Project Agent definition (YAML) the drafting step writes, not governed knowledge
 scripts/eval_runner.py:write_gate_manifest  # exempt: eval gate input-hash manifest
 core/project_agent_session.py:_run_one  # exempt: the gate subprocess I/O files in its own temp dir (in.json / err.txt)
 core/code_intel/local_roots.py:_locked  # exempt: local-roots registry JSON lock (bindings dir)
@@ -189,8 +188,6 @@ routers/library_api.py:register_mount._work  # exempt: via library_mounts: mount
 core/library_mounts.py:_reindex_if_outdated  # exempt: via code_intel.build.spawn_child: starts a mount's re-index child (its code_intel.db); log under app data
 core/library_mounts.py:main  # exempt: the mount re-index child: the mount's code_intel.db and the rebuild-turn lock under app data
 jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via local_roots.migrate_once and code_intel.build: local-roots registry JSON and code graph DBs
-routers/ddd_brain.py:_confirm  # exempt: via project_agent_review.confirm: the person's confirm writes project-agent.yaml (a definition file, not governed knowledge)
-routers/ddd_brain.py:_edit  # exempt: via project_agent_review.edit: the person's form edit writes project-agent.yaml (a definition file, not governed knowledge)
 core/ddd_format.py:_append_moved  # exempt: writes the Brain's deep reference (2-understanding/knowledge/), not a governed file; the docs themselves go through governed_edit.apply_user_edit
 core/ingestion/pipeline_v2.py:_resolved  # exempt: reads the CDF store's root trust (lineage_external opens it); writes no governed file
 core/memory_injection.py:recorded_selection  # exempt: reads the latest injection selection from the CDF store (standing.connect, read-only here); writes no governed file

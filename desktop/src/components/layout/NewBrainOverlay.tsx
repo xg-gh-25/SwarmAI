@@ -85,7 +85,7 @@ function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSe
 }
 
 const NEXT_STEPS: { n: number; title: string; body: string }[] = [
-  { n: 1, title: 'Set up together in chat', body: 'Assets, knowledge, binding, then the Project Agent the agent proposes for you to confirm.' },
+  { n: 1, title: 'Set up together in chat', body: 'Assets, knowledge, binding, then the Project Agent the agent drafts from them.' },
   { n: 2, title: 'Grows in Brain Hub', body: 'It shows on the Brain map as being born; each petal fills as its section is written.' },
   { n: 3, title: 'Ready', body: 'When the check passes, open its map or describe a first change for a Run.' },
 ];

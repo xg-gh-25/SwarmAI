@@ -214,9 +214,12 @@ def _ws(tmp_path: Path, doc: dict | None = None, gates: dict[str, str] | None = 
 def test_a_pin_is_made_from_the_definition(tmp_path):
     ws = _ws(tmp_path)
     pin = pas.make_pin(ws, "Lib")
-    assert pin["mode"] == "research" and pin["reserved"] == ["push"] and pin["gates"] == ["block_rm"]
+    # the actions kept for the person are the product's, whatever the file says (design
+    # 2026-11-01-project-agent-simple)
+    from core.project_agent import RESERVED_ACTIONS
+    assert pin["mode"] == "research" and pin["reserved"] == sorted(RESERVED_ACTIONS) and pin["gates"] == ["block_rm"]
     rel = pas.make_pin(ws, "Lib", "release")
-    assert rel["reserved"] == ["push", "publish_release"] and rel["gates"] == ["block_rm", "slow"]
+    assert rel["reserved"] == sorted(RESERVED_ACTIONS) and rel["gates"] == ["block_rm", "slow"]
     assert rel["revision"] and len(rel["gates_digest"]) == 64
     for args in (("Lib", "nope"), ("Lib", None, "stale"), ("../etc",), ("Nope",)):
         with pytest.raises(pas.PinError):

@@ -14,7 +14,9 @@ docs/design/2026-10-28-project-agent-flow.md §7 ①–④, ⑥).
   §3, the s_swarm-out skill), with ``why`` recorded. The Project Agent does not set it.
   ``returns`` (answer / document / commits) is chosen the same way; only ``commits``
   makes the repositories writable on the Hive (each repo's ``access``, §4.3).
-  Everything else (delivery, revision, rules) comes from the definition; the repositories
+  Everything else (revision, setup, checks, gates) comes from the definition; nothing in
+  it is confirmed (design 2026-11-01-project-agent-simple): admission refuses what is
+  wrong and the agent fixes it. The repositories
   are every one the Brain binds, at this machine's commit when it has a checkout.
 - ``parse_execution(text)``: ``{"how", "profile"}`` of an execution choice.
 - ``admit(spec)``: the deterministic admission checks; each refusal names its rule.
@@ -32,8 +34,7 @@ from typing import Any, Optional
 import yaml
 
 from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, _bindings, _list_of_dicts,
-                                _mode_view, _skills, confirmation, normalize, revision, source_check_current,
-                                validate)
+                                _mode_view, _skills, normalize, revision, source_problems, validate)
 from core.project_agent_session import PinError, brain_dir
 
 MAX_ACCEPTANCE_CHARS = 2000
@@ -72,8 +73,7 @@ def _choice(workspace: Path, brain: str) -> Optional[dict[str, Any]]:
     identity = n.get("identity") if isinstance(n.get("identity"), dict) else {}
     intake = n.get("intake") if isinstance(n.get("intake"), dict) else {}
     return {"brain": brain, "summary": str(identity.get("summary") or "")[:300],
-            "handles": [str(h)[:200] for h in (intake.get("handles") or [])][:8],
-            "status": n.get("status", "draft")}
+            "handles": [str(h)[:200] for h in (intake.get("handles") or [])][:8]}
 
 
 def route(workspace: Path, text: str, brain: Optional[str] = None,
@@ -91,8 +91,7 @@ def route(workspace: Path, text: str, brain: Optional[str] = None,
     if hit and _choice(workspace, hit) is not None:
         return {"brain": hit, "signal": signal, "certain": True, "choices": []}
     choices = [c for c in (_choice(workspace, n) for n in names) if c]
-    general = _choice(workspace, GENERAL_BRAIN) or {"brain": GENERAL_BRAIN, "summary": "", "handles": [],
-                                                    "status": None}
+    general = _choice(workspace, GENERAL_BRAIN) or {"brain": GENERAL_BRAIN, "summary": "", "handles": []}
     general["summary"] = "Not part of any Brain: the Runner Agent, with the general Knowledge"
     return {"brain": None, "signal": signal if hit is None else "no_definition", "certain": False,
             "choices": choices + [general]}
@@ -193,20 +192,6 @@ def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance
     return out
 
 
-def confirm_latest(workspace: Path, brain: str, session: Optional[str] = None) -> Optional[dict[str, Any]]:
-    """Before a spec: the agent confirms the Brain's current definition when nothing
-    stands against it (core/project_agent_review.agent_confirm; design
-    2026-11-01-project-agent-owned-by-agent §3). It rewrites the definition, so it runs
-    before the spec reads its revision. None when the Brain cannot be found (``build``
-    says why)."""
-    try:
-        d = brain_dir(workspace, brain)
-    except PinError:
-        return None
-    from core.project_agent_review import agent_confirm
-    return agent_confirm(d, session=session, why="checked before a dispatch")
-
-
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
           execution: Optional[str] = None, why: str = "", placement: str = "hive", *,
           returns: Optional[str] = None, needs_private: str = "") -> dict[str, Any]:
@@ -241,7 +226,6 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
     usable = [s for s in view["skills"]
               if placement != "hive" or platform.get(s, "any") not in _DESKTOP_PLATFORMS]
     identity = n.get("identity") if isinstance(n.get("identity"), dict) else {}
-    check = source_check_current(d)
     return {
         "brain": brain, "mode": mid, "mode_when": view["when"],
         "mode_chosen": "named" if mode else "the default mode",
@@ -253,8 +237,9 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "private": private_needs(d, mid, view, task or "", acceptance or "", needs_private),
         "execution_why": " ".join((why or "").split())[:MAX_WHY_CHARS],
         "task": (task or "").strip(), "acceptance": " ".join((acceptance or "").split()),
-        "placement": placement, "repos": repos, "delivery": view["delivery"],
-        "revision": revision(d), "status": n.get("status", "draft"),
+        # what comes back is decided by ``returns``; a bundle is the one delivery there is
+        "placement": placement, "repos": repos, "delivery": "bundle",
+        "revision": revision(d),
         "reserved": view["reservedForHuman"], "gates": view["gates"],
         "skills": usable, "skills_not_here": [s for s in view["skills"] if s not in usable],
         "setup": view["setup"], "validations": view["validations"],
@@ -263,11 +248,8 @@ def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optiona
         "summary": _line(identity.get("summary")),
         "problems": validate(raw, d),
         "schema": raw.get("schema", 1),
-        # the record confirm writes for the revision the person confirmed; None when
-        # missing or older than the definition (General included)
-        "source_check": {"ok": check.get("ok") is True, "missing": [str(x) for x in check.get("missing") or []]}
-        if check else None,
-        "mode_placements": view["placements"],
+        # each setup / validation command's source must be in the repository (host only)
+        "source_problems": source_problems(d, mid) if placement == "hive" else [],
     }
 
 
@@ -313,9 +295,6 @@ def admit(spec: dict[str, Any]) -> list[str]:
         out.append(f"the Project Agent has problems: {'; '.join(spec['problems'][:3])}")
     if not spec["revision"]:
         out.append("the Project Agent has no revision (its file is missing or a link)")
-    if spec["placement"] not in spec["mode_placements"]:
-        out.append(f"mode {spec['mode']} does not run on {spec['placement']} (its placements: "
-                   f"{', '.join(spec['mode_placements']) or 'none'})")
     if spec["placement"] == "hive":
         if spec.get("private"):
             # no Hive reaches a private network (dispatch-center §2.2): refused before a
@@ -323,24 +302,16 @@ def admit(spec: dict[str, Any]) -> list[str]:
             out.append(PRIVATE_REFUSAL + "; ".join(spec["private"][:4]))
         if spec["schema"] != 2:
             out.append("the definition is schema 1: rewrite it with modes (schema 2) first")
-        state = confirmation(spec["status"], spec["source_check"])     # the Brain Hub's rule too
-        check = spec["source_check"]
-        if state in ("draft", "changed"):
-            # the agent confirms what does not widen its authority (confirm_latest); what
-            # is left waits for the person, and the spec's ``project_agent`` says why
-            what = ("the Project Agent is a draft" if state == "draft"
-                    else "the definition changed after it was confirmed")
-            out.append(f"{what}, not confirmed: " + _unconfirmed_why(spec.get("project_agent")))
-        elif not check["ok"]:
-            out.append("the source check found commands with no source in the repository: "
-                       + "; ".join(check["missing"][:3]))
+        if spec.get("source_problems"):
+            # nothing is confirmed (design 2026-11-01-project-agent-simple): the agent
+            # fixes the definition and dispatches again
+            out.append("fix the Project Agent first, a command has no source in the repository: "
+                       + "; ".join(spec["source_problems"][:3]))
         for r in spec["repos"]:
             if not str(r["url"]).startswith(("https://", "git@", "ssh://")):
                 out.append(f"{r['name']} has no remote a Hive can clone ({r['url']!r})")
             if r.get("error"):
                 out.append(f"{r['name']}: {r['error']}")
-        if spec["delivery"] == "branch-pr":
-            out.append("delivery branch-pr is not available yet; use bundle")
     prof = spec["execution"]["profile"]
     if prof is not None:
         from core.run_protocol.lifecycle import caps
@@ -365,18 +336,6 @@ def admit(spec: dict[str, Any]) -> list[str]:
 
 
 # ── ⑥ the project section the Hive reads before the task ─────────────────────
-
-def _unconfirmed_why(result: Any) -> str:
-    """Why the agent's own confirmation did not go through, in one line."""
-    if not isinstance(result, dict):
-        return "the agent did not confirm it (run project_agent confirm)"
-    if result.get("status") == "widened":
-        return ("it widens the authority the person last confirmed (" + "; ".join(result.get("widened") or [])[:400]
-                + "): ask the person with project_agent card, or undo those changes")
-    if result.get("status") == "problems":
-        return "fix it first: " + "; ".join(str(p) for p in result.get("problems") or [])[:400]
-    return "the agent did not confirm it (run project_agent confirm)"
-
 
 def lifecycle_caps_words(profile: str) -> bool:
     """The profile's requirement is the person's own words (direct)."""

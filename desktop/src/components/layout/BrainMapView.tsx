@@ -4,8 +4,8 @@
  * Agent, Conductor · Runs, Reflect · Evolution, Eval); clicking a map part opens its
  * tab.
  *   BrainMapView      Overview: the Brain map, and beside it Needs you + Eval summary
- *   BrainNeedsView    Needs you: Runs, a Project Agent draft
- *   BrainAgentView    Project Agent: review / revise / confirm, and Start a Run
+ *   BrainNeedsView    Needs you: Runs and what Need You holds for the Brain
+ *   BrainAgentView    Project Agent: what a Hive run reads, ask for a change, and Start a Run
  *   BrainRunsView     Conductor · Runs: the Chat tab and Hive lanes, each Run one card
  *   BrainEvalView     Eval: the five dimensions, UNKNOWN where nobody measures
  *   BrainAddKnowledge Brain (DDD): add files / folders / links / repos, distilled in chat
@@ -17,8 +17,8 @@
  * reads (GET /api/swarm-out/runs, polled while shown). Nothing here is a sample: what
  * nobody records is UNKNOWN or "—" (design docs/design/2026-10-30-brain-runs-one-card.md).
  * The Project Agent definition is real: project-agent.yaml, a skeleton at creation and
- * drafted from the DDD. Its form (ProjectAgentForm) shows the standard template's eight
- * sections, saves changes and confirms through the backend; bigger changes go to chat.
+ * drafted from the DDD, kept current by the agent. ProjectAgentView shows it read-only;
+ * a change goes to the agent in chat (nothing is confirmed).
  * Submitting a request is real: it goes to chat as a pipeline Run request.
  *
  * Exports: BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView,
@@ -36,7 +36,7 @@ import { LocalRunCard } from './LocalRunCard';
 import { Stat, SectionLabel, StatusBadge, Hint } from '../overlay';
 import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from './BrainMap';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
-import { ProjectAgentForm } from './ProjectAgentForm';
+import { ProjectAgentView } from './ProjectAgentView';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { openOverlayAt } from '../../utils/overlayTarget';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -73,7 +73,7 @@ function useBrainData(name: string) {
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
   const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
-  const needs = useMemo(() => needsYouItems(runs, detail?.projectAgent, detail?.pendingBySource), [runs, detail]);
+  const needs = useMemo(() => needsYouItems(runs, detail?.pendingBySource), [runs, detail]);
   const ev = useMemo(() => brainEval(runs, detail, knowledge), [runs, detail, knowledge]);
   return { detail, runs, needs, ev };
 }
@@ -104,8 +104,7 @@ function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], hive: 
     capabilities: base('capabilities'),
     delivery: base('delivery'),
     refresher: base('refresher'),
-    agent: pa === undefined ? undefined : pa === null ? 'attention'
-      : (pa.problems.length || pa.status !== 'reviewed') ? 'needs' : 'ok',
+    agent: pa === undefined ? undefined : pa === null ? 'attention' : pa.problems.length ? 'needs' : 'ok',
     conductor: runs.some((r) => r.needsYou) || hive.some((r) => r.state === 'waiting') ? 'needs'
       : runs.some((r) => r.status === 'running') || hive.some(hiveLive) ? 'busy' : runs.length || hive.length ? 'ok' : undefined,
     reflect: ev.brain.learnedWeek ? 'ok' : undefined,
@@ -116,8 +115,7 @@ function agentLine(pa: ProjectAgent | null | undefined): string | undefined {
   if (pa === undefined) return undefined;
   if (pa === null) return 'not generated yet';
   if (pa.problems.length) return 'file has problems';
-  const state = pa.confirmation ?? (pa.status === 'reviewed' ? 'reviewed' : 'draft');   // an older daemon: no confirmation
-  return `${state === 'changed' ? 'changed since confirmed' : state} · ${pa.defaultMode ?? '--'}`;
+  return `ready · ${pa.defaultMode ?? '--'}`;
 }
 
 /** Overview tab: the Brain map, Needs you and an Eval summary. Map parts open tabs. */
@@ -215,7 +213,7 @@ function LineKey({ v, dashed, children }: { v: string; dashed?: boolean; childre
   );
 }
 
-function NeedList({ items, onGoTo }: { items: ReturnType<typeof needsYouItems>; onGoTo: (t: BrainTab) => void }) {
+function NeedList({ items }: { items: ReturnType<typeof needsYouItems>; onGoTo?: (t: BrainTab) => void }) {
   if (items.length === 0) {
     return <div className="px-3 pb-3 text-small text-[var(--color-status-success)]" data-testid="bm-need-empty">Nothing needs you right now.</div>;
   }
@@ -229,7 +227,6 @@ function NeedList({ items, onGoTo }: { items: ReturnType<typeof needsYouItems>; 
           </div>
           {it.kind === 'run' && <button className="btn-sm btn-secondary shrink-0" onClick={() => openRun(it.id)}>Answer</button>}
           {it.kind === 'other' && <button className="btn-sm btn-secondary shrink-0" onClick={openNeedYou}>Open</button>}
-          {it.kind === 'agent' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('agent')}>Open</button>}
         </div>
       ))}
     </div>
@@ -269,14 +266,14 @@ export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: Bra
   return (
     <div className="p-4" data-testid="bm-needs-view">
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
-        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, a Project Agent that gives the agent more than you allowed, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
+        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
         <NeedList items={needs} onGoTo={onGoTo} />
       </div>
     </div>
   );
 }
 
-/** Project Agent tab: the definition (review / revise / confirm) and Start a Run. */
+/** Project Agent tab: the definition (read-only; a change goes to the agent) and Start a Run. */
 export function BrainAgentView({ name, onDispatch, onRequestClose }: {
   name: string; onDispatch?: Dispatch; onRequestClose?: () => void;
 }) {
@@ -416,9 +413,9 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
         </div>
       ) : (
         agent === null
-          ? <AgentNone onGenerate={() => send(`Draft the Project Agent of the ${name} Brain from its DDD (s_project-manager P3b, artifact_cli project-agent-draft) and tell me when it is on the Brain Hub form.`, 'draft the Project Agent')} />
-          : <ProjectAgentForm key={name} brain={name} agent={agent}
-              onRevise={(note) => send(`Revise the Project Agent of the ${name} Brain (project-agent.yaml): ${note}\nGive each change its source, keep it a draft, and tell me when it is on the Brain Hub form.`, 'revise the Project Agent')} />
+          ? <AgentNone onGenerate={() => send(`Draft the Project Agent of the ${name} Brain from its DDD (s_project-manager P3b, artifact_cli project-agent-draft) and tell me what it holds.`, 'draft the Project Agent')} />
+          : <ProjectAgentView key={name} brain={name} agent={agent}
+              onRevise={(note) => send(`Change the Project Agent of the ${name} Brain (project-agent.yaml): ${note}\nGive each change its source, check it with project_agent.validate, and tell me what you changed.`, 'change the Project Agent')} />
       )}
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4" data-testid="bm-agent-send">
         <SectionLabel>Send it work</SectionLabel>

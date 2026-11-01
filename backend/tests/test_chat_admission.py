@@ -144,4 +144,5 @@ def test_admission_state_stalled_counts_wedged_streaming_units(client):
         d = client.get("/api/chat/sessions/admission-state").json()
 
     assert d["stalled_streaming"] == 1   # only the wedged one
+    assert d["fixed_reserved"] is True   # a Host sends a Brain's task only to a daemon that says so
     assert d["idle_live_units"] == 1     # only the idle one (not the 2 streaming)

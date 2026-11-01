@@ -144,7 +144,6 @@ export function HiveBrains({ instanceId }: { instanceId: string }) {
           {data.brains.map((b) => {
             const v = verdict(b);
             const notes = [
-              b.agent === 'draft' ? 'Project Agent is a draft' : null,
               b.hiveChangedFiles ? `the Hive changed ${b.hiveChangedFiles} file${b.hiveChangedFiles === 1 ? '' : 's'}` : null,
               b.running ? `${b.running} running` : null,
             ].filter(Boolean);

@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from core.ddd_entry_lifecycle import (
     VALID_TYPES,
@@ -1315,123 +1315,6 @@ async def brain_recall(name: str, q: str = "") -> dict:
         return {"query": q, "count": 0, "hits": [], "error": "recall unavailable"}
 
 
-# ── Project Agent review card (design 2026-10-28-project-agent-flow §5, step 3) ──
-
-class ProjectAgentConfirmBody(BaseModel):
-    """The revision the person saw on the form."""
-    revision: str
-
-
-class ProjectAgentEditBody(BaseModel):
-    """The form's changes, made on the revision the person saw: each ``{path, value}``
-    or ``{path, remove: <row>}`` (core/project_agent_review.edit)."""
-    revision: str
-    changes: list[dict[str, Any]]
-
-
-def _agent_write(request: Request, project_dir: Path, work) -> dict:
-    """Run a form write: a JSON request from the app only (``X-Swarm-User-Action``,
-    which a cross-site page cannot send without a preflight the daemon refuses), and
-    never on a Hive (it runs the definitions the host syncs to it)."""
-    import os as _os
-    from core.project_agent_review import ReviewError
-    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if ctype != "application/json" or not request.headers.get("x-swarm-user-action"):
-        raise HTTPException(status_code=415, detail="a JSON request from the app is required")
-    if _os.environ.get("SWARMAI_MODE") == "hive":
-        raise HTTPException(status_code=403, detail="Change the Project Agent on the desktop")
-    try:
-        return work(project_dir)
-    except ReviewError as exc:
-        detail: Any = {"message": str(exc), "problems": exc.problems} if exc.problems else str(exc)
-        raise HTTPException(status_code=exc.status, detail=detail) from None
-
-
-def _confirm(body: ProjectAgentConfirmBody):
-    import getpass
-    from core.project_agent_review import confirm
-    return lambda d: confirm(d, seen_revision=body.revision, reviewer=getpass.getuser())
-
-
-def _edit(body: ProjectAgentEditBody):
-    from core.project_agent_review import edit
-    return lambda d: edit(d, seen_revision=body.revision, changes=body.changes)
-
-
-def _brain_dir_or_404(name: str) -> Path:
-    project_dir = _resolve_brain_dir(name)   # containment-checked
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
-    return project_dir
-
-
-@router.post("/brains/{name}/project-agent/confirm")
-async def confirm_project_agent(name: str, body: ProjectAgentConfirmBody, request: Request) -> dict:
-    """Confirm a Brain's Project Agent as the form showed it. 409 when it changed since."""
-    return await executors.run_nav(lambda: _agent_write(request, _brain_dir_or_404(name), _confirm(body)))
-
-
-class AgentConfirmBody(BaseModel):
-    """The agent asking: its session and, for a confirmation, why (design
-    2026-11-01-project-agent-owned-by-agent §2-§4)."""
-    session: Optional[str] = Field(default=None, max_length=80)
-    why: Optional[str] = Field(default=None, max_length=600)
-
-
-def _agent_brain_dir(name: str) -> Path:
-    """The Brain an agent confirms or asks about (``General`` = the Runner Agent); never
-    on a Hive, which runs the definitions the host syncs to it."""
-    import os as _os
-    from core.project_agent_session import PinError, brain_dir
-    if _os.environ.get("SWARMAI_MODE") == "hive":
-        raise HTTPException(status_code=403, detail="Change the Project Agent on the desktop")
-    try:
-        return brain_dir(_workspace_root(), name)
-    except PinError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from None
-
-
-@router.post("/brains/{name}/project-agent/agent-confirm")
-async def agent_confirm_project_agent(name: str, body: AgentConfirmBody) -> dict:
-    """The agent confirms the current definition when its authority is no wider than the
-    person's floor (core/project_agent_review.agent_confirm); ``status`` says what
-    happened. It never confirms as the person."""
-    from core.app_session_id import valid_app_session_id
-    from core.project_agent_review import agent_confirm
-    session = body.session if body.session and valid_app_session_id(body.session) else None
-    return await executors.run_nav(
-        lambda: agent_confirm(_agent_brain_dir(name), session=session, why=body.why or ""))
-
-
-@router.post("/brains/{name}/project-agent/agent-card")
-async def agent_card_project_agent(name: str, body: AgentConfirmBody) -> dict:
-    """The question card that asks the person to confirm what widened
-    (core/project_agent_card); 409 when there is nothing to ask."""
-    from core import project_agent_card
-
-    def _work() -> dict:
-        _agent_brain_dir(name)
-        try:
-            return project_agent_card.card(name, body.session)
-        except project_agent_card.CardError as e:
-            raise HTTPException(status_code=409, detail=str(e)) from None
-
-    return await executors.run_nav(_work)
-
-
-@router.get("/brains/{name}/project-agent/agent-card")
-async def agent_card_status(name: str) -> dict:
-    """What the person did with the last card: confirmed / kept / not_confirmed / asked."""
-    from core import project_agent_card
-    return await executors.run_nav(lambda: {"card": project_agent_card.status(name)})
-
-
-@router.patch("/brains/{name}/project-agent")
-async def edit_project_agent(name: str, body: ProjectAgentEditBody, request: Request) -> dict:
-    """Change fields of a Brain's Project Agent from the form; the result is a draft."""
-    return await executors.run_nav(lambda: _agent_write(request, _brain_dir_or_404(name), _edit(body)))
-
-
 # ── Local repositories (design 2026-10-29-code-intel-auto D1) ─────────────────
 # The user's own checkouts a Brain reads into its code graph. Declared with
 # ``artifact_cli bind --local`` (an agent, or New Brain through it), owned at once;
@@ -1527,19 +1410,3 @@ async def get_runner_agent() -> dict:
         return {"projectAgent": load_project_agent(general_brain_dir(_workspace_root()))}
 
     return await executors.run_nav(_work)
-
-
-@router.post("/runner-agent/confirm")
-async def confirm_runner_agent(body: ProjectAgentConfirmBody, request: Request) -> dict:
-    """Confirm the Runner Agent, as ``/brains/{name}/project-agent/confirm`` does."""
-    from core.project_agent import general_brain_dir
-    return await executors.run_nav(
-        lambda: _agent_write(request, general_brain_dir(_workspace_root()), _confirm(body)))
-
-
-@router.patch("/runner-agent")
-async def edit_runner_agent(body: ProjectAgentEditBody, request: Request) -> dict:
-    """Change fields of the Runner Agent, as ``PATCH /brains/{name}/project-agent`` does."""
-    from core.project_agent import general_brain_dir
-    return await executors.run_nav(
-        lambda: _agent_write(request, general_brain_dir(_workspace_root()), _edit(body)))

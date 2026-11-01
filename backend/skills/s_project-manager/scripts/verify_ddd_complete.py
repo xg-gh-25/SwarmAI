@@ -460,15 +460,11 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph {ci.name}: {nodes} files indexed")
 
 
-# Where a Project Agent may run. Guarded single-source import, the same pattern as
-# CANONICAL_DOCS: the literal fallback only fires when this gate runs portable, off a
-# SwarmAI host. (A Project Agent no longer names a pipeline profile: each dispatch picks
-# how its work runs, design 2026-10-30-run-spec §3.)
+# The Project Agent validator. Guarded single-source import, the same pattern as
+# CANONICAL_DOCS: None only when this gate runs portable, off a SwarmAI host.
 try:
-    from core.project_agent import PLACEMENTS as _PLACEMENTS
     from core.project_agent import validate as _validate_project_agent
 except ImportError:
-    _PLACEMENTS = frozenset({"chat-tab", "hive"})
     _validate_project_agent = None
 
 
@@ -479,9 +475,8 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
     project-agent-draft``). A skeleton (written by code when the Brain was created: no
     summary, no typical requests) → FAIL until the drafting step fills it in. Present with any problem ``core.project_agent.validate``
     reports for this Brain (either schema; names checked against the Brain on disk) →
-    FAIL. Valid and a draft → PENDING (it waits for the person on the Brain Hub review
-    card, which does not fail the gate). Valid and reviewed → PASS. Off a SwarmAI host
-    the validator is not importable and the placement check below runs instead.
+    FAIL. Valid → PASS: nothing is confirmed (design 2026-11-01-project-agent-simple).
+    Off a SwarmAI host the validator is not importable and only the shape is checked.
     """
     name = "⑤ Project Agent"
     p = d / "project-agent.yaml"
@@ -518,21 +513,11 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         modes = doc.get("modes") if doc.get("schema") == 2 else None
         detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
                   else "one mode (schema 1)")
-        if doc.get("status") != "reviewed":
-            return (name, STATUS_PENDING, f"draft · {detail} — confirm it: scripts.project_agent confirm (the person only when it says widened)")
-        return (name, STATUS_PASS, f"reviewed · {detail}")
-    bad: list[str] = []
+        return (name, STATUS_PASS, f"ready · {detail}")
     if doc.get("schema") == 2 and not (isinstance(doc.get("modes"), list) and doc["modes"]):
-        bad.append("modes []")
-    places = doc.get("placements") or []
-    if not places or any(x not in _PLACEMENTS for x in places):
-        bad.append(f"placements {places!r}")
-    if bad:
-        return (name, STATUS_FAIL, "not a supported value: " + ", ".join(bad))
+        return (name, STATUS_FAIL, "not a supported value: modes []")
     detail = (f"{len(doc['modes'])} modes" if doc.get("schema") == 2 else "one mode (schema 1)")
-    if doc.get("status") != "reviewed":
-        return (name, STATUS_PENDING, f"draft · {detail}")
-    return (name, STATUS_PASS, f"reviewed · {detail}")
+    return (name, STATUS_PASS, f"ready · {detail}")
 
 
 # ── orchestration ────────────────────────────────────────────────────────────

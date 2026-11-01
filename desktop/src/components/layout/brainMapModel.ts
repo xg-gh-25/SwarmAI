@@ -64,7 +64,7 @@ export function runTone(r: PipelineRunSummary): RunTone {
 }
 
 export interface NeedItem {
-  kind: 'run' | 'agent' | 'other';
+  kind: 'run' | 'other';
   id: string;
   title: string;
   detail: string;
@@ -72,14 +72,14 @@ export interface NeedItem {
   count: number;
 }
 
-/** Everything in this brain that waits for a person, in one list: Runs, and a Project Agent that gives the agent more than the person allowed (or a file with problems), then one
- *  row per kind the attention channel holds that neither list names (escalations,
- *  failing jobs, newly read repositories, Runs not listed, anything else).
- *  The rows' counts add up to the Brain header's count (the attention channel's
- *  pending + a Project Agent waiting), so the header, the map's You and this list agree. */
+/** Everything in this brain that waits for a person, in one list: Runs, then one row per
+ *  kind the attention channel holds that the Runs do not name (escalations, failing
+ *  jobs, newly read repositories, Runs not listed, anything else). The rows' counts add
+ *  up to the Brain header's count (the attention channel's pending), so the header, the
+ *  map's You and this list agree. The Project Agent never waits on the person: the
+ *  agent keeps it current and fixes its problems (design 2026-11-01-project-agent-simple). */
 export function needsYouItems(
   runs: PipelineRunSummary[],
-  agent?: { status?: string; problems?: string[] } | null,
   bySource?: Record<string, number>,
 ): NeedItem[] {
   const items: NeedItem[] = [];
@@ -102,11 +102,6 @@ export function needsYouItems(
       ['other', split.other, plural(split.other, 'other item'), 'open Need You'],
     ];
     for (const [id, n, title, detail] of rest) if (n > 0) items.push({ kind: 'other', id, title, detail, count: n });
-  }
-  if (agent && agent.problems && agent.problems.length) {
-    items.push({ kind: 'agent', id: 'project-agent', title: 'The Project Agent file has problems to fix', detail: agent.problems.join(' · '), count: 1 });
-  } else if (agent && agent.status !== 'reviewed') {
-    items.push({ kind: 'agent', id: 'project-agent', title: 'Confirm the Project Agent draft', detail: 'generated from this Brain; review it, then confirm or revise', count: 1 });
   }
   return items;
 }
@@ -174,7 +169,7 @@ export function brainEval(
 export interface HubSummary {
   brains: number;
   /** items waiting on a person: the attention channel's count (Runs, escalations,
-   *  failing jobs) + Project Agents to confirm or fix */
+   *  failing jobs) */
   needsYou: number;
   /** brains with a Run in progress */
   running: number;
@@ -192,8 +187,8 @@ export interface HubSummary {
 }
 
 /** How much an open item asks of the person, most first: a Run or an escalation is
- *  blocked on them; a failing job waits for a review; a Project Agent
- *  draft or a Brain being born is setup; a repository a Brain started reading is a
+ *  blocked on them; a failing job waits for a review; a Brain being born is setup; a
+ *  repository a Brain started reading is a
  *  notice. Only urgent and review carry a warm color on the Hub. */
 export type Severity = 'urgent' | 'review' | 'setup' | 'notice';
 export const SEVERITY_ORDER: Severity[] = ['urgent', 'review', 'setup', 'notice'];
@@ -202,7 +197,7 @@ export interface HubNeed {
   brain: string;
   /** run: one Run (from the analytics); runs: Runs waiting that the analytics did
    *  not list; escalations / jobs / repos: counted per brain; agent: a draft */
-  kind: 'run' | 'runs' | 'escalations' | 'jobs' | 'agent' | 'repos';
+  kind: 'run' | 'runs' | 'escalations' | 'jobs' | 'repos';
   id: string;
   text: string;
   /** how many items this row stands for (a per-brain count, or 1) */
@@ -213,32 +208,6 @@ export interface HubNeed {
   /** the built-in General Brain (opened by its own view, never by the name) */
   builtin?: boolean;
 }
-
-/** The General Brain's Runner Agent waits on the person: it gives the agent more than
- *  they last confirmed, or its file has problems. A draft or a changed one the agent
- *  confirms itself (design 2026-11-01-project-agent-owned-by-agent). */
-const generalWaits = (g?: GeneralBrain | null) =>
-  !!g && (g.projectAgentStatus === 'widened' || g.projectAgentStatus === 'invalid');
-
-/** The Need You row of the built-in General Brain's Runner Agent, or none. Its id never
- *  collides with a Projects/ Brain that carries the same name (`<name>-agent`). */
-export function generalNeed(g?: GeneralBrain | null): HubNeed | null {
-  if (!g || !generalWaits(g)) return null;
-  const s = g.projectAgentStatus;
-  return { brain: g.name, kind: 'agent', id: 'builtin-general-agent', since: null, builtin: true, count: 1,
-    severity: s === 'invalid' ? 'review' : 'setup',
-    text: s === 'widened' ? WIDENED_TEXT('Runner Agent') : 'Runner Agent file has problems to fix' };
-}
-
-/** A Project Agent waits on the person only when it gives the agent more than they last
- *  confirmed (confirm those), or has problems. A draft or a changed one the agent
- *  confirms itself before its next dispatch. */
-const agentWaits = (b: BrainSummary) =>
-  b.projectAgentStatus === 'widened' || b.projectAgentStatus === 'invalid';
-
-/** The definition gives the agent more than the person last allowed (a reserved action,
- *  a gate, how it delivers): only the person confirms that (core/project_agent_floor). */
-const WIDENED_TEXT = (who: string) => `${who} gives the agent more than you allowed: confirm it`;
 
 /** health.pending split by source (the attention channel's own split). An old daemon
  *  without the split counts everything as one unnamed bucket. */
@@ -254,11 +223,11 @@ export function pendingSplit(b: Pick<BrainSummary, 'health' | 'pendingBySource'>
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** Every item across all brains that waits for a person: Runs oldest first, then
- *  escalations, failing jobs and Project Agents to confirm or fix.
+ *  escalations and failing jobs.
  *  Each item is counted once: the attention channel's count per source, with the
  *  Runs named from the analytics where it lists them. */
 export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined,
-  general?: GeneralBrain | null): HubNeed[] {
+  _general?: GeneralBrain | null): HubNeed[] {
   const out: HubNeed[] = [];
   const runs: HubNeed[] = [];
   for (const b of brains) {
@@ -278,15 +247,9 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
     if (split.repos) row('repos', split.repos, 'notice', `now reads ${plural(split.repos, 'new repository', 'new repositories')}`);
   }
   runs.sort((x, y) => (x.since || '').localeCompare(y.since || ''));
-  const agents: HubNeed[] = brains.filter(agentWaits).map((b) => ({
-    brain: b.name, kind: 'agent', id: `${b.name}-agent`, since: null, count: 1,
-    severity: b.projectAgentStatus === 'invalid' ? 'review' : 'setup',
-    text: b.projectAgentStatus === 'widened' ? WIDENED_TEXT('Project Agent') : 'Project Agent file has problems to fix',
-  }));
   const order: HubNeed['kind'][] = ['runs', 'escalations', 'jobs', 'repos'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
-  const g = generalNeed(general);
-  return [...runs, ...out, ...agents, ...(g ? [g] : [])];
+  return [...runs, ...out];
 }
 
 export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
@@ -297,8 +260,7 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null,
   return {
     brains: brains.length,
     // the attention channel already counts waiting Runs (paused_run): never add them twice
-    needsYou: brains.reduce((s, b) => s + (b.health.pending ?? 0), 0) + brains.filter(agentWaits).length
-      + (generalWaits(general) ? 1 : 0),
+    needsYou: brains.reduce((s, b) => s + (b.health.pending ?? 0), 0),
     running: brains.filter((b) => b.health.liveRun).length,
     born: brains.filter((b) => b.setupState === 'setting-up').length,
     learned: reported.length ? reported.reduce((s, b) => s + (b.learnedWeek ?? 0), 0) : null,
@@ -326,7 +288,6 @@ export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): Brai
   if (b.projectAgentStatus === 'invalid') return { tone: 'review', rank: 1, text: 'Project Agent has problems' };
   if (b.health.liveRun) return { tone: 'live', rank: 2, text: 'Run in progress' };
   if (b.setupState === 'setting-up') return { tone: 'setup', rank: 3, text: bornText(b.setupProgress) };
-  if (b.projectAgentStatus === 'widened') return { tone: 'setup', rank: 3, text: 'Project Agent waits for you' };
   if (split.repos) return { tone: 'notice', rank: 4, text: `Reads ${plural(split.repos, 'new repository', 'new repositories')}` };
   return { tone: 'calm', rank: 5, text: '' };
 }
@@ -341,7 +302,7 @@ const NEXT_STEP: Record<string, string> = {
   'Gates': 'add the gates folder',
   'Capabilities': 'add the skills',
   'Delivery Contract': 'bind the repo',
-  'Project Agent': 'confirm the Project Agent',
+  'Project Agent': 'draft the Project Agent',
   'Refresher/code-intel': 'build the code graph',
 };
 

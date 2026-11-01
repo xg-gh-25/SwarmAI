@@ -120,7 +120,7 @@ export interface VerifyResult {
  *  times and counts come from the Hive; the reasons are the host's own text. */
 export interface HiveBrainRow {
   brain: string;
-  agent: 'reviewed' | 'draft' | 'invalid' | null;
+  agent: 'ready' | 'invalid' | null;
   localDigest: string | null;
   localError: string | null;
   hiveDigest: string | null;
@@ -147,7 +147,7 @@ function brainRow(r: Record<string, unknown>): HiveBrainRow {
   const num = (v: unknown) => (typeof v === 'number' ? v : null);
   return {
     brain: String(r.brain ?? ''),
-    agent: (['reviewed', 'draft', 'invalid'] as const).find((a) => a === r.agent) ?? null,
+    agent: (['ready', 'invalid'] as const).find((a) => a === r.agent) ?? null,
     localDigest: str(r.local_digest),
     localError: str(r.local_error),
     hiveDigest: str(r.hive_digest),

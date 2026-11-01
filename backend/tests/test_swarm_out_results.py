@@ -625,6 +625,19 @@ async def test_a_hive_that_cannot_prepare_a_workspace_gets_nothing(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_a_hive_that_reads_reserved_actions_from_the_file_gets_no_brain_task(monkeypatch, tmp_path):
+    # an older Hive took the reserved actions from the synced definition, which no longer
+    # carries them; a Brain's task goes only to a Hive that keeps the product's
+    seen = _hive_with(monkeypatch, tmp_path, {"saturated": False, "work_orders": True})
+    inst = await swarm_out._instance("worker-1")
+    with pytest.raises(swarm_out.SwarmOutError, match="does not keep the reserved actions"):
+        await swarm_out._require_work_orders(inst)
+    assert [r.url.path for r in seen] == ["/api/chat/sessions/admission-state"]
+    _hive_with(monkeypatch, tmp_path, _work.ADMISSION)
+    await swarm_out._require_work_orders(inst)                   # a current Hive passes
+
+
+@pytest.mark.asyncio
 async def test_a_workspace_the_hive_did_not_prepare_as_ordered_sends_nothing(monkeypatch, tmp_path):
     def odd(body):
         order = _work.order_for(body)

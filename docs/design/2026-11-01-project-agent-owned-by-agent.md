@@ -3,7 +3,7 @@ title: Project Agent 由 agent 自己确认，人只管"放宽给自己的权力
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: r1 已实现（2026-11-01）；§10 是实现时按审查改的地方
+status: 已被 docs/design/2026-11-01-project-agent-simple.md 取代（2026-11-01）：确认、底线、问题卡一并删掉
 tags: [project-agent, brain-hub, autonomy, hive, dispatch]
 related:
   - docs/design/2026-10-28-project-agent-flow.md（定义、revision、来源检查、D4"默认是草稿"；本设计改它的 §5 审核卡和 §7 ③ 准入）

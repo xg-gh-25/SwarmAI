@@ -2,15 +2,14 @@
 push a Brain to a Hive and compare what each side has.
 
 - ``local_brains(workspace)``: every Brain on this machine (``Projects/*`` and the
-  General Brain) with its Project Agent status, whether it allows the Hive, and its
-  content digest (computed here, from ``brain_sync.collect``).
+  General Brain) with its Project Agent status and its content digest (computed here, from ``brain_sync.collect``).
 - ``hive_brains(inst)``: what the Hive reports (``GET /api/hive/brains``), reduced to
   validated digests, times and counts; a Hive without the endpoint (404) is reported
   as too old to sync, so one update makes it syncable.
 - ``sync(inst, brain)``: package, push (``PUT /api/hive/brains/<brain>``) and check
   the Hive answered with the same digest. A Brain other than the two default ones
-  (SwarmAI and General) leaves this machine only when its Project Agent is reviewed
-  and allows the Hive: a draft does not go anywhere.
+  (SwarmAI and General) leaves this machine only when it has a valid Project Agent
+  (nothing is confirmed: design 2026-11-01-project-agent-simple).
 - ``status(hive_ref)``: the console's rows for one Hive, and ``sync_defaults`` (the
   SwarmAI and General Brains, synced when missing or out of date).
 
@@ -29,7 +28,7 @@ import yaml
 
 from core import brain_sync
 from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, general_brain_dir, is_general_name,
-                                normalize, validate)
+                                validate)
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +60,14 @@ def _brain_dir(workspace: Path, brain: str) -> tuple[Path, bool]:
 
 
 def _agent(root: Path) -> dict[str, Any]:
-    """{status: reviewed | draft | invalid | None, hive: allowed}."""
+    """{status: ready | invalid | None (no definition)}."""
     try:
         doc = yaml.safe_load((root / PROJECT_AGENT_FILE).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {"status": None, "hive": False}
+        return {"status": None}
     except (OSError, UnicodeError, yaml.YAMLError):
-        return {"status": "invalid", "hive": False}
-    if not isinstance(doc, dict) or validate(doc, root):
-        return {"status": "invalid", "hive": False}
-    n = normalize(doc)
-    return {"status": "reviewed" if n.get("status") == "reviewed" else "draft",
-            "hive": "hive" in (n.get("placements") or [])}
+        return {"status": "invalid"}
+    return {"status": "invalid" if not isinstance(doc, dict) or validate(doc, root) else "ready"}
 
 
 def local_brain(workspace: Path, brain: str) -> dict[str, Any]:
@@ -136,9 +131,8 @@ def _package(workspace: Path, brain: str, default: bool) -> tuple[bytes, str, in
     if not root.is_dir():
         raise SyncRefused(f"there is no Brain {brain} on this machine")
     agent = _agent(root)
-    if not default and not (agent["status"] == "reviewed" and agent["hive"]):
-        raise SyncRefused(f"{brain} goes to a Hive only once its Project Agent is confirmed "
-                          "with the Hive allowed")
+    if not default and agent["status"] != "ready":
+        raise SyncRefused(f"{brain} has no valid Project Agent; fix it, then send it")
     files = brain_sync.collect(root, general)
     data = brain_sync.pack(files)
     if len(data) > brain_sync.MAX_PACKAGE_BYTES:
@@ -180,11 +174,8 @@ def _row(local: dict[str, Any], remote: Optional[dict[str, Any]], supported: boo
     reasons = []
     if not supported:
         reasons.append("this Hive's version is too old to receive Brains")
-    if local["status"] != "reviewed":
-        reasons.append("its Project Agent is a draft" if local["status"] == "draft"
-                       else "it has no valid Project Agent")
-    elif not local["hive"]:
-        reasons.append("its Project Agent does not allow the Hive")
+    if local["status"] != "ready":
+        reasons.append("it has no valid Project Agent")
     if supported and not synced:
         reasons.append("not synced" if remote is None else "out of date")
     modified = None
@@ -197,8 +188,7 @@ def _row(local: dict[str, Any], remote: Optional[dict[str, Any]], supported: boo
             "running": remote.get("running") if remote else None,
             "dispatchable": not reasons, "reasons": reasons,
             "default": local["brain"] in DEFAULT_BRAINS,
-            "syncable": supported and (local["brain"] in DEFAULT_BRAINS
-                                       or (local["status"] == "reviewed" and local["hive"]))}
+            "syncable": supported and (local["brain"] in DEFAULT_BRAINS or local["status"] == "ready")}
 
 
 async def status(hive_ref: str) -> dict[str, Any]:

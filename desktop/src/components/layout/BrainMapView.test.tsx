@@ -25,14 +25,10 @@ const DETAIL = {
 };
 const KNOWLEDGE = { brain: 'P', since: 'week', layers: [], gaps: [], counts: { week: 1, all: 4 },
   withdrawn: { count: 0, items: [] } };
-const confirmProjectAgent = vi.fn();
-const editProjectAgent = vi.fn();
 vi.mock('../../services/ddd', () => ({
   useBrainDetail: () => ({ data: DETAIL }),
   useBrainKnowledge: () => ({ data: KNOWLEDGE }),
   useRunnerAgent: () => ({ data: null }),
-  confirmProjectAgent: (...a: unknown[]) => confirmProjectAgent(...a),
-  editProjectAgent: (...a: unknown[]) => editProjectAgent(...a),
   getStarterKind: () => Promise.resolve({ path: '', role: 'DISTILL', why: '', roots: [] }),
 }));
 vi.mock('../../services/pipelines', () => ({ pipelinesService: { fetchAnalytics: vi.fn() } }));
@@ -239,163 +235,52 @@ describe('BrainMapView', () => {
   });
 });
 
-describe('BrainMapView · Project Agent form', () => {
-  const field = (o: Record<string, unknown>) => ({
-    help: 'what it is for', kindLabel: { edit: 'Editable', brain: 'From the Brain', you: 'Your choice', fixed: 'Fixed' }[o.kind as string],
-    required: false, removable: false, editable: o.kind !== 'fixed' && o.shape !== 'view', example: '', columns: [], scope: 'shared', ...o,
-  });
-  const FORM = {
-    sections: [
-      { id: 'identity', title: 'Identity', purpose: 'Who it is.', fields: [
-        field({ key: 'summary', label: 'Summary', kind: 'edit', shape: 'text', required: true, value: 'Small fixes.', path: 'identity.summary' }),
-        field({ key: 'repos', label: 'Repositories', kind: 'brain', shape: 'view', editable: false,
-          value: [{ name: 'lib', local: '~/src/lib', remote: 'https://github.com/acme/lib.git' }] })] },
-      { id: 'modes', title: 'Modes', purpose: 'Kinds of work.', fields: [
-        field({ key: 'when', label: 'Used when', kind: 'edit', shape: 'text', required: true, scope: 'mode',
-          values: { 'code-change': 'a fix' }, paths: { 'code-change': 'modes[code-change].when' } }),
-        field({ key: 'mode_repos', label: 'Repositories', kind: 'brain', shape: 'names', scope: 'mode', editable: false,
-          values: { 'code-change': ['lib'] }, paths: { 'code-change': 'modes[code-change].repos' } }),
-        field({ key: 'validations', label: 'Checks a run must pass', kind: 'brain', shape: 'rows', removable: true, scope: 'mode',
-          columns: ['id', 'command', 'cwd', 'source'],
-          values: { 'code-change': [{ id: 'unit', command: 'pytest', cwd: '' }, { id: 'lint', command: 'ruff', cwd: '' }] },
-          paths: { 'code-change': 'modes[code-change].validations' } })] },
-      { id: 'guardrails', title: 'Guardrails', purpose: 'Limits.', fields: [
-        field({ key: 'reserved_for_human', label: 'Always ask me before', kind: 'you', shape: 'names', required: true,
-          value: ['push'], path: 'reserved_for_human', choices: [{ value: 'push', label: 'Push to a remote' }, { value: 'open_pr', label: 'Open a pull request' }] })] },
-      { id: 'intake', title: 'Intake', purpose: 'How work comes in.', fields: [
-        field({ key: 'handles', label: 'Typical requests', kind: 'edit', shape: 'list', required: true, value: ['fix a bug'], path: 'intake.handles' })] },
-      { id: 'profiles', title: 'Pipeline profiles', purpose: 'Reference.', fields: [
-        field({ key: 'profiles', label: 'Profiles', kind: 'fixed', shape: 'view', editable: false,
-          // the shape project_agent_form sends: no mode picks a profile (Run Spec)
-          value: [{ name: 'bugfix', for: 'a defect', stages: ['build', 'test'] }] })] },
-    ],
-    modes: [{ id: 'code-change', standard: true, isDefault: true, placements: ['chat-tab'], ownPlacements: false }],
-    missing: [], skeleton: false, enforced: 'The guardrails of this definition are enforced when the agent runs on a Hive.',
-  };
+describe('BrainMapView · Project Agent', () => {
   const AGENT = {
-    path: 'project-agent.yaml', status: 'draft', revision: 'r1', summary: 'Small fixes.',
-    identity: { summary: 'Small fixes.', inScope: [], outOfScope: [], source: 'TECH.md' },
-    problems: [], form: FORM,
+    path: 'project-agent.yaml', revision: 'r1234567', summary: 'Small fixes.', defaultMode: 'code-change',
+    reservedForHuman: ['open_pr', 'publish_release', 'push', 'send_external_message'], gates: ['no_git_push'],
+    reviewFocus: [{ area: 'security', why: 'constant-time compare', source: 'TECH.md' }],
+    modes: [{ id: 'code-change', when: 'a fix', repos: ['lib'],
+              setup: [{ command: 'uv sync', source: 'ci.yml', repo: 'lib' }],
+              validations: [{ id: 'unit', command: 'pytest -q', source: 'ci.yml', repo: 'lib' }],
+              skills: ['s_lib-release'], reservedForHuman: [], gates: ['no_git_push'] },
+            { id: 'research', when: 'a question', repos: [], setup: [], validations: [], skills: [],
+              reservedForHuman: [], gates: [] }],
+    problems: [],
   };
   const openAgent = (onDispatch = vi.fn(() => true)) => {
     render(<BrainAgentView name="P" onDispatch={onDispatch} />);
     return onDispatch;
   };
-  beforeEach(() => { confirmProjectAgent.mockReset(); editProjectAgent.mockReset(); });
 
-  it('shows the backend\'s sections in order, each field with who may change it', () => {
+  it('shows what a Hive run reads, and nothing to confirm or edit', () => {
     (DETAIL as Record<string, unknown>).projectAgent = AGENT;
     openAgent();
-    const ids = screen.getAllByTestId(/^pa-section-/).map((el) => el.getAttribute('data-testid'));
-    expect(ids).toEqual(['pa-section-identity', 'pa-section-modes', 'pa-section-guardrails', 'pa-section-intake', 'pa-section-profiles']);
-    expect(screen.getByTestId('pa-field-summary').textContent).toContain('Editable');
-    expect(screen.getByTestId('pa-field-repos').textContent).toContain('From the Brain');
-    expect(screen.getByTestId('pa-repos').textContent).toContain('github.com/acme/lib');
-    expect(screen.getByTestId('pa-enforced').textContent).toContain('on a Hive');
-    // the profiles reference renders the shape the backend sends (no modes per profile)
-    expect(screen.getByTestId('pa-profiles').textContent).toContain('build → test');
-    expect(screen.getByTestId('pa-profiles').textContent).not.toContain('Modes that start here');
-  });
-
-  it('saves the changes in one request, rows dropped highest first, then confirms', async () => {
-    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
-    editProjectAgent.mockResolvedValue({ revision: 'r2', status: 'draft' });
-    confirmProjectAgent.mockResolvedValue({ revision: 'r3', reviewedAt: 't', reviewedBy: 'me', aliasesAdded: [], sourceCheck: { ok: true, missing: [] } });
-    const onDispatch = openAgent();
-    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'Fixes to the signer.' } });
-    const rows = screen.getByTestId('pa-rows-modes[code-change].validations');
-    for (const b of Array.from(rows.querySelectorAll('button[title="Remove"]'))) fireEvent.click(b);
-    expect(screen.getByTestId('pa-count').textContent).toBe('3 changes');
-    expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();          // save first
-    fireEvent.click(screen.getByTestId('pa-save'));
-    await waitFor(() => expect(editProjectAgent).toHaveBeenCalledWith('P', 'r1', [
-      { path: 'identity.summary', value: 'Fixes to the signer.' },
-      { path: 'modes[code-change].validations', remove: 1 },
-      { path: 'modes[code-change].validations', remove: 0 }]));
-    fireEvent.click(screen.getByTestId('bm-agent-confirm'));
-    await waitFor(() => expect(confirmProjectAgent).toHaveBeenCalledWith('P', 'r1'));
-    expect(onDispatch).not.toHaveBeenCalled();
-  });
-
-  it('cannot confirm while a required field is empty', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, form: { ...FORM, missing: ['Typical requests'] } };
-    openAgent();
-    expect((screen.getByTestId('bm-agent-confirm') as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId('pa-missing').textContent).toContain('Typical requests');
-    expect(screen.getByTestId('pa-bar-note').textContent).toContain('Fill in first');
-  });
-
-  it('a change under the page keeps the unsaved changes and says so', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
-    const { rerender } = render(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
-    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'x' } });
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, revision: 'r9' };
-    rerender(<BrainAgentView name="P" onDispatch={vi.fn(() => true)} />);
-    expect(screen.getByTestId('pa-count').textContent).toBe('1 change');
-    expect((screen.getByTestId('pa-input-identity.summary') as HTMLInputElement).value).toBe('x');
-    expect(screen.getByTestId('pa-notice').textContent).toContain('kept');
-  });
-
-  it('a 409 keeps the changes', async () => {
-    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
-    editProjectAgent.mockRejectedValue({ response: { status: 409, data: { detail: 'changed' } } });
-    openAgent();
-    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'y' } });
-    fireEvent.click(screen.getByTestId('pa-save'));
-    await waitFor(() => expect(screen.getByTestId('pa-error').textContent).toContain('kept'));
-    expect(screen.getByTestId('pa-count').textContent).toBe('1 change');
-  });
-
-  it('saving a confirmed definition says it becomes a draft again', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed' };
-    openAgent();
-    fireEvent.change(screen.getByTestId('pa-input-identity.summary'), { target: { value: 'z' } });
-    expect(screen.getByTestId('pa-save').textContent).toBe('Save as draft');
-    expect(screen.getByTestId('pa-bar-note').textContent).toContain('draft again');
-  });
-
-  it('on a Hive the form is read-only', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, form: { ...FORM, readOnly: true } };
-    openAgent();
-    expect(screen.getByTestId('pa-read-only')).toBeTruthy();
-    expect(screen.queryByTestId('pa-input-identity.summary')).toBeNull();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('ready for Hive runs');
+    expect(screen.getByTestId('pa-mode-code-change').textContent).toContain('pytest -q');
+    expect(screen.getByTestId('pa-mode-code-change').textContent).toContain('uv sync');
+    expect(screen.getByTestId('pa-guards').textContent).toContain('push');
+    expect(screen.getByTestId('pa-guards').textContent).toContain('no_git_push');
     expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();
+    expect(screen.queryByTestId('pa-save')).toBeNull();
   });
 
-  it('a revise note goes to chat; a confirmed definition has no confirm button', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed' };
+  it('a definition with problems says the agent fixes them', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, problems: ['default_mode is not one of the modes'] };
+    openAgent();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('the agent fixes them');
+    expect(screen.getByTestId('bm-agent-problems').textContent).toContain('default_mode');
+  });
+
+  it('a change goes to the agent in chat', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
     const onDispatch = openAgent();
-    expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();
-    expect(screen.getByTestId('bm-agent-status').textContent).toContain('confirmed');
-    fireEvent.change(screen.getByTestId('bm-agent-note'), { target: { value: 'use full for API changes' } });
+    expect((screen.getByTestId('bm-agent-note') as HTMLTextAreaElement).tagName).toBe('TEXTAREA');
+    fireEvent.change(screen.getByTestId('bm-agent-note'), { target: { value: 'add a release mode' } });
     fireEvent.click(screen.getByTestId('bm-agent-revise'));
     const calls = onDispatch.mock.calls as unknown as string[][];
-    expect(calls[0][0]).toContain('use full for API changes');
-  });
-
-  it('a changed definition is the agent\'s to confirm; one that widens says what only the person confirms', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed', confirmation: 'changed' };
-    openAgent();
-    expect(screen.getByTestId('bm-agent-status').textContent).toContain('the agent confirms it before its next dispatch');
-    expect(screen.queryByTestId('pa-widened')).toBeNull();
-    expect(screen.getByTestId('bm-agent-confirm')).toBeTruthy();         // the person may still confirm
-  });
-
-  it('a definition that widens the agent\'s authority waits for the person and lists what', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'draft', confirmation: 'draft',
-      widened: ['the shared part no longer keeps push for you'],
-      agentConfirms: [{ at: '2026-11-01T03:00:00Z', why: 'checked before a dispatch', changed: ['modes[research].setup'], revision: 'r' }],
-      floorSetBy: 'gawan' };
-    openAgent();
-    expect(screen.getByTestId('bm-agent-status').textContent).toContain('waits for you');
-    expect(screen.getByTestId('pa-widened').textContent).toContain('no longer keeps push');
-    expect(screen.getByTestId('pa-agent-confirms').textContent).toContain('since you (gawan)');
-  });
-
-  it('a definition the agent confirmed says so', () => {
-    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed', confirmation: 'reviewed', reviewedBy: 'agent' };
-    openAgent();
-    expect(screen.getByTestId('bm-agent-status').textContent).toContain('by the agent');
+    expect(calls[0][0]).toContain('add a release mode');
+    expect(calls[0][0]).toContain('tell me what you changed');
   });
 
   it('no definition yet offers to generate it from the DDD', () => {
@@ -525,16 +410,11 @@ describe('BrainHubHome', () => {
     expect(screen.queryByTestId('hub-needs')).toBeNull();
   });
 
-  it('a Project Agent that waits for the person is setup (grey), an open item that opens the Project Agent panel', () => {
+  it('a Project Agent is never an open item: a broken one is a review signal on its card', () => {
     const onOpen = vi.fn();
-    render(<BrainHubHome brains={[brain('T', { projectAgentStatus: 'widened' })] as never} onOpen={onOpen} />);
-    expect(screen.getByTestId('hub-open-count').textContent).toBe('1 open item');
-    expect(screen.getByTestId('hub-attention').getAttribute('data-tone')).toBe('setup');
-    expect(screen.getByTestId('hub-signal-T').textContent).toBe('Project Agent waits for you');
-    expect(screen.getByTestId('hub-signal-T').getAttribute('data-tone')).toBe('setup');
-    fireEvent.click(screen.getByTestId('hub-needs-toggle'));
-    fireEvent.click(screen.getByTestId('hub-need-go-T-agent'));
-    expect(onOpen).toHaveBeenLastCalledWith('T', { view: 'map', panel: 'agent' });
+    render(<BrainHubHome brains={[brain('T', { projectAgentStatus: 'invalid' })] as never} onOpen={onOpen} />);
+    expect(screen.queryByTestId('hub-open-count')).toBeNull();
+    expect(screen.getByTestId('hub-signal-T').textContent).toBe('Project Agent has problems');
   });
 
   it('a repository a Brain started reading is a notice that opens the Brain', () => {

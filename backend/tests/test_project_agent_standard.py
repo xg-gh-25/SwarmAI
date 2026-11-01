@@ -2,12 +2,12 @@
 docs/design/2026-10-29-default-brains-and-project-agent-standard.md §6, S1-S6).
 
 Questions these tests answer: are the two shipped definitions written to the standard
-(valid, no remark, keys in the standard order, the standard modes of their shape); does
-the real generator start every draft from the same skeleton; does the review card get a
-remark exactly where a definition leaves the standard and never for what the generator
-writes; can no Projects/ Brain carry the General Brain's name on any path that makes
-one (create, rename, register, a Hive's install); does the Hub list carry the General
-Brain with what it really takes to a Hive.
+(valid, keys in the standard order, the standard modes of their shape, none of the keys
+a definition no longer has: design 2026-11-01-project-agent-simple); does the real
+generator start every draft from the same skeleton and drop retired keys; can no
+Projects/ Brain carry the General Brain's name on any path that makes one (create,
+rename, register, a Hive's install); does the Hub list carry the General Brain with
+what it really takes to a Hive.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import yaml
 
 from core import project_agent_draft as pad
 from core import project_agent_standard as std
-from core.project_agent import load_project_agent, normalize, notes, validate
+from core.project_agent import normalize, validate
 from core.project_agent_seed import SHIPPED, SHIPPED_DIR
 from tests.test_project_agent_draft import _brain, _repo
 
@@ -43,22 +43,16 @@ def test_a_shipped_definition_is_written_to_the_standard(tmp_path, name):
     doc = yaml.safe_load(raw)
     brain_dir = SHIPPED[name](ws)
     assert raw.startswith(std.HEADER), name
-    assert validate(doc, brain_dir) == [] and notes(doc, brain_dir) == [], name
+    assert validate(doc, brain_dir) == [], name
     assert list(doc) == list(std.ordered(doc)), name                 # keys in the standard order
     for m in doc["modes"]:
         assert list(m) == list(std.ordered({"modes": [m]})["modes"][0]), (name, m["id"])
     assert [{k: m[k] for k in ("id", "when")} for m in doc["modes"]] == \
         [{k: m[k] for k in ("id", "when")} for m in std.standard_modes(False)]
     assert all("profile" not in m and "profile_rules" not in m for m in doc["modes"]), name
-    assert doc["default_mode"] == std.default_mode(False) and doc["status"] == "draft"
-    assert 3 <= len(doc["intake"]["handles"]) <= 5 and doc["identity"]["out_of_scope"]
-    assert doc["reserved_for_human"] == list(std.DEFAULT_RESERVED)
-
-
-def test_the_runner_agent_may_go_to_a_hive_and_the_swarmai_draft_stays_on_the_desktop():
-    runner = yaml.safe_load((SHIPPED_DIR / "runner.yaml").read_text())
-    swarm = yaml.safe_load((SHIPPED_DIR / "swarmai.yaml").read_text())
-    assert runner["placements"] == ["chat-tab", "hive"] and swarm["placements"] == ["chat-tab"]
+    assert doc["default_mode"] == std.default_mode(False)
+    assert 3 <= len(doc["intake"]["handles"]) <= 5
+    assert not set(doc) & set(std.RETIRED_KEYS), name
 
 
 def test_the_standard_modes_of_one_shape_never_share_a_when():
@@ -82,7 +76,7 @@ def test_a_draft_without_a_repo_has_the_runner_agents_modes(tmp_path):
     runner = yaml.safe_load((SHIPPED_DIR / "runner.yaml").read_text())
     assert _skeleton(doc) == _skeleton(runner) and doc["default_mode"] == runner["default_mode"]
     assert list(doc) == list(std.ordered(doc))
-    assert validate(doc, b) == [] and notes(doc, b) == []          # the generator's own output: no remark
+    assert validate(doc, b) == [] and not set(doc) & set(std.RETIRED_KEYS)
 
 
 def test_a_draft_with_a_repo_has_code_change_and_research(tmp_path):
@@ -97,55 +91,28 @@ def test_a_draft_with_a_repo_has_code_change_and_research(tmp_path):
     assert doc["default_mode"] == "code-change"
     for m in doc["modes"]:                                         # each mode's keys in the standard order
         assert list(m) == [k for k in std.MODE_ORDER if k in m], m["id"]
-    # a proposed profile is not written (a dispatch picks how work runs), so no remark
+    # a proposed profile is not written (a dispatch picks how work runs)
     assert all("profile" not in m for m in doc["modes"])
-    assert notes(doc, b) == [n for n in notes(doc, b) if not n.startswith("standard:")]
 
 
-def test_a_mode_that_still_names_a_profile_gets_a_remark_not_a_problem(tmp_path):
-    b = _brain(tmp_path, None)
-    doc, _ = pad.build(b, {"identity": {"summary": "x", "source": "PRODUCT.md"},
-                           "handles": [{"text": "a task", "source": "PRODUCT.md"}]})
-    doc["modes"][0]["profile"] = "research"
-    doc["modes"][1]["profile_rules"] = [{"when": "w", "profile": "full"}]
-    assert validate(doc, b) == []
-    remark = [n for n in notes(doc, b) if "pipeline profile" in n]
-    assert len(remark) == 1 and "research, write" in remark[0] and "can be removed" in remark[0]
+def test_an_older_definitions_retired_keys_are_dropped_on_the_next_write():
+    old = {"schema": 2, "status": "reviewed", "reviewed_by": "x", "placements": ["chat-tab"],
+           "reserved_for_human": ["push"], "confidence": "c", "sources": ["a"],
+           "identity": {"summary": "s", "in_scope": ["a"], "out_of_scope": ["b"]},
+           "intake": {"handles": ["h"], "proposed_aliases": [{"name": "n"}]},
+           "modes": [{"id": "a", "when": "w", "delivery": "bundle", "placements": ["hive"],
+                      "reserved_for_human": [], "pr_remote": "fork", "profile": "full"}],
+           "default_mode": "a"}
+    d = std.ordered(old)
+    assert set(d) == {"schema", "identity", "intake", "modes", "default_mode"}
+    assert d["identity"] == {"summary": "s"} and d["intake"] == {"handles": ["h"]}
+    assert d["modes"] == [{"id": "a", "when": "w"}]
 
 
 def test_the_written_draft_starts_with_the_standard_header(tmp_path):
     b = _brain(tmp_path, None)
     rep = pad.apply(b, {"identity": {"summary": "x", "source": "PRODUCT.md"}})
     assert rep["written"] and (b / "project-agent.yaml").read_text().startswith(std.HEADER)
-
-
-# ── S3: remarks where a definition leaves the standard ───────────────────────
-
-def test_each_way_of_leaving_the_standard_is_one_remark(tmp_path):
-    b = _brain(tmp_path, _repo(tmp_path))
-    good, _ = pad.build(b, {"identity": {"summary": "x", "source": "PRODUCT.md"},
-                            "handles": [{"text": "a task", "source": "PRODUCT.md"}]})
-    assert [n for n in notes(good, b) if n.startswith("standard:")] == []
-    cases = {
-        "identity.summary": lambda d: d.pop("identity"),
-        "intake.handles": lambda d: d["intake"].pop("handles"),
-        "no longer reserved": lambda d: d["reserved_for_human"].remove("push"),
-        "no code-change": lambda d: d.update(modes=[m for m in d["modes"] if m["id"] != "code-change"],
-                                             default_mode="research"),
-    }
-    for needle, change in cases.items():
-        d = yaml.safe_load(yaml.safe_dump(good))
-        change(d)
-        got = [n for n in notes(d, b) if n.startswith("standard:")]
-        assert len(got) == 1 and needle in got[0], (needle, got)
-
-
-def test_a_remark_reaches_the_review_card_and_is_not_a_problem(tmp_path):
-    b = _brain(tmp_path, None)
-    doc, _ = pad.build(b, {})                                       # no summary, no handles
-    (b / "project-agent.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
-    pa = load_project_agent(b)
-    assert pa["problems"] == [] and sum(n.startswith("standard:") for n in pa["notes"]) == 2
 
 
 # ── S4: the General Brain's name ─────────────────────────────────────────────
@@ -221,7 +188,7 @@ def test_the_hub_list_carries_the_general_brain(tmp_path, monkeypatch):
     g = m._general_summary()
     assert g["name"] == "General" and g["library"] == {"files": 2, "bytes": len("# a\n") + len("# bb\n")}
     runner = yaml.safe_load((SHIPPED_DIR / "runner.yaml").read_text())
-    assert g["projectAgentStatus"] == "draft" and g["description"] == runner["identity"]["summary"]
+    assert g["projectAgentStatus"] == "ready" and g["description"] == runner["identity"]["summary"]
     assert g["shadowed"] is False
     shadow = ws / "Projects" / "general"
     shadow.mkdir()

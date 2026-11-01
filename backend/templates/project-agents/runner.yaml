@@ -1,39 +1,22 @@
-# Project Agent definition: how this Brain's work is taken in, done and delivered.
-# The agent keeps it current and confirms it; the person confirms what gives the agent more.
-# Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.
+# Project Agent definition: how a Hive run does this Brain's work.
+# The agent keeps it current; a dispatch uses the latest. Nothing in it is confirmed.
+# Fields: templates/project-agents/STANDARD.md.
 # Shipped with SwarmAI: the Runner Agent, the Project Agent of the General Brain, for tasks that
 # belong to no project. Its knowledge is the Markdown in Knowledge/Library; no repo, no gates of its own.
 schema: 2
-status: draft
-reviewed_at: null
-reviewed_by: null
 identity:
   summary: General research, reports and answers that belong to no project
-  in_scope:
-  - questions and investigations that belong to no project
-  - documents and reports that belong to no project
-  out_of_scope:
-  - changing the code of any project
-  - work that belongs to one of your Brains
-modes:
-- id: research
-  when: a question or an investigation, answered in the conversation
-- id: write
-  when: a document or a report as the deliverable
-default_mode: research
-reserved_for_human:
-- open_pr
-- publish_release
-- push
-- send_external_message
-gates:
-  enforce: []
-placements:
-- chat-tab
-- hive
 intake:
   handles:
   - research a topic and summarize what the sources say
   - answer a question from the general knowledge in the Library
   - write a report or a brief that belongs to no project
   - compare a few options and recommend one
+modes:
+- id: research
+  when: a question or an investigation, answered in the conversation
+- id: write
+  when: a document or a report as the deliverable
+default_mode: research
+gates:
+  enforce: []

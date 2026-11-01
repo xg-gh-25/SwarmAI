@@ -350,9 +350,11 @@ def test_the_return_routes_are_host_only_and_say_why_they_refuse(monkeypatch):
     def refuse(*a, **k):
         raise hive_return.ReturnError("the bundle has 2 refs; one is expected")
     monkeypatch.setattr(hive_return, "land", refuse)
-    r = c.post(f"/api/swarm-out/runs/{DID}/return/land", json={"key": "k" * 16, "tip": "t" * 40})
+    # the person's commands (a request that does not say person is an agent's, which
+    # is checked against the run first: core/swarm_out_actor)
+    r = c.post(f"/api/swarm-out/runs/{DID}/return/land", json={"key": "k" * 16, "tip": "t" * 40, "by": "person"})
     assert r.status_code == 409 and "2 refs" in r.json()["detail"]
-    assert c.post(f"/api/swarm-out/runs/{DID}/return/prepare", json={}).status_code == 400
+    assert c.post(f"/api/swarm-out/runs/{DID}/return/prepare", json={"by": "person"}).status_code == 400
     monkeypatch.setenv("SWARMAI_MODE", "hive")
     for path in ("prepare", "land"):
         assert c.post(f"/api/swarm-out/runs/{DID}/return/{path}", json={"url": URL}).status_code == 403

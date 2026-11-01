@@ -1,14 +1,14 @@
 """Shipped Project Agent definitions: the default SwarmAI Brain's and the Runner Agent's
 (design 2026-10-28-project-agent-flow §5).
 
-Both ship in ``templates/project-agents/`` as drafts, and each user reviews their own
-copy. On every workspace start ``seed_shipped`` places them:
+Both ship in ``templates/project-agents/`` as standard definitions, and the agent
+keeps each user's copy current. On every workspace start ``seed_shipped`` places them:
 
 - no definition yet: write the shipped one;
 - the definition still has the bytes this product last wrote (its sha256 equals the
   one recorded in ``.project-agent-shipped.json`` beside it): replace it with the
   newly shipped one;
-- anything else — the user edited or confirmed it, or it was never written by this
+- anything else — the agent or the person edited it, or it was never written by this
   seeder: leave it alone.
 
 This record is its own rule, not the ``user_customized`` flag of the context files

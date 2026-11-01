@@ -626,8 +626,7 @@ async def dispatch_spec(hive_ref: Optional[str], title: str, brain: str, task: s
                         needs_private: str = "", dispatched_from: Optional[str] = None) -> dict[str, Any]:
     """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
     the host builds the Task Spec from the definition (``core.task_spec``), refuses it
-    when the definition is not the revision the person was shown (``seen_revision``,
-    from ``/spec``) or admission fails (naming the rule), syncs the Brain when the
+    when the definition is not the revision ``/spec`` returned (``seen_revision``) or admission fails (naming the rule), syncs the Brain when the
     Hive's copy differs, then dispatches with the project section and the pin. The row
     records the spec; the result says what the sync did (``brain_sync``). No
     ``hive_ref``: ``pick_hive`` chooses (the person named none). ``brief``: one or two
@@ -739,6 +738,11 @@ async def _require_work_orders(inst: dict[str, Any]) -> None:
         body = None
     if not isinstance(body, dict) or body.get("work_orders") is not True:
         raise SwarmOutError(f"Hive {inst['name']}'s version cannot prepare a task's workspace; update it once")
+    if body.get("fixed_reserved") is not True:
+        # an older Hive takes the reserved actions from the synced definition, which no
+        # longer carries them: it could let push or a release through without the person
+        raise SwarmOutError(f"Hive {inst['name']}'s version does not keep the reserved actions "
+                            "for the person; update it once")
 
 
 #: hang guard for sending one repository's bundle to a Hive

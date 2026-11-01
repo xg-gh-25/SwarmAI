@@ -278,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
                 "mode": args.mode, "execution": args.execution, "why": args.why,
                 "returns": args.returns, "needs_private": args.needs_private}
         if args.cmd == "spec":
-            return _call("POST", "/spec", {**body, "session": _session()})
+            return _call("POST", "/spec", body)
         # a dispatch may sync the Brain, send this machine's commits, wait for the Hive
         # to prepare the workspace (a first clone of a large repository takes minutes)
         # and to name the session, all within the backend's DISPATCH_DEADLINE_S; past

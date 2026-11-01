@@ -56,7 +56,8 @@ bindings:
 
 
 def _brain(ws: Path, name: str = "Lib", doc: dict | None = None, check: bool = True) -> Path:
-    from core.project_agent import check_sources, revision
+    """A Brain with this definition. *check* is kept for older callers: nothing is
+    confirmed any more (design 2026-11-01-project-agent-simple)."""
     b = ws / "Projects" / name
     for s, plat in (("s_lib-release", None), ("s_lib-desk", "desktop")):
         (b / "4-capabilities" / s).mkdir(parents=True, exist_ok=True)
@@ -68,10 +69,8 @@ def _brain(ws: Path, name: str = "Lib", doc: dict | None = None, check: bool = T
     (b / "2-understanding" / "PRODUCT.md").write_text("# PRODUCT\n")
     (b / "bindings.yaml").write_text(BINDINGS)
     (b / ".project.json").write_text('{"name": "%s"}' % name)
+    (b / "ci.yml").write_text("on: push\n")          # the setup / validations source
     (b / "project-agent.yaml").write_text(yaml.safe_dump(doc or DEF, allow_unicode=True))
-    if check:
-        (b / ".project-agent-check.json").write_text(json.dumps({"revision": revision(b), "ok": True,
-                                                               "missing": []}))
     return b
 
 
@@ -88,9 +87,6 @@ def ws(tmp_path, monkeypatch):
                "modes": [{"id": "research", "when": "anything", "profile": "research"}],
                "default_mode": "research"}
     (lib / "project-agent.yaml").write_text(yaml.safe_dump(general))
-    from core.project_agent import revision
-    (lib / ".project-agent-check.json").write_text(json.dumps({"revision": revision(lib), "ok": True,
-                                                             "missing": []}))
     monkeypatch.setattr(pr, "get_swarmws", lambda: w)
     return w
 
@@ -178,35 +174,28 @@ def test_admission_names_each_rule(ws):
     _brain(ws)
     assert ts.admit(_build(ws, "Lib", "x", "done")) == []
     assert any("no acceptance" in r for r in ts.admit(_build(ws, "Lib", "x", "  ")))
+    # nothing is confirmed (design 2026-11-01-project-agent-simple): a draft, a definition
+    # without a record, one whose mode names only the chat tab or a branch-pr delivery
+    # all go to a Hive like any other
     _brain(ws, "Draft", doc={**DEF, "status": "draft"})
-    assert any("draft" in r for r in ts.admit(_build(ws, "Draft", "x", "y")))
-    _brain(ws, "Unchecked", check=False)
-    assert any("changed after it was confirmed" in r for r in ts.admit(_build(ws, "Unchecked", "x", "y")))
+    assert ts.admit(_build(ws, "Draft", "x", "y")) == []
+    assert ts.admit(_build(ws, "Draft", "x", "y", mode="release")) == []
+    pr = yaml.safe_load(yaml.safe_dump(DEF))
+    pr["modes"][0]["delivery"] = "branch-pr"
+    _brain(ws, "PR", doc=pr)
+    assert ts.admit(_build(ws, "PR", "x", "y")) == []
     local = yaml.safe_load(yaml.safe_dump(DEF))
     b = _brain(ws, "Local", doc=local)
     (b / "bindings.yaml").write_text(BINDINGS.replace("https://github.com/acme/lib.git", "/Users/me/lib"))
     assert any("no remote a Hive can clone" in r for r in ts.admit(_build(ws, "Local", "x", "y")))
-    pr = yaml.safe_load(yaml.safe_dump(DEF))
-    pr["modes"][0]["delivery"] = "branch-pr"
-    _brain(ws, "PR", doc=pr)
-    assert any("branch-pr" in r for r in ts.admit(_build(ws, "PR", "x", "y")))
-    # a mode that does not run on a Hive, reported with the other rules
-    refusals = ts.admit(_build(ws, "Draft", "x", "", mode="release"))
-    assert any("does not run on hive" in r for r in refusals) and any("draft" in r for r in refusals)
-    assert refusals[-1].startswith("the task has no acceptance")       # the design's order
-    # a source check that found commands with no source
+    # a command whose source is in neither the repository nor the Brain
     bad = _brain(ws, "NoSource")
-    rec = json.loads((bad / ".project-agent-check.json").read_text())
-    (bad / ".project-agent-check.json").write_text(json.dumps({**rec, "ok": False,
-                                                              "missing": ["modes[code-change].setup: x"]}))
-    assert any("no source in the repository" in r for r in ts.admit(_build(ws, "NoSource", "x", "y")))
-    # the Runner Agent too: changed after it was confirmed
-    lib = ws / "Knowledge" / "Library"
-    (lib / "project-agent.yaml").write_text((lib / "project-agent.yaml").read_text() + "# edited\n")
-    assert any("changed after it was confirmed" in r for r in ts.admit(_build(ws, "General", "x", "y")))
+    (bad / "ci.yml").unlink()
+    refusals = ts.admit(_build(ws, "NoSource", "x", ""))
+    assert any("no source in the repository" in r and "ci.yml" in r for r in refusals)
+    assert refusals[-1].startswith("the task has no acceptance")       # the design's order
     # schema 1 never goes to a Hive (its repositories are not in a mode)
-    v1 = {"status": "reviewed", "default_profile": "bugfix", "placements": ["chat-tab", "hive"],
-          "landing": {"approval": "human"}}
+    v1 = {"default_profile": "bugfix", "landing": {"approval": "human"}}
     _brain(ws, "Old", doc=v1)
     assert any("schema 1" in r for r in ts.admit(_build(ws, "Old", "x", "y")))
     # a Brain named in another case is not the Brain on disk
@@ -223,7 +212,7 @@ def test_the_project_section_tells_the_hive_how_to_work(ws):
     piped = ts.segment(_build(ws, "Lib", "x", "the signer test passes", execution="pipeline:bugfix"))
     assert "profile `bugfix`" in piped and "use no other profile" in piped
     for part in ('knowledge find --project Lib', "`uv sync`", "tests: `pytest -q`",
-                 "constant-time compare", "s_lib-release", "do not push", "push, open_pr",
+                 "constant-time compare", "s_lib-release", "do not push", "open_pr, publish_release, push, send_external_message",
                  "no_git_push", "Done when: the signer test passes"):
         assert part in text, part
     assert "s_lib-desk" not in text and text.endswith("## Task\n")
@@ -365,9 +354,10 @@ def test_a_refused_spec_or_an_old_hive_sends_nothing(ws, monkeypatch):
     import core.swarm_out as so
     import httpx
     from core.project_agent import revision
-    d = _brain(ws, doc={**DEF, "status": "draft"})
+    d = _brain(ws)
+    (d / "ci.yml").unlink()                              # admission refuses it
     calls = _fake_hive(monkeypatch, None)
-    with pytest.raises(so.SwarmOutError, match="draft"):
+    with pytest.raises(so.SwarmOutError, match="no source in the repository"):
         asyncio.run(so.dispatch_spec("hive3", "t", "Lib", "x", "y", execution="native", returns="commits", seen_revision=revision(d)))
     ok = _brain(ws, "Ok")
     calls = _fake_hive(monkeypatch, None, supported=False)
@@ -566,27 +556,14 @@ def test_the_route_endpoint_passes_the_deterministic_signals(ws, monkeypatch):
     assert r.json()["brain"] == "Other" and r.json()["signal"] == "signal2_bound_repo"
 
 
-def test_every_reader_agrees_whether_a_confirmation_holds(ws):
-    """The Brain Hub (status word, definition view) and the dispatch use one rule: a
-    definition changed outside the form after it was confirmed reads "changed" in the
-    Hub, which offers to confirm again, and the dispatch refuses it until then."""
+def test_nothing_waits_for_a_confirmation(ws):
+    """The Brain Hub's word and the dispatch agree: a valid definition is ready and
+    goes, however it was written or changed (design 2026-11-01-project-agent-simple)."""
     from core.project_agent import load_project_agent, project_agent_status
-    from core.project_agent_review import confirm
-    b = _brain(ws)
-    assert project_agent_status(b) == "reviewed" and load_project_agent(b)["confirmation"] == "reviewed"
+    b = _brain(ws, doc={**DEF, "status": "draft"})
+    assert project_agent_status(b) == "ready" and "confirmation" not in load_project_agent(b)
     assert not ts.admit(_build(ws, "Lib", "x", "y", placement="hive"))
-    # rewritten by hand / an agent (fields reordered): still "status: reviewed" in the file
-    doc = yaml.safe_load((b / "project-agent.yaml").read_text())
-    (b / "project-agent.yaml").write_text(yaml.safe_dump(dict(reversed(list(doc.items()))), sort_keys=False))
-    assert project_agent_status(b) == "changed" and load_project_agent(b)["confirmation"] == "changed"
-    refusals = ts.admit(_build(ws, "Lib", "x", "y", placement="hive"))
-    assert any("changed after it was confirmed" in r for r in refusals) and not any("draft" in r for r in refusals)
-    # a skill one of its modes uses changing counts too
-    pa = load_project_agent(b)
-    confirm(b, seen_revision=pa["revision"], reviewer="t")
-    after = ts.admit(_build(ws, "Lib", "x", "y", placement="hive"))      # (this fixture has no ci.yml checkout)
-    assert project_agent_status(b) == "reviewed" and not any("confirm" in r for r in after)
+    before = ts.build(ws, "Lib", "x", "y", None, "native", "", "hive", returns="answer")["revision"]
     (b / "4-capabilities" / "s_lib-release" / "SKILL.md").write_text("---\nname: s_lib-release\n---\nchanged\n")
-    assert project_agent_status(b) == "changed"
-    _brain(ws, "Draft", doc={**DEF, "status": "draft"})
-    assert project_agent_status(ws / "Projects" / "Draft") == "draft"
+    after = ts.build(ws, "Lib", "x", "y", None, "native", "", "hive", returns="answer")
+    assert after["revision"] != before and not ts.admit(after)       # a new version, used as it is

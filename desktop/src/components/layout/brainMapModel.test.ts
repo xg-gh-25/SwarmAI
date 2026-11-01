@@ -9,8 +9,8 @@
 import { describe, it, expect } from 'vitest';
 import type { BrainDetail, BrainKnowledge } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
-import { sectionCounts, projectRuns, runTone, needsYouItems, needsCount, brainHiveRuns, humanPerRun, brainEval, hubSummary, hubNeeds, brainSignal, generalNeed } from './brainMapModel';
-import type { BrainSummary, GeneralBrain } from '../../services/ddd';
+import { sectionCounts, projectRuns, runTone, needsYouItems, needsCount, brainHiveRuns, humanPerRun, brainEval, hubSummary, hubNeeds, brainSignal } from './brainMapModel';
+import type { GeneralBrain } from '../../services/ddd';
 import type { SwarmOutRun } from '../../services/swarmOut';
 
 const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
@@ -66,11 +66,8 @@ describe('brainMapModel', () => {
     expect(runTone(run({ status: 'paused' }))).toBe('stopped');
   });
 
-  it('needsYouItems: a Project Agent draft (or a broken file) waits on the person; a reviewed one does not', () => {
-    expect(needsYouItems([], { status: 'draft', problems: [] }).map((i) => i.title)).toEqual(['Confirm the Project Agent draft']);
-    expect(needsYouItems([], { status: 'reviewed', problems: ['bad profile'] })[0]).toMatchObject({ kind: 'agent', detail: 'bad profile' });
-    expect(needsYouItems([], { status: 'reviewed', problems: [] })).toEqual([]);
-    expect(needsYouItems([], null)).toEqual([]);
+  it('needsYouItems: the Project Agent never waits on the person (the agent keeps it current)', () => {
+    expect(needsYouItems([])).toEqual([]);
   });
 
   it('needsYouItems: Runs with needsYou, nothing else', () => {
@@ -80,7 +77,7 @@ describe('brainMapModel', () => {
   });
 
   it('needsYouItems: what Need You holds beyond the lists is a counted row, and the counts add up to the header', () => {
-    const items = needsYouItems([run({ id: 'r1', needsYou: true })], null,
+    const items = needsYouItems([run({ id: 'r1', needsYou: true })],
       { paused_run: 2, escalation: 2, job: 1, local_root: 1, other_source: 1 });
     expect(items.map((i) => `${i.id}:${i.count}`)).toEqual(
       ['r1:1', 'runs-unlisted:1', 'escalations:2', 'jobs:1', 'repos:1', 'other:1']);
@@ -142,46 +139,31 @@ describe('brainMapModel', () => {
     // no brain reports learnedWeek (old daemon) -> UNKNOWN, never 0
     expect(hubSummary([brain('C')], null).learned).toBeNull();
     // the General Brain's week is in the total
-    const general = { name: 'General', description: null, library: { files: 1, bytes: 1 }, projectAgentStatus: 'reviewed' as const,
+    const general = { name: 'General', description: null, library: { files: 1, bytes: 1 }, projectAgentStatus: 'ready' as const,
       shadowed: false, learnedWeek: 2 };
     expect(hubSummary(brains, a, general).learned).toBe(7);
   });
 
-  it('hubNeeds: Runs waiting on you oldest first, then each brain\'s escalations and jobs, then Project Agents', () => {
+  it('hubNeeds: Runs waiting on you oldest first, then each brain\'s escalations and jobs; never a Project Agent', () => {
     const a = an({ A: [
       run({ id: 'new', needsYou: true, pauseKind: 'decision', requirement: 'Pick a column', updatedAt: '2026-10-25T00:00:00Z' }),
       run({ id: 'old', needsYou: true, pauseKind: 'stopped', requirement: 'Resume me', updatedAt: '2026-10-20T00:00:00Z' }),
     ] });
     const items = hubNeeds([
-      brain('A', { projectAgentStatus: 'reviewed', pendingBySource: { paused_run: 3 } }, { pending: 3 }),
-      brain('B', { projectAgentStatus: 'widened', pendingBySource: { escalation: 2, job: 1 } }, { pending: 3 }),
+      brain('A', { projectAgentStatus: 'ready', pendingBySource: { paused_run: 3 } }, { pending: 3 }),
+      brain('B', { projectAgentStatus: 'ready', pendingBySource: { escalation: 2, job: 1 } }, { pending: 3 }),
       brain('C', { projectAgentStatus: 'invalid' })], a);
     // A: 3 Runs wait, the analytics names 2 -> one "1 Run waiting on you" row for the rest
-    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'A-runs', 'B-escalations', 'B-jobs', 'B-agent', 'C-agent']);
+    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'A-runs', 'B-escalations', 'B-jobs']);
     expect(items[2].text).toBe('1 Run waiting on you');
     expect(items[3]).toMatchObject({ brain: 'B', kind: 'escalations', text: '2 escalations to decide' });
     expect(items[4]).toMatchObject({ brain: 'B', kind: 'jobs', text: '1 other item in Need You' });
     expect(items[1].text).toBe('Run question: Pick a column');
-    expect(items[5]).toMatchObject({ kind: 'agent', text: 'Project Agent gives the agent more than you allowed: confirm it', severity: 'setup' });
     // severity: a Run or an escalation blocks on the person; a failing job waits for a review
-    expect(items.map((i) => i.severity)).toEqual(['urgent', 'urgent', 'urgent', 'urgent', 'review', 'setup', 'review']);
+    expect(items.map((i) => i.severity)).toEqual(['urgent', 'urgent', 'urgent', 'urgent', 'review']);
     expect(items[2].count).toBe(1);
     expect(items[3].count).toBe(2);
-    expect(hubSummary([brain('B', { projectAgentStatus: 'widened' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
-  });
-
-  it('a draft or a changed Project Agent is the agent\'s to confirm; only a widened one waits on the person', () => {
-    for (const st of ['draft', 'changed'] as const) {
-      expect(hubNeeds([brain('C', { projectAgentStatus: st })], null)).toEqual([]);
-      expect(hubSummary([brain('C', { projectAgentStatus: st })], null).needsYou).toBe(0);
-      expect(brainSignal(brain('C', { projectAgentStatus: st }), null)).toMatchObject({ tone: 'calm', text: '' });
-      expect(generalNeed({ name: 'General', projectAgentStatus: st } as unknown as GeneralBrain)).toBeNull();
-    }
-    expect(hubNeeds([brain('C', { projectAgentStatus: 'widened' })], null)).toEqual([expect.objectContaining({
-      kind: 'agent', severity: 'setup', text: 'Project Agent gives the agent more than you allowed: confirm it' })]);
-    expect(brainSignal(brain('C', { projectAgentStatus: 'widened' }), null)).toMatchObject({ tone: 'setup', text: 'Project Agent waits for you' });
-    expect(generalNeed({ name: 'General', projectAgentStatus: 'widened' } as unknown as GeneralBrain))
-      .toMatchObject({ severity: 'setup', text: 'Runner Agent gives the agent more than you allowed: confirm it' });
+    expect(hubSummary([brain('B', { projectAgentStatus: 'invalid' }), brain('C', { projectAgentStatus: 'ready' })], null).needsYou).toBe(0);
   });
 
   it('hubNeeds: a repository a Brain started reading is a notice, not "other items"', () => {
@@ -210,15 +192,11 @@ describe('brainMapModel', () => {
     expect(brainSignal(brain('D4', { setupState: 'setting-up',
       setupProgress: { done: 8, total: 9, next: '⑦ Something New' } }), a).text)
       .toBe('Being born · next: Something New (8/9)');
-    // a Project Agent waiting for the person is setup: grey, after a Run in progress
-    expect(brainSignal(brain('G', { projectAgentStatus: 'widened' }, { liveRun: true }), a)).toMatchObject({ tone: 'live' });
-    expect(brainSignal(brain('G2', { projectAgentStatus: 'widened' }), a))
-      .toMatchObject({ tone: 'setup', text: 'Project Agent waits for you' });
     expect(brainSignal(brain('H', { projectAgentStatus: 'invalid' }), a)).toMatchObject({ tone: 'review', text: 'Project Agent has problems' });
     expect(brainSignal(brain('J', { pendingBySource: { local_root: 1 } }, { pending: 1 }), a))
       .toMatchObject({ tone: 'notice', text: 'Reads 1 new repository' });
     // nothing going on: no status (the card's footer carries its recency)
-    expect(brainSignal(brain('I', { projectAgentStatus: 'reviewed' }), a)).toMatchObject({ tone: 'calm', text: '' });
+    expect(brainSignal(brain('I', { projectAgentStatus: 'ready' }), a)).toMatchObject({ tone: 'calm', text: '' });
     expect(brainSignal(brain('F'), a)).toMatchObject({ tone: 'calm', rank: 5 });
   });
 });
@@ -226,28 +204,12 @@ describe('brainMapModel', () => {
 describe('the built-in General Brain in Need You (F2)', () => {
   const g = (status: GeneralBrain['projectAgentStatus']): GeneralBrain =>
     ({ name: 'General', description: null, library: { files: 1, bytes: 1 }, projectAgentStatus: status, shadowed: false });
-  const shadow = {
-    name: 'General', kind: 'knowledge', lifecycleStage: 'GROW', projectAgentStatus: 'widened',
-    sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: false },
-    health: { pending: 0, liveRun: false, lastChangeRelative: '--' },
-  } as unknown as BrainSummary;
 
-  it('a widened or a broken Runner Agent is one row and one count; a confirmed or agent-confirmable one is none', () => {
-    for (const st of ['widened', 'invalid'] as const) {
-      expect(hubNeeds([], null, g(st)).map((n) => n.id)).toEqual(['builtin-general-agent']);
-      expect(hubSummary([], null, g(st)).needsYou).toBe(1);
-    }
-    for (const st of ['reviewed', 'draft', 'changed', null] as const) {
+  it('its Runner Agent is never a Need You row, whatever its state', () => {
+    for (const st of ['ready', 'invalid', null] as const) {
       expect(hubNeeds([], null, g(st))).toEqual([]);
       expect(hubSummary([], null, g(st)).needsYou).toBe(0);
     }
-    expect(generalNeed(null)).toBeNull();
-  });
-
-  it('a Projects/ Brain with the same name keeps its own row, with another id', () => {
-    const rows = hubNeeds([shadow], null, g('widened'));
-    expect(rows.map((n) => [n.id, !!n.builtin])).toEqual([['General-agent', false], ['builtin-general-agent', true]]);
-    expect(hubSummary([shadow], null, g('widened')).needsYou).toBe(2);
   });
 });
 

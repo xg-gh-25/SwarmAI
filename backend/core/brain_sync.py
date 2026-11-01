@@ -4,7 +4,7 @@ The host is the only writer; a Hive's copy of a Brain is a cache of one version.
 module holds both sides so they share one whitelist and one digest:
 
 - **What travels** (``whitelisted``): a Brain's ``AGENTS.md``, ``SYSTEM_PROMPT.md``,
-  ``CONTEXT.md``, ``REFRESHER.md``, ``project-agent.yaml``, ``.project-agent-check.json``,
+  ``CONTEXT.md``, ``REFRESHER.md``, ``project-agent.yaml``,
   ``bindings.yaml``, ``aim.json``, ``.project.json``; ``2-understanding/**/*.md`` (the
   ``*-archive*.md`` files included) and ``assets/data-source/data-contract/**/*.md`` -- every
   file ``core.addressing`` reads into a DDD's unit table, so ``knowledge find`` on the Hive
@@ -57,9 +57,9 @@ _TAR_SLACK = MAX_MEMBERS * 1536        # tar headers and padding on top of the f
 BRAIN_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 STATE_FILE = ".brain.json"
 TOP_FILES = frozenset({"AGENTS.md", "SYSTEM_PROMPT.md", "CONTEXT.md", "REFRESHER.md",
-                       "project-agent.yaml", ".project-agent-check.json", "bindings.yaml",
+                       "project-agent.yaml", "bindings.yaml",
                        "aim.json", ".project.json"})
-GENERAL_FILES = frozenset({"project-agent.yaml", ".project-agent-check.json"})
+GENERAL_FILES = frozenset({"project-agent.yaml"})
 _SKIP_PARTS = frozenset({"__pycache__", ".git", "node_modules", ".DS_Store"})
 _SKIP_SUFFIXES = (".pyc", ".pyo", ".lock", ".tmp")
 
@@ -75,7 +75,7 @@ class SyncError(ValueError):
 def _skipped(parts: list[str]) -> bool:
     name = parts[-1]
     return (any(p in _SKIP_PARTS for p in parts) or name.endswith(_SKIP_SUFFIXES)
-            or name.startswith(".") and name not in (".project-agent-check.json", ".project.json"))
+            or name.startswith(".") and name != ".project.json")
 
 
 def whitelisted(rel: str, general: bool) -> bool:
