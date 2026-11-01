@@ -29,6 +29,7 @@
 
 test_adaptive_timeout.py
 test_bvt_admission.py
+test_code_intel_filter_scope.py  # only a repo-local git filter program stops the callers report
 test_context_brain_health.py
 test_context_templates.py
 test_data_point_folding.py

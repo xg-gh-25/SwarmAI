@@ -132,12 +132,26 @@ def _git(repo: Path, *args: str) -> str | None:
     return out.stdout if out.returncode == 0 else None
 
 
+# Config scopes a repo itself carries (``.git/config``, ``config.worktree`` and what
+# they include). The user's own global and system config are not here: a filter
+# program they name (git-lfs, installed on every CI runner) already runs in all their
+# git use, so a diff running it is nothing new.
+_REPO_SCOPES = frozenset({"local", "worktree"})
+
+
 def filter_programs(repo: Path) -> list[str]:
-    """The filter programs the repo's config names (``filter.<driver>.clean`` /
+    """The filter programs the repo's own config names (``filter.<driver>.clean`` /
     ``.process`` / ``.smudge``): a diff against the working tree would run a clean
-    filter on a dirty file, so the report does not diff a working tree that has one."""
-    out = _git(repo, "config", "--get-regexp", r"^filter\..*\.(clean|process|smudge)$")
-    return [line.split(" ", 1)[0] for line in (out or "").splitlines() if line.strip()]
+    filter on a dirty file, so the report does not diff a working tree whose config
+    names one. A program in the user's global or system config does not count."""
+    out = _git(repo, "config", "--show-scope", "--get-regexp",
+               r"^filter\..*\.(clean|process|smudge)$")
+    found = []
+    for line in (out or "").splitlines():
+        scope, _, entry = line.partition("\t")
+        if scope in _REPO_SCOPES and entry.strip():
+            found.append(entry.split(" ", 1)[0])
+    return found
 
 
 def main_checkout(repo: Path) -> Path | None:

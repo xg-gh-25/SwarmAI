@@ -136,7 +136,7 @@ def validate(path: str | Path) -> str:
 # Git on an owned root runs with no hooks, no fsmonitor, explicit bare repos and no
 # signature program: the hourly job and every review read the root outside any
 # session. The same settings as ``repo_read.GIT_HARDENING``; a diff passes
-# ``--no-ext-diff --no-textconv``, and a working-tree diff is not run at all in a repo whose config names a filter
+# ``--no-ext-diff --no-textconv``, and a working-tree diff is not run at all in a repo whose own config names a filter
 # program (``changed.filter_programs``: git would run its clean filter on dirty files).
 GIT_SAFE: tuple[str, ...] = (
     "-c", "core.hooksPath=/dev/null",
