@@ -96,12 +96,8 @@ def _find(args: argparse.Namespace) -> int:
         return _find_stores(args)
     if args.where == "library":
         from core import cognition
-        refused = cognition.worker_refusal("library")
-        if refused:
-            _out(f"Library: {refused}.")
-            return 3
         from core.run_protocol.run_knowledge import _library_leg
-        rows = _library_leg(args.query)
+        rows = cognition.worker_library(_library_leg(args.query))
         shown = [r for r in rows if r["id"]]
         notes = [r["text"] for r in rows if not r["id"]]
         if args.json:

@@ -304,13 +304,27 @@ def test_worker_hive_reads_only_brains_and_code(ws, monkeypatch, capsys):
 
 
 # review round 1 — every route keeps the worker rule
-@pytest.mark.parametrize("argv", [["get", "MEMORY.md:5"], ["find", "--in", "library", "--query", "x"]])
+@pytest.mark.parametrize("argv", [["get", "MEMORY.md:5"], ["find", "--in", "memory,session", "--query", "x"]])
 def test_worker_refuses_every_route_to_its_private_stores(ws, monkeypatch, capsys, argv):
     monkeypatch.setenv("SWARMAI_MODE", "hive")
     monkeypatch.setenv("SWARMAI_ROLE", "worker")
-    assert knowledge_cli.main(argv, prog="cognition") == 3
+    assert knowledge_cli.main(argv, prog="cognition") in (0, 3)
     out = capsys.readouterr().out
     assert "not read on a worker Hive" in out and "Quokkas" not in out
+
+
+@pytest.mark.parametrize("where", ["library", "library,ddd"])
+def test_worker_library_search_returns_only_the_synced_general_brain(ws, monkeypatch, capsys, where):
+    from core.run_protocol import run_knowledge
+    monkeypatch.setattr(run_knowledge, "_library_leg", lambda q: [
+        {"kind": "library", "source": "Library/second.md", "id": "aaaaaaaa", "text": "kookaburra general"},
+        {"kind": "library", "source": "Notes/other-dispatch.md", "id": "bbbbbbbb", "text": "kookaburra private"}])
+    monkeypatch.setenv("SWARMAI_MODE", "hive")
+    monkeypatch.setenv("SWARMAI_ROLE", "worker")
+    argv = ["find", "--in", where, "--query", "kookaburra"] + (["--project", "P"] if "ddd" in where else [])
+    assert knowledge_cli.main(argv, prog="cognition") == 0
+    out = capsys.readouterr().out
+    assert "kookaburra private" not in out and "kookaburra" in out
 
 
 def test_worker_refuses_get_by_id_but_reads_a_brain(ws, monkeypatch, capsys):

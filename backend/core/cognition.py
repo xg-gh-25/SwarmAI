@@ -29,6 +29,9 @@ of two stores are never compared, so a big store cannot push a small one out.
 Who may read is not decided here: the command refuses whole in a session the daemon
 marked (``knowledge_cli``). On a worker Hive only the Brains and code are read: its
 memory, sessions and Knowledge belong to other dispatches (the same rule as its recall).
+Its ``Knowledge/Library`` is the synced General Brain, so the full-text search there
+returns only the hits inside it (``worker_library``): a task under the General Brain is
+told to search with ``--in library``, and a Hive of an older release knows no other way.
 """
 from __future__ import annotations
 
@@ -62,7 +65,7 @@ STORES: dict[str, Store] = {s.name: s for s in (
     Store("ddd", "a Brain: a project's DDD (--project P), or the General Brain (--project General, "
                  "Knowledge/Library)", "ddd", needs_project=True, on_worker=True),
     Store("library", "full-text search of Knowledge/ (Notes, Reports, Designs, Meetings, "
-                     "DailyActivity, Library ...)", "library", can_get=False),
+                     "DailyActivity, Library ...)", "library", can_get=False, on_worker=True),
     Store("memory", "MEMORY.md and its archives: cross-session principles, decisions, corrections",
           "context_files"),
     Store("evolution", "EVOLUTION.md and its archives: corrections and their data points", None),
@@ -234,7 +237,7 @@ def find_store(store: str, query: str, *, project: Optional[str] = None,
             hits.units, hits.omitted, hits.skipped = found.units, found.omitted, found.skipped
         elif store == "library":
             from core.run_protocol.run_knowledge import _library_leg
-            rows = _library_leg(query)
+            rows = worker_library(_library_leg(query))
             hits.notes = [str(r.get("text") or "") for r in rows if not r.get("id")]
             rows = [r for r in rows if r.get("id")]
             if general_searched:   # the General Brain's units already stand for Knowledge/Library
@@ -271,6 +274,15 @@ def worker_refusal(store: str) -> Optional[str]:
     from core.app_role import is_worker
     s = STORES.get(store)
     return WORKER_NOTE if s is not None and is_worker() and not s.on_worker else None
+
+
+def worker_library(rows: list) -> list:
+    """*rows* of the Library leg, on a worker Hive only those inside ``Knowledge/Library``
+    (the synced General Brain; the rest of its Knowledge is other dispatches')."""
+    from core.app_role import is_worker
+    if not is_worker():
+        return rows
+    return [r for r in rows if str(r.get("source") or "").startswith("Library/")]
 
 
 def stores_for(where: str, project: Optional[str]) -> tuple[list[str], dict[str, str]]:

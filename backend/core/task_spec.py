@@ -342,6 +342,8 @@ def segment(spec: dict[str, Any], run_id: Optional[str] = None) -> str:
     lines = [f"## Project Agent: {'Runner Agent (no Brain)' if general else b} — mode {spec['mode']}"]
     if spec["summary"] and not general:
         lines.append(spec["summary"])
+    # `knowledge`, not `cognition`: this text runs on the Hive, whose release may predate
+    # the cognition name (cognition entrance design); `knowledge` is the same command there.
     if general:
         lines.append('Knowledge: the general Knowledge of this workspace. Search it with the words '
                      'of your solution: "$SWARM_BACKEND_BIN" knowledge find --in library --query "<words>".')
