@@ -220,6 +220,11 @@ def _answer_sources(event_rows) -> dict[str, int]:
     return out
 
 
+def _review_coverage(event_rows) -> list[dict[str, Any]]:
+    from core.run_protocol.review import coverage_rows
+    return coverage_rows(list(event_rows))
+
+
 def _doc_paths_not_reviewed(event_rows) -> dict[str, list[str]]:
     """repo -> the paths of every review_reopen the engine closed itself (cli only)."""
     out: dict[str, set[str]] = {}
@@ -508,6 +513,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "experts": _experts(event_rows),
                # standalone T6: how each expert answer arrived (host hook / the agent)
                "answer_sources": _answer_sources(event_rows),
+               # what each expert's transcript shows it read (D2; RV-6 reads the same)
+               "review_coverage": _review_coverage(event_rows),
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows),
@@ -642,6 +649,8 @@ def _open_lines(open_checks: Mapping[str, Any], unclosed_high: Sequence[str]) ->
         if check_id == "RV-2":
             n = len(unclosed_high) or 1
             lines.append(f"{n} HIGH finding{'s' if n != 1 else ''} open")
+        elif check_id == "RV-6":     # its detail names who read how much
+            lines.append(str(open_checks[check_id])[:300])
         else:
             lines.append(OPEN_TEXT.get(check_id, f"{check_id} open"))
     return lines
@@ -742,6 +751,14 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         total = sum(int(v or 0) for v in sources.values())
         lines += ["", f"Review answers: {relayed} of {total} relayed by the agent "
                   "(no host hook recorded them)"]
+    coverage = [row for row in details.get("review_coverage") or () if isinstance(row, Mapping)]
+    if coverage:
+        lines += ["", "## Review coverage (from each expert's transcript)", ""]
+        lines += [f"- {_text(row.get('expert'), 40)} · {_text(row.get('stage'), 12)} "
+                  f"r{_text(row.get('round'), 4)}: read {int(row.get('read_pct') or 0)}% of its "
+                  f"prompt · {int(row.get('tool_calls') or 0)}/{int(row.get('cap') or 0)} tool calls"
+                  + (" · stopped at the cap" if row.get("budget_hit") else "")
+                  for row in coverage[:30]]
     lines += ["", "Full machine-readable audit is stored with this run."]
     if details.get("ddd_stale_since"):
         lines += ["", "DDD status: this run started with the prior DDD because S3 for "

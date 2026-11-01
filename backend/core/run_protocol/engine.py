@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core import run_worktree
+from core.doc_paths import is_doc_path
 from core.run_protocol import checks, git_tree, lifecycle, review, validation_report
 from core.run_protocol import answers as answer_protocol
 from core.run_protocol import findings as finding_protocol
@@ -55,7 +56,6 @@ class IntegrationRequired(EngineError):
 
 
 # files whose change never needs an expert (review_start, RV-4)
-_DOC_SUFFIXES = (".md", ".txt", ".rst")
 
 
 def _patch_paths_changed(root: str, then_base: str, then_tree: str, now_base: str,
@@ -208,7 +208,7 @@ def _comment_only_diff(file: str, diff: str, *,
     deleted, a mode or type change, an unreadable side, or one that does not parse is
     executable (fails closed). Without them only the hunk's two sides are compared."""
     suffix = Path(file).suffix.lower()
-    if suffix in {".md", ".txt", ".rst"}:
+    if is_doc_path(file):
         return True
     if suffix == ".py":
         if old is False or new is False:      # only the hunk: compare its two sides
@@ -982,7 +982,7 @@ class RunEngine:
                     memo[key] = ["(the last reviewed tree is unreadable)"]
             if memo[key]:
                 since[name] = memo[key]
-            code = [p for p in memo[key] if not p.endswith(_DOC_SUFFIXES)]
+            code = [p for p in memo[key] if not is_doc_path(p)]
             if code:
                 unreviewed[name] = code
         return {"patch_ids": patch_ids, "reviewed_patches": reviewed,
@@ -2492,7 +2492,7 @@ class RunEngine:
             if now and not before:
                 return {}      # a repo no review saw a tree of: not doc-only (fail closed)
             if since.get(name):
-                if any(not p.endswith(_DOC_SUFFIXES) for p in since[name]):
+                if any(not is_doc_path(p) for p in since[name]):
                     return {}
                 out[name] = list(since[name])
         return out
@@ -2878,7 +2878,7 @@ class RunEngine:
             diffs.append(f"## {name}\n" + diff)
             per_repo[name] = {"root": root, "base": base, "diff": diff, "tree": tree_sha, "paths": [
                 row["path"] for row in mine if not row["is_test"]
-                and not row["path"].endswith(_DOC_SUFFIXES)]}
+                and not is_doc_path(row["path"])]}
         patterns = review.review_patterns(self._repo_guidance(per_repo))
         roster = review.reviewers(profile=state["profile"], changed=changed,
                                   patterns=patterns["triggered"],
@@ -3169,7 +3169,7 @@ class RunEngine:
                               # main moved: callers of the run's own change, not main's
                               "callers_base": run_bases[name] if moved else None,
                               "paths": [row["path"] for row in mine if not row["is_test"]
-                                        and not row["path"].endswith(_DOC_SUFFIXES)]}
+                                        and not is_doc_path(row["path"])]}
         r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
               and e.get("round") == 1]
         earlier = {e["payload"]["expert_id"] for e in r1}

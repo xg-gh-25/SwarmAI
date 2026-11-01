@@ -368,3 +368,18 @@ def test_gate0_template_has_no_unfilled_placeholders():
 def test_pipeline_expert_system_prompt_names_prompt_file():
     from core import pipeline_expert_agent
     assert "PROMPT-FILE" in pipeline_expert_agent._SYSTEM_PROMPT
+
+
+def test_the_recorded_answer_carries_the_transcript_coverage(tmp_path):
+    """design 2026-11-01-pipeline-delivery-friction D2: what the expert read, from its
+    transcript, is on the answer event (RV-6 and the REPORT read it)."""
+    store, orch = _rig(tmp_path)
+    spawn = _handout(orch)["prompt"]
+    hb.bind_spawn(store, spawn, "tool-1")
+    pf = _prompt_file(spawn)
+    lines = Path(pf).read_bytes().count(b"\n")
+    t = _transcript(tmp_path, spawn, [({"file_path": pf}, False), ({"command": "ls"}, False)])
+    assert _stop(tmp_path, store, spawn, t)
+    answer = next(r for r in store.read_events() if r["kind"] == "answer")
+    assert answer["payload"]["coverage"] == {"prompt_lines": lines, "prompt_lines_read": 1,
+                                             "tool_calls": 2, "cap": 24}

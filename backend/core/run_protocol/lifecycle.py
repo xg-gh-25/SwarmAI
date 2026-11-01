@@ -110,8 +110,8 @@ REMOVED_PROFILES = {
     "goal": ("the goal profile was removed (2026-10-26): its goal_cycle was BUILD under "
              "another name; a large requirement is one full run whose PLAN lists every part as a task"),
     "docs": ("the docs profile was removed (2026-10-20). Documents outside a code repo "
-             "(SwarmWS Knowledge / DDD) need no run: edit them directly. *.md files and "
-             "backend/context/ in a code repo need no run either (core/doc_paths.py); any "
+             "(a workspace knowledge folder) need no run: edit them directly. *.md / *.rst "
+             "files in a code repo need no run either (core/doc_paths.py); any "
              "other file: `\"$SWARM_BACKEND_BIN\" pipeline-v1 create --profile direct "
              "--requirement \"<the request>\"`."),
 }

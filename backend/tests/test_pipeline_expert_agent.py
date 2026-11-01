@@ -100,7 +100,9 @@ def test_budget_gate_force_and_bounded_state(monkeypatch):
     g = pea.create_expert_budget_gate()
     for i in range(pea._MAX_TRACKED + 50):
         _run(g, _call(agent_id=f"x{i}"))
-    counts = next(c.cell_contents for c in g.__closure__ if isinstance(c.cell_contents, dict))
+    from collections import OrderedDict
+    counts = next(c.cell_contents for c in g.__closure__
+                  if isinstance(c.cell_contents, OrderedDict))
     assert len(counts) == pea._MAX_TRACKED
     for _ in range(pea.EXPERT_TOOL_CAP):
         _run(g, _call(agent_id="f"))
@@ -130,3 +132,77 @@ def test_build_hooks_registers_both_gates(monkeypatch):
 def test_session_options_carry_the_agent():
     from core.prompt_builder import _pipeline_expert_agents
     assert list(_pipeline_expert_agents()) == [pea.PIPELINE_EXPERT]
+
+
+# --- the cap grows with a long pipeline PROMPT-FILE (design 2026-11-01 friction D1) ---
+
+def _blob(tmp_path, lines, width=15):
+    d = tmp_path / "state" / "pipeline_agent_audit" / "runs" / "run_x" / "blobs"
+    d.mkdir(parents=True)
+    p = d / ("a" * 64)
+    p.write_text(("x" * width + "\n") * lines)
+    return str(p)
+
+
+def _read(path, agent_id="a1"):
+    return {"tool_name": "Read", "tool_input": {"file_path": path}, "agent_id": agent_id,
+            "agent_type": pea.PIPELINE_EXPERT}
+
+
+def test_expert_cap_adds_one_call_per_read_page(tmp_path):
+    assert pea.expert_cap(_blob(tmp_path, 4000)) == pea.EXPERT_TOOL_CAP + 2
+
+
+def test_expert_cap_counts_bytes_for_long_lines(tmp_path):
+    # 1000 lines of 200 chars = 201 KB: one page by lines, three by Read's output limit
+    assert pea.expert_cap(_blob(tmp_path, 1000, width=200)) == pea.EXPERT_TOOL_CAP + 3
+
+
+def test_expert_cap_is_bounded(tmp_path):
+    assert pea.expert_cap(_blob(tmp_path, 200_000)) == pea.EXPERT_TOOL_CAP_MAX
+
+
+def test_expert_cap_ignores_files_that_are_not_prompt_blobs(tmp_path):
+    other = tmp_path / "big.md"
+    other.write_text("x\n" * 50_000)
+    assert pea.expert_cap(str(other)) == pea.EXPERT_TOOL_CAP
+    assert pea.expert_cap(str(tmp_path / "state/pipeline_agent_audit/runs/r/blobs/" / ("b" * 64))) \
+        == pea.EXPERT_TOOL_CAP        # named like a blob, but missing
+
+
+def test_budget_gate_raises_the_cap_on_the_first_prompt_blob_read(tmp_path):
+    g = pea.create_expert_budget_gate()
+    path = _blob(tmp_path, 4000)
+    cap = pea.EXPERT_TOOL_CAP + 2
+    assert _run(g, _read(path)) == {}
+    for _ in range(cap - 1):
+        assert _run(g, _call()) == {}
+    res = _run(g, _call())
+    assert _denied(res)
+    reason = res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert f"({cap} calls)" in reason and "VERDICT" not in reason.upper()
+
+
+def test_budget_gate_keeps_the_base_cap_without_a_prompt_blob(tmp_path):
+    g = pea.create_expert_budget_gate()
+    other = tmp_path / "x.py"
+    other.write_text("x\n" * 50_000)
+    assert _run(g, _read(str(other))) == {}
+    for _ in range(pea.EXPERT_TOOL_CAP - 1):
+        assert _run(g, _call()) == {}
+    assert _denied(_run(g, _call()))
+
+
+def test_budget_gate_sets_the_cap_only_once(tmp_path):
+    g = pea.create_expert_budget_gate()
+    small = str(tmp_path / "small")
+    big = _blob(tmp_path, 100_000)
+    small_dir = tmp_path / "s" / "pipeline_agent_audit" / "runs" / "r" / "blobs"
+    small_dir.mkdir(parents=True)
+    small = small_dir / ("c" * 64)
+    small.write_text("x\n")
+    assert _run(g, _read(str(small))) == {}       # cap = 25
+    assert _run(g, _read(big)) == {}              # a later blob read does not raise it
+    for _ in range(pea.EXPERT_TOOL_CAP + 1 - 2):
+        assert _run(g, _call()) == {}
+    assert _denied(_run(g, _call()))

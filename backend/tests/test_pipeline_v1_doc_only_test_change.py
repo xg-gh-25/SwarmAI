@@ -2,12 +2,12 @@
 review (design 2026-10-26-pipeline-review-closure-and-visibility §5.2 point 1, step 10).
 
 Before: any change in TEST (a patch id the REVIEW completion did not record) reopened
-REVIEW, also when only ``.md/.txt/.rst`` files changed, where the incremental review has
+REVIEW, also when only doc-class files (``core.doc_paths``) changed, where the incremental review has
 nothing to hand out: review-start, two stage-completes and a second TEST report for a
 one-line note.
 
 What is tested, through real runs (``tests/pipeline_v1_rig.py``):
-- TEST changes only a ``.txt``: one stage-complete reopens and completes REVIEW itself
+- TEST changes only a ``.md``: one stage-complete reopens and completes REVIEW itself
   (the new patch id recorded), completes TEST on the report it was given and the run
   lands (LG-1 passes);
 - TEST changes a code file: REVIEW reopens as before;
@@ -45,7 +45,7 @@ def test_a_doc_only_change_in_test_completes_review_itself_and_lands(rig):
     r.create()
     r.drive(until="test")
     before = _completions(r)[-1]["patch_ids"]["repo"]
-    r.edit({"NOTES.txt": "a release note\n"})
+    r.edit({"NOTES.md": "a release note\n"})
     out = r.report_and_complete()
     assert out.get("ok") is True and r.state()["stage"] == "deliver", out
     assert [e for e in r.events() if e["kind"] == "review_reopen"], r.kinds()
@@ -54,8 +54,8 @@ def test_a_doc_only_change_in_test_completes_review_itself_and_lands(rig):
     state = r.drive()
     assert state["status"] == "completed" and state.get("landing") == "landed", state
     audit = json.loads((r.engine().run_dir / "run_audit.json").read_text())
-    assert audit["details"]["doc_paths_not_reviewed"] == {"repo": ["NOTES.txt"]}, audit["details"]
-    assert "NOTES.txt" in (r.engine().run_dir / "REPORT.md").read_text()
+    assert audit["details"]["doc_paths_not_reviewed"] == {"repo": ["NOTES.md"]}, audit["details"]
+    assert "NOTES.md" in (r.engine().run_dir / "REPORT.md").read_text()
 
 
 def test_a_code_change_in_test_still_reopens_review(rig):
@@ -91,11 +91,11 @@ def test_doc_only_reopens_do_not_use_up_the_reopen_cap(rig):
     r.create()
     r.drive(until="test")
     for i in range(lifecycle.REVIEW_REOPEN_CAP + 1):
-        r.edit({"NOTES.txt": f"note {i}\n"})
+        r.edit({"NOTES.md": f"note {i}\n"})
         out = r.report_and_complete("fail")
         assert r.state()["stage"] == "test", (i, out)
         assert "TS-1" not in json.dumps(out.get("forced") or {}), out
-    r.edit({"NOTES.txt": "last note\n"})
+    r.edit({"NOTES.md": "last note\n"})
     out = r.report_and_complete()
     assert out.get("ok") is True and r.state()["stage"] == "deliver", out
 
@@ -111,7 +111,7 @@ def test_a_failing_review_check_leaves_no_failed_review_attempt(rig, monkeypatch
     real = checks.evaluate
     monkeypatch.setattr(checks, "evaluate", lambda cid, ctx: (False, "forced")
                         if cid == "RV-4" else real(cid, ctx))
-    r.edit({"NOTES.txt": "a note\n"})
+    r.edit({"NOTES.md": "a note\n"})
     out = engine.stage_complete(r.report())
     assert out.get("reopened") == "review", out
     attempts = [e for e in r.events() if e["kind"] == "stage_attempt" and e.get("stage") == "review"]

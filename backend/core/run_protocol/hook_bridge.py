@@ -178,19 +178,23 @@ def bind_spawn(store: AuditStore, prompt: str, tool_use_id: str) -> "dict[str, A
 
 def record_answer(store: AuditStore, prompt_text: str, final_text: str, *,
                   completed_at: str, exact: bool = False, tool_use_id: str | None = None,
-                  session_id: str | None = None) -> "dict[str, Any] | None":
+                  session_id: str | None = None,
+                  coverage: "Mapping[str, int] | None" = None) -> "dict[str, Any] | None":
     """Persist an expert's answer for the handout *prompt_text* names (module docstring).
-    The answer and its findings are one operation on the run (r6 §2.2)."""
+    The answer and its findings are one operation on the run (r6 §2.2). *coverage*: what
+    the expert's transcript shows it read (``coverage``), recorded on the answer."""
     from core.run_protocol.oplock import operation
     # every other holder is a CLI call bounded by its Bash call, and a flock dies with
     # its process: this wait ends with the lock; the answer is never dropped for a busy
     # run (review f227e2ed)
     with operation(store.paths.root, store.paths.run_id, timeout=900.0):
         return _record(store, prompt_text, final_text, completed_at=completed_at,
-                       exact=exact, tool_use_id=tool_use_id, session_id=session_id)
+                       exact=exact, tool_use_id=tool_use_id, session_id=session_id,
+                       coverage=coverage)
 
 
-def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id, session_id):
+def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id, session_id,
+            coverage=None):
     handout = _handout(store, prompt_text)
     if handout is None:
         return None
@@ -205,7 +209,7 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
         if call is None:
             return None          # no host saw this spawn with the exact prompt
     return _write(store, handout, final_text, call=call, source="host", producer="hook",
-                  completed_at=completed_at, session_id=session_id)
+                  completed_at=completed_at, session_id=session_id, coverage=coverage)
 
 
 def record_relayed(store: AuditStore, handout_event_id: str, final_text: str, *,
@@ -272,7 +276,8 @@ def _repo_paths(store: AuditStore, code_trees: Any, files: "list[str]") -> dict[
     return changed
 
 
-def _write(store, handout, final_text, *, call, source, producer, completed_at, session_id):
+def _write(store, handout, final_text, *, call, source, producer, completed_at, session_id,
+           coverage=None):
     payload = handout["payload"]
     expert, review_round = payload["expert_id"], handout["round"]
     parsed = parse_answer(final_text, expert_id=expert, round=review_round,
@@ -282,6 +287,8 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
         "tool_use_id": call, "expert_id": expert, "stage": handout["stage"],
         "round": review_round, **parsed.answer_payload, "raw": final_text, "source": source,
     }
+    if coverage:
+        answer_payload["coverage"] = dict(coverage)
     handout_id = handout["event_id"]
 
     def answered(chain):
@@ -454,17 +461,49 @@ def _prompt_file(store: AuditStore, payload: Mapping[str, Any]) -> "str | None":
     return os.path.realpath(store.paths.blobs / str(payload["prompt_sha"]))
 
 
+def _evidence(store: AuditStore, handout: Mapping[str, Any],
+              transcript_path: "str | None") -> "dict[str, Any] | None":
+    """``subagent_transcript.spawn_evidence`` for *handout*'s expert, or None."""
+    from core import subagent_transcript
+    if not transcript_path:
+        return None
+    return subagent_transcript.spawn_evidence(
+        transcript_path, _prompt_file(store, handout["payload"]))
+
+
+def coverage(store: AuditStore, handout: Mapping[str, Any],
+             evidence: "Mapping[str, Any] | None") -> "dict[str, int] | None":
+    """What the expert covered, from its transcript (design 2026-11-01-pipeline-delivery-
+    friction D2): the prompt file's lines, how many distinct ones its Reads returned, its
+    tool calls and the cap it had. Deterministic facts, never the expert's own words.
+    None for a handout without a prompt file or an unreadable one."""
+    from core.pipeline_expert_agent import expert_cap
+    prompt_file = _prompt_file(store, handout["payload"])
+    if evidence is None or prompt_file is None:
+        return None
+    try:
+        data = Path(prompt_file).read_bytes()
+    except OSError:
+        return None
+    lines = data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
+    return {"prompt_lines": lines,
+            "prompt_lines_read": min(int(evidence.get("prompt_lines_read") or 0), lines),
+            "tool_calls": int(evidence.get("tool_calls") or 0),
+            "cap": expert_cap(prompt_file)}
+
+
 def _refusal(store: AuditStore, handout: Mapping[str, Any],
-             transcript_path: "str | None") -> "str | None":
+             transcript_path: "str | None",
+             evidence: "Mapping[str, Any] | None" = None) -> "str | None":
     """Why this sub-agent's answer may not be recorded for *handout*, or None
     (handout-by-file design §3.3): its first message must be the spawn text the
     handout's spawn was bound with, and a file-form expert must have read PROMPT-FILE
-    from the top, the file still being the prompt the handout names."""
-    from core import subagent_transcript
+    from the top, the file still being the prompt the handout names. *evidence*: the
+    transcript's ``spawn_evidence`` when the caller already read it."""
     payload = handout["payload"]
     prompt_file = _prompt_file(store, payload)
-    evidence = (subagent_transcript.spawn_evidence(transcript_path, prompt_file)
-                if transcript_path else None)
+    if evidence is None:
+        evidence = _evidence(store, handout, transcript_path)
     if evidence is None:
         return "transcript_unreadable"
     if _expected_sha(payload) not in evidence["first_shas"]:
@@ -498,7 +537,8 @@ def on_subagent_stop(prompt_head: str, final_text: str, *,
     handout = _handout(store, prompt_head)
     if handout is None:
         return None
-    reason = _refusal(store, handout, transcript_path)
+    evidence = _evidence(store, handout, transcript_path)
+    reason = _refusal(store, handout, transcript_path, evidence)
     if reason is not None:
         who = (f"transcript:{Path(transcript_path).name}" if transcript_path
                else "transcript:none")
@@ -507,7 +547,8 @@ def on_subagent_stop(prompt_head: str, final_text: str, *,
     from core.run_protocol.findings import FindingError
     try:
         recorded = record_answer(store, prompt_head, final_text, completed_at=at,
-                                 session_id=owner)
+                                 session_id=owner,
+                                 coverage=coverage(store, handout, evidence))
     except (StoreError, FindingError) as exc:
         # the answer could not be written: say so on the run, never drop it silently
         import logging

@@ -150,6 +150,9 @@ _SPECS = [
     # every addressed finding went to an R2 handout (review-closure §2.3 point 7)
     _c("RV-5", "review", "stage", "review", "review", CODE),
     _c("FX-1", "fixing_spec", "", "review", "review", CODE),
+    # how much of its prompt each expert read, from its transcript (audit only, design
+    # 2026-11-01-pipeline-delivery-friction D2): an incomplete review is said, never blocked
+    _c("RV-6", "review", "audit", "review", "review", CODE),
 ]
 _SPECS += [
     _c("TS-1", "validation_report", "stage audit", "test", "test", CODE),
@@ -414,6 +417,15 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         return _result(not missing, "every addressed finding went to R2" if not missing
                        else "addressed without an R2 handout (review-address with no items "
                             f"dispatches it): {missing}")
+    if check_id == "RV-6":
+        from core.run_protocol.review import coverage_rows
+        short = [row for row in coverage_rows(context.events) if not row["complete"]]
+        return _result(not short, "every expert read its whole prompt within its cap"
+                       if not short else "review coverage: " + "; ".join(
+                           f"{row['expert']} r{row['round']} read {row['read_pct']}% of its "
+                           "prompt" + (f", stopped at its {row['cap']}-call cap"
+                                       if row["budget_hit"] else "")
+                           for row in short[:6]))
     if check_id == "RV-4":
         unreviewed = context.run.get("unreviewed") or {}
         if not isinstance(unreviewed, Mapping):

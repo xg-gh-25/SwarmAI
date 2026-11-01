@@ -138,7 +138,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      "expert_id": str, "stage": str, "round": int, "state": str}, {"raw": str, "verdict": (str, type(None)),
                      "n_findings": int, "n_status": int,
                      # host: a host hook read it from the expert; relayed: the agent gave it
-                     "source": str}),
+                     "source": str,
+                     # what the expert's transcript shows it read (host answers only):
+                     # prompt_lines / prompt_lines_read / tool_calls / cap (design
+                     # 2026-11-01-pipeline-delivery-friction D2)
+                     "coverage": dict}),
     "finding_occ": _spec(("hook", "cli"), ("payload.answer_event_id", "ordinal"),
                          "event_id:canonical", {"answer_event_id": str,
                          "expert": str, "severity": str,
@@ -291,7 +295,7 @@ EVENT_SPECS: dict[str, EventSpec] = {
                              "bases": dict}),
     # TEST changed the code: the run goes back to REVIEW for an incremental review
     # (S6-2, design usable-by-anyone §3.3.3); the engine appends it, never the agent
-    # doc_paths: repo -> the doc-class paths (``.md/.txt/.rst``) changed since the last
+    # doc_paths: repo -> the doc-class paths (``core.doc_paths``: .md / .rst) changed since the last
     # reviewed tree when ONLY those changed: the engine completed that REVIEW itself
     # (design 2026-10-26-pipeline-review-closure §5.2 point 1)
     "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str},

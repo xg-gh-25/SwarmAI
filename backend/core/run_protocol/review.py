@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from core.doc_paths import is_doc_path
 from core.run_protocol import events as ev
 from core.run_protocol import findings as fd
 from core.run_protocol.findings import cluster_findings, fold as fold_findings, push_effect, r2_experts
@@ -449,6 +450,30 @@ def build_prompt(expert_id: str, instructions: str, review_input: str,
             f"\n\n{OUTPUT_CONTRACT}\n")
 
 
+def coverage_rows(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Per recorded expert answer that carries ``coverage`` (the transcript facts
+    hook_bridge records, design 2026-11-01-pipeline-delivery-friction D2): who, which
+    round, the share of its prompt file its Reads returned, its tool calls and cap, and
+    whether it read the whole prompt within its cap. The one reader for RV-6 and the
+    REPORT; an answer without coverage (relayed, older) is not listed."""
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        payload = event.get("payload") or {}
+        cov = payload.get("coverage") if event.get("kind") == "answer" else None
+        if not isinstance(cov, Mapping):
+            continue
+        total = int(cov.get("prompt_lines") or 0)
+        read = int(cov.get("prompt_lines_read") or 0)
+        calls, cap = int(cov.get("tool_calls") or 0), int(cov.get("cap") or 0)
+        budget_hit = bool(cap) and calls > cap
+        rows.append({"expert": str(payload.get("expert_id")), "stage": event.get("stage"),
+                     "round": event.get("round"),
+                     "read_pct": 100 if total <= 0 else min(100, (100 * read) // total),
+                     "tool_calls": calls, "cap": cap, "budget_hit": budget_hit,
+                     "complete": (total <= 0 or read >= total) and not budget_hit})
+    return rows
+
+
 SPAWN_INSTRUCTION = ("Read PROMPT-FILE from the top and follow it exactly. If the Read "
                      "output is cut short, keep reading with offset until the end. Your "
                      "report is your final message.")
@@ -580,7 +605,7 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
         shown = ", ".join(patterns[:6]) + (f" +{len(patterns) - 6}" if len(patterns) > 6 else "")
         picked["correctness"] = f"repository review patterns triggered: {shown}"
     source = [row for row in changed if row.get("is_test") is not True
-              and not str(row.get("path") or "").endswith((".md", ".txt", ".rst"))]
+              and not is_doc_path(str(row.get("path") or ""))]
     total = sum(int(row.get("insertions") or 0) + int(row.get("deletions") or 0)
                 for row in source)
     risk = "; ".join(security) if security else None

@@ -5,7 +5,9 @@ its head, and its final text. Used by the SwarmAI session's SubagentStop hook
 ``spawn_evidence`` is what an answer needs before it is recorded (handout-by-file
 design §3.3): the hashes of the sub-agent's whole first message, whether it read a
 given file from the top without the read failing, and whether anyone told it
-anything after it was spawned.
+anything after it was spawned; and what the review covered (design
+2026-11-01-pipeline-delivery-friction D2): how many distinct lines of that file its
+Reads returned, and how many tool calls it made.
 
 Public symbols: ``read_prompt_head``, ``read_final_text``, ``spawn_evidence``.
 """
@@ -15,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -111,6 +114,17 @@ def _literal(path: str) -> str:
     return os.path.normpath(os.path.abspath(os.path.expanduser(path)))
 
 
+# a Read result line: the line number, then a tab (or the arrow older hosts print)
+_READ_LINE = re.compile(r"^\s*(\d+)(?:\t|\u2192)", re.MULTILINE)
+
+
+def _result_text(content) -> str:
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text")
+    return content if isinstance(content, str) else ""
+
+
 def _message_text(content) -> str:
     if isinstance(content, list):
         return "\n".join(b.get("text", "") for b in content
@@ -119,21 +133,28 @@ def _message_text(content) -> str:
 
 
 def spawn_evidence(transcript_path: str, prompt_file: "str | None") -> "dict | None":
-    """``{"first_shas": set, "read_ok": bool, "told_after_spawn": bool}`` for an expert's
+    """``{"first_shas": set, "read_ok": bool, "told_after_spawn": bool,
+    "prompt_lines_read": int, "tool_calls": int}`` for an expert's
     transcript, or None when it cannot be read. ``first_shas``: sha256 of the WHOLE first
     user message as given and with one final newline added. ``read_ok``: a Read of
     *prompt_file* (the path exactly as given, not through a symlink) starting at its top
     (no offset, or 0 / 1) whose tool_result is not an error; a later paged Read does not
     matter, a Read starting in the middle is not a read of the top. Only the Read tool
     counts. ``told_after_spawn``: a later user record carries text (a message sent to the
-    expert after it was spawned), other than an interruption marker."""
+    expert after it was spawned), other than an interruption marker.
+    ``prompt_lines_read``: the distinct line numbers that successful Reads of
+    *prompt_file* (any offset) returned; ``tool_calls``: every tool_use the sub-agent
+    made."""
     try:
         p = Path(transcript_path)
         if not p.is_file() or p.stat().st_size > _EVIDENCE_SCAN_BYTES:
             return None
         target = _literal(prompt_file) if prompt_file else None
         first: "str | None" = None
-        pending: set[str] = set()
+        pending: set[str] = set()      # Reads of the top of the prompt file
+        paged: set[str] = set()        # every Read of the prompt file
+        lines_read: set[int] = set()
+        tool_calls = 0
         read_ok = told = False
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -152,26 +173,36 @@ def spawn_evidence(transcript_path: str, prompt_file: "str | None") -> "dict | N
                     later = _message_text(content).strip()
                     if later and not later.startswith(_INTERRUPTED):
                         told = True
-                if target is None or not isinstance(content, list):
+                if not isinstance(content, list):
                     continue
                 for b in content:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "tool_use":
+                        tool_calls += 1
+                        if target is None:
+                            continue
                         inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                        hit = (b.get("name") == "Read" and isinstance(inp.get("file_path"), str)
-                               and inp.get("offset") in (None, 0, 1)
-                               and _literal(inp["file_path"]) == target)
-                        if hit and isinstance(b.get("id"), str):
-                            pending.add(b["id"])
-                    elif b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
-                        if not b.get("is_error"):
+                        of_prompt = (b.get("name") == "Read"
+                                     and isinstance(inp.get("file_path"), str)
+                                     and _literal(inp["file_path"]) == target)
+                        if of_prompt and isinstance(b.get("id"), str):
+                            paged.add(b["id"])
+                            if inp.get("offset") in (None, 0, 1):
+                                pending.add(b["id"])
+                    elif b.get("type") == "tool_result" and b.get("tool_use_id") in paged:
+                        if b.get("is_error"):
+                            continue
+                        if b.get("tool_use_id") in pending:
                             read_ok = True
+                        lines_read.update(int(m) for m in
+                                          _READ_LINE.findall(_result_text(b.get("content"))))
         if first is None:
             return None
         variants = {first, first + "\n"}   # a host may drop the final newline
         return {"first_shas": {hashlib.sha256(v.encode("utf-8")).hexdigest() for v in variants},
-                "read_ok": read_ok, "told_after_spawn": told}
+                "read_ok": read_ok, "told_after_spawn": told,
+                "prompt_lines_read": len(lines_read), "tool_calls": tool_calls}
     except Exception:
         logger.debug("spawn_evidence: suppressed exception on a fail-safe path", exc_info=True)
         return None
