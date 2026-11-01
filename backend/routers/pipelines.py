@@ -8,8 +8,12 @@ Key endpoints:
 - ``GET /``                — runs in the 30-day window (``?active=true``: live ones)
 - ``GET /analytics``       — rollup, weekly trend and by-project groups
 - ``GET /{run_id}``        — one run: REPORT.md, reflect lessons, commits, decision
+- ``GET /{run_id}/view``   — everything the run's big card shows, with the commands its
+  state offers (``actions``; design 2026-11-01-brain-eval-and-runs §4.2)
 - ``PATCH /{run_id}/cancel`` / ``/resume`` — signed abandon / resume events
 - ``POST /{run_id}/decision`` — a person answers a pending decision (human-only)
+- ``POST /{run_id}/confirm-landed`` — a person says an abandoned run's change is on main
+  as these commits, where the engine could not show it (human-only)
 """
 from __future__ import annotations
 
@@ -457,41 +461,48 @@ async def pipeline_run_detail(run_id: str):
     if not _valid_run_id(run_id):
         return missing
 
-    def _read():
-        if not pm.is_v1(run_id):
-            return None
-        engine = _load_v1_engine(run_id)
-        if engine is None:
-            return None
-        run_dir = engine.run_dir
-        try:
-            raw = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        report_md, report_path = "", None
-        report = run_dir / "REPORT.md"
-        if report.is_file():
-            try:
-                report_md = report.read_text(encoding="utf-8")
-                report_path = str(report.relative_to(_get_swarmws()))
-            except (OSError, ValueError):
-                pass
-        try:
-            reflect = json.loads((run_dir / "artifacts" / "reflect.json").read_text(
-                encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            reflect = {}
-        lessons = reflect.get("lessons") if isinstance(reflect, dict) else None
-        lessons = [str(item.get("lesson") or item.get("text") or item)
-                   if isinstance(item, dict) else str(item)
-                   for item in (lessons if isinstance(lessons, list) else [])]
-        raw = _normalized(raw if isinstance(raw, dict) else {}, engine.run_id, engine.project)
-        return raw, report_md, report_path, lessons, _v1_decision(engine), engine.project
-
-    found = await executors.run_nav(_read)
+    found = await executors.run_nav(_read_detail, run_id)
     if found is None:
         return missing
-    raw, report_md, report_path, lessons, decision, project = found
+    return _detail_model(run_id, *found[:6])
+
+
+def _read_detail(run_id: str):
+    """(raw, report_md, report_path, lessons, decision, project, engine) of a v1 run, or
+    None. Blocking file IO: callers run it on the nav pool."""
+    if not pm.is_v1(run_id):
+        return None
+    engine = _load_v1_engine(run_id)
+    if engine is None:
+        return None
+    run_dir = engine.run_dir
+    try:
+        raw = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    report_md, report_path = "", None
+    report = run_dir / "REPORT.md"
+    if report.is_file():
+        try:
+            report_md = report.read_text(encoding="utf-8")
+            report_path = str(report.relative_to(_get_swarmws()))
+        except (OSError, ValueError):
+            pass
+    try:
+        reflect = json.loads((run_dir / "artifacts" / "reflect.json").read_text(
+            encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        reflect = {}
+    lessons = reflect.get("lessons") if isinstance(reflect, dict) else None
+    lessons = [str(item.get("lesson") or item.get("text") or item)
+               if isinstance(item, dict) else str(item)
+               for item in (lessons if isinstance(lessons, list) else [])]
+    raw = _normalized(raw if isinstance(raw, dict) else {}, engine.run_id, engine.project)
+    return raw, report_md, report_path, lessons, _v1_decision(engine), engine.project, engine
+
+
+def _detail_model(run_id, raw, report_md, report_path, lessons, decision, project) -> PipelineRunDetail:
+
     landed_as = raw.get("landed_as") if isinstance(raw.get("landed_as"), dict) else None
     return PipelineRunDetail(
         id=run_id, project=project, requirement=_text(raw.get("requirement")),
@@ -509,3 +520,144 @@ async def pipeline_run_detail(run_id: str):
         landed_as=landed_as,
         created_at=_text(raw.get("created_at")), updated_at=_text(raw.get("updated_at")),
         audit_card=raw.get("audit_card"))
+
+
+# ── the run's big card (design 2026-11-01-brain-eval-and-runs §4.2) ─────────────────
+
+#: a pause a person resumes (Stop, a closed tab, a worktree that failed); a run waiting
+#: for a decision is answered, an idle one is continued in its session
+_RESUMABLE = ("stopped", "worktree")
+
+
+def run_actions(summary: PipelineRunSummary, decision: Optional[PipelineDecision]) -> list[dict]:
+    """The commands a local run's state offers, in order, the first one primary when it
+    asks something of the person (the frontend renders these and decides nothing; the
+    Hive side is ``core.swarm_out_settle.derive``). Only existing routes: answer
+    (``/decision``), resume, continue (its session), confirm landed (``/confirm-landed``,
+    an abandoned run nobody cancelled whose change may be on main), cancel, open session."""
+    out: list[dict] = []
+    if decision is not None:
+        out.append({"key": "answer", "primary": True})
+    if summary.pause_kind in _RESUMABLE:
+        out.append({"key": "resume", "primary": not out})
+    if summary.pause_kind == "idle":
+        out.append({"key": "continue", "primary": not out})
+    if summary.status == "abandoned" and summary.needs_you:
+        out.append({"key": "confirm_landed", "primary": not out})
+    if summary.status in ("running", "paused"):
+        out.append({"key": "cancel", "primary": False})
+    if summary.owner_session_id:
+        out.append({"key": "open_session", "primary": False})
+    return out
+
+
+def _acceptance(run_dir: Path) -> list[dict]:
+    """The run's acceptance criteria from its REQUIREMENTS (``requirements[].acceptance``):
+    ``{id, text}`` each, "when <condition>: <response>"; [] when it wrote none."""
+    try:
+        doc = json.loads((run_dir / "artifacts" / "requirements.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    out = []
+    for req in (doc.get("requirements") if isinstance(doc, dict) else None) or []:
+        for ac in (req.get("acceptance") if isinstance(req, dict) else None) or []:
+            if not isinstance(ac, dict):
+                continue
+            cond, resp = _text(ac.get("condition")).strip(), _text(ac.get("response")).strip()
+            text = f"{cond} → {resp}" if cond and resp else (resp or cond)
+            if text:
+                out.append({"id": _text(ac.get("id"))[:20], "text": text[:400]})
+    return out[:30]
+
+
+def _stages(raw: dict) -> list[dict]:
+    """Each stage of the run's profile: its status and how many attempts it took."""
+    from core.run_protocol import lifecycle
+    stages = raw.get("stages") if isinstance(raw.get("stages"), dict) else {}
+    attempts = raw.get("stage_attempts") if isinstance(raw.get("stage_attempts"), dict) else {}
+    return [{"name": name, "status": stages.get(name) if isinstance(stages.get(name), str) else None,
+             "attempts": attempts.get(name) if isinstance(attempts.get(name), int) else None}
+            for name in lifecycle.PROFILE_STAGES.get(str(raw.get("profile") or ""), ())]
+
+
+@router.get("/{run_id}/view")
+async def pipeline_run_view(run_id: str):
+    """Everything a local run's big card shows, in one read: the row's facts
+    (``summary``), the retrospective (``detail``), the stages with their attempts, each
+    time a person stepped in, the acceptance criteria and the commands its state offers.
+    The run dir is the contract's (never a path built from the request)."""
+    from fastapi.responses import JSONResponse
+    missing = JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+    if not _valid_run_id(run_id):
+        return missing
+
+    def _read():
+        found = _read_detail(run_id)
+        if found is None:
+            return None
+        raw, report_md, report_path, lessons, decision, project, engine = found
+        from core import run_interventions
+
+        def question(request_id: str):
+            value = engine.decision_value(request_id)
+            return value.get("question") if isinstance(value, dict) else None
+        try:
+            events = engine.store.read_events()
+            steps = run_interventions.details(raw, events, question=question)
+        except Exception:  # noqa: BLE001 -- the list behind the counts never fails the card
+            logger.warning("interventions of %s are unreadable", run_id, exc_info=True)
+            steps = None
+        summary = _summary(raw, project)
+        return {
+            "summary": summary.model_dump(),
+            "detail": _detail_model(run_id, raw, report_md, report_path, lessons, decision,
+                                    project).model_dump(),
+            "stages": _stages(raw),
+            "interventions": steps,
+            "acceptance": _acceptance(engine.run_dir),
+            "actions": run_actions(summary, decision),
+        }
+
+    found = await executors.run_nav(_read)
+    return missing if found is None else found
+
+
+@router.post("/{run_id}/confirm-landed")
+async def confirm_landed(run_id: str, body: dict) -> dict:
+    """A person says this abandoned run's change is on main as ``body.commits``
+    (repo -> commit; a single-repo run may give ``{"": commit}``), where the engine
+    could not show it. Human-only: run_owner_gate refuses this route from a command
+    (``_HUMAN_ONLY_API_RE``); an agent asks the person through ``landed-as --prepare``
+    and ``--request`` in chat."""
+    from fastapi.responses import JSONResponse
+    if not _valid_run_id(run_id):
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+    commits = body.get("commits") if isinstance(body, dict) else None
+    if not isinstance(commits, dict) or not commits or not all(
+            isinstance(k, str) and isinstance(v, str) and v.strip() and len(v) <= 80
+            for k, v in commits.items()):
+        return JSONResponse(status_code=422, content={"status": "invalid", "run_id": run_id,
+                                                      "detail": "commits: repo -> commit"})
+
+    def _confirm():
+        from core.run_protocol.engine import EngineError
+        try:
+            engine = _load_v1_engine(run_id)
+            if engine is None:
+                return ("missing", None)
+            return ("confirmed", engine.confirm_landed_by_person(
+                {k: v.strip() for k, v in commits.items()})["landed_as"])
+        except EngineError as exc:
+            return ("conflict", str(exc)[:400])
+        except Exception:
+            logger.exception("confirm-landed failed for %s", run_id)
+            return ("error", "confirm-landed failed")
+
+    outcome, detail = await executors.run_nav(_confirm)
+    if outcome == "confirmed":
+        return {"status": "landed", "run_id": run_id, "landed_as": detail}
+    if outcome == "missing":
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
+    code = 409 if outcome == "conflict" else 500
+    return JSONResponse(status_code=code, content={"status": outcome, "run_id": run_id,
+                                                   "detail": detail})

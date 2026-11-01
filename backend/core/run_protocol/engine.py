@@ -2312,6 +2312,31 @@ class RunEngine:
                 "consumed_event_id": consumed["event_id"],
                 "action": action, "state": self.projection()}
 
+    @_one_operation
+    def confirm_landed_by_person(self, commits: Mapping[str, str]) -> dict[str, Any]:
+        """A person confirms from the dashboard (``POST /api/pipelines/{id}/confirm-landed``,
+        a route only the App calls: run_owner_gate refuses it from a command) that this
+        abandoned run's change is on main as *commits*, where the engine could not show it.
+        The same records as the chat path, in one operation: the ``confirm_landed``
+        land_request, the person's ``auth`` (``landing.approve_from_event``, as the
+        daemon writes it after an approval in chat), its consumption, and the
+        ``landed_as`` bound to the request, so the rescue is counted the same way
+        (core.run_interventions). Raises EngineError for what nobody can confirm (a run
+        not abandoned or already recorded, a commit not on its branch)."""
+        from core.run_protocol import landing
+        prepared = self.prepare_authorized_action(action="confirm_landed",
+                                                  target=json.dumps(dict(commits)))
+        request = prepared["request"]
+        request_id, bindings = request["request_id"], request["bindings"]
+        now = time.time()
+        landing.approve_from_event(self.store, request_id, now=now, at=_now())
+        try:
+            landing.consume_authorization(self.store, request_id, session_id=self.owner_session(),
+                                          bindings=bindings, at=_now(), now=now)
+        except landing.LandingError as exc:
+            raise EngineError(str(exc)) from exc
+        return {**self._record_confirmed_landing(request_id, bindings), "request_id": request_id}
+
     def _record_confirmed_landing(self, request_id: str,
                                   bindings: Mapping[str, Any]) -> dict[str, Any]:
         """The landed_as a person confirmed, bound to its consumed request."""

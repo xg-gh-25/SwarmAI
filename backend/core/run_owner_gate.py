@@ -36,7 +36,7 @@ For a ``pipeline_v1.py`` command:
   (``_record_approval``).
 - a Bash command that sends an HTTP request (``_makes_http_call``; one that only names a
   route, in a search or a file being edited, is not judged) to the human-only
-  ``/api/pipelines/<id>/decision`` is denied, and so is
+  ``/api/pipelines/<id>/decision`` or ``/confirm-landed`` is denied, and so is
   one to the user-only CDF redaction ``/api/ingestion/redact`` (CDF §13 tombstone: only
   the person triggers it, from the Flow view), one to the chat's question-card answer
   ``/api/chat/answer-question`` (it records the answer as the person's), and one to any
@@ -69,8 +69,10 @@ _TAKEOVER = frozenset({
     "landed-as",
 })
 _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
-# The daemon's human-only pipeline endpoint (docs/design/pipeline-v1-human-loop.md).
-_HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
+# The daemon's human-only pipeline endpoints: a decision's answer
+# (docs/design/pipeline-v1-human-loop.md) and a person's "it landed as these commits"
+# (design 2026-11-01-brain-eval-and-runs §4.2; an agent asks through landed-as --request).
+_HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/(?:decision|confirm-landed)\b")
 # The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
 _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
 # The chat's own question-card answer (routers/chat.py answer-question): it records the
@@ -421,6 +423,10 @@ def _user_only_deny(command: str) -> "dict | None":
     if not _makes_http_call(command):
         return None
     if _HUMAN_ONLY_API_RE.search(command):
+        if re.search(r"/confirm-landed\b", command):
+            return _deny("only a person confirms from the dashboard that a run landed. Ask "
+                         "them: landed-as --prepare with the commits, then landed-as "
+                         "--request <request id>.")
         return _deny("a pipeline decision is answered by a person (the chat question card "
                      "or the dashboard), never by a command. Ask with AskUserQuestion using "
                      "the run's ask_user_question payload, then wait for the answer.")

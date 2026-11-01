@@ -17,8 +17,10 @@ not counted here (``host_decisions``).
 
 Public:
 - ``windows(raw)``      — the (session id, start, end) spans the run was driven in;
-- ``messages(raw)``     — the person's messages in those spans (None when unreadable);
-- ``count(raw, ...)``   — ``{answers, corrections, rescues, total}``.
+- ``corrections(raw)``  — the person's messages in those spans, ``{at, text}`` (None when unreadable);
+- ``messages(raw)``     — how many (None when unreadable);
+- ``count(raw, ...)``   — ``{answers, corrections, rescues, total}``;
+- ``details(raw, events)`` — each answer, correction and rescue, for the big card.
 ``raw`` is a run's projection (``run.json`` / the engine's read model).
 """
 from __future__ import annotations
@@ -93,15 +95,27 @@ def _db_path() -> Path:
     return Path(get_app_data_dir()) / "data.db"
 
 
-def messages(raw: Mapping[str, Any], *, db_path: Path | None = None,
-             now: datetime | None = None) -> int | None:
-    """The person's messages sent into the run's sessions while it ran; None when the
-    chat store cannot be read (never a 0 for "unknown")."""
+def _text_of(content: Any) -> str:
+    """The typed text of a message (its text blocks), for a correction's one line."""
+    try:
+        blocks = json.loads(content) if isinstance(content, str) and content.startswith("[") else None
+    except ValueError:
+        blocks = None
+    if blocks is None:
+        return content if isinstance(content, str) else ""
+    return "\n".join(b.get("text", "") for b in blocks if isinstance(b, Mapping) and b.get("type") == "text")
+
+
+def corrections(raw: Mapping[str, Any], *, db_path: Path | None = None,
+                now: datetime | None = None) -> list[dict[str, str]] | None:
+    """The person's messages sent into the run's sessions while it ran, oldest first, as
+    ``{at, text}`` (``at`` as the chat store keeps it: local time); None when the chat
+    store cannot be read or the run never recorded its start (never [] for "unknown")."""
     if _utc(raw.get("created_at")) is None:
         return None              # a run that never recorded its start: unknown
     spans = windows(raw, now=now)
     if not spans:
-        return 0
+        return []
     path = db_path or _db_path()
     if not path.is_file():
         return None
@@ -110,18 +124,26 @@ def messages(raw: Mapping[str, Any], *, db_path: Path | None = None,
     except sqlite3.Error:
         return None
     try:
-        total = 0
+        out: list[dict[str, str]] = []
         for sid, start, end in spans:
             rows = conn.execute(
-                "SELECT content FROM messages WHERE session_id=? AND role='user' "
-                "AND created_at > ? AND created_at <= ?",
+                "SELECT content, created_at FROM messages WHERE session_id=? AND role='user' "
+                "AND created_at > ? AND created_at <= ? ORDER BY created_at",
                 (sid, _local_naive(start), _local_naive(end))).fetchall()
-            total += sum(1 for (content,) in rows if _is_steer(content))
-        return total
+            out += [{"at": str(at), "text": " ".join(_text_of(content).split())[:200]}
+                    for content, at in rows if _is_steer(content)]
+        return out
     except sqlite3.Error:
         return None
     finally:
         conn.close()
+
+
+def messages(raw: Mapping[str, Any], *, db_path: Path | None = None,
+             now: datetime | None = None) -> int | None:
+    """How many corrections (``corrections``); None when unknown."""
+    rows = corrections(raw, db_path=db_path, now=now)
+    return None if rows is None else len(rows)
 
 
 def _rescues(raw: Mapping[str, Any]) -> int:
@@ -159,3 +181,34 @@ def for_run(raw: Mapping[str, Any], *, db_path: Path | None = None,
             now: datetime | None = None) -> dict[str, int | None]:
     """``count`` with the corrections read from the chat store."""
     return count(raw, corrections=messages(raw, db_path=db_path, now=now))
+
+
+def details(raw: Mapping[str, Any], events: list[Mapping[str, Any]], *,
+            question: Any = None, db_path: Path | None = None,
+            now: datetime | None = None) -> dict[str, Any]:
+    """Each time a person stepped in, for the run's big card: ``answers`` (the person's
+    ``human_answer`` events: when, which request, the option, and the question when
+    *question*\(request_id) gives it), ``corrections`` (``corrections``; None when
+    unknown) and ``rescues`` (a person's override landing or confirmed landed-as). The
+    counts stay ``count``'s; this is the list behind them."""
+    answers, rescues = [], []
+    for e in events:
+        kind, payload = e.get("kind"), e.get("payload") if isinstance(e.get("payload"), Mapping) else {}
+        if kind == "human_answer":
+            rid = payload.get("request_id")
+            q = None
+            if callable(question) and isinstance(rid, str):
+                try:
+                    q = question(rid)
+                except Exception:  # noqa: BLE001 -- a question that cannot be read leaves it out
+                    q = None
+            answers.append({"at": e.get("at"), "request_id": rid, "option_id": payload.get("option_id"),
+                            "question": q})
+        elif payload.get("landing") == "human_override":
+            # the person's landing, as ``_rescues`` decides it (not the dispatching agent's)
+            if _rescues({"landing": "human_override", "auth_grants": raw.get("auth_grants")}):
+                rescues.append({"at": e.get("at"), "kind": "run_land"})
+        elif kind == "landed_as" and payload.get("request_id"):
+            rescues.append({"at": e.get("at"), "kind": "confirm_landed"})
+    return {"answers": answers, "corrections": corrections(raw, db_path=db_path, now=now),
+            "rescues": rescues}
