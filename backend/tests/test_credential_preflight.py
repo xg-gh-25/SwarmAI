@@ -137,3 +137,29 @@ async def test_preflight_valid_proceeds_to_spawn():
 
     assert not any(e.get("code") == "CREDENTIALS_EXPIRED" for e in events)
     mock_spawn.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_preflight_with_nothing_connected_says_so_not_expired():
+    """No account record and no sign-in method (a new user who chose "later", an old
+    Anthropic-key install without AWS credentials): its own code and words."""
+    async def run(reason):
+        unit = _cold_unit()
+        fake_validator = type("V", (), {"check": AsyncMock(return_value="expired"),
+                                        "last_expired_reason": reason})()
+        with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
+             patch("core.app_config_manager.AppConfigManager.instance", return_value=_cfg(True, None)), \
+             patch("core.aws_account.active", return_value=False), \
+             patch.object(unit, "_spawn", new=AsyncMock()) as mock_spawn:
+            events = await _collect(unit, options=object(), config=None)
+        mock_spawn.assert_not_called()
+        return next(e for e in events if e.get("type") == "error")
+
+    ev = await run("no_credentials")
+    assert ev["code"] == "ACCOUNT_NOT_CONNECTED"
+    assert "connected" in ev["message"].lower() and "expired" not in ev["message"].lower()
+    # credentials that exist but stopped working (an expired SSO session, no method
+    # recorded) are an expiry, not "nothing connected"
+    ev = await run("auth")
+    assert ev["code"] == "CREDENTIALS_EXPIRED"
+    assert "not connected" not in ev["message"].lower() and "connected yet" not in ev["message"].lower()

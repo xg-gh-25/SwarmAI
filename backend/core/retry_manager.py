@@ -83,6 +83,7 @@ class RetryManager:
         from .session_utils import (
             _build_error_event,
             _sanitize_sdk_error,
+            sdk_error_code,
         )
         from .session_unit import SessionState
 
@@ -107,7 +108,7 @@ class RetryManager:
             await self._parent._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
             yield _build_error_event(
-                code="SPAWN_FAILED",
+                code=sdk_error_code(str(spawn_exc), "SPAWN_FAILED"),
                 message=friendly,
                 detail=spawn_tb,
                 suggested_action=suggested,
@@ -186,7 +187,7 @@ class RetryManager:
         the resumed stream raised.
         """
         from .leak_transcript import clean_transcript_leaks, find_transcript
-        from .session_utils import _build_error_event, _sanitize_sdk_error
+        from .session_utils import _build_error_event, _sanitize_sdk_error, sdk_error_code
         from .session_unit import SessionState
         from .streaming_orchestrator import StreamingOrchestrator
 
@@ -224,7 +225,7 @@ class RetryManager:
             await parent._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
             yield _build_error_event(
-                code="SPAWN_FAILED",
+                code=sdk_error_code(str(spawn_exc), "SPAWN_FAILED"),
                 message=friendly,
                 detail=spawn_tb,
                 suggested_action=suggested,
@@ -303,6 +304,7 @@ class RetryManager:
             _build_error_event,
             _is_retriable_error,
             _sanitize_sdk_error,
+            sdk_error_code,
             classify_failure,
             compute_backoff,
         )
@@ -345,6 +347,7 @@ class RetryManager:
             _build_error_event,
             _is_retriable_error,
             _sanitize_sdk_error,
+            sdk_error_code,
             classify_failure,
             compute_backoff,
         )
@@ -627,7 +630,7 @@ class RetryManager:
                     await self._parent._crash_to_cold_async(clear_identity=True)
                     friendly, suggested = _sanitize_sdk_error(error_str)
                     yield _build_error_event(
-                        code="SPAWN_FAILED",
+                        code=sdk_error_code(error_str, "SPAWN_FAILED"),
                         message=friendly,
                         detail=spawn_tb,
                         suggested_action=suggested,

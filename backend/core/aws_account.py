@@ -1183,7 +1183,10 @@ def _remediation(state: str) -> Optional[dict]:
     if is_hive_mode():   # a Hive signs in with its instance role, whatever auth_method says
         return dict(remediation_for("iam_role"))
     if not active():
-        return dict(remediation_for(_cfg().get("auth_method")))
+        method = _cfg().get("auth_method")
+        if not method and _no_credentials_seen():   # nothing was ever connected
+            method = "not_connected"
+        return dict(remediation_for(method))
     if state not in (NEEDS_LOGIN, MISMATCH):
         return None
     method = "account_mismatch" if state == MISMATCH else remediation_method()
@@ -1193,6 +1196,17 @@ def _remediation(state: str) -> Optional[dict]:
         if cmd:
             out["action"] = {"kind": "terminal", "command": cmd, "title": "AWS sign-in"}
     return out
+
+
+def _no_credentials_seen() -> bool:
+    """Whether the last credential check found no AWS credentials on this machine at all
+    (the readiness sampler runs it): then the fix is "connect an account", not "sign in
+    again". No network here; False when it is not known."""
+    try:
+        from core import session_registry
+        return session_registry.get_credential_validator().last_expired_reason == "no_credentials"
+    except Exception:  # noqa: BLE001 — a fix text must never fail to build
+        return False
 
 
 #: a profile name that may be typed into a shell as one word (design 2026-11-01 §4.2)

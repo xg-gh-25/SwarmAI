@@ -83,6 +83,11 @@ def test_without_the_account_the_legacy_method_keeps_its_fix(tmp_path, monkeypat
     for method, kind in (("ada", "terminal"), ("sso", "terminal"), ("apikey", "settings"), (None, "settings")):
         mgr.update({"auth_method": method})
         assert aa.view()["remediation"]["action"]["kind"] == kind, method
+    assert aa.view()["remediation"]["id"] == "fallback"        # no method: not known to be unset-up
+    from core import session_registry
+    v = session_registry.get_credential_validator()
+    monkeypatch.setattr(v, "last_expired_reason", "no_credentials")
+    assert aa.view()["remediation"]["id"] == "not_connected"   # no credentials at all
     monkeypatch.setenv("SWARMAI_MODE", "hive")
     mgr.update({"auth_method": "iam_role"})
     assert aa.view()["remediation"]["action"] == {"kind": "settings", "tab": "ai-models"}

@@ -26,3 +26,19 @@ describe('ChatErrorMessage — fix the sign-in', () => {
     expect(screen.queryByTestId('chat-error-fix-sign-in')).toBeNull();
   });
 });
+
+describe('ChatErrorMessage — nothing connected yet', () => {
+  it('says so in its own words and opens the account page', async () => {
+    const { OPEN_SETTINGS_EVENT } = await import('../../common/settingsEvents');
+    const seen = vi.fn();
+    window.addEventListener(OPEN_SETTINGS_EVENT, seen);
+    render(<ChatErrorMessage error={{ code: 'ACCOUNT_NOT_CONNECTED', message: 'No AWS account is connected yet.', suggestedAction: 'Connect one…' }} />);
+    expect(screen.getByText('credentialBanner.chat.notConnected')).toBeInTheDocument();
+    expect(screen.getByText('credentialBanner.remedy.not_connected.message')).toBeInTheDocument();
+    expect(screen.queryByText(/Credentials Expired/)).toBeNull();
+    expect(screen.queryByTestId('chat-error-fix-sign-in')).toBeNull();
+    fireEvent.click(screen.getByTestId('chat-error-connect'));
+    expect((seen.mock.calls[0][0] as CustomEvent).detail).toEqual({ tab: 'aws-account' });
+    window.removeEventListener(OPEN_SETTINGS_EVENT, seen);
+  });
+});

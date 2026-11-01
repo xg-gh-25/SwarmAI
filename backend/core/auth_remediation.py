@@ -30,6 +30,9 @@ class Remediation(TypedDict):
     # Commands come only from the fixed strings here (or core.aws_account for a
     # profile name it validated); the frontend never builds one.
     action: dict
+    # Which entry this is (the key, or "fallback"): the UI shows its own translation of
+    # message / fix_text by it and falls back to the English text here.
+    id: str
 
 
 # Deep-link target for the model settings (Settings → LLM Models).
@@ -65,7 +68,7 @@ _REMEDIATION: dict[str, Remediation] = {
         "message": "Your AWS profile's sign-in has expired.",
         "fix_text": (
             "Sign in again for the AWS profile SwarmAI uses (for an SSO profile: "
-            "`aws sso login --profile <name>`; the name is in Settings → SwarmAI "
+            "`aws sso login --profile <name>`; the name is in Settings → Swarm AWS "
             "Account), then send your message again."
         ),
         "settings_tab": _ACCOUNT_TAB,
@@ -105,7 +108,7 @@ _REMEDIATION: dict[str, Remediation] = {
     "account_broken": {
         "message": "SwarmAI can't sign in to its AWS account.",
         "fix_text": (
-            "The sign-in it was set up with no longer works (see Settings → SwarmAI "
+            "The sign-in it was set up with no longer works (see Settings → Swarm AWS "
             "Account for the reason). Fix it there or in LLM Models, then send your "
             "message again."
         ),
@@ -154,6 +157,21 @@ _REMEDIATION: dict[str, Remediation] = {
 
 # Method-agnostic fallback — used when auth_method is unset/unknown. Deliberately
 # does NOT name any provider-specific command (never hardcode mwinit here).
+# Nothing was ever connected: no SwarmAI account and no sign-in method (a new user who
+# chose "configure later", or an old Anthropic-key install without AWS credentials).
+# Said as it is, not as an expiry (design 2026-11-01-settings-account-merge §3.1).
+_REMEDIATION["not_connected"] = {
+    "message": "No AWS account is connected yet.",
+    "fix_text": (
+        "Connect one in Settings → Swarm AWS Account (or enter a Bedrock API key in "
+        "Settings → LLM Models), then send your message again."
+    ),
+    "settings_tab": _ACCOUNT_TAB,
+    "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
+}
+for _k, _v in _REMEDIATION.items():
+    _v["id"] = _k
+
 _FALLBACK: Remediation = {
     "message": "Your credentials aren't working.",
     "fix_text": (
@@ -162,6 +180,7 @@ _FALLBACK: Remediation = {
     ),
     "settings_tab": _ACCOUNT_TAB,
     "action": {"kind": "settings", "tab": _ACCOUNT_TAB},
+    "id": "fallback",
 }
 
 
@@ -169,7 +188,8 @@ def remediation_for(auth_method: Optional[str]) -> Remediation:
     """Return the remediation for an auth method.
 
     Accepts "ada" | "ada_account" | "sso" | "sso_app" | "aws_login" | "access_keys" | "profile" |
-    "account_mismatch" | "iam_role" | "bedrock_api_key"; anything else (None,
+    "account_mismatch" | "account_broken" | "iam_role" | "bedrock_api_key" | "not_connected";
+    anything else (None,
     unrecognized) returns the safe method-agnostic fallback. Never raises,
     never emits Amazon-internal jargon for a non-ADA method.
     """

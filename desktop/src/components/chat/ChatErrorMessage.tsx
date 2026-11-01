@@ -13,6 +13,9 @@
  * - `SERVICE_UNAVAILABLE`   — triggers immediate health check
  * - `CREDENTIALS_EXPIRED`   — a "fix the sign-in" button: the chat's sign-in line
  *                             (CredentialBanner) verifies and runs its one action
+ *                             (the pre-flight's expiry, or a sign-in error mid-turn)
+ * - `ACCOUNT_NOT_CONNECTED` — nothing was ever connected: said as it is (not as an
+ *                             expiry), with a button to the account page
  *
  * Key exports:
  * - `ChatErrorMessage`      — React component
@@ -22,7 +25,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHealth } from '../../contexts/HealthContext';
-import { fixSignIn } from '../common/settingsEvents';
+import { fixSignIn, openSettings } from '../common/settingsEvents';
 
 export interface ChatErrorMessageProps {
   error: {
@@ -52,7 +55,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
       className={`border-l-4 rounded-r-lg p-4 my-2 ${
         // Informational errors (timeouts, queue) get amber styling — less alarming.
         // Hard errors (rate limit, credentials, service down) get red.
-        error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
+        error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || error.code === 'ACCOUNT_NOT_CONNECTED' || !error.code
           ? 'border-amber-500 bg-amber-950/30'
           : 'border-red-500 bg-red-950/40'
       }`}
@@ -61,7 +64,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
       {/* Error header */}
       <div className="flex items-center gap-2 mb-1">
         <span className={`material-symbols-outlined icon-sm ${
-          error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
+          error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || error.code === 'ACCOUNT_NOT_CONNECTED' || !error.code
             ? 'text-amber-400'
             : 'text-red-400'
         }`}>
@@ -74,7 +77,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
                 : 'error'}
         </span>
         <span className={`font-semibold text-sm ${
-          error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
+          error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || error.code === 'ACCOUNT_NOT_CONNECTED' || !error.code
             ? 'text-amber-400'
             : 'text-red-400'
         }`}>
@@ -87,16 +90,20 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
                 : error.code === 'SERVICE_UNAVAILABLE'
                   ? 'Service Unavailable'
                   : error.code === 'CREDENTIALS_EXPIRED'
-                    ? 'Credentials Expired'
+                    ? t('credentialBanner.chat.credentialsExpired')
+                    : error.code === 'ACCOUNT_NOT_CONNECTED'
+                    ? t('credentialBanner.chat.notConnected')
                     : error.code === 'QUEUE_TIMEOUT'
                       ? 'Slots Busy'
                       : error.code ?? 'Interrupted'}
         </span>
       </div>
 
-      {/* Error message */}
+      {/* Error message (never connected: one fixed sentence, so it is translated here) */}
       <p className="text-[var(--color-text)] text-sm mb-1">
-        {error.message ?? 'An error occurred'}
+        {error.code === 'ACCOUNT_NOT_CONNECTED'
+          ? t('credentialBanner.remedy.not_connected.message')
+          : (error.message ?? 'An error occurred')}
       </p>
 
       {/* Detail */}
@@ -109,7 +116,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
       {/* Suggested action */}
       {error.suggestedAction && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded px-3 py-2 text-yellow-200 text-sm">
-          💡 {error.suggestedAction}
+          💡 {error.code === 'ACCOUNT_NOT_CONNECTED' ? t('credentialBanner.remedy.not_connected.fix') : error.suggestedAction}
         </div>
       )}
 
@@ -121,6 +128,12 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
         <button type="button" onClick={fixSignIn} data-testid="chat-error-fix-sign-in"
           className="mt-3 btn-md btn-primary transition-colors">
           {t('credentialBanner.fixFromChat')}
+        </button>
+      )}
+      {error.code === 'ACCOUNT_NOT_CONNECTED' && (
+        <button type="button" onClick={() => openSettings('aws-account')} data-testid="chat-error-connect"
+          className="mt-3 btn-md btn-primary transition-colors">
+          {t('credentialBanner.chat.connect')}
         </button>
       )}
 

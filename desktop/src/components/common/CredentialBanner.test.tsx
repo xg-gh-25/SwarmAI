@@ -289,7 +289,30 @@ describe('CredentialBanner — asked, after the review', () => {
     await act(async () => { fixSignIn(); });
     await waitFor(() => expect(mockVerify).toHaveBeenCalledTimes(2));
     expect(runs.seen.length).toBe(1);
-    expect(mockGet).not.toHaveBeenCalled();     // the remedy from the verify is kept
+    expect(mockGet).toHaveBeenCalledTimes(1);   // the click's own read; the line does not read again over it
     runs.stop();
+  });
+});
+
+describe('CredentialBanner — words and the Bedrock-key case', () => {
+  it('an entry with no translation shows the backend text', async () => {
+    setAuth('expired');
+    mockGet.mockResolvedValue({ remediation: { id: 'not_connected', message: 'No AWS account is connected yet.',
+      fix_text: 'Connect one…', settings_tab: 'aws-account', action: { kind: 'settings', tab: 'aws-account' } } });
+    render(<CredentialBanner />);
+    // the mock t returns the key unchanged = no translation
+    expect(await screen.findByTestId('credential-banner')).toHaveTextContent('Connect one…');
+  });
+
+  it('chat on a Bedrock API key: the card button opens LLM Models, nothing is verified', async () => {
+    setAuth('valid');
+    mockGet.mockResolvedValue({ chat_via: 'bedrock_key', remediation: null });
+    const { OPEN_SETTINGS_EVENT, fixSignIn } = await import('./settingsEvents');
+    const opened = listen(OPEN_SETTINGS_EVENT);
+    render(<CredentialBanner />);
+    await act(async () => { fixSignIn(); });
+    await waitFor(() => expect(opened.seen).toEqual([{ tab: 'ai-models' }]));
+    expect(mockVerify).not.toHaveBeenCalled();
+    opened.stop();
   });
 });

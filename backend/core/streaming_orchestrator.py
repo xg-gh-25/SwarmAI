@@ -2866,6 +2866,7 @@ class StreamingOrchestrator:
                         _is_retriable_error,
                         _sanitize_sdk_error,
                         _build_error_event,
+                        sdk_error_code,
                     )
 
                     if self._parent._interrupted:
@@ -2882,7 +2883,7 @@ class StreamingOrchestrator:
                                 error_text
                             )
                             yield _build_error_event(
-                                code="SDK_ERROR",
+                                code=sdk_error_code(error_text),
                                 message=friendly,
                                 suggested_action=suggested,
                             )
@@ -2966,8 +2967,8 @@ class StreamingOrchestrator:
                     # The event is still yielded to the user below, so the error is
                     # surfaced, never silently dropped.
                     yield _build_error_event(
-                        code="SDK_ERROR", message=friendly, suggested_action=suggested,
-                        terminal=True,
+                        code=sdk_error_code(error_text), message=friendly,
+                        suggested_action=suggested, terminal=True,
                     )
                     # Clear stale sub-agent progress (matches
                     # turn_limit_reached and interrupt paths).

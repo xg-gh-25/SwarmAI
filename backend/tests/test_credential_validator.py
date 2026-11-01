@@ -469,3 +469,19 @@ async def test_a_caller_that_gives_up_does_not_lose_the_result(validator: Creden
         assert await second == "valid"
         assert await validator.check("us-east-1") == "valid"  # cached
     assert len(calls) == 1
+
+
+async def test_check_says_why_it_said_expired(validator: CredentialValidator):
+    """"No credentials at all" and "credentials that stopped working" are told apart:
+    the first is "connect an account", the second "sign in again" (design 2026-11-01 §3.1)."""
+    from botocore.exceptions import ClientError, NoCredentialsError
+    with patch.object(validator, "_call_sts_typed", side_effect=NoCredentialsError()):
+        assert await validator.check("us-east-1") == "expired"
+    assert validator.last_expired_reason == "no_credentials"
+    err = ClientError({"Error": {"Code": "ExpiredToken", "Message": "x"}}, "GetCallerIdentity")
+    with patch.object(validator, "_call_sts_typed", side_effect=err):
+        assert await validator.check("us-east-1") == "expired"
+    assert validator.last_expired_reason == "auth"
+    with patch.object(validator, "_call_sts_typed", return_value={"Account": "1"}):
+        assert await validator.check("us-east-1") == "valid"
+    assert validator.last_expired_reason is None

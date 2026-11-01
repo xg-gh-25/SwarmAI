@@ -136,6 +136,10 @@ class CredentialValidator:
         self._check_cache_status: AuthStatus | None = None
         # check(): the STS check in flight, shared by every caller
         self._inflight: "asyncio.Future[AuthStatus] | None" = None
+        #: why the last check said "expired": "no_credentials" (nothing on this machine
+        #: signs in at all) or "auth" (credentials that stopped working); None otherwise.
+        #: The fix text differs: "connect an account" vs "sign in again".
+        self.last_expired_reason: "str | None" = None
         # check(): an "unknown" is returned without STS until this monotonic time
         self._unknown_until: float = 0.0
         self._unknown_hold: float = _UNKNOWN_HOLD_S
@@ -311,12 +315,14 @@ class CredentialValidator:
             await executors.run_in("spawn", self._call_sts_typed, region)
             self._check_cache_status = "valid"
             self._check_cache_time = time.monotonic()
+            self.last_expired_reason = None
             self._unknown_until, self._unknown_hold = 0.0, _UNKNOWN_HOLD_S
             return "valid"
         except NoCredentialsError:
             # Subclass of BotoCoreError — MUST precede the BotoCoreError branch.
             logger.warning("Credential check: no AWS credentials found → expired")
             self._invalidate_check_cache()
+            self.last_expired_reason = "no_credentials"
             return "expired"
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
@@ -325,6 +331,7 @@ class CredentialValidator:
                 logger.warning(
                     "Credential check: auth-class STS error %s → expired", code
                 )
+                self.last_expired_reason = "auth"
                 return "expired"
             logger.warning(
                 "Credential check: non-auth STS error %s → unknown", code

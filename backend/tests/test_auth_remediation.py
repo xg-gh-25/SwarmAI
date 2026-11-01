@@ -57,3 +57,22 @@ def test_the_account_states_have_their_own_text():
     assert "aws sso login --profile" in p["fix_text"] and p["settings_tab"] == "aws-account"
     m = remediation_for("account_mismatch")
     assert "different account" in m["message"] and "mwinit" not in m["fix_text"]
+
+
+def test_every_entry_has_its_id_and_the_desktop_english_mirrors_it():
+    """The banner shows the translation of `credentialBanner.remedy.<id>` and falls back
+    to the backend text; the English locale must say exactly what the backend says, and
+    both locales must cover every entry (else a new entry shows untranslated)."""
+    import json
+    from pathlib import Path
+    from core import auth_remediation as ar
+    locales = Path(__file__).resolve().parents[2] / "desktop" / "src" / "i18n" / "locales"
+    en = json.loads((locales / "en.json").read_text(encoding="utf-8"))["credentialBanner"]["remedy"]
+    zh = json.loads((locales / "zh.json").read_text(encoding="utf-8"))["credentialBanner"]["remedy"]
+    entries = {**ar._REMEDIATION, "fallback": ar._FALLBACK}
+    for key, r in entries.items():
+        assert r["id"] == key
+        assert en[key] == {"message": r["message"], "fix": r["fix_text"]}, key
+        assert zh[key]["message"] and zh[key]["fix"], key
+    assert set(en) == set(zh) == set(entries)
+    assert remediation_for("not_connected")["message"] == "No AWS account is connected yet."

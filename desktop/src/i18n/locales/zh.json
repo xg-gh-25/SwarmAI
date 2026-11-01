@@ -2958,6 +2958,65 @@
     "resend": "刚才没发出去的消息可以重新发送。",
     "dismiss": "先收起，状态变了再出现",
     "doneNoAccount": "已重新登录。",
-    "fixFromChat": "修复登录"
+    "fixFromChat": "修复登录",
+    "remedy": {
+      "ada": {
+        "message": "你的 AWS 凭证不能用了。",
+        "fix": "刷新 Amazon 凭证：在终端运行 `mwinit -f`，再到 设置 → Swarm AWS Account 重新核实。"
+      },
+      "ada_account": {
+        "message": "Midway 登录已过期。",
+        "fix": "在终端运行 `mwinit -f`，然后重新发送消息（SwarmAI 会自己取新的凭证）。"
+      },
+      "profile": {
+        "message": "AWS profile 的登录已过期。",
+        "fix": "为 SwarmAI 用的 AWS profile 重新登录（SSO profile：`aws sso login --profile <名字>`，名字在 设置 → Swarm AWS Account 里），然后重新发送消息。"
+      },
+      "sso_app": {
+        "message": "AWS SSO 登录已过期。",
+        "fix": "在 设置 → Swarm AWS Account 点「重新登录」，然后重新发送消息。"
+      },
+      "aws_login": {
+        "message": "AWS 登录会话已结束。",
+        "fix": "在 设置 → Swarm AWS Account 重新登录（AWS 登录会话最长 12 小时），然后重新发送消息。"
+      },
+      "access_keys": {
+        "message": "你的 AWS 访问密钥不能用了。",
+        "fix": "访问密钥已被停用或删除。在 设置 → Swarm AWS Account（更换账号）填入新的，然后重新发送消息。"
+      },
+      "account_broken": {
+        "message": "SwarmAI 登不上它的 AWS 账号。",
+        "fix": "当初设置的登录方式已经不能用了（原因见 设置 → Swarm AWS Account）。在那里或在 LLM Models 里修好，然后重新发送消息。"
+      },
+      "account_mismatch": {
+        "message": "你的 AWS 凭证属于另一个账号，不是 SwarmAI 的账号。",
+        "fix": "改好登录，让它进到 SwarmAI 的账号，或到 设置 → Swarm AWS Account 检查账号。"
+      },
+      "sso": {
+        "message": "你的 AWS 凭证不能用了。",
+        "fix": "刷新 AWS SSO 会话：在终端运行 `aws sso login`，再到 设置 → Swarm AWS Account 重新核实。"
+      },
+      "iam_role": {
+        "message": "实例的 IAM 角色用不了 Bedrock。",
+        "fix": "给这台实例的 IAM 角色加上 `bedrock:InvokeModel`（并在该区域开通 Bedrock 模型访问），然后重新核实。"
+      },
+      "bedrock_api_key": {
+        "message": "你的 Bedrock API key 不能用了。",
+        "fix": "Bedrock key（bearer token）已过期或无效。生成一个新的短期 key（最长 12 小时），填到 设置 → LLM Models，然后重新发送消息。"
+      },
+      "not_connected": {
+        "message": "还没连接 AWS 账号。",
+        "fix": "到 设置 → Swarm AWS Account 连接一个（或在 设置 → LLM Models 填一个 Bedrock API key），然后重新发送消息。"
+      },
+      "fallback": {
+        "message": "凭证不能用了。",
+        "fix": "到 设置 → Swarm AWS Account 连接 AWS 账号（或在 设置 → LLM Models 填一个 Bedrock API key），然后重新发送消息。"
+      }
+    },
+    "chat": {
+      "credentialsExpired": "登录不能用了",
+      "notConnected": "还没连接 AWS 账号",
+      "connect": "连接账号"
+    }
   }
 }

@@ -2468,6 +2468,7 @@ class SessionUnit:
             _build_error_event,
             _is_retriable_error,
             _sanitize_sdk_error,
+            sdk_error_code,
         )
 
         # ── Layer -1: a user Stop still recycling this subprocess ──────
@@ -3071,7 +3072,7 @@ class SessionUnit:
             await self._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
-                code="CONVERSATION_ERROR",
+                code=sdk_error_code(error_str, "CONVERSATION_ERROR"),
                 message=friendly,
                 detail=tb_str,
                 suggested_action=suggested,
@@ -3102,6 +3103,7 @@ class SessionUnit:
             _build_error_event,
             _is_retriable_error,
             _sanitize_sdk_error,
+            sdk_error_code,
             classify_failure,
             compute_backoff,
         )
@@ -3163,18 +3165,25 @@ class SessionUnit:
                     return
             else:
                 _region = _cfg.get("aws_region", "us-east-1")
-                _auth = await session_registry.get_credential_validator().check(_region)
+                _validator = session_registry.get_credential_validator()
+                _auth = await _validator.check(_region)
                 if _auth == "expired":
                     # Remediation must match the actual method — use_bedrock can't
                     # tell ada from sso, so read the persisted auth_method (AC5).
-                    _rem = remediation_for(_cfg.get("auth_method"))
+                    # No sign-in method and no credentials on this machine at all =
+                    # nothing was ever connected: say so, with its own code, rather than
+                    # "expired" (design 2026-11-01 §3.1). Credentials that exist but
+                    # stopped working are still an expiry; a Hive keeps its own text.
+                    _never = (not _cfg.get("auth_method") and not aws_account.is_hive_mode()
+                              and getattr(_validator, "last_expired_reason", None) == "no_credentials")
+                    _rem = remediation_for("not_connected" if _never else _cfg.get("auth_method"))
                     logger.warning(
                         "session_unit.preflight session_id=%s creds expired "
                         "(method=%s) — aborting spawn (avoids invoke stall)",
                         self.session_id, _cfg.get("auth_method"),
                     )
                     yield _build_error_event(
-                        code="CREDENTIALS_EXPIRED",
+                        code="ACCOUNT_NOT_CONNECTED" if _never else "CREDENTIALS_EXPIRED",
                         message=_rem["message"],
                         suggested_action=_rem["fix_text"],
                     )
@@ -3340,7 +3349,7 @@ class SessionUnit:
             yield turn_notice_event("gave_up", "spawn_failed")
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
-                code="SPAWN_FAILED",
+                code=sdk_error_code(error_str, "SPAWN_FAILED"),
                 message=friendly,
                 detail=error_str,
                 suggested_action=suggested,
@@ -3351,7 +3360,7 @@ class SessionUnit:
             await self._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
-                code="SPAWN_FAILED",
+                code=sdk_error_code(error_str, "SPAWN_FAILED"),
                 message=friendly,
                 detail=traceback.format_exc(),
                 suggested_action=suggested,

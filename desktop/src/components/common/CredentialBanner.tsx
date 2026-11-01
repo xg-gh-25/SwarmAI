@@ -24,6 +24,8 @@
  *     Settings is open it stops asking; shown again, it asks at once and goes on.
  *   - action `sign_in`: opens the account page straight into the in-app sign-in.
  *   - action `settings`: opens that settings tab.
+ * The words are the translation of the backend entry (`remediation.id`,
+ * `credentialBanner.remedy.<id>`), else the backend's English text.
  * Outside the desktop app (no terminal) a terminal action becomes "Copy command".
  * × hides it until the credentials work again; then every state resets for the next expiry.
  *
@@ -51,6 +53,8 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
   const fixInFlight = useRef(false);        // the card's verify, apart from the poll's
   const remedyFromFix = useRef(false);      // the remedy was just taken from that verify
   const expired = health.auth === 'expired' || asked;
+  const expiredRef = useRef(expired);   // the value now, for a chain that started earlier
+  expiredRef.current = expired;
   const [remedy, setRemedy] = useState<Remedy | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [phase, setPhase] = useState<'idle' | 'waiting' | 'stopped' | 'done'>('idle');
@@ -150,19 +154,27 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
   };
 
   // A chat error card's button: verify once, then the same action the line would run.
+  // Chat on a Bedrock API key has nothing to verify: the key is entered in LLM Models.
   // A ref, so the listener (added once) always calls this render's act.
   const onFix = useRef<() => void>(() => {});
   onFix.current = () => {
     if (phase === 'waiting') { void check(); return; }   // the command is already typed
     if (fixInFlight.current) return;
     fixInFlight.current = true;
-    awsAccountService.verify()
+    awsAccountService.get()
+      .then((cur) => {
+        if (cur.chat_via === 'bedrock_key') { if (alive.current) openSettings('ai-models'); return null; }
+        return awsAccountService.verify();
+      })
       .then((v) => {
+        if (!v) return;
         if (!alive.current) return;
         if (v.state === 'connected') { showDone(v); return; }
         const r = v.remediation ?? null;
         if (r?.action?.kind === 'terminal') {
-          remedyFromFix.current = !expired;   // the effect that reads the remedy is about to run
+          // the effect that reads the remedy runs on the false→true edge only; if health
+          // turned expired while this chain ran, it has already run
+          remedyFromFix.current = !expiredRef.current;
           setRemedy(r);
           setDismissed(null);
           setAsked(true);
@@ -195,6 +207,12 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
   if (dismissed !== null && dismissed === keyOf(remedy)) return null;
 
   const action = remedy?.action;
+  const say = (field: 'message' | 'fix', english: string | undefined) => {
+    if (!remedy?.id) return english;
+    const key = `credentialBanner.remedy.${remedy.id}.${field}`;
+    const v = t(key);
+    return v === key ? english : v;
+  };
   const terminal = action?.kind === 'terminal' ? action : null;
   const waiting = phase === 'waiting' && terminal;
   const label = !action || action.kind === 'settings' ? t('credentialBanner.openSettings')
@@ -214,9 +232,9 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
           </>
         ) : (
           <>
-            <span className="text-[var(--color-text)]">{remedy?.message ?? t('credentialBanner.generic')}</span>
-            <span className="ml-2 text-[var(--color-text-secondary)]" title={remedy?.fix_text}>
-              {terminal ? t('credentialBanner.blocked') : remedy?.fix_text}
+            <span className="text-[var(--color-text)]">{say('message', remedy?.message) ?? t('credentialBanner.generic')}</span>
+            <span className="ml-2 text-[var(--color-text-secondary)]" title={say('fix', remedy?.fix_text)}>
+              {terminal ? t('credentialBanner.blocked') : say('fix', remedy?.fix_text)}
             </span>
           </>
         )}

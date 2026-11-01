@@ -2958,6 +2958,65 @@
     "resend": "A message that didn't go out can be sent again.",
     "dismiss": "Hide until it changes",
     "doneNoAccount": "Signed in again.",
-    "fixFromChat": "Fix the sign-in"
+    "fixFromChat": "Fix the sign-in",
+    "remedy": {
+      "ada": {
+        "message": "Your AWS credentials aren't working.",
+        "fix": "Refresh your Amazon credentials: run `mwinit -f` in a terminal, then re-verify in Settings → Swarm AWS Account."
+      },
+      "ada_account": {
+        "message": "Your Midway sign-in has expired.",
+        "fix": "Run `mwinit -f` in a terminal, then send your message again (SwarmAI fetches fresh credentials itself)."
+      },
+      "profile": {
+        "message": "Your AWS profile's sign-in has expired.",
+        "fix": "Sign in again for the AWS profile SwarmAI uses (for an SSO profile: `aws sso login --profile <name>`; the name is in Settings → Swarm AWS Account), then send your message again."
+      },
+      "sso_app": {
+        "message": "Your AWS SSO sign-in has expired.",
+        "fix": "Sign in again in Settings → Swarm AWS Account (Sign in again), then send your message again."
+      },
+      "aws_login": {
+        "message": "Your AWS login session has ended.",
+        "fix": "Sign in again in Settings → Swarm AWS Account (AWS login sessions last at most 12 hours), then send your message again."
+      },
+      "access_keys": {
+        "message": "Your AWS access keys aren't working.",
+        "fix": "The access keys were deactivated or deleted. Enter new ones in Settings → Swarm AWS Account (Change account), then send your message again."
+      },
+      "account_broken": {
+        "message": "SwarmAI can't sign in to its AWS account.",
+        "fix": "The sign-in it was set up with no longer works (see Settings → Swarm AWS Account for the reason). Fix it there or in LLM Models, then send your message again."
+      },
+      "account_mismatch": {
+        "message": "Your AWS credentials belong to a different account than your SwarmAI account.",
+        "fix": "Fix the sign-in so it reaches the SwarmAI account, or check the account in Settings → Swarm AWS Account."
+      },
+      "sso": {
+        "message": "Your AWS credentials aren't working.",
+        "fix": "Refresh your AWS SSO session: run `aws sso login` in a terminal, then re-verify in Settings → Swarm AWS Account."
+      },
+      "iam_role": {
+        "message": "The instance IAM role can't access Bedrock.",
+        "fix": "Add `bedrock:InvokeModel` to this instance's IAM role policy (and enable Bedrock model access for the region), then re-verify."
+      },
+      "bedrock_api_key": {
+        "message": "Your Bedrock API key isn't working.",
+        "fix": "Your Bedrock bearer token has expired or is invalid. Generate a new short-term key (max 12h) and enter it in Settings → LLM Models, then send your message again."
+      },
+      "not_connected": {
+        "message": "No AWS account is connected yet.",
+        "fix": "Connect one in Settings → Swarm AWS Account (or enter a Bedrock API key in Settings → LLM Models), then send your message again."
+      },
+      "fallback": {
+        "message": "Your credentials aren't working.",
+        "fix": "Connect an AWS account in Settings → Swarm AWS Account (or enter a Bedrock API key in Settings → LLM Models), then send your message again."
+      }
+    },
+    "chat": {
+      "credentialsExpired": "Sign-in not working",
+      "notConnected": "No AWS account connected",
+      "connect": "Connect an account"
+    }
   }
 }

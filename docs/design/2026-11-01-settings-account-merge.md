@@ -2,7 +2,7 @@
 created: 2026-11-01
 updated: 2026-11-01
 title: "设置页合并：Swarm AWS Account、LLM Models，登录过期一键修"
-status: r3 — 已实现（2026-11-01）；设计审查和实现审查见 §9；XG 已定（§8）：模型调用两选一；终端只填命令不回车；去掉 Core Engine、Capabilities tab；不再支持 Anthropic key（§3.1）
+status: r4 — 已实现（2026-11-01）；设计审查和实现审查见 §9；XG 已定（§8）：模型调用两选一；终端只填命令不回车；去掉 Core Engine、Capabilities tab；不再支持 Anthropic key（§3.1）
 related: docs/design/2026-10-31-swarmai-aws-account.md
 ---
 
@@ -68,6 +68,19 @@ Bedrock（默认）、Bedrock API key。不支持 Anthropic API key**（r3，见
 - **聊天里的 Credentials Expired 卡片：** 加"修复登录"按钮。它不自己决定怎么修：发 `FIX_SIGN_IN_EVENT` 给提示条，
   提示条先核实一次，已经登上就显示"已重新登录"，否则显示自己并执行它那一个动作。卡片和提示条因此不会说两套话；
   发消息前的检查常比 health 的下一次采样先发现过期，所以提示条在被请求时即使 health 还没报过期也会出现。
+
+- **（r4，走查后补）登录出错说对人话：**
+  - 对话中途的登录失败（令牌过期、"security token 无效"、401）按对话怎么登录给提示：用 Bedrock key 的叫他换 key，
+    其他人叫他到 Swarm AWS Account 重新登录；错误码是 `CREDENTIALS_EXPIRED`，卡片上有"修复登录"按钮。
+  - 从没连接过任何东西（没有账号记录、也没有登录方式）时，不再说"凭证过期"：用 `not_connected` 的修复提示，
+    发消息前的检查给错误码 `ACCOUNT_NOT_CONNECTED`，卡片标题是"还没连接 AWS 账号"，按钮直接打开账号页。
+  - 用 Bedrock key 的人点卡片上的"修复登录"：不去核实 AWS 账号，直接打开 LLM Models 填新 key。
+  - 每条修复提示带 `id`；提示条按 `credentialBanner.remedy.<id>` 显示当地语言，找不到才用后端的英文。英文语言包
+    和后端文字一致，由后端测试钉住。
+  - 审查（correctness 一轮，没有 HIGH）后改的：只有本机**完全没有**凭证时才算"还没连接"（凭证检查记下判定过期的
+    原因：没有凭证，还是凭证失效），本机凭证只是过期的仍按过期处理；登录失败的匹配收窄，`max_tokens`、上下文过长、
+    "401 ms" 这类不再被当成登录问题；启动失败、对话失败这几处也用同一个错误码，文字和按钮一致；提示条读"当前是否
+    过期"改用最新值。
 
 ## 4. 登录过期一键修
 

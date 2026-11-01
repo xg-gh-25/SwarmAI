@@ -67,7 +67,8 @@ export interface AwsAccountView {
   /** what the credential banner says if the credentials stop working: for the account
    *  when it needs the user (else null); without an account in use (no record, a Hive),
    *  always the fix for the legacy sign-in method — the banner shows only on "expired" */
-  remediation?: { message: string; fix_text: string; settings_tab: string; action?: RemediationAction } | null;
+  /** `id`: which backend entry (core/auth_remediation); the banner shows its translation by it */
+  remediation?: { id?: string; message: string; fix_text: string; settings_tab: string; action?: RemediationAction } | null;
   /** the Hive count and status (null on a Hive, or when it could not be read) */
   hive?: FleetStatus | null;
 }

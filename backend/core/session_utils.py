@@ -309,6 +309,30 @@ def _extract_resets_at(message: str) -> Optional[float]:
 # SDK error sanitization — translate raw CLI errors to user-friendly messages
 # ---------------------------------------------------------------------------
 
+#: stands in for the sign-in pattern's text, which depends on how chat signs in
+_SIGN_IN = "__sign_in__"
+
+_BEDROCK_KEY_TEXT = (
+    "Your Bedrock API key (bearer token) has expired or isn't working.",
+    "Bedrock bearer tokens are short-lived (max 12h). Generate a new one and update it "
+    "in Settings → LLM Models, then send your message again.",
+)
+_AWS_SIGN_IN_TEXT = (
+    "Your AWS sign-in isn't working (it may have expired).",
+    "Sign in again in Settings → Swarm AWS Account, then send your message again.",
+)
+
+
+def _sign_in_error_text() -> "tuple[str, str]":
+    """The sign-in failure text for how chat signs in now (aws_account.get_chat_via)."""
+    try:
+        from core.aws_account import get_chat_via
+        via = get_chat_via()
+    except Exception:  # noqa: BLE001 — an error message must never fail to build
+        via = "aws"
+    return _BEDROCK_KEY_TEXT if via == "bedrock_key" else _AWS_SIGN_IN_TEXT
+
+
 # Patterns: (regex, friendly_message, suggested_action)
 _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
     (
@@ -332,26 +356,20 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "Reconnecting automatically. If this persists, try restarting the app.",
     ),
     (
-        # Bedrock BEARER-TOKEN expiry at runtime (bedrock_api_key mode). A
-        # short-term AWS_BEARER_TOKEN_BEDROCK expires in <=12h, but the daemon is
-        # 24/7 — so an always-on session WILL hit mid-stream expiry. The STS
-        # pre-flight is skipped for bedrock_api_key (no sigv4 identity), so this
-        # bedrock-runtime error is the FIRST signal. It must NOT be mapped to the
-        # generic "ada credentials update" hint — the recovery is re-entering the
-        # bearer token. Ordered BEFORE the Anthropic pattern so the Bedrock-specific
-        # ExpiredToken/bearer signature wins. (Meta-review HIGH, run_9d9f7dff.)
-        r"(?:ExpiredToken(?:Exception)?|bedrock.{0,40}(?:bearer|token)|(?:bearer|token).{0,40}(?:expired|invalid)|AWS_BEARER_TOKEN_BEDROCK)",
-        "Your Bedrock API key (bearer token) has expired or isn't working.",
-        "Bedrock bearer tokens are short-lived (max 12h). Generate a new one and "
-        "update it in Settings → LLM Models, then send your message again.",
-    ),
-    (
-        # Any other authentication failure at runtime (a 401, "Unauthorized"): point
-        # at the two places a sign-in is fixed, never at a provider command.
-        r"(?:authentication_error|invalid.{0,20}(?:api[_-]?key|x-api-key)|\b401\b|permission_error|Unauthorized)",
-        "Your sign-in or key isn't working.",
-        "Check the sign-in in Settings → Swarm AWS Account (or the Bedrock API key in "
-        "Settings → LLM Models), then send your message again.",
+        # A sign-in failure at runtime: an expired token (a Bedrock bearer token, or an
+        # AWS session token mid-stream), a 401, "Unauthorized". The text depends on how
+        # chat signs in (_sign_in_error_text): a Bedrock-key user is told to enter a new
+        # key, everyone else to sign in again on the account page, so an SSO or
+        # access-key user is never sent to a key they do not have. Ordered here, as the
+        # two separate patterns were, so the earlier transport patterns still win.
+        # Narrow on purpose: "max_tokens is invalid", "prompt tokens 210000 (bedrock)" or
+        # "after 401 ms" are not sign-in failures and must keep their own text and code.
+        r"(?:ExpiredToken(?:Exception)?|UnrecognizedClient|security token|bearer token.{0,40}(?:expired|invalid)"
+        r"|(?:invalid|expired) bearer token|AWS_BEARER_TOKEN_BEDROCK"
+        r"|authentication_error|invalid.{0,20}(?:api[_-]?key|x-api-key)"
+        r"|(?:status|HTTP|code|error)\W{0,3}401\b|\b401 Unauthorized|permission_error|Unauthorized)",
+        _SIGN_IN,
+        _SIGN_IN,
     ),
 ]
 
@@ -364,9 +382,21 @@ def _sanitize_sdk_error(raw_error: str) -> tuple[str, Optional[str]]:
     """
     for pattern, friendly, action in _SDK_ERROR_PATTERNS:
         if re.search(pattern, raw_error, re.IGNORECASE):
+            if friendly == _SIGN_IN:
+                return _sign_in_error_text()
             return friendly, action
     # No match — return original but add a generic suggestion
     return raw_error, "Your conversation is saved. Send your message again to continue."
+
+
+def sdk_error_code(raw_error: str, default: str = "SDK_ERROR") -> str:
+    """The error code for a raw SDK error: ``CREDENTIALS_EXPIRED`` when it is a sign-in
+    failure (the chat card then offers "Fix the sign-in"), else *default*. The same
+    pattern order as :func:`_sanitize_sdk_error`, so code and text always agree."""
+    for pattern, friendly, _action in _SDK_ERROR_PATTERNS:
+        if re.search(pattern, raw_error or "", re.IGNORECASE):
+            return "CREDENTIALS_EXPIRED" if friendly == _SIGN_IN else default
+    return default
 
 
 def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
