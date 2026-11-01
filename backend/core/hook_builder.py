@@ -737,6 +737,23 @@ async def build_hooks(
             "parallel_nudge",
         )
 
+    # ── PostToolUse/PostToolUseFailure: repeat-run reminder (Bash) ──
+    # Inject-only, never a deny: when a slow command runs again and its earlier run sent
+    # its output through a filter (tail/head/grep), say so and how to keep the whole
+    # output next time (core/rerun_nudge.py). A failing run (non-zero exit) arrives as
+    # PostToolUseFailure, so both events share one state.
+    if session_context is not None:
+        from core.rerun_nudge import create_rerun_nudge_hook
+        registry.register(
+            "PostToolUse", create_rerun_nudge_hook(session_context, "PostToolUse"),
+            "rerun_nudge", matcher="Bash",
+        )
+        registry.register(
+            "PostToolUseFailure",
+            create_rerun_nudge_hook(session_context, "PostToolUseFailure"),
+            "rerun_nudge_failure", matcher="Bash",
+        )
+
     # ── PostCompact: capture the compaction summary ──────────
     # The SDK's HookEvent Literal lacks PostCompact, but the bundled CLI calls a
     # registered callback with {"trigger", "compact_summary", ...} BEFORE it emits

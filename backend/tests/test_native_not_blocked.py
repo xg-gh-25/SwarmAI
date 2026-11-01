@@ -46,7 +46,7 @@ GATE_CLASS = {
     "governance_file_gate": ADVISORY, "memory_edit_guard": ADVISORY,
     "persist_skill_tracker": ADVISORY, "persist_skill_tracker_reset": ADVISORY,
     "repo_guidance": ADVISORY, "repo_guidance_pre": ADVISORY, "shared_checkout": ADVISORY,
-    "shared_checkout_pre": ADVISORY, "enforcement_injector": ADVISORY, "parallel_nudge": ADVISORY,
+    "shared_checkout_pre": ADVISORY, "enforcement_injector": ADVISORY, "parallel_nudge": ADVISORY, "rerun_nudge": ADVISORY, "rerun_nudge_failure": ADVISORY,
     "pre_tool_logger": OBSERVE, "post_compact_summary": OBSERVE, "pre_compact_flag": OBSERVE,
     "post_compact_injection": OBSERVE, "notification_capture": OBSERVE, "stop_capture": OBSERVE,
     "error_pattern_detector": OBSERVE,

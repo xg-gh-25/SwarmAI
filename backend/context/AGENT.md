@@ -266,7 +266,11 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   `timeout` / `gtimeout`): a run still going at the Bash timeout is moved to the background
   and returns nothing, and a runner's own per-test timeout doesn't count. Run serially unless
   the user asks otherwise: parallel workers can outlive the cap and keep the command running.
-  Never background. **Every run answers a question stated before it starts**; a test file you
+  Never background. Run each test command once with its whole output in a file
+  (`> <log> 2>&1; echo exit=$?`) and read the failures from the file: a filter on the live
+  output (`| tail`, `| grep`, `| head`) drops what the next question needs, and that answer
+  then costs a re-run (a reminder follows a repeated run whose earlier output went
+  through such a filter). **Every run answers a question stated before it starts**; a test file you
   cannot say that about is not run. Three levels: while writing a fix → the tests just written,
   plus a mutation check (revert the fix, the test goes red: `"$SWARM_BACKEND_BIN" py -m
   scripts.mutation_check <spec.json> -- <test command>` runs each, any language, and always
