@@ -58,7 +58,7 @@ export interface AwsAccountView {
     ada: { role: string | null; provider: string | null } | null;
     sso?: { start_url: string | null; sso_region: string | null; role: string | null } | null;
   } | null;
-  chat_via: 'aws' | 'bedrock_key' | 'anthropic';
+  chat_via: 'aws' | 'bedrock_key';
   /** the main region: Bedrock, cloud storage, voice, the default for new Hives */
   region?: string;
   capabilities: (Record<'bedrock' | 'hive' | 'storage' | 'voice', Capability> & { checked_at?: string }) | null;

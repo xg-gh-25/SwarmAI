@@ -5,10 +5,12 @@
  * Two choices (XG, 2026-11-01): Bedrock through the Swarm AWS account (the default), or a
  * Bedrock API key. AWS sign-in itself lives on the Swarm AWS Account page; this only says
  * which way chat reaches the model, read from the one reader (`chat_via`, backend
- * aws_account.get_chat_via). Anthropic keys are no longer offered: a person already on
- * one sees it as the current choice ("old setting") until they pick another.
- *   - account: `awsAccountService.useForChat` (use_bedrock + the record's sign-in method);
- *     without an account record it cannot be picked and links to the account page.
+ * aws_account.get_chat_via). Anthropic keys are not supported (an old setup is moved onto
+ * Bedrock at startup, backend aws_account.retire_anthropic_direct).
+ *   - account: `awsAccountService.useForChat` (use_bedrock + the record's sign-in method).
+ *     Without an account record chat on Bedrock still works, on this computer's own AWS
+ *     credentials: the row says so as it is, and picking it opens the account page to
+ *     connect one (design 2026-11-01 §3).
  *   - Bedrock API key: the wizard's form (verify first, store only after it worked).
  */
 import { useCallback, useEffect, useState } from 'react';
@@ -37,7 +39,8 @@ export default function ModelProvider() {
   const via: Via = view.chat_via;
   const useAccount = async () => {
     setKeyOpen(false);
-    if (!acct || via === 'aws') return;
+    if (!acct) { openSettings('aws-account'); return; }
+    if (via === 'aws') return;
     setBusy(true);
     try { setView(await awsAccountService.useForChat(acct)); setKeyOpen(false); setFailed(false); }
     catch { setFailed(true); }
@@ -52,13 +55,20 @@ export default function ModelProvider() {
     <div data-testid="model-provider">
       <h3 className="text-sm font-medium text-[var(--color-text)] mb-2">{t('settings.modelProvider.title')}</h3>
       <div className="border-t border-[var(--color-border)]">
-        <button type="button" className={row} disabled={busy || !acct} data-testid="model-provider-aws"
+        <button type="button" className={row} disabled={busy} data-testid="model-provider-aws"
           aria-pressed={via === 'aws'} onClick={() => void useAccount()}>
           <Radio on={via === 'aws'} />
           <span>
-            <span className="block text-sm text-[var(--color-text)]">{t('settings.modelProvider.aws')}</span>
+            <span className="block text-sm text-[var(--color-text)]">
+              {acct ? t('settings.modelProvider.aws') : t('settings.modelProvider.awsLocal')}
+            </span>
             <span className="block text-xs text-[var(--color-text-muted)]">
-              {acct ? `${acct.account_id ?? '—'} · ${view.region ?? ''}` : t('settings.modelProvider.awsNone')}
+              {acct ? `${acct.account_id ?? '—'} · ${view.region ?? ''}` : (
+                <>
+                  {t('settings.modelProvider.awsLocalLead')}{' '}
+                  <span className="underline" data-testid="model-provider-connect">{t('settings.modelProvider.connect')}</span>
+                </>
+              )}
             </span>
           </span>
         </button>
@@ -70,15 +80,6 @@ export default function ModelProvider() {
             <span className="block text-xs text-[var(--color-text-muted)]">{t('settings.modelProvider.keyLead')}</span>
           </span>
         </button>
-        {via === 'anthropic' && (
-          <div className={row} data-testid="model-provider-anthropic">
-            <Radio on />
-            <span>
-              <span className="block text-sm text-[var(--color-text)]">{t('settings.modelProvider.anthropic')}</span>
-              <span className="block text-xs text-[var(--color-text-muted)]">{t('settings.modelProvider.anthropicLead')}</span>
-            </span>
-          </div>
-        )}
       </div>
       {keyOpen && (
         <div className="mt-4">

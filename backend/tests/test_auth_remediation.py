@@ -18,13 +18,10 @@ class TestRemediation:
         assert "aws sso login" in r["fix_text"].lower()
         assert "mwinit" not in r["fix_text"].lower()
 
-    def test_apikey_points_to_settings_not_aws(self):
-        r = remediation_for("apikey")
-        assert "mwinit" not in r["fix_text"].lower()
-        # Anthropic keys are no longer offered: it points at the two choices that are
-        # (design 2026-11-01-settings-account-merge §3), on the LLM Models page
-        assert "llm models" in r["fix_text"].lower() and "bedrock api key" in r["fix_text"].lower()
-        assert r["settings_tab"] == "ai-models"
+    def test_an_old_apikey_method_gets_the_generic_fix(self):
+        # Anthropic keys are not supported (design 2026-11-01-settings-account-merge §3):
+        # the old method name is unknown now and gets the method-agnostic text
+        assert remediation_for("apikey") == remediation_for(None)
 
     def test_iam_role_mentions_iam(self):
         r = remediation_for("iam_role")

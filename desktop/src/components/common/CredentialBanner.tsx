@@ -2,7 +2,14 @@
  * The sign-in problem line at the top of the chat (design
  * docs/design/2026-11-01-settings-account-merge.md §4).
  *
- * Shows ONLY on health's definitive `auth === 'expired'` (valid / unknown → nothing). It is
+ * Shows on health's definitive `auth === 'expired'` (valid / unknown → nothing), or when a
+ * chat error card asks it to (FIX_SIGN_IN_EVENT: the spawn's pre-flight often finds the
+ * expiry before health's next sample). Asked, it verifies once: signed in → the "signed in
+ * again" line; else it runs its one action at once (the person clicked). Only a terminal
+ * action keeps the line up without health's "expired" (it waits for the sign-in and ends
+ * in "signed in again", "check again" or ×); a settings / sign-in action just opens the
+ * page that fixes it. Already waiting on the terminal, a click checks again rather than
+ * typing the command a second time. It is
  * one in-flow line under the chat tab bar, never a floating box over the tabs or over
  * Settings: ChatPage hides it while Settings is open, because the account page shows the
  * same state there.
@@ -27,7 +34,7 @@ import { useTranslation } from 'react-i18next';
 import { useHealth } from '../../contexts/HealthContext';
 import { awsAccountService, type AwsAccountView, type RemediationAction } from '../../services/awsAccount';
 import { isDesktop } from '../../services/tauri';
-import { markTerminalRun, openSettings, openSignIn, runInTerminal } from './settingsEvents';
+import { FIX_SIGN_IN_EVENT, markTerminalRun, openSettings, openSignIn, runInTerminal } from './settingsEvents';
 
 type Remedy = NonNullable<AwsAccountView['remediation']>;
 
@@ -39,7 +46,11 @@ const keyOf = (r: Remedy | null) => (r ? `${r.message}|${JSON.stringify(r.action
 export default function CredentialBanner({ hidden = false }: { hidden?: boolean }) {
   const { t } = useTranslation();
   const { health } = useHealth();
-  const expired = health.auth === 'expired';
+  // asked by a chat error card to wait on a terminal sign-in; ends when it works, or on ×
+  const [asked, setAsked] = useState(false);
+  const fixInFlight = useRef(false);        // the card's verify, apart from the poll's
+  const remedyFromFix = useRef(false);      // the remedy was just taken from that verify
+  const expired = health.auth === 'expired' || asked;
   const [remedy, setRemedy] = useState<Remedy | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [phase, setPhase] = useState<'idle' | 'waiting' | 'stopped' | 'done'>('idle');
@@ -68,12 +79,24 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
       setPhase((p) => (p === 'done' ? p : 'idle'));
       return;
     }
+    if (remedyFromFix.current) { remedyFromFix.current = false; return undefined; }
     let cancelled = false;
     awsAccountService.get()
       .then((v) => { if (!cancelled) setRemedy(v.remediation ?? null); })
       .catch(() => { /* nothing to say beyond the generic line */ });
     return () => { cancelled = true; };
   }, [expired]);
+
+  const remedyRef = useRef<Remedy | null>(null);
+  remedyRef.current = remedy;
+  const showDone = useCallback((v: AwsAccountView) => {
+    setDoneAccount(v.account?.account_id ?? null);
+    setDismissed(keyOf(remedyRef.current));   // health may say "expired" until its next sample
+    setAsked(false);
+    setPhase('done');
+    if (doneTimer.current) clearTimeout(doneTimer.current);
+    doneTimer.current = setTimeout(() => { if (alive.current) setPhase('idle'); }, 2_000);
+  }, []);
 
   const stopTimer = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
@@ -89,11 +112,7 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
       const v = await awsAccountService.verify();
       if (!alive.current) return;
       if (v.state === 'connected') {
-        setDoneAccount(v.account?.account_id ?? null);
-        setDismissed(keyOf(remedy));   // health may say "expired" until its next sample
-        setPhase('done');
-        if (doneTimer.current) clearTimeout(doneTimer.current);
-        doneTimer.current = setTimeout(() => { if (alive.current) setPhase('idle'); }, 2_000);
+        showDone(v);
         return;
       }
     } catch { /* not yet */ } finally {
@@ -102,7 +121,7 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
     if (!alive.current) return;
     if (Date.now() - waitStarted.current >= WAIT_MAX_MS) { setPhase('stopped'); return; }
     timer.current = setTimeout(() => void check(), POLL_MS);
-  }, [stopTimer, remedy]);
+  }, [stopTimer, showDone]);
 
   const startWaiting = () => {
     waitStarted.current = Date.now();
@@ -118,8 +137,8 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
     if (phase === 'waiting' && !timer.current && !inFlight.current) void check();
   }, [hidden, expired, phase, stopTimer, check]);
 
-  const act = (a: RemediationAction | undefined) => {
-    if (!a || a.kind === 'settings') { openSettings(a?.tab ?? remedy?.settings_tab ?? 'aws-account'); return; }
+  const act = (a: RemediationAction | undefined, tab = remedy?.settings_tab) => {
+    if (!a || a.kind === 'settings') { openSettings(a?.tab ?? tab ?? 'aws-account'); return; }
     if (a.kind === 'sign_in') { openSignIn(); return; }
     if (!isDesktop()) {
       void navigator.clipboard?.writeText(a.command).then(() => setCopied(true)).catch(() => {});
@@ -129,6 +148,35 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
     markTerminalRun();
     startWaiting();
   };
+
+  // A chat error card's button: verify once, then the same action the line would run.
+  // A ref, so the listener (added once) always calls this render's act.
+  const onFix = useRef<() => void>(() => {});
+  onFix.current = () => {
+    if (phase === 'waiting') { void check(); return; }   // the command is already typed
+    if (fixInFlight.current) return;
+    fixInFlight.current = true;
+    awsAccountService.verify()
+      .then((v) => {
+        if (!alive.current) return;
+        if (v.state === 'connected') { showDone(v); return; }
+        const r = v.remediation ?? null;
+        if (r?.action?.kind === 'terminal') {
+          remedyFromFix.current = !expired;   // the effect that reads the remedy is about to run
+          setRemedy(r);
+          setDismissed(null);
+          setAsked(true);
+        }
+        act(r?.action, r?.settings_tab);
+      })
+      .catch(() => { if (alive.current) openSettings('aws-account'); })
+      .finally(() => { fixInFlight.current = false; });
+  };
+  useEffect(() => {
+    const h = () => onFix.current();
+    window.addEventListener(FIX_SIGN_IN_EVENT, h);
+    return () => window.removeEventListener(FIX_SIGN_IN_EVENT, h);
+  }, []);
 
   if (hidden) return null;
   if (phase === 'done') {
@@ -192,7 +240,7 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
       )}
       <button type="button" aria-label={t('credentialBanner.dismiss')} data-testid="credential-banner-dismiss"
         className="shrink-0 px-1 text-[var(--color-text-muted)]"
-        onClick={() => { stopTimer(); setPhase('idle'); setDismissed(keyOf(remedy)); }}>×</button>
+        onClick={() => { stopTimer(); setPhase('idle'); setAsked(false); setDismissed(keyOf(remedy)); }}>×</button>
     </div>
   );
 }

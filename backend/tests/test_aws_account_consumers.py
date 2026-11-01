@@ -66,8 +66,8 @@ def test_cli_gets_the_credential_export_only_with_a_resolvable_account_on_bedroc
     assert shlex.split(s["awsCredentialExport"]) == aa.backend_command()
     cfg.update({"auth_method": "bedrock_api_key"})
     assert aa.cli_settings() == {}
-    cfg.update({"auth_method": "ada", "use_bedrock": False})
-    assert aa.cli_settings() == {}
+    cfg.update({"auth_method": "ada", "use_bedrock": False})   # an old Anthropic-direct flag:
+    assert list(aa.cli_settings()) == ["awsCredentialExport"]  # chat runs on Bedrock regardless
     cfg.update({"use_bedrock": True, aa.RECORD_KEY: {"source": "bogus", "account_id": ACCT}})
     assert aa.cli_settings() == {}                      # not a source this version resolves
     cfg.update({aa.RECORD_KEY: None})
@@ -206,12 +206,11 @@ def test_the_chat_path_follows_the_legacy_settings_exactly_as_before(cfg):
     assert aa.get_chat_via() == "aws"
     cfg.update({"auth_method": "bedrock_api_key"})
     assert aa.get_chat_via() == "bedrock_key"
+    # Anthropic direct is not supported: the old settings that chose it give Bedrock
     cfg.update({"auth_method": "apikey", "use_bedrock": False})
-    assert aa.get_chat_via() == "anthropic"
-    cfg.update({"auth_method": "apikey", "use_bedrock": True})   # the CLI still runs Bedrock
     assert aa.get_chat_via() == "aws"
     cfg.update({"auth_method": "ada", "use_bedrock": 0})
-    assert aa.get_chat_via() == "anthropic"
+    assert aa.get_chat_via() == "aws"
 
 
 def test_a_legacy_sign_in_change_rederives_the_record(cfg, account, monkeypatch):
@@ -306,3 +305,56 @@ def test_polly_follows_an_account_connected_after_the_first_call(cfg, account, m
     assert first is not second
     assert second._request_signer._credentials.get_frozen_credentials().access_key == "ASIAONE"
     vs._get_polly_client.cache_clear()
+
+
+# ── Anthropic-direct is retired (design 2026-11-01-settings-account-merge §3) ──
+
+def test_an_old_anthropic_direct_install_moves_onto_bedrock(cfg, account):
+    cfg.update({"use_bedrock": False, "auth_method": "apikey"})
+    cfg.set_secret("anthropic_api_key", "sk-old")
+    assert aa.retire_anthropic_direct(cfg) is True
+    assert cfg.get("use_bedrock") is True
+    assert cfg.get("auth_method") == "ada"                 # the record's own sign-in
+    assert cfg.get("anthropic_api_key") == "sk-old"        # nothing the person saved is deleted
+    assert aa.retire_anthropic_direct(cfg) is False        # once
+
+
+def test_without_a_record_the_method_is_unset_not_guessed(cfg):
+    cfg.update({"use_bedrock": False, "auth_method": "apikey"})
+    assert aa.retire_anthropic_direct(cfg) is True
+    assert cfg.get("use_bedrock") is True and cfg.get("auth_method") is None
+    cfg.update({"auth_method": "sso"})                     # a Bedrock install is left alone
+    assert aa.retire_anthropic_direct(cfg) is False and cfg.get("auth_method") == "sso"
+
+
+
+def test_a_bedrock_method_left_with_use_bedrock_false_is_kept(cfg):
+    """Only an Anthropic-key method is replaced: a Bedrock key chosen with a stale
+    use_bedrock=false keeps its method (and so its injected token)."""
+    for method in ("bedrock_api_key", "sso"):
+        cfg.update({"use_bedrock": False, "auth_method": method})
+        assert aa.retire_anthropic_direct(cfg) is True
+        assert cfg.get("use_bedrock") is True and cfg.get("auth_method") == method
+
+
+def test_the_move_writes_no_secret_to_config_json(cfg, tmp_path):
+    import json
+    cfg.set_secret("anthropic_api_key", "sk-old")
+    cfg.update({"use_bedrock": False, "auth_method": "apikey"})
+    aa.retire_anthropic_direct(cfg)
+    on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert on_disk["use_bedrock"] is True and "anthropic_api_key" not in on_disk
+
+
+def test_model_names_are_translated_for_bedrock_whatever_the_old_flag_says():
+    """Every spawn runs on Bedrock, so a stale use_bedrock=false must not send a bare
+    model name (the CLI would hand it to Bedrock, which refuses it)."""
+    from unittest.mock import MagicMock
+    from core.prompt_builder import PromptBuilder
+    from jobs import model_resolve as mr
+    c = MagicMock()
+    c.get = MagicMock(side_effect=lambda k, d=None: {"use_bedrock": False, "bedrock_model_map": {},
+                                                     "default_model": "claude-sonnet-4-6"}.get(k, d))
+    chat = PromptBuilder(config=c).resolve_model({})
+    job = mr.resolve_job_model({"default_model": "claude-sonnet-4-6", "use_bedrock": False})
+    assert chat.startswith("us.anthropic.") and job.startswith("us.anthropic."), (chat, job)

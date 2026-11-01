@@ -111,35 +111,6 @@ class TestVerifyAuthBedrock:
         assert "123456789012" not in err, "leaked account-id"
         assert "abc-000-secret" not in err, "leaked request-id"
 
-    def test_verify_anthropic_error_does_not_leak_raw(self, client):
-        """#4b (Anthropic-direct path): a raw provider exception must not surface
-        its text in the client `error` field; error_type + fix_hint stay intact."""
-        sentinel = "InternalServerError: trace-id 987-secret-token host 10.1.2.3"
-
-        class _DummyConnectError(Exception):
-            pass
-
-        with patch("routers.system.httpx") as mock_httpx, \
-             patch("routers.system._get_auth_config", return_value={
-                 "use_bedrock": False, "anthropic_api_key": "sk-ant-x",
-                 "default_model": "claude-opus-4-6",
-             }):
-            # ConnectError must be a DISTINCT class so a generic Exception falls
-            # through to `except Exception` (the raw-leak branch), not the
-            # network branch. (A prior version aliased ConnectError=Exception,
-            # which caught the sentinel early and made the test vacuous.)
-            mock_httpx.ConnectError = _DummyConnectError
-            mock_httpx.AsyncClient.side_effect = Exception(sentinel)
-            resp = client.post("/api/system/verify-auth")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is False
-        err = data.get("error", "") or ""
-        assert "987-secret-token" not in err, "leaked trace-id"
-        assert "10.1.2.3" not in err, "leaked host IP"
-        assert "fix_hint" in data
-
     def test_verify_auth_bedrock_access_denied(self, client):
         """Model not enabled → error_type: access_denied."""
         mock_client = MagicMock()
@@ -236,65 +207,6 @@ class TestVerifyAuthBedrock:
         assert "bearer" in data["fix_hint"].lower() or "bedrock" in data["fix_hint"].lower()
 
 
-class TestVerifyAuthAnthropicAPI:
-    """Test POST /api/system/verify-auth with Anthropic API key path."""
-
-    def test_verify_auth_apikey_success(self, client):
-        """Happy path: mock _verify_anthropic_api returns success."""
-
-        async def mock_verify(config):
-            return {"success": True, "model": "claude-opus-4-6", "latency_ms": 100}
-
-        with patch("routers.system._get_auth_config", return_value={
-                 "use_bedrock": False, "default_model": "claude-opus-4-6",
-                 "anthropic_base_url": None,
-             }), \
-             patch("routers.system._verify_anthropic_api", side_effect=mock_verify):
-            resp = client.post("/api/system/verify-auth")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is True
-        assert data["model"] == "claude-opus-4-6"
-
-    def test_verify_auth_apikey_missing(self, client):
-        """No API key set → error_type: missing_key."""
-        with patch("routers.system._get_auth_config", return_value={
-                 "use_bedrock": False, "default_model": "claude-opus-4-6",
-                 "anthropic_base_url": None,
-             }), \
-             patch.dict(os.environ, {}, clear=True):
-            # Ensure ANTHROPIC_API_KEY is not set
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            resp = client.post("/api/system/verify-auth")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is False
-        assert data["error_type"] == "missing_key"
-
-    def test_verify_auth_apikey_invalid(self, client):
-        """401 from API → error_type: invalid_key."""
-        async def mock_verify(config):
-            return {
-                "success": False, "error": "Invalid API key",
-                "error_type": "invalid_key",
-                "fix_hint": "API key is invalid. Check the key at console.anthropic.com.",
-            }
-
-        with patch("routers.system._get_auth_config", return_value={
-                 "use_bedrock": False, "default_model": "claude-opus-4-6",
-                 "anthropic_base_url": None,
-             }), \
-             patch("routers.system._verify_anthropic_api", side_effect=mock_verify):
-            resp = client.post("/api/system/verify-auth")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["success"] is False
-        assert data["error_type"] == "invalid_key"
-
-
 # ── AC1: deployment_context detection (internal via ~/.ada|~/.midway) ──
 
 class TestDeploymentContext:
@@ -368,12 +280,13 @@ class TestDeploymentContext:
         assert d["suggested_method"] != "apikey"
         assert d["suggested_method"] in ("ada", "sso", "bedrock_api_key")
 
-    def test_external_machine_with_api_key_still_suggests_apikey(self, client):
-        # Regression guard: on external context apikey IS a valid card.
+    def test_external_machine_with_api_key_never_suggests_apikey(self, client):
+        # Anthropic keys are not supported: an exported key changes nothing.
         d = self._hint_with_home_and_env(
             client, set(), {"ANTHROPIC_API_KEY": "sk-ant-xyz"})
         assert d["deployment_context"] == "external"
-        assert d["suggested_method"] == "apikey"
+        assert d["suggested_method"] != "apikey"
+        assert "has_api_key" not in d
 
     # ── F3/F4: detection_confidence exposes low-confidence detection so the
     #    frontend can make the internal/external toggle discoverable. ──
@@ -521,41 +434,26 @@ class TestVerifyAuthOverrideBody:
         _, kwargs = mock_boto3.client.call_args
         assert kwargs.get("region_name") == "us-east-1"
 
-    def test_verify_auth_override_use_bedrock_false_routes_to_apikey(self, client):
-        """Body {use_bedrock: false} overrides stored use_bedrock=true →
-        routes to the Anthropic API path, not Bedrock."""
+    def test_verify_auth_use_bedrock_false_still_verifies_bedrock(self, client):
+        """Anthropic direct is not supported: a body {use_bedrock: false} (an old
+        client) is ignored and verify runs the Bedrock check."""
         async def mock_verify(config):
-            assert config.get("use_bedrock") is False
             return {"success": True, "model": "claude-opus-4-6", "latency_ms": 50}
 
-        # Do NOT mock _get_auth_config — drive the real merge; override flips
-        # use_bedrock false so the endpoint routes to the API-key path.
-        with patch("routers.system._verify_anthropic_api", side_effect=mock_verify):
+        with patch("routers.system._verify_bedrock", side_effect=mock_verify) as vb:
             resp = client.post("/api/system/verify-auth", json={"use_bedrock": False})
 
         assert resp.status_code == 200
         assert resp.json()["success"] is True
+        vb.assert_called_once()
 
 
 # ── AC3: Anthropic-direct key works in-app (env injection + verify reads secret) ──
 
-class TestAnthropicDirectPath:
-    """External Anthropic-direct users enter a key in-app; it must (1) be
-    usable by the agent at spawn WITHOUT an env var or relaunch, and (2) let
-    verify-auth succeed reading the persisted key (not just os.environ)."""
-
-    def test_configure_env_injects_persisted_key_when_not_bedrock(self, tmp_path):
-        from core.app_config_manager import AppConfigManager
-        from core import claude_environment
-        cfg = AppConfigManager(config_path=tmp_path / "config.json")
-        cfg.load()
-        cfg.update({"use_bedrock": False})
-        cfg.set_secret("anthropic_api_key", "sk-ant-injected")
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-            claude_environment._configure_claude_environment(cfg)
-            # The persisted key must land in os.environ so the SDK subprocess uses it.
-            assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-injected"
+class TestAnthropicKeyNotUsed:
+    """Anthropic-direct chat is not supported (design 2026-11-01-settings-account-merge
+    §3): a key an older version stored is never injected, a key an older version
+    injected into this long-lived process is removed, and a person's own export stays."""
 
     def test_configure_env_does_NOT_inject_when_bedrock(self, tmp_path):
         from core.app_config_manager import AppConfigManager
@@ -577,15 +475,12 @@ class TestAnthropicDirectPath:
         from core import claude_environment
         cfg = AppConfigManager(config_path=tmp_path / "config.json")
         cfg.load()
-        cfg.set_secret("anthropic_api_key", "sk-ant-stale")
+        cfg.set_secret("anthropic_api_key", "stale-test-key")
         with patch.dict(os.environ, {}, clear=True):
             os.environ.pop("ANTHROPIC_API_KEY", None)
-            # 1st spawn: API-key mode injects the key
-            cfg.update({"use_bedrock": False})
-            claude_environment._configure_claude_environment(cfg)
-            assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-stale"
-            # 2nd spawn: user switched to Bedrock — the stale key must be cleared
-            cfg.update({"use_bedrock": True})
+            # an older version injected it into this process
+            os.environ["ANTHROPIC_API_KEY"] = "stale-test-key"
+            cfg.update({"use_bedrock": False})   # even with the old flag
             claude_environment._configure_claude_environment(cfg)
             assert os.environ.get("ANTHROPIC_API_KEY") is None
 
@@ -602,23 +497,6 @@ class TestAnthropicDirectPath:
             claude_environment._configure_claude_environment(cfg)
             # User's explicit export (different value) is preserved.
             assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-USER-EXPORT"
-
-    def test_verify_anthropic_reads_persisted_key(self, client):
-        """verify-auth (apikey mode) must succeed with a persisted key even when
-        ANTHROPIC_API_KEY is NOT in the environment."""
-        async def mock_verify_ok(config):
-            # config must carry the key from the secret store, not env
-            assert config.get("anthropic_api_key") == "sk-ant-persisted"
-            return {"success": True, "model": "claude-opus-4-6", "latency_ms": 40}
-        with patch("routers.system._verify_anthropic_api", side_effect=mock_verify_ok), \
-             patch("routers.system._get_auth_config", return_value={
-                 "use_bedrock": False, "default_model": "claude-opus-4-6",
-                 "anthropic_base_url": None, "anthropic_api_key": "sk-ant-persisted",
-             }):
-            resp = client.post("/api/system/verify-auth", json={"use_bedrock": False})
-        assert resp.status_code == 200
-        assert resp.json()["success"] is True
-
 
 # ── AC6: Bedrock verify-auth is bounded (no unbounded hang) ──
 
@@ -654,21 +532,13 @@ class TestVerifyBedrockTimeout:
 # ── AC3/AC5: persist API key (secret) + auth_method endpoints ──
 
 class TestAuthPersistEndpoints:
-    def test_set_api_key_persists_and_not_echoed(self, client):
-        """POST /system/anthropic-api-key stores the key via the secret store
-        and the response must NOT echo the key back."""
-        called = {}
-        def fake_set_secret(self, k, v):
-            called[k] = v
-        with patch("core.app_config_manager.AppConfigManager.set_secret", new=fake_set_secret):
-            resp = client.post("/api/system/anthropic-api-key", json={"api_key": "sk-ant-endpoint"})
-        assert resp.status_code == 200
-        assert called.get("anthropic_api_key") == "sk-ant-endpoint"
-        # never echo the secret
-        assert "sk-ant-endpoint" not in resp.text
+    def test_there_is_no_anthropic_key_route(self, client):
+        """Anthropic keys are not supported: nothing can store one any more."""
+        resp = client.post("/api/system/anthropic-api-key", json={"api_key": "endpoint-test-key"})
+        assert resp.status_code in (404, 405)
 
-    def test_set_api_key_rejects_empty(self, client):
-        resp = client.post("/api/system/anthropic-api-key", json={"api_key": ""})
+    def test_set_auth_method_rejects_apikey(self, client):
+        resp = client.post("/api/system/auth-method", json={"method": "apikey"})
         assert resp.status_code in (400, 422)
 
     def test_set_auth_method_persists(self, client):
@@ -892,8 +762,8 @@ class TestAuthHint:
         assert data["has_sso_cache"] is True
         assert data["suggested_method"] == "sso"
 
-    def test_auth_hint_apikey_detected(self, client):
-        """ANTHROPIC_API_KEY set → suggested_method: apikey."""
+    def test_auth_hint_ignores_an_anthropic_key(self, client):
+        """ANTHROPIC_API_KEY set → not suggested: Anthropic keys are not supported."""
         with patch("routers.system.Path") as mock_path_cls:
             home_mock = MagicMock()
             home_mock.joinpath.return_value.is_dir.return_value = False
@@ -905,8 +775,8 @@ class TestAuthHint:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["has_api_key"] is True
-        assert data["suggested_method"] == "apikey"
+        assert "has_api_key" not in data
+        assert data["suggested_method"] != "apikey"
 
 
 # ── AC3: onboarding_complete flag lifecycle ──

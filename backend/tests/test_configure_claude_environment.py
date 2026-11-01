@@ -3,21 +3,18 @@
 Tests the updated function that reads from AppConfigManager in-memory cache
 instead of the database. Validates:
 
-- Bedrock toggle sets/removes CLAUDE_CODE_USE_BEDROCK
+- CLAUDE_CODE_USE_BEDROCK is always set: chat runs on Bedrock (an old
+  use_bedrock=false Anthropic-direct setting is ignored and never injects a key)
 - AWS_REGION and AWS_DEFAULT_REGION set from config when Bedrock enabled
 - ANTHROPIC_BASE_URL set/removed based on config
 - AWS credential env vars are NEVER set by this function
-- AuthenticationNotConfiguredError raised when no API key and Bedrock disabled
 
 **Validates: Requirements 2.3, 13.1, 13.2, 13.3, 13.5, 13.6, 13.7**
 """
 import os
 import pytest
 
-from core.claude_environment import (
-    _configure_claude_environment,
-    AuthenticationNotConfiguredError,
-)
+from core.claude_environment import _configure_claude_environment
 from core.app_config_manager import AppConfigManager
 
 
@@ -82,14 +79,21 @@ class TestBedrockToggle:
         assert os.environ["AWS_REGION"] == "eu-west-1"
         assert os.environ["AWS_DEFAULT_REGION"] == "eu-west-1"
 
-    def test_bedrock_disabled_removes_env_var(self):
-        """Req 13.2: Bedrock disabled → remove CLAUDE_CODE_USE_BEDROCK."""
-        os.environ["ANTHROPIC_API_KEY"] = "sk-test"
-        os.environ["CLAUDE_CODE_USE_BEDROCK"] = "true"
-        cfg = _make_config({"use_bedrock": False})
+    def test_an_old_anthropic_direct_setting_still_runs_on_bedrock(self):
+        """Anthropic-direct is no longer supported: use_bedrock=false (and a stored key)
+        still gives a Bedrock spawn, and the stored key is never injected."""
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
+        cfg = _make_config({"use_bedrock": False, "auth_method": "apikey", "anthropic_api_key": "sk-old"})
         _configure_claude_environment(cfg)
 
-        assert "CLAUDE_CODE_USE_BEDROCK" not in os.environ
+        assert os.environ["CLAUDE_CODE_USE_BEDROCK"] == "true"
+        assert "ANTHROPIC_API_KEY" not in os.environ
+
+    def test_a_key_an_older_version_injected_is_removed(self):
+        os.environ["ANTHROPIC_API_KEY"] = "sk-old"
+        _configure_claude_environment(_make_config({"anthropic_api_key": "sk-old"}))
+        assert "ANTHROPIC_API_KEY" not in os.environ
 
     def test_bedrock_default_region_us_east_1(self):
         """Default region is us-east-1 when not specified."""
@@ -138,9 +142,8 @@ class TestNoCredentialEnvVars:
                      "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"]:
             assert var not in os.environ, f"{var} should not be set"
 
-    def test_credential_vars_never_set_bedrock_disabled(self):
-        """Req 13.5: Even with Bedrock off, no credential vars set."""
-        os.environ["ANTHROPIC_API_KEY"] = "sk-test"
+    def test_credential_vars_never_set_old_setting(self):
+        """Req 13.5: Even with the old use_bedrock=false, no credential vars set."""
         for var in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
                      "AWS_SESSION_TOKEN", "AWS_BEARER_TOKEN_BEDROCK"]:
             os.environ.pop(var, None)
@@ -234,33 +237,6 @@ class TestBedrockBearerInjection:
 
 
 # ---------------------------------------------------------------------------
-# Auth validation (Req 13.6)
-# ---------------------------------------------------------------------------
-class TestAuthValidation:
-    def test_raises_when_no_api_key_and_bedrock_disabled(self):
-        """Req 13.6: No ANTHROPIC_API_KEY + Bedrock off → raise."""
-        os.environ.pop("ANTHROPIC_API_KEY", None)
-        cfg = _make_config({"use_bedrock": False})
-
-        with pytest.raises(AuthenticationNotConfiguredError):
-            _configure_claude_environment(cfg)
-
-    def test_no_raise_when_api_key_set(self):
-        """Req 13.6: ANTHROPIC_API_KEY present → no raise even without Bedrock."""
-        os.environ["ANTHROPIC_API_KEY"] = "sk-test"
-        cfg = _make_config({"use_bedrock": False})
-
-        _configure_claude_environment(cfg)  # should not raise
-
-    def test_no_raise_when_bedrock_enabled_no_api_key(self):
-        """Req 13.6: Bedrock enabled → no raise even without API key."""
-        os.environ.pop("ANTHROPIC_API_KEY", None)
-        cfg = _make_config({"use_bedrock": True})
-
-        _configure_claude_environment(cfg)  # should not raise
-
-
-# ---------------------------------------------------------------------------
 # Zero IO / synchronous (Req 13.7)
 # ---------------------------------------------------------------------------
 class TestZeroIO:
@@ -280,11 +256,10 @@ class TestPromptCacheOneHour:
     hundred thousand tokens) because every cache write was the five-minute tier; the
     one-hour tier keeps it readable across a normal pause."""
 
-    @pytest.mark.parametrize("bedrock,key", [(True, "sk-x"), (False, "sk-x")])
-    def test_both_modes_ask_for_the_one_hour_tier(self, bedrock, key):
+    def test_the_one_hour_tier_is_asked_for(self):
         for k in ("ENABLE_PROMPT_CACHING_1H", "ENABLE_PROMPT_CACHING_1H_BEDROCK"):
             os.environ.pop(k, None)
-        _configure_claude_environment(_make_config({"use_bedrock": bedrock, "anthropic_api_key": key}))
+        _configure_claude_environment(_make_config())
         assert os.environ["ENABLE_PROMPT_CACHING_1H_BEDROCK"] == "1"
         assert os.environ["ENABLE_PROMPT_CACHING_1H"] == "1"
 

@@ -36,7 +36,7 @@ vi.mock('../../../services/awsAccount', () => ({
     return d && typeof d === 'object' ? d : { kind: 'error', message: String(e) };
   },
 }));
-const sys = { verifyAuth: vi.fn(), persistApiKey: vi.fn(), persistBearerToken: vi.fn(), setAuthMethod: vi.fn() };
+const sys = { verifyAuth: vi.fn(), persistBearerToken: vi.fn(), setAuthMethod: vi.fn() };
 vi.mock('../../../services/system', () => ({
   systemService: new Proxy({}, { get: (_t, k: string) => (...a: unknown[]) => (sys as Record<string, (...x: unknown[]) => unknown>)[k](...a) }),
 }));
@@ -46,6 +46,12 @@ vi.mock('../../../services/settings', () => ({
 }));
 const mockOpen = vi.fn();
 vi.mock('../../../utils/openExternal', () => ({ openExternal: (...a: unknown[]) => mockOpen(...a) }));
+const mockDesktop = vi.fn(() => true);
+vi.mock('../../../services/tauri', () => ({ isDesktop: () => mockDesktop() }));
+const mockRun = vi.fn();
+vi.mock('../../common/settingsEvents', () => ({
+  runInTerminal: (...a: unknown[]) => mockRun(...a), markTerminalRun: () => {},
+}));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (k: string, o?: Record<string, unknown>) => {
@@ -87,7 +93,8 @@ function view(over: Partial<AwsAccountView> = {}): AwsAccountView {
 const problem = (detail: unknown) => ({ response: { data: { detail } } });
 
 beforeEach(() => {
-  for (const m of [...Object.values(svc), ...Object.values(sys), mockUpdateConfig, mockOpen]) m.mockReset();
+  for (const m of [...Object.values(svc), ...Object.values(sys), mockUpdateConfig, mockOpen, mockRun]) m.mockReset();
+  mockDesktop.mockReturnValue(true);
   svc.verifyRow.mockResolvedValue({ status: 'verified', account_id: A });
   mockOpen.mockResolvedValue(undefined);
 });
@@ -175,6 +182,26 @@ describe('ConnectAccount ③ ④ signing in and verifying', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(svc.connect).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId('connect-verified')).toBeInTheDocument();
+  });
+
+  it('Midway expired: in Settings one click types mwinit -f into the SwarmAI terminal; the wizard only says to run it', async () => {
+    const reach = async (mode: 'onboarding' | 'settings') => {
+      svc.detect.mockResolvedValue(detected([], { context: 'internal' }));
+      svc.connect.mockRejectedValue(problem({ kind: 'needs_login', message: 'Midway has expired' }));
+      const r = render(<ConnectAccount mode={mode} onConnected={vi.fn()} onLater={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.click(await screen.findByTestId('connect-method-ada'));
+      fireEvent.change(screen.getByTestId('connect-ada-account'), { target: { value: A } });
+      await act(async () => { fireEvent.click(screen.getByTestId('connect-ada-go')); });
+      expect(await screen.findByTestId('connect-ada-wait')).toHaveTextContent('mwinit -f');
+      return r;
+    };
+    const wizard = await reach('onboarding');   // before the app's terminal exists: any terminal
+    expect(screen.queryByTestId('connect-ada-terminal')).toBeNull();
+    expect(screen.getByTestId('connect-ada-wait')).toHaveTextContent('awsConnect.ada.midwayRun');
+    wizard.unmount();
+    await reach('settings');
+    fireEvent.click(screen.getByTestId('connect-ada-terminal'));
+    expect(mockRun).toHaveBeenCalledWith('mwinit -f', expect.any(String));
   });
 
   it('a mismatch names both accounts and connects nothing', async () => {

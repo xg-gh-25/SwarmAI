@@ -62,7 +62,7 @@ def test_the_capability_checks_run_in_the_main_region(account, monkeypatch):
     monkeypatch.setattr(aws_permissions, "run_hive_checks",
                         lambda sess, region, a, c: ({"status": "ok"}, {"status": "ok"}))
     monkeypatch.setattr(aa, "_voice_check", lambda sess, rec: {"status": "ok"})
-    monkeypatch.setattr(aa, "get_chat_via", lambda config=None: "anthropic")
+    monkeypatch.setattr(aa, "get_chat_via", lambda config=None: "bedrock_key")
     out = aa.run_capability_checks(AppConfigManager.instance())
     assert seen[0] == "eu-west-1" and out["hive"]["region"] == "eu-west-1"
 

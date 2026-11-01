@@ -65,6 +65,8 @@ SECRET_KEYS: frozenset[str] = frozenset({
     # AWS bearer token. Persisted to the durable 0o600 secret store, injected
     # at spawn by _configure_claude_environment when auth_method=bedrock_api_key.
     "aws_bearer_token_bedrock",
+    # No longer used (Anthropic-direct chat is not supported); kept on this list so a
+    # key an older version stored stays a secret: never in GET /settings, never in config.json.
     "anthropic_api_key",
     # the SwarmAI AWS account's own sign-ins (core/aws_signin): the Identity Center
     # client + tokens, and access keys for the ``keys`` source
@@ -95,7 +97,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # Persisted, non-secret. The active auth method chosen at setup, so error
     # remediation (CredentialBanner + spawn pre-flight) can be method-aware:
     # use_bedrock alone can't distinguish "ada" from "sso" (both are Bedrock).
-    # Values: "ada" | "sso" | "apikey" | "iam_role" | "bedrock_api_key".
+    # Values: "ada" | "sso" | "iam_role" | "bedrock_api_key" (an old "apikey" is moved
+    # off at startup by aws_account.retire_anthropic_direct).
     # Written on successful verify.
     "auth_method": None,
     # Persisted display context ("internal" | "external"), mirrors the wizard's

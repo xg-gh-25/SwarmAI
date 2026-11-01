@@ -140,12 +140,11 @@ export interface VerifyAuthResponse {
 export interface AuthHintResponse {
   hasAdaDir: boolean;
   hasSsoCache: boolean;
-  hasApiKey: boolean;
   deploymentContext: 'internal' | 'external';
   // "high" when a positive internal/SSO signal was detected; "low" when we only
   // DEFAULTED to external (no signal). Frontend elevates the context toggle on "low".
   detectionConfidence?: 'high' | 'low';
-  suggestedMethod: 'ada' | 'sso' | 'apikey' | 'iam_role' | 'bedrock_api_key';
+  suggestedMethod: 'ada' | 'sso' | 'iam_role' | 'bedrock_api_key';
   adaDetails?: {
     accountId?: string;
     roleName?: string;
@@ -234,14 +233,6 @@ export const systemService = {
   async getAuthHint(): Promise<AuthHintResponse> {
     const response = await api.get<Record<string, unknown>>('/system/auth-hint');
     return deepSnakeToCamel(response.data) as AuthHintResponse;
-  },
-
-  /**
-   * Persist the user's Anthropic API key (Anthropic-direct auth). Stored in the
-   * daemon's durable secret store — never echoed back, no relaunch needed.
-   */
-  async persistApiKey(apiKey: string): Promise<void> {
-    await api.post('/system/anthropic-api-key', { api_key: apiKey });
   },
 
   /**

@@ -211,7 +211,7 @@ def test_legacy_profile_records_take_the_account_from_the_config(cfg, user_aws, 
 
 
 def test_legacy_keys_become_the_chat_path_and_nothing_is_guessed(cfg, user_aws):
-    assert aa.derive_from_legacy({"auth_method": "apikey", "use_bedrock": False}) == (None, "anthropic")
+    assert aa.derive_from_legacy({"auth_method": "apikey", "use_bedrock": False}) == (None, "aws")
     assert aa.derive_from_legacy({"auth_method": "bedrock_api_key"}) == (None, "bedrock_key")
     assert aa.derive_from_legacy({}) == (None, "aws")
 
@@ -487,3 +487,15 @@ def test_the_channel_denial_is_not_too_wide():
     from core.security_hooks import owner_command_denial
     assert owner_command_denial("grep configure-aws-credentials .github/workflows/ci.yml") is None
     assert owner_command_denial("cd ~/.swarm-ai && cat aws/daemon.json")
+
+
+def test_startup_moves_off_anthropic_even_when_the_record_cannot_be_made(cfg, monkeypatch):
+    cfg.update({"use_bedrock": False, "auth_method": "apikey"})
+    monkeypatch.setattr(aa, "write_daemon_endpoint", lambda port: None)
+    monkeypatch.setattr(aa, "write_profile_file", lambda region: None)
+
+    def broken(config):
+        raise ValueError("config.json does not parse")
+    monkeypatch.setattr(aa, "ensure_record", broken)
+    aa.startup(18321)                                       # never raises
+    assert cfg.get("use_bedrock") is True and cfg.get("auth_method") is None

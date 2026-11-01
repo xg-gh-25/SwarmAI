@@ -72,12 +72,11 @@ async def test_preflight_expired_sso_does_NOT_say_mwinit():
 
 
 @pytest.mark.asyncio
-async def test_preflight_apikey_mode_skips_STS_and_spawns():
-    """use_bedrock=false (Anthropic-direct) → NO STS check, NO expired event,
-    proceeds to spawn. An API-key user must not get 'AWS credentials expired'."""
+async def test_preflight_an_old_anthropic_setting_is_checked_like_bedrock():
+    """Anthropic direct is not supported: an old use_bedrock=false / apikey setting runs
+    on Bedrock, so the pre-flight checks the AWS credentials like any Bedrock spawn."""
     unit = _cold_unit()
-    # Even if the validator WOULD say expired, apikey mode must never call it.
-    check_mock = AsyncMock(return_value="expired")
+    check_mock = AsyncMock(return_value="valid")
     fake_validator = type("V", (), {"check": check_mock})()
 
     with patch("core.session_registry.get_credential_validator", return_value=fake_validator), \
@@ -86,7 +85,7 @@ async def test_preflight_apikey_mode_skips_STS_and_spawns():
         events = await _collect(unit, options=object(), config=None)
 
     assert not any(e.get("code") == "CREDENTIALS_EXPIRED" for e in events)
-    check_mock.assert_not_called(), "apikey mode must NOT run the AWS STS check"
+    check_mock.assert_called_once()
     mock_spawn.assert_called_once()
 
 

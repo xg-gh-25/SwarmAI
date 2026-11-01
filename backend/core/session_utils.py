@@ -346,14 +346,12 @@ _SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
         "update it in Settings → LLM Models, then send your message again.",
     ),
     (
-        # Anthropic-direct auth failure at runtime — a key valid at setup but
-        # later revoked/rotated. In API-key mode the STS pre-flight and the
-        # /health auth check are both skipped, so this SDK error is the FIRST
-        # signal. Map to an actionable, provider-correct message (never mwinit).
+        # Any other authentication failure at runtime (a 401, "Unauthorized"): point
+        # at the two places a sign-in is fixed, never at a provider command.
         r"(?:authentication_error|invalid.{0,20}(?:api[_-]?key|x-api-key)|\b401\b|permission_error|Unauthorized)",
-        "Your API key isn't working.",
-        "Anthropic keys are no longer offered: in Settings → LLM Models choose a Bedrock "
-        "API key or Bedrock through the Swarm AWS account, then send your message again.",
+        "Your sign-in or key isn't working.",
+        "Check the sign-in in Settings → Swarm AWS Account (or the Bedrock API key in "
+        "Settings → LLM Models), then send your message again.",
     ),
 ]
 

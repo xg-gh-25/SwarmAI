@@ -11,6 +11,8 @@
  * - `SDK_SUBPROCESS_TIMEOUT` — informational (user can send a message to resume)
  * - `RATE_LIMIT_EXCEEDED`   — countdown timer, auto-re-enables on expiry
  * - `SERVICE_UNAVAILABLE`   — triggers immediate health check
+ * - `CREDENTIALS_EXPIRED`   — a "fix the sign-in" button: the chat's sign-in line
+ *                             (CredentialBanner) verifies and runs its one action
  *
  * Key exports:
  * - `ChatErrorMessage`      — React component
@@ -18,7 +20,9 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useHealth } from '../../contexts/HealthContext';
+import { fixSignIn } from '../common/settingsEvents';
 
 export interface ChatErrorMessageProps {
   error: {
@@ -33,6 +37,7 @@ export interface ChatErrorMessageProps {
 }
 
 export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
+  const { t } = useTranslation();
   const { triggerHealthCheck } = useHealth();
 
   // SERVICE_UNAVAILABLE triggers immediate health check
@@ -110,6 +115,13 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
 
       {error.code === 'RATE_LIMIT_EXCEEDED' && error.retryAfter && (
         <RateLimitCountdownInline retryAfterSec={error.retryAfter} />
+      )}
+
+      {error.code === 'CREDENTIALS_EXPIRED' && (
+        <button type="button" onClick={fixSignIn} data-testid="chat-error-fix-sign-in"
+          className="mt-3 btn-md btn-primary transition-colors">
+          {t('credentialBanner.fixFromChat')}
+        </button>
       )}
 
       {error.code === 'QUEUE_TIMEOUT' && onRetry && (

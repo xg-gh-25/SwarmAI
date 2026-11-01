@@ -61,7 +61,6 @@ export interface SettingsConfig extends Record<string, unknown> {
   readonly effectiveThinkingMode?: 'adaptive' | 'enabled' | 'disabled';
   anthropicBaseUrl: string | null;
   readonly awsCredentialsConfigured: boolean;
-  readonly anthropicApiKeyConfigured: boolean;
 }
 
 /** One discovered Bedrock model (GET /settings/bedrock/models). */

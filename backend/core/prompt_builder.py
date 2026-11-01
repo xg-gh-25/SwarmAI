@@ -786,12 +786,11 @@ class PromptBuilder:
         model = agent_config.get("model")
         if not model and self._config is not None:
             model = self._config.get("default_model")
-        use_bedrock = (
-            self._config.get("use_bedrock", False)
-            if self._config is not None
-            else os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").lower() == "true"
-        )
-        if model and use_bedrock:
+        # Chat always runs on Bedrock (claude_environment sets CLAUDE_CODE_USE_BEDROCK on
+        # every spawn; Anthropic-direct keys are not supported, design
+        # 2026-11-01-settings-account-merge §3.1), so the name is always translated: an
+        # old use_bedrock=false must not send a bare name the CLI then hands to Bedrock.
+        if model:
             config_map = (
                 self._config.get("bedrock_model_map")
                 if self._config is not None

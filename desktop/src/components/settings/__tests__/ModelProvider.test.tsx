@@ -1,9 +1,9 @@
 /**
  * Settings → LLM Models, where the model is called from (design 2026-11-01-settings-account-merge §3).
- * Questions: are there exactly two choices (account, Bedrock key), with the old Anthropic
- * key shown only to someone still on it; does the account choice go through the shared
- * useForChat and refuse without an account; does the key choice open the verify-then-store
- * form; and is there no AWS sign-in control here?
+ * Questions: are there exactly two choices (account, Bedrock key) and never an Anthropic
+ * one; does the account choice go through the shared useForChat; without an account, does
+ * it say chat runs on this computer's AWS credentials and lead to connecting one; does the
+ * key choice open the verify-then-store form; and is there no AWS sign-in control here?
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -19,11 +19,13 @@ vi.mock('../../awsAccount/ConnectAccount', () => ({
   BedrockKeyForm: (p: { region: string; context: string }) => <div data-testid="key-form" data-region={p.region} data-context={p.context} />,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+const mockOpenSettings = vi.fn();
+vi.mock('../../common/settingsEvents', () => ({ openSettings: (...a: unknown[]) => mockOpenSettings(...a) }));
 
 const account = { source: 'ada', account_id: '533267412361', region: 'us-east-1', context: 'internal' } as AwsAccountView['account'];
 const view = (over: Partial<AwsAccountView> = {}) => ({ state: 'connected', account, chat_via: 'aws', region: 'eu-west-1', ...over }) as AwsAccountView;
 
-beforeEach(() => { mockGet.mockReset(); mockUseForChat.mockReset(); });
+beforeEach(() => { mockGet.mockReset(); mockUseForChat.mockReset(); mockOpenSettings.mockReset(); });
 
 describe('ModelProvider', () => {
   it('offers two choices, the account one selected, and no sign-in controls', async () => {
@@ -46,12 +48,18 @@ describe('ModelProvider', () => {
     await waitFor(() => expect(screen.getByTestId('model-provider-aws')).toHaveAttribute('aria-pressed', 'true'));
   });
 
-  it('without an account the account choice cannot be picked and says where to connect', async () => {
-    mockGet.mockResolvedValue(view({ account: null, state: 'unconnected', chat_via: 'bedrock_key' }));
+  it('without an account, chat on Bedrock is said as it is: the computer\'s own AWS credentials', async () => {
+    mockGet.mockResolvedValue(view({ account: null, state: 'unconnected', chat_via: 'aws' }));
     render(<ModelProvider />);
     const aws = await screen.findByTestId('model-provider-aws');
-    expect(aws).toBeDisabled();
-    expect(aws).toHaveTextContent('settings.modelProvider.awsNone');
+    expect(aws).toHaveAttribute('aria-pressed', 'true');       // it IS how chat runs today
+    expect(aws).not.toBeDisabled();
+    expect(screen.getByText('settings.modelProvider.awsLocal')).toBeInTheDocument();   // exact: not the Lead
+    expect(screen.queryByText('settings.modelProvider.aws')).toBeNull();
+    expect(screen.getByTestId('model-provider-connect')).toHaveTextContent('settings.modelProvider.connect');
+    fireEvent.click(aws);                                      // picking it leads to connecting
+    expect(mockOpenSettings).toHaveBeenCalledWith('aws-account');
+    expect(mockUseForChat).not.toHaveBeenCalled();
   });
 
   it('the key choice opens the shared form in the main region', async () => {
@@ -63,12 +71,6 @@ describe('ModelProvider', () => {
     expect(form).toHaveAttribute('data-context', 'internal');
   });
 
-  it('someone still on an Anthropic key sees it as the current, old choice', async () => {
-    mockGet.mockResolvedValue(view({ chat_via: 'anthropic' }));
-    render(<ModelProvider />);
-    expect(await screen.findByTestId('model-provider-anthropic')).toHaveTextContent('settings.modelProvider.anthropic');
-    expect(screen.getByTestId('model-provider-aws')).toHaveAttribute('aria-pressed', 'false');
-  });
 
   it('the key form can be closed again, by cancel or by the account choice', async () => {
     mockGet.mockResolvedValue(view());

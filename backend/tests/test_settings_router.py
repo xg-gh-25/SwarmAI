@@ -36,7 +36,7 @@ from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG, SECRET_KEY
 _EXPECTED_CONFIG_KEYS = {
     k for k in DEFAULT_CONFIG if k not in SECRET_KEYS
 }
-_CREDENTIAL_STATUS_KEYS = {"aws_credentials_configured", "anthropic_api_key_configured"}
+_CREDENTIAL_STATUS_KEYS = {"aws_credentials_configured"}
 # Derived, read-only fields computed from default_model (model_registry):
 _DERIVED_THINKING_KEYS = {"supported_thinking_modes", "effective_thinking_mode"}
 _ALL_EXPECTED_KEYS = _EXPECTED_CONFIG_KEYS | _CREDENTIAL_STATUS_KEYS | _DERIVED_THINKING_KEYS
@@ -54,8 +54,7 @@ def _mock_probes():
     Individual tests can override via nested ``patch`` context managers
     when they need True values.
     """
-    with patch("routers.settings._probe_aws_credentials", return_value=False), \
-         patch("routers.settings._probe_anthropic_api_key", return_value=False):
+    with patch("routers.settings._probe_aws_credentials", return_value=False):
         yield
 
 
@@ -110,16 +109,14 @@ class TestGenericGETContract:
         resp = client.get("/api/settings")
         data = resp.json()
         assert data["aws_credentials_configured"] is False
-        assert data["anthropic_api_key_configured"] is False
+        assert "anthropic_api_key_configured" not in data   # Anthropic keys: not supported
 
     def test_credential_status_reflects_mocked_probes_true(self, client: TestClient):
         """Credential status fields are True when probes return True."""
-        with patch("routers.settings._probe_aws_credentials", return_value=True), \
-             patch("routers.settings._probe_anthropic_api_key", return_value=True):
+        with patch("routers.settings._probe_aws_credentials", return_value=True):
             resp = client.get("/api/settings")
             data = resp.json()
             assert data["aws_credentials_configured"] is True
-            assert data["anthropic_api_key_configured"] is True
 
     def test_get_reflects_prior_put(self, client: TestClient):
         """GET returns values written by a prior PUT."""

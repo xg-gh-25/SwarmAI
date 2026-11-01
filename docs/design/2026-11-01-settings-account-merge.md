@@ -2,7 +2,7 @@
 created: 2026-11-01
 updated: 2026-11-01
 title: "设置页合并：Swarm AWS Account、LLM Models，登录过期一键修"
-status: r2 — 已实现（2026-11-01）；设计审查和实现审查见 §9；XG 已定（§8）：模型调用两选一；终端只填命令不回车；去掉 Core Engine、Capabilities tab
+status: r3 — 已实现（2026-11-01）；设计审查和实现审查见 §9；XG 已定（§8）：模型调用两选一；终端只填命令不回车；去掉 Core Engine、Capabilities tab；不再支持 Anthropic key（§3.1）
 related: docs/design/2026-10-31-swarmai-aws-account.md
 ---
 
@@ -46,13 +46,28 @@ Mockup：`Knowledge/Mockups/2026-11-01-settings-aws-account-merge.html`（六屏
 `core/engine_metrics.py` 另有读者要查，不在这次删（记一条待办）。左侧导航的 Capabilities 卡片（skills / MCP）不受影响。
 
 **认证方式（XG 定）：AWS 的登录方式全部放账号页；LLM Models 里"从哪里调用模型"只有两项：经 Swarm AWS 账号走
-Bedrock（默认）、Bedrock API key。不再提供 Anthropic API key**（设置页和向导的"先只用对话"都去掉）。已经在用
-Anthropic key 的老用户照常能用：LLM Models 把它显示成当前选项"Anthropic API key（旧设置）"，可以换成另外两项，换走后
-不再出现；后端对它的支持不动。以下是 r0 的理由，保留作记录：
-Bedrock API key 和 Anthropic key 只是调用模型的钥匙，不是 AWS 账号：一个只有 Anthropic key 的外部用户不该被送到
-"AWS 账号"页去填。LLM Models 里这一项只有三个选项，默认"Bedrock，经 Swarm AWS 账号"，旁边写账号和区域并链接到
-账号页；另外两项注明"Hive、云存储、语音仍需要 Swarm AWS 账号"。这和账号设计 §5.1"对话的路和 AWS 账号分开"一致，
-读法不变（`aws_account.get_chat_via()`）。
+Bedrock（默认）、Bedrock API key。不支持 Anthropic API key**（r3，见 §3.1）。LLM Models 里默认一项旁边写账号和
+区域并链接到账号页；Bedrock key 那一项注明"Hive、云存储、语音仍需要 Swarm AWS 账号"。读法不变
+（`aws_account.get_chat_via()`，现在只有 `aws`、`bedrock_key` 两个值）。
+
+### 3.1 不支持 Anthropic key（r3，XG 2026-11-01）
+
+目标是不挡住任何人启动 SwarmAI，同时只留一条对话路：Bedrock。
+- **对话：** `claude_environment` 总是设 `CLAUDE_CODE_USE_BEDROCK`，从不注入 `ANTHROPIC_API_KEY`；旧版本注入进这个
+  长寿进程的那一把（等于存着的密钥）会被拿掉，用户自己 export 的不动。没有"没配置认证就报错"的检查了。
+- **老用户：** daemon 启动时 `aws_account.retire_anthropic_direct` 把 `use_bedrock=false` / `auth_method=apikey` 改成
+  `use_bedrock=true`，`auth_method` 取账号记录的登录方式（ada、Hive 的 iam_role），否则不设（拿通用的修复提示，
+  不猜命令）。账号记录建不出来时也照样改。存着的 key 留在密钥库里不用，不删任何人存过的东西。之后对话走本机的
+  AWS 凭证或账号；不能用时由提示条和错误卡片指到账号页。
+- **删掉的：** `/api/system/anthropic-api-key`、Anthropic 的核实路径、`auth-hint` 里的 `has_api_key`、设置页的
+  `anthropic_api_key_configured`、`apikey` 的 remediation；前端的 Anthropic 卡片（Hive 网页版的认证面板也去掉）。
+- **没有账号记录的老用户打开 LLM Models：** 默认一项如实写"Bedrock，用本机的 AWS 凭证"和"还没连接 Swarm AWS 账号"，
+  点它打开账号页去连接；不再显示成灰掉、点不了。
+- **向导里 Midway 过期：** 仍然写"打开本机的终端，运行 `mwinit -f`"，人用自己的终端（向导运行时 SwarmAI 终端还没有）。
+  设置页"更换账号 → ADA"的同一等待页有 SwarmAI 终端，多一个"在终端登录"按钮（填好 `mwinit -f`，不回车）。
+- **聊天里的 Credentials Expired 卡片：** 加"修复登录"按钮。它不自己决定怎么修：发 `FIX_SIGN_IN_EVENT` 给提示条，
+  提示条先核实一次，已经登上就显示"已重新登录"，否则显示自己并执行它那一个动作。卡片和提示条因此不会说两套话；
+  发消息前的检查常比 health 的下一次采样先发现过期，所以提示条在被请求时即使 health 还没报过期也会出现。
 
 ## 4. 登录过期一键修
 
@@ -137,9 +152,9 @@ tab 的内容（`hiveAccountView` 的 `shown`、`AccountCard` 的核实和删除
 3. 设置页：没有 `hive` tab；`ai-models` 深链接打开 LLM Models；LLM Models 里没有任何 AWS 登录控件；账号页的主区域
    改动写进 `aws_region`；有 SwarmAI 账号时"别的账号里的 Hive"只在有 Hive 时出现，没有时原样列出老的 Hive 账号；
    `hive` 深链接打开账号页；Hive 上 LLM Models 仍有 `AuthConfigPanel`；没有 Core Engine、Capabilities tab；
-   模型调用只有两项，`apikey` 用户看到"旧设置"那一项，换走后消失；向导的"先只用对话"没有 Anthropic。
+   模型调用只有两项，任何情况都没有 Anthropic 一项；向导的"先只用对话"没有 Anthropic。
 4. 不变的：没有账号的老用户能连接账号，原来的 Hive 账号仍列出；Hive 模式的安装向导仍用 `AuthConfigPanel`；
-   `get_chat_via()` 对三个选项的结果和今天相同。
+   `get_chat_via()` 对 Bedrock 两个选项的结果和今天相同（r3：旧的 Anthropic 设置得到 `aws`）。
 5. `npm run build` 的包大小检查通过；前端每个新逻辑做一次 mutation（去掉就变红）。
 
 **审查：** 实现后 correctness + ux 各一轮；终端写入命令那一段加 security（§4.2 的校验、命令只由后端生成）。
@@ -151,6 +166,8 @@ tab 的内容（`hiveAccountView` 的 `shown`、`AccountCard` 的核实和删除
 1. 模型调用方式留在 LLM Models，只保留经 Swarm AWS 账号走 Bedrock（默认）和 Bedrock API key。
 2. 终端里只填好命令，人自己按回车。
 3. 去掉 Core Engine、Capabilities 两个 tab。
+4. （r3）不支持 Anthropic key；向导里 Midway 过期仍让人用自己的终端跑 `mwinit -f`，设置页里可以用 SwarmAI 终端；
+   Hive 网页版一起清掉；目标是不挡住任何人启动 SwarmAI（§3.1）。
 
 ## 9. 审查记录
 
@@ -173,13 +190,30 @@ tab 的内容（`hiveAccountView` 的 `shown`、`AccountCard` 的核实和删除
   `sign_in` 从提示条点过来时直接进入 App 里的登录。
 - **LLM Models：** Bedrock key 的表单可以取消；中文"在 Swarm AWS Account 里改"补全；正文统一叫 Swarm AWS Account。
 - **没有账号记录的人：** 桌面上总能改主区域；Hive 上提示永远是实例角色（不看留下来的 `auth_method`）；还在用
-  Anthropic key 的人，提示改成"到 LLM Models 选 Bedrock API key 或经账号的 Bedrock"。
+  Anthropic key 的人，提示改成"到 LLM Models 选 Bedrock API key 或经账号的 Bedrock"（r3 起 Anthropic 不再支持，这条提示也删了）。
 - **测试：** profile 名字的坏例子都写成真实的 SSO profile，确保是名字规则挡住的；加一条"agent 的 ui_command 够不到
   终端事件"。
 
+**r3（不支持 Anthropic key）的实现审查（correctness、security 各一轮）：** 没有 HIGH；correctness 2 MED、5 LOW，
+security 1 MED、3 LOW。核实后按原因一次改完：
+- **只剩 Bedrock 一条路，所有读者都要知道：** 聊天（`prompt_builder`）和 job（`jobs/model_resolve`）的模型名不再看旧的
+  `use_bedrock`，一律转成 Bedrock 的名字；否则启动时那次改写还没跑（或 config.json 写不进去）时，旧 Anthropic 用户发出去的
+  是 Bedrock 不认的名字。
+- **改写只动该动的：** 只有 `auth_method=apikey` 才换方法；`use_bedrock=false` 配着 Bedrock key、sso 等，只把开关改回来，
+  方法保留。测试也查了 config.json 里没有写进密钥。
+- **提示条被卡片请求时：** 只有终端动作会让它留在上面（等登录完成）；打开设置页或 App 内登录的动作只打开那个页面，不留
+  一条不会自己消失的提示；已经在等终端时再点一次只是重新检查，不会再开一个终端；卡片的核实和轮询各用自己的标记；
+  刚从核实拿到的修复方法不会被随后的读取盖掉。
+- 过时的注释、没用的 `import httpx`、测试里不可能再出现的 `"anthropic"` 值一并改了。
+
+**r3 决定接受、写在这里的风险：** 旧 Anthropic 用户升级后，对话会走启动时从本机配置推出来的账号（例如 `~/.aws` 的
+default profile），没有先问他。这个账号原来就已经被 Hive、存储、语音使用；第一次核实成功后会弹一次"SwarmAI 账号已接上：
+账号 ID"。不推账号就只能让他的对话直接不能用，这和"不挡住任何人"相反。
+
 **已知、没在这次处理：**
+- 用户自己在 shell 里 export 的 `ANTHROPIC_API_KEY`（和存着的那把不同）仍留在 daemon 的环境里、会传给子进程（原来就这样）。
 - `useForChat`（从账号页搬过来的原有代码）分两次写，第二次失败时设置只改了一半；它也不先核实账号。
-- 没有账号记录的老用户一旦改用 Bedrock key，不能在 LLM Models 改回默认凭证链（要先连接账号）。
+- 没有账号记录的老用户一旦改用 Bedrock key，不能在 LLM Models 改回本机凭证（点默认一项会打开账号页去连接）。
 - 后端 `GET /api/system/engine-metrics`、`GET /api/system/capabilities` 和 `core/engine_metrics.py` 已经没有前端读者，
   另外检查后再删。
 - 前端 `buttonScale`、`iconScale`、`navVisualSystem` 三个设计规范测试在 main 上本来就是红的（别处的旧代码），这次没有

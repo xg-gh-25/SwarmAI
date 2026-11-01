@@ -1200,8 +1200,7 @@
       "chatVia": "对话使用",
       "chatViaValue": {
         "aws": "这个账号（Bedrock）",
-        "bedrock_key": "Bedrock API key",
-        "anthropic": "Anthropic key"
+        "bedrock_key": "Bedrock API key"
       },
       "profileFile": "子进程用的 profile",
       "derived": "从你之前的设置接过来的。",
@@ -1227,13 +1226,13 @@
       "heading": "LLM Models",
       "title": "从哪里调用模型",
       "aws": "Bedrock，经 Swarm AWS Account",
-      "awsNone": "先在 Swarm AWS Account 连接账号。",
       "key": "Bedrock API key",
       "keyLead": "只用于对话；Hive、云存储、语音仍需要 Swarm AWS Account。",
-      "anthropic": "Anthropic API key（旧设置）",
-      "anthropicLead": "仍然能用。选上面任意一项即可换掉，以后不再提供。",
       "signInIsThere": "AWS 登录和主区域在 {{page}} 里改。",
-      "cancel": "取消"
+      "cancel": "取消",
+      "awsLocal": "Bedrock，用本机的 AWS 凭证",
+      "awsLocalLead": "还没连接 Swarm AWS 账号；Hive、云存储、语音要先连接。",
+      "connect": "连接账号"
     }
   },
   "canvas": {
@@ -2759,9 +2758,10 @@
       "provider": "提供方",
       "go": "登录并核实",
       "midwayTitle": "Midway 已过期",
-      "midwayRun": "在终端运行",
+      "midwayRun": "打开本机的终端，运行",
       "midwayThen": "，完成后这里会自动继续。",
-      "retrying": "每 5 秒重试一次。"
+      "retrying": "每 5 秒重试一次。",
+      "midwayRunInApp": "在终端运行"
     },
     "sso": {
       "title": "用 AWS SSO 登录",
@@ -2957,6 +2957,7 @@
     "done": "已重新登录 · {{account}}",
     "resend": "刚才没发出去的消息可以重新发送。",
     "dismiss": "先收起，状态变了再出现",
-    "doneNoAccount": "已重新登录。"
+    "doneNoAccount": "已重新登录。",
+    "fixFromChat": "修复登录"
   }
 }

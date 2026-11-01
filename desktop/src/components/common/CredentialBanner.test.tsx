@@ -237,3 +237,59 @@ describe('CredentialBanner — after the review', () => {
     expect(takeSignInRequest()).toBe(false);
   });
 });
+
+describe('CredentialBanner — asked by a chat error card (FIX_SIGN_IN_EVENT)', () => {
+  it('before health has noticed: verifies, shows itself and types the command at once', async () => {
+    setAuth('valid');                                  // health's next sample is not in yet
+    mockVerify.mockResolvedValueOnce({ state: 'needs_login', account: null, ...remedy(terminal) });
+    const { TERMINAL_RUN_EVENT, fixSignIn } = await import('./settingsEvents');
+    const runs = listen(TERMINAL_RUN_EVENT);
+    render(<CredentialBanner />);
+    await act(async () => { fixSignIn(); });
+    await waitFor(() => expect(runs.seen).toEqual([{ command: 'mwinit -f', title: 'Midway sign-in' }]));
+    expect(await screen.findByTestId('credential-banner')).toHaveTextContent('credentialBanner.waiting');
+    runs.stop();
+  });
+
+  it('already signed in again: says so and runs nothing', async () => {
+    setAuth('valid');
+    mockVerify.mockResolvedValueOnce({ state: 'connected', account: { account_id: '533267412361' }, remediation: null });
+    const { TERMINAL_RUN_EVENT, fixSignIn } = await import('./settingsEvents');
+    const runs = listen(TERMINAL_RUN_EVENT);
+    render(<CredentialBanner />);
+    await act(async () => { fixSignIn(); });
+    expect(await screen.findByTestId('credential-banner-done')).toHaveTextContent('533267412361');
+    expect(runs.seen).toEqual([]);
+    runs.stop();
+  });
+});
+
+describe('CredentialBanner — asked, after the review', () => {
+  it('a settings action opens the page and leaves no line behind', async () => {
+    setAuth('valid');
+    mockVerify.mockResolvedValueOnce({ state: 'needs_login', account: null, ...remedy({ kind: 'settings', tab: 'ai-models' }) });
+    const { OPEN_SETTINGS_EVENT, fixSignIn } = await import('./settingsEvents');
+    const opened = listen(OPEN_SETTINGS_EVENT);
+    const { container } = render(<CredentialBanner />);
+    await act(async () => { fixSignIn(); });
+    await waitFor(() => expect(opened.seen).toEqual([{ tab: 'ai-models' }]));
+    expect(container.querySelector('[data-testid="credential-banner"]')).toBeNull();
+    opened.stop();
+  });
+
+  it('already waiting on the terminal: a second click checks, it does not type again', async () => {
+    setAuth('valid');
+    mockVerify.mockResolvedValue({ state: 'needs_login', account: null, ...remedy(terminal) });
+    const { TERMINAL_RUN_EVENT, fixSignIn } = await import('./settingsEvents');
+    const runs = listen(TERMINAL_RUN_EVENT);
+    render(<CredentialBanner />);
+    await act(async () => { fixSignIn(); });
+    await waitFor(() => expect(runs.seen.length).toBe(1));
+    await screen.findByText(/credentialBanner\.waiting\|/);
+    await act(async () => { fixSignIn(); });
+    await waitFor(() => expect(mockVerify).toHaveBeenCalledTimes(2));
+    expect(runs.seen.length).toBe(1);
+    expect(mockGet).not.toHaveBeenCalled();     // the remedy from the verify is kept
+    runs.stop();
+  });
+});

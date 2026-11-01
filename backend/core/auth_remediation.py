@@ -5,7 +5,6 @@ CredentialBanner surface "your credentials aren't working" to the user. The fix
 instruction MUST match the user's actual auth method — the old code hardcoded
 `mwinit -f`, an Amazon-internal Midway command, which is wrong (and useless) for:
   - external SSO users        → the fix is `aws sso login`
-  - Anthropic-direct users    → the fix is entering an API key in Settings
   - Hive IAM-role users       → the fix is an IAM policy change
   - Bedrock API-key users     → the fix is entering a new short-term bearer token
 
@@ -132,16 +131,6 @@ _REMEDIATION: dict[str, Remediation] = {
         "settings_tab": _ACCOUNT_TAB,
         "action": {"kind": "terminal", "command": "aws sso login", "title": "AWS SSO sign-in"},
     },
-    "apikey": {
-        "message": "No working Anthropic API key.",
-        "fix_text": (
-            "Anthropic keys are no longer offered: in Settings → LLM Models choose a "
-            "Bedrock API key or Bedrock through the Swarm AWS account, then send your "
-            "message again."
-        ),
-        "settings_tab": _SETTINGS_TAB,
-        "action": {"kind": "settings", "tab": _SETTINGS_TAB},
-    },
     "iam_role": {
         "message": "The instance IAM role can't access Bedrock.",
         "fix_text": (
@@ -180,7 +169,7 @@ def remediation_for(auth_method: Optional[str]) -> Remediation:
     """Return the remediation for an auth method.
 
     Accepts "ada" | "ada_account" | "sso" | "sso_app" | "aws_login" | "access_keys" | "profile" |
-    "account_mismatch" | "apikey" | "iam_role" | "bedrock_api_key"; anything else (None,
+    "account_mismatch" | "iam_role" | "bedrock_api_key"; anything else (None,
     unrecognized) returns the safe method-agnostic fallback. Never raises,
     never emits Amazon-internal jargon for a non-ADA method.
     """

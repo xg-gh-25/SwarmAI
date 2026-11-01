@@ -4,13 +4,22 @@
  * a Need-You row or a settings page can open them without importing each other.
  *
  * - OPEN_SETTINGS_EVENT `{tab?}`: open Settings on that tab.
+ * - FIX_SIGN_IN_EVENT: a chat error card's "fix the sign-in" button. The chat's sign-in
+ *   line (CredentialBanner) takes it: it re-verifies, shows itself and runs its one action,
+ *   so the card and the line never disagree about what to do.
  * - TERMINAL_RUN_EVENT `{command, title}`: open a new SwarmAI terminal at the current
  *   terminal location and type *command* into it, without Enter (the person runs it;
  *   design docs/design/2026-11-01-settings-account-merge.md §4.3). The command always
- *   comes from the backend (core/auth_remediation `action`), never built here.
+ *   comes from the backend (core/auth_remediation `action`) or is a fixed string (the
+ *   account page's Midway wait: `mwinit -f`); never built from input here.
  */
 export const OPEN_SETTINGS_EVENT = 'swarm:open-settings';
 export const TERMINAL_RUN_EVENT = 'swarm:terminal-run';
+export const FIX_SIGN_IN_EVENT = 'swarm:fix-sign-in';
+
+export function fixSignIn(): void {
+  window.dispatchEvent(new CustomEvent(FIX_SIGN_IN_EVENT));
+}
 
 export function openSettings(tab?: string): void {
   window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { tab } }));

@@ -413,9 +413,12 @@ class TestSessionEnv:
     def test_desktop_bedrock_session_routed(self):
         assert self._env() == {"ANTHROPIC_BEDROCK_BASE_URL": "http://127.0.0.1:18321/bedrock-gw"}
 
+    def test_an_old_anthropic_flag_is_routed_too(self):
+        # chat always runs on Bedrock now (Anthropic-direct is not supported)
+        assert self._env({"use_bedrock": False}) == self._env()
+
     @pytest.mark.parametrize("kw", [
         {"cfg": {"bedrock_thinking_gateway": False}},
-        {"cfg": {"use_bedrock": False}},
         {"cfg": {"auth_method": "bedrock_api_key"}},
         {"channel": {"channel_id": "c1"}},
         {"display": None},

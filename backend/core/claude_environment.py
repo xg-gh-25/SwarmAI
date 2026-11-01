@@ -12,9 +12,6 @@ This module isolates environment setup concerns.  It is responsible for:
                                          ``ClaudeSDKClient`` that suppresses
                                          anyio cancel-scope cleanup errors when
                                          the client is used across asyncio tasks.
-- ``AuthenticationNotConfiguredError`` — Raised by pre-flight validation when
-                                         neither an Anthropic API key nor
-                                         Bedrock authentication is configured.
 - ``_env_lock``                        — Module-level ``asyncio.Lock`` that
                                          serializes ``_configure_claude_environment``
                                          + client creation to prevent concurrent
@@ -176,11 +173,6 @@ class _ClaudeClientWrapper:
             raise
 
 
-class AuthenticationNotConfiguredError(Exception):
-    """Raised when no authentication method (API key or Bedrock) is configured."""
-    pass
-
-
 def _configure_claude_environment(config: AppConfigManager) -> None:
     """Configure env vars for Claude SDK from in-memory config cache.
 
@@ -190,15 +182,16 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
 
     **Env vars set by this function:**
 
-    - ``CLAUDE_CODE_USE_BEDROCK`` — ``"true"`` when Bedrock enabled, removed otherwise
+    - ``CLAUDE_CODE_USE_BEDROCK`` — always ``"true"``: chat runs on Bedrock (Anthropic-direct
+      keys are no longer supported, design 2026-11-01-settings-account-merge §3)
     - ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — from cached config
     - ``ANTHROPIC_BASE_URL`` — optional custom endpoint from cached config
     - ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` — always ``"1"``; SwarmAI owns its
       memory pipeline (DailyActivity → distillation → MEMORY.md)
     - ``ENABLE_PROMPT_CACHING_1H_BEDROCK`` / ``ENABLE_PROMPT_CACHING_1H`` — ``"1"``
       unless already set: prompt-cache writes go to the one-hour tier
-    - ``ANTHROPIC_API_KEY`` — injected in Anthropic-direct (apikey) mode from
-      the persisted secret; cleared in Bedrock mode if WE injected it
+    - ``ANTHROPIC_API_KEY`` — never injected; a key an older version injected into this
+      long-lived process (it equals the persisted secret) is removed
     - ``AWS_BEARER_TOKEN_BEDROCK`` — injected in Bedrock API-key
       (``auth_method=="bedrock_api_key"``) mode from the persisted secret;
       cleared for other Bedrock methods if WE injected it
@@ -207,65 +200,46 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
 
     - ``AWS_ACCESS_KEY_ID``, ``AWS_SECRET_ACCESS_KEY``, ``AWS_SESSION_TOKEN``
 
-    Raises:
-        AuthenticationNotConfiguredError: If no ``ANTHROPIC_API_KEY`` env var
-            is set and Bedrock is disabled.
     """
-    # 1. Bedrock toggle + region (from cached config, zero IO)
-    use_bedrock = config.get("use_bedrock", True)
+    # 1. Bedrock + region (from cached config, zero IO). An old use_bedrock=false
+    # (Anthropic direct) is ignored here; aws_account.retire_anthropic_direct rewrites it.
+    os.environ["CLAUDE_CODE_USE_BEDROCK"] = "true"
+    region = config.get("aws_region", "us-east-1") or "us-east-1"
+    os.environ["AWS_REGION"] = region
+    os.environ["AWS_DEFAULT_REGION"] = region
+    # Clear a stale key that WE injected in a prior API-key-mode spawn — the
+    # daemon is long-lived, so a leftover ANTHROPIC_API_KEY from a previous
+    # config would ride into this Bedrock session and confuse SDK routing.
+    # Only pop the one we injected (persisted key); never clobber a user's
+    # explicit shell export (which would === the persisted value only if they
+    # match — safest is to pop only when it equals the persisted key).
+    _persisted = config.get("anthropic_api_key")
+    if _persisted and os.environ.get("ANTHROPIC_API_KEY") == _persisted:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
 
-    if use_bedrock:
-        os.environ["CLAUDE_CODE_USE_BEDROCK"] = "true"
-        region = config.get("aws_region", "us-east-1") or "us-east-1"
-        os.environ["AWS_REGION"] = region
-        os.environ["AWS_DEFAULT_REGION"] = region
-        # Clear a stale key that WE injected in a prior API-key-mode spawn — the
-        # daemon is long-lived, so a leftover ANTHROPIC_API_KEY from a previous
-        # config would ride into this Bedrock session and confuse SDK routing.
-        # Only pop the one we injected (persisted key); never clobber a user's
-        # explicit shell export (which would === the persisted value only if they
-        # match — safest is to pop only when it equals the persisted key).
-        _persisted = config.get("anthropic_api_key")
-        if _persisted and os.environ.get("ANTHROPIC_API_KEY") == _persisted:
-            os.environ.pop("ANTHROPIC_API_KEY", None)
-
-        # Bedrock API-key (bearer-token) mode — inject the persisted
-        # AWS_BEARER_TOKEN_BEDROCK so the CLI subprocess authenticates to
-        # bedrock-runtime with the bearer token instead of the sigv4 credential
-        # chain (verified: the CLI reads this env var; botocore does too). Only
-        # active when auth_method=="bedrock_api_key" with a real token; all other
-        # Bedrock methods (ada/sso/iam_role) must NOT carry it.
-        #
-        # Cleanup is keyed on `_injected_bearer_token` (what WE set), NOT on the
-        # currently-persisted value — so a token we injected is ALWAYS cleared when
-        # switching away, even if the persisted secret vanished from cache
-        # (reload/reset/restore) while this long-lived daemon kept running. A stale
-        # injected token would otherwise be preferred by botocore/CLI over sigv4 and
-        # silently hijack an ada/sso spawn (Gate-2 correctness finding). We never
-        # record a user's own ambient export here, so we never clobber it.
-        global _injected_bearer_token
-        _bearer = config.get("aws_bearer_token_bedrock")
-        if config.get("auth_method") == "bedrock_api_key" and _bearer:
-            os.environ["AWS_BEARER_TOKEN_BEDROCK"] = _bearer
-            _injected_bearer_token = _bearer
-        elif _injected_bearer_token is not None and \
-                os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == _injected_bearer_token:
-            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
-            _injected_bearer_token = None
-    else:
-        os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
-
-    # 1b. Anthropic direct (API-key) mode — inject the persisted key into the
-    # environment so the SDK subprocess uses it, WITHOUT requiring the user to
-    # export ANTHROPIC_API_KEY in their shell (a Finder-launched launchd daemon
-    # does not inherit shell env) and WITHOUT a daemon relaunch (this runs on
-    # every spawn). The key lives in the durable 0o600 secret store, never in
-    # config.json. Bedrock mode must NOT set it. An env var already set by the
-    # user takes precedence (don't clobber an explicit export).
-    if not use_bedrock:
-        persisted_key = config.get("anthropic_api_key")
-        if persisted_key and not os.environ.get("ANTHROPIC_API_KEY"):
-            os.environ["ANTHROPIC_API_KEY"] = persisted_key
+    # Bedrock API-key (bearer-token) mode — inject the persisted
+    # AWS_BEARER_TOKEN_BEDROCK so the CLI subprocess authenticates to
+    # bedrock-runtime with the bearer token instead of the sigv4 credential
+    # chain (verified: the CLI reads this env var; botocore does too). Only
+    # active when auth_method=="bedrock_api_key" with a real token; all other
+    # Bedrock methods (ada/sso/iam_role) must NOT carry it.
+    #
+    # Cleanup is keyed on `_injected_bearer_token` (what WE set), NOT on the
+    # currently-persisted value — so a token we injected is ALWAYS cleared when
+    # switching away, even if the persisted secret vanished from cache
+    # (reload/reset/restore) while this long-lived daemon kept running. A stale
+    # injected token would otherwise be preferred by botocore/CLI over sigv4 and
+    # silently hijack an ada/sso spawn (Gate-2 correctness finding). We never
+    # record a user's own ambient export here, so we never clobber it.
+    global _injected_bearer_token
+    _bearer = config.get("aws_bearer_token_bedrock")
+    if config.get("auth_method") == "bedrock_api_key" and _bearer:
+        os.environ["AWS_BEARER_TOKEN_BEDROCK"] = _bearer
+        _injected_bearer_token = _bearer
+    elif _injected_bearer_token is not None and \
+            os.environ.get("AWS_BEARER_TOKEN_BEDROCK") == _injected_bearer_token:
+        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+        _injected_bearer_token = None
 
     # 2. Base URL (optional custom endpoint)
     base_url = config.get("anthropic_base_url")
@@ -361,14 +335,8 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # handled separately by the background-command guard, not here.
     os.environ.setdefault("BASH_DEFAULT_TIMEOUT_MS", "120000")
 
-    # 7. Pre-flight auth validation
-    # AWS credentials are NOT checked here — the SDK resolves them via the
-    # standard credential chain at query time. Auth errors from expired
-    # credentials are caught by session_unit's retry logic.
-    has_api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not has_api_key and not use_bedrock:
-        raise AuthenticationNotConfiguredError(
-            "No API key configured. Please add your Anthropic API key in Settings or enable Bedrock authentication."
-        )
+    # 7. AWS credentials are NOT checked here — the SDK resolves them via the standard
+    # credential chain at query time; session_unit's pre-flight and retry logic handle
+    # an expiry.
 
-    logger.info(f"Claude environment configured - Bedrock: {use_bedrock}, Base URL: {base_url or 'default'}")
+    logger.info(f"Claude environment configured - Bedrock, Base URL: {base_url or 'default'}")

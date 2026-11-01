@@ -36,7 +36,6 @@ def test_every_remediation_has_a_known_action():
     ("access_keys", "settings", None),
     ("account_broken", "settings", None),
     ("account_mismatch", "settings", None),
-    ("apikey", "settings", None),
     ("bedrock_api_key", "settings", None),
 ])
 def test_each_method_gets_the_designed_action(method, kind, command):

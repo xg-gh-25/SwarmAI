@@ -207,13 +207,12 @@ def _update_record(**fields: Any) -> None:
 
 
 def get_chat_via(config: Any = None) -> str:
-    """Which path chat takes: ``aws`` (Bedrock on this account), ``bedrock_key`` or
-    ``anthropic``. The settings that choose it are ``use_bedrock`` and ``auth_method``
-    (the wizard's "chat only", LLM Models): it is read from them here, the one reader,
-    so no consumer can disagree with another (design §5.1: no separate ``chat`` key)."""
+    """Which path chat takes: ``aws`` (Bedrock on this account, or the machine's AWS
+    credentials without one) or ``bedrock_key`` (a Bedrock API key). Chat always runs
+    on Bedrock: Anthropic-direct keys are no longer supported (design
+    2026-11-01-settings-account-merge §3; ``retire_anthropic_direct`` moves an old
+    install over). Read here, the one reader, so no consumer can disagree with another."""
     config = config if config is not None else _cfg()
-    if not config.get("use_bedrock", True):
-        return "anthropic"
     if config.get("auth_method") == "bedrock_api_key":
         return "bedrock_key"
     return "aws"
@@ -704,9 +703,7 @@ def derive_from_legacy(config: Any) -> "tuple[Optional[dict], Optional[str]]":
     region = config.get("aws_region") or "us-east-1"
     context = config.get("deployment_context")
     auth = config.get("auth_method")
-    chat_via = {"apikey": "anthropic", "bedrock_api_key": "bedrock_key"}.get(auth, "aws")
-    if config.get("use_bedrock") is False:
-        chat_via = "anthropic"
+    chat_via = "bedrock_key" if auth == "bedrock_api_key" else "aws"
     if is_hive_mode():
         return ({"source": "instance_role", "account_id": None, "region": region,
                  "context": context}, "aws")
@@ -1037,8 +1034,6 @@ def remediation_method(config: Any = None) -> Optional[str]:
     """The key of ``core.auth_remediation`` that matches how this account signs in."""
     config = config if config is not None else _cfg()
     via = get_chat_via(config)
-    if via == "anthropic":
-        return "apikey"
     if via == "bedrock_key":
         return "bedrock_api_key"
     rec = get_record()
@@ -1093,9 +1088,30 @@ def credential_resolver():
     return _Pinned()
 
 
+def retire_anthropic_direct(config: Any) -> bool:
+    """Move an install that chatted through an Anthropic key onto Bedrock (Anthropic
+    direct is no longer supported). Only the two settings that chose it change:
+    ``use_bedrock`` becomes true and ``auth_method`` becomes the legacy name of the
+    record's sign-in (ada, a Hive's iam_role), else unset: an unset method gets the
+    method-agnostic fix text rather than a guessed command. The stored key is left in
+    the secret store, unused: nothing the person saved is deleted. True when it moved."""
+    auth = config.get("auth_method")
+    if auth != "apikey" and config.get("use_bedrock", True) is not False:
+        return False
+    update: "dict[str, Any]" = {"use_bedrock": True}
+    if auth == "apikey":   # any other method (bedrock_api_key, sso, ada) is kept as chosen
+        rec = get_record() or {}
+        update["auth_method"] = {"ada": "ada", "instance_role": "iam_role"}.get(str(rec.get("source")))
+    method = update.get("auth_method", auth)
+    config.update(update)
+    logger.info("aws_account: Anthropic-direct chat retired; now Bedrock (auth_method=%s)", method)
+    return True
+
+
 def startup(port: int) -> None:
     """Daemon startup (blocking; run it in a thread): record, profile file, endpoint,
-    then one verification, and one capability check if none was ever made."""
+    then one verification, and one capability check if none was ever made. An old
+    Anthropic-direct setup is moved onto Bedrock, also when the record cannot be made."""
     cfg = _cfg()
     if not is_hive_mode():  # a Hive's children use its instance role directly
         # first: child processes reach this daemon even when the record cannot be made
@@ -1108,7 +1124,12 @@ def startup(port: int) -> None:
         rec = ensure_record(cfg)
     except Exception:  # noqa: BLE001 — e.g. a hand-edited config.json that does not parse
         logger.warning("aws_account: could not create the record", exc_info=True)
-        return
+        rec = None
+    # also without a record: chat must not stay on a path that no longer exists
+    try:
+        retire_anthropic_direct(cfg)
+    except Exception:  # noqa: BLE001 — never stop startup over it
+        logger.warning("aws_account: could not move off Anthropic-direct", exc_info=True)
     if rec is None:
         return
     if not is_hive_mode() and rec.get("region") and rec.get("region") != cfg.get("aws_region"):

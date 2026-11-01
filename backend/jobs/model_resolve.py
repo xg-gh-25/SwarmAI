@@ -61,8 +61,7 @@ def resolve_job_model(config: "dict | None" = None) -> str:
             # rather than re-implement config reading, because a second reader
             # would be exactly the kind of duplicate this module exists to remove.
             model = (mgr.get("default_model") or "").strip()
-            cfg = {"use_bedrock": mgr.get("use_bedrock"),
-                   "bedrock_model_map": mgr.get("bedrock_model_map")}
+            cfg = {"bedrock_model_map": mgr.get("bedrock_model_map")}
         except Exception as exc:  # noqa: BLE001 — unattended path, see docstring
             # LOUD on purpose: a PERMANENT failure here (renamed symbol, moved
             # module) would make every job silently ignore the configured model
@@ -93,19 +92,19 @@ def resolve_job_model(config: "dict | None" = None) -> str:
         model = fallback
 
     # Bedrock translation BEFORE the suffix, mirroring prompt_builder: the job
-    # path exports CLAUDE_CODE_USE_BEDROCK=true, so the CLI expects the
-    # inference-profile id (us.anthropic.*), not the bare family name.
-    if cfg.get("use_bedrock"):
-        try:
-            from config import get_bedrock_model_id
-            model = get_bedrock_model_id(
-                model, config_map=cfg.get("bedrock_model_map")
-            ) or model
-        except Exception as exc:  # noqa: BLE001 — never kill an unattended job
-            logger.warning(
-                "job model Bedrock translation failed (%s: %s) — using %s verbatim",
-                type(exc).__name__, exc, model,
-            )
+    # path exports CLAUDE_CODE_USE_BEDROCK=true (always: Anthropic-direct is not
+    # supported), so the CLI expects the inference-profile id (us.anthropic.*), not
+    # the bare family name. Not gated on the old use_bedrock flag.
+    try:
+        from config import get_bedrock_model_id
+        model = get_bedrock_model_id(
+            model, config_map=cfg.get("bedrock_model_map")
+        ) or model
+    except Exception as exc:  # noqa: BLE001 — never kill an unattended job
+        logger.warning(
+            "job model Bedrock translation failed (%s: %s) — using %s verbatim",
+            type(exc).__name__, exc, model,
+        )
 
     if not model.endswith("[1m]"):
         try:
@@ -137,7 +136,7 @@ def resolve_job_model(config: "dict | None" = None) -> str:
     # a real short name (`claude-haiku-4-5` — known, deliberately not 1M) but
     # returns an ARN unchanged, i.e. it could not be parsed at all. Only the
     # unparseable case is a silent hazard.
-    if cfg.get("use_bedrock") and not model.endswith("[1m]"):
+    if not model.endswith("[1m]"):
         try:
             from model_registry import normalize_short_name
             _unparseable = normalize_short_name(model) == model and (

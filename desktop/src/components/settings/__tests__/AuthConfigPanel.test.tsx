@@ -15,7 +15,6 @@ const mockGetAuthHint = vi.fn();
 const mockGetAPIConfiguration = vi.fn();
 const mockUpdateAPIConfiguration = vi.fn();
 
-const mockPersistApiKey = vi.fn();
 const mockSetAuthMethod = vi.fn();
 const mockPersistBearerToken = vi.fn();
 
@@ -23,7 +22,6 @@ vi.mock('../../../services/system', () => ({
   systemService: {
     verifyAuth: (...a: unknown[]) => mockVerifyAuth(...a),
     getAuthHint: (...a: unknown[]) => mockGetAuthHint(...a),
-    persistApiKey: (...a: unknown[]) => mockPersistApiKey(...a),
     setAuthMethod: (...a: unknown[]) => mockSetAuthMethod(...a),
     persistBearerToken: (...a: unknown[]) => mockPersistBearerToken(...a),
   },
@@ -43,7 +41,6 @@ beforeEach(() => {
   mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'us-east-1' });
   mockUpdateAPIConfiguration.mockResolvedValue({});
   mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latencyMs: 100 });
-  mockPersistApiKey.mockResolvedValue(undefined);
   mockSetAuthMethod.mockResolvedValue(undefined);
   mockPersistBearerToken.mockResolvedValue(undefined);
 });
@@ -60,14 +57,15 @@ describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
     expect(screen.queryByText(/Anthropic/i)).not.toBeInTheDocument();
   });
 
-  it('external context shows SSO + Anthropic Direct, NOT ADA', async () => {
+  it('external context shows SSO + Bedrock key, NOT ADA, never Anthropic', async () => {
     mockGetAuthHint.mockResolvedValue({
       deploymentContext: 'external', suggestedMethod: 'sso', hasAdaDir: false, runMode: 'desktop',
     });
     render(<AuthConfigPanel mode="onboarding" />);
     await waitFor(() => screen.getByText('Verify Connection'));
     expect(screen.getByText('AWS SSO')).toBeInTheDocument();
-    expect(screen.getByText(/Anthropic/i)).toBeInTheDocument();
+    expect(screen.getByText('Bedrock API Key')).toBeInTheDocument();
+    expect(screen.queryByText(/Anthropic/i)).not.toBeInTheDocument();   // not supported
     expect(screen.queryByText('Ada')).not.toBeInTheDocument();
   });
 
@@ -83,18 +81,6 @@ describe('AuthConfigPanel — AC2 context-filtered method cards', () => {
     const toggle = screen.getByText(/Amazon employee/i);
     await act(async () => { fireEvent.click(toggle); });
     expect(screen.getByText('Ada')).toBeInTheDocument();
-  });
-
-  it('external Anthropic Direct shows an API key INPUT (not just env-var text)', async () => {
-    mockGetAuthHint.mockResolvedValue({
-      deploymentContext: 'external', suggestedMethod: 'apikey', hasAdaDir: false, runMode: 'desktop',
-    });
-    render(<AuthConfigPanel mode="onboarding" />);
-    await waitFor(() => screen.getByText('Verify Connection'));
-    // Select the Anthropic Direct card -> real password input for the key
-    await act(async () => { fireEvent.click(screen.getByText('API Key').closest('button')!); });
-    const keyInput = screen.getByPlaceholderText(/sk-ant-/i);
-    expect(keyInput).toBeInTheDocument();
   });
 
   // ── AC6: Bedrock API Key card in BOTH contexts + short-term guidance ──

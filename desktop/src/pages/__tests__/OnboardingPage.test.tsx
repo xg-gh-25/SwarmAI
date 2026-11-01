@@ -29,7 +29,6 @@ vi.mock('../../services/system', () => ({
     verifyAuth: (...args: unknown[]) => mockVerifyAuth(...args),
     setOnboardingComplete: (...args: unknown[]) => mockSetOnboardingComplete(...args),
     getAuthHint: (...args: unknown[]) => mockGetAuthHint(...args),
-    persistApiKey: vi.fn().mockResolvedValue(undefined),
     setAuthMethod: vi.fn().mockResolvedValue(undefined),
     restoreBackup: (...args: unknown[]) => mockRestoreBackup(...args),
   },

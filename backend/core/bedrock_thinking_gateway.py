@@ -94,7 +94,7 @@ def gateway_env_for_session(
     if not config.get("bedrock_thinking_gateway", True):
         return {}
     from core.aws_account import get_chat_via
-    if get_chat_via(config) != "aws":  # no SigV4 signature to verify (key or Anthropic)
+    if get_chat_via(config) != "aws":  # no SigV4 signature to verify (a Bedrock API key)
         return {}
     if channel_context is not None or thinking_display != "summarized":
         return {}

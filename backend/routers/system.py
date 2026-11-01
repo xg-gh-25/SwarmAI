@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 import boto3
-import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
@@ -301,9 +300,8 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "bedrock_model_map": config.get("bedrock_model_map"),
             "anthropic_base_url": config.get("anthropic_base_url"),
             "auth_method": config.get("auth_method"),
-            # Persisted secrets (durable store) — so verify-auth can validate a
-            # key/token the user entered in-app without it being in os.environ.
-            "anthropic_api_key": config.get("anthropic_api_key"),
+            # Persisted secret (durable store) — so verify-auth can validate a
+            # token the user entered in-app without it being in os.environ.
             "aws_bearer_token_bedrock": config.get("aws_bearer_token_bedrock"),
         }
     except Exception:
@@ -315,13 +313,12 @@ def _get_auth_config(override: Optional[dict] = None) -> dict:
             "bedrock_model_map": None,
             "anthropic_base_url": None,
             "auth_method": None,
-            "anthropic_api_key": None,
             "aws_bearer_token_bedrock": None,
         }
     if override:
         for k in (
-            "use_bedrock", "aws_region", "default_model", "anthropic_base_url",
-            "auth_method", "anthropic_api_key", "aws_bearer_token_bedrock",
+            "aws_region", "default_model", "anthropic_base_url",
+            "auth_method", "aws_bearer_token_bedrock",
         ):
             if k in override and override[k] is not None:
                 base[k] = override[k]
@@ -342,15 +339,14 @@ def _auth_error(error: str, error_type: str, fix_hint: str) -> dict:
 async def verify_auth(request: Request):
     """Verify LLM authentication by making a minimal API call.
 
-    Accepts an OPTIONAL JSON body (aws_region, use_bedrock, default_model,
-    anthropic_base_url) merged over the stored config — so the onboarding wizard
+    Accepts an OPTIONAL JSON body (aws_region, auth_method, default_model,
+    anthropic_base_url, aws_bearer_token_bedrock) merged over the stored config — so the onboarding wizard
     can verify a config the user has entered but NOT yet persisted, and only
     persist it AFTER a successful verify. An empty/absent body falls back to the
     stored config (the Settings-tab caller sends no body).
 
-    Then:
-    - Bedrock: boto3 bedrock-runtime.invoke_model with max_tokens=1
-    - API key: httpx POST to messages API with max_tokens=1
+    Then Bedrock: one bedrock-runtime call with max_tokens=1 (chat always runs on
+    Bedrock; Anthropic-direct keys are no longer supported).
 
     Always returns 200 -- success/failure is in the response body.
     """
@@ -364,16 +360,7 @@ async def verify_auth(request: Request):
         override = {}
 
     config = _get_auth_config(override=override)
-    use_bedrock = config.get("use_bedrock", True)
-
-    if use_bedrock:
-        return await _verify_bedrock(config)
-    else:
-        return await _verify_anthropic_api(config)
-
-
-class SetApiKeyRequest(BaseModel):
-    api_key: str
+    return await _verify_bedrock(config)
 
 
 class SetBearerTokenRequest(BaseModel):
@@ -381,35 +368,18 @@ class SetBearerTokenRequest(BaseModel):
 
 
 class SetAuthMethodRequest(BaseModel):
-    method: str  # "ada" | "sso" | "apikey" | "iam_role" | "bedrock_api_key"
+    method: str  # "ada" | "sso" | "iam_role" | "bedrock_api_key"
     deployment_context: Optional[str] = None  # "internal" | "external"
 
 
-_VALID_AUTH_METHODS = {"ada", "sso", "apikey", "iam_role", "bedrock_api_key"}
-
-
-@router.post("/anthropic-api-key")
-async def set_anthropic_api_key(req: SetApiKeyRequest):
-    """Persist the user's Anthropic API key to the durable 0o600 secret store.
-
-    This is the ONLY sanctioned write path for the key (never via PUT /settings,
-    which strips secrets). The key is NEVER echoed back in any response. After
-    this, _configure_claude_environment injects it into the SDK env at the next
-    spawn (no daemon relaunch) and verify-auth can validate it.
-    """
-    key = (req.api_key or "").strip()
-    if not key:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="api_key must be non-empty")
-    AppConfigManager.instance().set_secret("anthropic_api_key", key)
-    return {"status": "ok", "configured": True}
+_VALID_AUTH_METHODS = {"ada", "sso", "iam_role", "bedrock_api_key"}
 
 
 @router.post("/bedrock-api-key")
 async def set_bedrock_api_key(req: SetBearerTokenRequest):
     """Persist the user's Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK).
 
-    Mirrors set_anthropic_api_key: the ONLY sanctioned write path for the token
+    The ONLY sanctioned write path for the token
     (never via PUT /settings, which strips secrets). NEVER echoed back. After
     this, _configure_claude_environment injects it as AWS_BEARER_TOKEN_BEDROCK
     into the SDK env at the next spawn (no daemon relaunch) when
@@ -600,74 +570,6 @@ async def _verify_bedrock(config: dict) -> dict:
                            "Check AWS configuration and try again.")
 
 
-async def _verify_anthropic_api(config: dict) -> dict:
-    """Verify Anthropic API key with a minimal messages call.
-
-    Reads the key from the config secret store first (the in-app key the user
-    just entered), falling back to the ANTHROPIC_API_KEY env var. Without the
-    config fallback, a freshly-entered key could never verify (it isn't in the
-    daemon's env) — the external Anthropic-direct path would be dead.
-    """
-    api_key = config.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return _auth_error(
-            "No Anthropic API key configured", "missing_key",
-            "Anthropic keys are no longer offered: choose a Bedrock API key or connect "
-            "the AWS account (Settings → LLM Models / Swarm AWS Account)."
-        )
-
-    base_url = config.get("anthropic_base_url") or "https://api.anthropic.com"
-    model = config.get("default_model", DEFAULT_CONFIG["default_model"])
-    start = time.monotonic()
-
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{base_url}/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
-            )
-
-        latency = int((time.monotonic() - start) * 1000)
-
-        if resp.status_code == 200:
-            return {"success": True, "model": model, "latency_ms": latency}
-
-        body = resp.json()
-        error_msg = body.get("error", {}).get("message", resp.text)
-        # #4b: log the raw provider message server-side, but return a
-        # generalized, identifier-free message to the client. Classification is
-        # by HTTP status (below), not by the message text, so generalizing is safe.
-        logger.warning("Anthropic verify failed (status=%s, raw): %s",
-                       resp.status_code, error_msg)
-
-        if resp.status_code == 401:
-            return _auth_error("API key rejected (401).", "invalid_key",
-                               "API key is invalid. Check the key at console.anthropic.com.")
-        if resp.status_code == 403:
-            return _auth_error("Access forbidden (403).", "forbidden",
-                               "API key doesn't have access to this model.")
-
-        return _auth_error(f"Anthropic API error (status {resp.status_code}).",
-                           "api_error", "Check Anthropic API status.")
-
-    except httpx.ConnectError:
-        return _auth_error("Cannot reach API endpoint", "network",
-                           f"Check network connectivity to {base_url}")
-    except Exception as e:
-        logger.warning("Anthropic verify failed (raw): %s", e)
-        return _auth_error("Anthropic verification failed.", "unknown",
-                           "Check API configuration.")
-
-
 @router.get("/auth-hint")
 async def get_auth_hint():
     """Return hints about the local credential environment.
@@ -685,10 +587,9 @@ async def get_auth_hint():
         )
 
     has_ada, has_midway, has_sso_cache = await asyncio.to_thread(_probe_cred_dirs)
-    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
-    # Deployment context drives which auth-method cards the wizard shows:
-    #   internal → [ADA, SSO]   external → [SSO, Anthropic Direct]
+    # Deployment context drives which sign-in methods the wizard shows first:
+    #   internal → [ADA, SSO]   external → [AWS login, SSO]
     # Detection is ASYMMETRIC: ~/.ada or ~/.midway present = confident internal
     # (Amazon-only tools). Their ABSENCE only DEFAULTS to external — the frontend
     # offers a one-click "Amazon employee?" toggle for internal users on a fresh
@@ -705,14 +606,7 @@ async def get_auth_hint():
         "high" if (has_ada or has_midway or has_sso_cache) else "low"
     )
 
-    # Suggested method MUST be consistent with deployment_context — the wizard
-    # only renders the apikey card for EXTERNAL context, so suggesting "apikey"
-    # on an internal machine (because ANTHROPIC_API_KEY happens to be exported)
-    # would be silently discarded by the frontend's snap-to-first (F4). Only
-    # suggest a method that will actually be in the resulting card set.
-    if has_api_key and deployment_context == "external":
-        suggested = "apikey"
-    elif has_ada:
+    if has_ada:
         suggested = "ada"
     elif has_sso_cache:
         suggested = "sso"
@@ -746,7 +640,6 @@ async def get_auth_hint():
     return {
         "has_ada_dir": has_ada if run_mode != "hive" else False,
         "has_sso_cache": has_sso_cache if run_mode != "hive" else False,
-        "has_api_key": has_api_key,
         "deployment_context": deployment_context,
         "detection_confidence": detection_confidence,
         "suggested_method": suggested,

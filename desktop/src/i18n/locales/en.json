@@ -1200,8 +1200,7 @@
       "chatVia": "Chat uses",
       "chatViaValue": {
         "aws": "this account (Bedrock)",
-        "bedrock_key": "a Bedrock API key",
-        "anthropic": "an Anthropic key"
+        "bedrock_key": "a Bedrock API key"
       },
       "profileFile": "Profile for child processes",
       "derived": "Set up from your previous settings.",
@@ -1227,13 +1226,13 @@
       "heading": "LLM Models",
       "title": "Where the model is called from",
       "aws": "Bedrock, through the Swarm AWS account",
-      "awsNone": "Connect an account on the Swarm AWS Account page first.",
       "key": "Bedrock API key",
       "keyLead": "Chat only; Hives, cloud storage and voice still need the Swarm AWS account.",
-      "anthropic": "Anthropic API key (old setting)",
-      "anthropicLead": "Still works. Pick one of the choices above to change it; it is no longer offered.",
       "signInIsThere": "AWS sign-in and the main region are set on the {{page}} page.",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "awsLocal": "Bedrock, with this computer's AWS credentials",
+      "awsLocalLead": "No Swarm AWS account is connected yet; Hives, cloud storage and voice need one.",
+      "connect": "Connect an account"
     }
   },
   "canvas": {
@@ -2759,9 +2758,10 @@
       "provider": "Provider",
       "go": "Sign in and check",
       "midwayTitle": "Midway has expired",
-      "midwayRun": "Run",
-      "midwayThen": " in a terminal. This page goes on by itself when it is done.",
-      "retrying": "Trying again every 5 seconds."
+      "midwayRun": "Open a terminal on this computer and run",
+      "midwayThen": ". This page goes on by itself when it is done.",
+      "retrying": "Trying again every 5 seconds.",
+      "midwayRunInApp": "Run"
     },
     "sso": {
       "title": "Sign in with AWS SSO",
@@ -2957,6 +2957,7 @@
     "done": "Signed in again · {{account}}",
     "resend": "A message that didn't go out can be sent again.",
     "dismiss": "Hide until it changes",
-    "doneNoAccount": "Signed in again."
+    "doneNoAccount": "Signed in again.",
+    "fixFromChat": "Fix the sign-in"
   }
 }

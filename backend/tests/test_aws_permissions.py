@@ -202,7 +202,7 @@ def test_a_check_that_breaks_still_names_its_region(monkeypatch):
             raise RuntimeError("offline")
     monkeypatch.setattr(acct, "get_record", lambda: {"region": "us-east-1", "account_id": "111111111111"})
     monkeypatch.setattr(acct, "session", lambda region: Any())
-    monkeypatch.setattr(acct, "get_chat_via", lambda config=None: "anthropic")
+    monkeypatch.setattr(acct, "get_chat_via", lambda config=None: "bedrock_key")
     monkeypatch.setattr(acct, "is_hive_mode", lambda: False)
     monkeypatch.setattr(acct, "_update_record", lambda **kw: None)
 

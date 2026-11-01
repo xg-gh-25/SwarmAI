@@ -1,8 +1,10 @@
 /**
  * Shared auth configuration panel.
  *
- * Used by both OnboardingPage (mode="onboarding") and Settings AI & Models tab (mode="settings").
- * Handles auth method selection, credential status, and verify connection.
+ * Used where there is no Swarm AWS account wizard: a Hive's onboarding (mode="onboarding") and
+ * a Hive's web Settings → LLM Models (mode="settings"). Handles auth method selection,
+ * credential status, and verify connection. Chat always runs on Bedrock: Anthropic-direct
+ * keys are no longer supported (design 2026-11-01-settings-account-merge §3).
  */
 import { useState, useEffect } from 'react';
 import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../services/system';
@@ -10,7 +12,7 @@ import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
 import { AWS_REGION_OPTIONS } from '../awsAccount/regions';
 
-type AuthMethod = 'sso' | 'ada' | 'apikey' | 'bedrock_api_key';
+type AuthMethod = 'sso' | 'ada' | 'bedrock_api_key';
 
 interface AuthConfigPanelProps {
   mode: 'onboarding' | 'settings';
@@ -25,7 +27,6 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
   const [accountId, setAccountId] = useState('');
   const [adaAccount, setAdaAccount] = useState('');
   const [adaRole, setAdaRole] = useState('');
-  const [apiKey, setApiKey] = useState('');
   const [bearerToken, setBearerToken] = useState('');
   const [verifyState, setVerifyState] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
   const [verifyResult, setVerifyResult] = useState<VerifyAuthResponse | null>(null);
@@ -47,7 +48,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         }
         // Map backend suggestion to UI method (iam_role → sso for Hive)
         const methodMap: Record<string, AuthMethod> = {
-          'ada': 'ada', 'sso': 'sso', 'apikey': 'apikey', 'iam_role': 'sso',
+          'ada': 'ada', 'sso': 'sso', 'iam_role': 'sso',
           'bedrock_api_key': 'bedrock_api_key',
         };
         setMethod(methodMap[hint.suggestedMethod] || 'sso');
@@ -84,9 +85,8 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       // Verify FIRST with the attempted (not-yet-persisted) config, and persist
       // ONLY after a successful verify. A failed verify must leave config
       // untouched (otherwise a wrong region/method silently persists).
-      const isBedrock = method !== 'apikey';
       const configUpdate: Record<string, unknown> = {
-        use_bedrock: isBedrock,
+        use_bedrock: true,
         aws_region: region,
         // Always send the selected method so the backend's method-aware
         // verify-error remediation resolves the REAL method (not None →
@@ -97,14 +97,8 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         configUpdate.ada_account = adaAccount;
         configUpdate.ada_role = adaRole;
       }
-      // For Anthropic-direct, pass the entered key so verify can validate it
-      // even before it's persisted (backend reads override.anthropic_api_key).
-      if (method === 'apikey' && apiKey.trim()) {
-        configUpdate.anthropic_api_key = apiKey.trim();
-      }
       // For Bedrock API Key, also pass the bearer token so the backend
       // temp-injects AWS_BEARER_TOKEN_BEDROCK to verify a not-yet-persisted token.
-      // (auth_method is already set above; use_bedrock stays true.)
       if (method === 'bedrock_api_key' && bearerToken.trim()) {
         configUpdate.aws_bearer_token_bedrock = bearerToken.trim();
       }
@@ -114,12 +108,8 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       setVerifyState(result.success ? 'success' : 'error');
 
       if (result.success) {
-        // Persist the API key via the dedicated secret endpoint (NOT settings —
+        // Persist the token via the dedicated secret endpoint (NOT settings —
         // secrets are stripped there). Then persist non-secret config + method.
-        if (method === 'apikey' && apiKey.trim()) {
-          await systemService.persistApiKey(apiKey.trim());
-          setApiKey('');  // don't keep the secret in component memory after persist
-        }
         if (method === 'bedrock_api_key' && bearerToken.trim()) {
           await systemService.persistBearerToken(bearerToken.trim());
           setBearerToken('');  // don't keep the secret in component memory after persist
@@ -144,8 +134,8 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
   };
 
   // Method cards are filtered by deployment context:
-  //   internal → [ADA, SSO, Bedrock Key]       (Amazon employees: ADA or corporate SSO)
-  //   external → [SSO, Anthropic, Bedrock Key]  (others: personal-AWS SSO, or Anthropic key)
+  //   internal → [ADA, SSO, Bedrock Key]  (Amazon employees: ADA or corporate SSO)
+  //   external → [SSO, Bedrock Key]       (others: personal-AWS SSO)
   // SSO is shared by both (same `aws sso login` → Bedrock, identity-agnostic).
   // Bedrock API Key is shown in BOTH — a bearer token is account-agnostic and is
   // the fastest path to Bedrock for internal AND external users alike.
@@ -159,7 +149,6 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
         ]
       : [
           { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
-          { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
           bedrockKeyCard,
         ];
 
@@ -319,7 +308,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
       {/* Config fields for AWS-identity methods (ada/sso). bedrock_api_key is a
           Bedrock method but uses a bearer token (no ADA/SSO account or setup
           hint) — its region lives in its own card block below. */}
-      {method !== 'apikey' && method !== 'bedrock_api_key' && (
+      {method !== 'bedrock_api_key' && (
         <div className="space-y-3">
           {/* AWS Account ID.
               - ADA: editable — the value builds the `ada credentials update` command below.
@@ -459,25 +448,6 @@ export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }:
               )
             )}
           </div>
-        </div>
-      )}
-
-      {method === 'apikey' && (
-        <div className="space-y-2">
-          <div>
-            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Anthropic API Key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value); setVerifyState('idle'); setVerifyResult(null); }}
-              placeholder="sk-ant-..."
-              autoComplete="off"
-              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-          <p className="text-[11px] text-[var(--color-text-muted)] opacity-60">
-            Stored securely on this device (not synced, not in config backups). Get a key at console.anthropic.com.
-          </p>
         </div>
       )}
 

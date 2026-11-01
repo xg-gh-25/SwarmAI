@@ -28,6 +28,8 @@ import {
 import { systemService } from '../../services/system';
 import { settingsService } from '../../services/settings';
 import { openExternal } from '../../utils/openExternal';
+import { isDesktop } from '../../services/tauri';
+import { markTerminalRun, runInTerminal } from '../common/settingsEvents';
 
 const ACCOUNT_RE = /^\d{12}$/;
 const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
@@ -96,6 +98,9 @@ function groupRows(rows: DetectRow[]): Group[] {
   }
   return groups;
 }
+
+/** the Midway sign-in, a fixed string (the same as core/auth_remediation's `ada` action) */
+const MWINIT = 'mwinit -f';
 
 const inputCls = 'w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]';
 const linkCls = 'text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors';
@@ -453,6 +458,9 @@ export default function ConnectAccount({
 
   if (screen.kind === 'ada_wait') {
     const c = screen.cand;
+    // In Settings the SwarmAI terminal exists: one click types the command (no Enter).
+    // The wizard runs before it, so there the person opens any terminal on this computer.
+    const inApp = mode === 'settings' && isDesktop();
     return (
       <div data-testid="connect-ada-wait">
         <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">{t('awsConnect.signInTo', { account: c.account_id })}</h2>
@@ -462,9 +470,15 @@ export default function ConnectAccount({
           <div>
             <p className="font-medium text-[var(--color-text)]">{t('awsConnect.ada.midwayTitle')}</p>
             <p className="text-sm text-[var(--color-text-secondary)] mt-1">
-              {t('awsConnect.ada.midwayRun')} <code className="font-mono">mwinit -f</code>{t('awsConnect.ada.midwayThen')}
+              {inApp ? t('awsConnect.ada.midwayRunInApp') : t('awsConnect.ada.midwayRun')} <code className="font-mono">{MWINIT}</code>{t('awsConnect.ada.midwayThen')}
             </p>
             <p className="text-xs text-[var(--color-text-muted)] mt-2">{t('awsConnect.ada.retrying')}</p>
+            {inApp && (
+              <button type="button" className="mt-3 btn-md btn-primary" data-testid="connect-ada-terminal"
+                onClick={() => { runInTerminal(MWINIT, 'Midway sign-in'); markTerminalRun(); }}>
+                {t('credentialBanner.inTerminal')}
+              </button>
+            )}
           </div>
         </div>
         {errorBox}

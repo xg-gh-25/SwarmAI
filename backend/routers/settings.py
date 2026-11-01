@@ -15,7 +15,6 @@ Public symbols:
 import asyncio
 import json
 import logging
-import os
 from fastapi import APIRouter, HTTPException, Request
 
 from config import get_app_data_dir
@@ -98,11 +97,6 @@ def _probe_aws_credentials() -> bool:
         # failure. Keep the honest-but-conservative False; log the actual reason.
         logger.warning("AWS credential probe failed, reporting unavailable: %s", exc)
         return False
-
-
-def _probe_anthropic_api_key() -> bool:
-    """Check if ``ANTHROPIC_API_KEY`` env var is set and non-empty."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +226,6 @@ def _build_config_response(cfg: AppConfigManager) -> dict:
         if k not in SECRET_KEYS
     }
     clean["aws_credentials_configured"] = _probe_aws_credentials()
-    clean["anthropic_api_key_configured"] = _probe_anthropic_api_key()
     # Derived, read-only: what the DEFAULT model accepts and the mode it actually
     # runs with (model_registry is the one rule). Not in DEFAULT_CONFIG, so not in
     # WRITABLE_KEYS — a PUT carrying them is silently ignored. The stored

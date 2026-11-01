@@ -36,8 +36,7 @@ from core.app_config_manager import AppConfigManager
 
 @pytest.fixture(autouse=True)
 def _mock_probes():
-    with patch("routers.settings._probe_aws_credentials", return_value=True), \
-         patch("routers.settings._probe_anthropic_api_key", return_value=False):
+    with patch("routers.settings._probe_aws_credentials", return_value=True):
         yield
 
 

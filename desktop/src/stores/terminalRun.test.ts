@@ -90,7 +90,9 @@ describe('openShellWithCommand', () => {
 describe('who can type a command', () => {
   it('an agent ui_command can never reach the terminal-run or settings events', async () => {
     const { UI_COMMAND_TABLE } = await import('../utils/uiCommands');
-    const { TERMINAL_RUN_EVENT } = await import('../components/common/settingsEvents');
-    expect(Object.values(UI_COMMAND_TABLE).map((e) => e.event)).not.toContain(TERMINAL_RUN_EVENT);
+    const { TERMINAL_RUN_EVENT, FIX_SIGN_IN_EVENT } = await import('../components/common/settingsEvents');
+    const events = Object.values(UI_COMMAND_TABLE).map((e) => e.event);
+    expect(events).not.toContain(TERMINAL_RUN_EVENT);
+    expect(events).not.toContain(FIX_SIGN_IN_EVENT);   // it runs the same action
   });
 });

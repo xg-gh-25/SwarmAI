@@ -3126,11 +3126,9 @@ class SessionUnit:
             _auth_method = _cfg.get("auth_method")
             _chat_via = aws_account.get_chat_via(_cfg)
             # Skip the AWS STS check when the active auth uses NO sigv4 identity:
-            #   - Anthropic-direct (API-key) mode: use_bedrock=False, no AWS at all
-            #   - Bedrock API-key mode: use_bedrock=True BUT auth is a bearer token
-            #     (AWS_BEARER_TOKEN_BEDROCK), which has no STS-resolvable identity —
-            #     an STS call would falsely report "expired" and block the spawn.
-            # In both cases STS is meaningless; skip it entirely (AC4/AC5).
+            # Bedrock API-key mode authenticates with a bearer token
+            # (AWS_BEARER_TOKEN_BEDROCK), which has no STS-resolvable identity —
+            # an STS call would falsely report "expired" and block the spawn (AC4/AC5).
             if _chat_via != "aws":
                 logger.debug(
                     "session_unit.preflight session_id=%s use_bedrock=%s "
