@@ -80,7 +80,7 @@ def _waits(row: dict[str, Any], data: dict[str, Any]) -> list[tuple[str, str, st
 
 #: a running run's state_reason is the Hive's activity name, which changes all the time:
 #: only these reasons of a running run are news
-_RUNNING_REASONS = ("answer_sent",)
+_RUNNING_REASONS = ("answer_sent", "background")
 
 
 def fingerprint(row: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:

@@ -74,9 +74,9 @@ def test_the_fetch_summarises_with_the_rows_agent(monkeypatch, tmp_path):
     seen = {}
     real = sor.summarize
 
-    def spy(body, has_more=False, agent=None):
-        seen["agent"] = agent
-        return real(body, has_more, agent)
+    def spy(body, has_more=False, agent=None, dispatch_id=None):
+        seen["agent"], seen["dispatch_id"] = agent, dispatch_id
+        return real(body, has_more, agent, dispatch_id)
     monkeypatch.setattr(sor, "summarize", spy)
     import httpx
     import core.swarm_out as so
@@ -90,6 +90,7 @@ def test_the_fetch_summarises_with_the_rows_agent(monkeypatch, tmp_path):
     row = {"dispatch_id": "so_" + "a" * 12, "hive_id": "h", "session_id": "s" * 8, "project_agent": AGENT}
     asyncio.run(sor.fetch(row))
     assert seen["agent"] == AGENT
+    assert seen["dispatch_id"] == row["dispatch_id"]        # a correction's run is the task's too
 
 
 def test_a_brain_gate_refusal_is_counted_for_the_turn():

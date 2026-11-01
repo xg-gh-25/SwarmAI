@@ -102,6 +102,12 @@ def test_two_tasks_on_one_repository_each_work_on_their_own_branch(world, monkey
     assert _g(mirror, "for-each-ref", "--format=%(refname) %(objectname)") == refs
     assert subprocess.run(["git", "cat-file", "-e", x], cwd=t2).returncode != 0   # not in the other task's
     assert _g(t1, "config", "--get", "remote.origin.url") == URL
+    # the Hive has no git user: a writable clone carries SwarmAI's, so a plain commit works
+    plain = subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "plain"], cwd=str(t1),
+                           capture_output=True, text=True)
+    assert plain.returncode == 0, plain.stderr
+    assert _g(t1, "log", "-1", "--format=%an <%ae>") == "Swarm <swarm@swarmai.dev>"
+    _g(t1, "reset", "-q", "--hard", "HEAD~1")
     facts = _facts(world, monkeypatch, o1)
     assert (facts[0]["error"], facts[0]["base"], facts[0]["commits"]) == (None, sha, [x])
     assert facts[0]["access"] == "write"

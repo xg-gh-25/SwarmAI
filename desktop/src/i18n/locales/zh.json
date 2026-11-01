@@ -2008,7 +2008,8 @@
       },
       "stateReason": {
         "answer_sent": "已回答，等 Hive 接收",
-        "answer_refused": "回答没用上"
+        "answer_refused": "回答没用上",
+        "background": "本轮已结束，后台任务还在跑"
       }
     },
     "wait": {

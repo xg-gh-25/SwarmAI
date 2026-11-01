@@ -243,14 +243,15 @@ def test_the_land_route_never_lets_an_agent_land_protected_paths(client, monkeyp
     landed: list = []
     monkeypatch.setattr(hive_return, "land", lambda *a: landed.append(a) or {"landed": True})
     _rows(monkeypatch, _offer("accept", "discard", accept="land"))
-    body = {**AGENT, "key": "k", "tip": "t"}
+    body = {**AGENT, "key": "k", "tip": "t", "summary": "s"}
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json={**body, "approve_protected": True}).status_code == 200
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land", json=body).status_code == 200
-    # whatever an agent's request says, its landing takes no protected path
-    assert landed == [(DID, "k", "t", False, False), (DID, "k", "t", False, False)]
+    # whatever an agent's request says, its landing takes no protected path; its
+    # summary becomes the landed commit's message body
+    assert landed == [(DID, "k", "t", False, False, "s"), (DID, "k", "t", False, False, "s")]
     assert c.post(f"/api/swarm-out/runs/{DID}/return/land",
                   json={"by": "person", "key": "k", "tip": "t"}).status_code == 200
-    assert landed[-1] == (DID, "k", "t", False, True)
+    assert landed[-1] == (DID, "k", "t", False, True, None)
 
 
 def test_the_dispatch_route_passes_the_dispatching_session(state, monkeypatch):

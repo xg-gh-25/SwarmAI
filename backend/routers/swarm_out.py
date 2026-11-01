@@ -130,6 +130,7 @@ class ReturnBody(ActorBody):
     key: Optional[str] = Field(default=None, max_length=16)
     tip: Optional[str] = Field(default=None, max_length=64)
     approve_protected: bool = False
+    summary: Optional[str] = Field(default=None, max_length=8000)
 
 
 def _actor(body: "Optional[ActorBody]"):
@@ -212,7 +213,7 @@ async def return_land(dispatch_id: str, body: ReturnBody) -> dict[str, Any]:
     actor = _actor(body)
     await _allowed(actor, "return_land", dispatch_id)
     out = await _return(asyncio.to_thread, hive_return.land, dispatch_id, body.key or "", body.tip or "",
-                        body.approve_protected and not actor.agent, not actor.agent)
+                        body.approve_protected and not actor.agent, not actor.agent, body.summary)
     _recorded(actor, "return_land", dispatch_id)
     return out
 

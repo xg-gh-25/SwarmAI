@@ -21,7 +21,7 @@ backend builds from the dispatch log (core/swarm_out_card).
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out stop|discard <dispatch_id> --why <one sentence>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out accept <dispatch_id> --ended-at <the result's ended_at> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-prepare <dispatch_id> --url <repository url> --why <w>
-    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --why <w>
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out return-land <dispatch_id> --key <k> --tip <sha> --summary-file <f> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out rerun <dispatch_id> --text-file <correction> --why <w>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out update-hive --hive <name> [--version <v>]
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out start-hive --hive <name>
@@ -58,6 +58,7 @@ have reached the Hive without an answer prints ``"maybe_sent": true``.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -200,9 +201,10 @@ def _parser() -> argparse.ArgumentParser:
             d.add_argument("--revision", required=True, help="the revision `spec` showed")
     sub.add_parser("runs")
     sub.add_parser("hives")
-    u = sub.add_parser("update-hive", help="update a Hive to a release (default: the latest published)")
+    u = sub.add_parser("update-hive", help="update a Hive to a release (default: this Host's own version)")
     u.add_argument("--hive", required=True, help="the Hive's name")
-    u.add_argument("--version", help="a release version, e.g. 2.3.0")
+    u.add_argument("--version", help="a release version, e.g. 2.3.0 (default: the version this Host runs, "
+                                     "which is what makes the Hive take this Host's runs)")
     w = sub.add_parser("watch", help="wait until one of the runs changes (at most 9 minutes)")
     w.add_argument("dispatch_ids", nargs="+", type=_dispatch_id)
     w.add_argument("--since", help="the token the last watch printed")
@@ -226,7 +228,7 @@ def _parser() -> argparse.ArgumentParser:
     rd.add_argument("dispatch_id", type=_dispatch_id)
     # the commands on a run the agent dispatched (design agent-owns-its-runs §2.1)
     for name, extra in (("accept", ("--ended-at",)), ("stop", ()),
-                        ("return-prepare", ("--url",)), ("return-land", ("--key", "--tip")),
+                        ("return-prepare", ("--url",)), ("return-land", ("--key", "--tip", "--summary-file")),
                         ("rerun", ("--text-file",)), ("discard", ())):
         c = sub.add_parser(name)
         c.add_argument("dispatch_id", type=_dispatch_id)
@@ -247,7 +249,15 @@ def _run_command(args) -> int:
         return _call("POST", path + "/return/prepare", {**actor, "url": args.url}, timeout=300)
     if args.cmd == "return-land":
         # never protected paths: the daemon refuses them to an agent (hive_return.land)
-        return _call("POST", path + "/return/land", {**actor, "key": args.key, "tip": args.tip}, timeout=300)
+        # the landed commit's message carries this summary (yours, from the review), never
+        # the Hive's own commit messages
+        try:
+            summary = open(args.summary_file, encoding="utf-8").read()
+        except (OSError, UnicodeError) as e:
+            print(json.dumps({"ok": False, "detail": f"cannot read the summary file: {type(e).__name__}"}))
+            return 1
+        return _call("POST", path + "/return/land", {**actor, "key": args.key, "tip": args.tip,
+                                                     "summary": summary}, timeout=300)
     if args.cmd == "rerun":
         text = open(args.text_file, encoding="utf-8").read()
         return _call("POST", path + "/rerun", {**actor, "text": text})
@@ -301,6 +311,18 @@ def _fleet_row(name: str) -> "dict | None":
     return next((h for h in _fleet() or [] if isinstance(h, dict) and h.get("name") == name), None)
 
 
+def _host_version() -> "str | None":
+    """The version the running Host reports (``/health``), or None."""
+    port = os.environ.get("SWARMAI_PORT", "18321")
+    url = f"http://127.0.0.1:{port if port.isdigit() else '18321'}/health"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=30) as r:
+            v = json.load(r).get("version")
+    except (OSError, http.client.HTTPException, ValueError, AttributeError):   # URLError is an OSError
+        return None
+    return v if isinstance(v, str) and v else None
+
+
 def _update_hive(args) -> int:
     """Update a Hive this Host's runs do not use: refused while it holds an open run (an
     update restarts it), then wait until it runs again (``UPDATE_WAIT_S``) and say whether
@@ -321,7 +343,13 @@ def _update_hive(args) -> int:
     hid = _hive_id(args.hive)
     if hid is None:
         return 1
-    body = {"version": args.version} if args.version else None
+    # the Hive takes this Host's runs when it has what this Host's version needs: the
+    # default is that version, not the latest published (a Host can be newer than it)
+    version = args.version or _host_version()
+    if not version:
+        print(json.dumps({"ok": False, "detail": "cannot read this Host's version; pass --version"}))
+        return 1
+    body = {"version": version}
     rc = _call("POST", f"/instances/{hid}/update", body, api="hive")
     if rc != 0:
         return rc
@@ -340,7 +368,9 @@ def _update_hive(args) -> int:
             print(json.dumps({"ok": False, "hive": args.hive, "status": "running",
                               "version": (now or {}).get("version"),
                               "detail": ("the update ended with the Hive running but without what this "
-                                         "Host needs to dispatch to it; Settings → Hive shows why")}))
+                                         f"Host needs to dispatch to it (asked for {version}); Settings → Hive "
+                                         "shows why. When no package of that version is published, a source "
+                                         f"checkout uploads one with `./hive/release.sh {version}`; then update again")}))
             return 1
         if st not in ("updating", None):
             print(json.dumps({"ok": False, "hive": args.hive, "status": st,

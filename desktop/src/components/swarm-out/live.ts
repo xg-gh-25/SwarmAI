@@ -180,8 +180,10 @@ export function lessonsLine(res: SwarmOutResult): string | null {
 export function stateLabel(r: SwarmOutRun): string {
   switch (stateOf(r)) {
     case 'waiting': return i18n.t('swarmOut.state.waiting');
-    case 'running': return r.state_reason && r.state_reason !== 'streaming'
-      ? i18n.t('swarmOut.state.runningWhy', { reason: r.state_reason }) : i18n.t('swarmOut.state.running');
+    case 'running': return r.state_reason === 'background'
+      ? i18n.t('swarmOut.review.stateReason.background')
+      : r.state_reason && r.state_reason !== 'streaming'
+        ? i18n.t('swarmOut.state.runningWhy', { reason: r.state_reason }) : i18n.t('swarmOut.state.running');
     case 'stopped': return r.state_reason === 'hive_stopped' ? i18n.t('swarmOut.state.stoppedHiveOff')
       : r.state_reason === 'hive_gone' ? i18n.t('swarmOut.state.stoppedHiveGone') : i18n.t('swarmOut.state.stopped');
     default: return r.session_unknown ? i18n.t('swarmOut.state.sessionUnknown') : i18n.t('swarmOut.state.unknown');

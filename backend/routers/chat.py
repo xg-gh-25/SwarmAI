@@ -463,6 +463,24 @@ async def chat_stream(request: Request):
                 pa.get("execution"), run_repos)
         except PinError as e:
             raise ValidationException(message="Invalid Project Agent", detail=str(e))
+    elif chat_request.project_agent and chat_request.session_id:
+        # a correction of a pipeline task whose run ended (Swarm Out re-run): the next
+        # run the Host named is made before the turn, so the correction goes through the
+        # pipeline too; a session whose run is still open continues in it
+        from core.project_agent_session import PinError, advance_pipeline_pin, set_pin
+        router_ = _get_router()
+        unit = router_.get_unit(chat_request.session_id)
+        if router_.is_busy(chat_request.session_id) or (
+                unit is not None and getattr(unit, "has_background_work", False) is True):
+            raise HTTPException(status_code=409, detail="the session is still working; send the correction when it ends")
+        try:
+            advanced = await advance_pipeline_pin(chat_request.session_id,
+                                                  chat_request.project_agent.get("execution"))
+        except PinError as e:
+            raise ValidationException(message="Invalid Project Agent", detail=str(e))
+        ctx = getattr(unit, "_hook_session_context", None) if unit is not None else None
+        if advanced is not None and isinstance(ctx, dict) and ctx.get("sdk_session_id") == chat_request.session_id:
+            set_pin(ctx, advanced)          # the live hooks read the new run, not a cached pin
 
     _get_router()  # Ensure session infrastructure initialized
 
@@ -949,6 +967,10 @@ async def get_admission_state_endpoint():
         # off-machine call or a reserved action is denied at once on a pinned session
         # (core/security_hooks); a Host dispatches only to a daemon that says so
         "zero_touch": True,
+        # a correction of a pipeline task whose run ended gets the next run the Host
+        # names (core/project_agent_session.advance_pipeline_pin); an older daemon runs
+        # it without one, so a Host sends that run only when this is set
+        "pipeline_rerun": True,
     }
 
 

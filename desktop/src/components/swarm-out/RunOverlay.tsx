@@ -364,6 +364,7 @@ export function CommandPanel({ r, full, fullRead = false, fullFailed = false, on
     if (mode === 'discard') void run(() => swarmOutService.discard(id, text), true);
   };
   const reasonLabel = r.state_reason === 'answer_sent' || r.state_reason === 'answer_refused'
+    || r.state_reason === 'background'
     ? t(`swarmOut.review.stateReason.${r.state_reason}`) : null;
 
   const header = (

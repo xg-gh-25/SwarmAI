@@ -432,8 +432,45 @@ _SAFE = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "
          "-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=", "-c", "filter.lfs.required=false")
 
 
+#: the longest landing summary taken (refused past it, never cut)
+SUMMARY_MAX = 4000
+
+
+def landing_message(title: str, hive: Any, dispatch_id: str, ref: str, files: list,
+                    protected: list, summary: Optional[str]) -> str:
+    """The landed commit's message, written on this machine: the run's title, the summary
+    the landing's reviewer wrote (what changed and why), and the files with their line
+    counts as prepare computed them. The Hive's own commit messages are its text and are
+    never copied here (an agent reads this log later); they stay at *ref*."""
+    msg = f"hive: {title}"
+    if summary:
+        msg += "\n\n" + summary
+    rows = [f"  {f.get('path')} (+{f.get('added', 0)} -{f.get('deleted', 0)})"
+            if isinstance(f.get("added"), int) else f"  {f.get('path')} (binary)" for f in files]
+    if rows:
+        msg += "\n\nFiles:\n" + "\n".join(rows)
+    msg += (f"\n\nThe commits of a Hive run ({hive}, dispatch {dispatch_id}), reviewed and "
+            f"squashed on this machine. The Hive's own commits are at {ref}.")
+    if protected:
+        msg += ("\n\nChanges protected paths: " + ", ".join(protected[:20])
+                + (" …" if len(protected) > 20 else ""))
+    return msg
+
+
+def _summary(summary: Optional[str]) -> Optional[str]:
+    if summary is None:
+        return None
+    text = "\n".join(line.rstrip() for line in str(summary).strip().splitlines())
+    if len(text) > SUMMARY_MAX:
+        raise ReturnError(f"the landing summary is {len(text)} characters; at most {SUMMARY_MAX}")
+    if _BAD_CHARS.search(text.replace("\n", "").replace("\t", "")):
+        # the same set refused in a path: control, zero-width and direction characters
+        raise ReturnError("the landing summary has control or invisible characters")
+    return text or None
+
+
 def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
-         allow_git_exec: bool = True) -> dict[str, Any]:
+         allow_git_exec: bool = True, summary: Optional[str] = None) -> dict[str, Any]:
     """Land the prepared tip the person or the dispatching agent approved; commits that
     change the repository's protected paths need ``approve_protected``, and the landed
     commit's message names those paths. The agent's landing (the route passes
@@ -444,6 +481,7 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     ``commit-tree``): no working tree holds the Hive's files and no hook runs until the
     main checkout fast-forwards to it, which runs no hook either."""
     from core import swarm_out
+    summary = _summary(summary)
     state = _prepared(dispatch_id, key, tip)
     repo = Path(state["repo"])
     if _git(repo, "rev-parse", "--verify", "--quiet", f"{state['ref']}^{{commit}}").stdout.decode().strip() != tip:
@@ -476,11 +514,8 @@ def land(dispatch_id: str, key: str, tip: str, approve_protected: bool = False,
     from core.run_protocol.landing import LandingError, _ident_env, landing_settings, with_trailer
     row = swarm_out._log_row_of(dispatch_id)
     title = " ".join(str(row.get("title") or "").split())[:72] or "a Hive run"
-    msg = (f"hive: {title}\n\nThe commits of a Hive run ({row.get('hive')}, dispatch {dispatch_id}), "
-           f"reviewed and squashed on this machine. The Hive's own commits are at {state['ref']}.")
-    if state["protected_files"]:
-        msg += ("\n\nChanges protected paths: " + ", ".join(state["protected_files"][:20])
-                + (" …" if len(state["protected_files"]) > 20 else ""))
+    msg = landing_message(title, row.get("hive"), dispatch_id, state["ref"], state["files"],
+                          state["protected_files"], summary)
     try:   # the repository's own author and trailer ([landing] in .swarmai/pipeline.toml)
         settings = landing_settings(str(repo), branch)
     except LandingError as e:

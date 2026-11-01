@@ -329,10 +329,18 @@ def _task_clone(m: Path, r: dict[str, Any], ws: Path, work_id: str) -> None:
 
 
 def _clone_into(m: Path, r: dict[str, Any], target: Path, work_id: str) -> None:
+    """A writable clone also gets SwarmAI's own commit identity in its config: a Hive has
+    no git user, so the agent's ``git commit`` (and a pipeline landing that uses the
+    repository's own identity) would otherwise fail or borrow an author. The Host lands
+    the work under its own author either way (``hive_return``)."""
     if not _ok(_git(None, "clone", "--no-checkout", "--no-tags", "--reference", str(m), "--",
                     str(m), str(target))):
         raise WorkError(ERR_WORKTREE)
-    steps = [("remote", "set-url", "origin", r["url"]),
+    from core.repo_pipeline_config import SWARM_IDENTITY
+    ident = [("config", "user.name", SWARM_IDENTITY[0]),
+             ("config", "user.email", SWARM_IDENTITY[1])] if r["access"] == "write" else []
+    steps = [*ident,
+             ("remote", "set-url", "origin", r["url"]),
              ("fetch", "--no-tags", "--quiet", str(m), "+refs/remotes/origin/*:refs/remotes/origin/*"),
              ("checkout", "-q", "-b", branch(work_id), r["sha"]) if r["access"] == "write"
              else ("checkout", "-q", "--detach", r["sha"])]

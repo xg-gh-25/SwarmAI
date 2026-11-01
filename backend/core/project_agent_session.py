@@ -27,6 +27,7 @@ a Project Agent the rules are meant to hold.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -150,6 +151,52 @@ def create_pinned_run(session_id: str, pin: dict[str, Any]) -> Optional[str]:
         run_id=ex["run_id"], transcript_ids=[], requirement=ex.get("requirement"),
         owner_source="host", review_answers="host")
     return engine.run_id
+
+
+async def advance_pipeline_pin(session_id: str, execution: Any) -> Optional[dict[str, Any]]:
+    """A correction (Swarm Out re-run) of a pipeline session whose run has ended: create
+    the next run the Host named (*execution*: ``{"how": "pipeline", "profile",
+    "run_id", "requirement"}``) on the same worktrees, owned by the session, and record
+    the pin with it, so the correction goes through the pipeline too (the agent never
+    creates a run, run-spec §4.2). Only ``execution`` is taken from the request: the
+    Brain, mode, revision and gates stay the ones the session was pinned to. Returns the
+    new pin; None when the session's run is still open (the correction continues in
+    it). Raises PinError when the session is not such a session or the run cannot be
+    made; the pin is then unchanged."""
+    from database import db
+    try:
+        row = await db.sessions.get(session_id)
+    except Exception as exc:  # noqa: BLE001 — reported as a refusal
+        raise PinError("the session record cannot be read") from exc
+    meta = (row or {}).get("metadata")
+    stored = meta.get(PIN_KEY) if isinstance(meta, dict) else None
+    pin = None if stored is None else _valid_pin(stored)
+    old = pin.get("execution") if isinstance(pin, dict) and not pin.get("broken") else None
+    if not isinstance(old, dict) or old.get("how") != "pipeline":
+        raise PinError("the session is not a pipeline session of a dispatched task")
+    from config import get_app_data_dir
+    from core.run_protocol.engine import logged_terminal
+    if not await asyncio.to_thread(logged_terminal, get_app_data_dir(), old["run_id"]):
+        return None
+    ex = pin_execution(execution, old.get("repos"))
+    if ex is None or ex["how"] != "pipeline" or ex["run_id"] == old["run_id"]:
+        raise PinError("the correction names no new pipeline run")
+    if ex["profile"] != old["profile"]:
+        # the profile is how much of the process the task gets: fixed at dispatch
+        raise PinError("a correction runs with the task's own profile")
+    new = {**pin, "execution": ex}
+    # recorded first, as a first message is (session_router): a run never exists that
+    # the session's record does not name
+    if not await record_pin(session_id, new):
+        raise PinError("the session record could not be updated; nothing was created")
+    try:
+        await asyncio.to_thread(create_pinned_run, session_id, new)
+    except Exception as exc:  # noqa: BLE001 — the old pin is put back
+        logger.error("project agent: the correction's run for %s was not created: %s", session_id, exc)
+        if not await record_pin(session_id, pin):
+            await record_pin(session_id, {"broken": "a correction's pipeline run could not be created"})
+        raise PinError("the correction's pipeline run could not be created") from exc
+    return new
 
 
 def set_pin(session_context: dict[str, Any], pin: Optional[dict[str, Any]]) -> None:

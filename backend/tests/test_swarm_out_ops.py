@@ -252,7 +252,7 @@ _CLI_ARGS = {
     "accept": ["so_0123456789ab", "--why", "w", "--ended-at", "2026-10-31T00:00:00Z"],
     "stop": ["so_0123456789ab", "--why", "w"],
     "return-prepare": ["so_0123456789ab", "--why", "w", "--url", "https://x/y.git"],
-    "return-land": ["so_0123456789ab", "--why", "w", "--key", "k", "--tip", "t"],
+    "return-land": ["so_0123456789ab", "--why", "w", "--key", "k", "--tip", "t", "--summary-file", __file__],
     "rerun": ["so_0123456789ab", "--why", "w", "--text-file", __file__],
     "discard": ["so_0123456789ab", "--why", "w"],
 }
@@ -268,6 +268,7 @@ def test_cli_calls_only_owner_agent_ops(monkeypatch):
     fetched: list = []
     monkeypatch.setenv("SWARM_APP_SESSION_ID", "s-abc123")
     monkeypatch.setattr(cli, "UPDATE_EVERY_S", 0)
+    monkeypatch.setattr(cli, "_host_version", lambda: "2.4.0")
     # /fleet: h1 takes this Host's runs once updated (capable) and is not running now,
     # so start-hive may start it; /hives: it runs again after the update
     monkeypatch.setattr(cli, "_fetch", lambda path: fetched.append(path) or {

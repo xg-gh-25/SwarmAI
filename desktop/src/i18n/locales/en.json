@@ -2008,7 +2008,8 @@
       },
       "stateReason": {
         "answer_sent": "Answered, waiting for the Hive",
-        "answer_refused": "Answer not used"
+        "answer_refused": "Answer not used",
+        "background": "Turn ended, background work still running"
       }
     },
     "wait": {

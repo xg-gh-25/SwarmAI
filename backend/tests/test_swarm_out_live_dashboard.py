@@ -100,8 +100,8 @@ def test_session_states_keeps_only_typed_fields(monkeypatch):
     monkeypatch.setattr(swarm_out, "_client", lambda inst, timeout=None: httpx.AsyncClient(
         base_url=swarm_out._base(inst), transport=httpx.MockTransport(hive)))
     got = asyncio.run(swarm_out._session_states(_inst("h1")))
-    assert got == {"s1": {"streaming": False, "waiting_input": True, "activity": None},
-                   "s3": {"streaming": True, "waiting_input": False, "activity": None}}
+    assert got == {"s1": {"streaming": False, "waiting_input": True, "activity": None, "background_work": False},
+                   "s3": {"streaming": True, "waiting_input": False, "activity": None, "background_work": False}}
 
 
 # ── fleet ─────────────────────────────────────────────────────────────────────

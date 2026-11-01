@@ -566,9 +566,71 @@ def _append(line: str) -> None:
         f.write(line)
 
 
-def pipeline_run_id(dispatch_id: str) -> str:
-    """The id of a pipeline task's run: ``run_`` + the dispatch's first eight hex."""
-    return "run_" + dispatch_id.removeprefix("so_")[:8]
+#: how many corrections of one pipeline task can each get a run of their own
+MAX_PIPELINE_RERUNS = 50
+
+
+def pipeline_run_id(dispatch_id: str, k: int = 0) -> str:
+    """The id of a pipeline task's run: ``run_`` + the dispatch's first eight hex. The
+    run of its *k*-th correction (a re-run after the run ended, ``rerun``): ``run_`` +
+    eight hex of a hash of the dispatch and *k*, so every run of the task is one of a
+    known set (``swarm_out_results.execution_check``)."""
+    if k == 0:
+        return "run_" + dispatch_id.removeprefix("so_")[:8]
+    import hashlib
+    return "run_" + hashlib.sha256(f"{dispatch_id}#{k}".encode()).hexdigest()[:8]
+
+
+def pipeline_run_ids(dispatch_id: str) -> set[str]:
+    """Every run id a pipeline task's runs can have: its first and its corrections'."""
+    return {pipeline_run_id(dispatch_id, k) for k in range(MAX_PIPELINE_RERUNS + 1)}
+
+
+def _pipeline_task(row: dict[str, Any]) -> bool:
+    agent = row.get("project_agent")
+    return isinstance(agent, dict) and agent.get("execution") == "pipeline" and bool(agent.get("run_id"))
+
+
+def _next_rerun(dispatch_id: str, kept: dict[str, Any]) -> int:
+    """The number of this correction's run, counted here under the run's lock (two at
+    once never get the same one): one past the last this Host named and the last the
+    Hive's result shows. Never derived from the result alone, which lists only some of
+    a session's runs. A number whose send fails is not reused (its run may exist)."""
+    from core import swarm_out_settle
+    res = kept.get("result") if isinstance(kept.get("result"), dict) else {}
+    shown = {r.get("run_id") for r in res.get("pipeline_runs") or [] if isinstance(r, dict)}
+    seen = max((k for k in range(1, MAX_PIPELINE_RERUNS + 1) if pipeline_run_id(dispatch_id, k) in shown),
+               default=0)
+    got: dict[str, int] = {}
+
+    def change(rec: dict[str, Any]):
+        n = rec.get("pipeline_reruns") if isinstance(rec.get("pipeline_reruns"), int) else 0
+        k = max(n, seen) + 1
+        if k > MAX_PIPELINE_RERUNS:
+            raise SwarmOutError(f"this task had {MAX_PIPELINE_RERUNS} corrections; dispatch it again")
+        rec["pipeline_reruns"] = got["k"] = k
+    swarm_out_settle._update(dispatch_id, change)
+    return got["k"]
+
+
+def _rerun_pin(row: dict[str, Any], k: int, text: str) -> dict:
+    """What a correction of a pipeline task sends with it (routers/chat.py on the Hive):
+    its run, number *k* (``_next_rerun``), with the task's own profile."""
+    agent = row["project_agent"]
+    from core.run_protocol.engine import REQUIREMENT_MAX
+    return {"brain": agent.get("brain"), "mode": agent.get("mode"), "revision": agent.get("revision"),
+            "execution": {"how": "pipeline", "profile": agent.get("profile"),
+                          "run_id": pipeline_run_id(row["dispatch_id"], k),
+                          "requirement": text if len(text) <= REQUIREMENT_MAX else None}}
+
+
+def _rerun_how(pin: dict, brain: str) -> str:
+    ex = pin["execution"]
+    return (f"How: if this session's pipeline run had ended, this correction runs in a new run "
+            f"`{ex['run_id']}` (profile `{ex['profile']}`), created with this message; otherwise it "
+            f"continues in the open run. Begin with `pipeline-v1 status --project {brain} --run-id "
+            f"{ex['run_id']}` (when it says there is no such run, use the session's open run) and "
+            "follow its next step; do not create another run and do not commit outside a run.")
 
 
 def _pin_request(agent: Optional[dict], task: str = "") -> Optional[dict]:
@@ -875,6 +937,11 @@ async def _start_session(client: httpx.AsyncClient, message: str,
     async with client.stream("POST", "/api/chat/stream", json=body,
                              timeout=httpx.Timeout(HTTP_TIMEOUT_S, read=SESSION_ID_WAIT_S)) as r:
         if r.status_code != 200:
+            if project_agent and session_id and r.status_code in (400, 409, 422):
+                # a correction's pipeline run (routers/chat.py): refused, nothing was sent
+                raise SwarmOutError(f"the Hive did not start a pipeline run for the correction (HTTP "
+                                    f"{r.status_code}: the session is still working, or its run "
+                                    "could not be made); nothing was sent")
             if project_agent and r.status_code in (400, 422):
                 # routers/chat.py refuses a pin it cannot make. The Brain was synced
                 # just before, so its copy is the host's: the two compute the revision
@@ -1244,9 +1311,9 @@ def _open_asks(s3, bucket: str, hive: str,
 
 async def _session_states(inst: dict[str, Any]) -> Optional[dict[str, dict[str, Any]]]:
     """Each session the Hive holds, from its own streaming-state endpoint (the one its
-    tabs read): ``{session_id: {streaming, waiting_input, activity}}``, or None when the
-    Hive did not say. Only those three fields are kept, and only with the expected
-    types (Hive-written data)."""
+    tabs read): ``{session_id: {streaming, waiting_input, activity, background_work}}``,
+    or None when the Hive did not say. Only those fields are kept, and only with the
+    expected types (Hive-written data; an older Hive sends no ``background_work``)."""
     async with _client(inst, PROBE_TIMEOUT_S) as client:
         r = await client.get("/api/chat/sessions/streaming-state")
     if r.status_code != 200:
@@ -1261,7 +1328,8 @@ async def _session_states(inst: dict[str, Any]) -> Optional[dict[str, dict[str, 
         activity = e.get("activity")
         out[sid] = {"streaming": e.get("streaming") is True,
                     "waiting_input": e.get("waiting_input") is True,
-                    "activity": activity if isinstance(activity, str) and _ACTIVITY_RE.match(activity) else None}
+                    "activity": activity if isinstance(activity, str) and _ACTIVITY_RE.match(activity) else None,
+                    "background_work": e.get("background_work") is True}
     return out
 
 
@@ -1307,6 +1375,10 @@ def run_state(row: dict[str, Any], hive_status: Optional[str],
         return "waiting", "waiting_input"
     if e["streaming"] or e["activity"] not in (None, "idle", "waiting_input"):
         return "running", e["activity"] if e["activity"] not in (None, "idle") else "streaming"
+    if e.get("background_work"):
+        # the turn ended but its sub-agents or background commands still run, and their
+        # end starts the turn that writes the real result: not finished yet
+        return "running", "background"
     return "stopped", "idle"
 
 
@@ -1752,13 +1824,43 @@ async def rerun(dispatch_id: str, text: str) -> dict[str, Any]:
     if kept.get("fetch_error") in swarm_out_settle.NO_RESULT_ERRORS:
         raise SwarmOutError("this run's session is gone from its Hive: discard it and send it again")
     inst = await _instance(row["hive_id"])
+    pin = None
+    if _pipeline_task(row):
+        cap = await _has_cap(inst, "pipeline_rerun")
+        if cap is None:
+            raise SwarmOutError(f"Hive {inst.get('name')} did not answer; nothing was sent")
+        if cap:             # an older Hive runs the correction without a run of its own
+            k = await asyncio.to_thread(_next_rerun, dispatch_id, kept)
+            pin = _rerun_pin({**row, "dispatch_id": dispatch_id}, k, text)
+    message = text if pin is None else _rerun_how(pin, str(pin.get("brain") or "")) + "\n\n" + text
     async with _client(inst) as client:
-        sid = await _start_session(client, text, session_id=row["session_id"])
+        sid = await _start_session(client, message, project_agent=pin, session_id=row["session_id"])
     if sid != row["session_id"]:
         raise SwarmOutError("the Hive did not take the correction into the run's session")
     await asyncio.to_thread(swarm_out_results.turn_started, dispatch_id)
     _refresh_soon()
-    return {"sent": True}
+    out: dict[str, Any] = {"sent": True}
+    if pin is not None:
+        # the run the correction gets when the session's run had ended; an open run
+        # takes the correction itself and this one is never made
+        out["run_id"] = pin["execution"]["run_id"]
+    elif _pipeline_task(row):
+        out["pipeline"] = "this Hive's version runs a correction without a pipeline run; update it when the run ends"
+    return out
+
+
+async def _has_cap(inst: dict[str, Any], cap: str) -> Optional[bool]:
+    """Whether the Hive's admission state says *cap*; None when it did not answer (not
+    the same as an older Hive)."""
+    try:
+        async with _client(inst, PROBE_TIMEOUT_S) as client:
+            r = await client.get("/api/chat/sessions/admission-state")
+        body = r.json() if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    return body.get(cap) is True
 
 
 async def discard_run(dispatch_id: str, note: str = "") -> dict[str, Any]:

@@ -57,7 +57,7 @@ MAX_TOOL_NAMES = 20
 #: bumped whenever ``summarize`` changes what it derives: a kept result of another
 #: version is fetched again in full (no ETag), so it is re-summarised instead of
 #: staying as the older rules made it
-SUMMARY_VERSION = 11
+SUMMARY_VERSION = 12
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -278,7 +278,8 @@ def _interventions(all_blocks: list) -> "tuple[int, int, int, int, int, int]":
     return approved, denied, unanswered_perm, answered_q, unanswered_q, host_handled
 
 
-def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = None) -> dict[str, Any]:
+def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = None,
+              dispatch_id: Optional[str] = None) -> dict[str, Any]:
     """The result of one run from its session's rows (chronological, as the
     messages API returns them). Pure; never raises on malformed input. ``agent``: the
     Project Agent the dispatch went under (the host's log row): its checks are looked
@@ -444,9 +445,12 @@ def summarize(messages: Any, has_more: bool = False, agent: Optional[dict] = Non
                 runs_seen.append({"run_id": rid, "profile": d.s(b.get("profile"), 20)})
     own = agent.get("run_id") if isinstance(agent, dict) else None
     if own:
-        # the run this dispatch named, when the session ended it (another one's summary
-        # may be here too: it abandoned a stale run, say)
-        summaries = [b for b in summaries if b.get("runId") == own] or summaries
+        # the runs this dispatch named (its first, and each correction's:
+        # core/swarm_out.pipeline_run_id), the last one the session ended (another
+        # run's summary may be here too: it abandoned a stale run, say)
+        from core.swarm_out import pipeline_run_ids
+        ids = (pipeline_run_ids(dispatch_id) if dispatch_id else set()) | {own}
+        summaries = [b for b in summaries if b.get("runId") in ids] or summaries
     if summaries:
         s = summaries[-1]
         audit = []
@@ -643,7 +647,8 @@ async def _fetch(row: dict) -> dict:
             else:
                 agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
                 # a summary reads Hive-written text: off the event loop
-                rec["result"] = await asyncio.to_thread(summarize, body, r.headers.get("x-has-more") == "1", agent)
+                rec["result"] = await asyncio.to_thread(summarize, body, r.headers.get("x-has-more") == "1", agent,
+                                                        rec.get("dispatch_id"))
                 rec["summary_version"] = SUMMARY_VERSION
                 etag = r.headers.get("etag")
                 rec["etag"] = etag[:200] if isinstance(etag, str) else None
@@ -746,7 +751,7 @@ async def _from_records(row: dict, rec: dict, prev: dict, pulled: dict) -> bool:
         return False
     agent = row.get("project_agent") if isinstance(row.get("project_agent"), dict) else None
     if rows:
-        rec["result"] = await asyncio.to_thread(summarize, rows, partial, agent)
+        rec["result"] = await asyncio.to_thread(summarize, rows, partial, agent, did)
         from core import hive_files
         attach_local(rec["result"], await asyncio.to_thread(hive_files.placed, did))
         rec["summary_version"] = SUMMARY_VERSION
@@ -893,7 +898,7 @@ def _public_repo(r: dict, host: dict) -> dict:
 EXECUTION_DIFFS = ("made_a_run", "no_run", "other_profile", "other_run")
 
 
-def execution_check(res: dict, agent: Any) -> Optional[dict]:
+def execution_check(res: dict, agent: Any, dispatch_id: Optional[str] = None) -> Optional[dict]:
     """Did the run run the way the Host pinned it (design 2026-10-30-run-spec §4.2, the
     evidence layer)? ``{"state": "matches" | "differs" | "not_yet", "why": code}`` from
     the row's ``execution`` / ``profile`` / ``run_id`` and the run's own pipeline record
@@ -910,7 +915,14 @@ def execution_check(res: dict, agent: Any) -> Optional[dict]:
     if not seen:
         ended = res.get("ended") in ENDED and res.get("provisional") is not True
         return {"state": "differs", "why": "no_run"} if ended else {"state": "not_yet", "why": None}
-    own = [r for r in seen if r["run_id"] == agent.get("run_id")] if agent.get("run_id") else seen[-1:]
+    # the task's own runs: the first, and a correction's (core/swarm_out.pipeline_run_id)
+    if agent.get("run_id"):
+        from core.swarm_out import pipeline_run_ids
+        ids = pipeline_run_ids(dispatch_id) if dispatch_id else set()
+        ids.add(agent["run_id"])
+        own = [r for r in seen if r["run_id"] in ids]
+    else:
+        own = seen[-1:]
     if not own:
         return {"state": "differs", "why": "other_run"}
     if agent.get("profile") and own[0].get("profile") and own[0]["profile"] != agent["profile"]:
@@ -918,7 +930,7 @@ def execution_check(res: dict, agent: Any) -> Optional[dict]:
     return {"state": "matches", "why": None}
 
 
-def _public_agent(res: dict, agent: Any) -> dict:
+def _public_agent(res: dict, agent: Any, dispatch_id: Optional[str] = None) -> dict:
     """The Project Agent part of ``/runs``: the brain, mode, profile and delivery from
     the host's own row; check statuses only for the row's check ids; gate refusals only
     under the row's gate names (or ``integrity``)."""
@@ -941,7 +953,7 @@ def _public_agent(res: dict, agent: Any) -> dict:
                    for i in ids if isinstance(i, str)] if ids else None,
         "gate_refusals": None if ref is None else {g: _int(ref.get(g)) for g in sorted(gates) if _int(ref.get(g))},
         "checks_partial": res.get("checks_partial") is True,
-        "execution_check": execution_check(res, agent),
+        "execution_check": execution_check(res, agent, dispatch_id),
     }
 
 
@@ -1124,7 +1136,7 @@ def public(record: Optional[dict], declared: Any = None, agent: Any = None,
         },
         "pipeline": pipeline,
         "dropped": _int(res.get("dropped")),
-        **_public_agent(res, agent),
+        **_public_agent(res, agent, (record or {}).get("dispatch_id")),
         "lessons": _public_lessons(record),
     }
 

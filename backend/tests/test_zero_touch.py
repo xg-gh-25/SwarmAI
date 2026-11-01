@@ -631,6 +631,7 @@ def test_update_hive_says_it_failed_when_the_hive_came_back_without_the_capabili
     from scripts import swarm_out as cli
     monkeypatch.setattr(cli, "UPDATE_EVERY_S", 0)
     monkeypatch.setattr(cli, "_call", lambda *a, **k: 0)
+    monkeypatch.setattr(cli, "_host_version", lambda: "2.4.0")
     for capable, rc in ((False, 1), (True, 0)):
         rows = iter([{"name": "h1", "open_runs": 0, "capable": False, "version": "2.2.0"},
                      {"name": "h1", "open_runs": 0, "capable": capable, "version": "2.3.0"}])

@@ -154,6 +154,10 @@ async def session_state_entry(unit, router=None) -> dict:
         # Background agents (core/background_agents.py) of this daemon run: the
         # live status is also pushed as `background_agents` envelopes on /events.
         "background_agents": bg_snapshot(unit),
+        # whether the session still has background work (a sub-agent, a background
+        # command, or a turn the CLI started and has not delivered yet): a Swarm Out Host
+        # reads a session that is idle but has this as still running, not finished
+        "background_work": getattr(unit, "has_background_work", False) is True,
         # steers written into the running turn and not yet read, and the turn's
         # segment keys (design chat-steer D5): only when there are any, so a turn
         # without a steer keeps the snapshot it always had
