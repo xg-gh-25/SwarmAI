@@ -78,6 +78,11 @@ _USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
 # wait forwarded from the chat both rely on, so only the App sends it (design
 # 2026-10-31-swarm-out-agent-owns-its-runs P10).
 _USER_ONLY_CHAT_ANSWER_RE = re.compile(r"/api/chat/answer-question\b")
+# The person's confirmation of a Project Agent (the Brain Hub form): it moves the floor
+# of the agent's authority, so the agent never sends it; it confirms with its own route
+# (``…/agent-confirm``) and asks the person with a card (design
+# 2026-11-01-project-agent-owned-by-agent §4)
+_USER_ONLY_AGENT_CONFIRM_RE = re.compile(r"/project-agent/confirm\b|/api/ddd/runner-agent/confirm\b")
 # A command on a run says who gives it (``by``; core/swarm_out_actor), which the route
 # cannot verify. So an agent gives these commands only through the Swarm Out CLI (its own
 # process sends ``by: agent``); an HTTP call to one of them from a command is refused
@@ -431,6 +436,11 @@ def _user_only_deny(command: str) -> "dict | None":
     if _USER_ONLY_CHAT_ANSWER_RE.search(command):
         return _deny("a question card is answered by the person in the chat, never by a "
                      "command. Ask with AskUserQuestion and wait for their answer.")
+    if _USER_ONLY_AGENT_CONFIRM_RE.search(command):
+        return _deny("the person confirms a Project Agent as themselves on the Brain Hub form, "
+                     "never by a command. Confirm as the agent with `\"$SWARM_BACKEND_BIN\" py -m "
+                     "scripts.project_agent confirm --brain <B> --why …`; when it says `widened`, "
+                     "ask the person with `scripts.project_agent card --brain <B>` and AskUserQuestion.")
     if _USER_ONLY_REDACT_RE.search(command):
         return _deny("withdrawing written knowledge is the person's action (the Flow view's "
                      "撤回 button), never a command. Tell the user which unit you think should "
@@ -552,6 +562,12 @@ _SW_MODULE = "scripts.session_worktree"
 #: agent gives on a run (design 2026-10-31-swarm-out-agent-owns-its-runs §2.1); it gets
 #: the same export, and is no landing (no turn changes are read for it)
 _SO_MODULE = "scripts.swarm_out"
+#: the Project Agent CLI names the session that confirms or asks (design
+#: 2026-11-01-project-agent-owned-by-agent §3-§4): the same export, no landing
+_PA_MODULE = "scripts.project_agent"
+#: only a plain run of it (one command, no other segment) is handed the session
+_PA_LINE_RE = re.compile(r'\A\s*"?\$SWARM_BACKEND_BIN"?\s+py\s+-m\s+' + re.escape(_PA_MODULE)
+                         + r'(?:\s[^;&|`$<>\n]*)?\s*\Z')
 
 
 def _session_worktree_export(command: str, sid: str, turn_id: "str | None",
@@ -624,7 +640,8 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             (phase == "check" and (_SW_MODULE in command or pipeline_command.is_land(command)))
             or (phase == "approved" and pipeline_command.is_land(command)
                 and any(c in command for c in AFTER_APPROVAL)))
-        swarm_out_cli = phase == "check" and isinstance(command, str) and _SO_MODULE in command
+        swarm_out_cli = phase == "check" and isinstance(command, str) and (
+            _SO_MODULE in command or bool(_PA_LINE_RE.match(command)))
         if lands or swarm_out_cli:
             # pure string work, no IO
             sub_agent = bool(input_data.get("agent_id"))

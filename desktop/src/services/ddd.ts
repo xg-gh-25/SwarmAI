@@ -80,9 +80,10 @@ export interface BrainSummary {
   /** While setting up: checks done (PASS + N/A) of all, from the last P6 --record.
    *  null/absent = no P6 run recorded yet, or not setting up. */
   setupProgress?: { done: number; total: number; next?: string | null } | null;
-  /** project-agent.yaml: 'draft' waits for the person to confirm; 'invalid' has
+  /** project-agent.yaml: 'widened' waits for the person (it gives the agent more than
+   *  they last confirmed); 'draft' / 'changed' the agent confirms itself; 'invalid' has
    *  problems; null/absent = no file (or an old daemon). */
-  projectAgentStatus?: 'draft' | 'changed' | 'reviewed' | 'invalid' | null;
+  projectAgentStatus?: 'draft' | 'changed' | 'widened' | 'reviewed' | 'invalid' | null;
   /** health.pending split by source: escalation | paused_run | job | …. */
   pendingBySource?: Record<string, number>;
   health: BrainHealth;
@@ -196,7 +197,14 @@ export interface ProjectAgent {
    *  confirmed, then the definition, a skill of its modes or its gates changed */
   confirmation?: 'draft' | 'reviewed' | 'changed';
   reviewedAt?: string | null;
+  /** who confirmed it: a login, or ``agent`` (the agent confirmed it itself) */
   reviewedBy?: string | null;
+  /** design 2026-11-01-project-agent-owned-by-agent §5: the person whose confirmation is
+   *  the floor (null = the product default), the agent's confirmations since, and what
+   *  the current definition gives the agent beyond the floor (only the person confirms) */
+  floorSetBy?: string | null;
+  agentConfirms?: { at: string; why: string; changed: string[]; revision: string }[];
+  widened?: string[];
   summary?: string;
   identity?: { summary: string; inScope: string[]; outOfScope: string[]; source: string };
   intake?: { handles: string[]; repos: string[]; proposedAliases?: { name: string; source: string }[] };
@@ -360,7 +368,7 @@ export interface GeneralBrain {
   name: string;
   description: string | null;
   library: { files: number; bytes: number };
-  projectAgentStatus: 'draft' | 'changed' | 'reviewed' | 'invalid' | null;
+  projectAgentStatus: 'draft' | 'changed' | 'widened' | 'reviewed' | 'invalid' | null;
   shadowed: boolean;
   /** entries CDF wrote into Knowledge/Library in the last 7 days (absent: old daemon) */
   learnedWeek?: number;

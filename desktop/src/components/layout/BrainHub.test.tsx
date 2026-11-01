@@ -1058,7 +1058,7 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
 // ── the built-in General Brain (design 2026-10-29-default-brains-and-project-agent-standard) ──
 
 const GENERAL = { name: 'General', description: 'General research, reports and answers that belong to no project',
-  library: { files: 52, bytes: 812345 }, projectAgentStatus: 'draft', shadowed: false };
+  library: { files: 52, bytes: 812345 }, projectAgentStatus: 'widened', shadowed: false };
 
 describe('BrainHub — the built-in General Brain', () => {
   it('is the second card, after SwarmAI, and says whether its Runner Agent is confirmed (F1)', async () => {
@@ -1071,7 +1071,7 @@ describe('BrainHub — the built-in General Brain', () => {
     expect(builtIn).toEqual(['hub-card-SwarmAI', 'hub-card-builtin-general']);
     const own = [...screen.getByTestId('brainhub-card-wall').children].map((c) => c.getAttribute('data-testid'));
     expect(own).toEqual(['hub-card-AIDLC']);
-    expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent to confirm');
+    expect(screen.getByTestId('hub-signal-builtin-general').textContent).toBe('Runner Agent waits for you');
     expect(screen.getByTestId('hub-signal-builtin-general').getAttribute('data-tone')).toBe('setup');
     expect(screen.queryByTestId('hub-runner')).toBeNull();             // the old footer entry is gone
   });

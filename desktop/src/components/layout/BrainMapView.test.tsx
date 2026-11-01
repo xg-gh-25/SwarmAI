@@ -373,11 +373,29 @@ describe('BrainMapView · Project Agent form', () => {
     expect(calls[0][0]).toContain('use full for API changes');
   });
 
-  it('a definition changed after it was confirmed says so and can be confirmed again', () => {
+  it('a changed definition is the agent\'s to confirm; one that widens says what only the person confirms', () => {
     (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed', confirmation: 'changed' };
     openAgent();
-    expect(screen.getByTestId('bm-agent-status').textContent).toContain('changed since you confirmed it');
-    expect(screen.getByTestId('bm-agent-confirm')).toBeTruthy();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('the agent confirms it before its next dispatch');
+    expect(screen.queryByTestId('pa-widened')).toBeNull();
+    expect(screen.getByTestId('bm-agent-confirm')).toBeTruthy();         // the person may still confirm
+  });
+
+  it('a definition that widens the agent\'s authority waits for the person and lists what', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'draft', confirmation: 'draft',
+      widened: ['the shared part no longer keeps push for you'],
+      agentConfirms: [{ at: '2026-11-01T03:00:00Z', why: 'checked before a dispatch', changed: ['modes[research].setup'], revision: 'r' }],
+      floorSetBy: 'gawan' };
+    openAgent();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('waits for you');
+    expect(screen.getByTestId('pa-widened').textContent).toContain('no longer keeps push');
+    expect(screen.getByTestId('pa-agent-confirms').textContent).toContain('since you (gawan)');
+  });
+
+  it('a definition the agent confirmed says so', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed', confirmation: 'reviewed', reviewedBy: 'agent' };
+    openAgent();
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('by the agent');
   });
 
   it('no definition yet offers to generate it from the DDD', () => {
@@ -507,12 +525,12 @@ describe('BrainHubHome', () => {
     expect(screen.queryByTestId('hub-needs')).toBeNull();
   });
 
-  it('a Project Agent draft is setup (grey), an open item that opens the Project Agent panel', () => {
+  it('a Project Agent that waits for the person is setup (grey), an open item that opens the Project Agent panel', () => {
     const onOpen = vi.fn();
-    render(<BrainHubHome brains={[brain('T', { projectAgentStatus: 'draft' })] as never} onOpen={onOpen} />);
+    render(<BrainHubHome brains={[brain('T', { projectAgentStatus: 'widened' })] as never} onOpen={onOpen} />);
     expect(screen.getByTestId('hub-open-count').textContent).toBe('1 open item');
     expect(screen.getByTestId('hub-attention').getAttribute('data-tone')).toBe('setup');
-    expect(screen.getByTestId('hub-signal-T').textContent).toBe('Project Agent to confirm');
+    expect(screen.getByTestId('hub-signal-T').textContent).toBe('Project Agent waits for you');
     expect(screen.getByTestId('hub-signal-T').getAttribute('data-tone')).toBe('setup');
     fireEvent.click(screen.getByTestId('hub-needs-toggle'));
     fireEvent.click(screen.getByTestId('hub-need-go-T-agent'));

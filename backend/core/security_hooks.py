@@ -1812,11 +1812,20 @@ def create_ask_question_gate(
         # 2026-10-31-swarm-out-agent-owns-its-runs §2.5). It never raises. A Hive card is
         # never also a local pipeline decision: its text is the Hive's, which could end
         # in a local decision's marker.
-        from . import swarm_out_wait_card
+        # A PERSON's answer on a Project Agent card (the definition widens the agent's
+        # authority) confirms it as the person, here in the daemon: the agent has no
+        # command that confirms as the person (core/project_agent_card, design
+        # 2026-11-01-project-agent-owned-by-agent §4). Never raises; never also a
+        # pipeline decision.
+        from . import project_agent_card, swarm_out_wait_card
         hive_card = any(isinstance(q, dict) and str(q.get("question", "")).startswith(
             swarm_out_wait_card.MARKER_PREFIX) for q in questions)
+        agent_card = any(isinstance(q, dict) and str(q.get("question", "")).startswith(
+            project_agent_card.MARKER_PREFIX) for q in questions)
         if answered_by == "person" and isinstance(answer, dict) and hive_card:
             await swarm_out_wait_card.forward(actual_session_id, questions, answer)
+        elif answered_by == "person" and isinstance(answer, dict) and agent_card:
+            await project_agent_card.forward(actual_session_id, questions, answer)
         elif answered_by == "person" and isinstance(answer, dict) and any(
                 isinstance(q, dict) and "[" in str(q.get("question", "")) for q in questions):
             from . import pipeline_human

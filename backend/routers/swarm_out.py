@@ -79,6 +79,13 @@ class SpecBody(BaseModel):
     why: Optional[str] = Field(default=None, max_length=600)
     returns: Optional[str] = Field(default=None, max_length=20)
     needs_private: Optional[str] = Field(default=None, max_length=600)
+    # the agent session asking (kept with the agent's confirmation of the definition)
+    session: Optional[str] = Field(default=None, max_length=80)
+
+
+def _session_or_none(sid: Optional[str]) -> Optional[str]:
+    from core.app_session_id import valid_app_session_id
+    return sid if sid and valid_app_session_id(sid) else None
 
 
 class AnswerBody(BaseModel):
@@ -237,12 +244,17 @@ async def spec(body: SpecBody) -> dict[str, Any]:
     import asyncio
     from core import task_spec
     from core.project_registry import get_swarmws
+    # the latest definition, confirmed by the agent when it widens nothing (design
+    # 2026-11-01-project-agent-owned-by-agent §3); before build, which reads the revision
+    confirmed = await asyncio.to_thread(task_spec.confirm_latest, get_swarmws(), body.brain,
+                                        _session_or_none(body.session))
     try:
         s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
                                     body.acceptance, body.mode, body.execution, body.why or "", "hive",
                                     returns=body.returns, needs_private=body.needs_private or "")
     except task_spec.SpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    s["project_agent"] = confirmed
     return {"spec": {k: v for k, v in s.items() if k != "task"},
             "refusals": task_spec.admit(s), "segment": task_spec.segment(s)}
 

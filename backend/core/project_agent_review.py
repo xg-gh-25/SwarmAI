@@ -18,6 +18,7 @@ nobody confirms or edits what they did not see.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -34,6 +35,7 @@ from core.project_agent import (PLACEMENTS, PROJECT_AGENT_FILE, RESERVED_ACTIONS
                                 revision, validate)
 
 _ALIAS_MAX = 40
+logger = logging.getLogger(__name__)
 
 
 class ReviewError(Exception):
@@ -358,5 +360,102 @@ def _confirm_locked(project_dir: Path, seen_revision: str, reviewer: str,
         raise ReviewError(409, f"aim.json cannot be written ({type(exc).__name__}); nothing was confirmed") from None
     _write(target, text)
     check = check_sources(project_dir)
-    return {"revision": revision(project_dir), "reviewedAt": doc["reviewed_at"],
+    rev = revision(project_dir)
+    from core import project_agent_floor
+    try:
+        project_agent_floor.set_by_person(project_dir, doc, reviewer, rev)
+    except OSError as exc:      # the confirmation holds; the floor stays where it was (stricter)
+        logger.warning("project agent: the floor of %s was not moved (%s)", project_dir.name, type(exc).__name__)
+    return {"revision": rev, "reviewedAt": doc["reviewed_at"],
             "reviewedBy": reviewer, "aliasesAdded": added, "aliasesRefused": refused, "sourceCheck": check}
+
+
+# ── the agent's own confirmation (design 2026-11-01-project-agent-owned-by-agent §2) ──
+
+_WHY_MAX = 300
+
+
+def agent_confirm(project_dir: Path, *, session: Optional[str], why: str,
+                  now: Optional[str] = None) -> dict[str, Any]:
+    """Confirm the current definition as the agent, when nothing stands against it.
+    Never raises; the result's ``status`` says what happened:
+
+    - ``already``: the current revision is confirmed (by anyone) and nothing is written;
+    - ``confirmed``: it is now, ``reviewed_by: agent``; the floor did not move;
+    - ``problems``: it does not validate, a form field is missing, or a command's source
+      is not in the repository (``problems`` lists them; the agent fixes them);
+    - ``widened``: its authority is wider than the person's floor (``widened`` lists
+      what); only the person confirms it (``project_agent_card``);
+    - ``none``: the Brain has no definition (or it is not a file).
+
+    Every check is deterministic; the agent's reason is kept, not judged."""
+    project_dir = Path(project_dir)
+    why = " ".join(str(why or "").split())[:_WHY_MAX]
+    try:
+        with _brain_lock(project_dir):
+            return _agent_confirm_locked(project_dir, session, why, now)
+    except ReviewError as exc:
+        return {"status": "problems", "problems": [str(exc), *exc.problems], "revision": revision(project_dir)}
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        logger.warning("project agent: agent confirm of %s failed (%s)", project_dir.name, type(exc).__name__)
+        return {"status": "problems", "problems": [f"the definition cannot be confirmed ({type(exc).__name__})"],
+                "revision": revision(project_dir)}
+
+
+def _agent_confirm_locked(project_dir: Path, session: Optional[str], why: str,
+                          now: Optional[str]) -> dict[str, Any]:
+    from core import project_agent_floor as fl
+    from core.project_agent import confirmation, source_check_current, source_problems
+    from core.project_agent_form import missing_required
+    rev = revision(project_dir)
+    if rev is None:
+        return {"status": "none", "revision": None}
+    target, doc = _load_seen(project_dir, rev)
+    # the floor first: a person's confirmation from before floors existed is read (and
+    # kept) only while it still holds (project_agent_floor.load)
+    rec = fl.load(project_dir)
+    check = source_check_current(project_dir)
+    if confirmation(doc.get("status", "draft"), check) == "reviewed":
+        if check.get("ok") is not True:
+            # the commands' sources are in the repository, not the revision: a source
+            # added since is seen only by checking again (the revision does not move)
+            check = check_sources(project_dir)
+            if not check.get("ok"):
+                return {"status": "problems", "problems": [str(m) for m in check.get("missing") or []],
+                        "revision": rev}
+        return {"status": "already", "revision": rev, "reviewedBy": doc.get("reviewed_by")}
+    if not why:
+        return {"status": "problems", "problems": ["say why the agent confirms it (--why)"], "revision": rev}
+    problems = list(validate(doc, project_dir))
+    missing = missing_required(doc)
+    if missing:
+        problems.append("fill these in: " + ", ".join(str(m) for m in missing))
+    problems.extend(source_problems(project_dir))
+    if problems:
+        return {"status": "problems", "problems": problems, "revision": rev}
+    wide = fl.widened(fl.authority(doc, project_dir), rec["floor"])
+    if wide:
+        return {"status": "widened", "widened": wide, "revision": rev,
+                "floorSetBy": rec.get("set_by")}
+    changed = fl.changed_fields(rec.get("doc"), doc)
+    doc["status"] = "reviewed"
+    doc["reviewed_at"] = now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    doc["reviewed_by"] = fl.AGENT
+    if validate(doc, project_dir):      # the same checks once more, on what is written
+        return {"status": "problems", "problems": validate(doc, project_dir), "revision": rev}
+    _write(target, _text_of(doc, "Confirmed by the agent: its authority is no wider than the person's floor."))
+    new_rev = revision(project_dir)
+    try:
+        check = check_sources(project_dir)
+    except OSError as exc:      # written, not confirmed: no source check holds for it
+        return {"status": "problems", "revision": new_rev,
+                "problems": [f"the source check could not be kept ({type(exc).__name__}); confirm again"]}
+    try:
+        fl.record_agent(project_dir, rec, {"at": doc["reviewed_at"], "session": session, "why": why,
+                                           "from_revision": rev, "revision": new_rev, "changed": changed,
+                                           "doc": doc})
+    except OSError as exc:      # confirmed; only the Brain Hub's log of it is missing
+        logger.warning("project agent: the agent confirmation of %s was not logged (%s)",
+                       project_dir.name, type(exc).__name__)
+    return {"status": "confirmed", "revision": new_rev, "reviewedAt": doc["reviewed_at"],
+            "changed": changed, "sourceCheck": check}

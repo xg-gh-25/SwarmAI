@@ -519,7 +519,7 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
                   else "one mode (schema 1)")
         if doc.get("status") != "reviewed":
-            return (name, STATUS_PENDING, f"draft · {detail} — confirm it on the Brain Hub review card")
+            return (name, STATUS_PENDING, f"draft · {detail} — confirm it: scripts.project_agent confirm (the person only when it says widened)")
         return (name, STATUS_PASS, f"reviewed · {detail}")
     bad: list[str] = []
     if doc.get("schema") == 2 and not (isinstance(doc.get("modes"), list) and doc["modes"]):

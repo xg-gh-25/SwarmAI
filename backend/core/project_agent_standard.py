@@ -259,7 +259,7 @@ MODES: dict[str, dict[str, Any]] = {
 }
 
 HEADER = ("# Project Agent definition: how this Brain's work is taken in, done and delivered.\n"
-          "# A draft until a person confirms it on the Brain Hub form.\n"
+          "# The agent keeps it current and confirms it; the person confirms what gives the agent more.\n"
           "# Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.\n")
 
 

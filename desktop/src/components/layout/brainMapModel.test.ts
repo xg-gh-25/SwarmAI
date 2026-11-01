@@ -154,7 +154,7 @@ describe('brainMapModel', () => {
     ] });
     const items = hubNeeds([
       brain('A', { projectAgentStatus: 'reviewed', pendingBySource: { paused_run: 3 } }, { pending: 3 }),
-      brain('B', { projectAgentStatus: 'draft', pendingBySource: { escalation: 2, job: 1 } }, { pending: 3 }),
+      brain('B', { projectAgentStatus: 'widened', pendingBySource: { escalation: 2, job: 1 } }, { pending: 3 }),
       brain('C', { projectAgentStatus: 'invalid' })], a);
     // A: 3 Runs wait, the analytics names 2 -> one "1 Run waiting on you" row for the rest
     expect(items.map((i) => i.id)).toEqual(['old', 'new', 'A-runs', 'B-escalations', 'B-jobs', 'B-agent', 'C-agent']);
@@ -162,22 +162,26 @@ describe('brainMapModel', () => {
     expect(items[3]).toMatchObject({ brain: 'B', kind: 'escalations', text: '2 escalations to decide' });
     expect(items[4]).toMatchObject({ brain: 'B', kind: 'jobs', text: '1 other item in Need You' });
     expect(items[1].text).toBe('Run question: Pick a column');
-    expect(items[5]).toMatchObject({ kind: 'agent', text: 'Project Agent draft to confirm', severity: 'setup' });
+    expect(items[5]).toMatchObject({ kind: 'agent', text: 'Project Agent gives the agent more than you allowed: confirm it', severity: 'setup' });
     // severity: a Run or an escalation blocks on the person; a failing job waits for a review
     expect(items.map((i) => i.severity)).toEqual(['urgent', 'urgent', 'urgent', 'urgent', 'review', 'setup', 'review']);
     expect(items[2].count).toBe(1);
     expect(items[3].count).toBe(2);
-    expect(hubSummary([brain('B', { projectAgentStatus: 'draft' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
+    expect(hubSummary([brain('B', { projectAgentStatus: 'widened' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
   });
 
-  it('a Project Agent changed after it was confirmed waits on the person, like a draft', () => {
-    const items = hubNeeds([brain('C', { projectAgentStatus: 'changed' })], null);
-    expect(items).toEqual([expect.objectContaining({ kind: 'agent', severity: 'setup',
-      text: 'Project Agent changed since you confirmed it: confirm again' })]);
-    expect(hubSummary([brain('C', { projectAgentStatus: 'changed' })], null).needsYou).toBe(1);
-    expect(brainSignal(brain('C', { projectAgentStatus: 'changed' }), null)).toMatchObject({ tone: 'setup', text: 'Project Agent to confirm again' });
-    expect(generalNeed({ name: 'General', projectAgentStatus: 'changed' } as unknown as GeneralBrain))
-      .toMatchObject({ severity: 'setup', text: 'Runner Agent changed since you confirmed it: confirm again' });
+  it('a draft or a changed Project Agent is the agent\'s to confirm; only a widened one waits on the person', () => {
+    for (const st of ['draft', 'changed'] as const) {
+      expect(hubNeeds([brain('C', { projectAgentStatus: st })], null)).toEqual([]);
+      expect(hubSummary([brain('C', { projectAgentStatus: st })], null).needsYou).toBe(0);
+      expect(brainSignal(brain('C', { projectAgentStatus: st }), null)).toMatchObject({ tone: 'calm', text: '' });
+      expect(generalNeed({ name: 'General', projectAgentStatus: st } as unknown as GeneralBrain)).toBeNull();
+    }
+    expect(hubNeeds([brain('C', { projectAgentStatus: 'widened' })], null)).toEqual([expect.objectContaining({
+      kind: 'agent', severity: 'setup', text: 'Project Agent gives the agent more than you allowed: confirm it' })]);
+    expect(brainSignal(brain('C', { projectAgentStatus: 'widened' }), null)).toMatchObject({ tone: 'setup', text: 'Project Agent waits for you' });
+    expect(generalNeed({ name: 'General', projectAgentStatus: 'widened' } as unknown as GeneralBrain))
+      .toMatchObject({ severity: 'setup', text: 'Runner Agent gives the agent more than you allowed: confirm it' });
   });
 
   it('hubNeeds: a repository a Brain started reading is a notice, not "other items"', () => {
@@ -206,10 +210,10 @@ describe('brainMapModel', () => {
     expect(brainSignal(brain('D4', { setupState: 'setting-up',
       setupProgress: { done: 8, total: 9, next: '⑦ Something New' } }), a).text)
       .toBe('Being born · next: Something New (8/9)');
-    // a Project Agent draft is setup: grey, after a Run in progress
-    expect(brainSignal(brain('G', { projectAgentStatus: 'draft' }, { liveRun: true }), a)).toMatchObject({ tone: 'live' });
-    expect(brainSignal(brain('G2', { projectAgentStatus: 'draft' }), a))
-      .toMatchObject({ tone: 'setup', text: 'Project Agent to confirm' });
+    // a Project Agent waiting for the person is setup: grey, after a Run in progress
+    expect(brainSignal(brain('G', { projectAgentStatus: 'widened' }, { liveRun: true }), a)).toMatchObject({ tone: 'live' });
+    expect(brainSignal(brain('G2', { projectAgentStatus: 'widened' }), a))
+      .toMatchObject({ tone: 'setup', text: 'Project Agent waits for you' });
     expect(brainSignal(brain('H', { projectAgentStatus: 'invalid' }), a)).toMatchObject({ tone: 'review', text: 'Project Agent has problems' });
     expect(brainSignal(brain('J', { pendingBySource: { local_root: 1 } }, { pending: 1 }), a))
       .toMatchObject({ tone: 'notice', text: 'Reads 1 new repository' });
@@ -223,17 +227,17 @@ describe('the built-in General Brain in Need You (F2)', () => {
   const g = (status: GeneralBrain['projectAgentStatus']): GeneralBrain =>
     ({ name: 'General', description: null, library: { files: 1, bytes: 1 }, projectAgentStatus: status, shadowed: false });
   const shadow = {
-    name: 'General', kind: 'knowledge', lifecycleStage: 'GROW', projectAgentStatus: 'draft',
+    name: 'General', kind: 'knowledge', lifecycleStage: 'GROW', projectAgentStatus: 'widened',
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: false },
     health: { pending: 0, liveRun: false, lastChangeRelative: '--' },
   } as unknown as BrainSummary;
 
-  it('a draft or a broken Runner Agent is one row and one count; a confirmed one is none', () => {
-    for (const st of ['draft', 'invalid'] as const) {
+  it('a widened or a broken Runner Agent is one row and one count; a confirmed or agent-confirmable one is none', () => {
+    for (const st of ['widened', 'invalid'] as const) {
       expect(hubNeeds([], null, g(st)).map((n) => n.id)).toEqual(['builtin-general-agent']);
       expect(hubSummary([], null, g(st)).needsYou).toBe(1);
     }
-    for (const st of ['reviewed', null] as const) {
+    for (const st of ['reviewed', 'draft', 'changed', null] as const) {
       expect(hubNeeds([], null, g(st))).toEqual([]);
       expect(hubSummary([], null, g(st)).needsYou).toBe(0);
     }
@@ -241,9 +245,9 @@ describe('the built-in General Brain in Need You (F2)', () => {
   });
 
   it('a Projects/ Brain with the same name keeps its own row, with another id', () => {
-    const rows = hubNeeds([shadow], null, g('draft'));
+    const rows = hubNeeds([shadow], null, g('widened'));
     expect(rows.map((n) => [n.id, !!n.builtin])).toEqual([['General-agent', false], ['builtin-general-agent', true]]);
-    expect(hubSummary([shadow], null, g('draft')).needsYou).toBe(2);
+    expect(hubSummary([shadow], null, g('widened')).needsYou).toBe(2);
   });
 });
 

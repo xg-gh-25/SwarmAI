@@ -193,6 +193,20 @@ def private_needs(d: Path, mid: str, view: dict[str, Any], task: str, acceptance
     return out
 
 
+def confirm_latest(workspace: Path, brain: str, session: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Before a spec: the agent confirms the Brain's current definition when nothing
+    stands against it (core/project_agent_review.agent_confirm; design
+    2026-11-01-project-agent-owned-by-agent §3). It rewrites the definition, so it runs
+    before the spec reads its revision. None when the Brain cannot be found (``build``
+    says why)."""
+    try:
+        d = brain_dir(workspace, brain)
+    except PinError:
+        return None
+    from core.project_agent_review import agent_confirm
+    return agent_confirm(d, session=session, why="checked before a dispatch")
+
+
 def build(workspace: Path, brain: str, task: str, acceptance: str, mode: Optional[str] = None,
           execution: Optional[str] = None, why: str = "", placement: str = "hive", *,
           returns: Optional[str] = None, needs_private: str = "") -> dict[str, Any]:
@@ -311,10 +325,12 @@ def admit(spec: dict[str, Any]) -> list[str]:
             out.append("the definition is schema 1: rewrite it with modes (schema 2) first")
         state = confirmation(spec["status"], spec["source_check"])     # the Brain Hub's rule too
         check = spec["source_check"]
-        if state == "draft":
-            out.append("the Project Agent is a draft: confirm it in the Brain Hub first")
-        elif state == "changed":
-            out.append("the definition was changed after it was confirmed: confirm it again in the Brain Hub")
+        if state in ("draft", "changed"):
+            # the agent confirms what does not widen its authority (confirm_latest); what
+            # is left waits for the person, and the spec's ``project_agent`` says why
+            what = ("the Project Agent is a draft" if state == "draft"
+                    else "the definition changed after it was confirmed")
+            out.append(f"{what}, not confirmed: " + _unconfirmed_why(spec.get("project_agent")))
         elif not check["ok"]:
             out.append("the source check found commands with no source in the repository: "
                        + "; ".join(check["missing"][:3]))
@@ -349,6 +365,18 @@ def admit(spec: dict[str, Any]) -> list[str]:
 
 
 # ── ⑥ the project section the Hive reads before the task ─────────────────────
+
+def _unconfirmed_why(result: Any) -> str:
+    """Why the agent's own confirmation did not go through, in one line."""
+    if not isinstance(result, dict):
+        return "the agent did not confirm it (run project_agent confirm)"
+    if result.get("status") == "widened":
+        return ("it widens the authority the person last confirmed (" + "; ".join(result.get("widened") or [])[:400]
+                + "): ask the person with project_agent card, or undo those changes")
+    if result.get("status") == "problems":
+        return "fix it first: " + "; ".join(str(p) for p in result.get("problems") or [])[:400]
+    return "the agent did not confirm it (run project_agent confirm)"
+
 
 def lifecycle_caps_words(profile: str) -> bool:
     """The profile's requirement is the person's own words (direct)."""

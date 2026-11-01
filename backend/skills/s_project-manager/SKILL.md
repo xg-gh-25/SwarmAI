@@ -132,7 +132,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P1 — CREATE** | `create_project` scaffolds the six-section skeleton (the four docs come from the one skeleton, `backend/templates/ddd-skeleton/`) + copies the native skills. Then replace the placeholder `description` in `aim.json` with one sentence on what this Brain is and for whom: its Brain Hub card and its package show it. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
 | **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** get the format (`artifact_cli entry-contract`), then write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** ask the person only about the PRODUCT sections it reports in `ask` (at most 3 questions); every section left without evidence gets a gap. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); PRODUCT, TECH and IMPROVEMENT each hold a typed entry, and every empty PRODUCT section has its gap (content). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
-| **P3b — PROJECT AGENT** ⭐ | **Every brain.** Draft `project-agent.yaml` (next to `bindings.yaml`, section ⑤) with `artifact_cli project-agent-draft` from what this brain now knows — see "Generating the Project Agent" below. Creating the Brain already wrote a skeleton (the standard modes, the repos' checks, every reserved action); drafting fills in the judged fields. The person reads it on the Brain Hub form, changes what they want there and confirms. | P6 ⑤ Project Agent check (the same validator the tool uses): reviewed → PASS; a valid draft → PENDING (it waits for the person); missing, invalid or still a skeleton (no summary, no typical requests) → FAIL. |
+| **P3b — PROJECT AGENT** ⭐ | **Every brain.** Draft `project-agent.yaml` (next to `bindings.yaml`, section ⑤) with `artifact_cli project-agent-draft` from what this brain now knows — see "Generating the Project Agent" below. Creating the Brain already wrote a skeleton (the standard modes, the repos' checks, every reserved action); drafting fills in the judged fields. Then confirm it yourself (`scripts.project_agent confirm`, step 5 below); the person confirms only what gives you more than they last allowed. | P6 ⑤ Project Agent check (the same validator the tool uses): reviewed → PASS; a valid draft → PENDING (confirm it); missing, invalid or still a skeleton (no summary, no typical requests) → FAIL. |
 | **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph, or `bind --local` reads a local checkout in place and builds its graph in a child; the reindex job keeps both current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
 | **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME> --record` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
@@ -175,12 +175,24 @@ derived, not asked for. You judge; a tool writes:
    decide is kept from the earlier draft (the person's changes on the form included);
    `--fresh` starts over. Read `dropped` and fix what you meant to keep; it never
    replaces a reviewed definition.
-4. Show the person the definition as a short table (one line per mode). They read it on
-   the Brain Hub form (eight sections, each field says what it is for and who changes
-   it), change what they want there and confirm.
+4. Show the person the definition as a short table (one line per mode). They can read
+   and change it on the Brain Hub form at any time (eight sections, each field says
+   what it is for and who changes it); you do not wait for them.
+5. Confirm it yourself: `"$SWARM_BACKEND_BIN" py -m scripts.project_agent confirm --brain
+   <NAME> --why "<one sentence>"` (design 2026-11-01-project-agent-owned-by-agent). It
+   confirms when the definition validates, every command's source is in the repository,
+   and the actions kept for the person, the enforced gates and how each mode delivers
+   are no wider than what the person last confirmed (on a new Brain: every reserved
+   action, a bundle, no gate). Tell the person in one line which actions stay theirs.
+   `problems`: fix them and confirm again. `widened`: run `scripts.project_agent card
+   --brain <NAME>` and call AskUserQuestion with exactly its `questions`; the daemon
+   confirms as the person on their "Confirm". Do the same after you change the
+   definition or a skill it uses; a dispatch's `spec` also confirms the latest itself.
 
 A 0-asset brain gets only `research` (and the modes you propose) and no validations.
-Placements start as `[chat-tab]`; the person allows the Hive on the form. P6 runs the
+Placements start as `[chat-tab]`; add `hive` when this Brain's work should run on a
+Hive (where work runs is yours to decide; the actions kept for the person hold there
+too). P6 runs the
 same validator the tool uses. Binding a repo later (`artifact_cli bind`) redrafts a
 draft so it gains the repo's code-change mode and checks; a confirmed definition is
 left for the person.

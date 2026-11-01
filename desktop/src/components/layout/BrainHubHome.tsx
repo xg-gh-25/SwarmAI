@@ -9,7 +9,7 @@
  *      person's own, alphabetical so a card never moves. A card: the flower, the name,
  *      what the Brain is, and one quiet footer — its size and recency, plus its one
  *      status when there is one. Color is a small dot, warm only for what blocks on the
- *      person or waits for a review; setup (a Project Agent to confirm) stays grey.
+ *      person or waits for a review; setup (a Project Agent that waits for you) stays grey.
  * Adding knowledge is an action of one Brain: it lives on that Brain's page (and the
  * Library, on General's), not here. Design: s_frontend-design's design-judgment.md
  * (one thing stands out, color only for what needs action, separate with whitespace).
@@ -111,10 +111,10 @@ function chipsOf(needs: HubNeed[]) {
 
 /** The General Brain card's one status: can a task that belongs to no Brain go out? */
 function generalSignal(g: GeneralBrain): { tone: BrainSignalTone; text: string } {
-  if (g.projectAgentStatus === 'draft') return { tone: 'setup', text: 'Runner Agent to confirm' };
-  if (g.projectAgentStatus === 'changed') return { tone: 'setup', text: 'Runner Agent to confirm again' };
+  if (g.projectAgentStatus === 'widened') return { tone: 'setup', text: 'Runner Agent waits for you' };
   if (g.projectAgentStatus === 'invalid') return { tone: 'review', text: 'Runner Agent has problems' };
-  if (g.projectAgentStatus === 'reviewed') return { tone: 'calm', text: '' };
+  // a draft or a changed one the agent confirms itself (2026-11-01-project-agent-owned-by-agent)
+  if (g.projectAgentStatus) return { tone: 'calm', text: '' };
   // no definition: a task that belongs to no Brain cannot go out
   return { tone: 'review', text: 'No Runner Agent yet' };
 }

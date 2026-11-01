@@ -63,7 +63,9 @@ questions** (step 4): a task a Hive cannot do is refused at once, not after thre
 | which Hive | do not ask: leave out `--hive` (the daemon picks the least busy running one) unless the person named one |
 | how it runs (`--execution`), what comes back (`--returns`), title, brief | do not ask: step 3's tables; you write title and brief. Unsure between two: take the lighter and say why in `--why` |
 | uncommitted files (`dirty` > 0) | do not ask: the card says they were not sent |
-| `spec` refuses | do not ask: run `dispatch` once with the same arguments. It refuses with the same reasons, records the refusal and shows a refusal card (what to do instead is on it); then stop |
+| `spec`'s `project_agent.status` is `widened` (the Brain's definition gives you more than the person last confirmed) | ask, the one Project Agent question: run `"$SWARM_BACKEND_BIN" py -m scripts.project_agent card --brain <B>` and call AskUserQuestion with exactly the `questions` it prints. The person's pick is read by the daemon: "Confirm" confirms it as them; "Keep them for me" means change those items back in `project-agent.yaml`. Then run `spec` again |
+| `spec`'s `project_agent.status` is `problems` | do not ask: fix the definition (`project-agent.yaml`, or the skill or command it names), then run `spec` again; the spec confirms the latest definition itself |
+| `spec` refuses for any other reason | do not ask: run `dispatch` once with the same arguments. It refuses with the same reasons, records the refusal and shows a refusal card (what to do instead is on it); then stop |
 | the task needs something a Hive cannot reach that the checks do not see (an internal service or site, a corporate-only tool) | do not ask: pass `--needs-private "<what, in one sentence>"`; it refuses the task (it can add a refusal, never remove one) |
 
 On the desktop ask with AskUserQuestion; in a channel session ask the same question as

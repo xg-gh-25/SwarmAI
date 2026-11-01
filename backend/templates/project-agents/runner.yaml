@@ -1,5 +1,5 @@
 # Project Agent definition: how this Brain's work is taken in, done and delivered.
-# A draft until a person confirms it on the Brain Hub form.
+# The agent keeps it current and confirms it; the person confirms what gives the agent more.
 # Fields and defaults: the Project Agent standard, templates/project-agents/STANDARD.md.
 # Shipped with SwarmAI: the Runner Agent, the Project Agent of the General Brain, for tasks that
 # belong to no project. Its knowledge is the Markdown in Knowledge/Library; no repo, no gates of its own.

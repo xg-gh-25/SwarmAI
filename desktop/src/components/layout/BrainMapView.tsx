@@ -269,7 +269,7 @@ export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: Bra
   return (
     <div className="p-4" data-testid="bm-needs-view">
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
-        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, a Project Agent draft to confirm, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
+        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, a Project Agent that gives the agent more than you allowed, and what Need You holds for it (escalations, failing jobs, a repository it started reading).</Hint></div>
         <NeedList items={needs} onGoTo={onGoTo} />
       </div>
     </div>

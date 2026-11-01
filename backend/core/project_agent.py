@@ -35,7 +35,7 @@ Key public symbols:
                            source file exists in the bound repo, stored per revision
 - ``load_project_agent``   parse + validate -> dict for the Brain Hub, or None if absent
 - ``confirmation`` draft / reviewed / changed: whether the person's confirmation holds (every reader)
-- ``project_agent_status`` draft / changed / reviewed / invalid / None, for the Hub home
+- ``project_agent_status`` draft / changed / widened / reviewed / invalid / None, for the Hub home
 """
 from __future__ import annotations
 
@@ -483,6 +483,18 @@ def check_sources(project_dir: Path) -> dict[str, Any]:
     import json
     import time
     project_dir = Path(project_dir)
+    missing = source_problems(project_dir)
+    result = {"revision": revision(project_dir), "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "ok": not missing, "missing": missing}
+    (project_dir / SOURCE_CHECK_FILE).write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
+
+
+def source_problems(project_dir: Path) -> list[str]:
+    """The rows whose ``source`` is in neither the mode's bound repo nor the Brain; the
+    check ``check_sources`` keeps, without keeping it (an agent checks before it
+    confirms: a stored record would read as a confirmation, ``confirmation``)."""
+    project_dir = Path(project_dir)
     raw = (project_dir / PROJECT_AGENT_FILE).read_text(encoding="utf-8")
     d = normalize(yaml.safe_load(raw) or {})
     checkouts = repo_roots(project_dir)
@@ -496,10 +508,7 @@ def check_sources(project_dir: Path) -> dict[str, Any]:
                     missing.append(f"modes[{m.get('id')}].{key}: a row has no source")
                 elif not any((root / src).is_file() for root in roots) and not (project_dir / src).is_file():
                     missing.append(f"modes[{m.get('id')}].{key}: source {src} not found in the bound repo")
-    result = {"revision": revision(project_dir), "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-              "ok": not missing, "missing": missing}
-    (project_dir / SOURCE_CHECK_FILE).write_text(json.dumps(result, indent=2), encoding="utf-8")
-    return result
+    return missing
 
 
 def source_check_current(project_dir: Path) -> Optional[dict[str, Any]]:
@@ -588,7 +597,25 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "confirmation": confirmation(d.get("status", "draft"), check),
         "sourcePaths": _source_paths(d, project_dir),
         "form": _form(d, project_dir),
+        **_ownership(doc, project_dir, confirmation(d.get("status", "draft"), check) == "reviewed"),
     }
+
+
+def _ownership(doc: dict[str, Any], project_dir: Path, reviewed: bool) -> dict[str, Any]:
+    """Who stands behind the confirmation (design 2026-11-01-project-agent-owned-by-agent
+    §5): ``floorSetBy`` (the person whose confirmation is the floor, None = the product
+    default), ``agentConfirms`` (the agent's confirmations since, newest last) and
+    ``widened`` (what the current definition gives the agent beyond the floor: only
+    the person confirms those). A view: nothing is written."""
+    try:
+        from core import project_agent_floor as fl
+        rec = fl.peek(project_dir, doc, reviewed)
+        return {"floorSetBy": rec.get("set_by"),
+                "agentConfirms": [e for e in rec.get("agent") or [] if isinstance(e, dict)][-5:],
+                "widened": [] if reviewed else fl.widened(fl.authority(doc, project_dir), rec["floor"])}
+    except Exception as exc:  # noqa: BLE001 — a view; its failure must not hide the definition
+        logger.warning("project_agent: the floor of %s could not be read: %s", project_dir, exc)
+        return {"floorSetBy": None, "agentConfirms": [], "widened": []}
 
 
 def _form(d: dict[str, Any], project_dir: Path) -> dict[str, Any] | None:
@@ -652,19 +679,25 @@ def confirmation(status: Any, source_check: Any) -> str:
     confirmed; ``reviewed`` confirmed and the revision then checked is the current one;
     ``changed`` confirmed, then the definition, a skill one of its modes uses or its
     gates changed (an edit in chat, by an agent or by hand; a save on the form makes
-    it a draft itself). A ``changed`` one waits for the person like a draft."""
+    it a draft itself). The agent confirms a draft or a changed one itself when it gives
+    the agent no more than the person last confirmed (project_agent_review.agent_confirm)."""
     if status != "reviewed":
         return "draft"
     return "reviewed" if source_check is not None else "changed"
 
 
 def project_agent_status(project_dir: Path) -> str | None:
-    """The one word the Brain Hub home needs: ``draft`` (waits for the person to
-    confirm), ``changed`` (confirmed, then changed: confirm again), ``reviewed``,
-    ``invalid`` (the file has problems), or None (no file)."""
+    """The one word the Brain Hub home needs: ``reviewed``; ``draft`` / ``changed``
+    (not confirmed for the current revision: the agent confirms it before its next
+    dispatch, nothing for the person); ``widened`` (it gives the agent more than the
+    person last confirmed: waits for the person); ``invalid`` (the file has problems,
+    the agent fixes them); or None (no file)."""
     pa = load_project_agent(project_dir)
     if pa is None:
         return None
     if pa.get("problems"):
         return "invalid"
-    return pa.get("confirmation") or confirmation(pa.get("status"), pa.get("sourceCheck"))
+    state = pa.get("confirmation") or confirmation(pa.get("status"), pa.get("sourceCheck"))
+    if state != "reviewed" and pa.get("widened"):
+        return "widened"
+    return state

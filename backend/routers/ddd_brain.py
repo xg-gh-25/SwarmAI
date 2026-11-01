@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.ddd_entry_lifecycle import (
     VALID_TYPES,
@@ -1369,6 +1369,61 @@ def _brain_dir_or_404(name: str) -> Path:
 async def confirm_project_agent(name: str, body: ProjectAgentConfirmBody, request: Request) -> dict:
     """Confirm a Brain's Project Agent as the form showed it. 409 when it changed since."""
     return await executors.run_nav(lambda: _agent_write(request, _brain_dir_or_404(name), _confirm(body)))
+
+
+class AgentConfirmBody(BaseModel):
+    """The agent asking: its session and, for a confirmation, why (design
+    2026-11-01-project-agent-owned-by-agent §2-§4)."""
+    session: Optional[str] = Field(default=None, max_length=80)
+    why: Optional[str] = Field(default=None, max_length=600)
+
+
+def _agent_brain_dir(name: str) -> Path:
+    """The Brain an agent confirms or asks about (``General`` = the Runner Agent); never
+    on a Hive, which runs the definitions the host syncs to it."""
+    import os as _os
+    from core.project_agent_session import PinError, brain_dir
+    if _os.environ.get("SWARMAI_MODE") == "hive":
+        raise HTTPException(status_code=403, detail="Change the Project Agent on the desktop")
+    try:
+        return brain_dir(_workspace_root(), name)
+    except PinError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from None
+
+
+@router.post("/brains/{name}/project-agent/agent-confirm")
+async def agent_confirm_project_agent(name: str, body: AgentConfirmBody) -> dict:
+    """The agent confirms the current definition when its authority is no wider than the
+    person's floor (core/project_agent_review.agent_confirm); ``status`` says what
+    happened. It never confirms as the person."""
+    from core.app_session_id import valid_app_session_id
+    from core.project_agent_review import agent_confirm
+    session = body.session if body.session and valid_app_session_id(body.session) else None
+    return await executors.run_nav(
+        lambda: agent_confirm(_agent_brain_dir(name), session=session, why=body.why or ""))
+
+
+@router.post("/brains/{name}/project-agent/agent-card")
+async def agent_card_project_agent(name: str, body: AgentConfirmBody) -> dict:
+    """The question card that asks the person to confirm what widened
+    (core/project_agent_card); 409 when there is nothing to ask."""
+    from core import project_agent_card
+
+    def _work() -> dict:
+        _agent_brain_dir(name)
+        try:
+            return project_agent_card.card(name, body.session)
+        except project_agent_card.CardError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from None
+
+    return await executors.run_nav(_work)
+
+
+@router.get("/brains/{name}/project-agent/agent-card")
+async def agent_card_status(name: str) -> dict:
+    """What the person did with the last card: confirmed / kept / not_confirmed / asked."""
+    from core import project_agent_card
+    return await executors.run_nav(lambda: {"card": project_agent_card.status(name)})
 
 
 @router.patch("/brains/{name}/project-agent")

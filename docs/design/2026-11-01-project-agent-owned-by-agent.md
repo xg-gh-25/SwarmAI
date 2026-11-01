@@ -3,7 +3,7 @@ title: Project Agent 由 agent 自己确认，人只管"放宽给自己的权力
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: r0 design（无代码）
+status: r1 已实现（2026-11-01）；§10 是实现时按审查改的地方
 tags: [project-agent, brain-hub, autonomy, hive, dispatch]
 related:
   - docs/design/2026-10-28-project-agent-flow.md（定义、revision、来源检查、D4"默认是草稿"；本设计改它的 §5 审核卡和 §7 ③ 准入）
@@ -136,3 +136,16 @@ agent 确认一个 revision，要同时满足（全是确定性检查）：
 - 权力部分是不是就这三样（保留动作、`gates.enforce`、`delivery`/`pr_remote`）。我的判断是 `placements` 加 `hive` 不算：派到 Hive 本来就是 agent 能做的，
   保留动作在 Hive 上照样生效。
 - 建完 Brain 那一次，agent 确认后要不要还在对话里说一句（我建议说，一行）。
+
+## 10. 实现时改的地方（2026-11-01，security + correctness 审查一轮）
+
+- **gate 脚本的内容也算权力部分**（推翻 §1"gate 脚本的内容算 agent 的"）：底线里只要有 enforce 的 gate，就同时记下 `3-gates/` 的摘要；
+  之后 gate 脚本变了，agent 不能自己确认（把一个 gate 改成什么都放过，和删掉它一样宽）。底线里没有 gate 时不比，不打扰。
+- **推到 GitHub 的 mode 推到哪也算：** `branch-pr` 的 mode 多了一个仓库，算放宽（今天准入还不让用 `branch-pr`，先守住）。
+- **人以前确认过的底线要早点记下：** 底线记录不存在时，只有定义还是"已确认"才认得出是人确认的；所以每次 `spec` 前的确认（哪怕结果是"已确认、不用动"）
+  都先读一次底线，是人的就落盘。
+- **已确认但来源检查没过的：** 命令来源在仓库里、不在 revision 里，补上来源后 revision 不变；所以"已确认"时如果检查没过，就当场再查一次。
+- **写完以后的失败：** 定义已写、来源检查写不下 → 报 `problems`（没有检查就不算确认）；记 agent 确认的日志写不下 → 照样算确认，只记一条警告。
+- **人那条确认路由：** gate 按 `/project-agent/confirm` 认，不再锚在 Brain 名那一段（名字可以由变量、`$(…)` 拼出来）。
+- **会话交给命令行：** 只交给"就是这一条 `scripts.project_agent` 命令"的那一行，不交给只是提到它名字的命令。
+- **没改：** 每次确认都用标准格式重写整份定义（手写的注释会丢）。人的确认本来就这样，这里沿用。

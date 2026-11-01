@@ -284,6 +284,8 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
   const confirmation = agent.confirmation ?? (agent.status === 'reviewed' ? 'reviewed' : 'draft');
   const reviewed = confirmation === 'reviewed';
   const changed = confirmation === 'changed';
+  const widened = agent.widened ?? [];
+  const agentConfirms = agent.agentConfirms ?? [];
   const readOnly = form?.readOnly === true;
   const canEdit = !busy && !readOnly;
   const count = pending.set.size + [...pending.drop.values()].reduce((n, s) => n + s.size, 0);
@@ -446,23 +448,30 @@ export function ProjectAgentForm({ brain, agent, onRevise }: {
           : form.skeleton
             ? <StatusBadge tone="warning" testid="bm-agent-status">not drafted yet</StatusBadge>
             : reviewed
-              ? <StatusBadge tone="success" testid="bm-agent-status">confirmed{agent.reviewedAt ? ` · ${agent.reviewedAt.slice(0, 10)}` : ''}{agent.reviewedBy ? ` by ${agent.reviewedBy}` : ''}</StatusBadge>
-              : changed
-                ? <StatusBadge tone="warning" testid="bm-agent-status">changed since you confirmed it · confirm again</StatusBadge>
-                : <StatusBadge tone="warning" testid="bm-agent-status">draft · needs your review</StatusBadge>}
+              ? <StatusBadge tone="success" testid="bm-agent-status">confirmed{agent.reviewedAt ? ` · ${agent.reviewedAt.slice(0, 10)}` : ''}{agent.reviewedBy ? (agent.reviewedBy === 'agent' ? ' by the agent' : ` by ${agent.reviewedBy}`) : ''}</StatusBadge>
+              : widened.length > 0
+                ? <StatusBadge tone="warning" testid="bm-agent-status">waits for you · it gives the agent more than you allowed</StatusBadge>
+                : <StatusBadge tone="neutral" testid="bm-agent-status">{changed ? 'changed' : 'draft'} · the agent confirms it before its next dispatch</StatusBadge>}
         {agent.revision && <span className="text-meta text-[var(--color-text-muted)]" data-testid="pa-revision">version {agent.revision.slice(0, 7)}</span>}
         <span className="flex-1" />
         <button className="btn-sm btn-ghost" data-testid="pa-open-file"
           onClick={() => openPath(brain === null ? 'Knowledge/Library/project-agent.yaml' : `Projects/${brain}/project-agent.yaml`)}>Open YAML</button>
       </div>
       <p className="mt-2 text-small text-[var(--color-text-muted)]" data-testid="pa-intro">
-        The agent that takes this Brain&apos;s work: <b className="text-[var(--color-text)]">what it accepts, how it does each kind of work, and what it never does without you.</b> Every Brain has this same form. It starts as a skeleton when the Brain is created and is drafted from the Brain&apos;s documents; check each field, change what you want, and confirm. A Hive takes its work only once you have confirmed it.
+        The agent that takes this Brain&apos;s work: <b className="text-[var(--color-text)]">what it accepts, how it does each kind of work, and what it never does without you.</b> Every Brain has this same form. The agent drafts it from the Brain&apos;s documents, keeps it current and confirms it itself. You confirm only what gives the agent more than you last allowed: an action kept for you, a gate, or how it delivers. You can change or tighten any field here at any time.
       </p>
       <div className="mt-2 flex flex-wrap gap-4">{KIND_LEGEND.map(([k, l, d]) => (
         <span key={k} className="flex items-center gap-1.5 text-meta text-[var(--color-text-muted)]"><KindTag kind={k} label={l} />{d}</span>))}</div>
       {readOnly && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-read-only">This Hive runs the definition your desktop sends it: change and confirm it on the desktop.</div>}
       {notice && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-notice">{notice}</div>}
       {problems.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-error)]" data-testid="bm-agent-problems">{problems.join(' · ')}</div>}
+      {!reviewed && widened.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-widened">Only you can confirm these: {widened.join(' · ')}</div>}
+      {agentConfirms.length > 0 && (
+        <details className="mt-2 text-meta text-[var(--color-text-muted)]" data-testid="pa-agent-confirms">
+          <summary>{agentConfirms.length === 1 ? 'The agent confirmed it once' : `The agent confirmed it ${agentConfirms.length} times`} since {agent.floorSetBy ? `you (${agent.floorSetBy})` : 'it was created'}</summary>
+          {agentConfirms.slice().reverse().map((e) => (
+            <div key={`${e.at}-${e.revision}`}>{e.at.slice(0, 16).replace('T', ' ')} · {e.why} · changed: {e.changed.join(', ')}</div>))}
+        </details>)}
       {(agent.notes ?? []).length > 0 && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-notes">{(agent.notes ?? []).join(' · ')}</div>}
       {form.missing.length > 0 && <div className="mt-2 text-meta text-[var(--color-status-warning)]" data-testid="pa-missing">Still empty: {form.missing.join(' · ')}</div>}
 

@@ -72,7 +72,7 @@ export interface NeedItem {
   count: number;
 }
 
-/** Everything in this brain that waits for a person, in one list: Runs, and a Project Agent draft to confirm (or a file with problems), then one
+/** Everything in this brain that waits for a person, in one list: Runs, and a Project Agent that gives the agent more than the person allowed (or a file with problems), then one
  *  row per kind the attention channel holds that neither list names (escalations,
  *  failing jobs, newly read repositories, Runs not listed, anything else).
  *  The rows' counts add up to the Brain header's count (the attention channel's
@@ -214,9 +214,11 @@ export interface HubNeed {
   builtin?: boolean;
 }
 
-/** The General Brain's Runner Agent waits on the person (draft or problems). */
+/** The General Brain's Runner Agent waits on the person: it gives the agent more than
+ *  they last confirmed, or its file has problems. A draft or a changed one the agent
+ *  confirms itself (design 2026-11-01-project-agent-owned-by-agent). */
 const generalWaits = (g?: GeneralBrain | null) =>
-  !!g && (g.projectAgentStatus === 'draft' || g.projectAgentStatus === 'changed' || g.projectAgentStatus === 'invalid');
+  !!g && (g.projectAgentStatus === 'widened' || g.projectAgentStatus === 'invalid');
 
 /** The Need You row of the built-in General Brain's Runner Agent, or none. Its id never
  *  collides with a Projects/ Brain that carries the same name (`<name>-agent`). */
@@ -225,18 +227,18 @@ export function generalNeed(g?: GeneralBrain | null): HubNeed | null {
   const s = g.projectAgentStatus;
   return { brain: g.name, kind: 'agent', id: 'builtin-general-agent', since: null, builtin: true, count: 1,
     severity: s === 'invalid' ? 'review' : 'setup',
-    text: s === 'draft' ? 'Runner Agent draft to confirm' : s === 'changed' ? CHANGED_TEXT('Runner Agent')
-      : 'Runner Agent file has problems to fix' };
+    text: s === 'widened' ? WIDENED_TEXT('Runner Agent') : 'Runner Agent file has problems to fix' };
 }
 
-/** A Project Agent waits on the person while it is a draft or changed since it was
- *  confirmed (confirm), or has problems (fix). */
+/** A Project Agent waits on the person only when it gives the agent more than they last
+ *  confirmed (confirm those), or has problems. A draft or a changed one the agent
+ *  confirms itself before its next dispatch. */
 const agentWaits = (b: BrainSummary) =>
-  b.projectAgentStatus === 'draft' || b.projectAgentStatus === 'changed' || b.projectAgentStatus === 'invalid';
+  b.projectAgentStatus === 'widened' || b.projectAgentStatus === 'invalid';
 
-/** Confirmed, then changed (in chat, by an agent or by hand): dispatch refuses it until
- *  the person confirms it again (core/project_agent.confirmation). */
-const CHANGED_TEXT = (who: string) => `${who} changed since you confirmed it: confirm again`;
+/** The definition gives the agent more than the person last allowed (a reserved action,
+ *  a gate, how it delivers): only the person confirms that (core/project_agent_floor). */
+const WIDENED_TEXT = (who: string) => `${who} gives the agent more than you allowed: confirm it`;
 
 /** health.pending split by source (the attention channel's own split). An old daemon
  *  without the split counts everything as one unnamed bucket. */
@@ -279,8 +281,7 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
   const agents: HubNeed[] = brains.filter(agentWaits).map((b) => ({
     brain: b.name, kind: 'agent', id: `${b.name}-agent`, since: null, count: 1,
     severity: b.projectAgentStatus === 'invalid' ? 'review' : 'setup',
-    text: b.projectAgentStatus === 'draft' ? 'Project Agent draft to confirm'
-      : b.projectAgentStatus === 'changed' ? CHANGED_TEXT('Project Agent') : 'Project Agent file has problems to fix',
+    text: b.projectAgentStatus === 'widened' ? WIDENED_TEXT('Project Agent') : 'Project Agent file has problems to fix',
   }));
   const order: HubNeed['kind'][] = ['runs', 'escalations', 'jobs', 'repos'];
   out.sort((x, y) => order.indexOf(x.kind) - order.indexOf(y.kind));
@@ -325,8 +326,7 @@ export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): Brai
   if (b.projectAgentStatus === 'invalid') return { tone: 'review', rank: 1, text: 'Project Agent has problems' };
   if (b.health.liveRun) return { tone: 'live', rank: 2, text: 'Run in progress' };
   if (b.setupState === 'setting-up') return { tone: 'setup', rank: 3, text: bornText(b.setupProgress) };
-  if (b.projectAgentStatus === 'draft') return { tone: 'setup', rank: 3, text: 'Project Agent to confirm' };
-  if (b.projectAgentStatus === 'changed') return { tone: 'setup', rank: 3, text: 'Project Agent to confirm again' };
+  if (b.projectAgentStatus === 'widened') return { tone: 'setup', rank: 3, text: 'Project Agent waits for you' };
   if (split.repos) return { tone: 'notice', rank: 4, text: `Reads ${plural(split.repos, 'new repository', 'new repositories')}` };
   return { tone: 'calm', rank: 5, text: '' };
 }
