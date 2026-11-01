@@ -220,6 +220,19 @@ def _answer_sources(event_rows) -> dict[str, int]:
     return out
 
 
+def _tests_carried(event_rows) -> "str | None":
+    """The latest passed LG-1 detail that carried a TEST report over a main move (E2)."""
+    from core.run_protocol.checks import CARRIED_MARK
+    found = None
+    for event in event_rows:
+        payload = event.get("payload") or {}
+        detail = payload.get("detail")
+        if event.get("kind") == "check" and payload.get("check_id") == "LG-1" \
+                and payload.get("passed") and isinstance(detail, str) and CARRIED_MARK in detail:
+            found = detail[detail.index(CARRIED_MARK):]
+    return found
+
+
 def _review_coverage(event_rows) -> list[dict[str, Any]]:
     from core.run_protocol.review import coverage_rows
     return coverage_rows(list(event_rows))
@@ -515,6 +528,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "answer_sources": _answer_sources(event_rows),
                # what each expert's transcript shows it read (D2; RV-6 reads the same)
                "review_coverage": _review_coverage(event_rows),
+               # a TEST report that stood across a main move at landing (E2)
+               "tests_carried": _tests_carried(event_rows),
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows),
@@ -776,6 +791,9 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                       for cmd in commands[:10]]
             if len(commands) > 10:
                 lines.append(f"- {len(commands) - 10} more in run_audit.json")
+    if details.get("tests_carried"):
+        lines += ["", "Tests were not run again after main moved: "
+                  + _text(details["tests_carried"], 600)]
     skipped = [(repo, cmd) for repo, commands in (details.get("test_reports") or {}).items()
                for cmd in commands or () if cmd.get("result") == "not_run"]
     if skipped:

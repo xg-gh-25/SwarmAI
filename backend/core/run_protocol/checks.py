@@ -310,11 +310,18 @@ def _document_check(check_id: str, context: CheckContext) -> Result:
     ))
 
 
+# LG-1's detail when a TEST report stood across a main move (design 2026-11-01-
+# pipeline-delivery-friction E2); the audit lists those landings in the REPORT
+CARRIED_MARK = "tests carried over a main move:"
+
+
 def _report_check(check_id: str, context: CheckContext) -> Result:
     """BX-3 / TS-1 / LG-1 (S6-1): for every expected repo, the latest validation report
     of BUILD (BX-3) or TEST (TS-1, LG-1) is on the repo's current code tree; TS-1 and
     LG-1 also refuse a TEST report with a failed command (the agent reported a failure,
-    so the change is not delivered)."""
+    so the change is not delivered). LG-1 also accepts the report a landing carried over
+    a main move (``run["carried_test_trees"]``, set by the engine only when main's new
+    commits change none of the run's files and the rebase kept the run's patch)."""
     from core.run_protocol.validation_report import latest
     stage = "test" if check_id in ("TS-1", "LG-1") else (
         "build")
@@ -325,6 +332,7 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
     if check_id == "BX-3" and not context.run.get("changed_paths"):
         return False, "no change in the run's worktree"
     reports = latest(context.events, stage)
+    carried = (context.run.get("carried_test_trees") or {}) if check_id == "LG-1" else {}
     problems = []
     for repo in expected:
         event = reports.get(repo)
@@ -333,7 +341,8 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
                             'the report as {"reports": [...]} with --artifact -')
             continue
         payload = event["payload"]
-        if not current.get(repo) or payload.get("code_tree") != current.get(repo):
+        on_tree = bool(current.get(repo)) and payload.get("code_tree") == current.get(repo)
+        if not on_tree and not (payload.get("code_tree") and carried.get(repo) == payload["code_tree"]):
             problems.append(f"{repo}: the {stage} report is for tree "
                             f"{str(payload.get('code_tree'))[:12]}, the code is now "
                             f"{str(current.get(repo))[:12]}; test again and report")

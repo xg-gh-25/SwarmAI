@@ -3467,7 +3467,10 @@ class RunEngine:
     def prepare_reflect(self, report: Mapping[str, Any]) -> dict[str, Any]:
         """Validate and record the five-part CDF report during DELIVER.
 
-        Any section may be empty. Old lesson-list artifacts are intentionally rejected.
+        Any section may be empty or missing. An entry that does not validate is dropped
+        and named in ``dropped`` (the rest is kept; run it again to add the fixed ones),
+        so one bad entry never sends the whole report back (design 2026-11-01-pipeline-
+        delivery-friction E1). Old lesson-list artifacts are intentionally rejected.
         RF failures never block landing; the third failure stores an empty report.
         """
         from core.run_protocol import reflect
@@ -3486,8 +3489,10 @@ class RunEngine:
         declares = isinstance(report, Mapping) and any(
             isinstance(row, Mapping) and row.get("closes")
             for rows in report.values() if isinstance(rows, list) for row in rows)
-        document = reflect.prepare(report, allowed_anchors=set(anchors), open_gap_ids=(
+        prepared = reflect.prepare_lenient(report, allowed_anchors=set(anchors), open_gap_ids=(
             gaps.open_gap_ids(self.project) if declares else set()))
+        dropped = prepared.pop("dropped")
+        document = prepared
         path = self.run_dir / "artifacts" / "reflect.json"
         DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
                                                indent=2))
@@ -3501,7 +3506,14 @@ class RunEngine:
                         "sections": {name: [] for name in reflect.SECTIONS}}
             DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False,
                                                    sort_keys=True, indent=2))
-        return {**document, "checks": result["checks"], "passed": result["passed"]}
+        out = {**document, "checks": result["checks"], "passed": result["passed"]}
+        if dropped:
+            out["dropped"] = dropped
+            out["note"] = (f"{len(dropped)} entr{'y' if len(dropped) == 1 else 'ies'} not "
+                           "kept (see dropped); the rest is recorded. Fix them and run "
+                           "reflect-prepare again with the whole report to keep them, or "
+                           "go on: REFLECT never blocks landing.")
+        return out
 
     @_one_operation
     def note_transcript(self, sid: str) -> None:
@@ -3639,15 +3651,13 @@ class RunEngine:
                          if not payload.get("n_fail") else None}
         return out
 
-    def _base_moved_note(self, before: Mapping[str, Mapping[str, Any]]) -> str | None:
-        """When LG-1 failed only because the sync moved main under a fresh TEST report:
-        what moved, the last TEST commands to run again and the run's files main also
-        changed (information; it releases nothing). None otherwise: no base moved, or a
-        repo's TEST report was not on its tree before the sync (design 2026-10-26-
-        pipeline-review-closure §5.2 point 2). A sync conflict or a changed patch never
-        gets here (LG-4 fails with it)."""
-        moved: list[str] = []
-        overlap: list[str] = []
+    def _main_moves(self, before: Mapping[str, Mapping[str, Any]]
+                    ) -> "dict[str, dict[str, Any]] | None":
+        """Per repo the landing's sync moved under a fresh TEST report: ``{"from", "to",
+        "report_tree", "overlap"}``, overlap being the run's own files main's new commits
+        also changed. None when a repo's TEST report was not on its tree before the sync
+        (it was stale, or had a failed command): then nothing moved under fresh evidence."""
+        moves: dict[str, dict[str, Any]] = {}
         for name, root in self.effective_repos().items():
             then = before.get(name) or {}
             if not then.get("tree") or then.get("report_tree") != then.get("tree"):
@@ -3658,18 +3668,42 @@ class RunEngine:
                 return None
             if not then.get("base") or now == then["base"]:
                 continue
-            moved.append(f"{name} {str(then['base'])[:12]}->{str(now)[:12]}")
             try:
                 main_paths = set(_git(root, "diff", "--name-only", "--no-renames",
                                       then["base"], now).splitlines())
                 own = set(_git(root, "diff", "--name-only", "--no-renames", now,
                                git_tree.write_tree(root, (f".aidlc/deliverables/{self.run_id}/",),
                                                    {})).splitlines())
+                overlap = sorted(path for path in main_paths & own if path)
             except EngineError:
-                continue
-            overlap += [f"{name}:{path}" for path in sorted(main_paths & own) if path]
-        if not moved:
+                overlap = None          # unknown: never carried over
+            moves[name] = {"from": then["base"], "to": now,
+                           "report_tree": then["report_tree"], "overlap": overlap}
+        return moves
+
+    def _carried_test_trees(self, moves: "Mapping[str, Mapping[str, Any]] | None"
+                            ) -> dict[str, str]:
+        """repo -> the TEST report tree that still stands after the sync (design 2026-11-01-
+        pipeline-delivery-friction E2): main moved under a fresh report by commits that
+        change none of the run's own files, and the rebase kept the run's patch (a changed
+        patch never gets here: LG-4 fails with it). LG-1 accepts that report; the REPORT
+        says the tests ran before main moved."""
+        return {name: str(move["report_tree"]) for name, move in (moves or {}).items()
+                if move.get("overlap") == []}
+
+    def _base_moved_note(self, before: Mapping[str, Mapping[str, Any]]) -> str | None:
+        """When LG-1 failed only because the sync moved main under a fresh TEST report:
+        what moved, the last TEST commands to run again and the run's files main also
+        changed (information; it releases nothing). None otherwise: no base moved, or a
+        repo's TEST report was not on its tree before the sync (design 2026-10-26-
+        pipeline-review-closure §5.2 point 2). A sync conflict or a changed patch never
+        gets here (LG-4 fails with it)."""
+        moves = self._main_moves(before)
+        if not moves:
             return None
+        moved = [f"{name} {str(m['from'])[:12]}->{str(m['to'])[:12]}"
+                 for name, m in moves.items()]
+        overlap = [f"{name}:{path}" for name, m in moves.items() for path in m["overlap"] or ()]
         commands = []
         for repo, report in sorted(self._test_reports(self.store.read_events()).items()):
             for cmd in (report or {}).get("commands") or ():
@@ -3767,7 +3801,10 @@ class RunEngine:
             code_trees = tree.build_code_trees(
                 repos, self.run_id, git_tree.write_tree, git_tree.list_reserved)
             context = self.check_context()
+            moves = self._main_moves(before_sync) if carry_error is None else None
+            carried = self._carried_test_trees(moves)
             run_facts = {**dict(context.run), "code_trees": code_trees,
+                         "carried_test_trees": carried,
                          "landing_bases": {name: _git(root, "rev-parse", "HEAD")
                                            for name, root in self.contract["repo_roots"].items()}}
             context = dataclasses.replace(context, run=run_facts,
@@ -3791,6 +3828,11 @@ class RunEngine:
                 if moved:
                     lg1_detail = f"{lifecycle.BASE_MOVED_PREFIX} {moved} | {lg1_detail}"[:1500]
                     lg1_cause = "base_moved"
+            if lg1_passed and carried:
+                lg1_detail = (f"{lg1_detail}; {checks.CARRIED_MARK} " + ", ".join(
+                    f"{name} (main {str(moves[name]['from'])[:12]}->{str(moves[name]['to'])[:12]})"
+                    for name in sorted(carried)) + ": main's new commits change none of "
+                    "the run's files, so the TEST report from before the sync stands")[:1500]
             record("LG-1", lg1_passed, lg1_detail, lg1_cause)
             if carry_error is not None:
                 conflict = carry_error.code == "merge_conflict"

@@ -41,19 +41,22 @@ def test_main_moves_disjoint_lands_on_new_main(rig):
 
 
 
-def test_main_moves_and_the_synced_tree_is_tested_again_before_it_lands(rig):
-    """S6-1: the landing rebases the worktree onto the moved main; the TEST report is
-    for the old tree, so LG-1 fails and next asks for report-tests on the new tree."""
+def test_main_moves_by_unrelated_commits_and_the_run_lands_on_that_attempt(rig):
+    """S6-1 with design 2026-11-01-pipeline-delivery-friction E2: the landing rebases the
+    worktree onto the moved main; main's new commits change none of the run's files, so
+    the TEST report from before the sync stands and the run lands on top of the moved
+    main. (A move that also changes a run file is tested again:
+    test_pipeline_v1_base_moved.)"""
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
     r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     moved = r.commit_on_main({"docs/notes.md": "unrelated\n"})
-    out = r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
-    assert _main(r) == moved and r.state()["status"] == "active", out
-    assert "report-tests" in out["next"]["command"], out["next"]
-    r.v1("report-tests", "--artifact", r.artifact("report", r.report()))
-    _landed_clean(r.drive())
+    r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    state = r.drive()
+    _landed_clean(state)
+    from tests.pipeline_v1_rig import _git
+    assert _git(r.repo, "rev-parse", "main~1") == moved
 
 
 def test_merge_conflict_three_times_ends_land_conflict(rig):

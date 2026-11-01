@@ -304,8 +304,12 @@ def test_the_run_is_shown_its_projects_gaps_and_a_landed_report_keeps_closes(tmp
         r.v1("reflect-prepare", "--artifact", r.artifact("reflect0", report))  # registers the roots
         from core.run_protocol.provenance import run_roots
         report["delivered"][0]["evidence"] = [sorted(run_roots(r.run_id))[0]]
-        refused = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", report))
-        assert refused.get("ok") is not True and "not open" in json.dumps(refused)
+        # an entry closing a gap that is not open is dropped, named, and the rest kept
+        # (design 2026-11-01-pipeline-delivery-friction E1)
+        kept = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", report))
+        dropped = kept["reflect"]["dropped"]
+        assert [d["section"] for d in dropped] == ["delivered"] and "not open" in dropped[0]["reason"]
+        assert kept["reflect"]["sections"]["delivered"] == []
         report["delivered"][0]["closes"] = [A]
         assert r.v1("reflect-prepare", "--artifact", r.artifact("reflect2", report)).get("ok") is True
         r.v1("land", "--message", "fix: tab refresh\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")

@@ -11,7 +11,9 @@ What is tested:
 - through real runs: main moves while the TEST report is fresh → the detail starts with
   ``base_moved:`` and names the last TEST command and the run files main also changed;
   three such moves, then the run lands on the fourth attempt; a run that changed its own
-  code after TEST gets no prefix (its report was stale before the sync).
+  code after TEST gets no prefix (its report was stale before the sync);
+- design 2026-11-01-pipeline-delivery-friction E2: a move whose commits change none of
+  the run's files carries the TEST report over, and the run lands without testing again.
 """
 from __future__ import annotations
 
@@ -100,6 +102,15 @@ def rig(tmp_path, monkeypatch):
     r.close()
 
 
+def _main_big(i: int) -> str:
+    """big.py as main has it after its i-th move: lines far from the run's own edit, so
+    the rebase is clean, but the file is one the run changed."""
+    text = BIG
+    for j in range(i + 1):
+        text = text.replace(f"value_{30 + j} = {30 + j}", f"value_{30 + j} = {300 + j}")
+    return text
+
+
 def _land(r: Rig) -> dict:
     return r.v1("land", "--message", "fix: swap the operands" + SWARM)
 
@@ -114,14 +125,14 @@ def test_main_moving_three_times_then_the_run_lands(rig):
     r.drive(until="deliver")
     r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     for i in range(3):
+        # each move also changes a run file (another line of big.py): the report does not
+        # carry over (E2), the run tests again
         r.commit_on_main({f"other{i}.py": f"x = {i}\n", "backend/core/big.py":
-                          BIG.replace("value_38 = 38", "value_38 = 380")}
-                         if i == 0 else {f"other{i}.py": f"x = {i}\n"})
+                          _main_big(i)})
         out = _land(r)
         assert out.get("ok") is False and _lg1(out).startswith("base_moved:"), out
         assert "python -m pytest backend/tests/test_x.py" in _lg1(out), out
-        if i == 0:
-            assert "backend/core/big.py" in _lg1(out), out
+        assert "backend/core/big.py" in _lg1(out), out
         assert r.state()["status"] == "active" and r.state().get("pending_landing") is None
         assert "report-tests" in json.dumps(r.v1("status")["next"])
         r.v1("report-tests", "--artifact", r.artifact(f"t{i}", r.report()))
@@ -174,7 +185,7 @@ def test_main_moving_three_times_with_long_test_commands_still_lands(rig):
 
     r.v1("report-tests", "--artifact", r.artifact("long0", long_report()))
     for i in range(3):
-        r.commit_on_main({f"other{i}.py": f"x = {i}\n"})
+        r.commit_on_main({f"other{i}.py": f"x = {i}\n", "backend/core/big.py": _main_big(i)})
         out = _land(r)
         assert out.get("ok") is False and _lg1(out).startswith("base_moved:"), out
         assert len(_lg1(out).encode()) > 1024, len(_lg1(out))
@@ -182,3 +193,35 @@ def test_main_moving_three_times_with_long_test_commands_still_lands(rig):
         r.v1("report-tests", "--artifact", r.artifact(f"long{i + 1}", long_report()))
     out = _land(r)
     assert out.get("ok") is True or r.state().get("landing") == "landed", out
+
+
+def test_main_moving_by_unrelated_commits_lands_without_testing_again(rig):
+    """design 2026-11-01-pipeline-delivery-friction E2: main moves by commits that change
+    none of the run's files, the rebase is clean: the TEST report from before the sync
+    stands, the run lands on that attempt, and the REPORT says the tests were not run
+    again."""
+    r = rig
+    r.create()
+    r.drive(until="deliver")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
+    r.commit_on_main({"elsewhere.py": "y = 1\n"})
+    out = _land(r)
+    assert r.state().get("landing") == "landed", out
+    lg1 = [e["payload"] for e in r.events() if e["kind"] == "check"
+           and e["payload"].get("check_id") == "LG-1"][-1]
+    assert lg1["passed"] and "tests carried over a main move" in str(lg1["detail"]), lg1
+    report = (r.engine().run_dir / "REPORT.md").read_text()
+    assert "Tests were not run again after main moved" in report
+
+
+def test_a_carried_report_needs_the_report_on_the_tree_before_the_sync(rig):
+    """A TEST report already stale before the sync is not carried: the run goes back to
+    TEST, exactly as before E2."""
+    r = rig
+    r.create()
+    r.drive(until="deliver")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
+    r.v1("report-tests", "--artifact", r.artifact("red", r.report("fail")))
+    r.commit_on_main({"elsewhere.py": "y = 1\n"})
+    out = _land(r)
+    assert out.get("ok") is False and r.state().get("landing") is None, out
