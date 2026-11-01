@@ -246,11 +246,16 @@ def test_an_accepted_run_is_read_only(world):
 def test_a_pass_verdict_is_read_only_before_the_run_settles(world, monkeypatch):
     """The panel shows "accepted" as soon as the verdict is in (files or lessons may still
     be coming): the proxy and the commands follow the same rule."""
+    from core import swarm_out_results
     from core.swarm_out_remote import closed_for
 
     async def start(*a, **k):
         raise AssertionError("nothing is sent")
     monkeypatch.setattr(swarm_out, "_start_session", start)
+    # the verdict is on the result there is now (a verdict on an older one is void:
+    # e2e-fixes #2, tests/test_swarm_out_e2e_fixes.py)
+    monkeypatch.setattr(swarm_out_results, "load", lambda d: {
+        "result": {"ended": "completed", "provisional": False, "ended_at": "x"}})
     st._update(DID, lambda rec: rec.update(verdict={"value": "pass", "ended_at": "x", "at": "y"}))
     assert closed_for({"dispatch_id": DID}, write=True).status == 409
     assert closed_for({"dispatch_id": DID}, write=False) is None
