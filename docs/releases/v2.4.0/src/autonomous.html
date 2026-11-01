@@ -1,0 +1,94 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css"></head>
+<body><div class="wrap"><div class="card">
+<h2>Autonomous Pipeline v1 — DDD-driven delivery, from intent to a landed commit</h2>
+<div class="sub">The pipeline owns the two ends: understand the need, then guard quality. How to write the code is the agent's call. Whether it is done is decided by deterministic checks.</div>
+<svg viewBox="0 0 1200 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
+  <defs>
+    <marker id="aO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f0953a"/></marker>
+    <marker id="aG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3fbf7f"/></marker>
+    <marker id="aD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a919c"/></marker>
+  </defs>
+
+  <!-- Brain band -->
+  <rect x="150" y="10" width="900" height="64" rx="10" fill="#1f2a24" stroke="#3fbf7f"/>
+  <text x="170" y="36" font-size="15" font-weight="600" fill="#e6e8eb">Brain (DDD)</text>
+  <text x="170" y="58" font-size="12.5" fill="#8a919c">PRODUCT · TECH · IMPROVEMENT · PROJECT · code graph · the repo's own review patterns</text>
+  <path d="M300,74 L300,130" stroke="#3fbf7f" stroke-width="2" marker-end="url(#aG)"/>
+  <text x="310" y="108" font-size="12" fill="#3fbf7f">knowledge drives the spec</text>
+  <path d="M760,74 L760,130" stroke="#3fbf7f" stroke-width="2" marker-end="url(#aG)"/>
+  <text x="770" y="108" font-size="12" fill="#3fbf7f">patterns and pitfalls guide review</text>
+  <path d="M1080,190 C1124,190 1124,42 1050,42" fill="none" stroke="#3fbf7f" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#aG)"/>
+  <text x="1138" y="104" font-size="12" fill="#3fbf7f">lessons</text>
+  <text x="1138" y="120" font-size="12" fill="#3fbf7f">via CDF</text>
+
+  <!-- intent -->
+  <rect x="10" y="150" width="110" height="80" rx="40" fill="#1a1d23" stroke="#2c313a"/>
+  <text x="65" y="186" font-size="14" font-weight="600" fill="#e6e8eb" text-anchor="middle">Intent</text>
+  <text x="65" y="205" font-size="11.5" fill="#8a919c" text-anchor="middle">your words</text>
+  <path d="M120,190 L148,190" stroke="#8a919c" marker-end="url(#aD)"/>
+
+  <!-- front end -->
+  <rect x="150" y="132" width="330" height="184" rx="10" fill="#171a20" stroke="#2c313a"/>
+  <text x="166" y="154" font-size="11.5" font-weight="600" fill="#8a919c" letter-spacing="1.2">FRONT END · UNDERSTAND</text>
+  <g font-size="13" font-weight="600" fill="#e6e8eb">
+    <rect x="166" y="166" width="94" height="48" rx="7" fill="#1a1d23" stroke="#f0953a"/><text x="213" y="187" text-anchor="middle">EVALUATE</text><text x="213" y="204" font-size="11" font-weight="400" fill="#8a919c" text-anchor="middle">+ Gate-0</text>
+    <rect x="270" y="166" width="94" height="48" rx="7" fill="#1a1d23" stroke="#2c313a"/><text x="317" y="195" text-anchor="middle">THINK</text>
+    <rect x="374" y="166" width="94" height="48" rx="7" fill="#1a1d23" stroke="#2c313a"/><text x="421" y="195" text-anchor="middle">PLAN</text>
+  </g>
+  <path d="M260,190 L270,190" stroke="#8a919c"/><path d="M364,190 L374,190" stroke="#8a919c"/>
+  <text x="166" y="240" font-size="12" fill="#c9cdd3">out: REQUIREMENTS + DESIGN_SPEC</text>
+  <text x="166" y="260" font-size="12" fill="#8a919c">root cause and a class fix before design;</text>
+  <text x="166" y="277" font-size="12" fill="#8a919c">every part of one requirement is one task</text>
+  <text x="166" y="297" font-size="12" fill="#8a919c">Gate-0: diagnose before you build</text>
+  <path d="M480,190 L508,190" stroke="#f0953a" stroke-width="2" marker-end="url(#aO)"/>
+
+  <!-- middle -->
+  <rect x="510" y="132" width="170" height="184" rx="10" fill="#171a20" stroke="#2c313a" stroke-dasharray="4 4"/>
+  <text x="526" y="154" font-size="11.5" font-weight="600" fill="#8a919c" letter-spacing="1.2">MIDDLE · NATIVE</text>
+  <rect x="526" y="166" width="138" height="48" rx="7" fill="#1a1d23" stroke="#2c313a"/>
+  <text x="595" y="195" font-size="13" font-weight="600" fill="#e6e8eb" text-anchor="middle">BUILD</text>
+  <text x="526" y="240" font-size="12" fill="#8a919c">the agent decides how</text>
+  <text x="526" y="257" font-size="12" fill="#8a919c">to write and test it;</text>
+  <text x="526" y="274" font-size="12" fill="#8a919c">its own run worktree,</text>
+  <text x="526" y="291" font-size="12" fill="#8a919c">in any repo</text>
+  <path d="M680,190 L708,190" stroke="#f0953a" stroke-width="2" marker-end="url(#aO)"/>
+
+  <!-- back end -->
+  <rect x="710" y="132" width="370" height="184" rx="10" fill="#171a20" stroke="#2c313a"/>
+  <text x="726" y="154" font-size="11.5" font-weight="600" fill="#8a919c" letter-spacing="1.2">BACK END · GUARD QUALITY</text>
+  <g font-size="12.5" font-weight="600" fill="#e6e8eb" text-anchor="middle">
+    <rect x="726" y="166" width="80" height="48" rx="7" fill="#1a1d23" stroke="#f0953a"/><text x="766" y="187">REVIEW</text><text x="766" y="204" font-size="11" font-weight="400" fill="#8a919c">Gate-2</text>
+    <rect x="814" y="166" width="78" height="48" rx="7" fill="#1a1d23" stroke="#2c313a"/><text x="853" y="195">TEST</text>
+    <rect x="900" y="166" width="82" height="48" rx="7" fill="#1a1d23" stroke="#2c313a"/><text x="941" y="195">DELIVER</text>
+    <rect x="990" y="166" width="80" height="48" rx="7" fill="#1f2a24" stroke="#3fbf7f"/><text x="1030" y="195">REFLECT</text>
+  </g>
+  <text x="726" y="240" font-size="12" fill="#8a919c">experts in parallel; findings from a ledger,</text>
+  <text x="726" y="257" font-size="12" fill="#8a919c">grouped by cause into one FIXING_SPEC</text>
+  <text x="726" y="277" font-size="12" fill="#8a919c">scoped tests: what the change reaches, once</text>
+  <text x="726" y="297" font-size="12" fill="#8a919c">land on main + REPORT; lessons close gaps</text>
+
+  <!-- output -->
+  <path d="M1080,240 L1100,240 L1100,380 L1040,380" fill="none" stroke="#3fbf7f" stroke-width="2" marker-end="url(#aG)"/>
+  <rect x="860" y="350" width="178" height="60" rx="10" fill="#1f2a24" stroke="#3fbf7f"/>
+  <text x="949" y="376" font-size="14" font-weight="600" fill="#e6e8eb" text-anchor="middle">Landed commit</text>
+  <text x="949" y="396" font-size="11.5" fill="#8a919c" text-anchor="middle">+ REPORT · residual risk</text>
+
+  <!-- deterministic disposal -->
+  <rect x="150" y="350" width="690" height="92" rx="10" fill="#14161b" stroke="#2c313a"/>
+  <text x="166" y="374" font-size="13" font-weight="600" fill="#e6e8eb">The OS disposes deterministically</text>
+  <text x="166" y="396" font-size="12" fill="#8a919c">Done = a test that went red on the defect and green on the fix, an exit code, a diff, a count.</text>
+  <text x="166" y="414" font-size="12" fill="#8a919c">Review rounds stop at the cap; what is still open is recorded for the person, never looped on.</text>
+  <text x="166" y="432" font-size="12" fill="#8a919c">A run that stops says why; a finished run says whether it was verified.</text>
+
+  <!-- profiles -->
+  <text x="150" y="476" font-size="11.5" font-weight="600" fill="#8a919c" letter-spacing="1.2">PROFILES · HOW DEEP THE FRONT END GOES · THE MIDDLE IS THE SAME</text>
+  <g font-size="12">
+    <rect x="150" y="488" width="176" height="52" rx="8" fill="#1a1d23" stroke="#2c313a"/><text x="164" y="509" font-weight="600" fill="#e6e8eb">full · bugfix</text><text x="164" y="527" fill="#8a919c">all eight stages</text>
+    <rect x="336" y="488" width="176" height="52" rx="8" fill="#1a1d23" stroke="#2c313a"/><text x="350" y="509" font-weight="600" fill="#e6e8eb">trivial</text><text x="350" y="527" fill="#8a919c">no THINK, still reviewed</text>
+    <rect x="522" y="488" width="176" height="52" rx="8" fill="#1a1d23" stroke="#2c313a"/><text x="536" y="509" font-weight="600" fill="#e6e8eb">direct</text><text x="536" y="527" fill="#8a919c">your words, then BUILD</text>
+    <rect x="708" y="488" width="176" height="52" rx="8" fill="#1a1d23" stroke="#2c313a"/><text x="722" y="509" font-weight="600" fill="#e6e8eb">research</text><text x="722" y="527" fill="#8a919c">no code: THINK → DELIVER</text>
+    <rect x="894" y="488" width="186" height="52" rx="8" fill="#1a1d23" stroke="#f0953a"/><text x="908" y="509" font-weight="600" fill="#f0953a">runs here or on a Hive</text><text x="908" y="527" fill="#8a919c">same stages, same checks</text>
+  </g>
+</svg>
+<div class="legend"><span><i style="border-color:#3fbf7f"></i>knowledge flows</span><span><i style="border-color:#f0953a"></i>work moves forward</span><span><i style="border-color:#3fbf7f;border-top-style:dashed"></i>what the run learned goes back into the Brain</span></div>
+</div></div></body></html>

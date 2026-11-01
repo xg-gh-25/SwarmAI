@@ -1,0 +1,121 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css"></head>
+<body><div class="wrap"><div class="card">
+<h2>Swarm Out — the Brain runs work in parallel on your Hives, and everything comes home</h2>
+<div class="sub">The dispatching agent owns each run to the end. A Hive executes; this machine keeps the Brain, the code and the judgment.</div>
+<svg viewBox="0 0 1200 640" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
+  <defs>
+    <marker id="aO" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f0953a"/></marker>
+    <marker id="aG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3fbf7f"/></marker>
+    <marker id="aB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6aa7ff"/></marker>
+    <marker id="aD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a919c"/></marker>
+  </defs>
+
+  <!-- column labels -->
+  <g font-size="11.5" font-weight="600" fill="#8a919c" letter-spacing="1.2">
+    <text x="20" y="22">THIS MACHINE (HOST)</text>
+    <text x="440" y="22">BETWEEN THEM</text>
+    <text x="790" y="22">YOUR HIVES ON AWS · IN PARALLEL</text>
+  </g>
+
+  <!-- HOST -->
+  <rect x="10" y="36" width="390" height="590" rx="12" fill="#171a20" stroke="#2c313a"/>
+  <g>
+    <rect x="30" y="56" width="350" height="56" rx="8" fill="#1a1d23" stroke="#2c313a"/>
+    <text x="46" y="80" font-size="14" font-weight="600" fill="#e6e8eb">You</text>
+    <text x="46" y="99" font-size="12" fill="#8a919c">one sentence in chat or the Swarm Out tab</text>
+
+    <rect x="30" y="132" width="350" height="72" rx="8" fill="#1a1d23" stroke="#f0953a"/>
+    <text x="46" y="156" font-size="14" font-weight="600" fill="#e6e8eb">Dispatching agent</text>
+    <text x="46" y="175" font-size="12" fill="#8a919c">picks Brain, Project Agent, mode and the least busy Hive;</text>
+    <text x="46" y="192" font-size="12" fill="#8a919c">watches, answers its own waits, reports each change</text>
+
+    <rect x="30" y="224" width="168" height="84" rx="8" fill="#1f2a24" stroke="#3fbf7f"/>
+    <text x="46" y="248" font-size="14" font-weight="600" fill="#e6e8eb">Brain (DDD)</text>
+    <text x="46" y="267" font-size="12" fill="#8a919c">domain knowledge,</text>
+    <text x="46" y="283" font-size="12" fill="#8a919c">gates, bound repos</text>
+    <rect x="212" y="224" width="168" height="84" rx="8" fill="#1a1d23" stroke="#2c313a"/>
+    <text x="228" y="248" font-size="14" font-weight="600" fill="#e6e8eb">Project Agent</text>
+    <text x="228" y="267" font-size="12" fill="#8a919c">one standard definition</text>
+    <text x="228" y="283" font-size="12" fill="#8a919c">per Brain</text>
+
+    <rect x="30" y="328" width="350" height="56" rx="8" fill="#1a1d23" stroke="#2c313a"/>
+    <text x="46" y="352" font-size="14" font-weight="600" fill="#e6e8eb">Run Spec</text>
+    <text x="46" y="371" font-size="12" fill="#8a919c">the task, how it runs, every repo at this machine's commit</text>
+
+    <rect x="30" y="404" width="350" height="68" rx="8" fill="#1a1d23" stroke="#2c313a"/>
+    <text x="46" y="428" font-size="14" font-weight="600" fill="#e6e8eb">Operations registry</text>
+    <text x="46" y="447" font-size="12" fill="#8a919c">which command on which run, by whom;</text>
+    <text x="46" y="464" font-size="12" fill="#8a919c">the gate is generated from this one table</text>
+
+    <rect x="30" y="490" width="350" height="116" rx="8" fill="#1f2a24" stroke="#3fbf7f"/>
+    <text x="46" y="514" font-size="14" font-weight="600" fill="#e6e8eb">Back home</text>
+    <text x="46" y="536" font-size="12" fill="#c9cdd3">commits → reviewed → landed on main</text>
+    <text x="46" y="555" font-size="12" fill="#c9cdd3">files the run wrote → the run's Brain</text>
+    <text x="46" y="574" font-size="12" fill="#c9cdd3">every lesson → this machine's CDF</text>
+    <text x="46" y="593" font-size="12" fill="#c9cdd3">spend → the usage ledger</text>
+  </g>
+  <path d="M205,112 L205,132" stroke="#8a919c" marker-end="url(#aD)"/>
+  <path d="M114,204 L114,224" stroke="#8a919c" marker-end="url(#aD)"/>
+  <path d="M296,204 L296,224" stroke="#8a919c" marker-end="url(#aD)"/>
+  <path d="M205,308 L205,328" stroke="#3fbf7f" marker-end="url(#aG)"/>
+
+  <!-- BETWEEN -->
+  <g font-size="12">
+    <path d="M380,168 L786,168" stroke="#f0953a" stroke-width="2" marker-end="url(#aO)"/>
+    <text x="452" y="156" font-size="13" font-weight="600" fill="#f0953a">Dispatch</text>
+    <text x="452" y="192" fill="#8a919c">Brain sync · repo bundles · pinned session</text>
+    <text x="452" y="210" fill="#8a919c">no confirm click; refused at intake if a Hive cannot do it</text>
+
+    <path d="M786,322 L384,322" stroke="#6aa7ff" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#aB)" marker-start="url(#aB)"/>
+        <text x="468" y="302" font-size="13" font-weight="600" fill="#6aa7ff">Waits and answers</text>
+    <text x="452" y="346" fill="#8a919c">its own classes: the agent answers</text>
+    <text x="452" y="363" fill="#8a919c">off-machine, irreversible, your data: you</text>
+
+    <path d="M786,432 L384,432" stroke="#8a919c" stroke-width="1.4" marker-end="url(#aD)" marker-start="url(#aD)"/>
+    <text x="468" y="420" font-size="13" font-weight="600" fill="#e6e8eb">Live session tab</text>
+    <text x="468" y="456" fill="#8a919c">open, watch or steer the Hive session</text>
+    <text x="468" y="473" fill="#8a919c">through the Host relay</text>
+
+    <path d="M786,548 L384,548" fill="none" stroke="#3fbf7f" stroke-width="2" marker-end="url(#aG)"/>
+        <text x="468" y="528" font-size="13" font-weight="600" fill="#3fbf7f">Sealed run record, taken back once</text>
+    <text x="452" y="572" fill="#8a919c">turns · commit bundle · files · lessons · spend</text>
+  </g>
+
+  <!-- HIVES -->
+  <g>
+    <rect x="790" y="36" width="400" height="590" rx="12" fill="#171a20" stroke="#2c313a"/>
+    <!-- three stacked Hives -->
+    <g>
+      <rect x="822" y="72" width="350" height="148" rx="10" fill="#1a1d23" stroke="#f0953a"/>
+      <text x="838" y="96" font-size="14" font-weight="600" fill="#e6e8eb">Hive · us-east</text>
+      <text x="1156" y="96" font-size="12" fill="#f0953a" text-anchor="end">BUILD</text>
+      <rect x="838" y="108" width="318" height="46" rx="6" fill="#14161b" stroke="#2c313a"/>
+      <text x="850" y="127" font-size="12.5" font-weight="600" fill="#b392f0">daemon</text>
+      <text x="850" y="144" font-size="11.5" fill="#8a919c">keeps Brain and bundle, pins the session, records</text>
+      <rect x="838" y="162" width="318" height="46" rx="6" fill="#14161b" stroke="#2c313a"/>
+      <text x="850" y="181" font-size="12.5" font-weight="600" fill="#3fbf7f">agent (worker role)</text>
+      <text x="850" y="198" font-size="11.5" fill="#8a919c">checks out the commit, runs the task or pipeline</text>
+    </g>
+    <g>
+      <rect x="838" y="238" width="334" height="50" rx="10" fill="#1a1d23" stroke="#f0953a"/>
+      <text x="854" y="268" font-size="14" font-weight="600" fill="#e6e8eb">Hive · ap-1</text>
+      <text x="1156" y="268" font-size="12" fill="#f0953a" text-anchor="end">REVIEW</text>
+    </g>
+    <g>
+      <rect x="838" y="300" width="334" height="50" rx="10" fill="#1a1d23" stroke="#3fbf7f"/>
+      <text x="854" y="330" font-size="14" font-weight="600" fill="#e6e8eb">Hive · eu-1</text>
+      <text x="1156" y="330" font-size="12" fill="#3fbf7f" text-anchor="end">DELIVER</text>
+    </g>
+    <g font-size="12" fill="#8a919c">
+      <text x="822" y="392" font-size="13" font-weight="600" fill="#e6e8eb">What a worker Hive does not do</text>
+      <text x="822" y="414">writes no cognition of its own</text>
+      <text x="822" y="433">its daemon never clones, fetches or checks out</text>
+      <text x="822" y="452">a Hive session never becomes a session here</text>
+      <text x="822" y="492" font-size="13" font-weight="600" fill="#e6e8eb">Where its knowledge comes from</text>
+      <text x="822" y="514">the synced Brain and General Brain;</text>
+      <text x="822" y="533">recall and briefing are off on the fast path</text>
+    </g>
+  </g>
+</svg>
+<div class="legend"><span><i style="border-color:#f0953a"></i>work goes out</span><span><i style="border-color:#3fbf7f"></i>results and lessons come home</span><span><i style="border-color:#6aa7ff;border-top-style:dashed"></i>a wait, answered by whoever answers for the run</span></div>
+</div></div></body></html>
