@@ -1702,7 +1702,7 @@
     "stats": {
       "time": "用时",
       "endedAt": "{{when}} 结束",
-      "human": "人工介入",
+      "human": "插手",
       "spendValue": "{{tokens}} token · {{cost}}",
       "spendShort": "{{tokens}} · {{cost}}",
       "tokensLegacy": "Token 总数不知道：这条记录是在计入缓存 token 之前存的，刷新结果后重算。",
@@ -1713,7 +1713,7 @@
       "modelOther": "其他模型",
       "unanswered_one": "{{count}} 个没回答",
       "unanswered_other": "{{count}} 个没回答",
-      "humanTitle": "批准 {{approved}} · 拒绝 {{denied}} · 回答 {{answered}} · 没回答 {{unanswered}}",
+      "humanTitle": "回答 {{answered}} · 会话里说的话 {{said}}（批准 {{approved}} / 拒绝 {{denied}} 是把关，不算）",
       "cost": "总花费",
       "failed": "失败步骤",
       "tokensBilled": "计费 token",
@@ -1725,7 +1725,7 @@
       "cacheHitTitle": "缓存读 ÷（输入 + 缓存读 + 缓存写）：输入这一侧有多少是从缓存读的",
       "rework": "返工",
       "reworkTitle": "各阶段第一次之后的重跑次数之和",
-      "humanLocalTitle": "pipeline 记下的你的决定",
+      "humanLocalTitle": "回答、纠偏和救场",
       "notRecorded": "这个 Run 没有记录"
     },
     "hiveTab": {

@@ -353,13 +353,23 @@ export function modelLabel(name: string): string {
   return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
 }
 
-/** The card's facts: how long it ran (and when it ended), the human loops (approvals
- *  and answered questions), the total cost (the CLI's own, per-turn increases) and, when
+/** How often a person stepped into the run: the questions they answered and what they
+ *  said in the session after the task. Approving or refusing a command is oversight the
+ *  product keeps for the person, and a question nobody answered is the run waiting, so
+ *  neither counts (design 2026-11-01-brain-eval-and-runs §3; the local twin is
+ *  backend core/run_interventions). */
+export function interventionsOf(res: SwarmOutResult): number {
+  const h = res.work.human;
+  return h.answered_questions + (h.said ?? 0);
+}
+
+/** The card's facts: how long it ran (and when it ended), how often a person stepped in
+ *  (interventionsOf), the total cost (the CLI's own, per-turn increases) and, when
  *  any failed, the failed steps. The tokens are a row of their own (tokenStats). A value
  *  not known is "—" with the reason on hover, never a zero. */
 export function runStats(res: SwarmOutResult): RunStat[] {
   const h = res.work.human;
-  const loops = h.approved + h.denied + h.unanswered + h.answered_questions;
+  const loops = interventionsOf(res);
   const dash = '—';
   const ended = when(res.ended_at);
   const out: RunStat[] = [
@@ -367,7 +377,7 @@ export function runStats(res: SwarmOutResult): RunStat[] {
       sub: ended ? i18n.t('swarmOut.stats.endedAt', { when: ended }) : undefined },
     { key: 'human', label: i18n.t('swarmOut.stats.human'), value: String(loops),
       sub: h.unanswered ? i18n.t('swarmOut.stats.unanswered', { count: h.unanswered }) : undefined,
-      title: i18n.t('swarmOut.stats.humanTitle', { approved: h.approved, denied: h.denied, answered: h.answered_questions, unanswered: h.unanswered }),
+      title: i18n.t('swarmOut.stats.humanTitle', { approved: h.approved, denied: h.denied, answered: h.answered_questions, said: h.said ?? 0 }),
       tone: h.unanswered ? 'attention' : undefined },
     { key: 'cost', label: i18n.t('swarmOut.stats.cost'), strong: true,
       value: res.cost_usd == null ? dash : `${res.cost_partial ? '≥ ' : ''}$${res.cost_usd.toFixed(2)}`,
@@ -494,11 +504,8 @@ export function inWindow(runs: SwarmOutRun[], now: number, days: number | null):
 export type HistoryOutcome = OutcomeBucket | 'running';
 export const historyOutcome = (r: SwarmOutRun): HistoryOutcome => (stateOf(r) === 'running' ? 'running' : outcomeBucket(r));
 
-/** The human loops of a run (approvals, denials and questions), as the card counts them. */
-const loopsOf = (res: SwarmOutResult): number => {
-  const h = res.work.human;
-  return h.approved + h.denied + h.unanswered + h.answered_questions;
-};
+/** How often a person stepped into a run, as the card counts it (interventionsOf). */
+const loopsOf = interventionsOf;
 
 /** A run's one type, by precedence: a pipeline run (with its profile), then code, files,
  *  an answer only, nothing produced; a run with no result yet is not known. */

@@ -350,10 +350,15 @@ def _card_facts(raw: dict, status: str) -> dict[str, Any]:
     summary = raw.get("audit_summary") if isinstance(raw.get("audit_summary"), dict) else {}
     usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
     billed = pm.tokens(raw)
-    autonomy = summary.get("autonomy") if isinstance(summary.get("autonomy"), dict) else {}
-    human = raw.get("human_decisions")
-    if not isinstance(human, int) or isinstance(human, bool):
-        human = autonomy.get("human_decisions") if isinstance(autonomy.get("human_decisions"), int) else None
+    # times a person stepped in: answers, corrections (messages into the run's session
+    # while it ran) and rescues; approvals and review are oversight, not counted
+    # (core.run_interventions; design 2026-11-01-brain-eval-and-runs §3)
+    from core import run_interventions
+    try:
+        interventions = run_interventions.for_run(raw)
+    except Exception:  # noqa: BLE001 -- a card fact never fails the summary
+        interventions = None
+    human = interventions["total"] if interventions else None
     attempts = raw.get("stage_attempts") if isinstance(raw.get("stage_attempts"), dict) else None
     rework = (sum(max(0, int(v) - 1) for v in attempts.values() if isinstance(v, int))
               if attempts else None)
@@ -366,6 +371,7 @@ def _card_facts(raw: dict, status: str) -> dict[str, Any]:
         "billed_tokens": billed,
         "cost_usd": _num(usage.get("book_cost_usd")),
         "human_decisions": human,
+        "interventions": interventions,
         "landing": landing,
         "not_landed_reason": (_text(raw.get("reason"))[:200] or None)
         if status == "completed" and landing == "not_landed" else None,

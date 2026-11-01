@@ -18,7 +18,7 @@
 import i18n from '../../i18n';
 import type { SwarmOutAction, SwarmOutAsk, SwarmOutCommand, SwarmOutResult, SwarmOutRun, SwarmOutStage } from '../../services/swarmOut';
 import { judgeState, type JudgeState } from './judge';
-import { brainLabel, checkStatus, runJudge } from './live';
+import { brainLabel, checkStatus, interventionsOf, runJudge } from './live';
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -133,12 +133,9 @@ export function brainChips(runs: SwarmOutRun[]): { brain: string; count: number 
     .sort((a, b) => (b.count - a.count) || a.brain.localeCompare(b.brain));
 }
 
-/** How often a person stepped into the run: approvals, denials, answered questions and
- *  everything they said in the session after the task. */
-export function interventions(res: SwarmOutResult): number {
-  const h = res.work.human;
-  return h.approved + h.denied + h.answered_questions + (h.said ?? 0);
-}
+/** How often a person stepped into the run (live.interventionsOf: answers and what they
+ *  said; approvals and denials are oversight, not counted). */
+export const interventions = interventionsOf;
 
 export interface AutonomyWord {
   kind: 'judge' | 'full' | 'interventions';

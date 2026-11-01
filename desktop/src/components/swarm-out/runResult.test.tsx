@@ -119,14 +119,15 @@ describe('what a run did, for every kind of run', () => {
     expect(runJudge(result())).toBeNull();
   });
 
-  it('facts: time, human loops, the total cost; failed steps only when some failed', () => {
+  it('facts: time, times a person stepped in, the total cost; failed steps only when some failed', () => {
     const by = (res: SwarmOutResult) => Object.fromEntries(runStats(res).map((x) => [x.key, x]));
     const unknown = by(result({ cost_usd: null, active_s: null, tokens: null, ended_at: null }, { human: { approved: 1, denied: 0, unanswered: 2, answered_questions: 1 } }));
     expect(Object.keys(unknown)).toEqual(['time', 'human', 'cost', 'failed']);
     expect([unknown.time.value, unknown.cost.value]).toEqual(['—', '—']);
     expect(unknown.cost.title).toBe('花费没有记录');
-    expect(unknown.human).toMatchObject({ value: '4', sub: '2 个没回答', tone: 'attention' });
-    expect(unknown.human.title).toBe('批准 1 · 拒绝 0 · 回答 1 · 没回答 2');
+    // one answer; the approval is oversight and the two unanswered are the run waiting
+    expect(unknown.human).toMatchObject({ value: '1', sub: '2 个没回答', tone: 'attention' });
+    expect(unknown.human.title).toBe('回答 1 · 会话里说的话 0（批准 1 / 拒绝 0 是把关，不算）');
     const known = by(result({ cost_partial: true, cost_usd: 3.7 }, { steps: { total: 3, failed: 0, agents: 0, by_tool: {} } }));
     expect(Object.keys(known)).toEqual(['time', 'human', 'cost']);
     expect(known.cost).toMatchObject({ value: '≥ $3.70', strong: true, title: '花费至少这么多：有的轮次没有记录' });

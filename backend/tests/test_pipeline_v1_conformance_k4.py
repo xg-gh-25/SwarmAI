@@ -113,11 +113,13 @@ def test_k4r1_untrusted_words_cannot_inject_markdown_or_html_into_report():
     assert "\\[link\\]" in head and "\\|" in head and "\\*b\\*" in head
 
 
-def test_s5_manual_rescues_are_not_measured_and_never_decide_autonomy():
+def test_s5_rescues_are_a_persons_landing_not_an_integrity_note():
+    """A rescue is the person landing the run (core.run_interventions); an integrity note
+    named manual_rescue is not one."""
     events = [{"kind": "integrity", "event_id": "i", "at": "2026-10-23T00:00:00+00:00",
                "payload": {"conflict_type": "manual_rescue"}}]
     autonomy = _audit(events)["summary"]["autonomy"]
-    assert autonomy["manual_rescues"] is None and autonomy["verdict"] == "PASS"
+    assert autonomy["manual_rescues"] == 0 and autonomy["verdict"] == "PASS"
 
 
 def test_l6_report_title_is_the_run_title():

@@ -26,7 +26,7 @@ import { Dot, Tbd } from './LiveDispatches';
 import { RunOverlay } from './RunOverlay';
 import { useOpenRun } from './openSession';
 import {
-  agentFacts, breakdown, dailyByOutcome, dimensionCounts, durationText, endedLabel, groupOf, historyOutcome, inWindow,
+  agentFacts, breakdown, dailyByOutcome, dimensionCounts, durationText, endedLabel, groupOf, historyOutcome, interventionsOf, inWindow,
   matchesFilter, runSpend, runType, spendText, tallyRuns, useRuns, when,
   type BreakdownDim, type HistoryOutcome, type OutcomeBucket, type RecordFilter, type RunTally,
 } from './live';
@@ -255,7 +255,7 @@ function HistoryRow({ r, open, onOpen, compact }: {
   const f = agentFacts(r);
   const ended = historyOutcome(r) === 'running' ? { text: t('swarmOut.history.outcome.running'), tone: 'busy' as Tone }
     : res ? endedLabel(res) : { text: t('swarmOut.history.outcome.other'), tone: 'unknown' as Tone };
-  const loops = res ? res.work.human.approved + res.work.human.denied + res.work.human.unanswered + res.work.human.answered_questions : null;
+  const loops = res ? interventionsOf(res) : null;
   const spend = res ? spendText(runSpend(res), true) : '—';
   const cells = [
     <span key="agent" className={`truncate ${f.none ? dim : muted}`} title={f.title}>{f.none ? f.agent : `${f.brain} · ${f.agent}`}</span>,

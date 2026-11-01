@@ -109,13 +109,15 @@ def test_partial_metering_cannot_read_as_complete():
     assert nothing["verdict"] == "BLOCK" and nothing["total_tokens"] is None
 
 
-def test_accept_finding_is_a_human_decision_and_approvals_are_counted():
+def test_accepting_a_finding_and_an_approval_are_oversight_not_interventions():
+    """Design 2026-11-01-brain-eval-and-runs §3: review and approvals the product keeps for
+    the person do not lower autonomy; they are still counted (required_approvals)."""
     events = [*MEASURED,
               {"kind": "auth_consumed", "at": "2026-10-22T00:00:02+00:00",
                "payload": {"action": "accept_finding"}},
               _metric("required_approval", 1, "hook")]
     autonomy = _facts(events=events)["summary"]["autonomy"]
-    assert autonomy["human_decisions"] == 1 and autonomy["verdict"] == "WARN"
+    assert autonomy["human_decisions"] == 0 and autonomy["verdict"] == "PASS"
     assert autonomy["required_approvals"] == 1
 
 

@@ -64,11 +64,13 @@ describe('the numbers', () => {
     expect(t.known).toBe(5);
   });
 
-  it('(2) done unattended means no human loop at all', () => {
+  it('(2) done unattended means nobody stepped in', () => {
     const t = tallyRuns(inWindow(RUNS, NOW, 7));
-    expect(t.unattended).toBe(2);                     // a needed a person: done, not unattended
+    // a's question went unanswered: the run waited, nobody stepped in (design
+    // 2026-11-01-brain-eval-and-runs §3), so a, b and c are done unattended
+    expect(t.unattended).toBe(3);
     expect(t.unattended).toBeLessThanOrEqual(t.by.completed);
-    expect([t.loops, t.unanswered]).toEqual([1, 1]);
+    expect([t.loops, t.unanswered]).toEqual([0, 1]);
     expect(t.medianActive).toBe(60);                  // the ended runs only: 10, 26, 60, 84, 300
   });
 
@@ -100,7 +102,13 @@ describe('the numbers', () => {
   it('the record filters', () => {
     const w = inWindow(RUNS, NOW, 7);
     const ids = (f: Parameters<typeof matchesFilter>[1]) => w.filter((r) => matchesFilter(r, f)).map((r) => r.title.slice(5));
-    expect([ids('error'), ids('stopped'), ids('human'), ids('unknown')]).toEqual([['e'], ['d'], ['a'], ['f', 'g']]);
+    expect([ids('error'), ids('stopped'), ids('human'), ids('unknown')]).toEqual([['e'], ['d'], [], ['f', 'g']]);
+  });
+
+  it('stepping in is an answer or a message; approving or refusing a command is not', () => {
+    const one = (h: Partial<SwarmOutResult['work']['human']>) => matchesFilter(run('x', result({}, human(h))), 'human');
+    expect([one({ approved: 2, denied: 1 }), one({ unanswered: 1 }), one({ answered_questions: 1 }), one({ said: 1 })])
+      .toEqual([false, false, true, true]);
   });
 });
 
@@ -114,8 +122,8 @@ describe('the view', () => {
   it('the verdict names its denominator; one number stands out', async () => {
     render(<HistoryView hidden={false} now={NOW} />);
     const v = await screen.findByTestId('history-verdict');
-    expect(v.textContent).toBe('2 个无人值守做完 · 共 7 个 run：3 个做完、1 个失败、1 个停下、1 个结束情况未知、1 个在跑');
-    expect(screen.getByTestId('history-sum-unattended').textContent).toBe('2/5无人值守做完（已知结局 5 个，40%）');
+    expect(v.textContent).toBe('3 个无人值守做完 · 共 7 个 run：3 个做完、1 个失败、1 个停下、1 个结束情况未知、1 个在跑');
+    expect(screen.getByTestId('history-sum-unattended').textContent).toBe('3/5无人值守做完（已知结局 5 个，60%）');
   });
 
   it('counts the tasks refused at intake, and how many needed a private network', async () => {

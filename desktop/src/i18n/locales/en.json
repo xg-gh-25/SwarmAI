@@ -1702,7 +1702,7 @@
     "stats": {
       "time": "Duration",
       "endedAt": "ended {{when}}",
-      "human": "Human loops",
+      "human": "Stepped in",
       "spendValue": "{{tokens}} token · {{cost}}",
       "spendShort": "{{tokens}} · {{cost}}",
       "tokensLegacy": "Tokens not known: this record was kept before cache tokens were counted. Refresh the result to recount.",
@@ -1713,7 +1713,7 @@
       "modelOther": "another model",
       "unanswered_one": "{{count}} unanswered",
       "unanswered_other": "{{count}} unanswered",
-      "humanTitle": "approved {{approved}} · denied {{denied}} · answered {{answered}} · unanswered {{unanswered}}",
+      "humanTitle": "answered {{answered}} · said in the session {{said}} (approved {{approved}} / denied {{denied}}: oversight, not counted)",
       "cost": "Total cost",
       "failed": "Failed steps",
       "tokensBilled": "Billed tokens",
@@ -1725,7 +1725,7 @@
       "cacheHitTitle": "Cache reads ÷ (input + cache reads + cache writes): the share of the input side served from the prompt cache",
       "rework": "Stages re-run",
       "reworkTitle": "Stage attempts beyond the first, summed",
-      "humanLocalTitle": "Decisions the pipeline recorded from you",
+      "humanLocalTitle": "Answers, corrections and rescues",
       "notRecorded": "This Run did not record it"
     },
     "hiveTab": {

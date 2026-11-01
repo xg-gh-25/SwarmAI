@@ -257,12 +257,17 @@ def test_card_facts_read_a_real_projection_and_none_from_a_bare_one():
     facts = _card_facts(raw, "completed")
     assert facts == {
         "finished_at": "2026-10-29T10:59:32+00:00", "active_s": 2314.2,
-        "billed_tokens": 350861 + 61511 + 24665603, "cost_usd": None, "human_decisions": 2,
+        "billed_tokens": 350861 + 61511 + 24665603, "cost_usd": None,
+        # no start time recorded: the corrections are unknown, so the total is too
+        "human_decisions": None,
+        "interventions": {"answers": 2, "corrections": None, "rescues": 0, "total": None},
         "landing": "not_landed", "not_landed_reason": "final_stale", "rework": 3,
         "audit": [{"dim": "Run Isolation", "verdict": "PASS", "detail": "x"},
                   {"dim": "Speed", "verdict": "BLOCK", "detail": ""}],
     }
     assert _card_facts({}, "running") == {
         "finished_at": None, "active_s": None, "billed_tokens": None, "cost_usd": None,
-        "human_decisions": None, "landing": None, "not_landed_reason": None, "rework": None,
+        "human_decisions": None,
+        "interventions": {"answers": 0, "corrections": None, "rescues": 0, "total": None},
+        "landing": None, "not_landed_reason": None, "rework": None,
         "audit": []}

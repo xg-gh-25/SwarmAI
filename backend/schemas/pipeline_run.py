@@ -110,7 +110,8 @@ class PipelineRunSummary(BaseModel):
     active_s: Optional[float] = Field(None, description="seconds the run was working (audit speed)")
     billed_tokens: Optional[int] = Field(None, description="every token billed, cache reads too")
     cost_usd: Optional[float] = Field(None, description="book cost (run_protocol.usage.measure)")
-    human_decisions: Optional[int] = None
+    human_decisions: Optional[int] = Field(None, description="times a person stepped in: answers + corrections + rescues (core.run_interventions); None when the chat store could not be read")
+    interventions: Optional[dict] = Field(None, description="{answers, corrections, rescues, total} (core.run_interventions)")
     landing: Optional[str] = Field(None, description="landed | not_landed | partial | … as recorded")
     not_landed_reason: Optional[str] = None
     rework: Optional[int] = Field(None, description="stage attempts beyond the first, summed")

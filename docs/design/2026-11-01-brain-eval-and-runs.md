@@ -79,14 +79,20 @@ Pipelines，Hive run 在 Swarm Out。
 Pipelines、Swarm Out、audit 的 Autonomy 一维都用它。
 - **算**：回答 run 问你的问题（`AskUserQuestion`、pipeline 的 decision）；纠偏（修正重跑；run 跑着时
   你往它会话里发的消息，和 Hive 的 `said` 同口径，`swarm_out_results.py:496`——只问一句"进行到
-  哪了"也算一次，分不出来就宁可多算，不靠模型判断）；救场（run 被丢下后由人手工落地；卡住后你
-  手动恢复）。
-- **不算**：批准或拒绝危险 / 不可逆的操作（权限请求、run-land、push）；验收交付物（通过、退回、
-  丢弃）；接受一个 finding（`accept_finding`）；Judge 和评审专家的结论。
-- 今天不一致、要一起改的：audit 的 Autonomy 一维算进了 run-land 和 `accept_finding`
+  哪了"也算一次，分不出来就宁可多算，不靠模型判断）；救场（pipeline 自己落不了地、由人
+  `run-land`（landing `human_override`，audit 里写 "Landed by a person"）；run 被丢下后由人确认
+  已落地（`landed_as` + `confirm_landed`））。
+- **不算**：批准或拒绝危险 / 不可逆的操作（权限请求、push）；验收交付物（通过、退回、丢弃）；
+  接受一个 finding（`accept_finding`）；Judge 和评审专家的结论；没人回答的问题（run 在等，没人
+  插手）。r6 实现时更正：r3 把 run-land 列成了"批准"，它其实是救场。
+- 今天不一致、要一起改的：audit 的 Autonomy 一维算进了 `accept_finding`
   （`audit.py:419-428`）；Swarm Out 的自主度算进了权限的批准 / 拒绝（`runReview.ts:136-140`）；
   本机 run 没记会话里的消息和手工落地。`manual_rescues` 一直是 null（`audit.py:425-428`），手工
   落地是它第一个有来源的值。
+- **实现（r6）**：`core/run_interventions.py` 一个函数。audit 在 REFLECT 时只读 run 自己的事件，
+  所以它的 Autonomy 一维算回答和救场；会话里的纠偏消息在展示时由 `for_run` 从聊天库加上
+  （`routers/pipelines._card_facts`）。聊天库读不到时总数是 null，不是 0。Hive 侧
+  `live.interventionsOf` = 回答 + 会话里说的话。
 
 **放在哪**：Pipelines 的 Metrics tab（"自主吗"）；Swarm Out 的标题行一句：`30 天 · 结束 N 个 ·
 没人插手 M 个 · 平均插手 x 次`；每一行有自主度一个词（全自主 / 插手 N 次）；大卡片的自主度 tab
