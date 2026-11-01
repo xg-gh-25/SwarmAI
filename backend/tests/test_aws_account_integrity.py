@@ -26,6 +26,9 @@ ALLOWED = {
         "SigV4 signing (botocore.auth); credentials come from aws_account, and the "
         "default chain only when there is no account",
     "core/credential_validator.py": "the spawn pre-flight when there is no account",
+    "core/ingestion/llm.py":
+        "botocore.exceptions only, to tell a credentials failure from other model-call "
+        "failures; it makes no client and reads no credentials",
     "core/voice_transcribe.py": "the amazon_transcribe client; credentials from aws_account",
     "jobs/bedrock.py": "client config; the default chain only when there is no account",
     "jobs/executor.py": "frozen keys for the CLI only when there is no account",
