@@ -3,7 +3,7 @@ title: Brain 只管知识；run 归执行它的地方 — Brain Eval 两个问�
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: design r5（XG 2026-11-01：大卡片用 B；Pipelines 列所有 pipeline run 并标本机 / Hive；统计区可视化，含 run 分布；token 单位 M）
+status: design r6（XG：Runs 和 Metrics 分两个 tab；XG 2026-11-01：大卡片用 B；Pipelines 列所有 pipeline run 并标本机 / Hive；统计区可视化，含 run 分布；token 单位 M）
 mockup: Knowledge/Designs/mockups/2026-11-01-brain-eval-and-runs.html（工作区内，r5）
 follows: 2026-10-30-brain-runs-one-card.md, 2026-10-31-swarm-out-run-review.md, 2026-10-31-cdf-health.md
 ---
@@ -88,8 +88,9 @@ Pipelines、Swarm Out、audit 的 Autonomy 一维都用它。
   本机 run 没记会话里的消息和手工落地。`manual_rescues` 一直是 null（`audit.py:425-428`），手工
   落地是它第一个有来源的值。
 
-**放在哪**：Pipelines 和 Swarm Out 的标题行各一句：`30 天 · 结束 N 个 · 没人插手 M 个 ·
-平均插手 x 次`；每一行有自主度一个词（全自主 / 插手 N 次）；大卡片的自主度 tab 列逐次明细。
+**放在哪**：Pipelines 的 Metrics tab（"自主吗"）；Swarm Out 的标题行一句：`30 天 · 结束 N 个 ·
+没人插手 M 个 · 平均插手 x 次`；每一行有自主度一个词（全自主 / 插手 N 次）；大卡片的自主度 tab
+列逐次明细。
 
 ## 4. Pipelines overlay：统计区 + Swarm Out 的列表 + 大卡片
 
@@ -97,9 +98,12 @@ Pipelines 列**所有 pipeline run，不管在哪跑**：本机的（`run.json`�
 run 里 `result.pipeline.run_id` 非空的那些；Hive 上的 native run 不在这里，在 Swarm Out）。
 Hive 的 pipeline run 两边都有：Swarm Out 管派单和收单，Pipelines 看所有 pipeline 的结果。
 
-### 4.0 统计区（r5，XG：可视化、含 run 分布、token 单位 M）
+**两个 tab（r6，XG）**：**Runs**（默认）和 **Metrics**。Runs 是"现在有什么要我处理"，打开就看；
+Metrics 是"这段时间跑得怎么样"，隔一阵看一次，放在一页里会把"等你"挤到下面。tab 名带"等你"的数
+（`Runs · 1 等你`）。筛选行（全部 / 本机 / Hive · Brain ▾）在两个 tab 上面，共用，切 tab 不丢。
+两个 tab 都不再放一行汇总数字（同一个数不出现两次）。
 
-一个筛选行放在最上面（全部 / 本机 / Hive · Brain ▾），统计区和下面的列表都跟着它变。
+### 4.0 Metrics tab（r5，XG：可视化、含 run 分布、token 单位 M）
 
 - **Run 分布**：大数 Total，下面两行 本机 N（占比）、Hive N（占比 · 各 Hive 名和数）；右边一张按天
   （数据满 14 天后按周）的堆叠柱，本机 / Hive 两色。配色用 dataviz 的分类色第 1、2 位（深色底
@@ -122,12 +126,11 @@ Hive 的 pipeline run 两边都有：Swarm Out 管派单和收单，Pipelines �
   有 BLOCK 的 2 个（run_3fe60e51 Speed，run_8a1af4d4 Quality + Speed）；本机中位 42 分钟、最长
   116 分钟；本机 token 共 684M，每次交付 114M；`cost_usd` 一个都没记录。
 
-### 4.1 列表
+### 4.1 Runs tab：列表
 
 照 `RunList`（Swarm Out 设计 §2.1）：
-- 标题行：`30 天 · 落地 4/8 · 没人插手 7/8 · 平均 47 分钟 · 花费 $X（有记录的才算）`。取代顶上
-  6 个数字格和按周吞吐柱（吞吐不支撑任何决定）。
-- Brain 筛选 chip（从行里的 Brain 生成，带数，不写死），取代按项目折叠分组。
+- 顶上 6 个数字格和按周吞吐柱删掉（数字去 Metrics；吞吐不支撑任何决定）。
+- Brain 筛选（从行里的 Brain 生成，带数，不写死）取代按项目折叠分组。
 - 分区：**等你**（等你回答 > 待你确认 > 停住了，按等了多久）永远在上面；**在跑**；**最近完成**
   （默认折叠，分页）。"Needs you" 就是"等你"分区的行数（今天的格子和置顶区已经是同一个定义，
   `needs_you`，只是字段名叫 `aborted_count`，`routers/pipelines.py:402`；顺手改名）。
