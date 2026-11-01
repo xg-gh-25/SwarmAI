@@ -12,7 +12,8 @@
  *
  * Data is backend-primary (IMPROVEMENT.md:367 — "when a symptom shows in a UI
  * widget, the fix layer is often the backend that feeds it"): the Context tab +
- * overview rail CONSUME the calibrated token_block from GET /eval/context-health;
+ * overview rail CONSUME the calibrated token_block and the north star readings
+ * (core.north_star.measures_for_ui) from GET /eval/context-health/lite;
  * the frontend invents no numbers. Opens on the existing `swarm:show-context`
  * window event via useExclusiveOverlay (single-overlay mux + back-to-chat).
  *
@@ -63,10 +64,33 @@ interface TokenBlock {
   per_file: TokenFileRow[];
 }
 // Lite first-paint payload (GET /eval/context-health/lite) — exactly 3 keys, no
-// heavy scans. The overlay's Context tab + rail + Review count consume this.
+// heavy scans. The overlay's Context tab + rail (load, north star) + Governance count
+// consume this.
+interface CognitionMeasures {
+  week: string;
+  sessions: number;
+  corrected_rate: number;              // share of the week's sessions the person corrected
+  earlier_mean: number | null;
+  earlier_weeks: number;
+  direction: 'better' | 'worse' | 'same' | null;   // fewer corrected sessions is better
+  repeat_rate: number | null;
+  corrections: number | null;
+}
+interface CdfMeasures {
+  useful_rate: number | null;
+  target: number | null;
+  below_target: string[];
+  checks_total: number;
+  checks_failing: string[];
+}
+interface NorthStar {
+  at: string;
+  measures: { cognition?: CognitionMeasures | null; cdf?: CdfMeasures | null };
+}
 interface ContextHealthLite {
   token_block?: TokenBlock | null;
   governance_pending_count?: number;
+  north_star?: NorthStar | null;
 }
 
 type TabKey = 'context' | 'memory' | 'guideline' | 'evolution';
@@ -185,6 +209,8 @@ export function CMBrainContent() {
           className="w-[264px] shrink-0 flex flex-col gap-4 border-r border-[var(--color-border)] p-4 overflow-y-auto"
           data-testid="cm-overview-rail"
         >
+          <NorthStarRail ns={data?.north_star} failed={healthErr && !data} />
+
           <div>
             <SectionLabel>Current load</SectionLabel>
             <div className="mt-1 flex items-baseline gap-1.5">
@@ -195,7 +221,7 @@ export function CMBrainContent() {
                 {block ? fmtTokens(block.total_tokens) : '—'}
               </span>
               <span className="text-small text-[var(--color-text-muted)]">
-                / {block ? fmtTokens(block.budget) : '—'} budget
+                / {block ? fmtTokens(block.budget) : '—'} warning line
               </span>
             </div>
             {healthErr && !block && (
@@ -266,6 +292,70 @@ export function CMBrainContent() {
   );
 }
 
+const pct = (x: number | null | undefined) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+const DIRECTION_TINT = {
+  better: 'var(--color-status-success)', worse: 'var(--color-status-warning)', same: 'var(--color-text-muted)',
+} as const;
+
+// "Am I getting better?" — the north star readings (SWARMAI.md § My North Star), from
+// the same snapshot file the prompt reads. One verdict stands out (the share of
+// sessions the person corrected, against the weeks before); repeats and the knowledge
+// flow are the supporting lines. Read-only; an absent snapshot says so, never "0".
+function NorthStarRail({ ns, failed }: { ns: NorthStar | null | undefined; failed: boolean }) {
+  const cog = ns?.measures?.cognition;
+  const cdf = ns?.measures?.cdf;
+  const at = ns?.at ? new Date(ns.at) : null;
+  return (
+    <div data-testid="cm-north-star">
+      <SectionLabel>Getting better?</SectionLabel>
+      {!ns || (!cog && !cdf) ? (
+        <div data-testid="cm-north-star-empty" className="mt-1 text-meta text-[var(--color-text-faint)]">
+          {failed ? 'couldn’t load — not “0”' : 'not measured yet'}
+        </div>
+      ) : (
+        <div className="mt-1 flex flex-col gap-1.5">
+          {cog && (
+            <div data-testid="cm-ns-corrected">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-display font-semibold text-[var(--color-text)]">{pct(cog.corrected_rate)}</span>
+                <span className="text-small text-[var(--color-text-muted)]">of sessions corrected</span>
+              </div>
+              <div className="text-meta text-[var(--color-text-muted)]">
+                {cog.week} · {cog.sessions} sessions
+                {cog.direction && cog.earlier_mean != null && (
+                  <span data-testid="cm-ns-direction" style={{ color: DIRECTION_TINT[cog.direction] }}>
+                    {' '}· {cog.direction === 'same' ? 'about the same as' : `${cog.direction} than`} {pct(cog.earlier_mean)} before
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+          {cog && cog.repeat_rate != null && (
+            <div data-testid="cm-ns-repeats" className="text-small text-[var(--color-text-muted)]">
+              Repeats <span className="tabular-nums text-[var(--color-text)]">{pct(cog.repeat_rate)}</span>
+              {cog.corrections != null && <> of {cog.corrections} corrections</>}
+            </div>
+          )}
+          {cdf && (
+            <div data-testid="cm-ns-cdf" className="text-small text-[var(--color-text-muted)]">
+              Knowledge useful{' '}
+              <span className="tabular-nums" style={{ color: cdf.useful_rate != null && cdf.target != null && cdf.useful_rate < cdf.target ? 'var(--color-status-warning)' : 'var(--color-text)' }}>
+                {pct(cdf.useful_rate)}
+              </span>
+              {cdf.target != null && <> · target {pct(cdf.target)}</>}
+            </div>
+          )}
+          {at && (
+            <div className="text-meta text-[var(--color-text-faint)]">
+              as of {at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // The rail's compact growth-trend — prompt_tokens over time. R30: <2 points →
 // explicit "collecting" text, never a fabricated line.
 function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
@@ -293,9 +383,10 @@ function RailTrend({ trend }: { trend: BrainTrend | undefined }) {
   );
 }
 
-// Over-budget alert (AC7) — honest: how much over + which files carry the load +
-// an OPEN action (never a fake "distill" that does nothing). Only rendered when
-// block.over_budget is true.
+// Over-the-warning-line alert (AC7) — honest: how much over + which files carry the
+// load + an OPEN action (never a fake "distill" that does nothing). Every file is
+// injected whole (nothing is truncated), so the alert asks for consolidation. Only
+// rendered when block.over_budget is true.
 function BudgetAlert({ block }: { block: TokenBlock }) {
   const over = block.total_tokens - block.budget;
   // The offenders: biggest files that are growing/oversized (the ones worth acting on).
@@ -311,7 +402,7 @@ function BudgetAlert({ block }: { block: TokenBlock }) {
       style={{ borderColor: 'color-mix(in srgb, var(--color-status-error) 45%, var(--color-border))', background: 'color-mix(in srgb, var(--color-status-error) 8%, transparent)' }}
     >
       <div className="text-meta font-semibold" style={{ color: 'var(--color-status-error)' }}>
-        Over budget by {fmtTokens(over)}
+        Over the warning line by {fmtTokens(over)} — nothing is cut; consolidate the biggest files
       </div>
       <div className="mt-1 text-meta leading-snug text-[var(--color-text-muted)]">
         {top.map((f) => (
@@ -458,13 +549,12 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
   return (
     <div data-testid="cm-panel-context" className="flex flex-col gap-1">
       <div className="mb-2 text-body text-[var(--color-text-muted)]">
-        The always-injected system prompt — {rows.length} files, priority-ordered. P0–P2 never truncated;
-        over budget → cut from the bottom up.
+        The always-injected system prompt — {rows.length} files, priority-ordered, each injected in full.
+        Nothing is cut: above the warning line, the files are kept lean by consolidating entries.
       </div>
       <div className="mb-3 text-meta text-[var(--color-text-faint)]">
-        P0–P2 never truncated · over budget → cut from P10 upward · click a file to open it in Canvas ·
-        bar = share of the on-disk context · every file is injected in full (disk size = prompt load) ·
-        Health: fresh / idle / growing / oversized
+        click a file to open it in Canvas · bar = share of the context (disk size = prompt load) ·
+        lock = system-owned, opens read-only · Health: fresh / idle / growing / oversized
       </div>
       {/* Column header — fixed widths so every row's cells line up (AC4 alignment).
           Grid columns match the row grid below exactly. */}
@@ -558,7 +648,7 @@ function ContextTab({ block }: { block: TokenBlock | null }) {
             <StatusBadge testid="cm-health" tone={HEALTH_TONE[f.health]}>{f.health}</StatusBadge>
           ) : <span aria-hidden />}
           {f.locked ? (
-            <span data-testid="cm-lock" className="material-symbols-outlined icon-xs text-center text-[var(--color-text-faint)]" title="P0–P2 never truncated · opens read-only">lock</span>
+            <span data-testid="cm-lock" className="material-symbols-outlined icon-xs text-center text-[var(--color-text-faint)]" title="System-owned · opens read-only">lock</span>
           ) : <span aria-hidden />}
         </button>
         );
@@ -723,11 +813,11 @@ function ArchivePanel({ source, enabled }: { source: ArchiveSource; enabled: boo
   return (
     <section data-testid={`cm-archive-${source}`}>
       <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-        Archived {source} · recall-backed cold storage
+        Archived {source} · older shards
       </div>
       <div className="mb-2 text-meta leading-relaxed text-[var(--color-text-muted)]">
-        Shards the size-valve moved out of live {source} (not deleted — open one to read it,
-        or search to recall a single entry).
+        Entries moved out of live {source} by size before that stopped (nothing is moved out
+        now). Open a shard to read it, or search to recall a single entry.
       </div>
 
       {/* Search box — one clear input; results replace the list while a query is active */}
@@ -856,11 +946,11 @@ function MemoryTab({ enabled }: { enabled: boolean }) {
         <TrendChart trend={trend} field="memory_bytes" />
       </section>
 
-      {/* Archived list + Recall search — the cold layer the size-valve moved out */}
+      {/* Archived list + Recall search — older shards, from before entries stopped being moved out by size */}
       <ArchivePanel source="memory" enabled={enabled} />
 
       <div className="text-meta text-[var(--color-text-faint)]">
-        How it works: live memory is injected as whole entries within a fixed budget (over it, the highest-value entries are chosen; the rest stay in the file and reach recall); reflection sediments new ones (confident-only); an entry leaves the file only when a newer decision overrides it or it is withdrawn, and what was replaced is recorded outside the file. Older archive shards stay readable here.
+        How it works: MEMORY.md is injected whole into every session. New entries come from the review after a session: the session's own agent declares what it learned, and the code checks the evidence before writing. An entry leaves the file only when a newer decision overrides it or it is withdrawn; what was replaced is recorded outside the file. Older archive shards stay readable here.
       </div>
     </div>
   );
@@ -905,10 +995,10 @@ function EvolutionTab({ enabled }: { enabled: boolean }) {
       <ArchivePanel source="evolution" enabled={enabled} />
 
       <div className="text-meta text-[var(--color-text-faint)]">
-        How it works: each correction is captured with a bias tag; recurring patterns (3× threshold)
-        surface a governance proposal for your review. Live EVOLUTION.md is injected in FULL; when it
-        grows past its size cap, the lowest-value entries are ARCHIVED (moved, not deleted — recall via
-        FTS5/BM25), so load-bearing patterns stay live.
+        How it works: each correction is an entry written by the review after a session. A recurring
+        one becomes a governance candidate; a candidate with specific rule text, checked against the
+        existing rules and backed by 3× evidence, is proposed for your approval (Needs you → Governance).
+        EVOLUTION.md is injected whole; nothing is moved out by size. Older archive shards stay readable here.
       </div>
     </div>
   );
@@ -943,50 +1033,41 @@ function TrendChart({ trend, field }: { trend: BrainTrend | undefined; field: 'm
 }
 
 // ── Guideline tab: static teaching content — "how a powerful agent brain works".
-// R30: describes MECHANISMS, not counts — NO baked numbers (they'd drift). All
-// content is stable architecture fact, safe to hardcode.
+// R30: describes MECHANISMS, not counts — NO baked numbers (they'd drift). Every line
+// must stay true of the running system: re-check it when a mechanism changes.
 const LIFECYCLE: Array<{ key: string; icon: string; title: string; desc: string }> = [
-  { key: 'assemble', icon: 'move_to_inbox', title: 'Assemble', desc: 'live memory injected in FULL, by priority' },
-  { key: 'recall', icon: 'search', title: 'Recall', desc: 'FTS5/BM25 searches the archived cold layer' },
+  { key: 'assemble', icon: 'move_to_inbox', title: 'Assemble', desc: 'every context file injected whole, by priority' },
+  { key: 'recall', icon: 'search', title: 'Recall', desc: 'each message pulls related project, Library and past-session knowledge' },
   { key: 'judge', icon: 'psychology', title: 'Judge', desc: 'the model reasons on that context' },
-  { key: 'sediment', icon: 'water_drop', title: 'Sediment', desc: 'reflect → new entries (confident-only)' },
+  { key: 'sediment', icon: 'water_drop', title: 'Sediment', desc: 'after a session, its agent declares what it learned; the code checks the evidence' },
   { key: 'revise', icon: 'published_with_changes', title: 'Revise', desc: 'a newer decision overrides; a withdrawn entry leaves' },
 ];
+// What runs by itself. One list (it used to be told twice: here and in an "under the
+// hood" list). Nothing decays or is cut by size: an entry leaves only by an override or
+// a withdrawal (design 2026-10-30-brain-driven §2.3).
 const AUTO_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
-  { icon: 'search', name: 'Recall', desc: 'searches the archived cold layer (FTS5) on demand', tag: 'hook' },
-  { icon: 'water_drop', name: 'Cultivation', desc: 'grows DDD docs from sessions, quality-gated', tag: 'hook' },
-  { icon: 'published_with_changes', name: 'Override & withdraw', desc: 'a declared newer decision replaces an entry; the record stays outside the file', tag: 'hook' },
-  { icon: 'genetics', name: 'Evolution capture', desc: 'corrections → pattern detection', tag: 'hook' },
+  { icon: 'search', name: 'Recall', desc: 'each message: the project brain, Library, past sessions, code graph', tag: 'hook' },
+  { icon: 'water_drop', name: 'After-session review', desc: 'writes what a session learned to MEMORY, EVOLUTION, a project brain, Library or Timeline', tag: 'job' },
+  { icon: 'published_with_changes', name: 'Override & withdraw', desc: 'a declared newer decision replaces an entry; the record stays outside the file', tag: 'job' },
+  { icon: 'event_note', name: 'Session record', desc: 'what each session did and where it stopped, read by the next one', tag: 'hook' },
+  { icon: 'genetics', name: 'Rule proposals', desc: 'a recurring correction with 3× evidence becomes a rule for you to approve', tag: 'job' },
+  { icon: 'monitoring', name: 'North star', desc: 'measures whether I am getting better (see the left rail)', tag: 'job' },
 ];
 const MANUAL_ITEMS: Array<{ icon: string; name: string; desc: string; tag: string }> = [
   { icon: 'explore', name: 'STEERING rules', desc: 'your standing directives (highest precedence)', tag: 'file' },
   { icon: 'person', name: 'USER profile', desc: 'who you are, how you like to work', tag: 'file' },
-  { icon: 'extension', name: 'Skill allowlist', desc: 'which capabilities this agent may use', tag: 'config' },
-  { icon: 'power', name: 'MCP tiers', desc: 'always-on vs on-demand tool servers', tag: 'config' },
-  { icon: 'folder_copy', name: 'Create a DDD', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
-];
-// The machinery, described by WHAT IT DOES — not by raw source-symbol names (R20:
-// context_health / s_persist mean nothing to a non-technical user). Each line is a
-// plain-language capability; the underlying hook/skill is deliberately not surfaced.
-const MACHINERY_AUTO = [
-  'Guards the context budget + keeps the knowledge index fresh',
-  'Grows the DDD docs from each session (quality-gated)',
-  'Decays idle knowledge, archives what stops earning its place',
-  'Captures corrections + detects repeating failure patterns',
-];
-const MACHINERY_MANUAL = [
-  'Save a lesson or decision into memory / a DDD doc',
-  'Distill raw session activity into curated memory',
-  'Propose or retire a governance rule',
-  'Create a project brain + validate its knowledge quality',
+  { icon: 'extension', name: 'Skills & MCP servers', desc: 'which capabilities this agent may use (Capabilities)', tag: 'config' },
+  { icon: 'folder_copy', name: 'Create a project brain', desc: 'a domain brain per project (Brain Hub)', tag: 'chat' },
+  { icon: 'bookmark_add', name: 'Remember this', desc: 'ask me to save a lesson or decision now', tag: 'chat' },
+  { icon: 'gavel', name: 'Approve a rule', desc: 'accept or reject a proposal (Needs you → Governance)', tag: 'click' },
 ];
 
 function GuidelineTab() {
   return (
     <div data-testid="cm-panel-guideline" className="flex flex-col gap-5 max-w-4xl">
       <div className="text-body text-[var(--color-text-muted)]">
-        How a powerful agent brain works — the lifecycle every message flows through, what runs
-        itself vs what you steer, and the machinery underneath.
+        How a powerful agent brain works — the lifecycle every message flows through, and what
+        runs itself vs what you steer.
       </div>
 
       {/* Lifecycle flow */}
@@ -1022,32 +1103,6 @@ function GuidelineTab() {
         </div>
       </section>
 
-      {/* Reference chips */}
-      <section>
-        <div className="mb-2 text-meta font-semibold uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
-          Under the hood — the machinery
-        </div>
-        <div data-testid="cm-guideline-chips" className="flex flex-col gap-2">
-          <div className="flex flex-col gap-1">
-            <span className="text-meta text-[var(--color-text-muted)]">Runs automatically:</span>
-            {MACHINERY_AUTO.map((c) => (
-              <div key={c} className="flex items-start gap-1.5 text-meta text-[var(--color-text-muted)]">
-                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: 'var(--color-status-success)' }} aria-hidden />
-                <span>{c}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-1 flex flex-col gap-1">
-            <span className="text-meta text-[var(--color-text-muted)]">You trigger:</span>
-            {MACHINERY_MANUAL.map((c) => (
-              <div key={c} className="flex items-start gap-1.5 text-meta text-[var(--color-text-muted)]">
-                <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full" style={{ background: 'var(--color-primary)' }} aria-hidden />
-                <span>{c}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
     </div>
   );
 }

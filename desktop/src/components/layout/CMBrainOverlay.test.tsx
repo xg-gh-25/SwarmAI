@@ -42,7 +42,7 @@ const GOV_PROPS = [
   { id: 'GC15', gc_id: 'GC15', occurrence_count: 3, proposed_rule: 'Block commit when a self-authored test patches the symbol-under-change.', checked: 'checked against: R28 — new because it names the patch' },
 ];
 
-// lite endpoint shape: exactly { token_block, governance_pending_count }
+// lite endpoint shape: exactly { token_block, governance_pending_count, north_star }
 function mockHealth(overrides: Record<string, unknown> = {}, opts: { governancePending?: number; trendPoints?: unknown[] } = {}) {
   const govN = opts.governancePending ?? 0;
   const lite = {
@@ -226,25 +226,30 @@ describe('CMBrainOverlay — Guideline tab (static teaching content, DoD3)', () 
     await openGuideline();
     expect(screen.getByTestId('cm-guideline-automatic')).toBeInTheDocument();
     expect(screen.getByTestId('cm-guideline-manual')).toBeInTheDocument();
-    // automatic column names real mechanisms (Recall/Cultivation/Override) — not counts
-    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/Recall|Cultivation|Override/);
+    // automatic column names real mechanisms (Recall/review/Override) — not counts
+    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/Recall/);
+    expect(screen.getByTestId('cm-guideline-automatic').textContent).toMatch(/After-session review/);
     // entries in a main file no longer decay: no decay/dormant mechanism is taught
     expect(screen.getByTestId('cm-guideline-automatic').textContent).not.toMatch(/Decay|dormant/);
     // manual column names user-steered surfaces (STEERING/USER/skill)
     expect(screen.getByTestId('cm-guideline-manual').textContent).toMatch(/STEERING|USER|[Ss]kill/);
   });
 
-  it('describes the machinery as WHAT-IT-DOES, not as raw source-symbol identifiers', async () => {
-    await openGuideline();
-    const machinery = screen.getByTestId('cm-guideline-chips');
-    // Redesign: the raw source symbols (context_health, s_persist, ...) are noise to
-    // a non-technical user (R20). The section now names what each mechanism DOES.
-    const txt = machinery.textContent ?? '';
-    // no raw hook/skill identifiers surfaced as content
+  it('names what each mechanism DOES, never a raw source identifier', async () => {
+    const panel = await openGuideline();
+    const txt = panel.textContent ?? '';
     expect(txt).not.toMatch(/context_health|memory_edit_guard|ddd_cultivation|knowledge_backflow|correction_capture|high_signal_capture/);
     expect(txt).not.toMatch(/s_persist|s_memory-distill|s_self-evolution|s_project-manager|s_golden-case/);
-    // it still teaches the machinery — in plain language
-    expect(txt.length).toBeGreaterThan(20);
+  });
+
+  it('teaches only mechanisms that exist: nothing decays, nothing is cut by size', async () => {
+    const panel = await openGuideline();
+    const txt = panel.textContent ?? '';
+    // retired: the size-valve, injection-time truncation, entry decay, the old
+    // cultivation path, the "confident-only" rule
+    expect(txt).not.toMatch(/[Dd]ecay|dormant|truncat|cut from|size cap|Cultivation|confident-only|cold layer/);
+    // the machinery is told once (the old "under the hood" list repeated it)
+    expect(screen.queryByTestId('cm-guideline-chips')).toBeNull();
   });
 
   it('R30: bakes NO drifty numeric counts into the static content', async () => {
@@ -337,12 +342,13 @@ describe('CMBrainOverlay — Context tab consumes the token block', () => {
     expect(screen.queryByTestId('cm-health-counts-KNOWLEDGE.md')).toBeNull();
   });
 
-  it('shows the truncation legend explaining the health/lock contract', async () => {
+  it('shows the legend: every file is injected whole, nothing is cut', async () => {
     renderOverlay();
     openOverlay();
     const panel = await screen.findByTestId('cm-panel-context');
-    // legend teaches the assembly/truncation contract + the health vocab
-    expect(panel.textContent).toMatch(/never truncated/i);
+    // the read path cuts nothing (R23): no truncation contract is taught
+    expect(panel.textContent).toMatch(/injected in full/i);
+    expect(panel.textContent).not.toMatch(/truncat|cut from/i);
     expect(panel.textContent).toMatch(/fresh.*idle.*growing.*oversized|Health/i);
   });
 
@@ -787,5 +793,49 @@ describe('CMBrainOverlay — degradation', () => {
     // overlay still opens; context panel shows an empty-but-valid state
     expect(await screen.findByTestId('cm-panel-context')).toBeInTheDocument();
     expect(screen.queryAllByTestId(/^cm-file-row-/)).toHaveLength(0);
+  });
+});
+
+describe('CMBrainOverlay — north star in the rail', () => {
+  const NS = {
+    at: '2026-11-01T06:05:34+00:00',
+    measures: {
+      cognition: { week: '2026-W44', sessions: 34, corrected_rate: 0.69, earlier_mean: 0.52, earlier_weeks: 7,
+                   direction: 'worse', repeat_rate: 0.13, corrections: 139 },
+      cdf: { useful_rate: 0.83, target: 0.9, below_target: ['GENERAL'], checks_total: 10, checks_failing: ['C3'] },
+    },
+  };
+
+  it('shows the share of corrected sessions against the weeks before, repeats and useful knowledge', async () => {
+    mockHealth({ north_star: NS });
+    renderOverlay();
+    const rail = await screen.findByTestId('cm-north-star');
+    await waitFor(() => expect(within(rail).getByTestId('cm-ns-corrected').textContent).toContain('69%'));
+    expect(within(rail).getByTestId('cm-ns-direction').textContent).toMatch(/worse than 52% before/);
+    expect(within(rail).getByTestId('cm-ns-repeats').textContent).toMatch(/13%.*139 corrections/);
+    expect(within(rail).getByTestId('cm-ns-cdf').textContent).toMatch(/83%.*target 90%/);
+  });
+
+  it('says it is not measured yet instead of showing 0', async () => {
+    mockHealth({ north_star: null });
+    renderOverlay();
+    const rail = await screen.findByTestId('cm-north-star');
+    await waitFor(() => expect(within(rail).getByTestId('cm-north-star-empty').textContent).toMatch(/not measured yet/));
+    expect(rail.textContent).not.toMatch(/0%/);
+  });
+});
+
+describe('CMBrainOverlay — Memory / Evolution say how they work today', () => {
+  it('Memory: injected whole, no fixed budget; Evolution: nothing moved out by size', async () => {
+    renderOverlay();
+    await screen.findByTestId('cm-brain-overlay');
+    act(() => { screen.getByTestId('cm-tab-memory').click(); });
+    const mem = await screen.findByTestId('cm-panel-memory');
+    expect(mem.textContent).toMatch(/injected whole/);
+    expect(mem.textContent).not.toMatch(/fixed budget|confident-only|size-valve/);
+    act(() => { screen.getByTestId('cm-tab-evolution').click(); });
+    const evo = await screen.findByTestId('cm-panel-evolution');
+    expect(evo.textContent).toMatch(/nothing is moved out by size/);
+    expect(evo.textContent).not.toMatch(/size cap|bias tag/);
   });
 });

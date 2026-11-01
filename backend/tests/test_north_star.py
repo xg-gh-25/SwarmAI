@@ -61,6 +61,27 @@ def test_the_headline_says_the_state_and_its_direction(parts):
     assert any("C10 knowledge is used: no_data" in line for line in snap["detail"])
 
 
+def test_the_measures_carry_the_same_readings_as_numbers(parts):
+    """The C&M rail reads numbers, not the headline's words (measures_for_ui)."""
+    m = N.compute(NOW)["measures"]
+    cog, cdf = m["cognition"], m["cdf"]
+    assert cog["week"] == "W44" and cog["sessions"] == 29 and cog["corrected_rate"] == 0.7
+    assert cog["earlier_mean"] == 0.4 and cog["earlier_weeks"] == 3 and cog["direction"] == "worse"
+    assert cog["repeat_rate"] == 0.08 and cog["corrections"] == 122
+    assert cdf["useful_rate"] == 0.83 and cdf["target"] == 0.9
+    assert cdf["below_target"] == ["GENERAL"] and cdf["checks_failing"] == ["C3"]
+    assert cdf["checks_total"] == 3 and "needs_you" not in m
+
+
+def test_the_overlay_reads_the_measures_from_the_file(parts):
+    assert N.measures_for_ui() is None                         # no snapshot yet
+    N.refresh(NOW)
+    ui = N.measures_for_ui()
+    assert ui["at"] == NOW.isoformat(timespec="seconds") and ui["measures"]["cdf"]["target"] == 0.9
+    N.path().write_text(json.dumps({"at": "2026-10-01T00:00:00+00:00", "headline": []}))
+    assert N.measures_for_ui()["measures"] == {}               # an older snapshot: none yet
+
+
 def test_a_part_that_cannot_be_read_is_said_and_the_rest_stays(parts, monkeypatch):
     def broken():
         raise RuntimeError("db gone")
@@ -68,6 +89,8 @@ def test_a_part_that_cannot_be_read_is_said_and_the_rest_stays(parts, monkeypatc
     snap = N.compute(NOW)
     assert snap["headline"][2] == "needs_you: unreadable (RuntimeError)"
     assert snap["headline"][0].startswith("Cognition")
+    monkeypatch.setattr(N, "_cdf", lambda overview: (_ for _ in ()).throw(RuntimeError("x")))
+    assert N.compute(NOW)["measures"]["cdf"] is None             # unreadable: no numbers
 
 
 def test_the_prompt_reads_the_file_with_its_age(parts):

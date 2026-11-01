@@ -9,7 +9,7 @@ removed with the auto_refresh module (run_781ffbd9); it remains in HEAVY_KEYS
 because the lite endpoint must still never surface it.
 
 Key properties verified:
-  - lite returns exactly {token_block, governance_pending_count} (AC1)
+  - lite returns exactly {token_block, governance_pending_count, north_star} (AC1)
   - NONE of the heavy full-endpoint keys are present (AC2)
   - token_block matches build_context_token_block (AC3)
   - governance_pending_count == get_pending_governance()["total"] (AC5)
@@ -25,7 +25,7 @@ FULL = "/api/eval/context-health"
 
 # The 5 heavy fields the lite endpoint must NEVER include.
 HEAVY_KEYS = {"refresh_log", "staleness", "learning_dashboard", "weeks_available"}
-LITE_KEYS = {"token_block", "governance_pending_count"}
+LITE_KEYS = {"token_block", "governance_pending_count", "north_star"}
 
 
 @pytest.fixture
@@ -36,8 +36,8 @@ def client():
 
 
 class TestContextHealthLiteShape:
-    def test_lite_returns_200_with_exactly_the_two_keys(self, client):
-        """AC1: lite returns {token_block, governance_pending_count}."""
+    def test_lite_returns_200_with_exactly_the_three_keys(self, client):
+        """AC1: lite returns {token_block, governance_pending_count, north_star}."""
         r = client.get(LITE)
         assert r.status_code == 200
         body = r.json()
@@ -54,6 +54,22 @@ class TestContextHealthLiteShape:
         """AC5 (shape): governance_pending_count is an int, not a list/None."""
         body = client.get(LITE).json()
         assert isinstance(body["governance_pending_count"], int)
+
+    def test_north_star_comes_from_the_snapshot_file(self, client, monkeypatch):
+        """The rail's north star readings: measures_for_ui, as read from its file."""
+        import core.north_star as N
+        monkeypatch.setattr(N, "measures_for_ui",
+                            lambda: {"at": "2026-11-01T06:00:00+00:00", "measures": {"cdf": {"useful_rate": 0.8}}})
+        assert client.get(LITE).json()["north_star"]["measures"]["cdf"]["useful_rate"] == 0.8
+
+    def test_an_unreadable_north_star_is_null_not_500(self, client, monkeypatch):
+        import core.north_star as N
+        def boom():
+            raise RuntimeError("x")
+        monkeypatch.setattr(N, "measures_for_ui", boom)
+        r = client.get(LITE)
+        assert r.status_code == 200 and r.json()["north_star"] is None
+
 
 class TestContextHealthLiteMatchesSources:
     def test_governance_count_matches_service_total(self, client):
@@ -84,12 +100,15 @@ class TestContextHealthLiteFailSoft:
         monkeypatch.setattr(
             initialization_manager, "get_cached_workspace_path", lambda: None
         )
+        import core.north_star as N
+        monkeypatch.setattr(N, "measures_for_ui", lambda: None)
         r = client.get(LITE)
         assert r.status_code == 200
         body = r.json()
         assert body == {
             "token_block": None,
             "governance_pending_count": 0,
+            "north_star": None,
         }
 
     def test_builder_error_fails_soft_to_null_not_500(self, client, monkeypatch):

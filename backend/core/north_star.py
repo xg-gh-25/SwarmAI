@@ -7,13 +7,16 @@ it (``core.ingestion.health.overview``) and what waits on the person
 
 - ``headline``: three short lines, injected into every desktop prompt (the prompt reads
   the file only; it never reads a database: SwarmAI TECH, system-prompt purity);
-- ``detail``: the full picture, printed by ``python -m scripts.north_star``.
+- ``detail``: the full picture, printed by ``python -m scripts.north_star``;
+- ``measures``: the same readings as numbers, for the C&M overlay's rail
+  (``measures_for_ui``, served by ``GET /api/eval/context-health/lite``).
 
 Written to ``<app data>/north_star.json`` by ``refresh()``: at the end of every health
 pass, by the lifecycle sweep (about every 30 minutes) and by the command. Every number
 carries its window; the headline carries the time it was computed.
 
-Public: ``refresh(now=None)``, ``compute(now=None)``, ``headline_for_prompt(now=None)``.
+Public: ``refresh(now=None)``, ``compute(now=None)``, ``headline_for_prompt(now=None)``,
+``measures_for_ui()``.
 """
 from __future__ import annotations
 
@@ -41,17 +44,17 @@ def _pct(x: float | None) -> str:
     return "n/a" if x is None else f"{round(x * 100)}%"
 
 
-def _cognition(level: dict) -> tuple[str, list[str]]:
-    """The headline line and the detail lines of the cognition level."""
+def _cognition(level: dict) -> tuple[str, list[str], dict | None]:
+    """The headline line, the detail lines and the measures of the cognition level."""
     weeks = [w for w in level.get("weeks") or [] if w.get("not_corrected_rate") is not None]
     detail = ["Cognition level (outcomes, not storage):"]
     if not weeks:
-        return "Cognition: no week with enough sessions yet.", detail + ["  no data"]
+        return "Cognition: no week with enough sessions yet.", detail + ["  no data"], None
     corrected = [(w["week"], 1 - w["not_corrected_rate"], w["sessions"]) for w in weeks]
     week, rate, sessions = corrected[-1]
     earlier = [r for _w, r, _n in corrected[:-1]]
+    mean = sum(earlier) / len(earlier) if earlier else None
     if earlier:
-        mean = sum(earlier) / len(earlier)
         # fewer corrected sessions is better
         move = ("better than" if rate < mean - FLAT_BAND else "worse than" if rate > mean + FLAT_BAND
                 else "about the same as")
@@ -87,10 +90,17 @@ def _cognition(level: dict) -> tuple[str, list[str]]:
     detail.append(f"  judge vs the review's record: corrected {agree.get('corrected_agreed', 0)}/"
                   f"{agree.get('corrected_total', 0)}, clean {agree.get('clean_agreed', 0)}/"
                   f"{agree.get('clean_total', 0)}")
-    return line, detail
+    measures = {
+        "week": week, "sessions": sessions, "corrected_rate": round(rate, 4),
+        "earlier_mean": round(mean, 4) if mean is not None else None, "earlier_weeks": len(earlier),
+        "direction": (None if mean is None else "better" if rate < mean - FLAT_BAND
+                      else "worse" if rate > mean + FLAT_BAND else "same"),
+        "repeat_rate": latest.get("repeat_rate"), "corrections": latest.get("corrections"),
+    }
+    return line, detail, measures
 
 
-def _cdf(overview: dict) -> tuple[str, list[str]]:
+def _cdf(overview: dict) -> tuple[str, list[str], dict]:
     from core.ingestion.health import CHECK_NAMES
     val = overview.get("value") or {}
     low = [f"{d['key']} {_pct(d['rate'])}" for d in val.get("destinations") or []
@@ -124,29 +134,36 @@ def _cdf(overview: dict) -> tuple[str, list[str]]:
     for part in ("seen", "why", "suggest"):
         for text in reading.get(part) or []:
             detail.append(f"  {part}: {text}")
-    return line, detail
+    measures = {
+        "useful_rate": val.get("rate"), "target": val.get("target"),
+        "below_target": [d["key"] for d in val.get("destinations") or []
+                         if d.get("rate") is not None and d["rate"] < d.get("target", 0)],
+        "checks_total": len(checks), "checks_failing": [c["id"] for c in failing],
+    }
+    return line, detail, measures
 
 
-def _needs_you(attention: dict) -> tuple[str, list[str]]:
+def _needs_you(attention: dict) -> tuple[str, list[str], None]:
     items = attention.get("items") or []
     counts = attention.get("counts") or {}
     if not items:
-        return "Needs You: nothing.", ["Needs You: nothing."]
+        return "Needs You: nothing.", ["Needs You: nothing."], None
     shown = "; ".join(f"[{it['tier']}] {it['title']}" for it in items[:3])
     more = f"; +{len(items) - 3} more" if len(items) > 3 else ""
     line = (f"Needs You: {counts.get('blocking', 0)} blocking, {counts.get('review', 0)} to review"
             f" — {shown}{more}.")
     detail = ["Needs You:"] + [f"  [{it['tier']}] {it['source']} · {it['title']} · {it.get('summary', '')}"
                                for it in items]
-    return line, detail
+    return line, detail, None
 
 
 def compute(now: datetime | None = None) -> dict:
-    """The snapshot: ``{"at", "headline", "detail"}``. A part that cannot be read says
-    so in its line; it never fails the whole."""
+    """The snapshot: ``{"at", "headline", "detail", "measures"}``. A part that cannot be
+    read says so in its line and has no measures (None); it never fails the whole."""
     now = now or datetime.now(timezone.utc)
     lines: list[str] = []
     detail: list[str] = []
+    measures: dict[str, Any] = {}
     parts = (
         ("cognition", lambda: _cognition(__import__("core.ingestion.cognition_level",
                                                     fromlist=["level"]).level(now))),
@@ -155,13 +172,16 @@ def compute(now: datetime | None = None) -> dict:
     )
     for name, fn in parts:
         try:
-            line, more = fn()
+            line, more, measure = fn()
         except Exception as exc:  # noqa: BLE001 -- one unreadable part is said, never fatal
             logger.warning("north star: %s unreadable", name, exc_info=True)
-            line, more = f"{name}: unreadable ({type(exc).__name__})", []
+            line, more, measure = f"{name}: unreadable ({type(exc).__name__})", [], None
         lines.append(line)
         detail += more + [""]
-    return {"at": now.isoformat(timespec="seconds"), "headline": lines, "detail": detail}
+        if name != "needs_you":
+            measures[name] = measure
+    return {"at": now.isoformat(timespec="seconds"), "headline": lines, "detail": detail,
+            "measures": measures}
 
 
 def _attention() -> dict:
@@ -206,3 +226,16 @@ def headline_for_prompt(now: datetime | None = None) -> str:
     age = f"{minutes} min ago" if minutes < 120 else f"{minutes // 60} h ago"
     return "\n".join([f"(as of {at.isoformat(timespec='minutes')}, {age}; detail: "
                       '`"$SWARM_BACKEND_BIN" py -m scripts.north_star`)'] + [f"- {x}" for x in lines])
+
+
+def measures_for_ui() -> dict | None:
+    """``{"at", "measures"}`` from the snapshot file, for the C&M overlay (read from the
+    file only, like the prompt). None when there is no snapshot; ``measures`` is ``{}``
+    for a snapshot written before measures existed (the next refresh adds them)."""
+    try:
+        snap = json.loads(path().read_text(encoding="utf-8"))
+        at = str(snap["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    measures = snap.get("measures")
+    return {"at": at, "measures": measures if isinstance(measures, dict) else {}}

@@ -323,21 +323,31 @@ async def reload_eval_data():
 async def get_context_health_lite():
     """Thin first-paint twin of /context-health for the C&M Global Brain overlay.
 
-    Returns ONLY the two things the overlay needs on open — the calibrated
-    token_block (Context tab + load rail) and a governance-pending count (Approve). It deliberately does NOT run the
+    Returns ONLY what the overlay needs on open — the calibrated token_block (Context
+    tab + load rail), a governance-pending count (Approve) and the north star readings
+    (``core.north_star.measures_for_ui``: read from its snapshot file, no database).
+    It deliberately does NOT run the
     heavy read ops the full endpoint does (_ch_ddd_staleness,
     _build_learning_dashboard) — those stay on GET /context-health, which has no
     UI reader since the Eval overlay dropped its Context Health tab. (The old read_refresh_log op was removed with
     the auto_refresh module, run_781ffbd9.)
 
-    ⚠️ DISTINCT schema from /context-health (2 keys, not 6). Fail-soft: any read
-    error / missing workspace → 200 with safe defaults (token_block null, 0),
-    never a 500 (matches the full endpoint's swallow-and-continue pattern).
+    ⚠️ DISTINCT schema from /context-health (3 keys, not 6). Fail-soft: any read
+    error / missing workspace → 200 with safe defaults (token_block null, 0,
+    north_star null), never a 500 (matches the full endpoint's swallow-and-continue
+    pattern).
     """
     from pathlib import Path
     from core.initialization_manager import initialization_manager
 
-    result = {"token_block": None, "governance_pending_count": 0}
+    result = {"token_block": None, "governance_pending_count": 0, "north_star": None}
+
+    # The north star readings: one small file, independent of the workspace path.
+    try:
+        from core.north_star import measures_for_ui
+        result["north_star"] = measures_for_ui()
+    except Exception as exc:
+        logger.debug("context-health/lite: north star failed: %s", exc)
 
     ws_path = initialization_manager.get_cached_workspace_path()
     if not ws_path:
