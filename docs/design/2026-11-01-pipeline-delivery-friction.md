@@ -3,7 +3,7 @@ title: Pipeline 交付摩擦 — 审查预算随规模、覆盖可见、单一�
 created: 2026-11-01
 updated: 2026-11-01
 project: SwarmAI
-status: r2 — 已过一次零上下文审查（r1 的 4 个 HIGH 按原因改掉，见修订记录），待 XG 定稿
+status: r3 — XG 定稿（native 实施，「DELIVER / REFLECT 别整太严」）；已实施，见 §6
 ---
 
 # Pipeline 交付摩擦
@@ -81,12 +81,34 @@ run_dab63338（35 项、248 个文件、约 2.7 万行）跑通了，但暴露�
 
 - `backend/tests/conftest.py`：比较 `os.path.realpath(sys.prefix)` 与 `realpath(.venv)`。AGENTS.md:531 的绕过说明删掉。
 
+### E1 REFLECT 宽松（XG：别整太严）
+
+- `reflect.prepare_lenient`：每条合法的 unit 保留，不合法的（形状、section、证据不属于本 run、关闭的 gap 不是 open）丢掉并在回复的 `dropped` 里写明原因；缺的 section 当空。只有旧的 lesson 列表整份拒收。RF 复查用的严格 `prepare` 是同一套校验加 raise。
+
+### E2 main 只动了与 run 无关的文件时，TEST 报告保留
+
+- 落地同步时，main 的新 commit 与 run 改动的文件没有交集、rebase 干净（patch 不变），同步前那份 TEST 报告继续有效：LG-1 读 `run["carried_test_trees"]`（engine 由两组 git 路径算出）。REPORT 写明"main 移动后没有重跑测试"。有交集仍按旧规则重测。这改了 2026-10-26 §5.2 第 2 点"main 动了就重测"，依据是 XG 的要求和 P5（测试由 agent 汇报，push 由人决定）。
+
+### N1 main 与 run 冲突不再让 run 走向终止（swarmws-46 run_3fe60e51 的证据）
+
+- 新的合并冲突（main 动进了 run 的行）计入 main 移动的计数（`BASE_MOVED_CAP`），不计入 run 自己的 3 次落地失败；一直没解决的冲突仍是 run 自己的（新 cause `conflict_unresolved`，3 次 `land_conflict`）。
+- 本次落地 rebase 到了新 main、唯一问题是 TEST 报告不在新 tree 上（解决了冲突、或报告本就旧）→ `base_moved`：重测，不算 run 自己的失败。失败的报告不算。
+- DELIVER 退回 REVIEW 一次之后，再出现与已审改动的差异时直接落地，LG-1 说明，REPORT 和 Quality 写"没有审查看过这部分差异"（P5：没跑的审查记录下来，不用来挡落地）。`next` 不再说"恢复已审代码"。
+
+### N2 main 与 run 文件重叠提前说
+
+- REVIEW / TEST 阶段 `next` 带 `main_overlap`：main 自 run base 以来的 commit 也改了 run 的哪些文件。只是信息，不挡。
+
+### N3 手工 commit 在同步时折回
+
+- `run_worktree.sync` 在 rebase 前把 run 分支上、base 之后手工做的 commit 用 `reset --soft base` 折回改动（文件内容不变，commit 仍在 reflog），不再报 "worktree HEAD is not the run's base"。commit gate 拒绝 run worktree 里的手工 commit 由 swarmws-46 做（35e9deb26）。
+
 ## 3. 不做
 
 | 项 | 原因 |
 |---|---|
 | 审查按 diff 分片（r1 的 D1） | handout 事件 id 是 `(stage, round, expert_id, attempt)` 的哈希（`events.py:90`、`:509`），`first_round_series` 按 `(expert_id, code_trees)` 分组（`review.py:161-177`），同一专家的多片会互相当成重问，破坏去重、重问上限和 `review_phase`；且 27k 行要 18 片，cap 内仍派不完。预算随规模（D1）+ 拆 run（D3）+ 覆盖可见（D2）达到同样目的，不动协议 |
-| 测试报告容忍纯文档差异（r1 的 D5） | 推翻已定决定"落地不放松 LG-1"（`2026-10-26-pipeline-review-closure-and-visibility.md:164`、`:246`、`:255`）；文档类文件也可能改变行为（测试读 `backend/context/**`）；main 移动已有 `base_moved` 机制（`lifecycle.py:46`） |
+| 测试报告容忍纯文档差异（r1 的 D5；E2 只在 main 的改动与 run 文件无交集时保留报告，与文件类型无关） | 推翻已定决定"落地不放松 LG-1"（`2026-10-26-pipeline-review-closure-and-visibility.md:164`、`:246`、`:255`）；文档类文件也可能改变行为（测试读 `backend/context/**`）；main 移动已有 `base_moved` 机制（`lifecycle.py:46`） |
 | worktree 写入 gate 对 heredoc 的误判 | `gate_decisions.jsonl` 里该 gate 共拒 36 次，heredoc 4 次；拒绝信息已给出路。度量不支持改解析（P5） |
 | 解析专家写的 `UNCHECKED` | 写法不一、是模型自述；D2 用 transcript 的确定性事实 |
 | 需求 4000 字上限 | 保护 recall 查询和专家 prompt 的体积；改的是报错指引（D7） |
@@ -107,11 +129,27 @@ run_dab63338（35 项、248 个文件、约 2.7 万行）跑通了，但暴露�
 
 最终测试集：上表全部 + `test_pipeline_v1_acceptance_matrix.py`、`test_run_protocol_review.py`、`test_pipeline_expert_agent.py` 等读审查、答案、报告的现有测试。审查：correctness + security（改的是审查预算和落地判断本身）。
 
-## 5. 实施方式（待定）
+## 5. 实施方式
 
-跨模块改 pipeline 核心（预算 gate、答案记录、审计、新命令、hook、专家 prompt）。可 native 做（按 §4 测试 + 专家审查），或走 pipeline（本 run 自己会用到改动前的旧审查方式）。
+native（XG 2026-11-01 定），按 §4 先写测试，每项 mutation check（回退修复测试变红），最后 correctness + security 审查。
+
+## 6. 实施记录
+
+| 改动 | commit |
+|---|---|
+| D1 D2 D5 | f00b96005 |
+| D4 | 025cd2e50 |
+| D9 | 67a0c9b4f |
+| E1 E2 | bc943e047 |
+| N1 N3 | b005ee2d5 |
+| N2 | 01cee171b |
+| D6 | 5fddd4929 |
+| D8 | 1f1acae8f |
+| D7 | 178bd2de9 |
+| D3 | d5fc87dd7 |
 
 ## 修订记录
 
 - r1（2026-11-01）：初稿。
 - r2（2026-11-01，零上下文审查 4 HIGH / 4 MEDIUM 按原因改）：撤掉 diff 分片（破坏事件 id、审查轮次分组和重问上限，且大 run 仍派不完）→ D1 改为预算随 PROMPT-FILE 规模、D2 覆盖改用 transcript 的确定性事实；撤掉"报告容忍纯文档差异"（推翻已定的 LG-1 决定，文档类也可能改变行为）；文档分类去掉 `.txt`、不提供仓库自定义路径；`base-tree` 放到系统临时目录并随 run release 删除，不进 run 目录（SwarmWS 会提交它）；D7 的样例改为在 rig 里走真实入口验证（r1 写的 validator 名字不对）；D8 改为只滤掉"别人写的、仍脏、与 run 无关"的路径，保留 still changing 行；新增 D4：专家 prompt 的输出格式与引擎契约冲突（审查员指出的漏掉的根因）。
+- r3（2026-11-01）：XG 定稿 native 实施并要求 DELIVER / REFLECT 别太严 → 新增 E1、E2；并入 swarmws-46 从 run_3fe60e51 / run_ee603ceb 带来的 N1–N3（N3 的 gate 部分、not_landed 后的 worktree 与恢复提示由它实施）；实施记录 §6。
