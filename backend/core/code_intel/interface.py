@@ -31,7 +31,10 @@ gives no interface.
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 LANGS = frozenset({"python", "typescript", "javascript", "java"})
 
@@ -140,7 +143,8 @@ def _parse(text: str, language: str, suffix: str = ""):
         return None
     try:
         return parser.parse(text.encode("utf-8"))
-    except Exception:  # noqa: BLE001 -- an unparseable file has no interface
+    except Exception as e:  # noqa: BLE001 -- an unparseable file has no interface
+        logger.debug("code_intel.interface: %s parse failed: %s", grammar, e)
         return None
 
 

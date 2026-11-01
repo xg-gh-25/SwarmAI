@@ -154,7 +154,7 @@ printf '%s\n' "${VERSION}" > "${STAGING}/VERSION"
 # ---------------------------------------------------------------------------
 # Hive seed material — read once by SwarmWorkspaceManager._seed_hive_from_package on a
 # Hive's first boot (SWARMAI_MODE=hive): config-hive.json + the 5 PUBLIC context files,
-# both from the repo. Private context files are never part of it (explicit whitelist
+# both from the repo. Private context files are never part of it (explicit allowlist
 # below). With --with-live-ddd only, it also carries this machine's live SwarmAI DDD.
 # Without a DDD in the seed, a fresh Hive gets the same 4-doc DDD scaffold a desktop
 # install gets.
@@ -301,7 +301,7 @@ if ! python3 -c "import json,sys; json.load(open('${SEED}/config-hive.json'))" 2
     exit 1
 fi
 
-# 3. PUBLIC context — EXPLICIT WHITELIST (never a glob): only the 5 system-owned
+# 3. PUBLIC context — EXPLICIT ALLOWLIST (never a glob): only the 5 system-owned
 #    files. The private six (MEMORY/USER/EVOLUTION/STEERING/TOOLS/KNOWLEDGE) must
 #    NEVER ship to a shared Hive. Mirrors _PUBLIC_CONTEXT_SEED in the manager.
 for f in SWARMAI.md IDENTITY.md SOUL.md AGENT.md SELF.md; do

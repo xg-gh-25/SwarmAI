@@ -27,6 +27,7 @@ nothing an agent wrote into a spec is trusted beyond those choices.
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -36,6 +37,8 @@ import yaml
 from core.project_agent import (GENERAL_BRAIN, PROJECT_AGENT_FILE, RESERVED_ACTIONS, _bindings, _list_of_dicts,
                                 _mode_view, _skills, dispatch_problems, normalize, revision, validate)
 from core.project_agent_session import PinError, brain_dir
+
+logger = logging.getLogger(__name__)
 
 MAX_ACCEPTANCE_CHARS = 2000
 #: why this execution was chosen, one sentence for the dispatch card
@@ -123,7 +126,8 @@ def private_hosts() -> list[str]:
     try:
         from core.app_config_manager import AppConfigManager
         v = AppConfigManager.instance().get("swarm_out_private_hosts", [])
-    except Exception:  # noqa: BLE001 — no settings: no pattern
+    except Exception as e:  # noqa: BLE001 — no settings: no pattern
+        logger.debug("task_spec: private host patterns unreadable: %s", e)
         return []
     return [p.strip().lower() for p in v if isinstance(p, str) and p.strip()] if isinstance(v, list) else []
 

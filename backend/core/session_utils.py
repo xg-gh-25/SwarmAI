@@ -328,7 +328,8 @@ def _sign_in_error_text() -> "tuple[str, str]":
     try:
         from core.aws_account import get_chat_via
         via = get_chat_via()
-    except Exception:  # noqa: BLE001 — an error message must never fail to build
+    except Exception as e:  # noqa: BLE001 — an error message must never fail to build
+        logger.debug("session_utils: chat sign-in method unknown: %s", e)
         via = "aws"
     return _BEDROCK_KEY_TEXT if via == "bedrock_key" else _AWS_SIGN_IN_TEXT
 

@@ -818,7 +818,7 @@ async def _ship_repos(inst: dict[str, Any], repos: list[dict[str, Any]],
             status, detail = await _within(deadline, f"sending {r['name']} to Hive {inst['name']}",
                                            SHIP_TIMEOUT_S, lambda: _put_repo(inst, r, path, size))
         finally:
-            path.unlink(missing_ok=True)
+            await asyncio.to_thread(path.unlink, missing_ok=True)
         if status == 200:
             continue
         if status == 404:
@@ -1439,8 +1439,8 @@ async def refresh_runs() -> dict[str, Any]:
                 await asyncio.shield(task)        # from before a command: let it end
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 — it is done; the next one is computed below
-                pass
+            except Exception as e:  # noqa: BLE001 — it is done; the next one is computed below
+                logger.debug("swarm_out: earlier runs snapshot failed: %s", e)
             continue
         gen = _SNAPSHOT["gen"]
         task = asyncio.ensure_future(_compute_runs())

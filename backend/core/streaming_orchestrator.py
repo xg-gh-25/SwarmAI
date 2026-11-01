@@ -379,8 +379,8 @@ class StreamingOrchestrator:
             return
         try:
             message._swarm_usage_recorded = True
-        except Exception:  # noqa: BLE001 — a result type that takes no attribute: record anyway
-            pass
+        except Exception as e:  # noqa: BLE001 — a result type that takes no attribute: record anyway
+            logger.debug("usage-recorded mark not settable on %s: %s", type(message).__name__, e)
         parent = self._parent
         try:
             from core import usage_accounting

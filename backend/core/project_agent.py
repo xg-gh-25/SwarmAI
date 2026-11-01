@@ -185,30 +185,30 @@ def _gates_dir(project_dir: Path) -> Path:
 def gate_files(project_dir: Path) -> dict[str, Path]:
     """{gate name: script} — the top-level ``*.py`` scripts of 3-gates/ that travel to a
     Hive, tests excluded."""
-    from core.brain_sync import whitelisted
+    from core.brain_sync import allowlisted
     root = _gates_dir(project_dir)
     if not root.is_dir():
         return {}
     out: dict[str, Path] = {}
     for p in sorted(root.iterdir()):
         if (p.is_file() and not p.is_symlink() and p.suffix == ".py" and not p.name.startswith("test_")
-                and whitelisted(f"3-gates/{p.name}", _is_general_dir(project_dir))):
+                and allowlisted(f"3-gates/{p.name}", _is_general_dir(project_dir))):
             out[p.stem] = p
     return out
 
 
 def _is_general_dir(project_dir: Path) -> bool:
     """True for the General Brain's directory (``Knowledge/Library``), which travels
-    under the General whitelist (its Markdown only)."""
+    under the General allowlist (its Markdown only)."""
     p = Path(project_dir)
     return p.name == "Library" and p.parent.name == "Knowledge"
 
 
 def _tree_files(root: Path, prefix: str, general: bool = False) -> list[Path]:
-    """The files under *root* that travel to a Hive (``core.brain_sync.whitelisted`` of
+    """The files under *root* that travel to a Hive (``core.brain_sync.allowlisted`` of
     ``<prefix>/<rel>``): the revision and the gates digest cover exactly what a Hive
     receives, so a Hive recomputes the same values from its copy."""
-    from core.brain_sync import whitelisted
+    from core.brain_sync import allowlisted
     if not root.is_dir():
         return []
     files = []
@@ -216,7 +216,7 @@ def _tree_files(root: Path, prefix: str, general: bool = False) -> list[Path]:
         rel = p.relative_to(root)
         if any(part in _GATE_SKIP_PARTS for part in rel.parts) or p.suffix == ".pyc":
             continue
-        if p.is_file() and not p.is_symlink() and whitelisted(f"{prefix}/{rel.as_posix()}", general):
+        if p.is_file() and not p.is_symlink() and allowlisted(f"{prefix}/{rel.as_posix()}", general):
             files.append(p)
     return files
 
@@ -316,9 +316,9 @@ def _in_v1_terms(problems: list[str]) -> list[str]:
 
 
 def _unsynced_gate_files(project_dir: Path) -> list[str]:
-    """A ``.py`` under 3-gates/ whose name the sync whitelist keeps home (a secret or
+    """A ``.py`` under 3-gates/ whose name the sync allowlist keeps home (a secret or
     archive name rule): it is neither a gate nor importable by one, here or on a Hive."""
-    from core.brain_sync import whitelisted
+    from core.brain_sync import allowlisted
     root = _gates_dir(project_dir)
     if not root.is_dir():
         return []
@@ -327,7 +327,7 @@ def _unsynced_gate_files(project_dir: Path) -> list[str]:
         rel = p.relative_to(root).as_posix()
         if "__pycache__" in rel or p.is_symlink() or rel.split("/")[-1].startswith("."):
             continue
-        if not whitelisted(f"3-gates/{rel}", False):
+        if not allowlisted(f"3-gates/{rel}", False):
             out.append(f"3-gates/{rel} is not used: its name matches a secret or archive rule, so it "
                        "is not synced or hashed; rename it")
     return out

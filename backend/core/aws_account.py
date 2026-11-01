@@ -1207,7 +1207,8 @@ def _no_credentials_seen() -> bool:
     try:
         from core import session_registry
         return session_registry.get_credential_validator().last_expired_reason == "no_credentials"
-    except Exception:  # noqa: BLE001 — a fix text must never fail to build
+    except Exception as e:  # noqa: BLE001 — a fix text must never fail to build
+        logger.debug("aws_account: last credential check unreadable: %s", e)
         return False
 
 

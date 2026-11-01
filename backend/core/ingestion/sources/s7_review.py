@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -683,13 +684,15 @@ def _earlier_units(session_id: str, workspace: Path, project: str | None) -> lis
     from core.ingestion.store import connect_ro
     try:
         conn = connect_ro()
-    except Exception:  # noqa: BLE001 — none shown then
+    except Exception as e:  # noqa: BLE001 — none shown then
+        logger.debug("s7_review: ingestion store unreadable: %s", e)
         return []
     try:
         ids = {f"cand:{r[0]}" for r in conn.execute(
             "SELECT u.unit_id FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id "
             "WHERE i.source_ref=? AND u.state='written'", (session_id,))}
-    except Exception:  # noqa: BLE001
+    except sqlite3.Error as e:
+        logger.debug("s7_review: earlier review entries unreadable: %s", e)
         ids = set()
     finally:
         conn.close()

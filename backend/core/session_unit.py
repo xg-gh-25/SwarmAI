@@ -327,7 +327,8 @@ def _get_children(pid: int) -> list[int]:
     try:
         import psutil
         return [child.pid for child in psutil.Process(pid).children()]
-    except Exception:  # noqa: BLE001 -- psutil.Error, ImportError, OSError: nothing to report
+    except Exception as e:  # noqa: BLE001 -- psutil.Error, ImportError, OSError
+        logger.debug("session_unit: children of pid %s unreadable: %s", pid, e)
         return []
 
 
@@ -415,7 +416,8 @@ def _signs_in_with_ada() -> bool:
     try:
         from core import aws_account
         return aws_account.remediation_method() in ("ada_account", "ada")
-    except Exception:  # noqa: BLE001 -- unknown sign-in: give the generic hint
+    except Exception as e:  # noqa: BLE001 -- unknown sign-in: give the generic hint
+        logger.debug("session_unit: sign-in method unknown: %s", e)
         return False
 
 

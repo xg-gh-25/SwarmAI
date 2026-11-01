@@ -38,12 +38,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from core.project_registry import DDD_CANONICAL_DOCS
+
 logger = logging.getLogger(__name__)
 
 MIN_SAMPLE = 10
 WINDOW = timedelta(days=30)
 TARGET = 0.9
-MAIN_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+MAIN_DOCS = DDD_CANONICAL_DOCS
 SHOWN = 20                     # drill-down rows per list
 SNAPSHOT_TTL = 600.0
 _DOC_FILES = ("requirements.json", "design_spec.json")

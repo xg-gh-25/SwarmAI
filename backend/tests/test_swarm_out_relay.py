@@ -1,7 +1,7 @@
 """Swarm Out relay (core/swarm_out_relay.py): a Hive session's events into the local hub.
 
 Questions, one per relay rule (design docs/design/2026-10-29-swarm-out-hive-session-tab.md
-§3): is only this session's whitelisted traffic published, with local seqs and the Hive's
+§3): is only this session's allowlisted traffic published, with local seqs and the Hive's
 turn ids (R4.1); is each Hive seq published once (R4.2); are the Hive's own log markers
 never passed on, and does the first connect join while reconnects use the relay's cursor
 (R4.3, R4.7); does stopping mid-turn leave no open turn here (R4.4); does a Hive restart
@@ -110,7 +110,7 @@ def ev(etype, seq, **kw):
     return {"type": etype, "sessionId": SID, "turnId": kw.pop("turn", "t1"), "eventSeq": seq, **kw}
 
 
-def test_only_this_sessions_whitelisted_events_are_published(env):
+def test_only_this_sessions_allowlisted_events_are_published(env):
     async def go():
         m = swarm_out_relay.manager()
         entry = await m.acquire(SID, "w1", INST)

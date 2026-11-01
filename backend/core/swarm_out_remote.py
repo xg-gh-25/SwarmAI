@@ -11,7 +11,7 @@ proxy in ``routers/swarm_out_remote.py`` and its live events through the relay i
   keys and query keys each may carry; nothing else is (§6.2).
 - ``build_body`` — the upstream body rebuilt from the route's key list, ``agent_id``
   fixed, ``session_id`` required and equal to the path's sid; never the client's body.
-- ``clean_event`` — a Hive event as the Host may pass it on: whitelisted type, every
+- ``clean_event`` — a Hive event as the Host may pass it on: allowlisted type, every
   session id it names equal to the sid, and on a proxied POST stream no ``eventSeq``
   (the tab's turn router counts one numbering per session: the relay's) (§3, §6.3).
 - ``iter_sse_lines`` — SSE lines from a byte stream, refusing a line over the cap.

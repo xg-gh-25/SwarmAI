@@ -425,7 +425,7 @@ def review_input_of(prompt: Any, expert_id: str, instructions: str, *,
     if isinstance(prompt, Mapping) and isinstance(prompt.get("blob"), str) and read_blob:
         try:
             prompt = read_blob(prompt["blob"]).decode("utf-8")
-        except Exception:  # noqa: BLE001 -- unreadable blob: no faithful copy
+        except (OSError, ValueError):  # unreadable blob or not UTF-8: no faithful copy
             return None
     if not isinstance(prompt, str):
         return None

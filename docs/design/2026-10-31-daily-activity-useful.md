@@ -1,3 +1,11 @@
+---
+title: "DailyActivity and Timeline: content worth reading in the prompt"
+created: 2026-10-31
+updated: 2026-10-31
+project: SwarmAI
+status: implemented
+---
+
 # DailyActivity and Timeline: content worth reading in the prompt
 
 Status: implemented 2026-10-31. Supersedes the "day 3–7 summaries" part of the CDF v2

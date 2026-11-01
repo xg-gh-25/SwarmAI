@@ -20,7 +20,7 @@
   "core/heartbeat.py": 3,
   "core/library_mounts.py": 4,
   "core/needs_human_review.py": 4,
-  "core/observation_hooks.py": 2,
+  "core/observation_hooks.py": 1,
   "core/plugin_manager.py": 1,
   "core/readiness_sampler.py": 2,
   "core/recall_multi.py": 1,

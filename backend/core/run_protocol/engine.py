@@ -3735,7 +3735,8 @@ class RunEngine:
         out: dict[str, list[str]] = {}
         try:
             trees = self._current_code(list(self.contract["expected_repos"]))[1]
-        except Exception:  # noqa: BLE001 -- information only
+        except Exception as e:  # noqa: BLE001 -- information only
+            logger.debug("engine: current code unreadable for main-moved check: %s", e)
             return out
         for name, root in self.effective_repos().items():
             try:
@@ -3747,7 +3748,8 @@ class RunEngine:
                                       base, head).splitlines())
                 own = set(_git(root, "diff", "--name-only", "--no-renames",
                                base, trees[name]).splitlines())
-            except Exception:  # noqa: BLE001 -- information only
+            except Exception as e:  # noqa: BLE001 -- information only
+                logger.debug("engine: main-moved check skipped %s: %s", name, e)
                 continue
             hit = sorted(path for path in main_paths & own if path)
             if hit:

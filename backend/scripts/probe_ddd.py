@@ -101,7 +101,9 @@ _GOOD = [
      "sources": ["src/tokensign/signer.py", "src/tokensign/timed.py:1"]},
 ] + [{"kind": "gap", "section": "What to Watch For", "title": f"{s}: no evidence yet",
       "what": "The repo says nothing about it."}
-     for s in ("What Makes It Different", "Strategic Priorities", "Success Criteria")]
+     # P2d: every PRODUCT and TECH section left without an entry gets its gap
+     # (core.ddd_skeleton.GAP_DOCS); Architecture's only entry is a refused one below
+     for s in ("What Makes It Different", "Strategic Priorities", "Success Criteria", "Architecture")]
 _BAD = [  # (entry, the reason bootstrap-apply must give)
     ({"kind": "cognition", "type": "decision", "section": "Architecture",
       "title": "HMAC is the signing primitive", "what": "Signatures are HMAC.",
@@ -145,7 +147,7 @@ def _bootstrap_holds() -> tuple[bool, str]:
             return False, f"refused {got}, expected the {len(_BAD)} bad entries ({list(want.values())})"
         if report.get("refused_docs"):
             return False, f"a newborn brain's docs were refused: {report['refused_docs']}"
-        want_written = {"PRODUCT.md": 2, "TECH.md": 3, "IMPROVEMENT.md": 3}
+        want_written = {"PRODUCT.md": 2, "TECH.md": 3, "IMPROVEMENT.md": 4}
         if report.get("written") != want_written:
             return False, f"written {report.get('written')}, expected {want_written}"
         placed = {(e.section, e.entry_type, e.taint)

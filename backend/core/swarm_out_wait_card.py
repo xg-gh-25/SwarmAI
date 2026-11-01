@@ -35,6 +35,7 @@ Public: ``MARKER_PREFIX``, ``card``, ``forward``, ``answer_as_host``, ``escalate
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -420,12 +421,17 @@ async def escalate(session: Optional[str], dispatch_id: str, request_id: str, wh
         raise CardError("this run has no open wait with that request id (`swarm_out watch`)")
     out = {"dispatch_id": dispatch_id, "request_id": request_id, "session": session,
            "why": why, "at": _now()}
+    await asyncio.to_thread(_write_escalation, p, out)
+    logger.info("swarm_out_wait_card: %s %s escalated to the person", dispatch_id, request_id)
+    return out
+
+
+def _write_escalation(p: Path, out: dict[str, Any]) -> None:
+    """Write the escalation record atomically (temp file + rename); run off the loop."""
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.parent / f".{p.name}.{secrets.token_hex(6)}.tmp"
     tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, p)
-    logger.info("swarm_out_wait_card: %s %s escalated to the person", dispatch_id, request_id)
-    return out
 
 
 def escalation(dispatch_id: str, request_id: str) -> Optional[dict[str, Any]]:

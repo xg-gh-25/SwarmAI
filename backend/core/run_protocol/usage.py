@@ -5,11 +5,14 @@ Public symbols:
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from core import transcript_usage
 from core.run_protocol.store import AuditStore
+
+logger = logging.getLogger(__name__)
 
 
 class UsageError(RuntimeError):
@@ -69,7 +72,8 @@ def measure(store: AuditStore, *, transcript_ids: Sequence[str], created_at: str
     billed = combined_input + value["output_tokens"] + value["cache_read_tokens"]
     try:
         book_cost = _ledger_attribution(store, value.get("by_model") or {}, stage)
-    except Exception:  # noqa: BLE001 — accounting never breaks the measurement
+    except Exception as e:  # noqa: BLE001 — accounting never breaks the measurement
+        logger.warning("run usage: ledger attribution failed for stage %s: %s", stage, e)
         book_cost = None
     metrics = {"input_tokens": combined_input,
                "output_tokens": value["output_tokens"],

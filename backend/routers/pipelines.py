@@ -360,7 +360,8 @@ def _card_facts(raw: dict, status: str) -> dict[str, Any]:
     from core import run_interventions
     try:
         interventions = run_interventions.for_run(raw)
-    except Exception:  # noqa: BLE001 -- a card fact never fails the summary
+    except Exception as e:  # noqa: BLE001 -- a card fact never fails the summary
+        logger.debug("pipelines: interventions unreadable: %s", e)
         interventions = None
     human = interventions["total"] if interventions else None
     attempts = raw.get("stage_attempts") if isinstance(raw.get("stage_attempts"), dict) else None

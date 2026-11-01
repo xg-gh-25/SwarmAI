@@ -923,7 +923,7 @@ def _general_summary() -> dict:
     """The General Brain on the Hub (design 2026-10-29-default-brains-and-project-agent-
     standard §3.1): not a ``Projects/`` DDD, so it is its own field, never in ``brains``.
     ``library`` counts what it really carries to a Hive: the Markdown of the sync
-    whitelist (core/brain_sync, general branch). ``shadowed``: a ``Projects/`` Brain
+    allowlist (core/brain_sync, general branch). ``shadowed``: a ``Projects/`` Brain
     carries its name in some case (made before the name was reserved)."""
     from core import brain_sync
     from core.project_agent import GENERAL_BRAIN, general_brain_dir, is_general_name

@@ -151,7 +151,7 @@ def _shown_title(summary: StructuredSummary, context: HookContext) -> str:
     title = " ".join(_validate_title(summary.session_title, context.session_title, []).split())
     try:
         from core.injection_patterns import scan_text
-    except Exception:  # pragma: no cover - the sanitizer logs this once
+    except ImportError:  # pragma: no cover - the sanitizer logs this once
         return title or "Untitled"
     return "Untitled" if not title or scan_text(title) else title
 

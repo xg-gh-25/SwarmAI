@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 /// The reader thread waits while this many bytes are buffered and not yet taken.
 pub const HIGH_WATER: usize = 1 << 20;
 
-/// errno EIO (5 on macOS and Linux): a PTY master's read once the slave closed.
+/// errno EIO (5 on macOS and Linux): a PTY master's read once the child side (pts) closed.
 const EIO: i32 = 5;
 
 struct State {
@@ -59,7 +59,7 @@ impl OutputPump {
                         Ok(0) => st.end = Some(None),
                         Ok(n) => st.buf.extend_from_slice(&chunk[..n]),
                         Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        // EIO is how a PTY master reports "the slave side closed"
+                        // EIO is how a PTY master reports "the child side (pts) closed"
                         // (the child exited): a normal end, not a failure.
                         Err(e) if e.raw_os_error() == Some(EIO) => st.end = Some(None),
                         Err(e) => st.end = Some(Some(e.to_string())),

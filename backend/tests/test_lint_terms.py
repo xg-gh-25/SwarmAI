@@ -23,7 +23,7 @@ def test_inclusive_flags():
                  f"{M}/{S} replication", f"the {S} node", f"add to {B}"):
         assert lt.scan_inclusive_terms(text), text
     assert set(lt.scan_inclusive_terms("whi" + "teday and bla" + "ckday")) == {
-        "whiteday", "blackday"}
+        "white" + "day", "black" + "day"}
 
 
 def test_inclusive_exemptions():

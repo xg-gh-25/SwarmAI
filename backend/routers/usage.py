@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -27,7 +28,8 @@ def _session_titles(conn, ids: list[str]) -> dict[str, str]:
     marks = ",".join("?" for _ in ids)
     try:
         return {r[0]: r[1] for r in conn.execute(f"SELECT id, title FROM sessions WHERE id IN ({marks})", ids) if r[1]}
-    except Exception:  # noqa: BLE001 — a title is a nicety; the row keeps its id
+    except sqlite3.Error as e:  # a title is a nicety; the row keeps its id
+        logger.debug("usage: session titles unreadable: %s", e)
         return {}
 
 
@@ -53,7 +55,8 @@ def _dispatch_titles() -> dict[str, str]:
         from core import swarm_out
         return {str(r["dispatch_id"]): str(r.get("title") or "")[:_TITLE_MAX]
                 for r in swarm_out._read_log() if r.get("dispatch_id")}
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug("usage: dispatch titles unreadable: %s", e)
         return {}
 
 
@@ -61,7 +64,8 @@ def _build(window: str) -> dict[str, Any]:
     from core import swarm_workspace_manager, usage_report
     try:
         workspace = swarm_workspace_manager.get_workspace_path()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        logger.debug("usage: workspace path unknown: %s", e)
         workspace = None
     conn = usage_report.connect()
     try:

@@ -123,7 +123,7 @@ Brain 一创建，代码就写出一份骨架；agent 补判断字段；人在�
 Derived 字段扩展现有函数，不另写：
 - `project_agent_draft.survey` 已返回仓库、skills（含 platform）、gates、命令 → 加上仓库的本机目录和远程 URL
   （URL 去掉凭据）、skill 描述、`aim.json` 的 tools / MCP / jobs。
-- 能否上 Hive：skill 用 `task_spec` 已有的 platform 过滤（`skills_not_here`）；文件用 `brain_sync.whitelisted`；
+- 能否上 Hive：skill 用 `task_spec` 已有的 platform 过滤（`skills_not_here`）；文件用 `brain_sync.allowlisted`；
   Brain 级原因用 `brain_sync_host._row` 已有的判断。
 - `project_agent.notes` 已有的提示（例如 Hive 模式里有只能本机跑的 skill）原样放进对应字段旁边。
 
@@ -152,7 +152,7 @@ Derived 字段扩展现有函数，不另写：
 ## 8. 页面文案就是事实
 
 - Guardrails 区底部固定一行："定义的守卫在 Hive 上执行；chat tab 里只有产品守卫。"
-- Capabilities 的 Tools 行写"到 Hive：不会（只同步 data-contract 文档）"，由 `brain_sync.whitelisted` 算出。
+- Capabilities 的 Tools 行写"到 Hive：不会（只同步 data-contract 文档）"，由 `brain_sync.allowlisted` 算出。
 - Runs in 的 Hive 行列出这个 Brain 到 Hive 时缺什么（只能本机跑的 skill、MCP），由 §5 的现有函数算出。
 - Slack 行显示"暂不可用"，开关禁用；页面不出现 local-worker。
 

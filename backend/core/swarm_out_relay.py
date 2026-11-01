@@ -8,7 +8,7 @@ router, connection state and status poll are unchanged.
 
 Rules (design §3, each tested in tests/test_swarm_out_relay.py):
 
-1. Only this session's events of whitelisted types (``swarm_out_remote.clean_event``)
+1. Only this session's events of allowlisted types (``swarm_out_remote.clean_event``)
    are published; they get this daemon's ``eventSeq`` (``hub().publish``).
 2. Each Hive ``eventSeq`` is published at most once per Hive epoch (``high``); the
    first connect joins (cursor -1), every reconnect sends the relay's own cursor.

@@ -1,9 +1,9 @@
 """Brain sync to a Hive (design docs/design/2026-10-28-project-agent-flow.md §6).
 
 The host is the only writer; a Hive's copy of a Brain is a cache of one version. One
-module holds both sides so they share one whitelist and one digest:
+module holds both sides so they share one allowlist and one digest:
 
-- **What travels** (``whitelisted``): a Brain's ``AGENTS.md``, ``SYSTEM_PROMPT.md``,
+- **What travels** (``allowlisted``): a Brain's ``AGENTS.md``, ``SYSTEM_PROMPT.md``,
   ``CONTEXT.md``, ``REFRESHER.md``, ``project-agent.yaml``,
   ``bindings.yaml``, ``aim.json``, ``.project.json``; ``2-understanding/**/*.md`` (the
   ``*-archive*.md`` files included) and ``assets/data-source/data-contract/**/*.md`` -- every
@@ -16,14 +16,14 @@ module holds both sides so they share one whitelist and one digest:
 - **The digest** (``content_digest``): sha256 over the sorted (path, sha256(bytes))
   pairs, so the same content always has the same digest, however it is packed, and a
   Hive can recompute it from the files on its disk.
-- **Host** (``collect`` → ``pack``): read the whitelisted files; a document whose
+- **Host** (``collect`` → ``pack``): read the allowlisted files; a document whose
   ``.md.lock`` is held (being written) stops the package; ``bindings.yaml`` travels
   without its machine-local ``worktree`` paths. ``pack`` is a deterministic tar.gz.
 - **Hive** (``unpack`` → ``install``): refuse a package over the size limits, with any
-  member that is not a regular file, whose path leaves the whitelist, or
+  member that is not a regular file, whose path leaves the allowlist, or
   whose digest is not the one sent. Install writes each file through directory file
   descriptors opened without following links (a symlink placed in the Brain cannot
-  redirect a write or a delete), deletes whitelisted files the package no longer has,
+  redirect a write or a delete), deletes allowlisted files the package no longer has,
   leaves everything else alone and records ``.brain.json``
   ``{digest, revision, installed_at, files: {path: sha256}}``.
 """
@@ -81,7 +81,7 @@ def _skipped(parts: list[str]) -> bool:
             or name.startswith(".") and name != ".project.json")
 
 
-def whitelisted(rel: str, general: bool) -> bool:
+def allowlisted(rel: str, general: bool) -> bool:
     """True when *rel* (``/``-separated, relative to the Brain) travels to a Hive."""
     if not rel or rel.startswith("/") or "\\" in rel:
         return False
@@ -115,7 +115,7 @@ def content_digest(files: dict[str, bytes]) -> str:
 
 
 def _walk(root: Path, general: bool) -> list[str]:
-    """Whitelisted regular files under *root* (never through a symlink), sorted."""
+    """Allowlisted regular files under *root* (never through a symlink), sorted."""
     out: list[str] = []
     if not root.is_dir() or root.is_symlink():
         return out
@@ -125,7 +125,7 @@ def _walk(root: Path, general: bool) -> list[str]:
         for name in sorted(filenames):
             p = base / name
             rel = p.relative_to(root).as_posix()
-            if not p.is_symlink() and p.is_file() and whitelisted(rel, general):
+            if not p.is_symlink() and p.is_file() and allowlisted(rel, general):
                 out.append(rel)
     return sorted(out)
 
@@ -173,7 +173,7 @@ def _read_plain(p: Path, limit: int) -> bytes:
 
 def old_layout(root: Path) -> bool:
     """True when a canonical doc sits at the Brain's root instead of 2-understanding/
-    (a Brain not yet migrated). The whitelist knows the numbered layout only, so such
+    (a Brain not yet migrated). The allowlist knows the numbered layout only, so such
     a Brain does not travel: its Hive copy would miss the docs."""
     from core.ddd_paths import UNDERSTANDING_DIR
     from core.project_registry import DDD_CANONICAL_DOCS
@@ -208,7 +208,7 @@ def collect(root: Path, general: bool) -> dict[str, bytes]:
 
 
 def installed_files(root: Path, general: bool) -> dict[str, bytes]:
-    """The whitelisted files a Hive has for a Brain, as they are on its disk (a file
+    """The allowlisted files a Hive has for a Brain, as they are on its disk (a file
     that is not a regular file, or vanished, is left out: it counts as changed)."""
     out: dict[str, bytes] = {}
     for rel in _walk(Path(root), general):
@@ -251,8 +251,8 @@ def unpack(data: bytes, general: bool, digest: str) -> dict[str, bytes]:
             for i, m in enumerate(tar):
                 if i >= MAX_MEMBERS:
                     raise SyncError("the package has too many files", 413)
-                rel = m.name               # whitelisted() refuses "", ".", "..", "/x", "a\\b"
-                if not m.isreg() or not whitelisted(rel, general):
+                rel = m.name               # allowlisted() refuses "", ".", "..", "/x", "a\\b"
+                if not m.isreg() or not allowlisted(rel, general):
                     raise SyncError(f"the package has a member that is not accepted: {m.name[:120]!r}")
                 total += m.size
                 if total > MAX_UNPACKED_BYTES:
@@ -447,7 +447,7 @@ def _journal_install(root: Path) -> None:
 
 def installed_state(workspace: Path, brain: str) -> Optional[dict[str, Any]]:
     """What this Hive has for *brain*: the recorded digest, revision and time, and
-    how many whitelisted files differ from what was installed (changed, added or
+    how many allowlisted files differ from what was installed (changed, added or
     missing). None when it was never installed."""
     root, general = brain_root(workspace, brain)
     try:

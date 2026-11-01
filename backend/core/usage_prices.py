@@ -23,12 +23,15 @@ before the CLI ever used them.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import time
 from typing import Any, Mapping, Optional, Sequence
 
 from model_registry import normalize_short_name
+
+logger = logging.getLogger(__name__)
 
 KINDS = ("input", "output", "cache_read", "cache_write")
 MIN_ROWS = 8
@@ -146,6 +149,6 @@ def current(db_path: Optional[str] = None) -> dict[str, dict[str, float]]:
                 _cache["prices"] = learn(conn)
             finally:
                 conn.close()
-        except Exception:  # noqa: BLE001 — pricing is best effort; the row keeps cost "none"
-            pass
+        except Exception as e:  # noqa: BLE001 — pricing is best effort; the row keeps cost "none"
+            logger.debug("usage_prices: prices not learned: %s", e)
         return _cache["prices"]

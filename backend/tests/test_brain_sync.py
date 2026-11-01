@@ -1,11 +1,11 @@
 """Brain sync to a Hive (design docs/design/2026-10-28-project-agent-flow.md §6, §11
 "同步" and "安装接口").
 
-Questions these tests answer: is only the whitelist packed (no private context, run
+Questions these tests answer: is only the allowlist packed (no private context, run
 records, code graphs, archives, locks, secrets or DDD-lifecycle skills), with machine
 paths taken out of bindings.yaml; does the same content give the same digest and the
 same bytes; does a document being written stop the package; does the Hive refuse a
-package with a link, a directory entry, a path outside the whitelist, `..`, an
+package with a link, a directory entry, a path outside the allowlist, `..`, an
 absolute path, a wrong digest or too much data, before writing anything; does a
 symlink planted in the Brain redirect no write; are files the package no longer has
 deleted while run records stay; does the Hive recompute the host's digest from its
@@ -74,7 +74,7 @@ EXPECTED = ["2-understanding/PRODUCT.md", "2-understanding/TECH-archive-2026-01.
             "bindings.yaml", "project-agent.yaml"]
 
 
-def test_only_the_whitelist_travels_and_worktree_paths_stay_home(tmp_path):
+def test_only_the_allowlist_travels_and_worktree_paths_stay_home(tmp_path):
     # (document bodies travel as written: a doc that names a host path carries it)
     b = _brain(tmp_path)
     files = bs.collect(b, general=False)
@@ -93,8 +93,8 @@ def test_only_the_whitelist_travels_and_worktree_paths_stay_home(tmp_path):
     ("assets/data-source/data-contract/e.csv", False), ("assets/data-source/x.md", False),
     ("assets/code-repo/data-contract/e.md", False), ("a/b/", False), ("2-understanding//a.md", False),
 ])
-def test_whitelist(rel, ok):
-    assert bs.whitelisted(rel, general=False) is ok
+def test_allowlist(rel, ok):
+    assert bs.allowlisted(rel, general=False) is ok
 
 
 def test_the_general_brain_is_library_markdown(tmp_path):
@@ -162,7 +162,7 @@ def _tar(members: list[tuple[str, bytes, bytes]]) -> bytes:
     [("MEMORY.md", tarfile.REGTYPE, b"x")],
     [("AGENTS.md", tarfile.REGTYPE, b"x"), ("AGENTS.md", tarfile.REGTYPE, b"y")],
 ])
-def test_unpack_refuses_what_is_not_a_plain_whitelisted_file(members):
+def test_unpack_refuses_what_is_not_a_plain_allowlisted_file(members):
     data = _tar(members)
     with pytest.raises(bs.SyncError):
         bs.unpack(data, False, bs.content_digest({m[0]: m[2] for m in members if m[1] == tarfile.REGTYPE}))
@@ -201,7 +201,7 @@ def test_install_recreates_the_brain_and_the_hive_recomputes_its_digest(tmp_path
     (target / "code_intel.db").write_bytes(b"hive db")
     rec = bs.install(hive, "Lib", files, digest)
     assert rec["digest"] == digest and rec["revision"]
-    assert not (target / "2-understanding" / "STALE.md").exists()           # whitelisted, no longer packed
+    assert not (target / "2-understanding" / "STALE.md").exists()           # allowlisted, no longer packed
     assert (target / ".artifacts" / "run.json").exists() and (target / "code_intel.db").read_bytes() == b"hive db"
     state = bs.installed_state(hive, "Lib")
     assert state["current_digest"] == digest and state["changed_files"] == 0
@@ -410,7 +410,7 @@ def test_the_host_needs_the_hive_to_confirm_this_version(tmp_path, monkeypatch):
 # ── review round 1 ───────────────────────────────────────────────────────────
 
 def test_the_hive_recomputes_the_hosts_revision_and_gates_digest(tmp_path):
-    """Files the whitelist keeps home (a .gitkeep, a dotfile in a skill) are outside the
+    """Files the allowlist keeps home (a .gitkeep, a dotfile in a skill) are outside the
     revision too: a run dispatched at the host's revision is not refused on the Hive."""
     from core import project_agent as pa
     doc = {**DEF, "modes": [{"id": "research", "when": "a question", "profile": "research",
@@ -580,8 +580,8 @@ def test_an_old_layout_brain_does_not_travel(tmp_path):
 
 
 def test_enablement_skills_stay_home():
-    assert not bs.whitelisted("4-capabilities/s_repo-to-ddd/SKILL.md", False)
-    assert bs.whitelisted("4-capabilities/s_lib-x/SKILL.md", False)
+    assert not bs.allowlisted("4-capabilities/s_repo-to-ddd/SKILL.md", False)
+    assert bs.allowlisted("4-capabilities/s_lib-x/SKILL.md", False)
 
 
 @pytest.mark.parametrize("code,match", [(423, "busy"), (409, "cannot be written"), (413, "larger"),

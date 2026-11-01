@@ -125,7 +125,7 @@ check_absent "node_modules/"           "No node_modules (built on the packaging 
 check_absent "/skills/s_internal-"     "No s_internal-* skills"
 check_absent "/templates/ddd-gates/"   "No internal DDD gate templates"
 check_absent "MagicMock"               "No test-leak junk"
-# the seed's context whitelist is the 5 public files; the private six never ship
+# the seed's context allowlist is the 5 public files; the private six never ship
 for f in MEMORY USER EVOLUTION STEERING TOOLS KNOWLEDGE; do
     check_absent "^hive/seed/context/${f}\.md$" "No private ${f}.md in the seed"
 done

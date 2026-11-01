@@ -655,7 +655,8 @@ def bind_project(
     try:
         from core.code_intel.local_roots import confirmed
         local = {str(Path(r).resolve()) for r in confirmed(project_name)}
-    except Exception:  # noqa: BLE001 — off the desktop there are no local roots
+    except Exception as e:  # noqa: BLE001 — off the desktop there are no local roots
+        logger.debug("ddd_bindings: no local roots for %s: %s", project_name, e)
         local = set()
 
     outcomes: list[BindOutcome] = []

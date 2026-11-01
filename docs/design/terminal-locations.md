@@ -139,8 +139,8 @@ returns up to 256 KB. Same command: 56 calls (probe of the same algorithm on a r
 PTY). The pump stops reading at 1 MB buffered until the frontend drains it, so a fast
 producer is still back-pressured. A keystroke echo waits at most the 4 ms linger.
 
-The parent drops its slave handle once the child holds it, and macOS reports the
-closed slave as EIO, which the pump maps to EOF (a real-PTY Rust test checks a
+The parent drops its child-side (pts) handle once the child holds it, and macOS reports
+the closed child side as EIO, which the pump maps to EOF (a real-PTY Rust test checks a
 child's exit arrives as EOF after its output). `pty_kill` removes the session from
 the registry and reaps the child off the async runtime, giving up after 3 s; before,
 a closed terminal's session stayed in the registry for the app's lifetime (the

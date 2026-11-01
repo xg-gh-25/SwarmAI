@@ -157,7 +157,7 @@ fn build_pty_env(mut env: BTreeMap<String, String>) -> BTreeMap<String, String> 
 
 /// A single live PTY session: the master side (resize), the child process, its
 /// killer, the writer onto the master, and the pump its output is read from. The
-/// parent's slave handle is dropped once the child holds it (portable-pty's own
+/// parent's child-side (pts) handle is dropped once the child holds it (portable-pty's own
 /// guidance; nothing here uses it).
 struct Session {
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -221,7 +221,8 @@ pub async fn pty_spawn(
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     let child_killer = child.clone_killer();
     let handler = state.session_id.fetch_add(1, Ordering::Relaxed);
-    // The child holds the slave now; the parent has no use for its copy.
+    // The child holds the child-side (pts) handle now; the parent has no use for its copy. (The
+    // destructured names are portable-pty's PtyPair fields.)
     let PtyPair { master, slave } = pair;
     drop(slave);
 

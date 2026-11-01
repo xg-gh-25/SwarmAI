@@ -245,7 +245,8 @@ def _version() -> str:
     try:
         from utils.runtime_paths import current_version
         return str(current_version() or "")
-    except Exception:  # noqa: BLE001 -- a version that cannot be read records no mark
+    except Exception as e:  # noqa: BLE001 -- a version that cannot be read records no mark
+        logger.debug("cognition_level: current version unreadable: %s", e)
         return ""
 
 

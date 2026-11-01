@@ -83,7 +83,7 @@ related:
    "projectAgentStatus": "draft|reviewed|invalid|null", "shadowed": false}
   ```
   - **为什么单独一个字段：** `brains` 数组的每一个消费方都把元素当成 `Projects/` 下的 DDD：画六段的花（`Flower`）、算 `hubSummary` 的计数、给"加知识"挑 Brain、六段的 `sectionsPresent`。General 没有六段，混进数组，每个消费方都要加一个判断，漏一个就是 bug。单独一个字段，只有要显示它的三处去读。
-  - **`library` 怎么算：** 数的是同步到 Hive 时，General 真正带过去的知识：`brain_sync._walk(general_brain_dir(ws), True)` 走出来的文件里的 `.md`。白名单在 `brain_sync.whitelisted` 的 `general` 分支（`brain_sync.py:88-89`）：`.md` 去掉 `*-archive*`，外加定义文件本身。`/api/library/native` 数的是 Library 里的所有文件（`library_api.py:66-84`），口径不同，两边都不改。页面上写明"Library 里会带到 Hive 的 Markdown"。
+  - **`library` 怎么算：** 数的是同步到 Hive 时，General 真正带过去的知识：`brain_sync._walk(general_brain_dir(ws), True)` 走出来的文件里的 `.md`。白名单在 `brain_sync.allowlisted` 的 `general` 分支（`brain_sync.py:88-89`）：`.md` 去掉 `*-archive*`，外加定义文件本身。`/api/library/native` 数的是 Library 里的所有文件（`library_api.py:66-84`），口径不同，两边都不改。页面上写明"Library 里会带到 Hive 的 Markdown"。
 - **保留名：** `General` 不管大小写都不能成为 `Projects/` 下的 Brain，三条路径都挡住。名字一律用 `project_agent.GENERAL_BRAIN`，比较时不分大小写，用一个函数 `project_agent.is_general_name(name)`。
   - **建项目和改名：** 在 `_validate_project_name`（`swarm_workspace_manager.py:2648`、`:2767`、`:2860`）里拒绝，错误信息说明它是自带的通用 Brain。
   - **注册：** `ensure_project_metadata`（`:189`）对这个名字抛 `ValueError`，不写 `.project.json`。调用它的 CLI 命令就会报错，而不是悄悄建出一个影子 Brain。已经有 `.project.json` 的目录照旧什么都不做（这个函数本来就只在没有 `.project.json` 时写）。
@@ -177,7 +177,7 @@ def deviations(doc) -> list[str]                        # 和标准不同的地�
 
 ## 5. 已知限制
 
-- **General 的知识只有 Library 的 Markdown。** 别的类别（Notes、Designs、Reports）不算 General 的知识，和同步到 Hive 的白名单一致（`brain_sync.whitelisted`，`brain_sync.py:88-89`）。页面上写清楚只数 Library。
+- **General 的知识只有 Library 的 Markdown。** 别的类别（Notes、Designs、Reports）不算 General 的知识，和同步到 Hive 的白名单一致（`brain_sync.allowlisted`，`brain_sync.py:88-89`）。页面上写清楚只数 Library。
 - **write 的规则（§4.1）只影响新草稿。** 已有 Brain 的定义里没有 write，`deviations` 不会因此报，因为它报的是"缺字段"和"标准 mode 被改"，不报"少了一个可选的标准 mode"。
 
 ## 6. 验证计划（测试在写代码前写好）

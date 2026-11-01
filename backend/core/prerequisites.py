@@ -112,7 +112,8 @@ def check_prerequisites() -> list[dict]:
     """Return the prerequisite items for this machine (see the module docstring)."""
     try:
         system = platform.system()
-    except Exception:
+    except OSError as e:
+        logger.debug("prerequisites: platform unknown: %s", e)
         system = ""
     items = [_safe("git", lambda: _check_git(system))]
     if system == "Windows":

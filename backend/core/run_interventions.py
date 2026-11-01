@@ -26,10 +26,13 @@ Public:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+logger = logging.getLogger(__name__)
 
 #: the prompt the Pipelines view puts in the owner session to continue a run
 #: (core/pipeline_human.continue_prompt): sending it is not the person steering
@@ -200,7 +203,7 @@ def details(raw: Mapping[str, Any], events: list[Mapping[str, Any]], *,
             now: datetime | None = None) -> dict[str, Any]:
     """Each time a person stepped in, for the run's big card: ``answers`` (the person's
     ``human_answer`` events: when, which request, the option, and the question when
-    *question*\(request_id) gives it), ``corrections`` (``corrections``; None when
+    *question*(request_id) gives it), ``corrections`` (``corrections``; None when
     unknown) and ``rescues`` (a person's override landing or confirmed landed-as). The
     counts stay ``count``'s; this is the list behind them."""
     answers, rescues = [], []
@@ -212,7 +215,8 @@ def details(raw: Mapping[str, Any], events: list[Mapping[str, Any]], *,
             if callable(question) and isinstance(rid, str):
                 try:
                     q = question(rid)
-                except Exception:  # noqa: BLE001 -- a question that cannot be read leaves it out
+                except Exception as e:  # noqa: BLE001 -- a question that cannot be read leaves it out
+                    logger.debug("run_interventions: question %s unreadable: %s", rid, e)
                     q = None
             answers.append({"at": e.get("at"), "request_id": rid, "option_id": payload.get("option_id"),
                             "question": q})

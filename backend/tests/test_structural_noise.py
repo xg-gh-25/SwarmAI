@@ -89,7 +89,7 @@ class TestStructuralNoise:
         assert structural_noise("🟡 Let me check the logs and then update the cache layer") is True
 
     def test_emoji_bold_check_requires_balanced_span(self):
-        # Gate-2: the bold-title whitelist requires a BALANCED **…** span, not a stray '**'
+        # Gate-2: the bold-title allowlist requires a BALANCED **…** span, not a stray '**'
         # substring. A single dangling '**' does NOT count as a title (so it can't be the
         # thing that rescues an entry from the noise floor).
         from core.extraction_patterns import _EMOJI_PREFIX

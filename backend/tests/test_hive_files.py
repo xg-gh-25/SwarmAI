@@ -151,8 +151,8 @@ def test_a_bad_path_or_a_linked_destination_writes_nothing(host, hive_ws, tmp_pa
 
 def test_the_general_brains_sync_leaves_returned_files_out():
     from core import brain_sync
-    assert brain_sync.whitelisted("notes.md", True)
-    assert not brain_sync.whitelisted(f"deliverables/hive/2026-10-30-{DID}/notes.md", True)
+    assert brain_sync.allowlisted("notes.md", True)
+    assert not brain_sync.allowlisted(f"deliverables/hive/2026-10-30-{DID}/notes.md", True)
 
 
 def test_each_returned_file_gets_its_local_path_by_identity():

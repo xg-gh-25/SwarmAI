@@ -4,7 +4,7 @@ Questions: does the proxy reach only a session this Host dispatched, from the ap
 desktop mode (R1); is what it sends the Hive rebuilt from the route's keys, with the
 Hive's credentials and none of the client's headers (R2); is what comes back treated
 as untrusted — no redirect, a few headers, no Hive error text, no oversized line, no
-event outside the whitelist or of another session, no Hive eventSeq on a POST stream
+event outside the allowlist or of another session, no Hive eventSeq on a POST stream
 (R3)? Every case checks the Hive is not called when the request is refused.
 """
 import base64
@@ -336,7 +336,7 @@ def test_a_line_nested_past_the_parser_depth_is_skipped(hive, api):
 
 
 @pytest.mark.parametrize("etype", KEPT)
-def test_clean_event_keeps_whitelisted_types(etype):
+def test_clean_event_keeps_allowlisted_types(etype):
     out = swarm_out_remote.clean_event({"type": etype, "sessionId": SID, "eventSeq": 4}, SID, post_stream=True)
     assert out == {"type": etype, "sessionId": SID}
     kept = swarm_out_remote.clean_event({"type": etype, "sessionId": SID, "eventSeq": 4}, SID, post_stream=False)

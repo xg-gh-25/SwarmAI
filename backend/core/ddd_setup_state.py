@@ -170,8 +170,9 @@ _WORK_FILES = (SETUP_FILE, "bindings.yaml", "project-agent.yaml", "AGENTS.md")
 
 def _last_change(project_dir: Path) -> float:
     from core.ddd_paths import ddd_path
+    from core.project_registry import DDD_CANONICAL_DOCS
     paths = [project_dir / f for f in _WORK_FILES]
-    paths += [ddd_path(project_dir, doc) for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")]
+    paths += [ddd_path(project_dir, doc) for doc in DDD_CANONICAL_DOCS]
     newest = 0.0
     for p in paths:
         try:
