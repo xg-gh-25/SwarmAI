@@ -120,6 +120,31 @@ def test_sampling_in_force_once_and_destination_from_where_it_is(env):
     assert run(env, judge)["scored"] == 0             # scored once
 
 
+def test_each_project_brain_gets_its_own_sample(env):
+    """design 2026-11-01-brain-eval-and-runs §2.2: sampled per (destination, project), at least
+    SAMPLE_PER_BRAIN per Brain (all when fewer), so a small Brain is not left to chance;
+    a destination with no project keeps one sample of SAMPLE_PER_DEST."""
+    ing, ws = env["ing"], env["ws"]
+    lines = {"P": [], "Q": [], "R": []}
+    for project, n in (("P", 15), ("Q", 15), ("R", 3)):
+        for i in range(n):
+            unit = f"cand-{project.lower()}{i}.unit"
+            path = f"Projects/{project}/2-understanding/TECH.md"
+            add_unit(ing, unit, path=path, store="DDD")
+            lines[project].append(f"- **{unit}** y <!-- cand:{unit} -->\n")
+    memory = []
+    for i in range(25):
+        add_unit(ing, f"cand-m{i}.unit")
+        memory.append(f"- **M{i}** x <!-- cand:cand-m{i}.unit -->\n")
+    for project, rows in lines.items():
+        write(ws, f"Projects/{project}/2-understanding/TECH.md", "## Architecture\n" + "".join(rows))
+    write(ws, ".context/MEMORY.md", "".join(memory))
+    run(env, Judge())
+    with health.connect_health() as conn:
+        per = dict(conn.execute("SELECT COALESCE(project, dest), COUNT(*) FROM verdicts GROUP BY 1").fetchall())
+    assert per == {"P": health.SAMPLE_PER_BRAIN, "Q": health.SAMPLE_PER_BRAIN, "R": 3, "MEMORY": health.SAMPLE_PER_DEST}
+
+
 def test_general_brain_subject_document_is_judged_as_that_subjects_brain(env):
     ing, ws = env["ing"], env["ws"]
     add_unit(ing, "cand-g.unit", path="Knowledge/Library/general-knowledge.md", store="COMMON_DDD")
@@ -155,7 +180,7 @@ def test_failed_judge_writes_no_verdict_and_retries(env):
 def test_user_verdict_overrides_and_agreement(env):
     ws = env["ws"]
     text = ""
-    for i in range(12):
+    for i in range(health.SAMPLE_PER_BRAIN):           # every one is sampled (one Brain's share)
         add_unit(env["ing"], f"cand-{i}.unit", path="Projects/P/2-understanding/TECH.md", store="DDD")
         text += f"- **E{i}** x <!-- cand:cand-{i}.unit -->\n"
     write(ws, "Projects/P/2-understanding/TECH.md", "## Architecture\n" + text)
@@ -164,7 +189,8 @@ def test_user_verdict_overrides_and_agreement(env):
     assert not health.set_user_verdict("never-sampled", "useful", now=NOW)
     view = health.overview("7d", now=NOW + timedelta(minutes=1))
     ddd = next(d for d in view["value"]["destinations"] if d["key"] == "DDD")
-    assert ddd["useful"] == 11 and ddd["withdraw"] == 1 and ddd["rate"] == round(11 / 12, 4)
+    n = health.SAMPLE_PER_BRAIN
+    assert ddd["useful"] == n - 1 and ddd["withdraw"] == 1 and ddd["rate"] == round((n - 1) / n, 4)
     assert view["agreement"] == {"judged_by_person": 1, "agreed": 0, "rate": None}
 
 

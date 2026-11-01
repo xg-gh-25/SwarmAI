@@ -84,8 +84,10 @@ The headline value is the sample-weighted share over all destinations, shown aga
 are still in force: some main cognition file, user file or the timeline holds the unit's marker
 `cand:<unit_id>` (every rendering writes it and a move keeps it; titles are rewritten by the
 renderers, so a title is no test), or, for a reference document, its own file names the unit.
-Withdrawn, closed or overridden units are not scored. Up to `SAMPLE_PER_DEST = 20` per
-destination, at random. A unit is scored once; one left unscored by a failed call stays a
+Withdrawn, closed or overridden units are not scored. For a project's Brain (DDD, GAP), up
+to `SAMPLE_PER_BRAIN = 10` per project and destination, so every Brain gets a rate of its own
+(design 2026-11-01-brain-eval-and-runs §2.2; the cost grows with the number of Brains); for
+every other destination up to `SAMPLE_PER_DEST = 20`; at random. A unit is scored once; one left unscored by a failed call stays a
 candidate for the next run while it is in the 7-day window.
 
 **Text shown.** The unit's content fields (its payload without the fields that only relate or

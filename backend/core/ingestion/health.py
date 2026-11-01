@@ -3,7 +3,8 @@ and what it costs (design docs/design/2026-10-31-cdf-health.md).
 
 Three answers, for any user, about the cognition system as a whole:
 
-- **value**: a separate judge scores a sample of new entries per destination (useful /
+- **value**: a separate judge scores a sample of new entries per destination, and per
+  project for a project's Brain (useful /
   weak / withdraw, with a class and a reason). The person's own verdict on a sampled
   entry overrides the judge's in every rate, and their agreement says how far to trust
   the judge. The judge only scores: nothing here removes, edits or vetoes an entry.
@@ -53,6 +54,8 @@ DB_FILENAME = "cdf_health.db"
 VERDICTS = ("useful", "weak", "withdraw")
 CLASSES = ("wrong_kind", "fixed_in_place", "lookup", "status", "copy", "unclear")
 SAMPLE_PER_DEST = 20          # entries scored per destination per pass
+SAMPLE_PER_BRAIN = 10         # per project Brain and destination (DDD, GAP) per pass
+PER_BRAIN_DESTS = ("DDD", "GAP")   # sampled per project, so every Brain gets its own rate
 MIN_SCORED = 10               # a rate needs at least this many scored entries
 MIN_AGREEMENT = 10            # an agreement rate needs this many person verdicts
 BATCH_MAX_ENTRIES = 20
@@ -565,19 +568,25 @@ def _short(value: Any, limit: int = REASON_CHARS) -> str:
 def score(units: list[dict], conn: sqlite3.Connection, *, call: Call, model_id: str,
           now: datetime, rng: random.Random,
           renew: Callable[[], None] = lambda: None) -> dict[str, dict[str, int]]:
-    """Sample up to SAMPLE_PER_DEST unscored units per destination, judge them and store the
-    verdicts. Returns per destination how many were sampled, scored and left by a failed call."""
+    """Sample unscored units, judge them and store the verdicts: up to SAMPLE_PER_BRAIN per
+    project and destination for a project's Brain (DDD, GAP: each Brain gets a rate of its
+    own, design 2026-11-01-brain-eval-and-runs §2.2), up to SAMPLE_PER_DEST for every other
+    destination. Returns per destination how many were sampled, scored and left by a failed
+    call."""
     scored = {r[0] for r in conn.execute("SELECT unit_id FROM verdicts")}
-    by_dest: dict[str, list[dict]] = {}
+    pools: dict[tuple[str, str], list[dict]] = {}
     for unit in units:
         if unit["unit_id"] not in scored:
-            by_dest.setdefault(unit["dest"], []).append(unit)
+            key = unit["project"] if unit["dest"] in PER_BRAIN_DESTS else None
+            pools.setdefault((unit["dest"], key or ""), []).append(unit)
     stats: dict[str, dict[str, int]] = {}
-    for dest, pool in sorted(by_dest.items()):
-        sample = rng.sample(pool, min(SAMPLE_PER_DEST, len(pool)))
+    for (dest, project), pool in sorted(pools.items()):
+        size = SAMPLE_PER_BRAIN if dest in PER_BRAIN_DESTS and project else SAMPLE_PER_DEST
+        sample = rng.sample(pool, min(size, len(pool)))
         for unit in sample:
             unit["text"] = entry_text(unit)
-        s = stats.setdefault(dest, {"sampled": len(sample), "scored": 0, "judge_failed": 0})
+        s = stats.setdefault(dest, {"sampled": 0, "scored": 0, "judge_failed": 0})
+        s["sampled"] += len(sample)
         # a General Brain subject document is judged as that subject's brain
         groups: dict[str | None, list[dict]] = {}
         for unit in sample:
