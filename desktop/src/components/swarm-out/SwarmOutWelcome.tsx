@@ -51,7 +51,7 @@ function Starter({ icon, text, hint, strong, testId }: {
       style={{ borderColor: strong ? 'color-mix(in srgb, var(--color-brand) 55%, var(--color-border))' : 'var(--color-border)' }}
       // after what the person already typed, never over it
       onClick={() => dispatchInjectChatInput({ text, focus: true, append: true })}>
-      <span className="material-symbols-outlined text-[16px] text-[var(--color-brand)] w-[18px] text-center self-start mt-[1px]" aria-hidden>{icon}</span>
+      <span className="material-symbols-outlined icon-sm text-[var(--color-brand)] w-[18px] text-center self-start mt-[1px]" aria-hidden>{icon}</span>
       {/* the hint on its own line: the column can be 360px wide */}
       <span className="flex-1 min-w-0 flex flex-col">
         <span>{text}</span>
@@ -72,7 +72,7 @@ export function SwarmOutWelcome({ hidden = false, onOpenHive }: { hidden?: boole
       <div className="chat-column flex flex-col pt-[34px] pb-4">
         <div className="w-10 h-10 rounded-[11px] flex items-center justify-center mb-3 text-[var(--color-brand)]"
           style={{ background: 'color-mix(in srgb, var(--color-brand) 16%, transparent)' }} aria-hidden>
-          <span className="material-symbols-outlined text-[22px]">hive</span>
+          <span className="material-symbols-outlined icon-lg">hive</span>
         </div>
         <h2 className="m-0 text-[22px] font-semibold tracking-[-0.01em] text-[var(--color-text)]">{t('needYou.source.swarm_out')}</h2>
         <p className="mt-1 mb-[22px] text-[14px] text-[var(--color-text-secondary)]">{t('swarmOut.welcome.why')}</p>
@@ -89,7 +89,7 @@ export function SwarmOutWelcome({ hidden = false, onOpenHive }: { hidden?: boole
               </div>
               {onOpenHive && (
                 <button type="button" onClick={onOpenHive} data-testid="swarm-out-welcome-open-hive"
-                  className="px-3 py-[5px] rounded-[7px] bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] font-semibold whitespace-nowrap">
+                  className="btn-md bg-[var(--color-text)] text-[var(--color-bg)] font-semibold">
                   {t('swarmOut.welcome.openHive')}
                 </button>
               )}

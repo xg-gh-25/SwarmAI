@@ -28,6 +28,7 @@ import {
 import { systemService } from '../../services/system';
 import { settingsService } from '../../services/settings';
 import { openExternal } from '../../utils/openExternal';
+import { copyToClipboard } from '../../utils/clipboard';
 import { isDesktop } from '../../services/tauri';
 import { markTerminalRun, runInTerminal } from '../common/settingsEvents';
 
@@ -104,7 +105,7 @@ const MWINIT = 'mwinit -f';
 
 const inputCls = 'w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]';
 const linkCls = 'text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors';
-const smallBtn = 'px-3 py-1.5 text-sm rounded-md border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-card)] disabled:opacity-50';
+const smallBtn = 'btn-md btn-secondary disabled:opacity-50';
 
 export default function ConnectAccount({
   mode, onConnected, onChatOnly, onLater, onCancel, start = 'pick', prefill,
@@ -534,7 +535,7 @@ export default function ConnectAccount({
               {t('awsConnect.sso.noBrowser')}{' '}
               <button type="button" className="underline" onClick={() => void openExternal(f.verification_url)}>{t('awsConnect.sso.openAgain')}</button>
               {' · '}
-              <button type="button" className="underline" onClick={() => void navigator.clipboard?.writeText(f.verification_url)}>{t('awsConnect.sso.copyLink')}</button>
+              <button type="button" className="underline" onClick={() => void copyToClipboard(f.verification_url)}>{t('awsConnect.sso.copyLink')}</button>
               {' · '}{t('awsConnect.sso.validFor', { minutes: Math.round(f.expires_in / 60) })}
             </p>
           </div>
@@ -853,7 +854,7 @@ function MoreWays({ rows, busy, errorBox, regionField, onProfile, onKeys, onInst
       <div className="flex gap-2 mb-6">
         {(['profile', 'keys', 'instance_role'] as const).map((w) => (
           <button key={w} type="button" onClick={() => setWay(w)} data-testid={`connect-way-${w}`}
-            className={`px-3 py-1.5 text-sm rounded-md border ${way === w ? 'border-[var(--color-primary)] text-[var(--color-text)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
+            className={`btn-md border ${way === w ? 'border-[var(--color-primary)] text-[var(--color-text)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
             {t(`awsConnect.way.${w}.title`)}
           </button>
         ))}

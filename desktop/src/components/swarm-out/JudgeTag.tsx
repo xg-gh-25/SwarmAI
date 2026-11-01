@@ -37,7 +37,7 @@ export function JudgeTag({ judge, title }: { judge: RunJudge; title: string }) {
         {...triggerProps}
         aria-label={t('ui.JudgeTag.tagLabel', { symbol })}
         data-testid="judge-tag"
-        className="inline-flex items-center gap-1.5 h-[20px] px-2.5 rounded-full border text-[11.5px] whitespace-nowrap bg-[var(--color-card)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:border-[var(--color-primary)] hover:text-[var(--color-text)]"
+        className="btn-sm rounded-full border bg-[var(--color-card)] text-[var(--color-text-secondary)] border-[var(--color-border)] hover:border-[var(--color-primary)] hover:text-[var(--color-text)]"
       >
         {t('ui.JudgeTag.name')} <b style={{ color: symbolColor }}>{symbol}</b>
         {judge.live && <span className="text-[10.5px] text-[var(--color-text-dim)]">{t('swarmOut.judge.soFar')}</span>}

@@ -142,7 +142,9 @@ describe('CredentialBanner', () => {
     render(<CredentialBanner />);
     await screen.findByText('Your Midway sign-in has expired.');
     fireEvent.click(screen.getByTestId('credential-banner-action'));
-    expect(writeText).toHaveBeenCalledWith('mwinit -f');
+    // copyToClipboard (utils/clipboard) tries the Tauri command first, then the
+    // Clipboard API: the write lands after a microtask, not in the click
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('mwinit -f'));
   });
 
   it('× hides it until the credentials work again', async () => {

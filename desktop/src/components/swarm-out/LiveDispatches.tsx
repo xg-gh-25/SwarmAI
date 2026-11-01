@@ -187,7 +187,7 @@ function AgentFacts({ r }: { r: SwarmOutRun }) {
   const f = agentFacts(r);
   const field = (icon: string, label: string, value: string, testId: string, title?: string) => (
     <span className="inline-flex items-center gap-1 min-w-0 max-w-full" title={title} data-testid={testId}>
-      <span className="material-symbols-outlined text-[14px] text-[var(--color-text-dim)]" aria-hidden>{icon}</span>
+      <span className="material-symbols-outlined icon-xs text-[var(--color-text-dim)]" aria-hidden>{icon}</span>
       <span className="text-[var(--color-text-dim)]">{label}</span>
       <span className={`truncate ${f.none ? muted : 'text-[var(--color-text)] font-medium'}`}>{value}</span>
     </span>
@@ -256,7 +256,7 @@ function OpenRunButton({ r, open }: { r: SwarmOutRun; open: () => void }) {
   return (
     <button type="button" className={`${btn} inline-flex items-center gap-1`} onClick={open}
       title={t('swarmOut.hiveTab.open', { title: r.title })} data-testid="swarm-out-run-open-button">
-      <span className="material-symbols-outlined text-[15px]" aria-hidden>open_in_new</span>
+      <span className="material-symbols-outlined icon-sm" aria-hidden>open_in_new</span>
       {t('swarmOut.card.open')}
     </button>
   );
@@ -310,7 +310,7 @@ export function RunCard({ r, onReload, onLeave }: {
         {canOpen && (
           <button type="button" className={`${btn} inline-flex items-center gap-1`} aria-haspopup="dialog"
             onClick={() => setOpen(true)} data-testid="swarm-out-run-toggle">
-            <span className="material-symbols-outlined text-[15px]" aria-hidden>open_in_full</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden>open_in_full</span>
             {t('swarmOut.review.openCard')}
           </button>
         )}

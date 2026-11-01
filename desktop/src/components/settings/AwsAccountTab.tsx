@@ -20,6 +20,7 @@ import { awsAccountService, type AwsAccountView, type Capability } from '../../s
 import { settingsService } from '../../services/settings';
 import { hiveService, hiveAccountView, type HiveAccount } from '../../services/hive';
 import { isDesktop } from '../../services/tauri';
+import { copyToClipboard } from '../../utils/clipboard';
 import ConnectAccount, { type ConnectStart } from '../awsAccount/ConnectAccount';
 import { CopyTemplate, HiveFleetSection } from '../awsAccount/HiveFleet';
 import { regionOptions } from '../awsAccount/regions';
@@ -204,7 +205,7 @@ export default function AwsAccountTab() {
                 <button type="button" disabled={busy !== null} data-testid="aws-account-terminal"
                   onClick={() => {
                     if (!isDesktop()) {
-                      void navigator.clipboard?.writeText(terminal.command).then(() => setCopied(true)).catch(() => {});
+                      void copyToClipboard(terminal.command).then((ok) => { if (ok) setCopied(true); });
                       return;
                     }
                     runInTerminal(terminal.command, terminal.title);

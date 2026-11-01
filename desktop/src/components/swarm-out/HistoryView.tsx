@@ -270,7 +270,7 @@ function HistoryRow({ r, open, onOpen, compact }: {
   const openBtn = openRun ? (
     <button type="button" onClick={(e) => { e.stopPropagation(); openRun(); }} data-testid="history-run-open"
       title={t('swarmOut.hiveTab.open', { title: r.title })} aria-label={t('swarmOut.hiveTab.open', { title: r.title })}
-      className={`material-symbols-outlined text-[16px] ${muted} hover:text-[var(--color-text)]`}>open_in_new</button>
+      className={`material-symbols-outlined icon-sm ${muted} hover:text-[var(--color-text)]`}>open_in_new</button>
   ) : <span />;
   return (
     <div className="border-t border-[var(--color-border)] first:border-t-0" data-testid="history-run" data-tone={tone} data-open={open || undefined}>

@@ -121,7 +121,7 @@ export function CdfHealth() {
             options={[{ key: '7d', label: t('cogHealth.w7d') }, { key: '30d', label: t('cogHealth.w30d') }]} />
           <button type="button" data-testid="health-recheck" disabled={running}
             onClick={() => recheck.mutate()}
-            className="h-7 rounded-md border border-[var(--color-border)] px-3 text-small text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] disabled:opacity-50">
+            className="btn-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] disabled:opacity-50">
             {running ? t('cogHealth.running') : t('cogHealth.recheck')}
           </button>
         </div>
@@ -271,7 +271,7 @@ function Samples({ d, zh }: { d: HealthDestination; zh: boolean }) {
                   disabled={set.isPending}
                   onClick={() => set.mutate({ unitId: s.unitId, verdict: v })}
                   aria-pressed={s.userVerdict === v}
-                  className="h-6 rounded border border-[var(--color-border)] px-2 text-meta text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] aria-pressed:text-[var(--color-text)]">
+                  className="btn-sm border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] aria-pressed:text-[var(--color-text)]">
                   {t(`cogHealth.verdict.${v}`)}
                 </button>
               ))}

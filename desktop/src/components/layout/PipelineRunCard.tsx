@@ -38,7 +38,7 @@ import { TONE_VAR } from '../swarm-out/tone';
 import { tokenM } from './pipelineRows';
 
 const muted = 'text-[var(--color-text-muted)]';
-const btn = 'px-3 py-1.5 rounded-md text-small border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50';
+const btn = 'btn-md btn-secondary disabled:opacity-50';
 
 type Tab = 'deliverable' | 'autonomy' | 'process' | 'cost' | 'lessons';
 

@@ -15,7 +15,7 @@ import { hiveStatusLabel } from './live';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
-const btn = 'px-3 py-1.5 rounded-md text-[12.5px] font-medium bg-[var(--color-primary)] text-white hover:opacity-90';
+const btn = 'btn-md btn-primary';
 
 export function HiveGuide({ hives, onOpenHive }: { hives: SwarmOutHive[]; onOpenHive?: () => void }) {
   const { t } = useTranslation();

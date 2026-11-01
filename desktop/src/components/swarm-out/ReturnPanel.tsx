@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { swarmOutService, type SwarmOutReturn } from '../../services/swarmOut';
 
 const muted = 'text-[var(--color-text-muted)]';
-const btn = 'px-2.5 py-1 rounded-md text-[12.5px] border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50';
+const btn = 'btn-md btn-secondary disabled:opacity-50';
 
 function errText(e: unknown): string {
   const d = (e as { detail?: unknown })?.detail;

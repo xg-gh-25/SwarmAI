@@ -164,7 +164,7 @@ export function ChatErrorMessage({ error, onRetry, onContinue }: ChatErrorMessag
           aria-label={t('chat.message.continueAria', 'Continue response')}
           className="mt-3 btn-md btn-secondary transition-colors"
           title={t('chat.message.continueTitle', { name: ASSISTANT_NAME, defaultValue: 'Continue — ask {{name}} to continue its response' })}>
-          <span className="material-symbols-outlined icon-xs">play_arrow</span>
+          <span className="material-symbols-outlined icon-sm">play_arrow</span>
           {t('chat.message.continue', 'Continue')}
         </button>
       )}

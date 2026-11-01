@@ -248,7 +248,7 @@ export function machineChecks(r: SwarmOutRun, full?: SwarmOutResult | null): { k
     const of = (st: string) => checks.filter((c) => checkStatus(c.status) === st).map((c) => c.id).join(', ');
     const missed = (['not_seen', 'errored', 'unknown'] as const)
       .map((st) => [st, of(st)] as const).filter(([, list]) => list)
-      .map(([st, list]) => t(`checks_${st}`, { list }));
+      .map(([st, list]) => i18n.t(`swarmOut.review.check.checks_${st}`, { list }));
     out.push({ key: 'checks', ok: missed.length === 0, text: missed.length === 0 ? t('checksRan') : missed.join(' · ') });
   }
   // a file "came back" only when it is here or was sent back (local / not_placed); the

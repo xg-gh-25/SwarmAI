@@ -30,7 +30,7 @@ function StopButton({ r, onDone }: { r: SwarmOutRun; onDone: () => void }) {
   const [failed, setFailed] = useState(false);
   return (
     <button type="button" disabled={busy} data-testid="swarm-out-row-stop"
-      className="inline-flex items-center gap-1 px-2 py-[2px] rounded-md border text-[11.5px] whitespace-nowrap disabled:opacity-50"
+      className="btn-sm border disabled:opacity-50"
       style={{ color: TONE_VAR.error, borderColor: `color-mix(in srgb, ${TONE_VAR.error} 45%, var(--color-border))` }}
       title={failed ? t('swarmOut.review.stopFailed') : t('swarmOut.review.cmd.stop.does')}
       onClick={(e) => {
@@ -47,7 +47,7 @@ function OpenButton({ r, compact }: { r: SwarmOutRun; compact: boolean }) {
   if (!open) return null;
   return (
     <button type="button" data-testid="swarm-out-row-open"
-      className="px-2 py-[2px] rounded-md border border-[var(--color-border)] text-[11.5px] text-[var(--color-text-secondary,var(--color-text-muted))] whitespace-nowrap hover:bg-[var(--color-hover)]"
+      className="btn-sm border border-[var(--color-border)] text-[var(--color-text-secondary,var(--color-text-muted))] hover:bg-[var(--color-hover)]"
       title={t('swarmOut.hiveTab.open', { title: r.title })} aria-label={t('swarmOut.hiveTab.open', { title: r.title })}
       onClick={(e) => { e.stopPropagation(); open(); }}>{compact ? '↗' : `${t('swarmOut.review.cmd.open.name')} ↗`}</button>
   );

@@ -38,7 +38,7 @@ export function GeneralBrainView({ general, onBack, onDispatch, onOpenLibrary }:
       <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
         <BackToHubButton testid="general-back" onClick={onBack} />
         <div className="mt-1 flex items-center gap-2">
-          <span className="material-symbols-outlined text-[var(--color-primary)]" aria-hidden="true">local_library</span>
+          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]" aria-hidden="true">local_library</span>
           <h2 className="text-title font-semibold">{t('ui.GeneralBrainView.title')}</h2>
           <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-text-muted)] bg-[var(--color-hover)]"
             data-testid="general-builtin-tag">{t('ui.GeneralBrainView.builtinTag')}</span>

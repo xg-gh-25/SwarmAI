@@ -96,7 +96,7 @@ export function Tabs<K extends string>({ items, value, onChange, label, testid, 
             {t.hint && <span className="text-meta font-normal text-[var(--color-text-faint)]">{t.hint}</span>}
             {t.count != null && (
               <span data-testid={t.testid ? `${t.testid}-count` : undefined}
-                className="rounded-full px-1.5 text-[11px] font-semibold leading-[18px] tabular-nums"
+                className="rounded-full px-1.5 text-meta font-semibold leading-[18px] tabular-nums"
                 style={t.tone === 'alert'
                   ? { background: TINT('--color-status-error', 18), color: 'var(--color-status-error)' }
                   : { background: TINT('--color-text', 10) }}>

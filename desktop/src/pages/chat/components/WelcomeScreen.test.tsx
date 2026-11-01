@@ -31,14 +31,16 @@ vi.mock('../../../services/api', () => ({ default: { get: (...a: unknown[]) => a
 const dispatchUiCommand = vi.fn(() => true);
 vi.mock('../../../utils/uiCommands', () => ({ dispatchUiCommand: (...a: unknown[]) => dispatchUiCommand(...a) }));
 
-// t() returns the key, except this screen's own ui.WelcomeScreen.* text, which the
-// app's i18n (test-setup) turns into its real English.
+// t() returns the key, except this screen's own ui.WelcomeScreen.* text and the
+// shared row's source label (NeedsYouRow: needYou.source.*), which the app's i18n
+// (test-setup) turns into their real English.
 vi.mock('react-i18next', async () => {
   const { default: i18n } = await import('../../../i18n');
+  const real = (k: string) => k.startsWith('ui.WelcomeScreen.') || k.startsWith('needYou.source.');
   return {
     initReactI18next: { type: '3rdParty', init: () => {} },
     useTranslation: () => ({
-      t: (k: string, o?: Record<string, unknown>) => (k.startsWith('ui.WelcomeScreen.') ? i18n.t(k, o) : k),
+      t: (k: string, o?: Record<string, unknown>) => (real(k) ? i18n.t(k, o) : k),
     }),
   };
 });

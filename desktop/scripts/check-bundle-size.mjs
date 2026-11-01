@@ -10,12 +10,17 @@
  * its own chunk (2026-10-23: 3,737,362 bytes) plus 5%. Raise it deliberately, in
  * the same change that explains what grew.
  *
+ * Raised 2026-11-01 to 4,082,474 bytes plus 5%: c3da5880a moved 1643 hardcoded UI
+ * strings into i18n, and both locales are imported eagerly by src/i18n/index.ts, so
+ * en.json + zh.json went from 83 kB (at the first cap) to 451 kB of the first chunk.
+ * That growth (+368 kB) is the whole overage; no other code moved into the chunk.
+ *
  * Usage: node scripts/check-bundle-size.mjs [distDir]   (default: dist)
  */
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const CAP_BYTES = Math.round(3_737_362 * 1.05);
+const CAP_BYTES = Math.round(4_082_474 * 1.05);
 const dist = process.argv[2] ?? 'dist';
 const assets = join(dist, 'assets');
 

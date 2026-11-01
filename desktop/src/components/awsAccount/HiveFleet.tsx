@@ -17,6 +17,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { copyToClipboard } from '../../utils/clipboard';
 import {
   awsAccountService, problemOf, type AwsAccountView, type Capability, type FleetStatus,
 } from '../../services/awsAccount';
@@ -24,7 +25,7 @@ import {
 const MAX = 8;
 const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
 const DEFAULT_TYPE = 'm7g.xlarge';
-const smallBtn = 'px-3 py-1.5 text-sm rounded-md border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-card)] disabled:opacity-50';
+const smallBtn = 'btn-md btn-secondary disabled:opacity-50';
 const inputCls = 'w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]';
 
 export function price(h: FleetStatus | null | undefined, type: string): number | null {
@@ -50,8 +51,7 @@ export function CopyTemplate() {
       onClick={async () => {
         try {
           const tpl = await awsAccountService.permissionTemplate();
-          await navigator.clipboard.writeText(JSON.stringify(tpl, null, 2));
-          setDone('copied');
+          setDone((await copyToClipboard(JSON.stringify(tpl, null, 2))) ? 'copied' : 'failed');
         } catch {
           setDone('failed');
         }

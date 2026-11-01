@@ -52,7 +52,7 @@ import { TONE_VAR } from './tone';
 import { modKeyLabel } from '../../utils/platform';
 
 const muted = 'text-[var(--color-text-muted)]';
-const btn = 'px-3 py-1.5 rounded-md text-[12.5px] border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50';
+const btn = 'btn-md btn-secondary disabled:opacity-50';
 
 type Tab = 'deliverable' | 'autonomy' | 'process' | 'cost' | 'lessons';
 /** what the command panel shows: the commands, or one of them taking words or a confirmation */

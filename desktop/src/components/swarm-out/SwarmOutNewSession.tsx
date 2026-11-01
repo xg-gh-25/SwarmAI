@@ -46,11 +46,11 @@ export function SwarmOutNewSession({ hasContent, block, long, onStart }: {
     <button type="button" data-testid="swarm-out-new-session" data-long={long || undefined}
       aria-disabled={off} title={why ?? t('swarmOut.fresh.hint')}
       onClick={() => { if (!off) onStart(); }}
-      className={`inline-flex items-center gap-1.5 h-[26px] px-[11px] rounded-[7px] border text-[12px] transition-colors ${
+      className={`btn-md border transition-colors ${
         off ? 'border-dashed border-[var(--color-border)] text-[var(--color-text-dim)] cursor-not-allowed'
           : long ? 'border-[var(--color-primary)] text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)]'
             : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-hover)]'}`}>
-      <span className="material-symbols-outlined text-[15px]" aria-hidden>add</span>
+      <span className="material-symbols-outlined icon-sm" aria-hidden>add</span>
       {t('swarmOut.fresh.button')}
     </button>
   );

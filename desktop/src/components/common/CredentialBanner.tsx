@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { useHealth } from '../../contexts/HealthContext';
 import { awsAccountService, type AwsAccountView, type RemediationAction } from '../../services/awsAccount';
 import { isDesktop } from '../../services/tauri';
+import { copyToClipboard } from '../../utils/clipboard';
 import { FIX_SIGN_IN_EVENT, markTerminalRun, openSettings, openSignIn, runInTerminal } from './settingsEvents';
 
 type Remedy = NonNullable<AwsAccountView['remediation']>;
@@ -145,7 +146,7 @@ export default function CredentialBanner({ hidden = false }: { hidden?: boolean 
     if (!a || a.kind === 'settings') { openSettings(a?.tab ?? tab ?? 'aws-account'); return; }
     if (a.kind === 'sign_in') { openSignIn(); return; }
     if (!isDesktop()) {
-      void navigator.clipboard?.writeText(a.command).then(() => setCopied(true)).catch(() => {});
+      void copyToClipboard(a.command).then((ok) => { if (ok) setCopied(true); });
       return;
     }
     runInTerminal(a.command, a.title);
