@@ -2,7 +2,7 @@
 
 Read `artifacts/knowledge.md` first: what the project DDD (PRODUCT, PROJECT) and the Library hold for this request, and a map of everything the DDD holds. It is a starting set, not the whole DDD: when a requirement depends on the domain, look it up with your own words (`"$SWARM_BACKEND_BIN" knowledge find --project <P> --query "<words>"`). Entries are leads; check them against the code. List the ids of entries you relied on in `knowledge_refs` (optional): an id from knowledge.md or from `knowledge find` / `get`; any other id is refused.
 
-One requirement is one run, however many parts it has: list every part as a task in PLAN, do them all in BUILD, and REVIEW and DELIVER the whole change once. Make separate runs only for requirements that do not depend on each other (each useful and revertible on its own), or when the user asks for separate landings.
+One requirement is one run, however many parts it has: list every part as a task in PLAN, do them all in BUILD, and REVIEW and DELIVER the whole change once. Make separate runs only for requirements that do not depend on each other (each useful and revertible on its own), or when the user asks for separate landings. A wide plan's PLAN reply lists task groups that share no file (`split_hint`): a candidate for separate runs.
 
 Write `artifacts/requirements.json` using the full REQUIREMENTS schema. Use structured EARS fields; do not write `REQUIREMENTS.md`.
 

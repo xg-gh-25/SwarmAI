@@ -163,3 +163,29 @@ def test_main_moving_in_deliver_still_lands_by_next(tmp_path, monkeypatch, case)
         assert moved and state["landing"] == "landed", (trail, state)
     finally:
         r.close()
+
+
+def test_split_groups_keep_tasks_that_share_a_file_or_depend_together():
+    """D3 (design 2026-11-01-pipeline-delivery-friction): groups share no file."""
+    from core.run_protocol.next_step import split_groups
+    tasks = [{"id": "T1", "file": "a/x.py", "depends_on": []},
+             {"id": "T2", "file": "a/x.py", "depends_on": []},
+             {"id": "T3", "file": "b/y.py", "depends_on": ["T4"]},
+             {"id": "T4", "file": "c/z.py", "depends_on": []},
+             {"id": "T5", "file": "d/w.py", "depends_on": [], "creates_test_files": ["d/t.py"]}]
+    assert split_groups(tasks) == [["T1", "T2"], ["T3", "T4"], ["T5"]]
+
+
+def test_a_wide_plan_gets_a_split_hint_and_a_narrow_one_none(monkeypatch):
+    from types import SimpleNamespace
+    from core.run_protocol import next_step
+    wide = [{"id": f"T{i}", "file": f"{('backend', 'desktop', 'docs')[i % 3]}/f{i}.py",
+             "depends_on": []} for i in range(45)]
+    engine = SimpleNamespace(check_context=lambda: SimpleNamespace(design={"tasks": wide}))
+    out: dict = {"why": "x."}
+    next_step._note_split(engine, out)
+    assert len(out["split_hint"]) == 45 and "share no file" in out["why"]
+    narrow = SimpleNamespace(check_context=lambda: SimpleNamespace(design={"tasks": wide[:10]}))
+    out = {"why": "x."}
+    next_step._note_split(narrow, out)
+    assert "split_hint" not in out

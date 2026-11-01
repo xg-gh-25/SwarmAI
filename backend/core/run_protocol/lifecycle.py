@@ -109,7 +109,8 @@ PROFILE_STAGES = {
 # reads as this message instead of a crash: its log stays as it is)
 REMOVED_PROFILES = {
     "goal": ("the goal profile was removed (2026-10-26): its goal_cycle was BUILD under "
-             "another name; a large requirement is one full run whose PLAN lists every part as a task"),
+             "another name; a large requirement is one full run whose PLAN lists every part as a task, "
+             "and parts that share no files and are useful on their own are separate runs"),
     "docs": ("the docs profile was removed (2026-10-20). Documents outside a code repo "
              "(a workspace knowledge folder) need no run: edit them directly. *.md / *.rst "
              "files in a code repo need no run either (core/doc_paths.py); any "

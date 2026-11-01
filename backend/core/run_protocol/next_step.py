@@ -23,6 +23,9 @@ from core.run_protocol import checks, lifecycle
 _CARDS = Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline" / "stages"
 _ARTIFACT_STAGES = {"evaluate", "plan"}
 _CODE_STAGES = {"build"}     # the agent writes and tests the change its own way
+# a plan this wide gets the split hint (design 2026-11-01-pipeline-delivery-friction D3)
+SPLIT_HINT_FILES = 40
+SPLIT_HINT_TOP_DIRS = 3
 # a person stopped the run, or its session went away: only a person resumes it
 _HUMAN_PAUSES = {"user_stop", "session_lost"}
 
@@ -303,6 +306,8 @@ def next_step(engine, *, previous_stage: str | None = None,
                         "run the final verification on this tree yourself (do not change "
                         "code in TEST), then pass the report on stdin in the same shape"))
         _note_main_overlap(engine, out)
+        if stage == "build" and previous_stage == "plan":
+            _note_split(engine, out)
         return out
     if not blocking:
         out.update(action="run", command=_cmd(engine, "stage-complete"),
@@ -311,6 +316,58 @@ def next_step(engine, *, previous_stage: str | None = None,
     out.update(action="fix", command=_cmd(engine, "stage-complete"),
                why=f"{len(blocking)} {stage} check(s) do not pass yet")
     return out
+
+
+def split_groups(tasks: Any) -> list[list[str]]:
+    """The plan's task ids grouped so that no two groups share a file (a task and the
+    tasks it depends on stay together): each group could land on its own."""
+    rows = [t for t in tasks or () if isinstance(t, Mapping) and isinstance(t.get("id"), str)]
+    parent = {t["id"]: t["id"] for t in rows}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    owner: dict[str, str] = {}
+    for t in rows:
+        files = [t.get("file"), *(t.get("creates_test_files") or ())]
+        for f in files:
+            if isinstance(f, str) and f:
+                if f in owner:
+                    parent[find(t["id"])] = find(owner[f])
+                else:
+                    owner[f] = t["id"]
+        for dep in t.get("depends_on") or ():
+            if dep in parent:
+                parent[find(t["id"])] = find(dep)
+    groups: dict[str, list[str]] = {}
+    for t in rows:
+        groups.setdefault(find(t["id"]), []).append(t["id"])
+    return sorted(groups.values(), key=lambda g: (-len(g), g))
+
+
+def _note_split(engine, out: dict[str, Any]) -> None:
+    """PLAN just ended with a wide plan (more than SPLIT_HINT_FILES files across at least
+    SPLIT_HINT_TOP_DIRS top-level directories) whose tasks fall into groups sharing no
+    file: say so once (D3). A hint, not a check: the run goes on as planned."""
+    design = getattr(engine.check_context(), "design", None) or {}
+    tasks = design.get("tasks") if isinstance(design, Mapping) else None
+    files = {f for t in tasks or () if isinstance(t, Mapping)
+             for f in (t.get("file"), *(t.get("creates_test_files") or ()))
+             if isinstance(f, str) and f}
+    tops = {f.split("/", 1)[0] for f in files}
+    if len(files) <= SPLIT_HINT_FILES or len(tops) < SPLIT_HINT_TOP_DIRS:
+        return
+    groups = split_groups(tasks)
+    if len(groups) < 2:
+        return
+    out["split_hint"] = groups
+    out["why"] = (out.get("why") or "") + (
+        f" This plan changes {len(files)} files in {len(tops)} top-level directories, and "
+        f"its tasks fall into {len(groups)} groups that share no file ({', '.join('+'.join(g[:4]) + ('…' if len(g) > 4 else '') for g in groups[:6])}). "
+        "A group that is useful and revertible on its own reviews and lands faster as its "
+        "own run: abandon this one and create one run per group, or go on as planned.")
 
 
 def _note_main_overlap(engine, out: dict[str, Any]) -> None:
