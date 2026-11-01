@@ -117,3 +117,34 @@ def test_internal_scan_error_fails_open(
     monkeypatch.setattr(worktree_write_gate, "_session_runs_light", fail)
     reporter = create_main_dirty_reporter({"sdk_session_id": "session-v1"})
     assert _invoke(reporter) == {}
+
+
+def test_another_live_session_s_files_outside_the_run_are_not_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """design 2026-11-01-pipeline-delivery-friction D8: a main-checkout file another live
+    session wrote, still uncommitted and not one of this run's files, is someone's
+    parallel work: it is counted, not listed. A file nobody else claims is listed, and
+    so is a sibling's file this run also changes."""
+    repo, engine = _start_v1_run(tmp_path, monkeypatch)
+    worktree = Path(engine.ensure_stage_worktrees()["repo"])
+    (repo / "theirs.py").write_text("x = 0\n", encoding="utf-8")
+    (repo / "shared.py").write_text("x = 0\n", encoding="utf-8")
+    _git(repo, "add", "theirs.py", "shared.py"); _git(repo, "commit", "-qm", "two files")
+    mine = {"sdk_session_id": "session-v1"}
+    other = {"_files_written": {str(Path(repo).resolve() / "theirs.py"),
+                                str(Path(repo).resolve() / "shared.py")}}
+    from core import shared_checkout
+    monkeypatch.setattr(shared_checkout, "_live_contexts",
+                        lambda: [("session-v1", mine), ("other-session", other)])
+    reporter = create_main_dirty_reporter(mine)
+    assert _invoke(reporter) == {}                      # the baseline
+    (worktree / "shared.py").write_text("x = 'run'\n", encoding="utf-8")   # the run's file
+    (repo / "theirs.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "shared.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "app.py").write_text("value = 3\n", encoding="utf-8")
+    report = _context(_invoke(reporter))
+    assert str(Path(repo).resolve() / "app.py") in report or str(repo / "app.py") in report
+    assert "shared.py" in report, report
+    assert "theirs.py" not in report.split("(1 more changed by")[0], report
+    assert "1 more changed by another live session" in report, report

@@ -123,6 +123,45 @@ def _scan_pool():
     return _POOL[0]
 
 
+def _changed_in(worktree: str) -> "set[str]":
+    """The paths git reports changed in a run worktree against its HEAD (the run's base
+    under the worktree invariant): the run's own change. Empty when git cannot tell."""
+    import subprocess
+    try:
+        p = subprocess.run(["git", "-C", worktree, "status", "--porcelain=v1", "-z",
+                            "--untracked-files=all"], capture_output=True, text=True,
+                           timeout=2.0, env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if p.returncode != 0:
+        return set()
+    return {entry[3:] for entry in p.stdout.split("\0") if len(entry) > 3}
+
+
+def _without_siblings(changed: "list[str]", mains: "dict[str, bool]", own: "set[str]",
+                      mine: "dict | None") -> "tuple[list[str], int]":
+    """*changed* without the paths another live session wrote that git still reports
+    uncommitted and that are not files of this run's change: that is someone's parallel
+    work, not this run's (design 2026-11-01-pipeline-delivery-friction D8). A path this
+    session may have written stays (no other session claims it), and so does one the run
+    also changes (landing will meet it). Returns (kept, how many were left out)."""
+    from core.shared_checkout import sibling_uncommitted
+    if not changed:
+        return changed, 0
+    theirs: "set[str]" = set()
+    for main in mains:
+        try:
+            # fresh: git's view now, not a cached one from before these changes
+            for _sid, rels in sibling_uncommitted(main, mine, strict=True):
+                theirs |= {os.path.join(main, rel) for rel in rels
+                           if rel not in own}
+        except Exception:  # noqa: BLE001 -- fail open: report everything
+            logger.debug("main_dirty_scan: sibling lookup failed", exc_info=True)
+            return changed, 0
+    kept = [path for path in changed if path not in theirs]
+    return kept, len(changed) - len(kept)
+
+
 def create_main_dirty_reporter(session_context: "dict[str, Any]"):
     """Factory (module docstring). *session_context*: the mutable dict SessionUnit
     updates; ``sdk_session_id`` holds the app session id (read at call time)."""
@@ -151,10 +190,12 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
         if not run_dir.is_dir():
             return None, None, None
         mains = {}
+        own: "set[str]" = set()       # the run's own changed files, repo-relative
         for _name, path in run["worktrees"]:
             m = rw.main_of(path)
             if m is not None:
                 mains[os.path.realpath(str(m))] = True
+            own |= _changed_in(str(path))
         seen = _load_seen(run_dir)
         reported = seen.get(REPORTED_KEY) if isinstance(seen.get(REPORTED_KEY), dict) else {}
         dirty = False
@@ -177,6 +218,8 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
         if reported:
             seen[REPORTED_KEY] = reported
         save = seen if dirty else None
+        changed, others = _without_siblings(changed, mains, own, session_context)
+        again = _without_siblings(again, mains, own, session_context)[0]
         tail = (" still changing, reported before: " + ", ".join(
             os.path.basename(p) for p in again[:MAX_LISTED])
             + (f" (+{len(again) - MAX_LISTED} more)" if len(again) > MAX_LISTED else "") + "."
@@ -185,11 +228,14 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
             return "Main checkout of this run's repo:" + tail, run_dir, save
         if not changed:
             return None, run_dir, save
+        aside = (f" ({others} more changed by another live session, outside this run's "
+                 "files: not listed)" if others else "")
         shown = changed[:MAX_LISTED]
         more = (f" (+{len(changed) - len(shown)} more: `git status` in the main checkout)"
                 if len(changed) > len(shown) else "")
         return ("Uncommitted files changed in the main checkout of this run's repo since the "
-                f"last command (not proven to be this session's): {', '.join(shown)}{more}. "
+                f"last command (not proven to be this session's): {', '.join(shown)}{more}"
+                f"{aside}. "
                 "This run's code belongs in its worktree, and landing refuses a main edit that "
                 "overlaps the run. " + __import__(
                     "core.worktree_write_gate", fromlist=["V1_MAIN_EDIT_REMEDY"]
